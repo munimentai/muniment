@@ -3,6 +3,10 @@
 use keyring::Entry;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
+};
 use tauri::{Emitter, Manager, WebviewUrl, WebviewWindowBuilder};
 
 const API: &str = "https://api.muniment.ai";
@@ -113,11 +117,14 @@ async fn begin_oidc(app: tauri::AppHandle, org_id: String) -> Result<(), String>
     }
 
     let callback_app = app.clone();
-    WebviewWindowBuilder::new(&app, "sign-in", WebviewUrl::External(start))
+    let completing = Arc::new(AtomicBool::new(false));
+    let callback_completing = completing.clone();
+    let sign_in = WebviewWindowBuilder::new(&app, "sign-in", WebviewUrl::External(start))
         .title("Sign in to muniment")
         .inner_size(560.0, 720.0)
         .navigation_handler(move |url| {
             if url.host_str() == Some("api.muniment.ai") && url.path() == "/v1/auth/oidc/callback" {
+                callback_completing.store(true, Ordering::Relaxed);
                 let callback = url.to_string();
                 let app = callback_app.clone();
                 tauri::async_runtime::spawn(async move {
@@ -157,6 +164,17 @@ async fn begin_oidc(app: tauri::AppHandle, org_id: String) -> Result<(), String>
         })
         .build()
         .map_err(|e| e.to_string())?;
+    let close_app = app.clone();
+    sign_in.on_window_event(move |event| {
+        if matches!(event, tauri::WindowEvent::CloseRequested { .. })
+            && !completing.load(Ordering::Relaxed)
+        {
+            let _ = close_app.emit(
+                "auth-complete",
+                serde_json::json!({ "error": "Sign in was canceled." }),
+            );
+        }
+    });
     Ok(())
 }
 
