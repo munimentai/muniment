@@ -22,3 +22,11 @@ Real builds run on ephemeral pve01 VM clones via `desktop-ci`
 one VM at a time, clone destroyed after. The GitHub workflow only runs the
 structure smoke on the shared runners; desktop-ci workflow wiring lands
 when the lane opens.
+
+### macOS CI note (2026-07-09)
+
+`.dmg` bundling is EXCLUDED from CI targets: Tauri's `bundle_dmg.sh` drives
+Finder via AppleScript and needs a GUI session, which the SSH-only CI VMs
+don't have (verified failing in the M0 shakeout; the `.app` bundle builds
+fine). DMG creation is a release-time step — solve at first release
+(hdiutil-based script or a GUI-session build), not in the CI gate.
