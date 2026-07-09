@@ -1,10 +1,25 @@
 name: CI
 
+# Desktop builds run through the pve01 desktop-ci driver (SSH-driven VM
+# clones; see homelab docs/infra-notes.md "Desktop-CI GLUE built"). The
+# runner container carries DESKTOP_CI_SSH_KEY, a restricted key whose only
+# capability on pve01 is `sudo desktop-ci`. Builds are serialized by the
+# driver's one-VM-at-a-time lock; matrix jobs also serialize on the single
+# repo runner, so a full PR gate is smoke + three sequential platform builds.
+# Push-to-main runs smoke only — merges are already PR-gated.
+# NOTE: the driver clones `--branch <ref>`, so we pass the branch NAME (the
+# PR head ref), which builds the branch TIP, not necessarily the triggering
+# SHA — fine for the merge gate, do not use for release artifact provenance.
+
 on:
   pull_request:
   push:
     branches:
       - main
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   smoke:
@@ -15,3 +30,37 @@ jobs:
 
       - name: Structure smoke
         run: test/smoke.sh
+
+  desktop-build:
+    if: github.event_name == 'pull_request'
+    needs: smoke
+    runs-on: self-hosted
+    timeout-minutes: 75
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [linux, windows, macos]
+    steps:
+      - name: Build (${{ matrix.platform }}) via desktop-ci
+        run: |
+          set -u
+          umask 077
+          key="$RUNNER_TEMP/desktop_ci_key"
+          printf '%s' "$DESKTOP_CI_SSH_KEY" > "$key"
+          trap 'rm -f "$key"' EXIT
+
+          # macOS: .app only — dmg bundling needs a GUI session (release-time step)
+          cmd='npm ci --no-audit --no-fund && npm run tauri build'
+          if [ "${{ matrix.platform }}" = "macos" ]; then
+            cmd='npm ci --no-audit --no-fund && npm run tauri build -- --bundles app'
+          fi
+
+          repo_url="https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}"
+          ref="${{ github.head_ref }}"
+
+          # Remote args are single-quoted so the build command's && stays
+          # inside --cmd instead of being parsed by the pve01 shell.
+          ssh -i "$key" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+              -o BatchMode=yes -o ServerAliveInterval=30 -o ServerAliveCountMax=8 \
+              desktopci@10.1.10.10 \
+              "sudo desktop-ci ${{ matrix.platform }} --repo '$repo_url' --ref '$ref' --cmd '$cmd'"
