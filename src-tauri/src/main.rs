@@ -33,16 +33,35 @@ struct SessionToken {
     token: String,
 }
 
+struct ControlPlaneError {
+    message: String,
+    invalid_session: bool,
+}
+
+impl ControlPlaneError {
+    fn unavailable(error: impl ToString) -> Self {
+        Self {
+            message: error.to_string(),
+            invalid_session: false,
+        }
+    }
+}
+
 fn credential() -> Result<Entry, String> {
     Entry::new(CREDENTIAL_SERVICE, CREDENTIAL_USER).map_err(|e| e.to_string())
 }
 
-async fn response_json(response: reqwest::Response) -> Result<Value, String> {
+async fn response_json(response: reqwest::Response) -> Result<Value, ControlPlaneError> {
     let status = response.status();
-    let body = response.text().await.map_err(|e| e.to_string())?;
+    let body = response
+        .text()
+        .await
+        .map_err(ControlPlaneError::unavailable)?;
     if status.is_success() {
-        serde_json::from_str(&body)
-            .map_err(|_| "The control plane returned an unreadable response.".into())
+        serde_json::from_str(&body).map_err(|_| ControlPlaneError {
+            message: "The control plane returned an unreadable response.".into(),
+            invalid_session: false,
+        })
     } else {
         let message = serde_json::from_str::<Value>(&body)
             .ok()
@@ -52,11 +71,14 @@ async fn response_json(response: reqwest::Response) -> Result<Value, String> {
                     .map(str::to_owned)
             })
             .unwrap_or_else(|| format!("Control plane request failed ({status})."));
-        Err(message)
+        Err(ControlPlaneError {
+            message,
+            invalid_session: status == reqwest::StatusCode::UNAUTHORIZED,
+        })
     }
 }
 
-async fn load_shell(token: &str) -> Result<ShellSession, String> {
+async fn load_shell(token: &str) -> Result<ShellSession, ControlPlaneError> {
     let client = reqwest::Client::new();
     let auth = format!("Bearer {token}");
     let context = response_json(
@@ -65,7 +87,7 @@ async fn load_shell(token: &str) -> Result<ShellSession, String> {
             .header("Authorization", &auth)
             .send()
             .await
-            .map_err(|e| e.to_string())?,
+            .map_err(ControlPlaneError::unavailable)?,
     )
     .await?;
     let snapshot = response_json(
@@ -74,7 +96,7 @@ async fn load_shell(token: &str) -> Result<ShellSession, String> {
             .header("Authorization", &auth)
             .send()
             .await
-            .map_err(|e| e.to_string())?,
+            .map_err(ControlPlaneError::unavailable)?,
     )
     .await?;
     Ok(ShellSession {
@@ -97,8 +119,10 @@ async fn restore_session() -> Result<Option<ShellSession>, String> {
     match load_shell(&token).await {
         Ok(shell) => Ok(Some(shell)),
         Err(error) => {
-            let _ = credential()?.delete_credential();
-            Err(error)
+            if error.invalid_session {
+                let _ = credential()?.delete_credential();
+            }
+            Err(error.message)
         }
     }
 }
@@ -129,9 +153,11 @@ async fn begin_oidc(app: tauri::AppHandle, org_id: String) -> Result<(), String>
                 let app = callback_app.clone();
                 tauri::async_runtime::spawn(async move {
                     let result: Result<ShellSession, String> = async {
-                        let value =
-                            response_json(reqwest::get(callback).await.map_err(|e| e.to_string())?)
-                                .await?;
+                        let value = response_json(
+                            reqwest::get(callback).await.map_err(|e| e.to_string())?,
+                        )
+                        .await
+                        .map_err(|e| e.message)?;
                         let auth: AuthResponse = serde_json::from_value(value)
                             .map_err(|_| "The sign-in response was incomplete.".to_string())?;
                         credential()?
@@ -144,7 +170,9 @@ async fn begin_oidc(app: tauri::AppHandle, org_id: String) -> Result<(), String>
                                 entitlement_snapshot: snapshot,
                             })
                         } else {
-                            load_shell(&auth.session.token).await
+                            load_shell(&auth.session.token)
+                                .await
+                                .map_err(|e| e.message)
                         }
                     }
                     .await;
