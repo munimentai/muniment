@@ -6,5 +6,6 @@ grep -q 'tauri_build::build' src-tauri/build.rs
 grep -q 'generate_context' src-tauri/src/main.rs
 test -f src-tauri/icons/icon.ico
 test -f src-tauri/icons/icon.icns
-test -f src/index.html
+test -f src/main.jsx
+test -f docs/frontend-framework.md
 echo "smoke OK"
