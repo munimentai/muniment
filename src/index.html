@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>muniment</title>
+<style>
+  :root { --paper: #F6F7F6; --ink: #1A1D1C; --muted: #5C6461; }
+  @media (prefers-color-scheme: dark) {
+    :root { --paper: #141716; --ink: #E8EBE9; --muted: #8A928E; }
+  }
+  * { margin: 0; box-sizing: border-box; }
+  body {
+    background: var(--paper); color: var(--ink);
+    font-family: system-ui, sans-serif;
+    min-height: 100vh; display: grid; place-items: center;
+  }
+  main { text-align: center; }
+  h1 { font-size: 1.5rem; font-weight: 600; }
+  p { color: var(--muted); font-size: 0.85rem; margin-top: 0.5rem; }
+</style>
+</head>
+<body>
+<main>
+  <h1>muniment</h1>
+  <p>M0 shell. The real client starts at Phase 2.</p>
+</main>
+</body>
+</html>

@@ -1,0 +1,369 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="_ds/muniment-design-system-42af51c9-b77b-4b92-a464-3542e2d14a9f/tokens/fonts.css">
+<link rel="stylesheet" href="_ds/muniment-design-system-42af51c9-b77b-4b92-a464-3542e2d14a9f/tokens/colors.css">
+<link rel="stylesheet" href="_ds/muniment-design-system-42af51c9-b77b-4b92-a464-3542e2d14a9f/tokens/typography.css">
+<link rel="stylesheet" href="_ds/muniment-design-system-42af51c9-b77b-4b92-a464-3542e2d14a9f/tokens/space-motion.css">
+<link rel="stylesheet" href="_ds/muniment-design-system-42af51c9-b77b-4b92-a464-3542e2d14a9f/tokens/base.css">
+<link rel="stylesheet" href="_ds/muniment-design-system-42af51c9-b77b-4b92-a464-3542e2d14a9f/styles.css">
+<script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
+<script src="_ds/muniment-design-system-42af51c9-b77b-4b92-a464-3542e2d14a9f/_ds_bundle.js"></script>
+<style>
+a{color:var(--ink)}a:hover{color:var(--muted)}
+.ph{position:relative;display:flex;flex-direction:column;background:var(--paper);color:var(--ink);font-family:var(--font-sans);border:1px solid var(--border);box-shadow:var(--shadow-window);overflow:hidden;box-sizing:border-box;border-radius:38px}
+.ios{width:390px;height:844px}
+.and{width:412px;height:892px;border-radius:26px}
+.lt{--paper:#F6F7F6;--surface:#FFFFFF;--faint:#EDEFEE;--ink:#1A1D1C;--muted:#5C6461;--border:#E2E5E3;--signal:#2A7264;--signal-soft:rgba(47,126,109,.10);--oxide:#B4483E;--ochre:#B98A2F;--shadow-window:0 1px 2px rgba(0,0,0,.05),0 12px 40px rgba(0,0,0,.08);--shadow-overlay:0 4px 24px rgba(0,0,0,.14);color-scheme:light}
+.dk{--paper:#141716;--surface:#1C201E;--faint:#222624;--ink:#E8EBE9;--muted:#8A928E;--border:#2A2F2C;--signal:#58B39F;--signal-soft:rgba(88,179,159,.12);--oxide:#C96A61;--ochre:#CBA14E;--shadow-window:0 1px 2px rgba(0,0,0,.20),0 12px 40px rgba(0,0,0,.36);--shadow-overlay:0 4px 24px rgba(0,0,0,.48);color-scheme:dark}
+.mn{font-family:var(--font-mono);font-variant-numeric:tabular-nums lining-nums}
+.mut{color:var(--muted)}.sig{color:var(--signal)}.ox{color:var(--oxide)}
+.grow{flex:1}
+.sb{flex:none;height:56px;display:flex;align-items:center;padding:0 30px;position:relative;z-index:5}
+.and .sb{height:46px;padding:0 24px}
+.sbt{font-size:15px;font-weight:600;letter-spacing:-.01em}
+.island{position:absolute;left:50%;top:13px;transform:translateX(-50%);width:120px;height:35px;border-radius:18px;background:#0B0D0C}
+.cam{position:absolute;left:50%;top:15px;transform:translateX(-50%);width:13px;height:13px;border-radius:50%;background:#0B0D0C}
+.sbi{display:flex;gap:6px;align-items:center;margin-left:auto;color:var(--ink)}
+.hi{position:absolute;bottom:8px;left:50%;transform:translateX(-50%);width:134px;height:5px;border-radius:3px;background:var(--ink);opacity:.5;z-index:90;pointer-events:none}
+.and .hi{width:104px;height:4px}
+.ltrow{display:flex;align-items:center;gap:10px;padding:10px 20px 6px}
+.lth{margin:0;font-size:30px;font-weight:700;letter-spacing:-.01em;flex:1}
+.hbtn{width:44px;height:44px;display:flex;align-items:center;justify-content:center;color:var(--ink);border-radius:6px}
+.pav{width:34px;height:34px;border-radius:6px;background:var(--faint);border:1px solid var(--border);display:flex;align-items:center;justify-content:center;font-size:14px;font-weight:600;color:var(--muted)}
+.srch{margin:6px 20px 10px;display:flex;align-items:center;gap:8px;background:var(--faint);border-radius:6px;padding:11px 12px;color:var(--muted);font-size:15px}
+.list{flex:1;overflow:hidden}
+.trow{display:flex;align-items:center;gap:10px;padding:0 20px;height:56px;border-bottom:1px solid var(--border)}
+.tt{font-size:15px;flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.tw{font-family:var(--font-mono);font-variant-numeric:tabular-nums;font-size:12px;color:var(--muted);flex:none}
+.tdot{width:7px;height:7px;border-radius:50%;flex:none}
+.tdot.no{background:transparent}.tdot.done{background:var(--muted)}.tdot.fail{background:var(--oxide)}
+.pulse{background:var(--signal);animation:pl 1.4s ease-in-out infinite}
+@keyframes pl{0%,100%{opacity:1}50%{opacity:.35}}
+@media (prefers-reduced-motion: reduce){.pulse,.caret,.mbar{animation:none}}
+.swipe{position:relative;overflow:hidden;border-bottom:1px solid var(--border)}
+.swrow{border-bottom:none;transform:translateX(-152px);background:var(--paper);position:relative;z-index:2}
+.sact{position:absolute;right:0;top:0;bottom:0;display:flex;z-index:1}
+.sa{width:76px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:5px;font-size:11px;font-weight:500;color:#F6F7F6}
+.sa.share{background:var(--muted)}.sa.del{background:var(--oxide)}
+.tabs{flex:none;border-top:1px solid var(--border);background:var(--surface);display:flex;padding:8px 8px 26px;position:relative;z-index:5}
+.tab{flex:1;display:flex;flex-direction:column;align-items:center;gap:3px;color:var(--muted);font-size:10.5px;font-weight:500;padding:4px 0;position:relative}
+.tab.on{color:var(--ink)}
+.and .tab{font-size:11px;gap:4px}
+.nind{display:flex;padding:3px 15px;border-radius:12px}
+.nind.on{background:var(--faint)}
+.tbdot{position:absolute;top:2px;right:calc(50% - 18px);width:7px;height:7px;border-radius:50%;background:var(--ink)}
+.fab{position:absolute;right:20px;bottom:112px;width:56px;height:56px;border-radius:50%;background:var(--ink);color:var(--paper);display:flex;align-items:center;justify-content:center;box-shadow:var(--shadow-overlay);z-index:30}
+.chd{flex:none;display:flex;align-items:center;gap:4px;padding:0 10px 6px;border-bottom:1px solid var(--border)}
+.iconb{min-width:44px;height:44px;display:flex;align-items:center;justify-content:center;color:var(--ink)}
+.chdt{flex:1;min-width:0;display:flex;flex-direction:column;gap:1px}
+.chtt{font-size:15px;font-weight:600;letter-spacing:-.01em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.chid{font-family:var(--font-mono);font-size:11px;color:var(--muted)}
+.conv{flex:1;overflow:hidden;padding:18px 16px;display:flex;flex-direction:column;gap:16px}
+.ubw{display:flex;justify-content:flex-end}
+.ub{max-width:82%;background:var(--faint);border-radius:10px;padding:10px 14px;font-size:15px;line-height:1.55}
+.resp{font-size:15px;line-height:1.55}
+.tcards{display:flex;flex-direction:column;gap:8px;margin-bottom:12px}
+.prov{font-family:var(--font-mono);font-variant-numeric:tabular-nums;font-size:12px;color:var(--muted);display:flex;align-items:center;gap:6px;margin-top:10px}
+.stream{border-bottom:2px solid var(--signal);padding-bottom:1px}
+.caret{display:inline-block;width:2px;height:1.05em;background:var(--signal);margin-left:1px;vertical-align:text-bottom;animation:cbl 1s steps(1) infinite}
+@keyframes cbl{50%{opacity:0}}
+.cw{flex:none;border-top:1px solid var(--border);background:var(--paper);padding:10px 12px 28px}
+.cw1{display:flex;align-items:flex-end;gap:10px}
+.comp{flex:1;min-width:0;background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:12px;box-sizing:border-box;display:flex;flex-direction:column;gap:8px}
+.comp.pol{border-color:var(--signal)}
+.cin{font-size:15px;line-height:1.5;min-height:23px}
+.ph2{color:var(--muted)}.verb{color:var(--muted)}
+.crow{display:flex;align-items:center;gap:6px}
+.cbtn2{width:34px;height:34px;display:flex;align-items:center;justify-content:center;color:var(--muted);margin-left:-8px}
+.vbtn{flex:none;width:56px;height:56px;border-radius:50%;border:1.5px solid var(--ink);color:var(--ink);display:flex;align-items:center;justify-content:center;background:transparent}
+.vbtn.hold{background:var(--faint)}
+.crow .vbtn{margin-left:2px}
+.sendi{width:34px;height:34px;border-radius:6px;background:var(--ink);color:var(--paper);display:flex;align-items:center;justify-content:center;margin-left:auto}
+.sendi.dis{opacity:.35}
+.hint{font-size:11.5px;color:var(--muted);padding:8px 4px 0}
+.meter{display:flex;align-items:center;gap:4px;height:16px}
+.mbar{width:3px;background:var(--muted);border-radius:2px;animation:mtr 900ms ease-in-out infinite}
+.mbar:nth-child(2){animation-delay:120ms}.mbar:nth-child(3){animation-delay:240ms}.mbar:nth-child(4){animation-delay:360ms}.mbar:nth-child(5){animation-delay:480ms}
+@keyframes mtr{0%,100%{height:5px}50%{height:15px}}
+.lstn{font-family:var(--font-mono);font-size:11px;color:var(--muted);margin-left:8px}
+.lockchip{display:inline-flex;align-items:center;gap:6px;font-family:var(--font-mono);font-size:11px;color:var(--ink);border:1px solid var(--border);border-radius:2px;padding:3px 8px;margin-left:auto}
+.tchips{display:flex;gap:6px;flex-wrap:wrap}
+.tchip{display:inline-flex;align-items:center;padding:4px 9px;border:1px solid var(--signal);border-radius:2px;font-family:var(--font-mono);font-size:11.5px;color:var(--signal)}
+.hero{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:flex-end;gap:14px;padding:0 28px 24px;text-align:center}
+.hero .big{font-size:17px;line-height:1.5;font-weight:500;max-width:26ch}
+.scopechip{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--border);border-radius:2px;padding:4px 9px;color:var(--muted);font-family:var(--font-mono);font-size:11.5px}
+.prow2{display:flex;align-items:center;gap:12px;padding:0 20px;height:60px;border-bottom:1px solid var(--border)}
+.pnm{font-size:15px;font-weight:500;flex:1;min-width:0}
+.pfold{display:flex;color:var(--muted)}
+.udot{width:7px;height:7px;border-radius:50%;background:var(--ink);flex:none}
+.chev{display:flex;color:var(--muted)}
+.pdhd{padding:8px 20px 12px;border-bottom:1px solid var(--border)}
+.pdins{font-size:13px;color:var(--muted);line-height:1.5}
+.pdmore{font-family:var(--font-mono);font-size:11px;color:var(--muted);margin-top:5px;display:inline-flex;gap:4px;align-items:center}
+.segw{padding:12px 20px 4px}
+.seg{display:inline-flex;border:1px solid var(--border);border-radius:6px;overflow:hidden}
+.segfull{display:flex;width:100%}
+.segb{flex:1;text-align:center;padding:8px 14px;font-size:13px;color:var(--muted);white-space:nowrap}
+.segb.on{background:var(--faint);color:var(--ink);font-weight:500}
+.pdfoot{margin-top:auto;padding:14px 20px;font-family:var(--font-mono);font-size:11.5px;color:var(--muted);text-align:center}
+.shbn{display:flex;align-items:center;gap:8px;padding:10px 16px;background:var(--faint);border-bottom:1px solid var(--border);font-size:13px}
+.tcard{border:1px solid var(--border);border-radius:6px;background:var(--surface)}
+.tchd{display:flex;align-items:center;gap:8px;padding:9px 12px;font-family:var(--font-mono);font-size:12px}
+.tcdot{width:7px;height:7px;border-radius:50%;background:var(--muted);flex:none}
+.redl{margin:0 12px 10px;padding:8px 10px;border:1px dashed var(--border);border-radius:6px;font-family:var(--font-mono);font-size:12px;color:var(--muted);text-decoration:line-through;text-decoration-color:var(--oxide)}
+.mm{font-family:var(--font-mono);font-size:13px}
+.shfoot2{flex:none;border-top:1px solid var(--border);padding:12px 16px 32px;font-family:var(--font-mono);font-size:11.5px;color:var(--muted);text-align:center}
+.fchips{display:flex;gap:6px;padding:4px 20px 12px;flex-wrap:wrap}
+.fchip{border:1px solid var(--border);border-radius:2px;padding:5px 10px;font-family:var(--font-mono);font-size:11.5px;color:var(--muted)}
+.fchip.on{background:var(--faint);color:var(--ink);border-color:var(--muted)}
+.ibrow{display:flex;align-items:center;gap:10px;padding:0 20px;height:56px;border-bottom:1px solid var(--border)}
+.ibwf{font-family:var(--font-mono);font-size:12.5px;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ibm{font-family:var(--font-mono);font-variant-numeric:tabular-nums;font-size:11.5px;color:var(--muted);flex:none}
+.scrim2{position:absolute;inset:0;background:rgba(20,23,22,.32);z-index:60}
+.sheet{position:absolute;left:0;right:0;bottom:-12px;background:var(--surface);border:1px solid var(--border);border-radius:10px;box-shadow:var(--shadow-overlay);z-index:70;padding:6px 16px 40px}
+.grab{width:36px;height:4px;border-radius:2px;background:var(--border);margin:8px auto 4px}
+.shsec{font-size:10.5px;letter-spacing:.04em;text-transform:uppercase;color:var(--muted);font-weight:500;margin:16px 2px 8px}
+.access{border:1px solid var(--border);border-radius:6px;margin:0 0 6px;overflow:hidden}
+.acchd{display:flex;align-items:center;gap:8px;padding:10px 12px;font-family:var(--font-mono);font-size:12px;color:var(--ink)}
+.accx{margin-left:auto;display:flex}
+.accbody{padding:0 12px 10px 32px;font-family:var(--font-mono);font-size:11.5px;color:var(--muted);line-height:1.7}
+.shfoot{font-family:var(--font-mono);font-size:11.5px;color:var(--muted);margin:12px 2px}
+.popsep2{height:1px;background:var(--border);margin:8px 0}
+.sout{display:flex;align-items:center;gap:10px;padding:12px 2px 0;font-size:15px;font-weight:500}
+.rthd{display:flex;align-items:baseline;gap:10px;margin:12px 2px 6px}
+.rtt{font-size:17px;font-weight:600;letter-spacing:-.01em;flex:1}
+.rid{font-family:var(--font-mono);font-size:11px;color:var(--muted)}
+.rrow{display:flex;justify-content:space-between;gap:16px;padding:10px 0;border-bottom:1px solid var(--border);font-family:var(--font-mono);font-variant-numeric:tabular-nums;font-size:12px}
+.rrow.last{border-bottom:none}
+.rk{color:var(--muted);flex:none}
+.rv{text-align:right;min-width:0}
+.ph{user-select:none}
+.trow,.prow2,.tab,.pav,.hbtn,.iconb,.fab,.prov,.vbtn,.sendi,.fchip,.segb,.tchip,.sa,.sout,.pdmore,.cbtn2,.tundo,.scrim2,.grab{cursor:pointer}
+.trow:active,.prow2:active,.acchd:active{background:var(--faint)}
+.iconb:active,.hbtn:active,.cbtn2:active,.pav:active{background:var(--faint);border-radius:6px}
+.vbtn:active{background:var(--faint)}
+.fab:active,.sendi:active{transform:translateY(.5px)}
+.toastm{position:absolute;left:50%;bottom:120px;transform:translateX(-50%);z-index:85;display:flex;align-items:center;gap:14px;background:var(--surface);border:1px solid var(--border);border-radius:6px;box-shadow:var(--shadow-overlay);padding:10px 14px;font-size:13px;white-space:nowrap}
+.tundo{font-weight:600}
+</style>
+</helmet>
+<div class="{{ rootCls }}">
+<sc-if value="{{ ios }}" hint-placeholder-val="{{ true }}"><div class="sb"><span class="sbt mn">9:41</span><div class="island"></div><div class="sbi"><x-import component-from-global-scope="MunimentDesignSystem_42af51.Icon" name="signal" size="15" hint-size="15px,15px"></x-import><x-import component-from-global-scope="MunimentDesignSystem_42af51.Icon" name="wifi" size="15" hint-size="15px,15px"></x-import><x-import component-from-global-scope="MunimentDesignSystem_42af51.Icon" name="battery-full" size="21" hint-size="21px,21px"></x-import></div></div></sc-if>
+<sc-if value="{{ and }}" hint-placeholder-val="{{ false }}"><div class="sb"><span class="sbt mn">9:41</span><div class="cam"></div><div class="sbi"><x-import component-from-global-scope="MunimentDesignSystem_42af51.Icon" name="wifi" size="14" hint-size="14px,14px"></x-import><x-import component-from-global-scope="MunimentDesignSystem_42af51.Icon" name="signal" size="14" hint-size="14px,14px"></x-import><x-import component-from-global-scope="MunimentDesignSystem_42af51.Icon" name="battery-full" size="19" hint-size="19px,19px"></x-import></div></div></sc-if>
+<sc-if value="{{ sThreads }}" hint-placeholder-val="{{ true }}">
+<div class="ltrow"><h1 class="lth">Threads</h1><sc-if value="{{ ios }}" hint-placeholder-val="{{ true }}"><span class="hbtn" onClick="{{ openComposer }}"><x-import component-from-global-scope="MunimentDesignSystem_42af51.Icon" name="plus" size="23" hint-size="23px,23px"></x-import></span></sc-if><span class="pav" onClick="{{ openAccess }}">m</span></div>
+<div class="srch"><x-import component-from-global-scope="MunimentDesignSystem_42af51.Icon" name="search" size="16" hint-size="16px,16px"></x-import>Search threads</div>
+<div class="list">
+<div class="trow" onClick="{{ openThread }}"><span class="tdot pulse"></span><span class="tt">Churn analysis — Q2</span><span class="tw">now</span></div>
+<div class="trow" onClick="{{ openThread }}"><span class="tdot no"></span><span class="tt">Q3 cloud spend variance</span><span class="tw">3h</span></div>
+<sc-if value="{{ notDeleted }}" hint-placeholder-val="{{ true }}"><div class="swipe"><div class="sact"><div class="sa share" onClick="{{ shareThread }}"><x-import component-from-global-scope="MunimentDesignSystem_42af51.Icon" name="folder-input" size="18" hint-size="18px,18px"></x-import>Share</div><div class="sa del" onClick="{{ delThread }}"><x-import component-from-global-scope="MunimentDesignSystem_42af51.Icon" name="trash-2" size="18" hint-size="18px,18px"></x-import>Delete</div></div><div class="trow swrow"><span class="tdot no"></span><span class="tt">Vendor contract review</span><span class="tw">1d</span></div></div></sc-if>
+<div class="trow" onClick="{{ openThread }}"><span class="tdot no"></span><span class="tt">Incident 4471 timeline</span><span class="tw">2d</span></div>
+<div class="trow" onClick="{{ openThread }}"><span class="tdot no"></span><span class="tt">Policy: analysis routing</span><span class="tw">2026-06-30</span></div>
+</div>
+</sc-if>
+<sc-if value="{{ sThread }}" hint-placeholder-val="{{ false }}">
+<div class="chd"><span class="iconb" onClick="{{ backThreads }}"><x-import component-from-global-scope="MunimentDesignSystem_42af51.Icon" name="chevron-left" size="24" hint-size="24px,24px"></x-import></span><span class="chdt"><span class="chtt">Churn analysis — Q2</span><span class="chid">thread 7c2e</span></span><span class="iconb"><x-import component-from-global-scope="MunimentDesignSystem_42af51.Icon" name="ellipsis" size="20" hint-size="20px,20px"></x-import></span></div>
+<div class="conv">
+<div class="ubw"><div class="ub">Pull Q2 churn by plan cohort and flag anything above 3%.</div></div>
+<div>
+<div class="tcards"><x-import component-from-global-scope="MunimentDesignSystem_42af51.ToolCard" status="complete" verb="Read" object="vault:acme/warehouse" hint-size="100%,40px"></x-import><x-import component-from-global-scope="MunimentDesignSystem_42af51.ToolCard" status="complete" verb="Computed" object="churn by plan cohort" hint-size="100%,40px"></x-import></div>
+<div class="resp">Q2 churn ran 2.1% overall. Two plan cohorts cross your 3% flag: starter monthly at 4.6% and legacy pro at 3.8%. Annual plans hold under 1%.</div>
+<div class="prov" onClick="{{ openReceipt }}"><span class="sig">analysis/high</span><span>· $0.0074</span><x-import component-from-global-scope="MunimentDesignSystem_42af51.Icon" name="chevron-down" size="13" hint-size="13px,13px"></x-import></div>
+</div>
+<div class="ubw"><div class="ub">Which accounts drive the starter-monthly number?</div></div>
+<div class="resp"><span class="stream">Eleven accounts closed in June drive most of it — eight were on fewer than five seats, and three churned within 60 days of a support escalation</span><span class="caret"></span></div>
+</div>
+</sc-if>
+<sc-if value="{{ sComposer }}" hint-placeholder-val="{{ false }}">
+<div class="chd"><span class="iconb" onClick="{{ backThreads }}"><x-import component-from-global-scope="MunimentDesignSystem_42af51.Icon" name="chevron-left" size="24" hint-size="24px,24px"></x-import></span><span class="chdt"><span class="chtt">New thread</span><span class="chid">unsaved</span></span></div>
+<div class="hero"><x-import component-from-global-scope="MunimentDesignSystem_42af51.Mark" size="36" state="rest" hint-size="36px,36px"></x-import><div class="big">Ask anything. Your org's routing decides which model answers.</div><span class="scopechip"><x-import component-from-global-scope="MunimentDesignSystem_42af51.Icon" name="building-2" size="13" hint-size="13px,13px"></x-import>org · dnsfilter</span></div>
+</sc-if>
+<sc-if value="{{ hasComposer }}" hint-placeholder-val="{{ false }}">
+<div class="cw">
+<div class="cw1">
+<div class="{{ compCls }}">
+<sc-if value="{{ cRest }}" hint-placeholder-val="{{ true }}"><div class="cin ph2">Message muniment</div></sc-if>
+<sc-if value="{{ vVerb }}" hint-placeholder-val="{{ false }}"><div class="cin verb">so basically i want to um ask which starter monthly accounts churned in june and why</div></sc-if>
+<sc-if value="{{ vPol }}" hint-placeholder-val="{{ false }}"><div class="cin"><span class="stream">Which starter-monthly accounts churned in June, and why?</span></div></sc-if>
+<sc-if value="{{ vDoneTxt }}" hint-placeholder-val="{{ false }}"><div class="cin">Which starter-monthly accounts churned in June, and why?</div></sc-if>
+<sc-if value="{{ vMeter }}" hint-placeholder-val="{{ false }}"><div class="meter"><span class="mbar"></span><span class="mbar"></span><span class="mbar"></span><span class="mbar"></span><span class="mbar"></span><span class="lstn">listening…</span><sc-if value="{{ vLock }}" hint-placeholder-val="{{ false }}"><span class="lockchip"><x-import component-from-global-scope="MunimentDesignSystem_42af51.Icon" name="lock" size="11" hint-size="11px,11px"></x-import>hands-free · tap to stop</span></sc-if></div></sc-if>
+<sc-if value="{{ vChips }}" hint-placeholder-val="{{ false }}"><div class="tchips"><span class="tchip" onClick="{{ applyChip }}">key points</span><span class="tchip" onClick="{{ applyChip }}">formal</span><span class="tchip" onClick="{{ applyChip }}">short</span><span class="tchip" onClick="{{ applyChip }}">long</span></div></sc-if>
+<div class="crow"><span class="cbtn2"><x-import component-from-global-scope="MunimentDesignSystem_42af51.Icon" name="paperclip" size="19" hint-size="19px,19px"></x-import></span><div class="grow"></div><sc-if value="{{ vSend }}" hint-placeholder-val="{{ false }}"><span class="{{ sendCls }}" onClick="{{ sendMsg }}"><x-import component-from-global-scope="MunimentDesignSystem_42af51.Icon" name="arrow-up" size="17" hint-size="17px,17px"></x-import></span></sc-if><div class="{{ vbtnCls }}" onMouseDown="{{ vDown }}" onMouseUp="{{ vUp }}" onMouseLeave="{{ vUp }}" onTouchStart="{{ vDown }}" onTouchEnd="{{ vUp }}"><x-import component-from-global-scope="MunimentDesignSystem_42af51.Icon" name="mic" size="22" hint-size="22px,22px"></x-import></div></div>
+</div>
+</div>
+<sc-if value="{{ vHint1 }}" hint-placeholder-val="{{ false }}"><div class="hint">Voice never leaves this phone.</div></sc-if>
+<sc-if value="{{ vHint2 }}" hint-placeholder-val="{{ false }}"><div class="hint">Release to send to the input · slide up to lock</div></sc-if>
+</div>
+</sc-if>
+<sc-if value="{{ sProjects }}" hint-placeholder-val="{{ false }}">
+<div class="ltrow"><h1 class="lth">Projects</h1></div>
+<div class="list">
+<div class="prow2" onClick="{{ openProject }}"><span class="pfold"><x-import component-from-global-scope="MunimentDesignSystem_42af51.Icon" name="folder" size="18" hint-size="18px,18px"></x-import></span><span class="pnm">Platform</span><span class="tw">6 members</span><span class="udot"></span><span class="chev"><x-import component-from-global-scope="MunimentDesignSystem_42af51.Icon" name="chevron-right" size="16" hint-size="16px,16px"></x-import></span></div>
+<div class="prow2" onClick="{{ openProject }}"><span class="pfold"><x-import component-from-global-scope="MunimentDesignSystem_42af51.Icon" name="folder" size="18" hint-size="18px,18px"></x-import></span><span class="pnm">Finance</span><span class="tw">4 members</span><span class="chev"><x-import component-from-global-scope="MunimentDesignSystem_42af51.Icon" name="chevron-right" size="16" hint-size="16px,16px"></x-import></span></div>
+<div class="prow2" onClick="{{ openProject }}"><span class="pfold"><x-import component-from-global-scope="MunimentDesignSystem_42af51.Icon" name="folder" size="18" hint-size="18px,18px"></x-import></span><span class="pnm">Legal reviews</span><span class="tw">3 members</span><span class="chev"><x-import component-from-global-scope="MunimentDesignSystem_42af51.Icon" name="chevron-right" size="16" hint-size="16px,16px"></x-import></span></div>
+</div>
+</sc-if>
+<sc-if value="{{ sProject }}" hint-placeholder-val="{{ false }}">
+<div class="chd"><span class="iconb" onClick="{{ backProjects }}"><x-import component-from-global-scope="MunimentDesignSystem_42af51.Icon" name="chevron-left" size="24" hint-size="24px,24px"></x-import></span><span class="chdt"><span class="chtt">Platform</span><span class="chid">project · 6 members</span></span><sc-if value="{{ ios }}" hint-placeholder-val="{{ true }}"><span class="iconb" onClick="{{ openComposer }}"><x-import component-from-global-scope="MunimentDesignSystem_42af51.Icon" name="plus" size="22" hint-size="22px,22px"></x-import></span></sc-if></div>
+<div class="pdhd"><div class="pdins">Route platform work at analysis/high. Prefer warehouse connections; publish artifacts to group:platform.<sc-if value="{{ insOpen }}" hint-placeholder-val="{{ false }}"> New threads started here inherit this scope. Shared threads stay read-only until forked.</sc-if></div><div class="pdmore" onClick="{{ toggleIns }}"><sc-if value="{{ insClosed }}" hint-placeholder-val="{{ true }}">more</sc-if><sc-if value="{{ insOpen }}" hint-placeholder-val="{{ false }}">less</sc-if><x-import component-from-global-scope="MunimentDesignSystem_42af51.Icon" name="chevron-down" size="12" hint-size="12px,12px"></x-import></div></div>
+<div class="segw"><div class="seg segfull"><span class="segb on">Threads</span><span class="segb">Shared</span><span class="segb">Artifacts</span><span class="segb">Inbox</span></div></div>
+<div class="list">
+<div class="trow" onClick="{{ openThread }}"><span class="tdot pulse"></span><span class="tt">Churn analysis — Q2</span><span class="tw">now</span></div>
+<div class="trow" onClick="{{ openThread }}"><span class="tdot no"></span><span class="tt">Object storage tiering plan</span><span class="tw">5h</span></div>
+<div class="trow" onClick="{{ openThread }}"><span class="tdot no"></span><span class="tt">Incident 4471 timeline</span><span class="tw">2d</span></div>
+</div>
+<div class="pdfoot">Connections are managed on desktop or by admins.</div>
+</sc-if>
+<sc-if value="{{ sShared }}" hint-placeholder-val="{{ false }}">
+<div class="chd"><span class="iconb" onClick="{{ backProject }}"><x-import component-from-global-scope="MunimentDesignSystem_42af51.Icon" name="chevron-left" size="24" hint-size="24px,24px"></x-import></span><span class="chdt"><span class="chtt">Forecast reconciliation — Q3</span><span class="chid">shared thread</span></span><x-import component-from-global-scope="MunimentDesignSystem_42af51.Button" size="sm" onClick="{{ forkShared }}" hint-size="auto,32px">Fork</x-import></div>
+<div class="shbn"><x-import component-from-global-scope="MunimentDesignSystem_42af51.Icon" name="eye" size="14" hint-size="14px,14px"></x-import>Shared by dana · view only</div>
+<div class="conv">
+<div class="ubw"><div class="ub">Reconcile Q3 actuals against the committed forecast.</div></div>
+<div>
+<div class="tcard"><div class="tchd"><span class="tcdot"></span>Read · vault:acme/finance</div><div class="redl">output withheld · connection not granted</div></div>
+<div class="resp" style="margin-top:12px">Actuals reconcile within 1.2% of the committed forecast overall. Object storage is the only service past tolerance, at 14.2% over. The finance records themselves are withheld here because you don't hold <span class="mm">vault:acme/finance</span>.</div>
+<div class="prov"><span class="sig">analysis/high</span><span>· $0.0089</span><x-import component-from-global-scope="MunimentDesignSystem_42af51.Icon" name="chevron-down" size="13" hint-size="13px,13px"></x-import></div>
+</div>
+</div>
+<div class="shfoot2">Fork continues under your own access · lineage recorded</div>
+</sc-if>
+<sc-if value="{{ sInbox }}" hint-placeholder-val="{{ false }}">
+<div class="ltrow"><h1 class="lth">Inbox</h1></div>
+<div class="fchips"><span class="{{ fc0 }}" onClick="{{ setF0 }}">all</span><span class="{{ fc1 }}" onClick="{{ setF1 }}">mine</span><span class="{{ fc2 }}" onClick="{{ setF2 }}">Platform</span><span class="{{ fc3 }}" onClick="{{ setF3 }}">Finance</span></div>
+<div class="list">
+<div class="ibrow"><span class="tdot pulse"></span><span class="ibwf">forecast-reconcile</span><span class="ibm">running</span><span class="ibm">—</span><span class="ibm">41s</span></div>
+<div class="ibrow"><span class="tdot done"></span><span class="ibwf">nightly-cost-report</span><span class="ibm">complete</span><span class="ibm">1 artifact</span><span class="ibm">2h</span></div>
+<div class="ibrow"><span class="tdot done"></span><span class="ibwf">contract-scan</span><span class="ibm">complete</span><span class="ibm">3 artifacts</span><span class="ibm">6h</span></div>
+<div class="ibrow"><span class="tdot fail"></span><span class="ibwf">churn-cohort-refresh</span><span class="ibm ox">failed</span><span class="ibm">—</span><span class="ibm">1d</span></div>
+<div class="ibrow"><span class="tdot done"></span><span class="ibwf">policy-drift-scan</span><span class="ibm">complete</span><span class="ibm">2 artifacts</span><span class="ibm">2026-07-01</span></div>
+</div>
+</sc-if>
+<sc-if value="{{ showTabs }}" hint-placeholder-val="{{ true }}">
+<sc-if value="{{ ios }}" hint-placeholder-val="{{ true }}"><div class="tabs">
+<div class="{{ tabT }}" onClick="{{ goThreads }}"><x-import component-from-global-scope="MunimentDesignSystem_42af51.Icon" name="message-square" size="22" hint-size="22px,22px"></x-import><span>Threads</span></div>
+<div class="{{ tabP }}" onClick="{{ goProjects }}"><x-import component-from-global-scope="MunimentDesignSystem_42af51.Icon" name="folder" size="22" hint-size="22px,22px"></x-import><span>Projects</span></div>
+<div class="{{ tabI }}" onClick="{{ goInbox }}"><x-import component-from-global-scope="MunimentDesignSystem_42af51.Icon" name="inbox" size="22" hint-size="22px,22px"></x-import><span>Inbox</span><sc-if value="{{ inboxDot }}" hint-placeholder-val="{{ true }}"><span class="tbdot"></span></sc-if></div>
+</div></sc-if>
+<sc-if value="{{ and }}" hint-placeholder-val="{{ false }}"><div class="tabs">
+<div class="{{ tabT }}" onClick="{{ goThreads }}"><span class="{{ nindT }}"><x-import component-from-global-scope="MunimentDesignSystem_42af51.Icon" name="message-square" size="21" hint-size="21px,21px"></x-import></span><span>Threads</span></div>
+<div class="{{ tabP }}" onClick="{{ goProjects }}"><span class="{{ nindP }}"><x-import component-from-global-scope="MunimentDesignSystem_42af51.Icon" name="folder" size="21" hint-size="21px,21px"></x-import></span><span>Projects</span></div>
+<div class="{{ tabI }}" onClick="{{ goInbox }}"><span class="{{ nindI }}"><x-import component-from-global-scope="MunimentDesignSystem_42af51.Icon" name="inbox" size="21" hint-size="21px,21px"></x-import></span><span>Inbox</span><sc-if value="{{ inboxDot }}" hint-placeholder-val="{{ true }}"><span class="tbdot"></span></sc-if></div>
+</div></sc-if>
+</sc-if>
+<sc-if value="{{ fabShow }}" hint-placeholder-val="{{ false }}"><div class="fab" onClick="{{ openComposer }}"><x-import component-from-global-scope="MunimentDesignSystem_42af51.Icon" name="plus" size="26" hint-size="26px,26px"></x-import></div></sc-if>
+<sc-if value="{{ oAccess }}" hint-placeholder-val="{{ false }}"><div class="scrim2" onClick="{{ closeAccess }}"></div><div class="sheet">
+<div class="grab"></div>
+<div class="shsec">Appearance</div>
+<div class="seg"><span class="{{ segS }}" onClick="{{ setSys }}">System</span><span class="{{ segL }}" onClick="{{ setLight }}">Light</span><span class="{{ segD }}" onClick="{{ setDark }}">Dark</span></div>
+<div class="shsec">Your access</div>
+<div class="access"><div class="acchd"><x-import component-from-global-scope="MunimentDesignSystem_42af51.Icon" name="users" size="14" hint-size="14px,14px"></x-import>group:data-team<span class="accx"><x-import component-from-global-scope="MunimentDesignSystem_42af51.Icon" name="chevron-up" size="13" hint-size="13px,13px"></x-import></span></div><div class="accbody"><div>models: glm-5.2, opus-4.8, glm-5.2-mini</div><div>connections: vault:acme/warehouse, pagerduty</div><div>packages: finance-tools</div><div>capabilities: project.publish</div></div></div>
+<div class="access"><div class="acchd"><x-import component-from-global-scope="MunimentDesignSystem_42af51.Icon" name="users" size="14" hint-size="14px,14px"></x-import>group:everyone<span class="accx"><x-import component-from-global-scope="MunimentDesignSystem_42af51.Icon" name="chevron-down" size="13" hint-size="13px,13px"></x-import></span></div></div>
+<div class="shfoot">Access is set by your admins.</div>
+<div class="popsep2"></div>
+<div class="sout"><x-import component-from-global-scope="MunimentDesignSystem_42af51.Icon" name="log-out" size="17" hint-size="17px,17px"></x-import>Sign out</div>
+</div></sc-if>
+<sc-if value="{{ oReceipt }}" hint-placeholder-val="{{ false }}"><div class="scrim2" onClick="{{ closeReceipt }}"></div><div class="sheet">
+<div class="grab"></div>
+<div class="rthd"><span class="rtt">Receipt</span><span class="rid">turn m0 · thread 7c2e</span></div>
+<div class="rrow"><span class="rk">route</span><span class="rv"><span class="sig">analysis/high</span> → glm-5.2</span></div>
+<div class="rrow"><span class="rk">matched rule</span><span class="rv">rule 7: analysis/high → glm-5.2, fallback opus-4.8</span></div>
+<div class="rrow"><span class="rk">tokens</span><span class="rv">3,240 in · 428 out</span></div>
+<div class="rrow"><span class="rk">cost</span><span class="rv">$0.0074</span></div>
+<div class="rrow"><span class="rk">duration</span><span class="rv">5.8s</span></div>
+<div class="rrow"><span class="rk">connections</span><span class="rv">vault:acme/warehouse</span></div>
+<div class="rrow last"><span class="rk">lineage</span><span class="rv">thread 7c2e · turn m0</span></div>
+</div></sc-if>
+<sc-if value="{{ toastOn }}" hint-placeholder-val="{{ false }}"><div class="toastm">{{ toastMsg }}<sc-if value="{{ toastUndoable }}" hint-placeholder-val="{{ false }}"><span class="tundo" onClick="{{ toastUndo }}">Undo</span></sc-if></div></sc-if>
+<div class="hi"></div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;:{&quot;width&quot;:430,&quot;height&quot;:900},&quot;screen&quot;:{&quot;editor&quot;:&quot;enum&quot;,&quot;default&quot;:&quot;threads&quot;,&quot;options&quot;:[&quot;threads&quot;,&quot;thread&quot;,&quot;receipt&quot;,&quot;composer&quot;,&quot;projects&quot;,&quot;project&quot;,&quot;shared&quot;,&quot;inbox&quot;,&quot;access&quot;],&quot;tsType&quot;:&quot;string&quot;,&quot;section&quot;:&quot;Frame&quot;},&quot;platform&quot;:{&quot;editor&quot;:&quot;enum&quot;,&quot;default&quot;:&quot;ios&quot;,&quot;options&quot;:[&quot;ios&quot;,&quot;android&quot;],&quot;tsType&quot;:&quot;string&quot;,&quot;section&quot;:&quot;Frame&quot;},&quot;theme&quot;:{&quot;editor&quot;:&quot;enum&quot;,&quot;default&quot;:&quot;light&quot;,&quot;options&quot;:[&quot;light&quot;,&quot;dark&quot;],&quot;tsType&quot;:&quot;string&quot;,&quot;section&quot;:&quot;Frame&quot;},&quot;stage&quot;:{&quot;editor&quot;:&quot;range&quot;,&quot;default&quot;:1,&quot;min&quot;:1,&quot;max&quot;:6,&quot;step&quot;:1,&quot;tsType&quot;:&quot;number&quot;,&quot;section&quot;:&quot;Voice (composer screen)&quot;}}">
+class Component extends DCLogic {
+  state={screen:null,theme:null,stage:null,filter:0,insOpen:false,deleted:false,toast:null};
+  componentWillUnmount(){(this._t||[]).forEach(clearTimeout)}
+  later(fn,ms){this._t=this._t||[];const t=setTimeout(fn,ms);this._t.push(t);return t}
+  go(sc){this.setState({screen:sc,toast:null})}
+  setStage(n){this.setState({stage:n})}
+  curStage(){return this.state.stage!=null?this.state.stage:parseInt(this.props.stage||'1',10)}
+  finishVoice(){this.setStage(4);this.later(()=>this.setStage(5),900);this.later(()=>{if(this.curStage()===5)this.setStage(6)},6900)}
+  vDown=()=>{const st=this.curStage();if(st===3){this.finishVoice();return}this._held=true;this.setStage(2);this._lockT=this.later(()=>{if(this._held)this.setStage(3)},1600)}
+  vUp=()=>{if(!this._held)return;this._held=false;clearTimeout(this._lockT);if(this.curStage()===2)this.finishVoice()}
+  fcCls(i){return 'fchip'+(this.state.filter===i?' on':'')}
+  toastShow(msg,undoable){this.setState({toast:{msg,undoable}});this.later(()=>{const t=this.state.toast;if(t&&t.msg===msg)this.setState({toast:null})},undoable?8000:4000)}
+  renderVals(){
+    const p=this.props;
+    const screen=this.state.screen||p.screen||'threads';
+    const platform=p.platform||'ios';
+    const theme=this.state.theme||p.theme||'light';
+    const stage=this.curStage();
+    const ios=platform!=='android';
+    const and=!ios;
+    const dark=theme==='dark';
+    const sThreads=screen==='threads'||screen==='access';
+    const sThread=screen==='thread'||screen==='receipt';
+    const sComposer=screen==='composer';
+    const sProjects=screen==='projects';
+    const sProject=screen==='project';
+    const sShared=screen==='shared';
+    const sInbox=screen==='inbox';
+    const showTabs=sThreads||sProjects||sProject||sInbox;
+    const tabOn=sThreads?'t':(sProjects||sProject)?'p':sInbox?'i':'';
+    const hasComposer=sThread||sComposer;
+    return {
+      ios, and,
+      rootCls:'ph '+(ios?'ios':'and')+(dark?' dk':' lt'),
+      sThreads, sThread, sComposer, sProjects, sProject, sShared, sInbox,
+      showTabs, hasComposer,
+      tabT:'tab'+(tabOn==='t'?' on':''),
+      tabP:'tab'+(tabOn==='p'?' on':''),
+      tabI:'tab'+(tabOn==='i'?' on':''),
+      nindT:'nind'+(tabOn==='t'?' on':''),
+      nindP:'nind'+(tabOn==='p'?' on':''),
+      nindI:'nind'+(tabOn==='i'?' on':''),
+      inboxDot: showTabs && !sInbox,
+      fabShow: and && (sThreads||sProject),
+      cRest: hasComposer && stage<=1,
+      vVerb: hasComposer && (stage===2||stage===3),
+      vMeter: hasComposer && (stage===2||stage===3),
+      vLock: hasComposer && stage===3,
+      vHint1: sComposer && stage<=1,
+      vHint2: hasComposer && stage===2,
+      vPol: hasComposer && stage===4,
+      vDoneTxt: hasComposer && stage>=5,
+      vChips: hasComposer && stage===5,
+      vSend: hasComposer && stage>=4,
+      sendCls:'sendi'+(stage===4?' dis':''),
+      compCls:'comp'+(stage===4?' pol':''),
+      vbtnCls:'vbtn'+(stage===2||stage===3?' hold':''),
+      oAccess: screen==='access',
+      oReceipt: screen==='receipt',
+      segS:'segb', segL:'segb'+(dark?'':' on'), segD:'segb'+(dark?' on':''),
+      goThreads:()=>this.go('threads'), goProjects:()=>this.go('projects'), goInbox:()=>this.go('inbox'),
+      openThread:()=>this.go('thread'), openAccess:()=>this.go('access'), openComposer:()=>this.go('composer'),
+      openReceipt:()=>this.go('receipt'), closeReceipt:()=>this.go('thread'), closeAccess:()=>this.go('threads'),
+      openProject:()=>this.go('project'), backProjects:()=>this.go('projects'), backThreads:()=>this.go('threads'), backProject:()=>this.go('project'),
+      forkShared:()=>this.go('thread'), sendMsg:()=>this.go('thread'),
+      vDown:this.vDown, vUp:this.vUp, applyChip:()=>this.setStage(6),
+      setSys:()=>this.setState({theme:null}), setLight:()=>this.setState({theme:'light'}), setDark:()=>this.setState({theme:'dark'}),
+      fc0:this.fcCls(0), fc1:this.fcCls(1), fc2:this.fcCls(2), fc3:this.fcCls(3),
+      setF0:()=>this.setState({filter:0}), setF1:()=>this.setState({filter:1}), setF2:()=>this.setState({filter:2}), setF3:()=>this.setState({filter:3}),
+      insOpen:this.state.insOpen, insClosed:!this.state.insOpen, toggleIns:()=>this.setState(s=>({insOpen:!s.insOpen})),
+      notDeleted:!this.state.deleted,
+      delThread:()=>{this.setState({deleted:true});this.toastShow('Thread deleted',true)},
+      shareThread:()=>this.toastShow('Shared to Platform · read-only',false),
+      toastOn:!!this.state.toast, toastMsg:this.state.toast?this.state.toast.msg:'', toastUndoable:!!(this.state.toast&&this.state.toast.undoable),
+      toastUndo:()=>this.setState({deleted:false,toast:null})
+    };
+  }
+}
+</script>
+</body>
+</html>

@@ -1,0 +1,26 @@
+/* Muniment webfonts — self-hosted, OFL. No third-party font CDNs in product surfaces. */
+
+/* Schibsted Grotesk — everything human: conversation, headings, buttons, prose, labels. */
+@font-face {
+  font-family: "Schibsted Grotesk";
+  src: url("../assets/fonts/SchibstedGrotesk-VariableFont_wght.ttf") format("truetype-variations");
+  font-weight: 400 700;
+  font-style: normal;
+  font-display: swap;
+}
+
+/* Commit Mono — everything that is a record: provenance, tool activity, audit rows, IDs, code. */
+@font-face {
+  font-family: "Commit Mono";
+  src: url("../assets/fonts/CommitMono-400-Regular.otf") format("opentype");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Commit Mono";
+  src: url("../assets/fonts/CommitMono-700-Regular.otf") format("opentype");
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+}

@@ -1,0 +1,371 @@
+# Muniment — Product & Engineering Spec (Harness)
+
+**Status:** Draft v2 for dev team handoff (v2: hosted-SaaS stance synced)
+**Author:** Mikey Pruitt
+**Companions:** 01–05 design docs · monetization-and-marketing.md
+**Date:** July 2026
+
+---
+
+## 1. Product thesis
+
+Every existing tool falls in one of two camps. Desktop-native multi-model clients (Cherry Studio, Jan, Msty, OpenCode Desktop) are single-user with zero org governance. Org-governed platforms (Open WebUI, LibreChat) are web apps with no desktop presence, no local agentic execution, and no local models.
+
+We build the thing in the gap: a desktop-native AI work app with one powerful mode, backed by an org control plane that handles identity, group-based entitlements, automatic model routing, MCP connection management, a skills/plugin registry, scheduled workflows, and a shared artifact library.
+
+Muniment is a **hosted SaaS**: we operate the control plane and gateway as a multi-tenant cloud; customers run nothing. The desktop app is a thin client to our cloud. **Closed source, commercial.** Pricing: one plan — $15/seat/mo billed annually, $20/seat/mo billed monthly, 10-seat minimum, 30-day full-product trial. Customers bring their own provider keys or model endpoints; muniment never marks up inference. No partner/reseller program. Self-hosting is not offered publicly; a self-hosted enterprise deployment is held in reserve as an unadvertised sales card only, so the architecture must remain deployable by compose/K8s even though we never say so.
+
+### Non-goals (v1)
+
+- **No serverless/solo mode.** The desktop app requires a control plane connection. Accepted tradeoffs: no offline use, no bottom-up solo-dev adoption funnel. Benefit: policy is always enforced, no provider API keys on laptops, one source of truth.
+- **No hosted MCP servers.** We manage MCP *connections* only. Hosting/governance of remote MCPs is delegated to services like MintMCP.
+- **No multiple UI modes.** One mode. No chat/cowork/code split.
+- **No mobile client** (Tauri v2 keeps the door open).
+- **No promise of laptop-grade sandbox isolation on Windows** (see 6.5).
+
+---
+
+## 2. Architecture overview
+
+Two components, one shared harness.
+
+```
+┌──────────────────────────────┐        ┌───────────────────────────────────┐
+│  DESKTOP CLIENT (Tauri v2)   │        │  CONTROL PLANE (muniment cloud)   │
+│                              │        │                                   │
+│  UI (webview, single mode)   │◄──WS──►│  API + admin web app              │
+│  Pi sidecar (RPC/stdio)      │        │  better-auth (OIDC) + SCIM 2.0    │
+│  llama.cpp sidecar:          │        │  Postgres (entitlements, registry,│
+│    - Gemma quant (polish +   │        │            artifacts, audit)      │
+│      routing classifier)     │  HTTPS │  LiteLLM gateway (models, keys,   │
+│  sherpa-onnx: Parakeet ASR   │───────►│    budgets, routing)              │
+│  Kokoro TTS                  │        │  Flue runtime (scheduled          │
+│  Local MCP clients (stdio)   │        │    workflows, durable sessions)   │
+│  Remote MCP clients (via CP  │        │  Package registry                 │
+│    connection registry)      │        │  Object storage (files/artifacts) │
+└──────────────────────────────┘        └───────────────────────────────────┘
+                                                     │
+                                          Providers: Anthropic, OpenAI,
+                                          Google, OpenRouter, org-hosted
+                                          open-weight endpoints (vLLM etc.)
+```
+
+**Why Pi + Flue and not a fork of OpenCode:** Pi (MIT) is designed for embedding, with RPC over stdin/stdout and an SDK. Flue (Apache 2.0, Astro team) is built on Pi, so skills, tools, sessions, and sandbox semantics are identical on the laptop and on the server. One skill format org-wide. OpenCode (MIT) is reference material for its permission config and client/server split, not a fork base: everything that differentiates this product (multi-user, orgs, groups, IdP, routing policy, shared libraries) is absent from OpenCode, and forking a repo at that velocity means permanent rebase pain in exactly the core files we would modify.
+
+### License inventory
+
+| Layer | Choice | License | Notes |
+|---|---|---|---|
+| Agent engine | Pi | MIT | Sidecar via RPC mode |
+| Server agent runtime | Flue | Apache 2.0 | Durable execution, sandboxes, MCP |
+| Desktop shell | Tauri v2 | MIT/Apache 2.0 | Capability model doubles as FS enforcement |
+| Model gateway | LiteLLM | MIT | Virtual keys, budgets, routing |
+| Auth | better-auth | MIT | OIDC; SCIM endpoint is custom |
+| ASR | Parakeet-TDT (sherpa-onnx) | CC-BY-4.0 (verify per release) | CPU-capable |
+| Polish/classifier | Gemma (small quant) | Gemma Terms of Use | Commercial use permitted; review terms before sale |
+| TTS | Kokoro | Apache 2.0 | 82M params, CPU real-time |
+| Router bootstrap | RouteLLM pretrained | Apache 2.0 | mf / sw_ranking routers |
+
+**Do not use as code base layers:** Open WebUI (custom license, branding restrictions), Cherry Studio and Paseo (AGPL). All three are fine as reference reading.
+
+---
+
+## 3. Roles and identity
+
+Three roles, org-scoped: `user`, `admin`, `owner`.
+
+- **User:** consumes what their groups grant. Chat, agentic runs, entitled models/MCPs/packages/artifacts/workflows.
+- **Admin:** manages people, groups, artifacts, packages (review/publish), workflow oversight.
+- **Owner:** everything admin has, plus routing policy, provider credentials, budgets, org security posture (sandbox policy, local model policy, local stdio MCP allowlist).
+
+### 3.1 Auth
+
+- better-auth with OIDC for IdP login (Okta, Entra, Google Workspace) plus local email/password for orgs without an IdP.
+- Sessions are short-lived tokens issued to the desktop client. No provider API keys ever reach the client.
+
+### 3.2 SCIM 2.0 (v1, not deferred)
+
+Custom SCIM 2.0 server endpoint on the control plane. Scope: `/Users` and `/Groups` CRUD + PATCH, bearer-token auth per IdP integration. IdP-sourced groups land in `groups` with `source='idp'` and members sync into `user_groups` with `source='scim'`. Manual group edits on IdP-sourced groups are rejected (mirrors Open WebUI's lockout-avoidance lesson: org owners are exempt from deprovisioning via SCIM alone; deactivation of an owner requires a second owner or break-glass procedure, log it either way).
+
+SCIM is a small, well-specified REST surface. Build it in-house; do not take a WorkOS dependency in a product we may sell.
+
+---
+
+## 4. Entitlements
+
+Single polymorphic grants table. Explicit deny exists and wins. Server is the only enforcer; the client receives a signed snapshot purely for UX (hiding controls). `org_id` on everything.
+
+### 4.1 Schema
+
+```sql
+-- principals
+users(id, org_id, email, idp_subject, status, entitlement_version)
+groups(id, org_id, name, source enum('manual','idp'), idp_group_id)
+user_groups(user_id, group_id, source enum('manual','scim'))
+org_members(user_id, org_id, role enum('user','admin','owner'))
+
+-- resources (registries, not payloads)
+models(id, org_id, litellm_model_name, display_name, tier, enabled)
+mcp_connections(id, org_id, name, url, auth_ref, transport, enabled)
+packages(id, org_id, name, kind enum('skill','plugin','extension','prompt'),
+         source, signed_by, review_status)
+package_versions(id, package_id, semver, manifest_hash)
+artifacts(id, org_id, owner_user_id, title, current_version_id)
+artifact_versions(id, artifact_id, storage_ref, created_by)
+workflows(id, org_id, owner_user_id, flue_ref, schedule_cron,
+          run_as enum('owner_identity','service'))
+files(id, org_id, owner_user_id, storage_ref, mime, sha256)
+
+-- the core
+grants(
+  id, org_id,
+  principal_type enum('user','group','org'),
+  principal_id,                       -- null when principal_type='org'
+  resource_type enum('model','mcp_connection','package','artifact',
+                     'workflow','file','capability'),
+  resource_id,                        -- null = wildcard for that type
+  action enum('use','read','edit','manage','publish','install','run'),
+  effect enum('allow','deny'),
+  granted_by, created_at, expires_at
+)
+
+-- money
+budget_policies(id, org_id, principal_type, principal_id,
+                period enum('daily','monthly'), limit_usd,
+                scope enum('all','tier'), tier)
+
+-- receipts
+audit_log(id, org_id, actor_user_id, action, resource_type,
+          resource_id, decision, request_meta jsonb, created_at)  -- append-only
+```
+
+### 4.2 Capabilities
+
+Grants with `resource_type='capability'`, key in `resource_id`. Initial set:
+
+`local_models.use`, `voice.cloud_cleanup`, `sandbox.full_auto`, `mcp.local_stdio`, `artifacts.publish_org`, `router.override` (user may manually pick a model instead of the router's choice), `workflows.create`, `packages.submit`.
+
+### 4.3 Resolution algorithm
+
+For (user, resource, action): collect matching grants across user / user's groups / org, including wildcards.
+
+1. Any user-level row matching: it decides (deny beats allow within the level).
+2. Else any group-level deny: **deny**.
+3. Else any group-level allow: allow.
+4. Else org default row: apply.
+5. Else: **deny**.
+
+Wildcards make defaults cheap: org-level `allow use model:*` plus group-level `deny use model:<frontier>` is two rows.
+
+### 4.4 Snapshot and propagation
+
+Materialize per-user snapshots at login and on any relevant change; bump `users.entitlement_version`; push refresh to connected desktops over the existing websocket. Snapshots are signed; clients treat them as display hints only.
+
+### 4.5 Gateway coupling (critical)
+
+On any change to a user's model set or budget, regenerate their LiteLLM virtual key with the allowed model list and budget baked in. A compromised client cannot call outside its entitlements because the gateway itself refuses.
+
+### 4.6 Workflow coupling (critical)
+
+Scheduled Flue runs resolve entitlements against the owning user **at run time**, not schedule time. Revoking a user's MCP access kills their nightly job's access on the next run.
+
+---
+
+## 5. Model routing
+
+### 5.1 Flow
+
+1. User submits a prompt in the client.
+2. Resident local Gemma classifies: task type (code-plan, code-edit, general, extraction, vision, long-context, etc.) and difficulty tier. **The local model classifies, it never routes.**
+3. Label rides as request metadata to the LiteLLM gateway.
+4. Gateway maps label → model per owner-defined policy (e.g. `code-plan/high → glm-5.2 via OpenRouter`, `vision → gemma-4 org endpoint`, `general/low → haiku-class`). Owner policy is authoritative; the gateway may ignore or re-derive the label.
+5. Users with `router.override` may pin a model; the pin is honored only within their entitled model list.
+
+### 5.2 Bootstrap and training pipeline (v1, not deferred)
+
+Cold-start reality: no traffic means no trained router on day one. v1 ships the full pipeline:
+
+- Day one routing = heuristic label→model policy + RouteLLM pretrained routers (`mf`, `sw_ranking`) as a second opinion where useful.
+- Log from message one: prompt features (not raw prompts where policy forbids), classifier label, gateway decision, chosen model, latency, cost, and outcome signals (regeneration, model-switch retry, thumbs, task completion where detectable).
+- Eval harness: replay logged traffic against candidate routing policies offline.
+- Once volume justifies it, train the router on our traffic and hot-swap weights. Training becomes a data job, not a code project.
+
+### 5.3 Abuse and edge cases
+
+- Label spoofing (client forces "hard" to reach the expensive model): budgets are the backstop; add server-side sampled re-classification (~1-5% of traffic) for audit drift detection.
+- Local models (Ollama/llama.cpp on the user's machine): unreachable by the gateway. Client-side provider exception, gated by `local_models.use`, with usage telemetry still reported to the control plane. Owner can disable org-wide.
+
+---
+
+## 6. Desktop client
+
+Tauri v2. Frontend framework: team's choice (React or Svelte), Tailwind fine. Tauri capability model is part of the security design, not just packaging.
+
+### 6.1 Single mode UI
+
+One conversation surface that scales from chat to full agentic runs. No mode switcher. The Pi engine's tool activity renders inline (tool calls, diffs, command output) with collapse/expand. Artifacts render in a side panel. Global hotkeys: new conversation, voice dictation (hold-to-talk and toggle), quick-switch conversations.
+
+### 6.2 Pi sidecar
+
+- Client spawns Pi in RPC mode (JSON over stdio) as a managed child process.
+- Client supplies: system context, entitled skills/extensions (installed from the registry), MCP tool surface, model = the user's LiteLLM virtual endpoint.
+- Steering and follow-up mid-run (Pi supports steer vs queued follow-up; expose both).
+- Session events stream to the UI and, in summary form, to the control plane for continuity and audit.
+
+### 6.3 Local model sidecar
+
+- llama.cpp server managed by the app, loading one resident small Gemma quant (3-4 GB class). Serves two roles without reload: dictation polish and routing classification.
+- Health-managed: crash restart, version pinning from the control plane, owner can pin the model build org-wide.
+
+### 6.4 MCP
+
+- **Remote connections:** pulled from the control plane connection registry (section 8), filtered by entitlements. OAuth handled centrally; the client receives short-lived tokens.
+- **Local stdio servers** (filesystem, browser automation): allowed only if `mcp.local_stdio` is granted AND the server binary/command matches the owner allowlist. Owner kill switch disables all local stdio org-wide.
+
+### 6.5 Filesystem access and sandboxing (honest version)
+
+v1 default is **permission gates, not containers**:
+
+- Workspace-scoped file access; the workspace root is chosen per conversation/project and enforced by both the Tauri capability scope and a Pi permission-gate extension.
+- ask/allow/deny prompts on commands and out-of-scope paths, with per-group owner policy able to force stricter modes (e.g. contractors always-ask).
+
+Full-auto mode (no prompts) is opt-in and requires `sandbox.full_auto` plus isolation:
+
+- Linux: bubblewrap.
+- macOS: Seatbelt (`sandbox-exec` profile).
+- Windows: no credible native equivalent; full-auto requires WSL2 or routes the run to a server-side Flue sandbox instead. Do not promise laptop isolation on Windows.
+- Flue's `just-bash` virtual sandbox is available for runs that don't need the real filesystem.
+
+### 6.6 Attachments
+
+- Images and PDFs: sent to multimodal models directly (respect per-model size/page caps from the model registry).
+- docx/xlsx/csv/text: extracted client-side before send.
+- Every attachment is content-addressed (sha256) and stored via the control plane file store so attachments referenced by shared artifacts and scheduled workflows resolve under the same entitlements.
+
+### 6.7 Voice (all on-device)
+
+Zero voice bytes leave the machine. This is a selling point; keep it true.
+
+- **Capture (ASR):** Parakeet-TDT via sherpa-onnx (CPU-capable, no CUDA requirement). Eval alternative: Qwen3-ASR (verify open weights + license + CPU latency). whisper.cpp is fallback only (too slow for live dictation UX).
+- **Polish:** two-stage Eloquent pattern. Stage 1 verbatim live transcript; stage 2 on pause, the resident Gemma strips fillers, applies mid-sentence self-corrections, and offers transforms (key points / formal / short / long). Custom vocabulary per user (org jargon, names) stored locally, optionally seeded from the control plane org dictionary.
+- **Output (TTS):** Kokoro (82M, Apache 2.0), resident, CPU real-time. Read-aloud for responses and artifacts. OS voices as zero-effort fallback only. Qwen3-TTS is off the list under the on-device constraint (too heavy per laptop).
+- Hold-to-talk and toggle modes on a global hotkey; hold-to-talk is the default (clean capture boundaries).
+
+---
+
+## 7. Control plane
+
+Operated by us as a multi-tenant cloud (Docker Compose for dev, K8s in production; the stack stays compose-deployable to preserve the unadvertised enterprise self-host card). Components: API service, admin web app, Postgres, LiteLLM, Flue runtime, object storage (S3-compatible), Redis (websocket fanout, LiteLLM rate limiting). Per-org isolation enforced at the schema (org_id everywhere), the gateway (per-user virtual keys), and object-storage prefixes; noisy-neighbor controls via the budget system. Customer org endpoints (their own vLLM/TGI) are reachable via IP allowlist or the muniment outbound connector agent — a roadmap item the gateway design must accommodate.
+
+### 7.1 Admin web app (web-only is fine)
+
+- **Owner:** provider credentials, model registry + tiers, routing policy editor (label→model matrix with per-group overrides), budgets, org security posture (sandbox policy, local model policy, local stdio allowlist), audit log explorer.
+- **Admin:** users/groups (manual + IdP-sourced read-only), grants editor with effective-permissions preview ("what can this user touch and why"), package review queue, workflow oversight, artifact library moderation.
+- Effective-permissions preview is not optional polish; it is the debugging tool for every entitlement support ticket.
+
+### 7.2 LiteLLM gateway
+
+- All cloud and org-hosted model traffic flows through it. Org-hosted open-weight endpoints (vLLM/TGI on rented or owned GPU) register as custom OpenAI-compatible providers.
+- Virtual key per user, regenerated on entitlement/budget change (4.5).
+- Budget enforcement per `budget_policies`; spend telemetry feeds the owner dashboard and the routing log.
+
+### 7.3 Flue runtime (scheduled workflows, v1)
+
+- Workflows are Flue agents/workflows referencing registry skills. Triggers: cron, webhook, manual.
+- `run_as='owner_identity'`: the run uses the owner's virtual key and entitlements, resolved at run time (4.6). `run_as='service'`: explicit service principal with its own grants, owner-approved.
+- Durable streams give crash recovery for long runs; interrupted work resumes on runtime restart.
+- Results delivered to a desktop inbox (websocket push + notification) and stored as artifacts/files under the owner's entitlements.
+
+### 7.4 Package registry / marketplace (v1)
+
+- Package format: Pi packages (bundles of extensions, skills, prompts, themes; installable from npm/git). Do not invent a format. Server-side skills for Flue use the same skill format.
+- Registry service: submission (`packages.submit`), admin review, signing (manifest hash + org signing key), versioning, org allowlist, group entitlements (`install`/`use` grants).
+- Desktop installs only entitled, signed versions; version pinning per group supported via grants on `package_versions` (first pass: pin at package level, per-version grants in a follow-up migration).
+
+### 7.5 MCP connection registry
+
+- Records: name, remote URL, transport, auth config reference (OAuth client credentials held server-side, secrets in a vault/KMS), enabled flag.
+- Group assignment via grants. MintMCP (or similar) endpoints are just entries here; their internal governance is theirs, ours is which groups see the connection at all.
+
+### 7.6 Artifact library
+
+- Versioned artifacts, group sharing via grants (`read`/`edit`), org-wide publish gated by `artifacts.publish_org` + admin review option.
+- Rendered in the desktop side panel; storage in object store, metadata in Postgres.
+
+### 7.7 Audit
+
+Append-only `audit_log` for every privileged decision: entitlement checks that deny, grant changes, key regenerations, package publishes, workflow runs, owner policy changes, local-stdio MCP invocations. Export stream to SIEM (stdout JSON lines is enough for v1).
+
+---
+
+## 8. Security summary
+
+- No provider API keys on laptops; short-lived session tokens + scoped LiteLLM virtual keys only.
+- Deny-wins entitlements; server-side enforcement; client snapshots are display hints.
+- Gateway refuses out-of-entitlement model calls even from a compromised client.
+- Voice fully on-device.
+- Sandbox honesty: permission gates by default, real isolation opt-in, Windows full-auto punts to WSL2 or server-side sandbox.
+- Label spoofing mitigated by budgets + sampled server-side re-classification.
+- Local stdio MCP servers allowlisted and owner-killable.
+- Package supply chain: review + signing before any group can install.
+- Owner deprovisioning cannot happen via SCIM alone.
+
+---
+
+## 9. Build order (dependency edges)
+
+Phases are dependency layers, not sprints. Within a phase, tracks run in parallel.
+
+**Phase 0 — Foundations (everything depends on this)**
+1. Postgres schema (section 4.1) + migrations. Blocks: all.
+2. Control plane API skeleton + websocket. Blocks: client, admin app.
+3. LiteLLM deployment with 2-3 providers + virtual key issuance wired to a stub user. Blocks: routing, client chat.
+
+**Phase 1 — Identity and enforcement**
+4. better-auth OIDC login + local auth. Depends: 2.
+5. Grants CRUD + resolution engine + snapshot/versioning. Depends: 1, 2.
+6. Virtual key regeneration on entitlement change. Depends: 3, 5.
+7. SCIM 2.0 endpoint (Users/Groups). Depends: 4, 5. (Parallel with 6.)
+
+**Phase 2 — Client core**
+8. Tauri shell + auth handshake + entitlement snapshot consumption. Depends: 4, 5.
+9. Pi sidecar integration (RPC), chat against virtual key. Depends: 6, 8.
+10. Local model sidecar (llama.cpp + Gemma). Depends: 8. (Parallel with 9.)
+11. Attachments pipeline + file store. Depends: 8; storage from Phase 0 infra.
+
+**Phase 3 — Routing and voice**
+12. Classifier prompt/finetune on Gemma + label metadata. Depends: 9, 10.
+13. Gateway label→model policy + owner policy editor. Depends: 6, 12.
+14. Routing log + eval harness + RouteLLM bootstrap. Depends: 13.
+15. Voice: Parakeet capture → Gemma polish → insert; Kokoro read-aloud; hotkeys. Depends: 10. (Parallel with 12-14.)
+
+**Phase 4 — Org surface**
+16. MCP connection registry + client remote MCP consumption. Depends: 5, 9.
+17. Local stdio MCP allowlist + kill switch. Depends: 16.
+18. Package registry + signing + client install flow. Depends: 5, 9.
+19. Artifact library + sharing + side-panel rendering. Depends: 5, 11.
+20. Admin web app consolidation (grants editor, effective-permissions preview, review queues). Depends: 5, 13, 16, 18.
+
+**Phase 5 — Autonomy**
+21. Flue runtime deployment + first scheduled workflow + run-time entitlement resolution + inbox delivery. Depends: 5, 6, 18 (skills from registry).
+22. Sandbox modes (permission gates already in 9; bubblewrap/Seatbelt full-auto; server-side sandbox fallback). Depends: 9, 21.
+23. Sampled re-classification audit + trained-router swap path. Depends: 14 (and traffic).
+
+---
+
+## 10. Open items and eval tasks
+
+| Item | Action |
+|---|---|
+| Qwen3-ASR | Verify open weights, license, CPU latency vs Parakeet |
+| Kokoro | Ear test on target voices; confirm quality bar |
+| Gemma terms | Legal read of Gemma Terms of Use before commercial sale |
+| Parakeet license | Confirm CC-BY-4.0 (or newer terms) on the exact release used |
+| Classifier taxonomy | Define the label set (task types x difficulty tiers) before Phase 3 |
+| Per-version package grants | Follow-up migration after marketplace v1 |
+| MCP proxy long-term | Customers may bring gateway services (e.g. MintMCP); decide later whether to build a native group-filtering proxy |
+| Windows full-auto | WSL2 detection UX vs server-side-only stance |
+| Naming/branding | Muniment (muniment.ai) — decided; trademark knockout pending |
+| Design partner | 5–8 orgs from founder network per monetization-and-marketing.md Phase 0 |
+| Org endpoint connectivity | Design the outbound connector agent (customer vLLM/TGI reachable from muniment cloud) |
+

@@ -1,0 +1,29 @@
+/* Muniment spacing, radius, and motion tokens. */
+
+:root {
+  /* Spacing scale: 4 / 8 / 12 / 16 / 20 / 24 / 32 / 44 / 64
+     Component internals prefer 8/12; layout gaps prefer 16/24/32. */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --space-11: 44px;   /* minimum touch target */
+  --space-16: 64px;
+
+  /* Radius: 2 = chips/kbd · 6 = buttons/inputs/tool cards · 10 = panels/composer/bubbles/windows/modals.
+     Nothing pill-shaped, no per-corner mixing. */
+  --radius-chip: 2px;
+  --radius-control: 6px;
+  --radius-panel: 10px;
+
+  /* Motion inventory is complete and small. Durations never exceed 300ms
+     except the mark and the website hero. prefers-reduced-motion removes all of it. */
+  --motion-panel: 180ms;    /* @kind other */ /* panel / rail slide, ease-out */
+  --motion-popover: 120ms;  /* @kind other */ /* popover fade + 2px rise */
+  --motion-pulse: 1400ms;   /* @kind other */ /* tool status pulse, ease-in-out */
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);   /* @kind other */
+  --ease-in-out: cubic-bezier(0.45, 0, 0.55, 1); /* @kind other */
+}

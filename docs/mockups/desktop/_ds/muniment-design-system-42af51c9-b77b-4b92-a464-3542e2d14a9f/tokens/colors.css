@@ -1,0 +1,94 @@
+/* Muniment color tokens.
+   All neutrals carry a faint green cast tying them to signal.
+   Never substitute pure #FFFFFF / #000000 for paper / ink.
+   --signal is COMPUTATION ONLY — see the color law in readme.md §Color.
+
+   Theming: default follows the OS via prefers-color-scheme; an explicit
+   [data-theme] on :root overrides the OS and persists per device.
+   Light and dark are each stated under recognized token scopes so the
+   compiler registers both. */
+
+/* Light — the default when no [data-theme] and the OS is light. */
+:root {
+  --paper: #F6F7F6;
+  --surface: #FFFFFF;
+  --faint: #EDEFEE;
+  --ink: #1A1D1C;
+  --muted: #5C6461;
+  --border: #E2E5E3;
+
+  --signal: #2A7264;              /* darkened from #2F7E6D to clear 4.5:1 for small mono on paper */
+  --signal-soft: rgba(47, 126, 109, 0.10);
+
+  --oxide: #B4483E;               /* deny / critical records */
+  --ochre: #B98A2F;               /* caution / budget records */
+
+  --shadow-window: 0 1px 2px rgba(0,0,0,.05), 0 12px 40px rgba(0,0,0,.08);
+  --shadow-overlay: 0 4px 24px rgba(0,0,0,.14);
+
+  color-scheme: light;
+}
+
+/* Follow the OS to dark when the user has not explicitly chosen light. */
+@media (prefers-color-scheme: dark) {
+  :root {
+    --paper: #141716;
+    --surface: #1C201E;
+    --faint: #222624;
+    --ink: #E8EBE9;
+    --muted: #8A928E;
+    --border: #2A2F2C;
+
+    --signal: #58B39F;
+    --signal-soft: rgba(88, 179, 159, 0.12);
+
+    --oxide: #C96A61;
+    --ochre: #CBA14E;
+
+    --shadow-window: 0 1px 2px rgba(0,0,0,.20), 0 12px 40px rgba(0,0,0,.36);
+    --shadow-overlay: 0 4px 24px rgba(0,0,0,.48);
+
+    color-scheme: dark;
+  }
+}
+
+/* Explicit user override — higher specificity than :root, so it beats the OS media block. */
+:root[data-theme="light"] {
+  --paper: #F6F7F6;
+  --surface: #FFFFFF;
+  --faint: #EDEFEE;
+  --ink: #1A1D1C;
+  --muted: #5C6461;
+  --border: #E2E5E3;
+
+  --signal: #2A7264;
+  --signal-soft: rgba(47, 126, 109, 0.10);
+
+  --oxide: #B4483E;
+  --ochre: #B98A2F;
+
+  --shadow-window: 0 1px 2px rgba(0,0,0,.05), 0 12px 40px rgba(0,0,0,.08);
+  --shadow-overlay: 0 4px 24px rgba(0,0,0,.14);
+
+  color-scheme: light;
+}
+
+:root[data-theme="dark"] {
+  --paper: #141716;
+  --surface: #1C201E;
+  --faint: #222624;
+  --ink: #E8EBE9;
+  --muted: #8A928E;
+  --border: #2A2F2C;
+
+  --signal: #58B39F;
+  --signal-soft: rgba(88, 179, 159, 0.12);
+
+  --oxide: #C96A61;
+  --ochre: #CBA14E;
+
+  --shadow-window: 0 1px 2px rgba(0,0,0,.20), 0 12px 40px rgba(0,0,0,.36);
+  --shadow-overlay: 0 4px 24px rgba(0,0,0,.48);
+
+  color-scheme: dark;
+}

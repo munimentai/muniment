@@ -1,0 +1,8 @@
+/* Muniment design system — global CSS entry point.
+   Consumers link this one file. Keep it a list of @import lines only. */
+
+@import "tokens/fonts.css";
+@import "tokens/colors.css";
+@import "tokens/typography.css";
+@import "tokens/space-motion.css";
+@import "tokens/base.css";

@@ -1,0 +1,11 @@
+{
+  "name": "muniment-desktop",
+  "private": true,
+  "version": "0.0.1",
+  "scripts": {
+    "tauri": "tauri"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2"
+  }
+}

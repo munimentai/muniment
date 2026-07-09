@@ -1,0 +1,46 @@
+/* Muniment typography tokens.
+   Schibsted Grotesk = human (speech). Commit Mono = record (evidence).
+   The register rule: if a string could appear in an audit log, it is mono;
+   if it could be said aloud naturally, it is grotesque.
+   Mono renders one step smaller than adjacent body text and NEVER bold. */
+
+:root {
+  --font-sans: "Schibsted Grotesk", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: "Commit Mono", ui-monospace, "SF Mono", Menlo, monospace;
+
+  /* Scale — desktop / web: 12 / 13 / 15 (body) / 17 / 22 / 28 */
+  --text-12: 12px;
+  --text-13: 13px;
+  --text-15: 15px;   /* body */
+  --text-17: 17px;
+  --text-22: 22px;
+  --text-28: 28px;
+
+  /* Mobile large-title step */
+  --text-30: 30px;
+
+  /* Weights (Schibsted 400/500/600/700; mono never bold in records) */
+  --weight-regular: 400;
+  --weight-medium: 500;
+  --weight-semibold: 600;
+  --weight-bold: 700;
+
+  /* Line heights */
+  --leading-body: 1.55;
+  --leading-heading: 1.3;
+  --leading-mono: 1.45;
+
+  /* Tracking */
+  --tracking-heading: -0.01em;   /* -1% */
+  --tracking-body: 0;
+  --tracking-caps: 0.04em;       /* +4%, tiny ALL-CAPS section labels only */
+}
+
+/* Records use tabular lining figures everywhere they carry numerals. */
+.mono,
+[data-mono] {
+  font-family: var(--font-mono);
+  font-weight: var(--weight-regular);
+  font-variant-numeric: tabular-nums lining-nums;
+  line-height: var(--leading-mono);
+}

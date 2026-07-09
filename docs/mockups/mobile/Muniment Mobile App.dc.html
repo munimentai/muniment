@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<meta name="design_doc_mode" content="canvas">
+<link rel="stylesheet" href="_ds/muniment-design-system-42af51c9-b77b-4b92-a464-3542e2d14a9f/tokens/fonts.css">
+<link rel="stylesheet" href="_ds/muniment-design-system-42af51c9-b77b-4b92-a464-3542e2d14a9f/tokens/colors.css">
+<link rel="stylesheet" href="_ds/muniment-design-system-42af51c9-b77b-4b92-a464-3542e2d14a9f/tokens/typography.css">
+<link rel="stylesheet" href="_ds/muniment-design-system-42af51c9-b77b-4b92-a464-3542e2d14a9f/tokens/space-motion.css">
+<link rel="stylesheet" href="_ds/muniment-design-system-42af51c9-b77b-4b92-a464-3542e2d14a9f/tokens/base.css">
+<link rel="stylesheet" href="_ds/muniment-design-system-42af51c9-b77b-4b92-a464-3542e2d14a9f/styles.css">
+<script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
+<script src="_ds/muniment-design-system-42af51c9-b77b-4b92-a464-3542e2d14a9f/_ds_bundle.js"></script>
+<style>
+body{margin:0;background:#DFE2E0;font-family:var(--font-sans);color:#1A1D1C}
+a{color:#1A1D1C}a:hover{color:#5C6461}
+.cv{padding:56px 64px 96px;display:flex;flex-direction:column;gap:72px}
+.hd{display:flex;align-items:center;gap:14px}
+.hd h1{margin:0;font-size:28px;font-weight:600;letter-spacing:-.01em;text-transform:lowercase}
+.hsub{font-family:var(--font-mono);font-size:12px;color:#5C6461;margin-top:4px}
+.grp{display:flex;flex-direction:column;gap:20px}
+.ghd{display:flex;align-items:baseline;gap:12px;border-bottom:1px solid #C9CDCB;padding-bottom:10px}
+.ghd h2{margin:0;font-size:22px;font-weight:700;letter-spacing:-.01em}
+.gref{font-family:var(--font-mono);font-size:12px;color:#5C6461}
+.row{display:flex;gap:40px;align-items:flex-start;flex-wrap:wrap}
+.fr{display:flex;flex-direction:column;gap:10px;flex:none}
+.cap{font-family:var(--font-mono);font-size:12px;color:#5C6461}
+</style>
+</helmet>
+<div class="cv">
+<div class="hd"><x-import component-from-global-scope="MunimentDesignSystem_42af51.Mark" size="30" state="rest" hint-size="30px,30px"></x-import><div><h1>muniment · mobile app</h1><div class="hsub">doc 3 of 5 · eight screens × ios/android × light/dark · voice sequence · receipt sheet · frames are tappable: rows, tabs, back, provenance → receipt, profile chip → access · hold the mic to talk</div></div></div>
+<section class="grp" id="threads"><div class="ghd"><h2>Threads</h2><span class="gref">§3.1 · home · large title, search, swipe actions, profile chip</span></div><div class="row">
+<div class="fr" data-screen-label="threads · ios · light"><dc-import name="MobileScreen" screen="threads" platform="ios" theme="light" hint-size="390px,844px"></dc-import><span class="cap">ios · light</span></div>
+<div class="fr" data-screen-label="threads · ios · dark"><dc-import name="MobileScreen" screen="threads" platform="ios" theme="dark" hint-size="390px,844px"></dc-import><span class="cap">ios · dark</span></div>
+<div class="fr" data-screen-label="threads · android · light"><dc-import name="MobileScreen" screen="threads" platform="android" theme="light" hint-size="412px,892px"></dc-import><span class="cap">android · light</span></div>
+<div class="fr" data-screen-label="threads · android · dark"><dc-import name="MobileScreen" screen="threads" platform="android" theme="dark" hint-size="412px,892px"></dc-import><span class="cap">android · dark</span></div>
+</div></section>
+<section class="grp" id="thread"><div class="ghd"><h2>Thread</h2><span class="gref">§3.2 · collapsed tool cards, truncated provenance, streaming underline</span></div><div class="row">
+<div class="fr" data-screen-label="thread · ios · light"><dc-import name="MobileScreen" screen="thread" platform="ios" theme="light" hint-size="390px,844px"></dc-import><span class="cap">ios · light</span></div>
+<div class="fr" data-screen-label="thread · ios · dark"><dc-import name="MobileScreen" screen="thread" platform="ios" theme="dark" hint-size="390px,844px"></dc-import><span class="cap">ios · dark</span></div>
+<div class="fr" data-screen-label="thread · android · light"><dc-import name="MobileScreen" screen="thread" platform="android" theme="light" hint-size="412px,892px"></dc-import><span class="cap">android · light</span></div>
+<div class="fr" data-screen-label="thread · android · dark"><dc-import name="MobileScreen" screen="thread" platform="android" theme="dark" hint-size="412px,892px"></dc-import><span class="cap">android · dark</span></div>
+</div></section>
+<section class="grp" id="receipt"><div class="ghd"><h2>Receipt bottom sheet</h2><span class="gref">§3.2 · tap the provenance line · full route as ledger</span></div><div class="row">
+<div class="fr" data-screen-label="receipt · ios · light"><dc-import name="MobileScreen" screen="receipt" platform="ios" theme="light" hint-size="390px,844px"></dc-import><span class="cap">ios · light</span></div>
+<div class="fr" data-screen-label="receipt · ios · dark"><dc-import name="MobileScreen" screen="receipt" platform="ios" theme="dark" hint-size="390px,844px"></dc-import><span class="cap">ios · dark</span></div>
+</div></section>
+<section class="grp" id="composer"><div class="ghd"><h2>Composer + voice</h2><span class="gref">§3.3 · the hero input · 56px hold-to-talk, ink ring at rest</span></div><div class="row">
+<div class="fr" data-screen-label="composer · ios · light"><dc-import name="MobileScreen" screen="composer" platform="ios" theme="light" hint-size="390px,844px"></dc-import><span class="cap">ios · light</span></div>
+<div class="fr" data-screen-label="composer · ios · dark"><dc-import name="MobileScreen" screen="composer" platform="ios" theme="dark" hint-size="390px,844px"></dc-import><span class="cap">ios · dark</span></div>
+<div class="fr" data-screen-label="composer · android · light"><dc-import name="MobileScreen" screen="composer" platform="android" theme="light" hint-size="412px,892px"></dc-import><span class="cap">android · light</span></div>
+<div class="fr" data-screen-label="composer · android · dark"><dc-import name="MobileScreen" screen="composer" platform="android" theme="dark" hint-size="412px,892px"></dc-import><span class="cap">android · dark</span></div>
+</div></section>
+<section class="grp" id="voice"><div class="ghd"><h2>Voice interaction</h2><span class="gref">§3.3 · 6-frame sequence · all on-device</span></div><div class="row">
+<div class="fr" data-screen-label="voice 1 · rest"><dc-import name="MobileScreen" screen="composer" platform="ios" theme="light" stage="1" hint-size="390px,844px"></dc-import><span class="cap">1 · rest — ink ring, first-use line</span></div>
+<div class="fr" data-screen-label="voice 2 · holding"><dc-import name="MobileScreen" screen="composer" platform="ios" theme="light" stage="2" hint-size="390px,844px"></dc-import><span class="cap">2 · holding — meter, verbatim transcript</span></div>
+<div class="fr" data-screen-label="voice 3 · locked"><dc-import name="MobileScreen" screen="composer" platform="ios" theme="light" stage="3" hint-size="390px,844px"></dc-import><span class="cap">3 · slid up — hands-free lock</span></div>
+<div class="fr" data-screen-label="voice 4 · polishing"><dc-import name="MobileScreen" screen="composer" platform="ios" theme="light" stage="4" hint-size="390px,844px"></dc-import><span class="cap">4 · released — signal flash while polishing</span></div>
+<div class="fr" data-screen-label="voice 5 · transforms"><dc-import name="MobileScreen" screen="composer" platform="ios" theme="light" stage="5" hint-size="390px,844px"></dc-import><span class="cap">5 · transform chips, 6s</span></div>
+<div class="fr" data-screen-label="voice 6 · ready"><dc-import name="MobileScreen" screen="composer" platform="ios" theme="light" stage="6" hint-size="390px,844px"></dc-import><span class="cap">6 · polished, ready to send</span></div>
+</div></section>
+<section class="grp" id="projects"><div class="ghd"><h2>Projects</h2><span class="gref">§3.4 · tab hides entirely for memberless users · no empty state by design</span></div><div class="row">
+<div class="fr" data-screen-label="projects · ios · light"><dc-import name="MobileScreen" screen="projects" platform="ios" theme="light" hint-size="390px,844px"></dc-import><span class="cap">ios · light</span></div>
+<div class="fr" data-screen-label="projects · ios · dark"><dc-import name="MobileScreen" screen="projects" platform="ios" theme="dark" hint-size="390px,844px"></dc-import><span class="cap">ios · dark</span></div>
+<div class="fr" data-screen-label="projects · android · light"><dc-import name="MobileScreen" screen="projects" platform="android" theme="light" hint-size="412px,892px"></dc-import><span class="cap">android · light</span></div>
+<div class="fr" data-screen-label="projects · android · dark"><dc-import name="MobileScreen" screen="projects" platform="android" theme="dark" hint-size="412px,892px"></dc-import><span class="cap">android · dark</span></div>
+</div></section>
+<section class="grp" id="project"><div class="ghd"><h2>Project detail</h2><span class="gref">§3.5 · instructions preview, segmented control, scope-inheriting new thread</span></div><div class="row">
+<div class="fr" data-screen-label="project · ios · light"><dc-import name="MobileScreen" screen="project" platform="ios" theme="light" hint-size="390px,844px"></dc-import><span class="cap">ios · light</span></div>
+<div class="fr" data-screen-label="project · ios · dark"><dc-import name="MobileScreen" screen="project" platform="ios" theme="dark" hint-size="390px,844px"></dc-import><span class="cap">ios · dark</span></div>
+<div class="fr" data-screen-label="project · android · light"><dc-import name="MobileScreen" screen="project" platform="android" theme="light" hint-size="412px,892px"></dc-import><span class="cap">android · light</span></div>
+<div class="fr" data-screen-label="project · android · dark"><dc-import name="MobileScreen" screen="project" platform="android" theme="dark" hint-size="412px,892px"></dc-import><span class="cap">android · dark</span></div>
+</div></section>
+<section class="grp" id="shared"><div class="ghd"><h2>Shared thread</h2><span class="gref">§3.6 · view only, fork as primary action, redaction at small size</span></div><div class="row">
+<div class="fr" data-screen-label="shared · ios · light"><dc-import name="MobileScreen" screen="shared" platform="ios" theme="light" hint-size="390px,844px"></dc-import><span class="cap">ios · light</span></div>
+<div class="fr" data-screen-label="shared · ios · dark"><dc-import name="MobileScreen" screen="shared" platform="ios" theme="dark" hint-size="390px,844px"></dc-import><span class="cap">ios · dark</span></div>
+<div class="fr" data-screen-label="shared · android · light"><dc-import name="MobileScreen" screen="shared" platform="android" theme="light" hint-size="412px,892px"></dc-import><span class="cap">android · light</span></div>
+<div class="fr" data-screen-label="shared · android · dark"><dc-import name="MobileScreen" screen="shared" platform="android" theme="dark" hint-size="412px,892px"></dc-import><span class="cap">android · dark</span></div>
+</div></section>
+<section class="grp" id="inbox"><div class="ghd"><h2>Inbox</h2><span class="gref">§3.7 · ledger rows · signal pulse on running status dots only</span></div><div class="row">
+<div class="fr" data-screen-label="inbox · ios · light"><dc-import name="MobileScreen" screen="inbox" platform="ios" theme="light" hint-size="390px,844px"></dc-import><span class="cap">ios · light</span></div>
+<div class="fr" data-screen-label="inbox · ios · dark"><dc-import name="MobileScreen" screen="inbox" platform="ios" theme="dark" hint-size="390px,844px"></dc-import><span class="cap">ios · dark</span></div>
+<div class="fr" data-screen-label="inbox · android · light"><dc-import name="MobileScreen" screen="inbox" platform="android" theme="light" hint-size="412px,892px"></dc-import><span class="cap">android · light</span></div>
+<div class="fr" data-screen-label="inbox · android · dark"><dc-import name="MobileScreen" screen="inbox" platform="android" theme="dark" hint-size="412px,892px"></dc-import><span class="cap">android · dark</span></div>
+</div></section>
+<section class="grp" id="access"><div class="ghd"><h2>Entitlement peek</h2><span class="gref">§3.8 · from the profile chip · read-only bottom sheet</span></div><div class="row">
+<div class="fr" data-screen-label="access · ios · light"><dc-import name="MobileScreen" screen="access" platform="ios" theme="light" hint-size="390px,844px"></dc-import><span class="cap">ios · light</span></div>
+<div class="fr" data-screen-label="access · ios · dark"><dc-import name="MobileScreen" screen="access" platform="ios" theme="dark" hint-size="390px,844px"></dc-import><span class="cap">ios · dark</span></div>
+<div class="fr" data-screen-label="access · android · light"><dc-import name="MobileScreen" screen="access" platform="android" theme="light" hint-size="412px,892px"></dc-import><span class="cap">android · light</span></div>
+<div class="fr" data-screen-label="access · android · dark"><dc-import name="MobileScreen" screen="access" platform="android" theme="dark" hint-size="412px,892px"></dc-import><span class="cap">android · dark</span></div>
+</div></section>
+</div>
+</x-dc>
+</body>
+</html>

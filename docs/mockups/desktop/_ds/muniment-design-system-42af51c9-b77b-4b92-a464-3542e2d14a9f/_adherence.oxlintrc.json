@@ -1,0 +1,285 @@
+{
+  "plugins": [
+    "react",
+    "import"
+  ],
+  "rules": {
+    "react/forbid-elements": [
+      "warn",
+      {
+        "forbid": []
+      }
+    ],
+    "no-restricted-imports": [
+      "warn",
+      {
+        "patterns": [
+          {
+            "group": [
+              "components/controls/**",
+              "components/feedback/**",
+              "components/icon/**",
+              "components/mark/**",
+              "components/records/**",
+              "ui_kits/admin-web-app/**",
+              "ui_kits/desktop-app/**"
+            ],
+            "message": "Import design-system components from 'index.js', not component internals."
+          }
+        ]
+      }
+    ],
+    "no-restricted-syntax": [
+      "warn",
+      {
+        "selector": "Literal[value=/#[0-9a-fA-F]{3,8}\\b/]",
+        "message": "Raw hex color — use a design-system color token via var()."
+      },
+      {
+        "selector": "Literal[value=/\\b\\d+px\\b/]",
+        "message": "Raw px value — use a design-system spacing token via var()."
+      },
+      {
+        "selector": "Literal[value=/font-family\\s*:\\s*(?!['\\\"]?(?:Schibsted Grotesk|Commit Mono))/i]",
+        "message": "Font not provided by the design system. Available: Schibsted Grotesk, Commit Mono."
+      },
+      {
+        "selector": "JSXOpeningElement[name.name='Button'] > JSXAttribute > JSXIdentifier[name!=/^(?:variant|size|children|key|ref|className|style|children)$/]",
+        "message": "<Button> doesn't accept that prop. Declared props: variant, size, children."
+      },
+      {
+        "selector": "JSXOpeningElement[name.name='Button'] > JSXAttribute[name.name='variant'] > Literal[value!=/^(?:primary|quiet|outline)$/]",
+        "message": "<Button> variant must be one of 'primary' | 'quiet' | 'outline'."
+      },
+      {
+        "selector": "JSXOpeningElement[name.name='Button'] > JSXAttribute[name.name='size'] > Literal[value!=/^(?:sm|md)$/]",
+        "message": "<Button> size must be one of 'sm' | 'md'."
+      },
+      {
+        "selector": "JSXOpeningElement[name.name='Chip'] > JSXAttribute > JSXIdentifier[name!=/^(?:variant|onRemove|children|key|ref|className|style|children)$/]",
+        "message": "<Chip> doesn't accept that prop. Declared props: variant, onRemove, children."
+      },
+      {
+        "selector": "JSXOpeningElement[name.name='Chip'] > JSXAttribute[name.name='variant'] > Literal[value!=/^(?:default|kbd|attachment|model-pin|filter|transform)$/]",
+        "message": "<Chip> variant must be one of 'default' | 'kbd' | 'attachment' | 'model-pin' | 'filter' | 'transform'."
+      },
+      {
+        "selector": "JSXOpeningElement[name.name='DataColumn'] > JSXAttribute > JSXIdentifier[name!=/^(?:key|header|mono|align|key|ref|className|style|children)$/]",
+        "message": "<DataColumn> doesn't accept that prop. Declared props: key, header, mono, align."
+      },
+      {
+        "selector": "JSXOpeningElement[name.name='DataColumn'] > JSXAttribute[name.name='align'] > Literal[value!=/^(?:left|right|center)$/]",
+        "message": "<DataColumn> align must be one of 'left' | 'right' | 'center'."
+      },
+      {
+        "selector": "JSXOpeningElement[name.name='EmptyState'] > JSXAttribute > JSXIdentifier[name!=/^(?:message|action|onAction|key|ref|className|style|children)$/]",
+        "message": "<EmptyState> doesn't accept that prop. Declared props: message, action, onAction."
+      },
+      {
+        "selector": "JSXOpeningElement[name.name='Icon'] > JSXAttribute > JSXIdentifier[name!=/^(?:name|size|strokeWidth|color|title|key|ref|className|style|children)$/]",
+        "message": "<Icon> doesn't accept that prop. Declared props: name, size, strokeWidth, color, title."
+      },
+      {
+        "selector": "JSXOpeningElement[name.name='Input'] > JSXAttribute > JSXIdentifier[name!=/^(?:as|label|error|composer|key|ref|className|style|children)$/]",
+        "message": "<Input> doesn't accept that prop. Declared props: as, label, error, composer."
+      },
+      {
+        "selector": "JSXOpeningElement[name.name='Input'] > JSXAttribute[name.name='as'] > Literal[value!=/^(?:input|textarea)$/]",
+        "message": "<Input> as must be one of 'input' | 'textarea'."
+      },
+      {
+        "selector": "JSXOpeningElement[name.name='Mark'] > JSXAttribute > JSXIdentifier[name!=/^(?:size|state|title|style|key|ref|className|style|children)$/]",
+        "message": "<Mark> doesn't accept that prop. Declared props: size, state, title, style."
+      },
+      {
+        "selector": "JSXOpeningElement[name.name='Mark'] > JSXAttribute[name.name='state'] > Literal[value!=/^(?:rest|thinking)$/]",
+        "message": "<Mark> state must be one of 'rest' | 'thinking'."
+      },
+      {
+        "selector": "JSXOpeningElement[name.name='ModalConfirm'] > JSXAttribute > JSXIdentifier[name!=/^(?:label|onConfirm|destructive|requireName|key|ref|className|style|children)$/]",
+        "message": "<ModalConfirm> doesn't accept that prop. Declared props: label, onConfirm, destructive, requireName."
+      },
+      {
+        "selector": "JSXOpeningElement[name.name='PopoverItem'] > JSXAttribute > JSXIdentifier[name!=/^(?:label|onClick|destructive|separator|key|ref|className|style|children)$/]",
+        "message": "<PopoverItem> doesn't accept that prop. Declared props: label, onClick, destructive, separator."
+      },
+      {
+        "selector": "JSXOpeningElement[name.name='ProvenanceReceipt'] > JSXAttribute > JSXIdentifier[name!=/^(?:rule|tokens|connections|lineage|key|ref|className|style|children)$/]",
+        "message": "<ProvenanceReceipt> doesn't accept that prop. Declared props: rule, tokens, connections, lineage."
+      },
+      {
+        "selector": "JSXOpeningElement[name.name='QueryBar'] > JSXAttribute > JSXIdentifier[name!=/^(?:filters|onRemove|onSubmit|suggestions|placeholder|key|ref|className|style|children)$/]",
+        "message": "<QueryBar> doesn't accept that prop. Declared props: filters, onRemove, onSubmit, suggestions, placeholder."
+      },
+      {
+        "selector": "JSXOpeningElement[name.name='Toast'] > JSXAttribute > JSXIdentifier[name!=/^(?:message|action|onAction|onDismiss|duration|key|ref|className|style|children)$/]",
+        "message": "<Toast> doesn't accept that prop. Declared props: message, action, onAction, onDismiss, duration."
+      },
+      {
+        "selector": "JSXOpeningElement[name.name='ToolCard'] > JSXAttribute > JSXIdentifier[name!=/^(?:status|verb|object|children|defaultOpen|key|ref|className|style|children)$/]",
+        "message": "<ToolCard> doesn't accept that prop. Declared props: status, verb, object, children, defaultOpen."
+      },
+      {
+        "selector": "JSXOpeningElement[name.name='ToolCard'] > JSXAttribute[name.name='status'] > Literal[value!=/^(?:running|complete|error)$/]",
+        "message": "<ToolCard> status must be one of 'running' | 'complete' | 'error'."
+      }
+    ]
+  },
+  "overrides": [
+    {
+      "files": [
+        "**/index.js"
+      ],
+      "rules": {
+        "no-restricted-imports": "off"
+      }
+    }
+  ],
+  "x-omelette": {
+    "components": {
+      "Button": {
+        "replaces": []
+      },
+      "Chip": {
+        "replaces": []
+      },
+      "DataColumn": {
+        "replaces": []
+      },
+      "EmptyState": {
+        "replaces": []
+      },
+      "Icon": {
+        "replaces": []
+      },
+      "Input": {
+        "replaces": []
+      },
+      "Mark": {
+        "replaces": []
+      },
+      "ModalConfirm": {
+        "replaces": []
+      },
+      "PopoverItem": {
+        "replaces": []
+      },
+      "ProvenanceReceipt": {
+        "replaces": []
+      },
+      "QueryBar": {
+        "replaces": []
+      },
+      "Toast": {
+        "replaces": []
+      },
+      "ToolCard": {
+        "replaces": []
+      }
+    },
+    "tokens": [
+      "--border",
+      "--ease-in-out",
+      "--ease-out",
+      "--faint",
+      "--font-mono",
+      "--font-sans",
+      "--ink",
+      "--leading-body",
+      "--leading-heading",
+      "--leading-mono",
+      "--motion-panel",
+      "--motion-popover",
+      "--motion-pulse",
+      "--muted",
+      "--ochre",
+      "--oxide",
+      "--paper",
+      "--radius-chip",
+      "--radius-control",
+      "--radius-panel",
+      "--shadow-overlay",
+      "--shadow-window",
+      "--signal",
+      "--signal-soft",
+      "--space-1",
+      "--space-11",
+      "--space-16",
+      "--space-2",
+      "--space-3",
+      "--space-4",
+      "--space-5",
+      "--space-6",
+      "--space-8",
+      "--surface",
+      "--text-12",
+      "--text-13",
+      "--text-15",
+      "--text-17",
+      "--text-22",
+      "--text-28",
+      "--text-30",
+      "--tracking-body",
+      "--tracking-caps",
+      "--tracking-heading",
+      "--weight-bold",
+      "--weight-medium",
+      "--weight-regular",
+      "--weight-semibold"
+    ],
+    "tokenKinds": {
+      "--paper": "color",
+      "--surface": "color",
+      "--faint": "color",
+      "--ink": "color",
+      "--muted": "color",
+      "--border": "color",
+      "--signal": "color",
+      "--signal-soft": "color",
+      "--oxide": "color",
+      "--ochre": "color",
+      "--shadow-window": "shadow",
+      "--shadow-overlay": "shadow",
+      "--font-sans": "font",
+      "--font-mono": "font",
+      "--text-12": "font",
+      "--text-13": "font",
+      "--text-15": "font",
+      "--text-17": "font",
+      "--text-22": "font",
+      "--text-28": "font",
+      "--text-30": "font",
+      "--weight-regular": "font",
+      "--weight-medium": "font",
+      "--weight-semibold": "font",
+      "--weight-bold": "font",
+      "--leading-body": "font",
+      "--leading-heading": "font",
+      "--leading-mono": "font",
+      "--tracking-heading": "font",
+      "--tracking-body": "font",
+      "--tracking-caps": "font",
+      "--space-1": "spacing",
+      "--space-2": "spacing",
+      "--space-3": "spacing",
+      "--space-4": "spacing",
+      "--space-5": "spacing",
+      "--space-6": "spacing",
+      "--space-8": "spacing",
+      "--space-11": "spacing",
+      "--space-16": "spacing",
+      "--radius-chip": "radius",
+      "--radius-control": "radius",
+      "--radius-panel": "radius",
+      "--motion-panel": "other",
+      "--motion-popover": "other",
+      "--motion-pulse": "other",
+      "--ease-out": "other",
+      "--ease-in-out": "other"
+    },
+    "fontFamilies": [
+      "Commit Mono",
+      "Schibsted Grotesk"
+    ]
+  }
+}
