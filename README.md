@@ -30,3 +30,5 @@ Finder via AppleScript and needs a GUI session, which the SSH-only CI VMs
 don't have (verified failing in the M0 shakeout; the `.app` bundle builds
 fine). DMG creation is a release-time step — solve at first release
 (hdiutil-based script or a GUI-session build), not in the CI gate.
+
+<!-- ci-canary: desktop-ci gate proof 2026-07-09 -->
