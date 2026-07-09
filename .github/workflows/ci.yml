@@ -42,8 +42,20 @@ jobs:
         platform: [linux, windows, macos]
     steps:
       - name: Build (${{ matrix.platform }}) via desktop-ci
+        env:
+          PLATFORM: ${{ matrix.platform }}
+          REPO_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          REF: ${{ github.head_ref }}
         run: |
           set -u
+          case "$REF" in
+            ''|*[!A-Za-z0-9._/-]*)
+              printf 'error: unsafe branch ref for desktop-ci: %s\n' "$REF" >&2
+              exit 1
+              ;;
+          esac
+
           umask 077
           key="$RUNNER_TEMP/desktop_ci_key"
           printf '%s' "$DESKTOP_CI_SSH_KEY" > "$key"
@@ -51,16 +63,17 @@ jobs:
 
           # macOS: .app only — dmg bundling needs a GUI session (release-time step)
           cmd='npm ci --no-audit --no-fund && npm run tauri build'
-          if [ "${{ matrix.platform }}" = "macos" ]; then
+          if [ "$PLATFORM" = "macos" ]; then
             cmd='npm ci --no-audit --no-fund && npm run tauri build -- --bundles app'
           fi
 
-          repo_url="https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}"
-          ref="${{ github.head_ref }}"
+          repo_url="https://x-access-token:${REPO_TOKEN}@github.com/${REPOSITORY}"
 
           # Remote args are single-quoted so the build command's && stays
           # inside --cmd instead of being parsed by the pve01 shell.
+          # desktop-ci accepts clone credentials only in --repo, so the token is
+          # temporarily visible in local and remote process listings.
           ssh -i "$key" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
               -o BatchMode=yes -o ServerAliveInterval=30 -o ServerAliveCountMax=8 \
               desktopci@10.1.10.10 \
-              "sudo desktop-ci ${{ matrix.platform }} --repo '$repo_url' --ref '$ref' --cmd '$cmd'"
+              "sudo desktop-ci $PLATFORM --repo '$repo_url' --ref '$REF' --cmd '$cmd'"
