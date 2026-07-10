@@ -149,11 +149,19 @@ statuses, and malformed or unexpected envelopes are probe errors and enter the
 existing supervisor restart path. Diagnostics identify the status or parsing
 failure but never copy the response body, which may contain user data.
 
-This slice intentionally exposes only the loopback base URL and health state
-needed by later local-role clients. Chat/completion calls, model discovery,
-download and selection, resident-model policy, UI wiring, and cloud or Pi
-behavior remain deferred. Virtual keys and control-plane version negotiation
-also remain absent.
+`LlamaChatClient` uses that same validated loopback boundary for one bounded,
+synchronous `POST /v1/chat/completions` call. Its typed request supplies model,
+system/user messages, maximum output tokens, and temperature, and always sends
+`stream: false`. The client applies a finite caller-selected timeout, bounds the
+body before JSON decoding, and accepts exactly one non-empty assistant message.
+Available prompt, completion, and total token counts are returned with the text.
+Status, transport, size, JSON, and response-shape failures are typed diagnostics
+that never include prompt or raw response-body content.
+
+Streaming, model acquisition/selection and resident-model policy, and the
+dictation/classifier role prompts remain out of scope. UI wiring and cloud or Pi
+behavior are also deferred, as are virtual keys and control-plane version
+negotiation.
 
 Supervisor lifecycle events and stderr are diagnostic telemetry, not durable
 user-session history. Pi integration will translate only user-relevant domain
