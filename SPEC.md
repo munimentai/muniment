@@ -13,8 +13,10 @@ serverless/solo mode exists** (harness-spec non-goal). Closed source.
   [design-spec.md](docs/spec/design-spec.md) §2 (layout, thread grammar,
   composer, voice states, projects) and §1 (brand foundation, color law,
   tokens, the milled ring §1.8).
-- [03-mobile-app.md](docs/spec/03-mobile-app.md) — **mockup only, never
-  engineered** (non-goal; screens exist for the brand story).
+- [03-mobile-app.md](docs/spec/03-mobile-app.md) — design ground truth for the
+  phased mobile companion app (harness-spec §12); where mobile is engineered
+  (this Tauri workspace vs a separate repo) is the §12.5 repo-strategy ADR,
+  owner-gated.
 
 **Design ground truth = the owner-built mockups in
 [docs/mockups/desktop/](docs/mockups/desktop/)** (adhere closely). Ring
