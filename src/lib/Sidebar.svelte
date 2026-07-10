@@ -50,7 +50,7 @@
     border-right: 1px solid var(--border);
     transition: width 180ms ease;
   }
-  aside.collapsed { width: 52px; }
+  aside.collapsed { width: 52px; overflow: visible; }
   header { height: 54px; display: flex; align-items: center; gap: 9px; padding: 0 12px; }
   button { color: var(--ink); font: inherit; }
   .mark, .collapse, nav button, .profile-button, .popover button {
@@ -65,14 +65,14 @@
   nav button { width: 100%; display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-radius: var(--radius-control); text-align: left; color: var(--muted); }
   .icon { width: 18px; flex: none; text-align: center; font-family: var(--font-mono); }
   .threads { flex: 1; padding: 12px 20px; }
-  h2 { font-size: 10.5px; letter-spacing: .04em; text-transform: uppercase; color: var(--muted); }
+  h2 { font-size: var(--text-12); letter-spacing: .04em; text-transform: uppercase; color: var(--muted); }
   .empty { margin-top: 9px; color: var(--muted); font-family: var(--font-mono); font-size: var(--text-12); }
   .profile { position: relative; padding: 10px; border-top: 1px solid var(--border); }
   .profile-button { width: 100%; display: flex; align-items: center; gap: 10px; padding: 7px; border-radius: var(--radius-control); cursor: pointer; }
   .profile-button:hover { background: var(--faint); }
   .identity { width: 26px; height: 26px; flex: none; display: grid; place-items: center; color: var(--muted); background: var(--faint); border: 1px solid var(--border); border-radius: var(--radius-control); font-family: var(--font-mono); font-size: var(--text-12); }
   .subject { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--font-mono); font-size: var(--text-12); }
-  .popover { position: absolute; right: 10px; bottom: 58px; left: 10px; padding: 8px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-panel); }
+  .popover { position: absolute; z-index: 1; right: 10px; bottom: 58px; left: 10px; padding: 8px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-panel); }
   .popover p { padding: 6px 8px 10px; overflow-wrap: anywhere; color: var(--muted); font-family: var(--font-mono); font-size: var(--text-12); }
   .popover button { width: 100%; padding: 7px 8px; border-radius: var(--radius-control); text-align: left; cursor: pointer; }
   .popover button:hover { background: var(--faint); }
