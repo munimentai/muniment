@@ -58,20 +58,18 @@ Phase 1 live.
     - DONE 2026-07-10 — restart-safe transport: generation-tagged I/O so
       stale output from a dead process generation cannot corrupt
       post-restart calls.
+    - DONE 2026-07-10 — supervisor status-change events: ordered Starting/
+      Healthy/Restarting/Failed/Stopped transitions with cause, generation,
+      attempt, and backoff metadata pushed to subscribers.
+    - DONE 2026-07-10 — bounded stderr diagnostics: producer-side retained
+      line ring, generation reset, and recent stderr tails on restart/failure
+      causes.
     - NEXT — call cancellation + abandoned-request hygiene: cancel an
       in-flight JSON-RPC call from another thread (LSP-style cancel
       notification, method name configurable) and discard late responses
       to cancelled or timed-out requests so they cannot fail later calls
       (item 9 "stop generation" prerequisite; also closes the
       timeout→MismatchedId hole in the live generation).
-    - NEXT — supervisor status-change events: push Starting/Healthy/
-      Restarting/Failed/Stopped transitions with cause metadata (exit code,
-      spawn error, probe failure, attempt, backoff) to subscribers, so the
-      future health UI does not poll.
-    - NEXT — bounded stderr diagnostics: cap unread stderr on the producer
-      side (llama.cpp is stderr-chatty) and keep a recent-lines ring that
-      failure reporting includes (feeds the §2.6 "Copy diagnostics"
-      pattern).
     Pi RPC wiring stays blocked on cloud 6; llama.cpp + model residency
     land with item 10 proper.
 11. Attachments pipeline + content-addressed file store client. The store
