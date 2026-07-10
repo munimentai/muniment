@@ -53,6 +53,10 @@ reference implementation: [docs/design-reference/ring/](docs/design-reference/ri
 9. **Platform chrome follows the OS** (design-spec §2 platform note); brand
    tokens identical across platforms.
 10. **Monetization and launch/publicity are owner-only.**
+11. **Local run state is event-sourced.** The append-only SQLite journal in
+    [ADR 0002](docs/decisions/0002-event-sourced-run-journal.md) is authoritative
+    for live/resumed sessions; UI, receipts, and relay are rebuildable
+    projections. This contract precedes, but does not implement, item 9.
 
 ## CI
 
