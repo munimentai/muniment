@@ -87,7 +87,7 @@ jobs:
               | sh -s -- -y --profile minimal --default-toolchain stable
           fi
           echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
-          rustup component add rustfmt clippy
+          "$HOME/.cargo/bin/rustup" component add rustfmt clippy
           # rustc needs a C linker even for dependency-free crates
           if ! command -v cc >/dev/null 2>&1; then
             apt-get update -qq
