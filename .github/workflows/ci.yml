@@ -5,8 +5,8 @@ name: CI
 # runner container carries DESKTOP_CI_SSH_KEY, a restricted key whose only
 # capability on pve01 is `sudo desktop-ci`. Builds are serialized by the
 # driver's one-VM-at-a-time lock; matrix jobs also serialize on the single
-# repo runner, so a full PR gate is smoke (structure check + Rust unit tests)
-# plus three sequential platform builds.
+# repo runner, so a code PR gate is smoke (structure check + unit tests) plus
+# three sequential platform builds. Markdown-only PRs run structure smoke only.
 # Push-to-main runs smoke only — merges are already PR-gated.
 # NOTE: the driver clones `--branch <ref>`, so we pass the branch NAME (the
 # PR head ref), which builds the branch TIP, not necessarily the triggering
@@ -25,14 +25,35 @@ concurrency:
 jobs:
   smoke:
     runs-on: self-hosted
+    outputs:
+      docs_only: ${{ steps.changes.outputs.docs_only }}
     steps:
       - name: Checkout
         uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Classify PR changes
+        if: github.event_name == 'pull_request'
+        id: changes
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          docs_only=true
+          while IFS= read -r path; do
+            case "$path" in
+              *.md) ;;
+              *) docs_only=false; break ;;
+            esac
+          done < <(git diff --name-only --diff-filter=ACDMRT "$BASE_SHA" "$HEAD_SHA")
+          echo "docs_only=$docs_only" >> "$GITHUB_OUTPUT"
 
       - name: Structure smoke
         run: test/smoke.sh
 
       - name: Node 24 (bootstrap if missing)
+        if: steps.changes.outputs.docs_only != 'true'
         run: |
           node_dir="$HOME/.local/node-24"
           if { ! command -v node >/dev/null 2>&1 || [ "$(node -p 'process.versions.node.split(`.`)[0]' 2>/dev/null)" != 24 ]; } \
@@ -50,6 +71,7 @@ jobs:
           echo "$HOME/.local/node-24/bin" >> "$GITHUB_PATH"
 
       - name: Frontend unit tests
+        if: steps.changes.outputs.docs_only != 'true'
         run: npm ci --no-audit --no-fund && npm test
 
       # Unit tests cover src-tauri/core (muniment-core), which is kept free of
@@ -58,6 +80,7 @@ jobs:
       # core crate compiles anywhere. The runner container persists, so the
       # rustup bootstrap below is a one-time cost.
       - name: Rust toolchain (bootstrap if missing)
+        if: steps.changes.outputs.docs_only != 'true'
         run: |
           if ! command -v cargo >/dev/null 2>&1 && [ ! -x "$HOME/.cargo/bin/cargo" ]; then
             curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
@@ -71,10 +94,11 @@ jobs:
           fi
 
       - name: Rust unit tests
+        if: steps.changes.outputs.docs_only != 'true'
         run: cargo test --manifest-path src-tauri/core/Cargo.toml --locked
 
   desktop-build:
-    if: github.event_name == 'pull_request'
+    if: github.event_name == 'pull_request' && needs.smoke.outputs.docs_only != 'true'
     needs: smoke
     runs-on: self-hosted
     timeout-minutes: 75
