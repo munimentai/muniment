@@ -106,9 +106,11 @@ The caller supplies the ping method name and per-call timeout; the helper sends
 the method with no parameters and maps any remote error, timeout, or transport
 failure to a descriptive health-check error. The probe uses the same call lock
 as application calls, so it cannot consume their responses or notifications.
-Consequently, a probe waits behind a long-running call (bounded by that call's
-timeout) and stalls the supervisor loop while it does so. Keep probe timeouts
-small relative to `health_interval`.
+If an application call holds the lock, the probe promptly reports healthy
+without sending a ping. The call's own timeout or cancellation bounds a hang;
+after it releases the lock, the next probe performs a real ping. When no call is
+in flight, an unanswered ping still fails after the probe timeout and follows
+the normal supervisor restart path.
 
 ## Scope boundary
 
