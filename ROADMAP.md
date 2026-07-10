@@ -25,16 +25,26 @@ the owner declares cloud Phase 1 live.
      docs/decisions/0001), design-token layer, vendored fonts.
    - 8b DONE 2026-07-09 — OIDC auth core in Rust: PKCE S256 + loopback
      redirect + keychain token store, mock-IdP test suite (docs/auth.md).
-   - 8c NEXT — session freshness (refresh-on-expiry via the tested refresh
-     grant) + real signed-out/signed-in shell states replacing the
-     temporary trigger row.
+   - 8c DONE 2026-07-10 — session freshness (refresh-on-expiry via the
+     tested refresh grant) + real signed-out/signed-in shell states
+     replacing the temporary trigger row.
    - 8d BLOCKED on cloud Phase 1 — client registration + real handshake
      against api.muniment.ai, entitlement snapshot fetch + display
      (profile block "Your access" peek).
+   - 8e NEXT — pre-chat shell frame, fully local and nothing fabricated:
+     design-spec §2.1 layout (collapsible sidebar, thread surface with the
+     §2.6 first-run state, composer shell without send, artifact rail ⌘J)
+     plus the §1.8 ring promoted to a tested component (rest + thinking
+     states). Send/threads/provenance arrive only with item 9 — no mocks.
 9. Pi sidecar (RPC over stdio), chat against the user's virtual key
    (depends cloud 6 + item 8). Streaming = signal underline + caret; the
    provenance line lands with this item.
 10. Local model sidecar (llama.cpp + resident Gemma quant), health-managed.
+   - Groundwork proceeding under the gate reading (shared with item 9):
+     sidecar process supervisor in muniment-core — spawn/stdio/health/
+     crash-restart/shutdown, proven against a stub binary in unit tests.
+     Pi RPC wiring stays blocked on cloud 6; llama.cpp + model residency
+     land with item 10 proper; control-plane version pinning with cloud.
 11. Attachments pipeline + content-addressed file store client.
 
 ## Phase 3 — Routing metadata + voice (§9 items 12, 15)
