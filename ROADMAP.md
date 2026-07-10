@@ -64,12 +64,20 @@ Phase 1 live.
     - DONE 2026-07-10 — bounded stderr diagnostics: producer-side retained
       line ring, generation reset, and recent stderr tails on restart/failure
       causes.
-    - NEXT — call cancellation + abandoned-request hygiene: cancel an
-      in-flight JSON-RPC call from another thread (LSP-style cancel
-      notification, method name configurable) and discard late responses
-      to cancelled or timed-out requests so they cannot fail later calls
-      (item 9 "stop generation" prerequisite; also closes the
-      timeout→MismatchedId hole in the live generation).
+    - DONE 2026-07-10 — call cancellation + abandoned-request hygiene:
+      cancel an in-flight JSON-RPC call from another thread (cancel
+      notification, method name configurable) and silently discard late
+      responses to cancelled or timed-out IDs via a bounded,
+      generation-aware queue (closes the timeout→MismatchedId hole).
+    - NEXT — health probing that coexists with long-running calls: the
+      JSON-RPC probe currently blocks unboundedly on the shared call lock,
+      so one long generation (item 9's normal case) stalls the supervisor
+      loop and delays crash handling. The probe must never block on the
+      call lock, must steal no frames from an in-flight call, and a
+      genuinely hung idle sidecar must still fail and restart.
+    - Code health, queued — split the 1,300-line sidecar/mod.rs into
+      submodules (jsonrpc / io / supervisor) following the auth/ pattern;
+      pure code motion, public API unchanged.
     Pi RPC wiring stays blocked on cloud 6; llama.cpp + model residency
     land with item 10 proper.
 11. Attachments pipeline + content-addressed file store client. The store
