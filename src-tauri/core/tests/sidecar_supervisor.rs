@@ -292,6 +292,52 @@ fn blocked_probe_cannot_delay_startup_timeout_or_become_healthy() {
 }
 
 #[test]
+fn restarted_generation_probes_independently_of_stale_blocked_probe() {
+    let mut cfg = config(&["echo"]);
+    cfg.startup_timeout = Duration::from_millis(100);
+    cfg.health_interval = Duration::from_millis(5);
+    cfg.restart.max_restarts = 1;
+    let (release_first, blocked_first) = std::sync::mpsc::channel();
+    let blocked_first = Arc::new(std::sync::Mutex::new(blocked_first));
+    let (release_second, blocked_second) = std::sync::mpsc::channel();
+    let blocked_second = Arc::new(std::sync::Mutex::new(blocked_second));
+    let probe_count = Arc::new(AtomicUsize::new(0));
+    let count = Arc::clone(&probe_count);
+    let supervisor = SidecarSupervisor::spawn(cfg, move |_| {
+        match count.fetch_add(1, Ordering::SeqCst) {
+            0 => blocked_first.lock().unwrap().recv().unwrap(),
+            1 => blocked_second.lock().unwrap().recv().unwrap(),
+            call => panic!("overlapping probe call {call} for replacement generation"),
+        }
+        Ok(ProbeOutcome::Ready)
+    })
+    .unwrap();
+    let events = supervisor.subscribe();
+    assert_eq!(next_event(&events).status, SidecarStatus::Starting);
+    let restarting = next_event(&events);
+    assert_eq!(restarting.status, SidecarStatus::Restarting);
+    assert!(matches!(
+        restarting.cause,
+        Some(SidecarEventCause::StartupTimeout { .. })
+    ));
+    assert_eq!(next_event(&events).status, SidecarStatus::Starting);
+
+    let until = Instant::now() + Duration::from_secs(1);
+    while probe_count.load(Ordering::SeqCst) < 2 {
+        assert!(Instant::now() < until, "replacement probe did not start");
+        thread::yield_now();
+    }
+    release_first.send(()).unwrap();
+    thread::sleep(Duration::from_millis(20));
+    assert_eq!(probe_count.load(Ordering::SeqCst), 2);
+    release_second.send(()).unwrap();
+
+    let healthy = next_event(&events);
+    assert_eq!(healthy.status, SidecarStatus::Healthy);
+    assert_eq!(healthy.generation, Some(2));
+}
+
+#[test]
 fn hard_startup_probe_failure_uses_health_failure_path() {
     let mut cfg = config(&["stderr-hang"]);
     cfg.restart.max_restarts = 0;

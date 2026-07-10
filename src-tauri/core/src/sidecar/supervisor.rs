@@ -272,7 +272,7 @@ fn supervise(
     probe: Arc<HealthProbe>,
 ) {
     let (probe_results_tx, probe_results) = mpsc::channel::<ProbeResult>();
-    let mut probe_in_flight = false;
+    let mut probe_in_flight_generation = None;
     let mut restarts = VecDeque::new();
     let mut consecutive_failures = 0u32;
     let mut restart_cause = None;
@@ -387,7 +387,9 @@ fn supervise(
 
             let mut probe_result = None;
             while let Ok(result) = probe_results.try_recv() {
-                probe_in_flight = false;
+                if probe_in_flight_generation == Some(result.generation) {
+                    probe_in_flight_generation = None;
+                }
                 if result.generation == child_generation {
                     probe_result = Some(result);
                 }
@@ -463,9 +465,11 @@ fn supervise(
                     stderr_tail: stderr_tail(&stderr),
                 };
             }
-            if !probe_in_flight && Instant::now() >= next_probe {
+            if probe_in_flight_generation != Some(child_generation)
+                && Instant::now() >= next_probe
+            {
                 next_probe = Instant::now() + config.health_interval;
-                probe_in_flight = true;
+                probe_in_flight_generation = Some(child_generation);
                 let probe = Arc::clone(&probe);
                 let probe_io = io.clone();
                 let results = probe_results_tx.clone();
