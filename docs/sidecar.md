@@ -84,6 +84,22 @@ malformed JSON, invalid JSON-RPC version or response shape, mismatched IDs, and
 valid remote error responses. The transport is deliberately synchronous; it
 does not multiplex calls.
 
+### Cancellation and late responses
+
+A transport configured with `with_cancel_method` supports cancellable calls
+through a cloneable `JsonRpcCancellationToken`. Another thread can signal the
+token while a call is blocked; the transport promptly sends the configured
+JSON-RPC cancellation notification with the request ID and returns
+`JsonRpcTransportError::Cancelled`. The notification method is deliberately
+peer-specific rather than fixed to the LSP convention.
+
+Timed-out and cancelled request IDs are retained in a bounded, generation-aware
+queue. If the live sidecar later sends either a success or error response for
+one of those abandoned IDs, the transport silently discards it and continues
+waiting for the current call. Entries from replaced process generations are
+purged, and the oldest entry is evicted at the fixed capacity, preventing an
+unresponsive peer from growing transport state without bound.
+
 For supervised JSON-RPC peers, `JsonRpcTransport::health_probe` turns an
 `Arc<JsonRpcTransport>` into the closure accepted by `SidecarSupervisor::spawn`.
 The caller supplies the ping method name and per-call timeout; the helper sends
