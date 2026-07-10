@@ -1,0 +1,87 @@
+/*
+ * Design tokens — docs/spec/design-spec.md §1.3–1.5. This file is the single
+ * source for color, radius, and type tokens; components reference the custom
+ * properties, never raw values. `--signal` may only be referenced by
+ * components on the §1.2 allowed list (color means computation).
+ *
+ * Themes follow the OS (§1.3). The per-device user override arrives with the
+ * settings surface in a later slice.
+ */
+
+@font-face {
+  font-family: 'Schibsted Grotesk';
+  font-style: normal;
+  font-weight: 400 900;
+  font-display: swap;
+  src: url('../fonts/SchibstedGrotesk-latin.woff2') format('woff2');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
+@font-face {
+  font-family: 'Schibsted Grotesk';
+  font-style: normal;
+  font-weight: 400 900;
+  font-display: swap;
+  src: url('../fonts/SchibstedGrotesk-latin-ext.woff2') format('woff2');
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+
+/* One weight, one register (§1.4): if it's a record, it's mono. */
+@font-face {
+  font-family: 'Commit Mono';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url('../fonts/CommitMono-VF.woff2') format('woff2');
+}
+
+:root {
+  color-scheme: light dark;
+
+  /* §1.3 color tokens — light */
+  --paper: #F6F7F6;
+  --surface: #FFFFFF;
+  --faint: #EDEFEE;
+  --ink: #1A1D1C;
+  --muted: #5C6461;
+  --border: #E2E5E3;
+  --signal: #2F7E6D;
+  --signal-soft: rgba(47, 126, 109, .10);
+  --oxide: #B4483E;
+  --ochre: #B98A2F;
+
+  /* §1.4 type — two families, two registers */
+  --font-human: 'Schibsted Grotesk', system-ui, sans-serif;
+  --font-mono: 'Commit Mono', ui-monospace, monospace;
+
+  /* §1.4 desktop type scale; mono runs one step smaller than adjacent body */
+  --text-12: 12px;
+  --text-13: 13px;
+  --text-15: 15px; /* body */
+  --text-17: 17px;
+  --text-22: 22px;
+  --text-28: 28px;
+  --leading-body: 1.55;
+  --leading-heading: 1.3;
+
+  /* §1.5 radius scale — nothing pill-shaped */
+  --radius-chip: 2px;    /* chips, kbd */
+  --radius-control: 6px; /* buttons, tools, inputs */
+  --radius-panel: 10px;  /* panels, composer, window */
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    /* §1.3 color tokens — dark */
+    --paper: #141716;
+    --surface: #1C201E;
+    --faint: #222624;
+    --ink: #E8EBE9;
+    --muted: #8A928E;
+    --border: #2A2F2C;
+    --signal: #58B39F;
+    --signal-soft: rgba(88, 179, 159, .12);
+    --oxide: #C96A61;
+    --ochre: #CBA14E;
+  }
+}
