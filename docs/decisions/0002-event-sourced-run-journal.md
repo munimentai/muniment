@@ -196,8 +196,9 @@ local Pi run.
 ## Follow-up implementation slices
 
 1. **Implemented:** SQLite schema, envelope types, atomic append API, migrations/
-   upcasters, integrity checks, and contract tests, without Pi wiring.
-2. Deterministic UI/run reducer, disposable snapshots, and crash fixtures.
+upcasters, integrity checks, and contract tests, without Pi wiring.
+2. **Implemented:** Deterministic UI/run reducer and crash fixtures. Disposable
+   snapshots remain deferred until the reducer contract has production usage.
 3. Pi domain/effect translation and receipt projection.
 4. Retention, export/deletion, CAS collection, and crash-safe compaction.
 5. A journal-backed relay projection/cursor when the existing full-fidelity
