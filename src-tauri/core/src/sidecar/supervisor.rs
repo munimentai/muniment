@@ -13,7 +13,14 @@ use super::{LineReader, LineWriter, SidecarError, SidecarIo};
 const DEFAULT_STDERR_CAPACITY: usize = 256;
 const STDERR_DIAGNOSTIC_LINES: usize = 20;
 
-type HealthProbe = dyn Fn(&SidecarIo) -> Result<(), String> + Send + Sync + 'static;
+type HealthProbe = dyn Fn(&SidecarIo) -> Result<ProbeOutcome, String> + Send + Sync + 'static;
+
+/// A successful probe result, distinguishing startup progress from readiness.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProbeOutcome {
+    Ready,
+    Loading,
+}
 
 #[derive(Debug, Clone)]
 pub struct RestartPolicy {
@@ -42,6 +49,8 @@ pub struct SidecarConfig {
     pub env: HashMap<String, String>,
     pub restart: RestartPolicy,
     pub health_interval: Duration,
+    /// Maximum time a spawned generation may report `Loading` before restart.
+    pub startup_timeout: Duration,
     pub shutdown_timeout: Duration,
     /// Maximum number of recent stderr lines retained for reading and diagnostics.
     pub stderr_capacity: usize,
@@ -57,6 +66,7 @@ impl SidecarConfig {
             env: HashMap::new(),
             restart: RestartPolicy::default(),
             health_interval: Duration::from_secs(5),
+            startup_timeout: Duration::from_secs(60),
             shutdown_timeout: Duration::from_secs(2),
             stderr_capacity: DEFAULT_STDERR_CAPACITY,
             poll_interval: Duration::from_millis(20),
@@ -88,6 +98,10 @@ pub enum SidecarEventCause {
     SpawnError(String),
     HealthProbeFailure {
         message: String,
+        stderr_tail: Vec<String>,
+    },
+    StartupTimeout {
+        timeout: Duration,
         stderr_tail: Vec<String>,
     },
     Shutdown,
@@ -124,7 +138,7 @@ enum SupervisorCommand {
 impl SidecarSupervisor {
     pub fn spawn(
         config: SidecarConfig,
-        health_probe: impl Fn(&SidecarIo) -> Result<(), String> + Send + Sync + 'static,
+        health_probe: impl Fn(&SidecarIo) -> Result<ProbeOutcome, String> + Send + Sync + 'static,
     ) -> Result<Self, SidecarError> {
         if config.program.is_empty() {
             return Err(SidecarError::Spawn(std::io::Error::new(
@@ -160,16 +174,9 @@ impl SidecarSupervisor {
             )))),
             stderr: LineReader(LineReaderInner::Stderr(stderr.clone())),
         };
-        let starting = SidecarEvent {
-            status: SidecarStatus::Starting,
-            cause: None,
-            restart_attempt: None,
-            backoff_delay: None,
-            generation: None,
-        };
         let state = Arc::new(Mutex::new(SupervisorState {
             status: SidecarStatus::Starting,
-            events: vec![starting],
+            events: Vec::new(),
             subscribers: Vec::new(),
             closed: false,
         }));
@@ -309,14 +316,16 @@ fn supervise(
         emit_event(
             &state,
             SidecarEvent {
-                status: SidecarStatus::Healthy,
+                status: SidecarStatus::Starting,
                 cause: None,
                 restart_attempt: None,
                 backoff_delay: None,
                 generation: Some(child_generation),
             },
         );
-        let mut next_probe = Instant::now() + config.health_interval;
+        let startup_deadline = Instant::now() + config.startup_timeout;
+        let mut ready = false;
+        let mut next_probe = Instant::now();
         let cause = loop {
             match commands.recv_timeout(config.poll_interval) {
                 Ok(SupervisorCommand::Shutdown(done)) => {
@@ -362,19 +371,61 @@ fn supervise(
             }
             if Instant::now() >= next_probe {
                 next_probe = Instant::now() + config.health_interval;
-                if let Err(message) = probe(&io) {
-                    stop_child(
-                        &mut child,
-                        &io,
-                        config.shutdown_timeout,
-                        config.poll_interval,
-                    );
-                    break SidecarEventCause::HealthProbeFailure {
-                        message,
-                        stderr_tail: stderr_tail(&stderr),
-                    };
+                match probe(&io) {
+                    Ok(ProbeOutcome::Ready) => {
+                        if !ready {
+                            ready = true;
+                            consecutive_failures = 0;
+                            emit_event(
+                                &state,
+                                SidecarEvent {
+                                    status: SidecarStatus::Healthy,
+                                    cause: None,
+                                    restart_attempt: None,
+                                    backoff_delay: None,
+                                    generation: Some(child_generation),
+                                },
+                            );
+                        }
+                    }
+                    Ok(ProbeOutcome::Loading) if !ready => {}
+                    Ok(ProbeOutcome::Loading) => {
+                        stop_child(
+                            &mut child,
+                            &io,
+                            config.shutdown_timeout,
+                            config.poll_interval,
+                        );
+                        break SidecarEventCause::HealthProbeFailure {
+                            message: "probe reported loading after readiness".into(),
+                            stderr_tail: stderr_tail(&stderr),
+                        };
+                    }
+                    Err(message) => {
+                        stop_child(
+                            &mut child,
+                            &io,
+                            config.shutdown_timeout,
+                            config.poll_interval,
+                        );
+                        break SidecarEventCause::HealthProbeFailure {
+                            message,
+                            stderr_tail: stderr_tail(&stderr),
+                        };
+                    }
                 }
-                consecutive_failures = 0;
+            }
+            if !ready && Instant::now() >= startup_deadline {
+                stop_child(
+                    &mut child,
+                    &io,
+                    config.shutdown_timeout,
+                    config.poll_interval,
+                );
+                break SidecarEventCause::StartupTimeout {
+                    timeout: config.startup_timeout,
+                    stderr_tail: stderr_tail(&stderr),
+                };
             }
         };
         io.stdin.0.lock().unwrap().writer = None;
