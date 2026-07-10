@@ -118,4 +118,4 @@ Phase 1 live.
   three platforms (Linux, Windows, and macOS). Docs-only PRs (markdown-only
   diffs) gate on the structure smoke alone — markdown cannot break a
   platform build. Pushes to `main` run the smoke only.
-- Mobile is never engineered. macOS/Windows/Linux only.
+- This repo builds macOS/Windows/Linux. The mobile companion app is in scope product-wide (harness-spec §12); do NOT scaffold mobile targets in this repo unless/until the §12.5 repo-strategy ADR chooses the shared-workspace path (owner-gated).

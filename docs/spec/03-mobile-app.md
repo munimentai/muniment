@@ -1,7 +1,7 @@
 # Muniment Mobile App — Design Document
 
 **Doc 3 of 5** · Tokens, laws, identity, components: see 01-design-system.md
-**Scope:** mockup only — these screens exist to complete the brand story and de-risk future scope. Design them fully; do not engineer them. · **Status:** v1 · July 2026
+**Scope:** design ground truth for the **mobile companion app** — engineering is now in scope, phased per harness-spec §12 (amended 2026-07-10; was mockup-only). These eight screens are the M0/M2 surface; the M1 live-session view needs a ninth mockup before it is engineered. · **Status:** v1.1 · July 2026
 
 ---
 
@@ -24,7 +24,9 @@ Large title "Threads". Search field. New-thread button (ink FAB on Android, head
 Same grammar as desktop, compressed: user bubbles right/`faint`; responses plain on `paper`, no avatar; pre-first-token = 17px thinking ring + `Routing · <label>` mono; streaming = signal underline + caret. **Tool cards arrive collapsed** (header only: status dot + verb + object); tap expands. Provenance line truncates to `route · cost`; tap opens the **receipt bottom sheet**: full route, matched rule, tokens, connections touched, lineage — mono, ledger layout. Message long-press: copy, fork from here, share…, read aloud, retry.
 
 ### 3.3 Composer + voice (the hero input)
-Docked composer: input, attach, and a **large hold-to-talk control** (56px, ink ring at rest). Hold: control fills `faint`, 5-bar level meter animates above, verbatim transcript streams muted into the input. Release: signal underline flash while the on-device model polishes; transform chips (key points · formal · short · long) slide in for 6s. Slide-up while holding locks hands-free; tap to stop. All on-device; first use shows a one-time line: "Voice never leaves this phone."
+Docked composer: input, attach, and a **large hold-to-talk control** (56px, ink ring at rest). Hold: control fills `faint`, 5-bar level meter animates above, verbatim transcript streams muted into the input. Release: signal underline flash while polish runs; transform chips (key points · formal · short · long) slide in for 6s. Slide-up while holding locks hands-free; tap to stop.
+
+**Voice stack (amended 2026-07-10, harness-spec §12.3):** mobile does NOT carry the desktop on-device stack. Use platform-native speech APIs (iOS Speech framework / Android SpeechRecognizer or system dictation) or a purpose-chosen mobile alternative, decided by ADR at build time. The "Voice never leaves this phone" first-use line ships ONLY if the chosen stack actually guarantees on-device processing; otherwise the first-use line states honestly where speech is processed (copy honesty is law). Voice is M2 — not required for the first shipped versions. The interaction design above stands regardless of stack.
 
 ### 3.4 Projects list
 Rows: project name, member count (mono), unread-inbox dot (ink, not signal). Empty state for eligible-but-memberless users never occurs (tab hidden); this screen has no empty state by design.

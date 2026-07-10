@@ -2,7 +2,7 @@
 
 1. **Owner mockups (ground truth): [docs/mockups/desktop/](docs/mockups/desktop/)**
    — adhere closely. Mobile mockups ([docs/mockups/mobile/](docs/mockups/mobile/))
-   complete the brand story; never engineered.
+   are design ground truth for the phased mobile companion app (harness-spec §12).
 2. **The written system:** [docs/spec/design-spec.md](docs/spec/design-spec.md)
    §1 (tokens/laws/identity) + §2 (desktop app) and
    [docs/spec/02-desktop-app.md](docs/spec/02-desktop-app.md).
