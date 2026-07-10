@@ -142,6 +142,10 @@ Single mode. No mode switcher exists in any menu.
 - **Streaming:** the active line carries a 2px signal underline and a signal caret. When generation ends, the color leaves. No dots, no shimmer.
 - **Tool activity:** inline mono cards (radius 6, `surface`). Header: status dot + verb + object (`read dim_customers · fct_mrr_events`). Running = signal dot pulsing + signal header text; complete = muted, collapsed to header with expand. Long output collapses past 8 lines.
 - **Provenance line:** under every response, mono, 11.5px, muted with the route in signal: `analysis/high → glm-5.2 · $0.0041 · 3.8s`. Click expands the full receipt: classifier label, policy rule that matched, tokens, connections touched. This is the brand's signature element; it ships in v1 and is never optional.
+- **State provenance:** when persistence lands, conversation, tool, permission,
+  and receipt UI reduces from the append-only local run journal (desktop ADR
+  0002). Reopen rebuilds from it; snapshots are disposable, and uncertain
+  external effects render needs-attention instead of repeating. Not implemented.
 - **Model pin (router.override holders only):** a small mono chip adjacent to the provenance area, `auto ▾`. Pinning shows `pinned → <model>` in ink (a user decision is not computation). Users without the capability never see the chip.
 
 ### 2.3 Composer

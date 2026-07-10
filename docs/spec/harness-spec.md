@@ -395,6 +395,11 @@ Muniment combines what the industry ships as four loose nouns — connectors, sk
 
 **§11.3 Receipts:** receipts name the capabilities in the loop — route · model · cost · time · capability@version[, ...]. Emitted from day one of the capability schema (retrofitting provenance into an append-only log is a known trap).
 
+For desktop runs, the append-only local SQLite run journal defined by desktop
+ADR 0002 is authoritative. Receipts are rebuildable projections of its
+versioned events, not independently maintained state. The contract is decided;
+implementation remains Phase 2 work.
+
 **§11.4 Vocabulary:** end users see "capabilities" by that name on every surface. Admin LIBRARY regroups to Capabilities + Artifacts. Copy law unaffected.
 
 ---
@@ -434,12 +439,15 @@ control plane.
    classifier, so the label is produced server-side (heuristic tier first;
    sampled re-classification already exists as a pattern, §5.3).
 3. **Session relay + remote approvals.** The desktop publishes full-fidelity
-   Pi session events over its existing control-plane websocket (§6.2 today
+   Pi session events projected from its authoritative local run journal over
+   its existing control-plane websocket (§6.2 today
    sends summaries); the control plane relays steer / queued follow-up /
    interrupt commands back down, and — the flagship — **ask/allow/deny
    permission gates (§6.5) can be answered from the phone**, receipt-visible.
    The relay works only while the desktop is online with a live run; the
-   offline story is a server-side Flue session (§7.3), later (M3).
+   offline story is a server-side Flue session (§7.3), later (M3). Relay
+   cursors and control-plane copies are consumers, not a competing history;
+   journal-backed publication is not yet implemented.
 
 ### 12.3 Voice on mobile (owner decision 2026-07-10)
 
