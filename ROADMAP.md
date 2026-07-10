@@ -101,11 +101,18 @@ Phase 1 live.
   consume this same journal rather than inventing parallel histories. The
   ADR 0002 decides schema/versioning, ordering/concurrency, retention/compaction,
   deletion/export, corruption recovery, and the boundary between durable
-  run events and supervisor diagnostics. Implementation remains planned; the
-  schema/append slice must land before session/chat persistence.
+  run events and supervisor diagnostics.
+  - Slice 1 DONE 2026-07-10 — SQLite schema, versioned envelope, validated
+    open, atomic append contract, and contract tests.
+  - Slice 2 DONE 2026-07-10 — deterministic run-state reducer with permission,
+    terminal, unsupported-safety-event, incremental replay, and
+    crash-at-effect-boundary fixtures.
+  - NEXT — Pi domain/effect translation and receipt projection when cloud 6
+    opens; then retention/export/deletion/CAS collection/compaction; relay
+    projection remains deferred to the existing §12 relay work.
 
-- PLANNED — **Capability vocabulary + receipt provenance.** Keep the
-  in-flight 2.x slices above unchanged. Follow-up client waves make every
+- PLANNED — **Capability vocabulary + receipt provenance.** Follow-up client
+  waves make every
   end-user palette/library surface say “capabilities,” support the approved
   one-line description before deferred loading, and render receipts as
   `route · model · cost · time · capability@version[, ...]`. Real
