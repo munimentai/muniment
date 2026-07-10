@@ -19,9 +19,9 @@ windows; CLT on macOS).
 
 Real builds run on ephemeral pve01 VM clones via `desktop-ci`
 (`ssh pve01 sudo desktop-ci <platform> --repo <url> --cmd '<build>'`),
-one VM at a time, clone destroyed after. The GitHub workflow only runs the
-structure smoke on the shared runners; desktop-ci workflow wiring lands
-when the lane opens.
+one VM at a time, clone destroyed after. Pull requests are gated on the
+structure smoke followed by sequential Linux, Windows, and macOS builds via
+`desktop-ci`; pushes to `main` run the smoke only.
 
 ### macOS CI note (2026-07-09)
 
