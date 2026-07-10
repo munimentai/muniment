@@ -2,6 +2,7 @@
   import { onMount } from 'svelte'
 
   import { bootState, errorState, statusState, waitingState } from './lib/auth-state.js'
+  import AppFrame from './lib/AppFrame.svelte'
   import { ringPath } from './lib/mark.js'
 
   const markD = ringPath()
@@ -31,6 +32,9 @@
   })
 </script>
 
+{#if tauri && auth.name === 'signed-in'}
+  <AppFrame subject={auth.subject} onSignOut={() => run('sign-out')} />
+{:else}
 <main>
   <div class="lockup">
     <svg width="34" height="34" viewBox="0 0 48 48" role="img" aria-label="muniment">
@@ -51,12 +55,6 @@
         <button disabled>Sign in</button>
         <p class="record">Waiting for the browser sign-in…</p>
       </section>
-    {:else if auth.name === 'signed-in'}
-      <section class="auth-state profile">
-        <p class="subject">{auth.subject}</p>
-        <p class="record">signed in · local session</p>
-        <button onclick={() => run('sign-out')}>Sign out</button>
-      </section>
     {:else if auth.name === 'error'}
       <section class="auth-state" aria-live="polite">
         <p class="record error-record">{auth.message}</p>
@@ -65,6 +63,7 @@
     {/if}
   {/if}
 </main>
+{/if}
 
 <style>
   main {
@@ -140,20 +139,10 @@
     color: var(--muted);
   }
 
-  .subject {
-    font-size: var(--text-17);
-    font-weight: 600;
-    overflow-wrap: anywhere;
-  }
-
   .record {
     font-family: var(--font-mono);
     font-size: var(--text-12);
     color: var(--muted);
-  }
-
-  .profile button {
-    margin-top: 8px;
   }
 
   .error-record {
