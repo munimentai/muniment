@@ -11,7 +11,7 @@
 
 Every existing tool falls in one of two camps. Desktop-native multi-model clients (Cherry Studio, Jan, Msty, OpenCode Desktop) are single-user with zero org governance. Org-governed platforms (Open WebUI, LibreChat) are web apps with no desktop presence, no local agentic execution, and no local models.
 
-We build the thing in the gap: a desktop-native AI work app with one powerful mode, backed by an org control plane that handles identity, group-based entitlements, automatic model routing, MCP connection management, a skills/plugin registry, scheduled workflows, and a shared artifact library.
+We build the thing in the gap: a desktop-native AI work app with one powerful mode, backed by an org control plane that handles identity, group-based capability entitlements, automatic model routing, MCP connection management, scheduled workflows, and a shared library of capabilities and artifacts.
 
 Muniment is a **hosted SaaS**: we operate the control plane and gateway as a multi-tenant cloud; customers run nothing. The desktop app is a thin client to our cloud. **Closed source, commercial.** Pricing: one plan — $15/seat/mo billed annually, $20/seat/mo billed monthly, 10-seat minimum, 30-day full-product trial. Customers bring their own provider keys or model endpoints; muniment never marks up inference. No partner/reseller program. Self-hosting is not offered publicly; a self-hosted enterprise deployment is held in reserve as an unadvertised sales card only, so the architecture must remain deployable by compose/K8s even though we never say so.
 
@@ -41,7 +41,7 @@ Two components, one shared harness.
 │  sherpa-onnx: Parakeet ASR   │───────►│    budgets, routing)              │
 │  Kokoro TTS                  │        │  Flue runtime (scheduled          │
 │  Local MCP clients (stdio)   │        │    workflows, durable sessions)   │
-│  Remote MCP clients (via CP  │        │  Package registry                 │
+│  Remote MCP clients (via CP  │        │  Capability registry             │
 │    connection registry)      │        │  Object storage (files/artifacts) │
 └──────────────────────────────┘        └───────────────────────────────────┘
                                                      │
@@ -74,8 +74,8 @@ Two components, one shared harness.
 
 Three roles, org-scoped: `user`, `admin`, `owner`.
 
-- **User:** consumes what their groups grant. Chat, agentic runs, entitled models/MCPs/packages/artifacts/workflows.
-- **Admin:** manages people, groups, artifacts, packages (review/publish), workflow oversight.
+- **User:** consumes what their groups grant. Chat, agentic runs, entitled models, capabilities, and artifacts. Connections and workflows appear only through the capabilities that bind them.
+- **Admin:** manages people, groups, artifacts, capabilities (review/publish), and workflow oversight within each containing capability.
 - **Owner:** everything admin has, plus routing policy, provider credentials, budgets, org security posture (sandbox policy, local model policy, local stdio MCP allowlist).
 
 ### 3.1 Auth
@@ -96,6 +96,8 @@ SCIM is a small, well-specified REST surface. Build it in-house; do not take a W
 Single polymorphic grants table. Explicit deny exists and wins. Server is the only enforcer; the client receives a signed snapshot purely for UX (hiding controls). `org_id` on everything.
 
 ### 4.1 Schema
+
+> **§11 anchor:** `resource_type='capability'` is reserved for the capability manifest as the end-user grant target. The pre-§11 `packages` / `package_versions` rows below describe the existing implementation baseline; the capability schema and migration are follow-up work, not part of this codification.
 
 ```sql
 -- principals
@@ -144,6 +146,8 @@ audit_log(id, org_id, actor_user_id, action, resource_type,
 Grants with `resource_type='capability'`, key in `resource_id`. Initial set:
 
 `local_models.use`, `voice.cloud_cleanup`, `sandbox.full_auto`, `mcp.local_stdio`, `artifacts.publish_org`, `router.override` (user may manually pick a model instead of the router's choice), `workflows.create`, `packages.submit`.
+
+> **§11 anchor:** this pre-§11 list is a set of dotted permission flags, not capabilities in the product vocabulary. Follow-up schema work must remove that naming collision while preserving the capability grant target defined in §11.2.
 
 ### 4.3 Resolution algorithm
 
@@ -260,7 +264,7 @@ Operated by us as a multi-tenant cloud (Docker Compose for dev, K8s in productio
 ### 7.1 Admin web app (web-only is fine)
 
 - **Owner:** provider credentials, model registry + tiers, routing policy editor (label→model matrix with per-group overrides), budgets, org security posture (sandbox policy, local model policy, local stdio allowlist), audit log explorer.
-- **Admin:** users/groups (manual + IdP-sourced read-only), grants editor with effective-permissions preview ("what can this user touch and why"), package review queue, workflow oversight, artifact library moderation.
+- **Admin:** users/groups (manual + IdP-sourced read-only), grants editor with effective-permissions preview ("what can this user touch and why"), capability review queue (signed, versioned manifests and their subunits), workflow oversight within the containing capability, artifact library moderation.
 - Effective-permissions preview is not optional polish; it is the debugging tool for every entitlement support ticket.
 
 ### 7.2 LiteLLM gateway
@@ -271,16 +275,18 @@ Operated by us as a multi-tenant cloud (Docker Compose for dev, K8s in productio
 
 ### 7.3 Flue runtime (scheduled workflows, v1)
 
-- Workflows are Flue agents/workflows referencing registry skills. Triggers: cron, webhook, manual.
+- Capability workflow subunits are Flue agents/procedures referencing skills in the same reviewed manifest. Triggers: cron, webhook, manual.
 - `run_as='owner_identity'`: the run uses the owner's virtual key and entitlements, resolved at run time (4.6). `run_as='service'`: explicit service principal with its own grants, owner-approved.
 - Durable streams give crash recovery for long runs; interrupted work resumes on runtime restart.
 - Results delivered to a desktop inbox (websocket push + notification) and stored as artifacts/files under the owner's entitlements.
 
-### 7.4 Package registry / marketplace (v1)
+### 7.4 Capability registry / marketplace (v1)
 
-- Package format: Pi packages (bundles of extensions, skills, prompts, themes; installable from npm/git). Do not invent a format. Server-side skills for Flue use the same skill format.
-- Registry service: submission (`packages.submit`), admin review, signing (manifest hash + org signing key), versioning, org allowlist, group entitlements (`install`/`use` grants).
-- Desktop installs only entitled, signed versions; version pinning per group supported via grants on `package_versions` (first pass: pin at package level, per-version grants in a follow-up migration).
+> **§11 anchor:** "package" is retired as a product noun. This section describes the Pi distribution/installation substrate for capabilities; users and admins grant and list capabilities, never package kinds or subunits independently. Follow-up implementation work will align the registry schema and APIs.
+
+- Distribution format: Pi packages (installable from npm/git). Do not invent a format. This is internal substrate terminology only: each distribution carries one capability manifest whose reviewed subunits are skills (including former prompts), extensions, connections, workflows, and model requirements. Server-side skills for Flue use the same skill format.
+- Registry service: capability submission and admin review, signing (manifest hash + org signing key), versioning, org allowlist, and capability entitlements. `packages.submit`, `package_versions`, and `install`/`use` package grants are pre-§11 API/schema baseline names pending the follow-up migration; they are not product UI vocabulary.
+- Desktop installs only entitled, signed capability versions. Capability grants track a channel under the strict pin / gated / pure `:latest` policy in §11.2; the existing package-level and `package_versions` grant mechanics are implementation baseline only.
 
 ### 7.5 MCP connection registry
 
@@ -294,7 +300,7 @@ Operated by us as a multi-tenant cloud (Docker Compose for dev, K8s in productio
 
 ### 7.7 Audit
 
-Append-only `audit_log` for every privileged decision: entitlement checks that deny, grant changes, key regenerations, package publishes, workflow runs, owner policy changes, local-stdio MCP invocations. Export stream to SIEM (stdout JSON lines is enough for v1).
+Append-only `audit_log` for every privileged decision: entitlement checks that deny, grant changes, key regenerations, capability publishes, workflow runs, owner policy changes, local-stdio MCP invocations. Export stream to SIEM (stdout JSON lines is enough for v1).
 
 ---
 
@@ -307,7 +313,7 @@ Append-only `audit_log` for every privileged decision: entitlement checks that d
 - Sandbox honesty: permission gates by default, real isolation opt-in, Windows full-auto punts to WSL2 or server-side sandbox.
 - Label spoofing mitigated by budgets + sampled server-side re-classification.
 - Local stdio MCP servers allowlisted and owner-killable.
-- Package supply chain: review + signing before any group can install.
+- Capability supply chain: review + signing of the versioned manifest before any group can install it; Pi packages are the distribution substrate.
 - Owner deprovisioning cannot happen via SCIM alone.
 
 ---
@@ -342,12 +348,12 @@ Phases are dependency layers, not sprints. Within a phase, tracks run in paralle
 **Phase 4 — Org surface**
 16. MCP connection registry + client remote MCP consumption. Depends: 5, 9.
 17. Local stdio MCP allowlist + kill switch. Depends: 16.
-18. Package registry + signing + client install flow. Depends: 5, 9.
+18. Capability registry + signing + client install flow (Pi package distribution substrate). Depends: 5, 9.
 19. Artifact library + sharing + side-panel rendering. Depends: 5, 11.
 20. Admin web app consolidation (grants editor, effective-permissions preview, review queues). Depends: 5, 13, 16, 18.
 
 **Phase 5 — Autonomy**
-21. Flue runtime deployment + first scheduled workflow + run-time entitlement resolution + inbox delivery. Depends: 5, 6, 18 (skills from registry).
+21. Flue runtime deployment + first capability workflow + run-time entitlement resolution + inbox delivery. Depends: 5, 6, 18 (skills from the capability manifest).
 22. Sandbox modes (permission gates already in 9; bubblewrap/Seatbelt full-auto; server-side sandbox fallback). Depends: 9, 21.
 23. Sampled re-classification audit + trained-router swap path. Depends: 14 (and traffic).
 
@@ -362,10 +368,31 @@ Phases are dependency layers, not sprints. Within a phase, tracks run in paralle
 | Gemma terms | Legal read of Gemma Terms of Use before commercial sale |
 | Parakeet license | Confirm CC-BY-4.0 (or newer terms) on the exact release used |
 | Classifier taxonomy | Define the label set (task types x difficulty tiers) before Phase 3 |
-| Per-version package grants | Follow-up migration after marketplace v1 |
+| Capability channel grants | Replace the package-level/per-version baseline with strict pin / gated / pure `:latest` capability grants in the follow-up migration |
 | MCP proxy long-term | Customers may bring gateway services (e.g. MintMCP); decide later whether to build a native group-filtering proxy |
 | Windows full-auto | WSL2 detection UX vs server-side-only stance |
 | Naming/branding | Muniment (muniment.ai) — decided; trademark knockout pending |
 | Design partner | 5–8 orgs from founder network per monetization-and-marketing.md Phase 0 |
 | Org endpoint connectivity | Design the outbound connector agent (customer vLLM/TGI reachable from muniment cloud) |
 
+---
+
+## 11. The capability — canonical definition (harness-spec §11, owner decision 2026-07-10; add this VERBATIM as §11 of the vendored harness-spec in docs/spec/)
+
+Muniment combines what the industry ships as four loose nouns — connectors, skills, plugins, workflows — into ONE governed primitive: **the capability**. PydanticAI v2 named the composition side (a capability "bundles an agent's instructions, tools, lifecycle hooks, and model settings into a single, composable unit" — pydantic.dev/articles/pydantic-ai-v2); muniment's capability is the same unit made *governable*: the thing an org reviews, grants, meters, and sees in receipts. Composition is theirs; entitlement is ours.
+
+**§11.1 Anatomy (subunits):** a capability is a signed, versioned manifest over:
+
+- **skills** — instruction content: prompts, procedures, bundled reference assets. The former "prompt" package kind COLLAPSES into skills; there is no separate prompt noun.
+- **extensions** — code that executes: lifecycle hooks and local tools (in the spirit of Claude's filesystem/Chrome-control extensions). Most audit-sensitive subunit: hooks rewrite what the model sees, so they live INSIDE the reviewed unit.
+- **connections** — bindings BY NAME to MCP-registry / stdio-allowlist entries. The registries are SUBSTRATE — they own endpoints and auth; a capability only references approved entries.
+- **workflows** — Flue procedures (muniment's extension beyond the PydanticAI bundle).
+- **model requirements** — declared needs (tier/effort/modality); declarations only, routing policy decides.
+
+**"Package" is retired as a product noun.** The Pi package format survives as the distribution/installation format of a capability; the old package kinds become subunits, never granted or listed independently.
+
+**§11.2 Grants and versioning:** the capability is THE end-user grant target (resource_type='capability', already reserved in §4.1). Versioning: grants track a channel, **gated on surface change** by default — every version declares its surface (connections bound, extensions/hooks present, model requirements, scopes); content-only updates flow automatically (:latest semantics); surface-EXPANDING updates park until re-approved, grantees stay on the last approved version meanwhile ("you granted a shape, not a snapshot — when the shape grows, we ask again"). Per-org policy knob: strict pin / gated (default) / pure :latest. Deferred loading is a governance feature: the one-line description shown before a capability loads is the description the admin approved.
+
+**§11.3 Receipts:** receipts name the capabilities in the loop — route · model · cost · time · capability@version[, ...]. Emitted from day one of the capability schema (retrofitting provenance into an append-only log is a known trap).
+
+**§11.4 Vocabulary:** end users see "capabilities" by that name on every surface. Admin LIBRARY regroups to Capabilities + Artifacts. Copy law unaffected.

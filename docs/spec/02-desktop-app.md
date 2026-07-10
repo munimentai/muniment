@@ -22,11 +22,15 @@ Expanded by default (260px), state remembered; collapse (`⌘\`) animates 180ms 
 
 Top→bottom: **New thread** (`⌘N`) · **Search** (`⌘F` global) · **Threads** (recents; title + relative time, no content previews; context menu: rename, share to project…, delete) · **Projects** (section renders only if the user belongs to ≥1 project; solo users never see the concept) · **Inbox** (only if the user owns workflows or belongs to a project) · **Profile block**.
 
-**Profile block:** no avatar. `mikey · dnsfilter · owner` — name grotesque, org+role mono muted. Click → popover: appearance (System/Light/Dark), **Your access** (entitlement peek: groups list; each expands to models, connections, packages, capabilities granted, read-only, mono; footer "Access is set by your admins"), keyboard shortcuts, sign out.
+**Profile block:** no avatar. `mikey · dnsfilter · owner` — name grotesque, org+role mono muted. Click → popover: appearance (System/Light/Dark), **Your access** (entitlement peek: groups list; each expands to models, connections, and capabilities granted, read-only, mono; footer "Access is set by your admins"), keyboard shortcuts, sign out.
 
 ### 2.2 Command palette (`⌘K`)
 
-Supplements navigation, never replaces it. Sections: threads, projects, artifacts, actions ("New thread in <project>", "Open inbox", "Toggle appearance", "Pin model…" if entitled). Fuzzy match; recent-first; mono for record-type results.
+Supplements navigation, never replaces it. Sections: threads, projects, capabilities, artifacts, actions ("New thread in <project>", "Open inbox", "Toggle appearance", "Pin model…" if entitled). Fuzzy match; recent-first; mono for record-type results. Capability results use that name only—never packages, plugins, or prompts—and show the approved one-line description before deferred loading.
+
+### 2.3 Capability surfaces and resolution
+
+Every end-user palette and library surface lists **capabilities** by that name, never packages, plugins, or prompts. Before deferred loading, the client shows the capability's one-line approved description so the user sees the same description the admin reviewed. The client resolves and displays a capability as one signed, versioned unit whose subunits are: **skills** (instruction content, including former prompts, procedures, and reference assets); **extensions** (executing code, including lifecycle hooks and local tools); **connections** (bindings by name to approved registry or stdio-allowlist entries); **workflows** (Flue procedures); and **model requirements** (declared tier, effort, or modality needs; routing policy still decides). Subunits are never granted or listed independently.
 
 ## 3. Thread surface
 
@@ -39,7 +43,7 @@ One mode. No mode switcher exists anywhere, including menus and settings.
 - **Pre-first-token:** the milled ring (thinking state, 17px) + mono status: `Routing · analysis/high`. Ring and streaming underline never animate at once; the ring resolves when the first token lands.
 - **Streaming:** active line carries the 2px signal underline + signal caret. Color leaves at completion.
 - **Tool activity:** inline tool cards per design-system §6. Sequential tools stack; parallel tools render as a grouped card with per-tool status rows.
-- **Provenance line:** under every response. Click expands the receipt inline: classifier label, matched policy rule (mono, e.g. `rule 7: analysis/high → glm-5.2, fallback opus-4.8`), token counts, connections touched, fork lineage if any. This element is never hidden by any setting.
+- **Provenance line:** under every response. The receipt is `route · model · cost · time · capability@version[, ...]`, naming every capability in the loop. Click expands it inline: classifier label, matched policy rule (mono, e.g. `rule 7: analysis/high → glm-5.2, fallback opus-4.8`), token counts, capabilities and versions, connections touched, fork lineage if any. This element is never hidden by any setting. Capability provenance is part of the receipt's definition of done even if its rendering ships in a later wave.
 - **Model pin (entitled users only):** mono chip `auto ▾` right of the provenance area. Pinned state renders in ink: `pinned → glm-5.2` (a user decision is not computation). Pin persists per thread. Users without `router.override` never see the chip.
 
 ### 3.2 Message actions
@@ -75,7 +79,7 @@ A project = shared workspace root + files + artifacts + connections + instructio
 - **Fork** (primary action on shared threads): continues as the viewer's own thread under their own key/entitlements. Lineage recorded in provenance.
 - **Artifacts:** the project library; group-permission chips (mono) on each; publish flow if entitled.
 - **Inbox:** workflow results as ledger rows (workflow · run time · status · artifacts). Running rows carry the signal pulse. Personal inbox aggregates across projects + personal workflows.
-- **Connections:** read-only list of the project's MCP connections and skills with grant source (`via group:data-team`). Nothing to configure for non-admins; admins get a "Manage in admin" deep link.
+- **Connections:** read-only list of the project's MCP connections and capabilities with grant source (`via group:data-team`). Capability subunits such as skills are not listed independently. Nothing to configure for non-admins; admins get a "Manage in admin" deep link.
 
 ## 8. Sandboxing UX (permission gates)
 
