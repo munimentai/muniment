@@ -41,7 +41,8 @@ reference implementation: [docs/design-reference/ring/](docs/design-reference/ri
    "supercharge"/"unlock", no "sovereignty". Errors state what happened +
    next step, never apologize (§1.7).
 6. **The provenance line ships in v1 and is never optional** (§2.2) — under
-   every response: `label/tier → model · $cost · time`, expandable receipt.
+   every response, with an expandable receipt defined as
+   `route · model · cost · time · capability@version[, ...]`.
 7. **Sandbox honesty (harness-spec §6.5):** permission gates by default;
    full-auto only with `sandbox.full_auto` + real isolation (bubblewrap /
    Seatbelt); NEVER promise laptop isolation on Windows.
