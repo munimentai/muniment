@@ -69,17 +69,21 @@ Phase 1 live.
       notification, method name configurable) and silently discard late
       responses to cancelled or timed-out IDs via a bounded,
       generation-aware queue (closes the timeout→MismatchedId hole).
-    - NEXT — health probing that coexists with long-running calls: the
-      JSON-RPC probe currently blocks unboundedly on the shared call lock,
-      so one long generation (item 9's normal case) stalls the supervisor
-      loop and delays crash handling. The probe must never block on the
-      call lock, must steal no frames from an in-flight call, and a
-      genuinely hung idle sidecar must still fail and restart.
-    - Code health, queued — split the 1,300-line sidecar/mod.rs into
-      submodules (jsonrpc / io / supervisor) following the auth/ pattern;
-      pure code motion, public API unchanged.
-    Pi RPC wiring stays blocked on cloud 6; llama.cpp + model residency
-    land with item 10 proper.
+    - DONE 2026-07-10 — health probing coexists with long-running calls:
+      probes never wait on the application call lock or steal its frames,
+      idle hangs still fail, and shutdown is not stalled by a long call.
+    - DONE 2026-07-10 — split the former 1,300-line sidecar module into
+      jsonrpc / io / supervisor submodules following the auth pattern;
+      public API unchanged.
+    - NEXT — readiness-aware supervision for slow-loading processes: keep a
+      generation Starting while its probe reports model loading, bound that
+      startup interval, and preserve restart/diagnostic behavior after it is
+      ready. This is the first prerequisite for managing llama-server, whose
+      health endpoint distinguishes loading from ready.
+    - THEN — a loopback-only managed llama-server launcher and tested HTTP
+      health/client boundary, followed by resident model selection and the
+      two local roles (dictation polish + routing classification).
+    Pi RPC wiring stays blocked on cloud 6.
 11. Attachments pipeline + content-addressed file store client. The store
     itself is control-plane-side (harness-spec §6.6: sha256-addressed via
     the cloud file store), so the client pipeline follows items 8d/9.
