@@ -467,14 +467,27 @@ pub struct LineReader(Arc<Mutex<LineReceiver>>);
 
 impl LineReader {
     pub fn read_line(&self) -> Result<String, SidecarError> {
-        let generation = self.0.lock().unwrap().generation.load(Ordering::Acquire);
-        self.read_for_generation(generation, None)?
-            .ok_or(SidecarError::Disconnected)
+        let mut guard = self.0.lock().unwrap();
+        if let Some((_, line)) = guard.pending.pop_front() {
+            return Ok(line);
+        }
+        guard
+            .receiver
+            .recv()
+            .map(|(_, line)| line)
+            .map_err(|_| SidecarError::Disconnected)
     }
 
     pub fn read_line_timeout(&self, timeout: Duration) -> Result<Option<String>, SidecarError> {
-        let generation = self.0.lock().unwrap().generation.load(Ordering::Acquire);
-        self.read_for_generation(generation, Some(timeout))
+        let mut guard = self.0.lock().unwrap();
+        if let Some((_, line)) = guard.pending.pop_front() {
+            return Ok(Some(line));
+        }
+        match guard.receiver.recv_timeout(timeout) {
+            Ok((_, line)) => Ok(Some(line)),
+            Err(mpsc::RecvTimeoutError::Timeout) => Ok(None),
+            Err(mpsc::RecvTimeoutError::Disconnected) => Err(SidecarError::Disconnected),
+        }
     }
 
     fn read_line_timeout_for_generation(
@@ -496,6 +509,7 @@ impl LineReader {
             if guard.generation.load(Ordering::Acquire) != generation {
                 return Err(SidecarError::Disconnected);
             }
+            guard.pending.retain(|(seen, _)| *seen >= generation);
             if let Some(index) = guard
                 .pending
                 .iter()
