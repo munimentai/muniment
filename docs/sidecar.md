@@ -128,11 +128,32 @@ the normal supervisor restart path.
 
 ## Scope boundary
 
-This remains transport groundwork for roadmap items 9 and 10, not a mock
-implementation of either sidecar. There are still no Pi-specific methods, no
-network or cloud handshake, and no llama.cpp integration. Virtual keys,
-control-plane version negotiation, model download, and model residency also
-remain deliberately blocked and absent from this module.
+`muniment_core::llama` owns the local llama.cpp boundary. A typed
+`LlamaServerConfig` turns an explicit executable, model path, and port into
+separate process arguments and always supplies `--host 127.0.0.1` (or the
+explicit IPv6 loopback `::1`). `LlamaServer` delegates spawning, restart
+budget/backoff, stderr diagnostics, and shutdown to `SidecarSupervisor`; it is
+not a second process manager. Dropping it therefore retains the supervisor's
+forced child cleanup guarantee.
+
+The corresponding base URL is deliberately restricted to numeric loopback
+addresses and plain HTTP. Wildcard, LAN, hostname, path-bearing, and HTTPS URLs
+are rejected. This matters even though llama-server currently defaults to
+loopback: its public health API does not perform an API-key check, and a future
+upstream default must not silently widen local access.
+
+The bounded `GET /health` probe follows llama.cpp's documented states: HTTP
+503 with its `Loading model` error is `ProbeOutcome::Loading`, while HTTP 200
+with `{"status":"ok"}` is `ProbeOutcome::Ready`. Connection failures, other
+statuses, and malformed or unexpected envelopes are probe errors and enter the
+existing supervisor restart path. Diagnostics identify the status or parsing
+failure but never copy the response body, which may contain user data.
+
+This slice intentionally exposes only the loopback base URL and health state
+needed by later local-role clients. Chat/completion calls, model discovery,
+download and selection, resident-model policy, UI wiring, and cloud or Pi
+behavior remain deferred. Virtual keys and control-plane version negotiation
+also remain absent.
 
 Supervisor lifecycle events and stderr are diagnostic telemetry, not durable
 user-session history. Pi integration will translate only user-relevant domain
