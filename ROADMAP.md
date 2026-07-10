@@ -44,7 +44,8 @@ Phase 1 live.
      (profile block "Your access" peek).
 9. Pi sidecar (RPC over stdio), chat against the user's virtual key
    (depends cloud 6 + item 8). Streaming = signal underline + caret; the
-   provenance line lands with this item.
+   provenance line lands with this item. Before session/chat persistence is
+   implemented, decide the local run journal contract below.
 10. Local model sidecar (llama.cpp + resident Gemma quant), health-managed.
     Shared 9/10 groundwork — all stub-binary tested, no Tauri, no network:
     - DONE 2026-07-10 — sidecar process supervisor in muniment-core:
@@ -75,12 +76,11 @@ Phase 1 live.
     - DONE 2026-07-10 — split the former 1,300-line sidecar module into
       jsonrpc / io / supervisor submodules following the auth pattern;
       public API unchanged.
-    - NEXT — readiness-aware supervision for slow-loading processes: keep a
-      generation Starting while its probe reports model loading, bound that
-      startup interval, and preserve restart/diagnostic behavior after it is
-      ready. This is the first prerequisite for managing llama-server, whose
-      health endpoint distinguishes loading from ready.
-    - THEN — a loopback-only managed llama-server launcher and tested HTTP
+    - DONE 2026-07-10 — readiness-aware supervision for slow-loading
+      processes: a generation remains Starting while its probe reports
+      loading, startup is bounded, and normal restart/diagnostic behavior
+      resumes after readiness.
+    - NEXT — a loopback-only managed llama-server launcher and tested HTTP
       health/client boundary, followed by resident model selection and the
       two local roles (dictation polish + routing classification).
     Pi RPC wiring stays blocked on cloud 6.
@@ -90,6 +90,18 @@ Phase 1 live.
     - Groundwork DONE 2026-07-10 — content-addressed local object store in
       muniment-core: atomic publish + dedup, constant-memory streaming
       put/get/verify, stale temp-file sweep (docs/cas.md).
+
+- PLANNED — **Durable local run journal.** Before Phase 2 item 9 session/chat
+  work, record an ADR that makes a per-run append-only SQLite event journal
+  the source of truth for live and resumed state. Deterministic replay must
+  reconstruct pending permission gates and terminal/needs-attention states;
+  recorded external effects are never silently re-executed. Large bodies
+  live in the local content-addressed store and journal events hold hashes.
+  Receipt/provenance projections (§11.3) and the mobile session relay (§12)
+  consume this same journal rather than inventing parallel histories. The
+  ADR decides schema/versioning, ordering/concurrency, retention/compaction,
+  deletion/export, corruption recovery, and the boundary between durable
+  run events and supervisor diagnostics before implementation slices begin.
 
 - PLANNED — **Capability vocabulary + receipt provenance.** Keep the
   in-flight 2.x slices above unchanged. Follow-up client waves make every
