@@ -29,16 +29,14 @@ Phase 1 live.
    - 8c DONE 2026-07-10 — session freshness (refresh-on-expiry via the
      tested refresh grant) + real signed-out/signed-in shell states
      replacing the temporary trigger row.
-   - 8e IMPLEMENTED 2026-07-10, in review — pre-chat shell frame per
-     design-spec §2.1 (collapsible sidebar, thread surface with the §2.6
-     first-run state, composer shell without send, artifact rail). Ticket
-     complete; PR not yet on main at this update.
-   - §1.8 ring IMPLEMENTED 2026-07-10, in review — milled ring as a tested
-     component with rest + thinking states. PR not yet on main.
-   - 8f IMPLEMENTED 2026-07-10, in review — §2.6 server-unreachable state:
-     structured error kinds from the auth commands + full-surface mono
-     notice (what happened, retry countdown, "Copy diagnostics"). PR not
-     yet on main.
+   - 8e DONE 2026-07-10 — pre-chat shell frame per design-spec §2.1
+     (collapsible sidebar, thread surface with the §2.6 first-run state,
+     composer shell without send, artifact rail).
+   - §1.8 ring DONE 2026-07-10 — milled ring as a tested component with
+     rest + thinking states.
+   - 8f DONE 2026-07-10 — §2.6 server-unreachable state: structured error
+     kinds from the auth commands + full-surface mono notice (what happened,
+     retry countdown, "Copy diagnostics").
    - 8d BLOCKED on cloud Phase 1 — client registration + real handshake
      against api.muniment.ai, entitlement snapshot fetch + display
      (profile block "Your access" peek).
@@ -58,20 +56,18 @@ Phase 1 live.
     - DONE 2026-07-10 — restart-safe transport: generation-tagged I/O so
       stale output from a dead process generation cannot corrupt
       post-restart calls.
+    - DONE 2026-07-10 — supervisor status-change events: ordered Starting/
+      Healthy/Restarting/Failed/Stopped transitions with cause, generation,
+      attempt, and backoff metadata pushed to subscribers.
+    - DONE 2026-07-10 — bounded stderr diagnostics: producer-side retained
+      line ring, generation reset, and recent stderr tails on restart/failure
+      causes.
     - NEXT — call cancellation + abandoned-request hygiene: cancel an
       in-flight JSON-RPC call from another thread (LSP-style cancel
       notification, method name configurable) and discard late responses
       to cancelled or timed-out requests so they cannot fail later calls
       (item 9 "stop generation" prerequisite; also closes the
       timeout→MismatchedId hole in the live generation).
-    - NEXT — supervisor status-change events: push Starting/Healthy/
-      Restarting/Failed/Stopped transitions with cause metadata (exit code,
-      spawn error, probe failure, attempt, backoff) to subscribers, so the
-      future health UI does not poll.
-    - NEXT — bounded stderr diagnostics: cap unread stderr on the producer
-      side (llama.cpp is stderr-chatty) and keep a recent-lines ring that
-      failure reporting includes (feeds the §2.6 "Copy diagnostics"
-      pattern).
     Pi RPC wiring stays blocked on cloud 6; llama.cpp + model residency
     land with item 10 proper.
 11. Attachments pipeline + content-addressed file store client. The store
