@@ -32,6 +32,6 @@ milestone authenticates against it (owner-set gate, 2026-07-08).
   granted`).
 
 ## Standing gates
-- Every PR: green desktop-CI builds (all three platforms when touched code
-  is cross-platform; the workflow wiring lands when the lane opens).
+- Every PR: structure smoke followed by green desktop-CI builds on all three
+  platforms (Linux, Windows, and macOS). Pushes to `main` run the smoke only.
 - Mobile is never engineered. macOS/Windows/Linux only.
