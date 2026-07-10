@@ -5,7 +5,7 @@ Phase 1 (OIDC + grants + key regen) is live** — the shell's first real
 milestone authenticates against it (owner-set gate, 2026-07-08).
 
 Gate reading in practice (updated 2026-07-10, per the merged 2.8a–2.8c
-waves and the shell-frame/ring/supervisor slices that followed):
+waves and the sidecar supervisor/RPC slices that followed):
 client-side slices that are fully verifiable locally — toolchain, protocol
 core proven against an in-process mock IdP in unit tests, UI states that
 fabricate nothing — proceed. Anything that needs the live control plane —
@@ -29,12 +29,13 @@ mocked (SPEC law 1), until the owner declares cloud Phase 1 live.
    - 8c DONE 2026-07-10 — session freshness (refresh-on-expiry via the
      tested refresh grant) + real signed-out/signed-in shell states
      replacing the temporary trigger row.
-   - 8e DONE 2026-07-10 — pre-chat shell frame, fully local and nothing
+   - 8e PENDING — pre-chat shell frame, fully local and nothing
      fabricated: design-spec §2.1 layout (collapsible sidebar, thread
      surface with the §2.6 first-run state, composer shell without send,
-     artifact rail) plus the §1.8 ring promoted to a tested component
-     (rest + thinking states). Send/threads/provenance arrive only with
-     item 9 — no mocks.
+     artifact rail). Send/threads/provenance arrive only with item 9 — no
+     mocks.
+   - §1.8 ring PENDING — promote the milled ring to a tested component
+     with rest + thinking states.
    - 8f NEXT — the §2.6 server-unreachable state: full-surface notice in
      mono ledger style (what happened, retrying countdown, "Copy
      diagnostics"). SPEC law 1 requires this honest state before any real
@@ -50,10 +51,11 @@ mocked (SPEC law 1), until the owner declares cloud Phase 1 live.
     - Groundwork DONE 2026-07-10 (shared with item 9): sidecar process
       supervisor in muniment-core — spawn/stdio/health/crash-restart/
       shutdown, proven against a stub binary in unit tests.
-    - Groundwork NEXT (shared with item 9): line-delimited JSON-RPC framing
-      over the supervisor's stdio, proven against the same stub binary —
-      still no Tauri, no network. Pi RPC wiring stays blocked on cloud 6;
-      llama.cpp + model residency land with item 10 proper.
+    - RPC groundwork DONE 2026-07-10 (shared with item 9): typed,
+      line-delimited JSON-RPC 2.0 framing over the supervisor's stdio,
+      proven against the same stub binary — still no Tauri, no network. Pi
+      RPC wiring stays blocked on cloud 6; llama.cpp + model residency land
+      with item 10 proper.
 11. Attachments pipeline + content-addressed file store client. The store
     itself is control-plane-side (harness-spec §6.6: sha256-addressed via
     the cloud file store), so the client pipeline follows items 8d/9.
