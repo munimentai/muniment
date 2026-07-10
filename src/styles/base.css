@@ -1,0 +1,20 @@
+/* App-level base. Everything visual comes from tokens.css. */
+
+* {
+  margin: 0;
+  box-sizing: border-box;
+}
+
+html,
+body {
+  height: 100%;
+}
+
+body {
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--font-human);
+  font-size: var(--text-15);
+  line-height: var(--leading-body);
+  -webkit-font-smoothing: antialiased;
+}
