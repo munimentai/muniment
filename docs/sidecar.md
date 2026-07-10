@@ -11,6 +11,14 @@ and piped stdin/stdout/stderr. `SidecarIo` exposes each stream as line-oriented
 handles; the handles continue to work when a replacement process is started.
 A caller-supplied health closure can perform the sidecar's own ping protocol.
 
+Stderr is best-effort diagnostic output. `SidecarConfig::stderr_capacity`
+(default: 256 lines) bounds it at the producer: when full, the oldest line is
+evicted before a new one is retained, even if no caller reads stderr. Reading
+`SidecarIo.stderr` returns retained lines in arrival order, skipping lines that
+were evicted before they could be read. `SidecarSupervisor::recent_stderr()`
+returns a non-consuming snapshot in the same order. The ring is cleared when a
+replacement child is spawned, so snapshots never mix process generations.
+
 Unexpected exits, spawn errors, and failed health checks restart the child
 using capped exponential backoff. `RestartPolicy` limits restarts within a
 rolling time window, after which status becomes `Failed`. Other observable
@@ -36,6 +44,10 @@ contains its attempt number within the rolling restart window and selected
 backoff. `Healthy` identifies the active I/O generation. `Stopped` records a
 requested shutdown. The existing `status()` API remains the current snapshot
 of this same event stream.
+
+Process-exit, process-wait, and health-probe causes include up to the last 20
+retained stderr lines. This tail is present on both restart events and the final
+`Failed` event when the restart budget is exhausted.
 
 Subscriptions use unbounded channels. Publishing therefore never waits for a
 slow receiver; queued events remain available until that receiver consumes or
