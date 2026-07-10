@@ -179,9 +179,9 @@ No live co-typing in a thread in v1 (v2 experiment behind a driver/suggester mod
 
 ---
 
-## 3. Mobile app (mockup only — not scoped for build)
+## 3. Mobile app (companion app — engineering phased per harness-spec §12; amended 2026-07-10)
 
-Purpose: screens exist to complete the brand story and de-risk future scope. Design them together with desktop; do not engineer them.
+Purpose: originally mockup-only to complete the brand story and de-risk future scope; as of 2026-07-10 these screens are the design ground truth for the phased mobile companion app (harness-spec §12, 03-mobile-app.md v1.1). The M1 live-session view still needs a ninth mockup before engineering.
 
 Platform has its say: iOS uses a bottom tab bar, large-title headers, system swipe-back, SF-symbol-weight icon rendering; Android uses Material navigation patterns, predictive back, and system dynamic-color is **ignored** (brand tokens win — territory doesn't recolor itself per phone). Both respect OS light/dark.
 
