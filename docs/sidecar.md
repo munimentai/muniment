@@ -44,6 +44,16 @@ malformed JSON, invalid JSON-RPC version or response shape, mismatched IDs, and
 valid remote error responses. The transport is deliberately synchronous; it
 does not multiplex calls.
 
+For supervised JSON-RPC peers, `JsonRpcTransport::health_probe` turns an
+`Arc<JsonRpcTransport>` into the closure accepted by `SidecarSupervisor::spawn`.
+The caller supplies the ping method name and per-call timeout; the helper sends
+the method with no parameters and maps any remote error, timeout, or transport
+failure to a descriptive health-check error. The probe uses the same call lock
+as application calls, so it cannot consume their responses or notifications.
+Consequently, a probe waits behind a long-running call (bounded by that call's
+timeout) and stalls the supervisor loop while it does so. Keep probe timeouts
+small relative to `health_interval`.
+
 ## Scope boundary
 
 This remains transport groundwork for roadmap items 9 and 10, not a mock
