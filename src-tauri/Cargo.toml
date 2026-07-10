@@ -7,7 +7,18 @@ edition = "2021"
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
+muniment-core = { path = "core", features = ["tls"] }
+serde_json = "1"
 tauri = { version = "2", features = [] }
+
+# Platform keychains: macOS Keychain / Windows Credential Manager / Linux
+# Secret Service. `vendored` builds libdbus from source so the Linux build
+# VM needs no system packages beyond the C toolchain it already has; the
+# other two features are pure windows-sys / Security.framework bindings.
+[dependencies.keyring]
+version = "3"
+default-features = false
+features = ["apple-native", "windows-native", "sync-secret-service", "vendored"]
 
 [profile.release]
 strip = true
