@@ -20,7 +20,7 @@ Muniment is a **hosted SaaS**: we operate the control plane and gateway as a mul
 - **No serverless/solo mode.** The desktop app requires a control plane connection. Accepted tradeoffs: no offline use, no bottom-up solo-dev adoption funnel. Benefit: policy is always enforced, no provider API keys on laptops, one source of truth.
 - **No hosted MCP servers.** We manage MCP *connections* only. Hosting/governance of remote MCPs is delegated to services like MintMCP.
 - **No multiple UI modes.** One mode. No chat/cowork/code split.
-- **No mobile client** (Tauri v2 keeps the door open).
+- **Mobile is a companion surface, never a peer execution surface.** (Amended 2026-07-10 — was "No mobile client".) A phased mobile companion app is in scope: see §12. Phones never run local models, local MCP servers, or sandboxes; the desktop remains the only local-execution surface.
 - **No promise of laptop-grade sandbox isolation on Windows** (see 6.5).
 
 ---
@@ -396,3 +396,82 @@ Muniment combines what the industry ships as four loose nouns — connectors, sk
 **§11.3 Receipts:** receipts name the capabilities in the loop — route · model · cost · time · capability@version[, ...]. Emitted from day one of the capability schema (retrofitting provenance into an append-only log is a known trap).
 
 **§11.4 Vocabulary:** end users see "capabilities" by that name on every surface. Admin LIBRARY regroups to Capabilities + Artifacts. Copy law unaffected.
+
+---
+
+## 12. Mobile companion app (owner decision 2026-07-10)
+
+Amends the §1 non-goal "No mobile client". Mobile enters scope as a **phased
+companion client** — TestFlight/internal-track distribution first, selective
+version shipping; launch timing and any public announcement remain owner-only.
+03-mobile-app.md stays the design ground truth for the eight mockup screens;
+its "mockup only — do not engineer" scope line is superseded by this section.
+
+### 12.1 What mobile is (and is not)
+
+Mobile is a governed window onto the same control plane: chat through the
+org's entitled models, watch and steer serious agent work running on the
+user's desktop, read artifacts, see receipts, peek entitlements. It is NOT a
+fourth execution surface: no local models on the phone, no local stdio MCP
+servers, no local sandbox, no artifact editing (full-screen viewer + "Edit on
+desktop", per 03 §4). The no-keys-on-clients rule applies doubly: phones hold
+only short-lived session tokens; all model traffic proxies through the
+control plane.
+
+### 12.2 Enabling primitives (control-plane + desktop work; each also serves desktop)
+
+1. **Server-side thread store.** Threads/messages become first-class
+   control-plane records (org_id-scoped, entitlement-checked). Already
+   implied by shared threads (03 §3.6, share-to-project) and cross-device
+   continuity; mobile just makes it non-optional. The desktop remains the
+   execution surface and syncs its threads up; mobile reads and appends
+   through the store. Design provenance in from day one (receipts §11.3 —
+   retrofitting provenance is a known trap).
+2. **Chat completion endpoint.** The control plane exposes a chat API that
+   resolves the caller's LiteLLM virtual key **server-side** (§4.5), so
+   entitlements and budgets enforce identically for clients that cannot hold
+   a virtual endpoint. Routing labels (§5): mobile has no resident local
+   classifier, so the label is produced server-side (heuristic tier first;
+   sampled re-classification already exists as a pattern, §5.3).
+3. **Session relay + remote approvals.** The desktop publishes full-fidelity
+   Pi session events over its existing control-plane websocket (§6.2 today
+   sends summaries); the control plane relays steer / queued follow-up /
+   interrupt commands back down, and — the flagship — **ask/allow/deny
+   permission gates (§6.5) can be answered from the phone**, receipt-visible.
+   The relay works only while the desktop is online with a live run; the
+   offline story is a server-side Flue session (§7.3), later (M3).
+
+### 12.3 Voice on mobile (owner decision 2026-07-10)
+
+The desktop on-device voice stack (§6.7) does **not** port to phones and is
+not required for mobile v1. When mobile voice is built it uses
+**platform-native speech APIs** (iOS Speech framework / Android
+SpeechRecognizer or system dictation) or a purpose-chosen mobile alternative
+stack — decided by ADR at that phase. Copy honesty is law: the desktop claim
+"voice never leaves this machine" is **desktop-scoped** and is never asserted
+for mobile unless the chosen mobile stack actually guarantees it
+(platform dictation may transit vendor cloud). 03 §3.3's "all on-device"
+line is amended accordingly; the hold-to-talk interaction design stands.
+
+### 12.4 Phases
+
+- **M0 — companion read/chat:** OIDC login, thread list/view + chat (thread
+  store + chat endpoint), inbox read-only, entitlement peek, push
+  notifications. TestFlight/internal track only.
+- **M1 — live session mirror:** watch a desktop run, steer / queued
+  follow-up, answer permission gates remotely. Requires a ninth screen
+  (live session view) — not in the current eight mockups; owner supplies the
+  design before M1 engineering (mockups are ground truth; do not invent it).
+- **M2 — voice input** per §12.3; artifact viewer polish.
+- **M3 — cloud-sandbox runs from mobile:** start/steer server-side Flue
+  sessions (§7.3); no new mobile-specific primitives.
+
+### 12.5 Open items
+
+| Item | Action |
+|---|---|
+| Repo strategy | ADR before M0: mobile targets inside the muniment-desktop Tauri v2 workspace (shared webview UI + Rust core) vs a separate repo + factory lane. |
+| Stack | Default assumption Tauri v2 mobile (stable API; plugin surface thinner than desktop; tauri-action has no mobile automation yet). ADR may choose otherwise. |
+| Mobile CI | iOS builds on the macOS CI template, Android SDK on the Linux template; extend the desktop-ci driver. Before M0 scaffolding. |
+| Push notifications | APNs/FCM relay from control-plane events (workflow complete/failed, shared-thread mention, permission gate pending). Design at M0. |
+| Apple developer account | Owner acquires; TestFlight first, selective version shipping. |
