@@ -19,3 +19,8 @@ status-dot pulse while running; provenance line under every response (mono,
 11.5px, route in signal); composer focus shifts border to `muted`, never
 signal. Radius 2/6/10. Both themes first-class; `prefers-reduced-motion`
 respected everywhere.
+
+When persistence lands, conversation, tool, permission, and receipt UI reduces
+from the append-only local run journal (ADR 0002). Reopen rebuilds from it;
+snapshots are disposable, and uncertain external effects render explicit
+needs-attention instead of repeating. This state contract is not implemented.

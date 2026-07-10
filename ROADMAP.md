@@ -91,17 +91,18 @@ Phase 1 live.
       muniment-core: atomic publish + dedup, constant-memory streaming
       put/get/verify, stale temp-file sweep (docs/cas.md).
 
-- PLANNED — **Durable local run journal.** Before Phase 2 item 9 session/chat
-  work, record an ADR that makes a per-run append-only SQLite event journal
+- DECIDED 2026-07-10 — **Durable local run journal.** ADR 0002 makes a per-run
+  append-only SQLite event journal
   the source of truth for live and resumed state. Deterministic replay must
   reconstruct pending permission gates and terminal/needs-attention states;
   recorded external effects are never silently re-executed. Large bodies
   live in the local content-addressed store and journal events hold hashes.
   Receipt/provenance projections (§11.3) and the mobile session relay (§12)
   consume this same journal rather than inventing parallel histories. The
-  ADR decides schema/versioning, ordering/concurrency, retention/compaction,
+  ADR 0002 decides schema/versioning, ordering/concurrency, retention/compaction,
   deletion/export, corruption recovery, and the boundary between durable
-  run events and supervisor diagnostics before implementation slices begin.
+  run events and supervisor diagnostics. Implementation remains planned; the
+  schema/append slice must land before session/chat persistence.
 
 - PLANNED — **Capability vocabulary + receipt provenance.** Keep the
   in-flight 2.x slices above unchanged. Follow-up client waves make every

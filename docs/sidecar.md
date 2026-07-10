@@ -134,6 +134,13 @@ network or cloud handshake, and no llama.cpp integration. Virtual keys,
 control-plane version negotiation, model download, and model residency also
 remain deliberately blocked and absent from this module.
 
+Supervisor lifecycle events and stderr are diagnostic telemetry, not durable
+user-session history. Pi integration will translate only user-relevant domain
+facts into the append-only journal defined by [ADR 0002](decisions/0002-event-sourced-run-journal.md).
+That journal—not the supervisor replay buffer, raw JSON-RPC transcript, or
+current status—is the future source for resume, receipt, and mobile-relay
+projections; none of those projections is implemented here.
+
 ## Tests
 
 Run `cargo test --manifest-path src-tauri/core/Cargo.toml`. Integration tests
