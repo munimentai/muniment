@@ -97,6 +97,8 @@ Single polymorphic grants table. Explicit deny exists and wins. Server is the on
 
 ### 4.1 Schema
 
+> **§11 anchor:** `resource_type='capability'` is reserved for the capability manifest as the end-user grant target. The pre-§11 `packages` / `package_versions` rows below describe the existing implementation baseline; the capability schema and migration are follow-up work, not part of this codification.
+
 ```sql
 -- principals
 users(id, org_id, email, idp_subject, status, entitlement_version)
@@ -144,6 +146,8 @@ audit_log(id, org_id, actor_user_id, action, resource_type,
 Grants with `resource_type='capability'`, key in `resource_id`. Initial set:
 
 `local_models.use`, `voice.cloud_cleanup`, `sandbox.full_auto`, `mcp.local_stdio`, `artifacts.publish_org`, `router.override` (user may manually pick a model instead of the router's choice), `workflows.create`, `packages.submit`.
+
+> **§11 anchor:** this pre-§11 list is a set of dotted permission flags, not capabilities in the product vocabulary. Follow-up schema work must remove that naming collision while preserving the capability grant target defined in §11.2.
 
 ### 4.3 Resolution algorithm
 
@@ -278,6 +282,8 @@ Operated by us as a multi-tenant cloud (Docker Compose for dev, K8s in productio
 
 ### 7.4 Package registry / marketplace (v1)
 
+> **§11 anchor:** "package" is retired as a product noun. This section describes the Pi distribution/installation substrate for capabilities; users and admins grant and list capabilities, never package kinds or subunits independently. Follow-up implementation work will align the registry schema and APIs.
+
 - Package format: Pi packages (bundles of extensions, skills, prompts, themes; installable from npm/git). Do not invent a format. Server-side skills for Flue use the same skill format.
 - Registry service: submission (`packages.submit`), admin review, signing (manifest hash + org signing key), versioning, org allowlist, group entitlements (`install`/`use` grants).
 - Desktop installs only entitled, signed versions; version pinning per group supported via grants on `package_versions` (first pass: pin at package level, per-version grants in a follow-up migration).
@@ -369,3 +375,24 @@ Phases are dependency layers, not sprints. Within a phase, tracks run in paralle
 | Design partner | 5–8 orgs from founder network per monetization-and-marketing.md Phase 0 |
 | Org endpoint connectivity | Design the outbound connector agent (customer vLLM/TGI reachable from muniment cloud) |
 
+---
+
+## 11. The capability — canonical definition (harness-spec §11, owner decision 2026-07-10; add this VERBATIM as §11 of the vendored harness-spec in docs/spec/)
+
+Muniment combines what the industry ships as four loose nouns — connectors, skills, plugins, workflows — into ONE governed primitive: **the capability**. PydanticAI v2 named the composition side (a capability "bundles an agent's instructions, tools, lifecycle hooks, and model settings into a single, composable unit" — pydantic.dev/articles/pydantic-ai-v2); muniment's capability is the same unit made *governable*: the thing an org reviews, grants, meters, and sees in receipts. Composition is theirs; entitlement is ours.
+
+**§11.1 Anatomy (subunits):** a capability is a signed, versioned manifest over:
+
+- **skills** — instruction content: prompts, procedures, bundled reference assets. The former "prompt" package kind COLLAPSES into skills; there is no separate prompt noun.
+- **extensions** — code that executes: lifecycle hooks and local tools (in the spirit of Claude's filesystem/Chrome-control extensions). Most audit-sensitive subunit: hooks rewrite what the model sees, so they live INSIDE the reviewed unit.
+- **connections** — bindings BY NAME to MCP-registry / stdio-allowlist entries. The registries are SUBSTRATE — they own endpoints and auth; a capability only references approved entries.
+- **workflows** — Flue procedures (muniment's extension beyond the PydanticAI bundle).
+- **model requirements** — declared needs (tier/effort/modality); declarations only, routing policy decides.
+
+**"Package" is retired as a product noun.** The Pi package format survives as the distribution/installation format of a capability; the old package kinds become subunits, never granted or listed independently.
+
+**§11.2 Grants and versioning:** the capability is THE end-user grant target (resource_type='capability', already reserved in §4.1). Versioning: grants track a channel, **gated on surface change** by default — every version declares its surface (connections bound, extensions/hooks present, model requirements, scopes); content-only updates flow automatically (:latest semantics); surface-EXPANDING updates park until re-approved, grantees stay on the last approved version meanwhile ("you granted a shape, not a snapshot — when the shape grows, we ask again"). Per-org policy knob: strict pin / gated (default) / pure :latest. Deferred loading is a governance feature: the one-line description shown before a capability loads is the description the admin approved.
+
+**§11.3 Receipts:** receipts name the capabilities in the loop — route · model · cost · time · capability@version[, ...]. Emitted from day one of the capability schema (retrofitting provenance into an append-only log is a known trap).
+
+**§11.4 Vocabulary:** end users see "capabilities" by that name on every surface. Admin LIBRARY regroups to Capabilities + Artifacts. Copy law unaffected.
