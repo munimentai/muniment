@@ -9,7 +9,10 @@ dependency and uses only Rust's portable standard-process APIs.
 `SidecarSupervisor` starts a configured program with arguments, environment,
 and piped stdin/stdout/stderr. `SidecarIo` exposes each stream as line-oriented
 handles; the handles continue to work when a replacement process is started.
-A caller-supplied health closure can perform the sidecar's own ping protocol.
+A caller-supplied probe closure can perform the sidecar's own protocol. Its
+typed result is `ProbeOutcome::Loading` while startup work is in progress and
+`ProbeOutcome::Ready` once the process can serve requests; errors represent an
+unhealthy process.
 
 Stderr is best-effort diagnostic output. `SidecarConfig::stderr_capacity`
 (default: 256 lines) bounds it at the producer: when full, the oldest line is
@@ -24,6 +27,14 @@ using capped exponential backoff. `RestartPolicy` limits restarts within a
 rolling time window, after which status becomes `Failed`. Other observable
 states are `Starting`, `Healthy`, `Restarting`, and `Stopped`.
 
+Each spawned generation stays `Starting` while probes report `Loading`. Probes
+begin immediately and repeat at `health_interval` (default: 5 seconds). The
+first `Ready` emits `Healthy` exactly once; later probe errors use the ordinary
+health-failure restart path. Loading does not consume restart attempts, but it
+is bounded by `startup_timeout` (a nonzero default of 60 seconds). If readiness
+does not arrive, the child is stopped and restarted under the existing rolling
+budget and capped backoff.
+
 Shutdown first closes stdin so a cooperative child can finish. If it has not
 exited by the configured deadline, the supervisor kills and reaps it. Dropping
 the supervisor performs the same shutdown, preventing orphan children.
@@ -32,8 +43,8 @@ the supervisor performs the same shutdown, preventing orphan children.
 
 `SidecarSupervisor::subscribe` returns a standard-library `mpsc::Receiver` of
 ordered `SidecarEvent` values. A new receiver first replays the transitions
-already emitted by that supervisor, including the initial `Starting`, and then
-receives live transitions. This avoids races between the immediately-started
+already emitted by that supervisor, including generation-tagged `Starting`,
+and then receives live transitions. This avoids races between the immediately-started
 worker and callers attaching their first receiver. Multiple receivers each see
 the complete stream; dropping one does not affect the others.
 
@@ -41,13 +52,16 @@ Each event contains the new `SidecarStatus`. Restart and failure events retain
 their cause as a process exit (code and signal where available), process wait
 error, spawn error, or health-probe failure message. A `Restarting` event also
 contains its attempt number within the rolling restart window and selected
-backoff. `Healthy` identifies the active I/O generation. `Stopped` records a
+backoff. `Starting` and `Healthy` identify the active I/O generation, producing
+that order for a ready process. `Stopped` records a
 requested shutdown. The existing `status()` API remains the current snapshot
 of this same event stream.
 
-Process-exit, process-wait, and health-probe causes include up to the last 20
-retained stderr lines. This tail is present on both restart events and the final
-`Failed` event when the restart budget is exhausted.
+Process-exit, process-wait, health-probe, and startup-timeout causes include up
+to the last 20 retained stderr lines. This tail is present on both restart events and the final
+`Failed` event when the restart budget is exhausted. Startup-timeout causes also
+record the configured timeout, distinguishing slow loading from a hard probe
+error.
 
 Subscriptions use unbounded channels. Publishing therefore never waits for a
 slow receiver; queued events remain available until that receiver consumes or
