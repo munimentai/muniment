@@ -25,21 +25,32 @@ the supervisor performs the same shutdown, preventing orphan children.
 `JsonRpcTransport` provides synchronous, one-request-at-a-time JSON-RPC 2.0
 over a supervisor's `SidecarIo`. `call` allocates a numeric request ID;
 `call_with_id` accepts a numeric or string ID. Both serialize one typed request
-as a single newline-terminated JSON record and wait up to the caller's timeout
-for exactly one response with the same ID.
+as a single newline-terminated JSON record and wait up to the caller's overall
+timeout for a response with the same ID. Server notifications received first
+are never treated as responses: plain calls skip them, while
+`call_with_notifications` delivers each typed notification to its callback in
+arrival order before returning the final result. A response with another ID is
+still a protocol error.
 
-The public `JsonRpcRequest`, `JsonRpcSuccess`, `JsonRpcErrorResponse`, and
-`JsonRpcErrorObject` types expose the wire envelopes. `JsonRpcTransportError`
-distinguishes timeouts, disconnection/I/O, malformed JSON, invalid JSON-RPC
-version or response shape, mismatched IDs, and valid remote error responses.
-The transport is deliberately synchronous; it does not multiplex calls.
+`notify` sends a standard JSON-RPC notification containing `jsonrpc`, `method`,
+and optional `params`, but no `id`, and does not wait for a response. Reader
+lines are normalized at the process boundary: CRLF records have their trailing
+carriage return removed and blank keepalive lines are dropped.
+
+The public `JsonRpcRequest`, `JsonRpcNotification`, `JsonRpcSuccess`,
+`JsonRpcErrorResponse`, and `JsonRpcErrorObject` types expose the wire
+envelopes. `JsonRpcTransportError` distinguishes timeouts, disconnection/I/O,
+malformed JSON, invalid JSON-RPC version or response shape, mismatched IDs, and
+valid remote error responses. The transport is deliberately synchronous; it
+does not multiplex calls.
 
 ## Scope boundary
 
-This is groundwork for roadmap items 9 and 10, not a mock implementation of
-either sidecar. Pi-specific methods, the cloud handshake, virtual keys,
-control-plane version negotiation, llama.cpp integration, model download, and
-model residency remain deliberately blocked and absent from this module.
+This remains transport groundwork for roadmap items 9 and 10, not a mock
+implementation of either sidecar. There are still no Pi-specific methods, no
+network or cloud handshake, and no llama.cpp integration. Virtual keys,
+control-plane version negotiation, model download, and model residency also
+remain deliberately blocked and absent from this module.
 
 ## Tests
 
