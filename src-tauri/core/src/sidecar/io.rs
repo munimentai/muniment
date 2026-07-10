@@ -6,6 +6,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{mpsc, Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
+#[derive(Debug)]
 pub enum SidecarError {
     Spawn(std::io::Error),
     Io(std::io::Error),

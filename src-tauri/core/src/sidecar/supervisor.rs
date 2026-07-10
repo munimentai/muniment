@@ -2,7 +2,7 @@ use std::collections::{HashMap, VecDeque};
 use std::io::{BufRead, BufReader, BufWriter};
 use std::process::{Child, ChildStderr, ChildStdout, Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{mpsc, Arc, Mutex};
+use std::sync::{mpsc, Arc, Condvar, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
@@ -102,8 +102,6 @@ pub struct SidecarEvent {
     pub backoff_delay: Option<Duration>,
     pub generation: Option<u64>,
 }
-
-#[derive(Debug)]
 
 pub struct SidecarSupervisor {
     state: Arc<Mutex<SupervisorState>>,
