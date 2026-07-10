@@ -4,14 +4,14 @@ Phases mirror harness-spec §9. **This lane is CLOSED until muniment-cloud
 Phase 1 (OIDC + grants + key regen) is live** — the shell's first real
 milestone authenticates against it (owner-set gate, 2026-07-08).
 
-Gate reading in practice (updated 2026-07-10, per the merged 2.8a–2.8c
-waves and the sidecar supervisor/RPC slices that followed):
-client-side slices that are fully verifiable locally — toolchain, protocol
-core proven against an in-process mock IdP in unit tests, UI states that
-fabricate nothing — proceed. Anything that needs the live control plane —
-desktop client registration on api.muniment.ai, the first real handshake,
-entitlement snapshot fetch, websocket-pushed refresh — stays BLOCKED, not
-mocked (SPEC law 1), until the owner declares cloud Phase 1 live.
+Gate reading in practice (updated 2026-07-10): client-side slices that are
+fully verifiable locally — toolchain, protocol core proven against an
+in-process mock IdP in unit tests, sidecar transport proven against a stub
+binary, UI states that fabricate nothing — proceed. Anything that needs the
+live control plane — desktop client registration on api.muniment.ai, the
+first real handshake, entitlement snapshot fetch, websocket-pushed refresh —
+stays BLOCKED, not mocked (SPEC law 1), until the owner declares cloud
+Phase 1 live.
 
 ## M0 — Scaffold (done at bootstrap, 2026-07-09)
 - Tauri v2 hello-world shell (static webview page, brand-neutral).
@@ -29,18 +29,16 @@ mocked (SPEC law 1), until the owner declares cloud Phase 1 live.
    - 8c DONE 2026-07-10 — session freshness (refresh-on-expiry via the
      tested refresh grant) + real signed-out/signed-in shell states
      replacing the temporary trigger row.
-   - 8e PENDING — pre-chat shell frame, fully local and nothing
-     fabricated: design-spec §2.1 layout (collapsible sidebar, thread
-     surface with the §2.6 first-run state, composer shell without send,
-     artifact rail). Send/threads/provenance arrive only with item 9 — no
-     mocks.
-   - §1.8 ring PENDING — promote the milled ring to a tested component
-     with rest + thinking states.
-   - 8f NEXT — the §2.6 server-unreachable state: full-surface notice in
-     mono ledger style (what happened, retrying countdown, "Copy
-     diagnostics"). SPEC law 1 requires this honest state before any real
-     handshake ships, and it is fully verifiable locally — it renders
-     precisely when the control plane is absent, which is today's reality.
+   - 8e IMPLEMENTED 2026-07-10, in review — pre-chat shell frame per
+     design-spec §2.1 (collapsible sidebar, thread surface with the §2.6
+     first-run state, composer shell without send, artifact rail). Ticket
+     complete; PR not yet on main at this update.
+   - §1.8 ring IMPLEMENTED 2026-07-10, in review — milled ring as a tested
+     component with rest + thinking states. PR not yet on main.
+   - 8f IMPLEMENTED 2026-07-10, in review — §2.6 server-unreachable state:
+     structured error kinds from the auth commands + full-surface mono
+     notice (what happened, retry countdown, "Copy diagnostics"). PR not
+     yet on main.
    - 8d BLOCKED on cloud Phase 1 — client registration + real handshake
      against api.muniment.ai, entitlement snapshot fetch + display
      (profile block "Your access" peek).
@@ -48,17 +46,25 @@ mocked (SPEC law 1), until the owner declares cloud Phase 1 live.
    (depends cloud 6 + item 8). Streaming = signal underline + caret; the
    provenance line lands with this item.
 10. Local model sidecar (llama.cpp + resident Gemma quant), health-managed.
-    - Groundwork DONE 2026-07-10 (shared with item 9): sidecar process
-      supervisor in muniment-core — spawn/stdio/health/crash-restart/
-      shutdown, proven against a stub binary in unit tests.
-    - RPC groundwork DONE 2026-07-10 (shared with item 9): typed,
-      line-delimited JSON-RPC 2.0 framing over the supervisor's stdio,
-      proven against the same stub binary — still no Tauri, no network. Pi
-      RPC wiring stays blocked on cloud 6; llama.cpp + model residency land
-      with item 10 proper.
+    Shared 9/10 groundwork — all stub-binary tested, no Tauri, no network:
+    - DONE 2026-07-10 — sidecar process supervisor in muniment-core:
+      spawn/stdio/health/crash-restart/shutdown (docs/sidecar.md).
+    - DONE 2026-07-10 — typed, line-delimited JSON-RPC 2.0 framing over
+      the supervisor's stdio.
+    - DONE 2026-07-10 — JSON-RPC notifications (send + interleaved receive
+      during calls) and reader-line normalization (CRLF, blank keepalives).
+    - NEXT — JSON-RPC ping health probe: run the supervisor's health check
+      through the shared transport without racing in-flight calls.
+    - NEXT — restart-safe transport: output lines from a dead process
+      generation must not corrupt post-restart calls.
+    Pi RPC wiring stays blocked on cloud 6; llama.cpp + model residency
+    land with item 10 proper.
 11. Attachments pipeline + content-addressed file store client. The store
     itself is control-plane-side (harness-spec §6.6: sha256-addressed via
     the cloud file store), so the client pipeline follows items 8d/9.
+    - Groundwork DONE 2026-07-10 — content-addressed local object store in
+      muniment-core: atomic publish + dedup, constant-memory streaming
+      put/get/verify, stale temp-file sweep (docs/cas.md).
 
 ## Phase 3 — Routing metadata + voice (§9 items 12, 15)
 - Classifier labels ride as request metadata; model pin chip for
