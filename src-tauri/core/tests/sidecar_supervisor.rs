@@ -257,6 +257,28 @@ fn loading_timeout_exhausts_restart_budget_with_stderr_diagnostics() {
 }
 
 #[test]
+fn ready_returned_after_startup_deadline_times_out_without_becoming_healthy() {
+    let mut cfg = config(&["echo"]);
+    cfg.startup_timeout = Duration::from_millis(10);
+    cfg.restart.max_restarts = 0;
+    let supervisor = SidecarSupervisor::spawn(cfg, |_| {
+        thread::sleep(Duration::from_millis(30));
+        Ok(ProbeOutcome::Ready)
+    })
+    .unwrap();
+    let events = supervisor.subscribe();
+    assert_eq!(next_event(&events).status, SidecarStatus::Starting);
+    let failed = next_event(&events);
+    assert_eq!(failed.status, SidecarStatus::Failed);
+    assert!(matches!(
+        failed.cause,
+        Some(SidecarEventCause::StartupTimeout { timeout, .. })
+            if timeout == Duration::from_millis(10)
+    ));
+    assert!(events.recv_timeout(Duration::from_millis(25)).is_err());
+}
+
+#[test]
 fn hard_startup_probe_failure_uses_health_failure_path() {
     let mut cfg = config(&["stderr-hang"]);
     cfg.restart.max_restarts = 0;

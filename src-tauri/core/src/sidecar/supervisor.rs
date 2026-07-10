@@ -369,9 +369,34 @@ fn supervise(
                 }
                 Ok(None) => {}
             }
+            if !ready && Instant::now() >= startup_deadline {
+                stop_child(
+                    &mut child,
+                    &io,
+                    config.shutdown_timeout,
+                    config.poll_interval,
+                );
+                break SidecarEventCause::StartupTimeout {
+                    timeout: config.startup_timeout,
+                    stderr_tail: stderr_tail(&stderr),
+                };
+            }
             if Instant::now() >= next_probe {
                 next_probe = Instant::now() + config.health_interval;
-                match probe(&io) {
+                let probe_result = probe(&io);
+                if !ready && probe_result.is_ok() && Instant::now() >= startup_deadline {
+                    stop_child(
+                        &mut child,
+                        &io,
+                        config.shutdown_timeout,
+                        config.poll_interval,
+                    );
+                    break SidecarEventCause::StartupTimeout {
+                        timeout: config.startup_timeout,
+                        stderr_tail: stderr_tail(&stderr),
+                    };
+                }
+                match probe_result {
                     Ok(ProbeOutcome::Ready) => {
                         if !ready {
                             ready = true;
@@ -414,18 +439,6 @@ fn supervise(
                         };
                     }
                 }
-            }
-            if !ready && Instant::now() >= startup_deadline {
-                stop_child(
-                    &mut child,
-                    &io,
-                    config.shutdown_timeout,
-                    config.poll_interval,
-                );
-                break SidecarEventCause::StartupTimeout {
-                    timeout: config.startup_timeout,
-                    stderr_tail: stderr_tail(&stderr),
-                };
             }
         };
         io.stdin.0.lock().unwrap().writer = None;
