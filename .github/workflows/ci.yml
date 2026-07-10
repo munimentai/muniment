@@ -87,11 +87,20 @@ jobs:
               | sh -s -- -y --profile minimal --default-toolchain stable
           fi
           echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          "$HOME/.cargo/bin/rustup" component add rustfmt clippy
           # rustc needs a C linker even for dependency-free crates
           if ! command -v cc >/dev/null 2>&1; then
             apt-get update -qq
             apt-get install -y -qq --no-install-recommends gcc libc6-dev
           fi
+
+      - name: Rust formatting
+        if: steps.changes.outputs.docs_only != 'true'
+        run: cargo fmt --manifest-path src-tauri/core/Cargo.toml --check
+
+      - name: Rust lint
+        if: steps.changes.outputs.docs_only != 'true'
+        run: cargo clippy --manifest-path src-tauri/core/Cargo.toml --all-targets --locked -- -D warnings
 
       - name: Rust unit tests
         if: steps.changes.outputs.docs_only != 'true'
