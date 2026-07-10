@@ -79,7 +79,6 @@ fn restart_events_include_exit_attempt_and_backoff() {
             .unwrap();
     let events = supervisor.subscribe();
     assert_eq!(next_event(&events).status, SidecarStatus::Starting);
-    assert_eq!(next_event(&events).status, SidecarStatus::Healthy);
     let restarting = next_event(&events);
     assert_eq!(restarting.status, SidecarStatus::Restarting);
     assert!(matches!(
@@ -88,6 +87,7 @@ fn restart_events_include_exit_attempt_and_backoff() {
     ));
     assert_eq!(restarting.restart_attempt, Some(1));
     assert_eq!(restarting.backoff_delay, Some(Duration::from_millis(10)));
+    assert_eq!(next_event(&events).status, SidecarStatus::Starting);
     assert_eq!(next_event(&events).status, SidecarStatus::Healthy);
     supervisor.shutdown().unwrap();
     let _ = std::fs::remove_dir(marker);
