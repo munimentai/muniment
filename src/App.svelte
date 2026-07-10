@@ -1,30 +1,34 @@
 <script>
+  import { onMount } from 'svelte'
+
+  import { bootState, errorState, statusState, waitingState } from './lib/auth-state.js'
   import { ringPath } from './lib/mark.js'
 
   const markD = ringPath()
   const version = __APP_VERSION__
 
-  // Temporary trigger for the Rust auth commands (Phase 2.8b) — the real
-  // signed-in UI is the next slice. Hidden when the page is served outside
-  // Tauri (plain `npm run dev` in a browser).
   const tauri = window.__TAURI__?.core
-  let authLine = $state('')
-  let busy = $state(false)
+  let auth = $state(bootState)
 
-  async function call(command) {
-    busy = true
-    authLine = command === 'auth_sign_in' ? 'waiting for browser sign-in…' : '…'
+  async function run(action) {
+    const command = {
+      status: 'auth_status',
+      'sign-in': 'auth_sign_in',
+      'sign-out': 'auth_sign_out',
+    }[action]
+
+    if (action === 'sign-in') auth = waitingState()
     try {
       const status = await tauri.invoke(command)
-      authLine = status.signed_in
-        ? `signed in as ${status.subject ?? 'unknown subject'}`
-        : 'signed out'
+      auth = statusState(status)
     } catch (err) {
-      authLine = `error: ${err}`
-    } finally {
-      busy = false
+      auth = errorState(action, err)
     }
   }
+
+  onMount(() => {
+    if (tauri) run('status')
+  })
 </script>
 
 <main>
@@ -37,13 +41,27 @@
   <p class="meta">shell v{version}</p>
 
   {#if tauri}
-    <div class="auth-dev">
-      <button onclick={() => call('auth_sign_in')} disabled={busy}>sign in</button>
-      <button onclick={() => call('auth_status')} disabled={busy}>status</button>
-      <button onclick={() => call('auth_sign_out')} disabled={busy}>sign out</button>
-    </div>
-    {#if authLine}
-      <p class="auth-line">{authLine}</p>
+    {#if auth.name === 'signed-out'}
+      <section class="auth-state">
+        <p class="support">Sign in to continue to your workspace.</p>
+        <button onclick={() => run('sign-in')}>Sign in</button>
+      </section>
+    {:else if auth.name === 'signing-in'}
+      <section class="auth-state" aria-live="polite">
+        <button disabled>Sign in</button>
+        <p class="record">Waiting for the browser sign-in…</p>
+      </section>
+    {:else if auth.name === 'signed-in'}
+      <section class="auth-state profile">
+        <p class="subject">{auth.subject}</p>
+        <p class="record">signed in · local session</p>
+        <button onclick={() => run('sign-out')}>Sign out</button>
+      </section>
+    {:else if auth.name === 'error'}
+      <section class="auth-state" aria-live="polite">
+        <p class="record error-record">{auth.message}</p>
+        <button onclick={() => run(auth.retry)}>Try again</button>
+      </section>
     {/if}
   {/if}
 </main>
@@ -83,14 +101,17 @@
     color: var(--muted);
   }
 
-  /* Temporary auth trigger (Phase 2.8b) — replaced by the signed-in UI. */
-  .auth-dev {
+  .auth-state {
     margin-top: 34px;
     display: flex;
-    gap: 8px;
+    flex-direction: column;
+    align-items: center;
+    gap: 12px;
+    max-width: 420px;
+    text-align: center;
   }
 
-  .auth-dev button {
+  button {
     font: inherit;
     font-size: var(--text-13);
     color: var(--ink);
@@ -101,24 +122,41 @@
     cursor: pointer;
   }
 
-  .auth-dev button:hover:not(:disabled) {
+  button:hover:not(:disabled) {
     border-color: var(--muted);
   }
 
-  .auth-dev button:focus-visible {
+  button:focus-visible {
     outline: 2px solid var(--signal);
     outline-offset: 1px;
   }
 
-  .auth-dev button:disabled {
+  button:disabled {
     color: var(--muted);
     cursor: default;
   }
 
-  .auth-line {
-    margin-top: 12px;
+  .support {
+    color: var(--muted);
+  }
+
+  .subject {
+    font-size: var(--text-17);
+    font-weight: 600;
+    overflow-wrap: anywhere;
+  }
+
+  .record {
     font-family: var(--font-mono);
     font-size: var(--text-12);
     color: var(--muted);
+  }
+
+  .profile button {
+    margin-top: 8px;
+  }
+
+  .error-record {
+    line-height: var(--leading-body);
   }
 </style>
