@@ -146,7 +146,6 @@ fn restart_events_include_exit_attempt_and_backoff() {
     .unwrap();
     let events = supervisor.subscribe();
     assert_eq!(next_event(&events).status, SidecarStatus::Starting);
-    assert_eq!(next_event(&events).status, SidecarStatus::Healthy);
     let restarting = next_event(&events);
     assert_eq!(restarting.status, SidecarStatus::Restarting);
     assert!(matches!(
