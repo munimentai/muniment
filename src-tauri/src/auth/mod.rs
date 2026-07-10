@@ -4,7 +4,7 @@
 //! without the GUI stack; this module only wires it to the webview.
 //!
 //! Nothing here logs or returns token material: commands hand the webview
-//! an `AuthStatus` (signed-in flag, subject, expiry) and error strings that
+//! an `AuthStatus` (signed-in flag, subject, expiry) and structured errors that
 //! `muniment_core::auth::AuthError` guarantees are token-free.
 
 mod keyring_store;
@@ -15,6 +15,7 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use muniment_core::auth::{self, AuthError, AuthStatus, OidcConfig, TokenStore};
+use serde::Serialize;
 
 use keyring_store::KeyringTokenStore;
 
@@ -31,6 +32,30 @@ const SIGN_IN_TIMEOUT: Duration = Duration::from_secs(300);
 /// Renew shortly before expiry so callers do not receive a nearly-dead token.
 const REFRESH_SKEW: Duration = Duration::from_secs(60);
 
+#[derive(Debug, Serialize)]
+pub struct CommandError {
+    kind: &'static str,
+    message: String,
+}
+
+impl CommandError {
+    fn internal(message: impl Into<String>) -> Self {
+        Self {
+            kind: "internal",
+            message: message.into(),
+        }
+    }
+}
+
+impl From<AuthError> for CommandError {
+    fn from(error: AuthError) -> Self {
+        Self {
+            kind: error.kind(),
+            message: error.to_string(),
+        }
+    }
+}
+
 /// The one place issuer and client_id are decided. Env overrides exist for
 /// development against a non-default control plane (`MUNIMENT_ISSUER`,
 /// `MUNIMENT_CLIENT_ID`).
@@ -40,6 +65,20 @@ fn oidc_config() -> OidcConfig {
         client_id: std::env::var("MUNIMENT_CLIENT_ID").unwrap_or_else(|_| DEFAULT_CLIENT_ID.into()),
         scopes: SCOPES.into(),
     }
+}
+
+/// Host-only issuer identity for token-free connectivity diagnostics.
+#[tauri::command]
+pub fn auth_issuer_host() -> String {
+    let issuer = oidc_config().issuer;
+    issuer
+        .split_once("://")
+        .map(|(_, rest)| rest)
+        .unwrap_or(&issuer)
+        .split('/')
+        .next()
+        .unwrap_or("unknown")
+        .to_owned()
 }
 
 /// Managed by Tauri; shared across the `auth_*` commands.
@@ -60,9 +99,9 @@ impl AuthState {
 /// Run the browser sign-in flow, persist the tokens, and report the new
 /// status. Concurrent invocations are rejected while one is in flight.
 #[tauri::command]
-pub async fn auth_sign_in(state: tauri::State<'_, AuthState>) -> Result<AuthStatus, String> {
+pub async fn auth_sign_in(state: tauri::State<'_, AuthState>) -> Result<AuthStatus, CommandError> {
     if state.sign_in_running.swap(true, Ordering::SeqCst) {
-        return Err("a sign-in is already in progress".into());
+        return Err(CommandError::internal("a sign-in is already in progress"));
     }
     let store = state.store.clone();
     let running = state.sign_in_running.clone();
@@ -72,8 +111,8 @@ pub async fn auth_sign_in(state: tauri::State<'_, AuthState>) -> Result<AuthStat
         result
     })
     .await
-    .map_err(|e| format!("sign-in task failed: {e}"))?;
-    outcome.map_err(|e| e.to_string())
+    .map_err(|e| CommandError::internal(format!("sign-in task failed: {e}")))?;
+    outcome.map_err(Into::into)
 }
 
 fn sign_in_blocking(store: &dyn TokenStore) -> Result<AuthStatus, AuthError> {
@@ -85,17 +124,19 @@ fn sign_in_blocking(store: &dyn TokenStore) -> Result<AuthStatus, AuthError> {
 
 /// Signed-in subject/expiry from the stored tokens; no network.
 #[tauri::command]
-pub async fn auth_status(state: tauri::State<'_, AuthState>) -> Result<AuthStatus, String> {
+pub async fn auth_status(state: tauri::State<'_, AuthState>) -> Result<AuthStatus, CommandError> {
     let store = state.store.clone();
     tauri::async_runtime::spawn_blocking(move || auth::status(store.as_ref()))
         .await
-        .map_err(|e| format!("status task failed: {e}"))?
-        .map_err(|e| e.to_string())
+        .map_err(|e| CommandError::internal(format!("status task failed: {e}")))?
+        .map_err(Into::into)
 }
 
 /// Return session status after renewing expired or nearly-expired tokens.
 #[tauri::command]
-pub async fn auth_ensure_fresh(state: tauri::State<'_, AuthState>) -> Result<AuthStatus, String> {
+pub async fn auth_ensure_fresh(
+    state: tauri::State<'_, AuthState>,
+) -> Result<AuthStatus, CommandError> {
     let store = state.store.clone();
     tauri::async_runtime::spawn_blocking(move || {
         let now = SystemTime::now()
@@ -105,22 +146,22 @@ pub async fn auth_ensure_fresh(state: tauri::State<'_, AuthState>) -> Result<Aut
         auth::ensure_fresh(store.as_ref(), &oidc_config(), now, REFRESH_SKEW)
     })
     .await
-    .map_err(|e| format!("session refresh task failed: {e}"))?
-    .map_err(|e| e.to_string())
+    .map_err(|e| CommandError::internal(format!("session refresh task failed: {e}")))?
+    .map_err(Into::into)
 }
 
 /// Clear stored tokens; best-effort revocation when discovery advertises a
 /// revocation endpoint.
 #[tauri::command]
-pub async fn auth_sign_out(state: tauri::State<'_, AuthState>) -> Result<AuthStatus, String> {
+pub async fn auth_sign_out(state: tauri::State<'_, AuthState>) -> Result<AuthStatus, CommandError> {
     let store = state.store.clone();
     tauri::async_runtime::spawn_blocking(move || {
         auth::sign_out(store.as_ref(), &oidc_config())?;
         auth::status(store.as_ref())
     })
     .await
-    .map_err(|e| format!("sign-out task failed: {e}"))?
-    .map_err(|e| e.to_string())
+    .map_err(|e| CommandError::internal(format!("sign-out task failed: {e}")))?
+    .map_err(Into::into)
 }
 
 /// Hand the authorization URL to the default browser — RFC 8252 §7.2 wants

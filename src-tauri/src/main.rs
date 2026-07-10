@@ -9,7 +9,8 @@ fn main() {
             auth::auth_sign_in,
             auth::auth_status,
             auth::auth_ensure_fresh,
-            auth::auth_sign_out
+            auth::auth_sign_out,
+            auth::auth_issuer_host
         ])
         .run(tauri::generate_context!())
         .expect("error while running muniment");

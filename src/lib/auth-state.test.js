@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { bootState, errorState, statusState, waitingState } from './auth-state.js'
+import { bootState, errorKind, errorState, statusState, waitingState } from './auth-state.js'
 
 describe('auth state transitions', () => {
   it('starts in boot and resolves status to signed out', () => {
@@ -22,5 +22,13 @@ describe('auth state transitions', () => {
       message: 'Sign-in not completed — the browser session was cancelled. Try again.',
       retry: 'sign-in',
     })
+  })
+
+  it('classifies structured command errors without matching their message', () => {
+    const error = { kind: 'network', message: 'network error: connection refused' }
+    expect(errorKind(error)).toBe('network')
+    expect(errorState('status', error).message).toBe(
+      'Session status unavailable — network error: connection refused. Try again.',
+    )
   })
 })

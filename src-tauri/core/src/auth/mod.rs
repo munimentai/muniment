@@ -54,6 +54,17 @@ pub enum AuthError {
     Timeout,
 }
 
+impl AuthError {
+    /// Stable classification for callers that need to choose recovery UI.
+    pub fn kind(&self) -> &'static str {
+        match self {
+            AuthError::Discovery(_) | AuthError::Http(_) | AuthError::Timeout => "network",
+            AuthError::Denied(_) => "denied",
+            _ => "internal",
+        }
+    }
+}
+
 impl fmt::Display for AuthError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -71,3 +82,18 @@ impl fmt::Display for AuthError {
 }
 
 impl std::error::Error for AuthError {}
+
+#[cfg(test)]
+mod tests {
+    use super::AuthError;
+
+    #[test]
+    fn auth_error_kinds_are_stable() {
+        assert_eq!(AuthError::Http("offline".into()).kind(), "network");
+        assert_eq!(AuthError::Discovery("unavailable".into()).kind(), "network");
+        assert_eq!(AuthError::Timeout.kind(), "network");
+        assert_eq!(AuthError::Denied("cancelled".into()).kind(), "denied");
+        assert_eq!(AuthError::StateMismatch.kind(), "internal");
+        assert_eq!(AuthError::Token("rejected".into()).kind(), "internal");
+    }
+}

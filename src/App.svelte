@@ -1,33 +1,50 @@
 <script>
   import { onMount } from 'svelte'
 
-  import { bootState, errorState, statusState, waitingState } from './lib/auth-state.js'
+  import { bootState, errorKind, errorMessage, errorState, statusState, waitingState } from './lib/auth-state.js'
+  import { connectedState, enterUnreachable, resetConnectivity } from './lib/connectivity.js'
   import { ringPath } from './lib/mark.js'
+  import ServerUnreachable from './lib/ServerUnreachable.svelte'
 
   const markD = ringPath()
   const version = __APP_VERSION__
 
   const tauri = window.__TAURI__?.core
   let auth = $state(bootState)
+  let connectivity = $state(connectedState)
+  let issuerHost = $state('api.muniment.ai')
 
   async function run(action) {
     const command = {
       status: 'auth_status',
       'sign-in': 'auth_sign_in',
       'sign-out': 'auth_sign_out',
+      'ensure-fresh': 'auth_ensure_fresh',
     }[action]
 
     if (action === 'sign-in') auth = waitingState()
     try {
       const status = await tauri.invoke(command)
+      connectivity = resetConnectivity()
       auth = statusState(status)
     } catch (err) {
+      if (errorKind(err) === 'network' && action !== 'sign-out') {
+        connectivity = enterUnreachable(
+          connectivity,
+          { action, message: errorMessage(err) },
+          Date.now(),
+        )
+        return
+      }
       auth = errorState(action, err)
     }
   }
 
   onMount(() => {
-    if (tauri) run('status')
+    if (tauri) {
+      tauri.invoke('auth_issuer_host').then((host) => { issuerHost = host })
+      run('status')
+    }
   })
 </script>
 
@@ -65,6 +82,15 @@
     {/if}
   {/if}
 </main>
+
+{#if connectivity.name === 'unreachable'}
+  <ServerUnreachable
+    state={connectivity}
+    {version}
+    {issuerHost}
+    onretry={() => run(connectivity.action)}
+  />
+{/if}
 
 <style>
   main {
