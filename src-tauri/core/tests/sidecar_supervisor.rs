@@ -257,18 +257,30 @@ fn loading_timeout_exhausts_restart_budget_with_stderr_diagnostics() {
 }
 
 #[test]
-fn ready_returned_after_startup_deadline_times_out_without_becoming_healthy() {
+fn blocked_probe_cannot_delay_startup_timeout_or_become_healthy() {
     let mut cfg = config(&["echo"]);
     cfg.startup_timeout = Duration::from_millis(10);
     cfg.restart.max_restarts = 0;
-    let supervisor = SidecarSupervisor::spawn(cfg, |_| {
-        thread::sleep(Duration::from_millis(30));
+    let (release_probe, blocked_probe) = std::sync::mpsc::channel();
+    let blocked_probe = Arc::new(std::sync::Mutex::new(blocked_probe));
+    let probe_started = Arc::new(AtomicUsize::new(0));
+    let started = Arc::clone(&probe_started);
+    let supervisor = SidecarSupervisor::spawn(cfg, move |_| {
+        started.store(1, Ordering::SeqCst);
+        blocked_probe.lock().unwrap().recv().unwrap();
         Ok(ProbeOutcome::Ready)
     })
     .unwrap();
     let events = supervisor.subscribe();
     assert_eq!(next_event(&events).status, SidecarStatus::Starting);
+    let deadline = Instant::now() + Duration::from_secs(1);
+    while probe_started.load(Ordering::SeqCst) == 0 {
+        assert!(Instant::now() < deadline, "probe did not start");
+        thread::yield_now();
+    }
+    let timeout_started = Instant::now();
     let failed = next_event(&events);
+    assert!(timeout_started.elapsed() < Duration::from_millis(200));
     assert_eq!(failed.status, SidecarStatus::Failed);
     assert!(matches!(
         failed.cause,
@@ -276,6 +288,7 @@ fn ready_returned_after_startup_deadline_times_out_without_becoming_healthy() {
             if timeout == Duration::from_millis(10)
     ));
     assert!(events.recv_timeout(Duration::from_millis(25)).is_err());
+    release_probe.send(()).unwrap();
 }
 
 #[test]
@@ -299,12 +312,25 @@ fn shutdown_during_loading_is_prompt_and_reaps_child() {
     let pid_arg = pid_file.to_string_lossy().into_owned();
     let mut cfg = config(&["pid", &pid_arg]);
     cfg.startup_timeout = Duration::from_secs(30);
-    let mut supervisor = SidecarSupervisor::spawn(cfg, |_| Ok(ProbeOutcome::Loading)).unwrap();
+    let (release_probe, blocked_probe) = std::sync::mpsc::channel();
+    let blocked_probe = Arc::new(std::sync::Mutex::new(blocked_probe));
+    let probe_started = Arc::new(AtomicUsize::new(0));
+    let started_probe = Arc::clone(&probe_started);
+    let mut supervisor = SidecarSupervisor::spawn(cfg, move |_| {
+        started_probe.store(1, Ordering::SeqCst);
+        blocked_probe.lock().unwrap().recv().unwrap();
+        Ok(ProbeOutcome::Loading)
+    })
+    .unwrap();
     let events = supervisor.subscribe();
     assert_eq!(next_event(&events).status, SidecarStatus::Starting);
     let until = Instant::now() + Duration::from_secs(2);
     while !pid_file.exists() {
         assert!(Instant::now() < until, "stub did not write its pid");
+        thread::yield_now();
+    }
+    while probe_started.load(Ordering::SeqCst) == 0 {
+        assert!(Instant::now() < until, "probe did not start");
         thread::yield_now();
     }
     let pid = std::fs::read_to_string(&pid_file).unwrap();
@@ -314,6 +340,7 @@ fn shutdown_during_loading_is_prompt_and_reaps_child() {
     assert_eq!(next_event(&events).status, SidecarStatus::Stopped);
     #[cfg(target_os = "linux")]
     assert!(!PathBuf::from(format!("/proc/{pid}")).exists());
+    release_probe.send(()).unwrap();
     let _ = std::fs::remove_file(pid_file);
 }
 

@@ -15,6 +15,12 @@ const STDERR_DIAGNOSTIC_LINES: usize = 20;
 
 type HealthProbe = dyn Fn(&SidecarIo) -> Result<ProbeOutcome, String> + Send + Sync + 'static;
 
+struct ProbeResult {
+    generation: u64,
+    completed_at: Instant,
+    outcome: Result<ProbeOutcome, String>,
+}
+
 /// A successful probe result, distinguishing startup progress from readiness.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProbeOutcome {
@@ -265,6 +271,8 @@ fn supervise(
     commands: mpsc::Receiver<SupervisorCommand>,
     probe: Arc<HealthProbe>,
 ) {
+    let (probe_results_tx, probe_results) = mpsc::channel::<ProbeResult>();
+    let mut probe_in_flight = false;
     let mut restarts = VecDeque::new();
     let mut consecutive_failures = 0u32;
     let mut restart_cause = None;
@@ -327,7 +335,14 @@ fn supervise(
         let mut ready = false;
         let mut next_probe = Instant::now();
         let cause = loop {
-            match commands.recv_timeout(config.poll_interval) {
+            let wait = if ready {
+                config.poll_interval
+            } else {
+                config
+                    .poll_interval
+                    .min(startup_deadline.saturating_duration_since(Instant::now()))
+            };
+            match commands.recv_timeout(wait) {
                 Ok(SupervisorCommand::Shutdown(done)) => {
                     stop_child(
                         &mut child,
@@ -369,22 +384,17 @@ fn supervise(
                 }
                 Ok(None) => {}
             }
-            if !ready && Instant::now() >= startup_deadline {
-                stop_child(
-                    &mut child,
-                    &io,
-                    config.shutdown_timeout,
-                    config.poll_interval,
-                );
-                break SidecarEventCause::StartupTimeout {
-                    timeout: config.startup_timeout,
-                    stderr_tail: stderr_tail(&stderr),
-                };
+
+            let mut probe_result = None;
+            while let Ok(result) = probe_results.try_recv() {
+                probe_in_flight = false;
+                if result.generation == child_generation {
+                    probe_result = Some(result);
+                }
             }
-            if Instant::now() >= next_probe {
-                next_probe = Instant::now() + config.health_interval;
-                let probe_result = probe(&io);
-                if !ready && probe_result.is_ok() && Instant::now() >= startup_deadline {
+
+            if let Some(result) = probe_result {
+                if !ready && result.completed_at >= startup_deadline {
                     stop_child(
                         &mut child,
                         &io,
@@ -396,7 +406,7 @@ fn supervise(
                         stderr_tail: stderr_tail(&stderr),
                     };
                 }
-                match probe_result {
+                match result.outcome {
                     Ok(ProbeOutcome::Ready) => {
                         if !ready {
                             ready = true;
@@ -439,6 +449,34 @@ fn supervise(
                         };
                     }
                 }
+            }
+
+            if !ready && Instant::now() >= startup_deadline {
+                stop_child(
+                    &mut child,
+                    &io,
+                    config.shutdown_timeout,
+                    config.poll_interval,
+                );
+                break SidecarEventCause::StartupTimeout {
+                    timeout: config.startup_timeout,
+                    stderr_tail: stderr_tail(&stderr),
+                };
+            }
+            if !probe_in_flight && Instant::now() >= next_probe {
+                next_probe = Instant::now() + config.health_interval;
+                probe_in_flight = true;
+                let probe = Arc::clone(&probe);
+                let probe_io = io.clone();
+                let results = probe_results_tx.clone();
+                thread::spawn(move || {
+                    let outcome = probe(&probe_io);
+                    let _ = results.send(ProbeResult {
+                        generation: child_generation,
+                        completed_at: Instant::now(),
+                        outcome,
+                    });
+                });
             }
         };
         io.stdin.0.lock().unwrap().writer = None;
