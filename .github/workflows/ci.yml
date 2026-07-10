@@ -32,6 +32,26 @@ jobs:
       - name: Structure smoke
         run: test/smoke.sh
 
+      - name: Node 24 (bootstrap if missing)
+        run: |
+          node_dir="$HOME/.local/node-24"
+          if { ! command -v node >/dev/null 2>&1 || [ "$(node -p 'process.versions.node.split(`.`)[0]' 2>/dev/null)" != 24 ]; } \
+              && [ ! -x "$node_dir/bin/node" ]; then
+            case "$(uname -m)" in
+              x86_64) node_arch=x64 ;;
+              aarch64|arm64) node_arch=arm64 ;;
+              *) printf 'unsupported Node architecture: %s\n' "$(uname -m)" >&2; exit 1 ;;
+            esac
+            mkdir -p "$node_dir"
+            curl --proto '=https' --tlsv1.2 -sSfL \
+              "https://nodejs.org/dist/v24.4.1/node-v24.4.1-linux-${node_arch}.tar.xz" \
+              | tar -xJ --strip-components=1 -C "$node_dir"
+          fi
+          echo "$HOME/.local/node-24/bin" >> "$GITHUB_PATH"
+
+      - name: Frontend unit tests
+        run: npm ci --no-audit --no-fund && npm test
+
       # Unit tests cover src-tauri/core (muniment-core), which is kept free of
       # Tauri on purpose: compiling the tauri crate needs the GUI dev stack
       # (webkit2gtk etc.) that only the desktop-ci build VMs carry, while the
