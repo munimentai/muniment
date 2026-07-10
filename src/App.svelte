@@ -2,9 +2,8 @@
   import { onMount } from 'svelte'
 
   import { bootState, errorState, statusState, waitingState } from './lib/auth-state.js'
-  import { ringPath } from './lib/mark.js'
+  import Ring from './lib/Ring.svelte'
 
-  const markD = ringPath()
   const version = __APP_VERSION__
 
   const tauri = window.__TAURI__?.core
@@ -33,9 +32,7 @@
 
 <main>
   <div class="lockup">
-    <svg width="34" height="34" viewBox="0 0 48 48" role="img" aria-label="muniment">
-      <path d={markD} stroke-width="4.5" />
-    </svg>
+    <Ring state="rest" size={34} strokeWidth={4.5} />
     <span class="name">muniment</span>
   </div>
   <p class="meta">shell v{version}</p>
@@ -80,12 +77,6 @@
     display: flex;
     align-items: center;
     gap: 13px;
-  }
-
-  .lockup path {
-    fill: none;
-    stroke: var(--ink);
-    stroke-linecap: round;
   }
 
   .name {
