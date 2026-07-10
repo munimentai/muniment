@@ -44,13 +44,12 @@ pub enum ChatRole {
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
+#[non_exhaustive]
 pub struct ChatCompletionRequest {
     pub model: String,
     pub messages: Vec<ChatMessage>,
     pub max_tokens: u32,
     pub temperature: f32,
-    #[serde(skip)]
-    _non_exhaustive: (),
 }
 
 impl ChatCompletionRequest {
@@ -65,7 +64,6 @@ impl ChatCompletionRequest {
             messages,
             max_tokens,
             temperature,
-            _non_exhaustive: (),
         }
     }
 }
@@ -162,7 +160,7 @@ impl LlamaChatClient {
         let mut bytes = Vec::new();
         response
             .into_reader()
-            .take(self.max_response_bytes + 1)
+            .take(self.max_response_bytes.saturating_add(1))
             .read_to_end(&mut bytes)
             .map_err(|error| LlamaChatError::Transport(error.to_string()))?;
         if bytes.len() as u64 > self.max_response_bytes {

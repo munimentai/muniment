@@ -183,6 +183,20 @@ fn chat_errors_are_typed_bounded_and_redacted() {
 }
 
 #[test]
+fn chat_maximum_response_limit_does_not_overflow() {
+    let body = r#"{"choices":[{"message":{"role":"assistant","content":"answer"}}]}"#;
+    let (url, request, worker) = chat_fixture(response("200 OK", body));
+    let result = LlamaChatClient::new(url, Duration::from_secs(1))
+        .unwrap()
+        .with_max_response_bytes(u64::MAX)
+        .complete(&chat_request())
+        .unwrap();
+    assert_eq!(result.text, "answer");
+    request.recv().unwrap();
+    worker.join().unwrap();
+}
+
+#[test]
 fn documented_loading_transitions_to_ready() {
     let loading = response(
         "503 Service Unavailable",
