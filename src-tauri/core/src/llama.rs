@@ -362,7 +362,7 @@ mod tests {
 
     impl Read for Unreadable {
         fn read(&mut self, _buffer: &mut [u8]) -> std::io::Result<usize> {
-            Err(std::io::Error::new(std::io::ErrorKind::Other, "secret"))
+            Err(std::io::Error::other("secret"))
         }
     }
 
