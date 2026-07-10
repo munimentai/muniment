@@ -91,6 +91,15 @@ Phase 1 live.
       muniment-core: atomic publish + dedup, constant-memory streaming
       put/get/verify, stale temp-file sweep (docs/cas.md).
 
+- PLANNED — **Capability vocabulary + receipt provenance.** Keep the
+  in-flight 2.x slices above unchanged. Follow-up client waves make every
+  end-user palette/library surface say “capabilities,” support the approved
+  one-line description before deferred loading, and render receipts as
+  `route · model · cost · time · capability@version[, ...]`. Real
+  `capability@version` values depend cross-repo on MUNICLOUD's capability
+  schema; the desktop client renders what its entitlement snapshot and
+  receipt provide and does not synthesize provenance.
+
 ## Phase 3 — Routing metadata + voice (§9 items 12, 15)
 - Classifier labels ride as request metadata; model pin chip for
   `router.override` holders only.
@@ -98,7 +107,8 @@ Phase 1 live.
   read-aloud; global hotkeys (⌥Space; Windows binding decided in-build).
 
 ## Phase 4+ — Org surface (§9 items 16-19)
-- Remote MCP consumption, local stdio allowlist, package install flow,
+- Remote MCP consumption, local stdio allowlist, capability install flow
+  (Pi packages remain the distribution format),
   artifact side panel, projects (Threads/Shared/Artifacts/Inbox/
   Connections) with the redaction rule (`output withheld · connection not
   granted`).

@@ -17,7 +17,7 @@ Persistent left nav, grouped, mono section labels:
 - **Access:** Grants · Effective permissions
 - **Models:** Providers · Model registry · Routing policy · Budgets
 - **Connections:** MCP registry · Local-stdio allowlist
-- **Library:** Packages · Artifacts · Workflows
+- **Library:** Capabilities · Artifacts
 - **Records:** Audit · Usage
 
 Role gating: admins see People, Access, Library, and Records read-only; owners see everything plus §7. **Hidden, not disabled:** sections a role lacks do not render. Header: lockup, org name, environment tag (mono chip: `prod`), account menu.
@@ -75,14 +75,13 @@ Top: the org **kill switch** — a labeled toggle whose confirm states blast rad
 
 ## 8. Library
 
-### 8.1 Packages
-Tabs: **Review queue · Published · Rejected**. Queue row expand: manifest diff view (mono), contents inventory (extensions/skills/prompts), signature status, submitter. Actions: "Approve and sign" (states the signing key) · "Reject with note". Published rows: versions, group entitlements, install count. Per-group version pinning surfaces here post-v1 (leave the affordance space in the layout).
+### 8.1 Capabilities
+Tabs: **Review queue · Published · Rejected**. Queue row expand: signed, versioned capability-manifest diff (mono); subunit inventory (skills, including former prompts · extensions, including hooks and local tools · connections · workflows · model requirements); declared surface diff (connections, extensions/hooks, model requirements, scopes); signature status; submitter. Actions: "Approve and sign" (states the signing key) · "Reject with note". Approval covers the capability's one-line deferred-loading description as well as its declared surface. Published rows: versions, channel policy (strict pin / gated / pure `:latest`), group entitlements, install count. Surface-expanding versions park in the review queue under the default gated policy while grantees remain on the last approved version. The Pi package format appears only in technical distribution details, never as a Library noun or independently grantable item.
 
 ### 8.2 Artifacts
 Org library moderation: title · owner · shared-with chips · versions · flags. Org-wide publish queue if the org enables review.
 
-### 8.3 Workflows
-Rows: workflow · owner · trigger (mono cron/webhook) · run-as (owner_identity/service chip) · last run · state. **Signal, allowed use #2:** running rows carry the pulse. Row expand → run history ledger (trigger, duration, result, artifacts, entitlement-resolution note when access changed between runs — "salesforce connection unavailable at run time: grant revoked", oxide record). Service principals link to their own grants view.
+Workflow operations live inside the containing capability's detail: workflow · owner · trigger (mono cron/webhook) · run-as (owner_identity/service chip) · last run · state. **Signal, allowed use #2:** running rows carry the pulse. Workflow row expand → run history ledger (trigger, duration, result, artifacts, entitlement-resolution note when access changed between runs — "salesforce connection unavailable at run time: grant revoked", oxide record). Service principals link to their own grants view. Workflows are subunits and never receive an independent Library listing or grant.
 
 ## 9. Records
 
@@ -108,5 +107,5 @@ Empty tables: one sentence + the creating action ("No grants yet. Everything is 
 2. Effective permissions (§5.2).
 3. Routing policy (§6.3).
 4. Grants, Users, MCP registry.
-5. Workflows + Audit.
+5. Capability workflow operations + Audit.
 6. Remainder follows the kit with minimal bespoke work.
