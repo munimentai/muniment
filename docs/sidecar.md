@@ -37,6 +37,12 @@ and optional `params`, but no `id`, and does not wait for a response. Reader
 lines are normalized at the process boundary: CRLF records have their trailing
 carriage return removed and blank keepalive lines are dropped.
 
+Each spawned process has a distinct I/O generation. Output is tagged at the
+process boundary, and readers discard frames from earlier generations after a
+restart. A JSON-RPC call is bound to the generation whose stdin accepted its
+request, so a crash interrupts that call and output still draining from the
+dead process cannot fail a later call or reach its notification callback.
+
 The public `JsonRpcRequest`, `JsonRpcNotification`, `JsonRpcSuccess`,
 `JsonRpcErrorResponse`, and `JsonRpcErrorObject` types expose the wire
 envelopes. `JsonRpcTransportError` distinguishes timeouts, disconnection/I/O,
