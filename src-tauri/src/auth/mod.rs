@@ -12,7 +12,7 @@ mod keyring_store;
 use std::process::Command;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use muniment_core::auth::{self, AuthError, AuthStatus, OidcConfig, TokenStore};
 
@@ -28,6 +28,8 @@ const SCOPES: &str = "openid profile email offline_access";
 /// How long the loopback listener waits for the user to finish in the
 /// browser before the sign-in attempt is abandoned.
 const SIGN_IN_TIMEOUT: Duration = Duration::from_secs(300);
+/// Renew shortly before expiry so callers do not receive a nearly-dead token.
+const REFRESH_SKEW: Duration = Duration::from_secs(60);
 
 /// The one place issuer and client_id are decided. Env overrides exist for
 /// development against a non-default control plane (`MUNIMENT_ISSUER`,
@@ -89,6 +91,22 @@ pub async fn auth_status(state: tauri::State<'_, AuthState>) -> Result<AuthStatu
         .await
         .map_err(|e| format!("status task failed: {e}"))?
         .map_err(|e| e.to_string())
+}
+
+/// Return session status after renewing expired or nearly-expired tokens.
+#[tauri::command]
+pub async fn auth_ensure_fresh(state: tauri::State<'_, AuthState>) -> Result<AuthStatus, String> {
+    let store = state.store.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_secs())
+            .unwrap_or(0);
+        auth::ensure_fresh(store.as_ref(), &oidc_config(), now, REFRESH_SKEW)
+    })
+    .await
+    .map_err(|e| format!("session refresh task failed: {e}"))?
+    .map_err(|e| e.to_string())
 }
 
 /// Clear stored tokens; best-effort revocation when discovery advertises a

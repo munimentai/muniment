@@ -1,6 +1,6 @@
 # Desktop sign-in (OIDC authorization code + PKCE)
 
-Phase 2.8b slice: the Rust core can complete a browser sign-in against the
+The Rust core can complete a browser sign-in against the
 muniment-cloud control plane and hold tokens in the platform keychain. No
 signed-in UI, no entitlement fetch — those are follow-up slices.
 
@@ -30,8 +30,17 @@ discovery. Sequence, as implemented in `src-tauri/core/src/auth/`:
 `auth_status` answers from the stored tokens only — no network.
 `auth_sign_out` clears the stored tokens, with best-effort RFC 7009
 revocation first when discovery advertises a `revocation_endpoint`.
-A refresh-grant helper (`muniment_core::auth::refresh_tokens`) exists and is
-tested; wiring it into a session-keepalive loop is a later slice.
+
+## Session freshness
+
+`auth_ensure_fresh` checks stored expiry with a 60-second safety margin. Fresh
+sessions and signed-out state require no network. Expired or nearly-expired
+sessions are renewed with the refresh grant and the rotated tokens are saved.
+If the provider rejects a dead refresh token (or none is stored), the local
+session is cleared and signed-out status is returned. Discovery and network
+failures are returned without clearing the stored session, so an unreachable
+server never signs the user out. The core accepts the current time as an input
+to keep this behavior deterministic in tests.
 
 ## Configuration surface
 
@@ -95,6 +104,7 @@ the webview.
 |-----------------|------------------------|-----------------------------------|
 | `auth_sign_in`  | `AuthStatus` or error  | Runs the full browser flow; 5-min timeout; concurrent calls rejected |
 | `auth_status`   | `AuthStatus`           | Local only, no network            |
+| `auth_ensure_fresh` | `AuthStatus` or error | Refreshes at expiry or within 60 seconds |
 | `auth_sign_out` | `AuthStatus`           | Best-effort revocation + clear    |
 
 `AuthStatus` is `{ signed_in: bool, subject: string|null, expires_at: unix-seconds|null }`.
@@ -136,6 +146,6 @@ build); verify it manually:
 
 ## Follow-ups (out of scope here)
 
-- Signed-in UI and session lifecycle (auto-refresh via `refresh_tokens`).
+- Signed-in UI.
 - Entitlement snapshot fetch after sign-in.
 - Registering the real client id and removing the placeholder default.

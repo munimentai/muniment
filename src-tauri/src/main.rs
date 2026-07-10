@@ -8,6 +8,7 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             auth::auth_sign_in,
             auth::auth_status,
+            auth::auth_ensure_fresh,
             auth::auth_sign_out
         ])
         .run(tauri::generate_context!())
