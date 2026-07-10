@@ -5,7 +5,8 @@ name: CI
 # runner container carries DESKTOP_CI_SSH_KEY, a restricted key whose only
 # capability on pve01 is `sudo desktop-ci`. Builds are serialized by the
 # driver's one-VM-at-a-time lock; matrix jobs also serialize on the single
-# repo runner, so a full PR gate is smoke + three sequential platform builds.
+# repo runner, so a full PR gate is smoke (structure check + Rust unit tests)
+# plus three sequential platform builds.
 # Push-to-main runs smoke only — merges are already PR-gated.
 # NOTE: the driver clones `--branch <ref>`, so we pass the branch NAME (the
 # PR head ref), which builds the branch TIP, not necessarily the triggering
@@ -30,6 +31,27 @@ jobs:
 
       - name: Structure smoke
         run: test/smoke.sh
+
+      # Unit tests cover src-tauri/core (muniment-core), which is kept free of
+      # Tauri on purpose: compiling the tauri crate needs the GUI dev stack
+      # (webkit2gtk etc.) that only the desktop-ci build VMs carry, while the
+      # core crate compiles anywhere. The runner container persists, so the
+      # rustup bootstrap below is a one-time cost.
+      - name: Rust toolchain (bootstrap if missing)
+        run: |
+          if ! command -v cargo >/dev/null 2>&1 && [ ! -x "$HOME/.cargo/bin/cargo" ]; then
+            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+              | sh -s -- -y --profile minimal --default-toolchain stable
+          fi
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          # rustc needs a C linker even for dependency-free crates
+          if ! command -v cc >/dev/null 2>&1; then
+            apt-get update -qq
+            apt-get install -y -qq --no-install-recommends gcc libc6-dev
+          fi
+
+      - name: Rust unit tests
+        run: cargo test --manifest-path src-tauri/core/Cargo.toml --locked
 
   desktop-build:
     if: github.event_name == 'pull_request'
