@@ -20,6 +20,28 @@ Shutdown first closes stdin so a cooperative child can finish. If it has not
 exited by the configured deadline, the supervisor kills and reaps it. Dropping
 the supervisor performs the same shutdown, preventing orphan children.
 
+## Lifecycle events
+
+`SidecarSupervisor::subscribe` returns a standard-library `mpsc::Receiver` of
+ordered `SidecarEvent` values. A new receiver first replays the transitions
+already emitted by that supervisor, including the initial `Starting`, and then
+receives live transitions. This avoids races between the immediately-started
+worker and callers attaching their first receiver. Multiple receivers each see
+the complete stream; dropping one does not affect the others.
+
+Each event contains the new `SidecarStatus`. Restart and failure events retain
+their cause as a process exit (code and signal where available), process wait
+error, spawn error, or health-probe failure message. A `Restarting` event also
+contains its attempt number within the rolling restart window and selected
+backoff. `Healthy` identifies the active I/O generation. `Stopped` records a
+requested shutdown. The existing `status()` API remains the current snapshot
+of this same event stream.
+
+Subscriptions use unbounded channels. Publishing therefore never waits for a
+slow receiver; queued events remain available until that receiver consumes or
+drops them. Disconnected senders are pruned while publishing. After `Stopped`
+or `Failed` is delivered, all receiver channels disconnect.
+
 ## JSON-RPC framing
 
 `JsonRpcTransport` provides synchronous, one-request-at-a-time JSON-RPC 2.0
