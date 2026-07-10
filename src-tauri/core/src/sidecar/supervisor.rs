@@ -465,8 +465,7 @@ fn supervise(
                     stderr_tail: stderr_tail(&stderr),
                 };
             }
-            if probe_in_flight_generation != Some(child_generation)
-                && Instant::now() >= next_probe
+            if probe_in_flight_generation != Some(child_generation) && Instant::now() >= next_probe
             {
                 next_probe = Instant::now() + config.health_interval;
                 probe_in_flight_generation = Some(child_generation);
