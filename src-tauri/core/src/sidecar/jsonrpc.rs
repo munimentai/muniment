@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::Value;
 
-use super::{SidecarError, SidecarIo};
+use super::{HealthProbeResult, SidecarError, SidecarIo};
 
 const JSON_RPC_VERSION: &str = "2.0";
 const JSON_RPC_CANCEL_POLL_INTERVAL: Duration = Duration::from_millis(10);
@@ -223,14 +223,14 @@ impl JsonRpcTransport {
         self: &Arc<Self>,
         method: impl Into<String> + 'static,
         timeout: Duration,
-    ) -> impl Fn(&SidecarIo) -> Result<(), String> + Send + Sync + 'static {
+    ) -> impl Fn(&SidecarIo) -> Result<HealthProbeResult, String> + Send + Sync + 'static {
         let transport = Arc::clone(self);
         let method = method.into();
         move |_| {
             let call = match transport.call_lock.try_lock() {
                 Ok(call) => call,
                 Err(TryLockError::Poisoned(error)) => error.into_inner(),
-                Err(TryLockError::WouldBlock) => return Ok(()),
+                Err(TryLockError::WouldBlock) => return Ok(HealthProbeResult::Ready),
             };
             let id = JsonRpcId::Number(transport.next_id.fetch_add(1, Ordering::Relaxed));
             transport
@@ -243,7 +243,7 @@ impl JsonRpcTransport {
                     &mut |_| {},
                     call,
                 )
-                .map(|_| ())
+                .map(|_| HealthProbeResult::Ready)
                 .map_err(|error| format!("JSON-RPC health probe `{method}` failed: {error}"))
         }
     }

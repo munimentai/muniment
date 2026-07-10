@@ -1,12 +1,13 @@
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant};
 
 use muniment_core::sidecar::{
-    JsonRpcCancellationToken, JsonRpcId, JsonRpcTransport, JsonRpcTransportError, RestartPolicy,
-    SidecarConfig, SidecarError, SidecarEvent, SidecarEventCause, SidecarStatus, SidecarSupervisor,
+    HealthProbeResult, JsonRpcCancellationToken, JsonRpcId, JsonRpcTransport,
+    JsonRpcTransportError, RestartPolicy, SidecarConfig, SidecarError, SidecarEvent,
+    SidecarEventCause, SidecarStatus, SidecarSupervisor,
 };
 use serde_json::{json, Value};
 
@@ -49,7 +50,8 @@ fn next_event(events: &std::sync::mpsc::Receiver<SidecarEvent>) -> SidecarEvent 
 
 #[test]
 fn subscribers_receive_the_full_ordered_lifecycle() {
-    let mut supervisor = SidecarSupervisor::spawn(config(&["echo"]), |_| Ok(())).unwrap();
+    let mut supervisor =
+        SidecarSupervisor::spawn(config(&["echo"]), |_| Ok(HealthProbeResult::Ready)).unwrap();
     let first = supervisor.subscribe();
     let second = supervisor.subscribe();
 
@@ -67,12 +69,81 @@ fn subscribers_receive_the_full_ordered_lifecycle() {
 }
 
 #[test]
+fn delayed_readiness_emits_healthy_once() {
+    let mut cfg = config(&["echo"]);
+    cfg.health_interval = Duration::from_millis(10);
+    let release = Arc::new(AtomicBool::new(false));
+    let probe_release = Arc::clone(&release);
+    let (probed_tx, probed_rx) = std::sync::mpsc::channel();
+    let mut supervisor = SidecarSupervisor::spawn(cfg, move |_| {
+        probed_tx.send(()).unwrap();
+        Ok(if probe_release.load(Ordering::SeqCst) {
+            HealthProbeResult::Ready
+        } else {
+            HealthProbeResult::Starting
+        })
+    })
+    .unwrap();
+    let events = supervisor.subscribe();
+    assert_eq!(next_event(&events).status, SidecarStatus::Starting);
+    probed_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+    assert_eq!(supervisor.status(), SidecarStatus::Starting);
+    assert!(events.try_recv().is_err());
+
+    release.store(true, Ordering::SeqCst);
+    let healthy = next_event(&events);
+    assert_eq!(healthy.status, SidecarStatus::Healthy);
+    probed_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+    probed_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+    assert!(events.try_recv().is_err(), "duplicate Healthy transition");
+    supervisor.shutdown().unwrap();
+}
+
+#[test]
+fn readiness_timeout_exhausts_restart_budget_with_structured_cause() {
+    let mut cfg = config(&["echo"]);
+    cfg.health_interval = Duration::from_millis(10);
+    cfg.startup_timeout = Duration::from_millis(25);
+    cfg.restart.max_restarts = 1;
+    let supervisor = SidecarSupervisor::spawn(cfg, |_| Ok(HealthProbeResult::Starting)).unwrap();
+    let events = supervisor.subscribe();
+    let failed = loop {
+        let event = next_event(&events);
+        if event.status == SidecarStatus::Failed {
+            break event;
+        }
+    };
+    assert!(matches!(
+        failed.cause,
+        Some(SidecarEventCause::ReadinessTimeout { timeout, .. })
+            if timeout == Duration::from_millis(25)
+    ));
+}
+
+#[test]
+fn shutdown_remains_responsive_while_starting() {
+    let mut cfg = config(&["echo"]);
+    cfg.health_interval = Duration::from_millis(10);
+    let (probed_tx, probed_rx) = std::sync::mpsc::channel();
+    let mut supervisor = SidecarSupervisor::spawn(cfg, move |_| {
+        probed_tx.send(()).unwrap();
+        Ok(HealthProbeResult::Starting)
+    })
+    .unwrap();
+    probed_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+    supervisor.shutdown().unwrap();
+    assert_eq!(supervisor.status(), SidecarStatus::Stopped);
+}
+
+#[test]
 fn restart_events_include_exit_attempt_and_backoff() {
     let marker = temp_marker("restart-events");
     let _ = std::fs::remove_dir(&marker);
     let marker_arg = marker.to_string_lossy().into_owned();
-    let mut supervisor =
-        SidecarSupervisor::spawn(config(&["once", &marker_arg]), |_| Ok(())).unwrap();
+    let mut supervisor = SidecarSupervisor::spawn(config(&["once", &marker_arg]), |_| {
+        Ok(HealthProbeResult::Ready)
+    })
+    .unwrap();
     let events = supervisor.subscribe();
     assert_eq!(next_event(&events).status, SidecarStatus::Starting);
     assert_eq!(next_event(&events).status, SidecarStatus::Healthy);
@@ -84,6 +155,7 @@ fn restart_events_include_exit_attempt_and_backoff() {
     ));
     assert_eq!(restarting.restart_attempt, Some(1));
     assert_eq!(restarting.backoff_delay, Some(Duration::from_millis(10)));
+    assert_eq!(next_event(&events).status, SidecarStatus::Starting);
     assert_eq!(next_event(&events).status, SidecarStatus::Healthy);
     supervisor.shutdown().unwrap();
     let _ = std::fs::remove_dir(marker);
@@ -93,7 +165,7 @@ fn restart_events_include_exit_attempt_and_backoff() {
 fn failed_event_preserves_the_last_error() {
     let mut cfg = config(&["crash"]);
     cfg.restart.max_restarts = 1;
-    let supervisor = SidecarSupervisor::spawn(cfg, |_| Ok(())).unwrap();
+    let supervisor = SidecarSupervisor::spawn(cfg, |_| Ok(HealthProbeResult::Ready)).unwrap();
     let events = supervisor.subscribe();
     let failed = loop {
         let event = next_event(&events);
@@ -110,7 +182,8 @@ fn failed_event_preserves_the_last_error() {
 
 #[test]
 fn spawn_and_line_round_trip() {
-    let mut supervisor = SidecarSupervisor::spawn(config(&["echo"]), |_| Ok(())).unwrap();
+    let mut supervisor =
+        SidecarSupervisor::spawn(config(&["echo"]), |_| Ok(HealthProbeResult::Ready)).unwrap();
     wait_for(&supervisor, SidecarStatus::Healthy);
     let io = supervisor.io();
     io.stdin.write_line("hello sidecar").unwrap();
@@ -129,7 +202,7 @@ fn spawn_and_line_round_trip() {
 fn stderr_is_bounded_and_reader_starts_at_oldest_retained_line() {
     let mut cfg = config(&["stderr-spam", "100000"]);
     cfg.stderr_capacity = 37;
-    let mut supervisor = SidecarSupervisor::spawn(cfg, |_| Ok(())).unwrap();
+    let mut supervisor = SidecarSupervisor::spawn(cfg, |_| Ok(HealthProbeResult::Ready)).unwrap();
     assert_eq!(
         supervisor
             .io()
@@ -160,7 +233,10 @@ fn stderr_ring_is_cleared_when_a_replacement_starts() {
     let _ = std::fs::remove_dir(&marker);
     let marker_arg = marker.to_string_lossy().into_owned();
     let mut supervisor =
-        SidecarSupervisor::spawn(config(&["stderr-generation", &marker_arg]), |_| Ok(())).unwrap();
+        SidecarSupervisor::spawn(config(&["stderr-generation", &marker_arg]), |_| {
+            Ok(HealthProbeResult::Ready)
+        })
+        .unwrap();
     let events = supervisor.subscribe();
     loop {
         let event = next_event(&events);
@@ -186,7 +262,16 @@ fn stderr_ring_is_cleared_when_a_replacement_starts() {
 fn health_restart_cause_includes_recent_stderr() {
     let mut cfg = config(&["stderr-hang"]);
     cfg.health_interval = Duration::from_millis(20);
-    let mut supervisor = SidecarSupervisor::spawn(cfg, |_| Err("unhealthy".into())).unwrap();
+    let probes = Arc::new(AtomicUsize::new(0));
+    let probe_count = Arc::clone(&probes);
+    let mut supervisor = SidecarSupervisor::spawn(cfg, move |_| {
+        if probe_count.fetch_add(1, Ordering::SeqCst) == 0 {
+            Ok(HealthProbeResult::Ready)
+        } else {
+            Err("unhealthy".into())
+        }
+    })
+    .unwrap();
     let events = supervisor.subscribe();
     let restarting = loop {
         let event = next_event(&events);
@@ -207,8 +292,10 @@ fn crash_restarts_after_backoff() {
     let marker = temp_marker("restart");
     let _ = std::fs::remove_dir(&marker);
     let marker_arg = marker.to_string_lossy().into_owned();
-    let mut supervisor =
-        SidecarSupervisor::spawn(config(&["once", &marker_arg]), |_| Ok(())).unwrap();
+    let mut supervisor = SidecarSupervisor::spawn(config(&["once", &marker_arg]), |_| {
+        Ok(HealthProbeResult::Ready)
+    })
+    .unwrap();
     let io = supervisor.io();
     let started = Instant::now();
     loop {
@@ -234,7 +321,7 @@ fn crash_restarts_after_backoff() {
 fn restart_cap_exhaustion_becomes_failed() {
     let mut cfg = config(&["crash"]);
     cfg.restart.max_restarts = 2;
-    let supervisor = SidecarSupervisor::spawn(cfg, |_| Ok(())).unwrap();
+    let supervisor = SidecarSupervisor::spawn(cfg, |_| Ok(HealthProbeResult::Ready)).unwrap();
     wait_for(&supervisor, SidecarStatus::Failed);
 }
 
@@ -256,7 +343,7 @@ fn failed_health_probe_restarts_the_child() {
         {
             Some(line) if line == "pong" => {
                 probe_count.fetch_add(1, Ordering::SeqCst);
-                Ok(())
+                Ok(HealthProbeResult::Ready)
             }
             _ => Err("probe timed out".into()),
         }
@@ -337,7 +424,9 @@ fn graceful_shutdown_leaves_no_child() {
     let pid_file = temp_marker("pid");
     let _ = std::fs::remove_file(&pid_file);
     let pid_arg = pid_file.to_string_lossy().into_owned();
-    let mut supervisor = SidecarSupervisor::spawn(config(&["pid", &pid_arg]), |_| Ok(())).unwrap();
+    let mut supervisor =
+        SidecarSupervisor::spawn(config(&["pid", &pid_arg]), |_| Ok(HealthProbeResult::Ready))
+            .unwrap();
     wait_for(&supervisor, SidecarStatus::Healthy);
     let until = Instant::now() + Duration::from_secs(2);
     while !pid_file.exists() && Instant::now() < until {
@@ -361,7 +450,7 @@ fn shutdown_forces_and_reaps_an_uncooperative_child() {
     let pid_arg = pid_file.to_string_lossy().into_owned();
     let mut cfg = config(&["hang", &pid_arg]);
     cfg.shutdown_timeout = Duration::from_millis(30);
-    let mut supervisor = SidecarSupervisor::spawn(cfg, |_| Ok(())).unwrap();
+    let mut supervisor = SidecarSupervisor::spawn(cfg, |_| Ok(HealthProbeResult::Ready)).unwrap();
     wait_for(&supervisor, SidecarStatus::Healthy);
     let until = Instant::now() + Duration::from_secs(2);
     while !pid_file.exists() && Instant::now() < until {
@@ -378,7 +467,8 @@ fn shutdown_forces_and_reaps_an_uncooperative_child() {
 }
 
 fn rpc_supervisor() -> SidecarSupervisor {
-    let supervisor = SidecarSupervisor::spawn(config(&["json-rpc"]), |_| Ok(())).unwrap();
+    let supervisor =
+        SidecarSupervisor::spawn(config(&["json-rpc"]), |_| Ok(HealthProbeResult::Ready)).unwrap();
     wait_for(&supervisor, SidecarStatus::Healthy);
     supervisor
 }
@@ -701,8 +791,10 @@ fn json_rpc_restart_discards_previous_generation_frames() {
     let _ = std::fs::remove_dir(&marker);
     let marker_arg = marker.to_string_lossy().into_owned();
     let mut supervisor =
-        SidecarSupervisor::spawn(config(&["json-rpc-stale-once", &marker_arg]), |_| Ok(()))
-            .unwrap();
+        SidecarSupervisor::spawn(config(&["json-rpc-stale-once", &marker_arg]), |_| {
+            Ok(HealthProbeResult::Ready)
+        })
+        .unwrap();
     let io = supervisor.io();
     let until = Instant::now() + Duration::from_secs(2);
     loop {
@@ -739,7 +831,7 @@ fn json_rpc_call_interrupted_by_restart_returns_bounded_error() {
     let marker_arg = marker.to_string_lossy().into_owned();
     let mut supervisor =
         SidecarSupervisor::spawn(config(&["json-rpc-crash-call-once", &marker_arg]), |_| {
-            Ok(())
+            Ok(HealthProbeResult::Ready)
         })
         .unwrap();
     wait_for(&supervisor, SidecarStatus::Healthy);

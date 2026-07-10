@@ -11,5 +11,6 @@ pub use jsonrpc::{
     JsonRpcVersion,
 };
 pub use supervisor::{
-    RestartPolicy, SidecarConfig, SidecarEvent, SidecarEventCause, SidecarStatus, SidecarSupervisor,
+    HealthProbeResult, RestartPolicy, SidecarConfig, SidecarEvent, SidecarEventCause,
+    SidecarStatus, SidecarSupervisor,
 };
