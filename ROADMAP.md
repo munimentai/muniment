@@ -53,10 +53,25 @@ Phase 1 live.
       the supervisor's stdio.
     - DONE 2026-07-10 — JSON-RPC notifications (send + interleaved receive
       during calls) and reader-line normalization (CRLF, blank keepalives).
-    - NEXT — JSON-RPC ping health probe: run the supervisor's health check
-      through the shared transport without racing in-flight calls.
-    - NEXT — restart-safe transport: output lines from a dead process
-      generation must not corrupt post-restart calls.
+    - DONE 2026-07-10 — JSON-RPC ping health probe through the shared
+      transport, sharing the call lock so it cannot race in-flight calls.
+    - DONE 2026-07-10 — restart-safe transport: generation-tagged I/O so
+      stale output from a dead process generation cannot corrupt
+      post-restart calls.
+    - NEXT — call cancellation + abandoned-request hygiene: cancel an
+      in-flight JSON-RPC call from another thread (LSP-style cancel
+      notification, method name configurable) and discard late responses
+      to cancelled or timed-out requests so they cannot fail later calls
+      (item 9 "stop generation" prerequisite; also closes the
+      timeout→MismatchedId hole in the live generation).
+    - NEXT — supervisor status-change events: push Starting/Healthy/
+      Restarting/Failed/Stopped transitions with cause metadata (exit code,
+      spawn error, probe failure, attempt, backoff) to subscribers, so the
+      future health UI does not poll.
+    - NEXT — bounded stderr diagnostics: cap unread stderr on the producer
+      side (llama.cpp is stderr-chatty) and keep a recent-lines ring that
+      failure reporting includes (feeds the §2.6 "Copy diagnostics"
+      pattern).
     Pi RPC wiring stays blocked on cloud 6; llama.cpp + model residency
     land with item 10 proper.
 11. Attachments pipeline + content-addressed file store client. The store
