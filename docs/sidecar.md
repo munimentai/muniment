@@ -128,6 +128,15 @@ the normal supervisor restart path.
 
 ## Scope boundary
 
+Desktop ASR is deliberately outside the sidecar boundary. As decided in
+[ADR 0004](decisions/0004-desktop-asr-runtime.md), `muniment_core` will own
+microphone PCM and invoke the pinned sherpa-onnx v1.13.2 C API in process with
+the pinned Parakeet-TDT 0.6B v3 INT8 offline artifact. No ASR socket or child
+process is introduced; only utterance-final transcript text proceeds to the
+local Gemma dictation-polish contract, and voice bytes never enter a network
+client, Pi, llama-server, telemetry, or crash reports. Native desktop packaging
+and target-hardware validation remain follow-up work.
+
 `muniment_core::llama` owns the local llama.cpp boundary. The typed resident
 descriptor pins the Gemma artifact identity, stable API alias, and context
 limit selected in [ADR 0003](decisions/0003-resident-gemma-model.md).
