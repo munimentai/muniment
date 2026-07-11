@@ -55,6 +55,18 @@ impl AuthState {
             sign_in_running: Arc::new(AtomicBool::new(false)),
         }
     }
+
+    pub(crate) fn store(&self) -> Arc<dyn TokenStore> {
+        self.store.clone()
+    }
+}
+
+pub(crate) fn config() -> OidcConfig {
+    oidc_config()
+}
+
+pub(crate) fn refresh_skew() -> Duration {
+    REFRESH_SKEW
 }
 
 /// Run the browser sign-in flow, persist the tokens, and report the new
