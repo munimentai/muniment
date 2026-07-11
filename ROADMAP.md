@@ -1,6 +1,6 @@
 # muniment-desktop — ROADMAP
 
-Phases mirror harness-spec §9. **This lane is CLOSED until muniment-cloud Phase 1 (OIDC + grants + key regen) is live.** Locally verifiable client slices may proceed; registration, the first real handshake, entitlement fetch, and websocket refresh remain blocked and must not be mocked.
+Phases mirror harness-spec §9. Muniment-cloud Phase 1 native auth and the cloud prerequisites for desktop chat are live as of 2026-07-11; client work that uses them must exercise the real contracts and must not introduce mocked production paths.
 
 ## M0 — Scaffold (done 2026-07-09)
 - Tauri v2 desktop shell builds on macOS, Windows, and Linux.
@@ -10,10 +10,13 @@ Phases mirror harness-spec §9. **This lane is CLOSED until muniment-cloud Phase
 
 ### 8. Shell, auth, and entitlements
 - DONE — Svelte 5/Vite toolchain, design tokens, OIDC PKCE core, keychain storage, refresh-on-expiry, signed-out/signed-in states, pre-chat shell frame, reusable milled ring, and structured server-unreachable recovery.
-- BLOCKED on cloud Phase 1 — desktop registration, real handshake, and entitlement snapshot fetch/display.
+- DONE cloud prerequisite — native-app PKCE issuer/client support and key regeneration are live at `api.muniment.ai` (2026-07-11).
+- NEXT after first chat — desktop registration/handshake and entitlement snapshot fetch/display where those surfaces remain unwired.
 
 ### 9. Pi sidecar and cloud chat
-- RPC wiring remains blocked on cloud 6. Before persistence, use the durable journal contract below.
+- DONE groundwork — supervised sidecar lifecycle, readiness-aware startup/restart, typed RPC framing, notifications, ping health checks, cancellable calls, and the durable journal/reducer contract below.
+- NEXT — pin and distribute the real Pi runtime under an ADR, spawn it through the existing supervisor, then deliver the first signed-in streamed chat through the user's scoped LiteLLM virtual key with durable event translation and a provenance line.
+- FOLLOW — steering/follow-up controls, tool/permission activity, session resume, and richer receipt expansion in separately reviewable slices.
 
 ### 10. Local Gemma sidecar
 - DONE — supervised JSON-RPC sidecar lifecycle; loopback llama-server launch/health/chat; pinned Gemma descriptor and launch verification; dictation-polish and routing-classifier contracts/evaluations with adversarial framing.
@@ -26,13 +29,13 @@ Phases mirror harness-spec §9. **This lane is CLOSED until muniment-cloud Phase
 ### Durable local run journal
 - DECIDED — ADR 0002 makes a per-run append-only SQLite event journal authoritative; external effects are never silently re-executed and large bodies live in CAS.
 - DONE — schema/envelope/atomic append and deterministic reducer/replay with permission, terminal, unsupported-event, incremental, and crash-boundary coverage.
-- NEXT when cloud 6 opens — Pi domain/effect translation and receipt projection; retention/export/deletion/CAS collection/compaction follow.
+- NEXT with Phase 2.9 — Pi domain/effect translation and receipt projection; retention/export/deletion/CAS collection/compaction follow.
 
 ### Capability vocabulary and provenance
 - PLANNED — user surfaces say “capabilities” and receipts render `route · model · cost · time · capability@version[, ...]`. The client never synthesizes values absent from the cloud schema.
 
 ## Phase 3 — Routing metadata + voice (§9 items 12, 15)
-- Routing metadata carriage/policy integration remains blocked on item 9/cloud 6; the local classifier contract is complete.
+- Routing metadata carriage/policy integration follows item 9; the local classifier contract is complete.
 - Voice direction remains Parakeet capture → Gemma polish → transforms, with Kokoro read-aloud and global hotkeys.
 - DONE — ADRs 0004/0005, pinned Parakeet verification, revision publication/recovery, bounded resumable acquisition, consumption of the shared native HTTPS/proxy transport, the shared pure-core install coordinator, exact resumable-stage byte accounting, and Parakeet acquisition/publication composition through that coordinator.
 - NEXT after the current Gemma activation slice — native adapters/Tauri commands. UI, native bindings/packaging, capture/VAD, and hardware validation follow separately.
