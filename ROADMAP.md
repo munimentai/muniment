@@ -41,7 +41,8 @@ Gate reading in practice (updated 2026-07-10): client-side slices that are fully
 - Classifier labels ride as request metadata; model pin chip for `router.override` holders only. Local classifier contract/evaluation and adversarial-framing groundwork are DONE; metadata carriage and policy integration remain blocked on Phase 2 item 9/cloud 6.
 - Voice: Parakeet capture → Gemma polish (flash) → transforms; Kokoro read-aloud; global hotkeys (⌥Space; Windows binding decided in-build). Dictation-polish contract/evaluation and adversarial-framing groundwork are DONE.
   - DONE 2026-07-10 — ADR 0004 pins sherpa-onnx v1.13.2 and the immutable Parakeet-TDT 0.6B v3 INT8 four-file artifact, defines the in-process privacy/packaging boundary, records licensing duties, and sets a target-hardware validation matrix.
-  - NEXT — add a pure-Rust, constant-memory verifier that publishes the pinned four-file ASR model set only after every file passes exact size/SHA-256 checks; acquisition, native bindings, packaging, capture/VAD, and hardware validation follow as separate slices.
+  - DONE 2026-07-10 — a pure-Rust, constant-memory verifier publishes success only after every pinned ASR artifact passes regular-file, exact-size, and SHA-256 checks.
+  - NEXT — decide acquisition, atomic publication, update/rollback, recovery, removal, and notice delivery for the ASR model set; native bindings, packaging, capture/VAD, and hardware validation follow as separate slices.
 
 ## Phase 4+ — Org surface (§9 items 16-19)
 - Remote MCP consumption, local stdio allowlist, capability install flow, artifact side panel, and projects with the redaction rule (`output withheld · connection not granted`).
