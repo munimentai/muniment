@@ -268,7 +268,7 @@ fn extract_archive(archive: &Path, stage: &Path) -> Result<(), PiInstallError> {
                 .by_index(index)
                 .map_err(|_| PiInstallError::UnsafeArchive)?;
             let enclosed = entry.enclosed_name().ok_or(PiInstallError::UnsafeArchive)?;
-            if !safe_name(enclosed) || (!entry.is_dir() && !entry.is_file()) {
+            if !safe_name(&enclosed) || (!entry.is_dir() && !entry.is_file()) {
                 return Err(PiInstallError::UnsafeArchive);
             }
             let output = stage.join(enclosed);
