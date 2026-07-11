@@ -106,11 +106,47 @@ impl PiLifecycleBoundary for FsPiLifecycleBoundary {
         fs::rename(staged, destination).map_err(|_| PiInstallError::Persistence)
     }
     fn replace_pointer(&self, temporary: &Path, destination: &Path) -> Result<(), PiInstallError> {
-        #[cfg(windows)]
-        if destination.exists() {
-            fs::remove_file(destination).map_err(|_| PiInstallError::Persistence)?;
-        }
-        fs::rename(temporary, destination).map_err(|_| PiInstallError::Persistence)
+        replace_pointer_file(temporary, destination)
+    }
+}
+
+#[cfg(not(windows))]
+fn replace_pointer_file(temporary: &Path, destination: &Path) -> Result<(), PiInstallError> {
+    fs::rename(temporary, destination).map_err(|_| PiInstallError::Persistence)
+}
+
+#[cfg(windows)]
+fn replace_pointer_file(temporary: &Path, destination: &Path) -> Result<(), PiInstallError> {
+    use std::os::windows::ffi::OsStrExt;
+
+    const MOVEFILE_REPLACE_EXISTING: u32 = 0x1;
+    const MOVEFILE_WRITE_THROUGH: u32 = 0x8;
+
+    #[link(name = "kernel32")]
+    extern "system" {
+        fn MoveFileExW(existing: *const u16, new: *const u16, flags: u32) -> i32;
+    }
+
+    let existing: Vec<_> = temporary.as_os_str().encode_wide().chain(Some(0)).collect();
+    let new: Vec<_> = destination
+        .as_os_str()
+        .encode_wide()
+        .chain(Some(0))
+        .collect();
+    // SAFETY: both pointers reference NUL-terminated UTF-16 buffers that live
+    // for the duration of the call. No aliases into Rust-managed memory are
+    // retained by MoveFileExW.
+    let replaced = unsafe {
+        MoveFileExW(
+            existing.as_ptr(),
+            new.as_ptr(),
+            MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
+        )
+    };
+    if replaced == 0 {
+        Err(PiInstallError::Persistence)
+    } else {
+        Ok(())
     }
 }
 
@@ -546,6 +582,28 @@ mod tests {
         );
         assert_eq!(fs::read_to_string(root.join("current")).unwrap(), original);
         assert!(!root.join(".current.tmp").exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn native_failed_pointer_replacement_preserves_the_existing_pointer() {
+        static NEXT: AtomicU64 = AtomicU64::new(0);
+        let root = std::env::temp_dir().join(format!(
+            "muniment-pi-native-pointer-{}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::Relaxed)
+        ));
+        fs::create_dir_all(&root).unwrap();
+        let destination = root.join("current");
+        let original = format!("{POINTER_HEADER}\n{}\n", PI_ARTIFACT.version);
+        fs::write(&destination, &original).unwrap();
+
+        assert_eq!(
+            FsPiLifecycleBoundary.replace_pointer(&root.join("missing.tmp"), &destination),
+            Err(PiInstallError::Persistence)
+        );
+        assert_eq!(fs::read_to_string(destination).unwrap(), original);
         fs::remove_dir_all(root).unwrap();
     }
 
