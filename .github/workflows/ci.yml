@@ -6,7 +6,8 @@ name: CI
 # capability on pve01 is `sudo desktop-ci`. Builds are serialized by the
 # driver's one-VM-at-a-time lock; matrix jobs also serialize on the single
 # repo runner, so a code PR gate is smoke (structure check + unit tests) plus
-# three sequential platform builds. Markdown-only PRs run structure smoke only.
+# native Windows and macOS compile preflights, then three sequential platform
+# builds. Markdown-only PRs run structure smoke only.
 # Push-to-main runs smoke only — merges are already PR-gated.
 # NOTE: the driver clones `--branch <ref>`, so we pass the branch NAME (the
 # PR head ref), which builds the branch TIP, not necessarily the triggering
@@ -106,9 +107,50 @@ jobs:
         if: steps.changes.outputs.docs_only != 'true'
         run: cargo test --manifest-path src-tauri/core/Cargo.toml --locked
 
-  desktop-build:
+  desktop-compile:
+    name: Desktop compile preflight (${{ matrix.platform }})
     if: github.event_name == 'pull_request' && needs.smoke.outputs.docs_only != 'true'
     needs: smoke
+    runs-on: self-hosted
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [windows, macos]
+    steps:
+      - name: Check (${{ matrix.platform }}) via desktop-ci
+        env:
+          PLATFORM: ${{ matrix.platform }}
+          REPO_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          REF: ${{ github.head_ref }}
+        run: |
+          set -u
+          case "$REF" in
+            ''|*[!A-Za-z0-9._/-]*)
+              printf 'error: unsafe branch ref for desktop-ci: %s\n' "$REF" >&2
+              exit 1
+              ;;
+          esac
+
+          umask 077
+          key="$RUNNER_TEMP/desktop_ci_key"
+          printf '%s' "$DESKTOP_CI_SSH_KEY" > "$key"
+          trap 'rm -f "$key"' EXIT
+
+          cmd='cargo check --manifest-path src-tauri/Cargo.toml --locked'
+          repo_url="https://x-access-token:${REPO_TOKEN}@github.com/${REPOSITORY}"
+
+          # Keep the check command inside --cmd and pass clone credentials only
+          # through --repo, matching the desktop build invocation below.
+          ssh -i "$key" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+              -o BatchMode=yes -o ServerAliveInterval=30 -o ServerAliveCountMax=8 \
+              desktopci@10.1.10.10 \
+              "sudo desktop-ci $PLATFORM --repo '$repo_url' --ref '$REF' --cmd '$cmd'"
+
+  desktop-build:
+    if: github.event_name == 'pull_request' && needs.smoke.outputs.docs_only != 'true'
+    needs: [smoke, desktop-compile]
     runs-on: self-hosted
     timeout-minutes: 75
     strategy:
