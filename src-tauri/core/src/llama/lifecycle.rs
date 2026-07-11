@@ -120,6 +120,45 @@ pub enum GemmaRecovery {
     RepairRequired,
 }
 
+/// Pure boundary for starting llama-server and waiting until its readiness
+/// probe succeeds. Implementations must redact platform diagnostics into one
+/// of these categories before returning to core.
+pub trait GemmaActivationBoundary {
+    fn start_and_health(
+        &mut self,
+        revision: &Path,
+        descriptor: &'static GemmaRevisionDescriptor,
+    ) -> Result<(), GemmaActivationFailure>;
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GemmaActivationFailure {
+    Startup,
+    HealthCheck,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GemmaRollbackFailure {
+    PreviousUnavailable,
+    Persistence,
+    Activation(GemmaActivationFailure),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum GemmaActivation {
+    Activated(PathBuf),
+    RolledBack {
+        current: PathBuf,
+        rejected: GemmaActivationFailure,
+    },
+    /// Gemma-dependent work must remain disabled until repair. Other core
+    /// features are unaffected.
+    RepairRequired {
+        rejected: GemmaActivationFailure,
+        rollback: GemmaRollbackFailure,
+    },
+}
+
 pub struct GemmaRevisionLifecycle {
     root: PathBuf,
     descriptors: &'static [&'static GemmaRevisionDescriptor],
@@ -163,6 +202,71 @@ impl GemmaRevisionLifecycle {
     ) -> Result<PathBuf, GemmaLifecycleError> {
         let _lock = boundary.lock_exclusive(&self.root.join("install.lock"))?;
         self.publish_lock_held(staged_directory, boundary)
+    }
+
+    /// Publishes a candidate and makes it durable current only after one
+    /// health-checked startup. On failure, verified `previous` is restored
+    /// atomically and receives the only recovery startup attempt.
+    pub fn activate<B: GemmaLifecycleBoundary, A: GemmaActivationBoundary>(
+        &self,
+        staged_directory: &Path,
+        boundary: &B,
+        activation: &mut A,
+    ) -> Result<GemmaActivation, GemmaLifecycleError> {
+        let _lock = boundary.lock_exclusive(&self.root.join("install.lock"))?;
+        self.activate_lock_held(staged_directory, boundary, activation)
+    }
+
+    /// Activation variant for install coordinators already holding
+    /// `install.lock`.
+    pub fn activate_lock_held<B: GemmaLifecycleBoundary, A: GemmaActivationBoundary>(
+        &self,
+        staged_directory: &Path,
+        boundary: &B,
+        activation: &mut A,
+    ) -> Result<GemmaActivation, GemmaLifecycleError> {
+        let candidate = self.publish_lock_held(staged_directory, boundary)?;
+        let rejected = match activation.start_and_health(&candidate, self.target) {
+            Ok(()) => return Ok(GemmaActivation::Activated(candidate)),
+            Err(failure) => failure,
+        };
+
+        let previous = match self.resolve_pointer("previous") {
+            Ok(previous) => previous,
+            Err(GemmaLifecycleError::Persistence(_)) => {
+                return Ok(GemmaActivation::RepairRequired {
+                    rejected,
+                    rollback: GemmaRollbackFailure::Persistence,
+                })
+            }
+            Err(_) => {
+                return Ok(GemmaActivation::RepairRequired {
+                    rejected,
+                    rollback: GemmaRollbackFailure::PreviousUnavailable,
+                })
+            }
+        };
+        if self
+            .write_pointer("current", &previous.value, boundary)
+            .and_then(|_| boundary.sync_directory(&self.root).map_err(Into::into))
+            .is_err()
+        {
+            return Ok(GemmaActivation::RepairRequired {
+                rejected,
+                rollback: GemmaRollbackFailure::Persistence,
+            });
+        }
+        let descriptor = previous.descriptor;
+        match activation.start_and_health(&previous.path, descriptor) {
+            Ok(()) => Ok(GemmaActivation::RolledBack {
+                current: previous.path,
+                rejected,
+            }),
+            Err(failure) => Ok(GemmaActivation::RepairRequired {
+                rejected,
+                rollback: GemmaRollbackFailure::Activation(failure),
+            }),
+        }
     }
 
     /// Publishes a verified stage while the caller retains `install.lock`.
@@ -271,7 +375,11 @@ impl GemmaRevisionLifecycle {
             .map_err(GemmaLifecycleError::RevisionInvalid)?;
         verify_notice(path.join(descriptor.notice.filename), descriptor.notice)
             .map_err(GemmaLifecycleError::RevisionInvalid)?;
-        Ok(ResolvedPointer { path, value })
+        Ok(ResolvedPointer {
+            path,
+            value,
+            descriptor,
+        })
     }
 
     fn write_pointer<B: GemmaLifecycleBoundary>(
@@ -309,6 +417,7 @@ impl GemmaRevisionLifecycle {
 struct ResolvedPointer {
     path: PathBuf,
     value: String,
+    descriptor: &'static GemmaRevisionDescriptor,
 }
 
 fn pointer_value(descriptor: &GemmaRevisionDescriptor) -> String {

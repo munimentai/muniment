@@ -11,8 +11,8 @@ use muniment_core::llama::acquisition::{
 };
 use muniment_core::llama::install::install_gemma_revision;
 use muniment_core::llama::lifecycle::{
-    GemmaLifecycleBoundary, GemmaNoticeDescriptor, GemmaPersistenceError, GemmaRevisionDescriptor,
-    GemmaRevisionLifecycle,
+    GemmaActivation, GemmaActivationBoundary, GemmaActivationFailure, GemmaLifecycleBoundary,
+    GemmaNoticeDescriptor, GemmaPersistenceError, GemmaRevisionDescriptor, GemmaRevisionLifecycle,
 };
 use muniment_core::llama::ResidentModelDescriptor;
 use muniment_core::model_install::{
@@ -106,6 +106,18 @@ impl GemmaLifecycleBoundary for Boundary {
     }
 }
 
+struct Startup(usize);
+impl GemmaActivationBoundary for Startup {
+    fn start_and_health(
+        &mut self,
+        _: &Path,
+        _: &'static GemmaRevisionDescriptor,
+    ) -> Result<(), GemmaActivationFailure> {
+        self.0 += 1;
+        Ok(())
+    }
+}
+
 fn root() -> PathBuf {
     static NEXT: AtomicU64 = AtomicU64::new(0);
     let root = std::env::temp_dir().join(format!(
@@ -135,6 +147,7 @@ fn coordinator_owns_locking_and_uses_gemmas_exact_stage_accounting() {
         checks.push(value);
         Ok(Some(value))
     };
+    let mut startup = Startup(0);
 
     let installed = install_gemma_revision(
         &root.join("staging"),
@@ -151,13 +164,21 @@ fn coordinator_owns_locking_and_uses_gemmas_exact_stage_accounting() {
         &mut space,
         &lifecycle,
         &boundary,
+        &mut startup,
     )
     .unwrap();
 
-    assert_eq!(installed, root.join("revisions/revision"));
-    assert_eq!(fs::read(installed.join("model.gguf")).unwrap(), b"abc");
+    assert_eq!(
+        installed,
+        GemmaActivation::Activated(root.join("revisions/revision"))
+    );
+    assert_eq!(
+        fs::read(root.join("revisions/revision/model.gguf")).unwrap(),
+        b"abc"
+    );
     assert_eq!(checks, [MARGIN + 2, MARGIN]);
     assert_eq!(lock.0, 1);
     assert_eq!(boundary.0.load(Ordering::Relaxed), 0);
+    assert_eq!(startup.0, 1);
     fs::remove_dir_all(root).unwrap();
 }

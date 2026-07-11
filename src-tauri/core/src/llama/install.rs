@@ -1,6 +1,6 @@
-//! Coordinated acquisition and publication of a resident Gemma revision.
+//! Coordinated acquisition and health-checked activation of a Gemma revision.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use crate::model_install::{
     install_model, AvailableSpace, InstallCancellation, InstallLock, ModelInstallError,
@@ -12,15 +12,16 @@ use super::acquisition::{
     GemmaRetryWait,
 };
 use super::lifecycle::{
-    GemmaLifecycleBoundary, GemmaLifecycleError, GemmaRevisionDescriptor, GemmaRevisionLifecycle,
+    GemmaActivation, GemmaActivationBoundary, GemmaLifecycleBoundary, GemmaLifecycleError,
+    GemmaRevisionDescriptor, GemmaRevisionLifecycle,
 };
 
 pub type GemmaInstallError = ModelInstallError<GemmaAcquisitionError, GemmaLifecycleError>;
 
-/// Acquires and publishes one pinned Gemma revision under the shared install
+/// Acquires and activates one pinned Gemma revision under the shared install
 /// lock and exact resumable-stage storage checks.
 #[allow(clippy::too_many_arguments)]
-pub fn install_gemma_revision<T, C, K, W, L, S, B>(
+pub fn install_gemma_revision<T, C, K, W, L, S, B, A>(
     staging_root: &Path,
     install_id: &str,
     descriptor: &'static GemmaRevisionDescriptor,
@@ -32,7 +33,8 @@ pub fn install_gemma_revision<T, C, K, W, L, S, B>(
     space: &mut S,
     lifecycle: &GemmaRevisionLifecycle,
     lifecycle_boundary: &B,
-) -> Result<PathBuf, GemmaInstallError>
+    activation: &mut A,
+) -> Result<GemmaActivation, GemmaInstallError>
 where
     T: GemmaDownloadTransport,
     C: GemmaCancellation + InstallCancellation,
@@ -41,6 +43,7 @@ where
     L: InstallLock,
     S: AvailableSpace,
     B: GemmaLifecycleBoundary,
+    A: GemmaActivationBoundary,
 {
     install_model(
         lock,
@@ -58,6 +61,6 @@ where
                 cancellation,
             )
         },
-        |stage| lifecycle.publish_lock_held(&stage, lifecycle_boundary),
+        |stage| lifecycle.activate_lock_held(&stage, lifecycle_boundary, activation),
     )
 }

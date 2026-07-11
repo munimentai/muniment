@@ -205,7 +205,21 @@ not disclose file contents or installation paths. llama-server receives the
 model path and `muniment-resident-gemma` alias as separate arguments; resident
 chat requests always use that alias rather than a caller-selected model name.
 
-Artifact acquisition and update/rollback policy remain out of scope.
+Resident Gemma activation is a pure-core lifecycle operation. The install
+coordinator publishes the verified candidate while holding `install.lock`,
+then invokes an injected startup/readiness boundary. A successful health check
+leaves the candidate as `current` and the verified former current revision as
+`previous`. A failed candidate records only a closed, redacted startup or
+health-check category; core verifies and atomically restores `previous`, then
+invokes the boundary exactly once for that restored revision. It never retries
+the rejected candidate or promotes staging as recovery. Missing, corrupt, or
+unpersistable previous state, or a failed recovery startup, returns an explicit
+repair-required outcome so Gemma-dependent work can remain disabled without
+affecting the rest of core.
+
+The boundary is deterministic in core tests and has no Tauri, networking, or
+llama-server dependency. Native process/health adapters, Tauri commands, UI,
+cleanup, and real model downloads remain later work.
 Dictation-polish and routing-classifier contract evaluation use deterministic
 golden fixtures and mock HTTP responses; CI never loads the model.
 

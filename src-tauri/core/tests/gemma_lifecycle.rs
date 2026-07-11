@@ -1,10 +1,11 @@
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 
 use muniment_core::llama::lifecycle::{
-    GemmaLifecycleBoundary, GemmaLifecycleError, GemmaNoticeDescriptor, GemmaPersistenceError,
-    GemmaRecovery, GemmaRevisionDescriptor, GemmaRevisionLifecycle,
+    GemmaActivation, GemmaActivationBoundary, GemmaActivationFailure, GemmaLifecycleBoundary,
+    GemmaLifecycleError, GemmaNoticeDescriptor, GemmaPersistenceError, GemmaRecovery,
+    GemmaRevisionDescriptor, GemmaRevisionLifecycle, GemmaRollbackFailure,
 };
 use muniment_core::llama::ResidentModelDescriptor;
 
@@ -44,7 +45,8 @@ static KNOWN: [&GemmaRevisionDescriptor; 2] = [&OLD, &NEW];
 
 struct Boundary {
     locks: AtomicUsize,
-    fail_current: AtomicBool,
+    current_replacements: AtomicUsize,
+    fail_current_at: AtomicUsize,
     revision_failure: AtomicUsize,
 }
 
@@ -52,23 +54,32 @@ impl Boundary {
     fn working() -> Self {
         Self {
             locks: AtomicUsize::new(0),
-            fail_current: AtomicBool::new(false),
+            current_replacements: AtomicUsize::new(0),
+            fail_current_at: AtomicUsize::new(0),
             revision_failure: AtomicUsize::new(0),
         }
     }
     fn failing_current() -> Self {
         Self {
             locks: AtomicUsize::new(0),
-            fail_current: AtomicBool::new(true),
+            current_replacements: AtomicUsize::new(0),
+            fail_current_at: AtomicUsize::new(1),
             revision_failure: AtomicUsize::new(0),
         }
     }
     fn failing_revision_at(step: usize) -> Self {
         Self {
             locks: AtomicUsize::new(0),
-            fail_current: AtomicBool::new(false),
+            current_replacements: AtomicUsize::new(0),
+            fail_current_at: AtomicUsize::new(0),
             revision_failure: AtomicUsize::new(step),
         }
+    }
+
+    fn failing_current_at(step: usize) -> Self {
+        let boundary = Self::working();
+        boundary.fail_current_at.store(step, Ordering::Relaxed);
+        boundary
     }
 }
 
@@ -110,15 +121,39 @@ impl GemmaLifecycleBoundary for Boundary {
         temporary: &Path,
         destination: &Path,
     ) -> Result<(), GemmaPersistenceError> {
-        if destination.file_name().and_then(|name| name.to_str()) == Some("current")
-            && self.fail_current.swap(false, Ordering::Relaxed)
-        {
-            return Err(GemmaPersistenceError::Failed);
+        if destination.file_name().and_then(|name| name.to_str()) == Some("current") {
+            let step = self.current_replacements.fetch_add(1, Ordering::Relaxed) + 1;
+            if self.fail_current_at.load(Ordering::Relaxed) == step {
+                return Err(GemmaPersistenceError::Failed);
+            }
         }
         if destination.exists() {
             fs::remove_file(destination).unwrap();
         }
         fs::rename(temporary, destination).map_err(|_| GemmaPersistenceError::Failed)
+    }
+}
+
+struct Activation {
+    results: Vec<Result<(), GemmaActivationFailure>>,
+    attempts: Vec<PathBuf>,
+}
+
+impl GemmaActivationBoundary for Activation {
+    fn start_and_health(
+        &mut self,
+        revision: &Path,
+        _: &'static GemmaRevisionDescriptor,
+    ) -> Result<(), GemmaActivationFailure> {
+        self.attempts.push(revision.to_path_buf());
+        self.results.remove(0)
+    }
+}
+
+fn activation(results: Vec<Result<(), GemmaActivationFailure>>) -> Activation {
+    Activation {
+        results,
+        attempts: Vec::new(),
     }
 }
 
@@ -221,6 +256,158 @@ fn interrupted_pointer_replace_keeps_verified_current_and_previous() {
         update.resolve_current().unwrap(),
         root.join("revisions/old")
     );
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn activation_keeps_healthy_candidate_and_verified_previous() {
+    let root = root();
+    GemmaRevisionLifecycle::new(root.clone(), &KNOWN, &OLD)
+        .unwrap()
+        .publish(&stage(&root, "old", b"abc"), &Boundary::working())
+        .unwrap();
+    let update = GemmaRevisionLifecycle::new(root.clone(), &KNOWN, &NEW).unwrap();
+    let mut startup = activation(vec![Ok(())]);
+
+    assert_eq!(
+        update
+            .activate(
+                &stage(&root, "new", b"def"),
+                &Boundary::working(),
+                &mut startup
+            )
+            .unwrap(),
+        GemmaActivation::Activated(root.join("revisions/new"))
+    );
+    assert_eq!(
+        update.resolve_current().unwrap(),
+        root.join("revisions/new")
+    );
+    assert_eq!(
+        fs::read_to_string(root.join("previous"))
+            .unwrap()
+            .lines()
+            .last(),
+        Some("old")
+    );
+    assert_eq!(startup.attempts, [root.join("revisions/new")]);
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn failed_candidate_rolls_back_once_and_never_retries_candidate() {
+    let root = root();
+    GemmaRevisionLifecycle::new(root.clone(), &KNOWN, &OLD)
+        .unwrap()
+        .publish(&stage(&root, "old", b"abc"), &Boundary::working())
+        .unwrap();
+    let update = GemmaRevisionLifecycle::new(root.clone(), &KNOWN, &NEW).unwrap();
+    let mut startup = activation(vec![Err(GemmaActivationFailure::HealthCheck), Ok(())]);
+
+    assert_eq!(
+        update
+            .activate(
+                &stage(&root, "new", b"def"),
+                &Boundary::working(),
+                &mut startup
+            )
+            .unwrap(),
+        GemmaActivation::RolledBack {
+            current: root.join("revisions/old"),
+            rejected: GemmaActivationFailure::HealthCheck,
+        }
+    );
+    assert_eq!(
+        update.resolve_current().unwrap(),
+        root.join("revisions/old")
+    );
+    assert_eq!(
+        startup.attempts,
+        [root.join("revisions/new"), root.join("revisions/old")]
+    );
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn failed_recovery_startup_requires_repair_after_exactly_two_attempts() {
+    let root = root();
+    GemmaRevisionLifecycle::new(root.clone(), &KNOWN, &OLD)
+        .unwrap()
+        .publish(&stage(&root, "old", b"abc"), &Boundary::working())
+        .unwrap();
+    let update = GemmaRevisionLifecycle::new(root.clone(), &KNOWN, &NEW).unwrap();
+    let mut startup = activation(vec![
+        Err(GemmaActivationFailure::Startup),
+        Err(GemmaActivationFailure::HealthCheck),
+    ]);
+
+    assert_eq!(
+        update
+            .activate(
+                &stage(&root, "new", b"def"),
+                &Boundary::working(),
+                &mut startup
+            )
+            .unwrap(),
+        GemmaActivation::RepairRequired {
+            rejected: GemmaActivationFailure::Startup,
+            rollback: GemmaRollbackFailure::Activation(GemmaActivationFailure::HealthCheck),
+        }
+    );
+    assert_eq!(startup.attempts.len(), 2);
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn missing_corrupt_or_unreplaceable_previous_requires_repair_without_fallback_startup() {
+    for corrupt_previous in [false, true] {
+        let root = root();
+        GemmaRevisionLifecycle::new(root.clone(), &KNOWN, &OLD)
+            .unwrap()
+            .publish(&stage(&root, "old", b"abc"), &Boundary::working())
+            .unwrap();
+        let update = GemmaRevisionLifecycle::new(root.clone(), &KNOWN, &NEW).unwrap();
+        if corrupt_previous {
+            fs::write(root.join("revisions/old/model.gguf"), b"bad").unwrap();
+        } else {
+            fs::remove_file(root.join("current")).unwrap();
+        }
+        let retry_stage = stage(&root, "new", b"def");
+        let mut startup = activation(vec![Err(GemmaActivationFailure::HealthCheck)]);
+        assert!(matches!(
+            update
+                .activate(&retry_stage, &Boundary::working(), &mut startup)
+                .unwrap(),
+            GemmaActivation::RepairRequired {
+                rollback: GemmaRollbackFailure::PreviousUnavailable,
+                ..
+            }
+        ));
+        assert_eq!(startup.attempts.len(), 1);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    let root = root();
+    GemmaRevisionLifecycle::new(root.clone(), &KNOWN, &OLD)
+        .unwrap()
+        .publish(&stage(&root, "old", b"abc"), &Boundary::working())
+        .unwrap();
+    let update = GemmaRevisionLifecycle::new(root.clone(), &KNOWN, &NEW).unwrap();
+    let mut startup = activation(vec![Err(GemmaActivationFailure::Startup)]);
+    assert!(matches!(
+        update
+            .activate(
+                &stage(&root, "new", b"def"),
+                &Boundary::failing_current_at(2),
+                &mut startup,
+            )
+            .unwrap(),
+        GemmaActivation::RepairRequired {
+            rollback: GemmaRollbackFailure::Persistence,
+            ..
+        }
+    ));
+    assert_eq!(startup.attempts.len(), 1);
     fs::remove_dir_all(root).unwrap();
 }
 
