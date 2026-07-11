@@ -6,6 +6,8 @@ use std::path::Path;
 
 use sha2::{Digest, Sha256};
 
+pub mod lifecycle;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct AsrArtifactDescriptor {
     pub filename: &'static str,
@@ -83,7 +85,7 @@ pub fn verify_parakeet_model_set(
     verify_model_set(model_set_directory.as_ref(), &PARAKEET_MODEL_MANIFEST)
 }
 
-fn verify_model_set(
+pub fn verify_model_set(
     directory: &Path,
     manifest: &AsrArtifactManifest,
 ) -> Result<(), AsrModelSetVerificationError> {
@@ -97,7 +99,7 @@ fn verify_artifact(
     path: &Path,
     descriptor: &AsrArtifactDescriptor,
 ) -> Result<(), AsrModelSetVerificationError> {
-    let metadata = std::fs::metadata(path).map_err(|error| {
+    let metadata = std::fs::symlink_metadata(path).map_err(|error| {
         if error.kind() == std::io::ErrorKind::NotFound {
             AsrModelSetVerificationError::Missing
         } else {
@@ -249,7 +251,7 @@ mod tests {
         symlink("four", directory.join("four")).unwrap();
         assert_eq!(
             verify_model_set(&directory, &MANIFEST),
-            Err(AsrModelSetVerificationError::Unreadable)
+            Err(AsrModelSetVerificationError::NotRegularFile)
         );
         std::fs::remove_dir_all(directory).unwrap();
     }
