@@ -49,6 +49,8 @@ pub const PARAKEET_MODEL_MANIFEST: AsrArtifactManifest = AsrArtifactManifest {
     artifacts: &PARAKEET_ARTIFACTS,
 };
 
+pub const PARAKEET_MODEL_MANIFESTS: [&AsrArtifactManifest; 1] = [&PARAKEET_MODEL_MANIFEST];
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AsrModelSetVerificationError {
     Missing,
@@ -184,40 +186,40 @@ pub enum AsrRecovery {
     RepairRequired,
 }
 
-/// Publication and resolution policy for one compiled ASR manifest.
+/// Publication and resolution policy for a selected target among the compiled
+/// ASR manifests known to this application version.
 pub struct AsrRevisionLifecycle {
     root: PathBuf,
-    manifest: &'static AsrArtifactManifest,
+    manifests: &'static [&'static AsrArtifactManifest],
+    target: &'static AsrArtifactManifest,
 }
 
 impl AsrRevisionLifecycle {
     pub fn new(
         root: PathBuf,
-        manifest: &'static AsrArtifactManifest,
+        manifests: &'static [&'static AsrArtifactManifest],
+        target: &'static AsrArtifactManifest,
     ) -> Result<Self, AsrLifecycleError> {
-        if !safe_component(manifest.identity)
-            || !safe_component(manifest.revision)
-            || manifest
-                .artifacts
-                .iter()
-                .any(|artifact| !safe_component(artifact.filename))
-            || manifest
-                .artifacts
-                .iter()
-                .enumerate()
-                .any(|(index, artifact)| {
-                    manifest.artifacts[index + 1..]
-                        .iter()
-                        .any(|other| artifact.filename == other.filename)
+        if manifests.is_empty()
+            || !manifests.contains(&target)
+            || manifests.iter().any(|manifest| !valid_manifest(manifest))
+            || manifests.iter().enumerate().any(|(index, manifest)| {
+                manifests[index + 1..].iter().any(|other| {
+                    manifest.identity == other.identity && manifest.revision == other.revision
                 })
+            })
         {
             return Err(AsrLifecycleError::InvalidManifest);
         }
-        Ok(Self { root, manifest })
+        Ok(Self {
+            root,
+            manifests,
+            target,
+        })
     }
 
     pub fn resolve_current(&self) -> Result<PathBuf, AsrLifecycleError> {
-        self.resolve_pointer("current")
+        self.resolve_pointer("current").map(|pointer| pointer.path)
     }
 
     pub fn publish(
@@ -228,28 +230,28 @@ impl AsrRevisionLifecycle {
         if staged_directory.parent() != Some(self.root.join("staging").as_path()) {
             return Err(AsrLifecycleError::InvalidPointer);
         }
-        verify_model_set(staged_directory, self.manifest)
+        verify_model_set(staged_directory, self.target)
             .map_err(AsrLifecycleError::RevisionInvalid)?;
-        for artifact in self.manifest.artifacts {
+        for artifact in self.target.artifacts {
             boundary.sync_file(&staged_directory.join(artifact.filename))?;
         }
         boundary.sync_directory(staged_directory)?;
 
         let revisions = self.root.join("revisions");
         fs::create_dir_all(&revisions).map_err(|_| AsrPersistenceError::Failed)?;
-        let revision = revisions.join(self.manifest.revision);
+        let revision = revisions.join(self.target.revision);
         if revision.exists() {
-            verify_model_set(&revision, self.manifest)
-                .map_err(AsrLifecycleError::RevisionInvalid)?;
+            verify_model_set(&revision, self.target).map_err(AsrLifecycleError::RevisionInvalid)?;
         } else {
             fs::rename(staged_directory, &revision).map_err(|_| AsrPersistenceError::Failed)?;
             boundary.sync_directory(&revisions)?;
         }
 
-        if self.resolve_current().is_ok() {
-            self.write_pointer("previous", boundary)?;
+        if let Ok(current) = self.resolve_pointer("current") {
+            self.write_pointer("previous", &current.value, boundary)?;
         }
-        self.write_pointer("current", boundary)?;
+        let target_pointer = pointer_value(self.target);
+        self.write_pointer("current", &target_pointer, boundary)?;
         boundary.sync_directory(&self.root)?;
         Ok(revision)
     }
@@ -259,15 +261,15 @@ impl AsrRevisionLifecycle {
         boundary: &impl AsrLifecycleBoundary,
     ) -> Result<AsrRecovery, AsrLifecycleError> {
         match self.resolve_pointer("current") {
-            Ok(path) => return Ok(AsrRecovery::Current(path)),
+            Ok(pointer) => return Ok(AsrRecovery::Current(pointer.path)),
             Err(AsrLifecycleError::Persistence(error)) => return Err(error.into()),
             Err(_) => {}
         }
         match self.resolve_pointer("previous") {
-            Ok(path) => {
-                self.write_pointer("current", boundary)?;
+            Ok(pointer) => {
+                self.write_pointer("current", &pointer.value, boundary)?;
                 boundary.sync_directory(&self.root)?;
-                Ok(AsrRecovery::RestoredPrevious(path))
+                Ok(AsrRecovery::RestoredPrevious(pointer.path))
             }
             Err(AsrLifecycleError::Persistence(error)) => Err(error.into()),
             Err(_)
@@ -279,7 +281,7 @@ impl AsrRevisionLifecycle {
         }
     }
 
-    fn resolve_pointer(&self, name: &str) -> Result<PathBuf, AsrLifecycleError> {
+    fn resolve_pointer(&self, name: &str) -> Result<ResolvedPointer, AsrLifecycleError> {
         let value = fs::read_to_string(self.root.join(name)).map_err(|error| {
             if error.kind() == std::io::ErrorKind::NotFound {
                 AsrLifecycleError::RevisionMissing
@@ -304,17 +306,21 @@ impl AsrRevisionLifecycle {
         if !safe_component(identity) || !safe_component(revision) {
             return Err(AsrLifecycleError::InvalidPointer);
         }
-        if identity != self.manifest.identity || revision != self.manifest.revision {
-            return Err(AsrLifecycleError::UnknownPointer);
-        }
+        let manifest = self
+            .manifests
+            .iter()
+            .copied()
+            .find(|manifest| manifest.identity == identity && manifest.revision == revision)
+            .ok_or(AsrLifecycleError::UnknownPointer)?;
         let path = self.root.join("revisions").join(revision);
-        verify_model_set(&path, self.manifest).map_err(AsrLifecycleError::RevisionInvalid)?;
-        Ok(path)
+        verify_model_set(&path, manifest).map_err(AsrLifecycleError::RevisionInvalid)?;
+        Ok(ResolvedPointer { path, value })
     }
 
     fn write_pointer(
         &self,
         name: &str,
+        value: &str,
         boundary: &impl AsrLifecycleBoundary,
     ) -> Result<(), AsrLifecycleError> {
         fs::create_dir_all(&self.root).map_err(|_| AsrPersistenceError::Failed)?;
@@ -325,12 +331,8 @@ impl AsrRevisionLifecycle {
             .open(&temporary)
             .map_err(|_| AsrPersistenceError::Failed)?;
         let result: Result<(), AsrPersistenceError> = (|| {
-            writeln!(
-                file,
-                "muniment-asr-pointer-v1\n{}\n{}",
-                self.manifest.identity, self.manifest.revision
-            )
-            .map_err(|_| AsrPersistenceError::Failed)?;
+            file.write_all(value.as_bytes())
+                .map_err(|_| AsrPersistenceError::Failed)?;
             drop(file);
             boundary.sync_file(&temporary)?;
             boundary.replace_pointer(&temporary, &self.root.join(name))?;
@@ -341,6 +343,36 @@ impl AsrRevisionLifecycle {
         }
         result.map_err(Into::into)
     }
+}
+
+struct ResolvedPointer {
+    path: PathBuf,
+    value: String,
+}
+
+fn pointer_value(manifest: &AsrArtifactManifest) -> String {
+    format!(
+        "muniment-asr-pointer-v1\n{}\n{}\n",
+        manifest.identity, manifest.revision
+    )
+}
+
+fn valid_manifest(manifest: &AsrArtifactManifest) -> bool {
+    safe_component(manifest.identity)
+        && safe_component(manifest.revision)
+        && !manifest
+            .artifacts
+            .iter()
+            .any(|artifact| !safe_component(artifact.filename))
+        && !manifest
+            .artifacts
+            .iter()
+            .enumerate()
+            .any(|(index, artifact)| {
+                manifest.artifacts[index + 1..]
+                    .iter()
+                    .any(|other| artifact.filename == other.filename)
+            })
 }
 
 fn safe_component(value: &str) -> bool {
@@ -417,9 +449,37 @@ mod tests {
     ];
     const MANIFEST: AsrArtifactManifest = AsrArtifactManifest {
         identity: "test-manifest-v1",
-        revision: "test",
+        revision: "old",
         artifacts: &FIXTURES,
     };
+    const UPDATE_FIXTURES: [AsrArtifactDescriptor; 4] = [
+        AsrArtifactDescriptor {
+            filename: "one",
+            byte_size: 1,
+            sha256: "3f79bb7b435b05321651daefd374cdc681dc06faa65e374e38337b88ca046dea",
+        },
+        AsrArtifactDescriptor {
+            filename: "two",
+            byte_size: 1,
+            sha256: "252f10c83610ebca1a059c0bae8255eba2f95be4d1d7bcfa89d7248a82d9f111",
+        },
+        AsrArtifactDescriptor {
+            filename: "three",
+            byte_size: 1,
+            sha256: "cd0aa9856147b6c5b4ff2b7dfee5da20aa38253099ef1b4a64aced233c9afe29",
+        },
+        AsrArtifactDescriptor {
+            filename: "four",
+            byte_size: 1,
+            sha256: "aaa9402664f1a41f40ebbc52c9993eb66aeb366602958fdfaa283b71e64db123",
+        },
+    ];
+    const UPDATE_MANIFEST: AsrArtifactManifest = AsrArtifactManifest {
+        identity: "test-manifest-v2",
+        revision: "new",
+        artifacts: &UPDATE_FIXTURES,
+    };
+    const KNOWN_MANIFESTS: [&AsrArtifactManifest; 2] = [&MANIFEST, &UPDATE_MANIFEST];
 
     fn fixture_directory() -> std::path::PathBuf {
         static NEXT: AtomicU64 = AtomicU64::new(0);
@@ -497,7 +557,8 @@ mod tests {
         ] {
             fs::write(stage.join(name), [contents]).unwrap();
         }
-        let lifecycle = AsrRevisionLifecycle::new(root.clone(), &MANIFEST).unwrap();
+        let lifecycle =
+            AsrRevisionLifecycle::new(root.clone(), &KNOWN_MANIFESTS, &MANIFEST).unwrap();
         (root, lifecycle, stage)
     }
 
@@ -605,7 +666,7 @@ mod tests {
     fn publishes_and_resolves_only_a_verified_revision() {
         let (root, lifecycle, stage) = lifecycle_fixture();
         let revision = lifecycle.publish(&stage, &TestBoundary::working()).unwrap();
-        assert_eq!(revision, root.join("revisions/test"));
+        assert_eq!(revision, root.join("revisions/old"));
         assert_eq!(lifecycle.resolve_current().unwrap(), revision);
         assert!(!stage.exists());
         fs::remove_dir_all(root).unwrap();
@@ -619,23 +680,26 @@ mod tests {
         let replacement_stage = root.join("staging/update");
         fs::create_dir(&replacement_stage).unwrap();
         for (name, contents) in [
-            ("one", b'a'),
-            ("two", b'b'),
-            ("three", b'c'),
-            ("four", b'd'),
+            ("one", b'e'),
+            ("two", b'f'),
+            ("three", b'g'),
+            ("four", b'h'),
         ] {
             fs::write(replacement_stage.join(name), [contents]).unwrap();
         }
+        let update =
+            AsrRevisionLifecycle::new(root.clone(), &KNOWN_MANIFESTS, &UPDATE_MANIFEST).unwrap();
         assert_eq!(
-            lifecycle.publish(&replacement_stage, &TestBoundary::failing_current()),
+            update.publish(&replacement_stage, &TestBoundary::failing_current()),
             Err(AsrLifecycleError::Persistence(AsrPersistenceError::Failed))
         );
         assert_eq!(fs::read(root.join("current")).unwrap(), old_pointer);
         assert_eq!(
-            lifecycle.resolve_current().unwrap(),
-            root.join("revisions/test")
+            update.resolve_current().unwrap(),
+            root.join("revisions/old")
         );
         assert_eq!(fs::read(root.join("previous")).unwrap(), old_pointer);
+        assert!(root.join("revisions/new").exists());
         fs::remove_dir_all(root).unwrap();
     }
 
@@ -643,16 +707,30 @@ mod tests {
     fn corrupt_current_recovers_verified_previous_without_scanning_staging() {
         let (root, lifecycle, stage) = lifecycle_fixture();
         lifecycle.publish(&stage, &TestBoundary::working()).unwrap();
-        fs::copy(root.join("current"), root.join("previous")).unwrap();
-        fs::write(root.join("current"), "broken").unwrap();
+        let replacement_stage = root.join("staging/update");
+        fs::create_dir(&replacement_stage).unwrap();
+        for (name, contents) in [
+            ("one", b'e'),
+            ("two", b'f'),
+            ("three", b'g'),
+            ("four", b'h'),
+        ] {
+            fs::write(replacement_stage.join(name), [contents]).unwrap();
+        }
+        let update =
+            AsrRevisionLifecycle::new(root.clone(), &KNOWN_MANIFESTS, &UPDATE_MANIFEST).unwrap();
+        update
+            .publish(&replacement_stage, &TestBoundary::working())
+            .unwrap();
+        fs::remove_file(root.join("revisions/new/four")).unwrap();
         fs::create_dir(root.join("staging/tempting-complete-set")).unwrap();
         assert_eq!(
-            lifecycle.recover(&TestBoundary::working()).unwrap(),
-            AsrRecovery::RestoredPrevious(root.join("revisions/test"))
+            update.recover(&TestBoundary::working()).unwrap(),
+            AsrRecovery::RestoredPrevious(root.join("revisions/old"))
         );
         assert_eq!(
-            lifecycle.resolve_current().unwrap(),
-            root.join("revisions/test")
+            update.resolve_current().unwrap(),
+            root.join("revisions/old")
         );
         fs::remove_dir_all(root).unwrap();
     }
@@ -661,7 +739,7 @@ mod tests {
     fn rejects_unknown_absolute_and_traversal_pointers_with_redacted_errors() {
         let (root, lifecycle, _) = lifecycle_fixture();
         for pointer in [
-            "muniment-asr-pointer-v1\nunknown\ntest\n",
+            "muniment-asr-pointer-v1\nunknown\nold\n",
             "muniment-asr-pointer-v1\ntest-manifest-v1\n/absolute\n",
             "muniment-asr-pointer-v1\ntest-manifest-v1\n../test\n",
         ] {
