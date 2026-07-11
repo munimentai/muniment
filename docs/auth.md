@@ -19,8 +19,9 @@ returns 404 on the control plane).
 3. **Implemented in pure core:** bind an ephemeral `127.0.0.1` callback,
    launch the validated opaque continuation in the system browser, validate
    callback state, and retain the authorization code with its PKCE verifier.
-4. **Follow-up:** `POST /v1/auth/native/token` exchanges the code and later
-   rotates tokens and device challenges.
+4. **Implemented in pure core:** `POST /v1/auth/native/token` exchanges the
+   code with its PKCE, redirect, device, and signed installation-proof context,
+   then atomically persists the token set and newly rotated device challenge.
 5. **Follow-up:** `GET /v1/auth/native/session` inspects the authoritative
    session and consumes its entitlement snapshot; native revocation/device
    management follow the corresponding `/v1/auth/native/*` endpoints.
@@ -178,8 +179,9 @@ build); verify it manually:
 
 ## Follow-ups (out of scope here)
 
-- Native token exchange and rotation.
+- Native refresh and credential rotation.
 - Authoritative native session inspection.
+- Native Tauri command wiring.
 - Entitlement snapshot consumption.
 - Migration or removal of credentials created by the existing generic-OIDC flow.
 - Signed-in UI.
