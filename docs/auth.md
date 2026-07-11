@@ -16,8 +16,9 @@ returns 404 on the control plane).
 2. **Implemented:** `POST /v1/auth/native/authorize` constructs and signs the
    canonical installation proof, validates the opaque HTTPS continuation, and
    persists the rotated device challenge.
-3. **Follow-up:** launch the system browser and receive its loopback callback
-   through the opaque continuation URL.
+3. **Implemented in pure core:** bind an ephemeral `127.0.0.1` callback,
+   launch the validated opaque continuation in the system browser, validate
+   callback state, and retain the authorization code with its PKCE verifier.
 4. **Follow-up:** `POST /v1/auth/native/token` exchanges the code and later
    rotates tokens and device challenges.
 5. **Follow-up:** `GET /v1/auth/native/session` inspects the authoritative
@@ -177,8 +178,6 @@ build); verify it manually:
 
 ## Follow-ups (out of scope here)
 
-- Browser authorization against the native endpoint.
-- Device-proof construction and signing.
 - Native token exchange and rotation.
 - Authoritative native session inspection.
 - Entitlement snapshot consumption.
