@@ -61,7 +61,7 @@ Two components, one shared harness.
 | Desktop shell | Tauri v2 | MIT/Apache 2.0 | Capability model doubles as FS enforcement |
 | Model gateway | LiteLLM | MIT | Virtual keys, budgets, routing |
 | Auth | better-auth | MIT | OIDC; SCIM endpoint is custom |
-| ASR | Parakeet-TDT (sherpa-onnx) | CC-BY-4.0 (verify per release) | CPU-capable |
+| ASR | Parakeet-TDT 0.6B v3 INT8 (sherpa-onnx v1.13.2) | CC-BY-4.0 model; Apache-2.0 runtime | Offline, CPU-only desktop; exact artifacts in ADR 0004 |
 | Polish/classifier | Gemma (small quant) | Gemma Terms of Use | Commercial use permitted; review terms before sale |
 | TTS | Kokoro | Apache 2.0 | 82M params, CPU real-time |
 | Router bootstrap | RouteLLM pretrained | Apache 2.0 | mf / sw_ranking routers |
@@ -250,7 +250,7 @@ Full-auto mode (no prompts) is opt-in and requires `sandbox.full_auto` plus isol
 
 Zero voice bytes leave the machine. This is a selling point; keep it true.
 
-- **Capture (ASR):** Parakeet-TDT via sherpa-onnx (CPU-capable, no CUDA requirement). Eval alternative: Qwen3-ASR (verify open weights + license + CPU latency). whisper.cpp is fallback only (too slow for live dictation UX).
+- **Capture (ASR):** the immutable Parakeet-TDT 0.6B v3 INT8 conversion via sherpa-onnx v1.13.2, pinned in ADR 0004. The desktop core owns 16 kHz mono PCM and in-process CPU inference; recognition is utterance-final/offline (VAD chunking would be simulated streaming), with no CUDA requirement and no ASR network boundary. Latency, memory, and quality remain gated on ADR 0004's target-hardware matrix. Eval alternative: Qwen3-ASR (verify open weights + license + CPU latency). whisper.cpp is fallback only (too slow for live dictation UX).
 - **Polish:** two-stage Eloquent pattern. Stage 1 verbatim live transcript; stage 2 on pause, the resident Gemma strips fillers, applies mid-sentence self-corrections, and offers transforms (key points / formal / short / long). Custom vocabulary per user (org jargon, names) stored locally, optionally seeded from the control plane org dictionary.
 - **Output (TTS):** Kokoro (82M, Apache 2.0), resident, CPU real-time. Read-aloud for responses and artifacts. OS voices as zero-effort fallback only. Qwen3-TTS is off the list under the on-device constraint (too heavy per laptop).
 - Hold-to-talk and toggle modes on a global hotkey; hold-to-talk is the default (clean capture boundaries).
@@ -366,7 +366,7 @@ Phases are dependency layers, not sprints. Within a phase, tracks run in paralle
 | Qwen3-ASR | Verify open weights, license, CPU latency vs Parakeet |
 | Kokoro | Ear test on target voices; confirm quality bar |
 | Gemma terms | Legal read of Gemma Terms of Use before commercial sale |
-| Parakeet license | Confirm CC-BY-4.0 (or newer terms) on the exact release used |
+| Parakeet validation | Run ADR 0004's CPU latency, real-time-factor, peak-memory, and multilingual quality matrix before claiming the live-dictation UX bar |
 | Classifier taxonomy | Define the label set (task types x difficulty tiers) before Phase 3 |
 | Capability channel grants | Replace the package-level/per-version baseline with strict pin / gated / pure `:latest` capability grants in the follow-up migration |
 | MCP proxy long-term | Customers may bring gateway services (e.g. MintMCP); decide later whether to build a native group-filtering proxy |
