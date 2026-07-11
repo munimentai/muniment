@@ -10,16 +10,30 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
+use super::loopback::RedirectCatcher;
 use super::native_registration::{InstallationStore, CLIENT_ID, CLIENT_ROLE};
+use super::pkce::{random_state, PkcePair};
+use super::AuthError;
 
 const AUTHORIZATION_PATH: &str = "/v1/auth/native/authorize";
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct NativeAuthorizationInput {
     pub redirect_uri: String,
     pub code_challenge: String,
     pub state: String,
     pub org_id: Option<Uuid>,
+}
+
+impl fmt::Debug for NativeAuthorizationInput {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("NativeAuthorizationInput")
+            .field("redirect_uri", &self.redirect_uri)
+            .field("code_challenge", &self.code_challenge)
+            .field("state", &"<redacted>")
+            .field("org_id", &self.org_id)
+            .finish()
+    }
 }
 
 #[derive(Clone, Serialize)]
@@ -65,7 +79,7 @@ impl fmt::Debug for NativeAuthorizationRequest {
             .field("response_type", &self.response_type)
             .field("code_challenge", &self.code_challenge)
             .field("code_challenge_method", &self.code_challenge_method)
-            .field("state", &self.state)
+            .field("state", &"<redacted>")
             .field("device_id", &self.device_id)
             .field("client_role", &self.client_role)
             .field("org_id", &self.org_id)
@@ -82,11 +96,88 @@ pub struct NativeAuthorizationResponse {
     pub device_challenge: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct NativeAuthorizationResult {
     pub authorization_url: String,
     pub device_id: Uuid,
 }
+
+impl fmt::Debug for NativeAuthorizationResult {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("NativeAuthorizationResult")
+            .field("authorization_url", &"<redacted>")
+            .field("device_id", &self.device_id)
+            .finish()
+    }
+}
+
+/// Credentials produced by the native browser leg. They remain in the pure
+/// Rust core for the subsequent native token exchange.
+#[derive(Clone, PartialEq, Eq)]
+pub struct NativeBrowserAuthorization {
+    pub authorization_code: String,
+    pub pkce_verifier: String,
+    pub redirect_uri: String,
+    pub device_id: Uuid,
+}
+
+impl fmt::Debug for NativeBrowserAuthorization {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("NativeBrowserAuthorization")
+            .field("authorization_code", &"<redacted>")
+            .field("pkce_verifier", &"<redacted>")
+            .field("redirect_uri", &self.redirect_uri)
+            .field("device_id", &self.device_id)
+            .finish()
+    }
+}
+
+/// Bounded failures for the native browser leg. No provider, callback, or
+/// transport text is retained because those values may contain credentials.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum NativeBrowserAuthorizationError {
+    ListenerUnavailable,
+    RandomnessUnavailable,
+    Configuration,
+    InstallationMissing,
+    RegistrationExpired,
+    AuthorizationUnavailable,
+    AuthorizationRejected(u16),
+    MalformedAuthorizationResponse,
+    Persistence,
+    BrowserLaunch,
+    StateMismatch,
+    ProviderError,
+    InvalidCallback,
+    Timeout,
+}
+
+impl fmt::Display for NativeBrowserAuthorizationError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let message = match self {
+            Self::ListenerUnavailable => "native callback listener unavailable",
+            Self::RandomnessUnavailable => "secure randomness unavailable",
+            Self::Configuration => "native authorization configuration is invalid",
+            Self::InstallationMissing => "native installation is not registered",
+            Self::RegistrationExpired => "native installation registration has expired",
+            Self::AuthorizationUnavailable => "native authorization unavailable",
+            Self::AuthorizationRejected(_) => "native authorization was rejected",
+            Self::MalformedAuthorizationResponse => "native authorization response was malformed",
+            Self::Persistence => "installation persistence failed",
+            Self::BrowserLaunch => "system browser could not be opened",
+            Self::StateMismatch => "native sign-in rejected: state mismatch",
+            Self::ProviderError => "native sign-in was not completed",
+            Self::InvalidCallback => "native sign-in callback was invalid",
+            Self::Timeout => "timed out waiting for native sign-in",
+        };
+        match self {
+            Self::AuthorizationRejected(status) => write!(f, "{message} with HTTP {status}"),
+            _ => f.write_str(message),
+        }
+    }
+}
+
+impl std::error::Error for NativeBrowserAuthorizationError {}
 
 pub trait AuthorizationTransport: Send + Sync {
     fn authorize(
@@ -128,6 +219,86 @@ impl fmt::Display for NativeAuthorizationError {
 }
 
 impl std::error::Error for NativeAuthorizationError {}
+
+/// Complete the native external-browser leg without issuer discovery or a
+/// token request. The listener is deliberately bound before any values are
+/// advertised to the authorization service.
+pub fn run_native_browser_authorization<E>(
+    store: &dyn InstallationStore,
+    transport: &dyn AuthorizationTransport,
+    base_url: &str,
+    org_id: Option<Uuid>,
+    now_unix_seconds: u64,
+    open_browser: impl FnOnce(&str) -> Result<(), E>,
+    timeout: Duration,
+) -> Result<NativeBrowserAuthorization, NativeBrowserAuthorizationError> {
+    let catcher = RedirectCatcher::bind()
+        .map_err(|_| NativeBrowserAuthorizationError::ListenerUnavailable)?;
+    let redirect_uri = catcher.redirect_uri();
+    let pkce =
+        PkcePair::generate().map_err(|_| NativeBrowserAuthorizationError::RandomnessUnavailable)?;
+    let state =
+        random_state().map_err(|_| NativeBrowserAuthorizationError::RandomnessUnavailable)?;
+    let mut proof_jti = [0_u8; 16];
+    getrandom::fill(&mut proof_jti)
+        .map_err(|_| NativeBrowserAuthorizationError::RandomnessUnavailable)?;
+    let authorization = begin_native_authorization(
+        store,
+        transport,
+        base_url,
+        NativeAuthorizationInput {
+            redirect_uri: redirect_uri.clone(),
+            code_challenge: pkce.challenge,
+            state: state.clone(),
+            org_id,
+        },
+        now_unix_seconds,
+        proof_jti,
+    )
+    .map_err(map_authorization_error)?;
+    open_browser(&authorization.authorization_url)
+        .map_err(|_| NativeBrowserAuthorizationError::BrowserLaunch)?;
+    let authorization_code = catcher
+        .wait_for_callback(&state, timeout)
+        .map_err(map_callback_error)?;
+    Ok(NativeBrowserAuthorization {
+        authorization_code,
+        pkce_verifier: pkce.verifier,
+        redirect_uri,
+        device_id: authorization.device_id,
+    })
+}
+
+fn map_authorization_error(error: NativeAuthorizationError) -> NativeBrowserAuthorizationError {
+    match error {
+        NativeAuthorizationError::Config(_) => NativeBrowserAuthorizationError::Configuration,
+        NativeAuthorizationError::InstallationMissing => {
+            NativeBrowserAuthorizationError::InstallationMissing
+        }
+        NativeAuthorizationError::RegistrationExpired => {
+            NativeBrowserAuthorizationError::RegistrationExpired
+        }
+        NativeAuthorizationError::Transport(_) => {
+            NativeBrowserAuthorizationError::AuthorizationUnavailable
+        }
+        NativeAuthorizationError::HttpStatus(status) => {
+            NativeBrowserAuthorizationError::AuthorizationRejected(status)
+        }
+        NativeAuthorizationError::MalformedResponse(_) => {
+            NativeBrowserAuthorizationError::MalformedAuthorizationResponse
+        }
+        NativeAuthorizationError::Persistence(_) => NativeBrowserAuthorizationError::Persistence,
+    }
+}
+
+fn map_callback_error(error: AuthError) -> NativeBrowserAuthorizationError {
+    match error {
+        AuthError::StateMismatch => NativeBrowserAuthorizationError::StateMismatch,
+        AuthError::Denied(_) => NativeBrowserAuthorizationError::ProviderError,
+        AuthError::Timeout => NativeBrowserAuthorizationError::Timeout,
+        _ => NativeBrowserAuthorizationError::InvalidCallback,
+    }
+}
 
 pub struct UreqAuthorizationTransport {
     timeout: Duration,

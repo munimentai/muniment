@@ -1,8 +1,9 @@
 # Desktop authentication
 
 The production Muniment handshake is installation-bound native auth. The Rust
-core currently implements registration, coherent keychain persistence, and
-the installation-proof authorization request. The older generic OIDC flow remains as tested groundwork, but it
+core currently implements registration, coherent keychain persistence, the
+installation-proof authorization request, and the verified system-browser
+loopback callback. The older generic OIDC flow remains as tested groundwork, but it
 is not the live production handshake (`/.well-known/openid-configuration`
 returns 404 on the control plane).
 
@@ -16,8 +17,13 @@ returns 404 on the control plane).
 2. **Implemented:** `POST /v1/auth/native/authorize` constructs and signs the
    canonical installation proof, validates the opaque HTTPS continuation, and
    persists the rotated device challenge.
-3. **Follow-up:** launch the system browser and receive its loopback callback
-   through the opaque continuation URL.
+3. **Implemented in the pure Rust core:** bind an ephemeral `127.0.0.1`
+   listener, generate fresh PKCE S256 and state values, advertise that exact
+   redirect in the signed authorize request, open the returned opaque HTTPS
+   continuation through an injected system-browser boundary, and accept a
+   code only from a state-verified callback. The code, verifier, exact redirect
+   URI, and device id are returned together for the next step with redacted
+   debug output.
 4. **Follow-up:** `POST /v1/auth/native/token` exchanges the code and later
    rotates tokens and device challenges.
 5. **Follow-up:** `GET /v1/auth/native/session` inspects the authoritative
@@ -31,6 +37,10 @@ native-installation`). An existing record is returned without making a network
 request. A failed keychain write publishes no partial installation locally.
 Secret-bearing values use redacted `Debug` implementations and do not cross a
 Tauri command boundary.
+
+The native browser/callback orchestration does not perform issuer discovery
+and does not contact `/v1/auth/native/token`. Native token exchange, session
+inspection, and Tauri command/browser wiring remain follow-up work.
 
 ## Legacy generic OIDC groundwork
 
@@ -147,7 +157,10 @@ the real signed-in UI slice.
 ## Testing
 
 `cargo test --manifest-path src-tauri/core/Cargo.toml` (what CI's smoke job
-runs) covers: PKCE S256 correctness against the RFC 7636 appendix-B vector,
+runs) covers: the native browser leg's successful loopback round-trip,
+authorize-request correlation, state mismatch, provider error, timeout, and
+browser-launch failure; PKCE S256 correctness against the RFC 7636 appendix-B
+vector,
 state-mismatch rejection (including that no token request is made),
 full code exchange and refresh against an in-process mock IdP on
 127.0.0.1, PKCE proof enforcement by the token endpoint, provider `error`
@@ -177,10 +190,9 @@ build); verify it manually:
 
 ## Follow-ups (out of scope here)
 
-- Browser authorization against the native endpoint.
-- Device-proof construction and signing.
 - Native token exchange and rotation.
 - Authoritative native session inspection.
 - Entitlement snapshot consumption.
+- Tauri wiring for the native browser flow.
 - Migration or removal of credentials created by the existing generic-OIDC flow.
 - Signed-in UI.
