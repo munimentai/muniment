@@ -3,6 +3,8 @@
 mod auth;
 mod chat;
 
+use tauri::Manager;
+
 fn main() {
     tauri::Builder::default()
         .manage(auth::AuthState::new())
