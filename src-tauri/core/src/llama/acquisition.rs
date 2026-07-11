@@ -86,10 +86,31 @@ pub trait GemmaAcquisitionClock {
     fn now(&self) -> Duration;
 }
 
+/// Retry-delay boundary. Implementations apply jitter up to `maximum_delay`
+/// and poll `cancellation` while waiting so cancellation remains prompt.
+pub trait GemmaRetryWait {
+    /// Returns `false` when cancellation interrupted the wait.
+    fn wait(&mut self, maximum_delay: Duration, cancellation: &dyn GemmaCancellation) -> bool;
+}
+
+impl<F> GemmaRetryWait for F
+where
+    F: FnMut(Duration, &dyn GemmaCancellation) -> bool,
+{
+    fn wait(&mut self, maximum_delay: Duration, cancellation: &dyn GemmaCancellation) -> bool {
+        self(maximum_delay, cancellation)
+    }
+}
+
 impl<F: Fn() -> Duration> GemmaAcquisitionClock for F {
     fn now(&self) -> Duration {
         self()
     }
+}
+
+pub struct GemmaAcquisitionRuntime<'a, K, W> {
+    pub clock: &'a K,
+    pub retry_wait: &'a mut W,
 }
 
 impl<F: Fn() -> bool> GemmaCancellation for F {
@@ -137,13 +158,14 @@ pub fn acquire_gemma_stage<
     T: GemmaDownloadTransport,
     C: GemmaCancellation,
     K: GemmaAcquisitionClock,
+    W: GemmaRetryWait,
 >(
     staging_root: &Path,
     install_id: &str,
     descriptor: &'static GemmaRevisionDescriptor,
     limits: GemmaAcquisitionLimits,
     transport: &mut T,
-    clock: &K,
+    runtime: GemmaAcquisitionRuntime<'_, K, W>,
     cancellation: &C,
 ) -> Result<PathBuf, GemmaAcquisitionError> {
     if !safe_component(install_id)
@@ -158,7 +180,7 @@ pub fn acquire_gemma_stage<
             GemmaAcquisitionError::InvalidLimits
         });
     }
-    let started_at = clock.now();
+    let started_at = runtime.clock.now();
     require_directory(staging_root)?;
     let stage = staging_root.join(install_id);
     match fs::create_dir(&stage) {
@@ -187,7 +209,7 @@ pub fn acquire_gemma_stage<
         if cancellation.is_cancelled() {
             return Err(GemmaAcquisitionError::Cancelled);
         }
-        let remaining = remaining_budget(clock, started_at, limits.deadline)?;
+        let remaining = remaining_budget(runtime.clock, started_at, limits.deadline)?;
         let offset = part_length(&part, descriptor.model.byte_size)?;
         if offset == descriptor.model.byte_size {
             return finish_stage(stage, part, descriptor);
@@ -204,7 +226,17 @@ pub fn acquire_gemma_stage<
         };
         let response = match transport.download(&request) {
             Ok(response) => response,
-            Err(GemmaTransportError::Transient) if attempt + 1 < limits.max_attempts => continue,
+            Err(GemmaTransportError::Transient) if attempt + 1 < limits.max_attempts => {
+                wait_before_retry(
+                    runtime.retry_wait,
+                    runtime.clock,
+                    started_at,
+                    limits.deadline,
+                    attempt,
+                    cancellation,
+                )?;
+                continue;
+            }
             Err(GemmaTransportError::Transient) => return Err(GemmaAcquisitionError::Retryable),
             Err(GemmaTransportError::Unavailable) => {
                 return Err(GemmaAcquisitionError::Unavailable)
@@ -216,11 +248,29 @@ pub fn acquire_gemma_stage<
             Err(GemmaAcquisitionError::InvalidResponse) => {
                 remove_part(&part)?;
                 if attempt + 1 < limits.max_attempts {
+                    wait_before_retry(
+                        runtime.retry_wait,
+                        runtime.clock,
+                        started_at,
+                        limits.deadline,
+                        attempt,
+                        cancellation,
+                    )?;
                     continue;
                 }
                 return Err(GemmaAcquisitionError::Retryable);
             }
-            Err(GemmaAcquisitionError::Retryable) if attempt + 1 < limits.max_attempts => continue,
+            Err(GemmaAcquisitionError::Retryable) if attempt + 1 < limits.max_attempts => {
+                wait_before_retry(
+                    runtime.retry_wait,
+                    runtime.clock,
+                    started_at,
+                    limits.deadline,
+                    attempt,
+                    cancellation,
+                )?;
+                continue;
+            }
             Err(GemmaAcquisitionError::Retryable) => return Err(GemmaAcquisitionError::Retryable),
             Err(error) => return Err(error),
         };
@@ -231,15 +281,35 @@ pub fn acquire_gemma_stage<
             response.body,
             &part,
             descriptor.model.byte_size,
-            clock,
+            runtime.clock,
             started_at,
             limits.deadline,
             cancellation,
         ) {
             Ok(true) => return finish_stage(stage, part, descriptor),
-            Ok(false) if attempt + 1 < limits.max_attempts => continue,
+            Ok(false) if attempt + 1 < limits.max_attempts => {
+                wait_before_retry(
+                    runtime.retry_wait,
+                    runtime.clock,
+                    started_at,
+                    limits.deadline,
+                    attempt,
+                    cancellation,
+                )?;
+                continue;
+            }
             Ok(false) => return Err(GemmaAcquisitionError::Retryable),
-            Err(GemmaAcquisitionError::Retryable) if attempt + 1 < limits.max_attempts => continue,
+            Err(GemmaAcquisitionError::Retryable) if attempt + 1 < limits.max_attempts => {
+                wait_before_retry(
+                    runtime.retry_wait,
+                    runtime.clock,
+                    started_at,
+                    limits.deadline,
+                    attempt,
+                    cancellation,
+                )?;
+                continue;
+            }
             Err(error) => return Err(error),
         }
     }
@@ -255,7 +325,10 @@ fn validate_response<R>(
         200 if response.content_range.is_none() => Ok(false),
         206 => match response.content_range {
             Some((first, last, total))
-                if first == offset && total == expected && last >= first && last < total =>
+                if first == offset
+                    && total == expected
+                    && last >= first
+                    && last == expected.saturating_sub(1) =>
             {
                 Ok(true)
             }
@@ -266,6 +339,25 @@ fn validate_response<R>(
         404 | 410 => Err(GemmaAcquisitionError::Unavailable),
         _ => Err(GemmaAcquisitionError::Rejected),
     }
+}
+
+fn wait_before_retry<W: GemmaRetryWait, K: GemmaAcquisitionClock>(
+    retry_wait: &mut W,
+    clock: &K,
+    started_at: Duration,
+    deadline: Duration,
+    attempt: u8,
+    cancellation: &dyn GemmaCancellation,
+) -> Result<(), GemmaAcquisitionError> {
+    if cancellation.is_cancelled() {
+        return Err(GemmaAcquisitionError::Cancelled);
+    }
+    let remaining = remaining_budget(clock, started_at, deadline)?;
+    let backoff = Duration::from_secs(1_u64 << attempt.min(2));
+    if !retry_wait.wait(backoff.min(remaining), cancellation) || cancellation.is_cancelled() {
+        return Err(GemmaAcquisitionError::Cancelled);
+    }
+    remaining_budget(clock, started_at, deadline).map(|_| ())
 }
 
 fn stream_response<R: Read, C: GemmaCancellation, K: GemmaAcquisitionClock>(

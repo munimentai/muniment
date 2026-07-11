@@ -1,5 +1,5 @@
-use std::collections::VecDeque;
 use std::cell::Cell;
+use std::collections::VecDeque;
 use std::fs;
 use std::io::Cursor;
 use std::path::PathBuf;
@@ -8,8 +8,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use muniment_core::llama::acquisition::{
-    acquire_gemma_stage, GemmaAcquisitionError, GemmaAcquisitionLimits, GemmaDownloadRequest,
-    GemmaDownloadResponse, GemmaDownloadTransport, GemmaTransportError,
+    acquire_gemma_stage, GemmaAcquisitionError, GemmaAcquisitionLimits, GemmaAcquisitionRuntime,
+    GemmaCancellation, GemmaDownloadRequest, GemmaDownloadResponse, GemmaDownloadTransport,
+    GemmaTransportError,
 };
 use muniment_core::llama::lifecycle::{GemmaNoticeDescriptor, GemmaRevisionDescriptor};
 use muniment_core::llama::ResidentModelDescriptor;
@@ -82,6 +83,10 @@ fn root() -> PathBuf {
     root
 }
 
+fn no_wait(_: Duration, _: &dyn GemmaCancellation) -> bool {
+    true
+}
+
 #[test]
 fn resumes_a_part_and_returns_only_a_verified_publication_stage() {
     let root = root();
@@ -95,7 +100,10 @@ fn resumes_a_part_and_returns_only_a_verified_publication_stage() {
         &REVISION,
         GemmaAcquisitionLimits::default(),
         &mut transport,
-        &|| Duration::ZERO,
+        GemmaAcquisitionRuntime {
+            clock: &|| Duration::ZERO,
+            retry_wait: &mut no_wait,
+        },
         &|| false,
     )
     .unwrap();
@@ -122,7 +130,10 @@ fn a_full_response_to_a_range_request_restarts_instead_of_appending() {
         &REVISION,
         GemmaAcquisitionLimits::default(),
         &mut transport,
-        &|| Duration::ZERO,
+        GemmaAcquisitionRuntime {
+            clock: &|| Duration::ZERO,
+            retry_wait: &mut no_wait,
+        },
         &|| false,
     )
     .unwrap();
@@ -143,7 +154,10 @@ fn transient_failure_retries_from_the_preserved_part() {
         &REVISION,
         GemmaAcquisitionLimits::default(),
         &mut transport,
-        &|| Duration::ZERO,
+        GemmaAcquisitionRuntime {
+            clock: &|| Duration::ZERO,
+            retry_wait: &mut no_wait,
+        },
         &|| false,
     )
     .unwrap();
@@ -166,7 +180,10 @@ fn server_failure_retries_from_the_preserved_part() {
         &REVISION,
         GemmaAcquisitionLimits::default(),
         &mut transport,
-        &|| Duration::ZERO,
+        GemmaAcquisitionRuntime {
+            clock: &|| Duration::ZERO,
+            retry_wait: &mut no_wait,
+        },
         &|| false,
     )
     .unwrap();
@@ -190,10 +207,42 @@ fn an_inconsistent_range_discards_the_part_before_retrying() {
         &REVISION,
         GemmaAcquisitionLimits::default(),
         &mut transport,
-        &|| Duration::ZERO,
+        GemmaAcquisitionRuntime {
+            clock: &|| Duration::ZERO,
+            retry_wait: &mut no_wait,
+        },
         &|| false,
     )
     .unwrap();
+    assert_eq!(transport.offsets, [1, 0]);
+    assert_eq!(fs::read(root.join("install/model.gguf")).unwrap(), b"abc");
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn a_resumed_range_must_cover_the_complete_remaining_artifact() {
+    let root = root();
+    fs::create_dir(root.join("install")).unwrap();
+    fs::write(root.join("install/model.gguf.part"), b"a").unwrap();
+    let mut transport = Transport::new([
+        Reply::Response(206, Some((1, 1, 3)), b"bc"),
+        Reply::Response(200, None, b"abc"),
+    ]);
+
+    acquire_gemma_stage(
+        &root,
+        "install",
+        &REVISION,
+        GemmaAcquisitionLimits::default(),
+        &mut transport,
+        GemmaAcquisitionRuntime {
+            clock: &|| Duration::ZERO,
+            retry_wait: &mut no_wait,
+        },
+        &|| false,
+    )
+    .unwrap();
+
     assert_eq!(transport.offsets, [1, 0]);
     assert_eq!(fs::read(root.join("install/model.gguf")).unwrap(), b"abc");
     fs::remove_dir_all(root).unwrap();
@@ -212,7 +261,10 @@ fn an_invalid_completed_model_is_replaced_by_a_verified_download() {
         &REVISION,
         GemmaAcquisitionLimits::default(),
         &mut transport,
-        &|| Duration::ZERO,
+        GemmaAcquisitionRuntime {
+            clock: &|| Duration::ZERO,
+            retry_wait: &mut no_wait,
+        },
         &|| false,
     )
     .unwrap();
@@ -234,7 +286,10 @@ fn bad_or_oversized_bytes_are_never_exposed_as_a_complete_stage() {
                 &REVISION,
                 GemmaAcquisitionLimits::default(),
                 &mut transport,
-                &|| Duration::ZERO,
+                GemmaAcquisitionRuntime {
+                    clock: &|| Duration::ZERO,
+                    retry_wait: &mut no_wait,
+                },
                 &|| false
             ),
             Err(GemmaAcquisitionError::Verification(_)) | Err(GemmaAcquisitionError::TooLarge)
@@ -258,7 +313,10 @@ fn cancellation_is_retryable_without_destroying_resume_bytes() {
             &REVISION,
             GemmaAcquisitionLimits::default(),
             &mut transport,
-            &|| Duration::ZERO,
+            GemmaAcquisitionRuntime {
+                clock: &|| Duration::ZERO,
+                retry_wait: &mut no_wait,
+            },
             &|| true
         ),
         Err(GemmaAcquisitionError::Cancelled)
@@ -311,7 +369,10 @@ fn retries_share_one_acquisition_deadline() {
             &REVISION,
             limits,
             &mut transport,
-            &clock,
+            GemmaAcquisitionRuntime {
+                clock: &clock,
+                retry_wait: &mut no_wait,
+            },
             &|| false,
         ),
         Err(GemmaAcquisitionError::Retryable)
@@ -320,5 +381,76 @@ fn retries_share_one_acquisition_deadline() {
         transport.deadlines,
         [Duration::from_secs(10), Duration::from_secs(4)]
     );
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn retries_use_capped_backoff_within_the_shared_deadline() {
+    let root = root();
+    let now = Rc::new(Cell::new(Duration::ZERO));
+    let clock_now = Rc::clone(&now);
+    let clock = move || clock_now.get();
+    let wait_now = Rc::clone(&now);
+    let delays = Rc::new(std::cell::RefCell::new(Vec::new()));
+    let recorded_delays = Rc::clone(&delays);
+    let mut wait = move |delay: Duration, cancellation: &dyn GemmaCancellation| {
+        assert!(!cancellation.is_cancelled());
+        recorded_delays.borrow_mut().push(delay);
+        wait_now.set(wait_now.get() + delay);
+        true
+    };
+    let mut transport = Transport::new([
+        Reply::Error(GemmaTransportError::Transient),
+        Reply::Response(503, None, b""),
+        Reply::Response(200, None, b"abc"),
+    ]);
+    let limits = GemmaAcquisitionLimits {
+        deadline: Duration::from_secs(4),
+        ..GemmaAcquisitionLimits::default()
+    };
+
+    acquire_gemma_stage(
+        &root,
+        "install",
+        &REVISION,
+        limits,
+        &mut transport,
+        GemmaAcquisitionRuntime {
+            clock: &clock,
+            retry_wait: &mut wait,
+        },
+        &|| false,
+    )
+    .unwrap();
+
+    assert_eq!(
+        *delays.borrow(),
+        [Duration::from_secs(1), Duration::from_secs(2)]
+    );
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn cancellation_can_interrupt_retry_backoff() {
+    let root = root();
+    let mut transport = Transport::new([Reply::Error(GemmaTransportError::Transient)]);
+    let mut wait = |_: Duration, _: &dyn GemmaCancellation| false;
+
+    assert_eq!(
+        acquire_gemma_stage(
+            &root,
+            "install",
+            &REVISION,
+            GemmaAcquisitionLimits::default(),
+            &mut transport,
+            GemmaAcquisitionRuntime {
+                clock: &|| Duration::ZERO,
+                retry_wait: &mut wait,
+            },
+            &|| false,
+        ),
+        Err(GemmaAcquisitionError::Cancelled)
+    );
+    assert_eq!(transport.offsets, [0]);
     fs::remove_dir_all(root).unwrap();
 }
