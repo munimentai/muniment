@@ -13,7 +13,8 @@ Phases mirror harness-spec §9. **This lane is CLOSED until muniment-cloud Phase
 - BLOCKED on cloud Phase 1 — desktop registration, real handshake, and entitlement snapshot fetch/display.
 
 ### 9. Pi sidecar and cloud chat
-- RPC wiring remains blocked on cloud 6. Before persistence, use the durable journal contract below.
+- DONE foundation — ADR 0008 pins Pi 0.73.1, chooses verified first-use acquisition of its platform-native executable, and proves its real `get_state` RPC readiness through `SidecarSupervisor`.
+- NEXT, gated on cloud 6 — chat through Pi against the LiteLLM virtual endpoint, including steer/follow-up and projection into the durable journal contract below.
 
 ### 10. Local Gemma sidecar
 - DONE — supervised JSON-RPC sidecar lifecycle; loopback llama-server launch/health/chat; pinned Gemma descriptor and launch verification; dictation-polish and routing-classifier contracts/evaluations with adversarial framing.

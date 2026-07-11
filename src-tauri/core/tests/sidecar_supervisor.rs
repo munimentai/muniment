@@ -5,9 +5,9 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use muniment_core::sidecar::{
-    JsonRpcCancellationToken, JsonRpcId, JsonRpcTransport, JsonRpcTransportError, ProbeOutcome,
-    RestartPolicy, SidecarConfig, SidecarError, SidecarEvent, SidecarEventCause, SidecarStatus,
-    SidecarSupervisor,
+    JsonRpcCancellationToken, JsonRpcId, JsonRpcTransport, JsonRpcTransportError, PiRpcTransport,
+    ProbeOutcome, RestartPolicy, SidecarConfig, SidecarError, SidecarEvent, SidecarEventCause,
+    SidecarStatus, SidecarSupervisor,
 };
 use serde_json::{json, Value};
 
@@ -79,7 +79,14 @@ fn restart_events_include_exit_attempt_and_backoff() {
             .unwrap();
     let events = supervisor.subscribe();
     assert_eq!(next_event(&events).status, SidecarStatus::Starting);
-    let restarting = next_event(&events);
+    let restarting = loop {
+        let event = next_event(&events);
+        if event.status == SidecarStatus::Restarting {
+            break event;
+        }
+        assert_eq!(event.status, SidecarStatus::Healthy);
+        assert_eq!(event.generation, Some(1));
+    };
     assert_eq!(restarting.status, SidecarStatus::Restarting);
     assert!(matches!(
         restarting.cause,
@@ -492,6 +499,46 @@ fn json_rpc_probe_keeps_supervisor_healthy_across_intervals() {
             Some("ping")
         );
     }
+    assert_eq!(supervisor.status(), SidecarStatus::Healthy);
+    supervisor.shutdown().unwrap();
+}
+
+#[test]
+fn pi_probe_routes_interleaved_frames_before_its_response() {
+    let mut cfg = config(&["pi-rpc-interleaved"]);
+    cfg.health_interval = Duration::from_secs(60);
+    let transport = Arc::new(OnceLock::new());
+    let probe_transport = Arc::clone(&transport);
+    let mut supervisor = SidecarSupervisor::spawn(cfg, move |io| {
+        let transport = probe_transport.get_or_init(|| Arc::new(PiRpcTransport::new(io.clone())));
+        transport.health_probe(Duration::from_millis(100))(io)
+    })
+    .unwrap();
+
+    wait_for(&supervisor, SidecarStatus::Healthy);
+    let routed = transport.get().unwrap().subscribe();
+
+    // Run a second probe after subscribing so both unrelated frames are
+    // deterministically observable and the correlated response remains last.
+    transport
+        .get()
+        .unwrap()
+        .health_probe(Duration::from_millis(100))(&supervisor.io())
+    .unwrap();
+    assert_eq!(
+        routed.recv_timeout(Duration::from_secs(1)).unwrap(),
+        json!({"type": "agent_start", "requestId": "unrelated"})
+    );
+    assert_eq!(
+        routed.recv_timeout(Duration::from_secs(1)).unwrap(),
+        json!({
+            "type": "response",
+            "command": "get_state",
+            "success": true,
+            "id": "another-call"
+        })
+    );
+    assert!(routed.recv_timeout(Duration::from_millis(20)).is_err());
     assert_eq!(supervisor.status(), SidecarStatus::Healthy);
     supervisor.shutdown().unwrap();
 }

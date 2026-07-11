@@ -223,3 +223,15 @@ launch a local stub executable and cover line and JSON-RPC round-trips, protocol
 failures, crash restart and backoff, restart-window exhaustion, health-probe
 restart, and child reaping on shutdown. They require no GUI, network, sleeps as
 assertions, or Docker service.
+# Pi chat frames
+
+The pinned Pi runtime uses its own LF-delimited JSON protocol, not the generic
+JSON-RPC 2.0 transport. `PiRpcTransport` is the sole stdout reader: correlated
+command acknowledgements return to the caller while interleaved agent events
+remain ordered for subscribers. Chat frames are narrowed by `pi_chat` into
+prompt acceptance, text delta, completion receipt, cancellation, or failure.
+Raw upstream errors are intentionally discarded at that boundary.
+
+Prompt text and gateway credentials are process-memory-only inputs. Journal
+events contain only prompt acceptance, renderable deltas, terminal state, and
+the authoritative receipt fields. Missing receipt fields remain absent.
