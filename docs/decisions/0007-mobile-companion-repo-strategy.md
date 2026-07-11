@@ -1,6 +1,6 @@
 # 0007 — Owner-gated mobile companion repository and stack strategy
 
-- Status: proposed — awaiting OWNER RATIFICATION
+- Status: accepted — owner ratified 2026-07-11
 - Date: 2026-07-11
 - Context: ROADMAP standing gates; harness-spec §12.5
 
@@ -20,7 +20,7 @@ is prohibited from running local models, local MCP servers, sandboxes, or user
 keys. It uses short-lived session tokens and control-plane APIs, so useful
 reuse of `src-tauri/core` is expected to be small.
 
-## Decision proposed for owner ratification
+## Decision
 
 Create a separate **`muniment-mobile` repository**, with its own Plane/factory
 lane, ownership boundary, CI gates, and release cadence. Build the iOS and
@@ -28,8 +28,7 @@ Android clients with **React Native using Expo as the framework**, retaining
 platform-specific files or native modules where the product specification
 requires different behavior.
 
-This is a proposal, not an accepted decision. The owner must record explicit
-ratification before any action described here becomes authorized.
+The owner ratified this decision as-is on 2026-07-11.
 
 ### Repository strategy
 
@@ -122,6 +121,15 @@ Flue sessions. At every phase, mobile is never a local execution surface: no
 local models, local MCP servers, local sandboxes, or user keys run or reside
 there.
 
+### Notes carried into M1
+
+The M1 session mirror derives live state from the relayed Pi event stream. The
+desktop's deterministic run-state reducer is Rust (see [ADR 0002](0002-event-sourced-run-journal.md)
+and MUNIDESK-48/49), so a TypeScript mobile client risks a second, drifting
+derivation. The M1 design must resolve this deliberately through shared reducer
+spec fixtures or cloud-served derived state. This is a design obligation for M1,
+not M0.
+
 ## CI and distribution requirements
 
 No CI change is made by this ADR. After ratification, mobile must have
@@ -143,7 +151,7 @@ owner-gated distribution actions. Production launch, store submission, public
 availability, and announcement are owner-only. This ADR creates no account,
 credential, repository, pipeline, signing asset, build, or release.
 
-## Consequences and ratification gate
+## Consequences and ratification
 
 The recommendation gives mobile an architecture-aligned ownership boundary,
 native-oriented shared UI, independent gates, and selective releases. It accepts
@@ -152,11 +160,10 @@ occasional Swift/Kotlin modules. Desktop and mobile changes that alter a shared
 cloud contract will require coordinated reviews rather than an atomic monorepo
 commit.
 
-**Until the owner records ratification, no repository scaffolding,
-implementation tickets, CI edits, signing or provisioning work, account or
-credential work, build upload, TestFlight/internal-track distribution, or
-production distribution may begin.** Ratification would make the following
-decisions actionable, without this ADR filing or implementing them now:
+The owner ratified this decision as-is on 2026-07-11. The following
+post-ratification decisions are now actionable in the `muniment-mobile`
+repository and Plane/factory lane, not in this repository. This ADR neither
+files nor implements them:
 
 - create and assign the `muniment-mobile` repository and Plane/factory lane;
 - pin the React Native/Expo versions and native-project workflow;
@@ -166,9 +173,6 @@ decisions actionable, without this ADR filing or implementing them now:
 - specify M0 authentication, secure token storage, deep links, and push setup;
 - assign Apple/Google account roles, signing custody, tester groups, and the
   owner-only launch checklist.
-
-If the owner rejects either recommendation, this ADR returns to proposed with
-the chosen repository and/or framework recorded before any scaffold begins.
 
 ## Sources
 
