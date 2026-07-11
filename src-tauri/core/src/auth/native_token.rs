@@ -262,16 +262,22 @@ pub fn exchange_native_code(
         &request,
     )?;
     validate_response(&response, &installation)?;
+    let expires_at = now_unix_seconds
+        .checked_add(response.expires_in)
+        .ok_or_else(|| NativeTokenError::MalformedResponse("token expiry overflowed".into()))?;
+    let refresh_expires_at = now_unix_seconds
+        .checked_add(response.refresh_expires_in)
+        .ok_or_else(|| NativeTokenError::MalformedResponse("refresh expiry overflowed".into()))?;
     installation.device_challenge = response.device_challenge;
     let credentials = NativeCredentials {
         installation,
         tokens: TokenSet {
             access_token: response.access_token,
             refresh_token: Some(response.refresh_token),
-            expires_at: Some(now_unix_seconds.saturating_add(response.expires_in)),
+            expires_at: Some(expires_at),
             subject: Some(response.session.user_id.to_string()),
         },
-        refresh_expires_at: now_unix_seconds.saturating_add(response.refresh_expires_in),
+        refresh_expires_at,
     };
     store
         .save_credentials(&credentials)
@@ -287,6 +293,7 @@ fn validate_response(
         || r.refresh_token.is_empty()
         || r.token_type != "Bearer"
         || r.expires_in != 900
+        || r.refresh_expires_in == 0
         || r.refresh_expires_in > 86400
         || r.session.device_id != installation.device_id
         || r.session.client_role != CLIENT_ROLE

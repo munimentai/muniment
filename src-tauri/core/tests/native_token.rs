@@ -110,6 +110,10 @@ fn success(challenge: &str) -> String {
     )
 }
 
+fn success_json() -> serde_json::Value {
+    serde_json::from_str(&success(&URL_SAFE_NO_PAD.encode([11; 32]))).unwrap()
+}
+
 fn store(fail_save: bool) -> MemoryStore {
     MemoryStore {
         installation: Mutex::new(Some(installation())),
@@ -181,7 +185,19 @@ fn exact_exchange_is_bound_signed_and_persisted_coherently() {
 }
 
 #[test]
-fn malformed_extra_and_unchanged_challenges_publish_nothing() {
+fn malformed_or_missing_response_data_publishes_nothing() {
+    let mut missing_refresh_token = success_json();
+    missing_refresh_token
+        .as_object_mut()
+        .unwrap()
+        .remove("refresh_token");
+    let mut invalid_access_lifetime = success_json();
+    invalid_access_lifetime["expires_in"] = 0.into();
+    let mut malformed_access_lifetime = success_json();
+    malformed_access_lifetime["expires_in"] = "900".into();
+    let mut invalid_refresh_lifetime = success_json();
+    invalid_refresh_lifetime["refresh_expires_in"] = 0.into();
+
     for body in [
         success("not-base64"),
         success(&installation().device_challenge),
@@ -189,6 +205,10 @@ fn malformed_extra_and_unchanged_challenges_publish_nothing() {
             .trim_end_matches('}')
             .to_string()
             + ",\"extra\":true}",
+        missing_refresh_token.to_string(),
+        invalid_access_lifetime.to_string(),
+        malformed_access_lifetime.to_string(),
+        invalid_refresh_lifetime.to_string(),
     ] {
         let server = Server::spawn(200, body);
         let store = store(false);

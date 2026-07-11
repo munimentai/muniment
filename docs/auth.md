@@ -181,6 +181,7 @@ build); verify it manually:
 
 - Native refresh and credential rotation.
 - Authoritative native session inspection.
+- Native Tauri command wiring.
 - Entitlement snapshot consumption.
 - Migration or removal of credentials created by the existing generic-OIDC flow.
 - Signed-in UI.
