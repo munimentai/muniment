@@ -74,7 +74,7 @@ pub fn verify_model_artifact(
     descriptor: &ResidentModelDescriptor,
 ) -> Result<(), ModelVerificationError> {
     let path = path.as_ref();
-    let metadata = std::fs::metadata(path).map_err(|error| {
+    let metadata = std::fs::symlink_metadata(path).map_err(|error| {
         if error.kind() == std::io::ErrorKind::NotFound {
             ModelVerificationError::Missing
         } else {

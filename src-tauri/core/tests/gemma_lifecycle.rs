@@ -37,6 +37,7 @@ static KNOWN: [&GemmaRevisionDescriptor; 2] = [&OLD, &NEW];
 struct Boundary {
     locks: AtomicUsize,
     fail_current: AtomicBool,
+    revision_failure: AtomicUsize,
 }
 
 impl Boundary {
@@ -44,12 +45,21 @@ impl Boundary {
         Self {
             locks: AtomicUsize::new(0),
             fail_current: AtomicBool::new(false),
+            revision_failure: AtomicUsize::new(0),
         }
     }
     fn failing_current() -> Self {
         Self {
             locks: AtomicUsize::new(0),
             fail_current: AtomicBool::new(true),
+            revision_failure: AtomicUsize::new(0),
+        }
+    }
+    fn failing_revision_at(step: usize) -> Self {
+        Self {
+            locks: AtomicUsize::new(0),
+            fail_current: AtomicBool::new(false),
+            revision_failure: AtomicUsize::new(step),
         }
     }
 }
@@ -66,6 +76,26 @@ impl GemmaLifecycleBoundary for Boundary {
     }
     fn sync_directory(&self, _: &Path) -> Result<(), GemmaPersistenceError> {
         Ok(())
+    }
+    fn replace_revision(
+        &self,
+        staged: &Path,
+        destination: &Path,
+    ) -> Result<(), GemmaPersistenceError> {
+        if self.revision_failure.load(Ordering::Relaxed) == 1 {
+            return Err(GemmaPersistenceError::Failed);
+        }
+        let quarantine = destination.with_extension("replaced");
+        if quarantine.exists() {
+            fs::remove_dir_all(&quarantine).map_err(|_| GemmaPersistenceError::Failed)?;
+        }
+        if destination.exists() || fs::symlink_metadata(destination).is_ok() {
+            fs::rename(destination, &quarantine).map_err(|_| GemmaPersistenceError::Failed)?;
+        }
+        if self.revision_failure.load(Ordering::Relaxed) == 2 {
+            return Err(GemmaPersistenceError::Failed);
+        }
+        fs::rename(staged, destination).map_err(|_| GemmaPersistenceError::Failed)
     }
     fn replace_pointer(
         &self,
@@ -171,6 +201,118 @@ fn corrupt_current_restores_verified_previous_and_never_promotes_staging() {
     );
     assert_eq!(boundary.locks.load(Ordering::Relaxed), 1);
     fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn verified_stage_repairs_corrupt_existing_revision() {
+    let root = root();
+    let lifecycle = GemmaRevisionLifecycle::new(root.clone(), &KNOWN, &OLD).unwrap();
+    lifecycle
+        .publish(&stage(&root, "first", b"abc"), &Boundary::working())
+        .unwrap();
+    fs::write(root.join("revisions/old/model.gguf"), b"bad").unwrap();
+
+    let repaired = lifecycle
+        .publish(&stage(&root, "repair", b"abc"), &Boundary::working())
+        .unwrap();
+    assert_eq!(repaired, root.join("revisions/old"));
+    assert_eq!(fs::read(repaired.join("model.gguf")).unwrap(), b"abc");
+    assert_eq!(lifecycle.resolve_current().unwrap(), repaired);
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn interrupted_corrupt_revision_replacement_never_exposes_staged_bytes() {
+    for failure_step in [1, 2] {
+        let root = root();
+        let lifecycle = GemmaRevisionLifecycle::new(root.clone(), &KNOWN, &OLD).unwrap();
+        lifecycle
+            .publish(&stage(&root, "first", b"abc"), &Boundary::working())
+            .unwrap();
+        fs::write(root.join("revisions/old/model.gguf"), b"bad").unwrap();
+        let repair = stage(&root, "repair", b"abc");
+
+        assert_eq!(
+            lifecycle.publish(&repair, &Boundary::failing_revision_at(failure_step)),
+            Err(GemmaLifecycleError::Persistence(
+                GemmaPersistenceError::Failed
+            ))
+        );
+        assert!(lifecycle.resolve_current().is_err());
+        assert!(repair.exists());
+
+        lifecycle.publish(&repair, &Boundary::working()).unwrap();
+        assert_eq!(
+            lifecycle.resolve_current().unwrap(),
+            root.join("revisions/old")
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn rejects_linked_stage_directory_and_model() {
+    use std::os::unix::fs::symlink;
+
+    let root = root();
+    let lifecycle = GemmaRevisionLifecycle::new(root.clone(), &KNOWN, &OLD).unwrap();
+    let outside = root.with_extension("outside");
+    fs::create_dir(&outside).unwrap();
+    fs::write(outside.join("model.gguf"), b"abc").unwrap();
+    let linked_stage = root.join("staging/linked-stage");
+    symlink(&outside, &linked_stage).unwrap();
+    assert_eq!(
+        lifecycle.publish(&linked_stage, &Boundary::working()),
+        Err(GemmaLifecycleError::InvalidStage)
+    );
+
+    let model_stage = root.join("staging/linked-model");
+    fs::create_dir(&model_stage).unwrap();
+    symlink(outside.join("model.gguf"), model_stage.join("model.gguf")).unwrap();
+    assert!(matches!(
+        lifecycle.publish(&model_stage, &Boundary::working()),
+        Err(GemmaLifecycleError::RevisionInvalid(_))
+    ));
+    assert!(!root.join("current").exists());
+    fs::remove_dir_all(root).unwrap();
+    fs::remove_dir_all(outside).unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn recovery_rejects_linked_revision_directory_and_model() {
+    use std::os::unix::fs::symlink;
+
+    for link_directory in [true, false] {
+        let root = root();
+        let lifecycle = GemmaRevisionLifecycle::new(root.clone(), &KNOWN, &OLD).unwrap();
+        lifecycle
+            .publish(&stage(&root, "first", b"abc"), &Boundary::working())
+            .unwrap();
+        let revision = root.join("revisions/old");
+        let outside = root.with_extension("outside");
+        fs::create_dir(&outside).unwrap();
+        fs::write(outside.join("model.gguf"), b"abc").unwrap();
+        if link_directory {
+            fs::remove_dir_all(&revision).unwrap();
+            symlink(&outside, &revision).unwrap();
+        } else {
+            fs::remove_file(revision.join("model.gguf")).unwrap();
+            symlink(outside.join("model.gguf"), revision.join("model.gguf")).unwrap();
+        }
+
+        assert!(matches!(
+            lifecycle.resolve_current(),
+            Err(GemmaLifecycleError::RevisionInvalid(_))
+        ));
+        assert_eq!(
+            lifecycle.recover(&Boundary::working()).unwrap(),
+            GemmaRecovery::RepairRequired
+        );
+        fs::remove_dir_all(root).unwrap();
+        fs::remove_dir_all(outside).unwrap();
+    }
 }
 
 #[test]

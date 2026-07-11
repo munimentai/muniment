@@ -37,6 +37,15 @@ pub trait GemmaLifecycleBoundary {
     fn lock_exclusive(&self, path: &Path) -> Result<Self::LockGuard, GemmaPersistenceError>;
     fn sync_file(&self, path: &Path) -> Result<(), GemmaPersistenceError>;
     fn sync_directory(&self, path: &Path) -> Result<(), GemmaPersistenceError>;
+    /// Publishes `staged` at `destination`, replacing an existing corrupt
+    /// revision if necessary. The operation must be crash-safe: interruption
+    /// may leave either directory unpublished, but must never expose a partial
+    /// revision at `destination`.
+    fn replace_revision(
+        &self,
+        staged: &Path,
+        destination: &Path,
+    ) -> Result<(), GemmaPersistenceError>;
     fn replace_pointer(
         &self,
         temporary: &Path,
@@ -143,6 +152,7 @@ impl GemmaRevisionLifecycle {
         if staged_directory.parent() != Some(self.root.join("staging").as_path()) {
             return Err(GemmaLifecycleError::InvalidStage);
         }
+        require_directory(staged_directory).map_err(|_| GemmaLifecycleError::InvalidStage)?;
         let staged_model = staged_directory.join(self.target.model.filename);
         verify_model_artifact(&staged_model, self.target.model)
             .map_err(GemmaLifecycleError::RevisionInvalid)?;
@@ -152,11 +162,11 @@ impl GemmaRevisionLifecycle {
         let revisions = self.root.join("revisions");
         fs::create_dir_all(&revisions).map_err(|_| GemmaPersistenceError::Failed)?;
         let revision = revisions.join(self.target.revision);
-        if revision.exists() {
-            verify_model_artifact(revision.join(self.target.model.filename), self.target.model)
-                .map_err(GemmaLifecycleError::RevisionInvalid)?;
-        } else {
-            fs::rename(staged_directory, &revision).map_err(|_| GemmaPersistenceError::Failed)?;
+        let installed_is_valid = require_directory(&revision).is_ok()
+            && verify_model_artifact(revision.join(self.target.model.filename), self.target.model)
+                .is_ok();
+        if !installed_is_valid {
+            boundary.replace_revision(staged_directory, &revision)?;
             boundary.sync_directory(&revisions)?;
         }
 
@@ -216,6 +226,7 @@ impl GemmaRevisionLifecycle {
             .find(|descriptor| descriptor.identity == lines[1] && descriptor.revision == lines[2])
             .ok_or(GemmaLifecycleError::UnknownPointer)?;
         let path = self.root.join("revisions").join(descriptor.revision);
+        require_directory(&path).map_err(GemmaLifecycleError::RevisionInvalid)?;
         verify_model_artifact(path.join(descriptor.model.filename), descriptor.model)
             .map_err(GemmaLifecycleError::RevisionInvalid)?;
         Ok(ResolvedPointer { path, value })
@@ -277,4 +288,19 @@ fn safe_component(value: &str) -> bool {
         && value != ".."
         && !value.contains(['/', '\\'])
         && !Path::new(value).is_absolute()
+}
+
+fn require_directory(path: &Path) -> Result<(), ModelVerificationError> {
+    let metadata = fs::symlink_metadata(path).map_err(|error| {
+        if error.kind() == std::io::ErrorKind::NotFound {
+            ModelVerificationError::Missing
+        } else {
+            ModelVerificationError::Unreadable
+        }
+    })?;
+    if metadata.file_type().is_dir() {
+        Ok(())
+    } else {
+        Err(ModelVerificationError::NotRegularFile)
+    }
 }
