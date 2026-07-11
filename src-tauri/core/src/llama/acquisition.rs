@@ -1,6 +1,6 @@
 //! Bounded, resumable acquisition of a resident Gemma revision.
 //!
-//! HTTP and clocks remain native-adapter concerns. Core supplies the only
+//! HTTP and clock readings remain injected native-adapter concerns. Core supplies the only
 //! permitted URL, response limits, resume rules, staging layout, and artifact
 //! verification contract.
 
@@ -79,6 +79,19 @@ pub trait GemmaCancellation {
     fn is_cancelled(&self) -> bool;
 }
 
+/// Monotonic time source used to enforce one deadline across every retry and
+/// body read. The returned duration needs no particular epoch; it must only
+/// advance monotonically during one acquisition call.
+pub trait GemmaAcquisitionClock {
+    fn now(&self) -> Duration;
+}
+
+impl<F: Fn() -> Duration> GemmaAcquisitionClock for F {
+    fn now(&self) -> Duration {
+        self()
+    }
+}
+
 impl<F: Fn() -> bool> GemmaCancellation for F {
     fn is_cancelled(&self) -> bool {
         self()
@@ -120,12 +133,17 @@ impl std::error::Error for GemmaAcquisitionError {}
 
 /// Downloads the target into `staging/<id>`, returning that directory only
 /// after the pinned bytes and notice form a publication-ready stage.
-pub fn acquire_gemma_stage<T: GemmaDownloadTransport, C: GemmaCancellation>(
+pub fn acquire_gemma_stage<
+    T: GemmaDownloadTransport,
+    C: GemmaCancellation,
+    K: GemmaAcquisitionClock,
+>(
     staging_root: &Path,
     install_id: &str,
     descriptor: &'static GemmaRevisionDescriptor,
     limits: GemmaAcquisitionLimits,
     transport: &mut T,
+    clock: &K,
     cancellation: &C,
 ) -> Result<PathBuf, GemmaAcquisitionError> {
     if !safe_component(install_id)
@@ -140,6 +158,7 @@ pub fn acquire_gemma_stage<T: GemmaDownloadTransport, C: GemmaCancellation>(
             GemmaAcquisitionError::InvalidLimits
         });
     }
+    let started_at = clock.now();
     require_directory(staging_root)?;
     let stage = staging_root.join(install_id);
     match fs::create_dir(&stage) {
@@ -168,6 +187,7 @@ pub fn acquire_gemma_stage<T: GemmaDownloadTransport, C: GemmaCancellation>(
         if cancellation.is_cancelled() {
             return Err(GemmaAcquisitionError::Cancelled);
         }
+        let remaining = remaining_budget(clock, started_at, limits.deadline)?;
         let offset = part_length(&part, descriptor.model.byte_size)?;
         if offset == descriptor.model.byte_size {
             return finish_stage(stage, part, descriptor);
@@ -175,7 +195,12 @@ pub fn acquire_gemma_stage<T: GemmaDownloadTransport, C: GemmaCancellation>(
         let request = GemmaDownloadRequest {
             url: source_url(descriptor),
             offset,
-            limits,
+            limits: GemmaAcquisitionLimits {
+                connect_timeout: limits.connect_timeout.min(remaining),
+                read_timeout: limits.read_timeout.min(remaining),
+                deadline: remaining,
+                max_attempts: limits.max_attempts,
+            },
         };
         let response = match transport.download(&request) {
             Ok(response) => response,
@@ -206,6 +231,9 @@ pub fn acquire_gemma_stage<T: GemmaDownloadTransport, C: GemmaCancellation>(
             response.body,
             &part,
             descriptor.model.byte_size,
+            clock,
+            started_at,
+            limits.deadline,
             cancellation,
         ) {
             Ok(true) => return finish_stage(stage, part, descriptor),
@@ -240,10 +268,13 @@ fn validate_response<R>(
     }
 }
 
-fn stream_response<R: Read, C: GemmaCancellation>(
+fn stream_response<R: Read, C: GemmaCancellation, K: GemmaAcquisitionClock>(
     mut body: R,
     part: &Path,
     expected: u64,
+    clock: &K,
+    started_at: Duration,
+    deadline: Duration,
     cancellation: &C,
 ) -> Result<bool, GemmaAcquisitionError> {
     let mut file = OpenOptions::new()
@@ -262,9 +293,11 @@ fn stream_response<R: Read, C: GemmaCancellation>(
                 .map_err(|_| GemmaAcquisitionError::Persistence)?;
             return Err(GemmaAcquisitionError::Cancelled);
         }
+        remaining_budget(clock, started_at, deadline)?;
         let count = body
             .read(&mut buffer)
             .map_err(|_| GemmaAcquisitionError::Retryable)?;
+        remaining_budget(clock, started_at, deadline)?;
         if count == 0 {
             file.flush()
                 .map_err(|_| GemmaAcquisitionError::Persistence)?;
@@ -281,6 +314,18 @@ fn stream_response<R: Read, C: GemmaCancellation>(
         file.write_all(&buffer[..count])
             .map_err(|_| GemmaAcquisitionError::Persistence)?;
     }
+}
+
+fn remaining_budget<K: GemmaAcquisitionClock>(
+    clock: &K,
+    started_at: Duration,
+    deadline: Duration,
+) -> Result<Duration, GemmaAcquisitionError> {
+    let elapsed = clock.now().saturating_sub(started_at);
+    deadline
+        .checked_sub(elapsed)
+        .filter(|remaining| !remaining.is_zero())
+        .ok_or(GemmaAcquisitionError::Retryable)
 }
 
 fn finish_stage(

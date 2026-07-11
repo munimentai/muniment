@@ -1,8 +1,11 @@
 use std::collections::VecDeque;
+use std::cell::Cell;
 use std::fs;
 use std::io::Cursor;
 use std::path::PathBuf;
+use std::rc::Rc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::Duration;
 
 use muniment_core::llama::acquisition::{
     acquire_gemma_stage, GemmaAcquisitionError, GemmaAcquisitionLimits, GemmaDownloadRequest,
@@ -92,6 +95,7 @@ fn resumes_a_part_and_returns_only_a_verified_publication_stage() {
         &REVISION,
         GemmaAcquisitionLimits::default(),
         &mut transport,
+        &|| Duration::ZERO,
         &|| false,
     )
     .unwrap();
@@ -118,6 +122,7 @@ fn a_full_response_to_a_range_request_restarts_instead_of_appending() {
         &REVISION,
         GemmaAcquisitionLimits::default(),
         &mut transport,
+        &|| Duration::ZERO,
         &|| false,
     )
     .unwrap();
@@ -138,6 +143,7 @@ fn transient_failure_retries_from_the_preserved_part() {
         &REVISION,
         GemmaAcquisitionLimits::default(),
         &mut transport,
+        &|| Duration::ZERO,
         &|| false,
     )
     .unwrap();
@@ -160,6 +166,7 @@ fn server_failure_retries_from_the_preserved_part() {
         &REVISION,
         GemmaAcquisitionLimits::default(),
         &mut transport,
+        &|| Duration::ZERO,
         &|| false,
     )
     .unwrap();
@@ -183,6 +190,7 @@ fn an_inconsistent_range_discards_the_part_before_retrying() {
         &REVISION,
         GemmaAcquisitionLimits::default(),
         &mut transport,
+        &|| Duration::ZERO,
         &|| false,
     )
     .unwrap();
@@ -204,6 +212,7 @@ fn an_invalid_completed_model_is_replaced_by_a_verified_download() {
         &REVISION,
         GemmaAcquisitionLimits::default(),
         &mut transport,
+        &|| Duration::ZERO,
         &|| false,
     )
     .unwrap();
@@ -225,6 +234,7 @@ fn bad_or_oversized_bytes_are_never_exposed_as_a_complete_stage() {
                 &REVISION,
                 GemmaAcquisitionLimits::default(),
                 &mut transport,
+                &|| Duration::ZERO,
                 &|| false
             ),
             Err(GemmaAcquisitionError::Verification(_)) | Err(GemmaAcquisitionError::TooLarge)
@@ -248,6 +258,7 @@ fn cancellation_is_retryable_without_destroying_resume_bytes() {
             &REVISION,
             GemmaAcquisitionLimits::default(),
             &mut transport,
+            &|| Duration::ZERO,
             &|| true
         ),
         Err(GemmaAcquisitionError::Cancelled)
@@ -255,6 +266,59 @@ fn cancellation_is_retryable_without_destroying_resume_bytes() {
     assert_eq!(
         fs::read(root.join("install/model.gguf.part")).unwrap(),
         b"a"
+    );
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn retries_share_one_acquisition_deadline() {
+    struct DeadlineTransport {
+        now: Rc<Cell<Duration>>,
+        deadlines: Vec<Duration>,
+    }
+
+    impl GemmaDownloadTransport for DeadlineTransport {
+        type Body = Cursor<Vec<u8>>;
+
+        fn download(
+            &mut self,
+            request: &GemmaDownloadRequest,
+        ) -> Result<GemmaDownloadResponse<Self::Body>, GemmaTransportError> {
+            self.deadlines.push(request.limits.deadline);
+            self.now.set(self.now.get() + Duration::from_secs(6));
+            Err(GemmaTransportError::Transient)
+        }
+    }
+
+    let root = root();
+    let now = Rc::new(Cell::new(Duration::ZERO));
+    let clock_now = Rc::clone(&now);
+    let clock = move || clock_now.get();
+    let mut transport = DeadlineTransport {
+        now,
+        deadlines: Vec::new(),
+    };
+    let limits = GemmaAcquisitionLimits {
+        deadline: Duration::from_secs(10),
+        max_attempts: 3,
+        ..GemmaAcquisitionLimits::default()
+    };
+
+    assert_eq!(
+        acquire_gemma_stage(
+            &root,
+            "install",
+            &REVISION,
+            limits,
+            &mut transport,
+            &clock,
+            &|| false,
+        ),
+        Err(GemmaAcquisitionError::Retryable)
+    );
+    assert_eq!(
+        transport.deadlines,
+        [Duration::from_secs(10), Duration::from_secs(4)]
     );
     fs::remove_dir_all(root).unwrap();
 }
