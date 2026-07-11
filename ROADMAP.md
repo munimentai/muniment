@@ -12,7 +12,8 @@ Phases mirror harness-spec §9. Muniment-cloud Phase 1 native auth and the cloud
 - DONE — Svelte 5/Vite toolchain, design tokens, generic OIDC PKCE core, keychain storage, refresh-on-expiry, signed-out/signed-in states, pre-chat shell frame, reusable milled ring, and structured server-unreachable recovery.
 - DONE cloud prerequisite — the `muniment-desktop` installation-bound native authorization, token rotation, session, revocation, and entitlement-snapshot contracts are live at `api.muniment.ai` (2026-07-11).
 - CORRECTION — the live desktop contract is `/v1/auth/native/*`, not generic issuer discovery; `/.well-known/openid-configuration` returns 404. The existing generic OIDC core remains useful test groundwork but is not the production handshake.
-- NEXT before first chat — register and securely persist the desktop installation identity and one-use registration material through `POST /v1/auth/native/devices`. Follow with device-proof browser authorization, token exchange/rotation, authoritative session inspection, and entitlement snapshot consumption as separately reviewable slices.
+- DONE — registration and coherent keychain persistence of the desktop installation identity and one-use registration material through `POST /v1/auth/native/devices`.
+- NEXT before first chat — construct the installation proof and begin browser authorization through `POST /v1/auth/native/authorize`. Follow with system-browser callback handling, token exchange/rotation, authoritative session inspection, and entitlement snapshot consumption as separately reviewable slices.
 
 ### 9. Pi sidecar and cloud chat
 - DONE foundation — ADR 0008 pins Pi 0.73.1, chooses verified first-use acquisition of its platform-native executable, and proves its real `get_state` RPC readiness through `SidecarSupervisor`.
