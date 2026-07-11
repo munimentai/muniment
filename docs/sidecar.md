@@ -160,9 +160,12 @@ Available prompt, completion, and total token counts are returned with the text.
 Status, transport, size, JSON, and response-shape failures are typed diagnostics
 that never include prompt or raw response-body content.
 
-Streaming and the dictation/classifier role prompts remain out of scope. UI
-wiring and cloud or Pi behavior are also deferred, as are virtual keys and
-control-plane version negotiation.
+The dictation-polish role wraps this boundary with typed transcript input and
+polished-text output. Its fixed, zero-temperature prompt removes speech fillers
+and false starts, applies explicit self-corrections, and corrects mechanics while
+requiring meaning and detail to be preserved. Streaming and the classifier role
+prompt remain out of scope. UI wiring and cloud or Pi behavior are also
+deferred, as are virtual keys and control-plane version negotiation.
 
 Before producing launch arguments, the core requires the installed artifact to
 be a regular file with the descriptor's exact byte size and SHA-256. Hashing is
@@ -172,7 +175,9 @@ model path and `muniment-resident-gemma` alias as separate arguments; resident
 chat requests always use that alias rather than a caller-selected model name.
 
 Artifact acquisition and update/rollback policy remain out of scope, as do the
-dictation-polish and classifier role prompts and their evaluation.
+classifier role prompt and its evaluation. Dictation-polish contract evaluation
+uses deterministic golden fixtures and mock HTTP responses; CI never loads the
+model.
 
 Supervisor lifecycle events and stderr are diagnostic telemetry, not durable
 user-session history. Pi integration will translate only user-relevant domain
