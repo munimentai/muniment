@@ -23,7 +23,8 @@ Gate reading in practice (updated 2026-07-10): client-side slices that are fully
     - DONE 2026-07-10 — shared process supervisor, typed JSON-RPC transport, notification/cancellation hygiene, readiness-aware health, lifecycle events, bounded stderr diagnostics, restart safety, and module split; all stub-binary tested.
     - DONE 2026-07-10 — loopback-only managed llama-server launcher, bounded HTTP health/chat clients, and typed/redacted failures.
     - DONE 2026-07-10 — ADR 0003 pins Gemma 3 4B QAT Q4_0; launch streams exact-size/SHA-256 verification and fixes the API alias/context.
-    - NEXT — add the typed dictation-polish role contract; routing classification follows with Phase 3 item 12's vocabulary and evaluation work. Artifact acquisition/update/rollback remains a separate distribution concern.
+    - DONE 2026-07-10 — typed dictation-polish request/response contract, fixed prompt, and deterministic golden evaluations over the managed chat client.
+    - NEXT — routing classification follows with Phase 3 item 12's vocabulary and evaluation work. Artifact acquisition/update/rollback remains a separate distribution concern.
 11. Attachments pipeline + content-addressed file store client. The cloud file-store pipeline follows items 8d/9.
     - Groundwork DONE — pure-Rust content-addressed local store with atomic dedup publish, constant-memory put/get/verify, and stale-temp sweep.
 
