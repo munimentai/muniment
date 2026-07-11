@@ -22,6 +22,8 @@ Real builds run on ephemeral pve01 VM clones via `desktop-ci`
 one VM at a time, clone destroyed after. Pull requests are gated on the
 structure smoke, Rust and JS unit tests, followed by sequential Linux, Windows,
 and macOS builds via `desktop-ci`; pushes to `main` run the smoke only.
+Nightly and manually dispatched release builds use the same serialized VMs and
+replace the assets on the private repository's `nightly` pre-release.
 
 ### macOS CI note (2026-07-09)
 
