@@ -23,8 +23,23 @@ const ALLOWED_HOSTS: &[&str] = &[
 pub type ModelResponseBody = Box<dyn Read + Send + Sync + 'static>;
 
 /// Production transport shared by the Gemma and Parakeet state machines.
-#[derive(Debug, Default)]
-pub struct NativeModelAcquisitionTransport;
+pub struct NativeModelAcquisitionTransport {
+    backend: Box<dyn HttpBackend>,
+}
+
+impl std::fmt::Debug for NativeModelAcquisitionTransport {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("NativeModelAcquisitionTransport")
+            .finish_non_exhaustive()
+    }
+}
+
+impl Default for NativeModelAcquisitionTransport {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum TransportFailure {
@@ -41,7 +56,16 @@ struct Response {
 
 impl NativeModelAcquisitionTransport {
     pub fn new() -> Self {
-        Self
+        Self {
+            backend: Box::new(UreqBackend),
+        }
+    }
+
+    #[cfg(test)]
+    fn with_backend(backend: impl HttpBackend + 'static) -> Self {
+        Self {
+            backend: Box::new(backend),
+        }
     }
 
     fn request(
@@ -58,44 +82,7 @@ impl NativeModelAcquisitionTransport {
             connect_timeout,
             read_timeout,
             deadline,
-            |request| {
-                let agent = ureq::AgentBuilder::new()
-                    .redirects(0)
-                    .https_only(true)
-                    .try_proxy_from_env(true)
-                    .timeout_connect(request.connect_timeout)
-                    .timeout_read(request.read_timeout)
-                    .timeout(request.deadline)
-                    .build();
-                let mut call = agent.get(request.url.as_str());
-                if request.offset != 0 {
-                    call = call.set("Range", &format!("bytes={}-", request.offset));
-                }
-                match call.call() {
-                    Ok(response) | Err(ureq::Error::Status(_, response)) => Ok(BackendResponse {
-                        status: response.status(),
-                        location: response.header("Location").map(str::to_owned),
-                        content_range: response.header("Content-Range").map(str::to_owned),
-                        body: response.into_reader(),
-                    }),
-                    Err(ureq::Error::Transport(error)) => Err(match error.kind() {
-                        ureq::ErrorKind::InvalidUrl
-                        | ureq::ErrorKind::UnknownScheme
-                        | ureq::ErrorKind::InsecureRequestHttpsOnly
-                        | ureq::ErrorKind::TooManyRedirects
-                        | ureq::ErrorKind::BadStatus
-                        | ureq::ErrorKind::BadHeader
-                        | ureq::ErrorKind::InvalidProxyUrl
-                        | ureq::ErrorKind::ProxyUnauthorized => TransportFailure::Rejected,
-                        ureq::ErrorKind::ConnectionFailed
-                            if error.message() == Some("tls connection init failed") =>
-                        {
-                            TransportFailure::Rejected
-                        }
-                        _ => TransportFailure::Transient,
-                    }),
-                }
-            },
+            |request| self.backend.execute(request),
         )
     }
 }
@@ -167,6 +154,53 @@ struct BackendResponse {
     location: Option<String>,
     content_range: Option<String>,
     body: ModelResponseBody,
+}
+
+trait HttpBackend: Send + Sync {
+    fn execute(&mut self, request: &BackendRequest) -> Result<BackendResponse, TransportFailure>;
+}
+
+struct UreqBackend;
+
+impl HttpBackend for UreqBackend {
+    fn execute(&mut self, request: &BackendRequest) -> Result<BackendResponse, TransportFailure> {
+        let agent = ureq::AgentBuilder::new()
+            .redirects(0)
+            .https_only(true)
+            .try_proxy_from_env(true)
+            .timeout_connect(request.connect_timeout)
+            .timeout_read(request.read_timeout)
+            .timeout(request.deadline)
+            .build();
+        let mut call = agent.get(request.url.as_str());
+        if request.offset != 0 {
+            call = call.set("Range", &format!("bytes={}-", request.offset));
+        }
+        match call.call() {
+            Ok(response) | Err(ureq::Error::Status(_, response)) => Ok(BackendResponse {
+                status: response.status(),
+                location: response.header("Location").map(str::to_owned),
+                content_range: response.header("Content-Range").map(str::to_owned),
+                body: response.into_reader(),
+            }),
+            Err(ureq::Error::Transport(error)) => Err(match error.kind() {
+                ureq::ErrorKind::InvalidUrl
+                | ureq::ErrorKind::UnknownScheme
+                | ureq::ErrorKind::InsecureRequestHttpsOnly
+                | ureq::ErrorKind::TooManyRedirects
+                | ureq::ErrorKind::BadStatus
+                | ureq::ErrorKind::BadHeader
+                | ureq::ErrorKind::InvalidProxyUrl
+                | ureq::ErrorKind::ProxyUnauthorized => TransportFailure::Rejected,
+                ureq::ErrorKind::ConnectionFailed
+                    if error.message() == Some("tls connection init failed") =>
+                {
+                    TransportFailure::Rejected
+                }
+                _ => TransportFailure::Transient,
+            }),
+        }
+    }
 }
 
 fn request_with<F>(
@@ -257,8 +291,27 @@ fn parse_content_range(value: &str) -> Result<Option<(u64, u64, u64)>, Transport
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::asr::acquisition::AsrAcquisitionLimits;
+    use crate::llama::acquisition::GemmaAcquisitionLimits;
     use std::collections::VecDeque;
     use std::io::Cursor;
+
+    struct FixtureBackend {
+        replies: VecDeque<Result<BackendResponse, TransportFailure>>,
+    }
+
+    impl HttpBackend for FixtureBackend {
+        fn execute(
+            &mut self,
+            request: &BackendRequest,
+        ) -> Result<BackendResponse, TransportFailure> {
+            assert_eq!(request.offset, 7);
+            assert!(request.connect_timeout <= Duration::from_secs(5));
+            assert!(request.read_timeout <= Duration::from_secs(5));
+            assert!(request.deadline <= Duration::from_secs(5));
+            self.replies.pop_front().unwrap()
+        }
+    }
 
     fn reply(
         status: u16,
@@ -274,27 +327,56 @@ mod tests {
         }
     }
 
-    fn run(replies: Vec<BackendResponse>) -> Result<Response, TransportFailure> {
-        let mut replies = VecDeque::from(replies);
-        request_with(
-            "https://huggingface.co/repo/resolve/revision/model?secret=value",
+    fn transport(
+        replies: Vec<Result<BackendResponse, TransportFailure>>,
+    ) -> NativeModelAcquisitionTransport {
+        NativeModelAcquisitionTransport::with_backend(FixtureBackend {
+            replies: VecDeque::from(replies),
+        })
+    }
+
+    fn gemma_request() -> GemmaDownloadRequest {
+        GemmaDownloadRequest::for_transport_test(
+            "https://huggingface.co/repo/resolve/revision/model?secret=value".into(),
             7,
-            Duration::from_secs(10),
-            Duration::from_secs(30),
-            Duration::from_secs(5),
-            |request| {
-                assert_eq!(request.offset, 7);
-                assert!(request.connect_timeout <= Duration::from_secs(5));
-                assert!(request.read_timeout <= Duration::from_secs(5));
-                assert!(request.deadline <= Duration::from_secs(5));
-                Ok(replies.pop_front().unwrap())
+            GemmaAcquisitionLimits {
+                connect_timeout: Duration::from_secs(10),
+                read_timeout: Duration::from_secs(30),
+                deadline: Duration::from_secs(5),
+                max_attempts: 1,
+            },
+        )
+    }
+
+    fn asr_request() -> AsrDownloadRequest {
+        AsrDownloadRequest::for_transport_test(
+            "https://huggingface.co/repo/resolve/revision/model?secret=value".into(),
+            7,
+            AsrAcquisitionLimits {
+                connect_timeout: Duration::from_secs(10),
+                read_timeout: Duration::from_secs(30),
+                deadline: Duration::from_secs(5),
+                max_attempts: 1,
             },
         )
     }
 
     #[test]
-    fn streams_success_and_parses_range() {
-        let mut response = run(vec![reply(206, None, Some("bytes 7-9/10"), b"abc")]).unwrap();
+    fn gemma_adapter_streams_200() {
+        let mut transport = transport(vec![Ok(reply(200, None, None, b"streamed"))]);
+        let mut response =
+            GemmaDownloadTransport::download(&mut transport, &gemma_request()).unwrap();
+        assert_eq!(response.status, 200);
+        assert_eq!(response.content_range, None);
+        let mut bytes = Vec::new();
+        response.body.read_to_end(&mut bytes).unwrap();
+        assert_eq!(bytes, b"streamed");
+    }
+
+    #[test]
+    fn asr_adapter_streams_206_and_parses_range() {
+        let mut transport = transport(vec![Ok(reply(206, None, Some("bytes 7-9/10"), b"abc"))]);
+        let mut response = AsrDownloadTransport::download(&mut transport, &asr_request()).unwrap();
         assert_eq!(response.status, 206);
         assert_eq!(response.content_range, Some((7, 9, 10)));
         let mut bytes = Vec::new();
@@ -303,47 +385,75 @@ mod tests {
     }
 
     #[test]
-    fn maps_status_failures() {
+    fn both_adapters_map_status_and_transport_failures() {
+        let mut gemma = transport(vec![Ok(reply(503, None, None, b"private body"))]);
         assert!(matches!(
-            run(vec![reply(503, None, None, b"private body")]),
-            Err(TransportFailure::Transient)
+            GemmaDownloadTransport::download(&mut gemma, &gemma_request()),
+            Err(GemmaTransportError::Transient)
+        ));
+        let mut asr = transport(vec![Err(TransportFailure::Transient)]);
+        assert!(matches!(
+            AsrDownloadTransport::download(&mut asr, &asr_request()),
+            Err(AsrTransportError::Transient)
         ));
         for status in [404, 410] {
+            let mut gemma = transport(vec![Ok(reply(status, None, None, b"secret body"))]);
             assert!(matches!(
-                run(vec![reply(status, None, None, b"")]),
-                Err(TransportFailure::Unavailable)
+                GemmaDownloadTransport::download(&mut gemma, &gemma_request()),
+                Err(GemmaTransportError::Unavailable)
+            ));
+            let mut asr = transport(vec![Ok(reply(status, None, None, b"secret body"))]);
+            assert!(matches!(
+                AsrDownloadTransport::download(&mut asr, &asr_request()),
+                Err(AsrTransportError::Unavailable)
             ));
         }
     }
 
     #[test]
     fn rejects_downgrade_and_unrelated_redirects() {
-        for location in ["http://huggingface.co/file", "https://example.com/file"] {
-            assert!(matches!(
-                run(vec![reply(302, Some(location), None, b"")]),
-                Err(TransportFailure::Rejected)
-            ));
-        }
+        let mut gemma = transport(vec![Ok(reply(
+            302,
+            Some("http://huggingface.co/file"),
+            None,
+            b"",
+        ))]);
+        assert!(matches!(
+            GemmaDownloadTransport::download(&mut gemma, &gemma_request()),
+            Err(GemmaTransportError::Rejected)
+        ));
+        let mut asr = transport(vec![Ok(reply(
+            302,
+            Some("https://example.com/file"),
+            None,
+            b"",
+        ))]);
+        assert!(matches!(
+            AsrDownloadTransport::download(&mut asr, &asr_request()),
+            Err(AsrTransportError::Rejected)
+        ));
     }
 
     #[test]
     fn accepts_expected_content_host_without_exposing_sensitive_values() {
-        let result = run(vec![
-            reply(
+        let mut allowed_transport = transport(vec![
+            Ok(reply(
                 302,
                 Some("https://cdn-lfs.huggingface.co/file?token=credential"),
                 None,
                 b"",
-            ),
-            reply(200, None, None, b"streamed"),
+            )),
+            Ok(reply(200, None, None, b"streamed")),
         ]);
+        let result = GemmaDownloadTransport::download(&mut allowed_transport, &gemma_request());
         assert!(result.is_ok());
-        let error = match run(vec![reply(
+        let mut transport = transport(vec![Ok(reply(
             302,
             Some("https://evil.invalid/path?token=credential"),
             None,
             b"",
-        )]) {
+        ))]);
+        let error = match AsrDownloadTransport::download(&mut transport, &asr_request()) {
             Err(error) => format!("{error:?}"),
             Ok(_) => panic!("unrelated redirect was accepted"),
         };
