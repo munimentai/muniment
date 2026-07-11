@@ -41,19 +41,17 @@ pub trait ExclusiveLock {
 }
 
 pub trait AtomicReplace {
+    /// Replaces `destination` without a reader-visible missing-file window.
+    /// Implementors must provide replace-existing semantics on their platform.
     fn replace(&self, source: &Path, destination: &Path) -> Result<(), LifecycleError>;
-}
-
-pub struct StdAtomicReplace;
-impl AtomicReplace for StdAtomicReplace {
-    fn replace(&self, source: &Path, destination: &Path) -> Result<(), LifecycleError> {
-        fs::rename(source, destination).map_err(|_| LifecycleError::Storage { retryable: true })
-    }
+    /// Atomically removes the pointer name when it exists.
+    fn remove(&self, path: &Path) -> Result<(), LifecycleError>;
 }
 
 pub struct AsrLifecycle<'a, L, A> {
     root: PathBuf,
     manifest: &'a AsrArtifactManifest,
+    known_manifests: &'a [&'a AsrArtifactManifest],
     lock: L,
     atomic: A,
 }
@@ -68,9 +66,16 @@ impl<'a, L: ExclusiveLock, A: AtomicReplace> AsrLifecycle<'a, L, A> {
         Self {
             root: root.into(),
             manifest,
+            known_manifests: &[],
             lock,
             atomic,
         }
+    }
+
+    /// Adds manifests for older revisions that pointers may still name.
+    pub fn with_known_manifests(mut self, known_manifests: &'a [&'a AsrArtifactManifest]) -> Self {
+        self.known_manifests = known_manifests;
+        self
     }
 
     /// Resolves exactly one `current` snapshot. Staging is never inspected.
@@ -84,6 +89,7 @@ impl<'a, L: ExclusiveLock, A: AtomicReplace> AsrLifecycle<'a, L, A> {
 
     pub fn publish(&self, stage_name: &str) -> Result<LifecycleState, LifecycleError> {
         let _guard = self.lock.try_acquire()?;
+        self.validate_layout()?;
         let stage_name = safe_component(stage_name)?;
         let revision = safe_revision(self.manifest.revision)?;
         let stage = self.root.join("staging").join(stage_name);
@@ -110,6 +116,7 @@ impl<'a, L: ExclusiveLock, A: AtomicReplace> AsrLifecycle<'a, L, A> {
 
     pub fn recover(&self) -> Result<LifecycleState, LifecycleError> {
         let _guard = self.lock.try_acquire()?;
+        self.validate_layout()?;
         if self.verified_pointer("current").ok().flatten().is_some() {
             return Ok(LifecycleState::Ready);
         }
@@ -128,6 +135,7 @@ impl<'a, L: ExclusiveLock, A: AtomicReplace> AsrLifecycle<'a, L, A> {
 
     pub fn rollback(&self) -> Result<LifecycleState, LifecycleError> {
         let _guard = self.lock.try_acquire()?;
+        self.validate_layout()?;
         let previous = self
             .verified_pointer("previous")?
             .ok_or(LifecycleError::VerificationFailed)?;
@@ -137,14 +145,15 @@ impl<'a, L: ExclusiveLock, A: AtomicReplace> AsrLifecycle<'a, L, A> {
 
     pub fn remove(&self) -> Result<LifecycleState, LifecycleError> {
         let _guard = self.lock.try_acquire()?;
+        self.validate_layout().map_err(cleanup_error)?;
+        // Inspect the complete owned tree before removing either usable pointer.
+        for name in ["current", "previous", "revisions", "staging"] {
+            preflight_owned(&self.root.join(name)).map_err(cleanup_error)?;
+        }
         for pointer in ["current", "previous"] {
             let path = self.root.join(pointer);
             match fs::symlink_metadata(&path) {
-                Ok(metadata) if metadata.file_type().is_symlink() => {
-                    return Err(LifecycleError::UnsafeEntry)
-                }
-                Ok(_) => fs::remove_file(path)
-                    .map_err(|_| LifecycleError::Storage { retryable: true })?,
+                Ok(_) => self.atomic.remove(&path).map_err(cleanup_error)?,
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
                 Err(_) => return Err(LifecycleError::Storage { retryable: true }),
             }
@@ -152,13 +161,17 @@ impl<'a, L: ExclusiveLock, A: AtomicReplace> AsrLifecycle<'a, L, A> {
         for directory in ["revisions", "staging"] {
             let path = self.root.join(directory);
             if path.exists() {
-                remove_owned_tree(&path)?;
+                remove_owned_tree(&path).map_err(cleanup_error)?;
             }
         }
         Ok(LifecycleState::NotInstalled)
     }
 
     fn verified_pointer(&self, name: &str) -> Result<Option<String>, LifecycleError> {
+        validate_directory(&self.root, false)?;
+        for directory in ["staging", "revisions"] {
+            validate_directory(&self.root.join(directory), false)?;
+        }
         let path = self.root.join(name);
         reject_symlink(&path)?;
         let value = match fs::read_to_string(path) {
@@ -167,13 +180,16 @@ impl<'a, L: ExclusiveLock, A: AtomicReplace> AsrLifecycle<'a, L, A> {
             Err(_) => return Err(LifecycleError::Storage { retryable: true }),
         };
         let revision = value.trim();
-        if revision != self.manifest.revision || safe_revision(revision).is_err() {
+        safe_revision(revision).map_err(|_| LifecycleError::VerificationFailed)?;
+        let manifest = self
+            .manifest_for(revision)
+            .ok_or(LifecycleError::VerificationFailed)?;
+        if manifest.revision != revision {
             return Err(LifecycleError::VerificationFailed);
         }
         let directory = self.root.join("revisions").join(revision);
         reject_symlink(&directory)?;
-        verify_model_set(&directory, self.manifest)
-            .map_err(|_| LifecycleError::VerificationFailed)?;
+        verify_model_set(&directory, manifest).map_err(|_| LifecycleError::VerificationFailed)?;
         Ok(Some(revision.to_owned()))
     }
 
@@ -183,6 +199,20 @@ impl<'a, L: ExclusiveLock, A: AtomicReplace> AsrLifecycle<'a, L, A> {
         fs::write(&temporary, format!("{revision}\n"))
             .map_err(|_| LifecycleError::Storage { retryable: true })?;
         self.atomic.replace(&temporary, &self.root.join(name))
+    }
+
+    fn manifest_for(&self, revision: &str) -> Option<&AsrArtifactManifest> {
+        std::iter::once(self.manifest)
+            .chain(self.known_manifests.iter().copied())
+            .find(|manifest| manifest.revision == revision)
+    }
+
+    fn validate_layout(&self) -> Result<(), LifecycleError> {
+        validate_directory(&self.root, true)?;
+        for name in ["staging", "revisions"] {
+            validate_directory(&self.root.join(name), false)?;
+        }
+        Ok(())
     }
 }
 
@@ -195,11 +225,52 @@ fn safe_component(value: &str) -> Result<&str, LifecycleError> {
 }
 
 fn safe_revision(value: &str) -> Result<&str, LifecycleError> {
-    if value.len() >= 40 && value.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+    if value.len() == 40
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
         Ok(value)
     } else {
         Err(LifecycleError::InvalidStage)
     }
+}
+
+fn validate_directory(path: &Path, required: bool) -> Result<(), LifecycleError> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.is_dir() && !metadata.file_type().is_symlink() => Ok(()),
+        Ok(_) => Err(LifecycleError::UnsafeEntry),
+        Err(error) if !required && error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) if required && error.kind() == std::io::ErrorKind::NotFound => {
+            fs::create_dir(path).map_err(|_| LifecycleError::Storage { retryable: true })
+        }
+        Err(_) => Err(LifecycleError::Storage { retryable: true }),
+    }
+}
+
+fn cleanup_error(_: LifecycleError) -> LifecycleError {
+    LifecycleError::Storage { retryable: true }
+}
+
+fn preflight_owned(path: &Path) -> Result<(), LifecycleError> {
+    let metadata = match fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(_) => return Err(LifecycleError::Storage { retryable: true }),
+    };
+    if metadata.file_type().is_symlink() {
+        return Err(LifecycleError::UnsafeEntry);
+    }
+    if metadata.is_dir() {
+        for entry in fs::read_dir(path).map_err(|_| LifecycleError::Storage { retryable: true })? {
+            preflight_owned(
+                &entry
+                    .map_err(|_| LifecycleError::Storage { retryable: true })?
+                    .path(),
+            )?;
+        }
+    }
+    Ok(())
 }
 
 fn reject_symlink(path: &Path) -> Result<(), LifecycleError> {
