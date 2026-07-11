@@ -163,9 +163,24 @@ that never include prompt or raw response-body content.
 The dictation-polish role wraps this boundary with typed transcript input and
 polished-text output. Its fixed, zero-temperature prompt removes speech fillers
 and false starts, applies explicit self-corrections, and corrects mechanics while
-requiring meaning and detail to be preserved. Streaming and the classifier role
-prompt remain out of scope. UI wiring and cloud or Pi behavior are also
-deferred, as are virtual keys and control-plane version negotiation.
+requiring meaning and detail to be preserved. Streaming remains out of scope.
+UI wiring and cloud or Pi behavior are also deferred, as are virtual keys and
+control-plane version negotiation.
+
+The routing-classifier role is a separate typed, zero-temperature contract. It
+returns only `task_type` and `difficulty`, plus llama.cpp token usage. The closed
+task vocabulary is `general`, `analysis`, `code-plan`, `code-edit`, `extraction`,
+`vision`, and `long-context`; difficulty is `low`, `medium`, or `high`. Its prompt
+delimits the user's request as untrusted data and requires one compact JSON
+object. Application-side decoding rejects malformed JSON, missing or extra
+fields, unknown labels, and surrounding prose without including the prompt or
+raw assistant response in diagnostics.
+
+This is classification evidence, not a routing decision. The response cannot
+name a model, provider, route, policy, entitlement, capability, or cost; those
+decisions belong to gateway policy as specified in §5 of the harness spec.
+Carrying these labels as request metadata and wiring the role into Pi or the
+gateway are explicitly deferred.
 
 Before producing launch arguments, the core requires the installed artifact to
 be a regular file with the descriptor's exact byte size and SHA-256. Hashing is
@@ -174,10 +189,9 @@ not disclose file contents or installation paths. llama-server receives the
 model path and `muniment-resident-gemma` alias as separate arguments; resident
 chat requests always use that alias rather than a caller-selected model name.
 
-Artifact acquisition and update/rollback policy remain out of scope, as do the
-classifier role prompt and its evaluation. Dictation-polish contract evaluation
-uses deterministic golden fixtures and mock HTTP responses; CI never loads the
-model.
+Artifact acquisition and update/rollback policy remain out of scope.
+Dictation-polish and routing-classifier contract evaluation use deterministic
+golden fixtures and mock HTTP responses; CI never loads the model.
 
 Supervisor lifecycle events and stderr are diagnostic telemetry, not durable
 user-session history. Pi integration will translate only user-relevant domain
