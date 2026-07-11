@@ -171,10 +171,13 @@ The routing-classifier role is a separate typed, zero-temperature contract. It
 returns only `task_type` and `difficulty`, plus llama.cpp token usage. The closed
 task vocabulary is `general`, `analysis`, `code-plan`, `code-edit`, `extraction`,
 `vision`, and `long-context`; difficulty is `low`, `medium`, or `high`. Its prompt
-delimits the user's request as untrusted data and requires one compact JSON
-object. Application-side decoding rejects malformed JSON, missing or extra
-fields, unknown labels, and surrounding prose without including the prompt or
-raw assistant response in diagnostics.
+serializes the user's request as one JSON string explicitly identified as
+untrusted data. JSON escaping keeps request-controlled tag-like text, quotes,
+and line breaks inside that string, making the framing unambiguous and testable;
+this separation reduces ambiguity but does not eliminate prompt-injection risk.
+The classifier requires one compact JSON object. Application-side decoding
+rejects malformed JSON, missing or extra fields, unknown labels, and surrounding
+prose without including the prompt or raw assistant response in diagnostics.
 
 This is classification evidence, not a routing decision. The response cannot
 name a model, provider, route, policy, entitlement, capability, or cost; those
