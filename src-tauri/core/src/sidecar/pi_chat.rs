@@ -130,16 +130,27 @@ impl PiRunAdapter {
         if accepted != PiChatEvent::PromptAccepted {
             return Err("Pi rejected the prompt".into());
         }
-        Ok((Self { run_id: run_id.into(), frames }, accepted))
+        Ok((
+            Self {
+                run_id: run_id.into(),
+                frames,
+            },
+            accepted,
+        ))
     }
 
-    pub fn run_id(&self) -> &str { &self.run_id }
+    pub fn run_id(&self) -> &str {
+        &self.run_id
+    }
 
     pub fn next(&self, timeout: Duration) -> Result<PiChatEvent, String> {
-        let frame = self.frames.recv_timeout(timeout).map_err(|error| match error {
-            mpsc::RecvTimeoutError::Timeout => "timed out waiting for Pi stream".to_string(),
-            mpsc::RecvTimeoutError::Disconnected => "Pi process stream ended".to_string(),
-        })?;
+        let frame = self
+            .frames
+            .recv_timeout(timeout)
+            .map_err(|error| match error {
+                mpsc::RecvTimeoutError::Timeout => "timed out waiting for Pi stream".to_string(),
+                mpsc::RecvTimeoutError::Disconnected => "Pi process stream ended".to_string(),
+            })?;
         parse_frame(&frame).map_err(str::to_owned)
     }
 }

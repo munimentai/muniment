@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { applyChatEvent, receiptParts, shouldSend } from './chat-state.js'
+import { applyBufferedChatEvents, applyChatEvent, receiptParts, shouldSend } from './chat-state.js'
 
 describe('chat composer and projection', () => {
   it('sends Enter, retains Shift+Enter, and blocks duplicate submits', () => {
@@ -19,5 +19,15 @@ describe('chat composer and projection', () => {
   it('does not invent missing receipt values', () => {
     expect(receiptParts({ route: 'fast', capabilities: [{ name: 'search', version: '2' }] }))
       .toEqual(['fast', 'search@2'])
+  })
+
+  it('preserves all projections that arrive before submit resolves', () => {
+    const run = applyBufferedChatEvents({ id: 'r', phase: 'thinking', text: '' }, [
+      { runId: 'r', phase: 'thinking', text: '' },
+      { runId: 'r', phase: 'streaming', text: 'fast ' },
+      { runId: 'r', phase: 'streaming', text: 'fast reply' },
+      { runId: 'r', phase: 'complete', text: 'fast reply', receipt: { route: 'fast' } },
+    ])
+    expect(run).toMatchObject({ phase: 'complete', text: 'fast reply', receipt: { route: 'fast' } })
   })
 })

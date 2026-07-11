@@ -20,3 +20,7 @@ export function applyChatEvent(run, event) {
   if (event.type === 'failed') return { ...run, phase: 'failed' }
   return run
 }
+
+export function applyBufferedChatEvents(run, events) {
+  return events.reduce((projection, event) => applyChatEvent(projection, event), run)
+}

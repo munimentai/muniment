@@ -8,7 +8,9 @@ use muniment_core::journal::reducer::project_chat;
 use muniment_core::journal::{EventEnvelope, EventPayload, Provenance, RunJournal};
 use muniment_core::sidecar::pi_chat::{cancel_command, PiChatEvent, PiRunAdapter, Receipt};
 use muniment_core::sidecar::pi_install::resolve_current;
-use muniment_core::sidecar::{pi_sidecar_config, PiRpcWiring, SidecarStatus, SidecarSupervisor};
+use muniment_core::sidecar::{
+    pi_sidecar_config, PiRpcTransport, PiRpcWiring, SidecarStatus, SidecarSupervisor,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use tauri::{Emitter, Manager};
@@ -47,11 +49,21 @@ struct ChatEvent {
 struct ActiveRun {
     id: String,
     cancelled: Arc<AtomicBool>,
+    transport: Arc<Mutex<Option<Arc<PiRpcTransport>>>>,
+}
+
+struct PiRuntime {
+    supervisor: SidecarSupervisor,
+    wiring: PiRpcWiring,
+    gateway_url: String,
+    virtual_key: String,
+    model: Option<String>,
 }
 
 pub struct ChatState {
     journal: Arc<Mutex<RunJournal>>,
     active: Mutex<Option<ActiveRun>>,
+    runtime: Arc<Mutex<Option<PiRuntime>>>,
 }
 
 impl ChatState {
@@ -63,6 +75,7 @@ impl ChatState {
                 directory.join("runs.sqlite3"),
             )?)),
             active: Mutex::new(None),
+            runtime: Arc::new(Mutex::new(None)),
         })
     }
 }
@@ -91,23 +104,28 @@ pub async fn chat_submit(
     validate_grant(&grant)?;
     let run_id = Uuid::now_v7().to_string();
     let cancelled = Arc::new(AtomicBool::new(false));
+    let transport = Arc::new(Mutex::new(None));
     *active = Some(ActiveRun {
         id: run_id.clone(),
         cancelled: Arc::clone(&cancelled),
+        transport: Arc::clone(&transport),
     });
     drop(active);
 
     let journal = Arc::clone(&state.journal);
+    let runtime = Arc::clone(&state.runtime);
     let result_id = run_id.clone();
     tauri::async_runtime::spawn_blocking(move || {
         coordinate(
             app.clone(),
             journal,
+            runtime,
             run_id.clone(),
             prompt,
             tokens.access_token,
             grant,
             cancelled,
+            transport,
         );
         if let Some(state) = app.try_state::<ChatState>() {
             let mut active = state
@@ -133,89 +151,136 @@ pub async fn chat_cancel(state: tauri::State<'_, ChatState>, run_id: String) -> 
         .filter(|run| run.id == run_id)
         .ok_or_else(|| "That reply is no longer active.".to_string())?;
     run.cancelled.store(true, Ordering::SeqCst);
+    if let Some(transport) = run
+        .transport
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .as_ref()
+    {
+        transport
+            .call(cancel_command(), Duration::from_secs(2))
+            .map_err(|_| "The reply could not be stopped yet. Try again.".to_string())?;
+    }
     Ok(())
 }
 
 fn coordinate(
     app: tauri::AppHandle,
     journal: Arc<Mutex<RunJournal>>,
+    runtime: Arc<Mutex<Option<PiRuntime>>>,
     run_id: String,
     prompt: String,
     access_token: String,
     grant: ChatGrant,
     cancelled: Arc<AtomicBool>,
+    active_transport: Arc<Mutex<Option<Arc<PiRpcTransport>>>>,
 ) {
     let mut seq = 0;
-    if append_emit(
-        &app,
-        &journal,
-        &run_id,
-        &mut seq,
-        "run.started",
-        json!({"prompt": prompt.clone()}),
-    )
-    .is_err()
-    {
+    if append_emit(&app, &journal, &run_id, &mut seq, "run.started", json!({})).is_err() {
         return;
     }
-    let root = match std::env::var("MUNIMENT_PI_ROOT") {
-        Ok(root) => root,
-        Err(_) => {
-            fail(
-                &app,
-                &journal,
-                &run_id,
-                &mut seq,
-                "The agent runtime is not installed.",
-            );
-            return;
-        }
-    };
-    let executable = match resolve_current(std::path::Path::new(&root)) {
-        Ok(path) => path,
-        Err(_) => {
-            fail(
-                &app,
-                &journal,
-                &run_id,
-                &mut seq,
-                "The agent runtime is unavailable.",
-            );
-            return;
-        }
-    };
-    let mut config = pi_sidecar_config(executable.to_string_lossy());
-    // This is a scoped LiteLLM virtual key, never a provider credential. It is
-    // inherited by the supervised child only and never serialized or logged.
-    config
-        .env
-        .insert("OPENAI_API_KEY".into(), grant.virtual_key.clone());
-    config
-        .env
-        .insert("OPENAI_BASE_URL".into(), grant.gateway_url.clone());
-    if let Some(model) = &grant.model {
-        config.env.insert("PI_DEFAULT_MODEL".into(), model.clone());
+    if cancelled.load(Ordering::SeqCst) {
+        let _ = append_emit(
+            &app,
+            &journal,
+            &run_id,
+            &mut seq,
+            "run.cancelled",
+            json!({}),
+        );
+        return;
     }
-    let wiring = PiRpcWiring::new();
-    let mut supervisor =
-        match SidecarSupervisor::spawn(config, wiring.readiness_probe(Duration::from_secs(10))) {
-            Ok(value) => value,
+    let mut runtime = runtime
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let same_grant = runtime.as_ref().is_some_and(|runtime| {
+        runtime.gateway_url == grant.gateway_url
+            && runtime.virtual_key == grant.virtual_key
+            && runtime.model == grant.model
+    });
+    if !same_grant {
+        *runtime = None;
+        let root = match std::env::var("MUNIMENT_PI_ROOT") {
+            Ok(root) => root,
             Err(_) => {
                 fail(
                     &app,
                     &journal,
                     &run_id,
                     &mut seq,
-                    "The agent runtime could not start.",
+                    "The agent runtime is not installed.",
                 );
                 return;
             }
         };
+        let executable = match resolve_current(std::path::Path::new(&root)) {
+            Ok(path) => path,
+            Err(_) => {
+                fail(
+                    &app,
+                    &journal,
+                    &run_id,
+                    &mut seq,
+                    "The agent runtime is unavailable.",
+                );
+                return;
+            }
+        };
+        let mut config = pi_sidecar_config(executable.to_string_lossy());
+        // This is a scoped LiteLLM virtual key, never a provider credential. It is
+        // inherited by the supervised child only and never serialized or logged.
+        config
+            .env
+            .insert("OPENAI_API_KEY".into(), grant.virtual_key.clone());
+        config
+            .env
+            .insert("OPENAI_BASE_URL".into(), grant.gateway_url.clone());
+        if let Some(model) = &grant.model {
+            config.env.insert("PI_DEFAULT_MODEL".into(), model.clone());
+        }
+        let wiring = PiRpcWiring::new();
+        let supervisor =
+            match SidecarSupervisor::spawn(config, wiring.readiness_probe(Duration::from_secs(10)))
+            {
+                Ok(value) => value,
+                Err(_) => {
+                    fail(
+                        &app,
+                        &journal,
+                        &run_id,
+                        &mut seq,
+                        "The agent runtime could not start.",
+                    );
+                    return;
+                }
+            };
+        *runtime = Some(PiRuntime {
+            supervisor,
+            wiring,
+            gateway_url: grant.gateway_url.clone(),
+            virtual_key: grant.virtual_key.clone(),
+            model: grant.model.clone(),
+        });
+    }
+    let runtime = runtime.as_ref().expect("runtime was initialized");
     let deadline = std::time::Instant::now() + Duration::from_secs(30);
-    while supervisor.status() == SidecarStatus::Starting && std::time::Instant::now() < deadline {
+    while runtime.supervisor.status() == SidecarStatus::Starting
+        && std::time::Instant::now() < deadline
+    {
+        if cancelled.load(Ordering::SeqCst) {
+            let _ = append_emit(
+                &app,
+                &journal,
+                &run_id,
+                &mut seq,
+                "run.cancelled",
+                json!({}),
+            );
+            return;
+        }
         std::thread::sleep(Duration::from_millis(10));
     }
-    let Some(transport) = wiring.transport() else {
+    let Some(transport) = runtime.wiring.transport() else {
         fail(
             &app,
             &journal,
@@ -223,9 +288,22 @@ fn coordinate(
             &mut seq,
             "The agent runtime did not become ready.",
         );
-        let _ = supervisor.shutdown();
         return;
     };
+    *active_transport
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(Arc::clone(&transport));
+    if cancelled.load(Ordering::SeqCst) {
+        let _ = append_emit(
+            &app,
+            &journal,
+            &run_id,
+            &mut seq,
+            "run.cancelled",
+            json!({}),
+        );
+        return;
+    }
     let (adapter, _) = match PiRunAdapter::start(run_id.clone(), &transport, &prompt, RPC_TIMEOUT) {
         Ok(value) => value,
         Err(_) => {
@@ -236,7 +314,6 @@ fn coordinate(
                 &mut seq,
                 "The reply could not be started.",
             );
-            let _ = supervisor.shutdown();
             return;
         }
     };
@@ -250,7 +327,6 @@ fn coordinate(
     )
     .is_err()
     {
-        let _ = supervisor.shutdown();
         return;
     }
     let mut aborting = false;
@@ -334,7 +410,7 @@ fn coordinate(
             Ok(PiChatEvent::Interleaved | PiChatEvent::PromptAccepted) => {}
             Err(error) if error == "timed out waiting for Pi stream" => {
                 if matches!(
-                    supervisor.status(),
+                    runtime.supervisor.status(),
                     SidecarStatus::Failed | SidecarStatus::Stopped
                 ) {
                     fail(
@@ -359,7 +435,6 @@ fn coordinate(
             }
         }
     }
-    let _ = supervisor.shutdown();
 }
 
 fn append_emit(

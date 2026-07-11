@@ -3,7 +3,7 @@
 
   import { bootState, errorState, statusState, waitingState } from './lib/auth-state.js'
   import { ringPath } from './lib/mark.js'
-  import { applyChatEvent, receiptParts, shouldSend } from './lib/chat-state.js'
+  import { applyBufferedChatEvents, applyChatEvent, receiptParts, shouldSend } from './lib/chat-state.js'
 
   const markD = ringPath()
   const version = __APP_VERSION__
@@ -13,6 +13,7 @@
   let draft = $state('')
   let messages = $state([])
   let active = $state(null)
+  let cancelError = $state('')
   let buffered = new Map()
   let unlisten
 
@@ -36,7 +37,7 @@
     if (tauri) run('status')
     window.__TAURI__?.event?.listen('chat-event', ({ payload }) => {
       if (!messages.some((message) => message.run?.id === payload.runId)) {
-        buffered.set(payload.runId, payload)
+        buffered.set(payload.runId, [...(buffered.get(payload.runId) ?? []), payload])
         return
       }
       const projected = applyChatEvent(active, payload)
@@ -57,13 +58,24 @@
     try {
       const run = await tauri.invoke('chat_submit', { prompt })
       active = { ...pending, id: run.runId }
-      const early = buffered.get(run.runId)
-      if (early) { active = applyChatEvent(active, early); buffered.delete(run.runId) }
-      messages = messages.map((message) => message.run === pending ? { ...message, run: active } : message)
+      const early = buffered.get(run.runId) ?? []
+      const projected = applyBufferedChatEvents(active, early)
+      buffered.delete(run.runId)
+      messages = messages.map((message) => message.run === pending ? { ...message, run: projected } : message)
+      active = ['complete', 'cancelled', 'failed'].includes(projected.phase) ? null : projected
     } catch (_) {
       const failed = { ...pending, id: `rejected-${messages.length}`, phase: 'failed' }
       messages = messages.map((message) => message.run === pending ? { ...message, run: failed } : message)
       active = null
+    }
+  }
+
+  async function cancel() {
+    cancelError = ''
+    try {
+      await tauri.invoke('chat_cancel', { runId: active.id })
+    } catch (_) {
+      cancelError = 'Could not stop this reply. Try again.'
     }
   }
 
@@ -113,7 +125,8 @@
         </div>
         <div class="composer">
           <textarea bind:value={draft} onkeydown={keydown} rows="2" placeholder="Ask anything" disabled={Boolean(active)}></textarea>
-          <div class="composer-row"><span>Routing is automatic. Every reply carries its receipt.</span>{#if active}<button onclick={() => tauri.invoke('chat_cancel', { runId: active.id })}>Stop</button>{:else}<button disabled={!draft.trim()} onclick={send}>Send</button>{/if}</div>
+          {#if cancelError}<p class="cancel-error" role="alert">{cancelError}</p>{/if}
+          <div class="composer-row"><span>Routing is automatic. Every reply carries its receipt.</span>{#if active && active.id !== 'pending'}<button onclick={cancel}>Stop</button>{:else if !active}<button disabled={!draft.trim()} onclick={send}>Send</button>{/if}</div>
         </div>
       </section>
     {:else if auth.name === 'error'}
@@ -224,6 +237,7 @@
   .provenance { display: block; margin-top: 10px; padding: 0; border: 0; background: transparent; color: var(--muted); font: var(--text-12) var(--font-mono); text-align: left; }
   .provenance span { color: var(--signal); }
   .run-error { color: var(--muted); font: var(--text-12) var(--font-mono); }
+  .cancel-error { margin: 0 0 8px; color: var(--muted); font: var(--text-12) var(--font-mono); }
   .run-error button { padding: 2px 6px; }
   .composer { width: min(760px, calc(100% - 48px)); margin: 0 auto 24px; padding: 12px; background: var(--surface); border: 1px solid var(--border); border-radius: 10px; }
   .composer:focus-within { border-color: var(--muted); }

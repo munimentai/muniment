@@ -35,7 +35,8 @@ fn pi_completion_does_not_claim_authoritative_provenance() {
     assert_eq!(
         parse_frame(&json!({"type":"agent_end","receipt":{
             "route":"untrusted", "model":"untrusted"
-        }})).unwrap(),
+        }}))
+        .unwrap(),
         PiChatEvent::Completed
     );
 }
