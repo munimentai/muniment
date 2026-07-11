@@ -4,10 +4,13 @@
 //! touches disk in plaintext.
 
 use keyring::Entry;
-use muniment_core::auth::{AuthError, TokenSet, TokenStore};
+use muniment_core::auth::{
+    AuthError, InstallationRecord, InstallationStore, NativeRegistrationError, TokenSet, TokenStore,
+};
 
 const SERVICE: &str = "ai.muniment.desktop";
 const USER: &str = "oidc-tokens";
+const INSTALLATION_USER: &str = "native-installation";
 
 pub struct KeyringTokenStore;
 
@@ -19,6 +22,43 @@ impl KeyringTokenStore {
     fn entry() -> Result<Entry, AuthError> {
         Entry::new(SERVICE, USER).map_err(store_err)
     }
+}
+
+pub struct KeyringInstallationStore;
+
+impl KeyringInstallationStore {
+    pub fn new() -> Self {
+        Self
+    }
+
+    fn entry() -> Result<Entry, NativeRegistrationError> {
+        Entry::new(SERVICE, INSTALLATION_USER).map_err(installation_store_err)
+    }
+}
+
+impl InstallationStore for KeyringInstallationStore {
+    fn save(&self, installation: &InstallationRecord) -> Result<(), NativeRegistrationError> {
+        let json = serde_json::to_string(installation).map_err(|_| {
+            NativeRegistrationError::Persistence("could not serialize installation".into())
+        })?;
+        Self::entry()?
+            .set_password(&json)
+            .map_err(installation_store_err)
+    }
+
+    fn load(&self) -> Result<Option<InstallationRecord>, NativeRegistrationError> {
+        match Self::entry()?.get_password() {
+            Ok(json) => serde_json::from_str(&json).map(Some).map_err(|_| {
+                NativeRegistrationError::Persistence("stored installation is unreadable".into())
+            }),
+            Err(keyring::Error::NoEntry) => Ok(None),
+            Err(error) => Err(installation_store_err(error)),
+        }
+    }
+}
+
+fn installation_store_err(error: keyring::Error) -> NativeRegistrationError {
+    NativeRegistrationError::Persistence(error.to_string())
 }
 
 impl TokenStore for KeyringTokenStore {

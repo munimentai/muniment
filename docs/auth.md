@@ -1,8 +1,37 @@
-# Desktop sign-in (OIDC authorization code + PKCE)
+# Desktop authentication
 
-The Rust core can complete a browser sign-in against the
-muniment-cloud control plane and hold tokens in the platform keychain. No
-signed-in UI, no entitlement fetch — those are follow-up slices.
+The production Muniment handshake is installation-bound native auth. The Rust
+core currently implements its first step: registration and coherent keychain
+persistence. The older generic OIDC flow remains as tested groundwork, but it
+is not the live production handshake (`/.well-known/openid-configuration`
+returns 404 on the control plane).
+
+## Native endpoint sequence
+
+1. **Implemented:** `POST /v1/auth/native/devices` with client id
+   `muniment-desktop`, client role `desktop`, platform `desktop`, and the
+   canonical unpadded base64url encoding of a newly generated Ed25519 public
+   key's raw 32 bytes. The response supplies a UUID device id, one-use
+   registration token, device challenge, and a 600-second expiry.
+2. **Follow-up:** `POST /v1/auth/native/authorize` constructs installation
+   proof and starts browser authorization.
+3. **Follow-up:** the system browser completes authorization through the
+   opaque continuation URL.
+4. **Follow-up:** `POST /v1/auth/native/token` exchanges the code and later
+   rotates tokens and device challenges.
+5. **Follow-up:** `GET /v1/auth/native/session` inspects the authoritative
+   session and consumes its entitlement snapshot; native revocation/device
+   management follow the corresponding `/v1/auth/native/*` endpoints.
+
+On first registration the raw private key, device id, registration token,
+challenge, and absolute registration expiry are serialized as one record in
+the platform keychain (`service: ai.muniment.desktop`, `user:
+native-installation`). An existing record is returned without making a network
+request. A failed keychain write publishes no partial installation locally.
+Secret-bearing values use redacted `Debug` implementations and do not cross a
+Tauri command boundary.
+
+## Legacy generic OIDC groundwork
 
 ## Flow
 
@@ -147,5 +176,10 @@ build); verify it manually:
 
 ## Follow-ups (out of scope here)
 
+- Browser authorization against the native endpoint.
+- Device-proof construction and signing.
+- Native token exchange and rotation.
+- Authoritative native session inspection.
+- Entitlement snapshot consumption.
+- Migration or removal of credentials created by the existing generic-OIDC flow.
 - Signed-in UI.
-- Entitlement snapshot fetch after sign-in.
