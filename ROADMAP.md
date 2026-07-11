@@ -28,7 +28,8 @@ Gate reading in practice (updated 2026-07-10): client-side slices that are fully
     - DONE 2026-07-10 — routing-classifier and dictation-polish prompts encode their complete untrusted input as JSON strings, with delimiter-breakout regression coverage.
     - DECIDED 2026-07-11 — ADR 0006 defines explicit first-use acquisition, immutable release-pinned identity, constant-memory verification, atomic publication, update/rollback/recovery/removal policy, and Gemma terms/notice delivery.
     - DONE 2026-07-11 — pure-core verified revision publication, pointer resolution, and crash recovery against tiny injected fixtures.
-    - NEXT — implement bounded pure-core acquisition/resume/cancellation into a publication-ready stage; native HTTP/proxy/free-space/locking adapters, activation-health rollback, UI, and release notices follow separately.
+    - DONE 2026-07-11 — bounded pure-core acquisition/resume/cancellation produces a verified, publication-ready Gemma stage.
+    - NEXT — add one shared native HTTPS/proxy transport adapter for Gemma and Parakeet; free-space/locking orchestration, activation-health rollback, commands, UI, and release notices follow separately.
 11. Attachments pipeline + content-addressed file store client. The cloud file-store pipeline follows items 8d/9.
     - Groundwork DONE — pure-Rust content-addressed local store with atomic dedup publish, constant-memory put/get/verify, and stale-temp sweep.
 
@@ -46,7 +47,8 @@ Gate reading in practice (updated 2026-07-10): client-side slices that are fully
   - DONE 2026-07-10 — a pure-Rust, constant-memory verifier publishes success only after every pinned ASR artifact passes regular-file, exact-size, and SHA-256 checks.
   - DONE 2026-07-10 — ADR 0005 selects first-use installation and defines immutable revision storage, bounded native download, atomic publication, recovery, rollback, removal, ownership/privacy boundaries, and notice delivery.
   - DONE 2026-07-11 — pure-core verified revision publication, pointer resolution, and crash recovery against tiny injected fixtures.
-  - NEXT — implement bounded pure-core acquisition/resume/cancellation into a publication-ready stage; native HTTP/proxy/free-space/locking adapters, UI, native bindings/packaging, capture/VAD, and hardware validation follow separately.
+  - DONE 2026-07-11 — bounded pure-core acquisition/resume/cancellation produces a verified, publication-ready Parakeet stage.
+  - NEXT — consume the shared native HTTPS/proxy transport adapter; free-space/locking orchestration, commands/UI, native bindings/packaging, capture/VAD, and hardware validation follow separately.
 
 ## Phase 4+ — Org surface (§9 items 16-19)
 - Remote MCP consumption, local stdio allowlist, capability install flow, artifact side panel, and projects with the redaction rule (`output withheld · connection not granted`).
