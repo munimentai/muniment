@@ -1,7 +1,9 @@
 use std::io::{Read, Write};
 use std::net::TcpListener;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc;
+use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
@@ -477,7 +479,15 @@ fn supervisor_restarts_stub_and_shutdown_cleans_up_child() {
     config.poll_interval = Duration::from_millis(5);
     config.shutdown_timeout = Duration::from_millis(100);
     let probe = health.clone();
-    let mut supervisor = SidecarSupervisor::spawn(config, move |_| probe.probe()).unwrap();
+    let probe_count = Arc::new(AtomicUsize::new(0));
+    let mut supervisor = SidecarSupervisor::spawn(config, move |_| {
+        if probe_count.fetch_add(1, Ordering::SeqCst) == 0 {
+            Ok(ProbeOutcome::Loading)
+        } else {
+            probe.probe()
+        }
+    })
+    .unwrap();
     let events = supervisor.subscribe();
     let mut healthy_generation = None;
     while let Ok(event) = events.recv_timeout(Duration::from_secs(5)) {
