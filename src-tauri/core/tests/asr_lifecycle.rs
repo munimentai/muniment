@@ -122,6 +122,31 @@ fn first_publish_and_remove() {
 }
 
 #[test]
+fn first_publish_interruption_recovers_published_revision() {
+    let root = Directory::new();
+    root.stage("install");
+    let interrupted = AsrLifecycle::new(
+        &root.0,
+        &MANIFEST,
+        TestLock::default(),
+        Replace {
+            fail_replace: true,
+            fail_remove: false,
+        },
+    );
+    assert_eq!(
+        interrupted.publish("install"),
+        Err(LifecycleError::Storage { retryable: true })
+    );
+    assert!(!root.0.join("staging/install").exists());
+    assert!(root.0.join("revisions").join(REVISION).exists());
+
+    let recovery = AsrLifecycle::new(&root.0, &MANIFEST, TestLock::default(), Replace::default());
+    assert_eq!(recovery.recover(), Ok(LifecycleState::Ready));
+    assert_eq!(recovery.resolve(), LifecycleState::Ready);
+}
+
+#[test]
 fn update_preserves_previous_and_interruption_preserves_current() {
     let root = Directory::new();
     root.stage("first");
@@ -145,7 +170,6 @@ fn update_preserves_previous_and_interruption_preserves_current() {
         Err(LifecycleError::Storage { retryable: true })
     ));
     assert_eq!(interrupted.resolve(), LifecycleState::Ready);
-    root.stage("third");
     let known = [&MANIFEST];
     let lifecycle = AsrLifecycle::new(
         &root.0,
@@ -154,7 +178,9 @@ fn update_preserves_previous_and_interruption_preserves_current() {
         Replace::default(),
     )
     .with_known_manifests(&known);
-    lifecycle.publish("third").unwrap();
+    // Retrying the same update succeeds after its stage was consumed by the
+    // interrupted publication.
+    lifecycle.publish("second").unwrap();
     assert_eq!(
         std::fs::read_to_string(root.0.join("previous"))
             .unwrap()

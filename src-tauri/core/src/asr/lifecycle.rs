@@ -94,7 +94,6 @@ impl<'a, L: ExclusiveLock, A: AtomicReplace> AsrLifecycle<'a, L, A> {
         let revision = safe_revision(self.manifest.revision)?;
         let stage = self.root.join("staging").join(stage_name);
         reject_symlink(&stage)?;
-        verify_model_set(&stage, self.manifest).map_err(|_| LifecycleError::VerificationFailed)?;
         fs::create_dir_all(self.root.join("revisions"))
             .map_err(|_| LifecycleError::Storage { retryable: true })?;
         let published = self.root.join("revisions").join(revision);
@@ -102,8 +101,14 @@ impl<'a, L: ExclusiveLock, A: AtomicReplace> AsrLifecycle<'a, L, A> {
             reject_symlink(&published)?;
             verify_model_set(&published, self.manifest)
                 .map_err(|_| LifecycleError::VerificationFailed)?;
-            remove_owned_tree(&stage)?;
+            if stage.exists() {
+                verify_model_set(&stage, self.manifest)
+                    .map_err(|_| LifecycleError::VerificationFailed)?;
+                remove_owned_tree(&stage)?;
+            }
         } else {
+            verify_model_set(&stage, self.manifest)
+                .map_err(|_| LifecycleError::VerificationFailed)?;
             fs::rename(&stage, &published)
                 .map_err(|_| LifecycleError::Storage { retryable: true })?;
         }
@@ -124,8 +129,28 @@ impl<'a, L: ExclusiveLock, A: AtomicReplace> AsrLifecycle<'a, L, A> {
             self.write_pointer("current", &previous)?;
             return Ok(LifecycleState::Ready);
         }
+        if !pointer_exists(&self.root.join("current"))?
+            && !pointer_exists(&self.root.join("previous"))?
+        {
+            for manifest in
+                std::iter::once(self.manifest).chain(self.known_manifests.iter().copied())
+            {
+                if safe_revision(manifest.revision).is_err() {
+                    continue;
+                }
+                let published = self.root.join("revisions").join(manifest.revision);
+                reject_symlink(&published)?;
+                if published.exists() && verify_model_set(&published, manifest).is_ok() {
+                    self.write_pointer("current", manifest.revision)?;
+                    return Ok(LifecycleState::Ready);
+                }
+            }
+        }
         Ok(
-            if self.root.join("current").exists() || self.root.join("previous").exists() {
+            if pointer_exists(&self.root.join("current"))?
+                || pointer_exists(&self.root.join("previous"))?
+                || directory_has_entries(&self.root.join("revisions"))?
+            {
                 LifecycleState::RepairRequired
             } else {
                 LifecycleState::NotInstalled
@@ -278,6 +303,26 @@ fn reject_symlink(path: &Path) -> Result<(), LifecycleError> {
         Ok(metadata) if metadata.file_type().is_symlink() => Err(LifecycleError::UnsafeEntry),
         Ok(_) => Ok(()),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(_) => Err(LifecycleError::Storage { retryable: true }),
+    }
+}
+
+fn pointer_exists(path: &Path) -> Result<bool, LifecycleError> {
+    match fs::symlink_metadata(path) {
+        Ok(_) => Ok(true),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(_) => Err(LifecycleError::Storage { retryable: true }),
+    }
+}
+
+fn directory_has_entries(path: &Path) -> Result<bool, LifecycleError> {
+    match fs::read_dir(path) {
+        Ok(mut entries) => entries
+            .next()
+            .transpose()
+            .map(|entry| entry.is_some())
+            .map_err(|_| LifecycleError::Storage { retryable: true }),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
         Err(_) => Err(LifecycleError::Storage { retryable: true }),
     }
 }
