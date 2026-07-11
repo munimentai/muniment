@@ -68,6 +68,20 @@ slow receiver; queued events remain available until that receiver consumes or
 drops them. Disconnected senders are pruned while publishing. After `Stopped`
 or `Failed` is delivered, all receiver channels disconnect.
 
+## Signed-in Pi chat
+
+Chat requests a strict `{ gatewayUrl, virtualKey, model?, receiptUrl }` grant
+from `POST /v1/desktop/chat/config` at the configured control-plane issuer,
+using the refreshed OIDC access token. Both URLs must be HTTPS and unknown
+members are rejected. The scoped LiteLLM virtual key and gateway URL exist
+only in the supervised Pi child's environment; neither is returned to the
+webview nor written to the run journal.
+
+After Pi emits `agent_end`, the desktop posts `{ runId }` to `receiptUrl` with
+the OIDC access token. Only that authoritative response supplies optional
+route, model, cost, time, and capability provenance. Pi event members are not
+treated as billing or routing authority.
+
 ## JSON-RPC framing
 
 `JsonRpcTransport` provides synchronous, one-request-at-a-time JSON-RPC 2.0
@@ -226,3 +240,15 @@ launch a local stub executable and cover line and JSON-RPC round-trips, protocol
 failures, crash restart and backoff, restart-window exhaustion, health-probe
 restart, and child reaping on shutdown. They require no GUI, network, sleeps as
 assertions, or Docker service.
+# Pi chat frames
+
+The pinned Pi runtime uses its own LF-delimited JSON protocol, not the generic
+JSON-RPC 2.0 transport. `PiRpcTransport` is the sole stdout reader: correlated
+command acknowledgements return to the caller while interleaved agent events
+remain ordered for subscribers. Chat frames are narrowed by `pi_chat` into
+prompt acceptance, text delta, completion receipt, cancellation, or failure.
+Raw upstream errors are intentionally discarded at that boundary.
+
+Prompt text and gateway credentials are process-memory-only inputs. Journal
+events contain only prompt acceptance, renderable deltas, terminal state, and
+the authoritative receipt fields. Missing receipt fields remain absent.
