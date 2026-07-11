@@ -185,13 +185,10 @@ fn malformed_extra_and_unchanged_challenges_publish_nothing() {
     for body in [
         success("not-base64"),
         success(&installation().device_challenge),
-        format!(
-            "{}",
-            success(&URL_SAFE_NO_PAD.encode([11; 32]))
-                .trim_end_matches('}')
-                .to_string()
-                + ",\"extra\":true}"
-        ),
+        success(&URL_SAFE_NO_PAD.encode([11; 32]))
+            .trim_end_matches('}')
+            .to_string()
+            + ",\"extra\":true}",
     ] {
         let server = Server::spawn(200, body);
         let store = store(false);
