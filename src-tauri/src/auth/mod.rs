@@ -48,6 +48,23 @@ pub struct AuthState {
     sign_in_running: Arc<AtomicBool>,
 }
 
+pub(crate) fn fresh_tokens(state: &AuthState) -> Result<muniment_core::auth::TokenSet, String> {
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let status = auth::ensure_fresh(state.store.as_ref(), &oidc_config(), now, REFRESH_SKEW)
+        .map_err(|error| error.to_string())?;
+    if !status.signed_in {
+        return Err("Sign in before sending a message.".into());
+    }
+    state
+        .store
+        .load()
+        .map_err(|error| error.to_string())?
+        .ok_or_else(|| "Sign in before sending a message.".into())
+}
+
 impl AuthState {
     pub fn new() -> Self {
         AuthState {
