@@ -453,7 +453,7 @@ fn append_emit(
         event_type: kind.into(),
         event_version: 1,
         envelope_version: 1,
-        recorded_at: Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true),
+        recorded_at: Utc::now().to_rfc3339_opts(SecondsFormat::AutoSi, true),
         occurred_at: None,
         correlation_id: None,
         causation_id: None,

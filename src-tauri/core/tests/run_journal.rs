@@ -1,3 +1,4 @@
+use chrono::{SecondsFormat, TimeZone, Utc};
 use muniment_core::journal::{
     Conflict, EventEnvelope, EventPayload, JournalError, Provenance, RunJournal,
 };
@@ -76,6 +77,34 @@ fn first_and_ordered_batch_append_survive_reopen() {
         [1, 2, 3]
     );
     assert_eq!(found[0].extra["future_field"], json!({"preserved": true}));
+}
+
+#[test]
+fn recorded_at_requires_canonical_whole_second_format() {
+    let db = TestDb::new();
+    let mut journal = RunJournal::open(db.as_ref()).unwrap();
+
+    let mut noncanonical = event(1);
+    noncanonical.recorded_at = "2026-07-11T12:00:00.000Z".into();
+    assert!(matches!(
+        journal.append(0, &noncanonical),
+        Err(JournalError::InvalidEnvelope(_))
+    ));
+
+    let mut canonical = event(1);
+    canonical.recorded_at = Utc
+        .with_ymd_and_hms(2026, 7, 11, 12, 0, 0)
+        .unwrap()
+        .to_rfc3339_opts(SecondsFormat::AutoSi, true);
+    assert_eq!(canonical.recorded_at, "2026-07-11T12:00:00Z");
+    journal.append(0, &canonical).unwrap();
+    drop(journal);
+
+    let journal = RunJournal::open(db.as_ref()).unwrap();
+    let found = journal.events(RUN).unwrap();
+    assert_eq!(found.len(), 1);
+    assert_eq!(found[0].event_id, canonical.event_id);
+    assert_eq!(found[0].recorded_at, canonical.recorded_at);
 }
 
 #[test]
