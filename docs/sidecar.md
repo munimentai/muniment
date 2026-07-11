@@ -68,6 +68,20 @@ slow receiver; queued events remain available until that receiver consumes or
 drops them. Disconnected senders are pruned while publishing. After `Stopped`
 or `Failed` is delivered, all receiver channels disconnect.
 
+## Signed-in Pi chat
+
+Chat requests a strict `{ gatewayUrl, virtualKey, model?, receiptUrl }` grant
+from `POST /v1/desktop/chat/config` at the configured control-plane issuer,
+using the refreshed OIDC access token. Both URLs must be HTTPS and unknown
+members are rejected. The scoped LiteLLM virtual key and gateway URL exist
+only in the supervised Pi child's environment; neither is returned to the
+webview nor written to the run journal.
+
+After Pi emits `agent_end`, the desktop posts `{ runId }` to `receiptUrl` with
+the OIDC access token. Only that authoritative response supplies optional
+route, model, cost, time, and capability provenance. Pi event members are not
+treated as billing or routing authority.
+
 ## JSON-RPC framing
 
 `JsonRpcTransport` provides synchronous, one-request-at-a-time JSON-RPC 2.0
@@ -116,6 +130,9 @@ unresponsive peer from growing transport state without bound.
 
 For supervised JSON-RPC peers, `JsonRpcTransport::health_probe` turns an
 `Arc<JsonRpcTransport>` into the closure accepted by `SidecarSupervisor::spawn`.
+Pi uses the public `PiRpcWiring` handle instead: retain it beside the supervisor,
+pass `wiring.readiness_probe(...)` to `spawn`, and obtain that exact sole stdout
+dispatcher through `wiring.transport()` after startup readiness.
 The caller supplies the ping method name and per-call timeout; the helper sends
 the method with no parameters and maps any remote error, timeout, or transport
 failure to a descriptive health-check error. The probe uses the same call lock

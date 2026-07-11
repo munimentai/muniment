@@ -31,16 +31,11 @@ fn prompt_contract_and_interleaved_deltas_are_typed() {
 }
 
 #[test]
-fn completion_preserves_only_authoritative_receipt_fields() {
-    let event = parse_frame(&json!({"type":"agent_end","receipt":{
-        "route":"analysis/high", "model":"glm", "capabilities":[]
-    }}))
-    .unwrap();
-    let PiChatEvent::Completed { receipt } = event else {
-        panic!("completion")
-    };
-    assert_eq!(receipt.route.as_deref(), Some("analysis/high"));
-    assert_eq!(receipt.model.as_deref(), Some("glm"));
-    assert_eq!(receipt.cost, None);
-    assert_eq!(receipt.time, None);
+fn pi_completion_does_not_claim_authoritative_provenance() {
+    assert_eq!(
+        parse_frame(&json!({"type":"agent_end","receipt":{
+            "route":"untrusted", "model":"untrusted"
+        }})).unwrap(),
+        PiChatEvent::Completed
+    );
 }

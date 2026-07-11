@@ -13,6 +13,7 @@
   let draft = $state('')
   let messages = $state([])
   let active = $state(null)
+  let buffered = new Map()
   let unlisten
 
   async function run(action) {
@@ -34,6 +35,10 @@
   onMount(() => {
     if (tauri) run('status')
     window.__TAURI__?.event?.listen('chat-event', ({ payload }) => {
+      if (!messages.some((message) => message.run?.id === payload.runId)) {
+        buffered.set(payload.runId, payload)
+        return
+      }
       const projected = applyChatEvent(active, payload)
       if (projected) messages = messages.map((message) => message.run?.id === projected.id ? { ...message, run: projected } : message)
       active = projected && !['complete', 'cancelled', 'failed'].includes(projected.phase) ? projected : null
@@ -46,13 +51,18 @@
     if (!prompt || active) return
     draft = ''
     messages.push({ role: 'user', text: prompt })
+    const pending = { id: 'pending', phase: 'thinking', text: '', receipt: null, prompt }
+    active = pending
+    messages.push({ role: 'assistant', run: pending })
     try {
       const run = await tauri.invoke('chat_submit', { prompt })
-      active = { id: run.runId, phase: 'thinking', text: '', receipt: null, prompt }
-      messages.push({ role: 'assistant', run: active })
+      active = { ...pending, id: run.runId }
+      const early = buffered.get(run.runId)
+      if (early) { active = applyChatEvent(active, early); buffered.delete(run.runId) }
+      messages = messages.map((message) => message.run === pending ? { ...message, run: active } : message)
     } catch (_) {
-      const failed = { id: `rejected-${messages.length}`, phase: 'failed', text: '', receipt: null, prompt }
-      messages.push({ role: 'assistant', run: failed })
+      const failed = { ...pending, id: `rejected-${messages.length}`, phase: 'failed' }
+      messages = messages.map((message) => message.run === pending ? { ...message, run: failed } : message)
       active = null
     }
   }
@@ -97,7 +107,7 @@
                 <span class="thinking"><svg width="17" height="17" viewBox="0 0 48 48" aria-label="Thinking"><path d={markD} stroke-width="5" /></svg><span>Routing</span></span>
               {:else}<p class:streaming={message.run.phase === 'streaming'}>{message.run.text}{#if message.run.phase === 'streaming'}<span class="caret" aria-hidden="true"></span>{/if}</p>{/if}
               {#if message.run.phase === 'failed'}<div class="run-error">Reply failed. <button onclick={() => { draft = message.run.prompt; send() }}>Try again</button></div>{/if}
-              {#if message.run.phase === 'complete'}{@const parts = receiptParts(message.run.receipt)}{#if parts.length}<button class="provenance" aria-label={parts.join(', ')}>{parts.join(' · ')}</button>{/if}{/if}
+              {#if message.run.phase === 'complete'}{@const parts = receiptParts(message.run.receipt)}{#if parts.length}<button class="provenance" aria-label={parts.join(', ')}><span>{parts[0]}</span>{#if parts.length > 1} · {parts.slice(1).join(' · ')}{/if}</button>{/if}{/if}
             </div>{/if}
           {/each}
         </div>
@@ -212,7 +222,7 @@
   .thinking { display: flex; align-items: center; gap: 9px; color: var(--muted); font: var(--text-12) var(--font-mono); }
   .thinking path { fill: none; stroke: var(--signal); stroke-linecap: round; animation: breathe 1.8s ease-in-out infinite; }
   .provenance { display: block; margin-top: 10px; padding: 0; border: 0; background: transparent; color: var(--muted); font: var(--text-12) var(--font-mono); text-align: left; }
-  .provenance::first-letter { color: var(--signal); }
+  .provenance span { color: var(--signal); }
   .run-error { color: var(--muted); font: var(--text-12) var(--font-mono); }
   .run-error button { padding: 2px 6px; }
   .composer { width: min(760px, calc(100% - 48px)); margin: 0 auto 24px; padding: 12px; background: var(--surface); border: 1px solid var(--border); border-radius: 10px; }

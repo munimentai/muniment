@@ -5,7 +5,12 @@
 //! each accepted prompt and discard unrelated frames.
 
 use serde::{Deserialize, Serialize};
+use std::sync::mpsc;
+use std::time::Duration;
+
 use serde_json::{json, Value};
+
+use super::PiRpcTransport;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -62,9 +67,7 @@ pub struct CapabilityReceipt {
 pub enum PiChatEvent {
     PromptAccepted,
     TextDelta(String),
-    Completed {
-        receipt: Receipt,
-    },
+    Completed,
     Cancelled,
     Failed,
     /// A valid Pi event for another part of the agent lifecycle.
@@ -93,12 +96,9 @@ pub fn parse_frame(frame: &Value) -> Result<PiChatEvent, &'static str> {
                 _ => Ok(PiChatEvent::Interleaved),
             }
         }
-        Some("agent_end") => {
-            let receipt = frame.get("receipt").cloned().unwrap_or_else(|| json!({}));
-            serde_json::from_value(receipt)
-                .map(|receipt| PiChatEvent::Completed { receipt })
-                .map_err(|_| "invalid receipt")
-        }
+        // Pi owns generation, not billing/routing provenance. Any similarly
+        // named member is deliberately ignored; the control plane supplies it.
+        Some("agent_end") => Ok(PiChatEvent::Completed),
         Some("cancelled") => Ok(PiChatEvent::Cancelled),
         Some("error") => Ok(PiChatEvent::Failed),
         Some(_) => Ok(PiChatEvent::Interleaved),
@@ -108,4 +108,38 @@ pub fn parse_frame(frame: &Value) -> Result<PiChatEvent, &'static str> {
 
 pub fn cancel_command() -> Value {
     json!({"type": "abort"})
+}
+
+/// Binds Pi's single active stream to a locally-owned run. Construct this
+/// before sending the prompt so no post-ack frame can be lost.
+pub struct PiRunAdapter {
+    run_id: String,
+    frames: mpsc::Receiver<Value>,
+}
+
+impl PiRunAdapter {
+    pub fn start(
+        run_id: impl Into<String>,
+        transport: &PiRpcTransport,
+        prompt: &str,
+        timeout: Duration,
+    ) -> Result<(Self, PiChatEvent), String> {
+        let frames = transport.subscribe();
+        let response = transport.call(PromptCommand::new(prompt).into_value(), timeout)?;
+        let accepted = parse_frame(&response).map_err(str::to_owned)?;
+        if accepted != PiChatEvent::PromptAccepted {
+            return Err("Pi rejected the prompt".into());
+        }
+        Ok((Self { run_id: run_id.into(), frames }, accepted))
+    }
+
+    pub fn run_id(&self) -> &str { &self.run_id }
+
+    pub fn next(&self, timeout: Duration) -> Result<PiChatEvent, String> {
+        let frame = self.frames.recv_timeout(timeout).map_err(|error| match error {
+            mpsc::RecvTimeoutError::Timeout => "timed out waiting for Pi stream".to_string(),
+            mpsc::RecvTimeoutError::Disconnected => "Pi process stream ended".to_string(),
+        })?;
+        parse_frame(&frame).map_err(str::to_owned)
+    }
 }

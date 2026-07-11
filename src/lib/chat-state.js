@@ -12,6 +12,7 @@ export function receiptParts(receipt = {}) {
 
 export function applyChatEvent(run, event) {
   if (!run || event.runId !== run.id) return run
+  if (event.phase) return { ...run, phase: event.phase, text: event.text ?? '', receipt: event.receipt ?? null }
   if (event.type === 'prompt-accepted') return { ...run, accepted: true }
   if (event.type === 'text-delta') return { ...run, phase: 'streaming', text: run.text + event.text }
   if (event.type === 'completed') return { ...run, phase: 'complete', receipt: event.receipt ?? {} }

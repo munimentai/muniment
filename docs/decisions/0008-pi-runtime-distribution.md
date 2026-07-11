@@ -44,6 +44,12 @@ the upstream changelog, license and RPC compatibility, a descriptor amendment
 in a signed app release, and the real-artifact readiness test on every changed
 target. Retain the previous verified revision until the replacement passes
 activation health; rollback selects it after a failed activation.
+The signed client compiles both the new descriptor and exactly one retained
+predecessor descriptor during a pin update. Pointer resolution accepts only
+those identities, verifies each revision with its own size, digest, archive
+name and executable layout, and atomically repoints `current` to `previous`
+when supervisor activation of the new pin fails. It never resolves an
+arbitrary version or filesystem path from pointer contents.
 
 ### Distribution
 
@@ -59,8 +65,9 @@ Acquisition reuses the shared bounded HTTPS transport, verified staging,
 install coordinator, lock/free-space protections, atomic publication,
 `current`/`previous` pointers and activation rollback defined by ADRs 0005 and
 0006. It adds a `pi` artifact descriptor and archive extraction inside the
-verified stage; extraction rejects absolute paths, parent traversal, links,
-extra executables and special files. Publication occurs only after archive
+verified stage; extraction admits only regular files and directories beneath
+the release's top-level `pi/` directory and rejects absolute paths, parent
+traversal, links and special files. Publication occurs only after archive
 size/digest verification and verification that the expected `pi` (`pi.exe` on
 Windows) is a regular executable. No webview-supplied URL or path participates.
 
@@ -90,7 +97,7 @@ is not release-ready.
 `SidecarSupervisor` launches the verified current executable directly:
 
 ```text
-program = <owned verified revision>/pi[.exe]
+program = <owned verified revision>/pi/pi[.exe]
 args    = --mode rpc --no-session
 env     = no Pi-specific additions (the supervisor currently inherits the
           desktop process environment); later provider secrets must use a
@@ -120,9 +127,10 @@ data?}` while agent events are interleaved on stdout. `get_state` is the
 readiness equivalent of ping. The real pinned Linux x64 executable was run
 with the launch arguments above and returned the required correlated state
 response without a provider credential or network model call. The implemented
-`PiRpcTransport` serializes application calls and periodic health probes through
-one stdout consumer, correlates responses by ID, and broadcasts unrelated
-events and responses in arrival order rather than consuming them.
+`PiRpcTransport` has a persistent stdout reader, serializes application calls
+and periodic health probes through it, correlates responses by ID, and
+broadcasts unrelated events and responses in arrival order. The reader keeps
+draining progress events after command acceptance even if no later RPC occurs.
 
 The surface required by harness-spec §6.2 is present: `prompt` accepts
 `streamingBehavior: "steer" | "followUp"`; explicit `steer` and `follow_up`
@@ -145,11 +153,13 @@ user's LiteLLM virtual endpoint, with one multiplexing RPC dispatcher, event
 projection into the durable journal, permission gates, and steer/follow-up.
 This ADR adds no chat UI, thread surface, provider call, or cloud mock.
 
-CI does not vendor Pi. The real-spawn test is gated by
-`MUNIMENT_PI_EXECUTABLE`, like model-dependent tests: ordinary three-platform
-CI skips it; an artifact job downloads the exact target descriptor into a
-temporary directory, verifies bytes and SHA-256, extracts it outside the repo,
-sets the variable, and runs `cargo test --test pi_sidecar`.
+CI does not vendor Pi. The real-spawn test is gated by `MUNIMENT_PI_ARCHIVE`,
+which names the downloaded release archive. The test passes that archive
+through the production verification, safe extraction and publication lifecycle
+before resolving and supervising the installed executable. Like model-dependent
+tests, ordinary three-platform CI skips it; an artifact job downloads the exact
+target descriptor to a temporary directory, sets the variable, and runs
+`cargo test --test pi_sidecar`.
 
 ## Sources
 
