@@ -10,6 +10,13 @@ fn prompt_contract_and_interleaved_deltas_are_typed() {
         })
     );
     assert_eq!(
+        parse_frame(&json!({
+            "type":"response", "command":"prompt", "success":true
+        }))
+        .unwrap(),
+        PiChatEvent::PromptAccepted
+    );
+    assert_eq!(
         parse_frame(&json!({"type":"tool_execution_start"})).unwrap(),
         PiChatEvent::Interleaved
     );

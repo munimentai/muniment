@@ -154,3 +154,23 @@ impl PiRunAdapter {
         parse_frame(&frame).map_err(str::to_owned)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn disconnected_stream_reports_process_death_without_upstream_details() {
+        let (sender, frames) = mpsc::channel();
+        let adapter = PiRunAdapter {
+            run_id: "0190a100-0000-7000-8000-000000000001".into(),
+            frames,
+        };
+        drop(sender);
+
+        assert_eq!(
+            adapter.next(Duration::from_millis(1)).unwrap_err(),
+            "Pi process stream ended"
+        );
+    }
+}

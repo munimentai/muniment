@@ -14,4 +14,14 @@ test -f vite.config.js
 # fonts are vendored (CSP is default-src 'self'; no CDN requests)
 test -f src/fonts/SchibstedGrotesk-latin.woff2
 test -f src/fonts/CommitMono-VF.woff2
+# desktop CI: native checks gate bundles, while docs-only PRs and main pushes
+# remain smoke-only
+ci=.github/workflows/ci.yml
+grep -Fq 'name: Desktop compile preflight (${{ matrix.platform }})' "$ci"
+grep -Fq "if: github.event_name == 'pull_request' && needs.smoke.outputs.docs_only != 'true'" "$ci"
+grep -Fq 'platform: [windows, macos]' "$ci"
+grep -Fq "cmd='cargo check --manifest-path src-tauri/Cargo.toml --locked'" "$ci"
+test -f src-tauri/Cargo.lock
+grep -Fq 'needs: [smoke, desktop-compile]' "$ci"
+test "$(grep -Fc "if: github.event_name == 'pull_request' && needs.smoke.outputs.docs_only != 'true'" "$ci")" -eq 2
 echo "smoke OK"

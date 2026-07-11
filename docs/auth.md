@@ -50,17 +50,17 @@ overrides for development.
 | Setting   | Default                                    | Override env        |
 |-----------|--------------------------------------------|---------------------|
 | Issuer    | `https://api.muniment.ai`                  | `MUNIMENT_ISSUER`   |
-| Client id | `muniment-desktop` (placeholder, see below)| `MUNIMENT_CLIENT_ID`|
+| Client id | `muniment-desktop`                         | `MUNIMENT_CLIENT_ID`|
 | Scopes    | `openid profile email offline_access`      | —                   |
 
-The default client id is a **placeholder**: the desktop client registration
-does not exist on the control plane yet. Once the cloud team registers it
-(next section), update `DEFAULT_CLIENT_ID` if the registered id differs.
+The default client id names the public desktop client registered on the
+control plane. The environment override remains available for development
+against another OIDC provider.
 
 ## Client registration (cloud side)
 
-The control plane (better-auth OIDC provider on api.muniment.ai) must
-register the desktop app as:
+The control plane (better-auth OIDC provider on api.muniment.ai) registers
+the desktop app as:
 
 - **Public client** (native app). No client secret is issued or sent; the
   token endpoint auth method is `none`.
@@ -74,10 +74,11 @@ register the desktop app as:
 - **Scopes**: `openid profile email offline_access` (`offline_access` so a
   refresh token is issued to keep desktop sessions short-lived-but-renewable,
   harness-spec §3.1).
-- Suggested client id: `muniment-desktop`.
+- **Client id**: `muniment-desktop`.
 
-Until that registration exists, a real handshake against api.muniment.ai
-cannot succeed; the flow is verified against a mock IdP in tests (below).
+The cloud registration and native-app PKCE support are live. The client flow
+is also verified against a mock IdP in tests (below); wiring and exercising
+the real handshake is the next client slice.
 
 ## Token storage
 
@@ -130,9 +131,9 @@ build); verify it manually:
 
 ## Manual verification (`tauri dev`)
 
-1. Point the app at a control plane with the client registered (or a local
-   OIDC provider):
-   `MUNIMENT_ISSUER=https://api.muniment.ai MUNIMENT_CLIENT_ID=<registered id> npm run tauri dev`
+1. Point the app at the live control plane (or override both values for a
+   local OIDC provider):
+   `MUNIMENT_ISSUER=https://api.muniment.ai MUNIMENT_CLIENT_ID=muniment-desktop npm run tauri dev`
 2. Click **sign in** — the system browser opens the IdP; complete the login.
 3. The browser tab shows "Signed in — return to muniment"; the app's status
    line shows `signed in as <subject>`.
@@ -148,4 +149,3 @@ build); verify it manually:
 
 - Signed-in UI.
 - Entitlement snapshot fetch after sign-in.
-- Registering the real client id and removing the placeholder default.
