@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use muniment_core::auth::{
-    run_native_browser_authorization, AuthorizationTransport, InstallationRecord,
+    run_native_browser_authorization, AuthorizationTransport, BrowserOpenError, InstallationRecord,
     InstallationStore, NativeAuthorizationError, NativeAuthorizationRequest,
     NativeAuthorizationResponse, NativeBrowserAuthorizationError, NativeRegistrationError,
     PkcePair,
@@ -184,7 +184,7 @@ fn timeout_and_browser_failure_are_bounded() {
 
     let attempt = Arc::new(Mutex::new(None));
     let transport = FakeTransport(attempt);
-    let fails = |_: &str| Err(());
+    let fails = |_: &str| Err(BrowserOpenError);
     let error = run_native_browser_authorization(
         &store(),
         &transport,

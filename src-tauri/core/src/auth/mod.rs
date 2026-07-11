@@ -29,9 +29,10 @@ pub use flow::{
 pub use loopback::RedirectCatcher;
 pub use native_authorization::{
     begin_native_authorization, run_native_browser_authorization, AuthorizationTransport,
-    BrowserOpener, NativeAuthorizationCode, NativeAuthorizationError, NativeAuthorizationInput,
-    NativeAuthorizationRequest, NativeAuthorizationResponse, NativeAuthorizationResult,
-    NativeBrowserAuthorizationError, NativeDeviceProof, UreqAuthorizationTransport,
+    BrowserOpenError, BrowserOpener, NativeAuthorizationCode, NativeAuthorizationError,
+    NativeAuthorizationInput, NativeAuthorizationRequest, NativeAuthorizationResponse,
+    NativeAuthorizationResult, NativeBrowserAuthorizationError, NativeDeviceProof,
+    UreqAuthorizationTransport,
 };
 pub use native_registration::{
     register_installation, InstallationRecord, InstallationStore, NativeDeviceRegistrationRequest,

@@ -106,15 +106,26 @@ impl fmt::Debug for NativeAuthorizationCode {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BrowserOpenError;
+
+impl fmt::Display for BrowserOpenError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "could not open the system browser")
+    }
+}
+
+impl std::error::Error for BrowserOpenError {}
+
 pub trait BrowserOpener: Send + Sync {
-    fn open(&self, url: &str) -> Result<(), ()>;
+    fn open(&self, url: &str) -> Result<(), BrowserOpenError>;
 }
 
 impl<F> BrowserOpener for F
 where
-    F: Fn(&str) -> Result<(), ()> + Send + Sync,
+    F: Fn(&str) -> Result<(), BrowserOpenError> + Send + Sync,
 {
-    fn open(&self, url: &str) -> Result<(), ()> {
+    fn open(&self, url: &str) -> Result<(), BrowserOpenError> {
         self(url)
     }
 }
