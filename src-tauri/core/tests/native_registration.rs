@@ -6,8 +6,8 @@ use std::time::Duration;
 
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use muniment_core::auth::{
-    register_installation, InstallationRecord, InstallationStore, NativeRegistrationError,
-    NativeDeviceRegistrationResponse, UreqRegistrationTransport,
+    register_installation, InstallationRecord, InstallationStore, NativeDeviceRegistrationResponse,
+    NativeRegistrationError, UreqRegistrationTransport,
 };
 
 #[derive(Default)]
