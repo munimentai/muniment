@@ -59,8 +59,9 @@ Acquisition reuses the shared bounded HTTPS transport, verified staging,
 install coordinator, lock/free-space protections, atomic publication,
 `current`/`previous` pointers and activation rollback defined by ADRs 0005 and
 0006. It adds a `pi` artifact descriptor and archive extraction inside the
-verified stage; extraction rejects absolute paths, parent traversal, links,
-extra executables and special files. Publication occurs only after archive
+verified stage; extraction admits only regular files and directories beneath
+the release's top-level `pi/` directory and rejects absolute paths, parent
+traversal, links and special files. Publication occurs only after archive
 size/digest verification and verification that the expected `pi` (`pi.exe` on
 Windows) is a regular executable. No webview-supplied URL or path participates.
 
@@ -90,7 +91,7 @@ is not release-ready.
 `SidecarSupervisor` launches the verified current executable directly:
 
 ```text
-program = <owned verified revision>/pi[.exe]
+program = <owned verified revision>/pi/pi[.exe]
 args    = --mode rpc --no-session
 env     = no Pi-specific additions (the supervisor currently inherits the
           desktop process environment); later provider secrets must use a
@@ -145,12 +146,13 @@ user's LiteLLM virtual endpoint, with one multiplexing RPC dispatcher, event
 projection into the durable journal, permission gates, and steer/follow-up.
 This ADR adds no chat UI, thread surface, provider call, or cloud mock.
 
-CI does not vendor Pi. The real-spawn test is gated by `MUNIMENT_PI_ROOT`,
-which names a published lifecycle root whose pointer and retained archive must
-pass the compiled size and digest checks. Like model-dependent tests, ordinary three-platform
-CI skips it; an artifact job downloads the exact target descriptor into a
-temporary directory, installs it outside the repo through the Pi lifecycle,
-sets the variable, and runs `cargo test --test pi_sidecar`.
+CI does not vendor Pi. The real-spawn test is gated by `MUNIMENT_PI_ARCHIVE`,
+which names the downloaded release archive. The test passes that archive
+through the production verification, safe extraction and publication lifecycle
+before resolving and supervising the installed executable. Like model-dependent
+tests, ordinary three-platform CI skips it; an artifact job downloads the exact
+target descriptor to a temporary directory, sets the variable, and runs
+`cargo test --test pi_sidecar`.
 
 ## Sources
 

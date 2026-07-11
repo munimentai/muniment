@@ -1,7 +1,7 @@
 //! Pinned Pi archive acquisition, safe extraction, and current/previous publication.
 
 use std::fs::{self, File, OpenOptions};
-use std::io::Read;
+use std::io::{Read, Write};
 use std::path::{Component, Path, PathBuf};
 use std::time::Duration;
 
@@ -28,7 +28,7 @@ pub const PI_ARTIFACT: PiArtifactDescriptor = PiArtifactDescriptor {
     archive: "pi-linux-x64.tar.gz",
     byte_size: 45_540_364,
     sha256: "00f0db9e93f6ba33deb1bb4d75b4eafede9fa5379b635a908cf967d5b37e366d",
-    executable: "pi",
+    executable: "pi/pi",
 };
 #[cfg(all(target_os = "linux", target_arch = "aarch64"))]
 pub const PI_ARTIFACT: PiArtifactDescriptor = PiArtifactDescriptor {
@@ -36,7 +36,7 @@ pub const PI_ARTIFACT: PiArtifactDescriptor = PiArtifactDescriptor {
     archive: "pi-linux-arm64.tar.gz",
     byte_size: 44_095_594,
     sha256: "f47455b6a7ff6e43752a37c7c0a08b8054efd82cae1efc06d007c94f06a56318",
-    executable: "pi",
+    executable: "pi/pi",
 };
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 pub const PI_ARTIFACT: PiArtifactDescriptor = PiArtifactDescriptor {
@@ -44,7 +44,7 @@ pub const PI_ARTIFACT: PiArtifactDescriptor = PiArtifactDescriptor {
     archive: "pi-darwin-arm64.tar.gz",
     byte_size: 28_567_469,
     sha256: "c64f501cad8fa0a581257dc9e878e1b2f351f295d0d85d573fe8d7967bfb1bee",
-    executable: "pi",
+    executable: "pi/pi",
 };
 #[cfg(all(target_os = "macos", target_arch = "x86_64"))]
 pub const PI_ARTIFACT: PiArtifactDescriptor = PiArtifactDescriptor {
@@ -52,7 +52,7 @@ pub const PI_ARTIFACT: PiArtifactDescriptor = PiArtifactDescriptor {
     archive: "pi-darwin-x64.tar.gz",
     byte_size: 31_000_715,
     sha256: "e59fded1f79fbc7b12e263bf43d1e358af598f6fb3c4d4f58e16d1c5ebe6b2b5",
-    executable: "pi",
+    executable: "pi/pi",
 };
 #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
 pub const PI_ARTIFACT: PiArtifactDescriptor = PiArtifactDescriptor {
@@ -60,8 +60,54 @@ pub const PI_ARTIFACT: PiArtifactDescriptor = PiArtifactDescriptor {
     archive: "pi-windows-x64.zip",
     byte_size: 48_225_045,
     sha256: "8bdb8e612a4b820f939a524652709b167ac5f1d4d1bba25988a631bff0bbe80b",
-    executable: "pi.exe",
+    executable: "pi/pi.exe",
 };
+
+const POINTER_HEADER: &str = "muniment-pi-pointer-v1";
+
+pub trait PiLifecycleBoundary {
+    fn sync_file(&self, path: &Path) -> Result<(), PiInstallError>;
+    fn sync_directory(&self, path: &Path) -> Result<(), PiInstallError>;
+    fn replace_revision(&self, staged: &Path, destination: &Path) -> Result<(), PiInstallError>;
+    fn replace_pointer(&self, temporary: &Path, destination: &Path) -> Result<(), PiInstallError>;
+}
+
+/// Native durable filesystem operations. The install coordinator owns the
+/// exclusive install lock while these operations run.
+pub struct FsPiLifecycleBoundary;
+
+impl PiLifecycleBoundary for FsPiLifecycleBoundary {
+    fn sync_file(&self, path: &Path) -> Result<(), PiInstallError> {
+        File::open(path)
+            .and_then(|file| file.sync_all())
+            .map_err(|_| PiInstallError::Persistence)
+    }
+    fn sync_directory(&self, path: &Path) -> Result<(), PiInstallError> {
+        #[cfg(unix)]
+        File::open(path)
+            .and_then(|file| file.sync_all())
+            .map_err(|_| PiInstallError::Persistence)?;
+        let _ = path;
+        Ok(())
+    }
+    fn replace_revision(&self, staged: &Path, destination: &Path) -> Result<(), PiInstallError> {
+        let quarantine = destination.with_extension("replaced");
+        if quarantine.exists() {
+            fs::remove_dir_all(&quarantine).map_err(|_| PiInstallError::Persistence)?;
+        }
+        if fs::symlink_metadata(destination).is_ok() {
+            fs::rename(destination, &quarantine).map_err(|_| PiInstallError::Persistence)?;
+        }
+        fs::rename(staged, destination).map_err(|_| PiInstallError::Persistence)
+    }
+    fn replace_pointer(&self, temporary: &Path, destination: &Path) -> Result<(), PiInstallError> {
+        #[cfg(windows)]
+        if destination.exists() {
+            fs::remove_file(destination).map_err(|_| PiInstallError::Persistence)?;
+        }
+        fs::rename(temporary, destination).map_err(|_| PiInstallError::Persistence)
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct PiDownloadRequest {
@@ -116,6 +162,7 @@ pub fn install_pi<
     C: InstallCancellation,
     L: InstallLock,
     S: AvailableSpace,
+    B: PiLifecycleBoundary,
 >(
     root: &Path,
     install_id: &str,
@@ -123,6 +170,7 @@ pub fn install_pi<
     cancellation: &C,
     lock: &mut L,
     space: &mut S,
+    boundary: &B,
 ) -> Result<PathBuf, CoordinatedPiInstallError> {
     if !safe_component(install_id) {
         return Err(ModelInstallError::Acquisition(PiInstallError::InvalidStage));
@@ -134,7 +182,7 @@ pub fn install_pi<
         cancellation,
         || Ok(PI_ARTIFACT.byte_size),
         || acquire_stage(&stage, transport),
-        |stage| publish_stage(root, &stage),
+        |stage| publish_stage(root, &stage, boundary),
     )
 }
 
@@ -198,7 +246,7 @@ pub fn verify_archive(path: &Path) -> Result<(), PiInstallError> {
 fn safe_name(path: &Path) -> bool {
     path.components()
         .all(|part| matches!(part, Component::Normal(_)))
-        && path.components().count() == 1
+        && path.components().next() == Some(Component::Normal("pi".as_ref()))
 }
 fn extract_archive(archive: &Path, stage: &Path) -> Result<(), PiInstallError> {
     #[cfg(windows)]
@@ -206,20 +254,29 @@ fn extract_archive(archive: &Path, stage: &Path) -> Result<(), PiInstallError> {
         let mut zip =
             zip::ZipArchive::new(File::open(archive).map_err(|_| PiInstallError::Persistence)?)
                 .map_err(|_| PiInstallError::UnsafeArchive)?;
-        if zip.len() != 1 {
-            return Err(PiInstallError::UnsafeArchive);
+        for index in 0..zip.len() {
+            let mut entry = zip
+                .by_index(index)
+                .map_err(|_| PiInstallError::UnsafeArchive)?;
+            let enclosed = entry.enclosed_name().ok_or(PiInstallError::UnsafeArchive)?;
+            if !safe_name(enclosed) || (!entry.is_dir() && !entry.is_file()) {
+                return Err(PiInstallError::UnsafeArchive);
+            }
+            let output = stage.join(enclosed);
+            if entry.is_dir() {
+                fs::create_dir_all(output).map_err(|_| PiInstallError::Persistence)?;
+            } else {
+                if let Some(parent) = output.parent() {
+                    fs::create_dir_all(parent).map_err(|_| PiInstallError::Persistence)?;
+                }
+                let mut out = OpenOptions::new()
+                    .write(true)
+                    .create_new(true)
+                    .open(output)
+                    .map_err(|_| PiInstallError::Persistence)?;
+                std::io::copy(&mut entry, &mut out).map_err(|_| PiInstallError::Persistence)?;
+            }
         }
-        let mut entry = zip.by_index(0).map_err(|_| PiInstallError::UnsafeArchive)?;
-        let name = Path::new(entry.name());
-        if !safe_name(name) || name != Path::new(PI_ARTIFACT.executable) || entry.is_dir() {
-            return Err(PiInstallError::UnsafeArchive);
-        }
-        let mut out = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(stage.join(PI_ARTIFACT.executable))
-            .map_err(|_| PiInstallError::Persistence)?;
-        std::io::copy(&mut entry, &mut out).map_err(|_| PiInstallError::Persistence)?;
     }
     #[cfg(not(windows))]
     {
@@ -227,26 +284,16 @@ fn extract_archive(archive: &Path, stage: &Path) -> Result<(), PiInstallError> {
             File::open(archive).map_err(|_| PiInstallError::Persistence)?,
         );
         let mut tar = tar::Archive::new(decoder);
-        let mut count = 0;
         for item in tar.entries().map_err(|_| PiInstallError::UnsafeArchive)? {
             let mut entry = item.map_err(|_| PiInstallError::UnsafeArchive)?;
             let path = entry.path().map_err(|_| PiInstallError::UnsafeArchive)?;
-            if !safe_name(&path)
-                || path.as_ref() != Path::new(PI_ARTIFACT.executable)
-                || !entry.header().entry_type().is_file()
-            {
-                return Err(PiInstallError::UnsafeArchive);
-            }
-            count += 1;
-            if count > 1 {
+            let kind = entry.header().entry_type();
+            if !safe_name(&path) || !(kind.is_file() || kind.is_dir()) {
                 return Err(PiInstallError::UnsafeArchive);
             }
             entry
-                .unpack(stage.join(PI_ARTIFACT.executable))
+                .unpack_in(stage)
                 .map_err(|_| PiInstallError::Persistence)?;
-        }
-        if count != 1 {
-            return Err(PiInstallError::UnsafeArchive);
         }
     }
     Ok(())
@@ -268,21 +315,28 @@ fn verify_executable(root: &Path) -> Result<PathBuf, PiInstallError> {
     Ok(path)
 }
 
-fn publish_stage(root: &Path, stage: &Path) -> Result<PathBuf, PiInstallError> {
+fn publish_stage<B: PiLifecycleBoundary>(
+    root: &Path,
+    stage: &Path,
+    boundary: &B,
+) -> Result<PathBuf, PiInstallError> {
     verify_archive(&stage.join(PI_ARTIFACT.archive))?;
     verify_executable(stage)?;
     let revisions = root.join("revisions");
     fs::create_dir_all(&revisions).map_err(|_| PiInstallError::Persistence)?;
     let destination = revisions.join(PI_ARTIFACT.version);
-    if destination.exists() {
-        fs::remove_dir_all(&destination).map_err(|_| PiInstallError::Persistence)?;
+    boundary.sync_file(&stage.join(PI_ARTIFACT.archive))?;
+    boundary.sync_file(&stage.join(PI_ARTIFACT.executable))?;
+    boundary.sync_directory(stage)?;
+    if resolve_revision(&destination).is_err() {
+        boundary.replace_revision(stage, &destination)?;
+        boundary.sync_directory(&revisions)?;
     }
-    fs::rename(stage, &destination).map_err(|_| PiInstallError::Persistence)?;
-    if let Ok(current) = fs::read_to_string(root.join("current")) {
-        fs::write(root.join("previous"), current).map_err(|_| PiInstallError::Persistence)?;
+    if let Ok(current) = read_pointer(root, "current") {
+        write_pointer(root, "previous", &current, boundary)?;
     }
-    fs::write(root.join("current"), format!("{}\n", PI_ARTIFACT.version))
-        .map_err(|_| PiInstallError::Persistence)?;
+    write_pointer(root, "current", PI_ARTIFACT.version, boundary)?;
+    boundary.sync_directory(root)?;
     resolve_current(root)
 }
 
@@ -290,12 +344,97 @@ pub fn resolve_current(root: &Path) -> Result<PathBuf, PiInstallError> {
     resolve_pointer(root, "current").or_else(|_| resolve_pointer(root, "previous"))
 }
 fn resolve_pointer(root: &Path, pointer: &str) -> Result<PathBuf, PiInstallError> {
-    let version =
-        fs::read_to_string(root.join(pointer)).map_err(|_| PiInstallError::NotInstalled)?;
-    if version.trim() != PI_ARTIFACT.version {
+    let version = read_pointer(root, pointer)?;
+    let revision = root.join("revisions").join(version);
+    resolve_revision(&revision)
+}
+
+fn resolve_revision(revision: &Path) -> Result<PathBuf, PiInstallError> {
+    verify_archive(&revision.join(PI_ARTIFACT.archive))?;
+    verify_executable(revision)
+}
+
+fn read_pointer(root: &Path, name: &str) -> Result<String, PiInstallError> {
+    let path = root.join(name);
+    if !fs::symlink_metadata(&path)
+        .map_err(|_| PiInstallError::NotInstalled)?
+        .file_type()
+        .is_file()
+    {
         return Err(PiInstallError::NotInstalled);
     }
-    let revision = root.join("revisions").join(version.trim());
-    verify_archive(&revision.join(PI_ARTIFACT.archive))?;
-    verify_executable(&revision)
+    let value = fs::read_to_string(path).map_err(|_| PiInstallError::NotInstalled)?;
+    let lines: Vec<_> = value.lines().collect();
+    if lines != [POINTER_HEADER, PI_ARTIFACT.version] {
+        return Err(PiInstallError::NotInstalled);
+    }
+    Ok(lines[1].to_owned())
+}
+
+fn write_pointer<B: PiLifecycleBoundary>(
+    root: &Path,
+    name: &str,
+    version: &str,
+    boundary: &B,
+) -> Result<(), PiInstallError> {
+    fs::create_dir_all(root).map_err(|_| PiInstallError::Persistence)?;
+    let temporary = root.join(format!(".{name}.tmp"));
+    let _ = fs::remove_file(&temporary);
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&temporary)
+        .map_err(|_| PiInstallError::Persistence)?;
+    file.write_all(format!("{POINTER_HEADER}\n{version}\n").as_bytes())
+        .map_err(|_| PiInstallError::Persistence)?;
+    drop(file);
+    boundary.sync_file(&temporary)?;
+    if let Err(error) = boundary.replace_pointer(&temporary, &root.join(name)) {
+        let _ = fs::remove_file(temporary);
+        return Err(error);
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    struct FailingActivation;
+    impl PiLifecycleBoundary for FailingActivation {
+        fn sync_file(&self, _: &Path) -> Result<(), PiInstallError> {
+            Ok(())
+        }
+        fn sync_directory(&self, _: &Path) -> Result<(), PiInstallError> {
+            Ok(())
+        }
+        fn replace_revision(&self, _: &Path, _: &Path) -> Result<(), PiInstallError> {
+            unreachable!()
+        }
+        fn replace_pointer(&self, _: &Path, _: &Path) -> Result<(), PiInstallError> {
+            Err(PiInstallError::Persistence)
+        }
+    }
+
+    #[test]
+    fn interrupted_activation_preserves_the_existing_pointer() {
+        static NEXT: AtomicU64 = AtomicU64::new(0);
+        let root = std::env::temp_dir().join(format!(
+            "muniment-pi-pointer-{}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::Relaxed)
+        ));
+        fs::create_dir_all(&root).unwrap();
+        let original = format!("{POINTER_HEADER}\n{}\n", PI_ARTIFACT.version);
+        fs::write(root.join("current"), &original).unwrap();
+
+        assert_eq!(
+            write_pointer(&root, "current", PI_ARTIFACT.version, &FailingActivation),
+            Err(PiInstallError::Persistence)
+        );
+        assert_eq!(fs::read_to_string(root.join("current")).unwrap(), original);
+        assert!(!root.join(".current.tmp").exists());
+        fs::remove_dir_all(root).unwrap();
+    }
 }

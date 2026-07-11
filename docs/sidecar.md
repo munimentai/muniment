@@ -116,6 +116,9 @@ unresponsive peer from growing transport state without bound.
 
 For supervised JSON-RPC peers, `JsonRpcTransport::health_probe` turns an
 `Arc<JsonRpcTransport>` into the closure accepted by `SidecarSupervisor::spawn`.
+Pi uses the public `PiRpcWiring` handle instead: retain it beside the supervisor,
+pass `wiring.readiness_probe(...)` to `spawn`, and obtain that exact sole stdout
+dispatcher through `wiring.transport()` after startup readiness.
 The caller supplies the ping method name and per-call timeout; the helper sends
 the method with no parameters and maps any remote error, timeout, or transport
 failure to a descriptive health-check error. The probe uses the same call lock

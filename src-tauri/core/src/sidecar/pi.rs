@@ -34,6 +34,35 @@ pub struct PiRpcTransport {
     subscribers: Mutex<Vec<mpsc::Sender<Value>>>,
 }
 
+/// Shared wiring for the supervisor health probe and all application RPC.
+/// Keeping this handle alongside the supervisor guarantees there is only one
+/// stdout consumer for a child generation.
+#[derive(Clone, Default)]
+pub struct PiRpcWiring {
+    transport: Arc<OnceLock<Arc<PiRpcTransport>>>,
+}
+
+impl PiRpcWiring {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn transport(&self) -> Option<Arc<PiRpcTransport>> {
+        self.transport.get().cloned()
+    }
+
+    pub fn readiness_probe(
+        &self,
+        timeout: Duration,
+    ) -> impl Fn(&SidecarIo) -> Result<ProbeOutcome, String> + Send + Sync + 'static {
+        let shared = Arc::clone(&self.transport);
+        move |io| {
+            let transport = shared.get_or_init(|| Arc::new(PiRpcTransport::new(io.clone())));
+            transport.health_probe(timeout)(io)
+        }
+    }
+}
+
 impl PiRpcTransport {
     pub fn new(io: SidecarIo) -> Self {
         Self {
@@ -158,9 +187,5 @@ impl PiRpcTransport {
 pub fn pi_readiness_probe(
     timeout: Duration,
 ) -> impl Fn(&SidecarIo) -> Result<ProbeOutcome, String> + Send + Sync + 'static {
-    let transport = Arc::new(OnceLock::<Arc<PiRpcTransport>>::new());
-    move |io| {
-        let transport = transport.get_or_init(|| Arc::new(PiRpcTransport::new(io.clone())));
-        transport.health_probe(timeout)(io)
-    }
+    PiRpcWiring::new().readiness_probe(timeout)
 }
