@@ -20,12 +20,25 @@ pub struct GemmaRevisionDescriptor {
     pub identity: &'static str,
     pub revision: &'static str,
     pub model: &'static ResidentModelDescriptor,
+    pub notice: GemmaNoticeDescriptor,
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct GemmaNoticeDescriptor {
+    pub filename: &'static str,
+    pub contents: &'static [u8],
+}
+
+const GEMMA_NOTICE: GemmaNoticeDescriptor = GemmaNoticeDescriptor {
+    filename: "NOTICE.txt",
+    contents: b"Gemma is provided under and subject to the Gemma Terms of Use found at ai.google.dev/gemma/terms\n",
+};
 
 pub const RESIDENT_GEMMA_REVISION: GemmaRevisionDescriptor = GemmaRevisionDescriptor {
     identity: "gemma-3-4b-it-q4_0-v1",
     revision: RESIDENT_MODEL_REVISION,
     model: &RESIDENT_MODEL,
+    notice: GEMMA_NOTICE,
 };
 
 pub const RESIDENT_GEMMA_REVISIONS: [&GemmaRevisionDescriptor; 1] = [&RESIDENT_GEMMA_REVISION];
@@ -154,9 +167,13 @@ impl GemmaRevisionLifecycle {
         }
         require_directory(staged_directory).map_err(|_| GemmaLifecycleError::InvalidStage)?;
         let staged_model = staged_directory.join(self.target.model.filename);
+        let staged_notice = staged_directory.join(self.target.notice.filename);
         verify_model_artifact(&staged_model, self.target.model)
             .map_err(GemmaLifecycleError::RevisionInvalid)?;
+        verify_notice(&staged_notice, self.target.notice)
+            .map_err(GemmaLifecycleError::RevisionInvalid)?;
         boundary.sync_file(&staged_model)?;
+        boundary.sync_file(&staged_notice)?;
         boundary.sync_directory(staged_directory)?;
 
         let revisions = self.root.join("revisions");
@@ -164,7 +181,12 @@ impl GemmaRevisionLifecycle {
         let revision = revisions.join(self.target.revision);
         let installed_is_valid = require_directory(&revision).is_ok()
             && verify_model_artifact(revision.join(self.target.model.filename), self.target.model)
-                .is_ok();
+                .is_ok()
+            && verify_notice(
+                revision.join(self.target.notice.filename),
+                self.target.notice,
+            )
+            .is_ok();
         if !installed_is_valid {
             boundary.replace_revision(staged_directory, &revision)?;
             boundary.sync_directory(&revisions)?;
@@ -196,7 +218,8 @@ impl GemmaRevisionLifecycle {
             }
             Err(GemmaLifecycleError::Persistence(error)) => Err(error.into()),
             Err(_)
-                if !self.root.join("current").exists() && !self.root.join("previous").exists() =>
+                if !path_entry_exists(&self.root.join("current"))
+                    && !path_entry_exists(&self.root.join("previous")) =>
             {
                 Ok(GemmaRecovery::NotInstalled)
             }
@@ -205,12 +228,19 @@ impl GemmaRevisionLifecycle {
     }
 
     fn resolve_pointer(&self, name: &str) -> Result<ResolvedPointer, GemmaLifecycleError> {
-        let value =
-            fs::read_to_string(self.root.join(name)).map_err(|error| match error.kind() {
-                std::io::ErrorKind::NotFound => GemmaLifecycleError::RevisionMissing,
-                std::io::ErrorKind::InvalidData => GemmaLifecycleError::InvalidPointer,
-                _ => GemmaLifecycleError::Persistence(GemmaPersistenceError::Failed),
-            })?;
+        let pointer_path = self.root.join(name);
+        let metadata = fs::symlink_metadata(&pointer_path).map_err(|error| match error.kind() {
+            std::io::ErrorKind::NotFound => GemmaLifecycleError::RevisionMissing,
+            _ => GemmaLifecycleError::Persistence(GemmaPersistenceError::Failed),
+        })?;
+        if !metadata.file_type().is_file() {
+            return Err(GemmaLifecycleError::InvalidPointer);
+        }
+        let value = fs::read_to_string(pointer_path).map_err(|error| match error.kind() {
+            std::io::ErrorKind::NotFound => GemmaLifecycleError::RevisionMissing,
+            std::io::ErrorKind::InvalidData => GemmaLifecycleError::InvalidPointer,
+            _ => GemmaLifecycleError::Persistence(GemmaPersistenceError::Failed),
+        })?;
         let lines: Vec<_> = value.lines().collect();
         if lines.len() != 3
             || lines[0] != POINTER_HEADER
@@ -228,6 +258,8 @@ impl GemmaRevisionLifecycle {
         let path = self.root.join("revisions").join(descriptor.revision);
         require_directory(&path).map_err(GemmaLifecycleError::RevisionInvalid)?;
         verify_model_artifact(path.join(descriptor.model.filename), descriptor.model)
+            .map_err(GemmaLifecycleError::RevisionInvalid)?;
+        verify_notice(path.join(descriptor.notice.filename), descriptor.notice)
             .map_err(GemmaLifecycleError::RevisionInvalid)?;
         Ok(ResolvedPointer { path, value })
     }
@@ -280,6 +312,40 @@ fn valid_descriptor(descriptor: &GemmaRevisionDescriptor) -> bool {
     safe_component(descriptor.identity)
         && safe_component(descriptor.revision)
         && safe_component(descriptor.model.filename)
+        && safe_component(descriptor.notice.filename)
+        && !descriptor.notice.contents.is_empty()
+}
+
+fn verify_notice(
+    path: impl AsRef<Path>,
+    descriptor: GemmaNoticeDescriptor,
+) -> Result<(), ModelVerificationError> {
+    let path = path.as_ref();
+    let metadata = fs::symlink_metadata(path).map_err(|error| {
+        if error.kind() == std::io::ErrorKind::NotFound {
+            ModelVerificationError::Missing
+        } else {
+            ModelVerificationError::Unreadable
+        }
+    })?;
+    if !metadata.file_type().is_file() {
+        return Err(ModelVerificationError::NotRegularFile);
+    }
+    if metadata.len() != descriptor.contents.len() as u64 {
+        return Err(ModelVerificationError::WrongSize {
+            expected: descriptor.contents.len() as u64,
+            actual: metadata.len(),
+        });
+    }
+    let contents = fs::read(path).map_err(|_| ModelVerificationError::Unreadable)?;
+    if contents != descriptor.contents {
+        return Err(ModelVerificationError::DigestMismatch);
+    }
+    Ok(())
+}
+
+fn path_entry_exists(path: &Path) -> bool {
+    fs::symlink_metadata(path).is_ok()
 }
 
 fn safe_component(value: &str) -> bool {

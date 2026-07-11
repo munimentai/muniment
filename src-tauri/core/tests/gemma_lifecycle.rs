@@ -3,8 +3,8 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 
 use muniment_core::llama::lifecycle::{
-    GemmaLifecycleBoundary, GemmaLifecycleError, GemmaPersistenceError, GemmaRecovery,
-    GemmaRevisionDescriptor, GemmaRevisionLifecycle,
+    GemmaLifecycleBoundary, GemmaLifecycleError, GemmaNoticeDescriptor, GemmaPersistenceError,
+    GemmaRecovery, GemmaRevisionDescriptor, GemmaRevisionLifecycle,
 };
 use muniment_core::llama::ResidentModelDescriptor;
 
@@ -26,11 +26,19 @@ static OLD: GemmaRevisionDescriptor = GemmaRevisionDescriptor {
     identity: "gemma-fixture-v1",
     revision: "old",
     model: &OLD_MODEL,
+    notice: GemmaNoticeDescriptor {
+        filename: "NOTICE.txt",
+        contents: b"notice-v1",
+    },
 };
 static NEW: GemmaRevisionDescriptor = GemmaRevisionDescriptor {
     identity: "gemma-fixture-v2",
     revision: "new",
     model: &NEW_MODEL,
+    notice: GemmaNoticeDescriptor {
+        filename: "NOTICE.txt",
+        contents: b"notice-v2",
+    },
 };
 static KNOWN: [&GemmaRevisionDescriptor; 2] = [&OLD, &NEW];
 
@@ -129,7 +137,47 @@ fn stage(root: &Path, name: &str, bytes: &[u8]) -> PathBuf {
     let stage = root.join("staging").join(name);
     fs::create_dir(&stage).unwrap();
     fs::write(stage.join("model.gguf"), bytes).unwrap();
+    let notice = if bytes == b"def" {
+        NEW.notice.contents
+    } else {
+        OLD.notice.contents
+    };
+    fs::write(stage.join("NOTICE.txt"), notice).unwrap();
     stage
+}
+
+#[test]
+fn notice_must_match_the_revision_descriptor_for_publication_and_resolution() {
+    let root = root();
+    let lifecycle = GemmaRevisionLifecycle::new(root.clone(), &KNOWN, &OLD).unwrap();
+
+    let missing = stage(&root, "missing-notice", b"abc");
+    fs::remove_file(missing.join("NOTICE.txt")).unwrap();
+    assert!(matches!(
+        lifecycle.publish(&missing, &Boundary::working()),
+        Err(GemmaLifecycleError::RevisionInvalid(_))
+    ));
+
+    let wrong_association = stage(&root, "wrong-notice", b"abc");
+    fs::write(wrong_association.join("NOTICE.txt"), NEW.notice.contents).unwrap();
+    assert!(matches!(
+        lifecycle.publish(&wrong_association, &Boundary::working()),
+        Err(GemmaLifecycleError::RevisionInvalid(_))
+    ));
+
+    lifecycle
+        .publish(&stage(&root, "valid", b"abc"), &Boundary::working())
+        .unwrap();
+    fs::write(root.join("revisions/old/NOTICE.txt"), b"tampered").unwrap();
+    assert!(matches!(
+        lifecycle.resolve_current(),
+        Err(GemmaLifecycleError::RevisionInvalid(_))
+    ));
+    assert_eq!(
+        lifecycle.recover(&Boundary::working()).unwrap(),
+        GemmaRecovery::RepairRequired
+    );
+    fs::remove_dir_all(root).unwrap();
 }
 
 #[test]
@@ -313,6 +361,47 @@ fn recovery_rejects_linked_revision_directory_and_model() {
         fs::remove_dir_all(root).unwrap();
         fs::remove_dir_all(outside).unwrap();
     }
+}
+
+#[cfg(unix)]
+#[test]
+fn linked_pointer_files_require_repair_even_when_the_target_looks_valid() {
+    use std::os::unix::fs::symlink;
+
+    for external_contents in [
+        "muniment-gemma-pointer-v1\ngemma-fixture-v1\nold\n",
+        "malformed",
+    ] {
+        let root = root();
+        let lifecycle = GemmaRevisionLifecycle::new(root.clone(), &KNOWN, &OLD).unwrap();
+        let external = root.with_extension("pointer");
+        fs::write(&external, external_contents).unwrap();
+        symlink(&external, root.join("current")).unwrap();
+
+        assert_eq!(
+            lifecycle.resolve_current(),
+            Err(GemmaLifecycleError::InvalidPointer)
+        );
+        assert_eq!(
+            lifecycle.recover(&Boundary::working()).unwrap(),
+            GemmaRecovery::RepairRequired
+        );
+        fs::remove_dir_all(root).unwrap();
+        fs::remove_file(external).unwrap();
+    }
+
+    let root = root();
+    let lifecycle = GemmaRevisionLifecycle::new(root.clone(), &KNOWN, &OLD).unwrap();
+    symlink(root.join("does-not-exist"), root.join("current")).unwrap();
+    assert_eq!(
+        lifecycle.resolve_current(),
+        Err(GemmaLifecycleError::InvalidPointer)
+    );
+    assert_eq!(
+        lifecycle.recover(&Boundary::working()).unwrap(),
+        GemmaRecovery::RepairRequired
+    );
+    fs::remove_dir_all(root).unwrap();
 }
 
 #[test]
