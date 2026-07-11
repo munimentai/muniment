@@ -1,8 +1,8 @@
 # Desktop authentication
 
 The production Muniment handshake is installation-bound native auth. The Rust
-core currently implements its first step: registration and coherent keychain
-persistence. The older generic OIDC flow remains as tested groundwork, but it
+core currently implements registration, coherent keychain persistence, and
+the installation-proof authorization request. The older generic OIDC flow remains as tested groundwork, but it
 is not the live production handshake (`/.well-known/openid-configuration`
 returns 404 on the control plane).
 
@@ -13,10 +13,11 @@ returns 404 on the control plane).
    canonical unpadded base64url encoding of a newly generated Ed25519 public
    key's raw 32 bytes. The response supplies a UUID device id, one-use
    registration token, device challenge, and a 600-second expiry.
-2. **Follow-up:** `POST /v1/auth/native/authorize` constructs installation
-   proof and starts browser authorization.
-3. **Follow-up:** the system browser completes authorization through the
-   opaque continuation URL.
+2. **Implemented:** `POST /v1/auth/native/authorize` constructs and signs the
+   canonical installation proof, validates the opaque HTTPS continuation, and
+   persists the rotated device challenge.
+3. **Follow-up:** launch the system browser and receive its loopback callback
+   through the opaque continuation URL.
 4. **Follow-up:** `POST /v1/auth/native/token` exchanges the code and later
    rotates tokens and device challenges.
 5. **Follow-up:** `GET /v1/auth/native/session` inspects the authoritative
