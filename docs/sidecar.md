@@ -134,8 +134,12 @@ microphone PCM and invoke the pinned sherpa-onnx v1.13.2 C API in process with
 the pinned Parakeet-TDT 0.6B v3 INT8 offline artifact. No ASR socket or child
 process is introduced; only utterance-final transcript text proceeds to the
 local Gemma dictation-polish contract, and voice bytes never enter a network
-client, Pi, llama-server, telemetry, or crash reports. Native desktop packaging
-and target-hardware validation remain follow-up work.
+client, Pi, llama-server, telemetry, or crash reports. Model acquisition also
+remains outside sidecar supervision: [ADR
+0005](decisions/0005-asr-model-lifecycle.md) selects a Rust-native first-use
+install with complete-set verification and atomic publication. Acquisition is
+the only ASR-related network boundary, and model bytes never cross the webview.
+Native desktop packaging and target-hardware validation remain follow-up work.
 
 `muniment_core::llama` owns the local llama.cpp boundary. The typed resident
 descriptor pins the Gemma artifact identity, stable API alias, and context
