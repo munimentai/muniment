@@ -45,7 +45,8 @@ Gate reading in practice (updated 2026-07-10): client-side slices that are fully
   - DONE 2026-07-10 — ADR 0004 pins sherpa-onnx v1.13.2 and the immutable Parakeet-TDT 0.6B v3 INT8 four-file artifact, defines the in-process privacy/packaging boundary, records licensing duties, and sets a target-hardware validation matrix.
   - DONE 2026-07-10 — a pure-Rust, constant-memory verifier publishes success only after every pinned ASR artifact passes regular-file, exact-size, and SHA-256 checks.
   - DONE 2026-07-10 — ADR 0005 selects first-use installation and defines immutable revision storage, bounded native download, atomic publication, recovery, rollback, removal, ownership/privacy boundaries, and notice delivery.
-  - NEXT — implement the pure-Rust lifecycle and injected filesystem/HTTP boundaries against tiny local fixtures and an in-process HTTP server; Tauri adapters, UI, native bindings/packaging, capture/VAD, and hardware validation follow separately.
+  - DONE 2026-07-11 — pure-core verified revision publication, pointer resolution, and crash recovery against tiny injected fixtures.
+  - NEXT — implement bounded pure-core acquisition/resume/cancellation into a publication-ready stage; native HTTP/proxy/free-space/locking adapters, UI, native bindings/packaging, capture/VAD, and hardware validation follow separately.
 
 ## Phase 4+ — Org surface (§9 items 16-19)
 - Remote MCP consumption, local stdio allowlist, capability install flow, artifact side panel, and projects with the redaction rule (`output withheld · connection not granted`).
