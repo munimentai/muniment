@@ -41,13 +41,12 @@ startup I/O but makes the local execution identity reproducible and prevents a
 partial or substituted artifact from being served. Changing model, quant,
 revision, or runtime context is an explicit descriptor and ADR update.
 
-Artifact acquisition, update/rollback policy, packaging, and acceptance of the
-Gemma terms are separate distribution concerns. Dictation and classifier role
-prompts and their evaluation are also deferred.
+Artifact acquisition, update/rollback policy, removal, integrity, and Gemma
+terms/notice delivery are decided by [ADR 0006](0006-resident-gemma-model-lifecycle.md).
+Dictation and classifier role prompts and their evaluation remain deferred.
 
 ## Sources
 
 - Upstream artifact: <https://huggingface.co/google/gemma-3-4b-it-qat-q4_0-gguf/tree/15f73f5eee9c28f53afefef5723e29680c2fc78a>
 - Gemma 3 model card: <https://ai.google.dev/gemma/docs/core/model_card_3>
 - llama-server model alias behavior: <https://github.com/ggml-org/llama.cpp/blob/master/tools/server/README.md>
-
