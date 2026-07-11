@@ -1,0 +1,138 @@
+name: Nightly desktop release
+
+on:
+  schedule:
+    - cron: "0 5 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: nightly-desktop-release
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    runs-on: self-hosted
+    outputs:
+      source_sha: ${{ steps.source.outputs.sha }}
+    steps:
+      - name: Resolve main revision
+        id: source
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const { data } = await github.rest.repos.getCommit({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              ref: "main",
+            });
+            core.setOutput("sha", data.sha);
+
+      - name: Ensure rolling pre-release exists
+        uses: actions/github-script@v8
+        env:
+          SOURCE_SHA: ${{ steps.source.outputs.sha }}
+        with:
+          script: |
+            try {
+              await github.rest.repos.getReleaseByTag({ ...context.repo, tag: "nightly" });
+            } catch (error) {
+              if (error.status !== 404) throw error;
+              await github.rest.repos.createRelease({
+                ...context.repo,
+                tag_name: "nightly",
+                target_commitish: process.env.SOURCE_SHA,
+                name: "Nightly desktop build",
+                body: "Initial nightly build is in progress.",
+                prerelease: true,
+              });
+            }
+
+  build:
+    needs: prepare
+    runs-on: self-hosted
+    timeout-minutes: 75
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        platform: [linux, windows, macos]
+    steps:
+      - name: Build and upload (${{ matrix.platform }}) via desktop-ci
+        env:
+          PLATFORM: ${{ matrix.platform }}
+          REPO_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          SOURCE_SHA: ${{ needs.prepare.outputs.source_sha }}
+        run: |
+          set -u
+          umask 077
+          key="$RUNNER_TEMP/desktop_ci_key"
+          printf '%s' "$DESKTOP_CI_SSH_KEY" > "$key"
+          trap 'rm -f "$key"' EXIT
+
+          build='npm ci --no-audit --no-fund && npm run tauri build'
+          if [ "$PLATFORM" = "macos" ]; then
+            build='npm ci --no-audit --no-fund && npm run tauri build -- --bundles app && ditto -c -k --sequesterRsrc --keepParent src-tauri/target/release/bundle/macos/muniment.app src-tauri/target/release/bundle/macos/muniment.app.zip'
+          fi
+
+          # The VM is destroyed when desktop-ci exits, so completed bundles are
+          # uploaded from inside it. Pinning the checkout makes the release SHA
+          # exact even if main advances while the three serialized VMs run.
+          cmd="git checkout --detach $SOURCE_SHA && $build && node .github/upload-nightly-assets.mjs $REPO_TOKEN $REPOSITORY $SOURCE_SHA $PLATFORM"
+          repo_url="https://x-access-token:${REPO_TOKEN}@github.com/${REPOSITORY}"
+
+          ssh -i "$key" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+              -o BatchMode=yes -o ServerAliveInterval=30 -o ServerAliveCountMax=8 \
+              desktopci@10.1.10.10 \
+              "sudo desktop-ci $PLATFORM --repo '$repo_url' --ref 'main' --cmd '$cmd'"
+
+  publish:
+    needs: [prepare, build]
+    runs-on: self-hosted
+    steps:
+      - name: Finalize rolling pre-release
+        uses: actions/github-script@v8
+        env:
+          SOURCE_SHA: ${{ needs.prepare.outputs.source_sha }}
+        with:
+          script: |
+            const sha = process.env.SOURCE_SHA;
+            const prefix = `nightly-${sha}-`;
+            const { data: release } = await github.rest.repos.getReleaseByTag({
+              ...context.repo,
+              tag: "nightly",
+            });
+            for (const suffix of [".deb", ".AppImage", ".msi", "-nsis.exe", ".app.zip"]) {
+              const matches = release.assets.filter((asset) =>
+                asset.name.startsWith(prefix) && asset.name.endsWith(suffix));
+              if (matches.length !== 1) {
+                core.setFailed(`expected one ${suffix} asset for ${sha}, found ${matches.length}`);
+                return;
+              }
+            }
+            for (const asset of release.assets) {
+              if (!asset.name.startsWith(prefix)) {
+                await github.rest.repos.deleteReleaseAsset({
+                  ...context.repo,
+                  asset_id: asset.id,
+                });
+              }
+            }
+            const buildDate = new Date().toISOString().replace("T", " ").replace(/:\d\d\.\d\d\dZ$/, " UTC");
+            await github.rest.repos.updateRelease({
+              ...context.repo,
+              release_id: release.id,
+              target_commitish: sha,
+              name: "Nightly desktop build",
+              body: `Automated desktop build from \`${sha}\`.\n\nBuilt ${buildDate}. Model weights are not included.`,
+              prerelease: true,
+            });
+            await github.rest.git.updateRef({
+              ...context.repo,
+              ref: "tags/nightly",
+              sha,
+              force: true,
+            });
