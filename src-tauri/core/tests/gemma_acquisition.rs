@@ -146,6 +146,29 @@ fn transient_failure_retries_from_the_preserved_part() {
 }
 
 #[test]
+fn server_failure_retries_from_the_preserved_part() {
+    let root = root();
+    fs::create_dir(root.join("install")).unwrap();
+    fs::write(root.join("install/model.gguf.part"), b"a").unwrap();
+    let mut transport = Transport::new([
+        Reply::Response(503, None, b""),
+        Reply::Response(206, Some((1, 2, 3)), b"bc"),
+    ]);
+    acquire_gemma_stage(
+        &root,
+        "install",
+        &REVISION,
+        GemmaAcquisitionLimits::default(),
+        &mut transport,
+        &|| false,
+    )
+    .unwrap();
+    assert_eq!(transport.offsets, [1, 1]);
+    assert_eq!(fs::read(root.join("install/model.gguf")).unwrap(), b"abc");
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn an_inconsistent_range_discards_the_part_before_retrying() {
     let root = root();
     fs::create_dir(root.join("install")).unwrap();
@@ -165,6 +188,28 @@ fn an_inconsistent_range_discards_the_part_before_retrying() {
     .unwrap();
     assert_eq!(transport.offsets, [1, 0]);
     assert_eq!(fs::read(root.join("install/model.gguf")).unwrap(), b"abc");
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn an_invalid_completed_model_is_replaced_by_a_verified_download() {
+    let root = root();
+    fs::create_dir(root.join("install")).unwrap();
+    fs::write(root.join("install/model.gguf"), b"bad").unwrap();
+    let mut transport = Transport::new([Reply::Response(200, None, b"abc")]);
+
+    let stage = acquire_gemma_stage(
+        &root,
+        "install",
+        &REVISION,
+        GemmaAcquisitionLimits::default(),
+        &mut transport,
+        &|| false,
+    )
+    .unwrap();
+
+    assert_eq!(transport.offsets, [0]);
+    assert_eq!(fs::read(stage.join("model.gguf")).unwrap(), b"abc");
     fs::remove_dir_all(root).unwrap();
 }
 

@@ -151,11 +151,17 @@ pub fn acquire_gemma_stage<T: GemmaDownloadTransport, C: GemmaCancellation>(
     }
     let part = stage.join(format!("{}.part", descriptor.model.filename));
     let completed = stage.join(descriptor.model.filename);
-    if completed.exists() {
-        verify_model_artifact(&completed, descriptor.model)
-            .map_err(GemmaAcquisitionError::Verification)?;
-        write_notice(&stage, descriptor)?;
-        return Ok(stage);
+    match fs::symlink_metadata(&completed) {
+        Ok(metadata)
+            if metadata.file_type().is_file()
+                && verify_model_artifact(&completed, descriptor.model).is_ok() =>
+        {
+            write_notice(&stage, descriptor)?;
+            return Ok(stage);
+        }
+        Ok(_) => remove_part(&completed)?,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(_) => return Err(GemmaAcquisitionError::Persistence),
     }
 
     for attempt in 0..limits.max_attempts {
@@ -182,13 +188,15 @@ pub fn acquire_gemma_stage<T: GemmaDownloadTransport, C: GemmaCancellation>(
         };
         let append = match validate_response(&response, offset, descriptor.model.byte_size) {
             Ok(append) => append,
-            Err(GemmaAcquisitionError::InvalidResponse | GemmaAcquisitionError::Retryable) => {
+            Err(GemmaAcquisitionError::InvalidResponse) => {
                 remove_part(&part)?;
                 if attempt + 1 < limits.max_attempts {
                     continue;
                 }
                 return Err(GemmaAcquisitionError::Retryable);
             }
+            Err(GemmaAcquisitionError::Retryable) if attempt + 1 < limits.max_attempts => continue,
+            Err(GemmaAcquisitionError::Retryable) => return Err(GemmaAcquisitionError::Retryable),
             Err(error) => return Err(error),
         };
         if !append {
