@@ -26,7 +26,8 @@ Gate reading in practice (updated 2026-07-10): client-side slices that are fully
     - DONE 2026-07-10 — typed dictation-polish request/response contract, fixed prompt, and deterministic golden evaluations over the managed chat client.
     - DONE 2026-07-10 — typed routing-classifier request/response contract with Phase 3 item 12's closed vocabulary, strict/redacted decoding, and deterministic golden evaluations.
     - DONE 2026-07-10 — routing-classifier and dictation-polish prompts encode their complete untrusted input as JSON strings, with delimiter-breakout regression coverage.
-    - Artifact acquisition/update/rollback remains a separate distribution concern.
+    - DECIDED 2026-07-11 — ADR 0006 defines explicit first-use acquisition, immutable release-pinned identity, constant-memory verification, atomic publication, update/rollback/recovery/removal policy, and Gemma terms/notice delivery.
+    - NEXT — implement pure-core filesystem publication, pointer resolution, and recovery against tiny injected fixtures; native download/resume/free-space/locking adapters, activation-health rollback, UI, and release notices follow separately.
 11. Attachments pipeline + content-addressed file store client. The cloud file-store pipeline follows items 8d/9.
     - Groundwork DONE — pure-Rust content-addressed local store with atomic dedup publish, constant-memory put/get/verify, and stale-temp sweep.
 
