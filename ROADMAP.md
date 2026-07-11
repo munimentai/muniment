@@ -10,12 +10,12 @@ Phases mirror harness-spec §9. Muniment-cloud Phase 1 native auth and the cloud
 
 ### 8. Shell, auth, and entitlements
 - DONE — Svelte 5/Vite toolchain, design tokens, OIDC PKCE core, keychain storage, refresh-on-expiry, signed-out/signed-in states, pre-chat shell frame, reusable milled ring, and structured server-unreachable recovery.
-- DONE cloud prerequisite — native-app PKCE issuer/client support and key regeneration are live at `api.muniment.ai` (2026-07-11).
-- NEXT after first chat — desktop registration/handshake and entitlement snapshot fetch/display where those surfaces remain unwired.
+- DONE cloud prerequisite — the `muniment-desktop` public client registration, native-app PKCE issuer support, and key regeneration are live at `api.muniment.ai` (2026-07-11).
+- NEXT before first chat — wire the existing client handshake/sign-in flow to the live registration and fetch the entitlement snapshot; snapshot display may follow as a separately reviewable surface.
 
 ### 9. Pi sidecar and cloud chat
-- DONE groundwork — supervised sidecar lifecycle, readiness-aware startup/restart, typed RPC framing, notifications, ping health checks, cancellable calls, and the durable journal/reducer contract below.
-- NEXT — pin and distribute the real Pi runtime under an ADR, spawn it through the existing supervisor, then deliver the first signed-in streamed chat through the user's scoped LiteLLM virtual key with durable event translation and a provenance line.
+- DONE foundation — ADR 0008 pins Pi 0.73.1, chooses verified first-use acquisition of its platform-native executable, and proves its real `get_state` RPC readiness through `SidecarSupervisor`.
+- NEXT, after the Phase 2.8 handshake/sign-in wiring — distribute and spawn the pinned Pi runtime through the existing supervisor, then deliver the first signed-in streamed chat through the user's scoped LiteLLM virtual key with durable event translation and a provenance line.
 - FOLLOW — steering/follow-up controls, tool/permission activity, session resume, and richer receipt expansion in separately reviewable slices.
 
 ### 10. Local Gemma sidecar
