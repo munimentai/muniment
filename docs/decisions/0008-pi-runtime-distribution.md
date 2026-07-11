@@ -145,10 +145,11 @@ user's LiteLLM virtual endpoint, with one multiplexing RPC dispatcher, event
 projection into the durable journal, permission gates, and steer/follow-up.
 This ADR adds no chat UI, thread surface, provider call, or cloud mock.
 
-CI does not vendor Pi. The real-spawn test is gated by
-`MUNIMENT_PI_EXECUTABLE`, like model-dependent tests: ordinary three-platform
+CI does not vendor Pi. The real-spawn test is gated by `MUNIMENT_PI_ROOT`,
+which names a published lifecycle root whose pointer and retained archive must
+pass the compiled size and digest checks. Like model-dependent tests, ordinary three-platform
 CI skips it; an artifact job downloads the exact target descriptor into a
-temporary directory, verifies bytes and SHA-256, extracts it outside the repo,
+temporary directory, installs it outside the repo through the Pi lifecycle,
 sets the variable, and runs `cargo test --test pi_sidecar`.
 
 ## Sources
