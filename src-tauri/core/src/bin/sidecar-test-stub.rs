@@ -269,6 +269,14 @@ fn pi_rpc_interleaved() {
             })
         );
         io::stdout().flush().unwrap();
+        if request["type"] == "prompt" {
+            thread::sleep(Duration::from_millis(10));
+            println!(
+                "{}",
+                serde_json::json!({"type": "message_update", "requestId": "after-response"})
+            );
+            io::stdout().flush().unwrap();
+        }
     }
 }
 

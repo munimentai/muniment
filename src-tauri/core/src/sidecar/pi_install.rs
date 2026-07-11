@@ -22,6 +22,11 @@ pub struct PiArtifactDescriptor {
     pub executable: &'static str,
 }
 
+/// The one older pin admitted for rollback. A pin update moves the former
+/// `PI_ARTIFACT` descriptor here; arbitrary installed revision names are never
+/// trusted. There is no predecessor for the first supported pin.
+pub const PI_PREVIOUS_ARTIFACT: Option<PiArtifactDescriptor> = None;
+
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 pub const PI_ARTIFACT: PiArtifactDescriptor = PiArtifactDescriptor {
     version: "0.73.1",
@@ -230,14 +235,18 @@ fn acquire_stage<T: PiDownloadTransport>(
 }
 
 pub fn verify_archive(path: &Path) -> Result<(), PiInstallError> {
+    verify_archive_for(path, PI_ARTIFACT)
+}
+
+fn verify_archive_for(path: &Path, descriptor: PiArtifactDescriptor) -> Result<(), PiInstallError> {
     let metadata = fs::symlink_metadata(path).map_err(|_| PiInstallError::Persistence)?;
-    if !metadata.file_type().is_file() || metadata.len() != PI_ARTIFACT.byte_size {
+    if !metadata.file_type().is_file() || metadata.len() != descriptor.byte_size {
         return Err(PiInstallError::WrongSize);
     }
     let mut file = File::open(path).map_err(|_| PiInstallError::Persistence)?;
     let mut hash = Sha256::new();
     std::io::copy(&mut file, &mut hash).map_err(|_| PiInstallError::Persistence)?;
-    if format!("{:x}", hash.finalize()) != PI_ARTIFACT.sha256 {
+    if format!("{:x}", hash.finalize()) != descriptor.sha256 {
         return Err(PiInstallError::DigestMismatch);
     }
     Ok(())
@@ -300,7 +309,14 @@ fn extract_archive(archive: &Path, stage: &Path) -> Result<(), PiInstallError> {
 }
 
 fn verify_executable(root: &Path) -> Result<PathBuf, PiInstallError> {
-    let path = root.join(PI_ARTIFACT.executable);
+    verify_executable_for(root, PI_ARTIFACT)
+}
+
+fn verify_executable_for(
+    root: &Path,
+    descriptor: PiArtifactDescriptor,
+) -> Result<PathBuf, PiInstallError> {
+    let path = root.join(descriptor.executable);
     let metadata = fs::symlink_metadata(&path).map_err(|_| PiInstallError::Persistence)?;
     if !metadata.file_type().is_file() {
         return Err(PiInstallError::UnsafeArchive);
@@ -328,7 +344,7 @@ fn publish_stage<B: PiLifecycleBoundary>(
     boundary.sync_file(&stage.join(PI_ARTIFACT.archive))?;
     boundary.sync_file(&stage.join(PI_ARTIFACT.executable))?;
     boundary.sync_directory(stage)?;
-    if resolve_revision(&destination).is_err() {
+    if resolve_revision(&destination, PI_ARTIFACT).is_err() {
         boundary.replace_revision(stage, &destination)?;
         boundary.sync_directory(&revisions)?;
     }
@@ -343,18 +359,109 @@ fn publish_stage<B: PiLifecycleBoundary>(
 pub fn resolve_current(root: &Path) -> Result<PathBuf, PiInstallError> {
     resolve_pointer(root, "current").or_else(|_| resolve_pointer(root, "previous"))
 }
-fn resolve_pointer(root: &Path, pointer: &str) -> Result<PathBuf, PiInstallError> {
-    let version = read_pointer(root, pointer)?;
-    let revision = root.join("revisions").join(version);
-    resolve_revision(&revision)
+
+/// Atomically reactivates the retained verified predecessor after the newly
+/// pinned revision fails its supervisor activation check.
+pub fn rollback_to_previous<B: PiLifecycleBoundary>(
+    root: &Path,
+    boundary: &B,
+) -> Result<PathBuf, PiInstallError> {
+    rollback_to_previous_for(root, boundary, PI_ARTIFACT, PI_PREVIOUS_ARTIFACT)
 }
 
-fn resolve_revision(revision: &Path) -> Result<PathBuf, PiInstallError> {
-    verify_archive(&revision.join(PI_ARTIFACT.archive))?;
-    verify_executable(revision)
+/// Resolves the new pin for supervisor startup and rolls the durable pointer
+/// back when its bounded readiness/activation check fails. The returned path
+/// is always the revision the caller should launch next.
+pub fn activate_or_rollback<B: PiLifecycleBoundary>(
+    root: &Path,
+    boundary: &B,
+    activation_healthy: impl FnOnce(&Path) -> bool,
+) -> Result<PathBuf, PiInstallError> {
+    activate_or_rollback_for(
+        root,
+        boundary,
+        PI_ARTIFACT,
+        PI_PREVIOUS_ARTIFACT,
+        activation_healthy,
+    )
+}
+
+fn activate_or_rollback_for<B: PiLifecycleBoundary>(
+    root: &Path,
+    boundary: &B,
+    current: PiArtifactDescriptor,
+    retained: Option<PiArtifactDescriptor>,
+    activation_healthy: impl FnOnce(&Path) -> bool,
+) -> Result<PathBuf, PiInstallError> {
+    let executable = resolve_pointer_for(root, "current", current, retained)?;
+    if activation_healthy(&executable) {
+        Ok(executable)
+    } else {
+        rollback_to_previous_for(root, boundary, current, retained)
+    }
+}
+
+fn rollback_to_previous_for<B: PiLifecycleBoundary>(
+    root: &Path,
+    boundary: &B,
+    current: PiArtifactDescriptor,
+    retained: Option<PiArtifactDescriptor>,
+) -> Result<PathBuf, PiInstallError> {
+    let previous = read_pointer_for(root, "previous", current, retained)?;
+    let descriptor = descriptor_for_version_from(&previous, current, retained)
+        .ok_or(PiInstallError::NotInstalled)?;
+    resolve_revision(&root.join("revisions").join(&previous), descriptor)?;
+    write_pointer(root, "current", &previous, boundary)?;
+    boundary.sync_directory(root)?;
+    resolve_pointer_for(root, "current", current, retained)
+}
+
+fn resolve_pointer(root: &Path, pointer: &str) -> Result<PathBuf, PiInstallError> {
+    resolve_pointer_for(root, pointer, PI_ARTIFACT, PI_PREVIOUS_ARTIFACT)
+}
+
+fn resolve_pointer_for(
+    root: &Path,
+    pointer: &str,
+    current: PiArtifactDescriptor,
+    retained: Option<PiArtifactDescriptor>,
+) -> Result<PathBuf, PiInstallError> {
+    let version = read_pointer_for(root, pointer, current, retained)?;
+    let descriptor = descriptor_for_version_from(&version, current, retained)
+        .ok_or(PiInstallError::NotInstalled)?;
+    let revision = root.join("revisions").join(version);
+    resolve_revision(&revision, descriptor)
+}
+
+fn descriptor_for_version_from(
+    version: &str,
+    current: PiArtifactDescriptor,
+    retained: Option<PiArtifactDescriptor>,
+) -> Option<PiArtifactDescriptor> {
+    [Some(current), retained]
+        .into_iter()
+        .flatten()
+        .find(|descriptor| descriptor.version == version)
+}
+
+fn resolve_revision(
+    revision: &Path,
+    descriptor: PiArtifactDescriptor,
+) -> Result<PathBuf, PiInstallError> {
+    verify_archive_for(&revision.join(descriptor.archive), descriptor)?;
+    verify_executable_for(revision, descriptor)
 }
 
 fn read_pointer(root: &Path, name: &str) -> Result<String, PiInstallError> {
+    read_pointer_for(root, name, PI_ARTIFACT, PI_PREVIOUS_ARTIFACT)
+}
+
+fn read_pointer_for(
+    root: &Path,
+    name: &str,
+    current: PiArtifactDescriptor,
+    retained: Option<PiArtifactDescriptor>,
+) -> Result<String, PiInstallError> {
     let path = root.join(name);
     if !fs::symlink_metadata(&path)
         .map_err(|_| PiInstallError::NotInstalled)?
@@ -365,7 +472,11 @@ fn read_pointer(root: &Path, name: &str) -> Result<String, PiInstallError> {
     }
     let value = fs::read_to_string(path).map_err(|_| PiInstallError::NotInstalled)?;
     let lines: Vec<_> = value.lines().collect();
-    if lines != [POINTER_HEADER, PI_ARTIFACT.version] {
+    if lines.len() != 2
+        || lines[0] != POINTER_HEADER
+        || descriptor_for_version_from(lines[1], current, retained).is_none()
+        || !safe_component(lines[1])
+    {
         return Err(PiInstallError::NotInstalled);
     }
     Ok(lines[1].to_owned())
@@ -435,6 +546,70 @@ mod tests {
         );
         assert_eq!(fs::read_to_string(root.join("current")).unwrap(), original);
         assert!(!root.join(".current.tmp").exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn pin_upgrade_rolls_back_only_to_the_retained_verified_descriptor() {
+        static NEXT: AtomicU64 = AtomicU64::new(0);
+        let root = std::env::temp_dir().join(format!(
+            "muniment-pi-upgrade-{}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::Relaxed)
+        ));
+        let descriptor = |version, archive| PiArtifactDescriptor {
+            version,
+            archive,
+            byte_size: 1,
+            sha256: "ca978112ca1bbdcafac231b39a23dc4da786eff8147c4e72b9807785afee48bb",
+            executable: "pi/pi",
+        };
+        let old = descriptor("0.72.0", "old.tar.gz");
+        let new = descriptor("0.73.1", "new.tar.gz");
+        for artifact in [old, new] {
+            let revision = root.join("revisions").join(artifact.version);
+            fs::create_dir_all(revision.join("pi")).unwrap();
+            fs::write(revision.join(artifact.archive), b"a").unwrap();
+            fs::write(revision.join(artifact.executable), b"executable").unwrap();
+        }
+        fs::write(
+            root.join("current"),
+            format!("{POINTER_HEADER}\n{}\n", new.version),
+        )
+        .unwrap();
+        fs::write(
+            root.join("previous"),
+            format!("{POINTER_HEADER}\n{}\n", old.version),
+        )
+        .unwrap();
+
+        let restored =
+            activate_or_rollback_for(&root, &FsPiLifecycleBoundary, new, Some(old), |_| false)
+                .unwrap();
+        assert_eq!(restored, root.join("revisions/0.72.0/pi/pi"));
+        assert_eq!(
+            read_pointer_for(&root, "current", new, Some(old)).unwrap(),
+            old.version
+        );
+
+        fs::write(
+            root.join("current"),
+            format!("{POINTER_HEADER}\n{}\n", new.version),
+        )
+        .unwrap();
+        assert_eq!(
+            rollback_to_previous_for(&root, &FailingActivation, new, Some(old)),
+            Err(PiInstallError::Persistence)
+        );
+        assert_eq!(
+            read_pointer_for(&root, "current", new, Some(old)).unwrap(),
+            new.version
+        );
+        fs::write(root.join("previous"), format!("{POINTER_HEADER}\nother\n")).unwrap();
+        assert_eq!(
+            rollback_to_previous_for(&root, &FsPiLifecycleBoundary, new, Some(old)),
+            Err(PiInstallError::NotInstalled)
+        );
         fs::remove_dir_all(root).unwrap();
     }
 }

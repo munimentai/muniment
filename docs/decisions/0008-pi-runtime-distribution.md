@@ -44,6 +44,12 @@ the upstream changelog, license and RPC compatibility, a descriptor amendment
 in a signed app release, and the real-artifact readiness test on every changed
 target. Retain the previous verified revision until the replacement passes
 activation health; rollback selects it after a failed activation.
+The signed client compiles both the new descriptor and exactly one retained
+predecessor descriptor during a pin update. Pointer resolution accepts only
+those identities, verifies each revision with its own size, digest, archive
+name and executable layout, and atomically repoints `current` to `previous`
+when supervisor activation of the new pin fails. It never resolves an
+arbitrary version or filesystem path from pointer contents.
 
 ### Distribution
 
@@ -121,9 +127,10 @@ data?}` while agent events are interleaved on stdout. `get_state` is the
 readiness equivalent of ping. The real pinned Linux x64 executable was run
 with the launch arguments above and returned the required correlated state
 response without a provider credential or network model call. The implemented
-`PiRpcTransport` serializes application calls and periodic health probes through
-one stdout consumer, correlates responses by ID, and broadcasts unrelated
-events and responses in arrival order rather than consuming them.
+`PiRpcTransport` has a persistent stdout reader, serializes application calls
+and periodic health probes through it, correlates responses by ID, and
+broadcasts unrelated events and responses in arrival order. The reader keeps
+draining progress events after command acceptance even if no later RPC occurs.
 
 The surface required by harness-spec §6.2 is present: `prompt` accepts
 `streamingBehavior: "steer" | "followUp"`; explicit `steer` and `follow_up`

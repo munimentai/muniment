@@ -537,6 +537,36 @@ fn pi_probe_routes_interleaved_frames_before_its_response() {
 }
 
 #[test]
+fn pi_dispatcher_delivers_event_after_response_without_another_call() {
+    let mut cfg = config(&["pi-rpc-interleaved"]);
+    cfg.health_interval = Duration::from_secs(60);
+    let wiring = PiRpcWiring::new();
+    let mut supervisor =
+        SidecarSupervisor::spawn(cfg, wiring.readiness_probe(Duration::from_millis(100))).unwrap();
+    wait_for(&supervisor, SidecarStatus::Healthy);
+    let transport = wiring.transport().expect("probe initialized dispatcher");
+    let routed = transport.subscribe();
+
+    let response = transport
+        .call(json!({"type": "prompt"}), Duration::from_millis(100))
+        .unwrap();
+    assert_eq!(response["command"], "prompt");
+    assert_eq!(
+        routed.recv_timeout(Duration::from_secs(1)).unwrap(),
+        json!({"type": "agent_start", "requestId": "unrelated"})
+    );
+    assert_eq!(
+        routed.recv_timeout(Duration::from_secs(1)).unwrap()["id"],
+        "another-call"
+    );
+    assert_eq!(
+        routed.recv_timeout(Duration::from_secs(1)).unwrap(),
+        json!({"type": "message_update", "requestId": "after-response"})
+    );
+    supervisor.shutdown().unwrap();
+}
+
+#[test]
 fn failed_json_rpc_probe_restarts_child_and_recovers() {
     let marker = temp_marker("json-rpc-probe");
     let _ = std::fs::remove_dir(&marker);

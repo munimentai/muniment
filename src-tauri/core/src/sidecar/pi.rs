@@ -1,6 +1,7 @@
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{mpsc, Arc, Mutex, OnceLock, TryLockError};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use serde_json::{json, Value};
 
@@ -8,6 +9,8 @@ use super::{ProbeOutcome, RestartPolicy, SidecarConfig, SidecarIo};
 
 pub const PI_NPM_PACKAGE: &str = "@mariozechner/pi-coding-agent";
 pub const PI_VERSION: &str = "0.73.1";
+
+type PendingCalls = Arc<Mutex<HashMap<String, mpsc::Sender<Result<Value, String>>>>>;
 
 /// Builds the production Pi RPC launch contract for a verified, platform-native
 /// Pi executable. The executable contains its Node-compatible runtime; a system
@@ -31,7 +34,8 @@ pub struct PiRpcTransport {
     io: SidecarIo,
     next_id: AtomicU64,
     call_lock: Mutex<()>,
-    subscribers: Mutex<Vec<mpsc::Sender<Value>>>,
+    pending: PendingCalls,
+    subscribers: Arc<Mutex<Vec<mpsc::Sender<Value>>>>,
 }
 
 /// Shared wiring for the supervisor health probe and all application RPC.
@@ -65,11 +69,66 @@ impl PiRpcWiring {
 
 impl PiRpcTransport {
     pub fn new(io: SidecarIo) -> Self {
+        let pending = Arc::new(Mutex::new(HashMap::<
+            String,
+            mpsc::Sender<Result<Value, String>>,
+        >::new()));
+        let subscribers = Arc::new(Mutex::new(Vec::<mpsc::Sender<Value>>::new()));
+        let reader = io.stdout.clone();
+        let reader_pending = Arc::clone(&pending);
+        let reader_subscribers = Arc::clone(&subscribers);
+        std::thread::Builder::new()
+            .name("pi-rpc-dispatcher".into())
+            .spawn(move || loop {
+                let frame = match reader.read_line() {
+                    Ok(line) => match serde_json::from_str::<Value>(&line) {
+                        Ok(frame) => frame,
+                        Err(error) => {
+                            let message = format!("invalid Pi RPC JSON: {error}");
+                            for (_, waiter) in reader_pending
+                                .lock()
+                                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                                .drain()
+                            {
+                                let _ = waiter.send(Err(message.clone()));
+                            }
+                            continue;
+                        }
+                    },
+                    Err(error) => {
+                        let message = error.to_string();
+                        for (_, waiter) in reader_pending
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner)
+                            .drain()
+                        {
+                            let _ = waiter.send(Err(message.clone()));
+                        }
+                        break;
+                    }
+                };
+                let waiter = frame.get("id").and_then(Value::as_str).and_then(|id| {
+                    reader_pending
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .remove(id)
+                });
+                if let Some(waiter) = waiter {
+                    let _ = waiter.send(Ok(frame));
+                } else {
+                    reader_subscribers
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .retain(|subscriber| subscriber.send(frame.clone()).is_ok());
+                }
+            })
+            .expect("spawn Pi RPC dispatcher");
         Self {
             io,
             next_id: AtomicU64::new(1),
             call_lock: Mutex::new(()),
-            subscribers: Mutex::new(Vec::new()),
+            pending,
+            subscribers,
         }
     }
 
@@ -146,37 +205,31 @@ impl PiRpcTransport {
         timeout: Duration,
         _guard: std::sync::MutexGuard<'_, ()>,
     ) -> Result<Value, String> {
-        let generation = self
-            .io
-            .stdin
-            .write_line_in_generation(&command.to_string())
-            .map_err(|error| error.to_string())?;
-        let deadline = Instant::now() + timeout;
-        loop {
-            let remaining = deadline.saturating_duration_since(Instant::now());
-            if remaining.is_zero() {
-                return Err(format!("timed out waiting for Pi RPC response `{id}`"));
-            }
-            let line = self
-                .io
-                .stdout
-                .read_line_timeout_for_generation(generation, remaining)
-                .map_err(|error| error.to_string())?
-                .ok_or_else(|| format!("timed out waiting for Pi RPC response `{id}`"))?;
-            let frame: Value = serde_json::from_str(&line)
-                .map_err(|error| format!("invalid Pi RPC JSON: {error}"))?;
-            if frame.get("id").and_then(Value::as_str) == Some(id) {
-                return Ok(frame);
-            }
-            self.route(frame);
-        }
-    }
-
-    fn route(&self, frame: Value) {
-        self.subscribers
+        let (sender, receiver) = mpsc::channel();
+        self.pending
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .retain(|subscriber| subscriber.send(frame.clone()).is_ok());
+            .insert(id.to_owned(), sender);
+        if let Err(error) = self.io.stdin.write_line(&command.to_string()) {
+            self.pending
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .remove(id);
+            return Err(error.to_string());
+        }
+        match receiver.recv_timeout(timeout) {
+            Ok(response) => response,
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                self.pending
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .remove(id);
+                Err(format!("timed out waiting for Pi RPC response `{id}`"))
+            }
+            Err(mpsc::RecvTimeoutError::Disconnected) => Err(format!(
+                "Pi RPC dispatcher stopped while waiting for `{id}`"
+            )),
+        }
     }
 }
 
