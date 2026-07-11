@@ -107,8 +107,9 @@ Readiness sends `{"id":"muniment-ready-N","type":"get_state"}` and requires
 a matching successful `response` for command `get_state` within the bounded
 probe timeout. It is side-effect free and requires neither credentials nor a
 model call. The production RPC dispatcher must be the sole stdout reader and
-route matching probe responses without dropping agent events; this foundation
-uses the probe before any chat traffic exists.
+route matching probe responses without dropping agent events. Startup and
+periodic health probes use that same dispatcher; a probe yields while a bounded
+application call is in flight instead of competing for stdout.
 
 ### Verified RPC surface
 
@@ -118,7 +119,10 @@ optional correlation `id`, and receive `{type:"response", command, success,
 data?}` while agent events are interleaved on stdout. `get_state` is the
 readiness equivalent of ping. The real pinned Linux x64 executable was run
 with the launch arguments above and returned the required correlated state
-response without a provider credential or network model call.
+response without a provider credential or network model call. The implemented
+`PiRpcTransport` serializes application calls and periodic health probes through
+one stdout consumer, correlates responses by ID, and broadcasts unrelated
+events and responses in arrival order rather than consuming them.
 
 The surface required by harness-spec §6.2 is present: `prompt` accepts
 `streamingBehavior: "steer" | "followUp"`; explicit `steer` and `follow_up`
