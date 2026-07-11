@@ -3,6 +3,7 @@
 use std::fs::{self, File, OpenOptions};
 use std::io::{BufReader, Read, Write};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use sha2::{Digest, Sha256};
 
@@ -323,13 +324,25 @@ impl AsrRevisionLifecycle {
         value: &str,
         boundary: &impl AsrLifecycleBoundary,
     ) -> Result<(), AsrLifecycleError> {
+        static NEXT_TEMPORARY: AtomicU64 = AtomicU64::new(0);
+
         fs::create_dir_all(&self.root).map_err(|_| AsrPersistenceError::Failed)?;
-        let temporary = self.root.join(format!(".{name}.tmp"));
-        let mut file = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&temporary)
-            .map_err(|_| AsrPersistenceError::Failed)?;
+        let (temporary, mut file) = loop {
+            let temporary = self.root.join(format!(
+                ".{name}.{}.{}.tmp",
+                std::process::id(),
+                NEXT_TEMPORARY.fetch_add(1, Ordering::Relaxed)
+            ));
+            match OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&temporary)
+            {
+                Ok(file) => break (temporary, file),
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(_) => return Err(AsrPersistenceError::Failed.into()),
+            }
+        };
         let result: Result<(), AsrPersistenceError> = (|| {
             file.write_all(value.as_bytes())
                 .map_err(|_| AsrPersistenceError::Failed)?;
@@ -704,7 +717,7 @@ mod tests {
     }
 
     #[test]
-    fn corrupt_current_recovers_verified_previous_without_scanning_staging() {
+    fn corrupt_current_with_stale_pointer_temp_recovers_verified_previous() {
         let (root, lifecycle, stage) = lifecycle_fixture();
         lifecycle.publish(&stage, &TestBoundary::working()).unwrap();
         let replacement_stage = root.join("staging/update");
@@ -723,6 +736,7 @@ mod tests {
             .publish(&replacement_stage, &TestBoundary::working())
             .unwrap();
         fs::remove_file(root.join("revisions/new/four")).unwrap();
+        fs::write(root.join(".current.tmp"), "interrupted pointer write").unwrap();
         fs::create_dir(root.join("staging/tempting-complete-set")).unwrap();
         assert_eq!(
             update.recover(&TestBoundary::working()).unwrap(),
