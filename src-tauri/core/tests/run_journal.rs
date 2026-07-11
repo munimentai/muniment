@@ -80,6 +80,28 @@ fn first_and_ordered_batch_append_survive_reopen() {
 }
 
 #[test]
+fn durable_run_index_reopens_in_first_recorded_order() {
+    let db = TestDb::new();
+    let mut journal = RunJournal::open(db.as_ref()).unwrap();
+    journal.append(0, &event(1)).unwrap();
+
+    let second_run = "0190a100-0000-7000-8000-000000000002";
+    let mut second = event(1);
+    second.event_id = "0190a100-0000-7000-8000-000000000099".into();
+    second.run_id = second_run.into();
+    second.recorded_at = "2026-07-10T12:00:01Z".into();
+    journal.append(0, &second).unwrap();
+    drop(journal);
+
+    let journal = RunJournal::open(db.as_ref()).unwrap();
+    assert_eq!(journal.run_ids().unwrap(), [RUN, second_run]);
+    let replayed = journal.events(RUN).unwrap();
+    assert_eq!(replayed.len(), 1);
+    assert_eq!(replayed[0].run_id, RUN);
+    assert_eq!(replayed[0].run_seq, 1);
+}
+
+#[test]
 fn recorded_at_requires_canonical_whole_second_format() {
     let db = TestDb::new();
     let mut journal = RunJournal::open(db.as_ref()).unwrap();

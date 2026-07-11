@@ -36,6 +36,17 @@ pub struct SubmitResult {
     run_id: String,
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HistoryEntry {
+    run_id: String,
+    prompt: Option<String>,
+    phase: String,
+    text: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    receipt: Option<Value>,
+}
+
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct ChatEvent {
@@ -80,6 +91,75 @@ impl ChatState {
     }
 }
 
+const PROMPT_SERVICE: &str = "ai.muniment.desktop.chat";
+const PROMPT_USER: &str = "protected-prompts";
+
+fn prompt_user(subject: Option<&str>, run_id: &str) -> String {
+    subject.filter(|value| !value.is_empty()).map_or_else(
+        || format!("{PROMPT_USER}:{run_id}"),
+        |value| format!("{PROMPT_USER}:{value}:{run_id}"),
+    )
+}
+
+fn load_prompt(run_id: &str, subject: Option<&str>) -> Result<Option<String>, String> {
+    let entry = keyring::Entry::new(PROMPT_SERVICE, &prompt_user(subject, run_id))
+        .map_err(|_| "Conversation history is unavailable.".to_string())?;
+    match entry.get_password() {
+        Ok(value) => Ok(Some(value)),
+        Err(keyring::Error::NoEntry) => Ok(None),
+        Err(_) => Err("Conversation history is unavailable.".to_string()),
+    }
+}
+
+fn protect_prompt(run_id: &str, prompt: &str, subject: Option<&str>) -> Result<(), String> {
+    keyring::Entry::new(PROMPT_SERVICE, &prompt_user(subject, run_id))
+        .and_then(|entry| entry.set_password(prompt))
+        .map_err(|_| "Conversation history is unavailable.".to_string())
+}
+
+fn projection_phase(status: &Option<muniment_core::journal::reducer::RunStatus>) -> &'static str {
+    match status {
+        Some(muniment_core::journal::reducer::RunStatus::Streaming) => "streaming",
+        Some(muniment_core::journal::reducer::RunStatus::Completed) => "complete",
+        Some(muniment_core::journal::reducer::RunStatus::Cancelled) => "cancelled",
+        Some(muniment_core::journal::reducer::RunStatus::Failed { .. }) => "failed",
+        _ => "thinking",
+    }
+}
+
+#[tauri::command]
+pub async fn chat_history(
+    auth_state: tauri::State<'_, auth::AuthState>,
+    state: tauri::State<'_, ChatState>,
+) -> Result<Vec<HistoryEntry>, String> {
+    // History is conversation data and follows the same signed-in gate as send.
+    let tokens = auth::fresh_tokens(&auth_state)?;
+    let journal = state
+        .journal
+        .lock()
+        .map_err(|_| "Conversation history is unavailable.".to_string())?;
+    journal
+        .run_ids()
+        .map_err(|_| "Conversation history is unavailable.".to_string())?
+        .into_iter()
+        .map(|run_id| {
+            let projection = project_chat(
+                &journal
+                    .events(&run_id)
+                    .map_err(|_| "Conversation history is unavailable.".to_string())?,
+            )
+            .map_err(|_| "Conversation history is unavailable.".to_string())?;
+            Ok(HistoryEntry {
+                prompt: load_prompt(&run_id, tokens.subject.as_deref())?,
+                phase: projection_phase(&projection.status).into(),
+                text: projection.text,
+                receipt: projection.receipt,
+                run_id,
+            })
+        })
+        .collect()
+}
+
 #[tauri::command]
 pub async fn chat_submit(
     app: tauri::AppHandle,
@@ -103,6 +183,7 @@ pub async fn chat_submit(
     let grant = fetch_grant(&tokens.access_token)?;
     validate_grant(&grant)?;
     let run_id = Uuid::now_v7().to_string();
+    protect_prompt(&run_id, &prompt, tokens.subject.as_deref())?;
     let cancelled = Arc::new(AtomicBool::new(false));
     let transport = Arc::new(Mutex::new(None));
     *active = Some(ActiveRun {
@@ -476,13 +557,7 @@ fn append_emit(
         journal.append(*seq - 1, &envelope).map_err(|_| ())?;
         project_chat(&journal.events(run_id).map_err(|_| ())?).map_err(|_| ())?
     };
-    let phase = match projection.status {
-        Some(muniment_core::journal::reducer::RunStatus::Streaming) => "streaming",
-        Some(muniment_core::journal::reducer::RunStatus::Completed) => "complete",
-        Some(muniment_core::journal::reducer::RunStatus::Cancelled) => "cancelled",
-        Some(muniment_core::journal::reducer::RunStatus::Failed { .. }) => "failed",
-        _ => "thinking",
-    };
+    let phase = projection_phase(&projection.status);
     app.emit(
         "chat-event",
         ChatEvent {

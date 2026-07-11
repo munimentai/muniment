@@ -14,6 +14,7 @@
   let messages = $state([])
   let active = $state(null)
   let cancelError = $state('')
+  let historyError = $state('')
   let buffered = new Map()
   let unlisten
 
@@ -28,8 +29,22 @@
     try {
       const status = await tauri.invoke(command)
       auth = statusState(status)
+      if (auth.name === 'signed-in') await loadHistory()
     } catch (err) {
       auth = errorState(action, err)
+    }
+  }
+
+  async function loadHistory() {
+    historyError = ''
+    try {
+      const history = await tauri.invoke('chat_history')
+      messages = history.flatMap((entry) => [
+        ...(entry.prompt ? [{ role: 'user', text: entry.prompt }] : []),
+        { role: 'assistant', run: { id: entry.runId, phase: entry.phase, text: entry.text, receipt: entry.receipt ?? null, prompt: entry.prompt ?? '' } },
+      ])
+    } catch (_) {
+      historyError = 'Conversation history could not be restored. Try again.'
     }
   }
 
@@ -87,7 +102,7 @@
   }
 </script>
 
-<main>
+<main class:signed-frame={auth.name === 'signed-in'}>
   <div class="lockup">
     <svg width="34" height="34" viewBox="0 0 48 48" role="img" aria-label="muniment">
       <path d={markD} stroke-width="4.5" />
@@ -109,8 +124,20 @@
       </section>
     {:else if auth.name === 'signed-in'}
       <section class="workspace">
-        <header><span>New thread</span><button class="quiet" onclick={() => run('sign-out')}>Sign out</button></header>
+        <header class="titlebar"><span class="thread-title">New thread</span><span class="thread-id">local · durable</span><span class="title-spacer"></span><button class="quiet" aria-label="Open artifact rail">⌘J</button></header>
+        <aside class="sidebar">
+          <div class="side-brand"><svg width="24" height="24" viewBox="0 0 48 48" aria-hidden="true"><path d={markD} stroke-width="5" /></svg><strong>muniment</strong></div>
+          <button class="side-action">＋ <span>New thread</span><kbd>⌘N</kbd></button>
+          <button class="side-action">⌕ <span>Search</span><kbd>⌘F</kbd></button>
+          <p class="side-label">Threads</p>
+          <button class="thread-row active-thread"><span></span>New thread</button>
+          <div class="profile-block">
+            <button class="profile-button"><span class="profile-initial">{auth.subject?.slice(0, 1)?.toLowerCase() ?? 'm'}</span><span><strong>{auth.subject ?? 'Signed in'}</strong><small>personal · member</small></span></button>
+            <button class="quiet sign-out" onclick={() => run('sign-out')}>Sign out</button>
+          </div>
+        </aside>
         <div class="thread" aria-live="polite">
+          {#if historyError}<p class="history-error" role="alert">{historyError} <button onclick={loadHistory}>Try again</button></p>{/if}
           {#if messages.length === 0}<p class="empty">Ask anything. Your org's routing decides which model answers.</p>{/if}
           {#each messages as message}
             {#if message.role === 'user'}<p class="user-message">{message.text}</p>
@@ -223,9 +250,27 @@
   }
 
   .workspace { position: fixed; inset: 0; display: grid; grid-template-rows: 52px 1fr auto; }
-  .workspace header { display: flex; justify-content: space-between; align-items: center; padding: 0 24px; border-bottom: 1px solid var(--border); font-weight: 600; }
+  .workspace { grid-template-columns: 260px 1fr; grid-template-areas: "title title" "side thread" "side composer"; }
+  .titlebar { grid-area: title; display: flex; align-items: center; padding: 0 18px 0 278px; border-bottom: 1px solid var(--border); background: var(--surface); }
+  .thread-title { font-weight: 600; }
+  .thread-id, kbd { margin-left: 10px; color: var(--muted); font: var(--text-12) var(--font-mono); }
+  .title-spacer { flex: 1; }
+  .sidebar { grid-area: side; min-width: 0; display: flex; flex-direction: column; padding: 14px 10px 10px; background: var(--surface); border-right: 1px solid var(--border); }
+  .side-brand { display: flex; align-items: center; gap: 10px; padding: 2px 8px 16px; }
+  .side-brand path { fill: none; stroke: var(--ink); stroke-linecap: round; }
+  .side-action, .thread-row, .profile-button { width: 100%; display: flex; align-items: center; gap: 9px; padding: 7px 8px; border-color: transparent; background: transparent; text-align: left; }
+  .side-action span { flex: 1; }
+  .side-label { margin: 20px 8px 5px; color: var(--muted); font: var(--text-12) var(--font-mono); }
+  .active-thread { background: var(--faint); }
+  .active-thread > span { width: 5px; height: 5px; border-radius: 50%; background: var(--signal); }
+  .profile-block { margin-top: auto; padding-top: 10px; border-top: 1px solid var(--border); }
+  .profile-button > span:last-child { min-width: 0; display: grid; }
+  .profile-button strong { overflow: hidden; text-overflow: ellipsis; font-size: var(--text-13); }
+  .profile-button small { color: var(--muted); font: var(--text-12) var(--font-mono); }
+  .profile-initial { display: grid; place-items: center; width: 27px; height: 27px; border-radius: 50%; background: var(--faint); }
+  .sign-out { margin: 3px 8px 0; padding-left: 0; color: var(--muted); }
   .quiet { background: transparent; border-color: transparent; }
-  .thread { width: min(760px, calc(100% - 48px)); margin: 0 auto; padding: 42px 0; overflow-y: auto; }
+  .thread { grid-area: thread; width: min(760px, calc(100% - 48px)); margin: 0 auto; padding: 42px 0; overflow-y: auto; }
   .empty { color: var(--muted); text-align: center; margin-top: 18vh; }
   .user-message { width: fit-content; max-width: 78%; margin: 0 0 28px auto; padding: 9px 13px; white-space: pre-wrap; background: var(--faint); border-radius: 10px; }
   .response { margin: 0 0 34px; }
@@ -237,9 +282,9 @@
   .provenance { display: block; margin-top: 10px; padding: 0; border: 0; background: transparent; color: var(--muted); font: var(--text-12) var(--font-mono); text-align: left; }
   .provenance span { color: var(--signal); }
   .run-error { color: var(--muted); font: var(--text-12) var(--font-mono); }
-  .cancel-error { margin: 0 0 8px; color: var(--muted); font: var(--text-12) var(--font-mono); }
+  .cancel-error, .history-error { margin: 0 0 8px; color: var(--muted); font: var(--text-12) var(--font-mono); }
   .run-error button { padding: 2px 6px; }
-  .composer { width: min(760px, calc(100% - 48px)); margin: 0 auto 24px; padding: 12px; background: var(--surface); border: 1px solid var(--border); border-radius: 10px; }
+  .composer { grid-area: composer; width: min(760px, calc(100% - 48px)); margin: 0 auto 24px; padding: 12px; background: var(--surface); border: 1px solid var(--border); border-radius: 10px; }
   .composer:focus-within { border-color: var(--muted); }
   textarea { width: 100%; resize: none; border: 0; outline: 0; background: transparent; color: var(--ink); font: inherit; }
   .composer-row { display: flex; justify-content: space-between; align-items: center; color: var(--muted); font-size: 11px; }

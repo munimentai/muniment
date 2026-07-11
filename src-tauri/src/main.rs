@@ -16,7 +16,8 @@ fn main() {
             auth::auth_ensure_fresh,
             auth::auth_sign_out,
             chat::chat_submit,
-            chat::chat_cancel
+            chat::chat_cancel,
+            chat::chat_history
         ])
         .run(tauri::generate_context!())
         .expect("error while running muniment");
