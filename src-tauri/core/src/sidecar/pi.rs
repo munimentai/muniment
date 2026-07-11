@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{mpsc, Arc, Mutex, OnceLock, TryLockError};
+use std::sync::{mpsc, Arc, Mutex, TryLockError};
 use std::time::Duration;
 
 use serde_json::{json, Value};
@@ -11,6 +11,7 @@ pub const PI_NPM_PACKAGE: &str = "@mariozechner/pi-coding-agent";
 pub const PI_VERSION: &str = "0.73.1";
 
 type PendingCalls = Arc<Mutex<HashMap<String, mpsc::Sender<Result<Value, String>>>>>;
+type CurrentTransport = Arc<Mutex<Option<(u64, Arc<PiRpcTransport>)>>>;
 
 /// Builds the production Pi RPC launch contract for a verified, platform-native
 /// Pi executable. The executable contains its Node-compatible runtime; a system
@@ -32,6 +33,7 @@ pub fn pi_sidecar_config(program: impl Into<String>) -> SidecarConfig {
 /// subscribers in order instead of being consumed as probe responses.
 pub struct PiRpcTransport {
     io: SidecarIo,
+    generation: u64,
     next_id: AtomicU64,
     call_lock: Mutex<()>,
     pending: PendingCalls,
@@ -43,7 +45,7 @@ pub struct PiRpcTransport {
 /// stdout consumer for a child generation.
 #[derive(Clone, Default)]
 pub struct PiRpcWiring {
-    transport: Arc<OnceLock<Arc<PiRpcTransport>>>,
+    transport: CurrentTransport,
 }
 
 impl PiRpcWiring {
@@ -52,7 +54,11 @@ impl PiRpcWiring {
     }
 
     pub fn transport(&self) -> Option<Arc<PiRpcTransport>> {
-        self.transport.get().cloned()
+        self.transport
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .as_ref()
+            .map(|(_, transport)| Arc::clone(transport))
     }
 
     pub fn readiness_probe(
@@ -61,7 +67,21 @@ impl PiRpcWiring {
     ) -> impl Fn(&SidecarIo) -> Result<ProbeOutcome, String> + Send + Sync + 'static {
         let shared = Arc::clone(&self.transport);
         move |io| {
-            let transport = shared.get_or_init(|| Arc::new(PiRpcTransport::new(io.clone())));
+            let generation = io.stdin.generation();
+            let transport = {
+                let mut current = shared
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                match current.as_ref() {
+                    Some((seen, transport)) if *seen == generation => Arc::clone(transport),
+                    _ => {
+                        let transport =
+                            Arc::new(PiRpcTransport::new_for_generation(io.clone(), generation));
+                        *current = Some((generation, Arc::clone(&transport)));
+                        transport
+                    }
+                }
+            };
             transport.health_probe(timeout)(io)
         }
     }
@@ -69,6 +89,11 @@ impl PiRpcWiring {
 
 impl PiRpcTransport {
     pub fn new(io: SidecarIo) -> Self {
+        let generation = io.stdin.generation();
+        Self::new_for_generation(io, generation)
+    }
+
+    fn new_for_generation(io: SidecarIo, generation: u64) -> Self {
         let pending = Arc::new(Mutex::new(HashMap::<
             String,
             mpsc::Sender<Result<Value, String>>,
@@ -80,7 +105,7 @@ impl PiRpcTransport {
         std::thread::Builder::new()
             .name("pi-rpc-dispatcher".into())
             .spawn(move || loop {
-                let frame = match reader.read_line() {
+                let frame = match reader.read_line_for_generation(generation) {
                     Ok(line) => match serde_json::from_str::<Value>(&line) {
                         Ok(frame) => frame,
                         Err(error) => {
@@ -125,6 +150,7 @@ impl PiRpcTransport {
             .expect("spawn Pi RPC dispatcher");
         Self {
             io,
+            generation,
             next_id: AtomicU64::new(1),
             call_lock: Mutex::new(()),
             pending,
@@ -205,6 +231,9 @@ impl PiRpcTransport {
         timeout: Duration,
         _guard: std::sync::MutexGuard<'_, ()>,
     ) -> Result<Value, String> {
+        if self.io.stdin.generation() != self.generation {
+            return Err("Pi RPC transport belongs to a replaced child generation".into());
+        }
         let (sender, receiver) = mpsc::channel();
         self.pending
             .lock()

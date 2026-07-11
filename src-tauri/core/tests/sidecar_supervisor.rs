@@ -567,6 +567,52 @@ fn pi_dispatcher_delivers_event_after_response_without_another_call() {
 }
 
 #[test]
+fn pi_wiring_replaces_dispatcher_after_child_restart() {
+    let marker = temp_marker("pi-rpc-restart");
+    let _ = std::fs::remove_dir(&marker);
+    let marker_arg = marker.to_string_lossy().into_owned();
+    let mut cfg = config(&["pi-rpc-restart-once", &marker_arg]);
+    cfg.health_interval = Duration::from_secs(60);
+    let wiring = PiRpcWiring::new();
+    let mut supervisor =
+        SidecarSupervisor::spawn(cfg, wiring.readiness_probe(Duration::from_millis(100))).unwrap();
+
+    wait_for(&supervisor, SidecarStatus::Healthy);
+    let stale = wiring.transport().expect("first dispatcher installed");
+    assert!(stale
+        .call(json!({"type": "prompt"}), Duration::from_secs(1))
+        .is_err());
+
+    let events = supervisor.subscribe();
+    loop {
+        let event = events.recv_timeout(Duration::from_secs(2)).unwrap();
+        if event.status == SidecarStatus::Healthy && event.generation == Some(2) {
+            break;
+        }
+    }
+
+    let transport = wiring
+        .transport()
+        .expect("replacement dispatcher installed");
+    assert!(stale
+        .call(json!({"type": "get_state"}), Duration::from_millis(100))
+        .unwrap_err()
+        .contains("replaced child generation"));
+    let routed = transport.subscribe();
+    let response = transport
+        .call(json!({"type": "prompt"}), Duration::from_millis(100))
+        .unwrap();
+    assert_eq!(response["command"], "prompt");
+    assert_eq!(
+        routed.recv_timeout(Duration::from_secs(1)).unwrap(),
+        json!({"type": "agent_start", "requestId": "unrelated"})
+    );
+
+    supervisor.shutdown().unwrap();
+    let _ = std::fs::remove_dir(marker);
+}
+
+#[test]
 fn failed_json_rpc_probe_restarts_child_and_recovers() {
     let marker = temp_marker("json-rpc-probe");
     let _ = std::fs::remove_dir(&marker);

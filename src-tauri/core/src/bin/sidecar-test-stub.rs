@@ -14,6 +14,23 @@ fn main() {
         Some("echo") => echo(),
         Some("json-rpc") => json_rpc(args.next()),
         Some("pi-rpc-interleaved") => pi_rpc_interleaved(),
+        Some("pi-rpc-restart-once") => {
+            let marker = args.next().unwrap();
+            if fs::create_dir(marker).is_ok() {
+                for line in io::stdin().lock().lines() {
+                    let request: serde_json::Value = serde_json::from_str(&line.unwrap()).unwrap();
+                    if request["type"] != "get_state" {
+                        std::process::exit(24);
+                    }
+                    println!(
+                        "{}",
+                        serde_json::json!({"type": "response", "command": "get_state", "success": true, "id": request["id"]})
+                    );
+                    io::stdout().flush().unwrap();
+                }
+            }
+            pi_rpc_interleaved();
+        }
         Some("json-rpc-stale-once") => {
             let marker = args.next().unwrap();
             if fs::create_dir(&marker).is_ok() {
