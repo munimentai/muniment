@@ -267,7 +267,7 @@ fn stream_response<R: Read, C: GemmaCancellation>(
             .ok_or(GemmaAcquisitionError::TooLarge)?;
         if total > expected {
             drop(file);
-            remove_part(&part)?;
+            remove_part(part)?;
             return Err(GemmaAcquisitionError::TooLarge);
         }
         file.write_all(&buffer[..count])
