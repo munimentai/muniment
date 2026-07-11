@@ -25,8 +25,8 @@ Gate reading in practice (updated 2026-07-10): client-side slices that are fully
     - DONE 2026-07-10 — ADR 0003 pins Gemma 3 4B QAT Q4_0; launch streams exact-size/SHA-256 verification and fixes the API alias/context.
     - DONE 2026-07-10 — typed dictation-polish request/response contract, fixed prompt, and deterministic golden evaluations over the managed chat client.
     - DONE 2026-07-10 — typed routing-classifier request/response contract with Phase 3 item 12's closed vocabulary, strict/redacted decoding, and deterministic golden evaluations.
-    - DONE 2026-07-10 — routing-classifier prompts encode the complete untrusted request as a JSON string, with delimiter-breakout regression coverage.
-    - NEXT — apply the same adversarial data framing to dictation polish; carrying classifier labels as request metadata remains BLOCKED on Pi/cloud 6. Artifact acquisition/update/rollback remains a separate distribution concern.
+    - DONE 2026-07-10 — routing-classifier and dictation-polish prompts encode their complete untrusted input as JSON strings, with delimiter-breakout regression coverage.
+    - Artifact acquisition/update/rollback remains a separate distribution concern.
 11. Attachments pipeline + content-addressed file store client. The cloud file-store pipeline follows items 8d/9.
     - Groundwork DONE — pure-Rust content-addressed local store with atomic dedup publish, constant-memory put/get/verify, and stale-temp sweep.
 
@@ -38,8 +38,9 @@ Gate reading in practice (updated 2026-07-10): client-side slices that are fully
 - PLANNED — **Capability vocabulary + receipt provenance.** End-user surfaces say “capabilities,” show the approved one-line description, and render `route · model · cost · time · capability@version[, ...]`. Real values depend on MUNICLOUD's schema; the client never synthesizes provenance.
 
 ## Phase 3 — Routing metadata + voice (§9 items 12, 15)
-- Classifier labels ride as request metadata; model pin chip for `router.override` holders only. Local classifier contract/evaluation groundwork is DONE; metadata carriage and policy integration remain blocked on Phase 2 item 9/cloud 6.
-- Voice: Parakeet capture → Gemma polish (flash) → transforms; Kokoro read-aloud; global hotkeys (⌥Space; Windows binding decided in-build).
+- Classifier labels ride as request metadata; model pin chip for `router.override` holders only. Local classifier contract/evaluation and adversarial-framing groundwork are DONE; metadata carriage and policy integration remain blocked on Phase 2 item 9/cloud 6.
+- Voice: Parakeet capture → Gemma polish (flash) → transforms; Kokoro read-aloud; global hotkeys (⌥Space; Windows binding decided in-build). Dictation-polish contract/evaluation and adversarial-framing groundwork are DONE.
+  - NEXT — pin the exact sherpa-onnx runtime and Parakeet artifact, licensing/attribution, packaging boundary, and target-hardware validation plan before adding capture code.
 
 ## Phase 4+ — Org surface (§9 items 16-19)
 - Remote MCP consumption, local stdio allowlist, capability install flow, artifact side panel, and projects with the redaction rule (`output withheld · connection not granted`).
