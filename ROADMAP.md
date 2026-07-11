@@ -9,13 +9,14 @@ Phases mirror harness-spec §9. Muniment-cloud Phase 1 native auth and the cloud
 ## Phase 2 — Client core (§9 items 8–11)
 
 ### 8. Shell, auth, and entitlements
-- DONE — Svelte 5/Vite toolchain, design tokens, OIDC PKCE core, keychain storage, refresh-on-expiry, signed-out/signed-in states, pre-chat shell frame, reusable milled ring, and structured server-unreachable recovery.
-- DONE cloud prerequisite — the `muniment-desktop` public client registration, native-app PKCE issuer support, and key regeneration are live at `api.muniment.ai` (2026-07-11).
-- NEXT before first chat — wire the existing client handshake/sign-in flow to the live registration and fetch the entitlement snapshot; snapshot display may follow as a separately reviewable surface.
+- DONE — Svelte 5/Vite toolchain, design tokens, generic OIDC PKCE core, keychain storage, refresh-on-expiry, signed-out/signed-in states, pre-chat shell frame, reusable milled ring, and structured server-unreachable recovery.
+- DONE cloud prerequisite — the `muniment-desktop` installation-bound native authorization, token rotation, session, revocation, and entitlement-snapshot contracts are live at `api.muniment.ai` (2026-07-11).
+- CORRECTION — the live desktop contract is `/v1/auth/native/*`, not generic issuer discovery; `/.well-known/openid-configuration` returns 404. The existing generic OIDC core remains useful test groundwork but is not the production handshake.
+- NEXT before first chat — register and securely persist the desktop installation identity and one-use registration material through `POST /v1/auth/native/devices`. Follow with device-proof browser authorization, token exchange/rotation, authoritative session inspection, and entitlement snapshot consumption as separately reviewable slices.
 
 ### 9. Pi sidecar and cloud chat
 - DONE foundation — ADR 0008 pins Pi 0.73.1, chooses verified first-use acquisition of its platform-native executable, and proves its real `get_state` RPC readiness through `SidecarSupervisor`.
-- NEXT, after the Phase 2.8 handshake/sign-in wiring — distribute and spawn the pinned Pi runtime through the existing supervisor, then deliver the first signed-in streamed chat through the user's scoped LiteLLM virtual key with durable event translation and a provenance line.
+- NEXT, after the Phase 2.8 native handshake/session wiring — deliver the first signed-in streamed chat through the supervised Pi runtime and the user's server-resolved scoped LiteLLM access, with durable event translation and a provenance line.
 - FOLLOW — steering/follow-up controls, tool/permission activity, session resume, and richer receipt expansion in separately reviewable slices.
 
 ### 10. Local Gemma sidecar
