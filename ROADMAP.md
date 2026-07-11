@@ -17,8 +17,8 @@ Phases mirror harness-spec §9. **This lane is CLOSED until muniment-cloud Phase
 
 ### 10. Local Gemma sidecar
 - DONE — supervised JSON-RPC sidecar lifecycle; loopback llama-server launch/health/chat; pinned Gemma descriptor and launch verification; dictation-polish and routing-classifier contracts/evaluations with adversarial framing.
-- DONE — ADR 0006, verified revision publication/recovery, bounded resumable acquisition, the shared native HTTPS/proxy acquisition transport, the pure-core cancellable-lock/free-space install coordinator, and exact resumable-stage byte accounting.
-- NEXT — wire Gemma acquisition/publication through the coordinator. Activation-health rollback, native adapters/Tauri commands, UI, and release notice delivery follow as separate slices.
+- DONE — ADR 0006, verified revision publication/recovery, bounded resumable acquisition, the shared native HTTPS/proxy acquisition transport, the pure-core cancellable-lock/free-space install coordinator, exact resumable-stage byte accounting, and Gemma acquisition/publication composition through that coordinator.
+- NEXT — activation-health rollback in pure core. Native adapters/Tauri commands, UI, and release notice delivery follow as separate slices.
 
 ### 11. Attachments and local CAS
 - DONE groundwork — pure-Rust content-addressed local store with atomic deduplication, constant-memory I/O/verification, and stale-temp cleanup. Cloud file flow follows items 8d/9.
@@ -35,7 +35,7 @@ Phases mirror harness-spec §9. **This lane is CLOSED until muniment-cloud Phase
 - Routing metadata carriage/policy integration remains blocked on item 9/cloud 6; the local classifier contract is complete.
 - Voice direction remains Parakeet capture → Gemma polish → transforms, with Kokoro read-aloud and global hotkeys.
 - DONE — ADRs 0004/0005, pinned Parakeet verification, revision publication/recovery, bounded resumable acquisition, consumption of the shared native HTTPS/proxy transport, the shared pure-core install coordinator, and exact resumable-stage byte accounting.
-- NEXT after the Gemma coordinator integration establishes the composition pattern — wire Parakeet acquisition/publication through the coordinator. Native adapters/Tauri commands, UI, native bindings/packaging, capture/VAD, and hardware validation follow separately.
+- NEXT — compose Parakeet acquisition/publication through the coordinator using the established Gemma pattern. Native adapters/Tauri commands, UI, native bindings/packaging, capture/VAD, and hardware validation follow separately.
 
 ## Phase 4+ — Org surface (§9 items 16–19)
 - Remote MCP consumption, local stdio allowlist, capability install flow, artifact side panel, and projects with the redaction rule (`output withheld · connection not granted`).
