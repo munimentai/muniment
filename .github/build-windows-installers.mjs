@@ -1,4 +1,4 @@
-import { readdir, rename } from "node:fs/promises";
+import { copyFile, readdir, rename } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 import { spawnSync } from "node:child_process";
 
@@ -21,6 +21,15 @@ const userMsi = await soleMsi();
 const savedUserMsi = join(dirname(userMsi), `.${basename(userMsi)}.per-user`);
 await rename(userMsi, savedUserMsi);
 
+// Keep an older product version for the Windows VM's major-upgrade verification.
+// The current build remains the release artifact and is the only machine MSI uploaded.
+const upgradeBaseMsi = join(dirname(msiDirectory), ".machine-upgrade-base.msi");
+run(
+  "run", "tauri", "build", "--", "--bundles", "msi",
+  "--config", "src-tauri/tauri.machine.conf.json",
+  "--config", JSON.stringify({ version: "0.0.0" }),
+);
+await copyFile(await soleMsi(), upgradeBaseMsi);
 run("run", "tauri", "build", "--", "--bundles", "msi", "--config", "src-tauri/tauri.machine.conf.json");
 const generatedMachineMsi = await soleMsi();
 const machineMsi = generatedMachineMsi.replace(/\.msi$/, "-machine.msi");

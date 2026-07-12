@@ -24,7 +24,9 @@ grep -Fq "cmd='cargo check --manifest-path src-tauri/Cargo.toml --locked'" "$ci"
 test -f src-tauri/Cargo.lock
 test -f src-tauri/tauri.machine.conf.json
 grep -Fq '"upgradeCode": "c75b4a56-7d8b-5b99-9fc7-61ef0aabe84b"' src-tauri/tauri.machine.conf.json
-grep -Fq 'Root="HKLM"' src-tauri/windows/per-machine.wxs
+grep -Fq '"template": "./windows/per-machine.wxs"' src-tauri/tauri.machine.conf.json
+test "$(grep -Fc 'Root="HKLM" Key="Software\\{{manufacturer}}\\{{product_name}}"' src-tauri/windows/per-machine.wxs)" -eq 5
+! grep -Fq 'Root="HKCU" Key="Software\\{{manufacturer}}\\{{product_name}}"' src-tauri/windows/per-machine.wxs
 grep -Fq 'build-windows-installers.mjs' .github/workflows/nightly.yml
 grep -Fq 'windows-installers.ps1' .github/workflows/nightly.yml
 test -f docs/windows-installers.md
