@@ -19,6 +19,7 @@ use uuid::Uuid;
 use crate::auth;
 
 const RPC_TIMEOUT: Duration = Duration::from_secs(30);
+const QUEUE_TIMEOUT: Duration = Duration::from_secs(2);
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -34,6 +35,21 @@ struct ChatGrant {
 #[serde(rename_all = "camelCase")]
 pub struct SubmitResult {
     run_id: String,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ChatDelivery {
+    Steer,
+    FollowUp,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ChatQueueRequest {
+    run_id: String,
+    delivery: ChatDelivery,
+    message: String,
 }
 
 #[derive(Serialize)]
@@ -61,6 +77,7 @@ struct ActiveRun {
     id: String,
     cancelled: Arc<AtomicBool>,
     transport: Arc<Mutex<Option<Arc<PiRpcTransport>>>>,
+    adapter: Arc<Mutex<Option<Arc<PiRunAdapter>>>>,
 }
 
 struct PiRuntime {
@@ -186,10 +203,12 @@ pub async fn chat_submit(
     protect_prompt(&run_id, &prompt, tokens.subject.as_deref())?;
     let cancelled = Arc::new(AtomicBool::new(false));
     let transport = Arc::new(Mutex::new(None));
+    let adapter = Arc::new(Mutex::new(None));
     *active = Some(ActiveRun {
         id: run_id.clone(),
         cancelled: Arc::clone(&cancelled),
         transport: Arc::clone(&transport),
+        adapter: Arc::clone(&adapter),
     });
     drop(active);
 
@@ -207,6 +226,7 @@ pub async fn chat_submit(
             grant,
             cancelled,
             transport,
+            adapter,
         );
         if let Some(state) = app.try_state::<ChatState>() {
             let mut active = state
@@ -219,6 +239,52 @@ pub async fn chat_submit(
         }
     });
     Ok(SubmitResult { run_id: result_id })
+}
+
+#[tauri::command]
+pub async fn chat_queue(
+    state: tauri::State<'_, ChatState>,
+    request: ChatQueueRequest,
+) -> Result<(), String> {
+    queue_message(&state.active, request)
+}
+
+fn queue_message(
+    active: &Mutex<Option<ActiveRun>>,
+    request: ChatQueueRequest,
+) -> Result<(), String> {
+    let active = active
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let run = active
+        .as_ref()
+        .filter(|run| run.id == request.run_id)
+        .ok_or_else(|| "That reply is no longer active.".to_string())?;
+    let transport = run
+        .transport
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clone();
+    let adapter = run
+        .adapter
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clone();
+    drop(active);
+    let (transport, adapter) = transport
+        .zip(adapter)
+        .ok_or_else(|| "The reply is not ready for messages yet.".to_string())?;
+    let result = match request.delivery {
+        ChatDelivery::Steer => adapter.steer(&transport, &request.message, QUEUE_TIMEOUT),
+        ChatDelivery::FollowUp => adapter.follow_up(&transport, &request.message, QUEUE_TIMEOUT),
+    };
+    result.map_err(|error| {
+        if error == "Pi queued message must not be empty" {
+            "Enter a message before sending.".to_string()
+        } else {
+            "The message could not be queued. Try again.".to_string()
+        }
+    })
 }
 
 #[tauri::command]
@@ -255,6 +321,7 @@ fn coordinate(
     grant: ChatGrant,
     cancelled: Arc<AtomicBool>,
     active_transport: Arc<Mutex<Option<Arc<PiRpcTransport>>>>,
+    active_adapter: Arc<Mutex<Option<Arc<PiRunAdapter>>>>,
 ) {
     let mut seq = 0;
     if append_emit(&app, &journal, &run_id, &mut seq, "run.started", json!({})).is_err() {
@@ -398,6 +465,10 @@ fn coordinate(
             return;
         }
     };
+    let adapter = Arc::new(adapter);
+    *active_adapter
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(Arc::clone(&adapter));
     if append_emit(
         &app,
         &journal,
@@ -618,4 +689,50 @@ fn fetch_receipt(url: &str, access_token: &str, run_id: &str) -> Result<Receipt,
         .map_err(|_| ())?
         .into_json()
         .map_err(|_| ())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn inactive_transport_run(id: &str) -> ActiveRun {
+        ActiveRun {
+            id: id.into(),
+            cancelled: Arc::new(AtomicBool::new(false)),
+            transport: Arc::new(Mutex::new(None)),
+            adapter: Arc::new(Mutex::new(None)),
+        }
+    }
+
+    #[test]
+    fn queue_request_is_closed_and_typed() {
+        for value in [
+            json!({"runId":"run-1", "delivery":"later", "message":"hello"}),
+            json!({"runId":"run-1", "delivery":"steer", "message":"hello", "extra":true}),
+        ] {
+            assert!(serde_json::from_value::<ChatQueueRequest>(value).is_err());
+        }
+        assert!(serde_json::from_value::<ChatQueueRequest>(json!({
+            "runId":"run-1", "delivery":"followUp", "message":"hello"
+        }))
+        .is_ok());
+    }
+
+    #[test]
+    fn queue_rejects_mismatched_and_not_ready_runs_safely() {
+        let active = Mutex::new(Some(inactive_transport_run("run-1")));
+        let request = |run_id: &str| ChatQueueRequest {
+            run_id: run_id.into(),
+            delivery: ChatDelivery::Steer,
+            message: "hello".into(),
+        };
+        assert_eq!(
+            queue_message(&active, request("stale-run")).unwrap_err(),
+            "That reply is no longer active."
+        );
+        assert_eq!(
+            queue_message(&active, request("run-1")).unwrap_err(),
+            "The reply is not ready for messages yet."
+        );
+    }
 }
