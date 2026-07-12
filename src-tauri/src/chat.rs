@@ -584,7 +584,12 @@ fn coordinate(
                 );
                 break;
             }
-            Ok(PiChatEvent::Interleaved | PiChatEvent::PromptAccepted) => {}
+            Ok(
+                PiChatEvent::ToolStarted { .. }
+                | PiChatEvent::ToolFinished { .. }
+                | PiChatEvent::Interleaved
+                | PiChatEvent::PromptAccepted,
+            ) => {}
             Err(error) if error == "timed out waiting for Pi stream" => {
                 if matches!(
                     runtime.supervisor.status(),
