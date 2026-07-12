@@ -1,6 +1,6 @@
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -109,12 +109,15 @@ fn callback(attempt: &Attempt, query: String) {
 
 struct TokenServer {
     base_url: String,
+    request: Arc<Mutex<Option<serde_json::Value>>>,
 }
 
 impl TokenServer {
     fn spawn(status: u16) -> Self {
         let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
         let base_url = format!("http://{}", listener.local_addr().unwrap());
+        let request = Arc::new(Mutex::new(None));
+        let captured_request = request.clone();
         std::thread::spawn(move || {
             let (mut stream, _) = listener.accept().unwrap();
             let mut bytes = Vec::new();
@@ -135,6 +138,8 @@ impl TokenServer {
                     })
                     .unwrap_or(0);
                 if bytes.len() >= split + 4 + content_length {
+                    let body = &bytes[split + 4..split + 4 + content_length];
+                    *captured_request.lock().unwrap() = Some(serde_json::from_slice(body).unwrap());
                     break;
                 }
             }
@@ -145,7 +150,7 @@ impl TokenServer {
             };
             write!(stream, "HTTP/1.1 {status} Result\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).unwrap();
         });
-        Self { base_url }
+        Self { base_url, request }
     }
 }
 
@@ -172,10 +177,34 @@ fn run(
     status: u16,
     deny: bool,
 ) -> Result<muniment_core::auth::AuthStatus, NativeSignInError> {
+    run_with_clock(
+        store,
+        registration_hits,
+        status,
+        deny,
+        Arc::new(AtomicU64::new(1_000)),
+        1_000,
+    )
+    .0
+}
+
+fn run_with_clock(
+    store: &Store,
+    registration_hits: Arc<AtomicUsize>,
+    status: u16,
+    deny: bool,
+    clock: Arc<AtomicU64>,
+    exchange_time: u64,
+) -> (
+    Result<muniment_core::auth::AuthStatus, NativeSignInError>,
+    TokenServer,
+) {
     let server = TokenServer::spawn(status);
     let attempt = Arc::new(Mutex::new(None));
     let authorization = Authorization(attempt.clone());
+    let browser_clock = clock.clone();
     let browser = move |_: &str| {
+        browser_clock.store(exchange_time, Ordering::SeqCst);
         let attempt = attempt.lock().unwrap().clone().unwrap();
         std::thread::spawn(move || {
             let query = if deny {
@@ -191,16 +220,17 @@ fn run(
         });
         Ok(())
     };
-    run_native_sign_in(
+    let result = run_native_sign_in(
         store,
         &Registration(registration_hits),
         &authorization,
         &UreqTokenTransport::new(Duration::from_secs(2)),
         &browser,
         &server.base_url,
-        1_000,
+        &|| clock.load(Ordering::SeqCst),
         Duration::from_secs(2),
-    )
+    );
+    (result, server)
 }
 
 #[test]
@@ -227,6 +257,36 @@ fn reuses_usable_installation_without_registration() {
     let hits = Arc::new(AtomicUsize::new(0));
     run(&store, hits.clone(), 200, false).unwrap();
     assert_eq!(hits.load(Ordering::SeqCst), 0);
+}
+
+#[test]
+fn exchange_uses_time_sampled_after_browser_authorization() {
+    let store = Store::default();
+    let (status, server) = run_with_clock(
+        &store,
+        Arc::new(AtomicUsize::new(0)),
+        200,
+        false,
+        Arc::new(AtomicU64::new(1_000)),
+        1_300,
+    );
+
+    assert_eq!(status.unwrap().expires_at, Some(2_200));
+    assert_eq!(
+        server.request.lock().unwrap().as_ref().unwrap()["device_proof"]["issued_at"],
+        "1970-01-01T00:21:40Z"
+    );
+    assert_eq!(
+        store
+            .credentials
+            .lock()
+            .unwrap()
+            .as_ref()
+            .unwrap()
+            .tokens
+            .expires_at,
+        Some(2_200)
+    );
 }
 
 #[test]

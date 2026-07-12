@@ -129,7 +129,7 @@ fn sign_in_blocking(
         &UreqTokenTransport::new(network_timeout),
         &|url: &str| spawn_browser(url).map_err(|_| BrowserOpenError),
         &api_base_url(),
-        unix_time(),
+        &unix_time,
         SIGN_IN_TIMEOUT,
     )
 }

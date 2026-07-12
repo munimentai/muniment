@@ -47,26 +47,24 @@ pub fn run_native_sign_in(
     tokens: &dyn TokenTransport,
     browser: &dyn BrowserOpener,
     base_url: &str,
-    now_unix_seconds: u64,
+    clock: &dyn Fn() -> u64,
     timeout: Duration,
 ) -> Result<AuthStatus, NativeSignInError> {
-    register_installation(store, registration, base_url, now_unix_seconds)
-        .map_err(map_registration)?;
+    register_installation(store, registration, base_url, clock()).map_err(map_registration)?;
     let code = run_native_browser_authorization(
         store,
         authorization,
         browser,
         base_url,
         None,
-        now_unix_seconds,
+        clock(),
         timeout,
     )
     .map_err(map_authorization)?;
     let mut proof_jti = [0_u8; 16];
     getrandom::fill(&mut proof_jti).map_err(|_| NativeSignInError::Randomness)?;
-    let credentials =
-        exchange_native_code(store, tokens, base_url, code, now_unix_seconds, proof_jti)
-            .map_err(map_token)?;
+    let credentials = exchange_native_code(store, tokens, base_url, code, clock(), proof_jti)
+        .map_err(map_token)?;
     Ok(AuthStatus {
         signed_in: true,
         subject: credentials.tokens.subject,
