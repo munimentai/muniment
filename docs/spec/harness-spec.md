@@ -511,9 +511,9 @@ layer's job, never the CLI's.
 
 1. **Attach protocol:** local IPC exposing session open/stream/steer,
    permission-gate answers, and artifact fetch — a thin projection of the
-   Pi RPC + run-journal surfaces the app already maintains (ADR to define
-   transport, local-process authorization, and crash semantics against
-   the journal).
+   Pi RPC + run-journal surfaces the app already maintains. Accepted
+   [ADR 0009](../decisions/0009-companion-attach-protocol.md) defines the
+   transport, local-process authorization, and journal-backed crash semantics.
 2. **Shared device session:** the CLI/extension reuse the desktop app's
    authenticated session (no second PKCE flow per surface).
 3. **Entitlement snapshot reuse:** same signed snapshot, same
@@ -521,7 +521,10 @@ layer's job, never the CLI's.
 
 ### 13.3 Phases
 
-- **E0 — attach-protocol ADR.**
+- **E0 — DONE:** accepted [attach-protocol ADR 0009](../decisions/0009-companion-attach-protocol.md).
+  The first unblocked slice is pure-core protocol types, strict codecs,
+  negotiation, authorization state, cursor/idempotency semantics, and tests;
+  native listeners and companion UIs remain unimplemented.
 - **E1 — CLI:** threads list/open, chat/run with inline tool stream,
   permission gates answered in-terminal, receipts printout.
 - **E2 — VS Code extension:** thread view + composer, editor-context
