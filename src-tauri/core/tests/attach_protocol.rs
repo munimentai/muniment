@@ -267,6 +267,92 @@ fn artifact_data_exception_is_exact_and_length_checked() {
 }
 
 #[test]
+fn outbound_codec_enforces_structural_and_artifact_limits() {
+    let mut nested = json!(null);
+    for _ in 0..MAX_JSON_DEPTH {
+        nested = json!([nested]);
+    }
+    assert!(matches!(
+        encode_frame(&nested),
+        Err(CodecError::LimitExceeded)
+    ));
+    assert!(matches!(
+        write_frame(
+            &mut Vec::new(),
+            &json!({"x":"x".repeat(MAX_STRING_BYTES + 1)})
+        ),
+        Err(CodecError::LimitExceeded)
+    ));
+    assert!(matches!(
+        encode_frame(&json!((0..=MAX_COLLECTION_ITEMS).collect::<Vec<_>>())),
+        Err(CodecError::LimitExceeded)
+    ));
+
+    let data = base64::Engine::encode(
+        &base64::engine::general_purpose::STANDARD,
+        vec![0; MAX_ARTIFACT_CHUNK_BYTES + 1],
+    );
+    let event = json!({"protocol":PROTOCOL,"subscription_id":ID,"event":"artifact.chunk","body":{"artifact_id":ID,"chunk_index":0,"offset":0,"byte_length":MAX_ARTIFACT_CHUNK_BYTES+1,"chunk_sha256":"a".repeat(64),"data":data}});
+    assert!(matches!(
+        encode_frame(&event),
+        Err(CodecError::ArtifactChunkTooLarge)
+    ));
+}
+
+#[test]
+fn outbound_discriminators_must_match_typed_bodies() {
+    let mismatched_request = Request {
+        protocol: Protocol,
+        request_id: ID.parse().unwrap(),
+        operation: Operation::ThreadList,
+        capability: "capability".into(),
+        idempotency_key: None,
+        body: RequestBody::RunStart(RunStartBody {
+            workspace_id: ID2.parse().unwrap(),
+            text: "hello".into(),
+            thread_id: None,
+            context: vec![],
+        }),
+    };
+    assert_eq!(
+        validate_request(&mismatched_request).unwrap_err().code,
+        ErrorCode::InvalidRequest
+    );
+    assert!(matches!(
+        encode_frame(&mismatched_request),
+        Err(CodecError::InvalidJson)
+    ));
+
+    let mismatched_event = Event {
+        protocol: Protocol,
+        subscription_id: ID.parse().unwrap(),
+        event: EventKind::ArtifactComplete,
+        run_id: None,
+        run_seq: None,
+        body: EventBody::Unknown(json!({"future":"value"})),
+    };
+    assert_eq!(
+        validate_event(&mismatched_event).unwrap_err().code,
+        ErrorCode::InvalidRequest
+    );
+    assert!(matches!(
+        write_frame(&mut Vec::new(), &mismatched_event),
+        Err(CodecError::InvalidJson)
+    ));
+
+    let mismatched_unknown = Event {
+        event: EventKind::Unknown("future.event".into()),
+        body: EventBody::StreamClosed(StreamClosedBody {
+            code: "cancelled".into(),
+            resumable: true,
+        }),
+        ..mismatched_event
+    };
+    assert!(validate_event(&mismatched_unknown).is_err());
+    assert!(encode_frame(&mismatched_unknown).is_err());
+}
+
+#[test]
 fn negotiation_is_minimal_and_actionable() {
     assert_eq!(
         negotiate_version(VersionRange { min: 1, max: 2 }).unwrap(),

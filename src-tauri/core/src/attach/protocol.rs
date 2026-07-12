@@ -141,15 +141,42 @@ impl Operation {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Request {
     pub protocol: Protocol,
     pub request_id: Id,
     pub operation: Operation,
     pub capability: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub idempotency_key: Option<String>,
     pub body: RequestBody,
+}
+impl Serialize for Request {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        if !request_body_matches(self.operation, &self.body) {
+            return Err(serde::ser::Error::custom(
+                "operation does not match request body",
+            ));
+        }
+        #[derive(Serialize)]
+        struct WireRequest<'a> {
+            protocol: Protocol,
+            request_id: Id,
+            operation: Operation,
+            capability: &'a str,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            idempotency_key: &'a Option<String>,
+            body: &'a RequestBody,
+        }
+        WireRequest {
+            protocol: self.protocol,
+            request_id: self.request_id,
+            operation: self.operation,
+            capability: &self.capability,
+            idempotency_key: &self.idempotency_key,
+            body: &self.body,
+        }
+        .serialize(serializer)
+    }
 }
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(untagged)]
@@ -244,6 +271,27 @@ pub enum RequestBody {
     ArtifactFetch(ArtifactFetchBody),
     ArtifactWindow(ArtifactWindowBody),
     RequestCancel(CancelTarget),
+}
+fn request_body_matches(operation: Operation, body: &RequestBody) -> bool {
+    matches!(
+        (operation, body),
+        (Operation::ThreadList, RequestBody::ThreadList(_))
+            | (Operation::ThreadOpen, RequestBody::ThreadOpen(_))
+            | (Operation::RunOpen, RequestBody::RunOpen(_))
+            | (Operation::RunStart, RequestBody::RunStart(_))
+            | (Operation::RunStream, RequestBody::RunStream(_))
+            | (Operation::RunCursorAck, RequestBody::RunCursorAck(_))
+            | (Operation::RunSteer, RequestBody::RunSteer(_))
+            | (Operation::RunFollowUp, RequestBody::RunFollowUp(_))
+            | (Operation::RunCancel, RequestBody::RunCancel(_))
+            | (
+                Operation::PermissionAnswer,
+                RequestBody::PermissionAnswer(_)
+            )
+            | (Operation::ArtifactFetch, RequestBody::ArtifactFetch(_))
+            | (Operation::ArtifactWindow, RequestBody::ArtifactWindow(_))
+            | (Operation::RequestCancel, RequestBody::RequestCancel(_))
+    )
 }
 impl Serialize for RequestBody {
     fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
@@ -538,16 +586,41 @@ pub enum EventBody {
     StreamClosed(StreamClosedBody),
     Unknown(Value),
 }
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Event {
     pub protocol: Protocol,
     pub subscription_id: Id,
     pub event: EventKind,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub run_id: Option<Id>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub run_seq: Option<u64>,
     pub body: EventBody,
+}
+impl Serialize for Event {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        if !event_body_matches(&self.event, &self.body) {
+            return Err(serde::ser::Error::custom("event does not match event body"));
+        }
+        #[derive(Serialize)]
+        struct WireEvent<'a> {
+            protocol: Protocol,
+            subscription_id: Id,
+            event: &'a EventKind,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            run_id: &'a Option<Id>,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            run_seq: &'a Option<u64>,
+            body: &'a EventBody,
+        }
+        WireEvent {
+            protocol: self.protocol,
+            subscription_id: self.subscription_id,
+            event: &self.event,
+            run_id: &self.run_id,
+            run_seq: &self.run_seq,
+            body: &self.body,
+        }
+        .serialize(serializer)
+    }
 }
 impl Serialize for EventBody {
     fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
@@ -563,6 +636,29 @@ impl Serialize for EventBody {
             Self::Unknown(v) => v.serialize(s),
         }
     }
+}
+fn event_body_matches(event: &EventKind, body: &EventBody) -> bool {
+    matches!(
+        (event, body),
+        (EventKind::RunEvent, EventBody::RunEvent(_))
+            | (
+                EventKind::SubscriptionCaughtUp,
+                EventBody::SubscriptionCaughtUp(_)
+            )
+            | (
+                EventKind::PermissionPending,
+                EventBody::PermissionPending(_)
+            )
+            | (EventKind::ArtifactChunk, EventBody::ArtifactChunk(_))
+            | (EventKind::ArtifactComplete, EventBody::ArtifactComplete(_))
+            | (EventKind::RequestCancelled, EventBody::RequestCancelled(_))
+            | (
+                EventKind::CapabilityRevoked,
+                EventBody::CapabilityRevoked(_)
+            )
+            | (EventKind::StreamClosed, EventBody::StreamClosed(_))
+            | (EventKind::Unknown(_), EventBody::Unknown(_))
+    )
 }
 #[derive(Deserialize)]
 struct RawEvent {
@@ -700,6 +796,12 @@ pub fn validate_authorized(v: &Authorized) -> Result<(), ProtocolError> {
     Ok(())
 }
 pub fn validate_request(v: &Request) -> Result<(), ProtocolError> {
+    if !request_body_matches(v.operation, &v.body) {
+        return Err(ProtocolError::invalid(
+            "operation does not match request body",
+            ErrorCode::InvalidRequest,
+        ));
+    }
     if !bounded(&v.capability, MAX_CLIENT_TEXT_BYTES) {
         return Err(ProtocolError::invalid(
             "invalid capability",
@@ -804,6 +906,12 @@ pub fn validate_error(v: &ErrorEnvelope) -> Result<(), ProtocolError> {
     Ok(())
 }
 pub fn validate_event(v: &Event) -> Result<(), ProtocolError> {
+    if !event_body_matches(&v.event, &v.body) {
+        return Err(ProtocolError::invalid(
+            "event does not match event body",
+            ErrorCode::InvalidRequest,
+        ));
+    }
     let bad = match &v.body {
         EventBody::RunEvent(x) => !bounded(&x.journal_event, MAX_CLIENT_TEXT_BYTES),
         EventBody::PermissionPending(x) => !bounded(&x.description, MAX_TEXT_BYTES),

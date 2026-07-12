@@ -240,6 +240,10 @@ pub fn encode_frame<T: Serialize>(value: &T) -> Result<Vec<u8>, CodecError> {
     if body.len() > MAX_FRAME_BYTES {
         return Err(CodecError::FrameTooLarge);
     }
+    // The serialized allocation is capped before parsing; validate that same
+    // buffer to preserve stable wire field order without a second body buffer.
+    let value: Value = decode_json(&body)?;
+    drop(value);
     let mut frame = Vec::with_capacity(body.len() + 4);
     frame.extend_from_slice(&(body.len() as u32).to_be_bytes());
     frame.extend(body);
