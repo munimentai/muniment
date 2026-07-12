@@ -240,7 +240,6 @@ build); verify it manually:
 
 ## Follow-ups (out of scope here)
 
-- Entitlement snapshot consumption.
 - Server-side native revocation/device management.
 - Migration or removal of credentials created by the existing generic-OIDC flow.
 - Signed-in UI.
