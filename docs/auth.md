@@ -66,6 +66,19 @@ signed-in state or using its access token. Missing or refresh-expired native
 credentials report signed out; refresh, transport, and validation failures
 preserve the last coherent record and surface only redacted errors.
 
+`auth_entitlement_snapshot` always runs the same authoritative refresh and
+session-inspection path, then returns a display-only projection:
+`{ snapshot_version, org_id, user_id, role, user_display_name,
+organization_display_name, groups }`. Each group is
+`{ name, models, connections, capabilities }`, with all grants represented as
+string arrays. Rust strictly deserializes this payload before projection;
+missing or type-invalid required fields fail the request. The command has no
+fields for the signed envelope, signature, algorithm, access or refresh token,
+device challenge, installation key, or raw JSON. These values are hints for
+the profile UI only: authorization decisions continue to use the server as the
+authority. A retry performs a new network inspection. `auth_status` remains
+local-only and network-free.
+
 `auth_sign_out` runs on a blocking worker and atomically replaces a
 credential-bearing native record with an installation-only record. This clears
 the access token, refresh token, access expiry, refresh expiry, and subject
@@ -185,6 +198,7 @@ the webview.
 | `auth_sign_in`  | `AuthStatus` or error  | Runs native registration/browser/exchange; 5-min timeout; concurrent calls rejected |
 | `auth_status`   | `AuthStatus`           | Local only, no network            |
 | `auth_ensure_fresh` | `AuthStatus` or error | Refreshes at expiry or within 60 seconds |
+| `auth_entitlement_snapshot` | `EntitlementSnapshotView` or error | Authoritative network inspection; safe display hints only |
 | `auth_sign_out` | `AuthStatus`           | Clears local native session; preserves installation |
 
 `AuthStatus` is `{ signed_in: bool, subject: string|null, expires_at: unix-seconds|null }`.

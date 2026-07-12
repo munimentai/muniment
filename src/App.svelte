@@ -1,7 +1,7 @@
 <script>
   import { onMount } from 'svelte'
 
-  import { bootState, errorState, statusState, waitingState } from './lib/auth-state.js'
+  import { accessErrorState, accessIdleState, accessLoadingState, accessReadyState, bootState, errorState, statusState, waitingState } from './lib/auth-state.js'
   import { ringPath } from './lib/mark.js'
   import { applyBufferedChatEvents, applyChatEvent, receiptParts, shouldSend } from './lib/chat-state.js'
 
@@ -15,6 +15,11 @@
   let active = $state(null)
   let cancelError = $state('')
   let historyError = $state('')
+  let access = $state(accessIdleState)
+  let accessOpen = $state(false)
+  let expandedGroups = $state(new Set())
+  let profileButton = $state()
+  let accessPopover = $state()
   let buffered = new Map()
   let unlisten
 
@@ -48,6 +53,37 @@
     }
   }
 
+  async function openAccess() {
+    accessOpen = true
+    access = accessLoadingState()
+    expandedGroups = new Set()
+    requestAnimationFrame(() => accessPopover?.focus())
+    try {
+      access = accessReadyState(await tauri.invoke('auth_entitlement_snapshot'))
+    } catch (err) {
+      access = accessErrorState(err)
+    }
+  }
+
+  function closeAccess() {
+    if (!accessOpen) return
+    accessOpen = false
+    profileButton?.focus()
+  }
+
+  function toggleGroup(name) {
+    const next = new Set(expandedGroups)
+    next.has(name) ? next.delete(name) : next.add(name)
+    expandedGroups = next
+  }
+
+  function accessKeydown(event) {
+    if (event.key === 'Escape') {
+      event.preventDefault()
+      closeAccess()
+    }
+  }
+
   onMount(() => {
     if (tauri) run('status')
     window.__TAURI__?.event?.listen('chat-event', ({ payload }) => {
@@ -59,7 +95,14 @@
       if (projected) messages = messages.map((message) => message.run?.id === projected.id ? { ...message, run: projected } : message)
       active = projected && !['complete', 'cancelled', 'failed'].includes(projected.phase) ? projected : null
     }).then((stop) => { unlisten = stop })
-    return () => unlisten?.()
+    const outside = (event) => {
+      if (accessOpen && !accessPopover?.contains(event.target) && !profileButton?.contains(event.target)) closeAccess()
+    }
+    document.addEventListener('click', outside)
+    return () => {
+      unlisten?.()
+      document.removeEventListener('click', outside)
+    }
   })
 
   async function send() {
@@ -132,8 +175,33 @@
           <p class="side-label">Threads</p>
           <button class="thread-row active-thread"><span></span>New thread</button>
           <div class="profile-block">
-            <button class="profile-button"><span class="profile-initial">{auth.subject?.slice(0, 1)?.toLowerCase() ?? 'm'}</span><span><strong>{auth.subject ?? 'Signed in'}</strong><small>personal · member</small></span></button>
-            <button class="quiet sign-out" onclick={() => run('sign-out')}>Sign out</button>
+            <button bind:this={profileButton} class="profile-button" aria-haspopup="dialog" aria-expanded={accessOpen} onclick={() => accessOpen ? closeAccess() : openAccess()}><span class="profile-initial">{(access.snapshot?.user_display_name ?? auth.subject)?.slice(0, 1)?.toLowerCase() ?? 'm'}</span><span><strong>{access.snapshot?.user_display_name ?? auth.subject ?? 'Signed in'}</strong><small>{access.snapshot?.organization_display_name ?? access.snapshot?.org_id ?? 'organization'} · {access.snapshot?.role ?? 'user'}</small></span></button>
+            {#if accessOpen}
+              <div bind:this={accessPopover} class="access-popover" role="dialog" aria-label="Your access" tabindex="-1" onkeydown={accessKeydown}>
+                <header><div><h2>Your access</h2>{#if access.name === 'ready'}<p>Snapshot v{access.snapshot.snapshot_version}</p>{/if}</div><button class="quiet close-access" aria-label="Close your access" onclick={closeAccess}>×</button></header>
+                {#if access.name === 'loading'}
+                  <p class="access-status" aria-live="polite">Checking your current access…</p>
+                {:else if access.name === 'error'}
+                  <div class="access-status" role="alert"><p>Your access could not be loaded.</p><button onclick={openAccess}>Try again</button></div>
+                {:else if access.name === 'ready'}
+                  <p class="access-label">Your groups</p>
+                  {#if access.groups.length === 0}<p class="empty-grant">No groups granted</p>{/if}
+                  {#each access.groups as group, index}
+                    {@const open = expandedGroups.has(group.name)}
+                    <div class="access-group">
+                      <button class="group-toggle" aria-expanded={open} aria-controls={`access-group-${index}`} onclick={() => toggleGroup(group.name)}><span>{group.name}</span><span aria-hidden="true">{open ? '−' : '+'}</span></button>
+                      {#if open}<div class="grant-grid" id={`access-group-${index}`}>
+                        {#each [['Models', group.models], ['Connections', group.connections], ['Capabilities', group.capabilities]] as category}
+                          <div><h3>{category[0]}</h3>{#if category[1].length}<ul>{#each category[1] as item}<li>{item}</li>{/each}</ul>{:else}<p class="empty-grant">None granted</p>{/if}</div>
+                        {/each}
+                      </div>{/if}
+                    </div>
+                  {/each}
+                {/if}
+                <footer>Access is set by your admins.</footer>
+                <button class="quiet sign-out" onclick={() => { closeAccess(); run('sign-out') }}>Sign out</button>
+              </div>
+            {/if}
           </div>
         </aside>
         <div class="thread" aria-live="polite">
@@ -263,12 +331,27 @@
   .side-label { margin: 20px 8px 5px; color: var(--muted); font: var(--text-12) var(--font-mono); }
   .active-thread { background: var(--faint); }
   .active-thread > span { width: 5px; height: 5px; border-radius: 50%; background: var(--signal); }
-  .profile-block { margin-top: auto; padding-top: 10px; border-top: 1px solid var(--border); }
+  .profile-block { position: relative; margin-top: auto; padding-top: 10px; border-top: 1px solid var(--border); }
   .profile-button > span:last-child { min-width: 0; display: grid; }
   .profile-button strong { overflow: hidden; text-overflow: ellipsis; font-size: var(--text-13); }
   .profile-button small { color: var(--muted); font: var(--text-12) var(--font-mono); }
   .profile-initial { display: grid; place-items: center; width: 27px; height: 27px; border-radius: 50%; background: var(--faint); }
-  .sign-out { margin: 3px 8px 0; padding-left: 0; color: var(--muted); }
+  .access-popover { position: absolute; z-index: 5; left: 0; bottom: calc(100% + 8px); width: 330px; max-height: min(560px, 70vh); overflow-y: auto; padding: 14px; background: var(--paper); border: 1px solid var(--border); border-radius: 10px; box-shadow: 0 12px 36px color-mix(in srgb, var(--ink) 14%, transparent); outline: none; }
+  .access-popover:focus-visible { border-color: var(--muted); }
+  .access-popover header { display: flex; align-items: start; justify-content: space-between; margin-bottom: 14px; }
+  .access-popover h2 { margin: 0; font-size: var(--text-13); }
+  .access-popover header p, .access-label { margin: 3px 0 0; color: var(--muted); font: var(--text-12) var(--font-mono); }
+  .close-access { padding: 0 4px; font-size: 18px; }
+  .access-label { margin: 0 0 6px; text-transform: uppercase; letter-spacing: .04em; }
+  .access-group { border-top: 1px solid var(--border); }
+  .group-toggle { width: 100%; display: flex; justify-content: space-between; padding: 9px 2px; border: 0; background: transparent; color: var(--ink); font: var(--text-12) var(--font-mono); text-align: left; }
+  .grant-grid { display: grid; gap: 10px; padding: 1px 2px 12px 12px; }
+  .grant-grid h3 { margin: 0 0 3px; color: var(--muted); font: var(--text-12) var(--font-mono); }
+  .grant-grid ul { margin: 0; padding: 0; list-style: none; font: var(--text-12) var(--font-mono); }
+  .grant-grid li + li { margin-top: 2px; }
+  .empty-grant, .access-status { margin: 8px 0; color: var(--muted); font: var(--text-12) var(--font-mono); }
+  .access-popover footer { margin: 12px -14px 0; padding: 11px 14px 0; border-top: 1px solid var(--border); color: var(--muted); font-size: 11px; }
+  .sign-out { margin-top: 8px; padding: 2px 0; color: var(--muted); }
   .quiet { background: transparent; border-color: transparent; }
   .thread { grid-area: thread; width: min(760px, calc(100% - 48px)); margin: 0 auto; padding: 42px 0; overflow-y: auto; }
   .empty { color: var(--muted); text-align: center; margin-top: 18vh; }

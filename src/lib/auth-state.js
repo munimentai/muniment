@@ -23,3 +23,26 @@ export function errorState(action, error) {
     retry: action,
   }
 }
+
+export const accessIdleState = { name: 'idle' }
+
+export function accessLoadingState() {
+  return { name: 'loading' }
+}
+
+export function accessReadyState(snapshot) {
+  return {
+    name: 'ready',
+    snapshot,
+    groups: snapshot.groups.map((group) => ({
+      ...group,
+      models: group.models ?? [],
+      connections: group.connections ?? [],
+      capabilities: group.capabilities ?? [],
+    })),
+  }
+}
+
+export function accessErrorState(error) {
+  return { name: 'error', message: String(error || 'Your access could not be loaded.') }
+}

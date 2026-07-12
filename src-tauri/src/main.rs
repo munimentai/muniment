@@ -15,6 +15,7 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             auth::auth_sign_in,
             auth::auth_status,
+            auth::auth_entitlement_snapshot,
             auth::auth_ensure_fresh,
             auth::auth_sign_out,
             chat::chat_submit,
