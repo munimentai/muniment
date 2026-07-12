@@ -34,6 +34,9 @@ $newProductCode = Get-MsiProperty $machineMsi.FullName "ProductCode"
 $oldUpgradeCode = Get-MsiProperty $upgradeBaseMsi "UpgradeCode"
 $newUpgradeCode = Get-MsiProperty $machineMsi.FullName "UpgradeCode"
 $expectedUpgradeCode = "C75B4A56-7D8B-5B99-9FC7-61EF0AABE84B"
+if ($oldProductCode -eq $newProductCode) {
+  throw "Upgrade fixture and release MSI must be distinct builds with different ProductCodes"
+}
 if ($oldUpgradeCode.Trim("{}").ToUpperInvariant() -ne $expectedUpgradeCode -or
     $newUpgradeCode.Trim("{}").ToUpperInvariant() -ne $expectedUpgradeCode) {
   throw "Machine MSI UpgradeCode is not stable: $oldUpgradeCode / $newUpgradeCode"

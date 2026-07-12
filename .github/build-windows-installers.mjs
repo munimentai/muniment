@@ -22,14 +22,11 @@ const userMsi = await soleMsi();
 const savedUserMsi = join(dirname(userMsi), `.${basename(userMsi)}.per-user`);
 await rename(userMsi, savedUserMsi);
 
-// Keep an older product version for the Windows VM's major-upgrade verification.
-// The current build remains the release artifact and is the only machine MSI uploaded.
+// Keep a distinct build for the Windows VM's same-version major-upgrade verification.
+// The WiX template enables AllowSameVersionUpgrades; the current build remains the
+// release artifact and is the only machine MSI uploaded.
 const upgradeBaseMsi = join(dirname(msiDirectory), ".machine-upgrade-base.msi");
-run(
-  "build", "--bundles", "msi",
-  "--config", "src-tauri/tauri.machine.conf.json",
-  "--config", JSON.stringify({ version: "0.0.0" }),
-);
+run("build", "--bundles", "msi", "--config", "src-tauri/tauri.machine.conf.json");
 await copyFile(await soleMsi(), upgradeBaseMsi);
 run("build", "--bundles", "msi", "--config", "src-tauri/tauri.machine.conf.json");
 const generatedMachineMsi = await soleMsi();
