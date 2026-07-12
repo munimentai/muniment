@@ -32,11 +32,17 @@ returns 404 on the control plane).
    entitlement snapshot. Native revocation/device management follow the
    corresponding `/v1/auth/native/*` endpoints.
 
-On first registration the raw private key, device id, registration token,
-challenge, and absolute registration expiry are serialized as one record in
+The installation and native session are serialized as one versioned record in
 the platform keychain (`service: ai.muniment.desktop`, `user:
-native-installation`). An existing record is returned without making a network
-request. A failed keychain write publishes no partial installation locally.
+native-credentials`). Registration writes the record without a session; token
+exchange and refresh replace that single value with the installation, rotated
+challenge, token set, and expiries together. An existing `native-installation`
+value is incorporated into an installation-only coherent record and removed
+only after that record is successfully published; failed cleanup is retried on
+later loads. The unrelated generic `oidc-tokens` value is left untouched because
+it is not a native installation-bound session and does not contain the native
+refresh expiry. An existing record is returned without making a network request.
+A failed keychain write publishes no partial installation locally.
 Secret-bearing values use redacted `Debug` implementations and do not cross a
 Tauri command boundary.
 
