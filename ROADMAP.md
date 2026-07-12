@@ -18,7 +18,8 @@ Phases mirror harness-spec §9. Muniment-cloud Phase 1 native auth and the cloud
 - DONE — refresh of an unexpired native session through `POST /v1/auth/native/token` with a fresh installation proof and coherent rotation of the access token, refresh token, expiries, and device challenge in pure core.
 - DONE — authoritative session inspection through `GET /v1/auth/native/session` in pure core, including strict identity, desktop-role, device-binding, and signed-entitlement-envelope validation.
 - DONE — desktop keychain adapter for one coherent versioned native installation/credential record, including safe migration of the legacy installation-only entry while leaving unrelated generic-OIDC credentials untouched.
-- NEXT before first chat — wire first-run registration, native browser authorization, and native token exchange through the Tauri sign-in command. Follow with native session refresh/status, entitlement snapshot consumption, and revocation as separately reviewable slices.
+- DONE — first-run registration, native browser authorization, native token exchange, and coherent credential persistence are wired through the Tauri `auth_sign_in` command.
+- NEXT before first chat — replace the legacy generic-OIDC status/fresh-token paths with native session status, refresh, and authoritative inspection. Entitlement snapshot consumption and native revocation follow as separately reviewable slices.
 
 ### 9. Pi sidecar and cloud chat
 - DONE foundation — ADR 0008 pins Pi 0.73.1, chooses verified first-use acquisition of its platform-native executable, and proves its real `get_state` RPC readiness through `SidecarSupervisor`.
