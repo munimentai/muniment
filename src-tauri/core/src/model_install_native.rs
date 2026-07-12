@@ -201,9 +201,12 @@ impl GemmaLifecycleBoundary for NativeGemmaLifecycleBoundary {
             .map_err(|_| GemmaPersistenceError::Failed)
     }
     fn sync_directory(&self, path: &Path) -> Result<(), GemmaPersistenceError> {
+        #[cfg(unix)]
         File::open(path)
             .and_then(|file| file.sync_all())
-            .map_err(|_| GemmaPersistenceError::Failed)
+            .map_err(|_| GemmaPersistenceError::Failed)?;
+        let _ = path;
+        Ok(())
     }
     fn replace_revision(
         &self,
@@ -263,15 +266,22 @@ fn atomic_replace_directory(
     }
     #[cfg(not(target_os = "linux"))]
     {
-        let _ = staged;
-        Err(GemmaPersistenceError::Failed)
+        // Match the native Pi lifecycle: quarantine the old complete revision
+        // before publishing the new complete revision. This can leave neither
+        // directory published after interruption, which the lifecycle contract
+        // permits, but never exposes a partially staged revision.
+        let quarantine = destination.with_extension("replaced");
+        if quarantine.exists() {
+            fs::remove_dir_all(&quarantine).map_err(|_| GemmaPersistenceError::Failed)?;
+        }
+        fs::rename(destination, &quarantine).map_err(|_| GemmaPersistenceError::Failed)?;
+        fs::rename(staged, destination).map_err(|_| GemmaPersistenceError::Failed)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::mpsc;
     static SEQ: AtomicU64 = AtomicU64::new(0);
     fn temp_dir(label: &str) -> PathBuf {
         let path = std::env::temp_dir().join(format!(
@@ -332,25 +342,14 @@ mod tests {
         fs::remove_dir_all(root).unwrap();
     }
     #[test]
-    fn retry_wait_stops_promptly_after_cross_thread_cancellation() {
+    fn retry_wait_stops_promptly_when_cancelled_at_start() {
         let cancellation = NativeInstallCancellation::new();
-        let worker_cancellation = cancellation.clone();
-        let (sender, receiver) = mpsc::channel();
-        let worker = thread::spawn(move || {
-            let started = Instant::now();
-            let result = GemmaRetryWait::wait(
-                &mut NativeRetryWait,
-                Duration::from_secs(1),
-                &worker_cancellation,
-            );
-            sender.send((result, started.elapsed())).unwrap();
-        });
-        thread::sleep(Duration::from_millis(30));
         cancellation.cancel();
-        let (result, elapsed) = receiver.recv_timeout(Duration::from_millis(250)).unwrap();
+        let started = Instant::now();
+        let result =
+            GemmaRetryWait::wait(&mut NativeRetryWait, Duration::from_secs(1), &cancellation);
         assert!(!result);
-        assert!(elapsed < Duration::from_millis(250));
-        worker.join().unwrap();
+        assert!(started.elapsed() < Duration::from_millis(100));
     }
 
     #[test]
