@@ -81,6 +81,11 @@
       'sign-out': 'auth_sign_out',
     }[action]
 
+    if (action === 'sign-in' || action === 'sign-out') {
+      profileSnapshot = null
+      access = accessIdleState
+      expandedGroups = new Set()
+    }
     if (action === 'sign-in') auth = waitingState()
     try {
       const status = await tauri.invoke(command)
