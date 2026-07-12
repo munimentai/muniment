@@ -16,6 +16,7 @@
   let cancelError = $state('')
   let historyError = $state('')
   let access = $state(accessIdleState)
+  let profileSnapshot = $state(null)
   let accessOpen = $state(false)
   let expandedGroups = $state(new Set())
   let profileButton = $state()
@@ -34,7 +35,7 @@
     try {
       const status = await tauri.invoke(command)
       auth = statusState(status)
-      if (auth.name === 'signed-in') await loadHistory()
+      if (auth.name === 'signed-in') await Promise.all([loadHistory(), loadAccess()])
     } catch (err) {
       auth = errorState(action, err)
     }
@@ -53,16 +54,22 @@
     }
   }
 
-  async function openAccess() {
-    accessOpen = true
+  async function loadAccess(open = false) {
+    if (open) accessOpen = true
     access = accessLoadingState()
     expandedGroups = new Set()
-    requestAnimationFrame(() => accessPopover?.focus())
+    if (open) requestAnimationFrame(() => accessPopover?.focus())
     try {
-      access = accessReadyState(await tauri.invoke('auth_entitlement_snapshot'))
+      const snapshot = await tauri.invoke('auth_entitlement_snapshot')
+      profileSnapshot = snapshot
+      access = accessReadyState(snapshot)
     } catch (err) {
       access = accessErrorState(err)
     }
+  }
+
+  function openAccess() {
+    return loadAccess(true)
   }
 
   function closeAccess() {
@@ -71,17 +78,10 @@
     profileButton?.focus()
   }
 
-  function toggleGroup(name) {
+  function toggleGroup(index) {
     const next = new Set(expandedGroups)
-    next.has(name) ? next.delete(name) : next.add(name)
+    next.has(index) ? next.delete(index) : next.add(index)
     expandedGroups = next
-  }
-
-  function accessKeydown(event) {
-    if (event.key === 'Escape') {
-      event.preventDefault()
-      closeAccess()
-    }
   }
 
   onMount(() => {
@@ -98,10 +98,18 @@
     const outside = (event) => {
       if (accessOpen && !accessPopover?.contains(event.target) && !profileButton?.contains(event.target)) closeAccess()
     }
+    const escape = (event) => {
+      if (accessOpen && event.key === 'Escape') {
+        event.preventDefault()
+        closeAccess()
+      }
+    }
     document.addEventListener('click', outside)
+    document.addEventListener('keydown', escape)
     return () => {
       unlisten?.()
       document.removeEventListener('click', outside)
+      document.removeEventListener('keydown', escape)
     }
   })
 
@@ -175,9 +183,9 @@
           <p class="side-label">Threads</p>
           <button class="thread-row active-thread"><span></span>New thread</button>
           <div class="profile-block">
-            <button bind:this={profileButton} class="profile-button" aria-haspopup="dialog" aria-expanded={accessOpen} onclick={() => accessOpen ? closeAccess() : openAccess()}><span class="profile-initial">{(access.snapshot?.user_display_name ?? auth.subject)?.slice(0, 1)?.toLowerCase() ?? 'm'}</span><span><strong>{access.snapshot?.user_display_name ?? auth.subject ?? 'Signed in'}</strong><small>{access.snapshot?.organization_display_name ?? access.snapshot?.org_id ?? 'organization'} · {access.snapshot?.role ?? 'user'}</small></span></button>
+            <button bind:this={profileButton} class="profile-button" aria-haspopup="dialog" aria-expanded={accessOpen} onclick={() => accessOpen ? closeAccess() : openAccess()}><span class="profile-initial">{(profileSnapshot?.user_display_name ?? auth.subject)?.slice(0, 1)?.toLowerCase() ?? 'm'}</span><span><strong>{profileSnapshot?.user_display_name ?? auth.subject ?? 'Signed in'}</strong><small>{profileSnapshot ? `${profileSnapshot.organization_display_name ?? profileSnapshot.org_id} · ${profileSnapshot.role}` : 'Access unavailable'}</small></span></button>
             {#if accessOpen}
-              <div bind:this={accessPopover} class="access-popover" role="dialog" aria-label="Your access" tabindex="-1" onkeydown={accessKeydown}>
+              <div bind:this={accessPopover} class="access-popover" role="dialog" aria-label="Your access" tabindex="-1">
                 <header><div><h2>Your access</h2>{#if access.name === 'ready'}<p>Snapshot v{access.snapshot.snapshot_version}</p>{/if}</div><button class="quiet close-access" aria-label="Close your access" onclick={closeAccess}>×</button></header>
                 {#if access.name === 'loading'}
                   <p class="access-status" aria-live="polite">Checking your current access…</p>
@@ -187,9 +195,9 @@
                   <p class="access-label">Your groups</p>
                   {#if access.groups.length === 0}<p class="empty-grant">No groups granted</p>{/if}
                   {#each access.groups as group, index}
-                    {@const open = expandedGroups.has(group.name)}
+                    {@const open = expandedGroups.has(index)}
                     <div class="access-group">
-                      <button class="group-toggle" aria-expanded={open} aria-controls={`access-group-${index}`} onclick={() => toggleGroup(group.name)}><span>{group.name}</span><span aria-hidden="true">{open ? '−' : '+'}</span></button>
+                      <button class="group-toggle" aria-expanded={open} aria-controls={`access-group-${index}`} onclick={() => toggleGroup(index)}><span>{group.name}</span><span aria-hidden="true">{open ? '−' : '+'}</span></button>
                       {#if open}<div class="grant-grid" id={`access-group-${index}`}>
                         {#each [['Models', group.models], ['Connections', group.connections], ['Capabilities', group.capabilities]] as category}
                           <div><h3>{category[0]}</h3>{#if category[1].length}<ul>{#each category[1] as item}<li>{item}</li>{/each}</ul>{:else}<p class="empty-grant">None granted</p>{/if}</div>
