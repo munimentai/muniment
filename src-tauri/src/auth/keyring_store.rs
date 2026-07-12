@@ -1,16 +1,86 @@
-//! [`TokenStore`] backed by the platform keychain via the `keyring` crate:
+//! Auth persistence backed by the platform keychain via the `keyring` crate:
 //! macOS Keychain, Windows Credential Manager, Secret Service on Linux.
-//! One entry holds the whole `TokenSet` as JSON — nothing token-shaped ever
-//! touches disk in plaintext.
 
 use keyring::Entry;
 use muniment_core::auth::{
-    AuthError, InstallationRecord, InstallationStore, NativeRegistrationError, TokenSet, TokenStore,
+    AuthError, CoherentNativeCredentialStore, InstallationRecord, InstallationStore,
+    NativeCredentialBackend, NativeCredentialKeys, NativeCredentialStore, NativeCredentials,
+    NativeRegistrationError, NativeTokenError, TokenSet, TokenStore,
 };
 
 const SERVICE: &str = "ai.muniment.desktop";
 const USER: &str = "oidc-tokens";
-const INSTALLATION_USER: &str = "native-installation";
+const NATIVE_KEYS: NativeCredentialKeys = NativeCredentialKeys {
+    record: "native-credentials",
+    legacy_installation: "native-installation",
+};
+
+struct PlatformKeychain;
+
+impl NativeCredentialBackend for PlatformKeychain {
+    fn get(&self, user: &str) -> Result<Option<String>, String> {
+        match Entry::new(SERVICE, user)
+            .map_err(|error| error.to_string())?
+            .get_password()
+        {
+            Ok(value) => Ok(Some(value)),
+            Err(keyring::Error::NoEntry) => Ok(None),
+            Err(error) => Err(error.to_string()),
+        }
+    }
+
+    fn set(&self, user: &str, value: &str) -> Result<(), String> {
+        Entry::new(SERVICE, user)
+            .map_err(|error| error.to_string())?
+            .set_password(value)
+            .map_err(|error| error.to_string())
+    }
+
+    fn delete(&self, user: &str) -> Result<(), String> {
+        match Entry::new(SERVICE, user)
+            .map_err(|error| error.to_string())?
+            .delete_credential()
+        {
+            Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
+            Err(error) => Err(error.to_string()),
+        }
+    }
+}
+
+pub struct KeyringNativeCredentialStore(CoherentNativeCredentialStore<PlatformKeychain>);
+
+impl KeyringNativeCredentialStore {
+    pub fn new() -> Self {
+        Self(CoherentNativeCredentialStore::new(
+            PlatformKeychain,
+            NATIVE_KEYS,
+        ))
+    }
+}
+
+impl InstallationStore for KeyringNativeCredentialStore {
+    fn save(&self, installation: &InstallationRecord) -> Result<(), NativeRegistrationError> {
+        self.0.save(installation)
+    }
+
+    fn load(&self) -> Result<Option<InstallationRecord>, NativeRegistrationError> {
+        self.0.load()
+    }
+}
+
+impl NativeCredentialStore for KeyringNativeCredentialStore {
+    fn load_installation(&self) -> Result<Option<InstallationRecord>, NativeTokenError> {
+        self.0.load_installation()
+    }
+
+    fn save_credentials(&self, credentials: &NativeCredentials) -> Result<(), NativeTokenError> {
+        self.0.save_credentials(credentials)
+    }
+
+    fn load_credentials(&self) -> Result<Option<NativeCredentials>, NativeTokenError> {
+        self.0.load_credentials()
+    }
+}
 
 pub struct KeyringTokenStore;
 
@@ -22,43 +92,6 @@ impl KeyringTokenStore {
     fn entry() -> Result<Entry, AuthError> {
         Entry::new(SERVICE, USER).map_err(store_err)
     }
-}
-
-pub struct KeyringInstallationStore;
-
-impl KeyringInstallationStore {
-    pub fn new() -> Self {
-        Self
-    }
-
-    fn entry() -> Result<Entry, NativeRegistrationError> {
-        Entry::new(SERVICE, INSTALLATION_USER).map_err(installation_store_err)
-    }
-}
-
-impl InstallationStore for KeyringInstallationStore {
-    fn save(&self, installation: &InstallationRecord) -> Result<(), NativeRegistrationError> {
-        let json = serde_json::to_string(installation).map_err(|_| {
-            NativeRegistrationError::Persistence("could not serialize installation".into())
-        })?;
-        Self::entry()?
-            .set_password(&json)
-            .map_err(installation_store_err)
-    }
-
-    fn load(&self) -> Result<Option<InstallationRecord>, NativeRegistrationError> {
-        match Self::entry()?.get_password() {
-            Ok(json) => serde_json::from_str(&json).map(Some).map_err(|_| {
-                NativeRegistrationError::Persistence("stored installation is unreadable".into())
-            }),
-            Err(keyring::Error::NoEntry) => Ok(None),
-            Err(error) => Err(installation_store_err(error)),
-        }
-    }
-}
-
-fn installation_store_err(error: keyring::Error) -> NativeRegistrationError {
-    NativeRegistrationError::Persistence(error.to_string())
 }
 
 impl TokenStore for KeyringTokenStore {
@@ -86,8 +119,6 @@ impl TokenStore for KeyringTokenStore {
     }
 }
 
-/// keyring errors describe the platform store, never secret values, so
-/// their Display form is safe to propagate.
 fn store_err(e: keyring::Error) -> AuthError {
     AuthError::Store(e.to_string())
 }
