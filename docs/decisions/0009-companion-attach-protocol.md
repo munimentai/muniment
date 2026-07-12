@@ -82,6 +82,9 @@ one response/error; later stream events use `subscription_id` and journal
 sequence, never a delayed second response. Error messages/details are a closed,
 redacted schema: no paths outside an approved workspace, environment values,
 tokens, raw provider/Pi errors, SQL, or entitlement-signing material.
+`idempotency_key` is conditionally required by the operation schema for every
+effectful operation (`run.start`, `run.steer`, `run.follow_up`, `run.cancel`,
+and `permission.answer`) and is rejected on operations where it has no meaning.
 
 Immediately after transport authentication the client must send, within five
 seconds and before any other operation:
@@ -152,12 +155,16 @@ supplied in a body.
 |---|---|
 | `thread.list` | Paginated, redacted thread summaries for one approved workspace; bounded `limit` (max 100) and opaque cursor. |
 | `thread.open` | A bounded page of the thread projection and cursor, after current workspace membership/grant checks. |
-| `run.open` | Opens an existing run projection, or starts a human-requested run from bounded text/context in an approved workspace. Starting requires valid session/entitlement and Pi availability. It returns only after `run.started`/`message.submitted` intent is committed. |
+| `run.open` | Opens a bounded projection of an existing `run_id` in an approved workspace. It is read-only and never starts or resumes execution. |
+| `run.start` | Starts a human-requested run from bounded text/context in an approved workspace. It requires valid session/entitlement, Pi availability, and an `idempotency_key`, and returns only after the `run.started`/`message.submitted` intent is committed. |
 | `run.stream` | Subscribes from a supplied last committed `run_seq`; emits `run.event` projections in order, followed by live committed events. |
+| `run.cursor_ack` | Acknowledges `through_run_seq` for one `subscription_id`; this is flow control only and has no journal effect. |
 | `run.steer`, `run.follow_up` | Submit bounded human text to the one desktop-owned Pi stream. Acceptance is a committed journal event and does not imply completion. Both require an `idempotency_key`. |
+| `run.cancel` | Requests cancellation of one `run_id`. It requires an `idempotency_key`; success means `run.cancel.requested` committed, not that Pi or an external effect stopped. |
 | `permission.answer` | Resolves a named pending `gate_id` with `allow` or `deny`, current policy checks, and required `idempotency_key`; the actor/provenance and decision commit before success. |
-| `artifact.fetch` | Reads a journal-referenced artifact the actor may currently access. Returns metadata then indexed, hash-verified chunks; supports cancellation but no arbitrary path or CAS-hash lookup. |
-| `request.cancel` | Cancels a pending request or subscription. For a run, cancellation becomes the journaled `run.cancel.requested` flow; it is not proof that an effect stopped. |
+| `artifact.fetch` | Opens a transfer for a journal `artifact_id` the actor may currently access. Its response returns bounded metadata and a `transfer_id`; no bytes are sent until `artifact.window`. There is no arbitrary path or CAS-hash lookup. |
+| `artifact.window` | Acknowledges the prior artifact prefix and grants a bounded next chunk window for one `transfer_id`; this is flow control only. |
+| `request.cancel` | Best-effort transport cancellation with exactly one target: `{kind:"request", request_id}` or `{kind:"subscription", subscription_id}`. It cannot request run cancellation; that uses `run.cancel`. |
 
 Server events are `run.event`, `subscription.caught_up`, `permission.pending`,
 `artifact.chunk`, `artifact.complete`, `request.cancelled`, `capability.revoked`,
@@ -173,10 +180,57 @@ editor path is canonicalized beneath an approved workspace without following a
 TOCTOU-prone stale decision. Text/context, page sizes, concurrent requests,
 subscriptions, artifact size and rate all have implementation constants and
 return `payload_too_large` or `rate_limited` before unbounded work. Each
-connection has bounded outbound queues and byte budgets. Artifact transfer is
-pull/window based; run streams require cursor acknowledgements. A consumer that
-exceeds its budget receives `slow_consumer` and its subscription closes, while
-the desktop continues journaling.
+connection has bounded outbound queues and byte budgets.
+
+`run.stream` returns a `subscription_id`, the resolved `run_id`, and the first
+available/current sequence bounds. Each `run.event` carries that
+`subscription_id`, `run_id`, and `run_seq`. The client sends
+`run.cursor_ack {subscription_id, through_run_seq}` monotonically after
+processing events. The server responds with the accepted
+`through_run_seq` and releases that portion of the window. An acknowledgement
+below the prior acknowledgement or above the highest sequence sent returns
+`invalid_cursor` and closes that subscription with
+`stream.closed {code:"invalid_cursor", resumable:true}`. A missing/unknown
+subscription returns `subscription_not_found`; it never affects another
+stream. The implementation advertises a bounded initial event/byte window in
+the `run.stream` response and sends no more events when it is exhausted.
+
+`artifact.fetch` responds with `{transfer_id, artifact_id, total_bytes,
+sha256, chunk_bytes, chunk_count}`. A client then sends
+`artifact.window {transfer_id, ack_through_chunk, max_chunks}` where the first
+acknowledgement is `-1`, later acknowledgements are monotonic contiguous chunk
+indexes actually received, and `max_chunks` is between 1 and the advertised
+server maximum. Its correlated response confirms `{ack_through_chunk,
+granted_chunks}`; the server may then emit at most that many
+`artifact.chunk` events carrying `subscription_id:transfer_id`, `artifact_id`,
+`chunk_index`, `offset`, decoded `byte_length`, `chunk_sha256`, and base64
+`data`. After the final acknowledged window it emits `artifact.complete` with
+the transfer ID, total length, and whole-artifact SHA-256. An ack beyond a sent
+chunk, a non-contiguous/regressing ack, or an invalid window returns
+`invalid_artifact_cursor` and closes only the transfer
+with a resumable `stream.closed`; an unknown/expired transfer returns
+`transfer_not_found`, requiring a new authorized `artifact.fetch`. No window
+means no chunks. `transfer_id` is also the transfer's `subscription_id`, so it
+is cancelled with the subscription target form. A receiver rejects a chunk
+whose index, offset, decoded length, or hashes contradict the advertised
+metadata and closes that transfer without consuming the bytes.
+
+`request.cancel` validates that exactly one target union is present and belongs
+to this connection. Unknown or already-terminal targets return
+`request_not_found` or `subscription_not_found`. On success its correlated
+response says cancellation was accepted. A pending target request terminates
+with a correlated `cancelled` error; a subscription/transfer emits
+`request.cancelled` and then `stream.closed {code:"cancelled",
+resumable:true}`. Cancellation races are resolved by the first terminal state;
+the cancel request then reports `already_completed`. Malformed target unions
+return `invalid_request` and affect no target.
+
+A consumer that exhausts an acknowledgement window or stops requesting
+artifact windows is simply paused. If retained unacknowledged output exceeds
+the advertised time/byte budget, it receives `slow_consumer` and
+`stream.closed {code:"slow_consumer", resumable:true}` for that stream, while
+the desktop continues journaling. Malformed flow-control requests count toward
+the connection violation limit; exceeding it closes the connection.
 
 There is no arbitrary Pi command/frame passthrough, database query, filesystem
 API, runtime spawn/control, credential/auth flow, background daemon mode,
@@ -188,14 +242,25 @@ agent access, not this attach service, owns automation.
 ### Commit, reconnect, and crash semantics
 
 For state-changing requests the desktop validates authorization and policy,
-then commits the accepted intent/decision with its stable idempotency key and
-actor provenance before returning success. A Pi acknowledgement is not a
-journal commit, and no raw Pi event is exposed before its domain event commits.
-`run.steer`, `run.follow_up`, and `permission.answer` store uniqueness by
-`(profile, operation, idempotency_key)`: an exact retry returns the original
-result/cursor, while reuse with different canonical input is
-`idempotency_conflict`. Keys are retained at least as long as the affected run
-and its journal events.
+then commits the accepted intent/decision with its required stable idempotency
+key and actor provenance before returning success. A Pi acknowledgement is not
+a journal commit, and no raw Pi event is exposed before its domain event
+commits. Every effectful operation (`run.start`, `run.steer`, `run.follow_up`,
+`run.cancel`, and `permission.answer`) stores uniqueness by
+`(profile, operation, idempotency_key)` together with a hash of its canonical,
+server-resolved input and the committed result/cursor. Canonical input includes
+the resolved workspace/run/gate identity and all effect-relevant body fields,
+not `request_id`. An exact retry, including `run.start`, returns the original
+run/result/cursor without dispatching again. Reuse with any different canonical
+input returns non-retryable `idempotency_conflict` and performs no work. These
+records are retained for the life of the profile journal; run archival retains
+an idempotency tombstone, and profile deletion is the only event that removes
+it. After connection authorization and workspace-scope validation, the desktop
+checks this durable record before mutable preconditions such as Pi availability
+or whether a gate remains pending; thus an exact retry still returns its
+original result after state has advanced. Current authorization is never
+bypassed by a key. A missing key is `idempotency_key_required` before any intent
+or effect.
 
 A subscriber supplies `(run_id, after_run_seq)`. The desktop replays committed
 events from `after_run_seq + 1`, signals `subscription.caught_up`, and then
@@ -243,9 +308,11 @@ cursor replay path when the client reconnects.
 
 Cross-platform golden byte fixtures cover hello/welcome, every request/event,
 errors, unknown optional fields, incompatible versions, malformed/oversized
-frames, cancellation and reconnect. The same behavior suite runs against an
-in-memory pure-core session and each native adapter so platform transports do
-not change protocol semantics.
+frames, exact/conflicting retries for every effectful operation, monotonic and
+invalid run acknowledgements, artifact window/ack/continuation, both
+cancellation target forms, slow-consumer closure, and reconnect. The same
+behavior suite runs against an in-memory pure-core session and each native
+adapter so platform transports do not change protocol semantics.
 
 ## Rejected alternatives
 
