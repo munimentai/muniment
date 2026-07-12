@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { bootState, errorState, statusState, waitingState } from './auth-state.js'
+import { accessErrorState, accessLoadingState, accessReadyState, bootState, errorState, statusState, waitingState } from './auth-state.js'
 
 describe('auth state transitions', () => {
   it('starts in boot and resolves status to signed out', () => {
@@ -22,5 +22,17 @@ describe('auth state transitions', () => {
       message: 'Sign-in not completed — the browser session was cancelled. Try again.',
       retry: 'sign-in',
     })
+  })
+})
+
+describe('access snapshot state', () => {
+  it('projects empty grants as stable empty categories', () => {
+    const state = accessReadyState({ groups: [{ name: 'everyone' }] })
+    expect(state.groups[0]).toMatchObject({ models: [], connections: [], capabilities: [] })
+  })
+
+  it('keeps loading and retryable failure local to access state', () => {
+    expect(accessLoadingState()).toEqual({ name: 'loading' })
+    expect(accessErrorState('offline')).toEqual({ name: 'error', message: 'offline' })
   })
 })

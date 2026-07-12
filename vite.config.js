@@ -10,6 +10,9 @@ const pkg = JSON.parse(readFileSync(new URL('./package.json', import.meta.url), 
 export default defineConfig({
   root: 'src',
   plugins: [svelte()],
+  resolve: {
+    conditions: ['browser'],
+  },
   define: {
     __APP_VERSION__: JSON.stringify(pkg.version),
   },
@@ -23,5 +26,8 @@ export default defineConfig({
   build: {
     outDir: '../dist',
     emptyOutDir: true,
+  },
+  test: {
+    environment: 'jsdom',
   },
 })
