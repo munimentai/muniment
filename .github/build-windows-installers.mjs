@@ -25,7 +25,7 @@ await rename(userMsi, savedUserMsi);
 // Keep a distinct build for the Windows VM's same-version major-upgrade verification.
 // The WiX template enables AllowSameVersionUpgrades; the current build remains the
 // release artifact and is the only machine MSI uploaded.
-const upgradeBaseMsi = join(dirname(msiDirectory), ".machine-upgrade-base.msi");
+const upgradeBaseMsi = join(dirname(msiDirectory), "machine-upgrade-base.msi");
 run("build", "--bundles", "msi", "--config", "src-tauri/tauri.machine.conf.json");
 await rename(await soleMsi(), upgradeBaseMsi);
 run("build", "--bundles", "msi", "--config", "src-tauri/tauri.machine.conf.json");

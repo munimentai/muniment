@@ -3,13 +3,15 @@ $ErrorActionPreference = "Stop"
 $bundleRoot = Join-Path $PSScriptRoot "..\src-tauri\target\release\bundle"
 $nsis = Get-ChildItem (Join-Path $bundleRoot "nsis") -Filter "*-setup.exe" -File
 $machineMsi = Get-ChildItem (Join-Path $bundleRoot "msi") -Filter "*-machine.msi" -File
-$upgradeBaseMsi = Join-Path $bundleRoot ".machine-upgrade-base.msi"
+$upgradeBaseMsi = Join-Path $bundleRoot "machine-upgrade-base.msi"
 if ($nsis.Count -ne 1 -or $machineMsi.Count -ne 1 -or -not (Test-Path $upgradeBaseMsi)) {
   throw "Expected exactly one NSIS installer, one per-machine MSI, and an upgrade-base MSI"
 }
 
-function Invoke-Msi($Arguments, $Description) {
-  $process = Start-Process msiexec.exe -ArgumentList $Arguments -Wait -PassThru
+function Invoke-Msi($Action, $Package, $Description) {
+  $resolvedPackage = (Resolve-Path -LiteralPath $Package).Path
+  $arguments = "$Action `"$resolvedPackage`" /qn /norestart"
+  $process = Start-Process msiexec.exe -ArgumentList $arguments -Wait -PassThru
   if ($process.ExitCode -notin @(0, 3010)) { throw "$Description failed: $($process.ExitCode)" }
 }
 
@@ -32,12 +34,12 @@ function Get-MunimentRegistrations {
   })
 }
 
-Invoke-Msi "/i `"$upgradeBaseMsi`" /qn /norestart" "Silent base MSI install"
+Invoke-Msi "/i" $upgradeBaseMsi "Silent base MSI install"
 $baseRegistration = Get-MunimentRegistrations
 if ($baseRegistration.Count -ne 1) { throw "Base MSI is not registered exactly once under HKLM uninstall registration" }
 $oldProductCode = $baseRegistration[0].PSChildName
 
-Invoke-Msi "/i `"$($machineMsi.FullName)`" /qn /norestart" "Silent MSI in-place upgrade"
+Invoke-Msi "/i" $machineMsi.FullName "Silent MSI in-place upgrade"
 $newRegistration = Get-MunimentRegistrations
 if ($newRegistration.Count -ne 1) { throw "Upgraded MSI is not registered exactly once under HKLM uninstall registration" }
 $newProductCode = $newRegistration[0].PSChildName
@@ -54,7 +56,7 @@ if (Test-Path "HKCU:\Software\Muniment\muniment") {
   throw "Per-machine MSI wrote application registration under HKCU"
 }
 
-Invoke-Msi "/x `"$($machineMsi.FullName)`" /qn /norestart" "Silent MSI uninstall"
+Invoke-Msi "/x" $machineMsi.FullName "Silent MSI uninstall"
 if (Test-Path $machineKey) { throw "Machine registration remains after MSI uninstall" }
 if ((Get-MunimentRegistrations).Count -ne 0) {
   throw "Machine uninstall registration remains after MSI uninstall"
