@@ -33,3 +33,18 @@ under `objects/` are left untouched.
 `verify` streams an object's bytes through SHA-256 and compares the result with
 its requested hash. It distinguishes missing objects from corrupt ones without
 loading the object into memory.
+
+## Removal and collection
+
+`remove` deletes one object and succeeds when that object is already absent.
+`object_hashes` lazily enumerates only regular files at canonical object paths;
+unrelated files and directories under `objects/` are ignored. `collect_unreferenced`
+accepts a keep-set (normally `RunJournal::referenced_hashes()`), removes every
+enumerated object outside that set, and returns the hashes it removed. It does
+not inspect or remove root entries, including `.cas-tmp-*` files; the temp-file
+sweep above exclusively owns those files.
+
+Collection must be serialized with CAS puts and journal appends. The caller must
+hold the application's shared state lock from taking the journal reference
+snapshot through completion of the CAS sweep; otherwise an object published or
+referenced after the snapshot could be removed while in use.
