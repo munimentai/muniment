@@ -39,6 +39,7 @@ impl std::error::Error for NativeSignInError {}
 
 /// Register/reuse an installation, authorize in the external browser, exchange
 /// the code, and atomically publish the resulting native credentials.
+#[allow(clippy::too_many_arguments)]
 pub fn run_native_sign_in(
     store: &(impl InstallationStore + NativeCredentialStore),
     registration: &dyn RegistrationTransport,
