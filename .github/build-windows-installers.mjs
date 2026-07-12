@@ -3,8 +3,9 @@ import { basename, dirname, join } from "node:path";
 import { spawnSync } from "node:child_process";
 
 const run = (...args) => {
-  const command = process.platform === "win32" ? "npm.cmd" : "npm";
-  const result = spawnSync(command, args, { stdio: "inherit" });
+  const cli = join("node_modules", "@tauri-apps", "cli", "tauri.js");
+  const result = spawnSync(process.execPath, [cli, ...args], { stdio: "inherit" });
+  if (result.error) throw result.error;
   if (result.status !== 0) process.exit(result.status ?? 1);
 };
 
@@ -16,7 +17,7 @@ const soleMsi = async () => {
 };
 
 // Preserve the normal MSI while the second bundling pass writes the fleet variant.
-run("run", "tauri", "build");
+run("build");
 const userMsi = await soleMsi();
 const savedUserMsi = join(dirname(userMsi), `.${basename(userMsi)}.per-user`);
 await rename(userMsi, savedUserMsi);
@@ -25,12 +26,12 @@ await rename(userMsi, savedUserMsi);
 // The current build remains the release artifact and is the only machine MSI uploaded.
 const upgradeBaseMsi = join(dirname(msiDirectory), ".machine-upgrade-base.msi");
 run(
-  "run", "tauri", "build", "--", "--bundles", "msi",
+  "build", "--bundles", "msi",
   "--config", "src-tauri/tauri.machine.conf.json",
   "--config", JSON.stringify({ version: "0.0.0" }),
 );
 await copyFile(await soleMsi(), upgradeBaseMsi);
-run("run", "tauri", "build", "--", "--bundles", "msi", "--config", "src-tauri/tauri.machine.conf.json");
+run("build", "--bundles", "msi", "--config", "src-tauri/tauri.machine.conf.json");
 const generatedMachineMsi = await soleMsi();
 const machineMsi = generatedMachineMsi.replace(/\.msi$/, "-machine.msi");
 await rename(generatedMachineMsi, machineMsi);
