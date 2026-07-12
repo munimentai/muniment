@@ -128,6 +128,16 @@ validated_decoder!(
     protocol::validate_authorized
 );
 validated_decoder!(decode_event, protocol::Event, protocol::validate_event);
+validated_decoder!(
+    decode_response,
+    protocol::Response,
+    protocol::validate_response
+);
+validated_decoder!(
+    decode_error,
+    protocol::ErrorEnvelope,
+    protocol::validate_error
+);
 fn decode_json<T: DeserializeOwned>(body: &[u8]) -> Result<T, CodecError> {
     let text = std::str::from_utf8(body).map_err(|_| CodecError::InvalidUtf8)?;
     let mut stream = serde_json::Deserializer::from_str(text).into_iter::<Value>();

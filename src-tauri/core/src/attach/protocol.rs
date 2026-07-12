@@ -13,6 +13,7 @@ pub const MAX_TEXT_BYTES: usize = 64 * 1024;
 pub const MAX_PAGE_SIZE: u16 = 100;
 pub const MAX_WORKSPACE_SCOPES: usize = 100;
 pub const MAX_CONTEXT_ITEMS: usize = 100;
+pub const MAX_RESPONSE_ITEMS: usize = 100;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Protocol;
@@ -189,7 +190,7 @@ pub struct RunStartBody {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RunStreamBody {
     pub run_id: Id,
-    pub last_run_seq: u64,
+    pub after_run_seq: u64,
 }
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CursorAckBody {
@@ -244,27 +245,21 @@ pub enum RequestBody {
     ArtifactWindow(ArtifactWindowBody),
     RequestCancel(CancelTarget),
 }
-impl RequestBody {
-    fn value(&self) -> Value {
-        match self {
-            Self::ThreadList(v) => serde_json::to_value(v),
-            Self::ThreadOpen(v) => serde_json::to_value(v),
-            Self::RunOpen(v) | Self::RunCancel(v) => serde_json::to_value(v),
-            Self::RunStart(v) => serde_json::to_value(v),
-            Self::RunStream(v) => serde_json::to_value(v),
-            Self::RunCursorAck(v) => serde_json::to_value(v),
-            Self::RunSteer(v) | Self::RunFollowUp(v) => serde_json::to_value(v),
-            Self::PermissionAnswer(v) => serde_json::to_value(v),
-            Self::ArtifactFetch(v) => serde_json::to_value(v),
-            Self::ArtifactWindow(v) => serde_json::to_value(v),
-            Self::RequestCancel(v) => serde_json::to_value(v),
-        }
-        .expect("wire bodies serialize")
-    }
-}
 impl Serialize for RequestBody {
     fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
-        self.value().serialize(s)
+        match self {
+            Self::ThreadList(v) => v.serialize(s),
+            Self::ThreadOpen(v) => v.serialize(s),
+            Self::RunOpen(v) | Self::RunCancel(v) => v.serialize(s),
+            Self::RunStart(v) => v.serialize(s),
+            Self::RunStream(v) => v.serialize(s),
+            Self::RunCursorAck(v) => v.serialize(s),
+            Self::RunSteer(v) | Self::RunFollowUp(v) => v.serialize(s),
+            Self::PermissionAnswer(v) => v.serialize(s),
+            Self::ArtifactFetch(v) => v.serialize(s),
+            Self::ArtifactWindow(v) => v.serialize(s),
+            Self::RequestCancel(v) => v.serialize(s),
+        }
     }
 }
 #[derive(Deserialize)]
@@ -310,11 +305,90 @@ fn from<T: for<'a> Deserialize<'a>, E: de::Error>(v: Value) -> Result<T, E> {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct Response<B> {
+pub struct ThreadSummary {
+    pub thread_id: Id,
+    pub title: String,
+}
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ThreadListResponse {
+    pub threads: Vec<ThreadSummary>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cursor: Option<String>,
+}
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ThreadOpenResponse {
+    pub thread_id: Id,
+    pub messages: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cursor: Option<String>,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RunProjectionResponse {
+    pub run_id: Id,
+    pub status: String,
+    pub current_run_seq: u64,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CommittedResponse {
+    pub run_id: Id,
+    pub run_seq: u64,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RunStreamResponse {
+    pub subscription_id: Id,
+    pub run_id: Id,
+    pub first_available_run_seq: u64,
+    pub current_run_seq: u64,
+    pub initial_event_window: u32,
+    pub initial_byte_window: u32,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CursorAckResponse {
+    pub through_run_seq: u64,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PermissionAnswerResponse {
+    pub gate_id: Id,
+    pub decision: PermissionDecision,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ArtifactFetchResponse {
+    pub transfer_id: Id,
+    pub artifact_id: Id,
+    pub total_bytes: u64,
+    pub sha256: String,
+    pub chunk_bytes: u32,
+    pub chunk_count: u64,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ArtifactWindowResponse {
+    pub ack_through_chunk: i64,
+    pub granted_chunks: u16,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CancellationResponse {
+    pub accepted: bool,
+}
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum ResponseBody {
+    ThreadList(ThreadListResponse),
+    ThreadOpen(ThreadOpenResponse),
+    RunProjection(RunProjectionResponse),
+    RunStream(RunStreamResponse),
+    ArtifactFetch(ArtifactFetchResponse),
+    PermissionAnswer(PermissionAnswerResponse),
+    Committed(CommittedResponse),
+    CursorAck(CursorAckResponse),
+    ArtifactWindow(ArtifactWindowResponse),
+    Cancellation(CancellationResponse),
+}
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Response {
     pub protocol: Protocol,
     pub request_id: Id,
     pub ok: True,
-    pub body: B,
+    pub body: ResponseBody,
 }
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct True;
@@ -541,14 +615,27 @@ pub struct ProtocolError {
 pub enum ErrorCode {
     InvalidRequest,
     IdempotencyKeyRequired,
+    IdempotencyConflict,
     ProtocolIncompatible,
     PayloadTooLarge,
+    InvalidCursor,
+    CursorExpired,
+    InvalidArtifactCursor,
+    SubscriptionNotFound,
+    TransferNotFound,
+    RequestNotFound,
+    AlreadyCompleted,
+    Cancelled,
+    SlowConsumer,
+    RateLimited,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ErrorAction {
     UpgradeCompanion,
     UpgradeDesktop,
+    ReopenRun,
+    ReopenArtifact,
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(untagged)]
@@ -663,6 +750,54 @@ pub fn validate_request(v: &Request) -> Result<(), ProtocolError> {
     if bad {
         return Err(ProtocolError::invalid(
             "invalid operation body",
+            ErrorCode::InvalidRequest,
+        ));
+    }
+    Ok(())
+}
+pub fn validate_response(v: &Response) -> Result<(), ProtocolError> {
+    let bad = match &v.body {
+        ResponseBody::ThreadList(x) => {
+            x.threads.len() > MAX_RESPONSE_ITEMS
+                || x.threads
+                    .iter()
+                    .any(|item| !bounded(&item.title, MAX_CLIENT_TEXT_BYTES))
+                || x.cursor
+                    .as_ref()
+                    .is_some_and(|cursor| !bounded(cursor, MAX_CLIENT_TEXT_BYTES))
+        }
+        ResponseBody::ThreadOpen(x) => {
+            x.messages.len() > MAX_RESPONSE_ITEMS
+                || x.messages
+                    .iter()
+                    .any(|message| !bounded(message, MAX_TEXT_BYTES))
+                || x.cursor
+                    .as_ref()
+                    .is_some_and(|cursor| !bounded(cursor, MAX_CLIENT_TEXT_BYTES))
+        }
+        ResponseBody::RunProjection(x) => !bounded(&x.status, MAX_CLIENT_TEXT_BYTES),
+        ResponseBody::RunStream(x) => x.initial_event_window == 0 || x.initial_byte_window == 0,
+        ResponseBody::ArtifactFetch(x) => {
+            x.sha256.len() != 64
+                || !x.sha256.bytes().all(|b| b.is_ascii_hexdigit())
+                || x.chunk_bytes == 0
+                || x.chunk_bytes as usize > crate::attach::codec::MAX_ARTIFACT_CHUNK_BYTES
+        }
+        ResponseBody::ArtifactWindow(x) => x.ack_through_chunk < -1 || x.granted_chunks == 0,
+        _ => false,
+    };
+    if bad {
+        return Err(ProtocolError::invalid(
+            "invalid response body",
+            ErrorCode::InvalidRequest,
+        ));
+    }
+    Ok(())
+}
+pub fn validate_error(v: &ErrorEnvelope) -> Result<(), ProtocolError> {
+    if !bounded(&v.error.message, MAX_CLIENT_TEXT_BYTES) {
+        return Err(ProtocolError::invalid(
+            "invalid error envelope",
             ErrorCode::InvalidRequest,
         ));
     }

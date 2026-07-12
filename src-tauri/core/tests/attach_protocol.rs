@@ -24,38 +24,49 @@ fn request(operation: &str, body: Value) -> Value {
     }
     value
 }
-fn fixture(name: &str) -> &'static [u8] {
-    match name {
-        "hello" => include_bytes!("fixtures/attach/hello.json"),
-        "welcome" => include_bytes!("fixtures/attach/welcome.json"),
-        "authorized" => include_bytes!("fixtures/attach/authorized.json"),
-        "response" => include_bytes!("fixtures/attach/response.json"),
-        "error" => include_bytes!("fixtures/attach/error.json"),
-        "incompatible" => include_bytes!("fixtures/attach/incompatible.json"),
-        _ => unreachable!(),
-    }
+fn golden_frames() -> Vec<(&'static str, Vec<u8>)> {
+    include_str!("fixtures/attach/golden.frames")
+        .lines()
+        .map(|line| {
+            let (name, hex) = line.split_once('|').unwrap();
+            let bytes = hex
+                .as_bytes()
+                .chunks_exact(2)
+                .map(|pair| u8::from_str_radix(std::str::from_utf8(pair).unwrap(), 16).unwrap())
+                .collect();
+            (name, bytes)
+        })
+        .collect()
 }
 
 #[test]
-fn golden_handshake_and_envelope_bytes() {
-    let hello = framed(serde_json::from_slice(fixture("hello")).unwrap());
-    assert_eq!(
-        u32::from_be_bytes(hello[..4].try_into().unwrap()) as usize,
-        hello.len() - 4
-    );
-    assert!(decode_hello(&hello).is_ok());
-    assert!(decode_welcome(&framed(serde_json::from_slice(fixture("welcome")).unwrap())).is_ok());
-    assert!(decode_authorized(&framed(
-        serde_json::from_slice(fixture("authorized")).unwrap()
-    ))
-    .is_ok());
-    assert!(decode_frame::<Response<Value>>(&framed(
-        serde_json::from_slice(fixture("response")).unwrap()
-    ))
-    .is_ok());
-    let error: ErrorEnvelope =
-        decode_frame(&framed(serde_json::from_slice(fixture("error")).unwrap())).unwrap();
-    assert_eq!(error.error.code, ErrorCode::InvalidRequest);
+fn exact_golden_frames_decode_and_reencode_without_drift() {
+    for (name, frame) in golden_frames() {
+        assert_eq!(
+            u32::from_be_bytes(frame[..4].try_into().unwrap()) as usize,
+            frame.len() - 4,
+            "big-endian prefix for {name}"
+        );
+        let encoded = if name == "hello" {
+            encode_frame(&decode_hello(&frame).unwrap()).unwrap()
+        } else if name == "welcome" {
+            encode_frame(&decode_welcome(&frame).unwrap()).unwrap()
+        } else if name == "authorized" {
+            encode_frame(&decode_authorized(&frame).unwrap()).unwrap()
+        } else if name.starts_with("request.") || name == "unknown_optional" {
+            encode_frame(&decode_request(&frame).unwrap()).unwrap()
+        } else if name.starts_with("response.") {
+            encode_frame(&decode_response(&frame).unwrap()).unwrap()
+        } else if name == "error" || name == "incompatible" {
+            encode_frame(&decode_error(&frame).unwrap()).unwrap()
+        } else {
+            encode_frame(&decode_event(&frame).unwrap()).unwrap()
+        };
+        // Unknown optional envelope fields are deliberately discarded by serde.
+        if name != "unknown_optional" {
+            assert_eq!(encoded, frame, "golden wire drift for {name}");
+        }
+    }
 }
 
 #[test]
@@ -68,7 +79,7 @@ fn every_closed_request_body_is_typed_and_validated() {
             "run.start",
             json!({"workspace_id":ID,"text":"hello","context":["selection"]}),
         ),
-        ("run.stream", json!({"run_id":ID,"last_run_seq":0})),
+        ("run.stream", json!({"run_id":ID,"after_run_seq":0})),
         (
             "run.cursor_ack",
             json!({"subscription_id":ID,"through_run_seq":1}),
@@ -94,6 +105,11 @@ fn every_closed_request_body_is_typed_and_validated() {
         );
     }
     assert!(decode_request(&framed(request("run.open", json!({})))).is_err());
+    assert!(decode_request(&framed(request(
+        "run.stream",
+        json!({"run_id":ID,"last_run_seq":0})
+    )))
+    .is_err());
     assert!(decode_request(&framed(request(
         "request.cancel",
         json!({"kind":"request","request_id":ID,"subscription_id":ID2})
@@ -265,11 +281,15 @@ fn negotiation_is_minimal_and_actionable() {
     let new = negotiate_version(VersionRange { min: 2, max: 3 }).unwrap_err();
     assert_eq!(new.action, Some(ErrorAction::UpgradeDesktop));
     let encoded = serde_json::to_string(&new).unwrap();
-    let golden: ErrorEnvelope = decode_frame(&framed(
-        serde_json::from_slice(fixture("incompatible")).unwrap(),
-    ))
-    .unwrap();
-    assert_eq!(golden.error, new);
+    let (_, incompatible) = golden_frames()
+        .into_iter()
+        .find(|(name, _)| *name == "incompatible")
+        .unwrap();
+    let golden: ErrorEnvelope = decode_error(&incompatible).unwrap();
+    assert_eq!(
+        golden.error,
+        negotiate_version(VersionRange { min: 0, max: 0 }).unwrap_err()
+    );
     for secret in ["profile", "session", "workspace", "entitlement", "runtime"] {
         assert!(!encoded.contains(secret));
     }
