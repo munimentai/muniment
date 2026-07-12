@@ -1,11 +1,18 @@
 import { describe, expect, it } from 'vitest'
-import { applyBufferedChatEvents, applyChatEvent, receiptParts, shouldSend } from './chat-state.js'
+import { applyBufferedChatEvents, applyChatEvent, composerAction, receiptParts, receiptRows } from './chat-state.js'
 
 describe('chat composer and projection', () => {
-  it('sends Enter, retains Shift+Enter, and blocks duplicate submits', () => {
-    expect(shouldSend({ key: 'Enter', shiftKey: false, isComposing: false }, 'hello', false)).toBe(true)
-    expect(shouldSend({ key: 'Enter', shiftKey: true, isComposing: false }, 'hello', false)).toBe(false)
-    expect(shouldSend({ key: 'Enter', shiftKey: false, isComposing: false }, 'hello', true)).toBe(false)
+  it('chooses submit or steer from the active run', () => {
+    const enter = { key: 'Enter', shiftKey: false, isComposing: false }
+    expect(composerAction(enter, 'hello', null)).toBe('submit')
+    expect(composerAction(enter, 'hello', { id: 'run-1' })).toBe('steer')
+    expect(composerAction(enter, 'hello', { id: 'pending' })).toBeNull()
+  })
+
+  it('blocks modified Enter, IME composition, and empty drafts', () => {
+    expect(composerAction({ key: 'Enter', shiftKey: true, isComposing: false }, 'hello', null)).toBeNull()
+    expect(composerAction({ key: 'Enter', shiftKey: false, isComposing: true }, 'hello', null)).toBeNull()
+    expect(composerAction({ key: 'Enter', shiftKey: false, isComposing: false }, '  ', null)).toBeNull()
   })
 
   it('moves thinking to streaming and removes signal on every terminal event', () => {
@@ -19,6 +26,36 @@ describe('chat composer and projection', () => {
   it('does not invent missing receipt values', () => {
     expect(receiptParts({ route: 'fast', capabilities: [{ name: 'search', version: '2' }] }))
       .toEqual(['fast', 'search@2'])
+  })
+
+  it('projects every present receipt field in record order', () => {
+    expect(receiptRows({
+      route: 'fast', model: 'glm-5.2', cost: '$0.04', time: '1.8s',
+      capabilities: [{ name: 'search', version: '2' }, { name: 'files', version: '1' }],
+    })).toEqual([
+      { label: 'Route', value: 'fast', route: true },
+      { label: 'Model', value: 'glm-5.2', route: false },
+      { label: 'Cost', value: '$0.04', route: false },
+      { label: 'Time', value: '1.8s', route: false },
+      { label: 'Capability', value: 'search@2', route: false },
+      { label: 'Capability', value: 'files@1', route: false },
+    ])
+  })
+
+  it('omits absent receipt fields', () => {
+    expect(receiptRows({ model: 'glm-5.2', time: '1.8s' })).toEqual([
+      { label: 'Model', value: 'glm-5.2', route: false },
+      { label: 'Time', value: '1.8s', route: false },
+    ])
+  })
+
+  it('projects capabilities without inventing other rows', () => {
+    expect(receiptRows({ capabilities: [{ name: 'search', version: '2' }] }))
+      .toEqual([{ label: 'Capability', value: 'search@2', route: false }])
+  })
+
+  it('projects no rows from an empty receipt', () => {
+    expect(receiptRows({})).toEqual([])
   })
 
   it('preserves all projections that arrive before submit resolves', () => {

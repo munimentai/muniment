@@ -20,6 +20,7 @@ fn main() {
             auth::auth_sign_out,
             chat::chat_submit,
             chat::chat_cancel,
+            chat::chat_queue,
             chat::chat_history
         ])
         .run(tauri::generate_context!())

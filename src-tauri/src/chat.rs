@@ -4,7 +4,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use chrono::{SecondsFormat, Utc};
-use muniment_core::journal::reducer::project_chat;
+use muniment_core::journal::reducer::{project_chat, reduce, RunStatus};
 use muniment_core::journal::{EventEnvelope, EventPayload, Provenance, RunJournal};
 use muniment_core::sidecar::pi_chat::{cancel_command, PiChatEvent, PiRunAdapter, Receipt};
 use muniment_core::sidecar::pi_install::resolve_current;
@@ -19,6 +19,7 @@ use uuid::Uuid;
 use crate::auth;
 
 const RPC_TIMEOUT: Duration = Duration::from_secs(30);
+const QUEUE_TIMEOUT: Duration = Duration::from_secs(2);
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -34,6 +35,21 @@ struct ChatGrant {
 #[serde(rename_all = "camelCase")]
 pub struct SubmitResult {
     run_id: String,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ChatDelivery {
+    Steer,
+    FollowUp,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ChatQueueRequest {
+    run_id: String,
+    delivery: ChatDelivery,
+    message: String,
 }
 
 #[derive(Serialize)]
@@ -61,6 +77,7 @@ struct ActiveRun {
     id: String,
     cancelled: Arc<AtomicBool>,
     transport: Arc<Mutex<Option<Arc<PiRpcTransport>>>>,
+    adapter: Arc<Mutex<Option<Arc<PiRunAdapter>>>>,
 }
 
 struct PiRuntime {
@@ -81,13 +98,37 @@ impl ChatState {
     pub fn new(app: &tauri::AppHandle) -> Result<Self, Box<dyn std::error::Error>> {
         let directory = app.path().app_data_dir()?;
         std::fs::create_dir_all(&directory)?;
+        let mut journal = RunJournal::open(directory.join("runs.sqlite3"))?;
+        reconcile_interrupted_runs(&mut journal);
         Ok(Self {
-            journal: Arc::new(Mutex::new(RunJournal::open(
-                directory.join("runs.sqlite3"),
-            )?)),
+            journal: Arc::new(Mutex::new(journal)),
             active: Mutex::new(None),
             runtime: Arc::new(Mutex::new(None)),
         })
+    }
+}
+
+fn reconcile_interrupted_runs(journal: &mut RunJournal) {
+    let Ok(run_ids) = journal.run_ids() else {
+        return;
+    };
+    for run_id in run_ids {
+        let Ok(events) = journal.events(&run_id) else {
+            continue;
+        };
+        let Ok(state) = reduce(&events) else {
+            continue;
+        };
+        if state.is_terminal() {
+            continue;
+        }
+        let envelope = event_envelope(
+            &run_id,
+            state.last_seq + 1,
+            "run.needs_attention",
+            json!({"reason": "interrupted"}),
+        );
+        let _ = journal.append(state.last_seq, &envelope);
     }
 }
 
@@ -117,12 +158,13 @@ fn protect_prompt(run_id: &str, prompt: &str, subject: Option<&str>) -> Result<(
         .map_err(|_| "Conversation history is unavailable.".to_string())
 }
 
-fn projection_phase(status: &Option<muniment_core::journal::reducer::RunStatus>) -> &'static str {
+fn projection_phase(status: &Option<RunStatus>) -> &'static str {
     match status {
-        Some(muniment_core::journal::reducer::RunStatus::Streaming) => "streaming",
-        Some(muniment_core::journal::reducer::RunStatus::Completed) => "complete",
-        Some(muniment_core::journal::reducer::RunStatus::Cancelled) => "cancelled",
-        Some(muniment_core::journal::reducer::RunStatus::Failed { .. }) => "failed",
+        Some(RunStatus::Streaming) => "streaming",
+        Some(RunStatus::Completed) => "complete",
+        Some(RunStatus::Cancelled) => "cancelled",
+        Some(RunStatus::Failed { .. }) => "failed",
+        Some(RunStatus::NeedsAttention(_)) => "interrupted",
         _ => "thinking",
     }
 }
@@ -186,10 +228,12 @@ pub async fn chat_submit(
     protect_prompt(&run_id, &prompt, tokens.subject.as_deref())?;
     let cancelled = Arc::new(AtomicBool::new(false));
     let transport = Arc::new(Mutex::new(None));
+    let adapter = Arc::new(Mutex::new(None));
     *active = Some(ActiveRun {
         id: run_id.clone(),
         cancelled: Arc::clone(&cancelled),
         transport: Arc::clone(&transport),
+        adapter: Arc::clone(&adapter),
     });
     drop(active);
 
@@ -207,6 +251,7 @@ pub async fn chat_submit(
             grant,
             cancelled,
             transport,
+            adapter,
         );
         if let Some(state) = app.try_state::<ChatState>() {
             let mut active = state
@@ -219,6 +264,52 @@ pub async fn chat_submit(
         }
     });
     Ok(SubmitResult { run_id: result_id })
+}
+
+#[tauri::command]
+pub async fn chat_queue(
+    state: tauri::State<'_, ChatState>,
+    request: ChatQueueRequest,
+) -> Result<(), String> {
+    queue_message(&state.active, request)
+}
+
+fn queue_message(
+    active: &Mutex<Option<ActiveRun>>,
+    request: ChatQueueRequest,
+) -> Result<(), String> {
+    let active = active
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let run = active
+        .as_ref()
+        .filter(|run| run.id == request.run_id)
+        .ok_or_else(|| "That reply is no longer active.".to_string())?;
+    let transport = run
+        .transport
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clone();
+    let adapter = run
+        .adapter
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clone();
+    drop(active);
+    let (transport, adapter) = transport
+        .zip(adapter)
+        .ok_or_else(|| "The reply is not ready for messages yet.".to_string())?;
+    let result = match request.delivery {
+        ChatDelivery::Steer => adapter.steer(&transport, &request.message, QUEUE_TIMEOUT),
+        ChatDelivery::FollowUp => adapter.follow_up(&transport, &request.message, QUEUE_TIMEOUT),
+    };
+    result.map_err(|error| {
+        if error == "Pi queued message must not be empty" {
+            "Enter a message before sending.".to_string()
+        } else {
+            "The message could not be queued. Try again.".to_string()
+        }
+    })
 }
 
 #[tauri::command]
@@ -255,6 +346,7 @@ fn coordinate(
     grant: ChatGrant,
     cancelled: Arc<AtomicBool>,
     active_transport: Arc<Mutex<Option<Arc<PiRpcTransport>>>>,
+    active_adapter: Arc<Mutex<Option<Arc<PiRunAdapter>>>>,
 ) {
     let mut seq = 0;
     if append_emit(&app, &journal, &run_id, &mut seq, "run.started", json!({})).is_err() {
@@ -398,6 +490,10 @@ fn coordinate(
             return;
         }
     };
+    let adapter = Arc::new(adapter);
+    *active_adapter
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(Arc::clone(&adapter));
     if append_emit(
         &app,
         &journal,
@@ -488,7 +584,12 @@ fn coordinate(
                 );
                 break;
             }
-            Ok(PiChatEvent::Interleaved | PiChatEvent::PromptAccepted) => {}
+            Ok(
+                PiChatEvent::ToolStarted { .. }
+                | PiChatEvent::ToolFinished { .. }
+                | PiChatEvent::Interleaved
+                | PiChatEvent::PromptAccepted,
+            ) => {}
             Err(error) if error == "timed out waiting for Pi stream" => {
                 if matches!(
                     runtime.supervisor.status(),
@@ -527,10 +628,30 @@ fn append_emit(
     payload: Value,
 ) -> Result<(), ()> {
     *seq += 1;
-    let envelope = EventEnvelope {
+    let envelope = event_envelope(run_id, *seq, kind, payload);
+    let projection = {
+        let mut journal = journal.lock().map_err(|_| ())?;
+        journal.append(*seq - 1, &envelope).map_err(|_| ())?;
+        project_chat(&journal.events(run_id).map_err(|_| ())?).map_err(|_| ())?
+    };
+    let phase = projection_phase(&projection.status);
+    app.emit(
+        "chat-event",
+        ChatEvent {
+            run_id: run_id.into(),
+            phase: phase.into(),
+            text: projection.text,
+            receipt: projection.receipt,
+        },
+    )
+    .map_err(|_| ())
+}
+
+fn event_envelope(run_id: &str, run_seq: u64, kind: &str, payload: Value) -> EventEnvelope {
+    EventEnvelope {
         event_id: Uuid::now_v7().to_string(),
         run_id: run_id.into(),
-        run_seq: *seq,
+        run_seq,
         event_type: kind.into(),
         event_version: 1,
         envelope_version: 1,
@@ -551,23 +672,7 @@ fn append_emit(
             extra: BTreeMap::new(),
         },
         extra: BTreeMap::new(),
-    };
-    let projection = {
-        let mut journal = journal.lock().map_err(|_| ())?;
-        journal.append(*seq - 1, &envelope).map_err(|_| ())?;
-        project_chat(&journal.events(run_id).map_err(|_| ())?).map_err(|_| ())?
-    };
-    let phase = projection_phase(&projection.status);
-    app.emit(
-        "chat-event",
-        ChatEvent {
-            run_id: run_id.into(),
-            phase: phase.into(),
-            text: projection.text,
-            receipt: projection.receipt,
-        },
-    )
-    .map_err(|_| ())
+    }
 }
 
 fn fail(
@@ -618,4 +723,105 @@ fn fetch_receipt(url: &str, access_token: &str, run_id: &str) -> Result<Receipt,
         .map_err(|_| ())?
         .into_json()
         .map_err(|_| ())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn append_test_event(
+        journal: &mut RunJournal,
+        run_id: &str,
+        seq: u64,
+        kind: &str,
+        payload: Value,
+    ) {
+        journal
+            .append(seq - 1, &event_envelope(run_id, seq, kind, payload))
+            .unwrap();
+    }
+
+    fn inactive_transport_run(id: &str) -> ActiveRun {
+        ActiveRun {
+            id: id.into(),
+            cancelled: Arc::new(AtomicBool::new(false)),
+            transport: Arc::new(Mutex::new(None)),
+            adapter: Arc::new(Mutex::new(None)),
+        }
+    }
+
+    #[test]
+    fn queue_request_is_closed_and_typed() {
+        for value in [
+            json!({"runId":"run-1", "delivery":"later", "message":"hello"}),
+            json!({"runId":"run-1", "delivery":"steer", "message":"hello", "extra":true}),
+        ] {
+            assert!(serde_json::from_value::<ChatQueueRequest>(value).is_err());
+        }
+        assert!(serde_json::from_value::<ChatQueueRequest>(json!({
+            "runId":"run-1", "delivery":"followUp", "message":"hello"
+        }))
+        .is_ok());
+    }
+
+    #[test]
+    fn queue_rejects_mismatched_and_not_ready_runs_safely() {
+        let active = Mutex::new(Some(inactive_transport_run("run-1")));
+        let request = |run_id: &str| ChatQueueRequest {
+            run_id: run_id.into(),
+            delivery: ChatDelivery::Steer,
+            message: "hello".into(),
+        };
+        assert_eq!(
+            queue_message(&active, request("stale-run")).unwrap_err(),
+            "That reply is no longer active."
+        );
+        assert_eq!(
+            queue_message(&active, request("run-1")).unwrap_err(),
+            "The reply is not ready for messages yet."
+        );
+    }
+
+    #[test]
+    fn startup_reconciles_only_non_terminal_runs_once() {
+        let directory = std::env::temp_dir().join(format!("muniment-chat-{}", Uuid::now_v7()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("runs.sqlite3");
+        let interrupted = Uuid::now_v7().to_string();
+        let completed = Uuid::now_v7().to_string();
+
+        {
+            let mut journal = RunJournal::open(&path).unwrap();
+            append_test_event(&mut journal, &interrupted, 1, "run.started", json!({}));
+            append_test_event(
+                &mut journal,
+                &interrupted,
+                2,
+                "model.stream.delta",
+                json!({"text": "partial"}),
+            );
+            append_test_event(&mut journal, &completed, 1, "run.started", json!({}));
+            append_test_event(&mut journal, &completed, 2, "run.completed", json!({}));
+
+            reconcile_interrupted_runs(&mut journal);
+
+            let interrupted_events = journal.events(&interrupted).unwrap();
+            assert_eq!(interrupted_events.len(), 3);
+            assert_eq!(interrupted_events[2].event_type, "run.needs_attention");
+            assert!(matches!(
+                reduce(&interrupted_events).unwrap().status,
+                RunStatus::NeedsAttention(_)
+            ));
+            assert_eq!(journal.events(&completed).unwrap().len(), 2);
+        }
+
+        {
+            let mut reopened = RunJournal::open(&path).unwrap();
+            reconcile_interrupted_runs(&mut reopened);
+            assert_eq!(reopened.events(&interrupted).unwrap().len(), 3);
+            assert_eq!(reopened.events(&completed).unwrap().len(), 2);
+        }
+
+        std::fs::remove_dir_all(directory).unwrap();
+    }
 }

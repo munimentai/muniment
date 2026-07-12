@@ -1,5 +1,7 @@
-export function shouldSend(event, text, active) {
-  return event.key === 'Enter' && !event.shiftKey && !event.isComposing && text.trim().length > 0 && !active
+export function composerAction(event, text, active) {
+  if (event.key !== 'Enter' || event.shiftKey || event.isComposing || !text.trim()) return null
+  if (!active) return 'submit'
+  return active.id === 'pending' ? null : 'steer'
 }
 
 export function receiptParts(receipt = {}) {
@@ -8,6 +10,19 @@ export function receiptParts(receipt = {}) {
     if (capability?.name && capability?.version) parts.push(`${capability.name}@${capability.version}`)
   }
   return parts
+}
+
+export function receiptRows(receipt = {}) {
+  const rows = []
+  for (const [field, label] of [['route', 'Route'], ['model', 'Model'], ['cost', 'Cost'], ['time', 'Time']]) {
+    if (receipt[field] !== undefined && receipt[field] !== null) rows.push({ label, value: receipt[field], route: field === 'route' })
+  }
+  for (const capability of receipt.capabilities ?? []) {
+    if (capability?.name !== undefined && capability?.name !== null && capability?.version !== undefined && capability?.version !== null) {
+      rows.push({ label: 'Capability', value: `${capability.name}@${capability.version}`, route: false })
+    }
+  }
+  return rows
 }
 
 export function applyChatEvent(run, event) {

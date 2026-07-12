@@ -140,6 +140,12 @@ progress arriving as events rather than a second response. The chat slice must
 preserve this distinction and must not send these envelopes through the
 repository's JSON-RPC 2.0 transport.
 
+The pure chat boundary exposes validated `steer` and `follow_up` envelopes and
+submits them through that same dispatcher. Their matching successful response
+means only that the message was queued: `steer` is delivered during the active
+turn, while `follow_up` waits until it finishes. Agent events around either
+acknowledgement remain on the existing ordered stream.
+
 ## Consequences and follow-up slices
 
 The application gains a reproducible runtime with modest on-demand transfer,
