@@ -14,9 +14,12 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use muniment_core::auth::{self, AuthError, AuthStatus, OidcConfig, TokenStore};
+use muniment_core::auth::{
+    self, AuthStatus, BrowserOpenError, OidcConfig, TokenStore, UreqAuthorizationTransport,
+    UreqRegistrationTransport, UreqTokenTransport,
+};
 
-use keyring_store::KeyringTokenStore;
+use keyring_store::{KeyringNativeCredentialStore, KeyringTokenStore};
 
 /// Default OIDC issuer: the muniment-cloud control plane.
 const DEFAULT_ISSUER: &str = "https://api.muniment.ai";
@@ -30,6 +33,12 @@ const SCOPES: &str = "openid profile email offline_access";
 const SIGN_IN_TIMEOUT: Duration = Duration::from_secs(300);
 /// Renew shortly before expiry so callers do not receive a nearly-dead token.
 const REFRESH_SKEW: Duration = Duration::from_secs(60);
+
+fn api_base_url() -> String {
+    std::env::var("MUNIMENT_API_BASE_URL")
+        .or_else(|_| std::env::var("MUNIMENT_ISSUER"))
+        .unwrap_or_else(|_| DEFAULT_ISSUER.into())
+}
 
 /// The one place issuer and client_id are decided. Env overrides exist for
 /// development against a non-default control plane (`MUNIMENT_ISSUER`,
@@ -45,6 +54,7 @@ fn oidc_config() -> OidcConfig {
 /// Managed by Tauri; shared across the `auth_*` commands.
 pub struct AuthState {
     store: Arc<dyn TokenStore>,
+    native_store: Arc<KeyringNativeCredentialStore>,
     sign_in_running: Arc<AtomicBool>,
 }
 
@@ -69,6 +79,7 @@ impl AuthState {
     pub fn new() -> Self {
         AuthState {
             store: Arc::new(KeyringTokenStore::new()),
+            native_store: Arc::new(KeyringNativeCredentialStore::new()),
             sign_in_running: Arc::new(AtomicBool::new(false)),
         }
     }
@@ -78,26 +89,56 @@ impl AuthState {
 /// status. Concurrent invocations are rejected while one is in flight.
 #[tauri::command]
 pub async fn auth_sign_in(state: tauri::State<'_, AuthState>) -> Result<AuthStatus, String> {
-    if state.sign_in_running.swap(true, Ordering::SeqCst) {
-        return Err("a sign-in is already in progress".into());
-    }
-    let store = state.store.clone();
-    let running = state.sign_in_running.clone();
+    let permit = SignInPermit::acquire(state.sign_in_running.clone())
+        .ok_or_else(|| "a sign-in is already in progress".to_string())?;
+    let store = state.native_store.clone();
     let outcome = tauri::async_runtime::spawn_blocking(move || {
-        let result = sign_in_blocking(store.as_ref());
-        running.store(false, Ordering::SeqCst);
-        result
+        let _permit = permit;
+        sign_in_blocking(store.as_ref())
     })
     .await
     .map_err(|e| format!("sign-in task failed: {e}"))?;
     outcome.map_err(|e| e.to_string())
 }
 
-fn sign_in_blocking(store: &dyn TokenStore) -> Result<AuthStatus, AuthError> {
-    let cfg = oidc_config();
-    let tokens = auth::run_sign_in(&cfg, open_in_browser, SIGN_IN_TIMEOUT)?;
-    store.save(&tokens)?;
-    auth::status(store)
+struct SignInPermit(Arc<AtomicBool>);
+
+impl SignInPermit {
+    fn acquire(running: Arc<AtomicBool>) -> Option<Self> {
+        running
+            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+            .ok()
+            .map(|_| Self(running))
+    }
+}
+
+impl Drop for SignInPermit {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::SeqCst);
+    }
+}
+
+fn sign_in_blocking(
+    store: &KeyringNativeCredentialStore,
+) -> Result<AuthStatus, auth::NativeSignInError> {
+    let network_timeout = Duration::from_secs(30);
+    auth::run_native_sign_in(
+        store,
+        &UreqRegistrationTransport::new(network_timeout),
+        &UreqAuthorizationTransport::new(network_timeout),
+        &UreqTokenTransport::new(network_timeout),
+        &|url: &str| spawn_browser(url).map_err(|_| BrowserOpenError),
+        &api_base_url(),
+        &unix_time,
+        SIGN_IN_TIMEOUT,
+    )
+}
+
+fn unix_time() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs())
+        .unwrap_or(0)
 }
 
 /// Signed-in subject/expiry from the stored tokens; no network.
@@ -140,12 +181,6 @@ pub async fn auth_sign_out(state: tauri::State<'_, AuthState>) -> Result<AuthSta
     .map_err(|e| e.to_string())
 }
 
-/// Hand the authorization URL to the default browser — RFC 8252 §7.2 wants
-/// the system browser, not an embedded webview.
-fn open_in_browser(url: &str) -> Result<(), AuthError> {
-    spawn_browser(url).map_err(|e| AuthError::Config(format!("cannot open system browser: {e}")))
-}
-
 #[cfg(target_os = "macos")]
 fn spawn_browser(url: &str) -> std::io::Result<()> {
     Command::new("open").arg(url).spawn().map(drop)
@@ -167,4 +202,18 @@ fn spawn_browser(url: &str) -> std::io::Result<()> {
 #[cfg(all(unix, not(target_os = "macos")))]
 fn spawn_browser(url: &str) -> std::io::Result<()> {
     Command::new("xdg-open").arg(url).spawn().map(drop)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn concurrent_sign_in_is_rejected_and_guard_releases_on_drop() {
+        let running = Arc::new(AtomicBool::new(false));
+        let first = SignInPermit::acquire(running.clone()).unwrap();
+        assert!(SignInPermit::acquire(running.clone()).is_none());
+        drop(first);
+        assert!(SignInPermit::acquire(running).is_some());
+    }
 }
