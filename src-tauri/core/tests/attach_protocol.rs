@@ -63,7 +63,7 @@ fn exact_golden_frames_decode_and_reencode_without_drift() {
             encode_frame(&decode_event(&frame).unwrap()).unwrap()
         };
         // Unknown optional envelope fields are deliberately discarded by serde.
-        if name != "unknown_optional" {
+        if name != "unknown_optional" && name != "event.run.event.optional" {
             assert_eq!(encoded, frame, "golden wire drift for {name}");
         }
     }
@@ -165,6 +165,27 @@ fn every_event_schema_and_unknown_event_compatibility() {
     assert!(decode_event(&framed(unknown_cancel)).is_err());
     let loose_projection = json!({"protocol":PROTOCOL,"subscription_id":ID,"event":"run.event","run_id":ID,"run_seq":1,"body":{"journal_event":"message.submitted","payload":{"secret":"input"}}});
     assert!(decode_event(&framed(loose_projection)).is_err());
+
+    let extended_projection = json!({
+        "protocol": PROTOCOL,
+        "subscription_id": ID,
+        "event": "run.event",
+        "run_id": ID,
+        "run_seq": 1,
+        "body": {
+            "journal_event": "message.submitted",
+            "payload": {"text": "hello", "future_payload_field": true},
+            "future_body_field": true
+        }
+    });
+    let decoded = decode_event(&framed(extended_projection)).unwrap();
+    assert!(matches!(
+        decoded.body,
+        EventBody::RunEvent(RunEventBody {
+            payload: RunEventPayload::Text(TextProjection { ref text }),
+            ..
+        }) if text == "hello"
+    ));
 }
 
 #[test]

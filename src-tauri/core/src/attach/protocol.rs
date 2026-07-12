@@ -559,31 +559,25 @@ pub enum JournalEvent {
     RunNeedsAttention,
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct EmptyProjection {}
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct TextProjection {
     pub text: String,
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct GateProjection {
     pub gate_id: Id,
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct PermissionProjection {
     pub gate_id: Id,
     pub decision: PermissionDecision,
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct EffectProjection {
     pub effect_id: Id,
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct ReasonProjection {
     pub reason: String,
 }
