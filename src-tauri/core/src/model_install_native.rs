@@ -78,6 +78,7 @@ impl InstallLock for NativeInstallLock {
             .read(true)
             .write(true)
             .create(true)
+            .truncate(false)
             .open(&self.path)
             .map_err(|_| InstallLockError::Failed)?;
         match file.try_lock_exclusive() {
@@ -189,6 +190,7 @@ impl GemmaLifecycleBoundary for NativeGemmaLifecycleBoundary {
             .read(true)
             .write(true)
             .create(true)
+            .truncate(false)
             .open(path)
             .map_err(|_| GemmaPersistenceError::Failed)?;
         file.lock_exclusive()
