@@ -26,9 +26,11 @@ returns 404 on the control plane).
    unexpired native session with a fresh installation proof and atomically
    persists the rotated access token, refresh token, expiries, and device
    challenge.
-6. **Follow-up:** `GET /v1/auth/native/session` inspects the authoritative
-   session and consumes its entitlement snapshot; native revocation/device
-   management follow the corresponding `/v1/auth/native/*` endpoints.
+6. **Implemented in pure core:** `GET /v1/auth/native/session` loads the
+   stored native access credential, inspects the authoritative session, and
+   strictly validates its identity, desktop role, device binding, and signed
+   entitlement snapshot. Native revocation/device management follow the
+   corresponding `/v1/auth/native/*` endpoints.
 
 On first registration the raw private key, device id, registration token,
 challenge, and absolute registration expiry are serialized as one record in
@@ -183,7 +185,6 @@ build); verify it manually:
 
 ## Follow-ups (out of scope here)
 
-- Authoritative native session inspection.
 - Native Tauri command wiring.
 - Entitlement snapshot consumption.
 - Migration or removal of credentials created by the existing generic-OIDC flow.
