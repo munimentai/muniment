@@ -1,8 +1,9 @@
 # Desktop authentication
 
 The production Muniment handshake is installation-bound native auth. The Rust
-core currently implements registration, coherent keychain persistence, and
-the installation-proof authorization request. The older generic OIDC flow remains as tested groundwork, but it
+core implements registration, browser authorization, token exchange, refresh,
+session inspection, and coherent keychain persistence. The Tauri `auth_sign_in`
+command composes the live registration, browser, and exchange path. The older generic OIDC flow remains as tested groundwork, but it
 is not the live production handshake (`/.well-known/openid-configuration`
 returns 404 on the control plane).
 
@@ -16,10 +17,10 @@ returns 404 on the control plane).
 2. **Implemented:** `POST /v1/auth/native/authorize` constructs and signs the
    canonical installation proof, validates the opaque HTTPS continuation, and
    persists the rotated device challenge.
-3. **Implemented in pure core:** bind an ephemeral `127.0.0.1` callback,
+3. **Implemented and wired through Tauri:** bind an ephemeral `127.0.0.1` callback,
    launch the validated opaque continuation in the system browser, validate
    callback state, and retain the authorization code with its PKCE verifier.
-4. **Implemented in pure core:** `POST /v1/auth/native/token` exchanges the
+4. **Implemented and wired through Tauri:** `POST /v1/auth/native/token` exchanges the
    code with its PKCE, redirect, device, and signed installation-proof context,
    then atomically persists the token set and newly rotated device challenge.
 5. **Implemented in pure core:** `POST /v1/auth/native/token` refreshes an
@@ -41,10 +42,26 @@ value is incorporated into an installation-only coherent record and removed
 only after that record is successfully published; failed cleanup is retried on
 later loads. The unrelated generic `oidc-tokens` value is left untouched because
 it is not a native installation-bound session and does not contain the native
-refresh expiry. An existing record is returned without making a network request.
+refresh expiry. An existing unexpired installation is returned without a
+registration request; a missing, incomplete, or expired installation is
+registered before authorization.
 A failed keychain write publishes no partial installation locally.
 Secret-bearing values use redacted `Debug` implementations and do not cross a
 Tauri command boundary.
+
+## Tauri native sign-in
+
+`auth_sign_in` runs keychain, network, loopback-listener, browser-launch,
+clock, and random-proof work on a blocking worker. It reuses or registers the
+installation, completes external-browser authorization, exchanges the code,
+and atomically saves the coherent native credential record. Concurrent attempts
+are rejected until the worker exits, including failure paths. Only the existing
+secret-free `AuthStatus` shape is returned to the webview.
+
+The native API base defaults to `https://api.muniment.ai` and may be overridden
+for loopback development with `MUNIMENT_API_BASE_URL`. `MUNIMENT_ISSUER` remains
+the legacy OIDC configuration and is accepted as a native fallback during the
+transition.
 
 ## Legacy generic OIDC groundwork
 
@@ -93,6 +110,7 @@ overrides for development.
 
 | Setting   | Default                                    | Override env        |
 |-----------|--------------------------------------------|---------------------|
+| Native API base | `https://api.muniment.ai`             | `MUNIMENT_API_BASE_URL` |
 | Issuer    | `https://api.muniment.ai`                  | `MUNIMENT_ISSUER`   |
 | Client id | `muniment-desktop`                         | `MUNIMENT_CLIENT_ID`|
 | Scopes    | `openid profile email offline_access`      | —                   |
@@ -120,9 +138,9 @@ the desktop app as:
   harness-spec §3.1).
 - **Client id**: `muniment-desktop`.
 
-The cloud registration and native-app PKCE support are live. The client flow
-is also verified against a mock IdP in tests (below); wiring and exercising
-the real handshake is the next client slice.
+The cloud registration and native-app PKCE support are live. The generic flow
+remains verified against a mock IdP, while production sign-in uses the native
+sequence above.
 
 ## Token storage
 
@@ -147,7 +165,7 @@ the webview.
 
 | Command         | Returns                | Notes                             |
 |-----------------|------------------------|-----------------------------------|
-| `auth_sign_in`  | `AuthStatus` or error  | Runs the full browser flow; 5-min timeout; concurrent calls rejected |
+| `auth_sign_in`  | `AuthStatus` or error  | Runs native registration/browser/exchange; 5-min timeout; concurrent calls rejected |
 | `auth_status`   | `AuthStatus`           | Local only, no network            |
 | `auth_ensure_fresh` | `AuthStatus` or error | Refreshes at expiry or within 60 seconds |
 | `auth_sign_out` | `AuthStatus`           | Best-effort revocation + clear    |
@@ -175,9 +193,9 @@ build); verify it manually:
 
 ## Manual verification (`tauri dev`)
 
-1. Point the app at the live control plane (or override both values for a
-   local OIDC provider):
-   `MUNIMENT_ISSUER=https://api.muniment.ai MUNIMENT_CLIENT_ID=muniment-desktop npm run tauri dev`
+1. Point the app at the live control plane (or override the API base for a
+   loopback native-auth service):
+   `MUNIMENT_API_BASE_URL=https://api.muniment.ai npm run tauri dev`
 2. Click **sign in** — the system browser opens the IdP; complete the login.
 3. The browser tab shows "Signed in — return to muniment"; the app's status
    line shows `signed in as <subject>`.
@@ -191,7 +209,8 @@ build); verify it manually:
 
 ## Follow-ups (out of scope here)
 
-- Native Tauri command wiring.
 - Entitlement snapshot consumption.
+- Replace the legacy generic `auth_status`, refresh, and sign-out paths with
+  native session inspection, native refresh, and native revocation.
 - Migration or removal of credentials created by the existing generic-OIDC flow.
 - Signed-in UI.
