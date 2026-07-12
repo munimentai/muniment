@@ -13,7 +13,6 @@ const USER: &str = "oidc-tokens";
 const NATIVE_KEYS: NativeCredentialKeys = NativeCredentialKeys {
     record: "native-credentials",
     legacy_installation: "native-installation",
-    legacy_session: USER,
 };
 
 struct PlatformKeychain;

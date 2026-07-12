@@ -19,7 +19,6 @@ pub trait NativeCredentialBackend: Send + Sync {
 pub struct NativeCredentialKeys {
     pub record: &'static str,
     pub legacy_installation: &'static str,
-    pub legacy_session: &'static str,
 }
 
 pub struct CoherentNativeCredentialStore<B> {
@@ -69,29 +68,16 @@ impl<B: NativeCredentialBackend> CoherentNativeCredentialStore<B> {
         };
         let installation: InstallationRecord = serde_json::from_str(&installation_json)
             .map_err(|_| "stored installation is unreadable".to_owned())?;
-        let session = self
-            .backend
-            .get(self.keys.legacy_session)?
-            .map(|json| {
-                let tokens: TokenSet = serde_json::from_str(&json)
-                    .map_err(|_| "stored session is unreadable".to_owned())?;
-                let refresh_expires_at = tokens.expires_at.unwrap_or(0);
-                Ok::<NativeCredentialSession, String>(NativeCredentialSession {
-                    tokens,
-                    refresh_expires_at,
-                })
-            })
-            .transpose()?;
         let record = NativeCredentialRecord {
             version: RECORD_VERSION,
             installation,
-            session,
+            session: None,
         };
 
-        // Publish the coherent value before removing either legacy value.
+        // Publish the coherent value before removing the legacy installation.
+        // The generic OIDC token entry is deliberately unrelated to this record.
         self.save_record(&record)?;
         let _ = self.backend.delete(self.keys.legacy_installation);
-        let _ = self.backend.delete(self.keys.legacy_session);
         Ok(Some(record))
     }
 }
@@ -159,8 +145,8 @@ mod tests {
     const KEYS: NativeCredentialKeys = NativeCredentialKeys {
         record: "native-credentials",
         legacy_installation: "native-installation",
-        legacy_session: "oidc-tokens",
     };
+    const OIDC_KEY: &str = "oidc-tokens";
 
     #[derive(Clone, Default)]
     struct MemoryBackend {
@@ -170,17 +156,17 @@ mod tests {
     }
 
     impl MemoryBackend {
-        fn with_split(installation: &InstallationRecord, tokens: &TokenSet) -> Self {
+        fn with_legacy_installation_and_oidc(
+            installation: &InstallationRecord,
+            tokens: &TokenSet,
+        ) -> Self {
             Self {
                 values: Arc::new(Mutex::new(HashMap::from([
                     (
                         KEYS.legacy_installation.into(),
                         serde_json::to_string(installation).unwrap(),
                     ),
-                    (
-                        KEYS.legacy_session.into(),
-                        serde_json::to_string(tokens).unwrap(),
-                    ),
+                    (OIDC_KEY.into(), serde_json::to_string(tokens).unwrap()),
                 ]))),
                 ..Self::default()
             }
@@ -246,29 +232,35 @@ mod tests {
     }
 
     #[test]
-    fn split_values_migrate_after_coherent_publish() {
-        let backend = MemoryBackend::with_split(&installation("legacy-challenge"), &tokens());
+    fn legacy_installation_migrates_without_treating_oidc_as_native_session() {
+        let backend = MemoryBackend::with_legacy_installation_and_oidc(
+            &installation("legacy-challenge"),
+            &tokens(),
+        );
         let store = CoherentNativeCredentialStore::new(backend.clone(), KEYS);
-        let loaded = store.load_credentials().unwrap().unwrap();
+        let loaded = store.load_installation().unwrap().unwrap();
 
-        assert_eq!(loaded.installation.device_challenge, "legacy-challenge");
-        assert_eq!(loaded.refresh_expires_at, 2_000);
+        assert_eq!(loaded.device_challenge, "legacy-challenge");
+        assert!(store.load_credentials().unwrap().is_none());
         let values = backend.values.lock().unwrap();
         assert!(values.contains_key(KEYS.record));
         assert!(!values.contains_key(KEYS.legacy_installation));
-        assert!(!values.contains_key(KEYS.legacy_session));
+        assert!(values.contains_key(OIDC_KEY));
     }
 
     #[test]
-    fn failed_publish_keeps_both_split_values() {
-        let mut backend = MemoryBackend::with_split(&installation("legacy-challenge"), &tokens());
+    fn failed_publish_keeps_legacy_installation_and_oidc_values() {
+        let mut backend = MemoryBackend::with_legacy_installation_and_oidc(
+            &installation("legacy-challenge"),
+            &tokens(),
+        );
         backend.fail_writes = true;
         let store = CoherentNativeCredentialStore::new(backend.clone(), KEYS);
 
         assert!(store.load_credentials().is_err());
         let values = backend.values.lock().unwrap();
         assert!(values.contains_key(KEYS.legacy_installation));
-        assert!(values.contains_key(KEYS.legacy_session));
+        assert!(values.contains_key(OIDC_KEY));
         assert!(!values.contains_key(KEYS.record));
     }
 }
