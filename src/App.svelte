@@ -1,9 +1,10 @@
 <script>
-  import { onMount } from 'svelte'
+  import { onMount, tick } from 'svelte'
 
   import { bootState, errorState, statusState, waitingState } from './lib/auth-state.js'
   import { ringPath } from './lib/mark.js'
   import { applyBufferedChatEvents, applyChatEvent, composerAction, receiptParts } from './lib/chat-state.js'
+  import { scrollFollowState } from './lib/scroll-follow.js'
 
   const markD = ringPath()
   const version = __APP_VERSION__
@@ -18,6 +19,47 @@
   let historyError = $state('')
   let buffered = new Map()
   let unlisten
+  let thread = $state()
+  let pinned = $state(true)
+  let hasContentBelow = $state(false)
+  let lastScrollTop = 0
+
+  function scrollToLatest() {
+    if (!thread) return
+    pinned = true
+    const behavior = window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth'
+    thread.scrollTo({ top: thread.scrollHeight, behavior })
+    lastScrollTop = thread.scrollHeight - thread.clientHeight
+    hasContentBelow = false
+  }
+
+  function followNewContent() {
+    if (!pinned) return
+    tick().then(() => {
+      if (!pinned || !thread) return
+      thread.scrollTo({ top: thread.scrollHeight, behavior: 'auto' })
+      lastScrollTop = thread.scrollHeight - thread.clientHeight
+      hasContentBelow = false
+    })
+  }
+
+  function handleThreadScroll() {
+    const next = scrollFollowState({
+      pinned,
+      scrollTop: thread.scrollTop,
+      scrollHeight: thread.scrollHeight,
+      clientHeight: thread.clientHeight,
+      lastScrollTop,
+    })
+    pinned = next.pinned
+    lastScrollTop = next.lastScrollTop
+    hasContentBelow = !pinned && thread.scrollHeight - thread.clientHeight - thread.scrollTop > 0
+  }
+
+  $effect(() => {
+    messages
+    followNewContent()
+  })
 
   async function run(action) {
     const command = {
@@ -44,6 +86,8 @@
         ...(entry.prompt ? [{ role: 'user', text: entry.prompt }] : []),
         { role: 'assistant', run: { id: entry.runId, phase: entry.phase, text: entry.text, receipt: entry.receipt ?? null, prompt: entry.prompt ?? '' } },
       ])
+      pinned = true
+      followNewContent()
     } catch (_) {
       historyError = 'Conversation history could not be restored. Try again.'
     }
@@ -71,6 +115,7 @@
     const pending = { id: 'pending', phase: 'thinking', text: '', receipt: null, prompt }
     active = pending
     messages.push({ role: 'assistant', run: pending })
+    followNewContent()
     try {
       const run = await tauri.invoke('chat_submit', { prompt })
       active = { ...pending, id: run.runId }
@@ -103,6 +148,7 @@
     try {
       await tauri.invoke('chat_queue', { runId, delivery, message })
       messages.push({ role: 'user', text: message })
+      followNewContent()
       if (draft.trim() === message) draft = ''
     } catch (err) {
       queueError = typeof err === 'string' ? err : String(err)
@@ -152,7 +198,8 @@
             <button class="quiet sign-out" onclick={() => run('sign-out')}>Sign out</button>
           </div>
         </aside>
-        <div class="thread" aria-live="polite">
+        <div class="thread-shell">
+        <div class="thread" aria-live="polite" bind:this={thread} onscroll={handleThreadScroll}>
           {#if historyError}<p class="history-error" role="alert">{historyError} <button onclick={loadHistory}>Try again</button></p>{/if}
           {#if messages.length === 0}<p class="empty">Ask anything. Your org's routing decides which model answers.</p>{/if}
           {#each messages as message}
@@ -165,6 +212,8 @@
               {#if message.run.phase === 'complete'}{@const parts = receiptParts(message.run.receipt)}{#if parts.length}<button class="provenance" aria-label={parts.join(', ')}><span>{parts[0]}</span>{#if parts.length > 1} · {parts.slice(1).join(' · ')}{/if}</button>{/if}{/if}
             </div>{/if}
           {/each}
+        </div>
+        {#if !pinned && hasContentBelow}<button class="latest" onclick={scrollToLatest}>↓ latest</button>{/if}
         </div>
         <div class="composer">
           <textarea bind:value={draft} onkeydown={keydown} rows="2" placeholder="Ask anything"></textarea>
@@ -296,7 +345,9 @@
   .profile-initial { display: grid; place-items: center; width: 27px; height: 27px; border-radius: 50%; background: var(--faint); }
   .sign-out { margin: 3px 8px 0; padding-left: 0; color: var(--muted); }
   .quiet { background: transparent; border-color: transparent; }
-  .thread { grid-area: thread; width: min(760px, calc(100% - 48px)); margin: 0 auto; padding: 42px 0; overflow-y: auto; }
+  .thread-shell { grid-area: thread; position: relative; min-height: 0; }
+  .thread { width: min(760px, calc(100% - 48px)); height: 100%; margin: 0 auto; padding: 42px 0; overflow-y: auto; }
+  .latest { position: absolute; left: 50%; bottom: 14px; transform: translateX(-50%); border-radius: 6px; background: var(--surface); color: var(--muted); font: var(--text-12) var(--font-mono); box-shadow: 0 1px 3px color-mix(in srgb, var(--ink) 10%, transparent); }
   .empty { color: var(--muted); text-align: center; margin-top: 18vh; }
   .user-message { width: fit-content; max-width: 78%; margin: 0 0 28px auto; padding: 9px 13px; white-space: pre-wrap; background: var(--faint); border-radius: 10px; }
   .response { margin: 0 0 34px; }
