@@ -3,7 +3,7 @@
 
   import { bootState, errorState, statusState, waitingState } from './lib/auth-state.js'
   import { ringPath } from './lib/mark.js'
-  import { applyBufferedChatEvents, applyChatEvent, receiptParts, shouldSend } from './lib/chat-state.js'
+  import { applyBufferedChatEvents, applyChatEvent, composerAction, receiptParts } from './lib/chat-state.js'
 
   const markD = ringPath()
   const version = __APP_VERSION__
@@ -14,6 +14,7 @@
   let messages = $state([])
   let active = $state(null)
   let cancelError = $state('')
+  let queueError = $state('')
   let historyError = $state('')
   let buffered = new Map()
   let unlisten
@@ -94,10 +95,25 @@
     }
   }
 
+  async function queue(delivery) {
+    const message = draft.trim()
+    if (!message || !active || active.id === 'pending') return
+    const runId = active.id
+    queueError = ''
+    try {
+      await tauri.invoke('chat_queue', { runId, delivery, message })
+      messages.push({ role: 'user', text: message })
+      if (draft.trim() === message) draft = ''
+    } catch (err) {
+      queueError = typeof err === 'string' ? err : String(err)
+    }
+  }
+
   function keydown(event) {
-    if (shouldSend(event, draft, Boolean(active))) {
+    const action = composerAction(event, draft, active)
+    if (action) {
       event.preventDefault()
-      send()
+      action === 'submit' ? send() : queue('steer')
     }
   }
 </script>
@@ -151,9 +167,19 @@
           {/each}
         </div>
         <div class="composer">
-          <textarea bind:value={draft} onkeydown={keydown} rows="2" placeholder="Ask anything" disabled={Boolean(active)}></textarea>
+          <textarea bind:value={draft} onkeydown={keydown} rows="2" placeholder="Ask anything"></textarea>
           {#if cancelError}<p class="cancel-error" role="alert">{cancelError}</p>{/if}
-          <div class="composer-row"><span>Routing is automatic. Every reply carries its receipt.</span>{#if active && active.id !== 'pending'}<button onclick={cancel}>Stop</button>{:else if !active}<button disabled={!draft.trim()} onclick={send}>Send</button>{/if}</div>
+          {#if queueError}<p class="cancel-error" role="alert">{queueError}</p>{/if}
+          <div class="composer-row">
+            <span>{active && active.id !== 'pending' ? '⏎ steers this reply · queue as follow-up' : 'Routing is automatic. Every reply carries its receipt.'}</span>
+            <div class="composer-actions">
+              {#if active && active.id !== 'pending'}
+                <button class="quiet follow-up" disabled={!draft.trim()} onclick={() => queue('followUp')}>Queue follow-up</button>
+                <button onclick={cancel}>Stop</button>
+                <button disabled={!draft.trim()} onclick={() => queue('steer')}>Send</button>
+              {:else if !active}<button disabled={!draft.trim()} onclick={send}>Send</button>{/if}
+            </div>
+          </div>
         </div>
       </section>
     {:else if auth.name === 'error'}
@@ -288,6 +314,8 @@
   .composer:focus-within { border-color: var(--muted); }
   textarea { width: 100%; resize: none; border: 0; outline: 0; background: transparent; color: var(--ink); font: inherit; }
   .composer-row { display: flex; justify-content: space-between; align-items: center; color: var(--muted); font-size: 11px; }
+  .composer-actions { display: flex; align-items: center; gap: 6px; }
+  .follow-up { color: var(--muted); font-family: var(--font-mono); }
   @keyframes blink { 50% { opacity: 0; } }
   @keyframes breathe { 50% { opacity: .45; } }
   @media (prefers-reduced-motion: reduce) { .caret, .thinking path { animation: none; } }
