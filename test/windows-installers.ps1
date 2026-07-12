@@ -10,7 +10,18 @@ if ($nsis.Count -ne 1 -or $machineMsi.Count -ne 1 -or -not (Test-Path $upgradeBa
 
 function Get-MsiProperty($Path, $Name) {
   $installer = New-Object -ComObject WindowsInstaller.Installer
-  $database = $installer.GetType().InvokeMember("OpenDatabase", "InvokeMethod", $null, $installer, @($Path, 0))
+  # Windows Installer exposes OpenDatabase through IDispatch. Be explicit about
+  # the argument types: PowerShell's reflection binder otherwise passes the
+  # persist mode as a generic PSObject on Windows PowerShell 5.1, which COM
+  # rejects with DISP_E_TYPEMISMATCH on the desktop-CI image.
+  [object[]]$openArguments = @([string](Resolve-Path $Path).Path, [int]0)
+  $database = $installer.GetType().InvokeMember(
+    "OpenDatabase",
+    [System.Reflection.BindingFlags]::InvokeMethod,
+    $null,
+    $installer,
+    $openArguments
+  )
   $view = $database.OpenView("SELECT ``Value`` FROM ``Property`` WHERE ``Property``='$Name'")
   $view.Execute()
   return $view.Fetch().StringData(1)
