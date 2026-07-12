@@ -782,37 +782,39 @@ mod tests {
         let directory = std::env::temp_dir().join(format!("muniment-chat-{}", Uuid::now_v7()));
         std::fs::create_dir_all(&directory).unwrap();
         let path = directory.join("runs.sqlite3");
+        let interrupted = Uuid::now_v7().to_string();
+        let completed = Uuid::now_v7().to_string();
 
         {
             let mut journal = RunJournal::open(&path).unwrap();
-            append_test_event(&mut journal, "interrupted", 1, "run.started", json!({}));
+            append_test_event(&mut journal, &interrupted, 1, "run.started", json!({}));
             append_test_event(
                 &mut journal,
-                "interrupted",
+                &interrupted,
                 2,
                 "model.stream.delta",
                 json!({"text": "partial"}),
             );
-            append_test_event(&mut journal, "completed", 1, "run.started", json!({}));
-            append_test_event(&mut journal, "completed", 2, "run.completed", json!({}));
+            append_test_event(&mut journal, &completed, 1, "run.started", json!({}));
+            append_test_event(&mut journal, &completed, 2, "run.completed", json!({}));
 
             reconcile_interrupted_runs(&mut journal);
 
-            let interrupted = journal.events("interrupted").unwrap();
-            assert_eq!(interrupted.len(), 3);
-            assert_eq!(interrupted[2].event_type, "run.needs_attention");
+            let interrupted_events = journal.events(&interrupted).unwrap();
+            assert_eq!(interrupted_events.len(), 3);
+            assert_eq!(interrupted_events[2].event_type, "run.needs_attention");
             assert!(matches!(
-                reduce(&interrupted).unwrap().status,
+                reduce(&interrupted_events).unwrap().status,
                 RunStatus::NeedsAttention(_)
             ));
-            assert_eq!(journal.events("completed").unwrap().len(), 2);
+            assert_eq!(journal.events(&completed).unwrap().len(), 2);
         }
 
         {
             let mut reopened = RunJournal::open(&path).unwrap();
             reconcile_interrupted_runs(&mut reopened);
-            assert_eq!(reopened.events("interrupted").unwrap().len(), 3);
-            assert_eq!(reopened.events("completed").unwrap().len(), 2);
+            assert_eq!(reopened.events(&interrupted).unwrap().len(), 3);
+            assert_eq!(reopened.events(&completed).unwrap().len(), 2);
         }
 
         std::fs::remove_dir_all(directory).unwrap();
