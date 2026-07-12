@@ -22,7 +22,11 @@ returns 404 on the control plane).
 4. **Implemented in pure core:** `POST /v1/auth/native/token` exchanges the
    code with its PKCE, redirect, device, and signed installation-proof context,
    then atomically persists the token set and newly rotated device challenge.
-5. **Follow-up:** `GET /v1/auth/native/session` inspects the authoritative
+5. **Implemented in pure core:** `POST /v1/auth/native/token` refreshes an
+   unexpired native session with a fresh installation proof and atomically
+   persists the rotated access token, refresh token, expiries, and device
+   challenge.
+6. **Follow-up:** `GET /v1/auth/native/session` inspects the authoritative
    session and consumes its entitlement snapshot; native revocation/device
    management follow the corresponding `/v1/auth/native/*` endpoints.
 
@@ -179,7 +183,6 @@ build); verify it manually:
 
 ## Follow-ups (out of scope here)
 
-- Native refresh and credential rotation.
 - Authoritative native session inspection.
 - Native Tauri command wiring.
 - Entitlement snapshot consumption.
