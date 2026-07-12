@@ -51,4 +51,4 @@ Phases mirror harness-spec §9. Muniment-cloud Phase 1 native auth and the cloud
 
 ## Standing gates
 - Code PRs: structure smoke, frontend/Rust tests, then Linux/Windows/macOS desktop builds. Markdown-only PRs gate on structure smoke alone; pushes to `main` run smoke only.
-- Build desktop targets only. Mobile scaffolding remains owner-gated by §12.5's repo-strategy ADR.
+- Build desktop targets only. Mobile scaffolding remains owner-gated by §12.5's repo-strategy ADR. CLI/editor E0 is decided by [ADR 0009](docs/decisions/0009-companion-attach-protocol.md); the first unblocked implementation slice is pure-core protocol types/codecs, negotiation, authorization state, cursor/idempotency semantics, and contract tests. No listener or companion UI is complete.
