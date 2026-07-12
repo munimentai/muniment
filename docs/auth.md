@@ -36,10 +36,13 @@ The installation and native session are serialized as one versioned record in
 the platform keychain (`service: ai.muniment.desktop`, `user:
 native-credentials`). Registration writes the record without a session; token
 exchange and refresh replace that single value with the installation, rotated
-challenge, token set, and expiries together. Existing `native-installation`
-and `oidc-tokens` split values are migrated only after the coherent value is
-successfully published. An existing record is returned without making a network
-request. A failed keychain write publishes no partial installation locally.
+challenge, token set, and expiries together. An existing `native-installation`
+value is incorporated into an installation-only coherent record and removed
+only after that record is successfully published; failed cleanup is retried on
+later loads. The unrelated generic `oidc-tokens` value is left untouched because
+it is not a native installation-bound session and does not contain the native
+refresh expiry. An existing record is returned without making a network request.
+A failed keychain write publishes no partial installation locally.
 Secret-bearing values use redacted `Debug` implementations and do not cross a
 Tauri command boundary.
 

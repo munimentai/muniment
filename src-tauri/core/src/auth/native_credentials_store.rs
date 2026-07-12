@@ -57,6 +57,10 @@ impl<B: NativeCredentialBackend> CoherentNativeCredentialStore<B> {
             if record.version != RECORD_VERSION {
                 return Err("stored native credential record has an unsupported version".into());
             }
+            // Cleanup is best-effort so a transient keychain deletion failure
+            // never makes the already-published coherent record unavailable.
+            // Retrying on every load eventually removes the legacy value.
+            let _ = self.backend.delete(self.keys.legacy_installation);
             return Ok(Some(record));
         }
         self.migrate_split_record()
@@ -153,6 +157,7 @@ mod tests {
         values: Arc<Mutex<HashMap<String, String>>>,
         writes: Arc<Mutex<Vec<String>>>,
         fail_writes: bool,
+        failed_deletes_remaining: Arc<Mutex<usize>>,
     }
 
     impl MemoryBackend {
@@ -188,6 +193,11 @@ mod tests {
         }
 
         fn delete(&self, key: &str) -> Result<(), String> {
+            let mut failures = self.failed_deletes_remaining.lock().unwrap();
+            if *failures > 0 {
+                *failures -= 1;
+                return Err("delete failed".into());
+            }
             self.values.lock().unwrap().remove(key);
             Ok(())
         }
@@ -262,5 +272,30 @@ mod tests {
         assert!(values.contains_key(KEYS.legacy_installation));
         assert!(values.contains_key(OIDC_KEY));
         assert!(!values.contains_key(KEYS.record));
+    }
+
+    #[test]
+    fn legacy_cleanup_retries_after_a_delete_failure() {
+        let backend = MemoryBackend::with_legacy_installation_and_oidc(
+            &installation("legacy-challenge"),
+            &tokens(),
+        );
+        *backend.failed_deletes_remaining.lock().unwrap() = 1;
+        let store = CoherentNativeCredentialStore::new(backend.clone(), KEYS);
+
+        let first = store.load_installation().unwrap().unwrap();
+        assert_eq!(first.device_challenge, "legacy-challenge");
+        assert!(backend
+            .values
+            .lock()
+            .unwrap()
+            .contains_key(KEYS.legacy_installation));
+
+        let second = store.load_installation().unwrap().unwrap();
+        assert_eq!(second.device_challenge, "legacy-challenge");
+        let values = backend.values.lock().unwrap();
+        assert!(values.contains_key(KEYS.record));
+        assert!(!values.contains_key(KEYS.legacy_installation));
+        assert!(values.contains_key(OIDC_KEY));
     }
 }
