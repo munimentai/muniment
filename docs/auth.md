@@ -23,11 +23,11 @@ returns 404 on the control plane).
 4. **Implemented and wired through Tauri:** `POST /v1/auth/native/token` exchanges the
    code with its PKCE, redirect, device, and signed installation-proof context,
    then atomically persists the token set and newly rotated device challenge.
-5. **Implemented in pure core:** `POST /v1/auth/native/token` refreshes an
+5. **Implemented and wired through Tauri:** `POST /v1/auth/native/token` refreshes an
    unexpired native session with a fresh installation proof and atomically
    persists the rotated access token, refresh token, expiries, and device
    challenge.
-6. **Implemented in pure core:** `GET /v1/auth/native/session` loads the
+6. **Implemented and wired through Tauri:** `GET /v1/auth/native/session` loads the
    stored native access credential, inspects the authoritative session, and
    strictly validates its identity, desktop role, device binding, and signed
    entitlement snapshot. Native revocation/device management follow the
@@ -57,6 +57,14 @@ installation, completes external-browser authorization, exchanges the code,
 and atomically saves the coherent native credential record. Concurrent attempts
 are rejected until the worker exits, including failure paths. Only the existing
 secret-free `AuthStatus` shape is returned to the webview.
+
+`auth_status` reads subject and expiry only from that coherent native record
+and performs no network request. `auth_ensure_fresh` and the pre-chat
+credential path refresh at the existing 60-second skew, persist the complete
+rotation, and validate the authoritative native session before reporting a
+signed-in state or using its access token. Missing or refresh-expired native
+credentials report signed out; refresh, transport, and validation failures
+preserve the last coherent record and surface only redacted errors.
 
 The native API base defaults to `https://api.muniment.ai` and may be overridden
 for loopback development with `MUNIMENT_API_BASE_URL`. `MUNIMENT_ISSUER` remains
@@ -88,7 +96,8 @@ discovery. Sequence, as implemented in `src-tauri/core/src/auth/`:
    `code_verifier`. Tokens are persisted via the `TokenStore` and the
    command returns a status payload (signed-in flag, subject, expiry).
 
-`auth_status` answers from the stored tokens only — no network.
+The legacy generic status helper answers from its OIDC token store only; the
+production `auth_status` command uses the native record described above.
 `auth_sign_out` clears the stored tokens, with best-effort RFC 7009
 revocation first when discovery advertises a `revocation_endpoint`.
 
@@ -210,7 +219,6 @@ build); verify it manually:
 ## Follow-ups (out of scope here)
 
 - Entitlement snapshot consumption.
-- Replace the legacy generic `auth_status`, refresh, and sign-out paths with
-  native session inspection, native refresh, and native revocation.
+- Native sign-out and server-side revocation/device management.
 - Migration or removal of credentials created by the existing generic-OIDC flow.
 - Signed-in UI.

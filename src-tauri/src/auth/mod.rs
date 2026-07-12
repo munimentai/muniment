@@ -16,7 +16,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use muniment_core::auth::{
     self, AuthStatus, BrowserOpenError, OidcConfig, TokenStore, UreqAuthorizationTransport,
-    UreqRegistrationTransport, UreqTokenTransport,
+    UreqRegistrationTransport, UreqSessionTransport, UreqTokenTransport,
 };
 
 use keyring_store::{KeyringNativeCredentialStore, KeyringTokenStore};
@@ -59,19 +59,10 @@ pub struct AuthState {
 }
 
 pub(crate) fn fresh_tokens(state: &AuthState) -> Result<muniment_core::auth::TokenSet, String> {
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
-    let status = auth::ensure_fresh(state.store.as_ref(), &oidc_config(), now, REFRESH_SKEW)
-        .map_err(|error| error.to_string())?;
-    if !status.signed_in {
-        return Err("Sign in before sending a message.".into());
-    }
-    state
-        .store
-        .load()
-        .map_err(|error| error.to_string())?
+    let result = ensure_native_session(state.native_store.as_ref())?;
+    result
+        .into_credentials()
+        .map(|credentials| credentials.tokens)
         .ok_or_else(|| "Sign in before sending a message.".into())
 }
 
@@ -144,8 +135,8 @@ fn unix_time() -> u64 {
 /// Signed-in subject/expiry from the stored tokens; no network.
 #[tauri::command]
 pub async fn auth_status(state: tauri::State<'_, AuthState>) -> Result<AuthStatus, String> {
-    let store = state.store.clone();
-    tauri::async_runtime::spawn_blocking(move || auth::status(store.as_ref()))
+    let store = state.native_store.clone();
+    tauri::async_runtime::spawn_blocking(move || auth::native_status(store.as_ref()))
         .await
         .map_err(|e| format!("status task failed: {e}"))?
         .map_err(|e| e.to_string())
@@ -154,17 +145,26 @@ pub async fn auth_status(state: tauri::State<'_, AuthState>) -> Result<AuthStatu
 /// Return session status after renewing expired or nearly-expired tokens.
 #[tauri::command]
 pub async fn auth_ensure_fresh(state: tauri::State<'_, AuthState>) -> Result<AuthStatus, String> {
-    let store = state.store.clone();
-    tauri::async_runtime::spawn_blocking(move || {
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|duration| duration.as_secs())
-            .unwrap_or(0);
-        auth::ensure_fresh(store.as_ref(), &oidc_config(), now, REFRESH_SKEW)
-    })
+    let store = state.native_store.clone();
+    tauri::async_runtime::spawn_blocking(move || ensure_native_session(store.as_ref()))
     .await
     .map_err(|e| format!("session refresh task failed: {e}"))?
-    .map_err(|e| e.to_string())
+    .map(|result| result.status)
+}
+
+fn ensure_native_session(
+    store: &KeyringNativeCredentialStore,
+) -> Result<auth::FreshNativeSession, String> {
+    let timeout = Duration::from_secs(30);
+    auth::ensure_fresh_native_session(
+        store,
+        &UreqTokenTransport::new(timeout),
+        &UreqSessionTransport::new(timeout),
+        &api_base_url(),
+        unix_time(),
+        REFRESH_SKEW,
+    )
+    .map_err(|error| error.to_string())
 }
 
 /// Clear stored tokens; best-effort revocation when discovery advertises a
