@@ -3,7 +3,7 @@
 
   import { bootState, errorState, statusState, waitingState } from './lib/auth-state.js'
   import { ringPath } from './lib/mark.js'
-  import { applyBufferedChatEvents, applyChatEvent, composerAction, receiptParts } from './lib/chat-state.js'
+  import { applyBufferedChatEvents, applyChatEvent, composerAction, receiptParts, receiptRows } from './lib/chat-state.js'
   import { scrollFollowState } from './lib/scroll-follow.js'
 
   const markD = ringPath()
@@ -23,6 +23,13 @@
   let pinned = $state(true)
   let hasContentBelow = $state(false)
   let lastScrollTop = 0
+  let expandedReceipts = $state(new Set())
+
+  function toggleReceipt(runId) {
+    const next = new Set(expandedReceipts)
+    next.has(runId) ? next.delete(runId) : next.add(runId)
+    expandedReceipts = next
+  }
 
   function scrollToLatest() {
     if (!thread) return
@@ -80,6 +87,7 @@
 
   async function loadHistory() {
     historyError = ''
+    expandedReceipts = new Set()
     try {
       const history = await tauri.invoke('chat_history')
       messages = history.flatMap((entry) => [
@@ -210,7 +218,21 @@
               {:else}<p class:streaming={message.run.phase === 'streaming'}>{message.run.text}{#if message.run.phase === 'streaming'}<span class="caret" aria-hidden="true"></span>{/if}</p>{/if}
               {#if message.run.phase === 'failed'}<div class="run-error">Reply failed. <button onclick={() => { draft = message.run.prompt; send() }}>Try again</button></div>{/if}
               {#if message.run.phase === 'interrupted'}<div class="run-error">Reply interrupted. {#if message.run.prompt}<button onclick={() => { draft = message.run.prompt; send() }}>Try again</button>{/if}</div>{/if}
-              {#if message.run.phase === 'complete'}{@const parts = receiptParts(message.run.receipt)}{#if parts.length}<button class="provenance" aria-label={parts.join(', ')}><span>{parts[0]}</span>{#if parts.length > 1} · {parts.slice(1).join(' · ')}{/if}</button>{/if}{/if}
+              {#if message.run.phase === 'complete'}
+                {@const parts = receiptParts(message.run.receipt)}
+                {@const rows = receiptRows(message.run.receipt)}
+                {#if parts.length}
+                  {@const expanded = expandedReceipts.has(message.run.id)}
+                  <button class="provenance" aria-expanded={expanded} aria-label={`${expanded ? 'Collapse' : 'Expand'} receipt: ${parts.join(', ')}`} onclick={() => toggleReceipt(message.run.id)}><span>{parts[0]}</span>{#if parts.length > 1} · {parts.slice(1).join(' · ')}{/if}</button>
+                  {#if expanded}
+                    <dl class="receipt-record">
+                      {#each rows as row}
+                        <div><dt>{row.label}</dt><dd class:route-value={row.route}>{row.value}</dd></div>
+                      {/each}
+                    </dl>
+                  {/if}
+                {/if}
+              {/if}
             </div>{/if}
           {/each}
         </div>
@@ -359,6 +381,10 @@
   .thinking path { fill: none; stroke: var(--signal); stroke-linecap: round; animation: breathe 1.8s ease-in-out infinite; }
   .provenance { display: block; margin-top: 10px; padding: 0; border: 0; background: transparent; color: var(--muted); font: var(--text-12) var(--font-mono); text-align: left; }
   .provenance span { color: var(--signal); }
+  .receipt-record { width: fit-content; min-width: 240px; margin: 8px 0 0; padding: 8px 12px; border: 1px solid var(--border); border-radius: 6px; color: var(--muted); font-size: var(--text-12); }
+  .receipt-record div { display: grid; grid-template-columns: 88px minmax(0, 1fr); gap: 12px; }
+  .receipt-record dd { margin: 0; font-family: var(--font-mono); font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+  .receipt-record .route-value { color: var(--signal); }
   .run-error { color: var(--muted); font: var(--text-12) var(--font-mono); }
   .cancel-error, .history-error { margin: 0 0 8px; color: var(--muted); font: var(--text-12) var(--font-mono); }
   .run-error button { padding: 2px 6px; }
