@@ -20,6 +20,9 @@ Muniment is a **hosted SaaS**: we operate the control plane and gateway as a mul
 - **No serverless/solo mode.** The desktop app requires a control plane connection. Accepted tradeoffs: no offline use, no bottom-up solo-dev adoption funnel. Benefit: policy is always enforced, no provider API keys on laptops, one source of truth.
 - **No hosted MCP servers.** We manage MCP *connections* only. Hosting/governance of remote MCPs is delegated to services like MintMCP.
 - **No multiple UI modes.** One mode. No chat/cowork/code split.
+  (Clarified 2026-07-12 — §13 adds the CLI and editor extension as
+  governed companion windows onto the same single mode; the non-goal
+  stands: no mode switcher, no second mode.)
 - **Mobile is a companion surface, never a peer execution surface.** (Amended 2026-07-10 — was "No mobile client".) A phased mobile companion app is in scope: see §12. Phones never run local models, local MCP servers, or sandboxes; the desktop remains the only local-execution surface.
 - **No promise of laptop-grade sandbox isolation on Windows** (see 6.5).
 
@@ -483,3 +486,56 @@ line is amended accordingly; the hold-to-talk interaction design stands.
 | Mobile CI | iOS builds on the macOS CI template, Android SDK on the Linux template; extend the desktop-ci driver. Before M0 scaffolding. |
 | Push notifications | APNs/FCM relay from control-plane events (workflow complete/failed, shared-thread mention, permission gate pending). Design at M0. |
 | Apple developer account | Owner acquires; TestFlight first, selective version shipping. |
+
+## 13. Companion work surfaces: CLI and editor extension (owner decision 2026-07-12)
+
+Amends §1 the way §12 did for mobile. The non-goal "No multiple UI modes"
+STANDS — these are not modes; they are additional governed windows onto the
+same single mode, in the places work already happens.
+
+### 13.1 What they are (and are not)
+
+The **muniment CLI** (terminal) and the **muniment editor extension**
+(VS Code and license-compatible forks; JetBrains later) are companion
+surfaces over the SAME local runtime the desktop app owns. They attach to
+the desktop app's managed Pi sidecar and run-journal over a local
+IPC/attach protocol; they never spawn a second ungoverned runtime, never
+hold provider keys, and never bypass the virtual-key path. Everything a
+user does in them carries the same entitlements, permission gates,
+receipts, and journal entries as the desktop surface. v1 requires the
+desktop app installed and signed in. The CLI is an interactive human
+surface — headless/scripted agents remain the server-side agent access
+layer's job, never the CLI's.
+
+### 13.2 Enabling primitives
+
+1. **Attach protocol:** local IPC exposing session open/stream/steer,
+   permission-gate answers, and artifact fetch — a thin projection of the
+   Pi RPC + run-journal surfaces the app already maintains (ADR to define
+   transport, local-process authorization, and crash semantics against
+   the journal).
+2. **Shared device session:** the CLI/extension reuse the desktop app's
+   authenticated session (no second PKCE flow per surface).
+3. **Entitlement snapshot reuse:** same signed snapshot, same
+   display-hints-only rule (§4.4).
+
+### 13.3 Phases
+
+- **E0 — attach-protocol ADR.**
+- **E1 — CLI:** threads list/open, chat/run with inline tool stream,
+  permission gates answered in-terminal, receipts printout.
+- **E2 — VS Code extension:** thread view + composer, editor-context
+  attach (send selection/file within workspace scope), permission gates
+  in-editor. Marketplace publishing is a public act — owner-gated like
+  all launch/publicity.
+- Distribution rides the existing channels (brew/winget once signed;
+  marketplace at owner go).
+
+### 13.4 Open items
+
+| Item | Action |
+|---|---|
+| Desktop-app requirement | v1: CLI/extension REQUIRE the desktop app (runtime owner). Standalone CLI runtime = future owner decision. |
+| Fork coverage | Decide which VS Code forks (Cursor/Windsurf) are officially claimed vs expected-to-work. |
+| JetBrains | Later; outside this amendment's build scope. |
+| Marketplace publisher account | Owner acquires alongside launch prep. |
