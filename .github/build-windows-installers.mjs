@@ -1,4 +1,4 @@
-import { copyFile, readdir, rename } from "node:fs/promises";
+import { readdir, rename } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 import { spawnSync } from "node:child_process";
 
@@ -27,7 +27,7 @@ await rename(userMsi, savedUserMsi);
 // release artifact and is the only machine MSI uploaded.
 const upgradeBaseMsi = join(dirname(msiDirectory), ".machine-upgrade-base.msi");
 run("build", "--bundles", "msi", "--config", "src-tauri/tauri.machine.conf.json");
-await copyFile(await soleMsi(), upgradeBaseMsi);
+await rename(await soleMsi(), upgradeBaseMsi);
 run("build", "--bundles", "msi", "--config", "src-tauri/tauri.machine.conf.json");
 const generatedMachineMsi = await soleMsi();
 const machineMsi = generatedMachineMsi.replace(/\.msi$/, "-machine.msi");
