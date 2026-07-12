@@ -8,7 +8,7 @@ if (!token || !repository || !/^[0-9a-f]{40}$/.test(sha) || !platform) {
 
 const specs = {
   linux: [["deb", ".deb"], ["appimage", ".AppImage"]],
-  windows: [["msi", ".msi"], ["nsis", "-setup.exe"]],
+  windows: [["msi", ".msi", "-machine.msi"], ["msi", "-machine.msi"], ["nsis", "-setup.exe"]],
   macos: [["macos", ".app.zip"]],
 };
 if (!specs[platform]) throw new Error(`unsupported platform: ${platform}`);
@@ -28,9 +28,11 @@ const api = async (url, options = {}) => {
 };
 
 const release = await (await api(`https://api.github.com/repos/${repository}/releases/tags/nightly`)).json();
-for (const [directory, suffix] of specs[platform]) {
+for (const [directory, suffix, excludeSuffix] of specs[platform]) {
   const bundleDirectory = join("src-tauri", "target", "release", "bundle", directory);
-  const matches = (await readdir(bundleDirectory)).filter((name) => name.endsWith(suffix));
+  const matches = (await readdir(bundleDirectory)).filter(
+    (name) => name.endsWith(suffix) && (!excludeSuffix || !name.endsWith(excludeSuffix)),
+  );
   if (matches.length !== 1) {
     throw new Error(`expected one ${suffix} in ${bundleDirectory}, found: ${matches.join(", ") || "none"}`);
   }

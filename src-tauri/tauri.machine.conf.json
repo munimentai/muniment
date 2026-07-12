@@ -1,0 +1,12 @@
+{
+  "bundle": {
+    "targets": ["msi"],
+    "windows": {
+      "wix": {
+        "upgradeCode": "c75b4a56-7d8b-5b99-9fc7-61ef0aabe84b",
+        "fragmentPaths": ["./windows/per-machine.wxs"],
+        "componentRefs": ["MunimentMachineRegistration"]
+      }
+    }
+  }
+}
