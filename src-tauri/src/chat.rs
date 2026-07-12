@@ -213,14 +213,15 @@ pub async fn chat_submit(
     if prompt.is_empty() {
         return Err("Enter a message before sending.".into());
     }
-    let active = state
-        .active
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    if active.is_some() {
-        return Err("A reply is already in progress.".into());
+    {
+        let active = state
+            .active
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if active.is_some() {
+            return Err("A reply is already in progress.".into());
+        }
     }
-    drop(active);
 
     let tokens = auth::fresh_tokens_async(&auth_state).await?;
     let run_id = Uuid::now_v7().to_string();
