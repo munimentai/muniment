@@ -1,5 +1,7 @@
-export function shouldSend(event, text, active) {
-  return event.key === 'Enter' && !event.shiftKey && !event.isComposing && text.trim().length > 0 && !active
+export function composerAction(event, text, active) {
+  if (event.key !== 'Enter' || event.shiftKey || event.isComposing || !text.trim()) return null
+  if (!active) return 'submit'
+  return active.id === 'pending' ? null : 'steer'
 }
 
 export function receiptParts(receipt = {}) {

@@ -1,11 +1,18 @@
 import { describe, expect, it } from 'vitest'
-import { applyBufferedChatEvents, applyChatEvent, receiptParts, shouldSend } from './chat-state.js'
+import { applyBufferedChatEvents, applyChatEvent, composerAction, receiptParts } from './chat-state.js'
 
 describe('chat composer and projection', () => {
-  it('sends Enter, retains Shift+Enter, and blocks duplicate submits', () => {
-    expect(shouldSend({ key: 'Enter', shiftKey: false, isComposing: false }, 'hello', false)).toBe(true)
-    expect(shouldSend({ key: 'Enter', shiftKey: true, isComposing: false }, 'hello', false)).toBe(false)
-    expect(shouldSend({ key: 'Enter', shiftKey: false, isComposing: false }, 'hello', true)).toBe(false)
+  it('chooses submit or steer from the active run', () => {
+    const enter = { key: 'Enter', shiftKey: false, isComposing: false }
+    expect(composerAction(enter, 'hello', null)).toBe('submit')
+    expect(composerAction(enter, 'hello', { id: 'run-1' })).toBe('steer')
+    expect(composerAction(enter, 'hello', { id: 'pending' })).toBeNull()
+  })
+
+  it('blocks modified Enter, IME composition, and empty drafts', () => {
+    expect(composerAction({ key: 'Enter', shiftKey: true, isComposing: false }, 'hello', null)).toBeNull()
+    expect(composerAction({ key: 'Enter', shiftKey: false, isComposing: true }, 'hello', null)).toBeNull()
+    expect(composerAction({ key: 'Enter', shiftKey: false, isComposing: false }, '  ', null)).toBeNull()
   })
 
   it('moves thinking to streaming and removes signal on every terminal event', () => {
