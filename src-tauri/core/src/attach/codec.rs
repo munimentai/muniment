@@ -1,3 +1,4 @@
+use super::protocol::{self, ProtocolError};
 use base64::Engine;
 use serde::{de::DeserializeOwned, Serialize};
 use serde_json::Value;
@@ -26,6 +27,7 @@ pub enum CodecError {
     TrailingData,
     LimitExceeded,
     ArtifactChunkTooLarge,
+    Protocol(ProtocolError),
 }
 impl fmt::Display for CodecError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -42,6 +44,7 @@ impl fmt::Display for CodecError {
                 Self::TrailingData => "trailing attach JSON data",
                 Self::LimitExceeded => "attach JSON exceeds structural limits",
                 Self::ArtifactChunkTooLarge => "artifact chunk exceeds decoded limit",
+                Self::Protocol(_) => "invalid attach protocol message",
             }
         )
     }
@@ -65,7 +68,7 @@ pub fn read_frame<R: Read, T: DeserializeOwned>(reader: &mut R) -> Result<T, Cod
 /// Reads and semantically validates a request at the trust boundary.
 pub fn read_request<R: Read>(reader: &mut R) -> Result<super::protocol::Request, CodecError> {
     let request = read_frame(reader)?;
-    super::protocol::validate_request(&request).map_err(|_| CodecError::InvalidJson)?;
+    protocol::validate_request(&request).map_err(CodecError::Protocol)?;
     Ok(request)
 }
 fn read_exact<R: Read>(reader: &mut R, mut out: &mut [u8], prefix: bool) -> Result<(), CodecError> {
@@ -101,9 +104,30 @@ pub fn decode_frame<T: DeserializeOwned>(frame: &[u8]) -> Result<T, CodecError> 
 }
 pub fn decode_request(frame: &[u8]) -> Result<super::protocol::Request, CodecError> {
     let request = decode_frame(frame)?;
-    super::protocol::validate_request(&request).map_err(|_| CodecError::InvalidJson)?;
+    protocol::validate_request(&request).map_err(CodecError::Protocol)?;
     Ok(request)
 }
+macro_rules! validated_decoder {
+    ($name:ident, $ty:ty, $validator:path) => {
+        pub fn $name(frame: &[u8]) -> Result<$ty, CodecError> {
+            let value = decode_frame(frame)?;
+            $validator(&value).map_err(CodecError::Protocol)?;
+            Ok(value)
+        }
+    };
+}
+validated_decoder!(decode_hello, protocol::Hello, protocol::validate_hello);
+validated_decoder!(
+    decode_welcome,
+    protocol::Welcome,
+    protocol::validate_welcome
+);
+validated_decoder!(
+    decode_authorized,
+    protocol::Authorized,
+    protocol::validate_authorized
+);
+validated_decoder!(decode_event, protocol::Event, protocol::validate_event);
 fn decode_json<T: DeserializeOwned>(body: &[u8]) -> Result<T, CodecError> {
     let text = std::str::from_utf8(body).map_err(|_| CodecError::InvalidUtf8)?;
     let mut stream = serde_json::Deserializer::from_str(text).into_iter::<Value>();
@@ -116,7 +140,7 @@ fn decode_json<T: DeserializeOwned>(body: &[u8]) -> Result<T, CodecError> {
     }
     let artifact_chunk = value.get("event").and_then(Value::as_str) == Some("artifact.chunk");
     check_artifact(&value)?;
-    check(&value, 1, &mut 0, artifact_chunk)?;
+    check(&value, 1, &mut 0, artifact_chunk, false)?;
     serde_json::from_value(value).map_err(|_| CodecError::InvalidJson)
 }
 fn check(
@@ -124,6 +148,7 @@ fn check(
     depth: usize,
     count: &mut usize,
     artifact_chunk: bool,
+    artifact_body: bool,
 ) -> Result<(), CodecError> {
     if depth > MAX_JSON_DEPTH {
         return Err(CodecError::LimitExceeded);
@@ -136,7 +161,7 @@ fn check(
                 return Err(CodecError::LimitExceeded);
             }
             for x in v {
-                check(x, depth + 1, count, artifact_chunk)?
+                check(x, depth + 1, count, artifact_chunk, false)?
             }
             Ok(())
         }
@@ -152,8 +177,14 @@ fn check(
                 // Base64 expands a permitted 256 KiB artifact beyond the
                 // ordinary string bound; it has already been decoded and
                 // checked above. No other field gets this exception.
-                if !(artifact_chunk && k == "data") {
-                    check(x, depth + 1, count, artifact_chunk)?
+                if !(artifact_body && k == "data") {
+                    check(
+                        x,
+                        depth + 1,
+                        count,
+                        artifact_chunk,
+                        artifact_chunk && k == "body",
+                    )?
                 }
             }
             Ok(())
@@ -163,21 +194,30 @@ fn check(
 }
 fn check_artifact(v: &Value) -> Result<(), CodecError> {
     if v.get("event").and_then(Value::as_str) == Some("artifact.chunk") {
-        if let Some(data) = v
+        let body = v
             .get("body")
-            .and_then(|b| b.get("data"))
+            .and_then(Value::as_object)
+            .ok_or(CodecError::InvalidJson)?;
+        let data = body
+            .get("data")
             .and_then(Value::as_str)
-        {
-            let estimated = data.len().saturating_mul(3) / 4;
-            if estimated > MAX_ARTIFACT_CHUNK_BYTES + 2 {
-                return Err(CodecError::ArtifactChunkTooLarge);
-            }
-            let decoded = base64::engine::general_purpose::STANDARD
-                .decode(data)
-                .map_err(|_| CodecError::InvalidJson)?;
-            if decoded.len() > MAX_ARTIFACT_CHUNK_BYTES {
-                return Err(CodecError::ArtifactChunkTooLarge);
-            }
+            .ok_or(CodecError::InvalidJson)?;
+        let estimated = data.len().saturating_mul(3) / 4;
+        if estimated > MAX_ARTIFACT_CHUNK_BYTES + 2 {
+            return Err(CodecError::ArtifactChunkTooLarge);
+        }
+        let decoded = base64::engine::general_purpose::STANDARD
+            .decode(data)
+            .map_err(|_| CodecError::InvalidJson)?;
+        if decoded.len() > MAX_ARTIFACT_CHUNK_BYTES {
+            return Err(CodecError::ArtifactChunkTooLarge);
+        }
+        let declared = body
+            .get("byte_length")
+            .and_then(Value::as_u64)
+            .ok_or(CodecError::InvalidJson)?;
+        if declared != decoded.len() as u64 {
+            return Err(CodecError::InvalidJson);
         }
     }
     Ok(())

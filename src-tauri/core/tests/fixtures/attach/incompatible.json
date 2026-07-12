@@ -1,0 +1,1 @@
+{"protocol":"muniment.attach/1","ok":false,"error":{"code":"protocol_incompatible","message":"attach protocol versions do not overlap","retryable":false,"action":"upgrade_desktop","details":{"supported":{"min":1,"max":1}}}}
