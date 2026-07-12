@@ -1,0 +1,11 @@
+{
+  "bundle": {
+    "targets": ["msi"],
+    "windows": {
+      "wix": {
+        "upgradeCode": "c75b4a56-7d8b-5b99-9fc7-61ef0aabe84b",
+        "template": "./windows/per-machine.wxs"
+      }
+    }
+  }
+}
