@@ -15,19 +15,14 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use muniment_core::auth::{
-    self, AuthStatus, BrowserOpenError, OidcConfig, TokenStore, UreqAuthorizationTransport,
+    self, AuthStatus, BrowserOpenError, NativeCredentialStore, UreqAuthorizationTransport,
     UreqRegistrationTransport, UreqSessionTransport, UreqTokenTransport,
 };
 
-use keyring_store::{KeyringNativeCredentialStore, KeyringTokenStore};
+use keyring_store::KeyringNativeCredentialStore;
 
 /// Default OIDC issuer: the muniment-cloud control plane.
 const DEFAULT_ISSUER: &str = "https://api.muniment.ai";
-/// Placeholder until the cloud team registers the desktop client — see
-/// docs/auth.md "Client registration (cloud side)".
-const DEFAULT_CLIENT_ID: &str = "muniment-desktop";
-/// `offline_access` asks the control plane for a refresh token.
-const SCOPES: &str = "openid profile email offline_access";
 /// How long the loopback listener waits for the user to finish in the
 /// browser before the sign-in attempt is abandoned.
 const SIGN_IN_TIMEOUT: Duration = Duration::from_secs(300);
@@ -40,20 +35,8 @@ fn api_base_url() -> String {
         .unwrap_or_else(|_| DEFAULT_ISSUER.into())
 }
 
-/// The one place issuer and client_id are decided. Env overrides exist for
-/// development against a non-default control plane (`MUNIMENT_ISSUER`,
-/// `MUNIMENT_CLIENT_ID`).
-fn oidc_config() -> OidcConfig {
-    OidcConfig {
-        issuer: std::env::var("MUNIMENT_ISSUER").unwrap_or_else(|_| DEFAULT_ISSUER.into()),
-        client_id: std::env::var("MUNIMENT_CLIENT_ID").unwrap_or_else(|_| DEFAULT_CLIENT_ID.into()),
-        scopes: SCOPES.into(),
-    }
-}
-
 /// Managed by Tauri; shared across the `auth_*` commands.
 pub struct AuthState {
-    store: Arc<dyn TokenStore>,
     native_store: Arc<KeyringNativeCredentialStore>,
     sign_in_running: Arc<AtomicBool>,
 }
@@ -69,7 +52,6 @@ pub(crate) fn fresh_tokens(state: &AuthState) -> Result<muniment_core::auth::Tok
 impl AuthState {
     pub fn new() -> Self {
         AuthState {
-            store: Arc::new(KeyringTokenStore::new()),
             native_store: Arc::new(KeyringNativeCredentialStore::new()),
             sign_in_running: Arc::new(AtomicBool::new(false)),
         }
@@ -167,14 +149,13 @@ fn ensure_native_session(
     .map_err(|error| error.to_string())
 }
 
-/// Clear stored tokens; best-effort revocation when discovery advertises a
-/// revocation endpoint.
+/// Clear the local native session while preserving the installation identity.
 #[tauri::command]
 pub async fn auth_sign_out(state: tauri::State<'_, AuthState>) -> Result<AuthStatus, String> {
-    let store = state.store.clone();
+    let store = state.native_store.clone();
     tauri::async_runtime::spawn_blocking(move || {
-        auth::sign_out(store.as_ref(), &oidc_config())?;
-        auth::status(store.as_ref())
+        store.clear_session().map_err(|error| error.to_string())?;
+        auth::native_status(store.as_ref()).map_err(|error| error.to_string())
     })
     .await
     .map_err(|e| format!("sign-out task failed: {e}"))?
