@@ -102,7 +102,7 @@
       }
       const projected = applyChatEvent(active, payload)
       if (projected) messages = messages.map((message) => message.run?.id === projected.id ? { ...message, run: projected } : message)
-      active = projected && !['complete', 'cancelled', 'failed'].includes(projected.phase) ? projected : null
+      active = projected && !['complete', 'cancelled', 'failed', 'interrupted'].includes(projected.phase) ? projected : null
     }).then((stop) => { unlisten = stop })
     return () => unlisten?.()
   })
@@ -123,7 +123,7 @@
       const projected = applyBufferedChatEvents(active, early)
       buffered.delete(run.runId)
       messages = messages.map((message) => message.run === pending ? { ...message, run: projected } : message)
-      active = ['complete', 'cancelled', 'failed'].includes(projected.phase) ? null : projected
+      active = ['complete', 'cancelled', 'failed', 'interrupted'].includes(projected.phase) ? null : projected
     } catch (_) {
       const failed = { ...pending, id: `rejected-${messages.length}`, phase: 'failed' }
       messages = messages.map((message) => message.run === pending ? { ...message, run: failed } : message)
@@ -209,6 +209,7 @@
                 <span class="thinking"><svg width="17" height="17" viewBox="0 0 48 48" aria-label="Thinking"><path d={markD} stroke-width="5" /></svg><span>Routing</span></span>
               {:else}<p class:streaming={message.run.phase === 'streaming'}>{message.run.text}{#if message.run.phase === 'streaming'}<span class="caret" aria-hidden="true"></span>{/if}</p>{/if}
               {#if message.run.phase === 'failed'}<div class="run-error">Reply failed. <button onclick={() => { draft = message.run.prompt; send() }}>Try again</button></div>{/if}
+              {#if message.run.phase === 'interrupted'}<div class="run-error">Reply interrupted. {#if message.run.prompt}<button onclick={() => { draft = message.run.prompt; send() }}>Try again</button>{/if}</div>{/if}
               {#if message.run.phase === 'complete'}{@const parts = receiptParts(message.run.receipt)}{#if parts.length}<button class="provenance" aria-label={parts.join(', ')}><span>{parts[0]}</span>{#if parts.length > 1} · {parts.slice(1).join(' · ')}{/if}</button>{/if}{/if}
             </div>{/if}
           {/each}
