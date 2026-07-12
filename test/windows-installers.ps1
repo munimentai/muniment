@@ -15,14 +15,6 @@ function Invoke-Msi($Action, $Package, $Description) {
   if ($process.ExitCode -notin @(0, 3010)) { throw "$Description failed: $($process.ExitCode)" }
 }
 
-# NSIS /S is case-sensitive. The default NSIS bundle is per-user.
-$nsisProcess = Start-Process $nsis.FullName -ArgumentList "/S" -Wait -PassThru
-if ($nsisProcess.ExitCode -ne 0) { throw "Silent NSIS install failed: $($nsisProcess.ExitCode)" }
-$nsisUninstaller = Join-Path $env:LOCALAPPDATA "muniment\uninstall.exe"
-if (-not (Test-Path $nsisUninstaller)) { throw "NSIS uninstaller not found at $nsisUninstaller" }
-$nsisUninstall = Start-Process $nsisUninstaller -ArgumentList "/S" -Wait -PassThru
-if ($nsisUninstall.ExitCode -ne 0) { throw "Silent NSIS uninstall failed: $($nsisUninstall.ExitCode)" }
-
 $machineKey = "HKLM:\Software\Muniment\muniment"
 $uninstallRoots = @(
   "HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall",
@@ -62,5 +54,14 @@ if ((Get-MunimentRegistrations).Count -ne 0) {
   throw "Machine uninstall registration remains after MSI uninstall"
 }
 Remove-Item $upgradeBaseMsi -Force
+
+# NSIS /S is case-sensitive. Run the per-user installer after the machine-scope
+# assertions so its expected HKCU registration cannot be attributed to the MSI.
+$nsisProcess = Start-Process $nsis.FullName -ArgumentList "/S" -Wait -PassThru
+if ($nsisProcess.ExitCode -ne 0) { throw "Silent NSIS install failed: $($nsisProcess.ExitCode)" }
+$nsisUninstaller = Join-Path $env:LOCALAPPDATA "muniment\uninstall.exe"
+if (-not (Test-Path $nsisUninstaller)) { throw "NSIS uninstaller not found at $nsisUninstaller" }
+$nsisUninstall = Start-Process $nsisUninstaller -ArgumentList "/S" -Wait -PassThru
+if ($nsisUninstall.ExitCode -ne 0) { throw "Silent NSIS uninstall failed: $($nsisUninstall.ExitCode)" }
 
 Write-Host "Windows silent installer verification OK"
