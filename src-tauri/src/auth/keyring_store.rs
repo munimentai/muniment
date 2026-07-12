@@ -80,6 +80,10 @@ impl NativeCredentialStore for KeyringNativeCredentialStore {
     fn load_credentials(&self) -> Result<Option<NativeCredentials>, NativeTokenError> {
         self.0.load_credentials()
     }
+
+    fn clear_session(&self) -> Result<(), NativeTokenError> {
+        self.0.clear_session()
+    }
 }
 
 pub struct KeyringTokenStore;

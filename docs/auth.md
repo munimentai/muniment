@@ -66,6 +66,15 @@ signed-in state or using its access token. Missing or refresh-expired native
 credentials report signed out; refresh, transport, and validation failures
 preserve the last coherent record and surface only redacted errors.
 
+`auth_sign_out` runs on a blocking worker and atomically replaces a
+credential-bearing native record with an installation-only record. This clears
+the access token, refresh token, access expiry, refresh expiry, and subject
+locally while preserving the registered installation keypair, device identity,
+and challenge for a later sign-in. It is idempotent when already signed out and
+does not modify the unrelated legacy `oidc-tokens` entry. Server-side native
+session revocation is a future slice; the desktop does not invent a revocation
+request until the live native contract is available.
+
 The native API base defaults to `https://api.muniment.ai` and may be overridden
 for loopback development with `MUNIMENT_API_BASE_URL`. `MUNIMENT_ISSUER` remains
 the legacy OIDC configuration and is accepted as a native fallback during the
@@ -96,10 +105,9 @@ discovery. Sequence, as implemented in `src-tauri/core/src/auth/`:
    `code_verifier`. Tokens are persisted via the `TokenStore` and the
    command returns a status payload (signed-in flag, subject, expiry).
 
-The legacy generic status helper answers from its OIDC token store only; the
-production `auth_status` command uses the native record described above.
-`auth_sign_out` clears the stored tokens, with best-effort RFC 7009
-revocation first when discovery advertises a `revocation_endpoint`.
+The legacy generic status and sign-out helpers operate on the OIDC token store
+only. Production `auth_status` and `auth_sign_out` use the native coherent
+record described above; the generic RFC 7009 path is not used by Tauri.
 
 ## Session freshness
 
@@ -177,7 +185,7 @@ the webview.
 | `auth_sign_in`  | `AuthStatus` or error  | Runs native registration/browser/exchange; 5-min timeout; concurrent calls rejected |
 | `auth_status`   | `AuthStatus`           | Local only, no network            |
 | `auth_ensure_fresh` | `AuthStatus` or error | Refreshes at expiry or within 60 seconds |
-| `auth_sign_out` | `AuthStatus`           | Best-effort revocation + clear    |
+| `auth_sign_out` | `AuthStatus`           | Clears local native session; preserves installation |
 
 `AuthStatus` is `{ signed_in: bool, subject: string|null, expires_at: unix-seconds|null }`.
 
@@ -211,14 +219,14 @@ build); verify it manually:
 4. Restart the app; **status** still reports signed in (tokens came from the
    keychain — macOS Keychain Access / Windows Credential Manager / Secret
    Service under `ai.muniment.desktop`).
-5. **sign out**; confirm the keychain entry is gone and **status** reports
-   signed out.
+5. **sign out**; confirm the `native-credentials` keychain value retains only
+   the installation and **status** reports signed out.
 6. Negative path: click **sign in** and cancel at the IdP — the app surfaces
    `access_denied` and stores nothing.
 
 ## Follow-ups (out of scope here)
 
 - Entitlement snapshot consumption.
-- Native sign-out and server-side revocation/device management.
+- Server-side native revocation/device management.
 - Migration or removal of credentials created by the existing generic-OIDC flow.
 - Signed-in UI.
