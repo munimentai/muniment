@@ -20,12 +20,13 @@ Phases mirror harness-spec §9. Muniment-cloud Phase 1 native auth and the cloud
 - DONE — desktop keychain adapter for one coherent versioned native installation/credential record, including safe migration of the legacy installation-only entry while leaving unrelated generic-OIDC credentials untouched.
 - DONE — first-run registration, native browser authorization, native token exchange, and coherent credential persistence are wired through the Tauri `auth_sign_in` command.
 - DONE — native local status, refresh at the safety skew, authoritative session inspection, and the pre-chat fresh-token path replace their legacy generic-OIDC counterparts end to end.
-- NEXT before first chat — make Sign out clear the production native session locally while preserving the installation identity. Entitlement snapshot consumption and server-side native revocation/device management follow as separately reviewable slices.
+- DONE — Sign out atomically clears the production native session locally while preserving the installation identity.
+- NEXT — consume the live typed entitlement snapshot without exposing signing material. Server-side native revocation/device management follows as a separately reviewable slice.
 
 ### 9. Pi sidecar and cloud chat
 - DONE foundation — ADR 0008 pins Pi 0.73.1, chooses verified first-use acquisition of its platform-native executable, and proves its real `get_state` RPC readiness through `SidecarSupervisor`.
-- NEXT, after the Phase 2.8 native handshake/session wiring — deliver the first signed-in streamed chat through the supervised Pi runtime and the user's server-resolved scoped LiteLLM access, with durable event translation and a provenance line.
-- FOLLOW — steering/follow-up controls, tool/permission activity, session resume, and richer receipt expansion in separately reviewable slices.
+- DONE — the first signed-in streamed chat runs through the supervised Pi runtime and the user's server-resolved scoped LiteLLM access, with durable event translation and server-authoritative provenance projection.
+- NEXT — steering/follow-up controls, then tool/permission activity, session resume, and richer receipt expansion in separately reviewable slices.
 
 ### 10. Local Gemma sidecar
 - DONE — supervised JSON-RPC sidecar lifecycle; loopback llama-server launch/health/chat; pinned Gemma descriptor and launch verification; dictation-polish and routing-classifier contracts/evaluations with adversarial framing.
@@ -38,7 +39,8 @@ Phases mirror harness-spec §9. Muniment-cloud Phase 1 native auth and the cloud
 ### Durable local run journal
 - DECIDED — ADR 0002 makes a per-run append-only SQLite event journal authoritative; external effects are never silently re-executed and large bodies live in CAS.
 - DONE — schema/envelope/atomic append and deterministic reducer/replay with permission, terminal, unsupported-event, incremental, and crash-boundary coverage.
-- NEXT with Phase 2.9 — Pi domain/effect translation and receipt projection; retention/export/deletion/CAS collection/compaction follow.
+- DONE first-chat slice — Pi domain/effect translation and server-authoritative receipt projection are durable and replayable.
+- NEXT with Phase 2.9 — retention/export/deletion/CAS collection/compaction in separately reviewable slices.
 
 ### Capability vocabulary and provenance
 - PLANNED — user surfaces say “capabilities” and receipts render `route · model · cost · time · capability@version[, ...]`. The client never synthesizes values absent from the cloud schema.
