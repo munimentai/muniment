@@ -1,9 +1,10 @@
 <script>
-  import { onMount } from 'svelte'
+  import { onMount, tick } from 'svelte'
 
   import { bootState, errorState, statusState, waitingState } from './lib/auth-state.js'
   import { ringPath } from './lib/mark.js'
-  import { applyBufferedChatEvents, applyChatEvent, composerAction, receiptParts } from './lib/chat-state.js'
+  import { applyBufferedChatEvents, applyChatEvent, composerAction, receiptParts, receiptRows } from './lib/chat-state.js'
+  import { scrollFollowState } from './lib/scroll-follow.js'
 
   const markD = ringPath()
   const version = __APP_VERSION__
@@ -18,6 +19,54 @@
   let historyError = $state('')
   let buffered = new Map()
   let unlisten
+  let thread = $state()
+  let pinned = $state(true)
+  let hasContentBelow = $state(false)
+  let lastScrollTop = 0
+  let expandedReceipts = $state(new Set())
+
+  function toggleReceipt(runId) {
+    const next = new Set(expandedReceipts)
+    next.has(runId) ? next.delete(runId) : next.add(runId)
+    expandedReceipts = next
+  }
+
+  function scrollToLatest() {
+    if (!thread) return
+    pinned = true
+    const behavior = window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth'
+    thread.scrollTo({ top: thread.scrollHeight, behavior })
+    lastScrollTop = thread.scrollHeight - thread.clientHeight
+    hasContentBelow = false
+  }
+
+  function followNewContent() {
+    if (!pinned) return
+    tick().then(() => {
+      if (!pinned || !thread) return
+      thread.scrollTo({ top: thread.scrollHeight, behavior: 'auto' })
+      lastScrollTop = thread.scrollHeight - thread.clientHeight
+      hasContentBelow = false
+    })
+  }
+
+  function handleThreadScroll() {
+    const next = scrollFollowState({
+      pinned,
+      scrollTop: thread.scrollTop,
+      scrollHeight: thread.scrollHeight,
+      clientHeight: thread.clientHeight,
+      lastScrollTop,
+    })
+    pinned = next.pinned
+    lastScrollTop = next.lastScrollTop
+    hasContentBelow = !pinned && thread.scrollHeight - thread.clientHeight - thread.scrollTop > 0
+  }
+
+  $effect(() => {
+    messages
+    followNewContent()
+  })
 
   async function run(action) {
     const command = {
@@ -38,12 +87,15 @@
 
   async function loadHistory() {
     historyError = ''
+    expandedReceipts = new Set()
     try {
       const history = await tauri.invoke('chat_history')
       messages = history.flatMap((entry) => [
         ...(entry.prompt ? [{ role: 'user', text: entry.prompt }] : []),
         { role: 'assistant', run: { id: entry.runId, phase: entry.phase, text: entry.text, receipt: entry.receipt ?? null, prompt: entry.prompt ?? '' } },
       ])
+      pinned = true
+      followNewContent()
     } catch (_) {
       historyError = 'Conversation history could not be restored. Try again.'
     }
@@ -58,7 +110,7 @@
       }
       const projected = applyChatEvent(active, payload)
       if (projected) messages = messages.map((message) => message.run?.id === projected.id ? { ...message, run: projected } : message)
-      active = projected && !['complete', 'cancelled', 'failed'].includes(projected.phase) ? projected : null
+      active = projected && !['complete', 'cancelled', 'failed', 'interrupted'].includes(projected.phase) ? projected : null
     }).then((stop) => { unlisten = stop })
     return () => unlisten?.()
   })
@@ -71,6 +123,7 @@
     const pending = { id: 'pending', phase: 'thinking', text: '', receipt: null, prompt }
     active = pending
     messages.push({ role: 'assistant', run: pending })
+    followNewContent()
     try {
       const run = await tauri.invoke('chat_submit', { prompt })
       active = { ...pending, id: run.runId }
@@ -78,7 +131,7 @@
       const projected = applyBufferedChatEvents(active, early)
       buffered.delete(run.runId)
       messages = messages.map((message) => message.run === pending ? { ...message, run: projected } : message)
-      active = ['complete', 'cancelled', 'failed'].includes(projected.phase) ? null : projected
+      active = ['complete', 'cancelled', 'failed', 'interrupted'].includes(projected.phase) ? null : projected
     } catch (_) {
       const failed = { ...pending, id: `rejected-${messages.length}`, phase: 'failed' }
       messages = messages.map((message) => message.run === pending ? { ...message, run: failed } : message)
@@ -103,6 +156,7 @@
     try {
       await tauri.invoke('chat_queue', { runId, delivery, message })
       messages.push({ role: 'user', text: message })
+      followNewContent()
       if (draft.trim() === message) draft = ''
     } catch (err) {
       queueError = typeof err === 'string' ? err : String(err)
@@ -152,7 +206,8 @@
             <button class="quiet sign-out" onclick={() => run('sign-out')}>Sign out</button>
           </div>
         </aside>
-        <div class="thread" aria-live="polite">
+        <div class="thread-shell">
+        <div class="thread" aria-live="polite" bind:this={thread} onscroll={handleThreadScroll}>
           {#if historyError}<p class="history-error" role="alert">{historyError} <button onclick={loadHistory}>Try again</button></p>{/if}
           {#if messages.length === 0}<p class="empty">Ask anything. Your org's routing decides which model answers.</p>{/if}
           {#each messages as message}
@@ -162,9 +217,26 @@
                 <span class="thinking"><svg width="17" height="17" viewBox="0 0 48 48" aria-label="Thinking"><path d={markD} stroke-width="5" /></svg><span>Routing</span></span>
               {:else}<p class:streaming={message.run.phase === 'streaming'}>{message.run.text}{#if message.run.phase === 'streaming'}<span class="caret" aria-hidden="true"></span>{/if}</p>{/if}
               {#if message.run.phase === 'failed'}<div class="run-error">Reply failed. <button onclick={() => { draft = message.run.prompt; send() }}>Try again</button></div>{/if}
-              {#if message.run.phase === 'complete'}{@const parts = receiptParts(message.run.receipt)}{#if parts.length}<button class="provenance" aria-label={parts.join(', ')}><span>{parts[0]}</span>{#if parts.length > 1} · {parts.slice(1).join(' · ')}{/if}</button>{/if}{/if}
+              {#if message.run.phase === 'interrupted'}<div class="run-error">Reply interrupted. {#if message.run.prompt}<button onclick={() => { draft = message.run.prompt; send() }}>Try again</button>{/if}</div>{/if}
+              {#if message.run.phase === 'complete'}
+                {@const parts = receiptParts(message.run.receipt)}
+                {@const rows = receiptRows(message.run.receipt)}
+                {#if parts.length}
+                  {@const expanded = expandedReceipts.has(message.run.id)}
+                  <button class="provenance" aria-expanded={expanded} aria-label={`${expanded ? 'Collapse' : 'Expand'} receipt: ${parts.join(', ')}`} onclick={() => toggleReceipt(message.run.id)}><span>{parts[0]}</span>{#if parts.length > 1} · {parts.slice(1).join(' · ')}{/if}</button>
+                  {#if expanded}
+                    <dl class="receipt-record">
+                      {#each rows as row}
+                        <div><dt>{row.label}</dt><dd class:route-value={row.route}>{row.value}</dd></div>
+                      {/each}
+                    </dl>
+                  {/if}
+                {/if}
+              {/if}
             </div>{/if}
           {/each}
+        </div>
+        {#if !pinned && hasContentBelow}<button class="latest" onclick={scrollToLatest}>↓ latest</button>{/if}
         </div>
         <div class="composer">
           <textarea bind:value={draft} onkeydown={keydown} rows="2" placeholder="Ask anything"></textarea>
@@ -296,7 +368,9 @@
   .profile-initial { display: grid; place-items: center; width: 27px; height: 27px; border-radius: 50%; background: var(--faint); }
   .sign-out { margin: 3px 8px 0; padding-left: 0; color: var(--muted); }
   .quiet { background: transparent; border-color: transparent; }
-  .thread { grid-area: thread; width: min(760px, calc(100% - 48px)); margin: 0 auto; padding: 42px 0; overflow-y: auto; }
+  .thread-shell { grid-area: thread; position: relative; min-height: 0; }
+  .thread { width: min(760px, calc(100% - 48px)); height: 100%; margin: 0 auto; padding: 42px 0; overflow-y: auto; }
+  .latest { position: absolute; left: 50%; bottom: 14px; transform: translateX(-50%); border-radius: 6px; background: var(--surface); color: var(--muted); font: var(--text-12) var(--font-mono); box-shadow: 0 1px 3px color-mix(in srgb, var(--ink) 10%, transparent); }
   .empty { color: var(--muted); text-align: center; margin-top: 18vh; }
   .user-message { width: fit-content; max-width: 78%; margin: 0 0 28px auto; padding: 9px 13px; white-space: pre-wrap; background: var(--faint); border-radius: 10px; }
   .response { margin: 0 0 34px; }
@@ -307,6 +381,10 @@
   .thinking path { fill: none; stroke: var(--signal); stroke-linecap: round; animation: breathe 1.8s ease-in-out infinite; }
   .provenance { display: block; margin-top: 10px; padding: 0; border: 0; background: transparent; color: var(--muted); font: var(--text-12) var(--font-mono); text-align: left; }
   .provenance span { color: var(--signal); }
+  .receipt-record { width: fit-content; min-width: 240px; margin: 8px 0 0; padding: 8px 12px; border: 1px solid var(--border); border-radius: 6px; color: var(--muted); font-size: var(--text-12); }
+  .receipt-record div { display: grid; grid-template-columns: 88px minmax(0, 1fr); gap: 12px; }
+  .receipt-record dd { margin: 0; font-family: var(--font-mono); font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+  .receipt-record .route-value { color: var(--signal); }
   .run-error { color: var(--muted); font: var(--text-12) var(--font-mono); }
   .cancel-error, .history-error { margin: 0 0 8px; color: var(--muted); font: var(--text-12) var(--font-mono); }
   .run-error button { padding: 2px 6px; }

@@ -1,5 +1,6 @@
 use muniment_core::journal::reducer::{
-    project_chat, reduce, AttentionReason, ReduceError, RunReducer, RunStatus,
+    project_chat, reduce, AttentionReason, ReduceError, RunReducer, RunStatus, ToolActivity,
+    ToolActivityStatus,
 };
 use muniment_core::journal::{EventEnvelope, EventPayload, Provenance};
 use serde_json::{json, Value};
@@ -137,6 +138,107 @@ fn every_effect_crash_boundary_is_safe() {
 }
 
 #[test]
+fn concurrent_effects_can_finish_in_any_order() {
+    let events = stream(&[
+        ("run.started", json!({})),
+        ("tool.effect.started", json!({"effect_id":"A"})),
+        ("tool.effect.started", json!({"effect_id":"B"})),
+        ("tool.effect.completed", json!({"effect_id":"B"})),
+        ("tool.effect.failed", json!({"effect_id":"A"})),
+        ("run.completed", json!({})),
+    ]);
+
+    assert_eq!(reduce(&events).unwrap().status, RunStatus::Completed);
+}
+
+#[test]
+fn concurrent_effect_transitions_require_matching_open_effects() {
+    let duplicate_start = stream(&[
+        ("run.started", json!({})),
+        ("tool.effect.started", json!({"effect_id":"A"})),
+        ("tool.effect.started", json!({"effect_id":"A"})),
+    ]);
+    assert!(matches!(
+        reduce(&duplicate_start),
+        Err(ReduceError::InvalidTransition { .. })
+    ));
+
+    let unmatched_outcome = stream(&[
+        ("run.started", json!({})),
+        ("tool.effect.started", json!({"effect_id":"A"})),
+        ("tool.effect.completed", json!({"effect_id":"B"})),
+    ]);
+    assert!(matches!(
+        reduce(&unmatched_outcome),
+        Err(ReduceError::InvalidTransition { .. })
+    ));
+}
+
+#[test]
+fn terminal_events_require_all_concurrent_effects_to_close() {
+    for (terminal, expected) in [
+        ("run.completed", RunStatus::Completed),
+        ("run.cancelled", RunStatus::Cancelled),
+        ("run.failed", RunStatus::Failed { reason: None }),
+    ] {
+        let open = stream(&[
+            ("run.started", json!({})),
+            ("tool.effect.started", json!({"effect_id":"A"})),
+            ("tool.effect.started", json!({"effect_id":"B"})),
+            ("tool.effect.completed", json!({"effect_id":"B"})),
+            (terminal, json!({})),
+        ]);
+        assert!(matches!(
+            reduce(&open),
+            Err(ReduceError::InvalidTransition { .. })
+        ));
+
+        let closed = stream(&[
+            ("run.started", json!({})),
+            ("tool.effect.started", json!({"effect_id":"A"})),
+            ("tool.effect.started", json!({"effect_id":"B"})),
+            ("tool.effect.completed", json!({"effect_id":"B"})),
+            ("tool.effect.failed", json!({"effect_id":"A"})),
+            (terminal, json!({})),
+        ]);
+        assert_eq!(reduce(&closed).unwrap().status, expected);
+    }
+}
+
+#[test]
+fn dangling_concurrent_effects_report_the_earliest_start() {
+    let events = stream(&[
+        ("run.started", json!({})),
+        ("tool.effect.started", json!({"effect_id":"first"})),
+        ("tool.effect.started", json!({"effect_id":"second"})),
+    ]);
+
+    assert_eq!(
+        reduce(&events).unwrap().status,
+        RunStatus::NeedsAttention(AttentionReason::UnknownEffectOutcome {
+            effect_id: "first".into()
+        })
+    );
+}
+
+#[test]
+fn recorded_attention_clears_all_concurrent_effects() {
+    let events = stream(&[
+        ("run.started", json!({})),
+        ("tool.effect.started", json!({"effect_id":"A"})),
+        ("tool.effect.started", json!({"effect_id":"B"})),
+        ("run.needs_attention", json!({"reason":"operator review"})),
+    ]);
+
+    assert_eq!(
+        reduce(&events).unwrap().status,
+        RunStatus::NeedsAttention(AttentionReason::Recorded {
+            reason: "operator review".into()
+        })
+    );
+}
+
+#[test]
 fn ordering_terminal_and_forward_compatibility_fail_closed() {
     let mut gap = stream(&[("run.started", json!({})), ("future.harmless", json!({}))]);
     gap[1].run_seq = 3;
@@ -241,6 +343,74 @@ fn chat_projection_replays_completed_and_failed_runs() {
         Some(RunStatus::Failed {
             reason: Some("runtime".into())
         })
+    );
+}
+
+#[test]
+fn chat_projection_tracks_tool_activity_in_start_order() {
+    let cases = [
+        (
+            vec![
+                ("run.started", json!({})),
+                (
+                    "tool.effect.started",
+                    json!({"effect_id":"e1", "display_name":"Search"}),
+                ),
+            ],
+            ToolActivityStatus::Running,
+        ),
+        (
+            vec![
+                ("run.started", json!({})),
+                ("tool.effect.started", json!({"effect_id":"e1"})),
+                ("tool.effect.completed", json!({"effect_id":"e1"})),
+            ],
+            ToolActivityStatus::Completed,
+        ),
+        (
+            vec![
+                ("run.started", json!({})),
+                ("tool.effect.started", json!({"effect_id":"e1"})),
+                ("tool.effect.failed", json!({"effect_id":"e1"})),
+            ],
+            ToolActivityStatus::Failed,
+        ),
+    ];
+    for (events, status) in cases {
+        assert_eq!(
+            project_chat(&stream(&events)).unwrap().tool_activity[0].status,
+            status
+        );
+    }
+
+    let interleaved = stream(&[
+        ("run.started", json!({})),
+        (
+            "tool.effect.started",
+            json!({"effect_id":"first", "display_name":"Search"}),
+        ),
+        ("model.stream.delta", json!({"text":"between"})),
+        ("tool.effect.completed", json!({"effect_id":"first"})),
+        ("tool.effect.started", json!({"effect_id":"second"})),
+        ("model.stream.delta", json!({"text":" tools"})),
+        ("tool.effect.failed", json!({"effect_id":"second"})),
+    ]);
+    let projection = project_chat(&interleaved).unwrap();
+    assert_eq!(projection.text, "between tools");
+    assert_eq!(
+        projection.tool_activity,
+        vec![
+            ToolActivity {
+                effect_id: "first".into(),
+                display_name: Some("Search".into()),
+                status: ToolActivityStatus::Completed,
+            },
+            ToolActivity {
+                effect_id: "second".into(),
+                display_name: None,
+                status: ToolActivityStatus::Failed,
+            },
+        ]
     );
 }
 

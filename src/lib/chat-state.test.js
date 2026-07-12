@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { applyBufferedChatEvents, applyChatEvent, composerAction, receiptParts } from './chat-state.js'
+import { applyBufferedChatEvents, applyChatEvent, composerAction, receiptParts, receiptRows } from './chat-state.js'
 
 describe('chat composer and projection', () => {
   it('chooses submit or steer from the active run', () => {
@@ -26,6 +26,36 @@ describe('chat composer and projection', () => {
   it('does not invent missing receipt values', () => {
     expect(receiptParts({ route: 'fast', capabilities: [{ name: 'search', version: '2' }] }))
       .toEqual(['fast', 'search@2'])
+  })
+
+  it('projects every present receipt field in record order', () => {
+    expect(receiptRows({
+      route: 'fast', model: 'glm-5.2', cost: '$0.04', time: '1.8s',
+      capabilities: [{ name: 'search', version: '2' }, { name: 'files', version: '1' }],
+    })).toEqual([
+      { label: 'Route', value: 'fast', route: true },
+      { label: 'Model', value: 'glm-5.2', route: false },
+      { label: 'Cost', value: '$0.04', route: false },
+      { label: 'Time', value: '1.8s', route: false },
+      { label: 'Capability', value: 'search@2', route: false },
+      { label: 'Capability', value: 'files@1', route: false },
+    ])
+  })
+
+  it('omits absent receipt fields', () => {
+    expect(receiptRows({ model: 'glm-5.2', time: '1.8s' })).toEqual([
+      { label: 'Model', value: 'glm-5.2', route: false },
+      { label: 'Time', value: '1.8s', route: false },
+    ])
+  })
+
+  it('projects capabilities without inventing other rows', () => {
+    expect(receiptRows({ capabilities: [{ name: 'search', version: '2' }] }))
+      .toEqual([{ label: 'Capability', value: 'search@2', route: false }])
+  })
+
+  it('projects no rows from an empty receipt', () => {
+    expect(receiptRows({})).toEqual([])
   })
 
   it('preserves all projections that arrive before submit resolves', () => {

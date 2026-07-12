@@ -26,7 +26,10 @@ Phases mirror harness-spec §9. Muniment-cloud Phase 1 native auth and the cloud
 ### 9. Pi sidecar and cloud chat
 - DONE foundation — ADR 0008 pins Pi 0.73.1, chooses verified first-use acquisition of its platform-native executable, and proves its real `get_state` RPC readiness through `SidecarSupervisor`.
 - DONE — the first signed-in streamed chat runs through the supervised Pi runtime and the user's server-resolved scoped LiteLLM access, with durable event translation and server-authoritative provenance projection.
-- NEXT — steering/follow-up controls, then tool/permission activity, session resume, and richer receipt expansion in separately reviewable slices.
+- DONE — mid-run steer and queued follow-up from the composer over the live Pi stream.
+- DONE — scroll-follow during streaming with user-scroll disengage, and startup reconciliation that marks interrupted runs `needs_attention` instead of rendering them as perpetually streaming.
+- DONE groundwork — typed Pi tool-execution frame parsing and chat projection of journal `tool.effect.*` events (pure core); the Tauri run loop does not journal tool activity yet.
+- NEXT — concurrent-effect reducer semantics (the reducer currently allows one open effect; the spec requires parallel tools), then journaled tool activity with inline tool cards per design-system §6, permission activity, session resume, and receipt expansion in separately reviewable slices.
 
 ### 10. Local Gemma sidecar
 - DONE — supervised JSON-RPC sidecar lifecycle; loopback llama-server launch/health/chat; pinned Gemma descriptor and launch verification; dictation-polish and routing-classifier contracts/evaluations with adversarial framing.
@@ -40,7 +43,8 @@ Phases mirror harness-spec §9. Muniment-cloud Phase 1 native auth and the cloud
 - DECIDED — ADR 0002 makes a per-run append-only SQLite event journal authoritative; external effects are never silently re-executed and large bodies live in CAS.
 - DONE — schema/envelope/atomic append and deterministic reducer/replay with permission, terminal, unsupported-event, incremental, and crash-boundary coverage.
 - DONE first-chat slice — Pi domain/effect translation and server-authoritative receipt projection are durable and replayable.
-- NEXT with Phase 2.9 — retention/export/deletion/CAS collection/compaction in separately reviewable slices.
+- DONE deletion slice — atomic deletion of a run's events with CAS reference accounting (`delete_run` returns the run's hashes; `referenced_hashes` reports journal-wide references).
+- NEXT with Phase 2.9 — CAS collection of unreferenced objects, then retention/export/compaction in separately reviewable slices.
 
 ### Capability vocabulary and provenance
 - PLANNED — user surfaces say “capabilities” and receipts render `route · model · cost · time · capability@version[, ...]`. The client never synthesizes values absent from the cloud schema.
