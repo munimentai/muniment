@@ -48,6 +48,7 @@ struct Boundary {
     locks: AtomicUsize,
     fail_current: AtomicBool,
     revision_failure: AtomicUsize,
+    fail_pointer_after_replace: Mutex<Option<&'static str>>,
 }
 
 impl Boundary {
@@ -56,6 +57,7 @@ impl Boundary {
             locks: AtomicUsize::new(0),
             fail_current: AtomicBool::new(false),
             revision_failure: AtomicUsize::new(0),
+            fail_pointer_after_replace: Mutex::new(None),
         }
     }
     fn failing_current() -> Self {
@@ -63,6 +65,7 @@ impl Boundary {
             locks: AtomicUsize::new(0),
             fail_current: AtomicBool::new(true),
             revision_failure: AtomicUsize::new(0),
+            fail_pointer_after_replace: Mutex::new(None),
         }
     }
     fn failing_revision_at(step: usize) -> Self {
@@ -70,6 +73,15 @@ impl Boundary {
             locks: AtomicUsize::new(0),
             fail_current: AtomicBool::new(false),
             revision_failure: AtomicUsize::new(step),
+            fail_pointer_after_replace: Mutex::new(None),
+        }
+    }
+    fn interrupt_after_pointer(name: &'static str) -> Self {
+        Self {
+            locks: AtomicUsize::new(0),
+            fail_current: AtomicBool::new(false),
+            revision_failure: AtomicUsize::new(0),
+            fail_pointer_after_replace: Mutex::new(Some(name)),
         }
     }
 }
@@ -120,7 +132,14 @@ impl GemmaLifecycleBoundary for Boundary {
         if destination.exists() {
             fs::remove_file(destination).unwrap();
         }
-        fs::rename(temporary, destination).map_err(|_| GemmaPersistenceError::Failed)
+        fs::rename(temporary, destination).map_err(|_| GemmaPersistenceError::Failed)?;
+        let name = destination.file_name().and_then(|name| name.to_str());
+        let mut failure = self.fail_pointer_after_replace.lock().unwrap();
+        if failure.as_deref() == name {
+            failure.take();
+            return Err(GemmaPersistenceError::Failed);
+        }
+        Ok(())
     }
 }
 
@@ -148,7 +167,7 @@ fn stage(root: &Path, name: &str, bytes: &[u8]) -> PathBuf {
     stage
 }
 
-#[derive(Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Attempt {
     Ready,
     StartFails,
@@ -296,6 +315,47 @@ fn failed_rollback_activation_stops_after_exactly_two_attempts() {
         root.join("revisions/old")
     );
     fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn interrupted_activation_state_replacement_never_relaunches_rejected_current() {
+    for interrupted_pointer in ["rejected", "activation-failure", "current"] {
+        let root = root();
+        let lifecycle = published_update(&root);
+        let failed = ActivationBoundary::new(vec![Attempt::ReadinessFails]);
+
+        assert_eq!(
+            lifecycle.activate(
+                &Boundary::interrupt_after_pointer(interrupted_pointer),
+                &failed,
+            ),
+            Err(GemmaLifecycleError::Persistence(
+                GemmaPersistenceError::Failed
+            ))
+        );
+
+        let retry = ActivationBoundary::new(vec![Attempt::Ready]);
+        let result = lifecycle.activate(&Boundary::working(), &retry).unwrap();
+        assert!(matches!(
+            result,
+            GemmaActivation::Active { revision, .. }
+                | GemmaActivation::RolledBack { revision, .. }
+                if revision == root.join("revisions/old")
+        ));
+        assert_eq!(
+            retry.launched.lock().unwrap().as_slice(),
+            &[root.join("revisions/old/model.gguf")]
+        );
+        assert_eq!(
+            lifecycle.resolve_current().unwrap(),
+            root.join("revisions/old")
+        );
+        if let Ok(diagnostic) = fs::read_to_string(root.join("activation-failure")) {
+            assert_eq!(diagnostic, "readiness\n");
+            assert!(!diagnostic.contains(root.to_str().unwrap()));
+        }
+        fs::remove_dir_all(root).unwrap();
+    }
 }
 
 #[test]

@@ -308,8 +308,9 @@ impl GemmaRevisionLifecycle {
                 server,
             }),
             Err(failure) => {
-                self.write_redacted_failure(failure, persistence)?;
                 self.write_pointer("rejected", &current.value, persistence)?;
+                persistence.sync_directory(&self.root)?;
+                self.write_redacted_failure(failure, persistence)?;
                 self.activate_previous(persistence, activation)
             }
         }
