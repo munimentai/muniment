@@ -116,7 +116,7 @@ impl KeyringNativeCredentialStore {
                 // The legacy token record did not retain the refresh expiry.
                 // Conservatively prevent refresh beyond the known access expiry.
                 let refresh_expires_at = tokens.expires_at.unwrap_or(0);
-                Ok(NativeKeychainSession {
+                Ok::<NativeKeychainSession, String>(NativeKeychainSession {
                     tokens,
                     refresh_expires_at,
                 })
