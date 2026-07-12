@@ -96,7 +96,7 @@ pub struct Authorized {
     pub capability: String,
     pub expires_at: String,
     pub idle_timeout_seconds: u32,
-    pub workspace_scopes: Vec<String>,
+    pub workspace_scopes: Vec<Id>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -531,10 +531,177 @@ impl<'de> Deserialize<'de> for EventKind {
         })
     }
 }
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum JournalEvent {
+    #[serde(rename = "run.started")]
+    RunStarted,
+    #[serde(rename = "message.submitted")]
+    MessageSubmitted,
+    #[serde(rename = "model.stream.delta")]
+    ModelStreamDelta,
+    #[serde(rename = "permission.requested")]
+    PermissionRequested,
+    #[serde(rename = "permission.resolved")]
+    PermissionResolved,
+    #[serde(rename = "tool.effect.started")]
+    ToolEffectStarted,
+    #[serde(rename = "tool.effect.completed")]
+    ToolEffectCompleted,
+    #[serde(rename = "tool.effect.failed")]
+    ToolEffectFailed,
+    #[serde(rename = "run.completed")]
+    RunCompleted,
+    #[serde(rename = "run.cancelled")]
+    RunCancelled,
+    #[serde(rename = "run.failed")]
+    RunFailed,
+    #[serde(rename = "run.needs_attention")]
+    RunNeedsAttention,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EmptyProjection {}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TextProjection {
+    pub text: String,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GateProjection {
+    pub gate_id: Id,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PermissionProjection {
+    pub gate_id: Id,
+    pub decision: PermissionDecision,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EffectProjection {
+    pub effect_id: Id,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ReasonProjection {
+    pub reason: String,
+}
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RunEventPayload {
+    Empty(EmptyProjection),
+    Text(TextProjection),
+    Gate(GateProjection),
+    Permission(PermissionProjection),
+    Effect(EffectProjection),
+    Reason(ReasonProjection),
+}
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RunEventBody {
-    pub journal_event: String,
-    pub payload: Value,
+    pub journal_event: JournalEvent,
+    pub payload: RunEventPayload,
+}
+fn run_payload_matches(event: JournalEvent, payload: &RunEventPayload) -> bool {
+    matches!(
+        (event, payload),
+        (
+            JournalEvent::RunStarted | JournalEvent::RunCompleted | JournalEvent::RunCancelled,
+            RunEventPayload::Empty(_)
+        ) | (
+            JournalEvent::MessageSubmitted | JournalEvent::ModelStreamDelta,
+            RunEventPayload::Text(_)
+        ) | (JournalEvent::PermissionRequested, RunEventPayload::Gate(_))
+            | (
+                JournalEvent::PermissionResolved,
+                RunEventPayload::Permission(_)
+            )
+            | (
+                JournalEvent::ToolEffectStarted
+                    | JournalEvent::ToolEffectCompleted
+                    | JournalEvent::ToolEffectFailed,
+                RunEventPayload::Effect(_)
+            )
+            | (
+                JournalEvent::RunFailed | JournalEvent::RunNeedsAttention,
+                RunEventPayload::Reason(_)
+            )
+    )
+}
+impl Serialize for RunEventBody {
+    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        if !run_payload_matches(self.journal_event, &self.payload) {
+            return Err(serde::ser::Error::custom(
+                "journal event does not match payload",
+            ));
+        }
+        #[derive(Serialize)]
+        struct Wire<'a, T> {
+            journal_event: JournalEvent,
+            payload: &'a T,
+        }
+        match &self.payload {
+            RunEventPayload::Empty(v) => Wire {
+                journal_event: self.journal_event,
+                payload: v,
+            }
+            .serialize(s),
+            RunEventPayload::Text(v) => Wire {
+                journal_event: self.journal_event,
+                payload: v,
+            }
+            .serialize(s),
+            RunEventPayload::Gate(v) => Wire {
+                journal_event: self.journal_event,
+                payload: v,
+            }
+            .serialize(s),
+            RunEventPayload::Permission(v) => Wire {
+                journal_event: self.journal_event,
+                payload: v,
+            }
+            .serialize(s),
+            RunEventPayload::Effect(v) => Wire {
+                journal_event: self.journal_event,
+                payload: v,
+            }
+            .serialize(s),
+            RunEventPayload::Reason(v) => Wire {
+                journal_event: self.journal_event,
+                payload: v,
+            }
+            .serialize(s),
+        }
+    }
+}
+impl<'de> Deserialize<'de> for RunEventBody {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        struct Wire {
+            journal_event: JournalEvent,
+            payload: Value,
+        }
+        let v = Wire::deserialize(d)?;
+        let payload = match v.journal_event {
+            JournalEvent::RunStarted | JournalEvent::RunCompleted | JournalEvent::RunCancelled => {
+                RunEventPayload::Empty(from(v.payload)?)
+            }
+            JournalEvent::MessageSubmitted | JournalEvent::ModelStreamDelta => {
+                RunEventPayload::Text(from(v.payload)?)
+            }
+            JournalEvent::PermissionRequested => RunEventPayload::Gate(from(v.payload)?),
+            JournalEvent::PermissionResolved => RunEventPayload::Permission(from(v.payload)?),
+            JournalEvent::ToolEffectStarted
+            | JournalEvent::ToolEffectCompleted
+            | JournalEvent::ToolEffectFailed => RunEventPayload::Effect(from(v.payload)?),
+            JournalEvent::RunFailed | JournalEvent::RunNeedsAttention => {
+                RunEventPayload::Reason(from(v.payload)?)
+            }
+        };
+        Ok(Self {
+            journal_event: v.journal_event,
+            payload,
+        })
+    }
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CaughtUpBody {
@@ -562,8 +729,14 @@ pub struct ArtifactCompleteBody {
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RequestCancelledBody {
-    pub kind: String,
+    pub kind: CancelledTargetKind,
     pub id: Id,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CancelledTargetKind {
+    Request,
+    Subscription,
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RevokedBody {
@@ -696,14 +869,11 @@ impl<'de> Deserialize<'de> for Event {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProtocolError {
     pub code: ErrorCode,
-    pub message: String,
     pub retryable: bool,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub action: Option<ErrorAction>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub details: Option<ErrorDetails>,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -739,14 +909,81 @@ pub enum ErrorDetails {
     Supported { supported: VersionRange },
 }
 impl ProtocolError {
-    fn invalid(message: &'static str, code: ErrorCode) -> Self {
+    fn invalid(_message: &'static str, code: ErrorCode) -> Self {
         Self {
             code,
-            message: message.into(),
             retryable: false,
             action: None,
             details: None,
         }
+    }
+}
+impl ErrorCode {
+    fn message(self) -> &'static str {
+        match self {
+            Self::InvalidRequest => "invalid request",
+            Self::IdempotencyKeyRequired => "idempotency key required",
+            Self::IdempotencyConflict => "idempotency key conflicts with an earlier request",
+            Self::ProtocolIncompatible => "attach protocol versions do not overlap",
+            Self::PayloadTooLarge => "payload too large",
+            Self::InvalidCursor => "invalid cursor",
+            Self::CursorExpired => "cursor expired",
+            Self::InvalidArtifactCursor => "invalid artifact cursor",
+            Self::SubscriptionNotFound => "subscription not found",
+            Self::TransferNotFound => "transfer not found",
+            Self::RequestNotFound => "request not found",
+            Self::AlreadyCompleted => "request already completed",
+            Self::Cancelled => "request cancelled",
+            Self::SlowConsumer => "consumer is too slow",
+            Self::RateLimited => "rate limited",
+        }
+    }
+}
+impl Serialize for ProtocolError {
+    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        #[derive(Serialize)]
+        struct Wire<'a> {
+            code: ErrorCode,
+            message: &'static str,
+            retryable: bool,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            action: &'a Option<ErrorAction>,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            details: &'a Option<ErrorDetails>,
+        }
+        Wire {
+            code: self.code,
+            message: self.code.message(),
+            retryable: self.retryable,
+            action: &self.action,
+            details: &self.details,
+        }
+        .serialize(s)
+    }
+}
+impl<'de> Deserialize<'de> for ProtocolError {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Wire {
+            code: ErrorCode,
+            message: String,
+            retryable: bool,
+            #[serde(default)]
+            action: Option<ErrorAction>,
+            #[serde(default)]
+            details: Option<ErrorDetails>,
+        }
+        let v = Wire::deserialize(d)?;
+        if v.message != v.code.message() {
+            return Err(de::Error::custom("invalid protocol error message"));
+        }
+        Ok(Self {
+            code: v.code,
+            retryable: v.retryable,
+            action: v.action,
+            details: v.details,
+        })
     }
 }
 fn bounded(v: &str, max: usize) -> bool {
@@ -784,9 +1021,6 @@ pub fn validate_authorized(v: &Authorized) -> Result<(), ProtocolError> {
         || v.idle_timeout_seconds == 0
         || v.workspace_scopes.is_empty()
         || v.workspace_scopes.len() > MAX_WORKSPACE_SCOPES
-        || v.workspace_scopes
-            .iter()
-            .any(|s| !bounded(s, MAX_CLIENT_TEXT_BYTES))
     {
         return Err(ProtocolError::invalid(
             "invalid authorization",
@@ -896,13 +1130,7 @@ pub fn validate_response(v: &Response) -> Result<(), ProtocolError> {
     }
     Ok(())
 }
-pub fn validate_error(v: &ErrorEnvelope) -> Result<(), ProtocolError> {
-    if !bounded(&v.error.message, MAX_CLIENT_TEXT_BYTES) {
-        return Err(ProtocolError::invalid(
-            "invalid error envelope",
-            ErrorCode::InvalidRequest,
-        ));
-    }
+pub fn validate_error(_v: &ErrorEnvelope) -> Result<(), ProtocolError> {
     Ok(())
 }
 pub fn validate_event(v: &Event) -> Result<(), ProtocolError> {
@@ -913,7 +1141,11 @@ pub fn validate_event(v: &Event) -> Result<(), ProtocolError> {
         ));
     }
     let bad = match &v.body {
-        EventBody::RunEvent(x) => !bounded(&x.journal_event, MAX_CLIENT_TEXT_BYTES),
+        EventBody::RunEvent(x) => {
+            !run_payload_matches(x.journal_event, &x.payload)
+                || matches!(&x.payload, RunEventPayload::Text(v) if !bounded(&v.text, MAX_TEXT_BYTES))
+                || matches!(&x.payload, RunEventPayload::Reason(v) if !bounded(&v.reason, MAX_CLIENT_TEXT_BYTES))
+        }
         EventBody::PermissionPending(x) => !bounded(&x.description, MAX_TEXT_BYTES),
         EventBody::ArtifactChunk(x) => {
             x.chunk_sha256.len() != 64 || !x.chunk_sha256.bytes().all(|b| b.is_ascii_hexdigit())
@@ -921,7 +1153,7 @@ pub fn validate_event(v: &Event) -> Result<(), ProtocolError> {
         EventBody::ArtifactComplete(x) => {
             x.sha256.len() != 64 || !x.sha256.bytes().all(|b| b.is_ascii_hexdigit())
         }
-        EventBody::RequestCancelled(x) => !bounded(&x.kind, MAX_CLIENT_TEXT_BYTES),
+        EventBody::RequestCancelled(_) => false,
         EventBody::CapabilityRevoked(x) => !bounded(&x.reason, MAX_CLIENT_TEXT_BYTES),
         EventBody::StreamClosed(x) => !bounded(&x.code, MAX_CLIENT_TEXT_BYTES),
         _ => false,
@@ -955,7 +1187,6 @@ pub fn negotiate_version(peer: VersionRange) -> Result<u16, ProtocolError> {
     };
     Err(ProtocolError {
         code: ErrorCode::ProtocolIncompatible,
-        message: "attach protocol versions do not overlap".into(),
         retryable: false,
         action: Some(action),
         details: Some(ErrorDetails::Supported { supported: ours }),

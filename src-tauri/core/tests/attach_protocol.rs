@@ -123,7 +123,7 @@ fn every_event_schema_and_unknown_event_compatibility() {
     let cases = [
         (
             "run.event",
-            json!({"journal_event":"message.committed","payload":{}}),
+            json!({"journal_event":"message.submitted","payload":{"text":"hello"}}),
             Some((ID, 1)),
         ),
         ("subscription.caught_up", json!({"through_run_seq":1}), None),
@@ -161,6 +161,32 @@ fn every_event_schema_and_unknown_event_compatibility() {
     }
     let missing = json!({"protocol":PROTOCOL,"subscription_id":ID,"event":"artifact.chunk","body":{"data":"YWJj"}});
     assert!(decode_event(&framed(missing)).is_err());
+    let unknown_cancel = json!({"protocol":PROTOCOL,"subscription_id":ID,"event":"request.cancelled","body":{"kind":"run","id":ID}});
+    assert!(decode_event(&framed(unknown_cancel)).is_err());
+    let loose_projection = json!({"protocol":PROTOCOL,"subscription_id":ID,"event":"run.event","run_id":ID,"run_seq":1,"body":{"journal_event":"message.submitted","payload":{"secret":"input"}}});
+    assert!(decode_event(&framed(loose_projection)).is_err());
+}
+
+#[test]
+fn authorization_scopes_are_uuid_ids() {
+    let invalid = json!({"capability":"capability","expires_at":"2026-07-12T00:00:00Z","idle_timeout_seconds":900,"workspace_scopes":["not-a-uuid"]});
+    assert!(decode_authorized(&framed(invalid)).is_err());
+}
+
+#[test]
+fn protocol_errors_have_closed_redacted_messages() {
+    let arbitrary = json!({"protocol":PROTOCOL,"ok":false,"error":{"code":"invalid_request","message":"token=secret /home/user","retryable":false}});
+    assert!(decode_error(&framed(arbitrary)).is_err());
+    let arbitrary_details = json!({"protocol":PROTOCOL,"ok":false,"error":{"code":"invalid_request","message":"invalid request","retryable":false,"details":{"token":"secret"}}});
+    assert!(decode_error(&framed(arbitrary_details)).is_err());
+
+    let attacker = "token=secret /home/user";
+    let mut invalid = request("run.start", json!({"workspace_id":ID,"text":attacker}));
+    invalid.as_object_mut().unwrap().remove("idempotency_key");
+    let CodecError::Protocol(error) = decode_request(&framed(invalid)).unwrap_err() else {
+        panic!()
+    };
+    assert!(!serde_json::to_string(&error).unwrap().contains(attacker));
 }
 
 #[test]
