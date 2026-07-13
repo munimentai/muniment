@@ -49,6 +49,18 @@ pub(crate) fn fresh_tokens(state: &AuthState) -> Result<muniment_core::auth::Tok
         .ok_or_else(|| "Sign in before sending a message.".into())
 }
 
+pub(crate) async fn fresh_tokens_async(
+    state: &AuthState,
+) -> Result<muniment_core::auth::TokenSet, String> {
+    let store = state.native_store.clone();
+    tauri::async_runtime::spawn_blocking(move || ensure_native_session(store.as_ref()))
+        .await
+        .map_err(|_| "Sign in before sending a message.".to_string())??
+        .into_credentials()
+        .map(|credentials| credentials.tokens)
+        .ok_or_else(|| "Sign in before sending a message.".into())
+}
+
 impl AuthState {
     pub fn new() -> Self {
         AuthState {
