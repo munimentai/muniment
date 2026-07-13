@@ -49,6 +49,18 @@ pub(crate) fn fresh_tokens(state: &AuthState) -> Result<muniment_core::auth::Tok
         .ok_or_else(|| "Sign in before sending a message.".into())
 }
 
+pub(crate) async fn fresh_tokens_async(
+    state: &AuthState,
+) -> Result<muniment_core::auth::TokenSet, String> {
+    let store = state.native_store.clone();
+    tauri::async_runtime::spawn_blocking(move || ensure_native_session(store.as_ref()))
+        .await
+        .map_err(|_| "Sign in before sending a message.".to_string())??
+        .into_credentials()
+        .map(|credentials| credentials.tokens)
+        .ok_or_else(|| "Sign in before sending a message.".into())
+}
+
 impl AuthState {
     pub fn new() -> Self {
         AuthState {
@@ -129,9 +141,23 @@ pub async fn auth_status(state: tauri::State<'_, AuthState>) -> Result<AuthStatu
 pub async fn auth_ensure_fresh(state: tauri::State<'_, AuthState>) -> Result<AuthStatus, String> {
     let store = state.native_store.clone();
     tauri::async_runtime::spawn_blocking(move || ensure_native_session(store.as_ref()))
-    .await
-    .map_err(|e| format!("session refresh task failed: {e}"))?
-    .map(|result| result.status)
+        .await
+        .map_err(|e| format!("session refresh task failed: {e}"))?
+        .map(|result| result.status)
+}
+
+/// Fetch the authoritative native session and expose only its typed,
+/// display-only entitlement projection.
+#[tauri::command]
+pub async fn auth_entitlement_snapshot(
+    state: tauri::State<'_, AuthState>,
+) -> Result<auth::EntitlementSnapshotView, String> {
+    let store = state.native_store.clone();
+    tauri::async_runtime::spawn_blocking(move || ensure_native_session(store.as_ref()))
+        .await
+        .map_err(|e| format!("access task failed: {e}"))??
+        .entitlement_snapshot
+        .ok_or_else(|| "Sign in to view your access.".into())
 }
 
 fn ensure_native_session(
