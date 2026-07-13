@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -61,6 +61,15 @@ pub struct HistoryEntry {
     text: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     receipt: Option<Value>,
+    tool_activity: Vec<ChatToolActivity>,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ChatToolActivity {
+    effect_id: String,
+    display_name: Option<String>,
+    status: String,
 }
 
 #[derive(Clone, Serialize)]
@@ -71,6 +80,7 @@ struct ChatEvent {
     text: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     receipt: Option<Value>,
+    tool_activity: Vec<ChatToolActivity>,
 }
 
 struct ActiveRun {
@@ -196,6 +206,7 @@ pub async fn chat_history(
                 phase: projection_phase(&projection.status).into(),
                 text: projection.text,
                 receipt: projection.receipt,
+                tool_activity: chat_tool_activity(&projection.tool_activity),
                 run_id,
             })
         })
@@ -533,6 +544,7 @@ fn coordinate(
         return;
     }
     let mut aborting = false;
+    let mut open_effects = BTreeSet::new();
     loop {
         if cancelled.swap(false, Ordering::SeqCst) {
             aborting = true;
@@ -554,11 +566,12 @@ fn coordinate(
                 }
             }
             Ok(PiChatEvent::Completed) if aborting => {
-                let _ = append_emit(
+                let _ = append_terminal(
                     &app,
                     &journal,
                     &run_id,
                     &mut seq,
+                    &mut open_effects,
                     "run.cancelled",
                     json!({}),
                 );
@@ -567,22 +580,24 @@ fn coordinate(
             Ok(PiChatEvent::Completed) => {
                 match fetch_receipt(&grant.receipt_url, &access_token, &run_id) {
                     Ok(receipt) => {
-                        let _ = append_emit(
+                        let _ = append_terminal(
                             &app,
                             &journal,
                             &run_id,
                             &mut seq,
+                            &mut open_effects,
                             "run.completed",
                             json!({"receipt": receipt}),
                         );
                         break;
                     }
                     Err(_) => {
-                        fail(
+                        fail_with_open_effects(
                             &app,
                             &journal,
                             &run_id,
                             &mut seq,
+                            &mut open_effects,
                             "The reply finished, but its receipt was unavailable.",
                         );
                         break;
@@ -590,59 +605,155 @@ fn coordinate(
                 }
             }
             Ok(PiChatEvent::Cancelled) => {
-                let _ = append_emit(
+                let _ = append_terminal(
                     &app,
                     &journal,
                     &run_id,
                     &mut seq,
+                    &mut open_effects,
                     "run.cancelled",
                     json!({}),
                 );
                 break;
             }
             Ok(PiChatEvent::Failed) => {
-                fail(
+                fail_with_open_effects(
                     &app,
                     &journal,
                     &run_id,
                     &mut seq,
+                    &mut open_effects,
                     "The model could not complete this reply.",
                 );
                 break;
             }
-            Ok(
-                PiChatEvent::ToolStarted { .. }
-                | PiChatEvent::ToolFinished { .. }
-                | PiChatEvent::Interleaved
-                | PiChatEvent::PromptAccepted,
-            ) => {}
+            Ok(event @ (PiChatEvent::ToolStarted { .. } | PiChatEvent::ToolFinished { .. })) => {
+                if let Some((kind, payload)) = tool_journal_entry(&event, &mut open_effects) {
+                    if append_emit(&app, &journal, &run_id, &mut seq, kind, payload).is_err() {
+                        break;
+                    }
+                }
+            }
+            Ok(PiChatEvent::Interleaved | PiChatEvent::PromptAccepted) => {}
             Err(error) if error == "timed out waiting for Pi stream" => {
                 if matches!(
                     runtime.supervisor.status(),
                     SidecarStatus::Failed | SidecarStatus::Stopped
                 ) {
-                    fail(
+                    fail_with_open_effects(
                         &app,
                         &journal,
                         &run_id,
                         &mut seq,
+                        &mut open_effects,
                         "The agent runtime stopped unexpectedly.",
                     );
                     break;
                 }
             }
             Err(_) => {
-                fail(
+                fail_with_open_effects(
                     &app,
                     &journal,
                     &run_id,
                     &mut seq,
+                    &mut open_effects,
                     "The agent runtime stopped unexpectedly.",
                 );
                 break;
             }
         }
     }
+}
+
+fn tool_journal_entry(
+    event: &PiChatEvent,
+    open_effects: &mut BTreeSet<String>,
+) -> Option<(&'static str, Value)> {
+    match event {
+        PiChatEvent::ToolStarted {
+            tool_call_id,
+            tool_name,
+        } if open_effects.insert(tool_call_id.clone()) => Some((
+            "tool.effect.started",
+            json!({"effect_id": tool_call_id, "display_name": tool_name}),
+        )),
+        PiChatEvent::ToolFinished {
+            tool_call_id,
+            failed,
+        } if open_effects.remove(tool_call_id) => Some((
+            if *failed {
+                "tool.effect.failed"
+            } else {
+                "tool.effect.completed"
+            },
+            json!({"effect_id": tool_call_id}),
+        )),
+        _ => None,
+    }
+}
+
+fn close_open_effects(
+    open_effects: &mut BTreeSet<String>,
+    mut append: impl FnMut(&str, Value) -> Result<(), ()>,
+) -> Result<(), ()> {
+    for effect_id in open_effects.clone() {
+        append("tool.effect.failed", json!({"effect_id": effect_id}))?;
+        open_effects.remove(&effect_id);
+    }
+    Ok(())
+}
+
+fn append_terminal(
+    app: &tauri::AppHandle,
+    journal: &Arc<Mutex<RunJournal>>,
+    run_id: &str,
+    seq: &mut u64,
+    open_effects: &mut BTreeSet<String>,
+    kind: &str,
+    payload: Value,
+) -> Result<(), ()> {
+    close_open_effects(open_effects, |kind, payload| {
+        append_emit(app, journal, run_id, seq, kind, payload)
+    })?;
+    append_emit(app, journal, run_id, seq, kind, payload)
+}
+
+fn fail_with_open_effects(
+    app: &tauri::AppHandle,
+    journal: &Arc<Mutex<RunJournal>>,
+    run_id: &str,
+    seq: &mut u64,
+    open_effects: &mut BTreeSet<String>,
+    reason: &str,
+) {
+    let _ = append_terminal(
+        app,
+        journal,
+        run_id,
+        seq,
+        open_effects,
+        "run.failed",
+        json!({"reason": reason}),
+    );
+}
+
+fn chat_tool_activity(
+    activity: &[muniment_core::journal::reducer::ToolActivity],
+) -> Vec<ChatToolActivity> {
+    activity
+        .iter()
+        .map(|activity| ChatToolActivity {
+            effect_id: activity.effect_id.clone(),
+            display_name: activity.display_name.clone(),
+            status: match activity.status {
+                muniment_core::journal::reducer::ToolActivityStatus::Running => "running",
+                muniment_core::journal::reducer::ToolActivityStatus::Completed => "completed",
+                muniment_core::journal::reducer::ToolActivityStatus::Failed => "failed",
+            }
+            .into(),
+        })
+        .collect()
 }
 
 fn append_emit(
@@ -661,6 +772,7 @@ fn append_emit(
         project_chat(&journal.events(run_id).map_err(|_| ())?).map_err(|_| ())?
     };
     let phase = projection_phase(&projection.status);
+    let tool_activity = chat_tool_activity(&projection.tool_activity);
     app.emit(
         "chat-event",
         ChatEvent {
@@ -668,6 +780,7 @@ fn append_emit(
             phase: phase.into(),
             text: projection.text,
             receipt: projection.receipt,
+            tool_activity,
         },
     )
     .map_err(|_| ())
@@ -833,6 +946,96 @@ mod tests {
             .filter_map(|result| result.as_ref().err().map(String::as_str))
             .collect();
         assert_eq!(errors, ["A reply is already in progress."]);
+    }
+
+    #[test]
+    fn tool_frames_ignore_duplicate_starts_and_unmatched_finishes() {
+        let mut open_effects = BTreeSet::new();
+        let started = PiChatEvent::ToolStarted {
+            tool_call_id: "tool-1".into(),
+            tool_name: "Read file".into(),
+        };
+        let unmatched = PiChatEvent::ToolFinished {
+            tool_call_id: "missing".into(),
+            failed: false,
+        };
+
+        assert_eq!(
+            tool_journal_entry(&started, &mut open_effects),
+            Some((
+                "tool.effect.started",
+                json!({"effect_id": "tool-1", "display_name": "Read file"})
+            ))
+        );
+        assert!(tool_journal_entry(&started, &mut open_effects).is_none());
+        assert!(tool_journal_entry(&unmatched, &mut open_effects).is_none());
+
+        let finished = PiChatEvent::ToolFinished {
+            tool_call_id: "tool-1".into(),
+            failed: false,
+        };
+        assert_eq!(
+            tool_journal_entry(&finished, &mut open_effects),
+            Some(("tool.effect.completed", json!({"effect_id": "tool-1"})))
+        );
+        assert!(tool_journal_entry(&finished, &mut open_effects).is_none());
+
+        let failed = PiChatEvent::ToolFinished {
+            tool_call_id: "tool-2".into(),
+            failed: true,
+        };
+        assert!(open_effects.insert("tool-2".into()));
+        assert_eq!(
+            tool_journal_entry(&failed, &mut open_effects),
+            Some(("tool.effect.failed", json!({"effect_id": "tool-2"})))
+        );
+    }
+
+    #[test]
+    fn terminal_failure_closes_a_tool_before_projecting_the_run() {
+        let directory = std::env::temp_dir().join(format!("muniment-chat-{}", Uuid::now_v7()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let mut journal = RunJournal::open(directory.join("runs.sqlite3")).unwrap();
+        let run_id = Uuid::now_v7().to_string();
+        let mut seq = 1;
+        append_test_event(&mut journal, &run_id, seq, "run.started", json!({}));
+        seq += 1;
+        append_test_event(
+            &mut journal,
+            &run_id,
+            seq,
+            "tool.effect.started",
+            json!({"effect_id": "tool-1", "display_name": "Read file"}),
+        );
+        let mut open_effects = BTreeSet::from(["tool-1".to_string()]);
+
+        close_open_effects(&mut open_effects, |kind, payload| {
+            seq += 1;
+            append_test_event(&mut journal, &run_id, seq, kind, payload);
+            Ok(())
+        })
+        .unwrap();
+        seq += 1;
+        append_test_event(
+            &mut journal,
+            &run_id,
+            seq,
+            "run.failed",
+            json!({"reason": "runtime stopped"}),
+        );
+
+        let events = journal.events(&run_id).unwrap();
+        let projection = project_chat(&events).unwrap();
+        assert!(open_effects.is_empty());
+        assert!(matches!(projection.status, Some(RunStatus::Failed { .. })));
+        assert_eq!(projection.tool_activity.len(), 1);
+        assert_eq!(
+            projection.tool_activity[0].status,
+            muniment_core::journal::reducer::ToolActivityStatus::Failed
+        );
+
+        drop(journal);
+        std::fs::remove_dir_all(directory).unwrap();
     }
 
     #[test]
