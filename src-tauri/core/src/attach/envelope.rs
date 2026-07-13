@@ -105,13 +105,78 @@ pub struct Event {
     pub body: Value,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(untagged)]
 pub enum Envelope {
     Response(Response),
     Error(ErrorEnvelope),
     Request(Request),
     Event(Event),
+}
+
+impl<'de> Deserialize<'de> for Envelope {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let value = Value::deserialize(deserializer)?;
+        let object = value
+            .as_object()
+            .ok_or_else(|| de::Error::custom("attach envelope must be an object"))?;
+        let has = |field: &str| object.contains_key(field);
+
+        let kind = if has("ok") {
+            if has("operation")
+                || has("capability")
+                || has("idempotency_key")
+                || has("subscription_id")
+                || has("event")
+                || has("run_id")
+                || has("run_seq")
+            {
+                return Err(de::Error::custom("conflicting attach envelope fields"));
+            }
+            match object.get("ok") {
+                Some(Value::Bool(true)) if !has("error") => 0,
+                Some(Value::Bool(false)) if has("error") && !has("body") => 1,
+                _ => return Err(de::Error::custom("invalid attach envelope discriminant")),
+            }
+        } else if has("operation") || has("capability") || has("idempotency_key") {
+            if has("error")
+                || has("subscription_id")
+                || has("event")
+                || has("run_id")
+                || has("run_seq")
+            {
+                return Err(de::Error::custom("conflicting attach envelope fields"));
+            }
+            2
+        } else if has("subscription_id") || has("event") || has("run_id") || has("run_seq") {
+            if has("error")
+                || has("request_id")
+                || has("operation")
+                || has("capability")
+                || has("idempotency_key")
+            {
+                return Err(de::Error::custom("conflicting attach envelope fields"));
+            }
+            3
+        } else {
+            return Err(de::Error::custom("unrecognized attach envelope shape"));
+        };
+
+        match kind {
+            0 => serde_json::from_value(value)
+                .map(Self::Response)
+                .map_err(de::Error::custom),
+            1 => serde_json::from_value(value)
+                .map(Self::Error)
+                .map_err(de::Error::custom),
+            2 => serde_json::from_value(value)
+                .map(Self::Request)
+                .map_err(de::Error::custom),
+            _ => serde_json::from_value(value)
+                .map(Self::Event)
+                .map_err(de::Error::custom),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -152,7 +217,7 @@ pub enum Operation {
     RequestCancel,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum EventName {
     #[serde(rename = "run.event")]
     RunEvent,
@@ -170,6 +235,34 @@ pub enum EventName {
     CapabilityRevoked,
     #[serde(rename = "stream.closed")]
     StreamClosed,
+    #[serde(untagged)]
+    Unknown(BoundedEventName),
+}
+
+/// A future v1 event name retained so a receiver can safely ignore the event.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BoundedEventName(String);
+
+impl BoundedEventName {
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl Serialize for BoundedEventName {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(&self.0)
+    }
+}
+
+impl<'de> Deserialize<'de> for BoundedEventName {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let value = String::deserialize(deserializer)?;
+        if value.is_empty() || value.len() > MAX_TEXT_LENGTH {
+            return Err(de::Error::custom("invalid event name"));
+        }
+        Ok(Self(value))
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -309,10 +402,25 @@ impl<'de> Deserialize<'de> for ProtocolError {
 }
 
 /// Closed, deliberately non-secret error detail vocabulary for this slice.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(untagged)]
 pub enum ErrorDetails {
     SupportedVersions { supported: VersionRange },
+}
+
+impl<'de> Deserialize<'de> for ErrorDetails {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct SupportedVersions {
+            supported: VersionRange,
+        }
+
+        let details = SupportedVersions::deserialize(deserializer)?;
+        Ok(Self::SupportedVersions {
+            supported: details.supported,
+        })
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

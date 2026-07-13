@@ -217,4 +217,67 @@ fn error_schema_rejects_arbitrary_messages_and_mismatched_details() {
         "retryable": false
     });
     assert!(serde_json::from_value::<ProtocolError>(mismatched).is_err());
+
+    let secret_detail = json!({
+        "code": "protocol_incompatible",
+        "message": "The companion and desktop protocol versions are incompatible.",
+        "retryable": false,
+        "action": "upgrade_companion",
+        "details": {
+            "supported": {"min": 1, "max": 1},
+            "token": "secret"
+        }
+    });
+    assert!(serde_json::from_value::<ProtocolError>(secret_detail).is_err());
+}
+
+#[test]
+fn envelope_shapes_reject_conflicting_fields_but_allow_future_optional_fields() {
+    let mixed = json!({
+        "protocol": PROTOCOL,
+        "request_id": id(1),
+        "operation": "thread.list",
+        "capability": "c",
+        "ok": true,
+        "body": {}
+    });
+    assert!(serde_json::from_value::<Envelope>(mixed).is_err());
+
+    let mixed_event = json!({
+        "protocol": PROTOCOL,
+        "subscription_id": id(2),
+        "event": "run.event",
+        "request_id": id(1),
+        "body": {}
+    });
+    assert!(serde_json::from_value::<Envelope>(mixed_event).is_err());
+
+    let future_response = json!({
+        "protocol": PROTOCOL,
+        "request_id": id(1),
+        "ok": true,
+        "body": {},
+        "future_optional": "ignored"
+    });
+    assert!(matches!(
+        serde_json::from_value::<Envelope>(future_response).unwrap(),
+        Envelope::Response(_)
+    ));
+}
+
+#[test]
+fn unknown_v1_events_are_representable_and_ignorable() {
+    let event = json!({
+        "protocol": PROTOCOL,
+        "subscription_id": id(3),
+        "event": "future.optional_event",
+        "body": {}
+    });
+    let Envelope::Event(event) = serde_json::from_value::<Envelope>(event).unwrap() else {
+        panic!("expected event envelope");
+    };
+    let EventName::Unknown(name) = event.event else {
+        panic!("expected unknown event name");
+    };
+    assert_eq!(name.as_str(), "future.optional_event");
 }
