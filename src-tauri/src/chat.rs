@@ -213,29 +213,42 @@ pub async fn chat_submit(
     if prompt.is_empty() {
         return Err("Enter a message before sending.".into());
     }
-    let tokens = auth::fresh_tokens(&auth_state)?;
-    let mut active = state
-        .active
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    if active.is_some() {
-        return Err("A reply is already in progress.".into());
+    {
+        let active = state
+            .active
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if active.is_some() {
+            return Err("A reply is already in progress.".into());
+        }
     }
 
-    let grant = fetch_grant(&tokens.access_token)?;
-    validate_grant(&grant)?;
+    let tokens = auth::fresh_tokens_async(&auth_state).await?;
     let run_id = Uuid::now_v7().to_string();
-    protect_prompt(&run_id, &prompt, tokens.subject.as_deref())?;
+    let access_token = tokens.access_token.clone();
+    let protected_run_id = run_id.clone();
+    let protected_prompt = prompt.clone();
+    let subject = tokens.subject.clone();
+    let grant = tauri::async_runtime::spawn_blocking(move || {
+        let grant = fetch_grant(&access_token)?;
+        validate_grant(&grant)?;
+        protect_prompt(&protected_run_id, &protected_prompt, subject.as_deref())?;
+        Ok::<_, String>(grant)
+    })
+    .await
+    .map_err(|_| "Chat configuration is temporarily unavailable.".to_string())??;
     let cancelled = Arc::new(AtomicBool::new(false));
     let transport = Arc::new(Mutex::new(None));
     let adapter = Arc::new(Mutex::new(None));
-    *active = Some(ActiveRun {
-        id: run_id.clone(),
-        cancelled: Arc::clone(&cancelled),
-        transport: Arc::clone(&transport),
-        adapter: Arc::clone(&adapter),
-    });
-    drop(active);
+    install_active_run(
+        &state.active,
+        ActiveRun {
+            id: run_id.clone(),
+            cancelled: Arc::clone(&cancelled),
+            transport: Arc::clone(&transport),
+            adapter: Arc::clone(&adapter),
+        },
+    )?;
 
     let journal = Arc::clone(&state.journal);
     let runtime = Arc::clone(&state.runtime);
@@ -264,6 +277,17 @@ pub async fn chat_submit(
         }
     });
     Ok(SubmitResult { run_id: result_id })
+}
+
+fn install_active_run(active: &Mutex<Option<ActiveRun>>, run: ActiveRun) -> Result<(), String> {
+    let mut active = active
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if active.is_some() {
+        return Err("A reply is already in progress.".into());
+    }
+    *active = Some(run);
+    Ok(())
 }
 
 #[tauri::command]
@@ -322,13 +346,15 @@ pub async fn chat_cancel(state: tauri::State<'_, ChatState>, run_id: String) -> 
         .as_ref()
         .filter(|run| run.id == run_id)
         .ok_or_else(|| "That reply is no longer active.".to_string())?;
-    run.cancelled.store(true, Ordering::SeqCst);
-    if let Some(transport) = run
+    let cancelled = Arc::clone(&run.cancelled);
+    let transport = run
         .transport
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .as_ref()
-    {
+        .clone();
+    drop(active);
+    cancelled.store(true, Ordering::SeqCst);
+    if let Some(transport) = transport {
         transport
             .call(cancel_command(), Duration::from_secs(2))
             .map_err(|_| "The reply could not be stopped yet. Try again.".to_string())?;
@@ -780,6 +806,33 @@ mod tests {
             queue_message(&active, request("run-1")).unwrap_err(),
             "The reply is not ready for messages yet."
         );
+    }
+
+    #[test]
+    fn concurrent_active_run_installs_allow_exactly_one_run() {
+        let active = Arc::new(Mutex::new(None));
+        let barrier = Arc::new(std::sync::Barrier::new(2));
+        let handles: Vec<_> = (0..2)
+            .map(|index| {
+                let active = Arc::clone(&active);
+                let barrier = Arc::clone(&barrier);
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    install_active_run(&active, inactive_transport_run(&format!("run-{index}")))
+                })
+            })
+            .collect();
+
+        let results: Vec<_> = handles
+            .into_iter()
+            .map(|handle| handle.join().unwrap())
+            .collect();
+        assert_eq!(results.iter().filter(|result| result.is_ok()).count(), 1);
+        let errors: Vec<_> = results
+            .iter()
+            .filter_map(|result| result.as_ref().err().map(String::as_str))
+            .collect();
+        assert_eq!(errors, ["A reply is already in progress."]);
     }
 
     #[test]
