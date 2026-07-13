@@ -26,20 +26,14 @@ fn all_envelope_kinds_round_trip() {
     round_trip(Envelope::Response(Response {
         protocol: Protocol,
         request_id: id(1),
-        ok: true,
+        ok: Success,
         body: json!({"accepted":true}),
     }));
     round_trip(Envelope::Error(ErrorEnvelope {
         protocol: Protocol,
         request_id: Some(id(1)),
-        ok: false,
-        error: ProtocolError {
-            code: ErrorCode::MalformedFrame,
-            message: "The frame is malformed.".into(),
-            retryable: false,
-            action: None,
-            details: None,
-        },
+        ok: Failure,
+        error: ProtocolError::malformed_frame(),
     }));
     round_trip(Envelope::Event(Event {
         protocol: Protocol,
@@ -49,6 +43,29 @@ fn all_envelope_kinds_round_trip() {
         run_seq: Some(7),
         body: json!({"kind":"message"}),
     }));
+}
+
+#[test]
+fn envelope_discriminants_are_fixed_on_encode_and_decode() {
+    assert_eq!(serde_json::to_value(Success).unwrap(), true);
+    assert_eq!(serde_json::to_value(Failure).unwrap(), false);
+    assert!(serde_json::from_value::<Success>(json!(false)).is_err());
+    assert!(serde_json::from_value::<Failure>(json!(true)).is_err());
+
+    let response = Response {
+        protocol: Protocol,
+        request_id: id(1),
+        ok: Success,
+        body: json!({}),
+    };
+    let error = ErrorEnvelope {
+        protocol: Protocol,
+        request_id: None,
+        ok: Failure,
+        error: ProtocolError::malformed_frame(),
+    };
+    assert_eq!(serde_json::to_value(response).unwrap()["ok"], true);
+    assert_eq!(serde_json::to_value(error).unwrap()["ok"], false);
 }
 
 #[test]
@@ -95,6 +112,48 @@ fn envelope_ids_are_bounded_uuid_strings() {
     ));
 }
 
+fn raw_json_frame(payload: &[u8]) -> Vec<u8> {
+    [&(payload.len() as u32).to_be_bytes()[..], payload].concat()
+}
+
+#[test]
+fn frame_structural_limits_are_enforced_independently() {
+    let nested = format!(
+        "{}0{}",
+        "[".repeat(MAX_JSON_DEPTH),
+        "]".repeat(MAX_JSON_DEPTH)
+    );
+    assert!(matches!(
+        decode_frame::<Value>(&raw_json_frame(nested.as_bytes())),
+        Err(FrameError::StructureLimit)
+    ));
+
+    let long_string = serde_json::to_string(&"x".repeat(MAX_TEXT_LENGTH + 1)).unwrap();
+    assert!(matches!(
+        decode_frame::<Value>(&raw_json_frame(long_string.as_bytes())),
+        Err(FrameError::StructureLimit)
+    ));
+
+    // Each object entry contributes its key and string value to the string count.
+    let too_many_strings = Value::Object(
+        (0..(MAX_JSON_STRINGS / 2 + 1))
+            .map(|i| (format!("k{i}"), json!("v")))
+            .collect(),
+    );
+    let payload = serde_json::to_vec(&too_many_strings).unwrap();
+    assert!(matches!(
+        decode_frame::<Value>(&raw_json_frame(&payload)),
+        Err(FrameError::StructureLimit)
+    ));
+
+    let too_many_entries = Value::Array(vec![Value::Null; MAX_JSON_COLLECTION_ENTRIES + 1]);
+    let payload = serde_json::to_vec(&too_many_entries).unwrap();
+    assert!(matches!(
+        decode_frame::<Value>(&raw_json_frame(&payload)),
+        Err(FrameError::StructureLimit)
+    ));
+}
+
 #[test]
 fn hello_welcome_and_version_overlap() {
     let hello = Hello {
@@ -124,10 +183,38 @@ fn incompatibility_is_actionable_and_discloses_no_runtime_state() {
         VersionRange { min: 1, max: 1 },
     )
     .unwrap_err();
-    assert_eq!(error.code, ErrorCode::ProtocolIncompatible);
-    assert_eq!(error.action, Some(ErrorAction::UpgradeDesktop));
+    assert_eq!(error.code(), ErrorCode::ProtocolIncompatible);
+    assert_eq!(error.action(), Some(ErrorAction::UpgradeDesktop));
     let serialized = serde_json::to_string(&error).unwrap();
     for forbidden in ["profile", "session", "workspace", "entitlement", "runtime"] {
         assert!(!serialized.contains(forbidden));
     }
+}
+
+#[test]
+fn error_schema_rejects_arbitrary_messages_and_mismatched_details() {
+    let approved = [
+        ProtocolError::malformed_frame(),
+        ProtocolError::payload_too_large(),
+        ProtocolError::protocol_incompatible(
+            VersionRange { min: 1, max: 1 },
+            ErrorAction::UpgradeCompanion,
+        ),
+    ];
+    let serialized = serde_json::to_string(&approved).unwrap();
+    assert!(!serialized.contains("/home/user/.env"));
+
+    let injected = json!({
+        "code": "malformed_frame",
+        "message": "/home/user/.env contains TOKEN=secret",
+        "retryable": false
+    });
+    assert!(serde_json::from_value::<ProtocolError>(injected).is_err());
+
+    let mismatched = json!({
+        "code": "payload_too_large",
+        "message": "The frame is malformed.",
+        "retryable": false
+    });
+    assert!(serde_json::from_value::<ProtocolError>(mismatched).is_err());
 }

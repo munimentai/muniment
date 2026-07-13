@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use super::{ErrorAction, ErrorCode, ErrorDetails, Protocol, ProtocolError, VersionRange};
+use super::{ErrorAction, Protocol, ProtocolError, VersionRange};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Client {
@@ -59,13 +59,7 @@ pub fn negotiate_version(
     } else {
         ErrorAction::UpgradeDesktop
     };
-    Err(ProtocolError {
-        code: ErrorCode::ProtocolIncompatible,
-        message: "The companion and desktop protocol versions are incompatible.".into(),
-        retryable: false,
-        action: Some(action),
-        details: Some(ErrorDetails::SupportedVersions { supported: desktop }),
-    })
+    Err(ProtocolError::protocol_incompatible(desktop, action))
 }
 
 /// Validates that the first decoded message is a hello and selects its version.

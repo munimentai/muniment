@@ -80,8 +80,7 @@ pub struct Request {
 pub struct Response {
     pub protocol: Protocol,
     pub request_id: Id,
-    #[serde(deserialize_with = "deserialize_true")]
-    pub ok: bool,
+    pub ok: Success,
     pub body: Value,
 }
 
@@ -90,8 +89,7 @@ pub struct ErrorEnvelope {
     pub protocol: Protocol,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub request_id: Option<Id>,
-    #[serde(deserialize_with = "deserialize_false")]
-    pub ok: bool,
+    pub ok: Failure,
     pub error: ProtocolError,
 }
 
@@ -181,15 +179,133 @@ pub enum ErrorAction {
     UpgradeDesktop,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Success;
+
+impl Serialize for Success {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_bool(true)
+    }
+}
+impl<'de> Deserialize<'de> for Success {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        bool::deserialize(deserializer)?
+            .then_some(Self)
+            .ok_or_else(|| de::Error::custom("ok must be true"))
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Failure;
+
+impl Serialize for Failure {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_bool(false)
+    }
+}
+impl<'de> Deserialize<'de> for Failure {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        (!bool::deserialize(deserializer)?)
+            .then_some(Self)
+            .ok_or_else(|| de::Error::custom("ok must be false"))
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ErrorMessage {
+    #[serde(rename = "The companion and desktop protocol versions are incompatible.")]
+    ProtocolIncompatible,
+    #[serde(rename = "The payload exceeds the allowed size.")]
+    PayloadTooLarge,
+    #[serde(rename = "The frame is malformed.")]
+    MalformedFrame,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct ProtocolError {
-    pub code: ErrorCode,
-    pub message: String,
-    pub retryable: bool,
+    code: ErrorCode,
+    message: ErrorMessage,
+    retryable: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub action: Option<ErrorAction>,
+    action: Option<ErrorAction>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub details: Option<ErrorDetails>,
+    details: Option<ErrorDetails>,
+}
+
+impl ProtocolError {
+    pub fn protocol_incompatible(supported: VersionRange, action: ErrorAction) -> Self {
+        Self {
+            code: ErrorCode::ProtocolIncompatible,
+            message: ErrorMessage::ProtocolIncompatible,
+            retryable: false,
+            action: Some(action),
+            details: Some(ErrorDetails::SupportedVersions { supported }),
+        }
+    }
+
+    pub fn payload_too_large() -> Self {
+        Self::simple(ErrorCode::PayloadTooLarge, ErrorMessage::PayloadTooLarge)
+    }
+
+    pub fn malformed_frame() -> Self {
+        Self::simple(ErrorCode::MalformedFrame, ErrorMessage::MalformedFrame)
+    }
+
+    fn simple(code: ErrorCode, message: ErrorMessage) -> Self {
+        Self {
+            code,
+            message,
+            retryable: false,
+            action: None,
+            details: None,
+        }
+    }
+
+    pub fn code(&self) -> ErrorCode {
+        self.code
+    }
+    pub fn message(&self) -> ErrorMessage {
+        self.message
+    }
+    pub fn retryable(&self) -> bool {
+        self.retryable
+    }
+    pub fn action(&self) -> Option<ErrorAction> {
+        self.action
+    }
+    pub fn details(&self) -> Option<&ErrorDetails> {
+        self.details.as_ref()
+    }
+}
+
+impl<'de> Deserialize<'de> for ProtocolError {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        struct Wire {
+            code: ErrorCode,
+            message: ErrorMessage,
+            retryable: bool,
+            #[serde(default)]
+            action: Option<ErrorAction>,
+            #[serde(default)]
+            details: Option<ErrorDetails>,
+        }
+        let wire = Wire::deserialize(deserializer)?;
+        let expected = match (wire.code, wire.action, wire.details) {
+            (
+                ErrorCode::ProtocolIncompatible,
+                Some(action),
+                Some(ErrorDetails::SupportedVersions { supported }),
+            ) => Self::protocol_incompatible(supported, action),
+            (ErrorCode::PayloadTooLarge, None, None) => Self::payload_too_large(),
+            (ErrorCode::MalformedFrame, None, None) => Self::malformed_frame(),
+            _ => return Err(de::Error::custom("invalid error schema")),
+        };
+        if wire.message != expected.message || wire.retryable != expected.retryable {
+            return Err(de::Error::custom("invalid error schema"));
+        }
+        Ok(expected)
+    }
 }
 
 /// Closed, deliberately non-secret error detail vocabulary for this slice.
@@ -204,17 +320,4 @@ pub enum ErrorDetails {
 pub struct VersionRange {
     pub min: u32,
     pub max: u32,
-}
-
-fn deserialize_true<'de, D: Deserializer<'de>>(d: D) -> Result<bool, D::Error> {
-    match bool::deserialize(d)? {
-        true => Ok(true),
-        false => Err(de::Error::custom("ok must be true")),
-    }
-}
-fn deserialize_false<'de, D: Deserializer<'de>>(d: D) -> Result<bool, D::Error> {
-    match bool::deserialize(d)? {
-        false => Ok(false),
-        true => Err(de::Error::custom("ok must be false")),
-    }
 }
