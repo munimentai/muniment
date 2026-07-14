@@ -270,8 +270,10 @@ pub fn gemma_install_start(state: State<'_, GemmaInstallState>) -> GemmaInstallS
 }
 
 #[tauri::command]
-pub async fn gemma_install_status(state: State<'_, GemmaInstallState>) -> GemmaInstallStatus {
-    state.status().await
+pub async fn gemma_install_status(
+    state: State<'_, GemmaInstallState>,
+) -> Result<GemmaInstallStatus, String> {
+    Ok(state.status().await)
 }
 
 #[tauri::command]
