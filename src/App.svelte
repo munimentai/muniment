@@ -3,7 +3,7 @@
 
   import { accessErrorState, accessIdleState, accessLoadingState, accessReadyState, bootState, errorState, statusState, waitingState } from './lib/auth-state.js'
   import { ringPath } from './lib/mark.js'
-  import { applyBufferedChatEvents, applyChatEvent, composerAction, receiptParts, receiptRows } from './lib/chat-state.js'
+  import { applyBufferedChatEvents, applyChatEvent, composerAction, historyMessages, receiptParts, receiptRows } from './lib/chat-state.js'
   import { scrollFollowState } from './lib/scroll-follow.js'
 
   const markD = ringPath()
@@ -101,10 +101,7 @@
     expandedReceipts = new Set()
     try {
       const history = await tauri.invoke('chat_history')
-      messages = history.flatMap((entry) => [
-        ...(entry.prompt ? [{ role: 'user', text: entry.prompt }] : []),
-        { role: 'assistant', run: { id: entry.runId, phase: entry.phase, text: entry.text, receipt: entry.receipt ?? null, prompt: entry.prompt ?? '' } },
-      ])
+      messages = historyMessages(history)
       pinned = true
       followNewContent()
     } catch (_) {
