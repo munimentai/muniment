@@ -364,7 +364,7 @@ impl RunJournal {
         rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
     }
 
-    fn refresh_after_compaction(&mut self) -> Result<(), JournalError> {
+    pub(crate) fn refresh_after_compaction(&mut self) -> Result<(), JournalError> {
         let Some(coordination) = &self.coordination else {
             return Ok(());
         };

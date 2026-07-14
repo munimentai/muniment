@@ -105,6 +105,11 @@ pub fn export_runs(
         ));
     }
 
+    let coordination = journal.coordination.clone();
+    let _operation = coordination
+        .as_ref()
+        .map(|state| state.operation.lock().unwrap());
+    journal.refresh_after_compaction()?;
     let tx = journal
         .connection
         .as_mut()

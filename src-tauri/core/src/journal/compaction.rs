@@ -107,6 +107,10 @@ impl RunJournal {
             .clone()
             .expect("file journal is coordinated");
         let _operation = coordination.operation.lock().unwrap();
+        // A peer may have replaced the database since this handle was opened.
+        // Refresh while holding the operation lock so a stale inode can never
+        // become the source of a new compacted snapshot.
+        self.refresh_after_compaction()?;
         let connection = self
             .connection
             .as_ref()

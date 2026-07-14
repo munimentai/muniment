@@ -210,6 +210,30 @@ fn open_peer_refreshes_all_reads_after_replacement() {
 }
 
 #[test]
+fn stale_peer_compaction_refreshes_before_snapshotting() {
+    let db = TestDb::new();
+    let mut first = RunJournal::open(db.as_ref()).unwrap();
+    first.append(0, &event(RUN, 1, 0)).unwrap();
+    let mut stale_peer = RunJournal::open(db.as_ref()).unwrap();
+
+    first.compact().unwrap();
+    first.append(1, &event(RUN, 2, 0)).unwrap();
+    stale_peer.compact().unwrap();
+
+    assert_eq!(first.events(RUN).unwrap().len(), 2);
+    drop(first);
+    drop(stale_peer);
+    assert_eq!(
+        RunJournal::open(db.as_ref())
+            .unwrap()
+            .events(RUN)
+            .unwrap()
+            .len(),
+        2
+    );
+}
+
+#[test]
 fn committed_wal_events_are_included() {
     let db = TestDb::new();
     let mut journal = RunJournal::open(db.as_ref()).unwrap();
