@@ -630,11 +630,15 @@ fn coordinate(
         .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(Arc::clone(&adapter));
     let session_root = match app.path().app_data_dir() {
         Ok(path) => path.join("pi-sessions"),
-        Err(_) => return,
-    };
-    let locator = match transport.session_locator(&session_root, RPC_TIMEOUT) {
-        Ok(locator) => locator,
         Err(_) => {
+            if adapter
+                .cancel_and_drain(&transport, Duration::from_secs(2))
+                .is_err()
+            {
+                let _ = runtime
+                    .as_mut()
+                    .map(|runtime| runtime.supervisor.shutdown());
+            }
             fail(
                 &app,
                 &journal,
@@ -647,6 +651,28 @@ fn coordinate(
             return;
         }
     };
+    let (locator, buffered_events) =
+        match adapter.await_session_binding(&transport, &session_root, RPC_TIMEOUT) {
+            Ok(binding) => binding,
+            Err(_) => {
+                // `await_session_binding` aborts and drains first. Reaping the
+                // supervised child is the final containment boundary if Pi did
+                // not acknowledge cancellation.
+                let _ = runtime
+                    .as_mut()
+                    .map(|runtime| runtime.supervisor.shutdown());
+                fail(
+                    &app,
+                    &journal,
+                    &mut projector,
+                    &run_id,
+                    &mut seq,
+                    "The reply could not be started.",
+                    subject.as_deref(),
+                );
+                return;
+            }
+        };
     if append_emit(
         &app,
         &journal,
@@ -659,6 +685,14 @@ fn coordinate(
     )
     .is_err()
     {
+        if adapter
+            .cancel_and_drain(&transport, Duration::from_secs(2))
+            .is_err()
+        {
+            let _ = runtime
+                .as_mut()
+                .map(|runtime| runtime.supervisor.shutdown());
+        }
         return;
     }
     if append_emit(
@@ -673,8 +707,17 @@ fn coordinate(
     )
     .is_err()
     {
+        if adapter
+            .cancel_and_drain(&transport, Duration::from_secs(2))
+            .is_err()
+        {
+            let _ = runtime
+                .as_mut()
+                .map(|runtime| runtime.supervisor.shutdown());
+        }
         return;
     }
+    let mut buffered_events = buffered_events.into_iter();
     let mut aborting = false;
     let mut open_effects = BTreeSet::new();
     loop {
@@ -682,7 +725,11 @@ fn coordinate(
             aborting = true;
             let _ = transport.call(cancel_command(), Duration::from_secs(2));
         }
-        match adapter.next(Duration::from_millis(100)) {
+        let event = buffered_events
+            .next()
+            .map(Ok)
+            .unwrap_or_else(|| adapter.next(Duration::from_millis(100)));
+        match event {
             Ok(PiChatEvent::TextDelta(text)) => {
                 if append_emit(
                     &app,
