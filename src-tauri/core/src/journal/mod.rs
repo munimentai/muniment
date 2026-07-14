@@ -1,5 +1,6 @@
 //! Durable, append-only per-run event journal.
 
+pub mod compaction;
 pub mod export;
 pub mod reducer;
 pub mod retention;
@@ -12,6 +13,7 @@ use serde_json::Value;
 use std::collections::{BTreeMap, HashSet};
 use std::fmt;
 use std::path::Path;
+use std::path::PathBuf;
 use std::str::FromStr;
 use std::time::Duration;
 use uuid::{Uuid, Version};
@@ -107,11 +109,15 @@ impl From<rusqlite::Error> for JournalError {
 }
 
 pub struct RunJournal {
-    connection: Connection,
+    pub(crate) connection: Option<Connection>,
+    pub(crate) path: Option<PathBuf>,
 }
 
 impl RunJournal {
     pub fn open(path: impl AsRef<Path>) -> Result<Self, JournalError> {
+        let path = path.as_ref();
+        let file_path = (path != Path::new(":memory:") && !path.as_os_str().is_empty())
+            .then(|| path.to_path_buf());
         let connection = Connection::open(path)?;
         connection.pragma_update(None, "foreign_keys", "ON")?;
         connection.pragma_update(None, "journal_mode", "WAL")?;
@@ -127,7 +133,10 @@ impl RunJournal {
             )));
         }
         validate_database(&connection)?;
-        Ok(Self { connection })
+        Ok(Self {
+            connection: Some(connection),
+            path: file_path,
+        })
     }
 
     pub fn append(
@@ -160,6 +169,8 @@ impl RunJournal {
             .collect::<Result<_, _>>()?;
         let tx = self
             .connection
+            .as_mut()
+            .expect("journal connection is always present outside compaction")
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
 
         // A complete retry is successful even if the caller's sequence expectation is now stale.
@@ -218,6 +229,8 @@ impl RunJournal {
     pub fn events(&self, run_id: &str) -> Result<Vec<EventEnvelope>, JournalError> {
         let mut statement = self
             .connection
+            .as_ref()
+            .expect("journal connection is always present outside compaction")
             .prepare("SELECT envelope_json FROM events WHERE run_id=?1 ORDER BY run_seq")?;
         let rows = statement.query_map([run_id], |r| r.get::<_, String>(0))?;
         rows.map(|row| {
@@ -232,6 +245,8 @@ impl RunJournal {
     pub fn delete_run(&mut self, run_id: &str) -> Result<HashSet<ContentHash>, JournalError> {
         let tx = self
             .connection
+            .as_mut()
+            .expect("journal connection is always present outside compaction")
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
         let hashes = referenced_hashes_for_run(&tx, Some(run_id))?;
         tx.execute("DELETE FROM events WHERE run_id=?1", [run_id])?;
@@ -241,15 +256,24 @@ impl RunJournal {
 
     /// Distinct CAS hashes referenced by all events currently in the journal.
     pub fn referenced_hashes(&self) -> Result<HashSet<ContentHash>, JournalError> {
-        referenced_hashes_for_run(&self.connection, None)
+        referenced_hashes_for_run(
+            self.connection
+                .as_ref()
+                .expect("journal connection is always present outside compaction"),
+            None,
+        )
     }
 
     /// Run identities in first-recorded order. Callers still reconstruct all
     /// visible state through `events`; this is only the durable history index.
     pub fn run_ids(&self) -> Result<Vec<String>, JournalError> {
-        let mut statement = self.connection.prepare(
-            "SELECT run_id FROM events GROUP BY run_id ORDER BY MIN(recorded_at), MIN(rowid)",
-        )?;
+        let mut statement = self
+            .connection
+            .as_ref()
+            .expect("journal connection is always present outside compaction")
+            .prepare(
+                "SELECT run_id FROM events GROUP BY run_id ORDER BY MIN(recorded_at), MIN(rowid)",
+            )?;
         let rows = statement.query_map([], |row| row.get::<_, String>(0))?;
         rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
     }
