@@ -1,16 +1,20 @@
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use muniment_core::sidecar::{pi_sidecar_config, validate_pi_session};
 
 fn root() -> PathBuf {
+    static NEXT_ROOT: AtomicUsize = AtomicUsize::new(0);
+
     let root = std::env::temp_dir().join(format!(
-        "muniment-pi-session-{}-{}",
+        "muniment-pi-session-{}-{}-{}",
         std::process::id(),
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
-            .as_nanos()
+            .as_nanos(),
+        NEXT_ROOT.fetch_add(1, Ordering::Relaxed)
     ));
     fs::create_dir(&root).unwrap();
     root

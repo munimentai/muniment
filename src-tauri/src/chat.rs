@@ -1694,7 +1694,6 @@ mod tests {
                 json!({}),
                 None,
             );
-
         }
 
         {
