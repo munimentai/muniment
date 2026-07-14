@@ -56,6 +56,7 @@ pub enum CompactionFault {
     BeforeReplacement,
     DuringReplacement,
     AfterReplacementBeforeDirectorySync,
+    AfterReplacementBeforeDirectorySyncAndReopen,
 }
 
 #[derive(Debug)]
@@ -184,20 +185,31 @@ impl RunJournal {
                 CompactionFault::DuringReplacement,
             ));
         }
-        let fail_after_replace =
-            fault == Some(CompactionFault::AfterReplacementBeforeDirectorySync);
+        let fail_after_replace = matches!(
+            fault,
+            Some(CompactionFault::AfterReplacementBeforeDirectorySync)
+                | Some(CompactionFault::AfterReplacementBeforeDirectorySyncAndReopen)
+        );
         if let Err(error) = atomic_replace(temporary, path, fail_after_replace) {
             let replaced = matches!(error, ReplacementError::Replaced(_));
             if replaced {
                 // The pathname already names the snapshot. Publish that fact
                 // even though its directory durability could not be confirmed,
                 // so peers cannot remain attached to the unlinked database.
-                self.generation = coordination
+                coordination
                     .generation
-                    .fetch_add(1, std::sync::atomic::Ordering::AcqRel)
-                    + 1;
+                    .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
             }
-            self.connection = Some(open_connection(path)?);
+            if fault == Some(CompactionFault::AfterReplacementBeforeDirectorySyncAndReopen) {
+                return Err(CompactionError::Injected(
+                    CompactionFault::AfterReplacementBeforeDirectorySyncAndReopen,
+                ));
+            }
+            let connection = open_connection(path)?;
+            self.connection = Some(connection);
+            self.generation = coordination
+                .generation
+                .load(std::sync::atomic::Ordering::Acquire);
             if fail_after_replace && replaced {
                 return Err(CompactionError::Injected(
                     CompactionFault::AfterReplacementBeforeDirectorySync,
@@ -208,11 +220,13 @@ impl RunJournal {
             };
             return Err(error.into());
         }
-        self.generation = coordination
+        let generation = coordination
             .generation
             .fetch_add(1, std::sync::atomic::Ordering::AcqRel)
             + 1;
-        self.connection = Some(open_connection(path)?);
+        let connection = open_connection(path)?;
+        self.connection = Some(connection);
+        self.generation = generation;
         Ok(())
     }
 }

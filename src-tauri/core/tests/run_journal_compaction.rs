@@ -356,6 +356,41 @@ fn post_replace_sync_failure_refreshes_peers_and_preserves_later_appends() {
 }
 
 #[test]
+fn post_replace_sync_and_first_reopen_failure_recovers_without_panicking() {
+    let db = TestDb::new();
+    let mut compactor = RunJournal::open(db.as_ref()).unwrap();
+    compactor.append(0, &event(RUN, 1, 32)).unwrap();
+    let mut peer = RunJournal::open(db.as_ref()).unwrap();
+
+    assert!(matches!(
+        compactor.compact_with_fault(Some(
+            CompactionFault::AfterReplacementBeforeDirectorySyncAndReopen
+        )),
+        Err(CompactionError::Injected(
+            CompactionFault::AfterReplacementBeforeDirectorySyncAndReopen
+        ))
+    ));
+
+    // The failed first reopen leaves this handle disconnected and its local
+    // generation stale. Its next operation must retry the open, while peers
+    // also observe the published replacement generation.
+    compactor.append(1, &event(RUN, 2, 32)).unwrap();
+    assert_eq!(peer.events(RUN).unwrap().len(), 2);
+    peer.append(2, &event(RUN, 3, 32)).unwrap();
+    assert_eq!(compactor.events(RUN).unwrap().len(), 3);
+    drop(compactor);
+    drop(peer);
+    assert_eq!(
+        RunJournal::open(db.as_ref())
+            .unwrap()
+            .events(RUN)
+            .unwrap()
+            .len(),
+        3
+    );
+}
+
+#[test]
 fn in_memory_compaction_is_typed_and_non_destructive() {
     let mut journal = RunJournal::open(":memory:").unwrap();
     journal.append(0, &event(RUN, 1, 0)).unwrap();

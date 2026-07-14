@@ -371,7 +371,7 @@ impl RunJournal {
         let generation = coordination
             .generation
             .load(std::sync::atomic::Ordering::Acquire);
-        if generation != self.generation {
+        if generation != self.generation || self.connection.is_none() {
             let path = self
                 .path
                 .as_ref()
