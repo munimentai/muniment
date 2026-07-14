@@ -318,9 +318,14 @@ fn install_active_run(active: &Mutex<Option<ActiveRun>>, run: ActiveRun) -> Resu
 #[tauri::command]
 pub async fn chat_queue(
     state: tauri::State<'_, ChatState>,
-    request: ChatQueueRequest,
+    run_id: String,
+    delivery: ChatDelivery,
+    message: String,
 ) -> Result<(), String> {
-    queue_message(&state.active, request)
+    queue_message(
+        &state.active,
+        ChatQueueRequest { run_id, delivery, message },
+    )
 }
 
 fn queue_message(
