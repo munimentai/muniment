@@ -282,6 +282,12 @@ pub fn gemma_install_start(state: State<'_, GemmaInstallState>) -> GemmaInstallS
 pub async fn gemma_install_status(
     state: State<'_, GemmaInstallState>,
 ) -> Result<GemmaInstallStatus, String> {
+    gemma_install_status_handler(&state).await
+}
+
+async fn gemma_install_status_handler(
+    state: &GemmaInstallState,
+) -> Result<GemmaInstallStatus, String> {
     Ok(state.status().await)
 }
 
@@ -303,7 +309,7 @@ mod tests {
     }
 
     fn public_status(state: &GemmaInstallState) -> GemmaInstallStatus {
-        tauri::async_runtime::block_on(state.status())
+        tauri::async_runtime::block_on(gemma_install_status_handler(state)).unwrap()
     }
 
     fn await_public_status(state: &GemmaInstallState, expected: GemmaInstallStatus) {
@@ -397,7 +403,7 @@ mod tests {
     }
 
     #[test]
-    fn start_is_single_flight_and_completes_successfully() {
+    fn public_status_handler_exposes_successful_completion() {
         let calls = Arc::new(AtomicUsize::new(0));
         let release = Arc::new(std::sync::Barrier::new(2));
         let runner = {
@@ -418,7 +424,7 @@ mod tests {
     }
 
     #[test]
-    fn failure_is_redacted() {
+    fn public_status_handler_preserves_redacted_failure() {
         let runner = Arc::new(|_: &Path, _: &NativeInstallCancellation| {
             Err(InstallFailure {
                 category: "downloadFailed",
@@ -437,7 +443,7 @@ mod tests {
     }
 
     #[test]
-    fn cancel_signals_the_active_operation() {
+    fn public_status_handler_preserves_cancelled_completion() {
         let runner = Arc::new(|_: &Path, cancellation: &NativeInstallCancellation| {
             while !cancellation.is_cancelled() {
                 std::thread::sleep(Duration::from_millis(2));
