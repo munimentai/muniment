@@ -7,6 +7,8 @@ use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::thread;
+use std::time::Duration;
 
 static NEXT_TEST: AtomicU64 = AtomicU64::new(0);
 
@@ -172,46 +174,57 @@ fn deterministic_multi_run_export_orders_envelopes_and_deduplicates_large_cas() 
         .any(|w| w == fixture.cas_root.as_os_str().as_encoded_bytes()));
 }
 
-struct AppendingWriter {
-    bytes: Vec<u8>,
-    db: PathBuf,
-    appended: bool,
-}
-impl Write for AppendingWriter {
-    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
-        self.bytes.extend_from_slice(bytes);
-        if !self.appended {
-            self.appended = true;
-            let mut concurrent = RunJournal::open(&self.db).unwrap();
-            concurrent.append(1, &inline(1, 2)).unwrap();
-        }
-        Ok(bytes.len())
-    }
-    fn flush(&mut self) -> io::Result<()> {
-        Ok(())
-    }
-}
-
 #[test]
 fn export_uses_one_sqlite_snapshot_during_concurrent_append() {
     let fixture = Fixture::new();
     let cas = LocalCas::open(&fixture.cas_root).unwrap();
     let mut journal = RunJournal::open(&fixture.db).unwrap();
-    journal.append(0, &inline(1, 1)).unwrap();
-    let mut writer = AppendingWriter {
-        bytes: Vec::new(),
-        db: fixture.db.clone(),
-        appended: false,
-    };
-    export_runs(&mut journal, &cas, &[inline(1, 1).run_id], &mut writer).unwrap();
+    let padding = "x".repeat(512 * 1024);
+    let first_run: Vec<_> = (1..=32)
+        .map(|seq| {
+            let mut envelope = inline(1, seq);
+            envelope.payload = EventPayload::Inline {
+                payload_json: json!({"sequence": seq, "padding": padding}),
+            };
+            envelope
+        })
+        .collect();
+    journal.append_batch(0, &first_run).unwrap();
+    journal.append(0, &inline(2, 1)).unwrap();
+
+    // Reading and parsing the large first run establishes the export snapshot
+    // and keeps that read active while this append commits. The second run is
+    // queried afterwards, so separate non-transactional queries would include
+    // its newly appended envelope.
+    let db = fixture.db.clone();
+    let concurrent_append = thread::spawn(move || {
+        thread::sleep(Duration::from_millis(5));
+        let mut concurrent = RunJournal::open(db).unwrap();
+        concurrent.append(1, &inline(2, 2)).unwrap();
+    });
+    let mut bytes = Vec::new();
+    export_runs(
+        &mut journal,
+        &cas,
+        &[inline(1, 1).run_id, inline(2, 1).run_id],
+        &mut bytes,
+    )
+    .unwrap();
+    concurrent_append.join().unwrap();
+
+    let envelopes: Vec<EventEnvelope> = records(&bytes)
+        .iter()
+        .filter(|r| r.0 == b'E')
+        .map(|r| serde_json::from_slice(r.1).unwrap())
+        .collect();
     assert_eq!(
-        records(&writer.bytes)
+        envelopes
             .iter()
-            .filter(|r| r.0 == b'E')
+            .filter(|event| event.run_id == inline(2, 1).run_id)
             .count(),
         1
     );
-    assert_eq!(journal.events(&inline(1, 1).run_id).unwrap().len(), 2);
+    assert_eq!(journal.events(&inline(2, 1).run_id).unwrap().len(), 2);
 }
 
 #[test]
@@ -226,7 +239,7 @@ fn missing_runs_corrupt_objects_and_writer_failures_are_typed() {
         .unwrap();
     let missing = inline(9, 1).run_id;
     assert!(
-        matches!(export_runs(&mut journal, &cas, &[missing.clone()], &mut Vec::new()), Err(ExportError::MissingRun(id)) if id == missing)
+        matches!(export_runs(&mut journal, &cas, std::slice::from_ref(&missing), &mut Vec::new()), Err(ExportError::MissingRun(id)) if id == missing)
     );
 
     fs::write(object_path(&fixture.cas_root, hash.as_str()), b"tampered").unwrap();
@@ -245,7 +258,7 @@ fn missing_runs_corrupt_objects_and_writer_failures_are_typed() {
 struct FailingWriter;
 impl Write for FailingWriter {
     fn write(&mut self, _: &[u8]) -> io::Result<usize> {
-        Err(io::Error::new(io::ErrorKind::Other, "full"))
+        Err(io::Error::other("full"))
     }
     fn flush(&mut self) -> io::Result<()> {
         Ok(())
