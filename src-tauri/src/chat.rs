@@ -937,12 +937,14 @@ fn append_emit(
 ) -> Result<(), ()> {
     *seq += 1;
     let envelope = event_envelope(run_id, *seq, kind, payload, subject);
+    let mut next_projector = projector.clone();
+    next_projector.apply(&envelope).map_err(|_| ())?;
+    let projection = next_projector.projection().map_err(|_| ())?;
     {
         let mut journal = journal.lock().map_err(|_| ())?;
         journal.append(*seq - 1, &envelope).map_err(|_| ())?;
     }
-    projector.apply(&envelope).map_err(|_| ())?;
-    let projection = projector.projection().map_err(|_| ())?;
+    *projector = next_projector;
     app.emit("chat-event", chat_event(run_id, projection))
         .map_err(|_| ())
 }
@@ -1301,8 +1303,10 @@ mod tests {
             }),
             |kind, payload| {
                 let envelope = event_envelope(&run_id, 3, kind, payload, None);
+                let mut next_projector = projector.clone();
+                next_projector.apply(&envelope).map_err(|_| ())?;
+                next_projector.projection().map_err(|_| ())?;
                 journal.append(2, &envelope).map_err(|_| ())?;
-                projector.apply(&envelope).map_err(|_| ())?;
                 emitted_after_projection_failure = true;
                 Ok(())
             },
@@ -1311,7 +1315,12 @@ mod tests {
         assert!(!emitted_after_projection_failure);
         // The coordinator handler has no response transport and therefore cannot
         // synthesize an allow/deny (or any other Pi extension-UI response).
-        assert_eq!(journal.events(&run_id).unwrap().len(), 3);
+        let events = journal.events(&run_id).unwrap();
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[0].event_type, "run.started");
+        assert_eq!(events[1].event_type, "permission.requested");
+        let replayed = muniment_core::journal::reducer::project_chat(&events).unwrap();
+        assert_eq!(replayed.pending_permission.unwrap().gate_id, "pi-request-1");
 
         drop(journal);
         std::fs::remove_dir_all(directory).unwrap();
