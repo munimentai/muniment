@@ -15,6 +15,7 @@ use std::fmt;
 use std::path::Path;
 use std::path::PathBuf;
 use std::str::FromStr;
+use std::sync::{Arc, Mutex, OnceLock, Weak};
 use std::time::Duration;
 use uuid::{Uuid, Version};
 
@@ -111,6 +112,33 @@ impl From<rusqlite::Error> for JournalError {
 pub struct RunJournal {
     pub(crate) connection: Option<Connection>,
     pub(crate) path: Option<PathBuf>,
+    pub(crate) coordination: Option<Arc<JournalCoordination>>,
+    pub(crate) generation: u64,
+}
+
+pub(crate) struct JournalCoordination {
+    pub(crate) operation: Mutex<()>,
+    pub(crate) generation: std::sync::atomic::AtomicU64,
+}
+
+fn coordination_for(path: &Path) -> Arc<JournalCoordination> {
+    static JOURNALS: OnceLock<Mutex<BTreeMap<PathBuf, Weak<JournalCoordination>>>> =
+        OnceLock::new();
+    let key = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        std::env::current_dir().unwrap_or_default().join(path)
+    };
+    let mut journals = JOURNALS.get_or_init(Default::default).lock().unwrap();
+    if let Some(existing) = journals.get(&key).and_then(Weak::upgrade) {
+        return existing;
+    }
+    let coordination = Arc::new(JournalCoordination {
+        operation: Mutex::new(()),
+        generation: std::sync::atomic::AtomicU64::new(0),
+    });
+    journals.insert(key, Arc::downgrade(&coordination));
+    coordination
 }
 
 impl RunJournal {
@@ -118,6 +146,10 @@ impl RunJournal {
         let path = path.as_ref();
         let file_path = (path != Path::new(":memory:") && !path.as_os_str().is_empty())
             .then(|| path.to_path_buf());
+        let coordination = file_path.as_deref().map(coordination_for);
+        let _operation = coordination
+            .as_ref()
+            .map(|state| state.operation.lock().unwrap());
         let connection = Connection::open(path)?;
         connection.pragma_update(None, "foreign_keys", "ON")?;
         connection.pragma_update(None, "journal_mode", "WAL")?;
@@ -133,9 +165,15 @@ impl RunJournal {
             )));
         }
         validate_database(&connection)?;
+        let generation = coordination.as_ref().map_or(0, |state| {
+            state.generation.load(std::sync::atomic::Ordering::Acquire)
+        });
+        drop(_operation);
         Ok(Self {
             connection: Some(connection),
             path: file_path,
+            generation,
+            coordination,
         })
     }
 
@@ -155,6 +193,11 @@ impl RunJournal {
         if events.is_empty() {
             return Ok(());
         }
+        let coordination = self.coordination.clone();
+        let _operation = coordination
+            .as_ref()
+            .map(|state| state.operation.lock().unwrap());
+        self.refresh_after_compaction()?;
         let run_id = &events[0].run_id;
         for (index, event) in events.iter().enumerate() {
             validate_envelope(event)?;
@@ -243,6 +286,11 @@ impl RunJournal {
 
     /// Atomically removes a run's events and returns their distinct CAS hashes.
     pub fn delete_run(&mut self, run_id: &str) -> Result<HashSet<ContentHash>, JournalError> {
+        let coordination = self.coordination.clone();
+        let _operation = coordination
+            .as_ref()
+            .map(|state| state.operation.lock().unwrap());
+        self.refresh_after_compaction()?;
         let tx = self
             .connection
             .as_mut()
@@ -272,11 +320,38 @@ impl RunJournal {
             .as_ref()
             .expect("journal connection is always present outside compaction")
             .prepare(
-                "SELECT run_id FROM events GROUP BY run_id ORDER BY MIN(recorded_at), MIN(rowid)",
+                "SELECT run_id FROM events GROUP BY run_id ORDER BY MIN(recorded_at), MIN(event_id)",
             )?;
         let rows = statement.query_map([], |row| row.get::<_, String>(0))?;
         rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
     }
+
+    fn refresh_after_compaction(&mut self) -> Result<(), JournalError> {
+        let Some(coordination) = &self.coordination else {
+            return Ok(());
+        };
+        let generation = coordination
+            .generation
+            .load(std::sync::atomic::Ordering::Acquire);
+        if generation != self.generation {
+            let path = self
+                .path
+                .as_ref()
+                .expect("coordinated journals are file-backed");
+            self.connection = Some(open_journal_connection(path)?);
+            self.generation = generation;
+        }
+        Ok(())
+    }
+}
+
+pub(crate) fn open_journal_connection(path: &Path) -> Result<Connection, JournalError> {
+    let connection = Connection::open(path)?;
+    connection.pragma_update(None, "foreign_keys", "ON")?;
+    connection.pragma_update(None, "journal_mode", "WAL")?;
+    connection.pragma_update(None, "synchronous", "FULL")?;
+    connection.busy_timeout(BUSY_TIMEOUT)?;
+    Ok(connection)
 }
 
 fn referenced_hashes_for_run(

@@ -1,7 +1,6 @@
 //! Crash-safe, non-destructive journal compaction.
 
-use super::{JournalError, RunJournal, BUSY_TIMEOUT};
-use rusqlite::Connection;
+use super::{open_journal_connection, JournalError, RunJournal};
 use std::fmt;
 use std::fs::{self, File};
 use std::io;
@@ -76,7 +75,22 @@ impl RunJournal {
             .clone()
             .ok_or(CompactionError::UnsupportedInMemory)?;
         let temporary = unique_temporary_path(&path)?;
-        let result = self.compact_to(&path, &temporary, fault);
+        let result = self.compact_to(&path, &temporary, fault, None);
+        let _ = fs::remove_file(&temporary);
+        result
+    }
+
+    #[doc(hidden)]
+    pub fn compact_with_close_hook(
+        &mut self,
+        hook: &mut dyn FnMut(),
+    ) -> Result<(), CompactionError> {
+        let path = self
+            .path
+            .clone()
+            .ok_or(CompactionError::UnsupportedInMemory)?;
+        let temporary = unique_temporary_path(&path)?;
+        let result = self.compact_to(&path, &temporary, None, Some(hook));
         let _ = fs::remove_file(&temporary);
         result
     }
@@ -86,14 +100,20 @@ impl RunJournal {
         path: &Path,
         temporary: &Path,
         fault: Option<CompactionFault>,
+        mut close_hook: Option<&mut dyn FnMut()>,
     ) -> Result<(), CompactionError> {
+        let coordination = self
+            .coordination
+            .clone()
+            .expect("file journal is coordinated");
+        let _operation = coordination.operation.lock().unwrap();
         let connection = self
             .connection
             .as_ref()
             .expect("journal connection is present");
-        // Retain an exclusive database lock across VACUUM INTO so no committed
-        // writer can fall between the snapshot and replacement.
-        connection.pragma_update(None, "locking_mode", "EXCLUSIVE")?;
+        // The journal coordination guard excludes all RunJournal mutations
+        // continuously across the SQLite and filesystem phases. Avoid retained
+        // SQLite exclusive locking, which would also block idle peer handles.
         let snapshot_result = (|| {
             connection
                 .execute_batch("BEGIN EXCLUSIVE; COMMIT; PRAGMA wal_checkpoint(TRUNCATE);")?;
@@ -114,8 +134,8 @@ impl RunJournal {
             Ok(())
         })();
         if let Err(error) = snapshot_result {
-            // Changing the pragma alone does not immediately release an
-            // already-held exclusive lock. Reopen to release it definitively.
+            // Reopen after any SQLite compaction error so the original journal
+            // remains immediately usable by this instance.
             let old = self
                 .connection
                 .take()
@@ -136,6 +156,9 @@ impl RunJournal {
             self.connection = Some(open_connection(path)?);
             return Err(error.into());
         }
+        if let Some(hook) = close_hook.as_mut() {
+            hook();
+        }
         if fault == Some(CompactionFault::DuringReplacement) {
             let missing = temporary.with_extension("missing");
             debug_assert!(!missing.exists());
@@ -154,18 +177,17 @@ impl RunJournal {
             self.connection = Some(open_connection(path)?);
             return Err(error.into());
         }
+        self.generation = coordination
+            .generation
+            .fetch_add(1, std::sync::atomic::Ordering::AcqRel)
+            + 1;
         self.connection = Some(open_connection(path)?);
         Ok(())
     }
 }
 
-fn open_connection(path: &Path) -> Result<Connection, CompactionError> {
-    let connection = Connection::open(path)?;
-    connection.pragma_update(None, "foreign_keys", "ON")?;
-    connection.pragma_update(None, "journal_mode", "WAL")?;
-    connection.pragma_update(None, "synchronous", "FULL")?;
-    connection.busy_timeout(BUSY_TIMEOUT)?;
-    Ok(connection)
+fn open_connection(path: &Path) -> Result<rusqlite::Connection, CompactionError> {
+    open_journal_connection(path).map_err(Into::into)
 }
 
 fn unique_temporary_path(path: &Path) -> Result<PathBuf, CompactionError> {

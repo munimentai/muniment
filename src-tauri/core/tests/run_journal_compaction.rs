@@ -6,6 +6,9 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::mpsc;
+use std::thread;
+use std::time::Duration;
 
 static NEXT_DB: AtomicU64 = AtomicU64::new(0);
 
@@ -46,13 +49,18 @@ impl Drop for TestDb {
 
 const RUN: &str = "0190a100-0000-7000-8000-000000000001";
 const DELETED_RUN: &str = "0190a100-0000-7000-8000-000000000002";
+const SECOND_RUN: &str = "0190a100-0000-7000-8000-000000000003";
 const HASH: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 
 fn event(run_id: &str, seq: u64, padding: usize) -> EventEnvelope {
     EventEnvelope {
         event_id: format!(
             "0190a100-0000-7000-8000-{:012}",
-            seq + if run_id == RUN { 0 } else { 10_000 }
+            seq + match run_id {
+                RUN => 0,
+                DELETED_RUN => 10_000,
+                _ => 20_000,
+            }
         ),
         run_id: run_id.into(),
         run_seq: seq,
@@ -111,6 +119,9 @@ fn compaction_reduces_churn_and_preserves_the_complete_authoritative_history() {
             &(1..=3).map(|seq| event(RUN, seq, 32)).collect::<Vec<_>>(),
         )
         .unwrap();
+    // Equal timestamps intentionally exercise the durable event-id tie-breaker
+    // used for run ordering; hidden rowids may change during VACUUM.
+    journal.append(0, &event(SECOND_RUN, 1, 32)).unwrap();
     for seq in 1..=160 {
         journal
             .append(seq - 1, &event(DELETED_RUN, seq, 8_000))
@@ -121,6 +132,7 @@ fn compaction_reduces_churn_and_preserves_the_complete_authoritative_history() {
     let before_events = journal.events(RUN).unwrap();
     let before_hashes = journal.referenced_hashes().unwrap();
     let before_runs = journal.run_ids().unwrap();
+    assert_eq!(before_runs, [RUN, SECOND_RUN]);
     let before_raw = raw_envelopes(db.as_ref());
     let before_version: i64 = Connection::open(db.as_ref())
         .unwrap()
@@ -166,6 +178,35 @@ fn committed_wal_events_are_included() {
             .unwrap()
             .len(),
         1
+    );
+}
+
+#[test]
+fn writer_at_the_close_to_replace_boundary_is_serialized_after_compaction() {
+    let db = TestDb::new();
+    let mut journal = RunJournal::open(db.as_ref()).unwrap();
+    journal.append(0, &event(RUN, 1, 32)).unwrap();
+    let mut writer = RunJournal::open(db.as_ref()).unwrap();
+    let path = db.0.clone();
+    let (start_tx, start_rx) = mpsc::channel();
+    let (done_tx, done_rx) = mpsc::channel();
+    let worker = thread::spawn(move || {
+        start_rx.recv().unwrap();
+        writer.append(1, &event(RUN, 2, 32)).unwrap();
+        done_tx.send(()).unwrap();
+    });
+
+    journal
+        .compact_with_close_hook(&mut || {
+            start_tx.send(()).unwrap();
+            assert!(done_rx.recv_timeout(Duration::from_millis(100)).is_err());
+        })
+        .unwrap();
+    worker.join().unwrap();
+    drop(journal);
+    assert_eq!(
+        RunJournal::open(path).unwrap().events(RUN).unwrap().len(),
+        2
     );
 }
 
