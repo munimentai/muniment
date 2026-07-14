@@ -127,6 +127,7 @@ fn reconcile_interrupted_runs(journal: &mut RunJournal) {
             state.last_seq + 1,
             "run.needs_attention",
             json!({"reason": "interrupted"}),
+            None,
         );
         let _ = journal.append(state.last_seq, &envelope);
     }
@@ -261,6 +262,7 @@ pub async fn chat_submit(
             run_id.clone(),
             prompt,
             tokens.access_token,
+            tokens.subject,
             grant,
             cancelled,
             transport,
@@ -369,13 +371,24 @@ fn coordinate(
     run_id: String,
     prompt: String,
     access_token: String,
+    subject: Option<String>,
     grant: ChatGrant,
     cancelled: Arc<AtomicBool>,
     active_transport: Arc<Mutex<Option<Arc<PiRpcTransport>>>>,
     active_adapter: Arc<Mutex<Option<Arc<PiRunAdapter>>>>,
 ) {
     let mut seq = 0;
-    if append_emit(&app, &journal, &run_id, &mut seq, "run.started", json!({})).is_err() {
+    if append_emit(
+        &app,
+        &journal,
+        &run_id,
+        &mut seq,
+        "run.started",
+        json!({}),
+        subject.as_deref(),
+    )
+    .is_err()
+    {
         return;
     }
     if cancelled.load(Ordering::SeqCst) {
@@ -386,6 +399,7 @@ fn coordinate(
             &mut seq,
             "run.cancelled",
             json!({}),
+            subject.as_deref(),
         );
         return;
     }
@@ -408,6 +422,7 @@ fn coordinate(
                     &run_id,
                     &mut seq,
                     "The agent runtime is not installed.",
+                    subject.as_deref(),
                 );
                 return;
             }
@@ -421,6 +436,7 @@ fn coordinate(
                     &run_id,
                     &mut seq,
                     "The agent runtime is unavailable.",
+                    subject.as_deref(),
                 );
                 return;
             }
@@ -449,6 +465,7 @@ fn coordinate(
                         &run_id,
                         &mut seq,
                         "The agent runtime could not start.",
+                        subject.as_deref(),
                     );
                     return;
                 }
@@ -474,6 +491,7 @@ fn coordinate(
                 &mut seq,
                 "run.cancelled",
                 json!({}),
+                subject.as_deref(),
             );
             return;
         }
@@ -486,6 +504,7 @@ fn coordinate(
             &run_id,
             &mut seq,
             "The agent runtime did not become ready.",
+            subject.as_deref(),
         );
         return;
     };
@@ -500,6 +519,7 @@ fn coordinate(
             &mut seq,
             "run.cancelled",
             json!({}),
+            subject.as_deref(),
         );
         return;
     }
@@ -512,6 +532,7 @@ fn coordinate(
                 &run_id,
                 &mut seq,
                 "The reply could not be started.",
+                subject.as_deref(),
             );
             return;
         }
@@ -527,6 +548,7 @@ fn coordinate(
         &mut seq,
         "model.prompt.accepted",
         json!({}),
+        subject.as_deref(),
     )
     .is_err()
     {
@@ -547,6 +569,7 @@ fn coordinate(
                     &mut seq,
                     "model.stream.delta",
                     json!({"text": text}),
+                    subject.as_deref(),
                 )
                 .is_err()
                 {
@@ -561,6 +584,7 @@ fn coordinate(
                     &mut seq,
                     "run.cancelled",
                     json!({}),
+                    subject.as_deref(),
                 );
                 break;
             }
@@ -574,6 +598,7 @@ fn coordinate(
                             &mut seq,
                             "run.completed",
                             json!({"receipt": receipt}),
+                            subject.as_deref(),
                         );
                         break;
                     }
@@ -584,6 +609,7 @@ fn coordinate(
                             &run_id,
                             &mut seq,
                             "The reply finished, but its receipt was unavailable.",
+                            subject.as_deref(),
                         );
                         break;
                     }
@@ -597,6 +623,7 @@ fn coordinate(
                     &mut seq,
                     "run.cancelled",
                     json!({}),
+                    subject.as_deref(),
                 );
                 break;
             }
@@ -607,6 +634,7 @@ fn coordinate(
                     &run_id,
                     &mut seq,
                     "The model could not complete this reply.",
+                    subject.as_deref(),
                 );
                 break;
             }
@@ -627,6 +655,7 @@ fn coordinate(
                         &run_id,
                         &mut seq,
                         "The agent runtime stopped unexpectedly.",
+                        subject.as_deref(),
                     );
                     break;
                 }
@@ -638,6 +667,7 @@ fn coordinate(
                     &run_id,
                     &mut seq,
                     "The agent runtime stopped unexpectedly.",
+                    subject.as_deref(),
                 );
                 break;
             }
@@ -652,9 +682,10 @@ fn append_emit(
     seq: &mut u64,
     kind: &str,
     payload: Value,
+    subject: Option<&str>,
 ) -> Result<(), ()> {
     *seq += 1;
-    let envelope = event_envelope(run_id, *seq, kind, payload);
+    let envelope = event_envelope(run_id, *seq, kind, payload, subject);
     let projection = {
         let mut journal = journal.lock().map_err(|_| ())?;
         journal.append(*seq - 1, &envelope).map_err(|_| ())?;
@@ -673,7 +704,13 @@ fn append_emit(
     .map_err(|_| ())
 }
 
-fn event_envelope(run_id: &str, run_seq: u64, kind: &str, payload: Value) -> EventEnvelope {
+fn event_envelope(
+    run_id: &str,
+    run_seq: u64,
+    kind: &str,
+    payload: Value,
+    subject: Option<&str>,
+) -> EventEnvelope {
     EventEnvelope {
         event_id: Uuid::now_v7().to_string(),
         run_id: run_id.into(),
@@ -691,7 +728,7 @@ fn event_envelope(run_id: &str, run_seq: u64, kind: &str, payload: Value) -> Eve
         provenance: Provenance {
             source: "muniment-desktop".into(),
             source_version: env!("CARGO_PKG_VERSION").into(),
-            actor_id: None,
+            actor_id: subject.map(str::to_owned),
             device_id: None,
             rpc_request_id: None,
             capability_versions: None,
@@ -707,6 +744,7 @@ fn fail(
     run_id: &str,
     seq: &mut u64,
     reason: &str,
+    subject: Option<&str>,
 ) {
     let _ = append_emit(
         app,
@@ -715,6 +753,7 @@ fn fail(
         seq,
         "run.failed",
         json!({"reason": reason}),
+        subject,
     );
 }
 
@@ -761,9 +800,13 @@ mod tests {
         seq: u64,
         kind: &str,
         payload: Value,
+        subject: Option<&str>,
     ) {
         journal
-            .append(seq - 1, &event_envelope(run_id, seq, kind, payload))
+            .append(
+                seq - 1,
+                &event_envelope(run_id, seq, kind, payload, subject),
+            )
             .unwrap();
     }
 
@@ -788,6 +831,15 @@ mod tests {
             "runId":"run-1", "delivery":"followUp", "message":"hello"
         }))
         .is_ok());
+    }
+
+    #[test]
+    fn event_envelope_records_the_owning_subject() {
+        let owned = event_envelope("run-1", 1, "run.started", json!({}), Some("sub-a"));
+        assert_eq!(owned.provenance.actor_id.as_deref(), Some("sub-a"));
+
+        let unowned = event_envelope("run-2", 1, "run.started", json!({}), None);
+        assert_eq!(unowned.provenance.actor_id, None);
     }
 
     #[test]
@@ -845,22 +897,38 @@ mod tests {
 
         {
             let mut journal = RunJournal::open(&path).unwrap();
-            append_test_event(&mut journal, &interrupted, 1, "run.started", json!({}));
+            append_test_event(
+                &mut journal,
+                &interrupted,
+                1,
+                "run.started",
+                json!({}),
+                None,
+            );
             append_test_event(
                 &mut journal,
                 &interrupted,
                 2,
                 "model.stream.delta",
                 json!({"text": "partial"}),
+                None,
             );
-            append_test_event(&mut journal, &completed, 1, "run.started", json!({}));
-            append_test_event(&mut journal, &completed, 2, "run.completed", json!({}));
+            append_test_event(&mut journal, &completed, 1, "run.started", json!({}), None);
+            append_test_event(
+                &mut journal,
+                &completed,
+                2,
+                "run.completed",
+                json!({}),
+                None,
+            );
 
             reconcile_interrupted_runs(&mut journal);
 
             let interrupted_events = journal.events(&interrupted).unwrap();
             assert_eq!(interrupted_events.len(), 3);
             assert_eq!(interrupted_events[2].event_type, "run.needs_attention");
+            assert_eq!(interrupted_events[2].provenance.actor_id, None);
             assert!(matches!(
                 reduce(&interrupted_events).unwrap().status,
                 RunStatus::NeedsAttention(_)
