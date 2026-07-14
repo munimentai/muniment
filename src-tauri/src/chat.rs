@@ -180,6 +180,38 @@ fn projection_phase(status: &Option<RunStatus>) -> &'static str {
     }
 }
 
+fn history_entries(
+    journal: &RunJournal,
+    subject: Option<&str>,
+) -> Result<Vec<HistoryEntry>, String> {
+    let mut entries = Vec::new();
+    for run_id in journal
+        .run_ids()
+        .map_err(|_| "Conversation history is unavailable.".to_string())?
+    {
+        let events = journal
+            .events(&run_id)
+            .map_err(|_| "Conversation history is unavailable.".to_string())?;
+        if matches!(
+            events.first().and_then(|event| event.provenance.actor_id.as_deref()),
+            Some(owner) if Some(owner) != subject
+        ) {
+            continue;
+        }
+        let projection = project_chat(&events)
+            .map_err(|_| "Conversation history is unavailable.".to_string())?;
+        entries.push(HistoryEntry {
+            prompt: load_prompt(&run_id, subject)?,
+            phase: projection_phase(&projection.status).into(),
+            text: projection.text,
+            receipt: projection.receipt,
+            tool_activity: chat_tool_activity(&projection.tool_activity),
+            run_id,
+        });
+    }
+    Ok(entries)
+}
+
 #[tauri::command]
 pub async fn chat_history(
     auth_state: tauri::State<'_, auth::AuthState>,
@@ -191,27 +223,7 @@ pub async fn chat_history(
         .journal
         .lock()
         .map_err(|_| "Conversation history is unavailable.".to_string())?;
-    journal
-        .run_ids()
-        .map_err(|_| "Conversation history is unavailable.".to_string())?
-        .into_iter()
-        .map(|run_id| {
-            let projection = project_chat(
-                &journal
-                    .events(&run_id)
-                    .map_err(|_| "Conversation history is unavailable.".to_string())?,
-            )
-            .map_err(|_| "Conversation history is unavailable.".to_string())?;
-            Ok(HistoryEntry {
-                prompt: load_prompt(&run_id, tokens.subject.as_deref())?,
-                phase: projection_phase(&projection.status).into(),
-                text: projection.text,
-                receipt: projection.receipt,
-                tool_activity: chat_tool_activity(&projection.tool_activity),
-                run_id,
-            })
-        })
-        .collect()
+    history_entries(&journal, tokens.subject.as_deref())
 }
 
 #[tauri::command]
@@ -1063,7 +1075,7 @@ mod tests {
         let mut journal = RunJournal::open(directory.join("runs.sqlite3")).unwrap();
         let run_id = Uuid::now_v7().to_string();
         let mut seq = 1;
-        append_test_event(&mut journal, &run_id, seq, "run.started", json!({}));
+        append_test_event(&mut journal, &run_id, seq, "run.started", json!({}), None);
         seq += 1;
         append_test_event(
             &mut journal,
@@ -1071,12 +1083,13 @@ mod tests {
             seq,
             "tool.effect.started",
             json!({"effect_id": "tool-1", "display_name": "Read file"}),
+            None,
         );
         let mut open_effects = BTreeSet::from(["tool-1".to_string()]);
 
         close_open_effects(&mut open_effects, |kind, payload| {
             seq += 1;
-            append_test_event(&mut journal, &run_id, seq, kind, payload);
+            append_test_event(&mut journal, &run_id, seq, kind, payload, None);
             Ok(())
         })
         .unwrap();
@@ -1087,6 +1100,7 @@ mod tests {
             seq,
             "run.failed",
             json!({"reason": "runtime stopped"}),
+            None,
         );
 
         let events = journal.events(&run_id).unwrap();
@@ -1097,6 +1111,134 @@ mod tests {
         assert_eq!(
             projection.tool_activity[0].status,
             muniment_core::journal::reducer::ToolActivityStatus::Failed
+        );
+
+        drop(journal);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn history_is_scoped_by_the_first_events_actor() {
+        keyring::set_default_credential_builder(keyring::mock::default_credential_builder());
+        let directory = std::env::temp_dir().join(format!("muniment-chat-{}", Uuid::now_v7()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let mut journal = RunJournal::open(directory.join("runs.sqlite3")).unwrap();
+
+        append_test_event(
+            &mut journal,
+            "run-a",
+            1,
+            "run.started",
+            json!({}),
+            Some("sub-a"),
+        );
+        append_test_event(
+            &mut journal,
+            "run-a",
+            2,
+            "model.stream.delta",
+            json!({"text": "private-a"}),
+            Some("sub-a"),
+        );
+        append_test_event(
+            &mut journal,
+            "run-a",
+            3,
+            "run.completed",
+            json!({"receipt": {"owner": "sub-a"}}),
+            Some("sub-a"),
+        );
+        append_test_event(
+            &mut journal,
+            "run-a-reconciled",
+            1,
+            "run.started",
+            json!({}),
+            Some("sub-a"),
+        );
+        append_test_event(
+            &mut journal,
+            "run-a-reconciled",
+            2,
+            "run.needs_attention",
+            json!({"reason": "interrupted"}),
+            None,
+        );
+
+        append_test_event(
+            &mut journal,
+            "run-b",
+            1,
+            "run.started",
+            json!({}),
+            Some("sub-b"),
+        );
+        append_test_event(
+            &mut journal,
+            "run-b",
+            2,
+            "model.stream.delta",
+            json!({"text": "private-b"}),
+            Some("sub-b"),
+        );
+        append_test_event(
+            &mut journal,
+            "run-b",
+            3,
+            "run.completed",
+            json!({"receipt": {"owner": "sub-b"}}),
+            Some("sub-b"),
+        );
+
+        append_test_event(
+            &mut journal,
+            "run-legacy",
+            1,
+            "run.started",
+            json!({}),
+            None,
+        );
+        append_test_event(
+            &mut journal,
+            "run-legacy",
+            2,
+            "run.completed",
+            json!({"receipt": {"legacy": true}}),
+            None,
+        );
+
+        let sub_b = history_entries(&journal, Some("sub-b")).unwrap();
+        assert_eq!(
+            sub_b
+                .iter()
+                .map(|entry| entry.run_id.as_str())
+                .collect::<BTreeSet<_>>(),
+            BTreeSet::from(["run-b", "run-legacy"])
+        );
+        assert!(sub_b.iter().all(|entry| !entry.text.contains("private-a")));
+        assert!(sub_b.iter().all(|entry| {
+            entry
+                .receipt
+                .as_ref()
+                .and_then(|receipt| receipt.get("owner"))
+                != Some(&json!("sub-a"))
+        }));
+
+        let sub_a = history_entries(&journal, Some("sub-a")).unwrap();
+        assert_eq!(
+            sub_a
+                .iter()
+                .map(|entry| entry.run_id.as_str())
+                .collect::<BTreeSet<_>>(),
+            BTreeSet::from(["run-a", "run-a-reconciled", "run-legacy"])
+        );
+        assert_eq!(
+            sub_a
+                .iter()
+                .find(|entry| entry.run_id == "run-a")
+                .unwrap()
+                .text,
+            "private-a"
         );
 
         drop(journal);
