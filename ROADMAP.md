@@ -54,7 +54,8 @@ Phases mirror harness-spec §9. Muniment-cloud Phase 1 native auth and the cloud
 - DONE collection slice — unreferenced CAS objects are collected using the journal's reference accounting (pure core).
 - DONE retention slice — terminal runs older than a supplied policy age out deterministically and their newly unreferenced CAS objects are collected; nonterminal and needs-attention runs are preserved.
 - DONE export slice — deterministic versioned pure-core export preserves canonical envelopes, verifies referenced CAS bodies, deduplicates bodies, and reads from one SQLite snapshot.
-- NEXT — crash-safe compaction remains in Needs Human and must not be re-filed until that decision is resolved.
+- DONE compaction slice — crash-safe, non-destructive SQLite compaction preserves canonical export and leaves the source journal intact on interruption or failure.
+- NEXT — no further journal-maintenance slice is selected; advance an ungated product lane.
 
 ### Capability vocabulary and provenance
 - DONE — user surfaces say “capabilities” and receipts render `route · model · cost · time · capability@version[, ...]` in both the provenance line and the expandable receipt record. The client never synthesizes values absent from the cloud schema.
@@ -63,11 +64,12 @@ Phases mirror harness-spec §9. Muniment-cloud Phase 1 native auth and the cloud
 - Routing metadata carriage/policy integration follows item 9; the local classifier contract is complete.
 - Voice direction remains Parakeet capture → Gemma polish → transforms, with Kokoro read-aloud and global hotkeys.
 - DONE — ADRs 0004/0005, pinned Parakeet verification, revision publication/recovery, bounded resumable acquisition, consumption of the shared native HTTPS/proxy transport, the shared pure-core install coordinator, exact resumable-stage byte accounting, Parakeet acquisition/publication composition through that coordinator, and standard-library native filesystem/lock/clock/cancellation adapters.
-- NEXT — Tauri install/status/cancel commands. UI, native bindings/packaging, capture/VAD, and hardware validation follow separately.
+- DONE — Tauri install, status, and cancel commands with redacted public states.
+- NEXT — native sherpa-onnx bindings and desktop packaging as a separately reviewable slice. UI, capture/VAD, and target-hardware validation follow separately.
 
 ## Phase 4+ — Org surface (§9 items 16–19)
 - Remote MCP consumption, local stdio allowlist, capability install flow, artifact side panel, and projects with the redaction rule (`output withheld · connection not granted`).
 
 ## Standing gates
 - Code PRs: structure smoke, frontend/Rust tests, then Linux/Windows/macOS desktop builds. Markdown-only PRs gate on structure smoke alone; pushes to `main` run smoke only.
-- Build desktop targets only. Mobile scaffolding remains owner-gated by §12.5's repo-strategy ADR. CLI/editor E0 is decided by [ADR 0009](docs/decisions/0009-companion-attach-protocol.md); pure-core protocol envelope types, bounded frame codec, version negotiation, pairing, capability authorization state, and a durable idempotency ledger for effectful requests are complete with contract tests. NEXT — bounded run-stream cursor/acknowledgement state as a separate pure-core slice. No listener or companion UI is complete.
+- Build desktop targets only. Mobile scaffolding remains owner-gated by §12.5's repo-strategy ADR. CLI/editor E0 is decided by [ADR 0009](docs/decisions/0009-companion-attach-protocol.md); pure-core protocol envelope types, bounded frame codec, version negotiation, pairing, capability authorization state, and a durable idempotency ledger for effectful requests are complete with contract tests. DONE — bounded pure-core run-stream cursor/acknowledgement window state and bounded artifact transfer window/acknowledgement state. NEXT — platform transport adapters and their contract tests as a separately reviewable slice. No listener or companion UI is complete.
