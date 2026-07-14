@@ -21,6 +21,18 @@ const snapshot = (groups = []) => ({
   groups,
 })
 
+const device = (device_id, overrides = {}) => ({
+  device_id,
+  client_id: 'muniment-desktop',
+  client_role: 'desktop',
+  platform: 'desktop',
+  created_at: '2026-01-01T00:00:00Z',
+  revoked_at: null,
+  last_active_at: '2026-01-02T00:00:00Z',
+  current: false,
+  ...overrides,
+})
+
 beforeAll(async () => {
   HTMLElement.prototype.scrollTo = vi.fn()
   window.__TAURI__ = {
@@ -36,6 +48,7 @@ beforeEach(() => {
     if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
     if (command === 'chat_history') return []
     if (command === 'auth_entitlement_snapshot') return snapshot()
+    if (command === 'auth_devices') return []
     throw new Error(`unexpected command: ${command}`)
   })
 })
@@ -77,6 +90,7 @@ describe('tool activity cards', () => {
       if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
       if (command === 'chat_history') return historyWith(toolActivity, phase)
       if (command === 'auth_entitlement_snapshot') return snapshot()
+      if (command === 'auth_devices') return []
       throw new Error(`unexpected command: ${command}`)
     })
     return render(App)
@@ -141,6 +155,7 @@ describe('active run composer queue', () => {
       if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
       if (command === 'chat_history') return []
       if (command === 'auth_entitlement_snapshot') return snapshot()
+      if (command === 'auth_devices') return []
       if (command === 'chat_submit') return { runId: 'run-7' }
       if (command === 'chat_queue') return undefined
       throw new Error(`unexpected command: ${command}`)
@@ -184,6 +199,7 @@ describe('active run composer queue', () => {
       if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
       if (command === 'chat_history') return []
       if (command === 'auth_entitlement_snapshot') return snapshot()
+      if (command === 'auth_devices') return []
       if (command === 'chat_submit') return { runId: 'run-7' }
       if (command === 'chat_queue') throw 'Could not queue this message'
       throw new Error(`unexpected command: ${command}`)
@@ -218,6 +234,7 @@ describe('signed-in access popover', () => {
         if (accessCalls <= 2) return snapshot()
         return newSessionAccess
       }
+      if (command === 'auth_devices') return []
       if (command === 'auth_sign_out') return { signed_in: false, subject: null }
       if (command === 'auth_sign_in') return { signed_in: true, subject: 'user-b' }
       throw new Error(`unexpected command: ${command}`)
@@ -258,6 +275,7 @@ describe('signed-in access popover', () => {
           { name: 'members', models: ['gpt'], connections: ['warehouse'], capabilities: ['chat'] },
         ])
       }
+      if (command === 'auth_devices') return []
       throw new Error(`unexpected command: ${command}`)
     })
 
@@ -296,5 +314,62 @@ describe('signed-in access popover', () => {
     await fireEvent.click(document.body)
     await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Your access' })).not.toBeInTheDocument())
     expect(profile).toHaveFocus()
+  })
+
+  it('renders mixed device states in deterministic order without disturbing groups', async () => {
+    invoke.mockImplementation(async (command) => {
+      if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
+      if (command === 'chat_history') return []
+      if (command === 'auth_entitlement_snapshot') return snapshot([{ name: 'members', models: ['gpt'], connections: [], capabilities: [] }])
+      if (command === 'auth_devices') return [
+        device('revoked-newest', { platform: 'ios', revoked_at: '2026-06-01T00:00:00Z', last_active_at: '2026-07-01T00:00:00Z' }),
+        device('active-old', { platform: 'android', last_active_at: '2026-05-01T00:00:00Z' }),
+        device('current-new', { current: true, last_active_at: '2026-06-01T00:00:00Z' }),
+      ]
+      throw new Error(`unexpected command: ${command}`)
+    })
+    render(App)
+    await fireEvent.click(await screen.findByRole('button', { name: /Alice/i }))
+    const dialog = screen.getByRole('dialog', { name: 'Your access' })
+    const rows = await within(dialog).findAllByRole('listitem')
+    expect(rows.map((row) => row.textContent)).toEqual(expect.arrayContaining([
+      expect.stringContaining('This device'), expect.stringContaining('Active'), expect.stringContaining('Revoked'),
+    ]))
+    expect(rows[0]).toHaveTextContent('desktopThis deviceActive')
+    expect(rows[1]).toHaveTextContent('androidActive')
+    expect(rows[2]).toHaveTextContent('iosRevoked')
+    expect(within(dialog).getByRole('button', { name: 'members' })).toBeInTheDocument()
+    expect(dialog).not.toHaveTextContent('revoked-newest')
+  })
+
+  it('renders an empty device response', async () => {
+    render(App)
+    await fireEvent.click(await screen.findByRole('button', { name: /Alice/i }))
+    expect(await screen.findByText('No devices found')).toBeInTheDocument()
+  })
+
+  it('retries only a failed device request and keeps entitlement groups rendered', async () => {
+    let deviceCalls = 0
+    invoke.mockImplementation(async (command) => {
+      if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
+      if (command === 'chat_history') return []
+      if (command === 'auth_entitlement_snapshot') return snapshot([{ name: 'members', models: [], connections: [], capabilities: [] }])
+      if (command === 'auth_devices') {
+        deviceCalls += 1
+        if (deviceCalls === 1) throw new Error('raw backend secret')
+        return [device('recovered')]
+      }
+      throw new Error(`unexpected command: ${command}`)
+    })
+    render(App)
+    await fireEvent.click(await screen.findByRole('button', { name: /Alice/i }))
+    const dialog = screen.getByRole('dialog', { name: 'Your access' })
+    expect(await within(dialog).findByText('Devices could not be loaded.')).toBeInTheDocument()
+    expect(dialog).not.toHaveTextContent('raw backend secret')
+    expect(within(dialog).getByRole('button', { name: 'members' })).toBeInTheDocument()
+    const entitlementCalls = invoke.mock.calls.filter(([command]) => command === 'auth_entitlement_snapshot').length
+    await fireEvent.click(within(dialog).getByRole('button', { name: 'Try again' }))
+    expect(await within(dialog).findByText('Active')).toBeInTheDocument()
+    expect(invoke.mock.calls.filter(([command]) => command === 'auth_entitlement_snapshot')).toHaveLength(entitlementCalls)
   })
 })

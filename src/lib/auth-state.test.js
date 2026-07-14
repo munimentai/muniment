@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { accessErrorState, accessLoadingState, accessReadyState, bootState, errorState, statusState, waitingState } from './auth-state.js'
+import { accessErrorState, accessLoadingState, accessReadyState, bootState, devicesErrorState, devicesLoadingState, devicesReadyState, errorState, statusState, waitingState } from './auth-state.js'
 
 describe('auth state transitions', () => {
   it('starts in boot and resolves status to signed out', () => {
@@ -22,6 +22,24 @@ describe('auth state transitions', () => {
       message: 'Sign-in not completed — the browser session was cancelled. Try again.',
       retry: 'sign-in',
     })
+  })
+})
+
+describe('device list state', () => {
+  it('orders active before revoked and each state by latest activity with a stable tie break', () => {
+    const devices = [
+      { device_id: 'd', revoked_at: '2026-01-03T00:00:00Z', last_active_at: '2026-01-04T00:00:00Z' },
+      { device_id: 'b', revoked_at: null, last_active_at: '2026-01-01T00:00:00Z' },
+      { device_id: 'c', revoked_at: null, last_active_at: '2026-01-02T00:00:00Z' },
+      { device_id: 'a', revoked_at: null, last_active_at: '2026-01-01T00:00:00Z' },
+    ]
+    expect(devicesReadyState(devices).devices.map(({ device_id }) => device_id)).toEqual(['c', 'a', 'b', 'd'])
+    expect(devices).toHaveLength(4)
+  })
+
+  it('keeps loading and redacted failure independent', () => {
+    expect(devicesLoadingState()).toEqual({ name: 'loading' })
+    expect(devicesErrorState('backend secret')).toEqual({ name: 'error' })
   })
 })
 
