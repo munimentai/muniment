@@ -47,6 +47,7 @@ struct ActiveInstall {
 
 struct Inner {
     generation: u64,
+    state_version: u64,
     status: GemmaInstallStatus,
     active: Option<ActiveInstall>,
 }
@@ -73,6 +74,7 @@ impl GemmaInstallState {
             root,
             inner: Arc::new(Mutex::new(Inner {
                 generation: 0,
+                state_version: 0,
                 status,
                 active: None,
             })),
@@ -80,12 +82,36 @@ impl GemmaInstallState {
         }
     }
 
-    fn status(&self) -> GemmaInstallStatus {
+    fn cached_status(&self) -> GemmaInstallStatus {
         self.inner
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .status
             .clone()
+    }
+
+    async fn status(&self) -> GemmaInstallStatus {
+        let state_version = {
+            let inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+            if inner.active.is_some() {
+                return inner.status.clone();
+            }
+            inner.state_version
+        };
+
+        let root = self.root.clone();
+        let inspected = tauri::async_runtime::spawn_blocking(move || inspect(&root))
+            .await
+            .unwrap_or(GemmaInstallStatus::Failed {
+                category: "inspectionFailed",
+                message: "The model installation could not be inspected.",
+            });
+        let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        if inner.active.is_none() && inner.state_version == state_version {
+            inner.state_version = inner.state_version.wrapping_add(1);
+            inner.status = inspected;
+        }
+        inner.status.clone()
     }
 
     fn start(&self) -> GemmaInstallStatus {
@@ -95,6 +121,7 @@ impl GemmaInstallState {
                 return inner.status.clone();
             }
             inner.generation = inner.generation.wrapping_add(1);
+            inner.state_version = inner.state_version.wrapping_add(1);
             let generation = inner.generation;
             let cancellation = NativeInstallCancellation::new();
             inner.active = Some(ActiveInstall {
@@ -115,6 +142,7 @@ impl GemmaInstallState {
                 return;
             }
             state.active = None;
+            state.state_version = state.state_version.wrapping_add(1);
             state.status = match result {
                 Ok(()) => GemmaInstallStatus::Installed,
                 Err(error) if error.cancelled => GemmaInstallStatus::Cancelled,
@@ -146,7 +174,11 @@ fn lifecycle(root: &Path) -> GemmaRevisionLifecycle {
 }
 
 fn inspect(root: &Path) -> GemmaInstallStatus {
-    match lifecycle(root).recover(&NativeGemmaLifecycleBoundary) {
+    inspect_lifecycle(&lifecycle(root))
+}
+
+fn inspect_lifecycle(lifecycle: &GemmaRevisionLifecycle) -> GemmaInstallStatus {
+    match lifecycle.recover(&NativeGemmaLifecycleBoundary) {
         Ok(GemmaRecovery::Current(_) | GemmaRecovery::RestoredPrevious(_)) => {
             GemmaInstallStatus::Installed
         }
@@ -238,8 +270,8 @@ pub fn gemma_install_start(state: State<'_, GemmaInstallState>) -> GemmaInstallS
 }
 
 #[tauri::command]
-pub fn gemma_install_status(state: State<'_, GemmaInstallState>) -> GemmaInstallStatus {
-    state.status()
+pub async fn gemma_install_status(state: State<'_, GemmaInstallState>) -> GemmaInstallStatus {
+    state.status().await
 }
 
 #[tauri::command]
@@ -250,6 +282,8 @@ pub fn gemma_install_cancel(state: State<'_, GemmaInstallState>) -> GemmaInstall
 #[cfg(test)]
 mod tests {
     use super::*;
+    use muniment_core::llama::lifecycle::{GemmaNoticeDescriptor, GemmaRevisionDescriptor};
+    use muniment_core::llama::ResidentModelDescriptor;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::{Duration, Instant};
 
@@ -260,24 +294,90 @@ mod tests {
     fn await_status(state: &GemmaInstallState, expected: GemmaInstallStatus) {
         let deadline = Instant::now() + Duration::from_secs(2);
         while Instant::now() < deadline {
-            if state.status() == expected {
+            if state.cached_status() == expected {
                 return;
             }
             std::thread::sleep(Duration::from_millis(5));
         }
-        assert_eq!(state.status(), expected);
+        assert_eq!(state.cached_status(), expected);
+    }
+
+    static TEST_MODEL: ResidentModelDescriptor = ResidentModelDescriptor {
+        filename: "model.gguf",
+        byte_size: 3,
+        sha256: "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
+        alias: "fixture",
+        context_tokens: 1,
+    };
+    static TEST_REVISION: GemmaRevisionDescriptor = GemmaRevisionDescriptor {
+        identity: "gemma-fixture-v1",
+        revision: "test-revision",
+        model: &TEST_MODEL,
+        notice: GemmaNoticeDescriptor {
+            filename: "NOTICE.txt",
+            contents: b"notice",
+        },
+    };
+    static TEST_REVISIONS: [&GemmaRevisionDescriptor; 1] = [&TEST_REVISION];
+
+    struct TestRoot(PathBuf);
+
+    impl TestRoot {
+        fn new() -> Self {
+            let root = std::env::temp_dir()
+                .join(format!("muniment-model-install-{}", uuid::Uuid::now_v7()));
+            fs::create_dir_all(&root).unwrap();
+            Self(root)
+        }
+
+        fn lifecycle(&self) -> GemmaRevisionLifecycle {
+            GemmaRevisionLifecycle::new(self.0.clone(), &TEST_REVISIONS, &TEST_REVISION).unwrap()
+        }
+    }
+
+    impl Drop for TestRoot {
+        fn drop(&mut self) {
+            fs::remove_dir_all(&self.0).unwrap();
+        }
     }
 
     #[test]
-    fn inspection_statuses_are_exposed_without_paths() {
-        let runner = Arc::new(|_: &Path, _: &NativeInstallCancellation| Ok(()));
+    fn filesystem_inspection_reports_not_installed() {
+        let root = TestRoot::new();
         assert_eq!(
-            state(GemmaInstallStatus::NotInstalled, runner.clone()).status(),
+            inspect_lifecycle(&root.lifecycle()),
             GemmaInstallStatus::NotInstalled
         );
+    }
+
+    #[test]
+    fn filesystem_inspection_verifies_installed_revision() {
+        let root = TestRoot::new();
+        let revision = root.0.join("revisions").join(TEST_REVISION.revision);
+        fs::create_dir_all(&revision).unwrap();
+        fs::write(revision.join(TEST_MODEL.filename), b"abc").unwrap();
+        fs::write(
+            revision.join(TEST_REVISION.notice.filename),
+            TEST_REVISION.notice.contents,
+        )
+        .unwrap();
+        fs::write(
+            root.0.join("current"),
+            "muniment-gemma-pointer-v1\ngemma-fixture-v1\ntest-revision\n",
+        )
+        .unwrap();
         assert_eq!(
-            state(GemmaInstallStatus::Installed, runner).status(),
+            inspect_lifecycle(&root.lifecycle()),
             GemmaInstallStatus::Installed
+        );
+
+        fs::remove_file(revision.join(TEST_MODEL.filename)).unwrap();
+        assert_eq!(
+            inspect_lifecycle(&root.lifecycle()),
+            GemmaInstallStatus::Failed {
+                category: "invalidInstall",
+                message: "The installed model could not be verified.",
+            }
         );
     }
 
