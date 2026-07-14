@@ -33,8 +33,12 @@ returns 404 on the control plane).
    entitlement snapshot.
 7. **Implemented and wired through Tauri:** `POST /v1/auth/native/revoke` uses the
    access bearer and current refresh token to revoke the current refresh family
-   and its access sessions before local sign-out. Broader device management
-   follows the corresponding `/v1/auth/native/*` endpoints.
+   and its access sessions before local sign-out.
+8. **Implemented in core only:** `GET /v1/auth/native/devices` uses a supplied
+   native access bearer to return a strictly validated, bounded list of at most
+   100 installations. The public result contains only server-derived display
+   metadata (device and client identifiers, role, platform, timestamps, and the
+   current-device marker); credentials and installation secrets are excluded.
 
 The installation and native session are serialized as one versioned record in
 the platform keychain (`service: ai.muniment.desktop`, `user:
@@ -252,6 +256,7 @@ build); verify it manually:
 
 ## Follow-ups (out of scope here)
 
-- Broader native device management (listing or revoking other devices).
+- Tauri exposure and device-management UI for the native device list.
+- Current-device removal and browser-step-up removal of other devices.
 - Migration or removal of credentials created by the existing generic-OIDC flow.
 - Signed-in UI.
