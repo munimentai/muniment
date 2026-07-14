@@ -33,7 +33,8 @@ Phases mirror harness-spec §9. Muniment-cloud Phase 1 native auth and the cloud
 - DONE — typed Pi tool-execution frame parsing, Tauri run-loop journaling of `tool.effect.*`, concurrent-effect reducer semantics, and tool activity in live/history chat payloads.
 - DONE — the provenance line expands into the full receipt record (design-system §6).
 - DONE — projected Pi tool activity renders as inline mono tool cards, including concurrent running effects and restored history.
-- NEXT — typed Pi permission-prompt protocol groundwork, then durable permission activity and session resume in separately reviewable slices.
+- DONE groundwork — typed, validated Pi extension-UI request/response protocol for blocking select, confirm, input, and editor interactions.
+- NEXT — durable permission activity and session resume in separately reviewable slices; the pending-gate projection remains blocked on the Needs Human decision.
 
 ### 10. Local Gemma sidecar
 - DONE — supervised JSON-RPC sidecar lifecycle; loopback llama-server launch/health/chat; pinned Gemma descriptor and launch verification; dictation-polish and routing-classifier contracts/evaluations with adversarial framing.
