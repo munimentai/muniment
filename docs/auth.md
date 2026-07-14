@@ -203,6 +203,14 @@ the webview.
 
 `AuthStatus` is `{ signed_in: bool, subject: string|null, expires_at: unix-seconds|null }`.
 
+Conversation history is scoped at read time to the freshly authenticated
+subject. A run's owner is the `provenance.actor_id` on its first journal event
+(`run.started`): an owner of `Some(subject)` makes that run visible only to the
+matching subject. Later events do not change ownership, including startup
+reconciliation events whose actor is `None`. Runs whose first event has no
+actor remain visible to every signed-in subject for compatibility with legacy
+developer data recorded before subject stamping was introduced.
+
 A temporary trigger row in `src/App.svelte` invokes these via
 `window.__TAURI__.core.invoke` (`withGlobalTauri` is on); it disappears with
 the real signed-in UI slice.
