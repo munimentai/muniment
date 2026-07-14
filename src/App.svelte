@@ -166,6 +166,11 @@
       const current = messages.find((message) => message.run?.id === payload.runId)?.run
       const projected = applyChatEvent(current, payload)
       if (projected) messages = messages.map((message) => message.run?.id === projected.id ? { ...message, run: projected } : message)
+      if (projected && ['complete', 'cancelled', 'failed', 'interrupted'].includes(projected.phase)) {
+        const next = new Set(resuming)
+        next.delete(payload.runId)
+        resuming = next
+      }
       if (active?.id === payload.runId) active = projected && !['complete', 'cancelled', 'failed', 'interrupted'].includes(projected.phase) ? projected : null
     }).then((stop) => { unlisten = stop })
     const outside = (event) => {
@@ -235,10 +240,9 @@
       const next = new Map(resumeError)
       next.set(run.id, typeof err === 'string' ? err : 'This reply could not be resumed. Try again.')
       resumeError = next
-    } finally {
-      const next = new Set(resuming)
-      next.delete(run.id)
-      resuming = next
+      const pending = new Set(resuming)
+      pending.delete(run.id)
+      resuming = pending
     }
   }
 

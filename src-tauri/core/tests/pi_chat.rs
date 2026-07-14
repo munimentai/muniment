@@ -157,6 +157,7 @@ fn extension_ui_responses_reject_mismatched_answers() {
 }
 use muniment_core::journal::reducer::reduce;
 use muniment_core::journal::{EventEnvelope, EventPayload, Provenance, RunJournal};
+use muniment_core::sidecar::pi_sidecar_config;
 use muniment_core::sidecar::{PiRpcWiring, SidecarConfig, SidecarStatus, SidecarSupervisor};
 use serde_json::json;
 use std::collections::BTreeMap;
@@ -225,6 +226,70 @@ fn prompt_contract_and_interleaved_deltas_are_typed() {
         parse_frame(&json!({"type":"error","message":"secret upstream detail"})).unwrap(),
         PiChatEvent::Failed
     );
+}
+
+#[test]
+fn explicit_resume_reopens_owned_session_and_sends_one_continuation() {
+    let temp = TempDir::new();
+    let sessions = temp.path().join("sessions");
+    fs::create_dir(&sessions).unwrap();
+    let session = sessions.join("bound.jsonl");
+    fs::write(&session, "{}\n").unwrap();
+    let args_file = temp.path().join("args");
+    let requests_file = temp.path().join("requests");
+    let locator = muniment_core::sidecar::validate_pi_session(&sessions, "bound.jsonl")
+        .unwrap()
+        .0;
+    let mut cfg = pi_sidecar_config(
+        env!("CARGO_BIN_EXE_sidecar-test-stub"),
+        &sessions,
+        Some(&locator),
+    )
+    .unwrap();
+    cfg.env.insert(
+        "PI_STUB_ARGS".into(),
+        args_file.to_string_lossy().into_owned(),
+    );
+    cfg.env.insert(
+        "PI_STUB_REQUESTS".into(),
+        requests_file.to_string_lossy().into_owned(),
+    );
+    cfg.health_interval = Duration::from_secs(60);
+    cfg.startup_timeout = Duration::from_secs(2);
+    let wiring = PiRpcWiring::new();
+    let mut supervisor =
+        SidecarSupervisor::spawn(cfg, wiring.readiness_probe(Duration::from_secs(2))).unwrap();
+    let until = Instant::now() + Duration::from_secs(5);
+    while supervisor.status() == SidecarStatus::Starting && Instant::now() < until {
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    let transport = wiring.transport().unwrap();
+    let prompt = "Continue the interrupted reply from the current session state. Do not repeat completed work or prior effects.";
+    let (adapter, _) =
+        PiRunAdapter::start("existing-run", &transport, prompt, Duration::from_secs(2)).unwrap();
+    assert_eq!(
+        adapter.next(Duration::from_secs(2)).unwrap(),
+        PiChatEvent::Failed
+    );
+    supervisor.shutdown().unwrap();
+
+    let args = fs::read_to_string(args_file).unwrap();
+    assert!(args.contains("--session-dir\n"));
+    assert!(args.contains(sessions.canonicalize().unwrap().to_string_lossy().as_ref()));
+    assert!(args.contains("--session\n"));
+    assert!(args.contains(session.canonicalize().unwrap().to_string_lossy().as_ref()));
+    let requests: Vec<serde_json::Value> = fs::read_to_string(requests_file)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    let prompts: Vec<_> = requests
+        .iter()
+        .filter(|request| request["type"] == "prompt")
+        .collect();
+    assert_eq!(prompts.len(), 1);
+    assert_eq!(prompts[0]["message"], prompt);
+    assert_ne!(prompts[0]["message"], "protected original prompt");
 }
 
 #[test]

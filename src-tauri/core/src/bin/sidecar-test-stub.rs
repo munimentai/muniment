@@ -6,6 +6,10 @@ use std::time::Duration;
 fn main() {
     let mut args = std::env::args().skip(1);
     let first = args.next();
+    if first.as_deref() == Some("--mode") {
+        pi_resume_stub(std::iter::once("--mode".to_string()).chain(args));
+        return;
+    }
     if first.as_deref() == Some("--model") {
         llama_server_stub(args);
         return;
@@ -117,6 +121,44 @@ fn main() {
             }
         }
         _ => std::process::exit(2),
+    }
+}
+
+fn pi_resume_stub(args: impl Iterator<Item = String>) {
+    if let Ok(path) = std::env::var("PI_STUB_ARGS") {
+        fs::write(path, args.collect::<Vec<_>>().join("\n")).unwrap();
+    }
+    for line in io::stdin().lock().lines() {
+        let line = line.unwrap();
+        if let Ok(path) = std::env::var("PI_STUB_REQUESTS") {
+            fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(path)
+                .unwrap()
+                .write_all(format!("{line}\n").as_bytes())
+                .unwrap();
+        }
+        let request: serde_json::Value = serde_json::from_str(&line).unwrap();
+        match request["type"].as_str() {
+            Some("get_state") => println!(
+                "{}",
+                serde_json::json!({"type":"response", "command":"get_state", "success":true, "id":request["id"]})
+            ),
+            Some("prompt") => {
+                println!(
+                    "{}",
+                    serde_json::json!({"type":"response", "command":"prompt", "success":true, "id":request["id"]})
+                );
+                println!(
+                    "{}",
+                    serde_json::json!({"type":"error", "message":"stub failure"})
+                );
+            }
+            Some("abort") => println!("{}", serde_json::json!({"type":"cancelled"})),
+            _ => std::process::exit(25),
+        }
+        io::stdout().flush().unwrap();
     }
 }
 

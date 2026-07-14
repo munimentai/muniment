@@ -417,7 +417,10 @@ fn pi_session_binding_replays_and_rebinding_fails_closed() {
 fn bound_interrupted_run_resumes_durably_on_the_same_run() {
     let resumed = stream(&[
         ("run.started", json!({})),
-        ("runtime.pi_session.bound", json!({"run_id": RUN, "locator": "session.jsonl"})),
+        (
+            "runtime.pi_session.bound",
+            json!({"run_id": RUN, "locator": "session.jsonl"}),
+        ),
         ("model.prompt.accepted", json!({})),
         ("model.stream.delta", json!({"text":"before"})),
         ("run.needs_attention", json!({"reason":"interrupted"})),
@@ -432,11 +435,53 @@ fn bound_interrupted_run_resumes_durably_on_the_same_run() {
     assert_eq!(project_chat(&resumed).unwrap().text, "before after");
 
     for events in [
-        stream(&[("run.started", json!({})), ("run.needs_attention", json!({})), ("run.resumed", json!({}))]),
-        stream(&[("run.started", json!({})), ("runtime.pi_session.bound", json!({"run_id": RUN, "locator":"session.jsonl"})), ("run.resumed", json!({}))]),
+        stream(&[
+            ("run.started", json!({})),
+            ("run.needs_attention", json!({})),
+            ("run.resumed", json!({})),
+        ]),
+        stream(&[
+            ("run.started", json!({})),
+            (
+                "runtime.pi_session.bound",
+                json!({"run_id": RUN, "locator":"session.jsonl"}),
+            ),
+            ("run.resumed", json!({})),
+        ]),
     ] {
-        assert!(matches!(reduce(&events), Err(ReduceError::InvalidTransition { .. })));
+        assert!(matches!(
+            reduce(&events),
+            Err(ReduceError::InvalidTransition { .. })
+        ));
     }
+}
+
+#[test]
+fn failed_resume_returns_to_needs_attention_and_can_retry() {
+    let events = stream(&[
+        ("run.started", json!({})),
+        (
+            "runtime.pi_session.bound",
+            json!({"run_id": RUN, "locator":"session.jsonl"}),
+        ),
+        ("model.stream.delta", json!({"text":"before"})),
+        ("run.needs_attention", json!({"reason":"interrupted"})),
+        ("run.resumed", json!({})),
+        ("model.prompt.accepted", json!({})),
+        ("run.needs_attention", json!({"reason":"resume_failed"})),
+    ]);
+    assert!(matches!(
+        reduce(&events).unwrap().status,
+        RunStatus::NeedsAttention(_)
+    ));
+
+    let mut retried = events;
+    let next = retried.len() as u64 + 1;
+    retried.push(event(next, "run.resumed", json!({})));
+    assert!(matches!(
+        reduce(&retried).unwrap().status,
+        RunStatus::Active
+    ));
 }
 
 #[test]

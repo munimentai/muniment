@@ -94,13 +94,24 @@ describe('interrupted reply resume', () => {
     expect(screen.queryByRole('button', { name: 'Resume' })).not.toBeInTheDocument()
   })
 
-  it('uses the existing run id and disables Resume while it is in flight', async () => {
-    let finish
-    restore(interrupted(), () => new Promise((resolve) => { finish = resolve }))
+  it('keeps Resume disabled after admission until a later terminal chat event', async () => {
+    restore(interrupted())
     await fireEvent.click(await screen.findByRole('button', { name: 'Resume' }))
     expect(screen.getByRole('button', { name: 'Resuming…' })).toBeDisabled()
     expect(invoke).toHaveBeenCalledWith('chat_resume', { runId: 'run-interrupted' })
-    finish({ runId: 'run-interrupted' })
+    await waitFor(() => expect(chatListener).toBeTypeOf('function'))
+
+    chatListener({ payload: {
+      runId: 'run-interrupted', phase: 'streaming', text: 'Partial answer continued',
+      receipt: null, toolActivity: [], pendingPermission: null,
+    } })
+    expect(screen.getByRole('button', { name: 'Resuming…' })).toBeDisabled()
+
+    chatListener({ payload: {
+      runId: 'run-interrupted', phase: 'interrupted', text: 'Partial answer continued',
+      receipt: null, toolActivity: [], pendingPermission: null,
+    } })
+    expect(await screen.findByRole('button', { name: 'Resume' })).toBeEnabled()
   })
 
   it('shows a recoverable error and enables Resume again', async () => {

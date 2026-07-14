@@ -1178,6 +1178,7 @@ fn fail_with_open_effects(
     reason: &str,
     subject: Option<&str>,
 ) {
+    let resume_failure = resume_was_attempted(journal, run_id);
     let _ = append_terminal(
         app,
         journal,
@@ -1185,10 +1186,22 @@ fn fail_with_open_effects(
         run_id,
         seq,
         open_effects,
-        "run.failed",
-        json!({"reason": reason}),
+        if resume_failure {
+            "run.needs_attention"
+        } else {
+            "run.failed"
+        },
+        json!({"reason": if resume_failure { "resume_failed" } else { reason }}),
         subject,
     );
+}
+
+fn resume_was_attempted(journal: &Arc<Mutex<RunJournal>>, run_id: &str) -> bool {
+    journal
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .events(run_id)
+        .is_ok_and(|events| events.iter().any(|event| event.event_type == "run.resumed"))
 }
 
 fn chat_tool_activity(
@@ -1287,11 +1300,12 @@ fn fail(
     reason: &str,
     subject: Option<&str>,
 ) {
-    let interrupted = projector
-        .projection()
-        .ok()
-        .and_then(|projection| projection.status)
-        .is_some_and(|status| matches!(status, RunStatus::NeedsAttention(_)));
+    let interrupted = resume_was_attempted(journal, run_id)
+        || projector
+            .projection()
+            .ok()
+            .and_then(|projection| projection.status)
+            .is_some_and(|status| matches!(status, RunStatus::NeedsAttention(_)));
     let _ = append_emit(
         app,
         journal,
@@ -1645,7 +1659,7 @@ mod tests {
             None,
         );
 
-        let entries = history_entries(&mut journal, None).unwrap();
+        let entries = history_entries(&mut journal, None, &directory).unwrap();
         let entry = entries.iter().find(|entry| entry.run_id == run_id).unwrap();
         assert_eq!(entry.phase, "pending-permission");
         let pending = entry.pending_permission.as_ref().unwrap();
@@ -1666,7 +1680,7 @@ mod tests {
             json!({"gate_id": "pi-request-1", "decision": "cancelled"}),
             None,
         );
-        let entries = history_entries(&mut journal, None).unwrap();
+        let entries = history_entries(&mut journal, None, &directory).unwrap();
         let entry = entries.iter().find(|entry| entry.run_id == run_id).unwrap();
         assert!(entry.pending_permission.is_none());
         assert_eq!(entry.phase, "thinking");
@@ -1811,7 +1825,7 @@ mod tests {
             None,
         );
 
-        let sub_b = history_entries(&mut journal, Some("sub-b")).unwrap();
+        let sub_b = history_entries(&mut journal, Some("sub-b"), &directory).unwrap();
         assert_eq!(
             sub_b
                 .iter()
@@ -1828,7 +1842,7 @@ mod tests {
                 != Some(&json!("sub-a"))
         }));
 
-        let sub_a = history_entries(&mut journal, Some("sub-a")).unwrap();
+        let sub_a = history_entries(&mut journal, Some("sub-a"), &directory).unwrap();
         assert_eq!(
             sub_a
                 .iter()
