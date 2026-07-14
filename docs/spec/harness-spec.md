@@ -519,7 +519,10 @@ user does in them carries the same entitlements, permission gates,
 receipts, and journal entries as the desktop surface. v1 requires the
 desktop app installed and signed in. The CLI is an interactive human
 surface — headless/scripted agents remain the server-side agent access
-layer's job, never the CLI's.
+layer's job, never the CLI's. Execution surfaces may invoke every
+runtime capability, including browser control (§6.8); the browser
+extension is an actuator of the runtime, not a companion surface, and is
+outside this section's scope.
 
 ### 13.2 Enabling primitives
 
