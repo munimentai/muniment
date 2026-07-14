@@ -180,12 +180,12 @@ fn ensure_native_session(
 pub async fn auth_sign_out(state: tauri::State<'_, AuthState>) -> Result<AuthStatus, String> {
     let store = state.native_store.clone();
     tauri::async_runtime::spawn_blocking(move || {
-        let _ = auth::revoke_current_native_session(
+        auth::sign_out_native_session(
             store.as_ref(),
-            &UreqRevocationTransport::new(Duration::from_secs(30)),
+            &UreqRevocationTransport::new(Duration::from_secs(2)),
             &api_base_url(),
-        );
-        store.clear_session().map_err(|error| error.to_string())?;
+        )
+        .map_err(|error| error.to_string())?;
         auth::native_status(store.as_ref(), unix_time()).map_err(|error| error.to_string())
     })
     .await

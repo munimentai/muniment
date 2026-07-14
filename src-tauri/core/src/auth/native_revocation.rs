@@ -165,6 +165,19 @@ pub fn revoke_current_native_session(
     Ok(())
 }
 
+/// Best-effort server revocation followed by the authoritative local clear.
+///
+/// Revocation errors are deliberately ignored so sign-out remains available
+/// while offline. Persistence errors from the local clear are still returned.
+pub fn sign_out_native_session(
+    store: &dyn NativeCredentialStore,
+    transport: &dyn RevocationTransport,
+    base_url: &str,
+) -> Result<(), super::native_token::NativeTokenError> {
+    let _ = revoke_current_native_session(store, transport, base_url);
+    store.clear_session()
+}
+
 fn validate_base_url(base_url: &str) -> Result<(), NativeRevocationError> {
     let parsed = url::Url::parse(base_url)
         .map_err(|_| NativeRevocationError::Config("invalid API base URL".into()))?;

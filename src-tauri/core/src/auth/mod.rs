@@ -48,8 +48,9 @@ pub use native_registration::{
     UreqRegistrationTransport,
 };
 pub use native_revocation::{
-    revoke_current_native_session, NativeRevocationError, NativeRevocationRequest,
-    NativeRevocationResponse, RevocationTransport, UreqRevocationTransport,
+    revoke_current_native_session, sign_out_native_session, NativeRevocationError,
+    NativeRevocationRequest, NativeRevocationResponse, RevocationTransport,
+    UreqRevocationTransport,
 };
 pub use native_session::{
     ensure_fresh_native_session, inspect_native_session, native_status,

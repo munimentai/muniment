@@ -4,8 +4,9 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use muniment_core::auth::{
-    revoke_current_native_session, InstallationRecord, NativeCredentialStore, NativeCredentials,
-    NativeRevocationError, TokenSet, UreqRevocationTransport,
+    revoke_current_native_session, sign_out_native_session, InstallationRecord,
+    NativeCredentialStore, NativeCredentials, NativeRevocationError, NativeRevocationRequest,
+    NativeRevocationResponse, RevocationTransport, TokenSet, UreqRevocationTransport,
 };
 use uuid::Uuid;
 
@@ -53,8 +54,8 @@ fn store() -> MemoryStore {
             registration_expires_at: 600,
         },
         tokens: TokenSet {
-            access_token: "access-secret".into(),
-            refresh_token: Some("refresh-secret".into()),
+            access_token: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA".into(),
+            refresh_token: Some("BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB".into()),
             expires_at: Some(1_900),
             subject: Some("user".into()),
         },
@@ -121,8 +122,10 @@ fn posts_exact_current_session_contract() {
     assert!(request.starts_with("POST /v1/auth/native/revoke HTTP/1.1\r\n"));
     assert!(request
         .to_ascii_lowercase()
-        .contains("authorization: bearer access-secret\r\n"));
-    assert!(request.ends_with(r#"{"scope":"current","refresh_token":"refresh-secret"}"#));
+        .contains("authorization: bearer aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\r\n"));
+    assert!(request.ends_with(
+        r#"{"scope":"current","refresh_token":"BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB"}"#
+    ));
 }
 
 #[test]
@@ -170,6 +173,111 @@ fn reports_network_failure_without_mutating_credentials() {
             .tokens
             .refresh_token
             .as_deref(),
-        Some("refresh-secret")
+        Some("BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB")
     );
+}
+
+struct OrderedStore {
+    credentials: Mutex<Option<NativeCredentials>>,
+    installation: InstallationRecord,
+    events: Arc<Mutex<Vec<&'static str>>>,
+}
+
+impl NativeCredentialStore for OrderedStore {
+    fn load_installation(
+        &self,
+    ) -> Result<Option<InstallationRecord>, muniment_core::auth::NativeTokenError> {
+        Ok(Some(self.installation.clone()))
+    }
+
+    fn save_credentials(
+        &self,
+        value: &NativeCredentials,
+    ) -> Result<(), muniment_core::auth::NativeTokenError> {
+        *self.credentials.lock().unwrap() = Some(value.clone());
+        Ok(())
+    }
+
+    fn load_credentials(
+        &self,
+    ) -> Result<Option<NativeCredentials>, muniment_core::auth::NativeTokenError> {
+        Ok(self.credentials.lock().unwrap().clone())
+    }
+
+    fn clear_session(&self) -> Result<(), muniment_core::auth::NativeTokenError> {
+        self.events.lock().unwrap().push("clear");
+        *self.credentials.lock().unwrap() = None;
+        Ok(())
+    }
+}
+
+struct OrderedTransport {
+    events: Arc<Mutex<Vec<&'static str>>>,
+    result: Result<(), NativeRevocationError>,
+}
+
+impl RevocationTransport for OrderedTransport {
+    fn revoke(
+        &self,
+        _url: &str,
+        _request: &NativeRevocationRequest,
+    ) -> Result<NativeRevocationResponse, NativeRevocationError> {
+        self.events.lock().unwrap().push("revoke");
+        self.result.clone()?;
+        serde_json::from_str(r#"{"ok":true}"#)
+            .map_err(|error| NativeRevocationError::MalformedResponse(error.to_string()))
+    }
+}
+
+fn ordered_store(events: Arc<Mutex<Vec<&'static str>>>) -> OrderedStore {
+    let credentials = store().load_credentials().unwrap().unwrap();
+    OrderedStore {
+        installation: credentials.installation.clone(),
+        credentials: Mutex::new(Some(credentials)),
+        events,
+    }
+}
+
+#[test]
+fn sign_out_attempts_revocation_before_clearing_locally() {
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let store = ordered_store(events.clone());
+    let transport = OrderedTransport {
+        events: events.clone(),
+        result: Ok(()),
+    };
+
+    sign_out_native_session(&store, &transport, "https://api.muniment.ai").unwrap();
+
+    assert_eq!(*events.lock().unwrap(), ["revoke", "clear"]);
+    assert!(store.load_credentials().unwrap().is_none());
+    assert_eq!(
+        store.load_installation().unwrap().unwrap().device_id,
+        store.installation.device_id
+    );
+}
+
+#[test]
+fn sign_out_clears_and_preserves_installation_when_revocation_fails() {
+    for failure in [
+        NativeRevocationError::Transport("offline".into()),
+        NativeRevocationError::HttpStatus(503),
+    ] {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let store = ordered_store(events.clone());
+        let installation = store.installation.clone();
+        let transport = OrderedTransport {
+            events: events.clone(),
+            result: Err(failure),
+        };
+
+        sign_out_native_session(&store, &transport, "https://api.muniment.ai").unwrap();
+
+        assert_eq!(*events.lock().unwrap(), ["revoke", "clear"]);
+        assert!(store.load_credentials().unwrap().is_none());
+        assert_eq!(
+            store.load_installation().unwrap().unwrap().device_id,
+            installation.device_id
+        );
+    }
 }
