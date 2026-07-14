@@ -4,7 +4,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use chrono::{SecondsFormat, Utc};
-use muniment_core::journal::reducer::{project_chat, reduce, RunStatus};
+use muniment_core::journal::reducer::{project_chat, reduce, ChatProjector, RunStatus};
 use muniment_core::journal::{EventEnvelope, EventPayload, Provenance, RunJournal};
 use muniment_core::sidecar::pi_chat::{cancel_command, PiChatEvent, PiRunAdapter, Receipt};
 use muniment_core::sidecar::pi_install::resolve_current;
@@ -406,9 +406,11 @@ fn coordinate(
     active_adapter: Arc<Mutex<Option<Arc<PiRunAdapter>>>>,
 ) {
     let mut seq = 0;
+    let mut projector = ChatProjector::new();
     if append_emit(
         &app,
         &journal,
+        &mut projector,
         &run_id,
         &mut seq,
         "run.started",
@@ -423,6 +425,7 @@ fn coordinate(
         let _ = append_emit(
             &app,
             &journal,
+            &mut projector,
             &run_id,
             &mut seq,
             "run.cancelled",
@@ -447,6 +450,7 @@ fn coordinate(
                 fail(
                     &app,
                     &journal,
+                    &mut projector,
                     &run_id,
                     &mut seq,
                     "The agent runtime is not installed.",
@@ -461,6 +465,7 @@ fn coordinate(
                 fail(
                     &app,
                     &journal,
+                    &mut projector,
                     &run_id,
                     &mut seq,
                     "The agent runtime is unavailable.",
@@ -490,6 +495,7 @@ fn coordinate(
                     fail(
                         &app,
                         &journal,
+                        &mut projector,
                         &run_id,
                         &mut seq,
                         "The agent runtime could not start.",
@@ -515,6 +521,7 @@ fn coordinate(
             let _ = append_emit(
                 &app,
                 &journal,
+                &mut projector,
                 &run_id,
                 &mut seq,
                 "run.cancelled",
@@ -529,6 +536,7 @@ fn coordinate(
         fail(
             &app,
             &journal,
+            &mut projector,
             &run_id,
             &mut seq,
             "The agent runtime did not become ready.",
@@ -543,6 +551,7 @@ fn coordinate(
         let _ = append_emit(
             &app,
             &journal,
+            &mut projector,
             &run_id,
             &mut seq,
             "run.cancelled",
@@ -557,6 +566,7 @@ fn coordinate(
             fail(
                 &app,
                 &journal,
+                &mut projector,
                 &run_id,
                 &mut seq,
                 "The reply could not be started.",
@@ -572,6 +582,7 @@ fn coordinate(
     if append_emit(
         &app,
         &journal,
+        &mut projector,
         &run_id,
         &mut seq,
         "model.prompt.accepted",
@@ -594,6 +605,7 @@ fn coordinate(
                 if append_emit(
                     &app,
                     &journal,
+                    &mut projector,
                     &run_id,
                     &mut seq,
                     "model.stream.delta",
@@ -609,6 +621,7 @@ fn coordinate(
                 let _ = append_terminal(
                     &app,
                     &journal,
+                    &mut projector,
                     &run_id,
                     &mut seq,
                     &mut open_effects,
@@ -624,6 +637,7 @@ fn coordinate(
                         let _ = append_terminal(
                             &app,
                             &journal,
+                            &mut projector,
                             &run_id,
                             &mut seq,
                             &mut open_effects,
@@ -637,6 +651,7 @@ fn coordinate(
                         fail_with_open_effects(
                             &app,
                             &journal,
+                            &mut projector,
                             &run_id,
                             &mut seq,
                             &mut open_effects,
@@ -651,6 +666,7 @@ fn coordinate(
                 let _ = append_terminal(
                     &app,
                     &journal,
+                    &mut projector,
                     &run_id,
                     &mut seq,
                     &mut open_effects,
@@ -664,6 +680,7 @@ fn coordinate(
                 fail_with_open_effects(
                     &app,
                     &journal,
+                    &mut projector,
                     &run_id,
                     &mut seq,
                     &mut open_effects,
@@ -677,6 +694,7 @@ fn coordinate(
                     if append_emit(
                         &app,
                         &journal,
+                        &mut projector,
                         &run_id,
                         &mut seq,
                         kind,
@@ -698,6 +716,7 @@ fn coordinate(
                     fail_with_open_effects(
                         &app,
                         &journal,
+                        &mut projector,
                         &run_id,
                         &mut seq,
                         &mut open_effects,
@@ -711,6 +730,7 @@ fn coordinate(
                 fail_with_open_effects(
                     &app,
                     &journal,
+                    &mut projector,
                     &run_id,
                     &mut seq,
                     &mut open_effects,
@@ -764,6 +784,7 @@ fn close_open_effects(
 fn append_terminal(
     app: &tauri::AppHandle,
     journal: &Arc<Mutex<RunJournal>>,
+    projector: &mut ChatProjector,
     run_id: &str,
     seq: &mut u64,
     open_effects: &mut BTreeSet<String>,
@@ -772,14 +793,15 @@ fn append_terminal(
     subject: Option<&str>,
 ) -> Result<(), ()> {
     close_open_effects(open_effects, |kind, payload| {
-        append_emit(app, journal, run_id, seq, kind, payload, subject)
+        append_emit(app, journal, projector, run_id, seq, kind, payload, subject)
     })?;
-    append_emit(app, journal, run_id, seq, kind, payload, subject)
+    append_emit(app, journal, projector, run_id, seq, kind, payload, subject)
 }
 
 fn fail_with_open_effects(
     app: &tauri::AppHandle,
     journal: &Arc<Mutex<RunJournal>>,
+    projector: &mut ChatProjector,
     run_id: &str,
     seq: &mut u64,
     open_effects: &mut BTreeSet<String>,
@@ -789,6 +811,7 @@ fn fail_with_open_effects(
     let _ = append_terminal(
         app,
         journal,
+        projector,
         run_id,
         seq,
         open_effects,
@@ -819,6 +842,7 @@ fn chat_tool_activity(
 fn append_emit(
     app: &tauri::AppHandle,
     journal: &Arc<Mutex<RunJournal>>,
+    projector: &mut ChatProjector,
     run_id: &str,
     seq: &mut u64,
     kind: &str,
@@ -827,11 +851,12 @@ fn append_emit(
 ) -> Result<(), ()> {
     *seq += 1;
     let envelope = event_envelope(run_id, *seq, kind, payload, subject);
-    let projection = {
+    {
         let mut journal = journal.lock().map_err(|_| ())?;
         journal.append(*seq - 1, &envelope).map_err(|_| ())?;
-        project_chat(&journal.events(run_id).map_err(|_| ())?).map_err(|_| ())?
-    };
+    }
+    projector.apply(&envelope).map_err(|_| ())?;
+    let projection = projector.projection().map_err(|_| ())?;
     let phase = projection_phase(&projection.status);
     let tool_activity = chat_tool_activity(&projection.tool_activity);
     app.emit(
@@ -884,6 +909,7 @@ fn event_envelope(
 fn fail(
     app: &tauri::AppHandle,
     journal: &Arc<Mutex<RunJournal>>,
+    projector: &mut ChatProjector,
     run_id: &str,
     seq: &mut u64,
     reason: &str,
@@ -892,6 +918,7 @@ fn fail(
     let _ = append_emit(
         app,
         journal,
+        projector,
         run_id,
         seq,
         "run.failed",
