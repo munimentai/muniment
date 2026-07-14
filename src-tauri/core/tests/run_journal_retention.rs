@@ -153,7 +153,10 @@ fn collects_deleted_only_objects_and_preserves_surviving_references() {
         .unwrap();
 
     let outcome = apply_retention(&mut journal, Some(&store), &policy(), now()).unwrap();
-    assert_eq!(outcome.collected_hashes, std::slice::from_ref(&deleted_only));
+    assert_eq!(
+        outcome.collected_hashes,
+        std::slice::from_ref(&deleted_only)
+    );
     assert!(!store.has(&deleted_only).unwrap());
     assert!(store.has(&shared).unwrap());
     drop(store);
