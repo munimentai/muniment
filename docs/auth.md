@@ -30,8 +30,11 @@ returns 404 on the control plane).
 6. **Implemented and wired through Tauri:** `GET /v1/auth/native/session` loads the
    stored native access credential, inspects the authoritative session, and
    strictly validates its identity, desktop role, device binding, and signed
-   entitlement snapshot. Native revocation/device management follow the
-   corresponding `/v1/auth/native/*` endpoints.
+   entitlement snapshot.
+7. **Implemented and wired through Tauri:** `POST /v1/auth/native/revoke` uses the
+   access bearer and current refresh token to revoke the current refresh family
+   and its access sessions before local sign-out. Broader device management
+   follows the corresponding `/v1/auth/native/*` endpoints.
 
 The installation and native session are serialized as one versioned record in
 the platform keychain (`service: ai.muniment.desktop`, `user:
@@ -79,14 +82,15 @@ the profile UI only: authorization decisions continue to use the server as the
 authority. A retry performs a new network inspection. `auth_status` remains
 local-only and network-free.
 
-`auth_sign_out` runs on a blocking worker and atomically replaces a
+`auth_sign_out` runs on a blocking worker and first attempts to revoke the
+current native refresh family and its access sessions server-side. Revocation
+is best-effort: an unavailable or rejecting server does not prevent offline
+sign-out. The command then atomically replaces a
 credential-bearing native record with an installation-only record. This clears
 the access token, refresh token, access expiry, refresh expiry, and subject
 locally while preserving the registered installation keypair, device identity,
 and challenge for a later sign-in. It is idempotent when already signed out and
-does not modify the unrelated legacy `oidc-tokens` entry. Server-side native
-session revocation is a future slice; the desktop does not invent a revocation
-request until the live native contract is available.
+does not modify the unrelated legacy `oidc-tokens` entry.
 
 The native API base defaults to `https://api.muniment.ai` and may be overridden
 for loopback development with `MUNIMENT_API_BASE_URL`. `MUNIMENT_ISSUER` remains
@@ -199,7 +203,7 @@ the webview.
 | `auth_status`   | `AuthStatus`           | Local only, no network            |
 | `auth_ensure_fresh` | `AuthStatus` or error | Refreshes at expiry or within 60 seconds |
 | `auth_entitlement_snapshot` | `EntitlementSnapshotView` or error | Authoritative network inspection; safe display hints only |
-| `auth_sign_out` | `AuthStatus`           | Clears local native session; preserves installation |
+| `auth_sign_out` | `AuthStatus`           | Best-effort current-session revocation, then local clear; preserves installation |
 
 `AuthStatus` is `{ signed_in: bool, subject: string|null, expires_at: unix-seconds|null }`.
 
@@ -222,7 +226,7 @@ runs) covers: PKCE S256 correctness against the RFC 7636 appendix-B vector,
 state-mismatch rejection (including that no token request is made),
 full code exchange and refresh against an in-process mock IdP on
 127.0.0.1, PKCE proof enforcement by the token endpoint, provider `error`
-redirects, sign-out revocation, discovery issuer-mismatch rejection, and
+redirects, discovery issuer-mismatch rejection, and
 token redaction in `Debug` output. No test touches api.muniment.ai.
 
 The standalone `muniment-core` crate builds without TLS (tests speak plain
@@ -248,6 +252,6 @@ build); verify it manually:
 
 ## Follow-ups (out of scope here)
 
-- Server-side native revocation/device management.
+- Broader native device management (listing or revoking other devices).
 - Migration or removal of credentials created by the existing generic-OIDC flow.
 - Signed-in UI.
