@@ -5,49 +5,54 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use muniment_core::auth::{
-    ensure_fresh_native_session, inspect_native_session, native_status, InstallationRecord,
-    NativeCredentialStore, NativeCredentials, NativeSession, NativeSessionError,
-    NativeSessionRequest, NativeTokenError, NativeTokenRequest, NativeTokenResponse,
-    SessionTransport, TokenSet, TokenTransport, UreqSessionTransport,
+    ensure_fresh_native_session, inspect_native_session, native_status, FreshNativeSessionError,
+    InstallationRecord, NativeCredentialStore, NativeCredentials, NativeSession,
+    NativeSessionError, NativeSessionRequest, NativeTokenError, NativeTokenRequest,
+    NativeTokenResponse, SessionTransport, TokenSet, TokenTransport, UreqSessionTransport,
 };
 use uuid::Uuid;
 
 const DEVICE_ID: &str = "10000000-0000-4000-8000-000000000001";
 
 #[derive(Default)]
-struct MemoryStore(Mutex<Option<NativeCredentials>>);
+struct MemoryStore {
+    installation: Mutex<Option<InstallationRecord>>,
+    credentials: Mutex<Option<NativeCredentials>>,
+    clear_calls: AtomicUsize,
+    fail_clear: bool,
+}
 
 impl NativeCredentialStore for MemoryStore {
     fn load_installation(
         &self,
     ) -> Result<Option<InstallationRecord>, muniment_core::auth::NativeTokenError> {
-        Ok(self
-            .0
-            .lock()
-            .unwrap()
-            .as_ref()
-            .map(|c| c.installation.clone()))
+        Ok(self.installation.lock().unwrap().clone())
     }
     fn save_credentials(
         &self,
         value: &NativeCredentials,
     ) -> Result<(), muniment_core::auth::NativeTokenError> {
-        *self.0.lock().unwrap() = Some(value.clone());
+        *self.installation.lock().unwrap() = Some(value.installation.clone());
+        *self.credentials.lock().unwrap() = Some(value.clone());
         Ok(())
     }
     fn load_credentials(
         &self,
     ) -> Result<Option<NativeCredentials>, muniment_core::auth::NativeTokenError> {
-        Ok(self.0.lock().unwrap().clone())
+        Ok(self.credentials.lock().unwrap().clone())
     }
     fn clear_session(&self) -> Result<(), muniment_core::auth::NativeTokenError> {
-        *self.0.lock().unwrap() = None;
+        self.clear_calls.fetch_add(1, Ordering::SeqCst);
+        if self.fail_clear {
+            return Err(NativeTokenError::Persistence("clear failed".into()));
+        }
+        *self.credentials.lock().unwrap() = None;
         Ok(())
     }
 }
 
 fn store() -> MemoryStore {
-    MemoryStore(Mutex::new(Some(NativeCredentials {
+    let credentials = NativeCredentials {
         installation: InstallationRecord {
             private_key: [1; 32],
             device_id: Uuid::parse_str(DEVICE_ID).unwrap(),
@@ -62,7 +67,13 @@ fn store() -> MemoryStore {
             subject: Some("user".into()),
         },
         refresh_expires_at: 86_400,
-    })))
+    };
+    MemoryStore {
+        installation: Mutex::new(Some(credentials.installation.clone())),
+        credentials: Mutex::new(Some(credentials)),
+        clear_calls: AtomicUsize::new(0),
+        fail_clear: false,
+    }
 }
 
 fn success() -> String {
@@ -409,18 +420,37 @@ fn signed_out_refresh_and_validation_failures_are_fail_closed_and_redacted() {
         calls: AtomicUsize::new(0),
         result: Err(NativeSessionError::Transport("session-secret".into())),
     };
-    for store in [MemoryStore::default(), orchestration_store(900, 1_000)] {
-        let result = ensure_fresh_native_session(
-            &store,
-            &tokens,
-            &sessions,
-            "http://localhost:3000",
-            1_000,
-            Duration::from_secs(60),
-        )
-        .unwrap();
-        assert!(!result.status.signed_in);
-    }
+    let empty = MemoryStore::default();
+    let result = ensure_fresh_native_session(
+        &empty,
+        &tokens,
+        &sessions,
+        "http://localhost:3000",
+        1_000,
+        Duration::from_secs(60),
+    )
+    .unwrap();
+    assert!(!result.status.signed_in);
+    assert_eq!(empty.clear_calls.load(Ordering::SeqCst), 0);
+
+    let expired = orchestration_store(900, 1_000);
+    let installation = expired.load_installation().unwrap().unwrap();
+    let result = ensure_fresh_native_session(
+        &expired,
+        &tokens,
+        &sessions,
+        "http://localhost:3000",
+        1_000,
+        Duration::from_secs(60),
+    )
+    .unwrap();
+    assert!(!result.status.signed_in);
+    assert!(expired.load_credentials().unwrap().is_none());
+    assert_eq!(
+        expired.load_installation().unwrap().unwrap().device_id,
+        installation.device_id
+    );
+    assert_eq!(expired.clear_calls.load(Ordering::SeqCst), 1);
     assert_eq!(tokens.calls.load(Ordering::SeqCst), 0);
     assert_eq!(sessions.calls.load(Ordering::SeqCst), 0);
 
@@ -471,4 +501,72 @@ fn signed_out_refresh_and_validation_failures_are_fail_closed_and_redacted() {
         "access-secret"
     );
     assert!(!format!("{error:?} {error}").contains("secret"));
+}
+
+#[test]
+fn refresh_expired_from_transport_clears_session_without_inspection() {
+    let store = orchestration_store(1_060, 4_000);
+    let installation_id = store.load_installation().unwrap().unwrap().device_id;
+    let tokens = CountingTokenTransport {
+        calls: AtomicUsize::new(0),
+        response: None,
+        error: Some(NativeTokenError::RefreshExpired),
+    };
+    let sessions = CountingSessionTransport {
+        calls: AtomicUsize::new(0),
+        result: Ok(session_result()),
+    };
+
+    let result = ensure_fresh_native_session(
+        &store,
+        &tokens,
+        &sessions,
+        "http://localhost:3000",
+        1_000,
+        Duration::from_secs(60),
+    )
+    .unwrap();
+
+    assert!(!result.status.signed_in);
+    assert!(store.load_credentials().unwrap().is_none());
+    assert_eq!(
+        store.load_installation().unwrap().unwrap().device_id,
+        installation_id
+    );
+    assert_eq!(store.clear_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(tokens.calls.load(Ordering::SeqCst), 1);
+    assert_eq!(sessions.calls.load(Ordering::SeqCst), 0);
+}
+
+#[test]
+fn dead_session_clear_failure_is_a_credentials_error() {
+    let store = MemoryStore {
+        fail_clear: true,
+        ..orchestration_store(900, 1_000)
+    };
+    let tokens = CountingTokenTransport {
+        calls: AtomicUsize::new(0),
+        response: None,
+        error: None,
+    };
+    let sessions = CountingSessionTransport {
+        calls: AtomicUsize::new(0),
+        result: Ok(session_result()),
+    };
+
+    let error = ensure_fresh_native_session(
+        &store,
+        &tokens,
+        &sessions,
+        "http://localhost:3000",
+        1_000,
+        Duration::from_secs(60),
+    )
+    .unwrap_err();
+
+    assert_eq!(error, FreshNativeSessionError::Credentials);
+    assert!(store.load_credentials().unwrap().is_some());
+    assert_eq!(store.clear_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(tokens.calls.load(Ordering::SeqCst), 0);
+    assert_eq!(sessions.calls.load(Ordering::SeqCst), 0);
 }

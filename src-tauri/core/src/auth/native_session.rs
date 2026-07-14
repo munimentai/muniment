@@ -329,6 +329,9 @@ pub fn ensure_fresh_native_session(
                 .as_ref()
                 .is_none_or(String::is_empty)
         {
+            store
+                .clear_session()
+                .map_err(|_| FreshNativeSessionError::Credentials)?;
             return Ok(signed_out());
         }
         let mut proof_jti = [0_u8; 16];
@@ -342,7 +345,10 @@ pub fn ensure_fresh_native_session(
         ) {
             Ok(credentials) => credentials,
             Err(NativeTokenError::CredentialsMissing | NativeTokenError::RefreshExpired) => {
-                return Ok(signed_out())
+                store
+                    .clear_session()
+                    .map_err(|_| FreshNativeSessionError::Credentials)?;
+                return Ok(signed_out());
             }
             Err(_) => return Err(FreshNativeSessionError::TokenRefresh),
         };
