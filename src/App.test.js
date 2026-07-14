@@ -8,6 +8,7 @@ import { historyMessages } from './lib/chat-state.js'
 
 let App
 let invoke
+let chatListener
 
 const snapshot = (groups = []) => ({
   snapshot_version: 2,
@@ -24,12 +25,13 @@ beforeAll(async () => {
   HTMLElement.prototype.scrollTo = vi.fn()
   window.__TAURI__ = {
     core: { invoke: (...args) => invoke(...args) },
-    event: { listen: vi.fn().mockResolvedValue(vi.fn()) },
+    event: { listen: vi.fn((_, listener) => { chatListener = listener; return Promise.resolve(vi.fn()) }) },
   }
   App = (await import('./App.svelte')).default
 })
 
 beforeEach(() => {
+  chatListener = undefined
   invoke = vi.fn(async (command) => {
     if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
     if (command === 'chat_history') return []
@@ -62,6 +64,74 @@ describe('history hydration', () => {
     const messages = historyMessages([{ runId: 'run-1', phase: 'complete', text: 'Done' }])
 
     expect(messages[0].run.toolActivity).toEqual([])
+  })
+})
+
+describe('tool activity cards', () => {
+  const historyWith = (toolActivity, phase = 'complete') => [{
+    runId: 'run-tools', phase, text: 'I used tools.', prompt: 'Do work', receipt: {}, toolActivity,
+  }]
+
+  function restore(toolActivity, phase) {
+    invoke.mockImplementation(async (command) => {
+      if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
+      if (command === 'chat_history') return historyWith(toolActivity, phase)
+      if (command === 'auth_entitlement_snapshot') return snapshot()
+      throw new Error(`unexpected command: ${command}`)
+    })
+    return render(App)
+  }
+
+  it('renders restored completed activity collapsed to its labeled header', async () => {
+    restore([{ effectId: 'tool-1', displayName: 'Search files', status: 'completed' }])
+
+    expect(await screen.findByRole('status', { name: 'Search files: completed' })).toHaveTextContent('Search filescompleted')
+  })
+
+  it('updates a live running card to completed', async () => {
+    restore([{ effectId: 'tool-1', displayName: 'Read file', status: 'running' }], 'streaming')
+    expect(await screen.findByRole('status', { name: 'Read file: running' })).toBeInTheDocument()
+    await waitFor(() => expect(chatListener).toBeTypeOf('function'))
+
+    chatListener({ payload: {
+      runId: 'run-tools', phase: 'complete', text: 'I used tools.', receipt: {},
+      toolActivity: [{ effectId: 'tool-1', displayName: 'Read file', status: 'completed' }],
+    } })
+
+    expect(await screen.findByRole('status', { name: 'Read file: completed' })).toBeInTheDocument()
+    expect(screen.queryByRole('status', { name: 'Read file: running' })).not.toBeInTheDocument()
+  })
+
+  it('labels failed activity with text and supplies a neutral missing name', async () => {
+    restore([{ effectId: 'tool-1', displayName: null, status: 'failed' }])
+
+    const card = await screen.findByRole('status', { name: 'Tool activity: failed' })
+    expect(card).toHaveTextContent('Tool activity')
+    expect(card).toHaveTextContent('failed')
+  })
+
+  it('groups parallel running effects and keeps every status row visible when settled', async () => {
+    restore([
+      { effectId: 'tool-1', displayName: 'Search files', status: 'running' },
+      { effectId: 'tool-2', displayName: 'Read file', status: 'running' },
+    ], 'streaming')
+
+    const group = await screen.findByRole('group', { name: /Parallel tool activity: Search files running, Read file running/ })
+    expect(within(group).getByLabelText('Search files: running')).toBeInTheDocument()
+    expect(within(group).getByLabelText('Read file: running')).toBeInTheDocument()
+    await waitFor(() => expect(chatListener).toBeTypeOf('function'))
+
+    chatListener({ payload: {
+      runId: 'run-tools', phase: 'complete', text: 'I used tools.', receipt: {},
+      toolActivity: [
+        { effectId: 'tool-1', displayName: 'Search files', status: 'completed' },
+        { effectId: 'tool-2', displayName: 'Read file', status: 'failed' },
+      ],
+    } })
+
+    const settled = await screen.findByRole('group', { name: /Search files completed, Read file failed/ })
+    expect(within(settled).getByLabelText('Search files: completed')).toBeInTheDocument()
+    expect(within(settled).getByLabelText('Read file: failed')).toBeInTheDocument()
   })
 })
 
