@@ -1,5 +1,7 @@
 use muniment_core::attach::*;
 
+const _: () = assert!(MAX_RUN_STREAM_WINDOW_EVENTS > 0 && MAX_RUN_STREAM_WINDOW_BYTES > 0);
+
 fn id(n: u128) -> Id {
     Id::new(format!("{n:032x}")).unwrap()
 }
@@ -150,5 +152,4 @@ fn initial_metadata_and_limits_are_explicit_and_bounded() {
             max_bytes: 40
         }
     );
-    assert!(MAX_RUN_STREAM_WINDOW_EVENTS > 0 && MAX_RUN_STREAM_WINDOW_BYTES > 0);
 }
