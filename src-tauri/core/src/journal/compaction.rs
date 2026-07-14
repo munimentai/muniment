@@ -55,6 +55,13 @@ pub enum CompactionFault {
     BeforeSnapshotCompletion,
     BeforeReplacement,
     DuringReplacement,
+    AfterReplacementBeforeDirectorySync,
+}
+
+#[derive(Debug)]
+enum ReplacementError {
+    NotReplaced(io::Error),
+    Replaced(io::Error),
 }
 
 impl RunJournal {
@@ -168,7 +175,7 @@ impl RunJournal {
             debug_assert!(!missing.exists());
             // Exercise the platform replacement call itself against the live,
             // existing destination, but with a source that cannot be moved.
-            let replacement_failed = atomic_replace(&missing, path).is_err();
+            let replacement_failed = atomic_replace(&missing, path, false).is_err();
             self.connection = Some(open_connection(path)?);
             if !replacement_failed {
                 return Err(io::Error::other("replacement fault unexpectedly succeeded").into());
@@ -177,8 +184,28 @@ impl RunJournal {
                 CompactionFault::DuringReplacement,
             ));
         }
-        if let Err(error) = atomic_replace(temporary, path) {
+        let fail_after_replace =
+            fault == Some(CompactionFault::AfterReplacementBeforeDirectorySync);
+        if let Err(error) = atomic_replace(temporary, path, fail_after_replace) {
+            let replaced = matches!(error, ReplacementError::Replaced(_));
+            if replaced {
+                // The pathname already names the snapshot. Publish that fact
+                // even though its directory durability could not be confirmed,
+                // so peers cannot remain attached to the unlinked database.
+                self.generation = coordination
+                    .generation
+                    .fetch_add(1, std::sync::atomic::Ordering::AcqRel)
+                    + 1;
+            }
             self.connection = Some(open_connection(path)?);
+            if fail_after_replace && replaced {
+                return Err(CompactionError::Injected(
+                    CompactionFault::AfterReplacementBeforeDirectorySync,
+                ));
+            }
+            let error = match error {
+                ReplacementError::NotReplaced(error) | ReplacementError::Replaced(error) => error,
+            };
             return Err(error.into());
         }
         self.generation = coordination
@@ -210,13 +237,28 @@ fn unique_temporary_path(path: &Path) -> Result<PathBuf, CompactionError> {
 }
 
 #[cfg(unix)]
-fn atomic_replace(temporary: &Path, destination: &Path) -> io::Result<()> {
-    fs::rename(temporary, destination)?;
-    File::open(destination.parent().unwrap_or_else(|| Path::new(".")))?.sync_all()
+fn atomic_replace(
+    temporary: &Path,
+    destination: &Path,
+    fail_after_replace: bool,
+) -> Result<(), ReplacementError> {
+    fs::rename(temporary, destination).map_err(ReplacementError::NotReplaced)?;
+    if fail_after_replace {
+        return Err(ReplacementError::Replaced(io::Error::other(
+            "injected failure before directory sync",
+        )));
+    }
+    File::open(destination.parent().unwrap_or_else(|| Path::new(".")))
+        .and_then(|directory| directory.sync_all())
+        .map_err(ReplacementError::Replaced)
 }
 
 #[cfg(windows)]
-fn atomic_replace(temporary: &Path, destination: &Path) -> io::Result<()> {
+fn atomic_replace(
+    temporary: &Path,
+    destination: &Path,
+    fail_after_replace: bool,
+) -> Result<(), ReplacementError> {
     use std::os::windows::ffi::OsStrExt;
 
     const MOVEFILE_REPLACE_EXISTING: u32 = 0x1;
@@ -243,7 +285,11 @@ fn atomic_replace(temporary: &Path, destination: &Path) -> io::Result<()> {
         )
     };
     if replaced == 0 {
-        Err(io::Error::last_os_error())
+        Err(ReplacementError::NotReplaced(io::Error::last_os_error()))
+    } else if fail_after_replace {
+        Err(ReplacementError::Replaced(io::Error::other(
+            "injected failure after replacement",
+        )))
     } else {
         Ok(())
     }
