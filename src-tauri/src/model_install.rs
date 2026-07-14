@@ -303,24 +303,34 @@ mod tests {
     use muniment_core::llama::ResidentModelDescriptor;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::{Duration, Instant};
+    use tauri::Manager;
 
     fn state(status: GemmaInstallStatus, runner: Arc<Runner>) -> GemmaInstallState {
         GemmaInstallState::with_runner(std::env::temp_dir(), status, runner)
     }
 
-    fn public_status(state: &GemmaInstallState) -> GemmaInstallStatus {
-        tauri::async_runtime::block_on(gemma_install_status_handler(state)).unwrap()
+    fn app_with_state(state: GemmaInstallState) -> tauri::App<tauri::test::MockRuntime> {
+        let app = tauri::test::mock_app();
+        assert!(app.manage(state));
+        app
     }
 
-    fn await_public_status(state: &GemmaInstallState, expected: GemmaInstallStatus) {
+    fn public_status(app: &tauri::App<tauri::test::MockRuntime>) -> GemmaInstallStatus {
+        tauri::async_runtime::block_on(gemma_install_status(app.state())).unwrap()
+    }
+
+    fn await_public_status(
+        app: &tauri::App<tauri::test::MockRuntime>,
+        expected: GemmaInstallStatus,
+    ) {
         let deadline = Instant::now() + Duration::from_secs(2);
         while Instant::now() < deadline {
-            if public_status(state) == expected {
+            if public_status(app) == expected {
                 return;
             }
             std::thread::sleep(Duration::from_millis(5));
         }
-        assert_eq!(public_status(state), expected);
+        assert_eq!(public_status(app), expected);
     }
 
     static TEST_MODEL: ResidentModelDescriptor = ResidentModelDescriptor {
@@ -403,7 +413,7 @@ mod tests {
     }
 
     #[test]
-    fn public_status_handler_exposes_successful_completion() {
+    fn public_status_command_exposes_successful_completion() {
         let calls = Arc::new(AtomicUsize::new(0));
         let release = Arc::new(std::sync::Barrier::new(2));
         let runner = {
@@ -415,16 +425,17 @@ mod tests {
                 Ok(())
             })
         };
-        let state = state(GemmaInstallStatus::NotInstalled, runner);
+        let app = app_with_state(state(GemmaInstallStatus::NotInstalled, runner));
+        let state = app.state::<GemmaInstallState>();
         assert_eq!(state.start(), GemmaInstallStatus::Installing);
         assert_eq!(state.start(), GemmaInstallStatus::Installing);
         release.wait();
-        await_public_status(&state, GemmaInstallStatus::Installed);
+        await_public_status(&app, GemmaInstallStatus::Installed);
         assert_eq!(calls.load(Ordering::SeqCst), 1);
     }
 
     #[test]
-    fn public_status_handler_preserves_redacted_failure() {
+    fn public_status_command_preserves_redacted_failure() {
         let runner = Arc::new(|_: &Path, _: &NativeInstallCancellation| {
             Err(InstallFailure {
                 category: "downloadFailed",
@@ -432,18 +443,19 @@ mod tests {
                 cancelled: false,
             })
         });
-        let state = state(GemmaInstallStatus::NotInstalled, runner);
+        let app = app_with_state(state(GemmaInstallStatus::NotInstalled, runner));
+        let state = app.state::<GemmaInstallState>();
         state.start();
         let expected = GemmaInstallStatus::Failed {
             category: "downloadFailed",
             message: "The model download failed.",
         };
-        await_public_status(&state, expected.clone());
-        assert_eq!(public_status(&state), expected);
+        await_public_status(&app, expected.clone());
+        assert_eq!(public_status(&app), expected);
     }
 
     #[test]
-    fn public_status_handler_preserves_cancelled_completion() {
+    fn public_status_command_preserves_cancelled_completion() {
         let runner = Arc::new(|_: &Path, cancellation: &NativeInstallCancellation| {
             while !cancellation.is_cancelled() {
                 std::thread::sleep(Duration::from_millis(2));
@@ -454,10 +466,11 @@ mod tests {
                 cancelled: true,
             })
         });
-        let state = state(GemmaInstallStatus::NotInstalled, runner);
+        let app = app_with_state(state(GemmaInstallStatus::NotInstalled, runner));
+        let state = app.state::<GemmaInstallState>();
         state.start();
         assert_eq!(state.cancel(), GemmaInstallStatus::Installing);
-        await_public_status(&state, GemmaInstallStatus::Cancelled);
-        assert_eq!(public_status(&state), GemmaInstallStatus::Cancelled);
+        await_public_status(&app, GemmaInstallStatus::Cancelled);
+        assert_eq!(public_status(&app), GemmaInstallStatus::Cancelled);
     }
 }
