@@ -3,7 +3,7 @@
 
   import { accessErrorState, accessIdleState, accessLoadingState, accessReadyState, bootState, errorState, statusState, waitingState } from './lib/auth-state.js'
   import { ringPath } from './lib/mark.js'
-  import { applyBufferedChatEvents, applyChatEvent, composerAction, historyMessages, receiptParts, receiptRows } from './lib/chat-state.js'
+  import { applyBufferedChatEvents, applyChatEvent, composerAction, historyMessages, receiptParts, receiptRows, toolName, toolStatus } from './lib/chat-state.js'
   import { scrollFollowState } from './lib/scroll-follow.js'
 
   const markD = ringPath()
@@ -30,6 +30,7 @@
   let hasContentBelow = $state(false)
   let lastScrollTop = 0
   let expandedReceipts = $state(new Set())
+  let parallelTools = $state(new Map())
 
   function toggleReceipt(runId) {
     const next = new Set(expandedReceipts)
@@ -72,6 +73,20 @@
   $effect(() => {
     messages
     followNewContent()
+  })
+
+  $effect(() => {
+    const next = new Map(parallelTools)
+    for (const message of messages) {
+      if (message.role !== 'assistant') continue
+      const running = (message.run.toolActivity ?? []).filter((tool) => tool.status === 'running')
+      if (running.length > 1) {
+        const grouped = new Set(next.get(message.run.id) ?? [])
+        running.forEach((tool) => grouped.add(tool.effectId))
+        next.set(message.run.id, [...grouped])
+      }
+    }
+    if ([...next].some(([id, tools]) => tools.length !== (parallelTools.get(id)?.length ?? 0))) parallelTools = next
   })
 
   async function run(action) {
@@ -146,9 +161,10 @@
         buffered.set(payload.runId, [...(buffered.get(payload.runId) ?? []), payload])
         return
       }
-      const projected = applyChatEvent(active, payload)
+      const current = messages.find((message) => message.run?.id === payload.runId)?.run
+      const projected = applyChatEvent(current, payload)
       if (projected) messages = messages.map((message) => message.run?.id === projected.id ? { ...message, run: projected } : message)
-      active = projected && !['complete', 'cancelled', 'failed', 'interrupted'].includes(projected.phase) ? projected : null
+      if (active?.id === payload.runId) active = projected && !['complete', 'cancelled', 'failed', 'interrupted'].includes(projected.phase) ? projected : null
     }).then((stop) => { unlisten = stop })
     const outside = (event) => {
       if (accessOpen && !accessPopover?.contains(event.target) && !profileButton?.contains(event.target)) closeAccess()
@@ -290,12 +306,32 @@
           {#if messages.length === 0}<p class="empty">Ask anything. Your org's routing decides which model answers.</p>{/if}
           {#each messages as message}
             {#if message.role === 'user'}<p class="user-message">{message.text}</p>
-            {:else}<div class="response">
+            {:else}
+            {@const activity = message.run.toolActivity ?? []}
+            {@const groupedIds = parallelTools.get(message.run.id) ?? []}
+            {@const groupedTools = activity.filter((tool) => groupedIds.includes(tool.effectId))}
+            {@const singleTools = activity.filter((tool) => !groupedIds.includes(tool.effectId))}
+            <div class="response">
               {#if message.run.phase === 'thinking'}
                 <span class="thinking"><svg width="17" height="17" viewBox="0 0 48 48" aria-label="Thinking"><path d={markD} stroke-width="5" /></svg><span>Routing</span></span>
               {:else}<p class:streaming={message.run.phase === 'streaming'}>{message.run.text}{#if message.run.phase === 'streaming'}<span class="caret" aria-hidden="true"></span>{/if}</p>{/if}
               {#if message.run.phase === 'failed'}<div class="run-error">Reply failed. <button onclick={() => { draft = message.run.prompt; send() }}>Try again</button></div>{/if}
               {#if message.run.phase === 'interrupted'}<div class="run-error">Reply interrupted. {#if message.run.prompt}<button onclick={() => { draft = message.run.prompt; send() }}>Try again</button>{/if}</div>{/if}
+              {#if groupedTools.length}
+                <div class="tool-card tool-group" role="group" aria-label={`Parallel tool activity: ${groupedTools.map((tool) => `${toolName(tool)} ${toolStatus(tool)}`).join(', ')}`}>
+                  <div class="tool-group-title">Parallel tool activity</div>
+                  {#each groupedTools as tool}
+                    <div class:tool-running={toolStatus(tool) === 'running'} class:tool-failed={toolStatus(tool) === 'failed'} class="tool-row" aria-label={`${toolName(tool)}: ${toolStatus(tool)}`}>
+                      <span class="tool-dot" aria-hidden="true"></span><span class="tool-name">{toolName(tool)}</span><span class="tool-status">{toolStatus(tool)}</span>
+                    </div>
+                  {/each}
+                </div>
+              {/if}
+              {#each singleTools as tool}
+                <div class:tool-running={toolStatus(tool) === 'running'} class:tool-failed={toolStatus(tool) === 'failed'} class="tool-card tool-row" role="status" aria-label={`${toolName(tool)}: ${toolStatus(tool)}`}>
+                  <span class="tool-dot" aria-hidden="true"></span><span class="tool-name">{toolName(tool)}</span><span class="tool-status">{toolStatus(tool)}</span>
+                </div>
+              {/each}
               {#if message.run.phase === 'complete'}
                 {@const parts = receiptParts(message.run.receipt)}
                 {@const rows = receiptRows(message.run.receipt)}
@@ -472,6 +508,16 @@
   .caret { display: inline-block; height: 1em; border-right: 2px solid var(--signal); margin-left: 2px; vertical-align: -2px; animation: blink 800ms step-end infinite; }
   .thinking { display: flex; align-items: center; gap: 9px; color: var(--muted); font: var(--text-12) var(--font-mono); }
   .thinking path { fill: none; stroke: var(--signal); stroke-linecap: round; animation: breathe 1.8s ease-in-out infinite; }
+  .tool-card { margin-top: 8px; padding: 8px 12px; border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--surface); color: var(--muted); font: 12.5px var(--font-mono); }
+  .tool-row { display: flex; align-items: center; gap: 8px; min-height: 20px; }
+  .tool-group-title { margin-bottom: 4px; color: var(--muted); }
+  .tool-group .tool-row + .tool-row { margin-top: 4px; }
+  .tool-dot { width: 7px; height: 7px; flex: 0 0 auto; border-radius: 50%; background: currentColor; }
+  .tool-name { min-width: 0; overflow-wrap: anywhere; }
+  .tool-status { margin-left: auto; }
+  .tool-running { color: var(--signal); }
+  .tool-running .tool-dot { animation: tool-pulse 1.4s ease-in-out infinite; }
+  .tool-failed .tool-status::before { content: 'error · '; }
   .provenance { display: block; margin-top: 10px; padding: 0; border: 0; background: transparent; color: var(--muted); font: var(--text-12) var(--font-mono); text-align: left; }
   .provenance span { color: var(--signal); }
   .receipt-record { width: fit-content; min-width: 240px; margin: 8px 0 0; padding: 8px 12px; border: 1px solid var(--border); border-radius: 6px; color: var(--muted); font-size: var(--text-12); }
@@ -489,5 +535,6 @@
   .follow-up { color: var(--muted); font-family: var(--font-mono); }
   @keyframes blink { 50% { opacity: 0; } }
   @keyframes breathe { 50% { opacity: .45; } }
-  @media (prefers-reduced-motion: reduce) { .caret, .thinking path { animation: none; } }
+  @keyframes tool-pulse { 50% { opacity: .3; transform: scale(.75); } }
+  @media (prefers-reduced-motion: reduce) { .caret, .thinking path, .tool-running .tool-dot { animation: none; } }
 </style>
