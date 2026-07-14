@@ -5,7 +5,8 @@ use std::time::Duration;
 
 use chrono::{SecondsFormat, Utc};
 use muniment_core::journal::reducer::{
-    project_chat, reduce, ChatProjector, PermissionGate, PermissionRequest, RunStatus,
+    project_chat, reduce, ChatProjection, ChatProjector, PermissionGate, PermissionRequest,
+    RunStatus,
 };
 use muniment_core::journal::{EventEnvelope, EventPayload, Provenance, RunJournal};
 use muniment_core::sidecar::pi_chat::{
@@ -732,17 +733,19 @@ fn coordinate(
                     }
                 }
             }
-            Ok(PiChatEvent::ExtensionUiRequest(request)) => {
-                if append_emit(
-                    &app,
-                    &journal,
-                    &mut projector,
-                    &run_id,
-                    &mut seq,
-                    "permission.requested",
-                    permission_journal_payload(&request),
-                    subject.as_deref(),
-                )
+            Ok(event @ PiChatEvent::ExtensionUiRequest(_)) => {
+                if coordinate_extension_ui_request(event, |kind, payload| {
+                    append_emit(
+                        &app,
+                        &journal,
+                        &mut projector,
+                        &run_id,
+                        &mut seq,
+                        kind,
+                        payload,
+                        subject.as_deref(),
+                    )
+                })
                 .is_err()
                 {
                     break;
@@ -782,6 +785,16 @@ fn coordinate(
             }
         }
     }
+}
+
+fn coordinate_extension_ui_request(
+    event: PiChatEvent,
+    append: impl FnOnce(&str, Value) -> Result<(), ()>,
+) -> Result<(), ()> {
+    let PiChatEvent::ExtensionUiRequest(request) = event else {
+        return Ok(());
+    };
+    append("permission.requested", permission_journal_payload(&request))
 }
 
 fn tool_journal_entry(
@@ -930,20 +943,19 @@ fn append_emit(
     }
     projector.apply(&envelope).map_err(|_| ())?;
     let projection = projector.projection().map_err(|_| ())?;
-    let phase = projection_phase(&projection.status);
-    let tool_activity = chat_tool_activity(&projection.tool_activity);
-    app.emit(
-        "chat-event",
-        ChatEvent {
-            run_id: run_id.into(),
-            phase: phase.into(),
-            text: projection.text,
-            receipt: projection.receipt,
-            tool_activity,
-            pending_permission: chat_pending_permission(projection.pending_permission),
-        },
-    )
-    .map_err(|_| ())
+    app.emit("chat-event", chat_event(run_id, projection))
+        .map_err(|_| ())
+}
+
+fn chat_event(run_id: &str, projection: ChatProjection) -> ChatEvent {
+    ChatEvent {
+        run_id: run_id.into(),
+        phase: projection_phase(&projection.status).into(),
+        text: projection.text,
+        receipt: projection.receipt,
+        tool_activity: chat_tool_activity(&projection.tool_activity),
+        pending_permission: chat_pending_permission(projection.pending_permission),
+    }
 }
 
 fn event_envelope(
@@ -1216,6 +1228,152 @@ mod tests {
                 expected
             );
         }
+    }
+
+    #[test]
+    fn coordinator_journals_extension_ui_before_projecting_and_stops_on_failure() {
+        let directory = std::env::temp_dir().join(format!("muniment-chat-{}", Uuid::now_v7()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let mut journal = RunJournal::open(directory.join("runs.sqlite3")).unwrap();
+        let run_id = Uuid::now_v7().to_string();
+        append_test_event(&mut journal, &run_id, 1, "run.started", json!({}), None);
+        let mut projector = ChatProjector::new();
+        projector
+            .apply(&journal.events(&run_id).unwrap()[0])
+            .unwrap();
+        let mut emitted = Vec::new();
+
+        coordinate_extension_ui_request(
+            PiChatEvent::ExtensionUiRequest(ExtensionUiRequest {
+                id: "pi-request-1".into(),
+                dialog: ExtensionUiDialog::Confirm {
+                    title: "Allow?".into(),
+                    message: "Proceed?".into(),
+                },
+                timeout: Some(5_000),
+            }),
+            |kind, payload| {
+                let envelope = event_envelope(&run_id, 2, kind, payload, None);
+                journal.append(1, &envelope).map_err(|_| ())?;
+                assert_eq!(journal.events(&run_id).unwrap().len(), 2);
+                projector.apply(&envelope).map_err(|_| ())?;
+                emitted.push(chat_event(
+                    &run_id,
+                    projector.projection().map_err(|_| ())?,
+                ));
+                Ok(())
+            },
+        )
+        .unwrap();
+
+        assert_eq!(journal.events(&run_id).unwrap()[1].event_type, "permission.requested");
+        let projection = emitted.pop().unwrap();
+        assert_eq!(projection.phase, "pending-permission");
+        assert_eq!(projection.pending_permission.unwrap().gate_id, "pi-request-1");
+
+        let mut append_attempts = 0;
+        assert!(coordinate_extension_ui_request(
+            PiChatEvent::ExtensionUiRequest(ExtensionUiRequest {
+                id: "pi-request-2".into(),
+                dialog: ExtensionUiDialog::Input {
+                    title: "Secret".into(),
+                    placeholder: None,
+                },
+                timeout: None,
+            }),
+            |_kind, _payload| {
+                append_attempts += 1;
+                Err(())
+            },
+        )
+        .is_err());
+        assert_eq!(append_attempts, 1);
+
+        let mut emitted_after_projection_failure = false;
+        assert!(coordinate_extension_ui_request(
+            PiChatEvent::ExtensionUiRequest(ExtensionUiRequest {
+                id: "pi-request-3".into(),
+                dialog: ExtensionUiDialog::Select {
+                    title: "Choose".into(),
+                    options: vec!["A".into(), "B".into()],
+                },
+                timeout: None,
+            }),
+            |kind, payload| {
+                let envelope = event_envelope(&run_id, 3, kind, payload, None);
+                journal.append(2, &envelope).map_err(|_| ())?;
+                projector.apply(&envelope).map_err(|_| ())?;
+                emitted_after_projection_failure = true;
+                Ok(())
+            },
+        )
+        .is_err());
+        assert!(!emitted_after_projection_failure);
+        // The coordinator handler has no response transport and therefore cannot
+        // synthesize an allow/deny (or any other Pi extension-UI response).
+        assert_eq!(journal.events(&run_id).unwrap().len(), 3);
+
+        drop(journal);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn history_projects_and_clears_a_typed_pending_permission() {
+        keyring::set_default_credential_builder(keyring::mock::default_credential_builder());
+        let directory = std::env::temp_dir().join(format!("muniment-chat-{}", Uuid::now_v7()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let mut journal = RunJournal::open(directory.join("runs.sqlite3")).unwrap();
+        let run_id = Uuid::now_v7().to_string();
+        append_test_event(&mut journal, &run_id, 1, "run.started", json!({}), None);
+        append_test_event(
+            &mut journal,
+            &run_id,
+            2,
+            "permission.requested",
+            json!({
+                "gate_id": "pi-request-1",
+                "kind": "editor",
+                "title": "Review command",
+                "prefill": "cargo test",
+                "timeout": 30_000
+            }),
+            None,
+        );
+
+        let entries = history_entries(&journal, None).unwrap();
+        let entry = entries
+            .iter()
+            .find(|entry| entry.run_id == run_id)
+            .unwrap();
+        assert_eq!(entry.phase, "pending-permission");
+        let pending = entry.pending_permission.as_ref().unwrap();
+        assert_eq!(pending.gate_id, "pi-request-1");
+        assert!(matches!(
+            &pending.request,
+            PermissionRequest::Editor { title, prefill, timeout }
+                if title == "Review command"
+                    && prefill.as_deref() == Some("cargo test")
+                    && *timeout == Some(30_000)
+        ));
+
+        append_test_event(
+            &mut journal,
+            &run_id,
+            3,
+            "permission.resolved",
+            json!({"gate_id": "pi-request-1", "decision": "cancelled"}),
+            None,
+        );
+        let entries = history_entries(&journal, None).unwrap();
+        let entry = entries
+            .iter()
+            .find(|entry| entry.run_id == run_id)
+            .unwrap();
+        assert!(entry.pending_permission.is_none());
+        assert_eq!(entry.phase, "thinking");
+
+        drop(journal);
+        std::fs::remove_dir_all(directory).unwrap();
     }
 
     #[test]
