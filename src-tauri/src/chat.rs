@@ -561,7 +561,7 @@ fn coordinate(
             };
         *runtime = Some(PiRuntime { supervisor, wiring });
     }
-    let runtime = runtime.as_ref().expect("runtime was initialized");
+    let runtime = runtime.as_mut().expect("runtime was initialized");
     let deadline = std::time::Instant::now() + Duration::from_secs(30);
     while runtime.supervisor.status() == SidecarStatus::Starting
         && std::time::Instant::now() < deadline
@@ -635,9 +635,7 @@ fn coordinate(
                 .cancel_and_drain(&transport, Duration::from_secs(2))
                 .is_err()
             {
-                let _ = runtime
-                    .as_mut()
-                    .map(|runtime| runtime.supervisor.shutdown());
+                let _ = runtime.supervisor.shutdown();
             }
             fail(
                 &app,
@@ -658,9 +656,7 @@ fn coordinate(
                 // `await_session_binding` aborts and drains first. Reaping the
                 // supervised child is the final containment boundary if Pi did
                 // not acknowledge cancellation.
-                let _ = runtime
-                    .as_mut()
-                    .map(|runtime| runtime.supervisor.shutdown());
+                let _ = runtime.supervisor.shutdown();
                 fail(
                     &app,
                     &journal,
@@ -689,9 +685,7 @@ fn coordinate(
             .cancel_and_drain(&transport, Duration::from_secs(2))
             .is_err()
         {
-            let _ = runtime
-                .as_mut()
-                .map(|runtime| runtime.supervisor.shutdown());
+            let _ = runtime.supervisor.shutdown();
         }
         return;
     }
@@ -711,9 +705,7 @@ fn coordinate(
             .cancel_and_drain(&transport, Duration::from_secs(2))
             .is_err()
         {
-            let _ = runtime
-                .as_mut()
-                .map(|runtime| runtime.supervisor.shutdown());
+            let _ = runtime.supervisor.shutdown();
         }
         return;
     }
