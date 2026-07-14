@@ -508,15 +508,15 @@
   .caret { display: inline-block; height: 1em; border-right: 2px solid var(--signal); margin-left: 2px; vertical-align: -2px; animation: blink 800ms step-end infinite; }
   .thinking { display: flex; align-items: center; gap: 9px; color: var(--muted); font: var(--text-12) var(--font-mono); }
   .thinking path { fill: none; stroke: var(--signal); stroke-linecap: round; animation: breathe 1.8s ease-in-out infinite; }
-  .tool-card { margin-top: 10px; padding: 8px 11px; border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--surface); color: var(--muted); font: 12.5px var(--font-mono); }
+  .tool-card { margin-top: 8px; padding: 8px 12px; border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--surface); color: var(--muted); font: 12.5px var(--font-mono); }
   .tool-row { display: flex; align-items: center; gap: 8px; min-height: 20px; }
-  .tool-group-title { margin-bottom: 5px; color: var(--muted); }
-  .tool-group .tool-row + .tool-row { margin-top: 3px; }
+  .tool-group-title { margin-bottom: 4px; color: var(--muted); }
+  .tool-group .tool-row + .tool-row { margin-top: 4px; }
   .tool-dot { width: 7px; height: 7px; flex: 0 0 auto; border-radius: 50%; background: currentColor; }
   .tool-name { min-width: 0; overflow-wrap: anywhere; }
   .tool-status { margin-left: auto; }
   .tool-running { color: var(--signal); }
-  .tool-running .tool-dot { animation: tool-pulse 1.8s ease-in-out infinite; }
+  .tool-running .tool-dot { animation: tool-pulse 1.4s ease-in-out infinite; }
   .tool-failed .tool-status::before { content: 'error · '; }
   .provenance { display: block; margin-top: 10px; padding: 0; border: 0; background: transparent; color: var(--muted); font: var(--text-12) var(--font-mono); text-align: left; }
   .provenance span { color: var(--signal); }
