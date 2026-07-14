@@ -32,7 +32,8 @@ Phases mirror harness-spec §9. Muniment-cloud Phase 1 native auth and the cloud
 - DONE — scroll-follow during streaming with user-scroll disengage, and startup reconciliation that marks interrupted runs `needs_attention` instead of rendering them as perpetually streaming.
 - DONE — typed Pi tool-execution frame parsing, Tauri run-loop journaling of `tool.effect.*`, concurrent-effect reducer semantics, and tool activity in live/history chat payloads.
 - DONE — the provenance line expands into the full receipt record (design-system §6).
-- NEXT — inline tool cards per design-system §6, then permission activity and session resume in separately reviewable slices.
+- DONE — projected Pi tool activity renders as inline mono tool cards, including concurrent running effects and restored history.
+- NEXT — typed Pi permission-prompt protocol groundwork, then durable permission activity and session resume in separately reviewable slices.
 
 ### 10. Local Gemma sidecar
 - DONE — supervised JSON-RPC sidecar lifecycle; loopback llama-server launch/health/chat; pinned Gemma descriptor and launch verification; dictation-polish and routing-classifier contracts/evaluations with adversarial framing.
@@ -49,7 +50,8 @@ Phases mirror harness-spec §9. Muniment-cloud Phase 1 native auth and the cloud
 - DONE deletion slice — atomic deletion of a run's events with CAS reference accounting (`delete_run` returns the run's hashes; `referenced_hashes` reports journal-wide references).
 - DONE collection slice — unreferenced CAS objects are collected using the journal's reference accounting (pure core).
 - DONE retention slice — terminal runs older than a supplied policy age out deterministically and their newly unreferenced CAS objects are collected; nonterminal and needs-attention runs are preserved.
-- NEXT — export, then compaction in separately reviewable slices.
+- DONE export slice — deterministic versioned pure-core export preserves canonical envelopes, verifies referenced CAS bodies, deduplicates bodies, and reads from one SQLite snapshot.
+- NEXT — crash-safe compaction as a separately reviewable pure-core slice.
 
 ### Capability vocabulary and provenance
 - DONE — user surfaces say “capabilities” and receipts render `route · model · cost · time · capability@version[, ...]` in both the provenance line and the expandable receipt record. The client never synthesizes values absent from the cloud schema.
@@ -65,4 +67,4 @@ Phases mirror harness-spec §9. Muniment-cloud Phase 1 native auth and the cloud
 
 ## Standing gates
 - Code PRs: structure smoke, frontend/Rust tests, then Linux/Windows/macOS desktop builds. Markdown-only PRs gate on structure smoke alone; pushes to `main` run smoke only.
-- Build desktop targets only. Mobile scaffolding remains owner-gated by §12.5's repo-strategy ADR. CLI/editor E0 is decided by [ADR 0009](docs/decisions/0009-companion-attach-protocol.md); pure-core protocol envelope types, bounded frame codec, and version negotiation with contract tests are complete. Authorization state and cursor/idempotency semantics follow as separate pure-core slices. No listener or companion UI is complete.
+- Build desktop targets only. Mobile scaffolding remains owner-gated by §12.5's repo-strategy ADR. CLI/editor E0 is decided by [ADR 0009](docs/decisions/0009-companion-attach-protocol.md); pure-core protocol envelope types, bounded frame codec, version negotiation, pairing, and capability authorization state with contract tests are complete. Cursor/idempotency semantics follow as a separate pure-core slice. No listener or companion UI is complete.
