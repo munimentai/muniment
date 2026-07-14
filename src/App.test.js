@@ -4,6 +4,8 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-li
 import '@testing-library/jest-dom/vitest'
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 
+import { historyMessages } from './lib/chat-state.js'
+
 let App
 let invoke
 
@@ -37,6 +39,31 @@ beforeEach(() => {
 })
 
 afterEach(() => cleanup())
+
+describe('history hydration', () => {
+  it('retains projected tool activity in the restored assistant run', () => {
+    const toolActivity = [
+      { effectId: 'tool-1', displayName: 'Search files', status: 'completed' },
+    ]
+
+    const messages = historyMessages([{
+      runId: 'run-1',
+      phase: 'complete',
+      text: 'Done',
+      prompt: 'Find it',
+      receipt: null,
+      toolActivity,
+    }])
+
+    expect(messages[1].run.toolActivity).toEqual(toolActivity)
+  })
+
+  it('defaults missing historical tool activity to an empty array', () => {
+    const messages = historyMessages([{ runId: 'run-1', phase: 'complete', text: 'Done' }])
+
+    expect(messages[0].run.toolActivity).toEqual([])
+  })
+})
 
 describe('signed-in access popover', () => {
   it('loads server-issued profile fields while entering the workspace', async () => {

@@ -23,6 +23,17 @@ describe('chat composer and projection', () => {
     expect(applyChatEvent(run, { runId: 'r', type: 'failed' }).phase).toBe('failed')
   })
 
+  it('threads projected tool activity into the active run', () => {
+    const toolActivity = [
+      { effectId: 'tool-1', displayName: 'Read file', status: 'running' },
+      { effectId: 'tool-2', displayName: null, status: 'completed' },
+    ]
+    expect(applyChatEvent(
+      { id: 'r', phase: 'thinking', text: '' },
+      { runId: 'r', phase: 'streaming', text: 'Working', toolActivity },
+    )).toMatchObject({ phase: 'streaming', text: 'Working', toolActivity })
+  })
+
   it('does not invent missing receipt values', () => {
     expect(receiptParts({ route: 'fast', capabilities: [{ name: 'search', version: '2' }] }))
       .toEqual(['fast', 'search@2'])
