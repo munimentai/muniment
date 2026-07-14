@@ -599,14 +599,13 @@ fn coordinate(
         return;
     }
     if cancelled.load(Ordering::SeqCst) {
-        let _ = append_emit(
+        cancel_before_prompt(
             &app,
             &journal,
             &mut projector,
             &run_id,
             &mut seq,
-            "run.cancelled",
-            json!({}),
+            resume_locator.is_some(),
             subject.as_deref(),
         );
         return;
@@ -719,14 +718,13 @@ fn coordinate(
         && std::time::Instant::now() < deadline
     {
         if cancelled.load(Ordering::SeqCst) {
-            let _ = append_emit(
+            cancel_before_prompt(
                 &app,
                 &journal,
                 &mut projector,
                 &run_id,
                 &mut seq,
-                "run.cancelled",
-                json!({}),
+                resume_locator.is_some(),
                 subject.as_deref(),
             );
             return;
@@ -749,14 +747,13 @@ fn coordinate(
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(Arc::clone(&transport));
     if cancelled.load(Ordering::SeqCst) {
-        let _ = append_emit(
+        cancel_before_prompt(
             &app,
             &journal,
             &mut projector,
             &run_id,
             &mut seq,
-            "run.cancelled",
-            json!({}),
+            resume_locator.is_some(),
             subject.as_deref(),
         );
         return;
@@ -1072,6 +1069,38 @@ fn coordinate(
             }
         }
     }
+}
+
+fn cancel_before_prompt(
+    app: &tauri::AppHandle,
+    journal: &Arc<Mutex<RunJournal>>,
+    projector: &mut ChatProjector,
+    run_id: &str,
+    seq: &mut u64,
+    resuming: bool,
+    subject: Option<&str>,
+) {
+    // Before `run.resumed`, an interrupted run is not active and therefore
+    // cannot accept `run.cancelled`. Re-asserting its interrupted state emits a
+    // durable event that releases the frontend while keeping Resume retryable.
+    let _ = append_emit(
+        app,
+        journal,
+        projector,
+        run_id,
+        seq,
+        if resuming {
+            "run.needs_attention"
+        } else {
+            "run.cancelled"
+        },
+        if resuming {
+            json!({"reason": "resume_cancelled"})
+        } else {
+            json!({})
+        },
+        subject,
+    );
 }
 
 fn coordinate_extension_ui_request(
@@ -1450,6 +1479,72 @@ mod tests {
             .filter_map(|result| result.as_ref().err().map(String::as_str))
             .collect();
         assert_eq!(errors, ["A reply is already in progress."]);
+    }
+
+    #[test]
+    fn cancelled_resume_before_transition_stays_interrupted_and_retryable() {
+        let directory = std::env::temp_dir().join(format!("muniment-chat-{}", Uuid::now_v7()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let run_id = Uuid::now_v7().to_string();
+        let locator = "owned-session.jsonl";
+        let mut stored = RunJournal::open(directory.join("runs.sqlite3")).unwrap();
+        append_test_event(
+            &mut stored,
+            &run_id,
+            1,
+            "run.started",
+            json!({}),
+            Some("sub-a"),
+        );
+        append_test_event(
+            &mut stored,
+            &run_id,
+            2,
+            "runtime.pi_session.bound",
+            json!({"run_id": run_id, "locator": locator}),
+            Some("sub-a"),
+        );
+        append_test_event(
+            &mut stored,
+            &run_id,
+            3,
+            "run.needs_attention",
+            json!({"reason": "interrupted"}),
+            Some("sub-a"),
+        );
+        let journal = Arc::new(Mutex::new(stored));
+        let app = tauri::test::mock_app();
+
+        coordinate(
+            app.handle().clone(),
+            Arc::clone(&journal),
+            Arc::new(Mutex::new(None)),
+            run_id.clone(),
+            RESUME_REQUEST.into(),
+            "unused-access-token".into(),
+            Some("sub-a".into()),
+            ChatGrant {
+                gateway_url: "https://gateway.invalid".into(),
+                virtual_key: "unused-key".into(),
+                model: None,
+                receipt_url: "https://receipt.invalid".into(),
+            },
+            Arc::new(AtomicBool::new(true)),
+            Arc::new(Mutex::new(None)),
+            Arc::new(Mutex::new(None)),
+            Some(locator.into()),
+        );
+
+        let events = journal.lock().unwrap().events(&run_id).unwrap();
+        assert_eq!(events.len(), 4);
+        assert_eq!(events[3].event_type, "run.needs_attention");
+        let state = reduce(&events).unwrap();
+        assert!(matches!(state.status, RunStatus::NeedsAttention(_)));
+        assert_eq!(state.pi_session.unwrap().locator, locator);
+        assert!(!events.iter().any(|event| event.event_type == "run.resumed"));
+
+        drop(app);
+        std::fs::remove_dir_all(directory).unwrap();
     }
 
     #[test]
