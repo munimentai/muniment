@@ -1128,14 +1128,10 @@ mod tests {
         let directory = std::env::temp_dir().join(format!("muniment-chat-{}", Uuid::now_v7()));
         std::fs::create_dir_all(&directory).unwrap();
         let mut journal = RunJournal::open(directory.join("runs.sqlite3")).unwrap();
-        let run_a = "01900000-0000-7000-8000-000000000001";
-        let run_a_reconciled = "01900000-0000-7000-8000-000000000002";
-        let run_b = "01900000-0000-7000-8000-000000000003";
-        let run_legacy = "01900000-0000-7000-8000-000000000004";
 
         append_test_event(
             &mut journal,
-            run_a,
+            "run-a",
             1,
             "run.started",
             json!({}),
@@ -1143,7 +1139,7 @@ mod tests {
         );
         append_test_event(
             &mut journal,
-            run_a,
+            "run-a",
             2,
             "model.stream.delta",
             json!({"text": "private-a"}),
@@ -1151,7 +1147,7 @@ mod tests {
         );
         append_test_event(
             &mut journal,
-            run_a,
+            "run-a",
             3,
             "run.completed",
             json!({"receipt": {"owner": "sub-a"}}),
@@ -1159,7 +1155,7 @@ mod tests {
         );
         append_test_event(
             &mut journal,
-            run_a_reconciled,
+            "run-a-reconciled",
             1,
             "run.started",
             json!({}),
@@ -1167,7 +1163,7 @@ mod tests {
         );
         append_test_event(
             &mut journal,
-            run_a_reconciled,
+            "run-a-reconciled",
             2,
             "run.needs_attention",
             json!({"reason": "interrupted"}),
@@ -1176,7 +1172,7 @@ mod tests {
 
         append_test_event(
             &mut journal,
-            run_b,
+            "run-b",
             1,
             "run.started",
             json!({}),
@@ -1184,7 +1180,7 @@ mod tests {
         );
         append_test_event(
             &mut journal,
-            run_b,
+            "run-b",
             2,
             "model.stream.delta",
             json!({"text": "private-b"}),
@@ -1192,7 +1188,7 @@ mod tests {
         );
         append_test_event(
             &mut journal,
-            run_b,
+            "run-b",
             3,
             "run.completed",
             json!({"receipt": {"owner": "sub-b"}}),
@@ -1201,7 +1197,7 @@ mod tests {
 
         append_test_event(
             &mut journal,
-            run_legacy,
+            "run-legacy",
             1,
             "run.started",
             json!({}),
@@ -1209,7 +1205,7 @@ mod tests {
         );
         append_test_event(
             &mut journal,
-            run_legacy,
+            "run-legacy",
             2,
             "run.completed",
             json!({"receipt": {"legacy": true}}),
@@ -1222,7 +1218,7 @@ mod tests {
                 .iter()
                 .map(|entry| entry.run_id.as_str())
                 .collect::<BTreeSet<_>>(),
-            BTreeSet::from([run_b, run_legacy])
+            BTreeSet::from(["run-b", "run-legacy"])
         );
         assert!(sub_b.iter().all(|entry| !entry.text.contains("private-a")));
         assert!(sub_b.iter().all(|entry| {
@@ -1239,12 +1235,12 @@ mod tests {
                 .iter()
                 .map(|entry| entry.run_id.as_str())
                 .collect::<BTreeSet<_>>(),
-            BTreeSet::from([run_a, run_a_reconciled, run_legacy])
+            BTreeSet::from(["run-a", "run-a-reconciled", "run-legacy"])
         );
         assert_eq!(
             sub_a
                 .iter()
-                .find(|entry| entry.run_id == run_a)
+                .find(|entry| entry.run_id == "run-a")
                 .unwrap()
                 .text,
             "private-a"
