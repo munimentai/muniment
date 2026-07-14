@@ -657,7 +657,17 @@ fn coordinate(
             }
             Ok(event @ (PiChatEvent::ToolStarted { .. } | PiChatEvent::ToolFinished { .. })) => {
                 if let Some((kind, payload)) = tool_journal_entry(&event, &mut open_effects) {
-                    if append_emit(&app, &journal, &run_id, &mut seq, kind, payload).is_err() {
+                    if append_emit(
+                        &app,
+                        &journal,
+                        &run_id,
+                        &mut seq,
+                        kind,
+                        payload,
+                        subject.as_deref(),
+                    )
+                    .is_err()
+                    {
                         break;
                     }
                 }
@@ -742,11 +752,12 @@ fn append_terminal(
     open_effects: &mut BTreeSet<String>,
     kind: &str,
     payload: Value,
+    subject: Option<&str>,
 ) -> Result<(), ()> {
     close_open_effects(open_effects, |kind, payload| {
-        append_emit(app, journal, run_id, seq, kind, payload)
+        append_emit(app, journal, run_id, seq, kind, payload, subject)
     })?;
-    append_emit(app, journal, run_id, seq, kind, payload)
+    append_emit(app, journal, run_id, seq, kind, payload, subject)
 }
 
 fn fail_with_open_effects(
@@ -756,6 +767,7 @@ fn fail_with_open_effects(
     seq: &mut u64,
     open_effects: &mut BTreeSet<String>,
     reason: &str,
+    subject: Option<&str>,
 ) {
     let _ = append_terminal(
         app,
@@ -765,6 +777,7 @@ fn fail_with_open_effects(
         open_effects,
         "run.failed",
         json!({"reason": reason}),
+        subject,
     );
 }
 
