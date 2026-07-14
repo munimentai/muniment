@@ -94,20 +94,35 @@ impl RunJournal {
         // Retain an exclusive database lock across VACUUM INTO so no committed
         // writer can fall between the snapshot and replacement.
         connection.pragma_update(None, "locking_mode", "EXCLUSIVE")?;
-        connection.execute_batch("BEGIN EXCLUSIVE; COMMIT; PRAGMA wal_checkpoint(TRUNCATE);")?;
+        let snapshot_result = (|| {
+            connection
+                .execute_batch("BEGIN EXCLUSIVE; COMMIT; PRAGMA wal_checkpoint(TRUNCATE);")?;
 
-        if fault == Some(CompactionFault::BeforeSnapshotCompletion) {
-            return Err(CompactionError::Injected(
-                CompactionFault::BeforeSnapshotCompletion,
-            ));
-        }
-        connection.execute("VACUUM INTO ?1", [temporary.to_string_lossy().as_ref()])?;
-        File::open(temporary)?.sync_all()?;
+            if fault == Some(CompactionFault::BeforeSnapshotCompletion) {
+                return Err(CompactionError::Injected(
+                    CompactionFault::BeforeSnapshotCompletion,
+                ));
+            }
+            connection.execute("VACUUM INTO ?1", [temporary.to_string_lossy().as_ref()])?;
+            File::open(temporary)?.sync_all()?;
 
-        if fault == Some(CompactionFault::BeforeReplacement) {
-            return Err(CompactionError::Injected(
-                CompactionFault::BeforeReplacement,
-            ));
+            if fault == Some(CompactionFault::BeforeReplacement) {
+                return Err(CompactionError::Injected(
+                    CompactionFault::BeforeReplacement,
+                ));
+            }
+            Ok(())
+        })();
+        if let Err(error) = snapshot_result {
+            // Changing the pragma alone does not immediately release an
+            // already-held exclusive lock. Reopen to release it definitively.
+            let old = self
+                .connection
+                .take()
+                .expect("journal connection is present");
+            drop(old);
+            self.connection = Some(open_connection(path)?);
+            return Err(error);
         }
 
         // Closing releases SQLite's handles and retained exclusive lock. The
@@ -116,20 +131,30 @@ impl RunJournal {
             .connection
             .take()
             .expect("journal connection is present");
-        old.close().map_err(|(_, error)| error)?;
-        if fault == Some(CompactionFault::DuringReplacement) {
+        if let Err((connection, error)) = old.close() {
+            drop(connection);
             self.connection = Some(open_connection(path)?);
+            return Err(error.into());
+        }
+        if fault == Some(CompactionFault::DuringReplacement) {
+            let missing = temporary.with_extension("missing");
+            debug_assert!(!missing.exists());
+            // Exercise the platform replacement call itself against the live,
+            // existing destination, but with a source that cannot be moved.
+            let replacement_failed = atomic_replace(&missing, path).is_err();
+            self.connection = Some(open_connection(path)?);
+            if !replacement_failed {
+                return Err(io::Error::other("replacement fault unexpectedly succeeded").into());
+            }
             return Err(CompactionError::Injected(
                 CompactionFault::DuringReplacement,
             ));
         }
-        if let Err(error) = fs::rename(temporary, path) {
+        if let Err(error) = atomic_replace(temporary, path) {
             self.connection = Some(open_connection(path)?);
             return Err(error.into());
         }
-        let sync_result = sync_parent(path);
         self.connection = Some(open_connection(path)?);
-        sync_result?;
         Ok(())
     }
 }
@@ -158,6 +183,42 @@ fn unique_temporary_path(path: &Path) -> Result<PathBuf, CompactionError> {
     )))
 }
 
-fn sync_parent(path: &Path) -> io::Result<()> {
-    File::open(path.parent().unwrap_or_else(|| Path::new(".")))?.sync_all()
+#[cfg(unix)]
+fn atomic_replace(temporary: &Path, destination: &Path) -> io::Result<()> {
+    fs::rename(temporary, destination)?;
+    File::open(destination.parent().unwrap_or_else(|| Path::new(".")))?.sync_all()
+}
+
+#[cfg(windows)]
+fn atomic_replace(temporary: &Path, destination: &Path) -> io::Result<()> {
+    use std::os::windows::ffi::OsStrExt;
+
+    const MOVEFILE_REPLACE_EXISTING: u32 = 0x1;
+    const MOVEFILE_WRITE_THROUGH: u32 = 0x8;
+
+    #[link(name = "kernel32")]
+    extern "system" {
+        fn MoveFileExW(existing: *const u16, new: *const u16, flags: u32) -> i32;
+    }
+
+    let existing: Vec<_> = temporary.as_os_str().encode_wide().chain(Some(0)).collect();
+    let new: Vec<_> = destination
+        .as_os_str()
+        .encode_wide()
+        .chain(Some(0))
+        .collect();
+    // SAFETY: both pointers reference NUL-terminated UTF-16 buffers that live
+    // for the call, and MoveFileExW retains neither pointer.
+    let replaced = unsafe {
+        MoveFileExW(
+            existing.as_ptr(),
+            new.as_ptr(),
+            MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
+        )
+    };
+    if replaced == 0 {
+        Err(io::Error::last_os_error())
+    } else {
+        Ok(())
+    }
 }

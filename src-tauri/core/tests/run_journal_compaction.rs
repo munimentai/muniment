@@ -184,7 +184,8 @@ fn injected_failures_leave_the_original_reopenable_and_remove_temporary_files() 
         assert!(
             matches!(journal.compact_with_fault(Some(fault)), Err(CompactionError::Injected(found)) if found == fault)
         );
-        drop(journal);
+        // The same journal remains usable: pre-replacement failures must have
+        // released exclusive locking, and replacement failures must reopen it.
         assert_eq!(
             RunJournal::open(db.as_ref())
                 .unwrap()
@@ -192,6 +193,16 @@ fn injected_failures_leave_the_original_reopenable_and_remove_temporary_files() 
                 .unwrap()
                 .len(),
             2
+        );
+        journal.append(2, &event(RUN, 3, 32)).unwrap();
+        drop(journal);
+        assert_eq!(
+            RunJournal::open(db.as_ref())
+                .unwrap()
+                .events(RUN)
+                .unwrap()
+                .len(),
+            3
         );
         let prefix = format!(".{}.compact-", db.0.file_name().unwrap().to_string_lossy());
         assert!(!fs::read_dir(db.0.parent().unwrap())
