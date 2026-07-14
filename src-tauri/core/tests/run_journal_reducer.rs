@@ -414,6 +414,32 @@ fn pi_session_binding_replays_and_rebinding_fails_closed() {
 }
 
 #[test]
+fn bound_interrupted_run_resumes_durably_on_the_same_run() {
+    let resumed = stream(&[
+        ("run.started", json!({})),
+        ("runtime.pi_session.bound", json!({"run_id": RUN, "locator": "session.jsonl"})),
+        ("model.prompt.accepted", json!({})),
+        ("model.stream.delta", json!({"text":"before"})),
+        ("run.needs_attention", json!({"reason":"interrupted"})),
+        ("run.resumed", json!({})),
+        ("model.prompt.accepted", json!({})),
+        ("model.stream.delta", json!({"text":" after"})),
+        ("run.completed", json!({})),
+    ]);
+    let state = reduce(&resumed).unwrap();
+    assert_eq!(state.run_id, RUN);
+    assert!(matches!(state.status, RunStatus::Completed));
+    assert_eq!(project_chat(&resumed).unwrap().text, "before after");
+
+    for events in [
+        stream(&[("run.started", json!({})), ("run.needs_attention", json!({})), ("run.resumed", json!({}))]),
+        stream(&[("run.started", json!({})), ("runtime.pi_session.bound", json!({"run_id": RUN, "locator":"session.jsonl"})), ("run.resumed", json!({}))]),
+    ] {
+        assert!(matches!(reduce(&events), Err(ReduceError::InvalidTransition { .. })));
+    }
+}
+
+#[test]
 fn pi_session_binding_survives_sqlite_reopen() {
     let path = std::env::temp_dir().join(format!(
         "muniment-binding-{}-{}.sqlite3",

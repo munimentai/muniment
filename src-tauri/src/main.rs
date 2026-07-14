@@ -24,6 +24,7 @@ fn main() {
             auth::auth_ensure_fresh,
             auth::auth_sign_out,
             chat::chat_submit,
+            chat::chat_resume,
             chat::chat_cancel,
             chat::chat_queue,
             chat::chat_history,

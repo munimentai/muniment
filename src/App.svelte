@@ -16,6 +16,8 @@
   let active = $state(null)
   let cancelError = $state('')
   let queueError = $state('')
+  let resumeError = $state(new Map())
+  let resuming = $state(new Set())
   let historyError = $state('')
   let access = $state(accessIdleState)
   let profileSnapshot = $state(null)
@@ -217,6 +219,29 @@
     }
   }
 
+  async function resume(run) {
+    if (active) return
+    const pending = new Set(resuming)
+    pending.add(run.id)
+    resuming = pending
+    const errors = new Map(resumeError)
+    errors.delete(run.id)
+    resumeError = errors
+    active = run
+    try {
+      await tauri.invoke('chat_resume', { runId: run.id })
+    } catch (err) {
+      active = null
+      const next = new Map(resumeError)
+      next.set(run.id, typeof err === 'string' ? err : 'This reply could not be resumed. Try again.')
+      resumeError = next
+    } finally {
+      const next = new Set(resuming)
+      next.delete(run.id)
+      resuming = next
+    }
+  }
+
   async function queue(delivery) {
     const message = draft.trim()
     if (!message || !active || active.id === 'pending') return
@@ -316,7 +341,13 @@
                 <span class="thinking"><svg width="17" height="17" viewBox="0 0 48 48" aria-label="Thinking"><path d={markD} stroke-width="5" /></svg><span>Routing</span></span>
               {:else}<p class:streaming={message.run.phase === 'streaming'}>{message.run.text}{#if message.run.phase === 'streaming'}<span class="caret" aria-hidden="true"></span>{/if}</p>{/if}
               {#if message.run.phase === 'failed'}<div class="run-error">Reply failed. <button onclick={() => { draft = message.run.prompt; send() }}>Try again</button></div>{/if}
-              {#if message.run.phase === 'interrupted'}<div class="run-error">Reply interrupted. {#if message.run.prompt}<button onclick={() => { draft = message.run.prompt; send() }}>Try again</button>{/if}</div>{/if}
+              {#if message.run.phase === 'interrupted'}
+                <div class="run-error">Reply interrupted.
+                  {#if message.run.resumable && !message.run.pendingPermission}<button disabled={resuming.has(message.run.id)} onclick={() => resume(message.run)}>{resuming.has(message.run.id) ? 'Resuming…' : 'Resume'}</button>{/if}
+                  {#if message.run.prompt}<button onclick={() => { draft = message.run.prompt; send() }}>Try again</button>{/if}
+                  {#if resumeError.has(message.run.id)}<span role="alert">{resumeError.get(message.run.id)}</span>{/if}
+                </div>
+              {/if}
               {#if groupedTools.length}
                 <div class="tool-card tool-group" role="group" aria-label={`Parallel tool activity: ${groupedTools.map((tool) => `${toolName(tool)} ${toolStatus(tool)}`).join(', ')}`}>
                   <div class="tool-group-title">Parallel tool activity</div>

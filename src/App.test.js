@@ -67,6 +67,50 @@ describe('history hydration', () => {
   })
 })
 
+describe('interrupted reply resume', () => {
+  const interrupted = (overrides = {}) => [{
+    runId: 'run-interrupted', phase: 'interrupted', text: 'Partial answer', prompt: 'Original prompt',
+    receipt: null, toolActivity: [], resumable: true, pendingPermission: null, ...overrides,
+  }]
+
+  function restore(history, resume = async () => ({ runId: 'run-interrupted' })) {
+    invoke.mockImplementation(async (command, payload) => {
+      if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
+      if (command === 'chat_history') return history
+      if (command === 'auth_entitlement_snapshot') return snapshot()
+      if (command === 'chat_resume') return resume(payload)
+      throw new Error(`unexpected command: ${command}`)
+    })
+    render(App)
+  }
+
+  it('shows Resume only for eligible interrupted history and keeps Try again separate', async () => {
+    restore(interrupted())
+    expect(await screen.findByRole('button', { name: 'Resume' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Try again' })).toBeInTheDocument()
+    cleanup()
+    restore(interrupted({ pendingPermission: { gateId: 'gate' } }))
+    await screen.findByText('Reply interrupted.')
+    expect(screen.queryByRole('button', { name: 'Resume' })).not.toBeInTheDocument()
+  })
+
+  it('uses the existing run id and disables Resume while it is in flight', async () => {
+    let finish
+    restore(interrupted(), () => new Promise((resolve) => { finish = resolve }))
+    await fireEvent.click(await screen.findByRole('button', { name: 'Resume' }))
+    expect(screen.getByRole('button', { name: 'Resuming…' })).toBeDisabled()
+    expect(invoke).toHaveBeenCalledWith('chat_resume', { runId: 'run-interrupted' })
+    finish({ runId: 'run-interrupted' })
+  })
+
+  it('shows a recoverable error and enables Resume again', async () => {
+    restore(interrupted(), async () => { throw 'Resume is temporarily unavailable.' })
+    await fireEvent.click(await screen.findByRole('button', { name: 'Resume' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent('Resume is temporarily unavailable.')
+    expect(screen.getByRole('button', { name: 'Resume' })).toBeEnabled()
+  })
+})
+
 describe('tool activity cards', () => {
   const historyWith = (toolActivity, phase = 'complete') => [{
     runId: 'run-tools', phase, text: 'I used tools.', prompt: 'Do work', receipt: {}, toolActivity,

@@ -91,7 +91,18 @@ conflicting bindings. Pi JSONL and its contents never cross Tauri and never
 reconstruct chat text, receipts, or provenance; the append-only run journal
 remains authoritative for those projections.
 
-Startup still marks every interrupted nonterminal run `run.needs_attention`.
+Startup marks interrupted nonterminal runs `run.needs_attention`; an unresolved
+permission gate remains pending and is never converted into a resumable run.
+
+An interrupted run with no pending permission gate may be explicitly resumed by
+the signed-in owner when its journal-bound session file still validates beneath
+the app-owned session directory. Resume obtains fresh native authentication and
+a new scoped chat grant, launches pinned Pi with both `--session-dir` and the
+validated `--session`, records `run.resumed` on the existing run, then sends one
+fixed continuation request. It never resubmits the protected original prompt,
+imports Pi JSONL into rendered history, replays journaled tool effects, or
+automatically answers a permission request. Failures remain recoverable and do
+not allow caller-provided session paths.
 The presence of a valid binding does not submit a prompt, resolve a permission
 gate, or repeat a tool effect. Automatic continuation is deliberately deferred
 to the next resume slice.

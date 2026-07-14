@@ -14,7 +14,8 @@ use muniment_core::sidecar::pi_chat::{
 };
 use muniment_core::sidecar::pi_install::resolve_current;
 use muniment_core::sidecar::{
-    pi_sidecar_config, PiRpcTransport, PiRpcWiring, SidecarStatus, SidecarSupervisor,
+    pi_sidecar_config, validate_pi_session, PiRpcTransport, PiRpcWiring, SidecarStatus,
+    SidecarSupervisor,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -69,6 +70,7 @@ pub struct HistoryEntry {
     tool_activity: Vec<ChatToolActivity>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pending_permission: Option<ChatPendingPermission>,
+    resumable: bool,
 }
 
 #[derive(Clone, Serialize)]
@@ -154,6 +156,11 @@ fn reconcile_interrupted_runs(journal: &mut RunJournal) {
         if state.is_terminal() {
             continue;
         }
+        // A blocking permission remains a blocking permission after restart;
+        // explicit resume must never stand in for the user's answer.
+        if matches!(state.status, RunStatus::PendingPermission(_)) {
+            continue;
+        }
         let envelope = event_envelope(
             &run_id,
             state.last_seq + 1,
@@ -206,6 +213,7 @@ fn projection_phase(status: &Option<RunStatus>) -> &'static str {
 fn history_entries(
     journal: &mut RunJournal,
     subject: Option<&str>,
+    session_root: &std::path::Path,
 ) -> Result<Vec<HistoryEntry>, String> {
     let mut entries = Vec::new();
     for run_id in journal
@@ -223,6 +231,14 @@ fn history_entries(
         }
         let projection = project_chat(&events)
             .map_err(|_| "Conversation history is unavailable.".to_string())?;
+        let state =
+            reduce(&events).map_err(|_| "Conversation history is unavailable.".to_string())?;
+        let resumable = matches!(state.status, RunStatus::NeedsAttention(_))
+            && projection.pending_permission.is_none()
+            && state
+                .pi_session
+                .as_ref()
+                .is_some_and(|binding| validate_pi_session(session_root, &binding.locator).is_ok());
         entries.push(HistoryEntry {
             prompt: load_prompt(&run_id, subject)?,
             phase: projection_phase(&projection.status).into(),
@@ -230,6 +246,7 @@ fn history_entries(
             receipt: projection.receipt,
             tool_activity: chat_tool_activity(&projection.tool_activity),
             pending_permission: chat_pending_permission(projection.pending_permission),
+            resumable,
             run_id,
         });
     }
@@ -238,6 +255,7 @@ fn history_entries(
 
 #[tauri::command]
 pub async fn chat_history(
+    app: tauri::AppHandle,
     auth_state: tauri::State<'_, auth::AuthState>,
     state: tauri::State<'_, ChatState>,
 ) -> Result<Vec<HistoryEntry>, String> {
@@ -247,7 +265,116 @@ pub async fn chat_history(
         .journal
         .lock()
         .map_err(|_| "Conversation history is unavailable.".to_string())?;
-    history_entries(&mut journal, tokens.subject.as_deref())
+    let session_root = app
+        .path()
+        .app_data_dir()
+        .map_err(|_| "Conversation history is unavailable.".to_string())?
+        .join("pi-sessions");
+    history_entries(&mut journal, tokens.subject.as_deref(), &session_root)
+}
+
+const RESUME_REQUEST: &str = "Continue the interrupted reply from the current session state. Do not repeat completed work or prior effects.";
+
+#[tauri::command]
+pub async fn chat_resume(
+    app: tauri::AppHandle,
+    auth_state: tauri::State<'_, auth::AuthState>,
+    state: tauri::State<'_, ChatState>,
+    run_id: String,
+) -> Result<SubmitResult, String> {
+    if state
+        .active
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .is_some()
+    {
+        return Err("A reply is already in progress.".into());
+    }
+    let tokens = auth::fresh_tokens_async(&auth_state).await?;
+    let session_root = app
+        .path()
+        .app_data_dir()
+        .map_err(|_| "This reply cannot be resumed. Try again.".to_string())?
+        .join("pi-sessions");
+    let locator = {
+        let journal = state
+            .journal
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let events = journal
+            .events(&run_id)
+            .map_err(|_| "This reply cannot be resumed. Try again.".to_string())?;
+        let owner = events
+            .first()
+            .and_then(|event| event.provenance.actor_id.as_deref());
+        if owner != tokens.subject.as_deref() {
+            return Err("This reply cannot be resumed. Try again.".into());
+        }
+        let projection = project_chat(&events)
+            .map_err(|_| "This reply cannot be resumed. Try again.".to_string())?;
+        let reduced =
+            reduce(&events).map_err(|_| "This reply cannot be resumed. Try again.".to_string())?;
+        if !matches!(reduced.status, RunStatus::NeedsAttention(_))
+            || projection.pending_permission.is_some()
+        {
+            return Err("This reply cannot be resumed. Try again.".into());
+        }
+        let binding = reduced
+            .pi_session
+            .ok_or_else(|| "This reply cannot be resumed. Try again.".to_string())?;
+        validate_pi_session(&session_root, &binding.locator)
+            .map_err(|_| "This reply cannot be resumed. Try again.".to_string())?;
+        binding.locator
+    };
+    let access_token = tokens.access_token.clone();
+    let grant = tauri::async_runtime::spawn_blocking(move || {
+        let grant = fetch_grant(&access_token)?;
+        validate_grant(&grant)?;
+        Ok::<_, String>(grant)
+    })
+    .await
+    .map_err(|_| "Chat configuration is temporarily unavailable.".to_string())??;
+    let cancelled = Arc::new(AtomicBool::new(false));
+    let transport = Arc::new(Mutex::new(None));
+    let adapter = Arc::new(Mutex::new(None));
+    install_active_run(
+        &state.active,
+        ActiveRun {
+            id: run_id.clone(),
+            cancelled: Arc::clone(&cancelled),
+            transport: Arc::clone(&transport),
+            adapter: Arc::clone(&adapter),
+        },
+    )?;
+    let result_id = run_id.clone();
+    let journal = Arc::clone(&state.journal);
+    let runtime = Arc::clone(&state.runtime);
+    tauri::async_runtime::spawn_blocking(move || {
+        coordinate(
+            app.clone(),
+            journal,
+            runtime,
+            run_id.clone(),
+            RESUME_REQUEST.into(),
+            tokens.access_token,
+            tokens.subject,
+            grant,
+            cancelled,
+            transport,
+            adapter,
+            Some(locator),
+        );
+        if let Some(state) = app.try_state::<ChatState>() {
+            let mut active = state
+                .active
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if active.as_ref().is_some_and(|current| current.id == run_id) {
+                *active = None;
+            }
+        }
+    });
+    Ok(SubmitResult { run_id: result_id })
 }
 
 #[tauri::command]
@@ -314,6 +441,7 @@ pub async fn chat_submit(
             cancelled,
             transport,
             adapter,
+            None,
         );
         if let Some(state) = app.try_state::<ChatState>() {
             let mut active = state
@@ -432,10 +560,31 @@ fn coordinate(
     cancelled: Arc<AtomicBool>,
     active_transport: Arc<Mutex<Option<Arc<PiRpcTransport>>>>,
     active_adapter: Arc<Mutex<Option<Arc<PiRunAdapter>>>>,
+    resume_locator: Option<String>,
 ) {
     let mut seq = 0;
     let mut projector = ChatProjector::new();
-    if append_emit(
+    let mut journaled_effects = BTreeSet::new();
+    if resume_locator.is_some() {
+        let events = journal
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .events(&run_id);
+        let Ok(events) = events else { return };
+        for event in &events {
+            if projector.apply(event).is_err() {
+                return;
+            }
+            if event.event_type == "tool.effect.started" {
+                if let EventPayload::Inline { payload_json } = &event.payload {
+                    if let Some(effect_id) = payload_json.get("effect_id").and_then(Value::as_str) {
+                        journaled_effects.insert(effect_id.to_owned());
+                    }
+                }
+            }
+        }
+        seq = events.last().map_or(0, |event| event.run_seq);
+    } else if append_emit(
         &app,
         &journal,
         &mut projector,
@@ -514,8 +663,11 @@ fn coordinate(
                 return;
             }
         };
-        let mut config = match pi_sidecar_config(executable.to_string_lossy(), &session_root, None)
-        {
+        let mut config = match pi_sidecar_config(
+            executable.to_string_lossy(),
+            &session_root,
+            resume_locator.as_deref(),
+        ) {
             Ok(config) => config,
             Err(_) => {
                 fail(
@@ -609,18 +761,46 @@ fn coordinate(
         );
         return;
     }
+    if resume_locator.is_some()
+        && append_emit(
+            &app,
+            &journal,
+            &mut projector,
+            &run_id,
+            &mut seq,
+            "run.resumed",
+            json!({}),
+            subject.as_deref(),
+        )
+        .is_err()
+    {
+        return;
+    }
     let (adapter, _) = match PiRunAdapter::start(run_id.clone(), &transport, &prompt, RPC_TIMEOUT) {
         Ok(value) => value,
         Err(_) => {
-            fail(
-                &app,
-                &journal,
-                &mut projector,
-                &run_id,
-                &mut seq,
-                "The reply could not be started.",
-                subject.as_deref(),
-            );
+            if resume_locator.is_some() {
+                let _ = append_emit(
+                    &app,
+                    &journal,
+                    &mut projector,
+                    &run_id,
+                    &mut seq,
+                    "run.needs_attention",
+                    json!({"reason":"resume_failed"}),
+                    subject.as_deref(),
+                );
+            } else {
+                fail(
+                    &app,
+                    &journal,
+                    &mut projector,
+                    &run_id,
+                    &mut seq,
+                    "The reply could not be started.",
+                    subject.as_deref(),
+                );
+            }
             return;
         }
     };
@@ -649,46 +829,51 @@ fn coordinate(
             return;
         }
     };
-    let (locator, buffered_events) =
-        match adapter.await_session_binding(&transport, &session_root, RPC_TIMEOUT) {
-            Ok(binding) => binding,
-            Err(_) => {
-                // `await_session_binding` aborts and drains first. Reaping the
-                // supervised child is the final containment boundary if Pi did
-                // not acknowledge cancellation.
-                let _ = runtime.supervisor.shutdown();
-                fail(
-                    &app,
-                    &journal,
-                    &mut projector,
-                    &run_id,
-                    &mut seq,
-                    "The reply could not be started.",
-                    subject.as_deref(),
-                );
-                return;
-            }
-        };
-    if append_emit(
-        &app,
-        &journal,
-        &mut projector,
-        &run_id,
-        &mut seq,
-        "runtime.pi_session.bound",
-        json!({"run_id": run_id, "locator": locator.as_str()}),
-        subject.as_deref(),
-    )
-    .is_err()
-    {
-        if adapter
-            .cancel_and_drain(&transport, Duration::from_secs(2))
-            .is_err()
+    let buffered_events = if resume_locator.is_some() {
+        Vec::new()
+    } else {
+        let (locator, buffered_events) =
+            match adapter.await_session_binding(&transport, &session_root, RPC_TIMEOUT) {
+                Ok(binding) => binding,
+                Err(_) => {
+                    // `await_session_binding` aborts and drains first. Reaping the
+                    // supervised child is the final containment boundary if Pi did
+                    // not acknowledge cancellation.
+                    let _ = runtime.supervisor.shutdown();
+                    fail(
+                        &app,
+                        &journal,
+                        &mut projector,
+                        &run_id,
+                        &mut seq,
+                        "The reply could not be started.",
+                        subject.as_deref(),
+                    );
+                    return;
+                }
+            };
+        if append_emit(
+            &app,
+            &journal,
+            &mut projector,
+            &run_id,
+            &mut seq,
+            "runtime.pi_session.bound",
+            json!({"run_id": run_id, "locator": locator.as_str()}),
+            subject.as_deref(),
+        )
+        .is_err()
         {
-            let _ = runtime.supervisor.shutdown();
+            if adapter
+                .cancel_and_drain(&transport, Duration::from_secs(2))
+                .is_err()
+            {
+                let _ = runtime.supervisor.shutdown();
+            }
+            return;
         }
-        return;
-    }
+        buffered_events
+    };
     if append_emit(
         &app,
         &journal,
@@ -811,7 +996,14 @@ fn coordinate(
                 break;
             }
             Ok(event @ (PiChatEvent::ToolStarted { .. } | PiChatEvent::ToolFinished { .. })) => {
+                if matches!(&event, PiChatEvent::ToolStarted { tool_call_id, .. } if journaled_effects.contains(tool_call_id))
+                {
+                    continue;
+                }
                 if let Some((kind, payload)) = tool_journal_entry(&event, &mut open_effects) {
+                    if let PiChatEvent::ToolStarted { tool_call_id, .. } = &event {
+                        journaled_effects.insert(tool_call_id.clone());
+                    }
                     if append_emit(
                         &app,
                         &journal,
@@ -1095,14 +1287,23 @@ fn fail(
     reason: &str,
     subject: Option<&str>,
 ) {
+    let interrupted = projector
+        .projection()
+        .ok()
+        .and_then(|projection| projection.status)
+        .is_some_and(|status| matches!(status, RunStatus::NeedsAttention(_)));
     let _ = append_emit(
         app,
         journal,
         projector,
         run_id,
         seq,
-        "run.failed",
-        json!({"reason": reason}),
+        if interrupted {
+            "run.needs_attention"
+        } else {
+            "run.failed"
+        },
+        json!({"reason": if interrupted { "resume_failed" } else { reason }}),
         subject,
     );
 }

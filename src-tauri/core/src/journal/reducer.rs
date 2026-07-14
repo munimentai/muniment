@@ -263,6 +263,7 @@ impl RunReducer {
         let terminal = self.state.as_ref().is_some_and(RunState::is_terminal);
         if terminal
             && event.event_type != "run.needs_attention"
+            && event.event_type != "run.resumed"
             && is_state_event(&event.event_type)
         {
             return Err(invalid(event, "event follows a terminal run state"));
@@ -355,6 +356,14 @@ impl RunReducer {
                     }),
                 );
             }
+            "run.resumed" => match self.state.as_ref().map(|state| &state.status) {
+                Some(RunStatus::NeedsAttention(_))
+                    if self.pi_session.is_some() && self.pending_gate.is_none() =>
+                {
+                    self.set_status(event, RunStatus::Active);
+                }
+                _ => return Err(invalid(event, "only a bound interrupted run may resume")),
+            },
             _ => {
                 if self.state.is_none() {
                     return Err(invalid(event, "first event must be run.started"));
