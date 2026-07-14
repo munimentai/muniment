@@ -2,6 +2,7 @@
 
 mod auth;
 mod chat;
+mod model_install;
 
 use tauri::Manager;
 
@@ -10,6 +11,8 @@ fn main() {
         .manage(auth::AuthState::new())
         .setup(|app| {
             app.manage(chat::ChatState::new(app.handle())?);
+            let model_root = app.path().app_data_dir()?.join("models").join("gemma");
+            app.manage(model_install::GemmaInstallState::new(model_root)?);
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -21,7 +24,10 @@ fn main() {
             chat::chat_submit,
             chat::chat_cancel,
             chat::chat_queue,
-            chat::chat_history
+            chat::chat_history,
+            model_install::gemma_install_start,
+            model_install::gemma_install_status,
+            model_install::gemma_install_cancel
         ])
         .run(tauri::generate_context!())
         .expect("error while running muniment");
