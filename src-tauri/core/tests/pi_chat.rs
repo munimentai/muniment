@@ -443,9 +443,11 @@ fn accepted_prompt_waits_for_session_file_and_preserves_stream_frames() {
 
 #[test]
 fn invalid_session_state_cancels_accepted_agent_work() {
-    let temp = TempDir::new();
-    let marker = temp.path().join("cancelled");
-    let outside = temp.path().parent().unwrap().join("outside-session.jsonl");
+    let owned_root = TempDir::new();
+    let outside_root = TempDir::new();
+    let marker = owned_root.path().join("cancelled");
+    let outside = outside_root.path().join("outside-session.jsonl");
+    fs::write(&outside, "{}\n").unwrap();
     let (mut supervisor, wiring) = deferred_session_supervisor(&outside, Some(&marker));
     let transport = wiring.transport().unwrap();
     let (adapter, _) =
@@ -453,7 +455,7 @@ fn invalid_session_state_cancels_accepted_agent_work() {
 
     assert_eq!(
         adapter
-            .await_session_binding(&transport, temp.path(), Duration::from_millis(100))
+            .await_session_binding(&transport, owned_root.path(), Duration::from_millis(100))
             .unwrap_err(),
         "Pi session binding failed"
     );

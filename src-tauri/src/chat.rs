@@ -1670,6 +1670,14 @@ mod tests {
                 &mut journal,
                 &interrupted,
                 2,
+                "runtime.pi_session.bound",
+                json!({"run_id": interrupted, "locator": "session.jsonl"}),
+                None,
+            );
+            append_test_event(
+                &mut journal,
+                &interrupted,
+                3,
                 "permission.requested",
                 json!({"gate_id":"gate-1","kind":"confirm","title":"Allow?","message":"Proceed?"}),
                 None,
@@ -1687,23 +1695,22 @@ mod tests {
                 None,
             );
 
-            reconcile_interrupted_runs(&mut journal);
-
-            let interrupted_events = journal.events(&interrupted).unwrap();
-            assert_eq!(interrupted_events.len(), 3);
-            assert_eq!(interrupted_events[2].event_type, "run.needs_attention");
-            assert_eq!(interrupted_events[2].provenance.actor_id, None);
-            assert!(matches!(
-                reduce(&interrupted_events).unwrap().status,
-                RunStatus::NeedsAttention(_)
-            ));
-            assert_eq!(journal.events(&completed).unwrap().len(), 2);
         }
 
         {
             let mut reopened = RunJournal::open(&path).unwrap();
             reconcile_interrupted_runs(&mut reopened);
-            assert_eq!(reopened.events(&interrupted).unwrap().len(), 3);
+            let interrupted_events = reopened.events(&interrupted).unwrap();
+            assert_eq!(interrupted_events.len(), 4);
+            assert_eq!(interrupted_events[3].event_type, "run.needs_attention");
+            assert_eq!(interrupted_events[3].provenance.actor_id, None);
+            let state = reduce(&interrupted_events).unwrap();
+            assert!(matches!(state.status, RunStatus::NeedsAttention(_)));
+            assert_eq!(state.pi_session.unwrap().locator, "session.jsonl");
+            assert_eq!(reopened.events(&completed).unwrap().len(), 2);
+
+            reconcile_interrupted_runs(&mut reopened);
+            assert_eq!(reopened.events(&interrupted).unwrap().len(), 4);
             assert_eq!(reopened.events(&completed).unwrap().len(), 2);
         }
 

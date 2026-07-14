@@ -49,3 +49,22 @@ fn session_validation_fails_closed_without_disclosing_paths() {
     );
     fs::remove_dir_all(root).unwrap();
 }
+
+#[cfg(unix)]
+#[test]
+fn session_validation_rejects_symlinks_resolving_outside_owned_root() {
+    use std::os::unix::fs::symlink;
+
+    let root = root();
+    let outside = root.with_extension("outside.jsonl");
+    fs::write(&outside, "{}\n").unwrap();
+    symlink(&outside, root.join("linked.jsonl")).unwrap();
+
+    assert_eq!(
+        validate_pi_session(&root, "linked.jsonl").unwrap_err(),
+        "Pi session file is unavailable"
+    );
+
+    fs::remove_dir_all(root).unwrap();
+    fs::remove_file(outside).unwrap();
+}
