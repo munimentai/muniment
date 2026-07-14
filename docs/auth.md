@@ -252,6 +252,6 @@ build); verify it manually:
 
 ## Follow-ups (out of scope here)
 
-- Server-side native revocation/device management.
+- Broader native device management (listing or revoking other devices).
 - Migration or removal of credentials created by the existing generic-OIDC flow.
 - Signed-in UI.
