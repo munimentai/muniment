@@ -64,7 +64,8 @@ Phases mirror harness-spec §9. Muniment-cloud Phase 1 native auth and the cloud
 - Routing metadata carriage/policy integration follows item 9; the local classifier contract is complete.
 - Voice direction remains Parakeet capture → Gemma polish → transforms, with Kokoro read-aloud and global hotkeys.
 - DONE — ADRs 0004/0005, pinned Parakeet verification, revision publication/recovery, bounded resumable acquisition, consumption of the shared native HTTPS/proxy transport, the shared pure-core install coordinator, exact resumable-stage byte accounting, Parakeet acquisition/publication composition through that coordinator, and standard-library native filesystem/lock/clock/cancellation adapters.
-- NEXT — Tauri install/status/cancel commands. UI, native bindings/packaging, capture/VAD, and hardware validation follow separately.
+- DONE — Tauri install, status, and cancel commands with redacted public states.
+- NEXT — native sherpa-onnx bindings and desktop packaging as a separately reviewable slice. UI, capture/VAD, and target-hardware validation follow separately.
 
 ## Phase 4+ — Org surface (§9 items 16–19)
 - Remote MCP consumption, local stdio allowlist, capability install flow, artifact side panel, and projects with the redaction rule (`output withheld · connection not granted`).
