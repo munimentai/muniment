@@ -125,7 +125,7 @@ struct Active {
 enum State {
     PairingRequired,
     Pending(Pending),
-    Active(Active),
+    Active(Box<Active>),
     Revoked,
 }
 
@@ -192,13 +192,13 @@ impl<C: AuthorizationClock, G: AuthorizationTokenGenerator> AuthorizationState<C
             expires_at,
             idle_timeout: CAPABILITY_IDLE_LIFETIME,
         };
-        self.state = State::Active(Active {
+        self.state = State::Active(Box::new(Active {
             token: token.clone(),
             binding: self.binding.clone(),
             approval,
             expires_at,
             last_activity: now,
-        });
+        }));
         Ok((token, grant))
     }
 
