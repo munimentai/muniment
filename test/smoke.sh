@@ -20,7 +20,7 @@ ci=.github/workflows/ci.yml
 grep -Fq 'name: Desktop compile preflight (${{ matrix.platform }})' "$ci"
 grep -Fq "if: github.event_name == 'pull_request' && needs.smoke.outputs.docs_only != 'true'" "$ci"
 grep -Fq 'platform: [windows, macos]' "$ci"
-grep -Fq "cmd='cargo check --manifest-path src-tauri/Cargo.toml --locked'" "$ci"
+grep -Fq "cmd='cargo check --manifest-path src-tauri/Cargo.toml --locked --all-targets'" "$ci"
 test -f src-tauri/Cargo.lock
 test -f src-tauri/tauri.machine.conf.json
 grep -Fq '"upgradeCode": "c75b4a56-7d8b-5b99-9fc7-61ef0aabe84b"' src-tauri/tauri.machine.conf.json
