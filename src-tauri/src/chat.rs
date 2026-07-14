@@ -206,7 +206,7 @@ fn projection_phase(status: &Option<RunStatus>) -> &'static str {
 }
 
 fn history_entries(
-    journal: &RunJournal,
+    journal: &mut RunJournal,
     subject: Option<&str>,
 ) -> Result<Vec<HistoryEntry>, String> {
     let mut entries = Vec::new();
@@ -245,11 +245,11 @@ pub async fn chat_history(
 ) -> Result<Vec<HistoryEntry>, String> {
     // History is conversation data and follows the same signed-in gate as send.
     let tokens = auth::fresh_tokens(&auth_state)?;
-    let journal = state
+    let mut journal = state
         .journal
         .lock()
         .map_err(|_| "Conversation history is unavailable.".to_string())?;
-    history_entries(&journal, tokens.subject.as_deref())
+    history_entries(&mut journal, tokens.subject.as_deref())
 }
 
 #[tauri::command]
@@ -1349,7 +1349,7 @@ mod tests {
             None,
         );
 
-        let entries = history_entries(&journal, None).unwrap();
+        let entries = history_entries(&mut journal, None).unwrap();
         let entry = entries
             .iter()
             .find(|entry| entry.run_id == run_id)
@@ -1373,7 +1373,7 @@ mod tests {
             json!({"gate_id": "pi-request-1", "decision": "cancelled"}),
             None,
         );
-        let entries = history_entries(&journal, None).unwrap();
+        let entries = history_entries(&mut journal, None).unwrap();
         let entry = entries
             .iter()
             .find(|entry| entry.run_id == run_id)
@@ -1528,7 +1528,7 @@ mod tests {
             None,
         );
 
-        let sub_b = history_entries(&journal, Some("sub-b")).unwrap();
+        let sub_b = history_entries(&mut journal, Some("sub-b")).unwrap();
         assert_eq!(
             sub_b
                 .iter()
@@ -1545,7 +1545,7 @@ mod tests {
                 != Some(&json!("sub-a"))
         }));
 
-        let sub_a = history_entries(&journal, Some("sub-a")).unwrap();
+        let sub_a = history_entries(&mut journal, Some("sub-a")).unwrap();
         assert_eq!(
             sub_a
                 .iter()
