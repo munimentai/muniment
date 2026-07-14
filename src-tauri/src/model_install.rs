@@ -49,6 +49,8 @@ struct Inner {
     generation: u64,
     state_version: u64,
     status: GemmaInstallStatus,
+    terminal_result: bool,
+    completed_success: bool,
     active: Option<ActiveInstall>,
 }
 
@@ -76,24 +78,22 @@ impl GemmaInstallState {
                 generation: 0,
                 state_version: 0,
                 status,
+                terminal_result: false,
+                completed_success: false,
                 active: None,
             })),
             runner,
         }
     }
 
-    fn cached_status(&self) -> GemmaInstallStatus {
-        self.inner
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .status
-            .clone()
-    }
-
     async fn status(&self) -> GemmaInstallStatus {
         let state_version = {
-            let inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
-            if inner.active.is_some() {
+            let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+            if inner.active.is_some() || inner.terminal_result {
+                return inner.status.clone();
+            }
+            if inner.completed_success {
+                inner.completed_success = false;
                 return inner.status.clone();
             }
             inner.state_version
@@ -128,6 +128,8 @@ impl GemmaInstallState {
                 generation,
                 cancellation: cancellation.clone(),
             });
+            inner.terminal_result = false;
+            inner.completed_success = false;
             inner.status = GemmaInstallStatus::Installing;
             (generation, cancellation)
         };
@@ -143,14 +145,21 @@ impl GemmaInstallState {
             }
             state.active = None;
             state.state_version = state.state_version.wrapping_add(1);
-            state.status = match result {
-                Ok(()) => GemmaInstallStatus::Installed,
-                Err(error) if error.cancelled => GemmaInstallStatus::Cancelled,
-                Err(error) => GemmaInstallStatus::Failed {
-                    category: error.category,
-                    message: error.message,
-                },
+            let completed_success = result.is_ok();
+            let (status, terminal_result) = match result {
+                Ok(()) => (GemmaInstallStatus::Installed, false),
+                Err(error) if error.cancelled => (GemmaInstallStatus::Cancelled, true),
+                Err(error) => (
+                    GemmaInstallStatus::Failed {
+                        category: error.category,
+                        message: error.message,
+                    },
+                    true,
+                ),
             };
+            state.status = status;
+            state.terminal_result = terminal_result;
+            state.completed_success = completed_success;
         });
         GemmaInstallStatus::Installing
     }
@@ -293,15 +302,19 @@ mod tests {
         GemmaInstallState::with_runner(std::env::temp_dir(), status, runner)
     }
 
-    fn await_status(state: &GemmaInstallState, expected: GemmaInstallStatus) {
+    fn public_status(state: &GemmaInstallState) -> GemmaInstallStatus {
+        tauri::async_runtime::block_on(state.status())
+    }
+
+    fn await_public_status(state: &GemmaInstallState, expected: GemmaInstallStatus) {
         let deadline = Instant::now() + Duration::from_secs(2);
         while Instant::now() < deadline {
-            if state.cached_status() == expected {
+            if public_status(state) == expected {
                 return;
             }
             std::thread::sleep(Duration::from_millis(5));
         }
-        assert_eq!(state.cached_status(), expected);
+        assert_eq!(public_status(state), expected);
     }
 
     static TEST_MODEL: ResidentModelDescriptor = ResidentModelDescriptor {
@@ -400,7 +413,7 @@ mod tests {
         assert_eq!(state.start(), GemmaInstallStatus::Installing);
         assert_eq!(state.start(), GemmaInstallStatus::Installing);
         release.wait();
-        await_status(&state, GemmaInstallStatus::Installed);
+        await_public_status(&state, GemmaInstallStatus::Installed);
         assert_eq!(calls.load(Ordering::SeqCst), 1);
     }
 
@@ -415,13 +428,12 @@ mod tests {
         });
         let state = state(GemmaInstallStatus::NotInstalled, runner);
         state.start();
-        await_status(
-            &state,
-            GemmaInstallStatus::Failed {
-                category: "downloadFailed",
-                message: "The model download failed.",
-            },
-        );
+        let expected = GemmaInstallStatus::Failed {
+            category: "downloadFailed",
+            message: "The model download failed.",
+        };
+        await_public_status(&state, expected.clone());
+        assert_eq!(public_status(&state), expected);
     }
 
     #[test]
@@ -439,6 +451,7 @@ mod tests {
         let state = state(GemmaInstallStatus::NotInstalled, runner);
         state.start();
         assert_eq!(state.cancel(), GemmaInstallStatus::Installing);
-        await_status(&state, GemmaInstallStatus::Cancelled);
+        await_public_status(&state, GemmaInstallStatus::Cancelled);
+        assert_eq!(public_status(&state), GemmaInstallStatus::Cancelled);
     }
 }
