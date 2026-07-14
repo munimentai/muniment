@@ -57,6 +57,17 @@ reference implementation: [docs/design-reference/ring/](docs/design-reference/ri
     [ADR 0002](docs/decisions/0002-event-sourced-run-journal.md) is authoritative
     for live/resumed sessions; UI, receipts, and relay are rebuildable
     projections. This contract precedes, but does not implement, item 9.
+12. **Public-evidence rule (docs sync, adopted 2026-07-13).** Any PR that
+    changes what an outside user can see or do — public API endpoints or wire
+    behavior, install/distribution channels or flags, authentication flows, or
+    other externally observable behavior — MUST update this repo's
+    public-evidence documentation IN THE SAME PR: `docs/public-evidence/`.
+    Evidence files are written to be lifted verbatim into the public docs site
+    (muniment.ai/docs): plain factual reference prose, copy-pasteable commands
+    and config, no roadmap speculation, no internal codenames, no pricing or
+    monetization content (owner-only). The reviewer blocks a PR that changes a
+    public surface without updating evidence. Merged evidence changes are
+    picked up automatically by the site lane — do not file site tickets by hand.
 
 ## CI
 
