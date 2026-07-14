@@ -258,6 +258,20 @@ Zero voice bytes leave the machine. This is a selling point; keep it true.
 - **Output (TTS):** Kokoro (82M, Apache 2.0), resident, CPU real-time. Read-aloud for responses and artifacts. OS voices as zero-effort fallback only. Qwen3-TTS is off the list under the on-device constraint (too heavy per laptop).
 - Hold-to-talk and toggle modes on a global hotkey; hold-to-talk is the default (clean capture boundaries).
 
+### 6.8 Browser control (governed runtime capability — owner decision 2026-07-13)
+
+The runtime exposes an actuator that drives the user's real browser — active control (navigate, read, click, type, extract) in the browser and profile where the user already works and is signed in. This is not a chat sidebar; it is the AI acting in the browser under policy.
+
+Mechanism: a muniment browser extension (MV3 service worker using the browser debugger API) pairs with the desktop runtime over a local loopback relay; the desktop app owns the relay and the pairing token. Extension pairing is the only viable path into the user's real profile — modern Chromium (136+) refuses external debugger attachment to the main profile — and it is the same mechanism frontier vendors now ship ungoverned.
+
+**Taxonomy (clarifies §1/§12/§13):** *Execution surfaces* — the desktop app, CLI, and editor extension — are each a full place a human does governed AI work; they are peers, and each drives the SAME local runtime. *Runtime capabilities* — local models, MCP tools, sandbox, virtual-key model access, and now browser control — are actuators the runtime exposes to whichever surface is driving. Browser control is a runtime capability, not a surface: a user never "sits in" it. Mobile is a companion surface with no local runtime and therefore can never invoke browser control (§12's existing rule already covers this).
+
+**Governance (existing gates, applied — nothing new invented):** every browser action is a governed runtime tool-call. Entitlement-gated (a browser-control grant). Permission-gated under the same ask/allow/deny model as 6.5: per-domain allowlist, read vs. act distinction, explicit approval on authenticated/sensitive domains. Every action lands in the run journal and its receipts like any other tool call (§11.3). Owner kill switch org-wide, same as local stdio MCP (6.4). Fleet distribution of the extension is admin managed-install via enterprise browser policy, not the public web store.
+
+Implementation base: a thin, closed-source-compatible fork of the Apache-2.0 Playwright extension/CDP-relay core, kept upstream-mergeable (attribution and NOTICE honored; changed files marked; no Microsoft marks).
+
+**Non-goal (the boundary):** the browser only. No OS control, no filesystem access via the browser, no control of other applications. Muniment takes the browser slice of computer control because that is where governed knowledge work happens; general computer use stays out of scope. Required capability, not the frontier bet.
+
 ---
 
 ## 7. Control plane
@@ -505,7 +519,10 @@ user does in them carries the same entitlements, permission gates,
 receipts, and journal entries as the desktop surface. v1 requires the
 desktop app installed and signed in. The CLI is an interactive human
 surface — headless/scripted agents remain the server-side agent access
-layer's job, never the CLI's.
+layer's job, never the CLI's. Execution surfaces may invoke every
+runtime capability, including browser control (§6.8); the browser
+extension is an actuator of the runtime, not a companion surface, and is
+outside this section's scope.
 
 ### 13.2 Enabling primitives
 

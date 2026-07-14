@@ -4,6 +4,8 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-li
 import '@testing-library/jest-dom/vitest'
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 
+import { historyMessages } from './lib/chat-state.js'
+
 let App
 let invoke
 
@@ -37,6 +39,93 @@ beforeEach(() => {
 })
 
 afterEach(() => cleanup())
+
+describe('history hydration', () => {
+  it('retains projected tool activity in the restored assistant run', () => {
+    const toolActivity = [
+      { effectId: 'tool-1', displayName: 'Search files', status: 'completed' },
+    ]
+
+    const messages = historyMessages([{
+      runId: 'run-1',
+      phase: 'complete',
+      text: 'Done',
+      prompt: 'Find it',
+      receipt: null,
+      toolActivity,
+    }])
+
+    expect(messages[1].run.toolActivity).toEqual(toolActivity)
+  })
+
+  it('defaults missing historical tool activity to an empty array', () => {
+    const messages = historyMessages([{ runId: 'run-1', phase: 'complete', text: 'Done' }])
+
+    expect(messages[0].run.toolActivity).toEqual([])
+  })
+})
+
+describe('active run composer queue', () => {
+  beforeEach(() => {
+    invoke.mockImplementation(async (command) => {
+      if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
+      if (command === 'chat_history') return []
+      if (command === 'auth_entitlement_snapshot') return snapshot()
+      if (command === 'chat_submit') return { runId: 'run-7' }
+      if (command === 'chat_queue') return undefined
+      throw new Error(`unexpected command: ${command}`)
+    })
+  })
+
+  async function startRun() {
+    render(App)
+    const composer = await screen.findByPlaceholderText('Ask anything')
+    await fireEvent.input(composer, { target: { value: 'Initial prompt' } })
+    await fireEvent.click(screen.getByRole('button', { name: 'Send' }))
+    await screen.findByRole('button', { name: 'Queue follow-up' })
+    return composer
+  }
+
+  function expectQueuePayload(payload) {
+    const call = invoke.mock.calls.find(([command]) => command === 'chat_queue')
+    // These are the camelCased flattened chat_queue parameters in src-tauri/src/chat.rs;
+    // delivery spellings come from ChatDelivery's rename_all = "camelCase".
+    expect(call?.[1]).toEqual(payload)
+  }
+
+  it('queues a follow-up with the exact Rust command payload', async () => {
+    const composer = await startRun()
+    await fireEvent.input(composer, { target: { value: 'Then summarize it' } })
+    await fireEvent.click(screen.getByRole('button', { name: 'Queue follow-up' }))
+
+    expectQueuePayload({ runId: 'run-7', delivery: 'followUp', message: 'Then summarize it' })
+  })
+
+  it('steers the active reply with the exact Rust command payload', async () => {
+    const composer = await startRun()
+    await fireEvent.input(composer, { target: { value: 'Focus on the risks' } })
+    await fireEvent.click(screen.getByRole('button', { name: 'Send' }))
+
+    expectQueuePayload({ runId: 'run-7', delivery: 'steer', message: 'Focus on the risks' })
+  })
+
+  it('shows a queue rejection and preserves the draft', async () => {
+    invoke.mockImplementation(async (command) => {
+      if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
+      if (command === 'chat_history') return []
+      if (command === 'auth_entitlement_snapshot') return snapshot()
+      if (command === 'chat_submit') return { runId: 'run-7' }
+      if (command === 'chat_queue') throw 'Could not queue this message'
+      throw new Error(`unexpected command: ${command}`)
+    })
+    const composer = await startRun()
+    await fireEvent.input(composer, { target: { value: 'Keep this draft' } })
+    await fireEvent.click(screen.getByRole('button', { name: 'Queue follow-up' }))
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Could not queue this message')
+    expect(composer).toHaveValue('Keep this draft')
+  })
+})
 
 describe('signed-in access popover', () => {
   it('loads server-issued profile fields while entering the workspace', async () => {

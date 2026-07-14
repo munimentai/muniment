@@ -16,7 +16,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use muniment_core::auth::{
     self, AuthStatus, BrowserOpenError, NativeCredentialStore, UreqAuthorizationTransport,
-    UreqRegistrationTransport, UreqSessionTransport, UreqTokenTransport,
+    UreqRegistrationTransport, UreqRevocationTransport, UreqSessionTransport, UreqTokenTransport,
 };
 
 use keyring_store::KeyringNativeCredentialStore;
@@ -130,7 +130,7 @@ fn unix_time() -> u64 {
 #[tauri::command]
 pub async fn auth_status(state: tauri::State<'_, AuthState>) -> Result<AuthStatus, String> {
     let store = state.native_store.clone();
-    tauri::async_runtime::spawn_blocking(move || auth::native_status(store.as_ref()))
+    tauri::async_runtime::spawn_blocking(move || auth::native_status(store.as_ref(), unix_time()))
         .await
         .map_err(|e| format!("status task failed: {e}"))?
         .map_err(|e| e.to_string())
@@ -180,8 +180,13 @@ fn ensure_native_session(
 pub async fn auth_sign_out(state: tauri::State<'_, AuthState>) -> Result<AuthStatus, String> {
     let store = state.native_store.clone();
     tauri::async_runtime::spawn_blocking(move || {
-        store.clear_session().map_err(|error| error.to_string())?;
-        auth::native_status(store.as_ref()).map_err(|error| error.to_string())
+        auth::sign_out_native_session(
+            store.as_ref(),
+            &UreqRevocationTransport::new(Duration::from_secs(2)),
+            &api_base_url(),
+        )
+        .map_err(|error| error.to_string())?;
+        auth::native_status(store.as_ref(), unix_time()).map_err(|error| error.to_string())
     })
     .await
     .map_err(|e| format!("sign-out task failed: {e}"))?

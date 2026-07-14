@@ -27,7 +27,7 @@ export function receiptRows(receipt = {}) {
 
 export function applyChatEvent(run, event) {
   if (!run || event.runId !== run.id) return run
-  if (event.phase) return { ...run, phase: event.phase, text: event.text ?? '', receipt: event.receipt ?? null }
+  if (event.phase) return { ...run, phase: event.phase, text: event.text ?? '', receipt: event.receipt ?? null, toolActivity: event.toolActivity ?? [] }
   if (event.type === 'prompt-accepted') return { ...run, accepted: true }
   if (event.type === 'text-delta') return { ...run, phase: 'streaming', text: run.text + event.text }
   if (event.type === 'completed') return { ...run, phase: 'complete', receipt: event.receipt ?? {} }
@@ -38,4 +38,11 @@ export function applyChatEvent(run, event) {
 
 export function applyBufferedChatEvents(run, events) {
   return events.reduce((projection, event) => applyChatEvent(projection, event), run)
+}
+
+export function historyMessages(history) {
+  return history.flatMap((entry) => [
+    ...(entry.prompt ? [{ role: 'user', text: entry.prompt }] : []),
+    { role: 'assistant', run: { id: entry.runId, phase: entry.phase, text: entry.text, receipt: entry.receipt ?? null, prompt: entry.prompt ?? '', toolActivity: entry.toolActivity ?? [] } },
+  ])
 }

@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -61,6 +61,15 @@ pub struct HistoryEntry {
     text: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     receipt: Option<Value>,
+    tool_activity: Vec<ChatToolActivity>,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ChatToolActivity {
+    effect_id: String,
+    display_name: Option<String>,
+    status: String,
 }
 
 #[derive(Clone, Serialize)]
@@ -71,6 +80,7 @@ struct ChatEvent {
     text: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     receipt: Option<Value>,
+    tool_activity: Vec<ChatToolActivity>,
 }
 
 struct ActiveRun {
@@ -127,6 +137,7 @@ fn reconcile_interrupted_runs(journal: &mut RunJournal) {
             state.last_seq + 1,
             "run.needs_attention",
             json!({"reason": "interrupted"}),
+            None,
         );
         let _ = journal.append(state.last_seq, &envelope);
     }
@@ -169,6 +180,38 @@ fn projection_phase(status: &Option<RunStatus>) -> &'static str {
     }
 }
 
+fn history_entries(
+    journal: &RunJournal,
+    subject: Option<&str>,
+) -> Result<Vec<HistoryEntry>, String> {
+    let mut entries = Vec::new();
+    for run_id in journal
+        .run_ids()
+        .map_err(|_| "Conversation history is unavailable.".to_string())?
+    {
+        let events = journal
+            .events(&run_id)
+            .map_err(|_| "Conversation history is unavailable.".to_string())?;
+        if matches!(
+            events.first().and_then(|event| event.provenance.actor_id.as_deref()),
+            Some(owner) if Some(owner) != subject
+        ) {
+            continue;
+        }
+        let projection = project_chat(&events)
+            .map_err(|_| "Conversation history is unavailable.".to_string())?;
+        entries.push(HistoryEntry {
+            prompt: load_prompt(&run_id, subject)?,
+            phase: projection_phase(&projection.status).into(),
+            text: projection.text,
+            receipt: projection.receipt,
+            tool_activity: chat_tool_activity(&projection.tool_activity),
+            run_id,
+        });
+    }
+    Ok(entries)
+}
+
 #[tauri::command]
 pub async fn chat_history(
     auth_state: tauri::State<'_, auth::AuthState>,
@@ -180,26 +223,7 @@ pub async fn chat_history(
         .journal
         .lock()
         .map_err(|_| "Conversation history is unavailable.".to_string())?;
-    journal
-        .run_ids()
-        .map_err(|_| "Conversation history is unavailable.".to_string())?
-        .into_iter()
-        .map(|run_id| {
-            let projection = project_chat(
-                &journal
-                    .events(&run_id)
-                    .map_err(|_| "Conversation history is unavailable.".to_string())?,
-            )
-            .map_err(|_| "Conversation history is unavailable.".to_string())?;
-            Ok(HistoryEntry {
-                prompt: load_prompt(&run_id, tokens.subject.as_deref())?,
-                phase: projection_phase(&projection.status).into(),
-                text: projection.text,
-                receipt: projection.receipt,
-                run_id,
-            })
-        })
-        .collect()
+    history_entries(&journal, tokens.subject.as_deref())
 }
 
 #[tauri::command]
@@ -261,6 +285,7 @@ pub async fn chat_submit(
             run_id.clone(),
             prompt,
             tokens.access_token,
+            tokens.subject,
             grant,
             cancelled,
             transport,
@@ -293,9 +318,14 @@ fn install_active_run(active: &Mutex<Option<ActiveRun>>, run: ActiveRun) -> Resu
 #[tauri::command]
 pub async fn chat_queue(
     state: tauri::State<'_, ChatState>,
-    request: ChatQueueRequest,
+    run_id: String,
+    delivery: ChatDelivery,
+    message: String,
 ) -> Result<(), String> {
-    queue_message(&state.active, request)
+    queue_message(
+        &state.active,
+        ChatQueueRequest { run_id, delivery, message },
+    )
 }
 
 fn queue_message(
@@ -369,13 +399,24 @@ fn coordinate(
     run_id: String,
     prompt: String,
     access_token: String,
+    subject: Option<String>,
     grant: ChatGrant,
     cancelled: Arc<AtomicBool>,
     active_transport: Arc<Mutex<Option<Arc<PiRpcTransport>>>>,
     active_adapter: Arc<Mutex<Option<Arc<PiRunAdapter>>>>,
 ) {
     let mut seq = 0;
-    if append_emit(&app, &journal, &run_id, &mut seq, "run.started", json!({})).is_err() {
+    if append_emit(
+        &app,
+        &journal,
+        &run_id,
+        &mut seq,
+        "run.started",
+        json!({}),
+        subject.as_deref(),
+    )
+    .is_err()
+    {
         return;
     }
     if cancelled.load(Ordering::SeqCst) {
@@ -386,6 +427,7 @@ fn coordinate(
             &mut seq,
             "run.cancelled",
             json!({}),
+            subject.as_deref(),
         );
         return;
     }
@@ -408,6 +450,7 @@ fn coordinate(
                     &run_id,
                     &mut seq,
                     "The agent runtime is not installed.",
+                    subject.as_deref(),
                 );
                 return;
             }
@@ -421,6 +464,7 @@ fn coordinate(
                     &run_id,
                     &mut seq,
                     "The agent runtime is unavailable.",
+                    subject.as_deref(),
                 );
                 return;
             }
@@ -449,6 +493,7 @@ fn coordinate(
                         &run_id,
                         &mut seq,
                         "The agent runtime could not start.",
+                        subject.as_deref(),
                     );
                     return;
                 }
@@ -474,6 +519,7 @@ fn coordinate(
                 &mut seq,
                 "run.cancelled",
                 json!({}),
+                subject.as_deref(),
             );
             return;
         }
@@ -486,6 +532,7 @@ fn coordinate(
             &run_id,
             &mut seq,
             "The agent runtime did not become ready.",
+            subject.as_deref(),
         );
         return;
     };
@@ -500,6 +547,7 @@ fn coordinate(
             &mut seq,
             "run.cancelled",
             json!({}),
+            subject.as_deref(),
         );
         return;
     }
@@ -512,6 +560,7 @@ fn coordinate(
                 &run_id,
                 &mut seq,
                 "The reply could not be started.",
+                subject.as_deref(),
             );
             return;
         }
@@ -527,12 +576,14 @@ fn coordinate(
         &mut seq,
         "model.prompt.accepted",
         json!({}),
+        subject.as_deref(),
     )
     .is_err()
     {
         return;
     }
     let mut aborting = false;
+    let mut open_effects = BTreeSet::new();
     loop {
         if cancelled.swap(false, Ordering::SeqCst) {
             aborting = true;
@@ -547,6 +598,7 @@ fn coordinate(
                     &mut seq,
                     "model.stream.delta",
                     json!({"text": text}),
+                    subject.as_deref(),
                 )
                 .is_err()
                 {
@@ -554,95 +606,214 @@ fn coordinate(
                 }
             }
             Ok(PiChatEvent::Completed) if aborting => {
-                let _ = append_emit(
+                let _ = append_terminal(
                     &app,
                     &journal,
                     &run_id,
                     &mut seq,
+                    &mut open_effects,
                     "run.cancelled",
                     json!({}),
+                    subject.as_deref(),
                 );
                 break;
             }
             Ok(PiChatEvent::Completed) => {
                 match fetch_receipt(&grant.receipt_url, &access_token, &run_id) {
                     Ok(receipt) => {
-                        let _ = append_emit(
+                        let _ = append_terminal(
                             &app,
                             &journal,
                             &run_id,
                             &mut seq,
+                            &mut open_effects,
                             "run.completed",
                             json!({"receipt": receipt}),
+                            subject.as_deref(),
                         );
                         break;
                     }
                     Err(_) => {
-                        fail(
+                        fail_with_open_effects(
                             &app,
                             &journal,
                             &run_id,
                             &mut seq,
+                            &mut open_effects,
                             "The reply finished, but its receipt was unavailable.",
+                            subject.as_deref(),
                         );
                         break;
                     }
                 }
             }
             Ok(PiChatEvent::Cancelled) => {
-                let _ = append_emit(
+                let _ = append_terminal(
                     &app,
                     &journal,
                     &run_id,
                     &mut seq,
+                    &mut open_effects,
                     "run.cancelled",
                     json!({}),
+                    subject.as_deref(),
                 );
                 break;
             }
             Ok(PiChatEvent::Failed) => {
-                fail(
+                fail_with_open_effects(
                     &app,
                     &journal,
                     &run_id,
                     &mut seq,
+                    &mut open_effects,
                     "The model could not complete this reply.",
+                    subject.as_deref(),
                 );
                 break;
             }
-            Ok(
-                PiChatEvent::ToolStarted { .. }
-                | PiChatEvent::ToolFinished { .. }
-                | PiChatEvent::Interleaved
-                | PiChatEvent::PromptAccepted,
-            ) => {}
+            Ok(event @ (PiChatEvent::ToolStarted { .. } | PiChatEvent::ToolFinished { .. })) => {
+                if let Some((kind, payload)) = tool_journal_entry(&event, &mut open_effects) {
+                    if append_emit(
+                        &app,
+                        &journal,
+                        &run_id,
+                        &mut seq,
+                        kind,
+                        payload,
+                        subject.as_deref(),
+                    )
+                    .is_err()
+                    {
+                        break;
+                    }
+                }
+            }
+            Ok(PiChatEvent::Interleaved | PiChatEvent::PromptAccepted) => {}
             Err(error) if error == "timed out waiting for Pi stream" => {
                 if matches!(
                     runtime.supervisor.status(),
                     SidecarStatus::Failed | SidecarStatus::Stopped
                 ) {
-                    fail(
+                    fail_with_open_effects(
                         &app,
                         &journal,
                         &run_id,
                         &mut seq,
+                        &mut open_effects,
                         "The agent runtime stopped unexpectedly.",
+                        subject.as_deref(),
                     );
                     break;
                 }
             }
             Err(_) => {
-                fail(
+                fail_with_open_effects(
                     &app,
                     &journal,
                     &run_id,
                     &mut seq,
+                    &mut open_effects,
                     "The agent runtime stopped unexpectedly.",
+                    subject.as_deref(),
                 );
                 break;
             }
         }
     }
+}
+
+fn tool_journal_entry(
+    event: &PiChatEvent,
+    open_effects: &mut BTreeSet<String>,
+) -> Option<(&'static str, Value)> {
+    match event {
+        PiChatEvent::ToolStarted {
+            tool_call_id,
+            tool_name,
+        } if open_effects.insert(tool_call_id.clone()) => Some((
+            "tool.effect.started",
+            json!({"effect_id": tool_call_id, "display_name": tool_name}),
+        )),
+        PiChatEvent::ToolFinished {
+            tool_call_id,
+            failed,
+        } if open_effects.remove(tool_call_id) => Some((
+            if *failed {
+                "tool.effect.failed"
+            } else {
+                "tool.effect.completed"
+            },
+            json!({"effect_id": tool_call_id}),
+        )),
+        _ => None,
+    }
+}
+
+fn close_open_effects(
+    open_effects: &mut BTreeSet<String>,
+    mut append: impl FnMut(&str, Value) -> Result<(), ()>,
+) -> Result<(), ()> {
+    for effect_id in open_effects.clone() {
+        append("tool.effect.failed", json!({"effect_id": effect_id}))?;
+        open_effects.remove(&effect_id);
+    }
+    Ok(())
+}
+
+fn append_terminal(
+    app: &tauri::AppHandle,
+    journal: &Arc<Mutex<RunJournal>>,
+    run_id: &str,
+    seq: &mut u64,
+    open_effects: &mut BTreeSet<String>,
+    kind: &str,
+    payload: Value,
+    subject: Option<&str>,
+) -> Result<(), ()> {
+    close_open_effects(open_effects, |kind, payload| {
+        append_emit(app, journal, run_id, seq, kind, payload, subject)
+    })?;
+    append_emit(app, journal, run_id, seq, kind, payload, subject)
+}
+
+fn fail_with_open_effects(
+    app: &tauri::AppHandle,
+    journal: &Arc<Mutex<RunJournal>>,
+    run_id: &str,
+    seq: &mut u64,
+    open_effects: &mut BTreeSet<String>,
+    reason: &str,
+    subject: Option<&str>,
+) {
+    let _ = append_terminal(
+        app,
+        journal,
+        run_id,
+        seq,
+        open_effects,
+        "run.failed",
+        json!({"reason": reason}),
+        subject,
+    );
+}
+
+fn chat_tool_activity(
+    activity: &[muniment_core::journal::reducer::ToolActivity],
+) -> Vec<ChatToolActivity> {
+    activity
+        .iter()
+        .map(|activity| ChatToolActivity {
+            effect_id: activity.effect_id.clone(),
+            display_name: activity.display_name.clone(),
+            status: match activity.status {
+                muniment_core::journal::reducer::ToolActivityStatus::Running => "running",
+                muniment_core::journal::reducer::ToolActivityStatus::Completed => "completed",
+                muniment_core::journal::reducer::ToolActivityStatus::Failed => "failed",
+            }
+            .into(),
+        })
+        .collect()
 }
 
 fn append_emit(
@@ -652,15 +823,17 @@ fn append_emit(
     seq: &mut u64,
     kind: &str,
     payload: Value,
+    subject: Option<&str>,
 ) -> Result<(), ()> {
     *seq += 1;
-    let envelope = event_envelope(run_id, *seq, kind, payload);
+    let envelope = event_envelope(run_id, *seq, kind, payload, subject);
     let projection = {
         let mut journal = journal.lock().map_err(|_| ())?;
         journal.append(*seq - 1, &envelope).map_err(|_| ())?;
         project_chat(&journal.events(run_id).map_err(|_| ())?).map_err(|_| ())?
     };
     let phase = projection_phase(&projection.status);
+    let tool_activity = chat_tool_activity(&projection.tool_activity);
     app.emit(
         "chat-event",
         ChatEvent {
@@ -668,12 +841,19 @@ fn append_emit(
             phase: phase.into(),
             text: projection.text,
             receipt: projection.receipt,
+            tool_activity,
         },
     )
     .map_err(|_| ())
 }
 
-fn event_envelope(run_id: &str, run_seq: u64, kind: &str, payload: Value) -> EventEnvelope {
+fn event_envelope(
+    run_id: &str,
+    run_seq: u64,
+    kind: &str,
+    payload: Value,
+    subject: Option<&str>,
+) -> EventEnvelope {
     EventEnvelope {
         event_id: Uuid::now_v7().to_string(),
         run_id: run_id.into(),
@@ -691,7 +871,7 @@ fn event_envelope(run_id: &str, run_seq: u64, kind: &str, payload: Value) -> Eve
         provenance: Provenance {
             source: "muniment-desktop".into(),
             source_version: env!("CARGO_PKG_VERSION").into(),
-            actor_id: None,
+            actor_id: subject.map(str::to_owned),
             device_id: None,
             rpc_request_id: None,
             capability_versions: None,
@@ -707,6 +887,7 @@ fn fail(
     run_id: &str,
     seq: &mut u64,
     reason: &str,
+    subject: Option<&str>,
 ) {
     let _ = append_emit(
         app,
@@ -715,6 +896,7 @@ fn fail(
         seq,
         "run.failed",
         json!({"reason": reason}),
+        subject,
     );
 }
 
@@ -761,9 +943,13 @@ mod tests {
         seq: u64,
         kind: &str,
         payload: Value,
+        subject: Option<&str>,
     ) {
         journal
-            .append(seq - 1, &event_envelope(run_id, seq, kind, payload))
+            .append(
+                seq - 1,
+                &event_envelope(run_id, seq, kind, payload, subject),
+            )
             .unwrap();
     }
 
@@ -788,6 +974,15 @@ mod tests {
             "runId":"run-1", "delivery":"followUp", "message":"hello"
         }))
         .is_ok());
+    }
+
+    #[test]
+    fn event_envelope_records_the_owning_subject() {
+        let owned = event_envelope("run-1", 1, "run.started", json!({}), Some("sub-a"));
+        assert_eq!(owned.provenance.actor_id.as_deref(), Some("sub-a"));
+
+        let unowned = event_envelope("run-2", 1, "run.started", json!({}), None);
+        assert_eq!(unowned.provenance.actor_id, None);
     }
 
     #[test]
@@ -836,6 +1031,230 @@ mod tests {
     }
 
     #[test]
+    fn tool_frames_ignore_duplicate_starts_and_unmatched_finishes() {
+        let mut open_effects = BTreeSet::new();
+        let started = PiChatEvent::ToolStarted {
+            tool_call_id: "tool-1".into(),
+            tool_name: "Read file".into(),
+        };
+        let unmatched = PiChatEvent::ToolFinished {
+            tool_call_id: "missing".into(),
+            failed: false,
+        };
+
+        assert_eq!(
+            tool_journal_entry(&started, &mut open_effects),
+            Some((
+                "tool.effect.started",
+                json!({"effect_id": "tool-1", "display_name": "Read file"})
+            ))
+        );
+        assert!(tool_journal_entry(&started, &mut open_effects).is_none());
+        assert!(tool_journal_entry(&unmatched, &mut open_effects).is_none());
+
+        let finished = PiChatEvent::ToolFinished {
+            tool_call_id: "tool-1".into(),
+            failed: false,
+        };
+        assert_eq!(
+            tool_journal_entry(&finished, &mut open_effects),
+            Some(("tool.effect.completed", json!({"effect_id": "tool-1"})))
+        );
+        assert!(tool_journal_entry(&finished, &mut open_effects).is_none());
+
+        let failed = PiChatEvent::ToolFinished {
+            tool_call_id: "tool-2".into(),
+            failed: true,
+        };
+        assert!(open_effects.insert("tool-2".into()));
+        assert_eq!(
+            tool_journal_entry(&failed, &mut open_effects),
+            Some(("tool.effect.failed", json!({"effect_id": "tool-2"})))
+        );
+    }
+
+    #[test]
+    fn terminal_failure_closes_a_tool_before_projecting_the_run() {
+        let directory = std::env::temp_dir().join(format!("muniment-chat-{}", Uuid::now_v7()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let mut journal = RunJournal::open(directory.join("runs.sqlite3")).unwrap();
+        let run_id = Uuid::now_v7().to_string();
+        let mut seq = 1;
+        append_test_event(&mut journal, &run_id, seq, "run.started", json!({}), None);
+        seq += 1;
+        append_test_event(
+            &mut journal,
+            &run_id,
+            seq,
+            "tool.effect.started",
+            json!({"effect_id": "tool-1", "display_name": "Read file"}),
+            None,
+        );
+        let mut open_effects = BTreeSet::from(["tool-1".to_string()]);
+
+        close_open_effects(&mut open_effects, |kind, payload| {
+            seq += 1;
+            append_test_event(&mut journal, &run_id, seq, kind, payload, None);
+            Ok(())
+        })
+        .unwrap();
+        seq += 1;
+        append_test_event(
+            &mut journal,
+            &run_id,
+            seq,
+            "run.failed",
+            json!({"reason": "runtime stopped"}),
+            None,
+        );
+
+        let events = journal.events(&run_id).unwrap();
+        let projection = project_chat(&events).unwrap();
+        assert!(open_effects.is_empty());
+        assert!(matches!(projection.status, Some(RunStatus::Failed { .. })));
+        assert_eq!(projection.tool_activity.len(), 1);
+        assert_eq!(
+            projection.tool_activity[0].status,
+            muniment_core::journal::reducer::ToolActivityStatus::Failed
+        );
+
+        drop(journal);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn history_is_scoped_by_the_first_events_actor() {
+        keyring::set_default_credential_builder(keyring::mock::default_credential_builder());
+        let directory = std::env::temp_dir().join(format!("muniment-chat-{}", Uuid::now_v7()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let mut journal = RunJournal::open(directory.join("runs.sqlite3")).unwrap();
+        let run_a = "01900000-0000-7000-8000-000000000001";
+        let run_a_reconciled = "01900000-0000-7000-8000-000000000002";
+        let run_b = "01900000-0000-7000-8000-000000000003";
+        let run_legacy = "01900000-0000-7000-8000-000000000004";
+
+        append_test_event(
+            &mut journal,
+            run_a,
+            1,
+            "run.started",
+            json!({}),
+            Some("sub-a"),
+        );
+        append_test_event(
+            &mut journal,
+            run_a,
+            2,
+            "model.stream.delta",
+            json!({"text": "private-a"}),
+            Some("sub-a"),
+        );
+        append_test_event(
+            &mut journal,
+            run_a,
+            3,
+            "run.completed",
+            json!({"receipt": {"owner": "sub-a"}}),
+            Some("sub-a"),
+        );
+        append_test_event(
+            &mut journal,
+            run_a_reconciled,
+            1,
+            "run.started",
+            json!({}),
+            Some("sub-a"),
+        );
+        append_test_event(
+            &mut journal,
+            run_a_reconciled,
+            2,
+            "run.needs_attention",
+            json!({"reason": "interrupted"}),
+            None,
+        );
+
+        append_test_event(
+            &mut journal,
+            run_b,
+            1,
+            "run.started",
+            json!({}),
+            Some("sub-b"),
+        );
+        append_test_event(
+            &mut journal,
+            run_b,
+            2,
+            "model.stream.delta",
+            json!({"text": "private-b"}),
+            Some("sub-b"),
+        );
+        append_test_event(
+            &mut journal,
+            run_b,
+            3,
+            "run.completed",
+            json!({"receipt": {"owner": "sub-b"}}),
+            Some("sub-b"),
+        );
+
+        append_test_event(
+            &mut journal,
+            run_legacy,
+            1,
+            "run.started",
+            json!({}),
+            None,
+        );
+        append_test_event(
+            &mut journal,
+            run_legacy,
+            2,
+            "run.completed",
+            json!({"receipt": {"legacy": true}}),
+            None,
+        );
+
+        let sub_b = history_entries(&journal, Some("sub-b")).unwrap();
+        assert_eq!(
+            sub_b
+                .iter()
+                .map(|entry| entry.run_id.as_str())
+                .collect::<BTreeSet<_>>(),
+            BTreeSet::from([run_b, run_legacy])
+        );
+        assert!(sub_b.iter().all(|entry| !entry.text.contains("private-a")));
+        assert!(sub_b.iter().all(|entry| {
+            entry
+                .receipt
+                .as_ref()
+                .and_then(|receipt| receipt.get("owner"))
+                != Some(&json!("sub-a"))
+        }));
+
+        let sub_a = history_entries(&journal, Some("sub-a")).unwrap();
+        assert_eq!(
+            sub_a
+                .iter()
+                .map(|entry| entry.run_id.as_str())
+                .collect::<BTreeSet<_>>(),
+            BTreeSet::from([run_a, run_a_reconciled, run_legacy])
+        );
+        assert_eq!(
+            sub_a
+                .iter()
+                .find(|entry| entry.run_id == run_a)
+                .unwrap()
+                .text,
+            "private-a"
+        );
+
+        drop(journal);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
     fn startup_reconciles_only_non_terminal_runs_once() {
         let directory = std::env::temp_dir().join(format!("muniment-chat-{}", Uuid::now_v7()));
         std::fs::create_dir_all(&directory).unwrap();
@@ -845,22 +1264,38 @@ mod tests {
 
         {
             let mut journal = RunJournal::open(&path).unwrap();
-            append_test_event(&mut journal, &interrupted, 1, "run.started", json!({}));
+            append_test_event(
+                &mut journal,
+                &interrupted,
+                1,
+                "run.started",
+                json!({}),
+                None,
+            );
             append_test_event(
                 &mut journal,
                 &interrupted,
                 2,
                 "model.stream.delta",
                 json!({"text": "partial"}),
+                None,
             );
-            append_test_event(&mut journal, &completed, 1, "run.started", json!({}));
-            append_test_event(&mut journal, &completed, 2, "run.completed", json!({}));
+            append_test_event(&mut journal, &completed, 1, "run.started", json!({}), None);
+            append_test_event(
+                &mut journal,
+                &completed,
+                2,
+                "run.completed",
+                json!({}),
+                None,
+            );
 
             reconcile_interrupted_runs(&mut journal);
 
             let interrupted_events = journal.events(&interrupted).unwrap();
             assert_eq!(interrupted_events.len(), 3);
             assert_eq!(interrupted_events[2].event_type, "run.needs_attention");
+            assert_eq!(interrupted_events[2].provenance.actor_id, None);
             assert!(matches!(
                 reduce(&interrupted_events).unwrap().status,
                 RunStatus::NeedsAttention(_)

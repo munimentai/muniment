@@ -21,8 +21,9 @@ Phases mirror harness-spec §9. Muniment-cloud Phase 1 native auth and the cloud
 - DONE — first-run registration, native browser authorization, native token exchange, and coherent credential persistence are wired through the Tauri `auth_sign_in` command.
 - DONE — native local status, refresh at the safety skew, authoritative session inspection, and the pre-chat fresh-token path replace their legacy generic-OIDC counterparts end to end.
 - DONE — Sign out atomically clears the production native session locally while preserving the installation identity.
+- DONE — Sign out best-effort revokes the current native refresh family and access sessions before the atomic local clear.
 - DONE — the signed-in profile consumes the live typed entitlement snapshot without exposing signing material.
-- NEXT — server-side native revocation/device management as a separately reviewable slice.
+- NEXT — native device management as a separately reviewable slice.
 
 ### 9. Pi sidecar and cloud chat
 - DONE foundation — ADR 0008 pins Pi 0.73.1, chooses verified first-use acquisition of its platform-native executable, and proves its real `get_state` RPC readiness through `SidecarSupervisor`.
