@@ -76,3 +76,13 @@ Desktop builds run on ephemeral pve01 VM clones via the `desktop-ci` driver
 homelab docs/infra-notes.md "Desktop-CI GLUE built"). CI-only gate. The
 lint/structure smoke runs on the shared self-hosted runners (no Docker, no
 GUI there — real builds happen in the VMs).
+
+## Journal-idea notes (cross-lane content pipeline)
+
+`docs/journal-ideas/` holds standalone notes on shipped features,
+engineering lessons, and agent-struggle patterns — raw material for the
+public journal on muniment.ai (rules in docs/journal-ideas/README.md).
+Merged notes flow to the site lane automatically. Notes must be safe to
+publish nearly verbatim: no secrets, no security-sensitive internals.
+Writing a note when a PR ships something notable is encouraged, never
+blocking.
