@@ -1,4 +1,6 @@
-use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+
+use serde::{de, Deserialize, Deserializer, Serialize};
 
 use super::{ErrorAction, Protocol, ProtocolError, VersionRange};
 
@@ -8,12 +10,58 @@ pub struct Client {
     pub version: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Hello {
     pub protocol: Protocol,
     pub client: Client,
     pub supported: VersionRange,
     pub client_nonce: String,
+}
+
+impl<'de> Deserialize<'de> for Hello {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        struct HelloFields {
+            protocol: Protocol,
+            client: Client,
+            supported: VersionRange,
+            client_nonce: String,
+            #[serde(flatten)]
+            extra: BTreeMap<String, serde_json::Value>,
+        }
+
+        const ENVELOPE_FIELDS: &[&str] = &[
+            "request_id",
+            "operation",
+            "capability",
+            "idempotency_key",
+            "ok",
+            "error",
+            "subscription_id",
+            "event",
+            "run_id",
+            "run_seq",
+            "body",
+        ];
+
+        let fields = HelloFields::deserialize(deserializer)?;
+        if fields
+            .extra
+            .keys()
+            .any(|field| ENVELOPE_FIELDS.contains(&field.as_str()))
+        {
+            return Err(de::Error::custom(
+                "hello contains non-handshake envelope fields",
+            ));
+        }
+
+        Ok(Self {
+            protocol: fields.protocol,
+            client: fields.client,
+            supported: fields.supported,
+            client_nonce: fields.client_nonce,
+        })
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

@@ -177,6 +177,39 @@ fn hello_welcome_and_version_overlap() {
 }
 
 #[test]
+fn hello_first_rejects_operation_shapes_but_allows_future_optional_fields() {
+    let hybrid = json!({
+        "protocol": PROTOCOL,
+        "client": {"kind": "cli", "version": "1.0.0"},
+        "supported": {"min": 1, "max": 1},
+        "client_nonce": "client-nonce",
+        "request_id": id(1),
+        "operation": "thread.list",
+        "capability": "connection-capability",
+        "body": {}
+    });
+    let first = serde_json::from_value::<FirstMessage>(hybrid).unwrap();
+    assert!(matches!(first, FirstMessage::Other(_)));
+    assert!(matches!(
+        negotiate_first(first, VersionRange { min: 1, max: 1 }),
+        Err(NegotiationError::HelloRequired)
+    ));
+
+    let future_hello = json!({
+        "protocol": PROTOCOL,
+        "client": {"kind": "cli", "version": "1.0.0"},
+        "supported": {"min": 1, "max": 1},
+        "client_nonce": "client-nonce",
+        "future_optional": {"enabled": true}
+    });
+    let first = serde_json::from_value::<FirstMessage>(future_hello).unwrap();
+    assert!(matches!(
+        negotiate_first(first, VersionRange { min: 1, max: 1 }),
+        Ok(1)
+    ));
+}
+
+#[test]
 fn incompatibility_is_actionable_and_discloses_no_runtime_state() {
     let error = negotiate_version(
         VersionRange { min: 2, max: 2 },
