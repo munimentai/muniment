@@ -25,6 +25,14 @@ export function receiptRows(receipt = {}) {
   return rows
 }
 
+export function toolName(activity = {}) {
+  return activity.displayName?.trim() || 'Tool activity'
+}
+
+export function toolStatus(activity = {}) {
+  return ['running', 'completed', 'failed'].includes(activity.status) ? activity.status : 'status unknown'
+}
+
 export function applyChatEvent(run, event) {
   if (!run || event.runId !== run.id) return run
   if (event.phase) return { ...run, phase: event.phase, text: event.text ?? '', receipt: event.receipt ?? null, toolActivity: event.toolActivity ?? [] }

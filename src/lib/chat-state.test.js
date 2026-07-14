@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { applyBufferedChatEvents, applyChatEvent, composerAction, receiptParts, receiptRows } from './chat-state.js'
+import { applyBufferedChatEvents, applyChatEvent, composerAction, receiptParts, receiptRows, toolName, toolStatus } from './chat-state.js'
 
 describe('chat composer and projection', () => {
   it('chooses submit or steer from the active run', () => {
@@ -32,6 +32,12 @@ describe('chat composer and projection', () => {
       { id: 'r', phase: 'thinking', text: '' },
       { runId: 'r', phase: 'streaming', text: 'Working', toolActivity },
     )).toMatchObject({ phase: 'streaming', text: 'Working', toolActivity })
+  })
+
+  it('gives tools accessible neutral names and explicit statuses', () => {
+    expect(toolName({ displayName: '  ' })).toBe('Tool activity')
+    expect(toolName({ displayName: 'Search files' })).toBe('Search files')
+    expect(toolStatus({ status: 'failed' })).toBe('failed')
   })
 
   it('does not invent missing receipt values', () => {
