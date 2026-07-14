@@ -119,8 +119,7 @@ fn compaction_reduces_churn_and_preserves_the_complete_authoritative_history() {
             &(1..=3).map(|seq| event(RUN, seq, 32)).collect::<Vec<_>>(),
         )
         .unwrap();
-    // Equal timestamps intentionally exercise the durable event-id tie-breaker
-    // used for run ordering; hidden rowids may change during VACUUM.
+    // Equal timestamps exercise the established first-recorded tie-breaker.
     journal.append(0, &event(SECOND_RUN, 1, 32)).unwrap();
     for seq in 1..=160 {
         journal
@@ -160,6 +159,53 @@ fn compaction_reduces_churn_and_preserves_the_complete_authoritative_history() {
     assert_eq!(
         RunJournal::open(db.as_ref()).unwrap().events(RUN).unwrap(),
         before_events
+    );
+}
+
+#[test]
+fn equal_timestamp_run_order_uses_insertion_order_not_event_id_order() {
+    let db = TestDb::new();
+    let mut journal = RunJournal::open(db.as_ref()).unwrap();
+    let mut first = event(RUN, 1, 0);
+    first.event_id = "0190a100-0000-7000-8000-000000000099".into();
+    let mut second = event(SECOND_RUN, 1, 0);
+    second.event_id = "0190a100-0000-7000-8000-000000000001".into();
+    journal.append(0, &first).unwrap();
+    journal.append(0, &second).unwrap();
+
+    assert_eq!(journal.run_ids().unwrap(), [RUN, SECOND_RUN]);
+    journal.compact().unwrap();
+    assert_eq!(journal.run_ids().unwrap(), [RUN, SECOND_RUN]);
+}
+
+#[test]
+fn open_peer_refreshes_all_reads_after_replacement() {
+    let db = TestDb::new();
+    let mut compactor = RunJournal::open(db.as_ref()).unwrap();
+    compactor.append(0, &event(RUN, 1, 0)).unwrap();
+
+    let equivalent_path =
+        db.0.parent()
+            .unwrap()
+            .join(".")
+            .join(db.0.file_name().unwrap());
+    let mut peer = RunJournal::open(equivalent_path).unwrap();
+    compactor.compact().unwrap();
+    let mut appended = event(SECOND_RUN, 1, 0);
+    appended.payload = EventPayload::Cas {
+        payload_cas: CasReference {
+            sha256: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".into(),
+            media_type: "application/octet-stream".into(),
+            byte_length: 2,
+        },
+    };
+    compactor.append(0, &appended).unwrap();
+
+    assert_eq!(peer.events(SECOND_RUN).unwrap().len(), 1);
+    assert_eq!(peer.run_ids().unwrap(), [RUN, SECOND_RUN]);
+    assert_eq!(
+        peer.referenced_hashes().unwrap(),
+        compactor.referenced_hashes().unwrap()
     );
 }
 

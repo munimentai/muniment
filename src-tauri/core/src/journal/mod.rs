@@ -12,8 +12,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{BTreeMap, HashSet};
 use std::fmt;
-use std::path::Path;
-use std::path::PathBuf;
+use std::path::{Component, Path, PathBuf};
 use std::str::FromStr;
 use std::sync::{Arc, Mutex, OnceLock, Weak};
 use std::time::Duration;
@@ -124,11 +123,7 @@ pub(crate) struct JournalCoordination {
 fn coordination_for(path: &Path) -> Arc<JournalCoordination> {
     static JOURNALS: OnceLock<Mutex<BTreeMap<PathBuf, Weak<JournalCoordination>>>> =
         OnceLock::new();
-    let key = if path.is_absolute() {
-        path.to_path_buf()
-    } else {
-        std::env::current_dir().unwrap_or_default().join(path)
-    };
+    let key = normalized_path(path);
     let mut journals = JOURNALS.get_or_init(Default::default).lock().unwrap();
     if let Some(existing) = journals.get(&key).and_then(Weak::upgrade) {
         return existing;
@@ -141,11 +136,39 @@ fn coordination_for(path: &Path) -> Arc<JournalCoordination> {
     coordination
 }
 
+fn normalized_path(path: &Path) -> PathBuf {
+    if let Ok(canonical) = path.canonicalize() {
+        return canonical;
+    }
+    let absolute = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        std::env::current_dir().unwrap_or_default().join(path)
+    };
+    if let (Some(parent), Some(name)) = (absolute.parent(), absolute.file_name()) {
+        if let Ok(parent) = parent.canonicalize() {
+            return parent.join(name);
+        }
+    }
+    absolute
+        .components()
+        .fold(PathBuf::new(), |mut result, part| {
+            match part {
+                Component::CurDir => {}
+                Component::ParentDir if result.file_name().is_some() => {
+                    result.pop();
+                }
+                _ => result.push(part.as_os_str()),
+            }
+            result
+        })
+}
+
 impl RunJournal {
     pub fn open(path: impl AsRef<Path>) -> Result<Self, JournalError> {
         let path = path.as_ref();
         let file_path = (path != Path::new(":memory:") && !path.as_os_str().is_empty())
-            .then(|| path.to_path_buf());
+            .then(|| normalized_path(path));
         let coordination = file_path.as_deref().map(coordination_for);
         let _operation = coordination
             .as_ref()
@@ -269,7 +292,12 @@ impl RunJournal {
         Ok(())
     }
 
-    pub fn events(&self, run_id: &str) -> Result<Vec<EventEnvelope>, JournalError> {
+    pub fn events(&mut self, run_id: &str) -> Result<Vec<EventEnvelope>, JournalError> {
+        let coordination = self.coordination.clone();
+        let _operation = coordination
+            .as_ref()
+            .map(|state| state.operation.lock().unwrap());
+        self.refresh_after_compaction()?;
         let mut statement = self
             .connection
             .as_ref()
@@ -303,7 +331,12 @@ impl RunJournal {
     }
 
     /// Distinct CAS hashes referenced by all events currently in the journal.
-    pub fn referenced_hashes(&self) -> Result<HashSet<ContentHash>, JournalError> {
+    pub fn referenced_hashes(&mut self) -> Result<HashSet<ContentHash>, JournalError> {
+        let coordination = self.coordination.clone();
+        let _operation = coordination
+            .as_ref()
+            .map(|state| state.operation.lock().unwrap());
+        self.refresh_after_compaction()?;
         referenced_hashes_for_run(
             self.connection
                 .as_ref()
@@ -314,13 +347,18 @@ impl RunJournal {
 
     /// Run identities in first-recorded order. Callers still reconstruct all
     /// visible state through `events`; this is only the durable history index.
-    pub fn run_ids(&self) -> Result<Vec<String>, JournalError> {
+    pub fn run_ids(&mut self) -> Result<Vec<String>, JournalError> {
+        let coordination = self.coordination.clone();
+        let _operation = coordination
+            .as_ref()
+            .map(|state| state.operation.lock().unwrap());
+        self.refresh_after_compaction()?;
         let mut statement = self
             .connection
             .as_ref()
             .expect("journal connection is always present outside compaction")
             .prepare(
-                "SELECT run_id FROM events GROUP BY run_id ORDER BY MIN(recorded_at), MIN(event_id)",
+                "SELECT run_id FROM events GROUP BY run_id ORDER BY MIN(recorded_at), MIN(rowid)",
             )?;
         let rows = statement.query_map([], |row| row.get::<_, String>(0))?;
         rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
