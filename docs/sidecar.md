@@ -77,6 +77,25 @@ members are rejected. The scoped LiteLLM virtual key and gateway URL exist
 only in the supervised Pi child's environment; neither is returned to the
 webview nor written to the run journal.
 
+Each local run launches a new persistent Pi conversation beneath the app data
+directory's owned `pi-sessions` root. Launch always supplies `--session-dir`;
+an explicit reopen additionally supplies a session file that Rust has
+canonicalized, verified as a regular file, and proven to remain beneath that
+root. Journal values are root-relative JSONL filenames, never arbitrary paths.
+
+After Pi accepts the prompt, the desktop reads `data.sessionFile` from the
+pinned 0.73.1 `get_state` response, validates it against the owned root, and
+appends one `runtime.pi_session.bound` event containing the local run id and
+non-secret filename locator. Reducer replay rejects malformed, duplicate, or
+conflicting bindings. Pi JSONL and its contents never cross Tauri and never
+reconstruct chat text, receipts, or provenance; the append-only run journal
+remains authoritative for those projections.
+
+Startup still marks every interrupted nonterminal run `run.needs_attention`.
+The presence of a valid binding does not submit a prompt, resolve a permission
+gate, or repeat a tool effect. Automatic continuation is deliberately deferred
+to the next resume slice.
+
 After Pi emits `agent_end`, the desktop posts `{ runId }` to `receiptUrl` with
 the OIDC access token. Only that authoritative response supplies optional
 route, model, cost, time, and capability provenance. Pi event members are not
