@@ -117,9 +117,6 @@ struct ActiveRun {
 struct PiRuntime {
     supervisor: SidecarSupervisor,
     wiring: PiRpcWiring,
-    gateway_url: String,
-    virtual_key: String,
-    model: Option<String>,
 }
 
 pub struct ChatState {
@@ -132,6 +129,7 @@ impl ChatState {
     pub fn new(app: &tauri::AppHandle) -> Result<Self, Box<dyn std::error::Error>> {
         let directory = app.path().app_data_dir()?;
         std::fs::create_dir_all(&directory)?;
+        std::fs::create_dir_all(directory.join("pi-sessions"))?;
         let mut journal = RunJournal::open(directory.join("runs.sqlite3"))?;
         reconcile_interrupted_runs(&mut journal);
         Ok(Self {
@@ -350,7 +348,11 @@ pub async fn chat_queue(
 ) -> Result<(), String> {
     queue_message(
         &state.active,
-        ChatQueueRequest { run_id, delivery, message },
+        ChatQueueRequest {
+            run_id,
+            delivery,
+            message,
+        },
     )
 }
 
@@ -463,13 +465,10 @@ fn coordinate(
     let mut runtime = runtime
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
-    let same_grant = runtime.as_ref().is_some_and(|runtime| {
-        runtime.gateway_url == grant.gateway_url
-            && runtime.virtual_key == grant.virtual_key
-            && runtime.model == grant.model
-    });
-    if !same_grant {
-        *runtime = None;
+    // A local run owns one Pi conversation. Do not carry a previous run's
+    // active session into this prompt.
+    *runtime = None;
+    {
         let root = match std::env::var("MUNIMENT_PI_ROOT") {
             Ok(root) => root,
             Err(_) => {
@@ -500,7 +499,37 @@ fn coordinate(
                 return;
             }
         };
-        let mut config = pi_sidecar_config(executable.to_string_lossy());
+        let session_root = match app.path().app_data_dir() {
+            Ok(path) => path.join("pi-sessions"),
+            Err(_) => {
+                fail(
+                    &app,
+                    &journal,
+                    &mut projector,
+                    &run_id,
+                    &mut seq,
+                    "The agent runtime is unavailable.",
+                    subject.as_deref(),
+                );
+                return;
+            }
+        };
+        let mut config = match pi_sidecar_config(executable.to_string_lossy(), &session_root, None)
+        {
+            Ok(config) => config,
+            Err(_) => {
+                fail(
+                    &app,
+                    &journal,
+                    &mut projector,
+                    &run_id,
+                    &mut seq,
+                    "The agent runtime is unavailable.",
+                    subject.as_deref(),
+                );
+                return;
+            }
+        };
         // This is a scoped LiteLLM virtual key, never a provider credential. It is
         // inherited by the supervised child only and never serialized or logged.
         config
@@ -530,13 +559,7 @@ fn coordinate(
                     return;
                 }
             };
-        *runtime = Some(PiRuntime {
-            supervisor,
-            wiring,
-            gateway_url: grant.gateway_url.clone(),
-            virtual_key: grant.virtual_key.clone(),
-            model: grant.model.clone(),
-        });
+        *runtime = Some(PiRuntime { supervisor, wiring });
     }
     let runtime = runtime.as_ref().expect("runtime was initialized");
     let deadline = std::time::Instant::now() + Duration::from_secs(30);
@@ -605,6 +628,39 @@ fn coordinate(
     *active_adapter
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(Arc::clone(&adapter));
+    let session_root = match app.path().app_data_dir() {
+        Ok(path) => path.join("pi-sessions"),
+        Err(_) => return,
+    };
+    let locator = match transport.session_locator(&session_root, RPC_TIMEOUT) {
+        Ok(locator) => locator,
+        Err(_) => {
+            fail(
+                &app,
+                &journal,
+                &mut projector,
+                &run_id,
+                &mut seq,
+                "The reply could not be started.",
+                subject.as_deref(),
+            );
+            return;
+        }
+    };
+    if append_emit(
+        &app,
+        &journal,
+        &mut projector,
+        &run_id,
+        &mut seq,
+        "runtime.pi_session.bound",
+        json!({"run_id": run_id, "locator": locator.as_str()}),
+        subject.as_deref(),
+    )
+    .is_err()
+    {
+        return;
+    }
     if append_emit(
         &app,
         &journal,
@@ -849,11 +905,8 @@ fn permission_journal_payload(request: &ExtensionUiRequest) -> Value {
             timeout,
         },
     };
-    serde_json::to_value(PermissionGate {
-        gate_id,
-        request,
-    })
-    .expect("permission gate is serializable")
+    serde_json::to_value(PermissionGate { gate_id, request })
+        .expect("permission gate is serializable")
 }
 
 fn close_open_effects(
@@ -1259,19 +1312,22 @@ mod tests {
                 journal.append(1, &envelope).map_err(|_| ())?;
                 assert_eq!(journal.events(&run_id).unwrap().len(), 2);
                 projector.apply(&envelope).map_err(|_| ())?;
-                emitted.push(chat_event(
-                    &run_id,
-                    projector.projection().map_err(|_| ())?,
-                ));
+                emitted.push(chat_event(&run_id, projector.projection().map_err(|_| ())?));
                 Ok(())
             },
         )
         .unwrap();
 
-        assert_eq!(journal.events(&run_id).unwrap()[1].event_type, "permission.requested");
+        assert_eq!(
+            journal.events(&run_id).unwrap()[1].event_type,
+            "permission.requested"
+        );
         let projection = emitted.pop().unwrap();
         assert_eq!(projection.phase, "pending-permission");
-        assert_eq!(projection.pending_permission.unwrap().gate_id, "pi-request-1");
+        assert_eq!(
+            projection.pending_permission.unwrap().gate_id,
+            "pi-request-1"
+        );
 
         let mut append_attempts = 0;
         assert!(coordinate_extension_ui_request(
@@ -1350,10 +1406,7 @@ mod tests {
         );
 
         let entries = history_entries(&mut journal, None).unwrap();
-        let entry = entries
-            .iter()
-            .find(|entry| entry.run_id == run_id)
-            .unwrap();
+        let entry = entries.iter().find(|entry| entry.run_id == run_id).unwrap();
         assert_eq!(entry.phase, "pending-permission");
         let pending = entry.pending_permission.as_ref().unwrap();
         assert_eq!(pending.gate_id, "pi-request-1");
@@ -1374,10 +1427,7 @@ mod tests {
             None,
         );
         let entries = history_entries(&mut journal, None).unwrap();
-        let entry = entries
-            .iter()
-            .find(|entry| entry.run_id == run_id)
-            .unwrap();
+        let entry = entries.iter().find(|entry| entry.run_id == run_id).unwrap();
         assert!(entry.pending_permission.is_none());
         assert_eq!(entry.phase, "thinking");
 
@@ -1511,14 +1561,7 @@ mod tests {
             Some("sub-b"),
         );
 
-        append_test_event(
-            &mut journal,
-            run_legacy,
-            1,
-            "run.started",
-            json!({}),
-            None,
-        );
+        append_test_event(&mut journal, run_legacy, 1, "run.started", json!({}), None);
         append_test_event(
             &mut journal,
             run_legacy,

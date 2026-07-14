@@ -98,11 +98,17 @@ is not release-ready.
 
 ```text
 program = <owned verified revision>/pi/pi[.exe]
-args    = --mode rpc --no-session
+args    = --mode rpc --session-dir <app-owned Pi session root>
 env     = no Pi-specific additions (the supervisor currently inherits the
           desktop process environment); later provider secrets must use a
           scoped channel and never appear in argv or diagnostics
 ```
+
+The session-resume groundwork amends the arguments above to `--mode rpc
+--session-dir <app-data>/pi-sessions` for a new persistent conversation, plus
+`--session <validated-file>` only for an explicit reopen. The app creates and
+owns the root. Rust accepts only a regular JSONL file whose canonical path is
+beneath it, and path failures use redacted diagnostics.
 
 The normal supervisor policy applies: at most five restarts per 60 seconds,
 exponential backoff from 250 ms to 10 seconds, a 30-second startup deadline,
@@ -153,6 +159,19 @@ known rollback identity, and no system Node dependency. First chat use needs a
 download and enough space for staging plus current/previous revisions. Release
 engineering must complete platform signing/notarization and native extraction
 before shipping.
+
+After prompt acceptance, the pinned `get_state` contract supplies
+`data.sessionFile`. Muniment validates that identity and durably binds its
+root-relative filename to the local run with a single typed
+`runtime.pi_session.bound` journal event. The local journal remains the only
+source for rendered history, receipts, and provenance; raw Pi session JSONL is
+runtime recovery state and never crosses the webview boundary. Duplicate or
+conflicting binding and malformed payloads fail closed during reduction.
+
+This decision does not authorize automatic continuation. On startup an
+interrupted run remains `run.needs_attention`, even when it has a binding; no
+prompt, permission answer, or tool is re-executed. Explicit safe continuation
+is deferred to the next slice.
 
 The gated next slice is chat through this supervised Pi process against the
 user's LiteLLM virtual endpoint, with one multiplexing RPC dispatcher, event
