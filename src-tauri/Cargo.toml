@@ -24,5 +24,8 @@ version = "3"
 default-features = false
 features = ["apple-native", "windows-native", "sync-secret-service", "vendored"]
 
+[dev-dependencies]
+tauri = { version = "2", features = ["test"] }
+
 [profile.release]
 strip = true
