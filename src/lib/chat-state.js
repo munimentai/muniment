@@ -63,7 +63,7 @@ export function applyBufferedChatEvents(run, events) {
 
 export function historyMessages(history) {
   return history.flatMap((entry) => [
-    ...(entry.prompt ? [{ role: 'user', text: entry.prompt, attachments: entry.attachments ?? [] }] : []),
+    ...(entry.prompt || entry.attachments?.length ? [{ role: 'user', text: entry.prompt ?? '', attachments: entry.attachments ?? [] }] : []),
     { role: 'assistant', run: { id: entry.runId, phase: entry.phase, text: entry.text, receipt: entry.receipt ?? null, prompt: entry.prompt ?? '', toolActivity: entry.toolActivity ?? [], resumable: entry.resumable === true } },
   ])
 }

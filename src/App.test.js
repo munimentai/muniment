@@ -166,6 +166,28 @@ it('hydrates safe durable attachment chips without paths or hashes', async () =>
   expect(document.body).not.toHaveTextContent('sha256')
 })
 
+it('hydrates durable attachment chips when the prompt is unavailable', async () => {
+  invoke.mockImplementation(async (command) => {
+    if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
+    if (command === 'chat_history') return [{
+      runId: 'restored-without-prompt', prompt: null, phase: 'complete', text: 'Done', receipt: {},
+      toolActivity: [], resumable: false,
+      attachments: [{ displayName: 'evidence.txt', byteLength: 1536 }],
+    }]
+    if (command === 'auth_entitlement_snapshot') return snapshot()
+    if (command === 'auth_devices') return []
+    throw new Error(`unexpected command: ${command}`)
+  })
+  render(App)
+
+  const saved = await screen.findByRole('list', { name: 'Saved attachments' })
+  expect(saved).toHaveTextContent('evidence.txt1.5 KBSaved locally · not sent to model')
+  expect(screen.getByText('Prompt unavailable')).toBeInTheDocument()
+  expect(saved.closest('.user-message')).not.toBeNull()
+  expect(document.body).not.toHaveTextContent('/private/evidence.txt')
+  expect(document.body).not.toHaveTextContent('sha256')
+})
+
 describe('history hydration', () => {
   it('retains projected tool activity in the restored assistant run', () => {
     const toolActivity = [
