@@ -143,10 +143,11 @@ product-approved corpus and are deliberately not invented here.
 
 The safe binding-contract slice is complete: `muniment-core` now validates
 finite 16 kHz mono `float32` utterances and the four regular model files before
-calling an injected offline-recognizer adapter, owns handle teardown on every
+calling a private, C-API-shaped sherpa adapter, owns handle teardown on every
 result path, and copies transcript text before releasing the native result.
-Tests use a fake adapter and require neither model downloads nor native
-libraries. Native v1.13.2 linking/resources, distribution notices, recognizer
+Tests inject a fake at that adapter's C-API seam and exercise configuration,
+native failure mapping, and cleanup without model downloads or native libraries.
+Native v1.13.2 linking/resources, distribution notices, recognizer
 construction from the installed revision, capture/UI/VAD, and target-hardware
 validation remain outstanding.
 
