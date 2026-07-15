@@ -35,24 +35,59 @@ const SIGN_VARS = ["AZURE_TENANT_ID", "AZURE_CLIENT_ID", "AZURE_CLIENT_SECRET",
 const signing = SIGN_VARS.every((v) => process.env[v]);
 
 let signArgs = [];
+// Microsoft's `sign` dotnet global tool signs on its own (no signtool) and
+// authenticates the service principal via Azure.Identity DefaultAzureCredential,
+// which reads AZURE_TENANT_ID/CLIENT_ID/CLIENT_SECRET from the env (no az login).
+// .NET 8+ SDK and `sign` are baked into the Windows CI template.
+const signSubArgs = (file) => [
+  "code", "artifact-signing",
+  "--verbosity", "warning",
+  "--timestamp-url", "http://timestamp.acs.microsoft.com",
+  "--artifact-signing-endpoint", process.env.AZURE_SIGNING_ENDPOINT,
+  "--artifact-signing-account", process.env.AZURE_SIGNING_ACCOUNT,
+  "--artifact-signing-certificate-profile", process.env.AZURE_SIGNING_PROFILE,
+  file,
+];
 if (signing) {
-  // artifact-signing-cli is the renamed trusted-signing-cli; it wraps signtool
-  // (Windows SDK, on the CI template) and cargo is already present, so no extra
-  // toolchain is provisioned.
-  const install = spawnSync("cargo", ["install", "artifact-signing-cli"], { stdio: "inherit" });
-  if (install.status !== 0) process.exit(install.status ?? 1);
-  const signCommand = `artifact-signing-cli -e ${process.env.AZURE_SIGNING_ENDPOINT}`
-    + ` -a ${process.env.AZURE_SIGNING_ACCOUNT} -c ${process.env.AZURE_SIGNING_PROFILE} %1`;
-  signArgs = ["--config", JSON.stringify({ bundle: { windows: { signCommand } } })];
-  console.log("windows signing ENABLED (Azure Artifact Signing)");
+  // Ensure the signing toolchain (.NET SDK + `sign`). Self-provisioning keeps the
+  // build working without modifying the shared Windows CI template; baking these
+  // into the template later just turns these installs into fast no-ops.
+  const onPath = (exe) => spawnSync("where", [exe], { encoding: "utf8" }).status === 0;
+  if (!onPath("dotnet")) {
+    console.log("installing .NET SDK (build-time; bake into the template to skip)...");
+    const dotnetDir = join(tmpdir(), "dotnet");
+    const r = spawnSync("powershell", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command",
+      `Invoke-WebRequest -UseBasicParsing https://dot.net/v1/dotnet-install.ps1 -OutFile $env:TEMP\\di.ps1; `
+      + `& $env:TEMP\\di.ps1 -Channel 8.0 -InstallDir '${dotnetDir}' -NoPath`], { stdio: "inherit" });
+    if (r.status !== 0) process.exit(r.status ?? 1);
+    process.env.DOTNET_ROOT = dotnetDir;
+    process.env.PATH = `${dotnetDir};${process.env.PATH}`;
+  }
+  if (!onPath("sign")) {
+    console.log("installing dotnet `sign` tool (build-time)...");
+    const signDir = join(tmpdir(), "signtools");
+    const r = spawnSync("dotnet", ["tool", "install", "--tool-path", signDir, "--prerelease", "sign"],
+      { stdio: "inherit" });
+    if (r.status !== 0) process.exit(r.status ?? 1);
+    process.env.PATH = `${signDir};${process.env.PATH}`;
+  }
 
-  // Preflight: probe the signing toolchain, then do ONE real signing call on a
-  // throwaway copy with output inherited, so the actual artifact-signing-cli
-  // error surfaces (tauri's signCommand reports only "failed to run …") and we
-  // fail before the ~5-min app compile. artifact-signing-cli needs signtool from
-  // Windows 11 SDK 10.0.26100+ and authenticates via the AZURE_* env vars.
-  for (const [cmd, cmdArgs] of [["where", ["signtool"]], ["where", ["dotnet"]],
-      ["dotnet", ["--version"]], ["where", ["az"]], ["where", ["artifact-signing-cli"]]]) {
+  // Tauri signs the app .exe (before packaging) and the NSIS installer with this
+  // custom command; %1 is each file path.
+  const signCommand = "sign code artifact-signing --verbosity warning"
+    + " --timestamp-url http://timestamp.acs.microsoft.com"
+    + ` --artifact-signing-endpoint ${process.env.AZURE_SIGNING_ENDPOINT}`
+    + ` --artifact-signing-account ${process.env.AZURE_SIGNING_ACCOUNT}`
+    + ` --artifact-signing-certificate-profile ${process.env.AZURE_SIGNING_PROFILE} %1`;
+  signArgs = ["--config", JSON.stringify({ bundle: { windows: { signCommand } } })];
+  console.log("windows signing ENABLED (Azure Artifact Signing via dotnet `sign`)");
+
+  // Preflight: confirm the toolchain and do ONE real test-sign on a throwaway
+  // copy with output inherited, so the real `sign` error surfaces (tauri's
+  // signCommand only reports "failed to run …") and we fail before the ~5-min
+  // app compile.
+  for (const [cmd, cmdArgs] of [["where", ["dotnet"]], ["dotnet", ["--version"]],
+      ["where", ["sign"]]]) {
     const r = spawnSync(cmd, cmdArgs, { encoding: "utf8" });
     console.log(`preflight: ${cmd} ${cmdArgs.join(" ")} -> rc=${r.status} `
       + `${((r.stdout || "") + (r.stderr || "")).replace(/\s+/g, " ").trim()}`);
@@ -60,11 +95,9 @@ if (signing) {
   const probeTarget = join(tmpdir(), "signprobe.exe");
   copyFileSync(process.execPath, probeTarget);
   console.log("preflight: test-signing a throwaway copy to surface the real error...");
-  const probe = spawnSync("artifact-signing-cli",
-    ["-e", process.env.AZURE_SIGNING_ENDPOINT, "-a", process.env.AZURE_SIGNING_ACCOUNT,
-     "-c", process.env.AZURE_SIGNING_PROFILE, probeTarget], { stdio: "inherit" });
+  const probe = spawnSync("sign", signSubArgs(probeTarget), { stdio: "inherit" });
   if (probe.status !== 0) {
-    console.error(`signing preflight FAILED (artifact-signing-cli rc=${probe.status}) — see output above`);
+    console.error(`signing preflight FAILED (sign rc=${probe.status}) — see output above`);
     process.exit(probe.status ?? 1);
   }
   console.log("signing preflight OK");
@@ -74,9 +107,7 @@ if (signing) {
 
 const signFile = (file) => {
   if (!signing) return;
-  const result = spawnSync("artifact-signing-cli",
-    ["-e", process.env.AZURE_SIGNING_ENDPOINT, "-a", process.env.AZURE_SIGNING_ACCOUNT,
-     "-c", process.env.AZURE_SIGNING_PROFILE, file], { stdio: "inherit" });
+  const result = spawnSync("sign", signSubArgs(file), { stdio: "inherit" });
   if (result.error) throw result.error;
   if (result.status !== 0) process.exit(result.status ?? 1);
 };
