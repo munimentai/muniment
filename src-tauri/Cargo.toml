@@ -4,6 +4,7 @@ version = "0.0.1"
 edition = "2021"
 
 [build-dependencies]
+sha2 = "0.10"
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
@@ -26,6 +27,7 @@ default-features = false
 features = ["apple-native", "windows-native", "sync-secret-service", "vendored"]
 
 [dev-dependencies]
+sha2 = "0.10"
 tauri = { version = "2", features = ["test"] }
 
 [[example]]

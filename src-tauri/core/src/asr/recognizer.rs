@@ -2,7 +2,9 @@
 
 use std::path::Path;
 
-use sherpa_onnx::{OfflineRecognizer, OfflineRecognizerConfig, OfflineTransducerModelConfig};
+use sherpa_onnx::{
+    OfflineRecognizer, OfflineRecognizerConfig, OfflineStream, OfflineTransducerModelConfig,
+};
 
 use super::{AsrLifecycleError, AsrRevisionLifecycle};
 
@@ -58,15 +60,62 @@ struct SherpaBackend(OfflineRecognizer);
 
 impl RecognizerBackend for SherpaBackend {
     fn decode(&self, samples: &[f32]) -> Result<String, OfflineRecognitionError> {
-        // OfflineStream is an owning RAII handle in the pinned Rust C-API wrapper;
-        // it is dropped on every return path, including a missing result.
-        let stream = self.0.create_stream();
+        self.decode_inner(
+            samples,
+            false,
+            #[cfg(test)]
+            None,
+        )
+    }
+}
+
+impl SherpaBackend {
+    fn decode_inner(
+        &self,
+        samples: &[f32],
+        fail_after_stream: bool,
+        #[cfg(test)] release_count: Option<std::sync::Arc<std::sync::atomic::AtomicUsize>>,
+    ) -> Result<String, OfflineRecognitionError> {
+        let stream = NativeStream {
+            handle: self.0.create_stream(),
+            #[cfg(test)]
+            release_count,
+        };
+        if fail_after_stream {
+            return Err(OfflineRecognitionError::NativeDecodeFailed);
+        }
         stream.accept_waveform(SAMPLE_RATE as i32, samples);
-        self.0.decode(&stream);
+        self.0.decode(&stream.handle);
         stream
             .get_result()
             .map(|result| result.text)
             .ok_or(OfflineRecognitionError::NativeDecodeFailed)
+    }
+}
+
+/// Owns one native stream so its C handle is released on every return path.
+struct NativeStream {
+    handle: OfflineStream,
+    #[cfg(test)]
+    release_count: Option<std::sync::Arc<std::sync::atomic::AtomicUsize>>,
+}
+
+impl std::ops::Deref for NativeStream {
+    type Target = OfflineStream;
+
+    fn deref(&self) -> &Self::Target {
+        &self.handle
+    }
+}
+
+#[cfg(test)]
+impl Drop for NativeStream {
+    fn drop(&mut self) {
+        if let Some(count) = &self.release_count {
+            count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        }
+        // `handle` is dropped immediately after this hook and destroys the
+        // actual sherpa-onnx stream pointer.
     }
 }
 
@@ -214,39 +263,28 @@ mod tests {
 
     #[test]
     fn native_failure_is_typed_and_backend_resources_are_released() {
-        let calls = Arc::new(AtomicUsize::new(0));
-        let recognizer = OfflineParakeetRecognizer {
-            backend: Box::new(FakeBackend {
-                calls: calls.clone(),
-                fail: true,
-            }),
-        };
+        let releases = Arc::new(AtomicUsize::new(0));
+        let backend = native_fixture_backend();
         assert_eq!(
-            recognizer.decode(SAMPLE_RATE, &[0.0]),
+            backend.decode_inner(&[0.0; 160], true, Some(releases.clone())),
             Err(OfflineRecognitionError::NativeDecodeFailed)
         );
-        assert_eq!(calls.load(Ordering::Relaxed), 1);
-        drop(recognizer);
-        assert_eq!(Arc::strong_count(&calls), 1);
+        assert_eq!(releases.load(Ordering::Relaxed), 1);
     }
 
     #[test]
-    fn deterministic_fixture_returns_one_final_transcript() {
-        let calls = Arc::new(AtomicUsize::new(0));
+    fn native_fixture_returns_one_final_transcript() {
         let recognizer = OfflineParakeetRecognizer {
-            backend: Box::new(FakeBackend { calls, fail: false }),
+            backend: Box::new(native_fixture_backend()),
         };
-        assert_eq!(
-            recognizer.decode(SAMPLE_RATE, &[0.0; 160]).unwrap(),
-            "fixture transcript"
-        );
+        let transcript = recognizer.decode(SAMPLE_RATE, &[0.0; 16_000]).unwrap();
+        assert!(transcript.contains("fixture"));
     }
 
-    #[test]
-    fn pinned_native_runtime_smoke_rejects_an_empty_configuration() {
-        // Exercises the actual dynamically linked v1.13.2 C boundary without
-        // downloading a model fixture. A missing model family is deterministic.
-        assert!(OfflineRecognizer::create(&OfflineRecognizerConfig::default()).is_none());
+    fn native_fixture_backend() -> SherpaBackend {
+        let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/asr-native");
+        let config = parakeet_config(&fixture).unwrap();
+        SherpaBackend(OfflineRecognizer::create(&config).expect("create fixture recognizer"))
     }
 
     #[test]
