@@ -26,7 +26,8 @@ grep -Fq 'Microsoft ONNX Runtime' docs/third-party/sherpa-onnx-NOTICE.md
 grep -Fq '"asr-runtime/*": "."' src-tauri/tauri.conf.json
 grep -Fq 'sherpa-onnx-LICENSE.txt' src-tauri/tauri.conf.json
 grep -Fq 'onnxruntime-LICENSE.txt' src-tauri/tauri.conf.json
-grep -Fq 'sherpa-onnx = { version = "=1.13.2"' src-tauri/core/Cargo.toml
+grep -Fq 'libloading = { version = "0.8", optional = true }' src-tauri/core/Cargo.toml
+grep -Fq 'CStr::from_ptr(version).to_bytes() != b"1.13.2"' src-tauri/core/src/asr/recognition.rs
 grep -Fq 'from_verified_revision' src-tauri/core/src/asr/recognition.rs
 grep -Fq 'unsupported desktop ASR target' src-tauri/build.rs
 test -x test/stage-asr-runtime.sh

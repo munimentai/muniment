@@ -1,11 +1,15 @@
 //! Rust-owned, offline-only boundary around a native Parakeet recognizer.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use super::VerifiedParakeetRevision;
 
 #[cfg(feature = "native-asr")]
-use sherpa_onnx::{OfflineRecognizer, OfflineRecognizerConfig, OfflineTransducerModelConfig};
+use super::sherpa_ffi;
+#[cfg(feature = "native-asr")]
+use std::ffi::{CStr, CString};
+#[cfg(feature = "native-asr")]
+use std::sync::{Arc, LazyLock};
 
 pub const SAMPLE_RATE: u32 = 16_000;
 
@@ -42,41 +46,227 @@ pub trait OfflineAsrNative {
 /// Pinned, in-process sherpa-onnx v1.13.2 C-API adapter used by desktop builds.
 /// The wrapper owns the C recognizer; each decode owns a C stream and result.
 #[cfg(feature = "native-asr")]
-pub struct SherpaOnnxNative;
+pub struct SherpaOnnxNative {
+    api: Result<Arc<SherpaApi>, NativeAsrError>,
+}
+
+#[cfg(feature = "native-asr")]
+struct SherpaApi {
+    _library: libloading::Library,
+    create_recognizer: sherpa_ffi::CreateRecognizer,
+    destroy_recognizer: sherpa_ffi::DestroyRecognizer,
+    create_stream: sherpa_ffi::CreateStream,
+    destroy_stream: sherpa_ffi::DestroyStream,
+    accept_waveform: sherpa_ffi::AcceptWaveform,
+    decode: sherpa_ffi::Decode,
+    get_result: sherpa_ffi::GetResult,
+    destroy_result: sherpa_ffi::DestroyResult,
+}
+
+#[cfg(feature = "native-asr")]
+pub struct SherpaRecognizer {
+    api: Arc<SherpaApi>,
+    ptr: *const sherpa_ffi::Recognizer,
+}
+
+#[cfg(feature = "native-asr")]
+impl Drop for SherpaRecognizer {
+    fn drop(&mut self) {
+        // SAFETY: this pointer was returned by this API instance and is owned here.
+        unsafe { (self.api.destroy_recognizer)(self.ptr) };
+    }
+}
+
+#[cfg(feature = "native-asr")]
+impl SherpaOnnxNative {
+    fn packaged_runtime_directory() -> Result<PathBuf, NativeAsrError> {
+        let executable = std::env::current_exe().map_err(|_| NativeAsrError::RuntimeUnavailable)?;
+        let directory = executable
+            .parent()
+            .ok_or(NativeAsrError::RuntimeUnavailable)?;
+        #[cfg(target_os = "linux")]
+        return Ok(directory.join("../lib/muniment"));
+        #[cfg(target_os = "macos")]
+        return Ok(directory.join("../Resources"));
+        #[cfg(target_os = "windows")]
+        return Ok(directory.to_owned());
+        #[allow(unreachable_code)]
+        Err(NativeAsrError::RuntimeUnavailable)
+    }
+
+    fn packaged() -> Self {
+        Self::load_from(&Self::packaged_runtime_directory().unwrap_or_else(|_| PathBuf::new()))
+    }
+
+    /// Loads and validates the packaged C API without allowing model paths to
+    /// influence native library resolution.
+    pub fn load_from(runtime_directory: &Path) -> Self {
+        Self {
+            api: load_api(runtime_directory),
+        }
+    }
+}
+
+#[cfg(feature = "native-asr")]
+fn load_api(directory: &Path) -> Result<Arc<SherpaApi>, NativeAsrError> {
+    #[cfg(target_os = "windows")]
+    const LIBRARY: &str = "sherpa-onnx-c-api.dll";
+    #[cfg(target_os = "macos")]
+    const LIBRARY: &str = "libsherpa-onnx-c-api.dylib";
+    #[cfg(target_os = "linux")]
+    const LIBRARY: &str = "libsherpa-onnx-c-api.so";
+
+    let path = directory.join(LIBRARY);
+    if !path.is_file() {
+        return Err(NativeAsrError::RuntimeUnavailable);
+    }
+    // SAFETY: every symbol is copied as a function pointer while `library` is
+    // retained by SherpaApi for longer than any handle or call.
+    unsafe {
+        let library =
+            libloading::Library::new(&path).map_err(|_| NativeAsrError::IncompatibleRuntime)?;
+        macro_rules! symbol {
+            ($name:literal, $ty:ty) => {
+                *library
+                    .get::<$ty>(concat!($name, "\0").as_bytes())
+                    .map_err(|_| NativeAsrError::IncompatibleRuntime)?
+            };
+        }
+        let version = symbol!("SherpaOnnxGetVersionStr", sherpa_ffi::GetString);
+        let commit = symbol!("SherpaOnnxGetGitSha1", sherpa_ffi::GetString);
+        let version = version();
+        let commit = commit();
+        if version.is_null()
+            || commit.is_null()
+            || CStr::from_ptr(version).to_bytes() != b"1.13.2"
+            || CStr::from_ptr(commit).to_bytes() != b"13d0ae6c"
+        {
+            return Err(NativeAsrError::IncompatibleRuntime);
+        }
+        Ok(Arc::new(SherpaApi {
+            create_recognizer: symbol!(
+                "SherpaOnnxCreateOfflineRecognizer",
+                sherpa_ffi::CreateRecognizer
+            ),
+            destroy_recognizer: symbol!(
+                "SherpaOnnxDestroyOfflineRecognizer",
+                sherpa_ffi::DestroyRecognizer
+            ),
+            create_stream: symbol!("SherpaOnnxCreateOfflineStream", sherpa_ffi::CreateStream),
+            destroy_stream: symbol!("SherpaOnnxDestroyOfflineStream", sherpa_ffi::DestroyStream),
+            accept_waveform: symbol!(
+                "SherpaOnnxAcceptWaveformOffline",
+                sherpa_ffi::AcceptWaveform
+            ),
+            decode: symbol!("SherpaOnnxDecodeOfflineStream", sherpa_ffi::Decode),
+            get_result: symbol!(
+                "SherpaOnnxGetOfflineStreamResultAsJson",
+                sherpa_ffi::GetResult
+            ),
+            destroy_result: symbol!(
+                "SherpaOnnxDestroyOfflineStreamResultJson",
+                sherpa_ffi::DestroyResult
+            ),
+            _library: library,
+        }))
+    }
+}
 
 #[cfg(feature = "native-asr")]
 impl OfflineAsrNative for SherpaOnnxNative {
-    type Handle = OfflineRecognizer;
+    type Handle = SherpaRecognizer;
 
     fn construct(&self, paths: &ParakeetModelPaths) -> Result<Self::Handle, NativeAsrError> {
-        fn path(path: &std::path::Path) -> Result<String, NativeAsrError> {
-            path.to_str()
-                .map(ToOwned::to_owned)
-                .ok_or(NativeAsrError::ConstructionFailed)
+        fn path(path: &Path) -> Result<CString, NativeAsrError> {
+            CString::new(path.to_string_lossy().as_bytes())
+                .map_err(|_| NativeAsrError::ConstructionFailed)
         }
-
-        let mut config = OfflineRecognizerConfig::default();
-        config.model_config.transducer = OfflineTransducerModelConfig {
-            encoder: Some(path(&paths.encoder)?),
-            decoder: Some(path(&paths.decoder)?),
-            joiner: Some(path(&paths.joiner)?),
+        let api = self.api.as_ref().map_err(|error| *error)?.clone();
+        let encoder = path(&paths.encoder)?;
+        let decoder = path(&paths.decoder)?;
+        let joiner = path(&paths.joiner)?;
+        let tokens = path(&paths.tokens)?;
+        let provider = CString::new("cpu").expect("literal");
+        let model_type = CString::new("nemo_transducer").expect("literal");
+        let decoding = CString::new("greedy_search").expect("literal");
+        let config = sherpa_ffi::RecognizerConfig {
+            feat_config: sherpa_ffi::FeatureConfig {
+                sample_rate: SAMPLE_RATE as i32,
+                feature_dim: 80,
+            },
+            model_config: sherpa_ffi::ModelConfig {
+                transducer: sherpa_ffi::Transducer {
+                    encoder: encoder.as_ptr(),
+                    decoder: decoder.as_ptr(),
+                    joiner: joiner.as_ptr(),
+                },
+                tokens: tokens.as_ptr(),
+                model_type: model_type.as_ptr(),
+                provider: provider.as_ptr(),
+                num_threads: 2,
+                ..Default::default()
+            },
+            decoding_method: decoding.as_ptr(),
+            max_active_paths: 4,
+            ..Default::default()
         };
-        config.model_config.tokens = Some(path(&paths.tokens)?);
-        config.model_config.model_type = Some("nemo_transducer".into());
-        config.model_config.provider = Some("cpu".into());
-        config.model_config.num_threads = 2;
-        config.decoding_method = Some("greedy_search".into());
-        OfflineRecognizer::create(&config).ok_or(NativeAsrError::ConstructionFailed)
+        // SAFETY: configuration strings remain alive for the duration of the call.
+        let ptr = unsafe { (api.create_recognizer)(&config) };
+        if ptr.is_null() {
+            Err(NativeAsrError::ConstructionFailed)
+        } else {
+            Ok(SherpaRecognizer { api, ptr })
+        }
     }
 
     fn decode(&self, handle: &mut Self::Handle, samples: &[f32]) -> Result<String, NativeAsrError> {
-        let stream = handle.create_stream();
-        stream.accept_waveform(SAMPLE_RATE as i32, samples);
-        handle.decode(&stream);
-        stream
-            .get_result()
-            .map(|result| result.text)
-            .ok_or(NativeAsrError::DecodeFailed)
+        // SAFETY: all pointers belong to the same retained API instance.
+        unsafe {
+            let stream = (handle.api.create_stream)(handle.ptr);
+            if stream.is_null() {
+                return Err(NativeAsrError::DecodeFailed);
+            }
+            struct StreamGuard<'a> {
+                api: &'a SherpaApi,
+                ptr: *const sherpa_ffi::Stream,
+            }
+            impl Drop for StreamGuard<'_> {
+                fn drop(&mut self) {
+                    unsafe { (self.api.destroy_stream)(self.ptr) }
+                }
+            }
+            let stream = StreamGuard {
+                api: &handle.api,
+                ptr: stream,
+            };
+            let length = i32::try_from(samples.len()).map_err(|_| NativeAsrError::DecodeFailed)?;
+            (handle.api.accept_waveform)(stream.ptr, SAMPLE_RATE as i32, samples.as_ptr(), length);
+            (handle.api.decode)(handle.ptr, stream.ptr);
+            let result = (handle.api.get_result)(stream.ptr);
+            if result.is_null() {
+                return Err(NativeAsrError::DecodeFailed);
+            }
+            struct ResultGuard<'a> {
+                api: &'a SherpaApi,
+                ptr: *const std::ffi::c_char,
+            }
+            impl Drop for ResultGuard<'_> {
+                fn drop(&mut self) {
+                    unsafe { (self.api.destroy_result)(self.ptr) }
+                }
+            }
+            let result = ResultGuard {
+                api: &handle.api,
+                ptr: result,
+            };
+            let json = CStr::from_ptr(result.ptr)
+                .to_str()
+                .map_err(|_| NativeAsrError::DecodeFailed)?;
+            serde_json::from_str::<serde_json::Value>(json)
+                .ok()
+                .and_then(|value| value.get("text")?.as_str().map(ToOwned::to_owned))
+                .ok_or(NativeAsrError::DecodeFailed)
+        }
     }
 
     fn destroy(&self, handle: Self::Handle) {
@@ -170,7 +360,7 @@ impl OfflineParakeetRecognizer<'static, SherpaOnnxNative> {
         revision: &VerifiedParakeetRevision,
     ) -> Result<Self, AsrRecognitionError> {
         // The adapter is stateless and lives for the process lifetime.
-        static NATIVE: SherpaOnnxNative = SherpaOnnxNative;
+        static NATIVE: LazyLock<SherpaOnnxNative> = LazyLock::new(SherpaOnnxNative::packaged);
         Self::new(&NATIVE, revision)
     }
 }
@@ -197,14 +387,41 @@ mod tests {
 
     #[cfg(feature = "native-asr")]
     #[test]
-    fn loads_the_pinned_native_runtime() {
-        use std::ffi::CStr;
+    fn production_loader_reports_absent_and_incompatible_runtime() {
+        let missing = SherpaOnnxNative::load_from(Path::new("definitely-not-an-asr-runtime"));
+        let revision = verified_for_test(Path::new("private/model"));
+        assert!(matches!(
+            OfflineParakeetRecognizer::new(&missing, &revision),
+            Err(AsrRecognitionError::RuntimeUnavailable)
+        ));
 
-        // SAFETY: these pinned C-API functions return process-lifetime strings.
-        let version = unsafe { CStr::from_ptr(sherpa_onnx_sys::SherpaOnnxGetVersionStr()) };
-        let commit = unsafe { CStr::from_ptr(sherpa_onnx_sys::SherpaOnnxGetGitSha1()) };
-        assert_eq!(version.to_bytes(), b"1.13.2");
-        assert_eq!(commit.to_bytes(), b"13d0ae6c");
+        let temporary =
+            std::env::temp_dir().join(format!("muniment-incompatible-{}", std::process::id()));
+        std::fs::create_dir_all(&temporary).unwrap();
+        let library = temporary.join(if cfg!(target_os = "windows") {
+            "sherpa-onnx-c-api.dll"
+        } else if cfg!(target_os = "macos") {
+            "libsherpa-onnx-c-api.dylib"
+        } else {
+            "libsherpa-onnx-c-api.so"
+        });
+        std::fs::copy(std::env::current_exe().unwrap(), &library).unwrap();
+        let incompatible = SherpaOnnxNative::load_from(&temporary);
+        assert!(matches!(
+            OfflineParakeetRecognizer::new(&incompatible, &revision),
+            Err(AsrRecognitionError::IncompatibleRuntime)
+        ));
+        std::fs::remove_dir_all(temporary).unwrap();
+    }
+
+    #[cfg(feature = "native-asr")]
+    #[test]
+    fn staged_runtime_has_the_pinned_compatible_c_api() {
+        let Some(directory) = std::env::var_os("SHERPA_ONNX_LIB_DIR") else {
+            return;
+        };
+        let native = SherpaOnnxNative::load_from(Path::new(&directory));
+        assert_eq!(native.api.as_ref().map(|_| ()), Ok(()));
     }
 
     struct FakeNative {

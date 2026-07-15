@@ -3,6 +3,8 @@
 pub mod acquisition;
 pub mod install;
 pub mod recognition;
+#[cfg(feature = "native-asr")]
+mod sherpa_ffi;
 
 use std::fs::{self, File, OpenOptions};
 use std::io::{BufReader, Read, Write};
