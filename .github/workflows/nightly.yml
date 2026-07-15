@@ -91,7 +91,7 @@ jobs:
 
           build='test/stage-asr-runtime.sh linux && npm ci --no-audit --no-fund && SHERPA_ONNX_LIB_DIR="$PWD/src-tauri/asr-runtime" npm run tauri build && test/bundle-asr-runtime.sh linux'
           if [ "$PLATFORM" = "windows" ]; then
-            build='test/stage-asr-runtime.sh windows && npm ci --no-audit --no-fund && SHERPA_ONNX_LIB_DIR=$PWD/src-tauri/asr-runtime node .github/build-windows-installers.mjs && powershell.exe -NoProfile -ExecutionPolicy Bypass -File test/windows-installers.ps1 && test/bundle-asr-runtime.sh windows'
+            build=''
           fi
           if [ "$PLATFORM" = "macos" ]; then
             build='test/stage-asr-runtime.sh macos-universal && npm ci --no-audit --no-fund && rustup target add aarch64-apple-darwin && SHERPA_ONNX_LIB_DIR="$PWD/src-tauri/asr-runtime" npm run tauri build -- --target universal-apple-darwin --bundles app && test/bundle-asr-runtime.sh macos && ditto -c -k --sequesterRsrc --keepParent src-tauri/target/universal-apple-darwin/release/bundle/macos/muniment.app src-tauri/target/universal-apple-darwin/release/bundle/macos/muniment.app.zip'
@@ -106,9 +106,9 @@ jobs:
           # so hit it most).
           cmd="git fetch --depth 1 origin $SOURCE_SHA && git checkout --detach $SOURCE_SHA && $build && node .github/upload-nightly-assets.mjs $REPO_TOKEN $REPOSITORY $SOURCE_SHA $PLATFORM"
           # desktop-ci invokes Windows commands through cmd.exe; enter Git Bash
-          # explicitly for the shell staging scripts and POSIX environment syntax.
+          # through a script so PowerShell never parses an inner && expression.
           if [ "$PLATFORM" = "windows" ]; then
-            cmd="\"%ProgramFiles%\\Git\\bin\\bash.exe\" -lc \"$cmd\""
+            cmd="\"%ProgramFiles%\\Git\\bin\\bash.exe\" .github/windows-desktop-ci.sh nightly $SOURCE_SHA $REPO_TOKEN $REPOSITORY $PLATFORM"
           fi
           repo_url="https://x-access-token:${REPO_TOKEN}@github.com/${REPOSITORY}"
           ssh_cmd="sudo desktop-ci $PLATFORM --repo '$repo_url' --ref 'main' --cmd '$cmd'"

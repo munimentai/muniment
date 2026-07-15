@@ -140,13 +140,13 @@ jobs:
 
           cmd="test/stage-asr-runtime.sh $PLATFORM && SHERPA_ONNX_LIB_DIR=\"\$PWD/src-tauri/asr-runtime\" cargo test --manifest-path src-tauri/Cargo.toml --locked --all-targets"
           # desktop-ci invokes Windows commands through cmd.exe; enter Git Bash
-          # explicitly for the shell staging script and POSIX environment syntax.
+          # through a script so PowerShell never parses an inner && expression.
           if [ "$PLATFORM" = "windows" ]; then
-            cmd='"%ProgramFiles%\Git\bin\bash.exe" -lc "test/stage-asr-runtime.sh windows && SHERPA_ONNX_LIB_DIR=$PWD/src-tauri/asr-runtime cargo test --manifest-path src-tauri/Cargo.toml --locked --all-targets"'
+            cmd='"%ProgramFiles%\Git\bin\bash.exe" .github/windows-desktop-ci.sh preflight'
           fi
           # macOS ships a universal app — test the host and preflight its arm64 slice.
           if [ "$PLATFORM" = "macos" ]; then
-            cmd='test/stage-asr-runtime.sh macos-$(uname -m | sed s/x86_64/x64/) && SHERPA_ONNX_LIB_DIR="$PWD/src-tauri/asr-runtime" cargo test --manifest-path src-tauri/Cargo.toml --locked --all-targets && rustup target add aarch64-apple-darwin && cargo check --manifest-path src-tauri/Cargo.toml --locked --all-targets --target aarch64-apple-darwin'
+            cmd='test/stage-asr-runtime.sh macos-$(uname -m | sed s/x86_64/x64/) && cargo build --manifest-path src-tauri/Cargo.toml --locked --example sidecar-test-stub && SHERPA_ONNX_LIB_DIR="$PWD/src-tauri/asr-runtime" cargo test --manifest-path src-tauri/Cargo.toml --locked --all-targets && rustup target add aarch64-apple-darwin && cargo check --manifest-path src-tauri/Cargo.toml --locked --all-targets --target aarch64-apple-darwin'
           fi
           repo_url="https://x-access-token:${REPO_TOKEN}@github.com/${REPOSITORY}"
 
@@ -190,7 +190,7 @@ jobs:
           # macOS: .app only — dmg bundling needs a GUI session (release-time step)
           cmd='test/stage-asr-runtime.sh linux && SHERPA_ONNX_LIB_DIR="$PWD/src-tauri/asr-runtime" cargo test --manifest-path src-tauri/Cargo.toml --locked && npm ci --no-audit --no-fund && SHERPA_ONNX_LIB_DIR="$PWD/src-tauri/asr-runtime" npm run tauri build && test/bundle-asr-runtime.sh linux'
           if [ "$PLATFORM" = "windows" ]; then
-            cmd='"%ProgramFiles%\Git\bin\bash.exe" -lc "test/stage-asr-runtime.sh windows && npm ci --no-audit --no-fund && SHERPA_ONNX_LIB_DIR=$PWD/src-tauri/asr-runtime node .github/build-windows-installers.mjs && powershell.exe -NoProfile -ExecutionPolicy Bypass -File test/windows-installers.ps1 && test/bundle-asr-runtime.sh windows"'
+            cmd='"%ProgramFiles%\Git\bin\bash.exe" .github/windows-desktop-ci.sh build'
           fi
           if [ "$PLATFORM" = "macos" ]; then
             cmd='test/stage-asr-runtime.sh macos-universal && npm ci --no-audit --no-fund && rustup target add aarch64-apple-darwin && SHERPA_ONNX_LIB_DIR="$PWD/src-tauri/asr-runtime" npm run tauri build -- --target universal-apple-darwin --bundles app && test/bundle-asr-runtime.sh macos'
