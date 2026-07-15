@@ -4,6 +4,12 @@ on:
   schedule:
     - cron: "0 5 * * *"
   workflow_dispatch:
+    inputs:
+      platform:
+        description: "Which platform(s) to build (targeted re-runs). Non-'all' skips publish."
+        type: choice
+        default: all
+        options: [all, linux, windows, macos]
 
 permissions:
   contents: write
@@ -58,7 +64,8 @@ jobs:
       fail-fast: false
       max-parallel: 1
       matrix:
-        platform: [linux, windows, macos]
+        # Full matrix on schedule / platform=all; a single platform on a targeted dispatch.
+        platform: ${{ fromJSON((github.event.inputs.platform == '' || github.event.inputs.platform == 'all') && '["linux","windows","macos"]' || format('["{0}"]', github.event.inputs.platform)) }}
     steps:
       - name: Build and upload (${{ matrix.platform }}) via desktop-ci
         env:
@@ -124,6 +131,8 @@ jobs:
 
   publish:
     needs: [prepare, build]
+    # Skip on a single-platform targeted run — the release asset-set check needs all platforms.
+    if: github.event.inputs.platform == '' || github.event.inputs.platform == 'all'
     runs-on: self-hosted
     steps:
       - name: Finalize rolling pre-release
