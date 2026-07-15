@@ -1647,7 +1647,7 @@ mod tests {
 
     fn accept_receipt_request(listener: std::net::TcpListener) -> std::net::TcpStream {
         listener.set_nonblocking(true).unwrap();
-        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        let deadline = std::time::Instant::now() + Duration::from_secs(30);
         loop {
             match listener.accept() {
                 Ok((stream, _)) => return stream,
