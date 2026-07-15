@@ -153,6 +153,9 @@ fn pi_resume(args: Vec<String>) {
             ),
             "prompt" => {
                 if !session_file.exists() {
+                    if let Some(parent) = session_file.parent() {
+                        fs::create_dir_all(parent).unwrap();
+                    }
                     fs::write(&session_file, "{}\n").unwrap();
                 }
                 if let Ok(path) = std::env::var("PI_RESUME_STUB_PROMPTS") {
