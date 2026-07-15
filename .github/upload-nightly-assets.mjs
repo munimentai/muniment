@@ -27,9 +27,15 @@ const api = async (url, options = {}) => {
   return response;
 };
 
+// macOS builds a universal (x86_64+arm64) app, which tauri writes under the
+// universal-apple-darwin target dir rather than the default release dir.
+const bundleBase = platform === "macos"
+  ? join("src-tauri", "target", "universal-apple-darwin", "release", "bundle")
+  : join("src-tauri", "target", "release", "bundle");
+
 const release = await (await api(`https://api.github.com/repos/${repository}/releases/tags/nightly`)).json();
 for (const [directory, suffix, excludeSuffix] of specs[platform]) {
-  const bundleDirectory = join("src-tauri", "target", "release", "bundle", directory);
+  const bundleDirectory = join(bundleBase, directory);
   const matches = (await readdir(bundleDirectory)).filter(
     (name) => name.endsWith(suffix) && (!excludeSuffix || !name.endsWith(excludeSuffix)),
   );

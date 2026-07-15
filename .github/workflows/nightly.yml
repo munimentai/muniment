@@ -87,7 +87,7 @@ jobs:
             build='npm ci --no-audit --no-fund && node .github/build-windows-installers.mjs && powershell.exe -NoProfile -ExecutionPolicy Bypass -File test/windows-installers.ps1'
           fi
           if [ "$PLATFORM" = "macos" ]; then
-            build='npm ci --no-audit --no-fund && npm run tauri build -- --bundles app && ditto -c -k --sequesterRsrc --keepParent src-tauri/target/release/bundle/macos/muniment.app src-tauri/target/release/bundle/macos/muniment.app.zip'
+            build='npm ci --no-audit --no-fund && rustup target add aarch64-apple-darwin && npm run tauri build -- --target universal-apple-darwin --bundles app && ditto -c -k --sequesterRsrc --keepParent src-tauri/target/universal-apple-darwin/release/bundle/macos/muniment.app src-tauri/target/universal-apple-darwin/release/bundle/macos/muniment.app.zip'
           fi
 
           # The VM is destroyed when desktop-ci exits, so completed bundles are
