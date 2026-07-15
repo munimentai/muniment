@@ -1,5 +1,5 @@
 import { readdir, rename } from "node:fs/promises";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, copyFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import { spawnSync } from "node:child_process";
@@ -45,6 +45,29 @@ if (signing) {
     + ` -a ${process.env.AZURE_SIGNING_ACCOUNT} -c ${process.env.AZURE_SIGNING_PROFILE} %1`;
   signArgs = ["--config", JSON.stringify({ bundle: { windows: { signCommand } } })];
   console.log("windows signing ENABLED (Azure Artifact Signing)");
+
+  // Preflight: probe the signing toolchain, then do ONE real signing call on a
+  // throwaway copy with output inherited, so the actual artifact-signing-cli
+  // error surfaces (tauri's signCommand reports only "failed to run …") and we
+  // fail before the ~5-min app compile. artifact-signing-cli needs signtool from
+  // Windows 11 SDK 10.0.26100+ and authenticates via the AZURE_* env vars.
+  for (const [cmd, cmdArgs] of [["where", ["signtool"]], ["where", ["dotnet"]],
+      ["dotnet", ["--version"]], ["where", ["az"]], ["where", ["artifact-signing-cli"]]]) {
+    const r = spawnSync(cmd, cmdArgs, { encoding: "utf8" });
+    console.log(`preflight: ${cmd} ${cmdArgs.join(" ")} -> rc=${r.status} `
+      + `${((r.stdout || "") + (r.stderr || "")).replace(/\s+/g, " ").trim()}`);
+  }
+  const probeTarget = join(tmpdir(), "signprobe.exe");
+  copyFileSync(process.execPath, probeTarget);
+  console.log("preflight: test-signing a throwaway copy to surface the real error...");
+  const probe = spawnSync("artifact-signing-cli",
+    ["-e", process.env.AZURE_SIGNING_ENDPOINT, "-a", process.env.AZURE_SIGNING_ACCOUNT,
+     "-c", process.env.AZURE_SIGNING_PROFILE, probeTarget], { stdio: "inherit" });
+  if (probe.status !== 0) {
+    console.error(`signing preflight FAILED (artifact-signing-cli rc=${probe.status}) — see output above`);
+    process.exit(probe.status ?? 1);
+  }
+  console.log("signing preflight OK");
 } else {
   console.log("windows signing SKIPPED: Azure credentials absent (unsigned build)");
 }
