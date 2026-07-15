@@ -138,6 +138,15 @@ impl PeerCredentialProvider for WrongUid {
     }
 }
 
+#[derive(Clone, Copy)]
+struct UnavailableCredentials;
+
+impl PeerCredentialProvider for UnavailableCredentials {
+    fn credentials(&self, _: RawFd) -> Result<PeerCredentials, LinuxTransportError> {
+        Err(LinuxTransportError::PeerCredentialsUnavailable)
+    }
+}
+
 #[test]
 fn rejects_a_peer_when_injected_credentials_do_not_match() {
     let runtime = TestDirectory::new();
@@ -148,6 +157,22 @@ fn rejects_a_peer_when_injected_credentials_do_not_match() {
         assert!(matches!(
             listener.accept(),
             Err(LinuxTransportError::PeerUidMismatch)
+        ));
+    });
+}
+
+#[test]
+fn rejects_a_peer_when_credentials_are_unavailable() {
+    let runtime = TestDirectory::new();
+    let listener =
+        LinuxAttachListener::bind_with_credentials(runtime.as_ref(), UnavailableCredentials)
+            .unwrap();
+    std::thread::scope(|scope| {
+        let endpoint = listener.endpoint().to_owned();
+        scope.spawn(move || UnixStream::connect(endpoint).unwrap());
+        assert!(matches!(
+            listener.accept(),
+            Err(LinuxTransportError::PeerCredentialsUnavailable)
         ));
     });
 }

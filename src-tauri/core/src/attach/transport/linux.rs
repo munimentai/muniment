@@ -5,7 +5,7 @@ use std::env;
 use std::fmt;
 use std::fs::{self, DirBuilder, Metadata, Permissions};
 use std::io;
-use std::os::fd::{AsRawFd, RawFd};
+use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
 use std::os::linux::fs::MetadataExt;
 use std::os::unix::fs::{DirBuilderExt, FileTypeExt, PermissionsExt};
 use std::os::unix::net::{UnixListener, UnixStream};
@@ -13,6 +13,7 @@ use std::path::{Path, PathBuf};
 
 const APP_DIRECTORY: &str = "muniment";
 const SOCKET_NAME: &str = "attach-v1.sock";
+const QUARANTINE_NAME: &str = ".attach-v1.removing";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LinuxTransportError {
@@ -108,8 +109,7 @@ impl Identity {
 pub struct LinuxAttachListener<C = SoPeerCredentialProvider> {
     listener: Option<UnixListener>,
     endpoint: PathBuf,
-    parent: PathBuf,
-    parent_identity: Identity,
+    parent_fd: OwnedFd,
     socket_identity: Identity,
     effective_uid: u32,
     credentials: C,
@@ -160,29 +160,35 @@ impl<C: PeerCredentialProvider> LinuxAttachListener<C> {
         )?;
         let parent_identity = Identity::of(&parent_metadata);
         let endpoint = parent.join(SOCKET_NAME);
+        let parent_fd = open_directory(&parent)?;
+        let anchored_endpoint = anchored_path(&parent_fd, SOCKET_NAME);
 
-        remove_stale_endpoint(&endpoint, &parent, parent_identity, effective_uid)?;
-        let listener = UnixListener::bind(&endpoint).map_err(|error| {
+        remove_stale_endpoint(&parent_fd, effective_uid)?;
+        let listener = UnixListener::bind(&anchored_endpoint).map_err(|error| {
             if error.kind() == io::ErrorKind::AddrInUse {
                 LinuxTransportError::EndpointLiveOrAmbiguous
             } else {
                 LinuxTransportError::Io
             }
         })?;
-        if fs::set_permissions(&endpoint, Permissions::from_mode(0o600)).is_err() {
-            let _ = fs::remove_file(&endpoint);
+        let socket_fd = open_nofollow(&parent_fd, SOCKET_NAME)?;
+        let bound_identity = fs::metadata(anchored_fd_path(&socket_fd))
+            .map(|metadata| Identity::of(&metadata))
+            .map_err(|_| LinuxTransportError::EndpointInsecure)?;
+        if fs::set_permissions(anchored_fd_path(&socket_fd), Permissions::from_mode(0o600)).is_err()
+        {
+            let _ = remove_matching_endpoint(&parent_fd, Some(bound_identity), effective_uid);
             return Err(LinuxTransportError::Io);
         }
         if !same_directory(&parent, parent_identity, effective_uid) {
             return Err(LinuxTransportError::AppDirectoryInsecure);
         }
-        let socket_metadata = verify_socket(&endpoint, effective_uid, Some(0o600))?;
+        let socket_metadata = verify_socket(&anchored_endpoint, effective_uid, Some(0o600))?;
 
         Ok(Self {
             listener: Some(listener),
             endpoint,
-            parent,
-            parent_identity,
+            parent_fd,
             socket_identity: Identity::of(&socket_metadata),
             effective_uid,
             credentials,
@@ -216,19 +222,11 @@ impl<C: PeerCredentialProvider> AttachListener for LinuxAttachListener<C> {
 impl<C> Drop for LinuxAttachListener<C> {
     fn drop(&mut self) {
         self.listener.take();
-        if !same_directory(&self.parent, self.parent_identity, self.effective_uid) {
-            return;
-        }
-        let Ok(metadata) = fs::symlink_metadata(&self.endpoint) else {
-            return;
-        };
-        if metadata.file_type().is_socket()
-            && metadata.st_uid() == self.effective_uid
-            && Identity::of(&metadata) == self.socket_identity
-            && same_directory(&self.parent, self.parent_identity, self.effective_uid)
-        {
-            let _ = fs::remove_file(&self.endpoint);
-        }
+        let _ = remove_matching_endpoint(
+            &self.parent_fd,
+            Some(self.socket_identity),
+            self.effective_uid,
+        );
     }
 }
 
@@ -271,13 +269,9 @@ fn verify_socket(
     Ok(metadata)
 }
 
-fn remove_stale_endpoint(
-    endpoint: &Path,
-    parent: &Path,
-    parent_identity: Identity,
-    uid: u32,
-) -> Result<(), LinuxTransportError> {
-    let first = match fs::symlink_metadata(endpoint) {
+fn remove_stale_endpoint(parent_fd: &OwnedFd, uid: u32) -> Result<(), LinuxTransportError> {
+    let endpoint = anchored_path(parent_fd, SOCKET_NAME);
+    let first = match fs::symlink_metadata(&endpoint) {
         Ok(metadata) => metadata,
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
         Err(_) => return Err(LinuxTransportError::EndpointLiveOrAmbiguous),
@@ -285,19 +279,112 @@ fn remove_stale_endpoint(
     if !first.file_type().is_socket() || first.st_uid() != uid {
         return Err(LinuxTransportError::EndpointInsecure);
     }
-    if !same_directory(parent, parent_identity, uid) {
-        return Err(LinuxTransportError::AppDirectoryInsecure);
-    }
-    match UnixStream::connect(endpoint) {
+    match UnixStream::connect(&endpoint) {
         Ok(_) => return Err(LinuxTransportError::EndpointLiveOrAmbiguous),
         Err(error) if error.kind() == io::ErrorKind::ConnectionRefused => {}
         Err(_) => return Err(LinuxTransportError::EndpointLiveOrAmbiguous),
     }
-    let second = verify_socket(endpoint, uid, None)?;
-    if Identity::of(&second) != Identity::of(&first)
-        || !same_directory(parent, parent_identity, uid)
-    {
+    remove_matching_endpoint(parent_fd, Some(Identity::of(&first)), uid)
+}
+
+fn open_directory(path: &Path) -> Result<OwnedFd, LinuxTransportError> {
+    let path = std::ffi::CString::new(path.as_os_str().as_encoded_bytes())
+        .map_err(|_| LinuxTransportError::AppDirectoryInsecure)?;
+    // SAFETY: path is a valid C string; the returned descriptor is uniquely owned.
+    let fd = unsafe {
+        libc::open(
+            path.as_ptr(),
+            libc::O_RDONLY | libc::O_DIRECTORY | libc::O_CLOEXEC | libc::O_NOFOLLOW,
+        )
+    };
+    if fd < 0 {
+        return Err(LinuxTransportError::AppDirectoryInsecure);
+    }
+    Ok(unsafe { OwnedFd::from_raw_fd(fd) })
+}
+
+fn open_nofollow(parent: &OwnedFd, name: &str) -> Result<OwnedFd, LinuxTransportError> {
+    let name = std::ffi::CString::new(name).expect("constant contains no NUL");
+    // O_PATH permits opening a socket filesystem object without following links.
+    let fd = unsafe {
+        libc::openat(
+            parent.as_raw_fd(),
+            name.as_ptr(),
+            libc::O_PATH | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+        )
+    };
+    if fd < 0 {
+        return Err(LinuxTransportError::EndpointInsecure);
+    }
+    Ok(unsafe { OwnedFd::from_raw_fd(fd) })
+}
+
+fn anchored_path(parent: &OwnedFd, name: &str) -> PathBuf {
+    PathBuf::from(format!("/proc/self/fd/{}/{}", parent.as_raw_fd(), name))
+}
+
+fn anchored_fd_path(fd: &OwnedFd) -> PathBuf {
+    PathBuf::from(format!("/proc/self/fd/{}", fd.as_raw_fd()))
+}
+
+/// Atomically moves the name out of service before deciding whether it is safe
+/// to unlink. A raced replacement is restored with `RENAME_NOREPLACE`.
+fn remove_matching_endpoint(
+    parent: &OwnedFd,
+    expected: Option<Identity>,
+    uid: u32,
+) -> Result<(), LinuxTransportError> {
+    let quarantine = anchored_path(parent, QUARANTINE_NAME);
+    rename_noreplace(parent, SOCKET_NAME, QUARANTINE_NAME)?;
+    let metadata = fs::symlink_metadata(&quarantine)
+        .map_err(|_| LinuxTransportError::EndpointLiveOrAmbiguous)?;
+    let matches = metadata.file_type().is_socket()
+        && metadata.st_uid() == uid
+        && expected.is_none_or(|identity| Identity::of(&metadata) == identity);
+    if matches {
+        fs::remove_file(&quarantine).map_err(|_| LinuxTransportError::EndpointLiveOrAmbiguous)
+    } else {
+        // Do not overwrite a newer endpoint while restoring the object we moved.
+        let old = std::ffi::CString::new(QUARANTINE_NAME).unwrap();
+        let new = std::ffi::CString::new(SOCKET_NAME).unwrap();
+        let result = unsafe {
+            libc::syscall(
+                libc::SYS_renameat2,
+                parent.as_raw_fd(),
+                old.as_ptr(),
+                parent.as_raw_fd(),
+                new.as_ptr(),
+                libc::RENAME_NOREPLACE,
+            )
+        };
+        if result != 0 {
+            return Err(LinuxTransportError::EndpointLiveOrAmbiguous);
+        }
+        Err(LinuxTransportError::EndpointInsecure)
+    }
+}
+
+fn rename_noreplace(
+    parent: &OwnedFd,
+    old_name: &str,
+    new_name: &str,
+) -> Result<(), LinuxTransportError> {
+    let old = std::ffi::CString::new(old_name).unwrap();
+    let new = std::ffi::CString::new(new_name).unwrap();
+    // SAFETY: names are valid C strings and both operations are anchored to the
+    // already verified directory descriptor.
+    let result = unsafe {
+        libc::syscall(
+            libc::SYS_renameat2,
+            parent.as_raw_fd(),
+            old.as_ptr(),
+            parent.as_raw_fd(),
+            new.as_ptr(),
+            libc::RENAME_NOREPLACE,
+        )
+    };
+    if result != 0 {
         return Err(LinuxTransportError::EndpointLiveOrAmbiguous);
     }
-    fs::remove_file(endpoint).map_err(|_| LinuxTransportError::EndpointLiveOrAmbiguous)
+    Ok(())
 }
