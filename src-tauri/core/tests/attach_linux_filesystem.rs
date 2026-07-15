@@ -72,6 +72,12 @@ fn rejects_invalid_runtime_directories() {
         AttachFilesystem::from_runtime_directory(&link).unwrap_err(),
         AttachFilesystemError::RuntimeDirectoryOpen
     );
+    let mut link_with_trailing_slash = link.as_os_str().to_owned();
+    link_with_trailing_slash.push("/");
+    assert_eq!(
+        AttachFilesystem::from_runtime_directory(link_with_trailing_slash).unwrap_err(),
+        AttachFilesystemError::RuntimeDirectoryInvalid
+    );
     fs::remove_file(link).unwrap();
 
     fs::set_permissions(&runtime.0, fs::Permissions::from_mode(0o750)).unwrap();

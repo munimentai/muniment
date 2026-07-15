@@ -48,6 +48,9 @@ impl AttachFilesystem {
         if !runtime.is_absolute() {
             return Err(AttachFilesystemError::RuntimeDirectoryNotAbsolute);
         }
+        if runtime.as_os_str().as_bytes().ends_with(b"/") {
+            return Err(AttachFilesystemError::RuntimeDirectoryInvalid);
+        }
 
         let runtime_c = CString::new(runtime.as_os_str().as_bytes())
             .map_err(|_| AttachFilesystemError::RuntimeDirectoryInvalid)?;
