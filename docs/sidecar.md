@@ -175,7 +175,26 @@ remains outside sidecar supervision: [ADR
 0005](decisions/0005-asr-model-lifecycle.md) selects a Rust-native first-use
 install with complete-set verification and atomic publication. Acquisition is
 the only ASR-related network boundary, and model bytes never cross the webview.
-Native desktop packaging and target-hardware validation remain follow-up work.
+The desktop now packages the pinned sherpa-onnx v1.13.2 CPU shared runtime and
+its ONNX Runtime dependency for macOS universal2, Windows x86_64, and Linux
+x86_64. Platform-relative loader paths make the libraries available from the
+application bundle without a machine-global installation; unsupported desktop
+targets fail during the build. The matching licenses and upstream ONNX Runtime
+notice inventory ship as user-readable bundle resources.
+
+`OfflineParakeetRecognizer::from_verified_current` is the only recognizer
+construction boundary. It asks `AsrRevisionLifecycle` to resolve the `current`
+pointer, which re-verifies the pinned four-file Parakeet revision before any
+native recognizer is created. Callers cannot select model files or endpoints.
+Each call accepts one complete, finite, normalized `f32` mono utterance at
+16 kHz and returns one final transcript; it is offline recognition, not token
+streaming. Native recognizer, stream, and result handles are RAII-owned and are
+released on success and failure.
+
+Microphone capture, PCM buffering, VAD, commands/webview state, first-use
+install UI, and the ADR 0004 target-hardware latency/quality matrix remain
+follow-up work. This boundary adds no PCM persistence, service, telemetry, or
+Pi routing.
 
 `muniment_core::llama` owns the local llama.cpp boundary. The typed resident
 descriptor pins the Gemma artifact identity, stable API alias, and context
