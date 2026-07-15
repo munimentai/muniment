@@ -142,7 +142,7 @@ jobs:
           # desktop-ci invokes Windows commands through cmd.exe; enter Git Bash
           # explicitly for the shell staging script and POSIX environment syntax.
           if [ "$PLATFORM" = "windows" ]; then
-            cmd="\"%ProgramFiles%\\Git\\bin\\bash.exe\" -lc \"$cmd\""
+            cmd='"%ProgramFiles%\Git\bin\bash.exe" -lc "test/stage-asr-runtime.sh windows && SHERPA_ONNX_LIB_DIR=$PWD/src-tauri/asr-runtime cargo test --manifest-path src-tauri/Cargo.toml --locked --all-targets"'
           fi
           # macOS ships a universal app — test the host and preflight its arm64 slice.
           if [ "$PLATFORM" = "macos" ]; then
