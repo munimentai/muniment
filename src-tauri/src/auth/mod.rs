@@ -16,7 +16,8 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use muniment_core::auth::{
     self, AuthStatus, BrowserOpenError, NativeCredentialStore, UreqAuthorizationTransport,
-    UreqRegistrationTransport, UreqRevocationTransport, UreqSessionTransport, UreqTokenTransport,
+    UreqNativeDeviceListTransport, UreqRegistrationTransport, UreqRevocationTransport,
+    UreqSessionTransport, UreqTokenTransport,
 };
 
 use keyring_store::KeyringNativeCredentialStore;
@@ -160,6 +161,40 @@ pub async fn auth_entitlement_snapshot(
         .ok_or_else(|| "Sign in to view your access.".into())
 }
 
+/// List display-only metadata for this account's native installations.
+#[tauri::command]
+pub async fn auth_devices(
+    state: tauri::State<'_, AuthState>,
+) -> Result<Vec<auth::NativeDevice>, String> {
+    let store = state.native_store.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let session = ensure_native_session(store.as_ref()).map_err(|_| device_list_error())?;
+        let credentials = session.into_credentials().ok_or_else(device_list_error)?;
+        list_devices(
+            Some(&credentials.tokens.access_token),
+            &UreqNativeDeviceListTransport::new(Duration::from_secs(30)),
+            &api_base_url(),
+        )
+    })
+    .await
+    .map_err(|_| device_list_error())?
+}
+
+fn list_devices(
+    access_token: Option<&str>,
+    transport: &dyn auth::NativeDeviceListTransport,
+    base_url: &str,
+) -> Result<Vec<auth::NativeDevice>, String> {
+    let access_token = access_token.ok_or_else(device_list_error)?;
+    auth::list_native_devices(transport, base_url, access_token)
+        .map(|list| list.devices)
+        .map_err(|_| device_list_error())
+}
+
+fn device_list_error() -> String {
+    "Your devices could not be loaded.".to_string()
+}
+
 fn ensure_native_session(
     store: &KeyringNativeCredentialStore,
 ) -> Result<auth::FreshNativeSession, String> {
@@ -220,6 +255,20 @@ fn spawn_browser(url: &str) -> std::io::Result<()> {
 mod tests {
     use super::*;
 
+    struct FailingDeviceTransport;
+
+    impl auth::NativeDeviceListTransport for FailingDeviceTransport {
+        fn list(
+            &self,
+            _: &str,
+            _: &auth::NativeDeviceListRequest,
+        ) -> Result<auth::NativeDeviceList, auth::NativeDeviceListError> {
+            Err(auth::NativeDeviceListError::Transport(
+                "backend-secret".into(),
+            ))
+        }
+    }
+
     #[test]
     fn concurrent_sign_in_is_rejected_and_guard_releases_on_drop() {
         let running = Arc::new(AtomicBool::new(false));
@@ -227,5 +276,24 @@ mod tests {
         assert!(SignInPermit::acquire(running.clone()).is_none());
         drop(first);
         assert!(SignInPermit::acquire(running).is_some());
+    }
+
+    #[test]
+    fn device_listing_rejects_a_missing_fresh_session_without_calling_the_client() {
+        let error =
+            list_devices(None, &FailingDeviceTransport, "https://api.muniment.ai").unwrap_err();
+        assert_eq!(error, "Your devices could not be loaded.");
+    }
+
+    #[test]
+    fn device_listing_redacts_client_errors() {
+        let error = list_devices(
+            Some("access-secret"),
+            &FailingDeviceTransport,
+            "https://api.muniment.ai",
+        )
+        .unwrap_err();
+        assert_eq!(error, "Your devices could not be loaded.");
+        assert!(!error.contains("secret"));
     }
 }
