@@ -551,11 +551,55 @@ fn attachment_error() -> String {
     "One or more selected files could not be added. Check the files and try again.".into()
 }
 
+struct OpenSelectedFile {
+    file: std::fs::File,
+    display_name: String,
+    byte_length: u64,
+}
+
+fn open_selected_files(files: Vec<SelectedFile>) -> Result<Vec<OpenSelectedFile>, String> {
+    files
+        .into_iter()
+        .map(|selected| {
+            // Validate the handle that will actually be read. Checking the path before
+            // opening leaves a window where it can be replaced with a different object.
+            let file = std::fs::File::open(&selected.path).map_err(|_| attachment_error())?;
+            let metadata = file.metadata().map_err(|_| attachment_error())?;
+            if !metadata.is_file() {
+                return Err(attachment_error());
+            }
+            let display_name = selected
+                .path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .ok_or_else(attachment_error)?
+                .to_owned();
+            Ok(OpenSelectedFile {
+                file,
+                display_name,
+                byte_length: metadata.len(),
+            })
+        })
+        .collect()
+}
+
 fn prepare_new_run(
     storage: &SharedStorage,
     run_id: &str,
     subject: Option<&str>,
     files: Vec<SelectedFile>,
+) -> Result<(u64, ChatProjector), String> {
+    // Open and validate every selection before creating a run, so ordinary
+    // selection failures cannot leave a rejected submission in the journal.
+    let files = open_selected_files(files)?;
+    prepare_opened_run(storage, run_id, subject, files)
+}
+
+fn prepare_opened_run(
+    storage: &SharedStorage,
+    run_id: &str,
+    subject: Option<&str>,
+    files: Vec<OpenSelectedFile>,
 ) -> Result<(u64, ChatProjector), String> {
     let mut storage = storage.lock().map_err(|_| attachment_error())?;
     let ChatStorage { journal, cas } = &mut *storage;
@@ -567,29 +611,17 @@ fn prepare_new_run(
         .append(0, &started)
         .map_err(|_| attachment_error())?;
 
-    for selected in files {
-        let metadata = std::fs::metadata(&selected.path).map_err(|_| attachment_error())?;
-        if !metadata.is_file() {
-            return Err(attachment_error());
-        }
-        let byte_length = metadata.len();
-        let display_name = selected
-            .path
-            .file_name()
-            .and_then(|name| name.to_str())
-            .ok_or_else(attachment_error)?
-            .to_owned();
-        let mut file = std::fs::File::open(&selected.path).map_err(|_| attachment_error())?;
+    for mut selected in files {
         let next_seq = seq + 1;
         let envelope_subject = subject.map(str::to_owned);
-        let attachment = ingest_attachment(
+        let attachment = match ingest_attachment(
             cas,
             journal,
             seq,
-            &mut file,
+            &mut selected.file,
             AttachmentMetadata {
-                display_name: &display_name,
-                byte_length,
+                display_name: &selected.display_name,
+                byte_length: selected.byte_length,
                 media_type: None,
             },
             |attachment| {
@@ -603,17 +635,54 @@ fn prepare_new_run(
                 envelope.payload = EventPayload::Attachment { attachment };
                 envelope
             },
-        )
-        .map_err(|_| attachment_error())?;
-        cas.verify(attachment.sha256())
-            .map_err(|_| attachment_error())?;
-        let events = journal.events(run_id).map_err(|_| attachment_error())?;
-        projector
-            .apply(events.last().ok_or_else(attachment_error)?)
-            .map_err(|_| attachment_error())?;
+        ) {
+            Ok(attachment) => attachment,
+            Err(_) => {
+                record_preparation_failure(journal, &mut projector, run_id, seq, subject);
+                return Err(attachment_error());
+            }
+        };
+        let attachment_event = match journal
+            .events(run_id)
+            .ok()
+            .and_then(|events| events.last().cloned())
+        {
+            Some(event) => event,
+            None => {
+                record_preparation_failure(journal, &mut projector, run_id, seq, subject);
+                return Err(attachment_error());
+            }
+        };
+        if projector.apply(&attachment_event).is_err() {
+            record_preparation_failure(journal, &mut projector, run_id, seq, subject);
+            return Err(attachment_error());
+        }
         seq = next_seq;
+        if cas.verify(attachment.sha256()).is_err() {
+            record_preparation_failure(journal, &mut projector, run_id, seq, subject);
+            return Err(attachment_error());
+        }
     }
     Ok((seq, projector))
+}
+
+fn record_preparation_failure(
+    journal: &mut RunJournal,
+    projector: &mut ChatProjector,
+    run_id: &str,
+    seq: u64,
+    subject: Option<&str>,
+) {
+    let failed = event_envelope(
+        run_id,
+        seq + 1,
+        "run.failed",
+        json!({"reason": "attachment"}),
+        subject,
+    );
+    if projector.apply(&failed).is_ok() {
+        let _ = journal.append(seq, &failed);
+    }
 }
 
 #[tauri::command]
@@ -1631,6 +1700,90 @@ mod tests {
         assert_eq!(error, attachment_error());
         assert!(!error.contains(missing.to_string_lossy().as_ref()));
         assert!(!prompt_log.exists(), "Pi must not receive a prompt");
+        std::env::remove_var("PI_RESUME_STUB_PROMPTS");
+        drop(storage);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn non_regular_attachment_is_rejected_before_a_run_is_created() {
+        let directory =
+            std::env::temp_dir().join(format!("muniment-non-regular-{}", Uuid::now_v7()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let storage = Arc::new(Mutex::new(ChatStorage {
+            journal: RunJournal::open(directory.join("runs.sqlite3")).unwrap(),
+            cas: LocalCas::open(&directory.join("cas")).unwrap(),
+        }));
+        let run_id = Uuid::now_v7().to_string();
+
+        assert!(prepare_new_run(
+            &storage,
+            &run_id,
+            Some("owner"),
+            vec![SelectedFile {
+                path: directory.clone(),
+            }],
+        )
+        .is_err());
+        assert!(storage
+            .lock()
+            .unwrap()
+            .journal
+            .events(&run_id)
+            .unwrap()
+            .is_empty());
+
+        drop(storage);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn changed_second_attachment_fails_the_run_without_prompting_pi() {
+        let _environment = PI_ENV_LOCK.lock().unwrap();
+        let directory = std::env::temp_dir().join(format!("muniment-changed-{}", Uuid::now_v7()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let first = directory.join("first.txt");
+        let second = directory.join("private-second.txt");
+        let prompt_log = directory.join("prompt.txt");
+        std::fs::write(&first, b"first attachment").unwrap();
+        std::fs::write(&second, b"second attachment").unwrap();
+        let storage = Arc::new(Mutex::new(ChatStorage {
+            journal: RunJournal::open(directory.join("runs.sqlite3")).unwrap(),
+            cas: LocalCas::open(&directory.join("cas")).unwrap(),
+        }));
+        let run_id = Uuid::now_v7().to_string();
+        let opened = open_selected_files(vec![
+            SelectedFile { path: first },
+            SelectedFile {
+                path: second.clone(),
+            },
+        ])
+        .unwrap();
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(&second)
+            .unwrap()
+            .set_len(1)
+            .unwrap();
+        std::env::set_var("PI_RESUME_STUB_PROMPTS", &prompt_log);
+
+        let error = match prepare_opened_run(&storage, &run_id, Some("owner"), opened) {
+            Ok(_) => panic!("changed attachment length must fail"),
+            Err(error) => error,
+        };
+        assert_eq!(error, attachment_error());
+        assert!(!error.contains(second.to_string_lossy().as_ref()));
+        assert!(!prompt_log.exists(), "Pi must receive zero prompts");
+        let events = storage.lock().unwrap().journal.events(&run_id).unwrap();
+        assert_eq!(
+            events
+                .iter()
+                .map(|event| event.event_type.as_str())
+                .collect::<Vec<_>>(),
+            ["run.started", "chat.attachment.ingested", "run.failed"]
+        );
+        assert!(reduce(&events).unwrap().is_terminal());
+
         std::env::remove_var("PI_RESUME_STUB_PROMPTS");
         drop(storage);
         std::fs::remove_dir_all(directory).unwrap();
