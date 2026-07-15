@@ -1,5 +1,6 @@
 <script>
   import { onMount, tick } from 'svelte'
+  import { open } from '@tauri-apps/plugin-dialog'
 
   import { accessErrorState, accessIdleState, accessLoadingState, accessReadyState, bootState, devicesErrorState, devicesIdleState, devicesLoadingState, devicesReadyState, errorState, statusState, waitingState } from './lib/auth-state.js'
   import { ringPath } from './lib/mark.js'
@@ -12,6 +13,8 @@
   const tauri = window.__TAURI__?.core
   let auth = $state(bootState)
   let draft = $state('')
+  let selectedFiles = $state([])
+  let submitError = $state('')
   let messages = $state([])
   let active = $state(null)
   let cancelError = $state('')
@@ -203,25 +206,50 @@
   async function send() {
     const prompt = draft.trim()
     if (!prompt || active) return
-    draft = ''
+    submitError = ''
     messages.push({ role: 'user', text: prompt })
     const pending = { id: 'pending', phase: 'thinking', text: '', receipt: null, prompt }
     active = pending
     messages.push({ role: 'assistant', run: pending })
     followNewContent()
     try {
-      const run = await tauri.invoke('chat_submit', { prompt })
+      const run = await tauri.invoke('chat_submit', {
+        prompt,
+        files: selectedFiles.map(({ path }) => ({ path })),
+      })
+      draft = ''
+      selectedFiles = []
       active = { ...pending, id: run.runId }
       const early = buffered.get(run.runId) ?? []
       const projected = applyBufferedChatEvents(active, early)
       buffered.delete(run.runId)
       messages = messages.map((message) => message.run === pending ? { ...message, run: projected } : message)
       active = ['complete', 'cancelled', 'failed', 'interrupted'].includes(projected.phase) ? null : projected
-    } catch (_) {
+    } catch (error) {
       const failed = { ...pending, id: `rejected-${messages.length}`, phase: 'failed' }
       messages = messages.map((message) => message.run === pending ? { ...message, run: failed } : message)
+      submitError = typeof error === 'string' ? error : 'The message could not be sent. Try again.'
       active = null
     }
+  }
+
+  async function chooseFiles() {
+    if (active) return
+    submitError = ''
+    let picked
+    try {
+      picked = await open({ multiple: true, directory: false })
+    } catch (_) {
+      submitError = 'Files could not be selected. Try again.'
+      return
+    }
+    if (!picked) return
+    const paths = Array.isArray(picked) ? picked : [picked]
+    const known = new Set(selectedFiles.map(({ path }) => path))
+    selectedFiles = [...selectedFiles, ...paths.filter((path) => !known.has(path)).map((path) => ({
+      path,
+      name: path.split(/[\\/]/).pop() || 'Selected file',
+    }))]
   }
 
   async function cancel() {
@@ -410,12 +438,21 @@
         {#if !pinned && hasContentBelow}<button class="latest" onclick={scrollToLatest}>↓ latest</button>{/if}
         </div>
         <div class="composer">
+          {#if selectedFiles.length}
+            <ul class="attachments" aria-label="Selected files">
+              {#each selectedFiles as file}
+                <li><span>{file.name}</span><button type="button" aria-label={`Remove ${file.name}`} onclick={() => { selectedFiles = selectedFiles.filter(({ path }) => path !== file.path) }}>Remove</button></li>
+              {/each}
+            </ul>
+          {/if}
           <textarea bind:value={draft} onkeydown={keydown} rows="2" placeholder={active?.phase === 'resuming' ? 'Resuming interrupted reply…' : 'Ask anything'} disabled={active?.phase === 'resuming'}></textarea>
+          {#if submitError}<p class="cancel-error" role="alert">{submitError}</p>{/if}
           {#if cancelError}<p class="cancel-error" role="alert">{cancelError}</p>{/if}
           {#if queueError}<p class="cancel-error" role="alert">{queueError}</p>{/if}
           <div class="composer-row">
             <span>{active?.phase === 'resuming' ? 'Reopening the existing secure session…' : active && active.id !== 'pending' ? '⏎ steers this reply · queue as follow-up' : 'Routing is automatic. Every reply carries its receipt.'}</span>
             <div class="composer-actions">
+              {#if !active}<button type="button" class="quiet attach" onclick={chooseFiles}>Add files</button>{/if}
               {#if active?.phase === 'resuming'}
                 <button disabled>Resuming…</button>
               {:else if active && active.id !== 'pending'}
@@ -599,6 +636,10 @@
   .run-error button { padding: 2px 6px; }
   .composer { grid-area: composer; width: min(760px, calc(100% - 48px)); margin: 0 auto 24px; padding: 12px; background: var(--surface); border: 1px solid var(--border); border-radius: 10px; }
   .composer:focus-within { border-color: var(--muted); }
+  .attachments { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 8px; padding: 0; list-style: none; }
+  .attachments li { display: flex; align-items: center; gap: 6px; max-width: 100%; padding: 4px 6px 4px 9px; border: 1px solid var(--border); border-radius: 999px; color: var(--muted); font: var(--text-12) var(--font-mono); }
+  .attachments span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .attachments button { padding: 1px 5px; border: 0; background: transparent; color: inherit; font-size: 11px; }
   textarea { width: 100%; resize: none; border: 0; outline: 0; background: transparent; color: var(--ink); font: inherit; }
   .composer-row { display: flex; justify-content: space-between; align-items: center; color: var(--muted); font-size: 11px; }
   .composer-actions { display: flex; align-items: center; gap: 6px; }

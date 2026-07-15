@@ -68,3 +68,19 @@ has not published. A byte-count mismatch or journal-append failure can leave a
 published but unreferenced object. `AttachmentIngestError` reports these cases
 explicitly (including the published hash or descriptor); the object is safe for
 the existing unreferenced-object collector to remove.
+
+## Desktop adapter
+
+The desktop app opens one `LocalCas` at `<app-data>/cas` beside its
+`<app-data>/runs.sqlite3` journal. Both are owned by the same locked storage
+state. For a new chat, the adapter appends and applies `run.started`, then
+streams each explicitly selected regular file into CAS and appends its
+`chat.attachment.ingested` event using the same run sequence and projector.
+Only after every object verifies and every event is durable may the coordinator
+submit the text prompt to Pi. File opening, hashing, verification, and journal
+I/O run on a blocking worker rather than the async UI thread.
+
+This boundary is local durability only. An ingested attachment has not been
+uploaded, processed by a cloud service, or supplied to Pi. Source filesystem
+paths are transient adapter inputs and never appear in journal payloads,
+history, command results, or user-facing errors.

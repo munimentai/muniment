@@ -19,5 +19,8 @@
     "svelte": "^5",
     "vite": "^7",
     "vitest": "^4.1.10"
+  },
+  "dependencies": {
+    "@tauri-apps/plugin-dialog": "^2.6.0"
   }
 }
