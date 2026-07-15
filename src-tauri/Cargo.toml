@@ -27,5 +27,10 @@ features = ["apple-native", "windows-native", "sync-secret-service", "vendored"]
 [dev-dependencies]
 tauri = { version = "2", features = ["test"] }
 
+[[example]]
+name = "sidecar-test-stub"
+path = "core/src/bin/sidecar-test-stub.rs"
+test = false
+
 [profile.release]
 strip = true
