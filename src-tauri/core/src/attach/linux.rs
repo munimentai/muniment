@@ -119,16 +119,18 @@ impl LinuxAttachListener {
 
         let handle_endpoint = handle_path(&parent_handle);
         let listener = UnixListener::bind(&handle_endpoint).map_err(|_| LinuxAttachError::Io)?;
+        after_created();
+        verify_listener_is_published(&listener, &parent_handle)?;
         let created_handle = open_endpoint(&parent_handle)?;
         let created_metadata = created_handle
             .metadata()
             .map_err(|_| LinuxAttachError::Io)?;
         verify_socket_metadata(&created_metadata, uid)?;
         let created_identity = Identity::of(&created_metadata);
-        after_created();
 
         let finish = || -> Result<Metadata, LinuxAttachError> {
             set_endpoint_mode(&created_handle)?;
+            verify_listener_is_published(&listener, &parent_handle)?;
             let socket_metadata =
                 endpoint_metadata(&parent_handle)?.ok_or(LinuxAttachError::EndpointInvalid)?;
             verify_socket_metadata(&socket_metadata, uid)?;
@@ -367,6 +369,14 @@ fn open_verified_directory(path: &Path, uid: u32, runtime: bool) -> Result<File,
 }
 
 fn open_or_create_parent(runtime: &File, uid: u32) -> Result<File, LinuxAttachError> {
+    open_or_create_parent_with(runtime, uid, || {})
+}
+
+fn open_or_create_parent_with(
+    runtime: &File,
+    uid: u32,
+    after_create: impl FnOnce(),
+) -> Result<File, LinuxAttachError> {
     let name = cstring("muniment")?;
     // SAFETY: the directory fd and NUL-terminated name are valid for the call.
     let result = unsafe { libc::mkdirat(runtime.as_raw_fd(), name.as_ptr(), DIRECTORY_MODE) };
@@ -376,10 +386,22 @@ fn open_or_create_parent(runtime: &File, uid: u32) -> Result<File, LinuxAttachEr
     }
     let path = PathBuf::from(format!("/proc/self/fd/{}/muniment", runtime.as_raw_fd()));
     if created {
-        fs::set_permissions(&path, Permissions::from_mode(DIRECTORY_MODE))
-            .map_err(|_| LinuxAttachError::Io)?;
+        after_create();
     }
-    open_verified_directory(&path, uid, false)
+    let parent = open_verified_directory(&path, uid, false)?;
+    if created {
+        // Apply the mode through the no-follow descriptor so a pathname
+        // replacement cannot redirect chmod to another object.
+        let result = unsafe { libc::fchmod(parent.as_raw_fd(), DIRECTORY_MODE) };
+        if result != 0 {
+            return Err(LinuxAttachError::Io);
+        }
+        let metadata = parent.metadata().map_err(|_| LinuxAttachError::Io)?;
+        if metadata.st_uid() != uid || metadata.st_mode() & 0o777 != DIRECTORY_MODE {
+            return Err(LinuxAttachError::AttachDirectoryInsecure);
+        }
+    }
+    Ok(parent)
 }
 
 fn handle_path(parent: &File) -> PathBuf {
@@ -425,6 +447,25 @@ fn set_endpoint_mode(endpoint: &File) -> Result<(), LinuxAttachError> {
     // therefore changes that inode even if its directory entry was replaced.
     let path = PathBuf::from(format!("/proc/self/fd/{}", endpoint.as_raw_fd()));
     fs::set_permissions(path, Permissions::from_mode(SOCKET_MODE)).map_err(|_| LinuxAttachError::Io)
+}
+
+fn verify_listener_is_published(
+    listener: &UnixListener,
+    parent: &File,
+) -> Result<(), LinuxAttachError> {
+    listener
+        .set_nonblocking(true)
+        .map_err(|_| LinuxAttachError::Io)?;
+    let probe =
+        UnixStream::connect(handle_path(parent)).map_err(|_| LinuxAttachError::EndpointInvalid)?;
+    let accepted = listener
+        .accept()
+        .map_err(|_| LinuxAttachError::EndpointInvalid)?
+        .0;
+    drop((probe, accepted));
+    listener
+        .set_nonblocking(false)
+        .map_err(|_| LinuxAttachError::Io)
 }
 
 fn create_sentinel(parent: &File, name: &str) -> Result<(), LinuxAttachError> {
@@ -582,6 +623,28 @@ mod tests {
         drop(listener);
         fs::remove_dir_all(parent_path).unwrap();
         fs::remove_dir_all(moved).unwrap();
+    }
+
+    #[test]
+    fn creating_parent_does_not_follow_a_replacement_symlink() {
+        let (runtime, runtime_handle) = test_parent();
+        let parent = runtime.join("muniment");
+        let moved = runtime.join("moved-parent");
+        let target = runtime.join("target");
+        fs::create_dir(&target).unwrap();
+        fs::set_permissions(&target, Permissions::from_mode(0o750)).unwrap();
+
+        let result = open_or_create_parent_with(&runtime_handle, effective_uid(), || {
+            fs::rename(&parent, &moved).unwrap();
+            symlink(&target, &parent).unwrap();
+        });
+
+        assert!(matches!(
+            result,
+            Err(LinuxAttachError::AttachDirectoryInvalid)
+        ));
+        assert_eq!(fs::metadata(&target).unwrap().st_mode() & 0o777, 0o750);
+        fs::remove_dir_all(runtime).unwrap();
     }
 
     #[test]
