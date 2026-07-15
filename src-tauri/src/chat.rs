@@ -807,7 +807,6 @@ fn coordinate(
         }
     };
     let adapter = Arc::new(adapter);
-    resume_attempt.accepted();
     *active_adapter
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(Arc::clone(&adapter));
@@ -824,8 +823,19 @@ fn coordinate(
         )
         .is_err()
         {
+            if adapter
+                .cancel_and_drain(&transport, Duration::from_secs(2))
+                .is_err()
+            {
+                let _ = runtime.supervisor.shutdown();
+            }
             return;
         }
+        // Prompt acknowledgement only proves that Pi accepted work. Report a
+        // successful resume after the transition is durable so callers never
+        // observe an active continuation that the journal still calls
+        // interrupted.
+        resume_attempt.accepted();
     }
     let session_root = match app.path().app_data_dir() {
         Ok(path) => path.join("pi-sessions"),
@@ -1471,6 +1481,155 @@ mod tests {
         drop(attempt);
         assert_eq!(receiver.recv().unwrap(), Ok(()));
         assert!(receiver.try_recv().is_err());
+    }
+
+    #[test]
+    fn resume_validation_fails_closed_for_every_unsafe_projection() {
+        let directory = std::env::temp_dir().join(format!("muniment-resume-{}", Uuid::now_v7()));
+        let sessions = directory.join("pi-sessions");
+        std::fs::create_dir_all(&sessions).unwrap();
+        std::fs::write(sessions.join("session.jsonl"), "{}\n").unwrap();
+        let run_id = Uuid::now_v7().to_string();
+        let events = |tail: Vec<(&str, Value)>| {
+            let mut values = vec![event_envelope(
+                &run_id,
+                1,
+                "run.started",
+                json!({}),
+                Some("owner"),
+            )];
+            values.extend(
+                tail.into_iter()
+                    .enumerate()
+                    .map(|(index, (kind, payload))| {
+                        event_envelope(&run_id, index as u64 + 2, kind, payload, Some("owner"))
+                    }),
+            );
+            values
+        };
+        let eligible = events(vec![
+            (
+                "runtime.pi_session.bound",
+                json!({"run_id":run_id, "locator":"session.jsonl"}),
+            ),
+            ("run.needs_attention", json!({"reason":"interrupted"})),
+        ]);
+        assert!(resumable_context(&eligible, Some("owner"), &sessions).is_ok());
+        assert!(resumable_context(&eligible, Some("another-subject"), &sessions).is_err());
+
+        for unsafe_events in [
+            events(vec![(
+                "run.needs_attention",
+                json!({"reason":"interrupted"}),
+            )]),
+            events(vec![
+                (
+                    "runtime.pi_session.bound",
+                    json!({"run_id":run_id, "locator":"missing.jsonl"}),
+                ),
+                ("run.needs_attention", json!({"reason":"interrupted"})),
+            ]),
+            events(vec![("run.completed", json!({}))]),
+            events(vec![
+                (
+                    "runtime.pi_session.bound",
+                    json!({"run_id":run_id, "locator":"session.jsonl"}),
+                ),
+                (
+                    "permission.requested",
+                    json!({"gate_id":"gate", "kind":"confirm", "title":"Allow?", "message":"Proceed?"}),
+                ),
+                ("run.needs_attention", json!({"reason":"interrupted"})),
+            ]),
+            events(vec![
+                (
+                    "runtime.pi_session.bound",
+                    json!({"run_id":run_id, "locator":"session.jsonl"}),
+                ),
+                (
+                    "tool.effect.started",
+                    json!({"effect_id":"effect", "display_name":"Command"}),
+                ),
+                ("run.needs_attention", json!({"reason":"interrupted"})),
+            ]),
+            Vec::new(),
+        ] {
+            assert!(resumable_context(&unsafe_events, Some("owner"), &sessions).is_err());
+        }
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn resume_runtime_failure_leaves_the_existing_journal_event_for_event_unchanged() {
+        let app = tauri::test::mock_app();
+        let directory = std::env::temp_dir().join(format!("muniment-resume-{}", Uuid::now_v7()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("runs.sqlite3");
+        let run_id = Uuid::now_v7().to_string();
+        let mut journal = RunJournal::open(&path).unwrap();
+        append_test_event(
+            &mut journal,
+            &run_id,
+            1,
+            "run.started",
+            json!({}),
+            Some("owner"),
+        );
+        append_test_event(
+            &mut journal,
+            &run_id,
+            2,
+            "runtime.pi_session.bound",
+            json!({"run_id":run_id, "locator":"session.jsonl"}),
+            Some("owner"),
+        );
+        append_test_event(
+            &mut journal,
+            &run_id,
+            3,
+            "run.needs_attention",
+            json!({"reason":"interrupted"}),
+            Some("owner"),
+        );
+        let before = journal.events(&run_id).unwrap();
+        let sessions = directory.join("pi-sessions");
+        std::fs::create_dir_all(&sessions).unwrap();
+        std::fs::write(sessions.join("session.jsonl"), "{}\n").unwrap();
+        let (locator, _) = validate_pi_session(&sessions, "session.jsonl").unwrap();
+        let shared = Arc::new(Mutex::new(journal));
+        let previous_root = std::env::var_os("MUNIMENT_PI_ROOT");
+        std::env::remove_var("MUNIMENT_PI_ROOT");
+        let (sender, receiver) = std::sync::mpsc::channel();
+        coordinate(
+            app.handle().clone(),
+            Arc::clone(&shared),
+            Arc::new(Mutex::new(None)),
+            run_id.clone(),
+            RESUME_PROMPT.into(),
+            "token".into(),
+            Some("owner".into()),
+            ChatGrant {
+                gateway_url: "https://gateway.invalid".into(),
+                virtual_key: "virtual-key".into(),
+                model: None,
+                receipt_url: "https://receipt.invalid".into(),
+            },
+            Arc::new(AtomicBool::new(false)),
+            Arc::new(Mutex::new(None)),
+            Arc::new(Mutex::new(None)),
+            Some(ResumeContext {
+                events: before.clone(),
+                locator,
+            }),
+            Some(sender),
+        );
+        if let Some(root) = previous_root {
+            std::env::set_var("MUNIMENT_PI_ROOT", root);
+        }
+        assert!(receiver.recv().unwrap().is_err());
+        assert_eq!(shared.lock().unwrap().events(&run_id).unwrap(), before);
+        drop(shared);
+        std::fs::remove_dir_all(directory).unwrap();
     }
 
     #[test]

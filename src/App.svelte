@@ -406,13 +406,15 @@
         {#if !pinned && hasContentBelow}<button class="latest" onclick={scrollToLatest}>↓ latest</button>{/if}
         </div>
         <div class="composer">
-          <textarea bind:value={draft} onkeydown={keydown} rows="2" placeholder="Ask anything"></textarea>
+          <textarea bind:value={draft} onkeydown={keydown} rows="2" placeholder={active?.phase === 'resuming' ? 'Resuming interrupted reply…' : 'Ask anything'} disabled={active?.phase === 'resuming'}></textarea>
           {#if cancelError}<p class="cancel-error" role="alert">{cancelError}</p>{/if}
           {#if queueError}<p class="cancel-error" role="alert">{queueError}</p>{/if}
           <div class="composer-row">
-            <span>{active && active.id !== 'pending' ? '⏎ steers this reply · queue as follow-up' : 'Routing is automatic. Every reply carries its receipt.'}</span>
+            <span>{active?.phase === 'resuming' ? 'Reopening the existing secure session…' : active && active.id !== 'pending' ? '⏎ steers this reply · queue as follow-up' : 'Routing is automatic. Every reply carries its receipt.'}</span>
             <div class="composer-actions">
-              {#if active && active.id !== 'pending'}
+              {#if active?.phase === 'resuming'}
+                <button disabled>Resuming…</button>
+              {:else if active && active.id !== 'pending'}
                 <button class="quiet follow-up" disabled={!draft.trim()} onclick={() => queue('followUp')}>Queue follow-up</button>
                 <button onclick={cancel}>Stop</button>
                 <button disabled={!draft.trim()} onclick={() => queue('steer')}>Send</button>

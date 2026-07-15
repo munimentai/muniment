@@ -101,6 +101,10 @@ describe('interrupted reply resume', () => {
     await fireEvent.click(button)
     await fireEvent.click(button)
     expect(screen.getByText('Partial answer')).toBeInTheDocument()
+    expect(screen.getByPlaceholderText('Resuming interrupted reply…')).toBeDisabled()
+    expect(screen.queryByRole('button', { name: 'Queue follow-up' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Send' })).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Resuming…' })).toBeDisabled()
     expect(invoke.mock.calls.filter(([command]) => command === 'chat_resume')).toEqual([
       ['chat_resume', { runId: 'run-interrupted' }],
     ])
