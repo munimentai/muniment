@@ -337,10 +337,7 @@ impl RunReducer {
 
         let terminal = self.state.as_ref().is_some_and(RunState::is_terminal);
         if terminal
-            && !matches!(
-                event.event_type.as_str(),
-                "run.explicit_resume"
-            )
+            && !matches!(event.event_type.as_str(), "run.explicit_resume")
             && is_state_event(&event.event_type)
         {
             return Err(invalid(event, "event follows a terminal run state"));
