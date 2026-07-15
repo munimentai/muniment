@@ -42,16 +42,5 @@ export const signArguments = (configuration, file) => [
   file,
 ];
 
-// Quote according to Windows' CommandLineToArgvW rules. Tauri replaces %1 with
-// the quoted path of the artifact being signed, so that placeholder stays raw.
-export const quoteWindowsArgument = (value) => {
-  if (/^[A-Za-z0-9_./:%-]+$/.test(value)) return value;
-  return `"${value
-    .replace(/(\\*)"/g, "$1$1\\\"")
-    .replace(/(\\+)$/, "$1$1")}"`;
-};
-
 export const tauriSignCommand = (configuration) =>
-  ["sign", ...signArguments(configuration, "%1")]
-    .map(quoteWindowsArgument)
-    .join(" ");
+  ({ cmd: "sign", args: signArguments(configuration, "%1") });

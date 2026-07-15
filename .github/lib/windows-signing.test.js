@@ -65,12 +65,16 @@ describe("Sign CLI commands", () => {
       "--artifact-signing-certificate-profile", completeEnvironment.AZURE_SIGNING_PROFILE,
       "artifact.msi",
     ]);
-    expect(tauriSignCommand(configuration)).toBe(
-      "sign code artifact-signing --verbosity warning"
-      + " --timestamp-url http://timestamp.acs.microsoft.com"
-      + " --artifact-signing-endpoint \"https://example.test/signing endpoint\""
-      + " --artifact-signing-account \"Muniment Account\""
-      + " --artifact-signing-certificate-profile \"Desktop \\\"Release\\\"\" %1",
-    );
+    expect(tauriSignCommand(configuration)).toEqual({
+      cmd: "sign",
+      args: [
+        "code", "artifact-signing", "--verbosity", "warning",
+        "--timestamp-url", "http://timestamp.acs.microsoft.com",
+        "--artifact-signing-endpoint", "https://example.test/signing endpoint",
+        "--artifact-signing-account", "Muniment Account",
+        "--artifact-signing-certificate-profile", "Desktop \"Release\"",
+        "%1",
+      ],
+    });
   });
 });
