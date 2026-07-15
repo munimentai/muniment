@@ -8,6 +8,7 @@ use tauri::Manager;
 
 fn main() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
         .manage(auth::AuthState::new())
         .setup(|app| {
             app.manage(chat::ChatState::new(app.handle())?);

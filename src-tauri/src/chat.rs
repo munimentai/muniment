@@ -4,6 +4,8 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use chrono::{SecondsFormat, Utc};
+use muniment_core::attachment::{ingest_attachment, AttachmentMetadata};
+use muniment_core::cas::LocalCas;
 use muniment_core::journal::reducer::{
     project_chat, reduce, ChatProjection, ChatProjector, PermissionGate, PermissionRequest,
     RunStatus,
@@ -19,6 +21,7 @@ use muniment_core::sidecar::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use std::path::PathBuf;
 use tauri::{Emitter, Manager};
 use uuid::Uuid;
 
@@ -41,6 +44,12 @@ struct ChatGrant {
 #[serde(rename_all = "camelCase")]
 pub struct SubmitResult {
     run_id: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SelectedFile {
+    path: PathBuf,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize)]
@@ -121,8 +130,15 @@ struct PiRuntime {
     wiring: PiRpcWiring,
 }
 
+struct ChatStorage {
+    journal: RunJournal,
+    cas: LocalCas,
+}
+
+type SharedStorage = Arc<Mutex<ChatStorage>>;
+
 pub struct ChatState {
-    journal: Arc<Mutex<RunJournal>>,
+    storage: SharedStorage,
     active: Mutex<Option<ActiveRun>>,
     runtime: Arc<Mutex<Option<PiRuntime>>>,
 }
@@ -135,7 +151,10 @@ impl ChatState {
         let mut journal = RunJournal::open(directory.join("runs.sqlite3"))?;
         reconcile_interrupted_runs(&mut journal);
         Ok(Self {
-            journal: Arc::new(Mutex::new(journal)),
+            storage: Arc::new(Mutex::new(ChatStorage {
+                journal,
+                cas: LocalCas::open(&directory.join("cas"))?,
+            })),
             active: Mutex::new(None),
             runtime: Arc::new(Mutex::new(None)),
         })
@@ -281,12 +300,16 @@ pub async fn chat_history(
 ) -> Result<Vec<HistoryEntry>, String> {
     // History is conversation data and follows the same signed-in gate as send.
     let tokens = auth::fresh_tokens(&auth_state)?;
-    let mut journal = state
-        .journal
+    let mut storage = state
+        .storage
         .lock()
         .map_err(|_| "Conversation history is unavailable.".to_string())?;
     let session_root = state_session_root(&app_handle)?;
-    history_entries(&mut journal, tokens.subject.as_deref(), &session_root)
+    history_entries(
+        &mut storage.journal,
+        tokens.subject.as_deref(),
+        &session_root,
+    )
 }
 
 fn state_session_root(app: &tauri::AppHandle) -> Result<std::path::PathBuf, String> {
@@ -333,6 +356,7 @@ pub async fn chat_submit(
     auth_state: tauri::State<'_, auth::AuthState>,
     state: tauri::State<'_, ChatState>,
     prompt: String,
+    files: Option<Vec<SelectedFile>>,
 ) -> Result<SubmitResult, String> {
     let prompt = prompt.trim().to_owned();
     if prompt.is_empty() {
@@ -374,14 +398,40 @@ pub async fn chat_submit(
             adapter: Arc::clone(&adapter),
         },
     )?;
-
-    let journal = Arc::clone(&state.journal);
+    let storage = Arc::clone(&state.storage);
+    let prepared_storage = Arc::clone(&storage);
+    let prepared_run_id = run_id.clone();
+    let prepared_subject = tokens.subject.clone();
+    let prepared = tauri::async_runtime::spawn_blocking(move || {
+        prepare_new_run(
+            &prepared_storage,
+            &prepared_run_id,
+            prepared_subject.as_deref(),
+            files.unwrap_or_default(),
+        )
+    })
+    .await
+    .map_err(|_| attachment_error())
+    .and_then(|result| result);
+    let (seq, projector) = match prepared {
+        Ok(prepared) => prepared,
+        Err(error) => {
+            let mut active = state
+                .active
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if active.as_ref().is_some_and(|current| current.id == run_id) {
+                *active = None;
+            }
+            return Err(error);
+        }
+    };
     let runtime = Arc::clone(&state.runtime);
     let result_id = run_id.clone();
     tauri::async_runtime::spawn_blocking(move || {
         coordinate(
             app.clone(),
-            journal,
+            storage,
             runtime,
             run_id.clone(),
             prompt,
@@ -393,6 +443,7 @@ pub async fn chat_submit(
             adapter,
             None,
             None,
+            Some((seq, projector)),
         );
         if let Some(state) = app.try_state::<ChatState>() {
             let mut active = state
@@ -417,11 +468,12 @@ pub async fn chat_resume(
     let tokens = auth::fresh_tokens_async(&auth_state).await?;
     let session_root = state_session_root(&app)?;
     let resume = {
-        let mut journal = state
-            .journal
+        let mut storage = state
+            .storage
             .lock()
             .map_err(|_| "This reply cannot be resumed.".to_string())?;
-        let events = journal
+        let events = storage
+            .journal
             .events(&run_id)
             .map_err(|_| "This reply cannot be resumed.".to_string())?;
         resumable_context(&events, tokens.subject.as_deref(), &session_root)?
@@ -446,14 +498,14 @@ pub async fn chat_resume(
             adapter: Arc::clone(&adapter),
         },
     )?;
-    let journal = Arc::clone(&state.journal);
+    let storage = Arc::clone(&state.storage);
     let runtime = Arc::clone(&state.runtime);
     let result_id = run_id.clone();
     let (attempt_sender, attempt_receiver) = std::sync::mpsc::channel();
     tauri::async_runtime::spawn_blocking(move || {
         coordinate(
             app.clone(),
-            journal,
+            storage,
             runtime,
             run_id.clone(),
             RESUME_PROMPT.into(),
@@ -465,6 +517,7 @@ pub async fn chat_resume(
             adapter,
             Some(resume),
             Some(attempt_sender),
+            None,
         );
         if let Some(state) = app.try_state::<ChatState>() {
             let mut active = state
@@ -492,6 +545,75 @@ fn install_active_run(active: &Mutex<Option<ActiveRun>>, run: ActiveRun) -> Resu
     }
     *active = Some(run);
     Ok(())
+}
+
+fn attachment_error() -> String {
+    "One or more selected files could not be added. Check the files and try again.".into()
+}
+
+fn prepare_new_run(
+    storage: &SharedStorage,
+    run_id: &str,
+    subject: Option<&str>,
+    files: Vec<SelectedFile>,
+) -> Result<(u64, ChatProjector), String> {
+    let mut storage = storage.lock().map_err(|_| attachment_error())?;
+    let ChatStorage { journal, cas } = &mut *storage;
+    let mut projector = ChatProjector::new();
+    let mut seq = 1;
+    let started = event_envelope(run_id, seq, "run.started", json!({}), subject);
+    projector.apply(&started).map_err(|_| attachment_error())?;
+    journal
+        .append(0, &started)
+        .map_err(|_| attachment_error())?;
+
+    for selected in files {
+        let metadata = std::fs::metadata(&selected.path).map_err(|_| attachment_error())?;
+        if !metadata.is_file() {
+            return Err(attachment_error());
+        }
+        let byte_length = metadata.len();
+        let display_name = selected
+            .path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .ok_or_else(attachment_error)?
+            .to_owned();
+        let mut file = std::fs::File::open(&selected.path).map_err(|_| attachment_error())?;
+        let next_seq = seq + 1;
+        let envelope_subject = subject.map(str::to_owned);
+        let attachment = ingest_attachment(
+            cas,
+            journal,
+            seq,
+            &mut file,
+            AttachmentMetadata {
+                display_name: &display_name,
+                byte_length,
+                media_type: None,
+            },
+            |attachment| {
+                let mut envelope = event_envelope(
+                    run_id,
+                    next_seq,
+                    "chat.attachment.ingested",
+                    json!({}),
+                    envelope_subject.as_deref(),
+                );
+                envelope.payload = EventPayload::Attachment { attachment };
+                envelope
+            },
+        )
+        .map_err(|_| attachment_error())?;
+        cas.verify(attachment.sha256())
+            .map_err(|_| attachment_error())?;
+        let events = journal.events(run_id).map_err(|_| attachment_error())?;
+        projector
+            .apply(events.last().ok_or_else(attachment_error)?)
+            .map_err(|_| attachment_error())?;
+        seq = next_seq;
+    }
+    Ok((seq, projector))
 }
 
 #[tauri::command]
@@ -577,7 +699,7 @@ pub async fn chat_cancel(state: tauri::State<'_, ChatState>, run_id: String) -> 
 
 fn coordinate<R: tauri::Runtime>(
     app: tauri::AppHandle<R>,
-    journal: Arc<Mutex<RunJournal>>,
+    journal: SharedStorage,
     runtime: Arc<Mutex<Option<PiRuntime>>>,
     run_id: String,
     prompt: String,
@@ -589,29 +711,35 @@ fn coordinate<R: tauri::Runtime>(
     active_adapter: Arc<Mutex<Option<Arc<PiRunAdapter>>>>,
     resume: Option<ResumeContext>,
     resume_result: Option<std::sync::mpsc::Sender<Result<(), String>>>,
+    prepared: Option<(u64, ChatProjector)>,
 ) {
     let mut resume_attempt = ResumeAttempt::new(resume_result);
-    let mut seq = resume.as_ref().map_or(0, |resume| {
-        resume.events.last().map_or(0, |event| event.run_seq)
+    let (mut seq, mut projector) = prepared.unwrap_or_else(|| {
+        (
+            resume.as_ref().map_or(0, |resume| {
+                resume.events.last().map_or(0, |event| event.run_seq)
+            }),
+            ChatProjector::new(),
+        )
     });
-    let mut projector = ChatProjector::new();
     if let Some(resume) = &resume {
         for event in &resume.events {
             if projector.apply(event).is_err() {
                 return;
             }
         }
-    } else if append_emit(
-        &app,
-        &journal,
-        &mut projector,
-        &run_id,
-        &mut seq,
-        "run.started",
-        json!({}),
-        subject.as_deref(),
-    )
-    .is_err()
+    } else if seq == 0
+        && append_emit(
+            &app,
+            &journal,
+            &mut projector,
+            &run_id,
+            &mut seq,
+            "run.started",
+            json!({}),
+            subject.as_deref(),
+        )
+        .is_err()
     {
         return;
     }
@@ -1182,7 +1310,7 @@ fn close_open_effects(
 
 fn append_terminal<R: tauri::Runtime>(
     app: &tauri::AppHandle<R>,
-    journal: &Arc<Mutex<RunJournal>>,
+    journal: &SharedStorage,
     projector: &mut ChatProjector,
     run_id: &str,
     seq: &mut u64,
@@ -1199,7 +1327,7 @@ fn append_terminal<R: tauri::Runtime>(
 
 fn fail_with_open_effects<R: tauri::Runtime>(
     app: &tauri::AppHandle<R>,
-    journal: &Arc<Mutex<RunJournal>>,
+    journal: &SharedStorage,
     projector: &mut ChatProjector,
     run_id: &str,
     seq: &mut u64,
@@ -1240,7 +1368,7 @@ fn chat_tool_activity(
 
 fn append_emit<R: tauri::Runtime>(
     app: &tauri::AppHandle<R>,
-    journal: &Arc<Mutex<RunJournal>>,
+    journal: &SharedStorage,
     projector: &mut ChatProjector,
     run_id: &str,
     seq: &mut u64,
@@ -1254,8 +1382,11 @@ fn append_emit<R: tauri::Runtime>(
     next_projector.apply(&envelope).map_err(|_| ())?;
     let projection = next_projector.projection().map_err(|_| ())?;
     {
-        let mut journal = journal.lock().map_err(|_| ())?;
-        journal.append(*seq - 1, &envelope).map_err(|_| ())?;
+        let mut storage = journal.lock().map_err(|_| ())?;
+        storage
+            .journal
+            .append(*seq - 1, &envelope)
+            .map_err(|_| ())?;
     }
     *projector = next_projector;
     app.emit("chat-event", chat_event(run_id, projection))
@@ -1309,7 +1440,7 @@ fn event_envelope(
 
 fn fail<R: tauri::Runtime>(
     app: &tauri::AppHandle<R>,
-    journal: &Arc<Mutex<RunJournal>>,
+    journal: &SharedStorage,
     projector: &mut ChatProjector,
     run_id: &str,
     seq: &mut u64,
@@ -1330,7 +1461,7 @@ fn fail<R: tauri::Runtime>(
 
 fn fail_start<R: tauri::Runtime>(
     app: &tauri::AppHandle<R>,
-    journal: &Arc<Mutex<RunJournal>>,
+    journal: &SharedStorage,
     projector: &mut ChatProjector,
     run_id: &str,
     seq: &mut u64,
@@ -1405,6 +1536,99 @@ mod tests {
             transport: Arc::new(Mutex::new(None)),
             adapter: Arc::new(Mutex::new(None)),
         }
+    }
+
+    #[test]
+    fn new_run_ingests_multiple_files_into_one_sequence_and_projector() {
+        let directory =
+            std::env::temp_dir().join(format!("muniment-attachments-{}", Uuid::now_v7()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let first = directory.join("first.txt");
+        let second = directory.join("second.bin");
+        std::fs::write(&first, b"first attachment").unwrap();
+        std::fs::write(&second, b"second attachment").unwrap();
+        let storage = Arc::new(Mutex::new(ChatStorage {
+            journal: RunJournal::open(directory.join("runs.sqlite3")).unwrap(),
+            cas: LocalCas::open(&directory.join("cas")).unwrap(),
+        }));
+        let run_id = Uuid::now_v7().to_string();
+
+        let (seq, mut projector) = prepare_new_run(
+            &storage,
+            &run_id,
+            Some("owner"),
+            vec![SelectedFile { path: first }, SelectedFile { path: second }],
+        )
+        .unwrap();
+        assert_eq!(seq, 3);
+        let mut storage = storage.lock().unwrap();
+        let events = storage.journal.events(&run_id).unwrap();
+        assert_eq!(
+            events
+                .iter()
+                .map(|event| event.event_type.as_str())
+                .collect::<Vec<_>>(),
+            [
+                "run.started",
+                "chat.attachment.ingested",
+                "chat.attachment.ingested",
+            ]
+        );
+        for event in &events[1..] {
+            let EventPayload::Attachment { attachment } = &event.payload else {
+                panic!("attachment payload")
+            };
+            storage.cas.verify(attachment.sha256()).unwrap();
+        }
+        let serialized = serde_json::to_string(&events).unwrap();
+        assert!(!serialized.contains(directory.to_string_lossy().as_ref()));
+        let next = event_envelope(
+            &run_id,
+            4,
+            "assistant.delta",
+            json!({"text":"ready"}),
+            Some("owner"),
+        );
+        projector.apply(&next).unwrap();
+        storage.journal.append(3, &next).unwrap();
+        assert_eq!(
+            storage
+                .journal
+                .events(&run_id)
+                .unwrap()
+                .last()
+                .unwrap()
+                .run_seq,
+            4
+        );
+        drop(storage);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn missing_attachment_returns_non_path_leaking_copy_before_pi_can_start() {
+        let directory = std::env::temp_dir().join(format!("muniment-missing-{}", Uuid::now_v7()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let storage = Arc::new(Mutex::new(ChatStorage {
+            journal: RunJournal::open(directory.join("runs.sqlite3")).unwrap(),
+            cas: LocalCas::open(&directory.join("cas")).unwrap(),
+        }));
+        let missing = directory.join("private-name.txt");
+        let error = match prepare_new_run(
+            &storage,
+            &Uuid::now_v7().to_string(),
+            Some("owner"),
+            vec![SelectedFile {
+                path: missing.clone(),
+            }],
+        ) {
+            Ok(_) => panic!("missing attachment must fail"),
+            Err(error) => error,
+        };
+        assert_eq!(error, attachment_error());
+        assert!(!error.contains(missing.to_string_lossy().as_ref()));
+        drop(storage);
+        std::fs::remove_dir_all(directory).unwrap();
     }
 
     #[test]
@@ -1606,7 +1830,10 @@ mod tests {
         std::fs::create_dir_all(&sessions).unwrap();
         std::fs::write(sessions.join("session.jsonl"), "{}\n").unwrap();
         let (locator, _) = validate_pi_session(&sessions, "session.jsonl").unwrap();
-        let shared = Arc::new(Mutex::new(journal));
+        let shared = Arc::new(Mutex::new(ChatStorage {
+            journal,
+            cas: LocalCas::open(&directory.join("cas")).unwrap(),
+        }));
         let previous_root = std::env::var_os("MUNIMENT_PI_ROOT");
         std::env::remove_var("MUNIMENT_PI_ROOT");
         let (sender, receiver) = std::sync::mpsc::channel();
@@ -1632,12 +1859,16 @@ mod tests {
                 locator,
             }),
             Some(sender),
+            None,
         );
         if let Some(root) = previous_root {
             std::env::set_var("MUNIMENT_PI_ROOT", root);
         }
         assert!(receiver.recv().unwrap().is_err());
-        assert_eq!(shared.lock().unwrap().events(&run_id).unwrap(), before);
+        assert_eq!(
+            shared.lock().unwrap().journal.events(&run_id).unwrap(),
+            before
+        );
         drop(shared);
         std::fs::remove_dir_all(directory).unwrap();
     }
@@ -1710,7 +1941,10 @@ mod tests {
         );
         let existing = journal.events(&run_id).unwrap();
         let (locator, _) = validate_pi_session(&sessions, &session_name).unwrap();
-        let shared = Arc::new(Mutex::new(journal));
+        let shared = Arc::new(Mutex::new(ChatStorage {
+            journal,
+            cas: LocalCas::open(&directory.join("cas")).unwrap(),
+        }));
 
         std::env::set_var("MUNIMENT_PI_ROOT", &directory);
         std::env::set_var("MUNIMENT_PI_TEST_EXECUTABLE", &stub);
@@ -1739,6 +1973,7 @@ mod tests {
                 locator,
             }),
             Some(sender),
+            None,
         );
         assert_eq!(receiver.recv().unwrap(), Ok(()));
         receipt_server.join().unwrap();
@@ -1751,7 +1986,7 @@ mod tests {
             std::env::remove_var(key);
         }
 
-        let events = shared.lock().unwrap().events(&run_id).unwrap();
+        let events = shared.lock().unwrap().journal.events(&run_id).unwrap();
         assert_eq!(
             events.iter().map(|event| event.run_seq).collect::<Vec<_>>(),
             (1..=events.len() as u64).collect::<Vec<_>>()

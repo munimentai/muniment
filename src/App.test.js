@@ -9,6 +9,7 @@ import { historyMessages } from './lib/chat-state.js'
 let App
 let invoke
 let chatListener
+let dialogResult
 
 const snapshot = (groups = []) => ({
   snapshot_version: 2,
@@ -39,11 +40,16 @@ beforeAll(async () => {
     core: { invoke: (...args) => invoke(...args) },
     event: { listen: vi.fn((_, listener) => { chatListener = listener; return Promise.resolve(vi.fn()) }) },
   }
+  window.__TAURI_INTERNALS__ = {
+    invoke: (command) => command === 'plugin:dialog|open' ? Promise.resolve(dialogResult) : Promise.reject(new Error(`unexpected internal command: ${command}`)),
+    transformCallback: vi.fn(),
+  }
   App = (await import('./App.svelte')).default
 })
 
 beforeEach(() => {
   chatListener = undefined
+  dialogResult = null
   invoke = vi.fn(async (command) => {
     if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
     if (command === 'chat_history') return []
@@ -54,6 +60,48 @@ beforeEach(() => {
 })
 
 afterEach(() => cleanup())
+
+describe('local file selection', () => {
+  it('treats picker cancel as a no-op and removes a selected file', async () => {
+    render(App)
+    const add = await screen.findByRole('button', { name: 'Add files' })
+    await fireEvent.click(add)
+    expect(screen.queryByRole('list', { name: 'Selected files' })).not.toBeInTheDocument()
+
+    dialogResult = ['/private/contracts/lease.pdf', 'C:\\notes\\brief.txt']
+    await fireEvent.click(add)
+    expect(await screen.findByText('lease.pdf')).toBeInTheDocument()
+    expect(screen.getByText('brief.txt')).toBeInTheDocument()
+    await fireEvent.click(screen.getByRole('button', { name: 'Remove lease.pdf' }))
+    expect(screen.queryByText('lease.pdf')).not.toBeInTheDocument()
+    expect(screen.getByText('brief.txt')).toBeInTheDocument()
+  })
+
+  it('retains draft and selection when local ingestion fails', async () => {
+    invoke.mockImplementation(async (command) => {
+      if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
+      if (command === 'chat_history') return []
+      if (command === 'auth_entitlement_snapshot') return snapshot()
+      if (command === 'auth_devices') return []
+      if (command === 'chat_submit') throw 'One or more selected files could not be added. Check the files and try again.'
+      throw new Error(`unexpected command: ${command}`)
+    })
+    dialogResult = ['/secret/location/evidence.pdf']
+    render(App)
+    await fireEvent.click(await screen.findByRole('button', { name: 'Add files' }))
+    const composer = screen.getByPlaceholderText('Ask anything')
+    await fireEvent.input(composer, { target: { value: 'Review this' } })
+    await fireEvent.click(screen.getByRole('button', { name: 'Send' }))
+
+    await screen.findByRole('alert')
+    expect(composer).toHaveValue('Review this')
+    expect(screen.getByText('evidence.pdf')).toBeInTheDocument()
+    expect(invoke).toHaveBeenCalledWith('chat_submit', {
+      prompt: 'Review this', files: [{ path: '/secret/location/evidence.pdf' }],
+    })
+    expect(screen.queryByText('/secret/location/evidence.pdf')).not.toBeInTheDocument()
+  })
+})
 
 describe('history hydration', () => {
   it('retains projected tool activity in the restored assistant run', () => {
