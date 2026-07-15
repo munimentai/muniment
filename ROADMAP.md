@@ -35,7 +35,7 @@ Phases mirror harness-spec §9. Muniment-cloud Phase 1 native auth and the cloud
 - DONE — projected Pi tool activity renders as inline mono tool cards, including concurrent running effects and restored history.
 - DONE groundwork — typed, validated Pi extension-UI request/response protocol for blocking select, confirm, input, and editor interactions.
 - DONE durability — blocking Pi UI requests are journaled before projection and replay as a typed pending permission gate.
-- NEXT — session resume as a separately reviewable slice; answering the pending gate remains blocked on the Needs Human decision.
+- DONE — explicit safe resume reopens an eligible interrupted Pi session and continues the same durable run without replaying prompts, permission decisions, or unresolved effects. Answering a pending gate remains blocked on the Needs Human decision.
 
 ### 10. Local Gemma sidecar
 - DONE — supervised JSON-RPC sidecar lifecycle; loopback llama-server launch/health/chat; pinned Gemma descriptor and launch verification; dictation-polish and routing-classifier contracts/evaluations with adversarial framing.
@@ -72,4 +72,4 @@ Phases mirror harness-spec §9. Muniment-cloud Phase 1 native auth and the cloud
 
 ## Standing gates
 - Code PRs: structure smoke, frontend/Rust tests, then Linux/Windows/macOS desktop builds. Markdown-only PRs gate on structure smoke alone; pushes to `main` run smoke only.
-- Build desktop targets only. Mobile scaffolding remains owner-gated by §12.5's repo-strategy ADR. CLI/editor E0 is decided by [ADR 0009](docs/decisions/0009-companion-attach-protocol.md); pure-core protocol envelope types, bounded frame codec, version negotiation, pairing, capability authorization state, and a durable idempotency ledger for effectful requests are complete with contract tests. DONE — bounded pure-core run-stream cursor/acknowledgement window state and bounded artifact transfer window/acknowledgement state. NEXT — platform transport adapters and their contract tests as a separately reviewable slice. No listener or companion UI is complete.
+- Build desktop targets only. Mobile scaffolding remains owner-gated by §12.5's repo-strategy ADR. CLI/editor E0 is decided by [ADR 0009](docs/decisions/0009-companion-attach-protocol.md); pure-core protocol envelope types, bounded frame codec, version negotiation, pairing, capability authorization state, and a durable idempotency ledger for effectful requests are complete with contract tests. DONE — bounded pure-core run-stream cursor/acknowledgement window state and bounded artifact transfer window/acknowledgement state. NEXT — the Linux owned Unix-socket transport adapter and its endpoint/peer-credential contract tests as a separately reviewable slice; macOS and Windows adapters follow separately. No listener or companion UI is complete.
