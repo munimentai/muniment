@@ -7,6 +7,7 @@ mod envelope;
 mod framing;
 mod idempotency;
 mod negotiation;
+pub mod transport;
 
 pub use artifact::*;
 pub use authorization::*;
@@ -15,3 +16,4 @@ pub use envelope::*;
 pub use framing::*;
 pub use idempotency::*;
 pub use negotiation::*;
+pub use transport::*;
