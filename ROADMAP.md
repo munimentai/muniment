@@ -23,7 +23,7 @@ Phases mirror harness-spec §9. Muniment-cloud Phase 1 native auth and the cloud
 - DONE — Sign out atomically clears the production native session locally while preserving the installation identity.
 - DONE — Sign out best-effort revokes the current native refresh family and access sessions before the atomic local clear.
 - DONE — the signed-in profile consumes the live typed entitlement snapshot without exposing signing material.
-- NEXT — native device management as a separately reviewable slice.
+- DONE — the signed-in access panel lists server-derived native-device metadata with current, active, revoked, empty, loading, failure, and retry states. No cross-device mutation is selected without a documented live cloud contract.
 
 ### 9. Pi sidecar and cloud chat
 - DONE foundation — ADR 0008 pins Pi 0.73.1, chooses verified first-use acquisition of its platform-native executable, and proves its real `get_state` RPC readiness through `SidecarSupervisor`.
