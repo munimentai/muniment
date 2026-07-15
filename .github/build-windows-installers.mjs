@@ -3,6 +3,13 @@ import { existsSync, readFileSync, copyFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import { spawnSync } from "node:child_process";
+import {
+  SIGN_CLI_VERSION,
+  resolveSigningConfiguration,
+  signArguments,
+  signToolInstallArgs,
+  tauriSignCommand,
+} from "./lib/windows-signing.mjs";
 
 const run = (...args) => {
   const cli = join("node_modules", "@tauri-apps", "cli", "tauri.js");
@@ -21,8 +28,8 @@ const soleMsi = async () => {
 // Azure Artifact Signing credentials arrive as a file the desktop-ci driver
 // writes into the VM over the SSH data channel (never on argv). Load them so
 // tauri's signCommand and the explicit MSI signing below can authenticate. When
-// the file or any variable is absent the build proceeds UNSIGNED — the nightly
-// keeps shipping and signing turns on the moment the six repo secrets exist.
+// the file is absent, developer/PR builds proceed unsigned. A partial set is a
+// configuration error so a missing nightly secret cannot publish unsigned.
 const credFile = join(tmpdir(), "dci_env");
 if (existsSync(credFile)) {
   for (const line of readFileSync(credFile, "utf8").split(/\r?\n/)) {
@@ -30,28 +37,24 @@ if (existsSync(credFile)) {
     if (eq > 0) process.env[line.slice(0, eq).trim()] = line.slice(eq + 1);
   }
 }
-const SIGN_VARS = ["AZURE_TENANT_ID", "AZURE_CLIENT_ID", "AZURE_CLIENT_SECRET",
-  "AZURE_SIGNING_ENDPOINT", "AZURE_SIGNING_ACCOUNT", "AZURE_SIGNING_PROFILE"];
-const signing = SIGN_VARS.every((v) => process.env[v]);
+let signingConfiguration;
+try {
+  signingConfiguration = resolveSigningConfiguration(process.env);
+} catch (error) {
+  console.error(error.message);
+  process.exit(1);
+}
+const signing = signingConfiguration !== null;
 
 let signArgs = [];
 // Microsoft's `sign` dotnet global tool signs on its own (no signtool) and
 // authenticates the service principal via Azure.Identity DefaultAzureCredential,
 // which reads AZURE_TENANT_ID/CLIENT_ID/CLIENT_SECRET from the env (no az login).
-// .NET 8+ SDK and `sign` are baked into the Windows CI template.
-const signSubArgs = (file) => [
-  "code", "artifact-signing",
-  "--verbosity", "warning",
-  "--timestamp-url", "http://timestamp.acs.microsoft.com",
-  "--artifact-signing-endpoint", process.env.AZURE_SIGNING_ENDPOINT,
-  "--artifact-signing-account", process.env.AZURE_SIGNING_ACCOUNT,
-  "--artifact-signing-certificate-profile", process.env.AZURE_SIGNING_PROFILE,
-  file,
-];
+// Sign requires .NET 8+; the exact reviewed Sign CLI is installed below.
+const signSubArgs = (file) => signArguments(signingConfiguration, file);
 if (signing) {
-  // Ensure the signing toolchain (.NET SDK + `sign`). Self-provisioning keeps the
-  // build working without modifying the shared Windows CI template; baking these
-  // into the template later just turns these installs into fast no-ops.
+  // Ensure the signing toolchain (.NET SDK + the reviewed `sign` version).
+  // Self-provisioning keeps the build independent of the shared Windows image.
   const onPath = (exe) => spawnSync("where", [exe], { encoding: "utf8" }).status === 0;
   if (!onPath("dotnet")) {
     console.log("installing .NET SDK (build-time; bake into the template to skip)...");
@@ -63,24 +66,18 @@ if (signing) {
     process.env.DOTNET_ROOT = dotnetDir;
     process.env.PATH = `${dotnetDir};${process.env.PATH}`;
   }
-  if (!onPath("sign")) {
-    console.log("installing dotnet `sign` tool (build-time)...");
-    const signDir = join(tmpdir(), "signtools");
-    const r = spawnSync("dotnet", ["tool", "install", "--tool-path", signDir, "--prerelease", "sign"],
-      { stdio: "inherit" });
-    if (r.status !== 0) process.exit(r.status ?? 1);
-    process.env.PATH = `${signDir};${process.env.PATH}`;
-  }
+  console.log(`installing dotnet \`sign\` tool ${SIGN_CLI_VERSION} (build-time)...`);
+  const signDir = join(tmpdir(), "signtools");
+  const signInstall = spawnSync("dotnet", signToolInstallArgs(signDir),
+    { stdio: "inherit" });
+  if (signInstall.status !== 0) process.exit(signInstall.status ?? 1);
+  process.env.PATH = `${signDir};${process.env.PATH}`;
 
   // Tauri signs the app .exe (before packaging) and the NSIS installer with this
   // custom command; %1 is each file path.
-  const signCommand = "sign code artifact-signing --verbosity warning"
-    + " --timestamp-url http://timestamp.acs.microsoft.com"
-    + ` --artifact-signing-endpoint ${process.env.AZURE_SIGNING_ENDPOINT}`
-    + ` --artifact-signing-account ${process.env.AZURE_SIGNING_ACCOUNT}`
-    + ` --artifact-signing-certificate-profile ${process.env.AZURE_SIGNING_PROFILE} %1`;
+  const signCommand = tauriSignCommand(signingConfiguration);
   signArgs = ["--config", JSON.stringify({ bundle: { windows: { signCommand } } })];
-  console.log("windows signing ENABLED (Azure Artifact Signing via dotnet `sign`)");
+  console.log(`windows signing ENABLED (Azure Artifact Signing via dotnet \`sign\` ${SIGN_CLI_VERSION})`);
 
   // Preflight: confirm the toolchain and do ONE real test-sign on a throwaway
   // copy with output inherited, so the real `sign` error surfaces (tauri's
@@ -102,7 +99,7 @@ if (signing) {
   }
   console.log("signing preflight OK");
 } else {
-  console.log("windows signing SKIPPED: Azure credentials absent (unsigned build)");
+  console.log("windows signing SKIPPED: no Azure signing credentials configured (unsigned developer/PR build)");
 }
 
 const signFile = (file) => {
