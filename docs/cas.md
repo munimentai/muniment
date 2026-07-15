@@ -84,3 +84,11 @@ This boundary is local durability only. An ingested attachment has not been
 uploaded, processed by a cloud service, or supplied to Pi. Source filesystem
 paths are transient adapter inputs and never appear in journal payloads,
 history, command results, or user-facing errors.
+
+The chat projector reduces attachment events in journal order to a public
+display record containing only `displayName`, `byteLength`, and optional
+`mediaType`. The content hash remains inside the journal/CAS boundary. Submit
+results, live chat events, and restored history all use this same projection.
+Until model file delivery is implemented, both live and restored attachment
+chips explicitly say `Saved locally · not sent to model`; this status describes
+local durability and must not be presented as upload or model delivery.
