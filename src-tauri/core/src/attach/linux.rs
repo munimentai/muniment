@@ -288,14 +288,15 @@ fn remove_verified(
     uid: u32,
     socket_id: Option<Identity>,
 ) -> Result<(), LinuxAttachError> {
-    remove_verified_with(parent, uid, socket_id, || {})
+    remove_verified_with(parent, uid, socket_id, || {}, || {})
 }
 
 fn remove_verified_with(
     parent: &File,
     uid: u32,
     socket_id: Option<Identity>,
-    before_rename: impl FnOnce(),
+    before_exchange: impl FnOnce(),
+    after_exchange: impl FnOnce(),
 ) -> Result<(), LinuxAttachError> {
     let Some(metadata) = endpoint_metadata(parent)? else {
         return Ok(());
@@ -304,24 +305,33 @@ fn remove_verified_with(
     if socket_id.is_some_and(|identity| identity != Identity::of(&metadata)) {
         return Err(LinuxAttachError::EndpointInvalid);
     }
-    before_rename();
+    before_exchange();
 
-    // Linux has no inode-conditional unlink. Atomically move the name aside,
-    // then validate the moved inode before unlinking it. If another process
-    // won the race and supplied a replacement, put it back and fail closed.
+    // Linux has no inode-conditional unlink. Exchange the endpoint with a
+    // private sentinel, keeping the public name occupied while the moved inode
+    // is validated. If another process won the race and supplied a replacement,
+    // the exchange can be reversed without allowing the endpoint to be
+    // repopulated in the meantime.
     let quarantine = format!(
         ".attach-v1.sock.remove-{}-{}",
         std::process::id(),
         NEXT_QUARANTINE.fetch_add(1, Ordering::Relaxed)
     );
-    rename_at_noreplace(parent, ENDPOINT_NAME, &quarantine)?;
+    create_sentinel(parent, &quarantine)?;
+    if let Err(error) = exchange_at(parent, ENDPOINT_NAME, &quarantine) {
+        let _ = unlink_at(parent, &quarantine);
+        return Err(error);
+    }
+    after_exchange();
     let moved = metadata_at(parent, &quarantine)?.ok_or(LinuxAttachError::Io)?;
     let expected = Identity::of(&metadata);
     if Identity::of(&moved) != expected {
-        rename_at_noreplace(parent, &quarantine, ENDPOINT_NAME)?;
+        exchange_at(parent, ENDPOINT_NAME, &quarantine)?;
+        unlink_at(parent, &quarantine)?;
         return Err(LinuxAttachError::EndpointInvalid);
     }
-    unlink_at(parent, &quarantine)
+    unlink_at(parent, &quarantine)?;
+    unlink_at(parent, ENDPOINT_NAME)
 }
 
 fn open_verified_directory(path: &Path, uid: u32, runtime: bool) -> Result<File, LinuxAttachError> {
@@ -417,7 +427,26 @@ fn set_endpoint_mode(endpoint: &File) -> Result<(), LinuxAttachError> {
     fs::set_permissions(path, Permissions::from_mode(SOCKET_MODE)).map_err(|_| LinuxAttachError::Io)
 }
 
-fn rename_at_noreplace(parent: &File, from: &str, to: &str) -> Result<(), LinuxAttachError> {
+fn create_sentinel(parent: &File, name: &str) -> Result<(), LinuxAttachError> {
+    let name = cstring(name)?;
+    // SAFETY: the directory fd and NUL-terminated name are valid for the call.
+    let fd = unsafe {
+        libc::openat(
+            parent.as_raw_fd(),
+            name.as_ptr(),
+            libc::O_WRONLY | libc::O_CREAT | libc::O_EXCL | libc::O_CLOEXEC,
+            SOCKET_MODE,
+        )
+    };
+    if fd < 0 {
+        return Err(LinuxAttachError::Io);
+    }
+    // SAFETY: openat returned a new owned descriptor.
+    drop(unsafe { File::from_raw_fd(fd) });
+    Ok(())
+}
+
+fn exchange_at(parent: &File, from: &str, to: &str) -> Result<(), LinuxAttachError> {
     let from = cstring(from)?;
     let to = cstring(to)?;
     // SAFETY: both names are valid and resolved relative to the same live directory fd.
@@ -428,7 +457,7 @@ fn rename_at_noreplace(parent: &File, from: &str, to: &str) -> Result<(), LinuxA
             from.as_ptr(),
             parent.as_raw_fd(),
             to.as_ptr(),
-            libc::RENAME_NOREPLACE,
+            libc::RENAME_EXCHANGE,
         )
     };
     if result == 0 {
@@ -479,13 +508,56 @@ mod tests {
         let mut replacement = None;
         let mut replacement_identity = None;
 
-        let result = remove_verified_with(&parent, effective_uid(), Some(identity), || {
-            fs::remove_file(&endpoint).unwrap();
-            replacement = Some(UnixListener::bind(&endpoint).unwrap());
-            replacement_identity = Some(Identity::of(&fs::symlink_metadata(&endpoint).unwrap()));
-        });
+        let result = remove_verified_with(
+            &parent,
+            effective_uid(),
+            Some(identity),
+            || {
+                fs::remove_file(&endpoint).unwrap();
+                replacement = Some(UnixListener::bind(&endpoint).unwrap());
+                replacement_identity =
+                    Some(Identity::of(&fs::symlink_metadata(&endpoint).unwrap()));
+            },
+            || {},
+        );
 
         assert_eq!(result, Err(LinuxAttachError::EndpointInvalid));
+        assert_eq!(
+            Identity::of(&fs::symlink_metadata(&endpoint).unwrap()),
+            replacement_identity.unwrap()
+        );
+        drop(original);
+        drop(replacement);
+        fs::remove_dir_all(parent_path).unwrap();
+    }
+
+    #[test]
+    fn removal_keeps_endpoint_occupied_while_restoring_a_replacement() {
+        let (parent_path, parent) = test_parent();
+        let endpoint = parent_path.join(ENDPOINT_NAME);
+        let original = UnixListener::bind(&endpoint).unwrap();
+        let identity = Identity::of(&fs::symlink_metadata(&endpoint).unwrap());
+        let mut replacement = None;
+        let mut replacement_identity = None;
+        let mut recreation_was_blocked = false;
+
+        let result = remove_verified_with(
+            &parent,
+            effective_uid(),
+            Some(identity),
+            || {
+                fs::remove_file(&endpoint).unwrap();
+                replacement = Some(UnixListener::bind(&endpoint).unwrap());
+                replacement_identity =
+                    Some(Identity::of(&fs::symlink_metadata(&endpoint).unwrap()));
+            },
+            || {
+                recreation_was_blocked = UnixListener::bind(&endpoint).is_err();
+            },
+        );
+
+        assert_eq!(result, Err(LinuxAttachError::EndpointInvalid));
+        assert!(recreation_was_blocked);
         assert_eq!(
             Identity::of(&fs::symlink_metadata(&endpoint).unwrap()),
             replacement_identity.unwrap()
