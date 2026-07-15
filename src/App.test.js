@@ -50,9 +50,10 @@ beforeAll(async () => {
 beforeEach(() => {
   chatListener = undefined
   dialogResult = null
-  invoke = vi.fn(async (command) => {
+  invoke = vi.fn(async (command, payload) => {
     if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
     if (command === 'chat_history') return []
+    if (command === 'chat_file_metadata') return { displayName: payload.path.split(/[\\/]/).pop(), byteLength: 1536 }
     if (command === 'auth_entitlement_snapshot') return snapshot()
     if (command === 'auth_devices') return []
     throw new Error(`unexpected command: ${command}`)
@@ -78,9 +79,10 @@ describe('local file selection', () => {
   })
 
   it('retains draft and selection when local ingestion fails', async () => {
-    invoke.mockImplementation(async (command) => {
+    invoke.mockImplementation(async (command, payload) => {
       if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
       if (command === 'chat_history') return []
+      if (command === 'chat_file_metadata') return { displayName: 'evidence.pdf', byteLength: 2048 }
       if (command === 'auth_entitlement_snapshot') return snapshot()
       if (command === 'auth_devices') return []
       if (command === 'chat_submit') throw 'One or more selected files could not be added. Check the files and try again.'
@@ -104,9 +106,12 @@ describe('local file selection', () => {
 
   it('submits selected paths and clears the draft and selection only after success', async () => {
     let resolveSubmit
-    invoke.mockImplementation(async (command) => {
+    invoke.mockImplementation(async (command, payload) => {
       if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
       if (command === 'chat_history') return []
+      if (command === 'chat_file_metadata') {
+        return { displayName: payload.path.split('/').pop(), byteLength: 1024 }
+      }
       if (command === 'auth_entitlement_snapshot') return snapshot()
       if (command === 'auth_devices') return []
       if (command === 'chat_submit') return new Promise((resolve) => { resolveSubmit = resolve })
@@ -130,10 +135,35 @@ describe('local file selection', () => {
     expect(screen.getByText('lease.pdf')).toBeInTheDocument()
     expect(screen.getByText('notes.txt')).toBeInTheDocument()
 
-    resolveSubmit({ runId: 'run-with-files' })
+    resolveSubmit({ runId: 'run-with-files', attachments: [
+      { displayName: 'lease.pdf', byteLength: 1024 },
+      { displayName: 'notes.txt', byteLength: 1024 },
+    ] })
     await waitFor(() => expect(composer).toHaveValue(''))
     expect(screen.queryByRole('list', { name: 'Selected files' })).not.toBeInTheDocument()
+    const saved = screen.getByRole('list', { name: 'Saved attachments' })
+    expect(saved).toHaveTextContent('lease.pdf1.0 KBSaved locally · not sent to model')
+    expect(document.body).not.toHaveTextContent('/private/contracts')
   })
+})
+
+it('hydrates safe durable attachment chips without paths or hashes', async () => {
+  invoke.mockImplementation(async (command) => {
+    if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
+    if (command === 'chat_history') return [{
+      runId: 'restored', prompt: 'Review it', phase: 'complete', text: 'Done', receipt: {},
+      toolActivity: [], resumable: false,
+      attachments: [{ displayName: 'contract.pdf', byteLength: 219136 }],
+    }]
+    if (command === 'auth_entitlement_snapshot') return snapshot()
+    if (command === 'auth_devices') return []
+    throw new Error(`unexpected command: ${command}`)
+  })
+  render(App)
+  const saved = await screen.findByRole('list', { name: 'Saved attachments' })
+  expect(saved).toHaveTextContent('contract.pdf214 KBSaved locally · not sent to model')
+  expect(document.body).not.toHaveTextContent('/private/contract.pdf')
+  expect(document.body).not.toHaveTextContent('sha256')
 })
 
 describe('history hydration', () => {

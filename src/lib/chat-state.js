@@ -33,9 +33,22 @@ export function toolStatus(activity = {}) {
   return ['running', 'completed', 'failed'].includes(activity.status) ? activity.status : 'status unknown'
 }
 
+export function formatByteSize(bytes) {
+  if (!Number.isFinite(bytes) || bytes < 0) return 'Unknown size'
+  if (bytes < 1024) return `${bytes} B`
+  const units = ['KB', 'MB', 'GB', 'TB']
+  let value = bytes / 1024
+  let unit = 0
+  while (value >= 1024 && unit < units.length - 1) {
+    value /= 1024
+    unit += 1
+  }
+  return `${value >= 10 ? value.toFixed(0) : value.toFixed(1)} ${units[unit]}`
+}
+
 export function applyChatEvent(run, event) {
   if (!run || event.runId !== run.id) return run
-  if (event.phase) return { ...run, phase: event.phase, text: event.text ?? '', receipt: event.receipt ?? null, toolActivity: event.toolActivity ?? [] }
+  if (event.phase) return { ...run, phase: event.phase, text: event.text ?? '', receipt: event.receipt ?? null, toolActivity: event.toolActivity ?? [], attachments: event.attachments ?? run.attachments ?? [] }
   if (event.type === 'prompt-accepted') return { ...run, accepted: true }
   if (event.type === 'text-delta') return { ...run, phase: 'streaming', text: run.text + event.text }
   if (event.type === 'completed') return { ...run, phase: 'complete', receipt: event.receipt ?? {} }
@@ -50,7 +63,7 @@ export function applyBufferedChatEvents(run, events) {
 
 export function historyMessages(history) {
   return history.flatMap((entry) => [
-    ...(entry.prompt ? [{ role: 'user', text: entry.prompt }] : []),
+    ...(entry.prompt ? [{ role: 'user', text: entry.prompt, attachments: entry.attachments ?? [] }] : []),
     { role: 'assistant', run: { id: entry.runId, phase: entry.phase, text: entry.text, receipt: entry.receipt ?? null, prompt: entry.prompt ?? '', toolActivity: entry.toolActivity ?? [], resumable: entry.resumable === true } },
   ])
 }
