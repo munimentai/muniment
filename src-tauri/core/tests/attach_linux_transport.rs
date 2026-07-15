@@ -1,14 +1,15 @@
 #![cfg(target_os = "linux")]
 
 use muniment_core::attach::transport::linux::{
-    LinuxAttachListener, LinuxTransportError, PeerCredentialProvider, PeerCredentials,
+    LinuxAttachListener, LinuxTransportError, ParentOpenHook, PeerCredentialProvider,
+    PeerCredentials,
 };
 use muniment_core::attach::{decode_frame, encode_frame, AttachListener};
 use serde_json::{json, Value};
 use std::fs::{self, Permissions};
 use std::io::{Read, Write};
 use std::os::fd::RawFd;
-use std::os::unix::fs::{symlink, PermissionsExt};
+use std::os::unix::fs::{symlink, FileTypeExt, PermissionsExt};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -199,4 +200,47 @@ fn removes_an_owned_stale_socket() {
     drop(UnixListener::bind(&endpoint).unwrap());
     let listener = LinuxAttachListener::bind_in(runtime.as_ref()).unwrap();
     assert_eq!(listener.endpoint(), endpoint);
+}
+
+struct ReplaceParent {
+    replacement: PathBuf,
+}
+
+impl ParentOpenHook for ReplaceParent {
+    fn before_parent_open(&self, parent: &Path) {
+        let verified = parent.with_extension("verified");
+        fs::rename(parent, verified).unwrap();
+        fs::rename(&self.replacement, parent).unwrap();
+    }
+}
+
+#[test]
+fn startup_never_unlinks_an_endpoint_under_a_replaced_parent() {
+    let runtime = TestDirectory::new();
+    let verified_parent = runtime.as_ref().join("muniment");
+    fs::create_dir(&verified_parent).unwrap();
+    fs::set_permissions(&verified_parent, Permissions::from_mode(0o700)).unwrap();
+
+    let replacement = runtime.as_ref().join("replacement");
+    fs::create_dir(&replacement).unwrap();
+    fs::set_permissions(&replacement, Permissions::from_mode(0o700)).unwrap();
+    let replacement_endpoint = replacement.join("attach-v1.sock");
+    drop(UnixListener::bind(&replacement_endpoint).unwrap());
+
+    let result = LinuxAttachListener::bind_with_credentials_and_hook(
+        runtime.as_ref(),
+        muniment_core::attach::transport::linux::SoPeerCredentialProvider,
+        ReplaceParent {
+            replacement: replacement.clone(),
+        },
+    );
+
+    assert!(matches!(
+        result,
+        Err(LinuxTransportError::AppDirectoryInsecure)
+    ));
+    assert!(fs::symlink_metadata(verified_parent.join("attach-v1.sock"))
+        .unwrap()
+        .file_type()
+        .is_socket());
 }

@@ -91,6 +91,17 @@ impl PeerCredentialProvider for SoPeerCredentialProvider {
     }
 }
 
+/// Test seam for exercising pathname-to-descriptor replacement races.
+#[doc(hidden)]
+pub trait ParentOpenHook {
+    fn before_parent_open(&self, _parent: &Path) {}
+}
+
+#[derive(Debug, Default, Clone, Copy)]
+pub struct NoParentOpenHook;
+
+impl ParentOpenHook for NoParentOpenHook {}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct Identity {
     device: u64,
@@ -133,6 +144,15 @@ impl<C: PeerCredentialProvider> LinuxAttachListener<C> {
         runtime: &Path,
         credentials: C,
     ) -> Result<Self, LinuxTransportError> {
+        Self::bind_with_credentials_and_hook(runtime, credentials, NoParentOpenHook)
+    }
+
+    #[doc(hidden)]
+    pub fn bind_with_credentials_and_hook<H: ParentOpenHook>(
+        runtime: &Path,
+        credentials: C,
+        hook: H,
+    ) -> Result<Self, LinuxTransportError> {
         if !runtime.is_absolute() {
             return Err(LinuxTransportError::RuntimeDirectoryNotAbsolute);
         }
@@ -160,7 +180,9 @@ impl<C: PeerCredentialProvider> LinuxAttachListener<C> {
         )?;
         let parent_identity = Identity::of(&parent_metadata);
         let endpoint = parent.join(SOCKET_NAME);
+        hook.before_parent_open(&parent);
         let parent_fd = open_directory(&parent)?;
+        verify_open_directory(&parent_fd, parent_identity, effective_uid)?;
         let anchored_endpoint = anchored_path(&parent_fd, SOCKET_NAME);
 
         remove_stale_endpoint(&parent_fd, effective_uid)?;
@@ -181,9 +203,16 @@ impl<C: PeerCredentialProvider> LinuxAttachListener<C> {
             return Err(LinuxTransportError::Io);
         }
         if !same_directory(&parent, parent_identity, effective_uid) {
+            let _ = remove_matching_endpoint(&parent_fd, Some(bound_identity), effective_uid);
             return Err(LinuxTransportError::AppDirectoryInsecure);
         }
-        let socket_metadata = verify_socket(&anchored_endpoint, effective_uid, Some(0o600))?;
+        let socket_metadata = match verify_socket(&anchored_endpoint, effective_uid, Some(0o600)) {
+            Ok(metadata) => metadata,
+            Err(error) => {
+                let _ = remove_matching_endpoint(&parent_fd, Some(bound_identity), effective_uid);
+                return Err(error);
+            }
+        };
 
         Ok(Self {
             listener: Some(listener),
@@ -301,6 +330,23 @@ fn open_directory(path: &Path) -> Result<OwnedFd, LinuxTransportError> {
         return Err(LinuxTransportError::AppDirectoryInsecure);
     }
     Ok(unsafe { OwnedFd::from_raw_fd(fd) })
+}
+
+fn verify_open_directory(
+    fd: &OwnedFd,
+    expected: Identity,
+    uid: u32,
+) -> Result<(), LinuxTransportError> {
+    let metadata = fs::metadata(anchored_fd_path(fd))
+        .map_err(|_| LinuxTransportError::AppDirectoryInsecure)?;
+    if !metadata.file_type().is_dir()
+        || metadata.st_uid() != uid
+        || metadata.st_mode() & 0o777 != 0o700
+        || Identity::of(&metadata) != expected
+    {
+        return Err(LinuxTransportError::AppDirectoryInsecure);
+    }
+    Ok(())
 }
 
 fn open_nofollow(parent: &OwnedFd, name: &str) -> Result<OwnedFd, LinuxTransportError> {
