@@ -80,6 +80,63 @@ describe('history hydration', () => {
   })
 })
 
+describe('interrupted reply resume', () => {
+  const interrupted = (resumable = true) => [{
+    runId: 'run-interrupted', phase: 'interrupted', text: 'Partial answer',
+    prompt: 'Original secret prompt', receipt: null, toolActivity: [], resumable,
+  }]
+
+  it('resumes the same run once and keeps its partial response visible', async () => {
+    let resolveResume
+    invoke.mockImplementation(async (command) => {
+      if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
+      if (command === 'chat_history') return interrupted()
+      if (command === 'auth_entitlement_snapshot') return snapshot()
+      if (command === 'auth_devices') return []
+      if (command === 'chat_resume') return new Promise((resolve) => { resolveResume = resolve })
+      throw new Error(`unexpected command: ${command}`)
+    })
+    render(App)
+    const button = await screen.findByRole('button', { name: 'Resume' })
+    await fireEvent.click(button)
+    await fireEvent.click(button)
+    expect(screen.getByText('Partial answer')).toBeInTheDocument()
+    expect(invoke.mock.calls.filter(([command]) => command === 'chat_resume')).toEqual([
+      ['chat_resume', { runId: 'run-interrupted' }],
+    ])
+    resolveResume({ runId: 'run-interrupted' })
+  })
+
+  it('offers a new-run fallback only when interruption is not resumable', async () => {
+    invoke.mockImplementation(async (command) => {
+      if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
+      if (command === 'chat_history') return interrupted(false)
+      if (command === 'auth_entitlement_snapshot') return snapshot()
+      if (command === 'auth_devices') return []
+      throw new Error(`unexpected command: ${command}`)
+    })
+    render(App)
+    expect(await screen.findByRole('button', { name: 'Try again' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Resume' })).not.toBeInTheDocument()
+  })
+
+  it('keeps a rejected resume interrupted with a retryable error', async () => {
+    invoke.mockImplementation(async (command) => {
+      if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
+      if (command === 'chat_history') return interrupted()
+      if (command === 'auth_entitlement_snapshot') return snapshot()
+      if (command === 'auth_devices') return []
+      if (command === 'chat_resume') throw 'This reply cannot be resumed.'
+      throw new Error(`unexpected command: ${command}`)
+    })
+    render(App)
+    await fireEvent.click(await screen.findByRole('button', { name: 'Resume' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent('This reply cannot be resumed.')
+    expect(screen.getByRole('button', { name: 'Resume' })).toBeEnabled()
+    expect(screen.getByText('Partial answer')).toBeInTheDocument()
+  })
+})
+
 describe('tool activity cards', () => {
   const historyWith = (toolActivity, phase = 'complete') => [{
     runId: 'run-tools', phase, text: 'I used tools.', prompt: 'Do work', receipt: {}, toolActivity,

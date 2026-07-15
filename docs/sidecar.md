@@ -249,8 +249,8 @@ Supervisor lifecycle events and stderr are diagnostic telemetry, not durable
 user-session history. Pi integration will translate only user-relevant domain
 facts into the append-only journal defined by [ADR 0002](decisions/0002-event-sourced-run-journal.md).
 That journal—not the supervisor replay buffer, raw JSON-RPC transcript, or
-current status—is the future source for resume, receipt, and mobile-relay
-projections; none of those projections is implemented here.
+current status—is the source for explicit resume and receipt projections, and
+the future source for mobile relay.
 
 ## Tests
 
@@ -271,3 +271,20 @@ Raw upstream errors are intentionally discarded at that boundary.
 Prompt text and gateway credentials are process-memory-only inputs. Journal
 events contain only prompt acceptance, renderable deltas, terminal state, and
 the authoritative receipt fields. Missing receipt fields remain absent.
+
+## Explicit Pi session resume
+
+A signed-in user may explicitly resume an eligible interrupted reply. Muniment
+reloads the durable journal, verifies its authenticated owner, validates its one
+Pi session binding, and reopens the pinned runtime with `--session`. Only after
+the reopened runtime is ready does it send one fixed continuation prompt. New
+frames use the existing projector, receipt, cancellation, tool, and terminal
+paths and continue the same run at its next journal sequence. The protected
+original prompt is neither loaded nor replayed.
+
+Resume fails closed for unknown or terminal runs, invalid or missing bindings,
+pending extension-UI permission requests, and tool effects with an unknown
+outcome. It never answers a gate, replays an effect, or starts automatically.
+Rejected resumes leave the journal unchanged and return a path- and
+credential-free error. Pi session JSONL remains runtime recovery material; the
+journal projection, not JSONL, is the UI and history authority.
