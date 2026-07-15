@@ -104,7 +104,7 @@ pub enum AttachmentIngestError {
     /// CAS publication succeeded, but the journal reference was not appended.
     /// The published object is unreferenced and may be collected.
     JournalAppend {
-        source: JournalError,
+        source: Box<JournalError>,
         attachment: ChatAttachment,
     },
 }
@@ -185,7 +185,7 @@ where
     journal
         .append(expected_last_seq, &event)
         .map_err(|source| AttachmentIngestError::JournalAppend {
-            source,
+            source: Box::new(source),
             attachment: attachment.clone(),
         })?;
     Ok(attachment)
