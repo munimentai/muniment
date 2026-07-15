@@ -306,6 +306,11 @@ impl RunReducer {
                 }
                 self.set_status(event, RunStatus::Active);
             }
+            "chat.attachment.ingested" => {
+                self.require_active(event)?;
+                let status = self.state.as_ref().unwrap().status.clone();
+                self.set_status(event, status);
+            }
             "runtime.pi_session.bound" => {
                 self.require_active(event)?;
                 if self.pi_session.is_some() {
@@ -519,7 +524,8 @@ fn is_known_safety_event(t: &str) -> bool {
     )
 }
 fn is_state_event(t: &str) -> bool {
-    t.starts_with("run.")
+    t.starts_with("chat.attachment.")
+        || t.starts_with("run.")
         || t.starts_with("model.")
         || t.starts_with("permission.")
         || t.starts_with("tool.")

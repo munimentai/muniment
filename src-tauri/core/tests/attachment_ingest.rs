@@ -69,6 +69,30 @@ fn event(seq: u64, attachment: ChatAttachment) -> EventEnvelope {
     }
 }
 
+fn attachment() -> ChatAttachment {
+    serde_json::from_value(json!({
+        "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "display_name": "evidence.txt",
+        "byte_length": 8
+    }))
+    .unwrap()
+}
+
+fn inline_event(seq: u64, event_type: &str, payload_json: serde_json::Value) -> EventEnvelope {
+    let mut event = event(seq, attachment());
+    event.event_type = event_type.into();
+    event.event_version = 1;
+    event.payload = EventPayload::Inline { payload_json };
+    event
+}
+
+fn attachment_event(seq: u64) -> EventEnvelope {
+    let mut event = event(seq, attachment());
+    event.event_type = ATTACHMENT_EVENT_TYPE.into();
+    event.event_version = ATTACHMENT_EVENT_VERSION;
+    event
+}
+
 struct GeneratedReader {
     remaining: u64,
     reads: usize,
@@ -163,6 +187,45 @@ fn streams_multiple_buffers_and_round_trips_safe_metadata_and_reference() {
         project_chat(&[started, projected_event]),
         Err(ReduceError::MissingAttachmentPayload { .. })
     ));
+}
+
+#[test]
+fn attachment_projection_rejects_non_executable_and_terminal_states() {
+    let pending = vec![
+        inline_event(1, "run.started", json!({})),
+        inline_event(
+            2,
+            "permission.requested",
+            json!({"gate_id":"g","kind":"confirm","title":"Allow?","message":"Proceed?"}),
+        ),
+        attachment_event(3),
+    ];
+    assert!(matches!(
+        project_chat(&pending),
+        Err(ReduceError::InvalidTransition { .. })
+    ));
+
+    let needs_attention = vec![
+        inline_event(1, "run.started", json!({})),
+        inline_event(2, "run.needs_attention", json!({"reason":"interrupted"})),
+        attachment_event(3),
+    ];
+    assert!(matches!(
+        project_chat(&needs_attention),
+        Err(ReduceError::InvalidTransition { .. })
+    ));
+
+    for terminal in ["run.completed", "run.cancelled", "run.failed"] {
+        let events = vec![
+            inline_event(1, "run.started", json!({})),
+            inline_event(2, terminal, json!({})),
+            attachment_event(3),
+        ];
+        assert!(matches!(
+            project_chat(&events),
+            Err(ReduceError::InvalidTransition { .. })
+        ));
+    }
 }
 
 #[test]
