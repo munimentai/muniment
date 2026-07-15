@@ -150,6 +150,30 @@ struct ResumeContext {
     locator: PiSessionLocator,
 }
 
+struct ResumeAttempt {
+    result: Option<std::sync::mpsc::Sender<Result<(), String>>>,
+}
+
+impl ResumeAttempt {
+    fn new(result: Option<std::sync::mpsc::Sender<Result<(), String>>>) -> Self {
+        Self { result }
+    }
+
+    fn accepted(&mut self) {
+        if let Some(result) = self.result.take() {
+            let _ = result.send(Ok(()));
+        }
+    }
+}
+
+impl Drop for ResumeAttempt {
+    fn drop(&mut self) {
+        if let Some(result) = self.result.take() {
+            let _ = result.send(Err("This reply could not be resumed. Try again.".into()));
+        }
+    }
+}
+
 fn reconcile_interrupted_runs(journal: &mut RunJournal) {
     let Ok(run_ids) = journal.run_ids() else {
         return;
@@ -368,6 +392,7 @@ pub async fn chat_submit(
             transport,
             adapter,
             None,
+            None,
         );
         if let Some(state) = app.try_state::<ChatState>() {
             let mut active = state
@@ -424,6 +449,7 @@ pub async fn chat_resume(
     let journal = Arc::clone(&state.journal);
     let runtime = Arc::clone(&state.runtime);
     let result_id = run_id.clone();
+    let (attempt_sender, attempt_receiver) = std::sync::mpsc::channel();
     tauri::async_runtime::spawn_blocking(move || {
         coordinate(
             app.clone(),
@@ -438,6 +464,7 @@ pub async fn chat_resume(
             transport,
             adapter,
             Some(resume),
+            Some(attempt_sender),
         );
         if let Some(state) = app.try_state::<ChatState>() {
             let mut active = state
@@ -449,6 +476,10 @@ pub async fn chat_resume(
             }
         }
     });
+    tauri::async_runtime::spawn_blocking(move || attempt_receiver.recv())
+        .await
+        .map_err(|_| "This reply could not be resumed. Try again.".to_string())?
+        .map_err(|_| "This reply could not be resumed. Try again.".to_string())??;
     Ok(SubmitResult { run_id: result_id })
 }
 
@@ -557,7 +588,9 @@ fn coordinate(
     active_transport: Arc<Mutex<Option<Arc<PiRpcTransport>>>>,
     active_adapter: Arc<Mutex<Option<Arc<PiRunAdapter>>>>,
     resume: Option<ResumeContext>,
+    resume_result: Option<std::sync::mpsc::Sender<Result<(), String>>>,
 ) {
+    let mut resume_attempt = ResumeAttempt::new(resume_result);
     let mut seq = resume.as_ref().map_or(0, |resume| {
         resume.events.last().map_or(0, |event| event.run_seq)
     });
@@ -583,16 +616,18 @@ fn coordinate(
         return;
     }
     if cancelled.load(Ordering::SeqCst) {
-        let _ = append_emit(
-            &app,
-            &journal,
-            &mut projector,
-            &run_id,
-            &mut seq,
-            "run.cancelled",
-            json!({}),
-            subject.as_deref(),
-        );
+        if resume.is_none() {
+            let _ = append_emit(
+                &app,
+                &journal,
+                &mut projector,
+                &run_id,
+                &mut seq,
+                "run.cancelled",
+                json!({}),
+                subject.as_deref(),
+            );
+        }
         return;
     }
     let mut runtime = runtime
@@ -605,7 +640,7 @@ fn coordinate(
         let root = match std::env::var("MUNIMENT_PI_ROOT") {
             Ok(root) => root,
             Err(_) => {
-                fail(
+                fail_start(
                     &app,
                     &journal,
                     &mut projector,
@@ -613,6 +648,7 @@ fn coordinate(
                     &mut seq,
                     "The agent runtime is not installed.",
                     subject.as_deref(),
+                    resume.is_some(),
                 );
                 return;
             }
@@ -620,7 +656,7 @@ fn coordinate(
         let executable = match resolve_current(std::path::Path::new(&root)) {
             Ok(path) => path,
             Err(_) => {
-                fail(
+                fail_start(
                     &app,
                     &journal,
                     &mut projector,
@@ -628,6 +664,7 @@ fn coordinate(
                     &mut seq,
                     "The agent runtime is unavailable.",
                     subject.as_deref(),
+                    resume.is_some(),
                 );
                 return;
             }
@@ -635,7 +672,7 @@ fn coordinate(
         let session_root = match app.path().app_data_dir() {
             Ok(path) => path.join("pi-sessions"),
             Err(_) => {
-                fail(
+                fail_start(
                     &app,
                     &journal,
                     &mut projector,
@@ -643,6 +680,7 @@ fn coordinate(
                     &mut seq,
                     "The agent runtime is unavailable.",
                     subject.as_deref(),
+                    resume.is_some(),
                 );
                 return;
             }
@@ -654,7 +692,7 @@ fn coordinate(
         ) {
             Ok(config) => config,
             Err(_) => {
-                fail(
+                fail_start(
                     &app,
                     &journal,
                     &mut projector,
@@ -662,6 +700,7 @@ fn coordinate(
                     &mut seq,
                     "The agent runtime is unavailable.",
                     subject.as_deref(),
+                    resume.is_some(),
                 );
                 return;
             }
@@ -683,7 +722,7 @@ fn coordinate(
             {
                 Ok(value) => value,
                 Err(_) => {
-                    fail(
+                    fail_start(
                         &app,
                         &journal,
                         &mut projector,
@@ -691,6 +730,7 @@ fn coordinate(
                         &mut seq,
                         "The agent runtime could not start.",
                         subject.as_deref(),
+                        resume.is_some(),
                     );
                     return;
                 }
@@ -703,6 +743,40 @@ fn coordinate(
         && std::time::Instant::now() < deadline
     {
         if cancelled.load(Ordering::SeqCst) {
+            if resume.is_none() {
+                let _ = append_emit(
+                    &app,
+                    &journal,
+                    &mut projector,
+                    &run_id,
+                    &mut seq,
+                    "run.cancelled",
+                    json!({}),
+                    subject.as_deref(),
+                );
+            }
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let Some(transport) = runtime.wiring.transport() else {
+        fail_start(
+            &app,
+            &journal,
+            &mut projector,
+            &run_id,
+            &mut seq,
+            "The agent runtime did not become ready.",
+            subject.as_deref(),
+            resume.is_some(),
+        );
+        return;
+    };
+    *active_transport
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(Arc::clone(&transport));
+    if cancelled.load(Ordering::SeqCst) {
+        if resume.is_none() {
             let _ = append_emit(
                 &app,
                 &journal,
@@ -713,42 +787,13 @@ fn coordinate(
                 json!({}),
                 subject.as_deref(),
             );
-            return;
         }
-        std::thread::sleep(Duration::from_millis(10));
-    }
-    let Some(transport) = runtime.wiring.transport() else {
-        fail(
-            &app,
-            &journal,
-            &mut projector,
-            &run_id,
-            &mut seq,
-            "The agent runtime did not become ready.",
-            subject.as_deref(),
-        );
-        return;
-    };
-    *active_transport
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(Arc::clone(&transport));
-    if cancelled.load(Ordering::SeqCst) {
-        let _ = append_emit(
-            &app,
-            &journal,
-            &mut projector,
-            &run_id,
-            &mut seq,
-            "run.cancelled",
-            json!({}),
-            subject.as_deref(),
-        );
         return;
     }
     let (adapter, _) = match PiRunAdapter::start(run_id.clone(), &transport, &prompt, RPC_TIMEOUT) {
         Ok(value) => value,
         Err(_) => {
-            fail(
+            fail_start(
                 &app,
                 &journal,
                 &mut projector,
@@ -756,11 +801,13 @@ fn coordinate(
                 &mut seq,
                 "The reply could not be started.",
                 subject.as_deref(),
+                resume.is_some(),
             );
             return;
         }
     };
     let adapter = Arc::new(adapter);
+    resume_attempt.accepted();
     *active_adapter
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(Arc::clone(&adapter));
@@ -1264,6 +1311,21 @@ fn fail(
     );
 }
 
+fn fail_start(
+    app: &tauri::AppHandle,
+    journal: &Arc<Mutex<RunJournal>>,
+    projector: &mut ChatProjector,
+    run_id: &str,
+    seq: &mut u64,
+    reason: &str,
+    subject: Option<&str>,
+    resuming: bool,
+) {
+    if !resuming {
+        fail(app, journal, projector, run_id, seq, reason, subject);
+    }
+}
+
 fn fetch_grant(access_token: &str) -> Result<ChatGrant, String> {
     let issuer =
         std::env::var("MUNIMENT_ISSUER").unwrap_or_else(|_| "https://api.muniment.ai".into());
@@ -1392,6 +1454,23 @@ mod tests {
             .filter_map(|result| result.as_ref().err().map(String::as_str))
             .collect();
         assert_eq!(errors, ["A reply is already in progress."]);
+    }
+
+    #[test]
+    fn resume_attempt_reports_acceptance_and_every_early_return() {
+        let (sender, receiver) = std::sync::mpsc::channel();
+        drop(ResumeAttempt::new(Some(sender)));
+        assert_eq!(
+            receiver.recv().unwrap().unwrap_err(),
+            "This reply could not be resumed. Try again."
+        );
+
+        let (sender, receiver) = std::sync::mpsc::channel();
+        let mut attempt = ResumeAttempt::new(Some(sender));
+        attempt.accepted();
+        drop(attempt);
+        assert_eq!(receiver.recv().unwrap(), Ok(()));
+        assert!(receiver.try_recv().is_err());
     }
 
     #[test]

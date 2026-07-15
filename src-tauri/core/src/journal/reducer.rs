@@ -264,7 +264,10 @@ impl RunReducer {
 
         let terminal = self.state.as_ref().is_some_and(RunState::is_terminal);
         if terminal
-            && !matches!(event.event_type.as_str(), "run.needs_attention" | "run.resumed")
+            && !matches!(
+                event.event_type.as_str(),
+                "run.needs_attention" | "run.resumed"
+            )
             && is_state_event(&event.event_type)
         {
             return Err(invalid(event, "event follows a terminal run state"));
@@ -356,8 +359,10 @@ impl RunReducer {
                 );
             }
             "run.resumed" => {
-                if !matches!(self.state.as_ref().map(|state| &state.status), Some(RunStatus::NeedsAttention(_)))
-                    || self.pending_gate.is_some()
+                if !matches!(
+                    self.state.as_ref().map(|state| &state.status),
+                    Some(RunStatus::NeedsAttention(_))
+                ) || self.pending_gate.is_some()
                     || !self.open_effects.is_empty()
                     || self.pi_session.is_none()
                 {
