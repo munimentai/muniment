@@ -1645,6 +1645,24 @@ mod tests {
 
     static PI_ENV_LOCK: Mutex<()> = Mutex::new(());
 
+    fn accept_receipt_request(listener: std::net::TcpListener) -> std::net::TcpStream {
+        listener.set_nonblocking(true).unwrap();
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        loop {
+            match listener.accept() {
+                Ok((stream, _)) => return stream,
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    assert!(
+                        std::time::Instant::now() < deadline,
+                        "coordinator did not request its receipt"
+                    );
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                Err(error) => panic!("receipt listener failed: {error}"),
+            }
+        }
+    }
+
     fn append_test_event(
         journal: &mut RunJournal,
         run_id: &str,
@@ -1929,7 +1947,10 @@ mod tests {
         let receipt_url = format!("http://{}/receipt", listener.local_addr().unwrap());
         let receipt_server = std::thread::spawn(move || {
             use std::io::{Read, Write};
-            let (mut stream, _) = listener.accept().unwrap();
+            let mut stream = accept_receipt_request(listener);
+            stream
+                .set_read_timeout(Some(Duration::from_secs(2)))
+                .unwrap();
             let mut request = [0; 4096];
             let _ = stream.read(&mut request).unwrap();
             let body = r#"{"route":"attachment-stub","model":"test"}"#;
@@ -2262,7 +2283,10 @@ mod tests {
         let receipt_url = format!("http://{}/receipt", listener.local_addr().unwrap());
         let receipt_server = std::thread::spawn(move || {
             use std::io::{Read, Write};
-            let (mut stream, _) = listener.accept().unwrap();
+            let mut stream = accept_receipt_request(listener);
+            stream
+                .set_read_timeout(Some(Duration::from_secs(2)))
+                .unwrap();
             let mut request = [0; 4096];
             let _ = stream.read(&mut request).unwrap();
             let body = r#"{"route":"resume-stub","model":"test"}"#;
