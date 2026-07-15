@@ -660,6 +660,46 @@ fn explicit_resume_replay_is_stable_across_sqlite_reopen() {
 }
 
 #[test]
+fn legacy_interrupted_attention_replays_across_reopen_but_cannot_resume() {
+    let path = std::env::temp_dir().join(format!(
+        "muniment-legacy-interruption-{}-{}.sqlite3",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    let legacy_events = stream(&[
+        ("run.started", json!({})),
+        ("run.needs_attention", json!({"reason":"interrupted"})),
+    ]);
+    {
+        let mut journal = RunJournal::open(&path).unwrap();
+        journal.append_batch(0, &legacy_events).unwrap();
+    }
+
+    let mut reopened = RunJournal::open(&path).unwrap();
+    let replayed = reopened.events(RUN).unwrap();
+    assert!(matches!(
+        reduce(&replayed).unwrap().status,
+        RunStatus::NeedsAttention(AttentionReason::Recorded { ref reason })
+            if reason == "interrupted"
+    ));
+
+    let mut resume_attempt = replayed;
+    resume_attempt.push(event(3, "run.explicit_resume", json!({"run_id":RUN})));
+    assert!(matches!(
+        reduce(&resume_attempt),
+        Err(ReduceError::InvalidTransition { .. })
+    ));
+
+    drop(reopened);
+    let _ = std::fs::remove_file(&path);
+    let _ = std::fs::remove_file(path.with_extension("sqlite3-wal"));
+    let _ = std::fs::remove_file(path.with_extension("sqlite3-shm"));
+}
+
+#[test]
 fn incremental_chat_projection_matches_full_replay_after_every_prefix() {
     let events = stream(&[
         ("run.started", json!({})),

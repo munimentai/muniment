@@ -423,15 +423,17 @@ impl RunReducer {
                 let reason =
                     optional_field(event, "reason")?.unwrap_or_else(|| "unspecified".into());
                 let status = if reason == "interrupted" {
-                    let policy: InterruptionResumePolicy = serde_json::from_value(
-                        payload(event)?
-                            .get("resume_policy")
-                            .cloned()
-                            .ok_or_else(|| {
-                                invalid(event, "interruption resume policy is missing")
-                            })?,
-                    )
-                    .map_err(|_| invalid(event, "interruption resume policy is invalid"))?;
+                    let Some(policy) = payload(event)?.get("resume_policy").cloned() else {
+                        self.pending_gate = None;
+                        self.open_effects.clear();
+                        self.set_status(
+                            event,
+                            RunStatus::NeedsAttention(AttentionReason::Recorded { reason }),
+                        );
+                        return Ok(());
+                    };
+                    let policy: InterruptionResumePolicy = serde_json::from_value(policy)
+                        .map_err(|_| invalid(event, "interruption resume policy is invalid"))?;
                     if policy.version != 1 {
                         return Err(invalid(
                             event,
