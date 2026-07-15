@@ -45,8 +45,44 @@ pub enum PermissionRequest {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum AttentionReason {
-    UnknownEffectOutcome { effect_id: String },
-    Recorded { reason: String },
+    UnknownEffectOutcome {
+        effect_id: String,
+    },
+    Interrupted {
+        eligibility: ExplicitResumeEligibility,
+    },
+    Recorded {
+        reason: String,
+    },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
+pub enum ExplicitResumeEligibility {
+    Eligible,
+    Blocked { reason: ExplicitResumeBlockReason },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ExplicitResumeBlockReason {
+    MissingPiSessionBinding,
+    PendingPermissionGate { gate_id: String },
+    OpenToolEffect { effect_id: String },
+    NotInterrupted,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct InterruptionResumePolicy {
+    pub version: u32,
+    pub eligibility: ExplicitResumeEligibility,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ExplicitResumePayload {
+    run_id: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -175,6 +211,35 @@ impl RunState {
                 | RunStatus::NeedsAttention(_)
         )
     }
+
+    pub fn explicit_resume_eligibility(&self) -> ExplicitResumeEligibility {
+        match &self.status {
+            RunStatus::PendingPermission(gate) => ExplicitResumeEligibility::Blocked {
+                reason: ExplicitResumeBlockReason::PendingPermissionGate {
+                    gate_id: gate.gate_id.clone(),
+                },
+            },
+            RunStatus::NeedsAttention(AttentionReason::UnknownEffectOutcome { effect_id }) => {
+                ExplicitResumeEligibility::Blocked {
+                    reason: ExplicitResumeBlockReason::OpenToolEffect {
+                        effect_id: effect_id.clone(),
+                    },
+                }
+            }
+            RunStatus::Active | RunStatus::Streaming if self.pi_session.is_some() => {
+                ExplicitResumeEligibility::Eligible
+            }
+            RunStatus::Active | RunStatus::Streaming => ExplicitResumeEligibility::Blocked {
+                reason: ExplicitResumeBlockReason::MissingPiSessionBinding,
+            },
+            RunStatus::NeedsAttention(AttentionReason::Interrupted { eligibility }) => {
+                eligibility.clone()
+            }
+            _ => ExplicitResumeEligibility::Blocked {
+                reason: ExplicitResumeBlockReason::NotInterrupted,
+            },
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -262,7 +327,10 @@ impl RunReducer {
 
         let terminal = self.state.as_ref().is_some_and(RunState::is_terminal);
         if terminal
-            && event.event_type != "run.needs_attention"
+            && !matches!(
+                event.event_type.as_str(),
+                "run.needs_attention" | "run.explicit_resume"
+            )
             && is_state_event(&event.event_type)
         {
             return Err(invalid(event, "event follows a terminal run state"));
@@ -345,15 +413,53 @@ impl RunReducer {
                 },
             )?,
             "run.needs_attention" => {
+                let reason =
+                    optional_field(event, "reason")?.unwrap_or_else(|| "unspecified".into());
+                let status = if reason == "interrupted" {
+                    let policy: InterruptionResumePolicy = serde_json::from_value(
+                        payload(event)?
+                            .get("resume_policy")
+                            .cloned()
+                            .ok_or_else(|| {
+                                invalid(event, "interruption resume policy is missing")
+                            })?,
+                    )
+                    .map_err(|_| invalid(event, "interruption resume policy is invalid"))?;
+                    if policy.version != 1 {
+                        return Err(invalid(
+                            event,
+                            "interruption resume policy version is unsupported",
+                        ));
+                    }
+                    if policy.eligibility != self.boundary_resume_eligibility() {
+                        return Err(invalid(
+                            event,
+                            "interruption resume policy does not match the replay boundary",
+                        ));
+                    }
+                    RunStatus::NeedsAttention(AttentionReason::Interrupted {
+                        eligibility: policy.eligibility,
+                    })
+                } else {
+                    RunStatus::NeedsAttention(AttentionReason::Recorded { reason })
+                };
                 self.pending_gate = None;
                 self.open_effects.clear();
-                self.set_status(
-                    event,
-                    RunStatus::NeedsAttention(AttentionReason::Recorded {
-                        reason: optional_field(event, "reason")?
-                            .unwrap_or_else(|| "unspecified".into()),
-                    }),
-                );
+                self.set_status(event, status);
+            }
+            "run.explicit_resume" => {
+                let request: ExplicitResumePayload =
+                    serde_json::from_value(payload(event)?.clone())
+                        .map_err(|_| invalid(event, "explicit resume payload is invalid"))?;
+                if request.run_id != event.run_id {
+                    return Err(invalid(event, "explicit resume run id does not match"));
+                }
+                match self.state.as_ref().map(|state| &state.status) {
+                    Some(RunStatus::NeedsAttention(AttentionReason::Interrupted {
+                        eligibility: ExplicitResumeEligibility::Eligible,
+                    })) if self.pi_session.is_some() => self.set_status(event, RunStatus::Active),
+                    _ => return Err(invalid(event, "run is not eligible for explicit resume")),
+                }
             }
             _ => {
                 if self.state.is_none() {
@@ -388,6 +494,28 @@ impl RunReducer {
             Some(RunStatus::Active | RunStatus::Streaming) if self.pending_gate.is_none() => Ok(()),
             _ => Err(invalid(event, "run is not executable")),
         }
+    }
+    fn boundary_resume_eligibility(&self) -> ExplicitResumeEligibility {
+        if let Some(gate) = &self.pending_gate {
+            return ExplicitResumeEligibility::Blocked {
+                reason: ExplicitResumeBlockReason::PendingPermissionGate {
+                    gate_id: gate.gate_id.clone(),
+                },
+            };
+        }
+        if let Some(effect_id) = self.open_effects.first() {
+            return ExplicitResumeEligibility::Blocked {
+                reason: ExplicitResumeBlockReason::OpenToolEffect {
+                    effect_id: effect_id.clone(),
+                },
+            };
+        }
+        if self.pi_session.is_none() {
+            return ExplicitResumeEligibility::Blocked {
+                reason: ExplicitResumeBlockReason::MissingPiSessionBinding,
+            };
+        }
+        ExplicitResumeEligibility::Eligible
     }
     fn require_executable(
         &mut self,
@@ -458,6 +586,7 @@ fn is_safety_event(t: &str) -> bool {
     t.starts_with("permission.")
         || t.starts_with("tool.effect.")
         || t.starts_with("runtime.pi_session.")
+        || t == "run.explicit_resume"
 }
 fn is_known_safety_event(t: &str) -> bool {
     matches!(
@@ -468,6 +597,7 @@ fn is_known_safety_event(t: &str) -> bool {
             | "tool.effect.completed"
             | "tool.effect.failed"
             | "runtime.pi_session.bound"
+            | "run.explicit_resume"
     )
 }
 fn is_state_event(t: &str) -> bool {

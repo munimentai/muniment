@@ -5,8 +5,8 @@ use std::time::Duration;
 
 use chrono::{SecondsFormat, Utc};
 use muniment_core::journal::reducer::{
-    project_chat, reduce, ChatProjection, ChatProjector, PermissionGate, PermissionRequest,
-    RunStatus,
+    project_chat, reduce, ChatProjection, ChatProjector, InterruptionResumePolicy, PermissionGate,
+    PermissionRequest, RunStatus,
 };
 use muniment_core::journal::{EventEnvelope, EventPayload, Provenance, RunJournal};
 use muniment_core::sidecar::pi_chat::{
@@ -158,7 +158,13 @@ fn reconcile_interrupted_runs(journal: &mut RunJournal) {
             &run_id,
             state.last_seq + 1,
             "run.needs_attention",
-            json!({"reason": "interrupted"}),
+            json!({
+                "reason": "interrupted",
+                "resume_policy": InterruptionResumePolicy {
+                    version: 1,
+                    eligibility: state.explicit_resume_eligibility(),
+                },
+            }),
             None,
         );
         let _ = journal.append(state.last_seq, &envelope);
@@ -1571,7 +1577,16 @@ mod tests {
             run_a_reconciled,
             2,
             "run.needs_attention",
-            json!({"reason": "interrupted"}),
+            json!({
+                "reason": "interrupted",
+                "resume_policy": {
+                    "version": 1,
+                    "eligibility": {
+                        "status": "blocked",
+                        "reason": {"kind": "missing_pi_session_binding"}
+                    }
+                }
+            }),
             None,
         );
 
@@ -1654,6 +1669,7 @@ mod tests {
         std::fs::create_dir_all(&directory).unwrap();
         let path = directory.join("runs.sqlite3");
         let interrupted = Uuid::now_v7().to_string();
+        let resumable = Uuid::now_v7().to_string();
         let completed = Uuid::now_v7().to_string();
 
         {
@@ -1685,6 +1701,23 @@ mod tests {
             let pending = project_chat(&journal.events(&interrupted).unwrap()).unwrap();
             assert_eq!(projection_phase(&pending.status), "pending-permission");
             assert_eq!(pending.pending_permission.unwrap().gate_id, "gate-1");
+            append_test_event(&mut journal, &resumable, 1, "run.started", json!({}), None);
+            append_test_event(
+                &mut journal,
+                &resumable,
+                2,
+                "runtime.pi_session.bound",
+                json!({"run_id": resumable, "locator": "resume.jsonl"}),
+                None,
+            );
+            append_test_event(
+                &mut journal,
+                &resumable,
+                3,
+                "model.stream.delta",
+                json!({"text": "partial"}),
+                None,
+            );
             append_test_event(&mut journal, &completed, 1, "run.started", json!({}), None);
             append_test_event(
                 &mut journal,
@@ -1702,14 +1735,41 @@ mod tests {
             let interrupted_events = reopened.events(&interrupted).unwrap();
             assert_eq!(interrupted_events.len(), 4);
             assert_eq!(interrupted_events[3].event_type, "run.needs_attention");
+            assert_eq!(
+                interrupted_events[3].payload,
+                EventPayload::Inline {
+                    payload_json: json!({
+                        "reason": "interrupted",
+                        "resume_policy": {
+                            "version": 1,
+                            "eligibility": {
+                                "status": "blocked",
+                                "reason": {"kind": "pending_permission_gate", "gate_id": "gate-1"}
+                            }
+                        }
+                    })
+                }
+            );
             assert_eq!(interrupted_events[3].provenance.actor_id, None);
             let state = reduce(&interrupted_events).unwrap();
             assert!(matches!(state.status, RunStatus::NeedsAttention(_)));
             assert_eq!(state.pi_session.unwrap().locator, "session.jsonl");
+            let resumable_events = reopened.events(&resumable).unwrap();
+            assert_eq!(resumable_events.len(), 4);
+            assert_eq!(
+                resumable_events[3].payload,
+                EventPayload::Inline {
+                    payload_json: json!({
+                        "reason": "interrupted",
+                        "resume_policy": {"version": 1, "eligibility": {"status": "eligible"}}
+                    })
+                }
+            );
             assert_eq!(reopened.events(&completed).unwrap().len(), 2);
 
             reconcile_interrupted_runs(&mut reopened);
             assert_eq!(reopened.events(&interrupted).unwrap().len(), 4);
+            assert_eq!(reopened.events(&resumable).unwrap().len(), 4);
             assert_eq!(reopened.events(&completed).unwrap().len(), 2);
         }
 

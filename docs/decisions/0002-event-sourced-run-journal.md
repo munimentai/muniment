@@ -56,7 +56,7 @@ reload/reduce/retry. Batches are all-or-none.
 Durable run-domain events align with Pi request/response/notification flow:
 
 - lifecycle: `run.started`, `run.cancel.requested`, `run.cancelled`,
-  `run.failed`, `run.completed`, `run.needs_attention`;
+  `run.failed`, `run.completed`, `run.needs_attention`, `run.explicit_resume`;
 - conversation/model: `message.submitted`, `model.requested`,
   `model.stream.delta`, `model.response.completed`;
 - tools/permissions: `tool.requested`, `permission.requested`,
@@ -89,6 +89,21 @@ After a crash with `tool.effect.started` but no outcome, the run becomes
 `run.needs_attention` with an unknown-outcome reason; a user may choose a new,
 recorded action. It is neither guessed failed nor retried. Cancellation records
 both request and observed result.
+
+Startup reconciliation appends `run.needs_attention` with a versioned,
+typed `resume_policy`. The policy is `eligible` only if replay at that exact
+boundary has a validated `runtime.pi_session.bound` locator, no pending
+permission gate, and no open tool effect. Otherwise it durably records the
+missing binding, pending gate id, or earliest open effect id before the reducer
+clears transient gate/effect state. Replay verifies that the recorded policy
+matches the boundary, so journal data cannot claim eligibility by omission.
+
+`run.explicit_resume` is the sole transition from an eligible interrupted
+needs-attention state back to active execution. Its payload repeats the run id;
+replay rejects mismatches, blocked or legacy attention states, absent/malformed
+bindings, terminal runs, and repeated resume events. This ADR defines only the
+core transition. Tauri session-path resolution and Pi launch, prompt behavior,
+and an explicit UI affordance are deferred; startup performs none of them.
 
 Representative ordered sequence:
 

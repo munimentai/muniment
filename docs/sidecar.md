@@ -91,10 +91,20 @@ conflicting bindings. Pi JSONL and its contents never cross Tauri and never
 reconstruct chat text, receipts, or provenance; the append-only run journal
 remains authoritative for those projections.
 
-Startup still marks every interrupted nonterminal run `run.needs_attention`.
-The presence of a valid binding does not submit a prompt, resolve a permission
-gate, or repeat a tool effect. Automatic continuation is deliberately deferred
-to the next resume slice.
+Startup still marks every interrupted nonterminal run `run.needs_attention`,
+but now records a versioned `resume_policy` in that event. Explicit resume is
+eligible only when replay finds a valid Pi session binding and no pending
+permission gate or `tool.effect.started` without an outcome at the interruption
+boundary. Blocked records retain the gate or effect identifier, or identify the
+missing binding, after `run.needs_attention` clears the live gate/effect state.
+
+The pure reducer accepts `run.explicit_resume` only for a journaled eligible
+interruption with the same run id and transitions it back to `Active`. It rejects
+malformed or missing bindings, blocked and forged policies, terminal runs, and
+duplicate resume events. Startup never appends this event: resolving the local
+session path, launching Pi with `--session`, and exposing the user-initiated UI
+action remain deferred to the Tauri/UI launch slice. Reopening therefore does
+not submit a prompt, resolve a permission, repeat a tool effect, or resume Pi.
 
 After Pi emits `agent_end`, the desktop posts `{ runId }` to `receiptUrl` with
 the OIDC access token. Only that authoritative response supplies optional

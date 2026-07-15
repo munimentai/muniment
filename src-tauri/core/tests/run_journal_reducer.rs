@@ -1,6 +1,7 @@
 use muniment_core::journal::reducer::{
-    project_chat, reduce, AttentionReason, ChatProjector, PermissionGate, PermissionRequest,
-    ReduceError, RunReducer, RunStatus, ToolActivity, ToolActivityStatus,
+    project_chat, reduce, AttentionReason, ChatProjector, ExplicitResumeBlockReason,
+    ExplicitResumeEligibility, PermissionGate, PermissionRequest, ReduceError, RunReducer,
+    RunStatus, ToolActivity, ToolActivityStatus,
 };
 use muniment_core::journal::{EventEnvelope, EventPayload, Provenance, RunJournal};
 use serde_json::{json, Value};
@@ -437,6 +438,211 @@ fn pi_session_binding_survives_sqlite_reopen() {
     let mut reopened = RunJournal::open(&path).unwrap();
     let state = reduce(&reopened.events(RUN).unwrap()).unwrap();
     assert_eq!(state.pi_session.unwrap().locator, "session.jsonl");
+    drop(reopened);
+    let _ = std::fs::remove_file(&path);
+    let _ = std::fs::remove_file(path.with_extension("sqlite3-wal"));
+    let _ = std::fs::remove_file(path.with_extension("sqlite3-shm"));
+}
+
+#[test]
+fn interruption_policy_exposes_each_resume_boundary() {
+    let cases = [
+        (
+            stream(&[
+                ("run.started", json!({})),
+                (
+                    "runtime.pi_session.bound",
+                    json!({"run_id": RUN, "locator": "session.jsonl"}),
+                ),
+                ("model.stream.delta", json!({"text": "partial"})),
+            ]),
+            ExplicitResumeEligibility::Eligible,
+        ),
+        (
+            stream(&[("run.started", json!({}))]),
+            ExplicitResumeEligibility::Blocked {
+                reason: ExplicitResumeBlockReason::MissingPiSessionBinding,
+            },
+        ),
+        (
+            stream(&[
+                ("run.started", json!({})),
+                (
+                    "runtime.pi_session.bound",
+                    json!({"run_id": RUN, "locator": "session.jsonl"}),
+                ),
+                (
+                    "permission.requested",
+                    json!({"gate_id":"g","kind":"confirm","title":"Allow?","message":"Proceed?"}),
+                ),
+            ]),
+            ExplicitResumeEligibility::Blocked {
+                reason: ExplicitResumeBlockReason::PendingPermissionGate {
+                    gate_id: "g".into(),
+                },
+            },
+        ),
+        (
+            stream(&[
+                ("run.started", json!({})),
+                (
+                    "runtime.pi_session.bound",
+                    json!({"run_id": RUN, "locator": "session.jsonl"}),
+                ),
+                ("tool.effect.started", json!({"effect_id":"e"})),
+            ]),
+            ExplicitResumeEligibility::Blocked {
+                reason: ExplicitResumeBlockReason::OpenToolEffect {
+                    effect_id: "e".into(),
+                },
+            },
+        ),
+    ];
+
+    for (events, expected) in cases {
+        assert_eq!(
+            reduce(&events).unwrap().explicit_resume_eligibility(),
+            expected
+        );
+    }
+}
+
+#[test]
+fn explicit_resume_only_transitions_a_journaled_eligible_interruption() {
+    let eligible = json!({"version":1,"eligibility":{"status":"eligible"}});
+    let events = stream(&[
+        ("run.started", json!({})),
+        (
+            "runtime.pi_session.bound",
+            json!({"run_id": RUN, "locator": "session.jsonl"}),
+        ),
+        ("model.stream.delta", json!({"text":"partial"})),
+        (
+            "run.needs_attention",
+            json!({"reason":"interrupted","resume_policy":eligible}),
+        ),
+        ("run.explicit_resume", json!({"run_id":RUN})),
+    ]);
+    assert_eq!(reduce(&events).unwrap().status, RunStatus::Active);
+
+    let mut duplicate = events.clone();
+    duplicate.push(event(6, "run.explicit_resume", json!({"run_id":RUN})));
+    assert!(matches!(
+        reduce(&duplicate),
+        Err(ReduceError::InvalidTransition { .. })
+    ));
+
+    let mut mismatch = events[..4].to_vec();
+    mismatch.push(event(5, "run.explicit_resume", json!({"run_id":"other"})));
+    assert!(matches!(
+        reduce(&mismatch),
+        Err(ReduceError::InvalidTransition { .. })
+    ));
+
+    let terminal = stream(&[
+        ("run.started", json!({})),
+        ("run.completed", json!({})),
+        ("run.explicit_resume", json!({"run_id":RUN})),
+    ]);
+    assert!(matches!(
+        reduce(&terminal),
+        Err(ReduceError::InvalidTransition { .. })
+    ));
+}
+
+#[test]
+fn blocked_interruption_policy_cannot_be_resumed_or_forged() {
+    let cases = [
+        (
+            vec![("run.started", json!({}))],
+            json!({"status":"blocked","reason":{"kind":"missing_pi_session_binding"}}),
+        ),
+        (
+            vec![
+                ("run.started", json!({})),
+                (
+                    "runtime.pi_session.bound",
+                    json!({"run_id": RUN, "locator": "session.jsonl"}),
+                ),
+                (
+                    "permission.requested",
+                    json!({"gate_id":"g","kind":"confirm","title":"Allow?","message":"Proceed?"}),
+                ),
+            ],
+            json!({"status":"blocked","reason":{"kind":"pending_permission_gate","gate_id":"g"}}),
+        ),
+        (
+            vec![
+                ("run.started", json!({})),
+                (
+                    "runtime.pi_session.bound",
+                    json!({"run_id": RUN, "locator": "session.jsonl"}),
+                ),
+                ("tool.effect.started", json!({"effect_id":"e"})),
+            ],
+            json!({"status":"blocked","reason":{"kind":"open_tool_effect","effect_id":"e"}}),
+        ),
+    ];
+
+    for (prefix, eligibility) in cases {
+        let mut events = stream(&prefix);
+        let seq = events.len() as u64 + 1;
+        events.push(event(
+            seq,
+            "run.needs_attention",
+            json!({
+                "reason":"interrupted", "resume_policy":{"version":1,"eligibility":eligibility}
+            }),
+        ));
+        events.push(event(seq + 1, "run.explicit_resume", json!({"run_id":RUN})));
+        assert!(matches!(
+            reduce(&events),
+            Err(ReduceError::InvalidTransition { .. })
+        ));
+    }
+
+    let forged = stream(&[
+        ("run.started", json!({})),
+        (
+            "run.needs_attention",
+            json!({"reason":"interrupted","resume_policy":{"version":1,"eligibility":{"status":"eligible"}}}),
+        ),
+    ]);
+    assert!(matches!(
+        reduce(&forged),
+        Err(ReduceError::InvalidTransition { .. })
+    ));
+}
+
+#[test]
+fn explicit_resume_replay_is_stable_across_sqlite_reopen() {
+    let path = std::env::temp_dir().join(format!(
+        "muniment-resume-{}-{}.sqlite3",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    let events = stream(&[
+        ("run.started", json!({})),
+        (
+            "runtime.pi_session.bound",
+            json!({"run_id": RUN, "locator": "session.jsonl"}),
+        ),
+        (
+            "run.needs_attention",
+            json!({"reason":"interrupted","resume_policy":{"version":1,"eligibility":{"status":"eligible"}}}),
+        ),
+        ("run.explicit_resume", json!({"run_id":RUN})),
+    ]);
+    let expected = reduce(&events).unwrap();
+    {
+        let mut journal = RunJournal::open(&path).unwrap();
+        journal.append_batch(0, &events).unwrap();
+    }
+    let mut reopened = RunJournal::open(&path).unwrap();
+    assert_eq!(reduce(&reopened.events(RUN).unwrap()).unwrap(), expected);
     drop(reopened);
     let _ = std::fs::remove_file(&path);
     let _ = std::fs::remove_file(path.with_extension("sqlite3-wal"));
