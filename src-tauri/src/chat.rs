@@ -8,7 +8,7 @@ use muniment_core::attachment::{ingest_attachment, AttachmentMetadata};
 use muniment_core::cas::LocalCas;
 use muniment_core::journal::reducer::{
     project_chat, reduce, ChatProjection, ChatProjector, PermissionGate, PermissionRequest,
-    RunStatus,
+    ProjectedAttachment, RunStatus,
 };
 use muniment_core::journal::{EventEnvelope, EventPayload, Provenance, RunJournal};
 use muniment_core::sidecar::pi_chat::{
@@ -44,6 +44,7 @@ struct ChatGrant {
 #[serde(rename_all = "camelCase")]
 pub struct SubmitResult {
     run_id: String,
+    attachments: Vec<ChatAttachment>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -77,6 +78,7 @@ pub struct HistoryEntry {
     #[serde(skip_serializing_if = "Option::is_none")]
     receipt: Option<Value>,
     tool_activity: Vec<ChatToolActivity>,
+    attachments: Vec<ChatAttachment>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pending_permission: Option<ChatPendingPermission>,
     resumable: bool,
@@ -99,6 +101,7 @@ struct ChatEvent {
     #[serde(skip_serializing_if = "Option::is_none")]
     receipt: Option<Value>,
     tool_activity: Vec<ChatToolActivity>,
+    attachments: Vec<ChatAttachment>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pending_permission: Option<ChatPendingPermission>,
 }
@@ -109,6 +112,26 @@ struct ChatPendingPermission {
     gate_id: String,
     #[serde(flatten)]
     request: PermissionRequest,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChatAttachment {
+    display_name: String,
+    byte_length: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    media_type: Option<String>,
+}
+
+fn chat_attachments(attachments: &[ProjectedAttachment]) -> Vec<ChatAttachment> {
+    attachments
+        .iter()
+        .map(|attachment| ChatAttachment {
+            display_name: attachment.display_name.clone(),
+            byte_length: attachment.byte_length,
+            media_type: attachment.media_type.clone(),
+        })
+        .collect()
 }
 
 fn chat_pending_permission(gate: Option<PermissionGate>) -> Option<ChatPendingPermission> {
@@ -284,6 +307,7 @@ fn history_entries(
             text: projection.text,
             receipt: projection.receipt,
             tool_activity: chat_tool_activity(&projection.tool_activity),
+            attachments: chat_attachments(&projection.attachments),
             pending_permission: chat_pending_permission(projection.pending_permission),
             resumable,
             run_id,
@@ -426,6 +450,12 @@ pub async fn chat_submit(
             return Err(error);
         }
     };
+    let attachments = chat_attachments(
+        &projector
+            .projection()
+            .map_err(|_| attachment_error())?
+            .attachments,
+    );
     let runtime = Arc::clone(&state.runtime);
     let result_id = run_id.clone();
     tauri::async_runtime::spawn_blocking(move || {
@@ -455,7 +485,10 @@ pub async fn chat_submit(
             }
         }
     });
-    Ok(SubmitResult { run_id: result_id })
+    Ok(SubmitResult {
+        run_id: result_id,
+        attachments,
+    })
 }
 
 #[tauri::command]
@@ -478,6 +511,11 @@ pub async fn chat_resume(
             .map_err(|_| "This reply cannot be resumed.".to_string())?;
         resumable_context(&events, tokens.subject.as_deref(), &session_root)?
     };
+    let attachments = chat_attachments(
+        &project_chat(&resume.events)
+            .map_err(|_| "This reply could not be resumed.".to_string())?
+            .attachments,
+    );
     let access_token = tokens.access_token.clone();
     let grant = tauri::async_runtime::spawn_blocking(move || {
         let grant = fetch_grant(&access_token)?;
@@ -533,7 +571,30 @@ pub async fn chat_resume(
         .await
         .map_err(|_| "This reply could not be resumed. Try again.".to_string())?
         .map_err(|_| "This reply could not be resumed. Try again.".to_string())??;
-    Ok(SubmitResult { run_id: result_id })
+    Ok(SubmitResult {
+        run_id: result_id,
+        attachments,
+    })
+}
+
+#[tauri::command]
+pub fn chat_file_metadata(path: PathBuf) -> Result<ChatAttachment, String> {
+    let file = std::fs::File::open(&path).map_err(|_| attachment_error())?;
+    let metadata = file.metadata().map_err(|_| attachment_error())?;
+    if !metadata.is_file() {
+        return Err(attachment_error());
+    }
+    let display_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .filter(|name| !name.is_empty())
+        .ok_or_else(attachment_error)?
+        .to_owned();
+    Ok(ChatAttachment {
+        display_name,
+        byte_length: metadata.len(),
+        media_type: None,
+    })
 }
 
 fn install_active_run(active: &Mutex<Option<ActiveRun>>, run: ActiveRun) -> Result<(), String> {
@@ -1463,12 +1524,14 @@ fn append_emit<R: tauri::Runtime>(
 }
 
 fn chat_event(run_id: &str, projection: ChatProjection) -> ChatEvent {
+    let attachments = chat_attachments(&projection.attachments);
     ChatEvent {
         run_id: run_id.into(),
         phase: projection_phase(&projection.status).into(),
         text: projection.text,
         receipt: projection.receipt,
         tool_activity: chat_tool_activity(&projection.tool_activity),
+        attachments,
         pending_permission: chat_pending_permission(projection.pending_permission),
     }
 }
@@ -1582,6 +1645,24 @@ mod tests {
 
     static PI_ENV_LOCK: Mutex<()> = Mutex::new(());
 
+    fn accept_receipt_request(listener: std::net::TcpListener) -> std::net::TcpStream {
+        listener.set_nonblocking(true).unwrap();
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        loop {
+            match listener.accept() {
+                Ok((stream, _)) => return stream,
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    assert!(
+                        std::time::Instant::now() < deadline,
+                        "coordinator did not request its receipt"
+                    );
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                Err(error) => panic!("receipt listener failed: {error}"),
+            }
+        }
+    }
+
     fn append_test_event(
         journal: &mut RunJournal,
         run_id: &str,
@@ -1609,6 +1690,7 @@ mod tests {
 
     #[test]
     fn new_run_ingests_multiple_files_into_one_sequence_and_projector() {
+        keyring::set_default_credential_builder(keyring::mock::default_credential_builder());
         let directory =
             std::env::temp_dir().join(format!("muniment-attachments-{}", Uuid::now_v7()));
         std::fs::create_dir_all(&directory).unwrap();
@@ -1649,6 +1731,24 @@ mod tests {
             };
             storage.cas.verify(attachment.sha256()).unwrap();
         }
+        let projection = projector.projection().unwrap();
+        assert_eq!(
+            projection
+                .attachments
+                .iter()
+                .map(|attachment| attachment.display_name.as_str())
+                .collect::<Vec<_>>(),
+            ["first.txt", "second.bin"]
+        );
+        let public = serde_json::to_string(&chat_attachments(&projection.attachments)).unwrap();
+        assert!(!public.contains("sha256"));
+        assert!(!public.contains(directory.to_string_lossy().as_ref()));
+        let history = history_entries(&mut storage.journal, Some("owner"), &directory).unwrap();
+        assert_eq!(history.len(), 1);
+        assert_eq!(history[0].attachments.len(), 2);
+        let restored = serde_json::to_string(&history).unwrap();
+        assert!(!restored.contains("sha256"));
+        assert!(!restored.contains(directory.to_string_lossy().as_ref()));
         let serialized = serde_json::to_string(&events).unwrap();
         assert!(!serialized.contains(directory.to_string_lossy().as_ref()));
         let next = event_envelope(
@@ -1847,7 +1947,10 @@ mod tests {
         let receipt_url = format!("http://{}/receipt", listener.local_addr().unwrap());
         let receipt_server = std::thread::spawn(move || {
             use std::io::{Read, Write};
-            let (mut stream, _) = listener.accept().unwrap();
+            let mut stream = accept_receipt_request(listener);
+            stream
+                .set_read_timeout(Some(Duration::from_secs(2)))
+                .unwrap();
             let mut request = [0; 4096];
             let _ = stream.read(&mut request).unwrap();
             let body = r#"{"route":"attachment-stub","model":"test"}"#;
@@ -2180,7 +2283,10 @@ mod tests {
         let receipt_url = format!("http://{}/receipt", listener.local_addr().unwrap());
         let receipt_server = std::thread::spawn(move || {
             use std::io::{Read, Write};
-            let (mut stream, _) = listener.accept().unwrap();
+            let mut stream = accept_receipt_request(listener);
+            stream
+                .set_read_timeout(Some(Duration::from_secs(2)))
+                .unwrap();
             let mut request = [0; 4096];
             let _ = stream.read(&mut request).unwrap();
             let body = r#"{"route":"resume-stub","model":"test"}"#;

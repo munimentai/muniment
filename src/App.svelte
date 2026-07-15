@@ -4,7 +4,7 @@
 
   import { accessErrorState, accessIdleState, accessLoadingState, accessReadyState, bootState, devicesErrorState, devicesIdleState, devicesLoadingState, devicesReadyState, errorState, statusState, waitingState } from './lib/auth-state.js'
   import { ringPath } from './lib/mark.js'
-  import { applyBufferedChatEvents, applyChatEvent, composerAction, historyMessages, receiptParts, receiptRows, toolName, toolStatus } from './lib/chat-state.js'
+  import { applyBufferedChatEvents, applyChatEvent, composerAction, formatByteSize, historyMessages, receiptParts, receiptRows, toolName, toolStatus } from './lib/chat-state.js'
   import { scrollFollowState } from './lib/scroll-follow.js'
 
   const markD = ringPath()
@@ -35,6 +35,7 @@
   let lastScrollTop = 0
   let expandedReceipts = $state(new Set())
   let parallelTools = $state(new Map())
+  let submissionSequence = 0
 
   function toggleReceipt(runId) {
     const next = new Set(expandedReceipts)
@@ -207,7 +208,9 @@
     const prompt = draft.trim()
     if (!prompt || active) return
     submitError = ''
-    messages.push({ role: 'user', text: prompt })
+    const submissionId = ++submissionSequence
+    const userMessage = { role: 'user', text: prompt, attachments: [], submissionId }
+    messages.push(userMessage)
     const pending = { id: 'pending', phase: 'thinking', text: '', receipt: null, prompt }
     active = pending
     messages.push({ role: 'assistant', run: pending })
@@ -219,6 +222,7 @@
       })
       draft = ''
       selectedFiles = []
+      messages = messages.map((message) => message.submissionId === submissionId ? { ...message, attachments: run.attachments ?? [] } : message)
       active = { ...pending, id: run.runId }
       const early = buffered.get(run.runId) ?? []
       const projected = applyBufferedChatEvents(active, early)
@@ -246,10 +250,16 @@
     if (!picked) return
     const paths = Array.isArray(picked) ? picked : [picked]
     const known = new Set(selectedFiles.map(({ path }) => path))
-    selectedFiles = [...selectedFiles, ...paths.filter((path) => !known.has(path)).map((path) => ({
-      path,
-      name: path.split(/[\\/]/).pop() || 'Selected file',
-    }))]
+    const additions = []
+    try {
+      for (const path of paths.filter((path) => !known.has(path))) {
+        additions.push({ path, ...await tauri.invoke('chat_file_metadata', { path }) })
+      }
+    } catch (_) {
+      submitError = 'One or more selected files could not be added. Check the files and try again.'
+      return
+    }
+    selectedFiles = [...selectedFiles, ...additions]
   }
 
   async function cancel() {
@@ -390,7 +400,19 @@
           {#if historyError}<p class="history-error" role="alert">{historyError} <button onclick={loadHistory}>Try again</button></p>{/if}
           {#if messages.length === 0}<p class="empty">Ask anything. Your org's routing decides which model answers.</p>{/if}
           {#each messages as message}
-            {#if message.role === 'user'}<p class="user-message">{message.text}</p>
+            {#if message.role === 'user'}
+              <div class="user-turn">
+                <div class="user-message">
+                  {#if message.text}<p>{message.text}</p>{:else}<p class="missing-prompt">Prompt unavailable</p>{/if}
+                  {#if message.attachments?.length}
+                    <ul class="message-attachments" aria-label="Saved attachments">
+                      {#each message.attachments as attachment}
+                        <li><span>{attachment.displayName}</span><span>{formatByteSize(attachment.byteLength)}</span><strong>Saved locally · not sent to model</strong></li>
+                      {/each}
+                    </ul>
+                  {/if}
+                </div>
+              </div>
             {:else}
             {@const activity = message.run.toolActivity ?? []}
             {@const groupedIds = parallelTools.get(message.run.id) ?? []}
@@ -441,7 +463,7 @@
           {#if selectedFiles.length}
             <ul class="attachments" aria-label="Selected files">
               {#each selectedFiles as file}
-                <li><span>{file.name}</span><button type="button" aria-label={`Remove ${file.name}`} onclick={() => { selectedFiles = selectedFiles.filter(({ path }) => path !== file.path) }}>Remove</button></li>
+                <li><span>{file.displayName}</span><span>{formatByteSize(file.byteLength)}</span><button type="button" aria-label={`Remove ${file.displayName}`} onclick={() => { selectedFiles = selectedFiles.filter(({ path }) => path !== file.path) }}>Remove</button></li>
               {/each}
             </ul>
           {/if}
@@ -608,7 +630,13 @@
   .thread { width: min(760px, calc(100% - 48px)); height: 100%; margin: 0 auto; padding: 42px 0; overflow-y: auto; }
   .latest { position: absolute; left: 50%; bottom: 14px; transform: translateX(-50%); border-radius: 6px; background: var(--surface); color: var(--muted); font: var(--text-12) var(--font-mono); box-shadow: 0 1px 3px color-mix(in srgb, var(--ink) 10%, transparent); }
   .empty { color: var(--muted); text-align: center; margin-top: 18vh; }
-  .user-message { width: fit-content; max-width: 78%; margin: 0 0 28px auto; padding: 9px 13px; white-space: pre-wrap; background: var(--faint); border-radius: 10px; }
+  .user-turn { max-width: 78%; margin: 0 0 28px auto; }
+  .user-message { width: fit-content; margin-left: auto; padding: 9px 13px; background: var(--faint); border-radius: 10px; }
+  .user-message > p { margin: 0; white-space: pre-wrap; }
+  .missing-prompt { color: var(--muted); font: var(--text-12) var(--font-mono); }
+  .message-attachments { display: grid; justify-items: end; gap: 4px; margin: 8px 0 0; padding: 0; list-style: none; }
+  .message-attachments li { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 5px 8px; max-width: 100%; padding: 5px 8px; border: 1px solid var(--border); border-radius: 2px; color: var(--muted); font: var(--text-12) var(--font-mono); }
+  .message-attachments strong { flex-basis: 100%; color: var(--muted); font-weight: 400; font-size: 10px; }
   .response { margin: 0 0 34px; }
   .response p { white-space: pre-wrap; }
   .streaming { display: inline; border-bottom: 2px solid var(--signal); }
@@ -637,7 +665,7 @@
   .composer { grid-area: composer; width: min(760px, calc(100% - 48px)); margin: 0 auto 24px; padding: 12px; background: var(--surface); border: 1px solid var(--border); border-radius: 10px; }
   .composer:focus-within { border-color: var(--muted); }
   .attachments { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 8px; padding: 0; list-style: none; }
-  .attachments li { display: flex; align-items: center; gap: 6px; max-width: 100%; padding: 4px 6px 4px 9px; border: 1px solid var(--border); border-radius: 999px; color: var(--muted); font: var(--text-12) var(--font-mono); }
+  .attachments li { display: flex; align-items: center; gap: 6px; max-width: 100%; padding: 4px 6px 4px 9px; border: 1px solid var(--border); border-radius: 2px; color: var(--muted); font: var(--text-12) var(--font-mono); }
   .attachments span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .attachments button { padding: 1px 5px; border: 0; background: transparent; color: inherit; font-size: 11px; }
   textarea { width: 100%; resize: none; border: 0; outline: 0; background: transparent; color: var(--ink); font: inherit; }
