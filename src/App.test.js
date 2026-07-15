@@ -111,6 +111,30 @@ describe('interrupted reply resume', () => {
     resolveResume({ runId: 'run-interrupted' })
   })
 
+  it('does not regress live completion when resume invocation resolves later', async () => {
+    let resolveResume
+    invoke.mockImplementation(async (command) => {
+      if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
+      if (command === 'chat_history') return interrupted()
+      if (command === 'auth_entitlement_snapshot') return snapshot()
+      if (command === 'auth_devices') return []
+      if (command === 'chat_resume') return new Promise((resolve) => { resolveResume = resolve })
+      throw new Error(`unexpected command: ${command}`)
+    })
+    render(App)
+    await fireEvent.click(await screen.findByRole('button', { name: 'Resume' }))
+    chatListener({ payload: {
+      runId: 'run-interrupted', phase: 'complete', text: 'Finished answer',
+      receipt: { id: 'receipt-1' }, toolActivity: [], pendingPermission: null,
+    } })
+    expect(await screen.findByText('Finished answer')).toBeInTheDocument()
+
+    resolveResume({ runId: 'run-interrupted' })
+    await waitFor(() => expect(screen.queryByText('Resuming…')).not.toBeInTheDocument())
+    expect(screen.getByText('Finished answer')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Resume' })).not.toBeInTheDocument()
+  })
+
   it('offers a new-run fallback only when interruption is not resumable', async () => {
     invoke.mockImplementation(async (command) => {
       if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }

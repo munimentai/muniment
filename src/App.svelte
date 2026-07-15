@@ -241,7 +241,11 @@
     try {
       await tauri.invoke('chat_resume', { runId: run.id })
       const early = buffered.get(run.id) ?? []
-      const projected = applyBufferedChatEvents(resuming, early)
+      // Live events can arrive while invoke is still waiting for the durable
+      // run.resumed transition. Reconcile from that newer projection instead
+      // of restoring the stale, local `resuming` snapshot.
+      const current = messages.find((message) => message.run?.id === run.id)?.run ?? resuming
+      const projected = applyBufferedChatEvents(current, early)
       buffered.delete(run.id)
       messages = messages.map((message) => message.run?.id === run.id ? { ...message, run: projected } : message)
       active = ['complete', 'cancelled', 'failed', 'interrupted'].includes(projected.phase) ? null : projected

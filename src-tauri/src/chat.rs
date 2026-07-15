@@ -575,8 +575,8 @@ pub async fn chat_cancel(state: tauri::State<'_, ChatState>, run_id: String) -> 
     Ok(())
 }
 
-fn coordinate(
-    app: tauri::AppHandle,
+fn coordinate<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
     journal: Arc<Mutex<RunJournal>>,
     runtime: Arc<Mutex<Option<PiRuntime>>>,
     run_id: String,
@@ -1173,8 +1173,8 @@ fn close_open_effects(
     Ok(())
 }
 
-fn append_terminal(
-    app: &tauri::AppHandle,
+fn append_terminal<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
     journal: &Arc<Mutex<RunJournal>>,
     projector: &mut ChatProjector,
     run_id: &str,
@@ -1190,8 +1190,8 @@ fn append_terminal(
     append_emit(app, journal, projector, run_id, seq, kind, payload, subject)
 }
 
-fn fail_with_open_effects(
-    app: &tauri::AppHandle,
+fn fail_with_open_effects<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
     journal: &Arc<Mutex<RunJournal>>,
     projector: &mut ChatProjector,
     run_id: &str,
@@ -1231,8 +1231,8 @@ fn chat_tool_activity(
         .collect()
 }
 
-fn append_emit(
-    app: &tauri::AppHandle,
+fn append_emit<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
     journal: &Arc<Mutex<RunJournal>>,
     projector: &mut ChatProjector,
     run_id: &str,
@@ -1300,8 +1300,8 @@ fn event_envelope(
     }
 }
 
-fn fail(
-    app: &tauri::AppHandle,
+fn fail<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
     journal: &Arc<Mutex<RunJournal>>,
     projector: &mut ChatProjector,
     run_id: &str,
@@ -1321,8 +1321,8 @@ fn fail(
     );
 }
 
-fn fail_start(
-    app: &tauri::AppHandle,
+fn fail_start<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
     journal: &Arc<Mutex<RunJournal>>,
     projector: &mut ChatProjector,
     run_id: &str,
