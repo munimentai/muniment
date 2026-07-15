@@ -138,7 +138,7 @@ jobs:
           printf '%s' "$DESKTOP_CI_SSH_KEY" > "$key"
           trap 'rm -f "$key"' EXIT
 
-          cmd='cargo check --manifest-path src-tauri/Cargo.toml --locked --all-targets'
+          cmd="test/stage-asr-runtime.sh $PLATFORM && cargo check --manifest-path src-tauri/Cargo.toml --locked --all-targets"
           repo_url="https://x-access-token:${REPO_TOKEN}@github.com/${REPOSITORY}"
 
           # Keep the check command inside --cmd and pass clone credentials only
@@ -179,12 +179,12 @@ jobs:
           trap 'rm -f "$key"' EXIT
 
           # macOS: .app only — dmg bundling needs a GUI session (release-time step)
-          cmd='cargo test --manifest-path src-tauri/Cargo.toml --locked && npm ci --no-audit --no-fund && npm run tauri build'
+          cmd='test/stage-asr-runtime.sh linux && cargo test --manifest-path src-tauri/Cargo.toml --locked && npm ci --no-audit --no-fund && npm run tauri build'
           if [ "$PLATFORM" = "windows" ]; then
-            cmd='npm ci --no-audit --no-fund && node .github/build-windows-installers.mjs && powershell.exe -NoProfile -ExecutionPolicy Bypass -File test/windows-installers.ps1'
+            cmd='test/stage-asr-runtime.sh windows && npm ci --no-audit --no-fund && node .github/build-windows-installers.mjs && powershell.exe -NoProfile -ExecutionPolicy Bypass -File test/windows-installers.ps1'
           fi
           if [ "$PLATFORM" = "macos" ]; then
-            cmd='npm ci --no-audit --no-fund && npm run tauri build -- --bundles app'
+            cmd='test/stage-asr-runtime.sh macos-$(uname -m | sed s/x86_64/x64/) && npm ci --no-audit --no-fund && npm run tauri build -- --bundles app'
           fi
 
           repo_url="https://x-access-token:${REPO_TOKEN}@github.com/${REPOSITORY}"

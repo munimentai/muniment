@@ -24,6 +24,10 @@
   },
   "bundle": {
     "active": true,
+    "resources": {
+      "asr-runtime/*": "asr-runtime/",
+      "../docs/third-party/sherpa-onnx-NOTICE.md": "third-party/sherpa-onnx-NOTICE.md"
+    },
     "targets": [
       "deb",
       "appimage",

@@ -11,6 +11,20 @@ test -f src/index.html
 grep -q '"beforeBuildCommand": "npm run build"' src-tauri/tauri.conf.json
 grep -q '"frontendDist": "../dist"' src-tauri/tauri.conf.json
 test -f vite.config.js
+# Offline ASR runtime identity and redistribution notices are release gates.
+asr_runtime=src-tauri/asr-runtime.toml
+grep -Fq 'version = "1.13.2"' "$asr_runtime"
+grep -Fq 'commit = "13d0ae6c539d2809d32f5eaa3ef1db0c459d0b24"' "$asr_runtime"
+for target in x86_64-unknown-linux-gnu x86_64-pc-windows-msvc x86_64-apple-darwin aarch64-apple-darwin; do
+  grep -Fq "[targets.$target]" "$asr_runtime"
+done
+test -f docs/third-party/sherpa-onnx-NOTICE.md
+grep -Fq 'Apache License 2.0' docs/third-party/sherpa-onnx-NOTICE.md
+grep -Fq 'Microsoft ONNX Runtime' docs/third-party/sherpa-onnx-NOTICE.md
+grep -Fq '"asr-runtime/*": "asr-runtime/"' src-tauri/tauri.conf.json
+grep -Fq 'unsupported desktop ASR target' src-tauri/build.rs
+test -x test/stage-asr-runtime.sh
+grep -Fq 'stage-asr-runtime.sh' .github/workflows/ci.yml
 # fonts are vendored (CSP is default-src 'self'; no CDN requests)
 test -f src/fonts/SchibstedGrotesk-latin.woff2
 test -f src/fonts/CommitMono-VF.woff2
@@ -20,7 +34,7 @@ ci=.github/workflows/ci.yml
 grep -Fq 'name: Desktop compile preflight (${{ matrix.platform }})' "$ci"
 grep -Fq "if: github.event_name == 'pull_request' && needs.smoke.outputs.docs_only != 'true'" "$ci"
 grep -Fq 'platform: [windows, macos]' "$ci"
-grep -Fq "cmd='cargo check --manifest-path src-tauri/Cargo.toml --locked --all-targets'" "$ci"
+grep -Fq 'cargo check --manifest-path src-tauri/Cargo.toml --locked --all-targets' "$ci"
 test -f src-tauri/Cargo.lock
 test -f src-tauri/tauri.machine.conf.json
 grep -Fq '"upgradeCode": "c75b4a56-7d8b-5b99-9fc7-61ef0aabe84b"' src-tauri/tauri.machine.conf.json
