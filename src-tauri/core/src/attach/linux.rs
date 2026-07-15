@@ -5,7 +5,7 @@ use std::ffi::{CString, OsStr};
 use std::fmt;
 use std::fs::{self, File, Metadata, OpenOptions, Permissions};
 use std::io;
-use std::os::fd::AsRawFd;
+use std::os::fd::{AsRawFd, FromRawFd};
 use std::os::linux::fs::MetadataExt;
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::{FileTypeExt, OpenOptionsExt, PermissionsExt};
@@ -101,6 +101,13 @@ impl LinuxAttachListener {
     }
 
     pub fn bind_in(runtime: &Path) -> Result<Self, LinuxAttachError> {
+        Self::bind_in_with(runtime, || {})
+    }
+
+    fn bind_in_with(
+        runtime: &Path,
+        after_created: impl FnOnce(),
+    ) -> Result<Self, LinuxAttachError> {
         let uid = effective_uid();
         let runtime_handle = open_verified_directory(runtime, uid, true)?;
         let parent = runtime.join("muniment");
@@ -112,20 +119,38 @@ impl LinuxAttachListener {
 
         let handle_endpoint = handle_path(&parent_handle);
         let listener = UnixListener::bind(&handle_endpoint).map_err(|_| LinuxAttachError::Io)?;
-        if set_endpoint_mode(&parent_handle).is_err() {
-            let _ = remove_verified(&parent_handle, uid, None);
-            return Err(LinuxAttachError::Io);
-        }
+        let created_handle = open_endpoint(&parent_handle)?;
+        let created_metadata = created_handle
+            .metadata()
+            .map_err(|_| LinuxAttachError::Io)?;
+        verify_socket_metadata(&created_metadata, uid)?;
+        let created_identity = Identity::of(&created_metadata);
+        after_created();
+
+        let finish = || -> Result<Metadata, LinuxAttachError> {
+            set_endpoint_mode(&created_handle)?;
+            let socket_metadata =
+                endpoint_metadata(&parent_handle)?.ok_or(LinuxAttachError::EndpointInvalid)?;
+            verify_socket_metadata(&socket_metadata, uid)?;
+            if Identity::of(&socket_metadata) != created_identity
+                || socket_metadata.st_mode() & 0o777 != SOCKET_MODE
+            {
+                return Err(LinuxAttachError::EndpointInvalid);
+            }
+            Ok(socket_metadata)
+        };
+        let socket_metadata = match finish() {
+            Ok(metadata) => metadata,
+            Err(error) => {
+                let _ = remove_verified(&parent_handle, uid, Some(created_identity));
+                return Err(error);
+            }
+        };
 
         let current_parent = verify_parent(&parent, uid)?;
         if Identity::of(&current_parent) != parent_identity {
+            let _ = remove_verified(&parent_handle, uid, Some(created_identity));
             return Err(LinuxAttachError::AttachDirectoryInvalid);
-        }
-        let socket_metadata =
-            endpoint_metadata(&parent_handle)?.ok_or(LinuxAttachError::EndpointInvalid)?;
-        verify_socket_metadata(&socket_metadata, uid)?;
-        if socket_metadata.st_mode() & 0o777 != SOCKET_MODE {
-            return Err(LinuxAttachError::EndpointInvalid);
         }
         let socket_identity = Identity::of(&socket_metadata);
         Ok(Self {
@@ -368,15 +393,28 @@ fn metadata_at(parent: &File, name: &str) -> Result<Option<Metadata>, LinuxAttac
     }
 }
 
-fn set_endpoint_mode(parent: &File) -> Result<(), LinuxAttachError> {
+fn open_endpoint(parent: &File) -> Result<File, LinuxAttachError> {
     let name = cstring(ENDPOINT_NAME)?;
-    // SAFETY: arguments reference a live directory and valid C string.
-    let result = unsafe { libc::fchmodat(parent.as_raw_fd(), name.as_ptr(), SOCKET_MODE, 0) };
-    if result == 0 {
-        Ok(())
-    } else {
-        Err(LinuxAttachError::Io)
+    // SAFETY: the directory descriptor and NUL-terminated name are valid.
+    let fd = unsafe {
+        libc::openat(
+            parent.as_raw_fd(),
+            name.as_ptr(),
+            libc::O_PATH | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+        )
+    };
+    if fd < 0 {
+        return Err(LinuxAttachError::EndpointInvalid);
     }
+    // SAFETY: openat returned a new owned descriptor.
+    Ok(unsafe { File::from_raw_fd(fd) })
+}
+
+fn set_endpoint_mode(endpoint: &File) -> Result<(), LinuxAttachError> {
+    // An O_PATH descriptor pins the created inode. Resolving this procfs link
+    // therefore changes that inode even if its directory entry was replaced.
+    let path = PathBuf::from(format!("/proc/self/fd/{}", endpoint.as_raw_fd()));
+    fs::set_permissions(path, Permissions::from_mode(SOCKET_MODE)).map_err(|_| LinuxAttachError::Io)
 }
 
 fn rename_at_noreplace(parent: &File, from: &str, to: &str) -> Result<(), LinuxAttachError> {
@@ -418,7 +456,7 @@ fn cstring(value: impl AsRef<OsStr>) -> Result<CString, LinuxAttachError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::os::unix::fs::PermissionsExt;
+    use std::os::unix::fs::{symlink, FileTypeExt, PermissionsExt};
 
     fn test_parent() -> (PathBuf, File) {
         let root = env::temp_dir().join(format!(
@@ -472,5 +510,74 @@ mod tests {
         drop(listener);
         fs::remove_dir_all(parent_path).unwrap();
         fs::remove_dir_all(moved).unwrap();
+    }
+
+    #[test]
+    fn bind_rejects_socket_replaced_before_publication() {
+        let (runtime, _) = test_parent();
+        let parent = runtime.join("muniment");
+        let endpoint = parent.join(ENDPOINT_NAME);
+        let mut replacement = None;
+
+        let result = LinuxAttachListener::bind_in_with(&runtime, || {
+            fs::remove_file(&endpoint).unwrap();
+            replacement = Some(UnixListener::bind(&endpoint).unwrap());
+        });
+
+        assert_eq!(result.unwrap_err(), LinuxAttachError::EndpointInvalid);
+        assert!(fs::symlink_metadata(&endpoint)
+            .unwrap()
+            .file_type()
+            .is_socket());
+        assert_ne!(
+            fs::symlink_metadata(&endpoint).unwrap().st_mode() & 0o777,
+            SOCKET_MODE
+        );
+        drop(replacement);
+        fs::remove_dir_all(runtime).unwrap();
+    }
+
+    #[test]
+    fn bind_rejects_symlink_replaced_before_publication_without_following_it() {
+        let (runtime, _) = test_parent();
+        let parent = runtime.join("muniment");
+        let endpoint = parent.join(ENDPOINT_NAME);
+        let target = runtime.join("target");
+        fs::write(&target, b"target").unwrap();
+        fs::set_permissions(&target, Permissions::from_mode(0o640)).unwrap();
+
+        let result = LinuxAttachListener::bind_in_with(&runtime, || {
+            fs::remove_file(&endpoint).unwrap();
+            symlink(&target, &endpoint).unwrap();
+        });
+
+        assert_eq!(result.unwrap_err(), LinuxAttachError::EndpointInvalid);
+        assert!(fs::symlink_metadata(&endpoint)
+            .unwrap()
+            .file_type()
+            .is_symlink());
+        assert_eq!(fs::metadata(&target).unwrap().st_mode() & 0o777, 0o640);
+        fs::remove_dir_all(runtime).unwrap();
+    }
+
+    #[test]
+    fn bind_rejects_parent_path_replaced_before_publication() {
+        let (runtime, _) = test_parent();
+        let parent = runtime.join("muniment");
+        let moved = runtime.join("original-parent");
+
+        let result = LinuxAttachListener::bind_in_with(&runtime, || {
+            fs::rename(&parent, &moved).unwrap();
+            fs::create_dir(&parent).unwrap();
+            fs::set_permissions(&parent, Permissions::from_mode(DIRECTORY_MODE)).unwrap();
+        });
+
+        assert_eq!(
+            result.unwrap_err(),
+            LinuxAttachError::AttachDirectoryInvalid
+        );
+        assert!(!moved.join(ENDPOINT_NAME).exists());
+        assert!(!parent.join(ENDPOINT_NAME).exists());
+        fs::remove_dir_all(runtime).unwrap();
     }
 }
