@@ -141,6 +141,15 @@ product-approved corpus and are deliberately not invented here.
 
 ## Consequences
 
+The safe binding-contract slice is complete: `muniment-core` now validates
+finite 16 kHz mono `float32` utterances and the four regular model files before
+calling an injected offline-recognizer adapter, owns handle teardown on every
+result path, and copies transcript text before releasing the native result.
+Tests use a fake adapter and require neither model downloads nor native
+libraries. Native v1.13.2 linking/resources, distribution notices, recognizer
+construction from the installed revision, capture/UI/VAD, and target-hardware
+validation remain outstanding.
+
 The choice is build-ready and reproducible, avoids CUDA and network inference,
 and preserves the existing Gemma polish boundary. It adds roughly 670 MB of
 model files plus target-native runtime libraries to desktop distribution and

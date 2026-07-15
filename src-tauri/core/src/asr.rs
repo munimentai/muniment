@@ -2,6 +2,7 @@
 
 pub mod acquisition;
 pub mod install;
+pub mod runtime;
 
 use std::fs::{self, File, OpenOptions};
 use std::io::{BufReader, Read, Write};
