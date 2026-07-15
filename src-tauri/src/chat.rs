@@ -653,7 +653,14 @@ fn coordinate<R: tauri::Runtime>(
                 return;
             }
         };
-        let executable = match resolve_current(std::path::Path::new(&root)) {
+        #[cfg(test)]
+        let executable = std::env::var_os("MUNIMENT_PI_TEST_EXECUTABLE")
+            .map(std::path::PathBuf::from)
+            .map(Ok)
+            .unwrap_or_else(|| resolve_current(std::path::Path::new(&root)));
+        #[cfg(not(test))]
+        let executable = resolve_current(std::path::Path::new(&root));
+        let executable = match executable {
             Ok(path) => path,
             Err(_) => {
                 fail_start(
@@ -1373,6 +1380,8 @@ fn fetch_receipt(url: &str, access_token: &str, run_id: &str) -> Result<Receipt,
 mod tests {
     use super::*;
 
+    static PI_ENV_LOCK: Mutex<()> = Mutex::new(());
+
     fn append_test_event(
         journal: &mut RunJournal,
         run_id: &str,
@@ -1561,6 +1570,7 @@ mod tests {
 
     #[test]
     fn resume_runtime_failure_leaves_the_existing_journal_event_for_event_unchanged() {
+        let _environment = PI_ENV_LOCK.lock().unwrap();
         let app = tauri::test::mock_app();
         let directory = std::env::temp_dir().join(format!("muniment-resume-{}", Uuid::now_v7()));
         std::fs::create_dir_all(&directory).unwrap();
@@ -1628,6 +1638,147 @@ mod tests {
         }
         assert!(receiver.recv().unwrap().is_err());
         assert_eq!(shared.lock().unwrap().events(&run_id).unwrap(), before);
+        drop(shared);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn resume_reopens_the_stub_session_and_completes_the_same_contiguous_run() {
+        let _environment = PI_ENV_LOCK.lock().unwrap();
+        let app = tauri::test::mock_app();
+        let directory = std::env::temp_dir().join(format!("muniment-resume-{}", Uuid::now_v7()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let args_log = directory.join("args.txt");
+        let prompt_log = directory.join("prompt.txt");
+        let session_name = format!("{}.jsonl", Uuid::now_v7());
+        let sessions = app.path().app_data_dir().unwrap().join("pi-sessions");
+        std::fs::create_dir_all(&sessions).unwrap();
+        std::fs::write(sessions.join(&session_name), "persisted Pi data\n").unwrap();
+
+        let executable_name = if cfg!(windows) {
+            "sidecar-test-stub.exe"
+        } else {
+            "sidecar-test-stub"
+        };
+        let test_executable = std::env::current_exe().unwrap();
+        let target_dir = test_executable.parent().unwrap().parent().unwrap();
+        let stub = target_dir.join("examples").join(executable_name);
+        assert!(stub.is_file(), "sidecar test stub was not built");
+
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let receipt_url = format!("http://{}/receipt", listener.local_addr().unwrap());
+        let receipt_server = std::thread::spawn(move || {
+            use std::io::{Read, Write};
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut request = [0; 4096];
+            let _ = stream.read(&mut request).unwrap();
+            let body = r#"{"route":"resume-stub","model":"test"}"#;
+            write!(
+                stream,
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            )
+            .unwrap();
+        });
+
+        let run_id = Uuid::now_v7().to_string();
+        let mut journal = RunJournal::open(directory.join("runs.sqlite3")).unwrap();
+        append_test_event(
+            &mut journal,
+            &run_id,
+            1,
+            "run.started",
+            json!({}),
+            Some("owner"),
+        );
+        append_test_event(
+            &mut journal,
+            &run_id,
+            2,
+            "runtime.pi_session.bound",
+            json!({"run_id":run_id, "locator":session_name}),
+            Some("owner"),
+        );
+        append_test_event(
+            &mut journal,
+            &run_id,
+            3,
+            "run.needs_attention",
+            json!({"reason":"interrupted"}),
+            Some("owner"),
+        );
+        let existing = journal.events(&run_id).unwrap();
+        let (locator, _) = validate_pi_session(&sessions, &session_name).unwrap();
+        let shared = Arc::new(Mutex::new(journal));
+
+        std::env::set_var("MUNIMENT_PI_ROOT", &directory);
+        std::env::set_var("MUNIMENT_PI_TEST_EXECUTABLE", &stub);
+        std::env::set_var("PI_RESUME_STUB_ARGS", &args_log);
+        std::env::set_var("PI_RESUME_STUB_PROMPTS", &prompt_log);
+        let (sender, receiver) = std::sync::mpsc::channel();
+        coordinate(
+            app.handle().clone(),
+            Arc::clone(&shared),
+            Arc::new(Mutex::new(None)),
+            run_id.clone(),
+            RESUME_PROMPT.into(),
+            "token".into(),
+            Some("owner".into()),
+            ChatGrant {
+                gateway_url: "https://gateway.invalid".into(),
+                virtual_key: "virtual-key".into(),
+                model: None,
+                receipt_url,
+            },
+            Arc::new(AtomicBool::new(false)),
+            Arc::new(Mutex::new(None)),
+            Arc::new(Mutex::new(None)),
+            Some(ResumeContext {
+                events: existing,
+                locator,
+            }),
+            Some(sender),
+        );
+        assert_eq!(receiver.recv().unwrap(), Ok(()));
+        receipt_server.join().unwrap();
+        for key in [
+            "MUNIMENT_PI_ROOT",
+            "MUNIMENT_PI_TEST_EXECUTABLE",
+            "PI_RESUME_STUB_ARGS",
+            "PI_RESUME_STUB_PROMPTS",
+        ] {
+            std::env::remove_var(key);
+        }
+
+        let events = shared.lock().unwrap().events(&run_id).unwrap();
+        assert_eq!(
+            events.iter().map(|event| event.run_seq).collect::<Vec<_>>(),
+            (1..=events.len() as u64).collect::<Vec<_>>()
+        );
+        assert_eq!(events.last().unwrap().event_type, "run.completed");
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| event.event_type == "run.started")
+                .count(),
+            1
+        );
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| event.event_type == "runtime.pi_session.bound")
+                .count(),
+            1
+        );
+        let args = std::fs::read_to_string(args_log).unwrap();
+        assert!(args.lines().any(|argument| argument == "--session"));
+        assert!(args.contains(&session_name));
+        let sent_prompt = std::fs::read_to_string(prompt_log).unwrap();
+        assert_eq!(sent_prompt, format!("{RESUME_PROMPT}\n"));
+        assert!(!sent_prompt.contains("ORIGINAL PROTECTED PROMPT"));
+
+        std::fs::remove_file(sessions.join(session_name)).unwrap();
         drop(shared);
         std::fs::remove_dir_all(directory).unwrap();
     }
