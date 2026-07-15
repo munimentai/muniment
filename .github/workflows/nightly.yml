@@ -91,9 +91,13 @@ jobs:
           fi
 
           # The VM is destroyed when desktop-ci exits, so completed bundles are
-          # uploaded from inside it. Pinning the checkout makes the release SHA
-          # exact even if main advances while the three serialized VMs run.
-          cmd="git checkout --detach $SOURCE_SHA && $build && node .github/upload-nightly-assets.mjs $REPO_TOKEN $REPOSITORY $SOURCE_SHA $PLATFORM"
+          # uploaded from inside it. desktop-ci does a shallow clone of main's
+          # tip; fetch the pinned commit BY HASH before checkout so all three
+          # serialized platforms build the exact same source even when main
+          # advances mid-run (a shallow branch clone can't check out a commit
+          # that is no longer the tip -> "unable to read tree", macOS built last
+          # so hit it most).
+          cmd="git fetch --depth 1 origin $SOURCE_SHA && git checkout --detach $SOURCE_SHA && $build && node .github/upload-nightly-assets.mjs $REPO_TOKEN $REPOSITORY $SOURCE_SHA $PLATFORM"
           repo_url="https://x-access-token:${REPO_TOKEN}@github.com/${REPOSITORY}"
           ssh_cmd="sudo desktop-ci $PLATFORM --repo '$repo_url' --ref 'main' --cmd '$cmd'"
 
