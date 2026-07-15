@@ -1,8 +1,9 @@
 # muniment-desktop
 
 The muniment desktop client (Tauri v2). Private, closed source. See
-SPEC.md / ROADMAP.md / DESIGN.md. **Lane closed until muniment-cloud
-Phase 1 ships** — see ROADMAP.
+SPEC.md / ROADMAP.md / DESIGN.md. The muniment-cloud Phase 1 prerequisite is
+live and the desktop client lane is active; see ROADMAP.md for current
+implementation status.
 
 ## Build
 
