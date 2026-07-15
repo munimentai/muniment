@@ -151,7 +151,7 @@ fn reconcile_interrupted_runs(journal: &mut RunJournal) {
         let Ok(state) = reduce(&events) else {
             continue;
         };
-        if state.is_terminal() {
+        if !state.needs_interruption_reconciliation() {
             continue;
         }
         let envelope = event_envelope(
@@ -1149,6 +1149,9 @@ fn fetch_receipt(url: &str, access_token: &str, run_id: &str) -> Result<Receipt,
 #[cfg(test)]
 mod tests {
     use super::*;
+    use muniment_core::journal::reducer::{
+        AttentionReason, ExplicitResumeBlockReason, ExplicitResumeEligibility,
+    };
 
     fn append_test_event(
         journal: &mut RunJournal,
@@ -1670,6 +1673,7 @@ mod tests {
         let path = directory.join("runs.sqlite3");
         let interrupted = Uuid::now_v7().to_string();
         let resumable = Uuid::now_v7().to_string();
+        let open_effect = Uuid::now_v7().to_string();
         let completed = Uuid::now_v7().to_string();
 
         {
@@ -1716,6 +1720,23 @@ mod tests {
                 3,
                 "model.stream.delta",
                 json!({"text": "partial"}),
+                None,
+            );
+            append_test_event(&mut journal, &open_effect, 1, "run.started", json!({}), None);
+            append_test_event(
+                &mut journal,
+                &open_effect,
+                2,
+                "runtime.pi_session.bound",
+                json!({"run_id": open_effect, "locator": "effect.jsonl"}),
+                None,
+            );
+            append_test_event(
+                &mut journal,
+                &open_effect,
+                3,
+                "tool.effect.started",
+                json!({"effect_id": "effect-1"}),
                 None,
             );
             append_test_event(&mut journal, &completed, 1, "run.started", json!({}), None);
@@ -1765,11 +1786,41 @@ mod tests {
                     })
                 }
             );
+            let open_effect_events = reopened.events(&open_effect).unwrap();
+            assert_eq!(open_effect_events.len(), 4);
+            assert_eq!(
+                open_effect_events[3].payload,
+                EventPayload::Inline {
+                    payload_json: json!({
+                        "reason": "interrupted",
+                        "resume_policy": {
+                            "version": 1,
+                            "eligibility": {
+                                "status": "blocked",
+                                "reason": {"kind": "open_tool_effect", "effect_id": "effect-1"}
+                            }
+                        }
+                    })
+                }
+            );
+            drop(reopened);
+
+            let mut reopened = RunJournal::open(&path).unwrap();
+            let replayed_open_effect = reduce(&reopened.events(&open_effect).unwrap()).unwrap();
+            assert!(matches!(
+                replayed_open_effect.status,
+                RunStatus::NeedsAttention(AttentionReason::Interrupted {
+                    eligibility: ExplicitResumeEligibility::Blocked {
+                        reason: ExplicitResumeBlockReason::OpenToolEffect { .. }
+                    }
+                })
+            ));
             assert_eq!(reopened.events(&completed).unwrap().len(), 2);
 
             reconcile_interrupted_runs(&mut reopened);
             assert_eq!(reopened.events(&interrupted).unwrap().len(), 4);
             assert_eq!(reopened.events(&resumable).unwrap().len(), 4);
+            assert_eq!(reopened.events(&open_effect).unwrap().len(), 4);
             assert_eq!(reopened.events(&completed).unwrap().len(), 2);
         }
 

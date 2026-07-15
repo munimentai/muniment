@@ -539,15 +539,25 @@ fn explicit_resume_only_transitions_a_journaled_eligible_interruption() {
         Err(ReduceError::InvalidTransition { .. })
     ));
 
-    let terminal = stream(&[
-        ("run.started", json!({})),
-        ("run.completed", json!({})),
-        ("run.explicit_resume", json!({"run_id":RUN})),
-    ]);
-    assert!(matches!(
-        reduce(&terminal),
-        Err(ReduceError::InvalidTransition { .. })
-    ));
+    for terminal_event in ["run.completed", "run.cancelled", "run.failed"] {
+        let terminal = stream(&[
+            ("run.started", json!({})),
+            (
+                "runtime.pi_session.bound",
+                json!({"run_id": RUN, "locator": "session.jsonl"}),
+            ),
+            (terminal_event, json!({})),
+            (
+                "run.needs_attention",
+                json!({"reason":"interrupted","resume_policy":eligible.clone()}),
+            ),
+            ("run.explicit_resume", json!({"run_id":RUN})),
+        ]);
+        assert!(matches!(
+            reduce(&terminal),
+            Err(ReduceError::InvalidTransition { .. })
+        ));
+    }
 }
 
 #[test]

@@ -212,6 +212,16 @@ impl RunState {
         )
     }
 
+    pub fn needs_interruption_reconciliation(&self) -> bool {
+        matches!(
+            self.status,
+            RunStatus::Active
+                | RunStatus::Streaming
+                | RunStatus::PendingPermission(_)
+                | RunStatus::NeedsAttention(AttentionReason::UnknownEffectOutcome { .. })
+        )
+    }
+
     pub fn explicit_resume_eligibility(&self) -> ExplicitResumeEligibility {
         match &self.status {
             RunStatus::PendingPermission(gate) => ExplicitResumeEligibility::Blocked {
@@ -329,7 +339,7 @@ impl RunReducer {
         if terminal
             && !matches!(
                 event.event_type.as_str(),
-                "run.needs_attention" | "run.explicit_resume"
+                "run.explicit_resume"
             )
             && is_state_event(&event.event_type)
         {
