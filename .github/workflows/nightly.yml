@@ -66,6 +66,15 @@ jobs:
           REPO_TOKEN: ${{ github.token }}
           REPOSITORY: ${{ github.repository }}
           SOURCE_SHA: ${{ needs.prepare.outputs.source_sha }}
+          # Azure Artifact Signing (Windows). Empty until the six repo secrets
+          # exist => unsigned build. TENANT/CLIENT/SECRET authenticate the
+          # service principal; ENDPOINT/ACCOUNT/PROFILE address the cert profile.
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+          AZURE_SIGNING_ENDPOINT: ${{ secrets.AZURE_SIGNING_ENDPOINT }}
+          AZURE_SIGNING_ACCOUNT: ${{ secrets.AZURE_SIGNING_ACCOUNT }}
+          AZURE_SIGNING_PROFILE: ${{ secrets.AZURE_SIGNING_PROFILE }}
         run: |
           set -u
           umask 077
@@ -86,11 +95,28 @@ jobs:
           # exact even if main advances while the three serialized VMs run.
           cmd="git checkout --detach $SOURCE_SHA && $build && node .github/upload-nightly-assets.mjs $REPO_TOKEN $REPOSITORY $SOURCE_SHA $PLATFORM"
           repo_url="https://x-access-token:${REPO_TOKEN}@github.com/${REPOSITORY}"
+          ssh_cmd="sudo desktop-ci $PLATFORM --repo '$repo_url' --ref 'main' --cmd '$cmd'"
 
-          ssh -i "$key" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
-              -o BatchMode=yes -o ServerAliveInterval=30 -o ServerAliveCountMax=8 \
-              desktopci@10.1.10.10 \
-              "sudo desktop-ci $PLATFORM --repo '$repo_url' --ref 'main' --cmd '$cmd'"
+          # Windows code signing: when the Azure Artifact Signing secrets exist,
+          # hand the service-principal creds to desktop-ci on stdin (never argv,
+          # so they stay out of pve01's sudo log and process list) and it injects
+          # them into the ephemeral build VM. Absent secret => unchanged unsigned build.
+          if [ "$PLATFORM" = "windows" ] && [ -n "${AZURE_CLIENT_SECRET:-}" ]; then
+            printf '%s\n' \
+              "AZURE_TENANT_ID=$AZURE_TENANT_ID" \
+              "AZURE_CLIENT_ID=$AZURE_CLIENT_ID" \
+              "AZURE_CLIENT_SECRET=$AZURE_CLIENT_SECRET" \
+              "AZURE_SIGNING_ENDPOINT=$AZURE_SIGNING_ENDPOINT" \
+              "AZURE_SIGNING_ACCOUNT=$AZURE_SIGNING_ACCOUNT" \
+              "AZURE_SIGNING_PROFILE=$AZURE_SIGNING_PROFILE" \
+            | ssh -i "$key" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+                  -o BatchMode=yes -o ServerAliveInterval=30 -o ServerAliveCountMax=8 \
+                  desktopci@10.1.10.10 "$ssh_cmd --env-stdin"
+          else
+            ssh -i "$key" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+                -o BatchMode=yes -o ServerAliveInterval=30 -o ServerAliveCountMax=8 \
+                desktopci@10.1.10.10 "$ssh_cmd"
+          fi
 
   publish:
     needs: [prepare, build]
