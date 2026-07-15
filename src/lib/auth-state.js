@@ -46,3 +46,23 @@ export function accessReadyState(snapshot) {
 export function accessErrorState(error) {
   return { name: 'error', message: String(error || 'Your access could not be loaded.') }
 }
+
+export const devicesIdleState = { name: 'idle' }
+
+export function devicesLoadingState() {
+  return { name: 'loading' }
+}
+
+export function devicesReadyState(devices) {
+  return {
+    name: 'ready',
+    devices: [...devices].sort((a, b) => {
+      const revoked = Number(Boolean(a.revoked_at)) - Number(Boolean(b.revoked_at))
+      return revoked || Date.parse(b.last_active_at) - Date.parse(a.last_active_at) || a.device_id.localeCompare(b.device_id)
+    }),
+  }
+}
+
+export function devicesErrorState() {
+  return { name: 'error' }
+}

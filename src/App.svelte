@@ -1,7 +1,7 @@
 <script>
   import { onMount, tick } from 'svelte'
 
-  import { accessErrorState, accessIdleState, accessLoadingState, accessReadyState, bootState, errorState, statusState, waitingState } from './lib/auth-state.js'
+  import { accessErrorState, accessIdleState, accessLoadingState, accessReadyState, bootState, devicesErrorState, devicesIdleState, devicesLoadingState, devicesReadyState, errorState, statusState, waitingState } from './lib/auth-state.js'
   import { ringPath } from './lib/mark.js'
   import { applyBufferedChatEvents, applyChatEvent, composerAction, historyMessages, receiptParts, receiptRows, toolName, toolStatus } from './lib/chat-state.js'
   import { scrollFollowState } from './lib/scroll-follow.js'
@@ -18,6 +18,7 @@
   let queueError = $state('')
   let historyError = $state('')
   let access = $state(accessIdleState)
+  let devices = $state(devicesIdleState)
   let profileSnapshot = $state(null)
   let accessOpen = $state(false)
   let expandedGroups = $state(new Set())
@@ -99,6 +100,7 @@
     if (action === 'sign-in' || action === 'sign-out') {
       profileSnapshot = null
       access = accessIdleState
+      devices = devicesIdleState
       expandedGroups = new Set()
     }
     if (action === 'sign-in') auth = waitingState()
@@ -139,7 +141,21 @@
   }
 
   function openAccess() {
-    return loadAccess(true)
+    loadAccess(true)
+    loadDevices()
+  }
+
+  async function loadDevices() {
+    devices = devicesLoadingState()
+    try {
+      devices = devicesReadyState(await tauri.invoke('auth_devices'))
+    } catch (_) {
+      devices = devicesErrorState()
+    }
+  }
+
+  function lastActive(value) {
+    return new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(value))
   }
 
   function closeAccess() {
@@ -294,6 +310,24 @@
                     </div>
                   {/each}
                 {/if}
+                <section class="devices-section" aria-labelledby="devices-heading">
+                  <h3 id="devices-heading" class="access-label">Devices</h3>
+                  {#if devices.name === 'loading'}
+                    <p class="access-status" aria-live="polite">Loading devices…</p>
+                  {:else if devices.name === 'error'}
+                    <div class="access-status" role="alert"><p>Devices could not be loaded.</p><button onclick={loadDevices}>Try again</button></div>
+                  {:else if devices.name === 'ready'}
+                    {#if devices.devices.length === 0}<p class="empty-grant">No devices found</p>{/if}
+                    <ul class="device-list">
+                      {#each devices.devices as device (device.device_id)}
+                        <li class:revoked={device.revoked_at}>
+                          <div class="device-heading"><strong>{device.platform}</strong>{#if device.current}<span class="current-device">This device</span>{/if}<span class="device-state">{device.revoked_at ? 'Revoked' : 'Active'}</span></div>
+                          <time datetime={device.last_active_at}>Last active {lastActive(device.last_active_at)}</time>
+                        </li>
+                      {/each}
+                    </ul>
+                  {/if}
+                </section>
                 <footer>Access is set by your admins.</footer>
                 <button class="quiet sign-out" onclick={() => { closeAccess(); run('sign-out') }}>Sign out</button>
               </div>
@@ -494,6 +528,17 @@
   .grant-grid ul { margin: 0; padding: 0; list-style: none; font: var(--text-12) var(--font-mono); }
   .grant-grid li + li { margin-top: 2px; }
   .empty-grant, .access-status { margin: 8px 0; color: var(--muted); font: var(--text-12) var(--font-mono); }
+  .access-status p { margin: 0 0 6px; }
+  .devices-section { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--border); }
+  .device-list { margin: 0; padding: 0; list-style: none; }
+  .device-list li { padding: 9px 2px; border-top: 1px solid var(--border); }
+  .device-list li:first-child { border-top: 0; }
+  .device-heading { display: flex; align-items: center; gap: 7px; font-size: var(--text-12); text-transform: capitalize; }
+  .device-heading strong { font-weight: 600; }
+  .current-device { padding: 1px 5px; border: 1px solid var(--signal); border-radius: 6px; color: var(--signal); font: 10px var(--font-mono); text-transform: none; }
+  .device-state { margin-left: auto; color: var(--signal); font: var(--text-12) var(--font-mono); text-transform: none; }
+  .device-list .revoked .device-state { color: var(--muted); }
+  .device-list time { display: block; margin-top: 3px; color: var(--muted); font: 11px var(--font-mono); }
   .access-popover footer { margin: 12px -14px 0; padding: 11px 14px 0; border-top: 1px solid var(--border); color: var(--muted); font-size: 11px; }
   .sign-out { margin-top: 8px; padding: 2px 0; color: var(--muted); }
   .quiet { background: transparent; border-color: transparent; }
