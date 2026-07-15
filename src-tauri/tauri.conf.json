@@ -25,8 +25,10 @@
   "bundle": {
     "active": true,
     "resources": {
-      "asr-runtime/*": "asr-runtime/",
-      "../docs/third-party/sherpa-onnx-NOTICE.md": "third-party/sherpa-onnx-NOTICE.md"
+      "asr-runtime/*": ".",
+      "../docs/third-party/sherpa-onnx-NOTICE.md": "third-party/sherpa-onnx-NOTICE.md",
+      "../docs/third-party/sherpa-onnx-LICENSE.txt": "third-party/sherpa-onnx-LICENSE.txt",
+      "../docs/third-party/onnxruntime-LICENSE.txt": "third-party/onnxruntime-LICENSE.txt"
     },
     "targets": [
       "deb",

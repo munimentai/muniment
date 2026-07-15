@@ -4,6 +4,9 @@ use std::path::PathBuf;
 
 use super::VerifiedParakeetRevision;
 
+#[cfg(feature = "native-asr")]
+use sherpa_onnx::{OfflineRecognizer, OfflineRecognizerConfig, OfflineTransducerModelConfig};
+
 pub const SAMPLE_RATE: u32 = 16_000;
 
 #[derive(Clone, PartialEq, Eq)]
@@ -34,6 +37,51 @@ pub trait OfflineAsrNative {
     fn construct(&self, paths: &ParakeetModelPaths) -> Result<Self::Handle, NativeAsrError>;
     fn decode(&self, handle: &mut Self::Handle, samples: &[f32]) -> Result<String, NativeAsrError>;
     fn destroy(&self, handle: Self::Handle);
+}
+
+/// Pinned, in-process sherpa-onnx v1.13.2 C-API adapter used by desktop builds.
+/// The wrapper owns the C recognizer; each decode owns a C stream and result.
+#[cfg(feature = "native-asr")]
+pub struct SherpaOnnxNative;
+
+#[cfg(feature = "native-asr")]
+impl OfflineAsrNative for SherpaOnnxNative {
+    type Handle = OfflineRecognizer;
+
+    fn construct(&self, paths: &ParakeetModelPaths) -> Result<Self::Handle, NativeAsrError> {
+        fn path(path: &std::path::Path) -> Result<String, NativeAsrError> {
+            path.to_str()
+                .map(ToOwned::to_owned)
+                .ok_or(NativeAsrError::ConstructionFailed)
+        }
+
+        let mut config = OfflineRecognizerConfig::default();
+        config.model_config.transducer = OfflineTransducerModelConfig {
+            encoder: Some(path(&paths.encoder)?),
+            decoder: Some(path(&paths.decoder)?),
+            joiner: Some(path(&paths.joiner)?),
+        };
+        config.model_config.tokens = Some(path(&paths.tokens)?);
+        config.model_config.model_type = Some("nemo_transducer".into());
+        config.model_config.provider = Some("cpu".into());
+        config.model_config.num_threads = 2;
+        config.decoding_method = Some("greedy_search".into());
+        OfflineRecognizer::create(&config).ok_or(NativeAsrError::ConstructionFailed)
+    }
+
+    fn decode(&self, handle: &mut Self::Handle, samples: &[f32]) -> Result<String, NativeAsrError> {
+        let stream = handle.create_stream();
+        stream.accept_waveform(SAMPLE_RATE as i32, samples);
+        handle.decode(&stream);
+        stream
+            .get_result()
+            .map(|result| result.text)
+            .ok_or(NativeAsrError::DecodeFailed)
+    }
+
+    fn destroy(&self, handle: Self::Handle) {
+        drop(handle);
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -114,6 +162,19 @@ impl<'a, N: OfflineAsrNative> OfflineParakeetRecognizer<'a, N> {
     }
 }
 
+#[cfg(feature = "native-asr")]
+impl OfflineParakeetRecognizer<'static, SherpaOnnxNative> {
+    /// Production construction entry point. Only the lifecycle-issued verified
+    /// revision can supply model paths; no webview path crosses this boundary.
+    pub fn from_verified_revision(
+        revision: &VerifiedParakeetRevision,
+    ) -> Result<Self, AsrRecognitionError> {
+        // The adapter is stateless and lives for the process lifetime.
+        static NATIVE: SherpaOnnxNative = SherpaOnnxNative;
+        Self::new(&NATIVE, revision)
+    }
+}
+
 impl<N: OfflineAsrNative> Drop for OfflineParakeetRecognizer<'_, N> {
     fn drop(&mut self) {
         if let Some(handle) = self.handle.take() {
@@ -134,7 +195,20 @@ mod tests {
 
     use super::*;
 
+    #[cfg(feature = "native-asr")]
+    #[test]
+    fn loads_the_pinned_native_runtime() {
+        use std::ffi::CStr;
+
+        // SAFETY: these pinned C-API functions return process-lifetime strings.
+        let version = unsafe { CStr::from_ptr(sherpa_onnx_sys::SherpaOnnxGetVersionStr()) };
+        let commit = unsafe { CStr::from_ptr(sherpa_onnx_sys::SherpaOnnxGetGitSha1()) };
+        assert_eq!(version.to_bytes(), b"1.13.2");
+        assert_eq!(commit.to_bytes(), b"13d0ae6c");
+    }
+
     struct FakeNative {
+        construction: Result<(), NativeAsrError>,
         result: RefCell<Result<String, NativeAsrError>>,
         destroyed: Cell<bool>,
     }
@@ -147,7 +221,7 @@ mod tests {
             assert!(paths.decoder.ends_with("decoder.int8.onnx"));
             assert!(paths.joiner.ends_with("joiner.int8.onnx"));
             assert!(paths.tokens.ends_with("tokens.txt"));
-            Ok(())
+            self.construction
         }
 
         fn decode(&self, _: &mut (), _: &[f32]) -> Result<String, NativeAsrError> {
@@ -162,6 +236,7 @@ mod tests {
     #[test]
     fn constructs_decodes_and_destroys_deterministically() {
         let native = FakeNative {
+            construction: Ok(()),
             result: RefCell::new(Ok("offline words".into())),
             destroyed: Cell::new(false),
         };
@@ -179,6 +254,7 @@ mod tests {
     #[test]
     fn rejects_malformed_samples_before_native_decode() {
         let native = FakeNative {
+            construction: Ok(()),
             result: RefCell::new(Ok(String::new())),
             destroyed: Cell::new(false),
         };
@@ -195,6 +271,7 @@ mod tests {
     #[test]
     fn native_failures_are_typed_and_paths_are_redacted() {
         let native = FakeNative {
+            construction: Ok(()),
             result: RefCell::new(Err(NativeAsrError::DecodeFailed)),
             destroyed: Cell::new(false),
         };
@@ -208,8 +285,18 @@ mod tests {
         for native_error in [
             NativeAsrError::RuntimeUnavailable,
             NativeAsrError::IncompatibleRuntime,
+            NativeAsrError::ConstructionFailed,
         ] {
-            let error = AsrRecognitionError::from(native_error);
+            let native = FakeNative {
+                construction: Err(native_error),
+                result: RefCell::new(Ok(String::new())),
+                destroyed: Cell::new(false),
+            };
+            let error = match OfflineParakeetRecognizer::new(&native, &revision) {
+                Ok(_) => panic!("construction unexpectedly succeeded"),
+                Err(error) => error,
+            };
+            assert!(!native.destroyed.get());
             assert!(!format!("{error:?} {error}").contains(secret));
         }
     }

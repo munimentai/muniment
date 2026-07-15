@@ -44,6 +44,18 @@ if ($uninstallRoots | ForEach-Object { Join-Path $_ $oldProductCode } | Where-Ob
 if ((Get-ItemPropertyValue $machineKey InstallDir) -notlike "$env:ProgramFiles\*") {
   throw "Per-machine MSI did not register a Program Files install in HKLM"
 }
+$machineInstallDir = Get-ItemPropertyValue $machineKey InstallDir
+foreach ($file in @(
+  "sherpa-onnx-c-api.dll",
+  "onnxruntime.dll",
+  "third-party\sherpa-onnx-NOTICE.md",
+  "third-party\sherpa-onnx-LICENSE.txt",
+  "third-party\onnxruntime-LICENSE.txt"
+)) {
+  if (-not (Test-Path (Join-Path $machineInstallDir $file))) {
+    throw "MSI is missing packaged ASR runtime resource: $file"
+  }
+}
 if (Test-Path "HKCU:\Software\Muniment\muniment") {
   throw "Per-machine MSI wrote application registration under HKCU"
 }
@@ -61,6 +73,11 @@ $nsisProcess = Start-Process $nsis.FullName -ArgumentList "/S" -Wait -PassThru
 if ($nsisProcess.ExitCode -ne 0) { throw "Silent NSIS install failed: $($nsisProcess.ExitCode)" }
 $nsisUninstaller = Join-Path $env:LOCALAPPDATA "muniment\uninstall.exe"
 if (-not (Test-Path $nsisUninstaller)) { throw "NSIS uninstaller not found at $nsisUninstaller" }
+foreach ($file in @("sherpa-onnx-c-api.dll", "onnxruntime.dll")) {
+  if (-not (Test-Path (Join-Path $env:LOCALAPPDATA "muniment\$file"))) {
+    throw "NSIS is missing packaged ASR runtime resource: $file"
+  }
+}
 $nsisUninstall = Start-Process $nsisUninstaller -ArgumentList "/S" -Wait -PassThru
 if ($nsisUninstall.ExitCode -ne 0) { throw "Silent NSIS uninstall failed: $($nsisUninstall.ExitCode)" }
 

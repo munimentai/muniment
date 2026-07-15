@@ -138,7 +138,10 @@ jobs:
           printf '%s' "$DESKTOP_CI_SSH_KEY" > "$key"
           trap 'rm -f "$key"' EXIT
 
-          cmd="test/stage-asr-runtime.sh $PLATFORM && cargo check --manifest-path src-tauri/Cargo.toml --locked --all-targets"
+          cmd="test/stage-asr-runtime.sh $PLATFORM && SHERPA_ONNX_LIB_DIR=\"\$PWD/src-tauri/asr-runtime\" cargo test --manifest-path src-tauri/Cargo.toml --locked --all-targets"
+          if [ "$PLATFORM" = "macos" ]; then
+            cmd='test/stage-asr-runtime.sh macos-$(uname -m | sed s/x86_64/x64/) && SHERPA_ONNX_LIB_DIR="$PWD/src-tauri/asr-runtime" cargo test --manifest-path src-tauri/Cargo.toml --locked --all-targets'
+          fi
           repo_url="https://x-access-token:${REPO_TOKEN}@github.com/${REPOSITORY}"
 
           # Keep the check command inside --cmd and pass clone credentials only
@@ -179,12 +182,12 @@ jobs:
           trap 'rm -f "$key"' EXIT
 
           # macOS: .app only — dmg bundling needs a GUI session (release-time step)
-          cmd='test/stage-asr-runtime.sh linux && cargo test --manifest-path src-tauri/Cargo.toml --locked && npm ci --no-audit --no-fund && npm run tauri build'
+          cmd='test/stage-asr-runtime.sh linux && SHERPA_ONNX_LIB_DIR="$PWD/src-tauri/asr-runtime" cargo test --manifest-path src-tauri/Cargo.toml --locked && npm ci --no-audit --no-fund && SHERPA_ONNX_LIB_DIR="$PWD/src-tauri/asr-runtime" npm run tauri build && test/bundle-asr-runtime.sh linux'
           if [ "$PLATFORM" = "windows" ]; then
-            cmd='test/stage-asr-runtime.sh windows && npm ci --no-audit --no-fund && node .github/build-windows-installers.mjs && powershell.exe -NoProfile -ExecutionPolicy Bypass -File test/windows-installers.ps1'
+            cmd='test/stage-asr-runtime.sh windows && npm ci --no-audit --no-fund && SHERPA_ONNX_LIB_DIR="$PWD/src-tauri/asr-runtime" node .github/build-windows-installers.mjs && powershell.exe -NoProfile -ExecutionPolicy Bypass -File test/windows-installers.ps1 && test/bundle-asr-runtime.sh windows'
           fi
           if [ "$PLATFORM" = "macos" ]; then
-            cmd='test/stage-asr-runtime.sh macos-$(uname -m | sed s/x86_64/x64/) && npm ci --no-audit --no-fund && npm run tauri build -- --bundles app'
+            cmd='test/stage-asr-runtime.sh macos-$(uname -m | sed s/x86_64/x64/) && npm ci --no-audit --no-fund && SHERPA_ONNX_LIB_DIR="$PWD/src-tauri/asr-runtime" npm run tauri build -- --bundles app && test/bundle-asr-runtime.sh macos'
           fi
 
           repo_url="https://x-access-token:${REPO_TOKEN}@github.com/${REPOSITORY}"
