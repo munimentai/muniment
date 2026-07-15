@@ -101,6 +101,39 @@ describe('local file selection', () => {
     })
     expect(screen.queryByText('/secret/location/evidence.pdf')).not.toBeInTheDocument()
   })
+
+  it('submits selected paths and clears the draft and selection only after success', async () => {
+    let resolveSubmit
+    invoke.mockImplementation(async (command) => {
+      if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
+      if (command === 'chat_history') return []
+      if (command === 'auth_entitlement_snapshot') return snapshot()
+      if (command === 'auth_devices') return []
+      if (command === 'chat_submit') return new Promise((resolve) => { resolveSubmit = resolve })
+      throw new Error(`unexpected command: ${command}`)
+    })
+    dialogResult = ['/private/contracts/lease.pdf', '/private/notes.txt']
+    render(App)
+    await fireEvent.click(await screen.findByRole('button', { name: 'Add files' }))
+    const composer = screen.getByPlaceholderText('Ask anything')
+    await fireEvent.input(composer, { target: { value: 'Review these' } })
+    await fireEvent.click(screen.getByRole('button', { name: 'Send' }))
+
+    expect(invoke).toHaveBeenCalledWith('chat_submit', {
+      prompt: 'Review these',
+      files: [
+        { path: '/private/contracts/lease.pdf' },
+        { path: '/private/notes.txt' },
+      ],
+    })
+    expect(composer).toHaveValue('Review these')
+    expect(screen.getByText('lease.pdf')).toBeInTheDocument()
+    expect(screen.getByText('notes.txt')).toBeInTheDocument()
+
+    resolveSubmit({ runId: 'run-with-files' })
+    await waitFor(() => expect(composer).toHaveValue(''))
+    expect(screen.queryByRole('list', { name: 'Selected files' })).not.toBeInTheDocument()
+  })
 })
 
 describe('history hydration', () => {

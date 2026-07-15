@@ -1607,8 +1607,11 @@ mod tests {
 
     #[test]
     fn missing_attachment_returns_non_path_leaking_copy_before_pi_can_start() {
+        let _environment = PI_ENV_LOCK.lock().unwrap();
         let directory = std::env::temp_dir().join(format!("muniment-missing-{}", Uuid::now_v7()));
         std::fs::create_dir_all(&directory).unwrap();
+        let prompt_log = directory.join("prompt.txt");
+        std::env::set_var("PI_RESUME_STUB_PROMPTS", &prompt_log);
         let storage = Arc::new(Mutex::new(ChatStorage {
             journal: RunJournal::open(directory.join("runs.sqlite3")).unwrap(),
             cas: LocalCas::open(&directory.join("cas")).unwrap(),
@@ -1627,6 +1630,130 @@ mod tests {
         };
         assert_eq!(error, attachment_error());
         assert!(!error.contains(missing.to_string_lossy().as_ref()));
+        assert!(!prompt_log.exists(), "Pi must not receive a prompt");
+        std::env::remove_var("PI_RESUME_STUB_PROMPTS");
+        drop(storage);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn prepared_attachments_reach_pi_before_coordinator_events_continue() {
+        let _environment = PI_ENV_LOCK.lock().unwrap();
+        let app = tauri::test::mock_app();
+        let directory =
+            std::env::temp_dir().join(format!("muniment-coordinate-{}", Uuid::now_v7()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let first = directory.join("first.txt");
+        let second = directory.join("second.txt");
+        let prompt_log = directory.join("prompt.txt");
+        std::fs::write(&first, b"first attachment").unwrap();
+        std::fs::write(&second, b"second attachment").unwrap();
+        let storage = Arc::new(Mutex::new(ChatStorage {
+            journal: RunJournal::open(directory.join("runs.sqlite3")).unwrap(),
+            cas: LocalCas::open(&directory.join("cas")).unwrap(),
+        }));
+        let run_id = Uuid::now_v7().to_string();
+        let prepared = prepare_new_run(
+            &storage,
+            &run_id,
+            Some("owner"),
+            vec![SelectedFile { path: first }, SelectedFile { path: second }],
+        )
+        .unwrap();
+
+        let before_pi = storage.lock().unwrap().journal.events(&run_id).unwrap();
+        assert_eq!(prepared.0, 3);
+        assert_eq!(
+            before_pi
+                .iter()
+                .map(|event| event.event_type.as_str())
+                .collect::<Vec<_>>(),
+            [
+                "run.started",
+                "chat.attachment.ingested",
+                "chat.attachment.ingested",
+            ]
+        );
+        assert!(!prompt_log.exists());
+
+        let executable_name = if cfg!(windows) {
+            "sidecar-test-stub.exe"
+        } else {
+            "sidecar-test-stub"
+        };
+        let test_executable = std::env::current_exe().unwrap();
+        let stub = test_executable
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .join("examples")
+            .join(executable_name);
+        assert!(stub.is_file(), "sidecar test stub was not built");
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let receipt_url = format!("http://{}/receipt", listener.local_addr().unwrap());
+        let receipt_server = std::thread::spawn(move || {
+            use std::io::{Read, Write};
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut request = [0; 4096];
+            let _ = stream.read(&mut request).unwrap();
+            let body = r#"{"route":"attachment-stub","model":"test"}"#;
+            write!(
+                stream,
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            )
+            .unwrap();
+        });
+        std::env::set_var("MUNIMENT_PI_ROOT", &directory);
+        std::env::set_var("MUNIMENT_PI_TEST_EXECUTABLE", &stub);
+        std::env::set_var("PI_RESUME_STUB_PROMPTS", &prompt_log);
+
+        coordinate(
+            app.handle().clone(),
+            Arc::clone(&storage),
+            Arc::new(Mutex::new(None)),
+            run_id.clone(),
+            "Review both files".into(),
+            "token".into(),
+            Some("owner".into()),
+            ChatGrant {
+                gateway_url: "https://gateway.invalid".into(),
+                virtual_key: "virtual-key".into(),
+                model: None,
+                receipt_url,
+            },
+            Arc::new(AtomicBool::new(false)),
+            Arc::new(Mutex::new(None)),
+            Arc::new(Mutex::new(None)),
+            None,
+            None,
+            Some(prepared),
+        );
+        receipt_server.join().unwrap();
+        for key in [
+            "MUNIMENT_PI_ROOT",
+            "MUNIMENT_PI_TEST_EXECUTABLE",
+            "PI_RESUME_STUB_PROMPTS",
+        ] {
+            std::env::remove_var(key);
+        }
+
+        assert_eq!(
+            std::fs::read_to_string(&prompt_log).unwrap(),
+            "Review both files\n"
+        );
+        let events = storage.lock().unwrap().journal.events(&run_id).unwrap();
+        assert_eq!(
+            events.iter().map(|event| event.run_seq).collect::<Vec<_>>(),
+            (1..=events.len() as u64).collect::<Vec<_>>()
+        );
+        assert_eq!(events[3].run_seq, 4);
+        assert_eq!(events[3].event_type, "runtime.pi_session.bound");
+        assert_eq!(events[4].event_type, "model.prompt.accepted");
+        assert_eq!(events[5].event_type, "model.stream.delta");
+        assert_eq!(events.last().unwrap().event_type, "run.completed");
         drop(storage);
         std::fs::remove_dir_all(directory).unwrap();
     }
