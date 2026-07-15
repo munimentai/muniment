@@ -141,15 +141,16 @@ product-approved corpus and are deliberately not invented here.
 
 ## Consequences
 
-The safe binding-contract slice is complete: `muniment-core` now validates
-finite 16 kHz mono `float32` utterances and the four regular model files before
-calling a private, C-API-shaped sherpa adapter, owns handle teardown on every
-result path, and copies transcript text before releasing the native result.
-Tests inject a fake at that adapter's C-API seam and exercise configuration,
-native failure mapping, and cleanup without model downloads or native libraries.
-Native v1.13.2 linking/resources, distribution notices, recognizer
-construction from the installed revision, capture/UI/VAD, and target-hardware
-validation remain outstanding.
+The safe binding-contract slice is complete: `muniment-core` now accepts only a
+non-forgeable model-set value returned by verified-current lifecycle resolution
+and finite 16 kHz mono `float32` utterances before calling a private,
+C-API-shaped sherpa adapter. The adapter owns handle teardown on every result
+path and copies transcript text before releasing the native result. Tests
+inject a fake through the production construction seam and exercise pinned
+configuration, native failure mapping, corrupt-model rejection, and cleanup
+without model downloads or native libraries. Native v1.13.2 linking/resources,
+distribution notices, capture/UI/VAD, and target-hardware validation remain
+outstanding.
 
 The choice is build-ready and reproducible, avoids CUDA and network inference,
 and preserves the existing Gemma polish boundary. It adds roughly 670 MB of

@@ -2,7 +2,7 @@
 
 use std::path::{Path, PathBuf};
 
-use super::PARAKEET_ARTIFACTS;
+use super::{VerifiedParakeetModelSet, PARAKEET_ARTIFACTS};
 
 pub const ASR_SAMPLE_RATE: u32 = 16_000;
 
@@ -41,10 +41,12 @@ pub struct OfflineRecognizer {
 }
 
 impl OfflineRecognizer {
-    #[cfg(test)]
-    fn new(adapter: impl native_adapter::Adapter + 'static) -> Self {
+    /// Constructs a recognizer from a safe implementation of the pinned
+    /// sherpa-onnx C API. Raw FFI values remain an implementation detail of
+    /// the implementation and the private adapter.
+    pub fn new(capi: impl SherpaOfflineApi + 'static) -> Self {
         Self {
-            adapter: Box::new(adapter),
+            adapter: Box::new(native_adapter::SherpaAdapter::new(capi)),
         }
     }
 
@@ -52,15 +54,54 @@ impl OfflineRecognizer {
     /// Parakeet model directory.
     pub fn recognize(
         &mut self,
-        model_directory: &Path,
+        model_set: &VerifiedParakeetModelSet,
         samples: &[f32],
     ) -> Result<String, OfflineRecognizerError> {
         if samples.iter().any(|sample| !sample.is_finite()) {
             return Err(OfflineRecognizerError::InvalidAudio);
         }
-        let paths = model_paths(model_directory)?;
+        let paths = model_paths(model_set.directory())?;
         self.adapter.recognize(&paths, samples)
     }
+}
+
+/// Safe injection seam for the pinned sherpa-onnx v1.13.2 offline API.
+/// Implementations may own native handles, but no pointer crosses this trait.
+pub trait SherpaOfflineApi {
+    type Recognizer: Copy;
+    type Stream: Copy;
+    type Result: Copy;
+
+    fn create_recognizer(&mut self, config: &SherpaRecognizerConfig) -> Option<Self::Recognizer>;
+    fn destroy_recognizer(&mut self, recognizer: Self::Recognizer);
+    fn create_stream(&mut self, recognizer: Self::Recognizer) -> Option<Self::Stream>;
+    fn destroy_stream(&mut self, stream: Self::Stream);
+    fn accept_waveform(&mut self, stream: Self::Stream, sample_rate: i32, samples: &[f32]);
+    fn decode(&mut self, recognizer: Self::Recognizer, stream: Self::Stream) -> bool;
+    fn get_result(
+        &mut self,
+        recognizer: Self::Recognizer,
+        stream: Self::Stream,
+    ) -> Option<Self::Result>;
+    /// Exposes result bytes only for the duration of `copy`.
+    fn read_result_text(&mut self, result: Self::Result, copy: &mut dyn FnMut(&[u8])) -> bool;
+    fn destroy_result(&mut self, result: Self::Result);
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SherpaTransducerConfig {
+    pub encoder: String,
+    pub decoder: String,
+    pub joiner: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SherpaRecognizerConfig {
+    pub transducer: SherpaTransducerConfig,
+    pub tokens: String,
+    pub provider: &'static str,
+    pub num_threads: i32,
+    pub debug: i32,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -101,39 +142,10 @@ fn model_paths(directory: &Path) -> Result<ParakeetModelPaths, OfflineRecognizer
 /// with extern calls; its raw pointers and unsafe blocks stay in this module.
 #[allow(dead_code)]
 mod native_adapter {
-    use super::{OfflineRecognizerError, ParakeetModelPaths, ASR_SAMPLE_RATE};
-
-    #[derive(Clone, Copy)]
-    pub(super) struct Handle(pub(super) usize);
-
-    #[derive(Debug, Clone, PartialEq, Eq)]
-    pub(super) struct TransducerConfig {
-        pub encoder: String,
-        pub decoder: String,
-        pub joiner: String,
-    }
-
-    #[derive(Debug, Clone, PartialEq, Eq)]
-    pub(super) struct RecognizerConfig {
-        pub transducer: TransducerConfig,
-        pub tokens: String,
-        pub provider: &'static str,
-        pub num_threads: i32,
-        pub debug: i32,
-    }
-
-    pub(super) trait Capi {
-        fn create_recognizer(&mut self, config: &RecognizerConfig) -> Option<Handle>;
-        fn destroy_recognizer(&mut self, recognizer: Handle);
-        fn create_stream(&mut self, recognizer: Handle) -> Option<Handle>;
-        fn destroy_stream(&mut self, stream: Handle);
-        fn accept_waveform(&mut self, stream: Handle, sample_rate: i32, samples: &[f32]);
-        fn decode(&mut self, recognizer: Handle, stream: Handle) -> bool;
-        fn get_result(&mut self, recognizer: Handle, stream: Handle) -> Option<Handle>;
-        /// Copies the native NUL-terminated result text while its handle lives.
-        fn copy_result_text(&mut self, result: Handle) -> Option<Vec<u8>>;
-        fn destroy_result(&mut self, result: Handle);
-    }
+    use super::{
+        OfflineRecognizerError, ParakeetModelPaths, SherpaOfflineApi, SherpaRecognizerConfig,
+        SherpaTransducerConfig, ASR_SAMPLE_RATE,
+    };
 
     pub(super) trait Adapter {
         fn recognize(
@@ -144,7 +156,7 @@ mod native_adapter {
     }
 
     pub(super) struct SherpaAdapter<C> {
-        pub(super) capi: C,
+        capi: C,
     }
 
     impl<C> SherpaAdapter<C> {
@@ -153,14 +165,14 @@ mod native_adapter {
         }
     }
 
-    impl<C: Capi> Adapter for SherpaAdapter<C> {
+    impl<C: SherpaOfflineApi> Adapter for SherpaAdapter<C> {
         fn recognize(
             &mut self,
             paths: &ParakeetModelPaths,
             samples: &[f32],
         ) -> Result<String, OfflineRecognizerError> {
-            let config = RecognizerConfig {
-                transducer: TransducerConfig {
+            let config = SherpaRecognizerConfig {
+                transducer: SherpaTransducerConfig {
                     encoder: path_text(&paths.encoder)?,
                     decoder: path_text(&paths.decoder)?,
                     joiner: path_text(&paths.joiner)?,
@@ -190,11 +202,11 @@ mod native_adapter {
         }
     }
 
-    impl<C: Capi> SherpaAdapter<C> {
+    impl<C: SherpaOfflineApi> SherpaAdapter<C> {
         fn decode_and_copy(
             &mut self,
-            recognizer: Handle,
-            stream: Handle,
+            recognizer: C::Recognizer,
+            stream: C::Stream,
         ) -> Result<String, OfflineRecognizerError> {
             if !self.capi.decode(recognizer, stream) {
                 return Err(OfflineRecognizerError::NativeDecodeFailed);
@@ -203,9 +215,14 @@ mod native_adapter {
                 .capi
                 .get_result(recognizer, stream)
                 .ok_or(OfflineRecognizerError::NativeResultFailed)?;
-            let bytes = self.capi.copy_result_text(result);
+            let mut bytes = Vec::new();
+            let copied = self
+                .capi
+                .read_result_text(result, &mut |text| bytes.extend_from_slice(text));
             self.capi.destroy_result(result);
-            let bytes = bytes.ok_or(OfflineRecognizerError::NativeResultFailed)?;
+            if !copied {
+                return Err(OfflineRecognizerError::NativeResultFailed);
+            }
             String::from_utf8(bytes).map_err(|_| OfflineRecognizerError::InvalidTranscript)
         }
     }
@@ -219,8 +236,11 @@ mod native_adapter {
 
 #[cfg(test)]
 mod tests {
-    use super::native_adapter::{Capi, Handle, RecognizerConfig, SherpaAdapter};
     use super::*;
+    use crate::asr::{
+        AsrLifecycleError, AsrModelSetVerificationError, AsrRevisionLifecycle,
+        PARAKEET_MODEL_MANIFEST, PARAKEET_MODEL_MANIFESTS,
+    };
     use std::cell::RefCell;
     use std::collections::HashMap;
     use std::fs;
@@ -231,7 +251,7 @@ mod tests {
 
     #[derive(Default)]
     struct FakeCapi {
-        config: Option<RecognizerConfig>,
+        config: Option<SherpaRecognizerConfig>,
         sample_rate: Option<i32>,
         sample_count: Option<usize>,
         text: Vec<u8>,
@@ -244,70 +264,79 @@ mod tests {
         events: Vec<&'static str>,
     }
 
-    impl Capi for FakeCapi {
-        fn create_recognizer(&mut self, config: &RecognizerConfig) -> Option<Handle> {
+    impl SherpaOfflineApi for FakeCapi {
+        type Recognizer = u8;
+        type Stream = u8;
+        type Result = u8;
+
+        fn create_recognizer(&mut self, config: &SherpaRecognizerConfig) -> Option<u8> {
             self.config = Some(config.clone());
-            (!self.fail_create).then_some(Handle(1))
+            (!self.fail_create).then_some(1)
         }
-        fn destroy_recognizer(&mut self, _: Handle) {
+        fn destroy_recognizer(&mut self, _: u8) {
             *self.releases.entry("recognizer").or_default() += 1;
         }
-        fn create_stream(&mut self, _: Handle) -> Option<Handle> {
-            (!self.fail_stream).then_some(Handle(2))
+        fn create_stream(&mut self, _: u8) -> Option<u8> {
+            (!self.fail_stream).then_some(2)
         }
-        fn destroy_stream(&mut self, _: Handle) {
+        fn destroy_stream(&mut self, _: u8) {
             *self.releases.entry("stream").or_default() += 1;
         }
-        fn accept_waveform(&mut self, _: Handle, rate: i32, samples: &[f32]) {
+        fn accept_waveform(&mut self, _: u8, rate: i32, samples: &[f32]) {
             self.sample_rate = Some(rate);
             self.sample_count = Some(samples.len());
         }
-        fn decode(&mut self, _: Handle, _: Handle) -> bool {
+        fn decode(&mut self, _: u8, _: u8) -> bool {
             !self.fail_decode
         }
-        fn get_result(&mut self, _: Handle, _: Handle) -> Option<Handle> {
-            (!self.fail_result).then_some(Handle(3))
+        fn get_result(&mut self, _: u8, _: u8) -> Option<u8> {
+            (!self.fail_result).then_some(3)
         }
-        fn copy_result_text(&mut self, _: Handle) -> Option<Vec<u8>> {
+        fn read_result_text(&mut self, _: u8, copy: &mut dyn FnMut(&[u8])) -> bool {
             if self.fail_copy {
-                None
+                false
             } else {
                 self.events.push("copy");
-                Some(self.text.clone())
+                copy(&self.text);
+                true
             }
         }
-        fn destroy_result(&mut self, _: Handle) {
+        fn destroy_result(&mut self, _: u8) {
             self.events.push("release-result");
             *self.releases.entry("result").or_default() += 1;
         }
     }
 
-    impl Capi for Rc<RefCell<FakeCapi>> {
-        fn create_recognizer(&mut self, config: &RecognizerConfig) -> Option<Handle> {
+    impl SherpaOfflineApi for Rc<RefCell<FakeCapi>> {
+        type Recognizer = u8;
+        type Stream = u8;
+        type Result = u8;
+
+        fn create_recognizer(&mut self, config: &SherpaRecognizerConfig) -> Option<u8> {
             self.borrow_mut().create_recognizer(config)
         }
-        fn destroy_recognizer(&mut self, handle: Handle) {
+        fn destroy_recognizer(&mut self, handle: u8) {
             self.borrow_mut().destroy_recognizer(handle)
         }
-        fn create_stream(&mut self, handle: Handle) -> Option<Handle> {
+        fn create_stream(&mut self, handle: u8) -> Option<u8> {
             self.borrow_mut().create_stream(handle)
         }
-        fn destroy_stream(&mut self, handle: Handle) {
+        fn destroy_stream(&mut self, handle: u8) {
             self.borrow_mut().destroy_stream(handle)
         }
-        fn accept_waveform(&mut self, handle: Handle, rate: i32, samples: &[f32]) {
+        fn accept_waveform(&mut self, handle: u8, rate: i32, samples: &[f32]) {
             self.borrow_mut().accept_waveform(handle, rate, samples)
         }
-        fn decode(&mut self, recognizer: Handle, stream: Handle) -> bool {
+        fn decode(&mut self, recognizer: u8, stream: u8) -> bool {
             self.borrow_mut().decode(recognizer, stream)
         }
-        fn get_result(&mut self, recognizer: Handle, stream: Handle) -> Option<Handle> {
+        fn get_result(&mut self, recognizer: u8, stream: u8) -> Option<u8> {
             self.borrow_mut().get_result(recognizer, stream)
         }
-        fn copy_result_text(&mut self, result: Handle) -> Option<Vec<u8>> {
-            self.borrow_mut().copy_result_text(result)
+        fn read_result_text(&mut self, result: u8, copy: &mut dyn FnMut(&[u8])) -> bool {
+            self.borrow_mut().read_result_text(result, copy)
         }
-        fn destroy_result(&mut self, result: Handle) {
+        fn destroy_result(&mut self, result: u8) {
             self.borrow_mut().destroy_result(result)
         }
     }
@@ -327,10 +356,13 @@ mod tests {
 
     fn recognizer(capi: FakeCapi) -> (OfflineRecognizer, Rc<RefCell<FakeCapi>>) {
         let capi = Rc::new(RefCell::new(capi));
-        (
-            OfflineRecognizer::new(SherpaAdapter::new(capi.clone())),
-            capi,
-        )
+        (OfflineRecognizer::new(capi.clone()), capi)
+    }
+
+    fn verified(directory: &Path) -> VerifiedParakeetModelSet {
+        VerifiedParakeetModelSet {
+            directory: directory.to_owned(),
+        }
     }
 
     #[test]
@@ -341,7 +373,7 @@ mod tests {
             ..Default::default()
         });
         assert_eq!(
-            recognizer.recognize(&directory, &[0.0, -0.5, 0.5]),
+            recognizer.recognize(&verified(&directory), &[0.0, -0.5, 0.5]),
             Ok("héllo".into())
         );
         let capi = capi.borrow();
@@ -381,7 +413,9 @@ mod tests {
     fn accepts_empty_transcript() {
         let directory = fixture();
         assert_eq!(
-            recognizer(FakeCapi::default()).0.recognize(&directory, &[]),
+            recognizer(FakeCapi::default())
+                .0
+                .recognize(&verified(&directory), &[]),
             Ok(String::new())
         );
         fs::remove_dir_all(directory).unwrap();
@@ -393,20 +427,54 @@ mod tests {
         fs::remove_file(directory.join("tokens.txt")).unwrap();
         let (mut r, capi) = recognizer(FakeCapi::default());
         assert_eq!(
-            r.recognize(&directory, &[0.0]),
+            r.recognize(&verified(&directory), &[0.0]),
             Err(OfflineRecognizerError::ModelArtifactMissing)
         );
         assert!(capi.borrow().config.is_none());
         fs::create_dir(directory.join("tokens.txt")).unwrap();
         assert_eq!(
-            r.recognize(&directory, &[0.0]),
+            r.recognize(&verified(&directory), &[0.0]),
             Err(OfflineRecognizerError::ModelArtifactNotFile)
         );
         assert_eq!(
-            r.recognize(&directory, &[f32::NAN]),
+            r.recognize(&verified(&directory), &[f32::NAN]),
             Err(OfflineRecognizerError::InvalidAudio)
         );
         fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn corrupt_named_files_cannot_be_resolved_for_recognition() {
+        let root = fixture();
+        let revision = root
+            .join("revisions")
+            .join(PARAKEET_MODEL_MANIFEST.revision);
+        fs::create_dir_all(&revision).unwrap();
+        for artifact in PARAKEET_ARTIFACTS {
+            fs::write(revision.join(artifact.filename), []).unwrap();
+        }
+        fs::write(
+            root.join("current"),
+            format!(
+                "muniment-asr-pointer-v1\n{}\n{}\n",
+                PARAKEET_MODEL_MANIFEST.identity, PARAKEET_MODEL_MANIFEST.revision
+            ),
+        )
+        .unwrap();
+        let lifecycle = AsrRevisionLifecycle::new(
+            root.clone(),
+            &PARAKEET_MODEL_MANIFESTS,
+            &PARAKEET_MODEL_MANIFEST,
+        )
+        .unwrap();
+
+        assert!(matches!(
+            lifecycle.resolve_current_parakeet(),
+            Err(AsrLifecycleError::RevisionInvalid(
+                AsrModelSetVerificationError::WrongSize { .. }
+            ))
+        ));
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
@@ -448,7 +516,7 @@ mod tests {
         ];
         for (capi, error, releases) in cases {
             let (mut r, capi) = recognizer(capi);
-            assert_eq!(r.recognize(&directory, &[0.0]), Err(error));
+            assert_eq!(r.recognize(&verified(&directory), &[0.0]), Err(error));
             assert_eq!(capi.borrow().releases, releases);
         }
         fs::remove_dir_all(directory).unwrap();
@@ -474,7 +542,7 @@ mod tests {
             ),
         ] {
             let (mut r, capi) = recognizer(capi);
-            assert_eq!(r.recognize(&directory, &[0.0]), Err(error));
+            assert_eq!(r.recognize(&verified(&directory), &[0.0]), Err(error));
             assert_eq!(
                 capi.borrow().releases,
                 HashMap::from([("result", 1), ("stream", 1), ("recognizer", 1)])

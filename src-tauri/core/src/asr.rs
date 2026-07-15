@@ -199,6 +199,19 @@ pub struct AsrRevisionLifecycle {
     target: &'static AsrArtifactManifest,
 }
 
+/// A model directory whose current pointer and pinned artifacts were verified
+/// by [`AsrRevisionLifecycle`]. Its path cannot be forged by callers.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VerifiedParakeetModelSet {
+    directory: PathBuf,
+}
+
+impl VerifiedParakeetModelSet {
+    pub(crate) fn directory(&self) -> &Path {
+        &self.directory
+    }
+}
+
 impl AsrRevisionLifecycle {
     pub fn new(
         root: PathBuf,
@@ -225,6 +238,17 @@ impl AsrRevisionLifecycle {
 
     pub fn resolve_current(&self) -> Result<PathBuf, AsrLifecycleError> {
         self.resolve_pointer("current").map(|pointer| pointer.path)
+    }
+
+    /// Resolves the verified current revision for offline recognition.
+    pub fn resolve_current_parakeet(&self) -> Result<VerifiedParakeetModelSet, AsrLifecycleError> {
+        if self.target != &PARAKEET_MODEL_MANIFEST {
+            return Err(AsrLifecycleError::InvalidManifest);
+        }
+        self.resolve_pointer("current")
+            .map(|pointer| VerifiedParakeetModelSet {
+                directory: pointer.path,
+            })
     }
 
     pub fn publish(
