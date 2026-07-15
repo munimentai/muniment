@@ -48,3 +48,23 @@ Collection must be serialized with CAS puts and journal appends. The caller must
 hold the application's shared state lock from taking the journal reference
 snapshot through completion of the CAS sweep; otherwise an object published or
 referenced after the snapshot could be removed while in use.
+
+## Chat attachments
+
+`attachment::ingest_attachment` is the pure-core boundary for local chat files.
+It accepts a reader and untrusted display metadata, strips path components from
+the display name, validates the optional media type and declared byte length,
+and streams the bytes through `LocalCas::put_reader`. Its version 1
+`chat.attachment.ingested` journal event records only the validated content
+hash, safe display name, byte length, and optional media type; the source path is
+neither retained nor serialized. Attachment payloads participate in the same
+`RunJournal::referenced_hashes()` accounting and durable export as other CAS
+payloads.
+
+The caller must hold the application's shared state lock across the entire
+ingestion call. CAS publication always completes before the journal append, so a
+successful journal reference can never point at an object that this operation
+has not published. A byte-count mismatch or journal-append failure can leave a
+published but unreferenced object. `AttachmentIngestError` reports these cases
+explicitly (including the published hash or descriptor); the object is safe for
+the existing unreferenced-object collector to remove.
