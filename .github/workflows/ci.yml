@@ -138,10 +138,10 @@ jobs:
           printf '%s' "$DESKTOP_CI_SSH_KEY" > "$key"
           trap 'rm -f "$key"' EXIT
 
-          cmd='cargo check --manifest-path src-tauri/Cargo.toml --locked --all-targets'
-          # macOS ships a universal app — preflight the arm64 cross slice too.
+          cmd="test/stage-asr-runtime.sh $PLATFORM && SHERPA_ONNX_LIB_DIR=\"\$PWD/src-tauri/asr-runtime\" cargo test --manifest-path src-tauri/Cargo.toml --locked --all-targets"
+          # macOS ships a universal app — test the host and preflight its arm64 slice.
           if [ "$PLATFORM" = "macos" ]; then
-            cmd='rustup target add aarch64-apple-darwin && cargo check --manifest-path src-tauri/Cargo.toml --locked --all-targets --target aarch64-apple-darwin'
+            cmd='test/stage-asr-runtime.sh macos-$(uname -m | sed s/x86_64/x64/) && SHERPA_ONNX_LIB_DIR="$PWD/src-tauri/asr-runtime" cargo test --manifest-path src-tauri/Cargo.toml --locked --all-targets && rustup target add aarch64-apple-darwin && cargo check --manifest-path src-tauri/Cargo.toml --locked --all-targets --target aarch64-apple-darwin'
           fi
           repo_url="https://x-access-token:${REPO_TOKEN}@github.com/${REPOSITORY}"
 
@@ -183,12 +183,12 @@ jobs:
           trap 'rm -f "$key"' EXIT
 
           # macOS: .app only — dmg bundling needs a GUI session (release-time step)
-          cmd='cargo test --manifest-path src-tauri/Cargo.toml --locked && npm ci --no-audit --no-fund && npm run tauri build'
+          cmd='test/stage-asr-runtime.sh linux && SHERPA_ONNX_LIB_DIR="$PWD/src-tauri/asr-runtime" cargo test --manifest-path src-tauri/Cargo.toml --locked && npm ci --no-audit --no-fund && SHERPA_ONNX_LIB_DIR="$PWD/src-tauri/asr-runtime" npm run tauri build && test/bundle-asr-runtime.sh linux'
           if [ "$PLATFORM" = "windows" ]; then
-            cmd='npm ci --no-audit --no-fund && node .github/build-windows-installers.mjs && powershell.exe -NoProfile -ExecutionPolicy Bypass -File test/windows-installers.ps1'
+            cmd='test/stage-asr-runtime.sh windows && npm ci --no-audit --no-fund && SHERPA_ONNX_LIB_DIR="$PWD/src-tauri/asr-runtime" node .github/build-windows-installers.mjs && powershell.exe -NoProfile -ExecutionPolicy Bypass -File test/windows-installers.ps1 && test/bundle-asr-runtime.sh windows'
           fi
           if [ "$PLATFORM" = "macos" ]; then
-            cmd='npm ci --no-audit --no-fund && rustup target add aarch64-apple-darwin && npm run tauri build -- --target universal-apple-darwin --bundles app'
+            cmd='test/stage-asr-runtime.sh macos-universal && npm ci --no-audit --no-fund && rustup target add aarch64-apple-darwin && SHERPA_ONNX_LIB_DIR="$PWD/src-tauri/asr-runtime" npm run tauri build -- --target universal-apple-darwin --bundles app && test/bundle-asr-runtime.sh macos'
           fi
 
           repo_url="https://x-access-token:${REPO_TOKEN}@github.com/${REPOSITORY}"

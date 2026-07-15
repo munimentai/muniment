@@ -89,12 +89,12 @@ jobs:
           printf '%s' "$DESKTOP_CI_SSH_KEY" > "$key"
           trap 'rm -f "$key"' EXIT
 
-          build='npm ci --no-audit --no-fund && npm run tauri build'
+          build='test/stage-asr-runtime.sh linux && npm ci --no-audit --no-fund && SHERPA_ONNX_LIB_DIR="$PWD/src-tauri/asr-runtime" npm run tauri build && test/bundle-asr-runtime.sh linux'
           if [ "$PLATFORM" = "windows" ]; then
-            build='npm ci --no-audit --no-fund && node .github/build-windows-installers.mjs && powershell.exe -NoProfile -ExecutionPolicy Bypass -File test/windows-installers.ps1'
+            build='test/stage-asr-runtime.sh windows && npm ci --no-audit --no-fund && SHERPA_ONNX_LIB_DIR="$PWD/src-tauri/asr-runtime" node .github/build-windows-installers.mjs && powershell.exe -NoProfile -ExecutionPolicy Bypass -File test/windows-installers.ps1 && test/bundle-asr-runtime.sh windows'
           fi
           if [ "$PLATFORM" = "macos" ]; then
-            build='npm ci --no-audit --no-fund && rustup target add aarch64-apple-darwin && npm run tauri build -- --target universal-apple-darwin --bundles app && ditto -c -k --sequesterRsrc --keepParent src-tauri/target/universal-apple-darwin/release/bundle/macos/muniment.app src-tauri/target/universal-apple-darwin/release/bundle/macos/muniment.app.zip'
+            build='test/stage-asr-runtime.sh macos-universal && npm ci --no-audit --no-fund && rustup target add aarch64-apple-darwin && SHERPA_ONNX_LIB_DIR="$PWD/src-tauri/asr-runtime" npm run tauri build -- --target universal-apple-darwin --bundles app && test/bundle-asr-runtime.sh macos && ditto -c -k --sequesterRsrc --keepParent src-tauri/target/universal-apple-darwin/release/bundle/macos/muniment.app src-tauri/target/universal-apple-darwin/release/bundle/macos/muniment.app.zip'
           fi
 
           # The VM is destroyed when desktop-ci exits, so completed bundles are

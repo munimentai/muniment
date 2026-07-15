@@ -2,6 +2,9 @@
 
 pub mod acquisition;
 pub mod install;
+pub mod recognition;
+#[cfg(feature = "native-asr")]
+mod sherpa_ffi;
 
 use std::fs::{self, File, OpenOptions};
 use std::io::{BufReader, Read, Write};
@@ -198,6 +201,17 @@ pub struct AsrRevisionLifecycle {
     target: &'static AsrArtifactManifest,
 }
 
+/// A model directory that was selected by a compiled manifest and verified by
+/// the lifecycle. It cannot be constructed from a webview supplied path.
+#[derive(Debug, Clone)]
+pub struct VerifiedParakeetRevision(PathBuf);
+
+impl VerifiedParakeetRevision {
+    pub(crate) fn path(&self) -> &Path {
+        &self.0
+    }
+}
+
 impl AsrRevisionLifecycle {
     pub fn new(
         root: PathBuf,
@@ -224,6 +238,12 @@ impl AsrRevisionLifecycle {
 
     pub fn resolve_current(&self) -> Result<PathBuf, AsrLifecycleError> {
         self.resolve_pointer("current").map(|pointer| pointer.path)
+    }
+
+    pub fn resolve_parakeet_recognizer_revision(
+        &self,
+    ) -> Result<VerifiedParakeetRevision, AsrLifecycleError> {
+        self.resolve_current().map(VerifiedParakeetRevision)
     }
 
     pub fn publish(
