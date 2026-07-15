@@ -139,6 +139,10 @@ jobs:
           trap 'rm -f "$key"' EXIT
 
           cmd='cargo check --manifest-path src-tauri/Cargo.toml --locked --all-targets'
+          # macOS ships a universal app — preflight the arm64 cross slice too.
+          if [ "$PLATFORM" = "macos" ]; then
+            cmd='rustup target add aarch64-apple-darwin && cargo check --manifest-path src-tauri/Cargo.toml --locked --all-targets --target aarch64-apple-darwin'
+          fi
           repo_url="https://x-access-token:${REPO_TOKEN}@github.com/${REPOSITORY}"
 
           # Keep the check command inside --cmd and pass clone credentials only
@@ -184,7 +188,7 @@ jobs:
             cmd='npm ci --no-audit --no-fund && node .github/build-windows-installers.mjs && powershell.exe -NoProfile -ExecutionPolicy Bypass -File test/windows-installers.ps1'
           fi
           if [ "$PLATFORM" = "macos" ]; then
-            cmd='npm ci --no-audit --no-fund && npm run tauri build -- --bundles app'
+            cmd='npm ci --no-audit --no-fund && rustup target add aarch64-apple-darwin && npm run tauri build -- --target universal-apple-darwin --bundles app'
           fi
 
           repo_url="https://x-access-token:${REPO_TOKEN}@github.com/${REPOSITORY}"
