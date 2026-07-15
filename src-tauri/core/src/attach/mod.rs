@@ -6,9 +6,9 @@ mod cursor;
 mod envelope;
 mod framing;
 mod idempotency;
-mod negotiation;
 #[cfg(target_os = "linux")]
 pub mod linux;
+mod negotiation;
 
 pub use artifact::*;
 pub use authorization::*;

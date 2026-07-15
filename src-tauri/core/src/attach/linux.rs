@@ -24,8 +24,8 @@ pub struct AttachFilesystem {
 impl AttachFilesystem {
     /// Validates `XDG_RUNTIME_DIR` and prepares its private attach directory.
     pub fn from_environment() -> Result<Self, AttachFilesystemError> {
-        let runtime = env::var_os("XDG_RUNTIME_DIR")
-            .ok_or(AttachFilesystemError::RuntimeDirectoryMissing)?;
+        let runtime =
+            env::var_os("XDG_RUNTIME_DIR").ok_or(AttachFilesystemError::RuntimeDirectoryMissing)?;
         Self::from_runtime_directory(runtime)
     }
 
@@ -82,10 +82,8 @@ impl AttachFilesystem {
             AttachFilesystemError::AttachDirectoryOpen,
         )?;
 
-        if created {
-            if unsafe { libc::fchmod(attach_directory.as_raw_fd(), PRIVATE_MODE) } != 0 {
-                return Err(AttachFilesystemError::AttachDirectoryPermissions);
-            }
+        if created && unsafe { libc::fchmod(attach_directory.as_raw_fd(), PRIVATE_MODE) } != 0 {
+            return Err(AttachFilesystemError::AttachDirectoryPermissions);
         }
         validate_directory(
             &attach_directory,
@@ -149,8 +147,7 @@ fn validate_directory(
         return Err(owner_error);
     }
     let mode = metadata.mode() & 0o777;
-    if (exact_private_mode && mode != PRIVATE_MODE) || (!exact_private_mode && mode & 0o077 != 0)
-    {
+    if (exact_private_mode && mode != PRIVATE_MODE) || (!exact_private_mode && mode & 0o077 != 0) {
         return Err(mode_error);
     }
     Ok(())
@@ -189,9 +186,7 @@ impl fmt::Display for AttachFilesystemError {
             Self::AttachDirectoryMetadata => "attach directory could not be verified",
             Self::AttachDirectoryWrongOwner => "attach directory has the wrong owner",
             Self::AttachDirectoryInsecure => "attach directory permissions are insecure",
-            Self::AttachDirectoryPermissions => {
-                "attach directory permissions could not be applied"
-            }
+            Self::AttachDirectoryPermissions => "attach directory permissions could not be applied",
         };
         formatter.write_str(message)
     }
