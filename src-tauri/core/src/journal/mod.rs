@@ -4,6 +4,7 @@ pub mod compaction;
 pub mod export;
 pub mod reducer;
 pub mod retention;
+pub mod summaries;
 
 use crate::attachment::ChatAttachment;
 use crate::cas::ContentHash;
