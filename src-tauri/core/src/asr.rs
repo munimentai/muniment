@@ -287,12 +287,18 @@ impl AsrRevisionLifecycle {
         let revisions = self.root.join("revisions");
         fs::create_dir_all(&revisions).map_err(|_| AsrPersistenceError::Failed)?;
         let revision = revisions.join(self.target.revision);
-        if revision.exists() {
-            verify_model_set(&revision, self.target).map_err(AsrLifecycleError::RevisionInvalid)?;
-        } else {
+        // A directory can already exist for this exact identity and revision
+        // when a prior application version published a smaller artifact set
+        // (e.g. the four-file Parakeet manifest before the VAD artifact was
+        // added). An already-complete revision is republished idempotently; a
+        // legacy incomplete one is repaired in place after the pointer commits.
+        let repair_incomplete = if !revision.exists() {
             fs::rename(staged_directory, &revision).map_err(|_| AsrPersistenceError::Failed)?;
             boundary.sync_directory(&revisions)?;
-        }
+            false
+        } else {
+            verify_model_set(&revision, self.target).is_err()
+        };
 
         if let Ok(current) = self.resolve_pointer("current") {
             self.write_pointer("previous", &current.value, boundary)?;
@@ -300,6 +306,13 @@ impl AsrRevisionLifecycle {
         let target_pointer = pointer_value(self.target);
         self.write_pointer("current", &target_pointer, boundary)?;
         boundary.sync_directory(&self.root)?;
+
+        // Repairing a legacy incomplete revision happens only once the pointer
+        // has committed so an interrupted publication leaves the prior published
+        // bytes and pointer unchanged and the completed stage retryable.
+        if repair_incomplete {
+            replace_revision_in_place(&revision, staged_directory, boundary)?;
+        }
         Ok(revision)
     }
 
@@ -407,6 +420,34 @@ impl AsrRevisionLifecycle {
 struct ResolvedPointer {
     path: PathBuf,
     value: String,
+}
+
+/// Atomically swaps a legacy incomplete revision directory for the freshly
+/// completed stage. The old directory is moved aside first so a failed swap can
+/// be rolled back, leaving the prior published bytes and the retryable stage
+/// intact.
+fn replace_revision_in_place(
+    revision: &Path,
+    staged_directory: &Path,
+    boundary: &impl AsrLifecycleBoundary,
+) -> Result<(), AsrLifecycleError> {
+    static NEXT_BACKUP: AtomicU64 = AtomicU64::new(0);
+
+    let revisions = revision.parent().ok_or(AsrPersistenceError::Failed)?;
+    let backup = revisions.join(format!(
+        ".repair.{}.{}",
+        std::process::id(),
+        NEXT_BACKUP.fetch_add(1, Ordering::Relaxed)
+    ));
+    fs::rename(revision, &backup).map_err(|_| AsrPersistenceError::Failed)?;
+    if fs::rename(staged_directory, revision).is_err() {
+        let _ = fs::rename(&backup, revision);
+        return Err(AsrPersistenceError::Failed.into());
+    }
+    let synced = boundary.sync_directory(revisions);
+    let _ = fs::remove_dir_all(&backup);
+    synced?;
+    Ok(())
 }
 
 fn pointer_value(manifest: &AsrArtifactManifest) -> String {
@@ -556,6 +597,32 @@ mod tests {
         additional_artifact: None,
     };
     const KNOWN_MANIFESTS: [&AsrArtifactManifest; 2] = [&MANIFEST, &UPDATE_MANIFEST];
+
+    // A shared identity and revision published first without, then with, an
+    // additional VAD artifact — modelling a legacy four-file install upgraded to
+    // the complete VAD-bearing set by a newer application version.
+    const LEGACY_MANIFEST: AsrArtifactManifest = AsrArtifactManifest {
+        identity: "parakeet-legacy",
+        revision: "shared-rev",
+        artifacts: &FIXTURES,
+        additional_artifact: None,
+    };
+    const COMPLETE_MANIFEST: AsrArtifactManifest = AsrArtifactManifest {
+        identity: "parakeet-legacy",
+        revision: "shared-rev",
+        artifacts: &FIXTURES,
+        additional_artifact: Some(AsrSourcedArtifactDescriptor {
+            repository: "csukuangfj/vad",
+            revision: "vad-rev",
+            artifact: AsrArtifactDescriptor {
+                filename: "silero_vad.onnx",
+                byte_size: 1,
+                sha256: "4c94485e0c21ae6c41ce1dfe7b6bfaceea5ab68e40a2476f50208e526f506080",
+            },
+        }),
+    };
+    const LEGACY_MANIFESTS: [&AsrArtifactManifest; 1] = [&LEGACY_MANIFEST];
+    const COMPLETE_MANIFESTS: [&AsrArtifactManifest; 1] = [&COMPLETE_MANIFEST];
 
     fn fixture_directory() -> std::path::PathBuf {
         static NEXT: AtomicU64 = AtomicU64::new(0);
@@ -828,6 +895,79 @@ mod tests {
             ));
             assert!(!format!("{error:?} {error}").contains(root.to_str().unwrap()));
         }
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn legacy_incomplete_revision_is_repaired_and_failed_publish_stays_retryable() {
+        let root = fixture_directory();
+        for artifact in FIXTURES {
+            fs::remove_file(root.join(artifact.filename)).unwrap();
+        }
+        fs::create_dir(root.join("staging")).unwrap();
+
+        // Publish the legacy four-artifact revision exactly as the prior
+        // application version would have, colliding on identity and revision.
+        let legacy_stage = root.join("staging/legacy");
+        fs::create_dir(&legacy_stage).unwrap();
+        for (name, contents) in [
+            ("one", b'a'),
+            ("two", b'b'),
+            ("three", b'c'),
+            ("four", b'd'),
+        ] {
+            fs::write(legacy_stage.join(name), [contents]).unwrap();
+        }
+        let legacy =
+            AsrRevisionLifecycle::new(root.clone(), &LEGACY_MANIFESTS, &LEGACY_MANIFEST).unwrap();
+        legacy
+            .publish(&legacy_stage, &TestBoundary::working())
+            .unwrap();
+        let revision = root.join("revisions/shared-rev");
+        assert!(!revision.join("silero_vad.onnx").exists());
+        let legacy_pointer = fs::read(root.join("current")).unwrap();
+
+        // The upgraded application version only knows the complete manifest.
+        let upgraded =
+            AsrRevisionLifecycle::new(root.clone(), &COMPLETE_MANIFESTS, &COMPLETE_MANIFEST)
+                .unwrap();
+        let stage = root.join("staging/upgrade");
+        fs::create_dir(&stage).unwrap();
+        for (name, contents) in [
+            ("one", b'a'),
+            ("two", b'b'),
+            ("three", b'c'),
+            ("four", b'd'),
+        ] {
+            fs::write(stage.join(name), [contents]).unwrap();
+        }
+        fs::write(stage.join("silero_vad.onnx"), b"v").unwrap();
+
+        // A publication interrupted at the current-pointer write leaves the
+        // legacy bytes and pointer untouched and keeps the completed stage.
+        assert_eq!(
+            upgraded.publish(&stage, &TestBoundary::failing_current()),
+            Err(AsrLifecycleError::Persistence(AsrPersistenceError::Failed))
+        );
+        assert_eq!(fs::read(root.join("current")).unwrap(), legacy_pointer);
+        assert_eq!(verify_model_set(&revision, &LEGACY_MANIFEST), Ok(()));
+        assert!(!revision.join("silero_vad.onnx").exists());
+        assert!(stage.join("silero_vad.onnx").exists());
+
+        // Retrying repairs the revision in place and makes the complete
+        // five-artifact set the current revision.
+        let installed = upgraded.publish(&stage, &TestBoundary::working()).unwrap();
+        assert_eq!(installed, revision);
+        assert_eq!(verify_model_set(&revision, &COMPLETE_MANIFEST), Ok(()));
+        assert_eq!(upgraded.resolve_current().unwrap(), revision);
+        assert!(!stage.exists());
+        assert!(
+            !root.join("revisions").read_dir().unwrap().any(|entry| entry
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .starts_with(".repair."))
+        );
         fs::remove_dir_all(root).unwrap();
     }
 
