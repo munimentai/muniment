@@ -173,6 +173,45 @@ fn stale_recovery_never_removes_a_replacement() {
 }
 
 #[test]
+fn stale_recovery_rollback_never_overwrites_a_raced_in_endpoint() {
+    let runtime = TestDirectory::new();
+    let filesystem = AttachFilesystem::from_runtime_directory(&runtime.0).unwrap();
+    let stale = UnixListener::bind(filesystem.endpoint_path()).unwrap();
+    drop(stale);
+    let attach_directory = filesystem.endpoint_path().parent().unwrap().to_owned();
+    let error = AttachTransport::bind_with_race_hooks(
+        &filesystem,
+        || {},
+        || {},
+        || {
+            let quarantine = fs::read_dir(&attach_directory)
+                .unwrap()
+                .map(|entry| entry.unwrap().path())
+                .find(|path| {
+                    path.file_name()
+                        .unwrap()
+                        .to_string_lossy()
+                        .starts_with(".attach-v1.sock.")
+                })
+                .unwrap();
+            fs::remove_file(&quarantine).unwrap();
+            fs::write(&quarantine, b"quarantined replacement").unwrap();
+            fs::write(filesystem.endpoint_path(), b"endpoint replacement").unwrap();
+        },
+    )
+    .unwrap_err();
+    assert_eq!(error, AttachTransportError::ExistingEndpointRemove);
+
+    let contents: Vec<Vec<u8>> = fs::read_dir(&attach_directory)
+        .unwrap()
+        .map(|entry| fs::read(entry.unwrap().path()).unwrap())
+        .collect();
+    assert_eq!(contents.len(), 2);
+    assert!(contents.contains(&b"quarantined replacement".to_vec()));
+    assert!(contents.contains(&b"endpoint replacement".to_vec()));
+}
+
+#[test]
 fn shutdown_check_remove_race_preserves_a_replacement() {
     let runtime = TestDirectory::new();
     let filesystem = AttachFilesystem::from_runtime_directory(&runtime.0).unwrap();

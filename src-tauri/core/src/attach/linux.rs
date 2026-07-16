@@ -132,7 +132,7 @@ pub struct AttachTransport<'a> {
 impl<'a> AttachTransport<'a> {
     /// Publishes a blocking stream listener. No accept thread is started.
     pub fn bind(filesystem: &'a AttachFilesystem) -> Result<Self, AttachTransportError> {
-        Self::bind_with_hooks(filesystem, || {}, || {})
+        Self::bind_with_race_hooks(filesystem, || {}, || {}, || {})
     }
 
     /// Binds while invoking deterministic race hooks used by contract tests.
@@ -142,8 +142,19 @@ impl<'a> AttachTransport<'a> {
         after_bind: impl FnOnce(),
         before_stale_remove: impl FnOnce(),
     ) -> Result<Self, AttachTransportError> {
+        Self::bind_with_race_hooks(filesystem, after_bind, before_stale_remove, || {})
+    }
+
+    /// Binds with an additional hook after a stale entry has been quarantined.
+    #[doc(hidden)]
+    pub fn bind_with_race_hooks(
+        filesystem: &'a AttachFilesystem,
+        after_bind: impl FnOnce(),
+        before_stale_remove: impl FnOnce(),
+        after_stale_quarantine: impl FnOnce(),
+    ) -> Result<Self, AttachTransportError> {
         let uid = unsafe { libc::geteuid() };
-        recover_stale_endpoint(filesystem, uid, before_stale_remove)?;
+        recover_stale_endpoint(filesystem, uid, before_stale_remove, after_stale_quarantine)?;
 
         let bind_path = pinned_endpoint_path(filesystem);
         let listener = UnixListener::bind(&bind_path).map_err(|_| AttachTransportError::Bind)?;
@@ -336,19 +347,26 @@ fn recover_stale_endpoint(
     filesystem: &AttachFilesystem,
     uid: libc::uid_t,
     before_remove: impl FnOnce(),
+    after_quarantine: impl FnOnce(),
 ) -> Result<(), AttachTransportError> {
-    let identity = match endpoint_metadata(filesystem) {
-        Ok(metadata) => {
-            if metadata.mode() & libc::S_IFMT != libc::S_IFSOCK || metadata.uid() != uid {
-                return Err(AttachTransportError::ExistingEndpointUnsafe);
-            }
-            EndpointIdentity {
-                device: metadata.dev(),
-                inode: metadata.ino(),
-            }
-        }
+    let pinned = match open_endpoint(filesystem) {
+        Ok(endpoint) => endpoint,
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
         Err(_) => return Err(AttachTransportError::ExistingEndpointUnsafe),
+    };
+    let metadata = File::from(
+        pinned
+            .try_clone()
+            .map_err(|_| AttachTransportError::ExistingEndpointUnsafe)?,
+    )
+    .metadata()
+    .map_err(|_| AttachTransportError::ExistingEndpointUnsafe)?;
+    if metadata.mode() & libc::S_IFMT != libc::S_IFSOCK || metadata.uid() != uid {
+        return Err(AttachTransportError::ExistingEndpointUnsafe);
+    }
+    let identity = EndpointIdentity {
+        device: metadata.dev(),
+        inode: metadata.ino(),
     };
 
     match UnixStream::connect(pinned_endpoint_path(filesystem)) {
@@ -357,8 +375,30 @@ fn recover_stale_endpoint(
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
         Err(_) => return Err(AttachTransportError::ExistingEndpointProbe),
     }
-    remove_exact_endpoint_with_hook(filesystem, identity, before_remove)
-        .map_err(|_| AttachTransportError::ExistingEndpointRemove)
+    remove_pinned_endpoint_with_hooks(
+        filesystem,
+        identity,
+        pinned,
+        before_remove,
+        after_quarantine,
+    )
+    .map_err(|_| AttachTransportError::ExistingEndpointRemove)
+}
+
+fn open_endpoint(filesystem: &AttachFilesystem) -> io::Result<OwnedFd> {
+    let name = CString::new(ENDPOINT_NAME).unwrap();
+    let fd = unsafe {
+        libc::openat(
+            filesystem.attach_directory.as_raw_fd(),
+            name.as_ptr(),
+            libc::O_PATH | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+        )
+    };
+    if fd < 0 {
+        Err(io::Error::last_os_error())
+    } else {
+        Ok(unsafe { OwnedFd::from_raw_fd(fd) })
+    }
 }
 
 fn apply_socket_permissions(
@@ -433,15 +473,53 @@ fn remove_exact_endpoint_with_hook(
     identity: EndpointIdentity,
     before_remove: impl FnOnce(),
 ) -> io::Result<()> {
+    remove_exact_endpoint_with_hooks(filesystem, identity, before_remove, || {})
+}
+
+fn remove_exact_endpoint_with_hooks(
+    filesystem: &AttachFilesystem,
+    identity: EndpointIdentity,
+    before_remove: impl FnOnce(),
+    after_quarantine: impl FnOnce(),
+) -> io::Result<()> {
+    let pinned = open_endpoint(filesystem)?;
+    remove_pinned_endpoint_with_hooks(
+        filesystem,
+        identity,
+        pinned,
+        before_remove,
+        after_quarantine,
+    )
+}
+
+fn remove_pinned_endpoint_with_hooks(
+    filesystem: &AttachFilesystem,
+    identity: EndpointIdentity,
+    pinned: OwnedFd,
+    before_remove: impl FnOnce(),
+    after_quarantine: impl FnOnce(),
+) -> io::Result<()> {
+    let directory = filesystem.attach_directory.as_raw_fd();
+    let from = CString::new(ENDPOINT_NAME).unwrap();
+    let pinned_metadata = File::from(pinned.try_clone()?).metadata()?;
+    if (EndpointIdentity {
+        device: pinned_metadata.dev(),
+        inode: pinned_metadata.ino(),
+    }) != identity
+        || pinned_metadata.mode() & libc::S_IFMT != libc::S_IFSOCK
+        || pinned_metadata.uid() != unsafe { libc::geteuid() }
+    {
+        return Err(io::Error::other("endpoint identity changed"));
+    }
+
     before_remove();
     let sequence = NEXT_QUARANTINE.fetch_add(1, Ordering::Relaxed);
     let quarantine = format!(".attach-v1.sock.{}.{}", std::process::id(), sequence);
-    let from = CString::new(ENDPOINT_NAME).unwrap();
     let to = CString::new(quarantine.clone()).unwrap();
-    let directory = filesystem.attach_directory.as_raw_fd();
     if unsafe { libc::renameat(directory, from.as_ptr(), directory, to.as_ptr()) } != 0 {
         return Err(io::Error::last_os_error());
     }
+    after_quarantine();
     let metadata = std::fs::symlink_metadata(PathBuf::from(format!(
         "/proc/self/fd/{directory}/{quarantine}"
     )))?;
@@ -449,16 +527,54 @@ fn remove_exact_endpoint_with_hook(
         device: metadata.dev(),
         inode: metadata.ino(),
     };
-    if moved == identity {
+    if moved == identity
+        && metadata.mode() & libc::S_IFMT == libc::S_IFSOCK
+        && metadata.uid() == unsafe { libc::geteuid() }
+    {
         if unsafe { libc::unlinkat(directory, to.as_ptr(), 0) } == 0 {
             return Ok(());
         }
         return Err(io::Error::last_os_error());
     }
-    if unsafe { libc::renameat(directory, to.as_ptr(), directory, from.as_ptr()) } != 0 {
-        return Err(io::Error::last_os_error());
-    }
+    restore_quarantined_entry(directory, &to, &from)?;
     Err(io::Error::other("endpoint identity changed"))
+}
+
+fn restore_quarantined_entry(
+    directory: libc::c_int,
+    quarantine: &CString,
+    endpoint: &CString,
+) -> io::Result<()> {
+    if unsafe {
+        libc::renameat2(
+            directory,
+            quarantine.as_ptr(),
+            directory,
+            endpoint.as_ptr(),
+            libc::RENAME_NOREPLACE,
+        )
+    } == 0
+    {
+        return Ok(());
+    }
+    let error = io::Error::last_os_error();
+    if error.raw_os_error() != Some(libc::EEXIST) {
+        return Err(error);
+    }
+    if unsafe {
+        libc::renameat2(
+            directory,
+            quarantine.as_ptr(),
+            directory,
+            endpoint.as_ptr(),
+            libc::RENAME_EXCHANGE,
+        )
+    } == 0
+    {
+        Ok(())
+    } else {
+        Err(io::Error::last_os_error())
+    }
 }
 
 fn open_directory(
