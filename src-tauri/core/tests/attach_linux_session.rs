@@ -2,7 +2,7 @@
 
 use muniment_core::attach::linux::{
     run_authenticated_session_with, run_authenticated_session_with_authorization, ApprovalDecision,
-    AttachSessionError, PeerCredentials,
+    AttachSessionError, AuthorizationSessionDependencies, PeerCredentials,
 };
 use muniment_core::attach::{
     decode_frame, encode_frame, Approval, AuthorizationClock, AuthorizationTokenGenerator,
@@ -83,13 +83,17 @@ fn approval_writes_one_authorized_grant_then_closes() {
             credentials(),
             "0.1.0",
             Duration::from_secs(1),
-            |b| {
-                b.fill(9);
-                Ok(())
+            AuthorizationSessionDependencies {
+                fill_random: |b: &mut [u8]| {
+                    b.fill(9);
+                    Ok(())
+                },
+                clock,
+                tokens: TestTokens(1),
+                approvals: |_: &muniment_core::attach::PairingChallenge, _: Duration| {
+                    Some(ApprovalDecision::Approve(approval()))
+                },
             },
-            clock,
-            TestTokens(1),
-            |_| ApprovalDecision::Approve(approval())
         ),
         Ok(())
     );
@@ -99,6 +103,74 @@ fn approval_writes_one_authorized_grant_then_closes() {
     assert_eq!(authorized.capability, "02".repeat(32));
     assert_eq!(authorized.expires_at, 3600);
     assert_eq!(authorized.idle_timeout_seconds, 900);
+    assert_eq!(client.read(&mut [0]).unwrap(), 0);
+}
+
+#[test]
+fn approval_after_hello_timeout_but_before_challenge_expiry_is_sent() {
+    let (mut client, server) = UnixStream::pair().unwrap();
+    client.write_all(&hello(1, 1)).unwrap();
+    let now = Rc::new(Cell::new(Duration::ZERO));
+    let decision_clock = now.clone();
+    let decided = Rc::new(Cell::new(false));
+    let decision_made = decided.clone();
+    let result = run_authenticated_session_with_authorization(
+        server,
+        credentials(),
+        "0.1.0",
+        Duration::from_secs(1),
+        AuthorizationSessionDependencies {
+            fill_random: |b: &mut [u8]| {
+                b.fill(9);
+                Ok(())
+            },
+            clock: TestClock(now),
+            tokens: TestTokens(1),
+            approvals: move |_: &muniment_core::attach::PairingChallenge, remaining: Duration| {
+                if decision_made.replace(true) {
+                    return None;
+                }
+                assert_eq!(remaining, CHALLENGE_LIFETIME);
+                decision_clock.set(Duration::from_secs(6));
+                Some(ApprovalDecision::Approve(approval()))
+            },
+        },
+    );
+    assert_eq!(result, Ok(()));
+    let _: Welcome = read_frame(&mut client);
+    let authorized: Authorized = read_frame(&mut client);
+    assert_eq!(authorized.capability, "02".repeat(32));
+    assert_eq!(client.read(&mut [0]).unwrap(), 0);
+}
+
+#[test]
+fn second_approval_after_consumption_cannot_write_another_grant() {
+    let (mut client, server) = UnixStream::pair().unwrap();
+    client.write_all(&hello(1, 1)).unwrap();
+    let calls = Rc::new(Cell::new(0));
+    let approval_calls = calls.clone();
+    let result = run_authenticated_session_with_authorization(
+        server,
+        credentials(),
+        "0.1.0",
+        Duration::from_secs(1),
+        AuthorizationSessionDependencies {
+            fill_random: |b: &mut [u8]| {
+                b.fill(9);
+                Ok(())
+            },
+            clock: TestClock(Rc::new(Cell::new(Duration::ZERO))),
+            tokens: TestTokens(1),
+            approvals: move |_: &muniment_core::attach::PairingChallenge, _: Duration| {
+                approval_calls.set(approval_calls.get() + 1);
+                Some(ApprovalDecision::Approve(approval()))
+            },
+        },
+    );
+    assert_eq!(result, Ok(()));
+    assert_eq!(calls.get(), 2);
+    let _: Welcome = read_frame(&mut client);
+    let _: Authorized = read_frame(&mut client);
     assert_eq!(client.read(&mut [0]).unwrap(), 0);
 }
 
@@ -114,19 +186,21 @@ fn denial_and_expired_challenge_close_without_authorized() {
             credentials(),
             "0.1.0",
             Duration::from_secs(1),
-            |b| {
-                b.fill(9);
-                Ok(())
-            },
-            TestClock(now),
-            TestTokens(1),
-            move |_| {
-                if expired {
-                    decision_clock.set(CHALLENGE_LIFETIME + Duration::from_nanos(1));
-                    ApprovalDecision::Approve(approval())
-                } else {
-                    ApprovalDecision::Deny
-                }
+            AuthorizationSessionDependencies {
+                fill_random: |b: &mut [u8]| {
+                    b.fill(9);
+                    Ok(())
+                },
+                clock: TestClock(now),
+                tokens: TestTokens(1),
+                approvals: move |_: &muniment_core::attach::PairingChallenge, _: Duration| {
+                    if expired {
+                        decision_clock.set(CHALLENGE_LIFETIME + Duration::from_nanos(1));
+                        Some(ApprovalDecision::Approve(approval()))
+                    } else {
+                        Some(ApprovalDecision::Deny)
+                    }
+                },
             },
         );
         assert_eq!(
