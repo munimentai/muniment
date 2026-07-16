@@ -52,6 +52,7 @@ pub struct UtteranceSegmenter {
     active: Vec<f32>,
     speech_samples: usize,
     trailing_samples: usize,
+    continuation_qualified: bool,
 }
 
 impl UtteranceSegmenter {
@@ -98,6 +99,7 @@ impl UtteranceSegmenter {
             active,
             speech_samples: 0,
             trailing_samples: 0,
+            continuation_qualified: false,
         })
     }
 
@@ -143,10 +145,15 @@ impl UtteranceSegmenter {
     fn push_sample(&mut self, sample: f32, activity: VoiceActivity, emitted: &mut Vec<Utterance>) {
         if self.active.is_empty() && self.speech_samples == 0 {
             if activity == VoiceActivity::NonSpeech {
+                self.continuation_qualified = false;
                 self.retain_pre_roll(sample);
                 return;
             }
             self.active.extend(self.pre_roll.drain(..));
+            if self.continuation_qualified {
+                self.speech_samples = self.config.min_speech_samples - 1;
+                self.continuation_qualified = false;
+            }
         }
 
         self.active.push(sample);
@@ -181,10 +188,12 @@ impl UtteranceSegmenter {
             self.active.clear();
         }
         if qualified && !preserve_discarded_tail {
-            self.speech_samples = self.config.min_speech_samples;
+            self.speech_samples = 0;
+            self.continuation_qualified = true;
         } else {
             self.speech_samples = 0;
             self.trailing_samples = 0;
+            self.continuation_qualified = false;
         }
     }
 
@@ -200,6 +209,7 @@ impl UtteranceSegmenter {
         self.active.clear();
         self.speech_samples = 0;
         self.trailing_samples = 0;
+        self.continuation_qualified = false;
     }
 }
 

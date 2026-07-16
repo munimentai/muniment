@@ -182,6 +182,26 @@ fn trailing_silence_emits_a_short_continuous_speech_remainder_after_maximum_spli
 }
 
 #[test]
+fn trailing_silence_after_exact_maximum_split_does_not_emit_an_utterance() {
+    let mut segmenter = UtteranceSegmenter::new(config()).unwrap();
+    let speech: Vec<_> = (1..=8).map(|n| n as f32 / 10.0).collect();
+
+    assert_eq!(
+        values(
+            segmenter
+                .push_frame(&speech, VoiceActivity::Speech)
+                .unwrap()
+        ),
+        vec![speech]
+    );
+    assert!(segmenter
+        .push_frame(&[-0.1, -0.2], VoiceActivity::NonSpeech)
+        .unwrap()
+        .is_empty());
+    assert!(segmenter.flush().is_none());
+}
+
+#[test]
 fn decisions_are_invariant_to_pcm_chunk_boundaries() {
     fn run(chunks: &[&[f32]]) -> Vec<Vec<f32>> {
         let mut segmenter = UtteranceSegmenter::new(config()).unwrap();
