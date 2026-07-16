@@ -25,6 +25,7 @@ pub struct PcmProducer {
     resample_accumulator: u32,
     low_pass: Option<LowPassFilter>,
     dropped_samples: Arc<AtomicU64>,
+    overflowed: Arc<std::sync::atomic::AtomicBool>,
 }
 
 /// Fixed-memory anti-alias filter used before reducing a device sample rate.
@@ -85,6 +86,7 @@ impl LowPassFilter {
 pub struct PcmConsumer {
     receiver: Receiver<f32>,
     dropped_samples: Arc<AtomicU64>,
+    overflowed: Arc<std::sync::atomic::AtomicBool>,
 }
 
 pub fn bounded_pcm_channel(
@@ -103,6 +105,7 @@ pub fn bounded_pcm_channel(
     }
     let (sender, receiver) = mpsc::sync_channel(capacity_samples);
     let dropped_samples = Arc::new(AtomicU64::new(0));
+    let overflowed = Arc::new(std::sync::atomic::AtomicBool::new(false));
     Ok((
         PcmProducer {
             sender,
@@ -113,10 +116,12 @@ pub fn bounded_pcm_channel(
             resample_accumulator: 0,
             low_pass: (source_rate > SAMPLE_RATE).then(|| LowPassFilter::new(source_rate)),
             dropped_samples: dropped_samples.clone(),
+            overflowed: overflowed.clone(),
         },
         PcmConsumer {
             receiver,
             dropped_samples,
+            overflowed,
         },
     ))
 }
@@ -167,10 +172,15 @@ impl PcmProducer {
             self.resample_accumulator += SAMPLE_RATE;
             while self.resample_accumulator >= self.source_rate {
                 self.resample_accumulator -= self.source_rate;
+                if self.overflowed.load(Ordering::Acquire) {
+                    self.dropped_samples.fetch_add(1, Ordering::Relaxed);
+                    continue;
+                }
                 match self.sender.try_send(mono) {
                     Ok(()) => {}
                     Err(TrySendError::Full(_)) => {
                         self.dropped_samples.fetch_add(1, Ordering::Relaxed);
+                        self.overflowed.store(true, Ordering::Release);
                     }
                     Err(TrySendError::Disconnected(_)) => return,
                 }
@@ -192,5 +202,28 @@ impl PcmConsumer {
 
     pub fn dropped_samples(&self) -> u64 {
         self.dropped_samples.load(Ordering::Relaxed)
+    }
+
+    /// Reports and resets drops since the previous observation.
+    pub fn take_dropped_samples(&self) -> u64 {
+        let dropped = self.dropped_samples.swap(0, Ordering::AcqRel);
+        self.overflowed.store(false, Ordering::Release);
+        dropped
+    }
+}
+
+#[cfg(test)]
+mod overflow_tests {
+    use super::*;
+
+    #[test]
+    fn taking_drops_resets_the_overflow_counter() {
+        let (mut producer, consumer) = bounded_pcm_channel(1, SAMPLE_RATE, 1).unwrap();
+        producer.push_f32(&[0.1, 0.2, 0.3]);
+        assert_eq!(consumer.drain(), vec![0.1]);
+        assert_eq!(consumer.take_dropped_samples(), 2);
+        assert_eq!(consumer.take_dropped_samples(), 0);
+        producer.push_f32(&[0.4]);
+        assert_eq!(consumer.drain(), vec![0.4]);
     }
 }

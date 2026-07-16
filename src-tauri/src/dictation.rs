@@ -6,13 +6,13 @@ use std::time::Duration;
 use muniment_core::asr::utterance::{Utterance, UtteranceConfig};
 use muniment_core::asr::{
     AsrLifecycleError, DictationPipeline, OfflineParakeetRecognizer, SileroVoiceActivityDetector,
-    PARAKEET_MODEL_MANIFEST, VAD_SAMPLE_RATE,
+    VadDecisionSource, PARAKEET_MODEL_MANIFEST, VAD_SAMPLE_RATE,
 };
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Runtime, State};
 
 use crate::model_install::parakeet_lifecycle;
-use crate::voice_capture::{VoiceCaptureError, VoiceCaptureState};
+use crate::voice_capture::{CapturedPcm, VoiceCaptureError, VoiceCaptureState};
 
 const POLL_INTERVAL: Duration = Duration::from_millis(20);
 
@@ -188,32 +188,69 @@ fn run_native(
             .map_err(|_| failure("modelUnavailable", "The speech model could not be loaded."))?;
     let recognizer = OfflineParakeetRecognizer::from_verified_current(&lifecycle)
         .map_err(|_| failure("modelUnavailable", "The speech model could not be loaded."))?;
-    let mut pipeline = DictationPipeline::new(vad, config())
+    let pipeline = DictationPipeline::new(vad, config())
         .map_err(|_| failure("pipelineUnavailable", "Dictation could not be started."))?;
+    run_coordinator(capture, pipeline, &recognizer, stop, running, emit)
+}
+
+trait CaptureSource {
+    fn start(&self) -> Result<(), VoiceCaptureError>;
+    fn take_samples(&self) -> Result<CapturedPcm, VoiceCaptureError>;
+    fn stop_and_take_samples(&self) -> Result<CapturedPcm, VoiceCaptureError>;
+    fn stop(&self) -> Result<(), VoiceCaptureError>;
+}
+
+impl CaptureSource for VoiceCaptureState {
+    fn start(&self) -> Result<(), VoiceCaptureError> {
+        self.start()
+    }
+    fn take_samples(&self) -> Result<CapturedPcm, VoiceCaptureError> {
+        self.take_samples()
+    }
+    fn stop_and_take_samples(&self) -> Result<CapturedPcm, VoiceCaptureError> {
+        self.stop_and_take_samples()
+    }
+    fn stop(&self) -> Result<(), VoiceCaptureError> {
+        self.stop()
+    }
+}
+
+trait TranscriptDecoder {
+    fn decode(&self, samples: &[f32]) -> Result<String, ()>;
+}
+
+impl TranscriptDecoder for OfflineParakeetRecognizer {
+    fn decode(&self, samples: &[f32]) -> Result<String, ()> {
+        self.decode(VAD_SAMPLE_RATE, samples).map_err(|_| ())
+    }
+}
+
+fn run_coordinator<C: CaptureSource, D: VadDecisionSource, R: TranscriptDecoder>(
+    capture: &C,
+    mut pipeline: DictationPipeline<D>,
+    recognizer: &R,
+    stop: &AtomicBool,
+    running: &Running,
+    emit: &Emit,
+) -> Result<(), DictationFailure> {
     capture.start().map_err(redact_capture)?;
     running();
     let result = (|| {
         while !stop.load(Ordering::Acquire) {
-            let samples = capture.take_samples().map_err(redact_capture)?;
-            recognize_all(
-                &recognizer,
-                pipeline.push(&samples).map_err(|_| {
-                    failure("audioFailed", "Dictation audio could not be processed.")
-                })?,
-                emit,
-            )?;
+            let batch = capture.take_samples().map_err(redact_capture)?;
+            push_and_recognize(&mut pipeline, recognizer, &batch.samples, emit)?;
+            if batch.discontinuity_after {
+                pipeline.discontinuity();
+            }
             std::thread::sleep(POLL_INTERVAL);
         }
-        let samples = capture.stop_and_take_samples().map_err(redact_capture)?;
-        recognize_all(
-            &recognizer,
-            pipeline
-                .push(&samples)
-                .map_err(|_| failure("audioFailed", "Dictation audio could not be processed."))?,
-            emit,
-        )?;
+        let batch = capture.stop_and_take_samples().map_err(redact_capture)?;
+        push_and_recognize(&mut pipeline, recognizer, &batch.samples, emit)?;
+        if batch.discontinuity_after {
+            pipeline.discontinuity();
+        }
         if let Some(utterance) = pipeline.flush() {
-            recognize(&recognizer, utterance, emit)?;
+            recognize(recognizer, utterance, emit)?;
         }
         Ok(())
     })();
@@ -223,8 +260,26 @@ fn run_native(
     result
 }
 
-fn recognize_all(
-    recognizer: &OfflineParakeetRecognizer,
+fn push_and_recognize<D: VadDecisionSource, R: TranscriptDecoder>(
+    pipeline: &mut DictationPipeline<D>,
+    recognizer: &R,
+    samples: &[f32],
+    emit: &Emit,
+) -> Result<(), DictationFailure> {
+    match pipeline.push(samples) {
+        Ok(utterances) => recognize_all(recognizer, utterances, emit),
+        Err(error) => {
+            recognize_all(recognizer, error.emitted, emit)?;
+            Err(failure(
+                "audioFailed",
+                "Dictation audio could not be processed.",
+            ))
+        }
+    }
+}
+
+fn recognize_all<R: TranscriptDecoder>(
+    recognizer: &R,
     utterances: Vec<Utterance>,
     emit: &Emit,
 ) -> Result<(), DictationFailure> {
@@ -234,13 +289,13 @@ fn recognize_all(
     Ok(())
 }
 
-fn recognize(
-    recognizer: &OfflineParakeetRecognizer,
+fn recognize<R: TranscriptDecoder>(
+    recognizer: &R,
     utterance: Utterance,
     emit: &Emit,
 ) -> Result<(), DictationFailure> {
     let text = recognizer
-        .decode(VAD_SAMPLE_RATE, &utterance.samples)
+        .decode(&utterance.samples)
         .map_err(|_| failure("recognitionFailed", "Speech recognition failed."))?;
     emit(DictationEvent::Transcript { text });
     Ok(())
@@ -291,9 +346,112 @@ pub fn dictation_status(state: State<'_, DictationState>) -> DictationStatus {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use muniment_core::asr::utterance::VoiceActivity;
+    use muniment_core::asr::{VadError, VAD_FRAME_SIZE};
+    use std::collections::VecDeque;
     use std::sync::mpsc;
     use std::time::{Duration, Instant};
     use tauri::{Listener, Manager};
+
+    struct FakeCapture {
+        batches: Mutex<VecDeque<CapturedPcm>>,
+        stopped: Mutex<Option<CapturedPcm>>,
+    }
+
+    impl CaptureSource for FakeCapture {
+        fn start(&self) -> Result<(), VoiceCaptureError> {
+            Ok(())
+        }
+        fn take_samples(&self) -> Result<CapturedPcm, VoiceCaptureError> {
+            Ok(self
+                .batches
+                .lock()
+                .unwrap()
+                .pop_front()
+                .unwrap_or(CapturedPcm {
+                    samples: Vec::new(),
+                    discontinuity_after: false,
+                }))
+        }
+        fn stop_and_take_samples(&self) -> Result<CapturedPcm, VoiceCaptureError> {
+            Ok(self.stopped.lock().unwrap().take().unwrap_or(CapturedPcm {
+                samples: Vec::new(),
+                discontinuity_after: false,
+            }))
+        }
+        fn stop(&self) -> Result<(), VoiceCaptureError> {
+            Ok(())
+        }
+    }
+
+    struct FakeVad {
+        decisions: VecDeque<Result<VoiceActivity, VadError>>,
+        discontinuities: Arc<std::sync::atomic::AtomicUsize>,
+    }
+
+    impl VadDecisionSource for FakeVad {
+        fn detect(&mut self, _: &[f32]) -> Result<VoiceActivity, VadError> {
+            self.decisions
+                .pop_front()
+                .unwrap_or(Ok(VoiceActivity::NonSpeech))
+        }
+        fn discontinuity(&mut self) {
+            self.discontinuities.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    struct FakeDecoder {
+        lengths: Arc<Mutex<Vec<usize>>>,
+    }
+
+    impl TranscriptDecoder for FakeDecoder {
+        fn decode(&self, samples: &[f32]) -> Result<String, ()> {
+            let mut lengths = self.lengths.lock().unwrap();
+            lengths.push(samples.len());
+            Ok(format!("decoded-{}", lengths.len()))
+        }
+    }
+
+    fn pcm(frames: usize) -> Vec<f32> {
+        vec![0.25; frames * VAD_FRAME_SIZE]
+    }
+
+    fn vad(speech: usize, silence: usize) -> VecDeque<Result<VoiceActivity, VadError>> {
+        std::iter::repeat_n(Ok(VoiceActivity::Speech), speech)
+            .chain(std::iter::repeat_n(Ok(VoiceActivity::NonSpeech), silence))
+            .collect()
+    }
+
+    fn coordinator_runner(
+        capture: FakeCapture,
+        decisions: VecDeque<Result<VoiceActivity, VadError>>,
+        lengths: Arc<Mutex<Vec<usize>>>,
+        discontinuities: Arc<std::sync::atomic::AtomicUsize>,
+    ) -> Arc<Runner> {
+        let capture = Arc::new(capture);
+        Arc::new(
+            move |_: &Path, _: &VoiceCaptureState, stop, running, emit| {
+                let pipeline = DictationPipeline::new(
+                    FakeVad {
+                        decisions: decisions.clone(),
+                        discontinuities: discontinuities.clone(),
+                    },
+                    config(),
+                )
+                .unwrap();
+                run_coordinator(
+                    capture.as_ref(),
+                    pipeline,
+                    &FakeDecoder {
+                        lengths: lengths.clone(),
+                    },
+                    stop,
+                    running,
+                    emit,
+                )
+            },
+        )
+    }
 
     fn app_with_runner(runner: Arc<Runner>) -> tauri::App<tauri::test::MockRuntime> {
         let app = tauri::test::mock_app();
@@ -318,20 +476,25 @@ mod tests {
 
     #[test]
     fn start_emits_transcript_and_stop_emits_trailing_flush() {
-        let runner = Arc::new(
-            |_: &Path, _: &VoiceCaptureState, stop: &AtomicBool, running: &Running, emit: &Emit| {
-                running();
-                emit(DictationEvent::Transcript {
-                    text: "first".into(),
-                });
-                while !stop.load(Ordering::Acquire) {
-                    std::thread::sleep(Duration::from_millis(2));
-                }
-                emit(DictationEvent::Transcript {
-                    text: "trailing".into(),
-                });
-                Ok(())
+        let lengths = Arc::new(Mutex::new(Vec::new()));
+        let decisions = vad(8, 16)
+            .into_iter()
+            .chain(std::iter::repeat_n(Ok(VoiceActivity::Speech), 8))
+            .collect();
+        let runner = coordinator_runner(
+            FakeCapture {
+                batches: Mutex::new(VecDeque::from([CapturedPcm {
+                    samples: pcm(24),
+                    discontinuity_after: false,
+                }])),
+                stopped: Mutex::new(Some(CapturedPcm {
+                    samples: pcm(8),
+                    discontinuity_after: false,
+                })),
             },
+            decisions,
+            lengths.clone(),
+            Arc::new(std::sync::atomic::AtomicUsize::new(0)),
         );
         let app = app_with_runner(runner);
         let (tx, rx) = mpsc::channel();
@@ -349,40 +512,81 @@ mod tests {
         );
         assert_eq!(
             rx.recv_timeout(Duration::from_secs(1)).unwrap(),
-            r#"{"type":"transcript","text":"first"}"#
+            r#"{"type":"transcript","text":"decoded-1"}"#
         );
         assert_eq!(dictation_stop(app.state()), DictationStatus::Running);
         assert_eq!(
             rx.recv_timeout(Duration::from_secs(1)).unwrap(),
-            r#"{"type":"transcript","text":"trailing"}"#
+            r#"{"type":"transcript","text":"decoded-2"}"#
         );
         wait_status(&app, DictationStatus::Stopped);
+        assert_eq!(lengths.lock().unwrap().len(), 2);
         assert_eq!(dictation_stop(app.state()), DictationStatus::Stopped);
     }
 
     #[test]
-    fn failure_statuses_are_closed_and_redacted() {
-        let runner = Arc::new(
-            |_: &Path, _: &VoiceCaptureState, _: &AtomicBool, _: &Running, _: &Emit| {
-                Err(DictationFailure {
-                    model_not_installed: true,
-                    category: "modelNotInstalled",
-                    message: "The speech model is not installed.",
-                })
+    fn overflow_breaks_audio_before_trailing_flush() {
+        let lengths = Arc::new(Mutex::new(Vec::new()));
+        let discontinuities = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let runner = coordinator_runner(
+            FakeCapture {
+                batches: Mutex::new(VecDeque::from([CapturedPcm {
+                    samples: pcm(8),
+                    discontinuity_after: true,
+                }])),
+                stopped: Mutex::new(Some(CapturedPcm {
+                    samples: pcm(8),
+                    discontinuity_after: false,
+                })),
             },
+            vad(16, 0),
+            lengths.clone(),
+            discontinuities.clone(),
         );
         let app = app_with_runner(runner);
         dictation_start(app.handle().clone(), app.state(), app.state());
-        let expected = DictationStatus::ModelNotInstalled {
-            category: "modelNotInstalled",
-            message: "The speech model is not installed.",
+        wait_status(&app, DictationStatus::Running);
+        std::thread::sleep(Duration::from_millis(30));
+        dictation_stop(app.state());
+        wait_status(&app, DictationStatus::Stopped);
+        assert_eq!(*lengths.lock().unwrap(), vec![8 * VAD_FRAME_SIZE]);
+        assert_eq!(discontinuities.load(Ordering::Relaxed), 1);
+    }
+
+    #[test]
+    fn push_error_decodes_prior_emission_and_redacts_backend_detail() {
+        let lengths = Arc::new(Mutex::new(Vec::new()));
+        let mut decisions = vad(8, 16);
+        decisions.push_back(Err(VadError::NativeDetectorUnavailable));
+        let runner = coordinator_runner(
+            FakeCapture {
+                batches: Mutex::new(VecDeque::from([CapturedPcm {
+                    samples: pcm(25),
+                    discontinuity_after: false,
+                }])),
+                stopped: Mutex::new(None),
+            },
+            decisions,
+            lengths.clone(),
+            Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+        );
+        let app = app_with_runner(runner);
+        let (tx, rx) = mpsc::channel();
+        app.handle().listen("dictation-event", move |event| {
+            let _ = tx.send(event.payload().to_owned());
+        });
+        dictation_start(app.handle().clone(), app.state(), app.state());
+        let expected = DictationStatus::Failed {
+            category: "audioFailed",
+            message: "Dictation audio could not be processed.",
         };
         wait_status(&app, expected.clone());
-        let json = serde_json::to_string(&expected).unwrap();
         assert_eq!(
-            json,
-            r#"{"state":"modelNotInstalled","category":"modelNotInstalled","message":"The speech model is not installed."}"#
+            rx.recv_timeout(Duration::from_secs(1)).unwrap(),
+            r#"{"type":"transcript","text":"decoded-1"}"#
         );
-        assert!(!json.contains('/') && !json.contains("onnx"));
+        assert_eq!(lengths.lock().unwrap().len(), 1);
+        let json = serde_json::to_string(&expected).unwrap();
+        assert!(!json.contains("NativeDetectorUnavailable") && !json.contains("onnx"));
     }
 }

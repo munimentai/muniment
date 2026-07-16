@@ -17,6 +17,13 @@ pub enum VoiceCaptureError {
     AlreadyRunning,
 }
 
+pub struct CapturedPcm {
+    pub samples: Vec<f32>,
+    /// Samples were lost after this batch. Callers must break streaming state
+    /// before processing the next batch.
+    pub discontinuity_after: bool,
+}
+
 pub struct VoiceCaptureState {
     active: Mutex<Option<ActiveCapture>>,
     runtime_failed: Arc<AtomicBool>,
@@ -108,22 +115,28 @@ impl VoiceCaptureState {
     }
 
     /// Stops capture and returns every sample queued before the stream closed.
-    pub fn stop_and_take_samples(&self) -> Result<Vec<f32>, VoiceCaptureError> {
+    pub fn stop_and_take_samples(&self) -> Result<CapturedPcm, VoiceCaptureError> {
         let active = self
             .active
             .lock()
             .map_err(|_| VoiceCaptureError::StreamBuildFailed)?
             .take();
-        Ok(active.map_or_else(Vec::new, |mut capture| {
-            let _ = capture.stop.try_send(());
-            if let Some(thread) = capture.thread.take() {
-                let _ = thread.join();
-            }
-            capture.consumer.drain()
-        }))
+        Ok(active.map_or_else(
+            || CapturedPcm {
+                samples: Vec::new(),
+                discontinuity_after: false,
+            },
+            |mut capture| {
+                let _ = capture.stop.try_send(());
+                if let Some(thread) = capture.thread.take() {
+                    let _ = thread.join();
+                }
+                drain_capture(&capture.consumer)
+            },
+        ))
     }
 
-    pub fn take_samples(&self) -> Result<Vec<f32>, VoiceCaptureError> {
+    pub fn take_samples(&self) -> Result<CapturedPcm, VoiceCaptureError> {
         if self.runtime_failed.swap(false, Ordering::AcqRel) {
             return Err(VoiceCaptureError::RuntimeStreamFailed);
         }
@@ -131,9 +144,13 @@ impl VoiceCaptureState {
             .active
             .lock()
             .map_err(|_| VoiceCaptureError::RuntimeStreamFailed)?;
-        Ok(active
-            .as_ref()
-            .map_or_else(Vec::new, |capture| capture.consumer.drain()))
+        Ok(active.as_ref().map_or_else(
+            || CapturedPcm {
+                samples: Vec::new(),
+                discontinuity_after: false,
+            },
+            |capture| drain_capture(&capture.consumer),
+        ))
     }
 
     fn open_stream(
@@ -206,6 +223,17 @@ impl VoiceCaptureState {
     }
 }
 
+fn drain_capture(consumer: &PcmConsumer) -> CapturedPcm {
+    let samples = consumer.drain();
+    // Reset only after draining: queued audio precedes the reported gap. A
+    // concurrent drop is conservatively assigned after this batch as well.
+    let discontinuity_after = consumer.take_dropped_samples() != 0;
+    CapturedPcm {
+        samples,
+        discontinuity_after,
+    }
+}
+
 impl Drop for VoiceCaptureState {
     fn drop(&mut self) {
         if let Ok(active) = self.active.get_mut() {
@@ -264,9 +292,9 @@ mod tests {
         let state = VoiceCaptureState::new();
         state.runtime_failed.store(true, Ordering::Release);
         assert_eq!(
-            state.take_samples(),
+            state.take_samples().map(|batch| batch.samples),
             Err(VoiceCaptureError::RuntimeStreamFailed)
         );
-        assert_eq!(state.take_samples(), Ok(Vec::new()));
+        assert_eq!(state.take_samples().unwrap().samples, Vec::<f32>::new());
     }
 }
