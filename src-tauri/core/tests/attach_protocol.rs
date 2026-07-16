@@ -203,6 +203,15 @@ fn authorized_round_trips_and_ignores_future_optional_fields() {
 }
 
 #[test]
+fn handshake_wire_debug_redacts_secrets() {
+    let welcome = welcome(1, "0.1.0", "server-nonce", "secret-challenge");
+    let authorized = authorized("secret-capability", 3600, 900, Default::default());
+
+    assert!(!format!("{welcome:?}").contains("secret-challenge"));
+    assert!(!format!("{authorized:?}").contains("secret-capability"));
+}
+
+#[test]
 fn hello_first_rejects_operation_shapes_but_allows_future_optional_fields() {
     let hybrid = json!({
         "protocol": PROTOCOL,
@@ -356,9 +365,10 @@ impl TestClock {
 
 struct TestTokens(u8);
 impl AuthorizationTokenGenerator for TestTokens {
-    fn fill(&mut self, bytes: &mut [u8]) {
+    fn fill(&mut self, bytes: &mut [u8]) -> Result<(), ()> {
         self.0 += 1;
         bytes.fill(self.0);
+        Ok(())
     }
 }
 

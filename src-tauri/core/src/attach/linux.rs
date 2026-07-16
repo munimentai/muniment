@@ -399,8 +399,8 @@ impl AuthorizationClock for SessionClock {
 
 struct SessionTokens;
 impl AuthorizationTokenGenerator for SessionTokens {
-    fn fill(&mut self, bytes: &mut [u8]) {
-        getrandom::fill(bytes).expect("operating-system randomness became unavailable");
+    fn fill(&mut self, bytes: &mut [u8]) -> Result<(), ()> {
+        getrandom::fill(bytes).map_err(|_| ())
     }
 }
 
@@ -480,7 +480,10 @@ where
         let challenge_expires_at = clock.now() + CHALLENGE_LIFETIME;
         let challenge = authorization
             .issue_challenge()
-            .map_err(|_| AttachSessionError::Authorization)?;
+            .map_err(|error| match error {
+                AuthorizationError::Randomness => AttachSessionError::Randomness,
+                _ => AttachSessionError::Authorization,
+            })?;
         let authorization_deadline = Instant::now()
             .checked_add(CHALLENGE_LIFETIME)
             .ok_or(AttachSessionError::Timeout)?;
@@ -499,6 +502,7 @@ where
         let (capability, grant) = authorization
             .approve(&challenge, approval)
             .map_err(|error| match error {
+                AuthorizationError::Randomness => AttachSessionError::Randomness,
                 AuthorizationError::ChallengeExpired => AttachSessionError::Timeout,
                 _ => AttachSessionError::Authorization,
             })?;

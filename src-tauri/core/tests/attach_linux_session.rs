@@ -58,9 +58,24 @@ impl AuthorizationClock for TestClock {
 }
 struct TestTokens(u8);
 impl AuthorizationTokenGenerator for TestTokens {
-    fn fill(&mut self, bytes: &mut [u8]) {
+    fn fill(&mut self, bytes: &mut [u8]) -> Result<(), ()> {
         bytes.fill(self.0);
         self.0 += 1;
+        Ok(())
+    }
+}
+
+struct FailingTokens {
+    calls_before_failure: usize,
+}
+impl AuthorizationTokenGenerator for FailingTokens {
+    fn fill(&mut self, bytes: &mut [u8]) -> Result<(), ()> {
+        if self.calls_before_failure == 0 {
+            return Err(());
+        }
+        self.calls_before_failure -= 1;
+        bytes.fill(1);
+        Ok(())
     }
 }
 fn approval() -> Approval {
@@ -69,6 +84,38 @@ fn approval() -> Approval {
         workspace: "workspace-1".into(),
         scopes: BTreeSet::from(["thread.read".into()]),
         lifetime: Duration::from_secs(3600),
+    }
+}
+
+#[test]
+fn authorization_randomness_failures_close_without_authorized() {
+    for calls_before_failure in [0, 1] {
+        let (mut client, server) = UnixStream::pair().unwrap();
+        client.write_all(&hello(1, 1)).unwrap();
+        let result = run_authenticated_session_with_authorization(
+            server,
+            credentials(),
+            "0.1.0",
+            Duration::from_secs(1),
+            AuthorizationSessionDependencies {
+                fill_random: |bytes: &mut [u8]| {
+                    bytes.fill(9);
+                    Ok(())
+                },
+                clock: TestClock(Rc::new(Cell::new(Duration::ZERO))),
+                tokens: FailingTokens {
+                    calls_before_failure,
+                },
+                approvals: |_: &muniment_core::attach::PairingChallenge, _: Duration| {
+                    Some(ApprovalDecision::Approve(approval()))
+                },
+            },
+        );
+        assert_eq!(result, Err(AttachSessionError::Randomness));
+        if calls_before_failure == 1 {
+            let _: Welcome = read_frame(&mut client);
+        }
+        assert_eq!(client.read(&mut [0]).unwrap(), 0);
     }
 }
 
