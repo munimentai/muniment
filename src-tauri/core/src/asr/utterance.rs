@@ -107,8 +107,9 @@ impl UtteranceSegmenter {
 
     /// Finishes hold-to-talk input, emitting a qualifying partial utterance.
     pub fn flush(&mut self) -> Option<Utterance> {
-        let utterance =
-            (self.speech_samples >= self.config.min_speech_samples).then(|| Utterance {
+        let utterance = (!self.active.is_empty()
+            && self.speech_samples >= self.config.min_speech_samples)
+            .then(|| Utterance {
                 samples: std::mem::take(&mut self.active),
             });
         self.clear();
@@ -130,7 +131,7 @@ impl UtteranceSegmenter {
     }
 
     fn push_sample(&mut self, sample: f32, activity: VoiceActivity, emitted: &mut Vec<Utterance>) {
-        if self.active.is_empty() {
+        if self.active.is_empty() && self.speech_samples == 0 {
             if activity == VoiceActivity::NonSpeech {
                 self.retain_pre_roll(sample);
                 return;
@@ -147,15 +148,16 @@ impl UtteranceSegmenter {
             VoiceActivity::NonSpeech => self.trailing_samples += 1,
         }
 
-        if self.active.len() == self.config.max_utterance_samples {
-            self.finish_active(emitted, false);
-        } else if self.trailing_samples == self.config.trailing_silence_samples {
+        if self.trailing_samples == self.config.trailing_silence_samples {
             self.finish_active(emitted, true);
+        } else if self.active.len() == self.config.max_utterance_samples {
+            self.finish_active(emitted, false);
         }
     }
 
     fn finish_active(&mut self, emitted: &mut Vec<Utterance>, preserve_discarded_tail: bool) {
-        if self.speech_samples >= self.config.min_speech_samples {
+        let qualified = self.speech_samples >= self.config.min_speech_samples;
+        if qualified {
             emitted.push(Utterance {
                 samples: std::mem::take(&mut self.active),
             });
@@ -168,8 +170,12 @@ impl UtteranceSegmenter {
         } else {
             self.active.clear();
         }
-        self.speech_samples = 0;
-        self.trailing_samples = 0;
+        if qualified && !preserve_discarded_tail {
+            self.speech_samples = self.config.min_speech_samples;
+        } else {
+            self.speech_samples = 0;
+            self.trailing_samples = 0;
+        }
     }
 
     fn retain_pre_roll(&mut self, sample: f32) {

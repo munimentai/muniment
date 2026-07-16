@@ -136,6 +136,36 @@ fn maximum_splits_continuous_speech_without_loss_or_duplication() {
 }
 
 #[test]
+fn flush_emits_a_short_continuous_speech_remainder_after_maximum_split() {
+    let mut segmenter = UtteranceSegmenter::new(config()).unwrap();
+    let input: Vec<_> = (1..=9).map(|n| n as f32 / 10.0).collect();
+    let mut output = values(segmenter.push_frame(&input, VoiceActivity::Speech).unwrap());
+    output.push(segmenter.flush().unwrap().samples);
+
+    assert_eq!(output.iter().map(Vec::len).collect::<Vec<_>>(), vec![8, 1]);
+    assert_eq!(output.concat(), input);
+}
+
+#[test]
+fn trailing_silence_emits_a_short_continuous_speech_remainder_after_maximum_split() {
+    let mut segmenter = UtteranceSegmenter::new(config()).unwrap();
+    let speech: Vec<_> = (1..=9).map(|n| n as f32 / 10.0).collect();
+    let mut output = values(
+        segmenter
+            .push_frame(&speech, VoiceActivity::Speech)
+            .unwrap(),
+    );
+    output.extend(values(
+        segmenter
+            .push_frame(&[-0.1, -0.2], VoiceActivity::NonSpeech)
+            .unwrap(),
+    ));
+
+    assert_eq!(output.iter().map(Vec::len).collect::<Vec<_>>(), vec![8, 3]);
+    assert_eq!(output.concat(), [speech, vec![-0.1, -0.2]].concat());
+}
+
+#[test]
 fn decisions_are_invariant_to_pcm_chunk_boundaries() {
     fn run(chunks: &[&[f32]]) -> Vec<Vec<f32>> {
         let mut segmenter = UtteranceSegmenter::new(config()).unwrap();
