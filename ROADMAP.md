@@ -65,8 +65,8 @@ Phases mirror harness-spec §9. Muniment-cloud Phase 1 native auth and the cloud
 - Voice direction remains Parakeet capture → Gemma polish → transforms, with Kokoro read-aloud and global hotkeys.
 - DONE — ADRs 0004/0005, pinned Parakeet verification, revision publication/recovery, bounded resumable acquisition, consumption of the shared native HTTPS/proxy transport, the shared pure-core install coordinator, exact resumable-stage byte accounting, Parakeet acquisition/publication composition through that coordinator, and standard-library native filesystem/lock/clock/cancellation adapters.
 - DONE — Tauri install, status, and cancel commands with redacted public states.
-- DONE foundation — sherpa-onnx 1.13.2 native libraries are packaged for macOS universal2, Windows x86_64, and Linux x86_64, with a verified offline Parakeet recognizer boundary and packaging contract tests. The recognizer’s safe binding contract remains in Needs Human and is not re-filed here.
-- NEXT — after the recognizer binding decision is resolved, capture/VAD, desktop command wiring, UI, and target-hardware validation follow as separate slices.
+- DONE foundation — sherpa-onnx 1.13.2 native libraries are packaged for macOS universal2, Windows x86_64, and Linux x86_64, with a safe offline Parakeet recognizer binding that verifies the current model, validates finite normalized mono 16 kHz input, owns and cleans up native handles, and has packaging and contract tests.
+- NEXT — capture/VAD, desktop command wiring, UI, and target-hardware validation remain as independent slices.
 
 ## Phase 4+ — Org surface (§9 items 16–19)
 - Remote MCP consumption, local stdio allowlist, capability install flow, artifact side panel, and projects with the redaction rule (`output withheld · connection not granted`).
