@@ -163,6 +163,16 @@ implementations, atomic replacement, and commands returning typed state only.
 Future UI may install, cancel, retry, and remove; it cannot choose URLs,
 revisions, filenames, or paths.
 
+The same trust boundary applies to ADR 0004's pinned `silero_vad.onnx`
+(revision `af4fcfc9b8305246b1fe2ebcaf248975673166f1`, 1,807,522 bytes, SHA-256
+`a35ebf52fd3ce5f1469b2a36158dba761bc47b973ea3382b3186ca15b1f5af28`).
+Pure core accepts an explicitly supplied installed file path and verifies that
+compiled identity before constructing the native detector. Missing,
+non-regular, unreadable, wrong-size, or digest-mismatched files yield typed,
+path-redacted errors. This slice does not add VAD acquisition or publication;
+packaging must place the verified file and its upstream MIT notice alongside
+the native runtime before capture integration is enabled.
+
 Responses stream native-to-disk. Model bytes, partials, digests, paths, and
 handles never cross Tauri IPC or enter the webview, telemetry, crash reports,
 Pi, llama-server, prompts, or sidecar I/O. PCM retains ADR 0004's stricter
