@@ -1646,9 +1646,10 @@ mod tests {
     static PI_ENV_LOCK: Mutex<()> = Mutex::new(());
 
     fn lock_unpoisoned<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
-        mutex
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
+        match mutex.lock() {
+            Ok(guard) => guard,
+            Err(error) => error.into_inner(),
+        }
     }
 
     // Acquire the shared PI-environment lock without propagating poisoning: if a
@@ -1672,6 +1673,7 @@ mod tests {
             assert!(result.join().is_err());
         });
 
+        assert!(mutex.is_poisoned());
         let value = lock_unpoisoned(&mutex);
         assert_eq!(*value, 42);
     }
