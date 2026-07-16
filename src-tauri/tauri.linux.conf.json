@@ -1,0 +1,9 @@
+{
+  "bundle": {
+    "resources": {
+      "third-party/sherpa-onnx-v1.13.2/linux-x86_64/libsherpa-onnx-c-api.so": "asr-runtime/libsherpa-onnx-c-api.so",
+      "third-party/sherpa-onnx-v1.13.2/linux-x86_64/libonnxruntime.so": "asr-runtime/libonnxruntime.so",
+      "third-party/sherpa-onnx-v1.13.2/notices/": "third-party-notices/asr/"
+    }
+  }
+}

@@ -1,0 +1,4 @@
+[env]
+# sherpa-onnx-sys otherwise downloads a different shared archive. Point its
+# link step at the same pinned, checked-in libraries that Tauri packages.
+SHERPA_ONNX_LIB_DIR = { value = "src-tauri/third-party/sherpa-onnx-v1.13.2/link", relative = true, force = true }
