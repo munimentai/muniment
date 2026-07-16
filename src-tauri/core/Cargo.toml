@@ -14,6 +14,9 @@ edition = "2021"
 [features]
 # rustls (ring provider) via ureq — turned on by the desktop crate.
 tls = ["ureq/tls", "ureq/native-certs", "ureq/proxy-from-env"]
+# The desktop packaging layer opts into this only when it supplies the pinned
+# sherpa-onnx v1.13.2 native library.
+native-sherpa-onnx = []
 
 [dependencies]
 base64 = "0.22"

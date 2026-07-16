@@ -1,17 +1,22 @@
 //! Safe ownership and validation boundary for offline Parakeet recognition.
 //!
-//! The deliberately small [`OfflineAbi`] interface mirrors the part of the
-//! sherpa-onnx v1.13.2 C API used by Muniment. Platform packaging supplies the
-//! concrete adapter; core tests use a deterministic implementation and never
-//! link or download a native runtime.
+//! The native adapter is opt-in so ordinary core builds never link or download
+//! a sherpa-onnx runtime. Tests exercise the same orchestration through a small
+//! ABI seam.
 
+#[cfg(any(test, feature = "native-sherpa-onnx"))]
 use std::path::{Path, PathBuf};
 
-use super::{verify_parakeet_model_set, AsrModelSetVerificationError};
+#[cfg(feature = "native-sherpa-onnx")]
+use super::verify_parakeet_model_set;
+use super::AsrModelSetVerificationError;
 
 pub const SAMPLE_RATE_HZ: u32 = 16_000;
 pub const FEATURE_DIM: i32 = 80;
 pub const NUM_THREADS: i32 = 2;
+
+#[cfg(feature = "native-sherpa-onnx")]
+mod native;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RecognizerError {
@@ -54,7 +59,8 @@ impl From<AsrModelSetVerificationError> for RecognizerError {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct OfflineConfig {
+#[cfg(any(test, feature = "native-sherpa-onnx"))]
+struct OfflineConfig {
     pub encoder: PathBuf,
     pub decoder: PathBuf,
     pub joiner: PathBuf,
@@ -69,7 +75,8 @@ pub(crate) struct OfflineConfig {
 
 /// Opaque identifiers are values owned by an ABI implementation, never native
 /// pointers exposed through the safe recognizer API.
-pub(crate) trait OfflineAbi {
+#[cfg(any(test, feature = "native-sherpa-onnx"))]
+trait OfflineAbi {
     type Recognizer: Copy;
     type Stream: Copy;
     type Result: Copy;
@@ -78,27 +85,42 @@ pub(crate) trait OfflineAbi {
     fn destroy_recognizer(&self, recognizer: Self::Recognizer);
     fn create_stream(&self, recognizer: Self::Recognizer) -> Option<Self::Stream>;
     fn destroy_stream(&self, stream: Self::Stream);
-    fn accept_waveform(&self, stream: Self::Stream, sample_rate: i32, samples: &[f32]);
-    fn decode(&self, recognizer: Self::Recognizer, stream: Self::Stream) -> Result<(), ()>;
-    fn get_result(&self, stream: Self::Stream) -> Option<Self::Result>;
-    fn result_text<'a>(&'a self, result: Self::Result) -> Option<&'a [u8]>;
+    fn accept_waveform(
+        &self,
+        stream: Self::Stream,
+        sample_rate: i32,
+        samples: &[f32],
+        sample_count: i32,
+    );
+    fn decode(&self, recognizer: Self::Recognizer, stream: Self::Stream);
+    fn get_result(
+        &self,
+        recognizer: Self::Recognizer,
+        stream: Self::Stream,
+    ) -> Option<Self::Result>;
+    fn copy_result_text(&self, result: Self::Result) -> Option<Vec<u8>>;
     fn destroy_result(&self, result: Self::Result);
 }
 
 /// Performs one utterance-final decode after validating the complete pinned
 /// model set and the C ABI input contract.
-pub(crate) fn recognize_parakeet(
-    abi: &impl OfflineAbi,
+#[cfg(feature = "native-sherpa-onnx")]
+pub fn recognize_parakeet(
     model_directory: &Path,
     sample_rate_hz: u32,
     samples: &[f32],
 ) -> Result<String, RecognizerError> {
-    recognize_parakeet_verified_by(abi, model_directory, sample_rate_hz, samples, |directory| {
-        verify_parakeet_model_set(directory).map_err(RecognizerError::from)
-    })
+    recognize_parakeet_with_abi(
+        &native::SherpaOnnxAbi,
+        model_directory,
+        sample_rate_hz,
+        samples,
+        |directory| verify_parakeet_model_set(directory).map_err(RecognizerError::from),
+    )
 }
 
-fn recognize_parakeet_verified_by(
+#[cfg(any(test, feature = "native-sherpa-onnx"))]
+fn recognize_parakeet_with_abi(
     abi: &impl OfflineAbi,
     model_directory: &Path,
     sample_rate_hz: u32,
@@ -120,25 +142,25 @@ fn recognize_parakeet_verified_by(
         }
     };
 
-    abi.accept_waveform(stream, SAMPLE_RATE_HZ as i32, samples);
-    if abi.decode(recognizer, stream).is_err() {
-        abi.destroy_stream(stream);
-        abi.destroy_recognizer(recognizer);
-        return Err(RecognizerError::DecodeFailed);
-    }
-    let result = match abi.get_result(stream) {
+    let sample_count =
+        i32::try_from(samples.len()).map_err(|_| RecognizerError::UtteranceTooLong)?;
+    abi.accept_waveform(stream, SAMPLE_RATE_HZ as i32, samples, sample_count);
+    abi.decode(recognizer, stream);
+    // The pinned decode call returns void. Its only observable failure is that
+    // no result snapshot is produced afterward.
+    let result = match abi.get_result(recognizer, stream) {
         Some(result) => result,
         None => {
             abi.destroy_stream(stream);
             abi.destroy_recognizer(recognizer);
-            return Err(RecognizerError::ResultUnavailable);
+            return Err(RecognizerError::DecodeFailed);
         }
     };
     let transcript = abi
-        .result_text(result)
+        .copy_result_text(result)
         .ok_or(RecognizerError::ResultUnavailable)
         .and_then(|text| {
-            std::str::from_utf8(text)
+            std::str::from_utf8(&text)
                 .map(str::to_owned)
                 .map_err(|_| RecognizerError::InvalidTranscript)
         });
@@ -148,6 +170,7 @@ fn recognize_parakeet_verified_by(
     transcript
 }
 
+#[cfg(any(test, feature = "native-sherpa-onnx"))]
 fn validate_input(sample_rate_hz: u32, samples: &[f32]) -> Result<(), RecognizerError> {
     if sample_rate_hz != SAMPLE_RATE_HZ {
         return Err(RecognizerError::InvalidSampleRate);
@@ -162,6 +185,7 @@ fn validate_input(sample_rate_hz: u32, samples: &[f32]) -> Result<(), Recognizer
     Ok(())
 }
 
+#[cfg(any(test, feature = "native-sherpa-onnx"))]
 fn validate_sample_count(sample_count: usize) -> Result<(), RecognizerError> {
     if sample_count > i32::MAX as usize {
         return Err(RecognizerError::UtteranceTooLong);
@@ -169,6 +193,7 @@ fn validate_sample_count(sample_count: usize) -> Result<(), RecognizerError> {
     Ok(())
 }
 
+#[cfg(any(test, feature = "native-sherpa-onnx"))]
 fn make_config(directory: &Path) -> Result<OfflineConfig, RecognizerError> {
     let paths = [
         directory.join("encoder.int8.onnx"),
@@ -247,33 +272,30 @@ mod tests {
         fn destroy_stream(&self, _: u8) {
             self.events.borrow_mut().push("destroy stream")
         }
-        fn accept_waveform(&self, _: u8, rate: i32, samples: &[f32]) {
+        fn accept_waveform(&self, _: u8, rate: i32, samples: &[f32], sample_count: i32) {
             assert_eq!(rate, 16_000);
+            assert_eq!(sample_count, samples.len() as i32);
             self.events.borrow_mut().push("accept");
             self.samples.borrow_mut().extend_from_slice(samples)
         }
-        fn decode(&self, _: u8, _: u8) -> Result<(), ()> {
+        fn decode(&self, _: u8, _: u8) {
             self.events.borrow_mut().push("decode");
-            if matches!(self.failure, Failure::Decode) {
-                Err(())
-            } else {
-                Ok(())
-            }
         }
-        fn get_result(&self, _: u8) -> Option<u8> {
+        fn get_result(&self, recognizer: u8, stream: u8) -> Option<u8> {
+            assert_eq!((recognizer, stream), (1, 2));
             self.events.borrow_mut().push("get result");
-            (!matches!(self.failure, Failure::Result)).then_some(3)
+            (!matches!(self.failure, Failure::Decode | Failure::Result)).then_some(3)
         }
-        fn result_text(&self, _: u8) -> Option<&[u8]> {
+        fn copy_result_text(&self, _: u8) -> Option<Vec<u8>> {
             self.events.borrow_mut().push("copy text");
-            (!matches!(self.failure, Failure::Text)).then_some(&self.text)
+            (!matches!(self.failure, Failure::Text)).then_some(self.text.clone())
         }
         fn destroy_result(&self, _: u8) {
             self.events.borrow_mut().push("destroy result")
         }
     }
     fn run(fake: &Fake, samples: &[f32]) -> Result<String, RecognizerError> {
-        recognize_parakeet_verified_by(fake, Path::new("models"), 16_000, samples, |_| Ok(()))
+        recognize_parakeet_with_abi(fake, Path::new("models"), 16_000, samples, |_| Ok(()))
     }
 
     #[test]
@@ -324,10 +346,8 @@ mod tests {
         ] {
             let fake = Fake::new(Failure::None);
             assert_eq!(
-                recognize_parakeet_verified_by(&fake, Path::new("models"), rate, &samples, |_| Ok(
-                    ()
-                ))
-                .unwrap_err(),
+                recognize_parakeet_with_abi(&fake, Path::new("models"), rate, &samples, |_| Ok(()))
+                    .unwrap_err(),
                 expected
             );
             assert!(fake.events.borrow().is_empty());
@@ -340,7 +360,7 @@ mod tests {
     #[test]
     fn verification_never_calls_abi() {
         let fake = Fake::new(Failure::None);
-        let error = recognize_parakeet_verified_by(&fake, Path::new("models"), 16_000, &[], |_| {
+        let error = recognize_parakeet_with_abi(&fake, Path::new("models"), 16_000, &[], |_| {
             Err(RecognizerError::ModelSet(
                 AsrModelSetVerificationError::Missing,
             ))
@@ -364,6 +384,7 @@ mod tests {
                     "create stream",
                     "accept",
                     "decode",
+                    "get result",
                     "destroy stream",
                     "destroy recognizer",
                 ],
