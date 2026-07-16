@@ -688,6 +688,7 @@ mod tests {
         identity: "parakeet-fixture-v1",
         revision: "test-revision",
         artifacts: &TEST_ASR_ARTIFACTS,
+        additional_artifact: None,
     };
     static TEST_ASR_MANIFESTS: [&AsrArtifactManifest; 1] = [&TEST_ASR_MANIFEST];
 
