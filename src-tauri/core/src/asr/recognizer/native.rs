@@ -179,10 +179,7 @@ extern "C" {
         n: i32,
     );
     fn SherpaOnnxDecodeOfflineStream(recognizer: *const Recognizer, stream: *const Stream);
-    fn SherpaOnnxGetOfflineStreamResult(
-        recognizer: *const Recognizer,
-        stream: *const Stream,
-    ) -> *const ResultSnapshot;
+    fn SherpaOnnxGetOfflineStreamResult(stream: *const Stream) -> *const ResultSnapshot;
     fn SherpaOnnxDestroyOfflineRecognizerResult(result: *const ResultSnapshot);
 }
 
@@ -243,12 +240,8 @@ impl OfflineAbi for SherpaOnnxAbi {
     fn decode(&self, recognizer: Self::Recognizer, stream: Self::Stream) {
         unsafe { SherpaOnnxDecodeOfflineStream(recognizer, stream) }
     }
-    fn get_result(
-        &self,
-        recognizer: Self::Recognizer,
-        stream: Self::Stream,
-    ) -> Option<Self::Result> {
-        let result = unsafe { SherpaOnnxGetOfflineStreamResult(recognizer, stream) };
+    fn get_result(&self, stream: Self::Stream) -> Option<Self::Result> {
+        let result = unsafe { SherpaOnnxGetOfflineStreamResult(stream) };
         (!result.is_null()).then_some(result)
     }
     fn copy_result_text(&self, result: Self::Result) -> Option<Vec<u8>> {

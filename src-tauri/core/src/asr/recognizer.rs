@@ -93,11 +93,7 @@ trait OfflineAbi {
         sample_count: i32,
     );
     fn decode(&self, recognizer: Self::Recognizer, stream: Self::Stream);
-    fn get_result(
-        &self,
-        recognizer: Self::Recognizer,
-        stream: Self::Stream,
-    ) -> Option<Self::Result>;
+    fn get_result(&self, stream: Self::Stream) -> Option<Self::Result>;
     fn copy_result_text(&self, result: Self::Result) -> Option<Vec<u8>>;
     fn destroy_result(&self, result: Self::Result);
 }
@@ -148,7 +144,7 @@ fn recognize_parakeet_with_abi(
     abi.decode(recognizer, stream);
     // The pinned decode call returns void. Its only observable failure is that
     // no result snapshot is produced afterward.
-    let result = match abi.get_result(recognizer, stream) {
+    let result = match abi.get_result(stream) {
         Some(result) => result,
         None => {
             abi.destroy_stream(stream);
@@ -281,8 +277,8 @@ mod tests {
         fn decode(&self, _: u8, _: u8) {
             self.events.borrow_mut().push("decode");
         }
-        fn get_result(&self, recognizer: u8, stream: u8) -> Option<u8> {
-            assert_eq!((recognizer, stream), (1, 2));
+        fn get_result(&self, stream: u8) -> Option<u8> {
+            assert_eq!(stream, 2);
             self.events.borrow_mut().push("get result");
             (!matches!(self.failure, Failure::Decode | Failure::Result)).then_some(3)
         }
