@@ -1,0 +1,10 @@
+{
+  "bundle": {
+    "resources": {
+      "third-party/sherpa-onnx-v1.13.2/windows-x86_64/sherpa-onnx-c-api.dll": "sherpa-onnx-c-api.dll",
+      "third-party/sherpa-onnx-v1.13.2/windows-x86_64/onnxruntime.dll": "onnxruntime.dll",
+      "third-party/sherpa-onnx-v1.13.2/windows-x86_64/onnxruntime_providers_shared.dll": "onnxruntime_providers_shared.dll",
+      "third-party/sherpa-onnx-v1.13.2/notices/": "third-party-notices/asr/"
+    }
+  }
+}
