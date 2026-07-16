@@ -1,17 +1,21 @@
 #![cfg(target_os = "linux")]
 
 use muniment_core::attach::linux::{
-    run_authenticated_session_with, AttachSessionError, PeerCredentials,
+    run_authenticated_session_with, run_authenticated_session_with_authorization, ApprovalDecision,
+    AttachSessionError, PeerCredentials,
 };
 use muniment_core::attach::{
-    decode_frame, encode_frame, ErrorAction, ErrorCode, ErrorEnvelope, Hello, Protocol,
-    VersionRange, Welcome, MAX_FRAME_LENGTH, MAX_JSON_DEPTH,
+    decode_frame, encode_frame, Approval, AuthorizationClock, AuthorizationTokenGenerator,
+    Authorized, ErrorAction, ErrorCode, ErrorEnvelope, Hello, Protocol, VersionRange, Welcome,
+    CHALLENGE_LIFETIME, MAX_FRAME_LENGTH, MAX_JSON_DEPTH,
 };
 use serde_json::json;
 use std::cell::Cell;
+use std::collections::BTreeSet;
 use std::io::{Read, Write};
 use std::net::Shutdown;
 use std::os::unix::net::UnixStream;
+use std::rc::Rc;
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -45,6 +49,99 @@ fn read_frame<T: serde::de::DeserializeOwned>(stream: &mut UnixStream) -> T {
     decode_frame(&bytes).unwrap().unwrap().0
 }
 
+#[derive(Clone)]
+struct TestClock(Rc<Cell<Duration>>);
+impl AuthorizationClock for TestClock {
+    fn now(&self) -> Duration {
+        self.0.get()
+    }
+}
+struct TestTokens(u8);
+impl AuthorizationTokenGenerator for TestTokens {
+    fn fill(&mut self, bytes: &mut [u8]) {
+        bytes.fill(self.0);
+        self.0 += 1;
+    }
+}
+fn approval() -> Approval {
+    Approval {
+        profile: "profile-1".into(),
+        workspace: "workspace-1".into(),
+        scopes: BTreeSet::from(["thread.read".into()]),
+        lifetime: Duration::from_secs(3600),
+    }
+}
+
+#[test]
+fn approval_writes_one_authorized_grant_then_closes() {
+    let (mut client, server) = UnixStream::pair().unwrap();
+    client.write_all(&hello(1, 1)).unwrap();
+    let clock = TestClock(Rc::new(Cell::new(Duration::ZERO)));
+    assert_eq!(
+        run_authenticated_session_with_authorization(
+            server,
+            credentials(),
+            "0.1.0",
+            Duration::from_secs(1),
+            |b| {
+                b.fill(9);
+                Ok(())
+            },
+            clock,
+            TestTokens(1),
+            |_| ApprovalDecision::Approve(approval())
+        ),
+        Ok(())
+    );
+    let welcome: Welcome = read_frame(&mut client);
+    assert_eq!(welcome.approval_challenge, "01".repeat(16));
+    let authorized: Authorized = read_frame(&mut client);
+    assert_eq!(authorized.capability, "02".repeat(32));
+    assert_eq!(authorized.expires_at, 3600);
+    assert_eq!(authorized.idle_timeout_seconds, 900);
+    assert_eq!(client.read(&mut [0]).unwrap(), 0);
+}
+
+#[test]
+fn denial_and_expired_challenge_close_without_authorized() {
+    for expired in [false, true] {
+        let (mut client, server) = UnixStream::pair().unwrap();
+        client.write_all(&hello(1, 1)).unwrap();
+        let now = Rc::new(Cell::new(Duration::ZERO));
+        let decision_clock = now.clone();
+        let result = run_authenticated_session_with_authorization(
+            server,
+            credentials(),
+            "0.1.0",
+            Duration::from_secs(1),
+            |b| {
+                b.fill(9);
+                Ok(())
+            },
+            TestClock(now),
+            TestTokens(1),
+            move |_| {
+                if expired {
+                    decision_clock.set(CHALLENGE_LIFETIME + Duration::from_nanos(1));
+                    ApprovalDecision::Approve(approval())
+                } else {
+                    ApprovalDecision::Deny
+                }
+            },
+        );
+        assert_eq!(
+            result,
+            if expired {
+                Err(AttachSessionError::Timeout)
+            } else {
+                Ok(())
+            }
+        );
+        let _: Welcome = read_frame(&mut client);
+        assert_eq!(client.read(&mut [0]).unwrap(), 0);
+    }
+}
+
 #[test]
 fn fragmented_hello_receives_deterministic_welcome_then_closes() {
     let (mut client, server) = UnixStream::pair().unwrap();
@@ -70,10 +167,7 @@ fn fragmented_hello_receives_deterministic_welcome_then_closes() {
     assert_eq!(welcome.selected, 1);
     assert_eq!(welcome.desktop_version, "0.1.0");
     assert_eq!(welcome.server_nonce, "000102030405060708090a0b0c0d0e0f");
-    assert_eq!(
-        welcome.approval_challenge,
-        "101112131415161718191a1b1c1d1e1f"
-    );
+    assert_eq!(welcome.approval_challenge.len(), 32);
     assert_eq!(client.read(&mut [0]).unwrap(), 0);
     assert_eq!(task.join().unwrap(), Ok(()));
 }

@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{de, Deserialize, Deserializer, Serialize};
 
@@ -79,6 +79,19 @@ pub struct Welcome {
     pub approval_challenge: String,
 }
 
+/// The connection-bound grant emitted after desktop approval.
+///
+/// `expires_at` is the number of whole seconds remaining when this message is
+/// emitted, rather than an absolute or monotonic timestamp. Monotonic clock
+/// values are deliberately local to the authorization policy.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Authorized {
+    pub capability: String,
+    pub expires_at: u64,
+    pub idle_timeout_seconds: u64,
+    pub workspace_scopes: BTreeMap<String, BTreeSet<String>>,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum FirstMessage {
@@ -136,5 +149,19 @@ pub fn welcome(
         server_nonce: server_nonce.into(),
         authorization: Authorization::PairingRequired,
         approval_challenge: approval_challenge.into(),
+    }
+}
+
+pub fn authorized(
+    capability: impl Into<String>,
+    expires_at: u64,
+    idle_timeout_seconds: u64,
+    workspace_scopes: BTreeMap<String, BTreeSet<String>>,
+) -> Authorized {
+    Authorized {
+        capability: capability.into(),
+        expires_at,
+        idle_timeout_seconds,
+        workspace_scopes,
     }
 }

@@ -178,6 +178,31 @@ fn hello_welcome_and_version_overlap() {
 }
 
 #[test]
+fn authorized_round_trips_and_ignores_future_optional_fields() {
+    let message = authorized(
+        "connection-capability",
+        3600,
+        900,
+        [(
+            "workspace-1".into(),
+            ["thread.read".into()].into_iter().collect(),
+        )]
+        .into_iter()
+        .collect(),
+    );
+    let encoded = encode_frame(&message).unwrap();
+    let decoded = decode_frame::<Authorized>(&encoded).unwrap().unwrap().0;
+    assert_eq!(decoded, message);
+
+    let mut value = serde_json::to_value(&message).unwrap();
+    value["future_optional"] = json!(true);
+    assert_eq!(
+        serde_json::from_value::<Authorized>(value).unwrap(),
+        message
+    );
+}
+
+#[test]
 fn hello_first_rejects_operation_shapes_but_allows_future_optional_fields() {
     let hybrid = json!({
         "protocol": PROTOCOL,
