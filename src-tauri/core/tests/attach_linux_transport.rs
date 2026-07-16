@@ -75,6 +75,43 @@ fn refuses_a_live_listener_and_recovers_a_stale_socket() {
 }
 
 #[test]
+fn stale_recovery_preserves_a_colliding_quarantine_entry() {
+    let runtime = TestDirectory::new();
+    let filesystem = AttachFilesystem::from_runtime_directory(&runtime.0).unwrap();
+    let stale = UnixListener::bind(filesystem.endpoint_path()).unwrap();
+    drop(stale);
+    let attach_directory = filesystem.endpoint_path().parent().unwrap().to_owned();
+    let mut candidate_count = 0;
+
+    let recovered = AttachTransport::bind_with_quarantine_candidate_hook(
+        &filesystem,
+        || {},
+        || {},
+        || {},
+        |candidate| {
+            candidate_count += 1;
+            if candidate_count == 1 {
+                fs::write(attach_directory.join(candidate), b"unrelated").unwrap();
+            }
+        },
+    )
+    .unwrap();
+
+    assert!(candidate_count >= 2);
+    let unrelated: Vec<_> = fs::read_dir(&attach_directory)
+        .unwrap()
+        .filter_map(|entry| {
+            let path = entry.unwrap().path();
+            (fs::read(&path).ok().as_deref() == Some(b"unrelated")).then_some(path)
+        })
+        .collect();
+    assert_eq!(unrelated.len(), 1);
+    drop(recovered);
+    assert_eq!(fs::read(&unrelated[0]).unwrap(), b"unrelated");
+    assert!(!filesystem.endpoint_path().exists());
+}
+
+#[test]
 fn refuses_unsafe_entries_and_preserves_replacements_on_drop() {
     let runtime = TestDirectory::new();
     let filesystem = AttachFilesystem::from_runtime_directory(&runtime.0).unwrap();

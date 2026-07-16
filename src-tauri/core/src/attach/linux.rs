@@ -10,13 +10,11 @@ use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
 
 const ATTACH_DIRECTORY: &[u8] = b"muniment\0";
 const ENDPOINT_NAME: &str = "attach-v1.sock";
 const PRIVATE_MODE: libc::mode_t = 0o700;
 const SOCKET_MODE: libc::mode_t = 0o600;
-static NEXT_QUARANTINE: AtomicU64 = AtomicU64::new(0);
 
 /// A verified, pinned filesystem boundary for the Linux attach endpoint.
 #[derive(Debug)]
@@ -132,7 +130,7 @@ pub struct AttachTransport<'a> {
 impl<'a> AttachTransport<'a> {
     /// Publishes a blocking stream listener. No accept thread is started.
     pub fn bind(filesystem: &'a AttachFilesystem) -> Result<Self, AttachTransportError> {
-        Self::bind_with_race_hooks(filesystem, || {}, || {}, || {})
+        Self::bind_with_quarantine_candidate_hook(filesystem, || {}, || {}, || {}, |_| {})
     }
 
     /// Binds while invoking deterministic race hooks used by contract tests.
@@ -142,7 +140,13 @@ impl<'a> AttachTransport<'a> {
         after_bind: impl FnOnce(),
         before_stale_remove: impl FnOnce(),
     ) -> Result<Self, AttachTransportError> {
-        Self::bind_with_race_hooks(filesystem, after_bind, before_stale_remove, || {})
+        Self::bind_with_quarantine_candidate_hook(
+            filesystem,
+            after_bind,
+            before_stale_remove,
+            || {},
+            |_| {},
+        )
     }
 
     /// Binds with an additional hook after a stale entry has been quarantined.
@@ -153,8 +157,32 @@ impl<'a> AttachTransport<'a> {
         before_stale_remove: impl FnOnce(),
         after_stale_quarantine: impl FnOnce(),
     ) -> Result<Self, AttachTransportError> {
+        Self::bind_with_quarantine_candidate_hook(
+            filesystem,
+            after_bind,
+            before_stale_remove,
+            after_stale_quarantine,
+            |_| {},
+        )
+    }
+
+    /// Binds with a hook before each quarantine move attempt.
+    #[doc(hidden)]
+    pub fn bind_with_quarantine_candidate_hook(
+        filesystem: &'a AttachFilesystem,
+        after_bind: impl FnOnce(),
+        before_stale_remove: impl FnOnce(),
+        after_stale_quarantine: impl FnOnce(),
+        quarantine_candidate: impl FnMut(&str),
+    ) -> Result<Self, AttachTransportError> {
         let uid = unsafe { libc::geteuid() };
-        recover_stale_endpoint(filesystem, uid, before_stale_remove, after_stale_quarantine)?;
+        recover_stale_endpoint(
+            filesystem,
+            uid,
+            before_stale_remove,
+            after_stale_quarantine,
+            quarantine_candidate,
+        )?;
 
         let bind_path = pinned_endpoint_path(filesystem);
         let listener = UnixListener::bind(&bind_path).map_err(|_| AttachTransportError::Bind)?;
@@ -348,6 +376,7 @@ fn recover_stale_endpoint(
     uid: libc::uid_t,
     before_remove: impl FnOnce(),
     after_quarantine: impl FnOnce(),
+    quarantine_candidate: impl FnMut(&str),
 ) -> Result<(), AttachTransportError> {
     let pinned = match open_endpoint(filesystem) {
         Ok(endpoint) => endpoint,
@@ -381,6 +410,7 @@ fn recover_stale_endpoint(
         pinned,
         before_remove,
         after_quarantine,
+        quarantine_candidate,
     )
     .map_err(|_| AttachTransportError::ExistingEndpointRemove)
 }
@@ -489,6 +519,7 @@ fn remove_exact_endpoint_with_hooks(
         pinned,
         before_remove,
         after_quarantine,
+        |_| {},
     )
 }
 
@@ -498,6 +529,7 @@ fn remove_pinned_endpoint_with_hooks(
     pinned: OwnedFd,
     before_remove: impl FnOnce(),
     after_quarantine: impl FnOnce(),
+    mut quarantine_candidate: impl FnMut(&str),
 ) -> io::Result<()> {
     let directory = filesystem.attach_directory.as_raw_fd();
     let from = CString::new(ENDPOINT_NAME).unwrap();
@@ -513,12 +545,27 @@ fn remove_pinned_endpoint_with_hooks(
     }
 
     before_remove();
-    let sequence = NEXT_QUARANTINE.fetch_add(1, Ordering::Relaxed);
-    let quarantine = format!(".attach-v1.sock.{}.{}", std::process::id(), sequence);
-    let to = CString::new(quarantine.clone()).unwrap();
-    if unsafe { libc::renameat(directory, from.as_ptr(), directory, to.as_ptr()) } != 0 {
-        return Err(io::Error::last_os_error());
-    }
+    let (quarantine, to) = loop {
+        let quarantine = quarantine_name()?;
+        quarantine_candidate(&quarantine);
+        let to = CString::new(quarantine.clone()).unwrap();
+        if unsafe {
+            libc::renameat2(
+                directory,
+                from.as_ptr(),
+                directory,
+                to.as_ptr(),
+                libc::RENAME_NOREPLACE,
+            )
+        } == 0
+        {
+            break (quarantine, to);
+        }
+        let error = io::Error::last_os_error();
+        if error.raw_os_error() != Some(libc::EEXIST) {
+            return Err(error);
+        }
+    };
     after_quarantine();
     let metadata = std::fs::symlink_metadata(PathBuf::from(format!(
         "/proc/self/fd/{directory}/{quarantine}"
@@ -538,6 +585,30 @@ fn remove_pinned_endpoint_with_hooks(
     }
     restore_quarantined_entry(directory, &to, &from)?;
     Err(io::Error::other("endpoint identity changed"))
+}
+
+fn quarantine_name() -> io::Result<String> {
+    let mut random = [0_u8; 16];
+    let mut filled = 0;
+    while filled < random.len() {
+        let result = unsafe {
+            libc::getrandom(
+                random[filled..].as_mut_ptr().cast(),
+                random.len() - filled,
+                0,
+            )
+        };
+        if result > 0 {
+            filled += result as usize;
+            continue;
+        }
+        let error = io::Error::last_os_error();
+        if error.kind() != io::ErrorKind::Interrupted {
+            return Err(error);
+        }
+    }
+    let token = u128::from_ne_bytes(random);
+    Ok(format!(".attach-v1.sock.{token:032x}"))
 }
 
 fn restore_quarantined_entry(
