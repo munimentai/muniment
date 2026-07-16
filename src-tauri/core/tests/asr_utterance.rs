@@ -96,6 +96,33 @@ fn rejects_short_noise_and_flushes_only_qualified_speech() {
 }
 
 #[test]
+fn rejected_speech_is_not_reused_when_pre_roll_exceeds_trailing_silence() {
+    let mut segmenter = UtteranceSegmenter::new(UtteranceConfig {
+        pre_roll_samples: 4,
+        min_speech_samples: 3,
+        trailing_silence_samples: 2,
+        max_utterance_samples: 9,
+        max_buffered_samples: 9,
+    })
+    .unwrap();
+    segmenter
+        .push_frame(&[0.1, 0.2], VoiceActivity::Speech)
+        .unwrap();
+    assert!(segmenter
+        .push_frame(&[0.3, 0.4], VoiceActivity::NonSpeech)
+        .unwrap()
+        .is_empty());
+    segmenter
+        .push_frame(&[0.5, 0.6, 0.7], VoiceActivity::Speech)
+        .unwrap();
+
+    assert_eq!(
+        segmenter.flush().unwrap().samples,
+        vec![0.3, 0.4, 0.5, 0.6, 0.7]
+    );
+}
+
+#[test]
 fn maximum_splits_continuous_speech_without_loss_or_duplication() {
     let mut segmenter = UtteranceSegmenter::new(config()).unwrap();
     let input: Vec<_> = (1..=19).map(|n| n as f32 / 20.0).collect();

@@ -160,10 +160,8 @@ impl UtteranceSegmenter {
                 samples: std::mem::take(&mut self.active),
             });
         } else if preserve_discarded_tail {
-            let keep_from = self
-                .active
-                .len()
-                .saturating_sub(self.config.pre_roll_samples);
+            let keep = self.trailing_samples.min(self.config.pre_roll_samples);
+            let keep_from = self.active.len().saturating_sub(keep);
             let tail: Vec<_> = self.active.drain(keep_from..).collect();
             self.pre_roll.extend(tail);
             self.active.clear();
