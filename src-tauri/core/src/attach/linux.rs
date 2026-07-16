@@ -417,6 +417,8 @@ pub fn run_authenticated_session_with<R>(
 where
     R: FnMut(&mut [u8]) -> Result<(), ()>,
 {
+    let mut unavailable =
+        |_: &str, _: ThreadListRequest| Err(ProtocolError::unsupported_operation());
     run_authenticated_session_with_authorization(
         stream,
         credentials,
@@ -428,6 +430,7 @@ where
             tokens: SessionTokens,
             approvals: |_: &super::PairingChallenge, _: Duration| Some(ApprovalDecision::Deny),
         },
+        &mut unavailable,
     )
 }
 
@@ -448,32 +451,7 @@ impl AuthorizationTokenGenerator for SessionTokens {
 
 /// Negotiates and waits for a deterministic desktop approval decision.
 #[doc(hidden)]
-pub fn run_authenticated_session_with_authorization<R, C, G, W>(
-    stream: UnixStream,
-    credentials: PeerCredentials,
-    desktop_version: &str,
-    timeout: Duration,
-    dependencies: AuthorizationSessionDependencies<R, C, G, W>,
-) -> Result<(), AttachSessionError>
-where
-    R: FnMut(&mut [u8]) -> Result<(), ()>,
-    C: AuthorizationClock + Clone,
-    G: AuthorizationTokenGenerator,
-    W: ApprovalWaiter,
-{
-    run_session(
-        stream,
-        credentials,
-        desktop_version,
-        timeout,
-        dependencies,
-        None::<&mut fn(&str, ThreadListRequest) -> Result<ThreadListPage, ProtocolError>>,
-    )
-}
-
-/// Testable authorized session that stays open and dispatches `thread.list`.
-#[doc(hidden)]
-pub fn run_authenticated_session_with_dispatch<R, C, G, W, S>(
+pub fn run_authenticated_session_with_authorization<R, C, G, W, S>(
     stream: UnixStream,
     credentials: PeerCredentials,
     desktop_version: &str,
@@ -494,7 +472,7 @@ where
         desktop_version,
         timeout,
         dependencies,
-        Some(service),
+        service,
     )
 }
 
@@ -504,7 +482,7 @@ fn run_session<R, C, G, W, S>(
     desktop_version: &str,
     timeout: Duration,
     dependencies: AuthorizationSessionDependencies<R, C, G, W>,
-    mut service: Option<&mut S>,
+    service: &mut S,
 ) -> Result<(), AttachSessionError>
 where
     R: FnMut(&mut [u8]) -> Result<(), ()>,
@@ -624,17 +602,15 @@ where
             &encode_frame(&response).map_err(|_| AttachSessionError::MalformedFrame)?,
             authorization_deadline,
         )?;
-        if let Some(service) = service.as_mut() {
-            serve_requests(
-                &mut stream,
-                timeout,
-                &binding,
-                &grant.profile,
-                &grant.workspace,
-                &mut authorization,
-                *service,
-            )?;
-        }
+        serve_requests(
+            &mut stream,
+            timeout,
+            &binding,
+            &grant.profile,
+            &grant.workspace,
+            &mut authorization,
+            service,
+        )?;
         Ok(())
     })();
     let _ = stream.shutdown(std::net::Shutdown::Both);
@@ -685,16 +661,38 @@ where
     S: ThreadListService,
 {
     loop {
+        // Give an already-buffered request a chance to supply its correlation ID even when
+        // the grant has just expired. Validation below still prevents stale dispatch.
+        let (authorization_expired, idle_remaining) = match authorization.remaining_lifetime() {
+            Ok(remaining) => (false, remaining.max(Duration::from_millis(1))),
+            Err(_) => (true, Duration::from_millis(1)),
+        };
+        let idle_deadline = Instant::now()
+            .checked_add(idle_remaining)
+            .ok_or(AttachSessionError::Timeout)?;
+        let mut prefix = [0; 4];
+        match read_before(stream, &mut prefix, idle_deadline) {
+            Ok(()) => {}
+            Err(AttachSessionError::Closed) => return Ok(()),
+            Err(AttachSessionError::Timeout) => {
+                let deadline = Instant::now() + timeout;
+                write_protocol_error(stream, ProtocolError::unauthorized(), deadline);
+                return Err(AttachSessionError::Authorization);
+            }
+            Err(error) => return Err(error),
+        }
         let deadline = Instant::now()
             .checked_add(timeout)
-            .ok_or(AttachSessionError::Timeout)?;
-        let frame = match read_one_frame(stream, deadline) {
+            .ok_or(AttachSessionError::Timeout)?
+            .min(idle_deadline);
+        let frame = match read_frame_after_prefix(stream, prefix, deadline) {
             Ok(frame) => frame,
-            Err(AttachSessionError::Closed) => return Ok(()),
             Err(error @ AttachSessionError::PayloadTooLarge) => {
                 write_protocol_error(stream, ProtocolError::payload_too_large(), deadline);
                 return Err(error);
             }
+            Err(error @ AttachSessionError::Timeout) => return Err(error),
+            Err(error @ AttachSessionError::Closed) => return Err(error),
             Err(error) => {
                 write_protocol_error(stream, ProtocolError::malformed_frame(), deadline);
                 return Err(error);
@@ -707,13 +705,23 @@ where
                 return Err(AttachSessionError::MalformedFrame);
             }
         };
+        if authorization_expired {
+            write_request_error(
+                stream,
+                Some(request.request_id),
+                ProtocolError::unauthorized(),
+                deadline,
+            );
+            return Err(AttachSessionError::Authorization);
+        }
+        let required_scope = (request.operation == Operation::ThreadList).then_some("thread.read");
         if authorization
-            .validate_request(
+            .validate_request_with_scope(
                 &request.capability,
                 binding,
                 profile,
                 workspace,
-                "thread.read",
+                required_scope,
             )
             .is_err()
         {
@@ -796,12 +804,11 @@ fn dispatch_request<S: ThreadListService>(
     serde_json::to_value(page).map_err(|_| ProtocolError::persistence_failed())
 }
 
-fn read_one_frame(
+fn read_frame_after_prefix(
     stream: &mut UnixStream,
+    prefix: [u8; 4],
     deadline: Instant,
 ) -> Result<Vec<u8>, AttachSessionError> {
-    let mut prefix = [0; 4];
-    read_before(stream, &mut prefix, deadline)?;
     let length = u32::from_be_bytes(prefix) as usize;
     if length > MAX_FRAME_LENGTH {
         return Err(AttachSessionError::PayloadTooLarge);
