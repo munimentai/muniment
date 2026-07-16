@@ -8,7 +8,7 @@ mod recognizer;
 pub mod utterance;
 mod vad;
 
-pub use pipeline::{DictationPipeline, DictationPipelineError};
+pub use pipeline::{DictationPipeline, DictationPipelineError, DictationPipelinePushError};
 pub use recognizer::{OfflineParakeetRecognizer, OfflineRecognitionError};
 pub use vad::{
     SileroVoiceActivityDetector, VadDecisionSource, VadError, VAD_FRAME_SIZE, VAD_SAMPLE_RATE,

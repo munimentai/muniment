@@ -2,7 +2,8 @@
 
 use super::{
     utterance::{
-        Utterance, UtteranceConfig, UtteranceConfigError, UtteranceInputError, UtteranceSegmenter,
+        validate_samples, Utterance, UtteranceConfig, UtteranceConfigError, UtteranceInputError,
+        UtteranceSegmenter,
     },
     VadDecisionSource, VadError, VAD_FRAME_SIZE,
 };
@@ -36,6 +37,25 @@ impl From<UtteranceInputError> for DictationPipelineError {
     }
 }
 
+/// A failed push together with every utterance completed before the failure.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DictationPipelinePushError {
+    pub error: DictationPipelineError,
+    pub emitted: Vec<Utterance>,
+}
+
+impl std::fmt::Display for DictationPipelinePushError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.error.fmt(f)
+    }
+}
+
+impl std::error::Error for DictationPipelinePushError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(&self.error)
+    }
+}
+
 /// Pure-core streaming pipeline for normalized mono 16 kHz PCM.
 pub struct DictationPipeline<D> {
     decider: D,
@@ -52,8 +72,18 @@ impl<D: VadDecisionSource> DictationPipeline<D> {
         })
     }
 
-    /// Consumes an arbitrary-length sequential PCM slice and returns completed utterances.
-    pub fn push(&mut self, mut samples: &[f32]) -> Result<Vec<Utterance>, DictationPipelineError> {
+    /// Consumes arbitrary-length sequential PCM and returns completed utterances.
+    /// On failure, the error carries any utterances completed by earlier frames in this push.
+    pub fn push(
+        &mut self,
+        mut samples: &[f32],
+    ) -> Result<Vec<Utterance>, DictationPipelinePushError> {
+        // Validate the complete caller-owned push before advancing any streaming state.
+        validate_samples(samples).map_err(|error| DictationPipelinePushError {
+            error: error.into(),
+            emitted: Vec::new(),
+        })?;
+
         let mut emitted = Vec::new();
         while !samples.is_empty() {
             let take = (VAD_FRAME_SIZE - self.partial_frame.len()).min(samples.len());
@@ -71,7 +101,10 @@ impl<D: VadDecisionSource> DictationPipeline<D> {
                             .map_err(DictationPipelineError::from)
                     });
                 self.partial_frame.clear();
-                emitted.extend(result?);
+                match result {
+                    Ok(utterances) => emitted.extend(utterances),
+                    Err(error) => return Err(DictationPipelinePushError { error, emitted }),
+                }
             }
         }
         Ok(emitted)

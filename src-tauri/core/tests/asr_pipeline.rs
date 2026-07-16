@@ -4,7 +4,8 @@ use muniment_core::asr::{
     utterance::{
         Utterance, UtteranceConfig, UtteranceConfigError, UtteranceInputError, VoiceActivity,
     },
-    DictationPipeline, DictationPipelineError, VadDecisionSource, VadError, VAD_FRAME_SIZE,
+    DictationPipeline, DictationPipelineError, DictationPipelinePushError, VadDecisionSource,
+    VadError, VAD_FRAME_SIZE,
 };
 
 struct FakeDecider {
@@ -140,9 +141,10 @@ fn input_and_decision_failures_remain_typed_and_do_not_wedge_reframing() {
     invalid[0] = f32::NAN;
     assert_eq!(
         pipeline.push(&invalid),
-        Err(DictationPipelineError::InvalidPcm(
-            UtteranceInputError::NonFiniteSample
-        ))
+        Err(DictationPipelinePushError {
+            error: DictationPipelineError::InvalidPcm(UtteranceInputError::NonFiniteSample),
+            emitted: Vec::new(),
+        })
     );
     assert_eq!(pipeline.buffered_samples(), 0);
 
@@ -156,9 +158,69 @@ fn input_and_decision_failures_remain_typed_and_do_not_wedge_reframing() {
     let mut pipeline = DictationPipeline::new(FailingDecider, config()).unwrap();
     assert_eq!(
         pipeline.push(&vec![0.0; VAD_FRAME_SIZE]),
-        Err(DictationPipelineError::Vad(
-            VadError::NativeDetectorUnavailable
-        ))
+        Err(DictationPipelinePushError {
+            error: DictationPipelineError::Vad(VadError::NativeDetectorUnavailable),
+            emitted: Vec::new(),
+        })
+    );
+    assert_eq!(pipeline.buffered_samples(), 0);
+}
+
+#[test]
+fn invalid_pcm_is_rejected_before_an_earlier_frame_can_be_consumed() {
+    let mut pipeline = pipeline(Rc::new(Cell::new(0)));
+    let mut input = vec![0.5; VAD_FRAME_SIZE * 3];
+    input.push(f32::NAN);
+
+    let error = pipeline.push(&input).unwrap_err();
+    assert_eq!(
+        error,
+        DictationPipelinePushError {
+            error: DictationPipelineError::InvalidPcm(UtteranceInputError::NonFiniteSample),
+            emitted: Vec::new(),
+        }
+    );
+    assert_eq!(pipeline.buffered_samples(), 0);
+
+    input.pop();
+    assert!(pipeline.push(&input).unwrap().is_empty());
+    assert_eq!(
+        pipeline.flush().unwrap().samples,
+        vec![0.5; VAD_FRAME_SIZE * 3]
+    );
+}
+
+#[test]
+fn utterances_emitted_before_a_later_decider_failure_are_returned_with_the_error() {
+    struct LaterFailingDecider {
+        calls: usize,
+    }
+    impl VadDecisionSource for LaterFailingDecider {
+        fn detect(&mut self, samples: &[f32]) -> Result<VoiceActivity, VadError> {
+            self.calls += 1;
+            if self.calls == 4 {
+                Err(VadError::NativeDetectorUnavailable)
+            } else if samples[0] > 0.25 {
+                Ok(VoiceActivity::Speech)
+            } else {
+                Ok(VoiceActivity::NonSpeech)
+            }
+        }
+        fn discontinuity(&mut self) {}
+    }
+
+    let mut pipeline = DictationPipeline::new(LaterFailingDecider { calls: 0 }, config()).unwrap();
+    let mut input = vec![0.5; VAD_FRAME_SIZE * 2];
+    input.extend(vec![0.0; VAD_FRAME_SIZE * 2]);
+
+    let error = pipeline.push(&input).unwrap_err();
+    assert_eq!(
+        error.error,
+        DictationPipelineError::Vad(VadError::NativeDetectorUnavailable)
+    );
+    assert_eq!(
+        samples(error.emitted),
+        vec![input[..VAD_FRAME_SIZE * 3].to_vec()]
     );
     assert_eq!(pipeline.buffered_samples(), 0);
 }
