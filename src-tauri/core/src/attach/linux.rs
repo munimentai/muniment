@@ -1,16 +1,19 @@
 //! Fail-closed Linux transport for the local companion attach protocol.
 
 use std::env;
-use std::fs::{self, DirBuilder, Metadata, Permissions};
+use std::ffi::CString;
+use std::fs::{self, File, Metadata};
 use std::io;
 use std::os::linux::fs::MetadataExt as LinuxMetadataExt;
-use std::os::unix::fs::{DirBuilderExt, FileTypeExt, MetadataExt, PermissionsExt};
-use std::os::unix::io::AsRawFd;
+use std::os::unix::fs::{FileTypeExt, MetadataExt, OpenOptionsExt};
+use std::os::unix::io::{AsRawFd, FromRawFd};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 const APP_DIR: &str = "muniment";
 const SOCKET_NAME: &str = "attach-v1.sock";
+static UNIQUE_NAME: AtomicU64 = AtomicU64::new(0);
 
 /// A non-secret reason the attach endpoint could not be safely created.
 #[derive(Debug)]
@@ -111,12 +114,14 @@ struct Identity {
     dev: u64,
     ino: u64,
 }
+
 fn identity(meta: &Metadata) -> Identity {
     Identity {
         dev: meta.st_dev(),
         ino: meta.st_ino(),
     }
 }
+
 fn effective_uid() -> u32 {
     unsafe { libc::geteuid() }
 }
@@ -126,7 +131,7 @@ fn effective_uid() -> u32 {
 pub struct OwnedUnixListener {
     listener: UnixListener,
     path: PathBuf,
-    parent_identity: Identity,
+    parent: File,
     socket_identity: Identity,
     uid: u32,
 }
@@ -142,54 +147,102 @@ impl OwnedUnixListener {
 
     fn bind_in_path(path: PathBuf) -> Result<Self, LinuxTransportError> {
         let uid = effective_uid();
-        let parent = path.parent().ok_or(LinuxTransportError::AppDirUnsafe)?;
-        let runtime_root = parent
+        let parent_path = path.parent().ok_or(LinuxTransportError::AppDirUnsafe)?;
+        let runtime_root = parent_path
             .parent()
             .ok_or(LinuxTransportError::RuntimeDirNotAbsolute)?;
         if endpoint_path_in(runtime_root)? != path {
             return Err(LinuxTransportError::EndpointVerificationFailed);
         }
-        match fs::symlink_metadata(parent) {
-            Ok(meta) => verify_dir(&meta, uid)?,
-            Err(error) if error.kind() == io::ErrorKind::NotFound => {
-                let mut builder = DirBuilder::new();
-                builder
-                    .mode(0o700)
-                    .create(parent)
-                    .map_err(LinuxTransportError::Io)?;
-                fs::set_permissions(parent, Permissions::from_mode(0o700))?;
-            }
-            Err(error) => return Err(LinuxTransportError::Io(error)),
+        let runtime = open_runtime_dir(runtime_root, uid)?;
+        let created = match mkdir_at(&runtime, APP_DIR, 0o700) {
+            Ok(()) => true,
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => false,
+            Err(error) => return Err(error.into()),
+        };
+        let parent = open_at(
+            &runtime,
+            APP_DIR,
+            libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW,
+        )
+        .map_err(|_| LinuxTransportError::AppDirUnsafe)?;
+        if created {
+            chmod_file(&parent, 0o700)?;
         }
-        let parent_meta = fs::symlink_metadata(parent)?;
-        verify_dir(&parent_meta, uid)?;
-        let parent_identity = identity(&parent_meta);
+        verify_dir(&parent.metadata()?, uid)?;
+        recover_existing(&parent, &path, uid)?;
 
-        recover_existing(&path, parent, parent_identity, uid)?;
-        let listener = UnixListener::bind(&path)?;
-        if let Err(error) = fs::set_permissions(&path, Permissions::from_mode(0o600)) {
-            let _ = fs::remove_file(&path);
-            return Err(LinuxTransportError::Io(error));
-        }
-        let socket_meta = fs::symlink_metadata(&path)?;
-        if !socket_meta.file_type().is_socket()
-            || socket_meta.st_uid() != uid
-            || socket_meta.mode() & 0o777 != 0o600
-        {
-            let _ = fs::remove_file(&path);
+        // Bind under an unguessable private name. Permission and identity checks happen
+        // there before one atomic rename publishes it as the endpoint.
+        let temporary = unique_name(".attach-v1.bind");
+        let temporary_path = PathBuf::from(format!(
+            "/proc/self/fd/{}/{}",
+            parent.as_raw_fd(),
+            temporary
+        ));
+        let listener = UnixListener::bind(&temporary_path)?;
+        let socket_file = match open_at(&parent, &temporary, libc::O_PATH | libc::O_NOFOLLOW) {
+            Ok(file) => file,
+            Err(error) => {
+                let _ = quarantine_remove(&parent, &temporary, None, uid);
+                return Err(error.into());
+            }
+        };
+        let before = match socket_file.metadata() {
+            Ok(meta) => meta,
+            Err(error) => {
+                let _ = quarantine_remove(&parent, &temporary, None, uid);
+                return Err(error.into());
+            }
+        };
+        if !before.file_type().is_socket() || before.st_uid() != uid {
+            let _ = quarantine_remove(&parent, &temporary, Some(identity(&before)), uid);
             return Err(LinuxTransportError::EndpointVerificationFailed);
         }
-        let current_parent = fs::symlink_metadata(parent)?;
-        if identity(&current_parent) != parent_identity || verify_dir(&current_parent, uid).is_err()
+        if let Err(error) = chmod_fd(&socket_file, 0o600) {
+            let _ = quarantine_remove(&parent, &temporary, Some(identity(&before)), uid);
+            return Err(error.into());
+        }
+        let after = match socket_file.metadata() {
+            Ok(meta) => meta,
+            Err(error) => {
+                let _ = quarantine_remove(&parent, &temporary, Some(identity(&before)), uid);
+                return Err(error.into());
+            }
+        };
+        let socket_identity = identity(&after);
+        if socket_identity != identity(&before) || after.mode() & 0o777 != 0o600 {
+            let _ = quarantine_remove(&parent, &temporary, Some(socket_identity), uid);
+            return Err(LinuxTransportError::EndpointVerificationFailed);
+        }
+        if let Err(error) = rename_noreplace(&parent, &temporary, SOCKET_NAME) {
+            let _ = quarantine_remove(&parent, &temporary, Some(socket_identity), uid);
+            return Err(if error.kind() == io::ErrorKind::AlreadyExists {
+                LinuxTransportError::ExistingEndpointUnsafe
+            } else {
+                error.into()
+            });
+        }
+        let published = match stat_at(&parent, SOCKET_NAME) {
+            Ok(meta) => meta,
+            Err(error) => {
+                let _ = quarantine_remove(&parent, SOCKET_NAME, Some(socket_identity), uid);
+                return Err(error.into());
+            }
+        };
+        if identity(&published) != socket_identity
+            || !published.file_type().is_socket()
+            || published.st_uid() != uid
+            || published.mode() & 0o777 != 0o600
         {
-            let _ = fs::remove_file(&path);
+            let _ = quarantine_remove(&parent, SOCKET_NAME, Some(socket_identity), uid);
             return Err(LinuxTransportError::EndpointVerificationFailed);
         }
         Ok(Self {
             listener,
             path,
-            parent_identity,
-            socket_identity: identity(&socket_meta),
+            parent,
+            socket_identity,
             uid,
         })
     }
@@ -214,26 +267,12 @@ impl OwnedUnixListener {
 
 impl Drop for OwnedUnixListener {
     fn drop(&mut self) {
-        let Some(parent) = self.path.parent() else {
-            return;
-        };
-        let Ok(parent_meta) = fs::symlink_metadata(parent) else {
-            return;
-        };
-        if identity(&parent_meta) != self.parent_identity
-            || verify_dir(&parent_meta, self.uid).is_err()
-        {
-            return;
-        }
-        let Ok(socket_meta) = fs::symlink_metadata(&self.path) else {
-            return;
-        };
-        if socket_meta.file_type().is_socket()
-            && socket_meta.st_uid() == self.uid
-            && identity(&socket_meta) == self.socket_identity
-        {
-            let _ = fs::remove_file(&self.path);
-        }
+        let _ = quarantine_remove(
+            &self.parent,
+            SOCKET_NAME,
+            Some(self.socket_identity),
+            self.uid,
+        );
     }
 }
 
@@ -244,16 +283,42 @@ fn verify_dir(meta: &Metadata, uid: u32) -> Result<(), LinuxTransportError> {
     Ok(())
 }
 
-fn recover_existing(
-    path: &Path,
-    parent: &Path,
-    parent_identity: Identity,
-    uid: u32,
-) -> Result<(), LinuxTransportError> {
-    let meta = match fs::symlink_metadata(path) {
+fn open_runtime_dir(path: &Path, uid: u32) -> Result<File, LinuxTransportError> {
+    let file = fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW)
+        .open(path)?;
+    let meta = file.metadata()?;
+    if !meta.file_type().is_dir() || meta.st_uid() != uid || meta.mode() & 0o077 != 0 {
+        return Err(LinuxTransportError::RuntimeDirUnavailable);
+    }
+    Ok(file)
+}
+
+fn mkdir_at(parent: &File, name: &str, mode: libc::mode_t) -> io::Result<()> {
+    let name = c_name(name)?;
+    let result = unsafe { libc::mkdirat(parent.as_raw_fd(), name.as_ptr(), mode) };
+    if result == 0 {
+        Ok(())
+    } else {
+        Err(io::Error::last_os_error())
+    }
+}
+
+fn chmod_file(file: &File, mode: libc::mode_t) -> io::Result<()> {
+    let result = unsafe { libc::fchmod(file.as_raw_fd(), mode) };
+    if result == 0 {
+        Ok(())
+    } else {
+        Err(io::Error::last_os_error())
+    }
+}
+
+fn recover_existing(parent: &File, path: &Path, uid: u32) -> Result<(), LinuxTransportError> {
+    let meta = match stat_at(parent, SOCKET_NAME) {
         Ok(meta) => meta,
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
-        Err(error) => return Err(LinuxTransportError::Io(error)),
+        Err(error) => return Err(error.into()),
     };
     if !meta.file_type().is_socket() || meta.st_uid() != uid {
         return Err(LinuxTransportError::ExistingEndpointUnsafe);
@@ -263,18 +328,107 @@ fn recover_existing(
         Err(error) if error.kind() == io::ErrorKind::ConnectionRefused => {}
         Err(_) => return Err(LinuxTransportError::ExistingEndpointUnsafe),
     }
-    let parent_now = fs::symlink_metadata(parent).map_err(LinuxTransportError::Io)?;
-    let endpoint_now = fs::symlink_metadata(path).map_err(LinuxTransportError::Io)?;
-    if identity(&parent_now) != parent_identity
-        || verify_dir(&parent_now, uid).is_err()
-        || identity(&endpoint_now) != identity(&meta)
-        || !endpoint_now.file_type().is_socket()
-        || endpoint_now.st_uid() != uid
+    quarantine_remove(parent, SOCKET_NAME, Some(identity(&meta)), uid)
+        .map_err(|_| LinuxTransportError::ExistingEndpointUnsafe)
+}
+
+// Atomically move a name out of service before inspecting it. If it is not the
+// expected inode, it is deliberately left in quarantine and never unlinked.
+fn quarantine_remove(
+    parent: &File,
+    name: &str,
+    expected: Option<Identity>,
+    uid: u32,
+) -> io::Result<()> {
+    let quarantine = unique_name(".attach-v1.quarantine");
+    rename_noreplace(parent, name, &quarantine)?;
+    let meta = stat_at(parent, &quarantine)?;
+    if expected.is_none()
+        || expected.is_some_and(|wanted| identity(&meta) != wanted)
+        || !meta.file_type().is_socket()
+        || meta.st_uid() != uid
     {
-        return Err(LinuxTransportError::ExistingEndpointUnsafe);
+        let _ = rename_noreplace(parent, &quarantine, name);
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "quarantined endpoint identity changed",
+        ));
     }
-    fs::remove_file(path)?;
-    Ok(())
+    unlink_at(parent, &quarantine)
+}
+
+fn unique_name(prefix: &str) -> String {
+    format!(
+        "{prefix}.{}.{}",
+        std::process::id(),
+        UNIQUE_NAME.fetch_add(1, Ordering::Relaxed)
+    )
+}
+
+fn c_name(name: &str) -> io::Result<CString> {
+    CString::new(name)
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "invalid endpoint name"))
+}
+
+fn open_at(parent: &File, name: &str, flags: i32) -> io::Result<File> {
+    let name = c_name(name)?;
+    let fd = unsafe { libc::openat(parent.as_raw_fd(), name.as_ptr(), flags | libc::O_CLOEXEC) };
+    if fd < 0 {
+        Err(io::Error::last_os_error())
+    } else {
+        Ok(unsafe { File::from_raw_fd(fd) })
+    }
+}
+
+fn stat_at(parent: &File, name: &str) -> io::Result<Metadata> {
+    open_at(parent, name, libc::O_PATH | libc::O_NOFOLLOW)?.metadata()
+}
+
+fn rename_noreplace(parent: &File, old: &str, new: &str) -> io::Result<()> {
+    let old = c_name(old)?;
+    let new = c_name(new)?;
+    let result = unsafe {
+        libc::renameat2(
+            parent.as_raw_fd(),
+            old.as_ptr(),
+            parent.as_raw_fd(),
+            new.as_ptr(),
+            libc::RENAME_NOREPLACE,
+        )
+    };
+    if result == 0 {
+        Ok(())
+    } else {
+        Err(io::Error::last_os_error())
+    }
+}
+
+fn unlink_at(parent: &File, name: &str) -> io::Result<()> {
+    let name = c_name(name)?;
+    let result = unsafe { libc::unlinkat(parent.as_raw_fd(), name.as_ptr(), 0) };
+    if result == 0 {
+        Ok(())
+    } else {
+        Err(io::Error::last_os_error())
+    }
+}
+
+fn chmod_fd(file: &File, mode: libc::mode_t) -> io::Result<()> {
+    let empty = c"";
+    let result = unsafe {
+        libc::syscall(
+            libc::SYS_fchmodat2,
+            file.as_raw_fd(),
+            empty.as_ptr(),
+            mode,
+            libc::AT_EMPTY_PATH,
+        )
+    };
+    if result == 0 {
+        Ok(())
+    } else {
+        Err(io::Error::last_os_error())
+    }
 }
 
 fn peer_credentials(stream: &UnixStream) -> Result<PeerCredentials, LinuxTransportError> {
@@ -301,4 +455,46 @@ fn peer_credentials(stream: &UnixStream) -> Result<PeerCredentials, LinuxTranspo
         uid: credentials.uid,
         gid: credentials.gid,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs::Permissions;
+    use std::os::unix::fs::PermissionsExt;
+
+    fn replacement_is_preserved_when_expected_identity_is_stale(name: &str) {
+        let root = env::temp_dir().join(unique_name("muniment-attach-race-test"));
+        fs::create_dir(&root).unwrap();
+        fs::set_permissions(&root, Permissions::from_mode(0o700)).unwrap();
+        let parent = open_runtime_dir(&root, effective_uid()).unwrap();
+        let path = root.join(name);
+
+        let stale = UnixListener::bind(&path).unwrap();
+        let stale_identity = identity(&fs::symlink_metadata(&path).unwrap());
+        drop(stale);
+        let held_stale = root.join(unique_name(".held-stale"));
+        fs::rename(&path, &held_stale).unwrap();
+        let replacement = UnixListener::bind(&path).unwrap();
+        let replacement_identity = identity(&fs::symlink_metadata(&path).unwrap());
+
+        assert!(quarantine_remove(&parent, name, Some(stale_identity), effective_uid()).is_err());
+        assert_eq!(
+            identity(&fs::symlink_metadata(&path).unwrap()),
+            replacement_identity
+        );
+
+        drop(replacement);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn stale_recovery_does_not_delete_a_raced_replacement() {
+        replacement_is_preserved_when_expected_identity_is_stale(SOCKET_NAME);
+    }
+
+    #[test]
+    fn bind_error_cleanup_does_not_delete_a_raced_replacement() {
+        replacement_is_preserved_when_expected_identity_is_stale(&unique_name(".bind"));
+    }
 }
