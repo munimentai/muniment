@@ -1631,6 +1631,10 @@ fn validate_grant(grant: &ChatGrant) -> Result<(), String> {
 }
 
 fn fetch_receipt(url: &str, access_token: &str, run_id: &str) -> Result<Receipt, ()> {
+    #[cfg(test)]
+    if let Ok(receipt) = std::env::var("PI_RESUME_STUB_RECEIPT") {
+        return serde_json::from_str(&receipt).map_err(|_| ());
+    }
     ureq::post(url)
         .set("Authorization", &format!("Bearer {access_token}"))
         .send_json(json!({"runId": run_id}))
@@ -1926,13 +1930,7 @@ mod tests {
         std::fs::remove_dir_all(directory).unwrap();
     }
 
-    // QUARANTINED (MUNIDESK-217): unreliable on the desktop-ci linux VM — the
-    // spawned sidecar-test-stub does not open its receipt connection within the
-    // deadline (fails at 10s AND 60s, even with --test-threads=1), blocking the
-    // desktop-build (linux) gate on every MUNIDESK PR. Ignored so the gate can
-    // pass; MUNIDESK-217 tracks making it hermetic and removing this ignore.
     #[test]
-    #[ignore = "flaky on desktop-ci linux (stub receipt handshake); tracked in MUNIDESK-217"]
     fn prepared_attachments_reach_pi_before_coordinator_events_continue() {
         let _environment = lock_pi_environment();
         let app = tauri::test::mock_app();
@@ -1986,28 +1984,13 @@ mod tests {
             .join("examples")
             .join(executable_name);
         assert!(stub.is_file(), "sidecar test stub was not built");
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        let receipt_url = format!("http://{}/receipt", listener.local_addr().unwrap());
-        let receipt_server = std::thread::spawn(move || {
-            use std::io::{Read, Write};
-            let mut stream = accept_receipt_request(listener);
-            stream
-                .set_read_timeout(Some(Duration::from_secs(2)))
-                .unwrap();
-            let mut request = [0; 4096];
-            let _ = stream.read(&mut request).unwrap();
-            let body = r#"{"route":"attachment-stub","model":"test"}"#;
-            write!(
-                stream,
-                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-                body.len(),
-                body
-            )
-            .unwrap();
-        });
         std::env::set_var("MUNIMENT_PI_ROOT", &directory);
         std::env::set_var("MUNIMENT_PI_TEST_EXECUTABLE", &stub);
         std::env::set_var("PI_RESUME_STUB_PROMPTS", &prompt_log);
+        std::env::set_var(
+            "PI_RESUME_STUB_RECEIPT",
+            r#"{"route":"attachment-stub","model":"test"}"#,
+        );
 
         coordinate(
             app.handle().clone(),
@@ -2021,7 +2004,7 @@ mod tests {
                 gateway_url: "https://gateway.invalid".into(),
                 virtual_key: "virtual-key".into(),
                 model: None,
-                receipt_url,
+                receipt_url: "https://receipt.invalid".into(),
             },
             Arc::new(AtomicBool::new(false)),
             Arc::new(Mutex::new(None)),
@@ -2030,11 +2013,11 @@ mod tests {
             None,
             Some(prepared),
         );
-        receipt_server.join().unwrap();
         for key in [
             "MUNIMENT_PI_ROOT",
             "MUNIMENT_PI_TEST_EXECUTABLE",
             "PI_RESUME_STUB_PROMPTS",
+            "PI_RESUME_STUB_RECEIPT",
         ] {
             std::env::remove_var(key);
         }
@@ -2053,6 +2036,10 @@ mod tests {
         assert_eq!(events[4].event_type, "model.prompt.accepted");
         assert_eq!(events[5].event_type, "model.stream.delta");
         assert_eq!(events.last().unwrap().event_type, "run.completed");
+        assert_eq!(
+            project_chat(&events).unwrap().receipt,
+            Some(json!({"route":"attachment-stub", "model":"test"}))
+        );
         drop(storage);
         std::fs::remove_dir_all(directory).unwrap();
     }
