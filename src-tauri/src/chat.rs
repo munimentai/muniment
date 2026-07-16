@@ -1645,14 +1645,35 @@ mod tests {
 
     static PI_ENV_LOCK: Mutex<()> = Mutex::new(());
 
+    fn lock_unpoisoned<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+        mutex
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
     // Acquire the shared PI-environment lock without propagating poisoning: if a
     // prior test panicked while holding the guard (e.g. a slow CI VM tripped the
     // receipt-handshake deadline), recover the guard instead of turning that one
     // flake into cascaded PoisonError failures across every sibling test.
     fn lock_pi_environment() -> std::sync::MutexGuard<'static, ()> {
-        PI_ENV_LOCK
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
+        lock_unpoisoned(&PI_ENV_LOCK)
+    }
+
+    #[test]
+    fn lock_unpoisoned_recovers_guard_after_panic() {
+        let mutex = Mutex::new(0);
+
+        std::thread::scope(|scope| {
+            let result = scope.spawn(|| {
+                let mut value = mutex.lock().unwrap();
+                *value = 42;
+                panic!("poison mutex");
+            });
+            assert!(result.join().is_err());
+        });
+
+        let value = lock_unpoisoned(&mutex);
+        assert_eq!(*value, 42);
     }
 
     fn accept_receipt_request(listener: std::net::TcpListener) -> std::net::TcpStream {
