@@ -5,6 +5,7 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 
 const RUNTIME: &str = "../third-party/sherpa-onnx-v1.13.2";
+const SILERO_VAD_SHA256: &str = "a35ebf52fd3ce5f1469b2a36158dba761bc47b973ea3382b3186ca15b1f5af28";
 type RuntimeFile = (&'static str, &'static str, &'static str);
 type PlatformCase = (&'static str, &'static str, &'static [RuntimeFile]);
 
@@ -93,6 +94,34 @@ fn every_supported_target_bundles_the_pinned_linked_runtime_at_its_loader_path()
             let linked = root.join(RUNTIME).join("link").join(filename);
             assert_eq!(sha256(&linked), *expected_hash);
         }
+    }
+}
+
+#[test]
+fn every_supported_target_bundles_the_pinned_silero_vad_and_notice() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let model = root.join(RUNTIME).join("silero_vad.onnx");
+    assert_eq!(fs::metadata(&model).unwrap().len(), 1_807_522);
+    assert_eq!(sha256(&model), SILERO_VAD_SHA256);
+
+    let notice =
+        fs::read_to_string(root.join(RUNTIME).join("notices/silero-vad-LICENSE.txt")).unwrap();
+    assert!(notice.contains("Copyright (c) 2020-present Silero Team"));
+    assert!(notice.contains("Permission is hereby granted, free of charge"));
+    let inventory =
+        fs::read_to_string(root.join(RUNTIME).join("notices/THIRD-PARTY-NOTICES.md")).unwrap();
+    assert!(inventory.contains("`silero-vad-LICENSE.txt` is the Silero VAD MIT license"));
+
+    let source = "third-party/sherpa-onnx-v1.13.2/silero_vad.onnx";
+    for platform in ["linux", "macos", "windows"] {
+        let config: Value = serde_json::from_slice(
+            &fs::read(root.join(format!("../tauri.{platform}.conf.json"))).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            config["bundle"]["resources"][source].as_str(),
+            Some("asr-runtime/silero_vad.onnx")
+        );
     }
 }
 

@@ -17,6 +17,9 @@ release archives (SHA-256 from the v1.13.2 release `checksum.txt`):
 - `onnxruntime-LICENSE.txt` is the ONNX Runtime MIT license.
 - `onnxruntime-ThirdPartyNotices.txt` is the notice inventory supplied for the
   packaged ONNX Runtime revision.
+- `silero-vad-LICENSE.txt` is the Silero VAD MIT license. The packaged
+  `silero_vad.onnx` is pinned by size and SHA-256 and shared by every desktop
+  bundle at the resource-relative path `asr-runtime/silero_vad.onnx`.
 
 The separately installed Parakeet model is NVIDIA `parakeet-tdt-0.6b-v3`,
 converted to ONNX/INT8 by the sherpa-onnx project. It is licensed under

@@ -5,6 +5,8 @@ use std::path::{Path, PathBuf};
 use sha2::{Digest, Sha256};
 
 const ROOT: &str = "third-party/sherpa-onnx-v1.13.2";
+const SILERO_VAD_SHA256: &str =
+    "a35ebf52fd3ce5f1469b2a36158dba761bc47b973ea3382b3186ca15b1f5af28";
 
 fn main() {
     let os = std::env::var("CARGO_CFG_TARGET_OS").expect("target OS is set by Cargo");
@@ -78,11 +80,16 @@ fn main() {
         let linked = link_directory.join(filename);
         require_hash(&linked, sha256);
     }
+    require_hash(
+        &PathBuf::from(ROOT).join("silero_vad.onnx"),
+        SILERO_VAD_SHA256,
+    );
     for notice in [
         "notices/THIRD-PARTY-NOTICES.md",
         "notices/sherpa-onnx-LICENSE.txt",
         "notices/onnxruntime-LICENSE.txt",
         "notices/onnxruntime-ThirdPartyNotices.txt",
+        "notices/silero-vad-LICENSE.txt",
     ] {
         require(&format!("{ROOT}/{notice}"));
     }

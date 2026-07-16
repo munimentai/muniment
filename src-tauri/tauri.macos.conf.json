@@ -3,6 +3,7 @@
     "resources": {
       "third-party/sherpa-onnx-v1.13.2/macos-universal2/libsherpa-onnx-c-api.dylib": "asr-runtime/libsherpa-onnx-c-api.dylib",
       "third-party/sherpa-onnx-v1.13.2/macos-universal2/libonnxruntime.1.24.4.dylib": "asr-runtime/libonnxruntime.1.24.4.dylib",
+      "third-party/sherpa-onnx-v1.13.2/silero_vad.onnx": "asr-runtime/silero_vad.onnx",
       "third-party/sherpa-onnx-v1.13.2/notices/": "third-party-notices/asr/"
     }
   }
