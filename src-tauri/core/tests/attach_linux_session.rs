@@ -1,13 +1,15 @@
 #![cfg(target_os = "linux")]
 
 use muniment_core::attach::linux::{
-    run_authenticated_session_with, run_authenticated_session_with_authorization, ApprovalDecision,
-    AttachSessionError, AuthorizationSessionDependencies, PeerCredentials,
+    run_authenticated_session_with, run_authenticated_session_with_authorization,
+    run_authenticated_session_with_dispatch, ApprovalDecision, AttachSessionError,
+    AuthorizationSessionDependencies, PeerCredentials, RedactedThreadSummary, ThreadListPage,
+    ThreadListRequest,
 };
 use muniment_core::attach::{
     decode_frame, encode_frame, Approval, AuthorizationClock, AuthorizationTokenGenerator,
-    Authorized, ErrorAction, ErrorCode, ErrorEnvelope, Hello, Protocol, VersionRange, Welcome,
-    CHALLENGE_LIFETIME, MAX_FRAME_LENGTH, MAX_JSON_DEPTH,
+    Authorized, ErrorAction, ErrorCode, ErrorEnvelope, Hello, Id, Operation, Protocol, Request,
+    Response, VersionRange, Welcome, CHALLENGE_LIFETIME, MAX_FRAME_LENGTH, MAX_JSON_DEPTH,
 };
 use serde_json::json;
 use std::cell::Cell;
@@ -470,4 +472,182 @@ fn eof_is_terminal_without_a_response_or_negotiation() {
     );
     assert_eq!(random_calls.get(), 0);
     assert_eq!(client.read(&mut [0]).unwrap(), 0);
+}
+
+fn request(id: u128, operation: Operation, body: serde_json::Value) -> Vec<u8> {
+    encode_frame(&Request {
+        protocol: Protocol,
+        request_id: Id::new(format!("{id:032x}")).unwrap(),
+        operation,
+        capability: "02".repeat(32),
+        idempotency_key: None,
+        body,
+    })
+    .unwrap()
+}
+
+fn dispatch_session<S>(
+    client: &mut UnixStream,
+    server: UnixStream,
+    clock: TestClock,
+    service: &mut S,
+) -> Result<(), AttachSessionError>
+where
+    S: muniment_core::attach::linux::ThreadListService,
+{
+    let result = run_authenticated_session_with_dispatch(
+        server,
+        credentials(),
+        "0.1.0",
+        Duration::from_secs(1),
+        AuthorizationSessionDependencies {
+            fill_random: |bytes: &mut [u8]| {
+                bytes.fill(9);
+                Ok(())
+            },
+            clock,
+            tokens: TestTokens(1),
+            approvals: |_: &muniment_core::attach::PairingChallenge, _: Duration| {
+                Some(ApprovalDecision::Approve(approval()))
+            },
+        },
+        service,
+    );
+    let _: Welcome = read_frame(client);
+    let _: Authorized = read_frame(client);
+    result
+}
+
+#[test]
+fn authorized_thread_list_is_bounded_paginated_and_correlated() {
+    let (mut client, server) = UnixStream::pair().unwrap();
+    client.write_all(&hello(1, 1)).unwrap();
+    client
+        .write_all(&request(
+            10,
+            Operation::ThreadList,
+            json!({"limit": 100, "cursor": "opaque-page-2"}),
+        ))
+        .unwrap();
+    client.shutdown(Shutdown::Write).unwrap();
+    let calls = Cell::new(0);
+    let mut service = |workspace: &str, request: ThreadListRequest| {
+        calls.set(calls.get() + 1);
+        assert_eq!(workspace, "workspace-1");
+        assert_eq!(request.limit, 100);
+        assert_eq!(request.cursor.as_deref(), Some("opaque-page-2"));
+        Ok(ThreadListPage {
+            threads: vec![RedactedThreadSummary {
+                thread_id: "thread-1".into(),
+                title: "Safe title".into(),
+                updated_at: "2026-07-16T00:00:00Z".into(),
+            }],
+            next_cursor: Some("opaque-page-3".into()),
+        })
+    };
+    assert_eq!(
+        dispatch_session(
+            &mut client,
+            server,
+            TestClock(Rc::new(Cell::new(Duration::ZERO))),
+            &mut service,
+        ),
+        Ok(())
+    );
+    let response: Response = read_frame(&mut client);
+    assert_eq!(
+        response.request_id,
+        Id::new(format!("{:032x}", 10)).unwrap()
+    );
+    assert_eq!(response.body["next_cursor"], "opaque-page-3");
+    assert_eq!(calls.get(), 1);
+}
+
+#[test]
+fn malformed_post_authorization_request_is_redacted_and_terminal() {
+    let (mut client, server) = UnixStream::pair().unwrap();
+    client.write_all(&hello(1, 1)).unwrap();
+    client
+        .write_all(&raw_frame(br#"{"secret":"/home/user""#))
+        .unwrap();
+    client.shutdown(Shutdown::Write).unwrap();
+    let mut service = |_: &str, _: ThreadListRequest| -> Result<ThreadListPage, _> {
+        panic!("malformed input must not dispatch")
+    };
+    assert_eq!(
+        dispatch_session(
+            &mut client,
+            server,
+            TestClock(Rc::new(Cell::new(Duration::ZERO))),
+            &mut service
+        ),
+        Err(AttachSessionError::MalformedFrame)
+    );
+    let error: ErrorEnvelope = read_frame(&mut client);
+    assert_eq!(error.request_id, None);
+    assert_eq!(error.error.code(), ErrorCode::MalformedFrame);
+    assert!(!serde_json::to_string(&error).unwrap().contains("/home"));
+}
+
+#[test]
+fn authorization_is_rechecked_before_every_dispatch() {
+    let (mut client, server) = UnixStream::pair().unwrap();
+    client.write_all(&hello(1, 1)).unwrap();
+    client
+        .write_all(&request(20, Operation::ThreadList, json!({"limit": 1})))
+        .unwrap();
+    client
+        .write_all(&request(21, Operation::ThreadList, json!({"limit": 1})))
+        .unwrap();
+    client.shutdown(Shutdown::Write).unwrap();
+    let now = Rc::new(Cell::new(Duration::ZERO));
+    let advance = now.clone();
+    let calls = Cell::new(0);
+    let mut service = move |_: &str, _: ThreadListRequest| {
+        calls.set(calls.get() + 1);
+        advance.set(Duration::from_secs(3601));
+        Ok(ThreadListPage {
+            threads: vec![],
+            next_cursor: None,
+        })
+    };
+    assert_eq!(
+        dispatch_session(&mut client, server, TestClock(now), &mut service),
+        Err(AttachSessionError::Authorization)
+    );
+    let _: Response = read_frame(&mut client);
+    let error: ErrorEnvelope = read_frame(&mut client);
+    assert_eq!(
+        error.request_id,
+        Some(Id::new(format!("{:032x}", 21)).unwrap())
+    );
+    assert_eq!(error.error.code(), ErrorCode::Unauthorized);
+}
+
+#[test]
+fn unsupported_operation_fails_closed_without_dispatch() {
+    let (mut client, server) = UnixStream::pair().unwrap();
+    client.write_all(&hello(1, 1)).unwrap();
+    client
+        .write_all(&request(30, Operation::ThreadOpen, json!({})))
+        .unwrap();
+    client.shutdown(Shutdown::Write).unwrap();
+    let mut service = |_: &str, _: ThreadListRequest| -> Result<ThreadListPage, _> {
+        panic!("unsupported operations must not dispatch")
+    };
+    assert_eq!(
+        dispatch_session(
+            &mut client,
+            server,
+            TestClock(Rc::new(Cell::new(Duration::ZERO))),
+            &mut service
+        ),
+        Ok(())
+    );
+    let error: ErrorEnvelope = read_frame(&mut client);
+    assert_eq!(
+        error.request_id,
+        Some(Id::new(format!("{:032x}", 30)).unwrap())
+    );
+    assert_eq!(error.error.code(), ErrorCode::UnsupportedOperation);
 }
