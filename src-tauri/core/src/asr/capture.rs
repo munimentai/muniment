@@ -6,6 +6,8 @@ use std::sync::Arc;
 
 use super::recognizer::SAMPLE_RATE;
 
+const LOW_PASS_TAPS: usize = 63;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CaptureConfigError {
     ZeroChannels,
@@ -21,7 +23,62 @@ pub struct PcmProducer {
     channel_sum: f64,
     channel_offset: usize,
     resample_accumulator: u32,
+    low_pass: Option<LowPassFilter>,
     dropped_samples: Arc<AtomicU64>,
+}
+
+/// Fixed-memory anti-alias filter used before reducing a device sample rate.
+struct LowPassFilter {
+    coefficients: [f64; LOW_PASS_TAPS],
+    history: [f32; LOW_PASS_TAPS],
+    cursor: usize,
+}
+
+impl LowPassFilter {
+    fn new(source_rate: u32) -> Self {
+        // Leave a small transition band below the 8 kHz output Nyquist limit.
+        let cutoff = 0.45 * f64::from(SAMPLE_RATE) / f64::from(source_rate);
+        let midpoint = (LOW_PASS_TAPS - 1) as f64 / 2.0;
+        let mut coefficients = [0.0; LOW_PASS_TAPS];
+        for (index, coefficient) in coefficients.iter_mut().enumerate() {
+            let offset = index as f64 - midpoint;
+            let sinc = if offset == 0.0 {
+                2.0 * cutoff
+            } else {
+                (2.0 * std::f64::consts::PI * cutoff * offset).sin()
+                    / (std::f64::consts::PI * offset)
+            };
+            // Blackman window gives useful stop-band rejection for speech input.
+            let phase = 2.0 * std::f64::consts::PI * index as f64 / (LOW_PASS_TAPS - 1) as f64;
+            let window = 0.42 - 0.5 * phase.cos() + 0.08 * (2.0 * phase).cos();
+            *coefficient = sinc * window;
+        }
+        let gain: f64 = coefficients.iter().sum();
+        for coefficient in &mut coefficients {
+            *coefficient /= gain;
+        }
+        Self {
+            coefficients,
+            history: [0.0; LOW_PASS_TAPS],
+            cursor: 0,
+        }
+    }
+
+    fn process(&mut self, sample: f32) -> f32 {
+        self.history[self.cursor] = sample;
+        let mut output = 0.0;
+        let mut history_index = self.cursor;
+        for coefficient in &self.coefficients {
+            output += coefficient * f64::from(self.history[history_index]);
+            history_index = if history_index == 0 {
+                LOW_PASS_TAPS - 1
+            } else {
+                history_index - 1
+            };
+        }
+        self.cursor = (self.cursor + 1) % LOW_PASS_TAPS;
+        output as f32
+    }
 }
 
 /// The consumer-owned half. Reading never occurs on the native audio thread.
@@ -54,6 +111,7 @@ pub fn bounded_pcm_channel(
             channel_sum: 0.0,
             channel_offset: 0,
             resample_accumulator: 0,
+            low_pass: (source_rate > SAMPLE_RATE).then(|| LowPassFilter::new(source_rate)),
             dropped_samples: dropped_samples.clone(),
         },
         PcmConsumer {
@@ -93,9 +151,13 @@ impl PcmProducer {
             if self.channel_offset != self.channels {
                 continue;
             }
-            let mono = (self.channel_sum / self.channels as f64) as f32;
+            let mut mono = (self.channel_sum / self.channels as f64) as f32;
             self.channel_sum = 0.0;
             self.channel_offset = 0;
+
+            if let Some(filter) = &mut self.low_pass {
+                mono = filter.process(mono);
+            }
 
             self.resample_accumulator += SAMPLE_RATE;
             while self.resample_accumulator >= self.source_rate {

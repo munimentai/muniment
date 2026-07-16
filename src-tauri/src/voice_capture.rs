@@ -1,3 +1,4 @@
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
@@ -16,7 +17,7 @@ pub enum VoiceCaptureError {
 
 pub struct VoiceCaptureState {
     active: Mutex<Option<ActiveCapture>>,
-    runtime_error: Arc<Mutex<Option<VoiceCaptureError>>>,
+    runtime_failed: Arc<AtomicBool>,
 }
 
 struct ActiveCapture {
@@ -32,7 +33,7 @@ impl VoiceCaptureState {
     pub fn new() -> Self {
         Self {
             active: Mutex::new(None),
-            runtime_error: Arc::new(Mutex::new(None)),
+            runtime_failed: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -44,10 +45,7 @@ impl VoiceCaptureState {
         if active.is_some() {
             return Err(VoiceCaptureError::AlreadyRunning);
         }
-        *self
-            .runtime_error
-            .lock()
-            .map_err(|_| VoiceCaptureError::StreamBuildFailed)? = None;
+        self.runtime_failed.store(false, Ordering::Release);
         let device = cpal::default_host()
             .default_input_device()
             .ok_or(VoiceCaptureError::NoInputDevice)?;
@@ -82,13 +80,8 @@ impl VoiceCaptureState {
     }
 
     pub fn take_samples(&self) -> Result<Vec<f32>, VoiceCaptureError> {
-        if let Some(error) = self
-            .runtime_error
-            .lock()
-            .map_err(|_| VoiceCaptureError::RuntimeStreamFailed)?
-            .take()
-        {
-            return Err(error);
+        if self.runtime_failed.swap(false, Ordering::AcqRel) {
+            return Err(VoiceCaptureError::RuntimeStreamFailed);
         }
         let active = self
             .active
@@ -106,11 +99,9 @@ impl VoiceCaptureState {
         format: cpal::SampleFormat,
         producer: PcmProducer,
     ) -> Result<cpal::Stream, VoiceCaptureError> {
-        let runtime_error = self.runtime_error.clone();
+        let runtime_failed = self.runtime_failed.clone();
         let on_error = move |_error| {
-            if let Ok(mut state) = runtime_error.try_lock() {
-                *state = Some(VoiceCaptureError::RuntimeStreamFailed);
-            }
+            runtime_failed.store(true, Ordering::Release);
         };
         match format {
             cpal::SampleFormat::F32 => {
@@ -193,5 +184,16 @@ mod tests {
         let drops = Arc::new(AtomicUsize::new(0));
         drop(state_with_fake_stream(drops.clone()));
         assert_eq!(drops.load(Ordering::Relaxed), 1);
+    }
+
+    #[test]
+    fn runtime_failure_is_reported_once_then_cleared() {
+        let state = VoiceCaptureState::new();
+        state.runtime_failed.store(true, Ordering::Release);
+        assert_eq!(
+            state.take_samples(),
+            Err(VoiceCaptureError::RuntimeStreamFailed)
+        );
+        assert_eq!(state.take_samples(), Ok(Vec::new()));
     }
 }

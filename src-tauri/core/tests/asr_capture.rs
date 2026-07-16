@@ -20,8 +20,47 @@ fn resamples_to_documented_one_sample_duration_tolerance() {
         producer.push_f32(&vec![0.25; source_rate as usize]);
         let output = consumer.drain();
         assert!(output.len().abs_diff(16_000) <= 1);
-        assert!(output.iter().all(|sample| *sample == 0.25));
+        if source_rate <= 16_000 {
+            assert!(output.iter().all(|sample| *sample == 0.25));
+        } else {
+            assert!(output[100..]
+                .iter()
+                .all(|sample| (*sample - 0.25).abs() < 0.000_01));
+        }
     }
+}
+
+fn sine(rate: u32, frequency: f32, sample_count: usize) -> Vec<f32> {
+    (0..sample_count)
+        .map(|index| (2.0 * std::f32::consts::PI * frequency * index as f32 / rate as f32).sin())
+        .collect()
+}
+
+fn rms(samples: &[f32]) -> f32 {
+    (samples.iter().map(|sample| sample * sample).sum::<f32>() / samples.len() as f32).sqrt()
+}
+
+#[test]
+fn downsampling_preserves_speech_and_rejects_above_nyquist_content_across_chunks() {
+    let source_rate = 48_000;
+    let speech = sine(source_rate, 1_000.0, source_rate as usize);
+    let aliasing = sine(source_rate, 12_000.0, source_rate as usize);
+
+    let convert_in_chunks = |input: &[f32]| {
+        let (mut producer, consumer) = bounded_pcm_channel(1, source_rate, 20_000).unwrap();
+        for chunk in input.chunks(137) {
+            producer.push_f32(chunk);
+        }
+        consumer.drain()
+    };
+    let speech_output = convert_in_chunks(&speech);
+    let rejected_output = convert_in_chunks(&aliasing);
+
+    assert!(speech_output.len().abs_diff(16_000) <= 1);
+    assert!(rejected_output.len().abs_diff(16_000) <= 1);
+    // Ignore the short causal-filter startup transient when comparing content.
+    assert!(rms(&speech_output[100..]) > 0.65);
+    assert!(rms(&rejected_output[100..]) < 0.02);
 }
 
 #[test]
