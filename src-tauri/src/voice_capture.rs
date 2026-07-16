@@ -1,5 +1,7 @@
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::{self, SyncSender};
 use std::sync::{Arc, Mutex};
+use std::thread::{self, JoinHandle};
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use muniment_core::asr::capture::{bounded_pcm_channel, PcmConsumer, PcmProducer};
@@ -21,13 +23,19 @@ pub struct VoiceCaptureState {
 }
 
 struct ActiveCapture {
-    _stream: Box<dyn OwnedStream>,
+    stop: SyncSender<()>,
+    thread: Option<JoinHandle<()>>,
     consumer: PcmConsumer,
 }
 
-trait OwnedStream: Send {}
-
-impl OwnedStream for cpal::Stream {}
+impl Drop for ActiveCapture {
+    fn drop(&mut self) {
+        let _ = self.stop.try_send(());
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
+    }
+}
 
 impl VoiceCaptureState {
     pub fn new() -> Self {
@@ -46,25 +54,45 @@ impl VoiceCaptureState {
             return Err(VoiceCaptureError::AlreadyRunning);
         }
         self.runtime_failed.store(false, Ordering::Release);
-        let device = cpal::default_host()
-            .default_input_device()
-            .ok_or(VoiceCaptureError::NoInputDevice)?;
-        let supported = device
-            .default_input_config()
-            .map_err(|_| VoiceCaptureError::UnsupportedConfig)?;
-        let config = supported.config();
-        let (producer, consumer) = bounded_pcm_channel(
-            config.channels,
-            config.sample_rate.0,
-            QUEUE_CAPACITY_SAMPLES,
-        )
-        .map_err(|_| VoiceCaptureError::UnsupportedConfig)?;
-        let stream = self.build_stream(&device, &config, supported.sample_format(), producer)?;
-        stream
-            .play()
+        let (ready_tx, ready_rx) = mpsc::sync_channel(1);
+        let (stop_tx, stop_rx) = mpsc::sync_channel(1);
+        let runtime_failed = self.runtime_failed.clone();
+        let capture_thread = thread::Builder::new()
+            .name("voice-capture".into())
+            .spawn(move || {
+                let result = Self::open_stream(runtime_failed).and_then(|(stream, consumer)| {
+                    stream
+                        .play()
+                        .map_err(|_| VoiceCaptureError::StreamBuildFailed)?;
+                    Ok((stream, consumer))
+                });
+                match result {
+                    Ok((stream, consumer)) => {
+                        if ready_tx.send(Ok(consumer)).is_ok() {
+                            let _ = stop_rx.recv();
+                        }
+                        drop(stream);
+                    }
+                    Err(error) => {
+                        let _ = ready_tx.send(Err(error));
+                    }
+                }
+            })
             .map_err(|_| VoiceCaptureError::StreamBuildFailed)?;
+        let consumer = match ready_rx.recv() {
+            Ok(Ok(consumer)) => consumer,
+            Ok(Err(error)) => {
+                let _ = capture_thread.join();
+                return Err(error);
+            }
+            Err(_) => {
+                let _ = capture_thread.join();
+                return Err(VoiceCaptureError::StreamBuildFailed);
+            }
+        };
         *active = Some(ActiveCapture {
-            _stream: Box::new(stream),
+            stop: stop_tx,
+            thread: Some(capture_thread),
             consumer,
         });
         Ok(())
@@ -92,14 +120,39 @@ impl VoiceCaptureState {
             .map_or_else(Vec::new, |capture| capture.consumer.drain()))
     }
 
+    fn open_stream(
+        runtime_failed: Arc<AtomicBool>,
+    ) -> Result<(cpal::Stream, PcmConsumer), VoiceCaptureError> {
+        let device = cpal::default_host()
+            .default_input_device()
+            .ok_or(VoiceCaptureError::NoInputDevice)?;
+        let supported = device
+            .default_input_config()
+            .map_err(|_| VoiceCaptureError::UnsupportedConfig)?;
+        let config = supported.config();
+        let (producer, consumer) = bounded_pcm_channel(
+            config.channels,
+            config.sample_rate.0,
+            QUEUE_CAPACITY_SAMPLES,
+        )
+        .map_err(|_| VoiceCaptureError::UnsupportedConfig)?;
+        let stream = Self::build_stream(
+            &device,
+            &config,
+            supported.sample_format(),
+            producer,
+            runtime_failed,
+        )?;
+        Ok((stream, consumer))
+    }
+
     fn build_stream(
-        &self,
         device: &cpal::Device,
         config: &cpal::StreamConfig,
         format: cpal::SampleFormat,
         producer: PcmProducer,
+        runtime_failed: Arc<AtomicBool>,
     ) -> Result<cpal::Stream, VoiceCaptureError> {
-        let runtime_failed = self.runtime_failed.clone();
         let on_error = move |_error| {
             runtime_failed.store(true, Ordering::Release);
         };
@@ -152,8 +205,6 @@ mod tests {
 
     struct FakeStream(Arc<AtomicUsize>);
 
-    impl OwnedStream for FakeStream {}
-
     impl Drop for FakeStream {
         fn drop(&mut self) {
             self.0.fetch_add(1, Ordering::Relaxed);
@@ -163,8 +214,14 @@ mod tests {
     fn state_with_fake_stream(drops: Arc<AtomicUsize>) -> VoiceCaptureState {
         let state = VoiceCaptureState::new();
         let (_, consumer) = bounded_pcm_channel(1, 16_000, 1).unwrap();
+        let (stop, stopped) = mpsc::sync_channel(1);
+        let thread = thread::spawn(move || {
+            let _stream = FakeStream(drops);
+            let _ = stopped.recv();
+        });
         *state.active.lock().unwrap() = Some(ActiveCapture {
-            _stream: Box::new(FakeStream(drops)),
+            stop,
+            thread: Some(thread),
             consumer,
         });
         state
