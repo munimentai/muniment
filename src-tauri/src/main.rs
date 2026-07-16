@@ -3,6 +3,10 @@
 mod auth;
 mod chat;
 mod model_install;
+// This slice intentionally has no command/UI consumer; the next voice slice
+// will drive this owned native state.
+#[allow(dead_code)]
+mod voice_capture;
 
 use tauri::Manager;
 
@@ -10,6 +14,7 @@ fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .manage(auth::AuthState::new())
+        .manage(voice_capture::VoiceCaptureState::new())
         .setup(|app| {
             app.manage(chat::ChatState::new(app.handle())?);
             let model_root = app.path().app_data_dir()?.join("models").join("gemma");

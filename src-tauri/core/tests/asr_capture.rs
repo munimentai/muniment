@@ -1,0 +1,41 @@
+use muniment_core::asr::capture::bounded_pcm_channel;
+
+#[test]
+fn normalizes_downmixes_and_sanitizes_native_samples() {
+    let (mut producer, consumer) = bounded_pcm_channel(2, 16_000, 8).unwrap();
+    producer.push_i16(&[i16::MAX, i16::MIN, 16_384, 16_384]);
+    let samples = consumer.drain();
+    assert!((samples[0] + 1.0 / 65_536.0).abs() < 0.000_001);
+    assert!((samples[1] - 0.5).abs() < 0.000_001);
+
+    let (mut producer, consumer) = bounded_pcm_channel(1, 16_000, 4).unwrap();
+    producer.push_f32(&[f32::NAN, 2.0, -2.0]);
+    assert_eq!(consumer.drain(), vec![0.0, 1.0, -1.0]);
+}
+
+#[test]
+fn resamples_to_documented_one_sample_duration_tolerance() {
+    for source_rate in [8_000, 44_100, 48_000] {
+        let (mut producer, consumer) = bounded_pcm_channel(1, source_rate, 20_000).unwrap();
+        producer.push_f32(&vec![0.25; source_rate as usize]);
+        let output = consumer.drain();
+        assert!(output.len().abs_diff(16_000) <= 1);
+        assert!(output.iter().all(|sample| *sample == 0.25));
+    }
+}
+
+#[test]
+fn preserves_frames_and_resampler_state_across_callback_chunks() {
+    let (mut producer, consumer) = bounded_pcm_channel(2, 16_000, 8).unwrap();
+    producer.push_f32(&[0.2]);
+    producer.push_f32(&[0.4, 0.6, 0.8]);
+    assert_eq!(consumer.drain(), vec![0.3, 0.70000005]);
+}
+
+#[test]
+fn overflow_is_bounded_and_counted_without_reordering_queued_audio() {
+    let (mut producer, consumer) = bounded_pcm_channel(1, 16_000, 2).unwrap();
+    producer.push_u16(&[32_768, 49_152, 65_535]);
+    assert_eq!(consumer.drain(), vec![0.0, 0.5]);
+    assert_eq!(consumer.dropped_samples(), 1);
+}
