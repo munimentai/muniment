@@ -6,7 +6,7 @@ use std::fs::{self, File, Metadata};
 use std::io;
 use std::os::linux::fs::MetadataExt as LinuxMetadataExt;
 use std::os::unix::fs::{FileTypeExt, MetadataExt, OpenOptionsExt};
-use std::os::unix::io::{AsRawFd, FromRawFd};
+use std::os::unix::io::{AsRawFd, FromRawFd, RawFd};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -414,11 +414,40 @@ fn unlink_at(parent: &File, name: &str) -> io::Result<()> {
 }
 
 fn chmod_fd(file: &File, mode: libc::mode_t) -> io::Result<()> {
+    chmod_fd_with(file, mode, fchmodat2)
+}
+
+fn chmod_fd_with(
+    file: &File,
+    mode: libc::mode_t,
+    fchmodat2: impl FnOnce(RawFd, libc::mode_t) -> io::Result<()>,
+) -> io::Result<()> {
+    match fchmodat2(file.as_raw_fd(), mode) {
+        Ok(()) => Ok(()),
+        Err(error) if error.raw_os_error() == Some(libc::ENOSYS) => {
+            // fchmod(2) rejects O_PATH descriptors, and fchmodat2(2) was only
+            // added in Linux 6.5. The procfs magic link resolves the already
+            // pinned inode, so replacing the endpoint pathname cannot redirect
+            // this compatibility path.
+            let path = CString::new(format!("/proc/self/fd/{}", file.as_raw_fd()))
+                .expect("file descriptor path contains no NUL bytes");
+            let result = unsafe { libc::chmod(path.as_ptr(), mode) };
+            if result == 0 {
+                Ok(())
+            } else {
+                Err(io::Error::last_os_error())
+            }
+        }
+        Err(error) => Err(error),
+    }
+}
+
+fn fchmodat2(fd: RawFd, mode: libc::mode_t) -> io::Result<()> {
     let empty = c"";
     let result = unsafe {
         libc::syscall(
             libc::SYS_fchmodat2,
-            file.as_raw_fd(),
+            fd,
             empty.as_ptr(),
             mode,
             libc::AT_EMPTY_PATH,
@@ -496,5 +525,28 @@ mod tests {
     #[test]
     fn bind_error_cleanup_does_not_delete_a_raced_replacement() {
         replacement_is_preserved_when_expected_identity_is_stale(&unique_name(".bind"));
+    }
+
+    #[test]
+    fn chmod_fd_falls_back_when_fchmodat2_is_unavailable() {
+        let root = env::temp_dir().join(unique_name("muniment-attach-chmod-test"));
+        fs::create_dir(&root).unwrap();
+        let path = root.join("socket");
+        let listener = UnixListener::bind(&path).unwrap();
+        let socket = open_at(
+            &File::open(&root).unwrap(),
+            "socket",
+            libc::O_PATH | libc::O_NOFOLLOW,
+        )
+        .unwrap();
+
+        chmod_fd_with(&socket, 0o600, |_, _| {
+            Err(io::Error::from_raw_os_error(libc::ENOSYS))
+        })
+        .unwrap();
+
+        assert_eq!(socket.metadata().unwrap().mode() & 0o777, 0o600);
+        drop(listener);
+        fs::remove_dir_all(root).unwrap();
     }
 }
