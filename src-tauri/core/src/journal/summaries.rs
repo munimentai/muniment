@@ -2,8 +2,9 @@
 
 use super::{EventEnvelope, EventPayload, JournalError, RunJournal};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
+use hmac::{Hmac, Mac};
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
+use sha2::Sha256;
 use std::fmt;
 
 /// Maximum number of summaries returned by one call.
@@ -65,7 +66,7 @@ struct Cursor {
     version: u8,
     updated_at: String,
     run_id: String,
-    checksum: String,
+    authenticator: String,
 }
 
 impl RunJournal {
@@ -86,7 +87,9 @@ impl RunJournal {
                 max: MAX_PAGE_SIZE,
             });
         }
-        let boundary = cursor.map(decode_cursor).transpose()?;
+        let boundary = cursor
+            .map(|cursor| decode_cursor(cursor, &self.cursor_key))
+            .transpose()?;
 
         let coordination = self.coordination.clone();
         let _operation = coordination
@@ -158,7 +161,10 @@ impl RunJournal {
             });
         }
         let next_cursor = if has_more {
-            summaries.last().map(encode_cursor).transpose()?
+            summaries
+                .last()
+                .map(|summary| encode_cursor(summary, &self.cursor_key))
+                .transpose()?
         } else {
             None
         };
@@ -197,13 +203,13 @@ fn title_from(events: &[EventEnvelope]) -> String {
         .collect()
 }
 
-fn encode_cursor(summary: &RunSummary) -> Result<String, RunSummaryListError> {
-    let checksum = cursor_checksum(&summary.updated_at, &summary.run_id);
+fn encode_cursor(summary: &RunSummary, key: &[u8; 32]) -> Result<String, RunSummaryListError> {
+    let authenticator = cursor_authenticator(key, &summary.updated_at, &summary.run_id);
     let cursor = Cursor {
         version: 1,
         updated_at: summary.updated_at.clone(),
         run_id: summary.run_id.clone(),
-        checksum,
+        authenticator,
     };
     let bytes = serde_json::to_vec(&cursor).map_err(|error| {
         RunSummaryListError::Journal(JournalError::Corrupt(format!(
@@ -213,7 +219,7 @@ fn encode_cursor(summary: &RunSummary) -> Result<String, RunSummaryListError> {
     Ok(URL_SAFE_NO_PAD.encode(bytes))
 }
 
-fn decode_cursor(encoded: &str) -> Result<Cursor, RunSummaryListError> {
+fn decode_cursor(encoded: &str, key: &[u8; 32]) -> Result<Cursor, RunSummaryListError> {
     if encoded.is_empty() || encoded.len() > 512 {
         return Err(RunSummaryListError::InvalidCursor);
     }
@@ -222,18 +228,26 @@ fn decode_cursor(encoded: &str) -> Result<Cursor, RunSummaryListError> {
         .map_err(|_| RunSummaryListError::InvalidCursor)?;
     let cursor: Cursor =
         serde_json::from_slice(&bytes).map_err(|_| RunSummaryListError::InvalidCursor)?;
-    if cursor.version != 1 || cursor.checksum != cursor_checksum(&cursor.updated_at, &cursor.run_id)
-    {
+    let authenticator = URL_SAFE_NO_PAD
+        .decode(&cursor.authenticator)
+        .map_err(|_| RunSummaryListError::InvalidCursor)?;
+    let mut mac = Hmac::<Sha256>::new_from_slice(key).expect("SHA-256 HMAC accepts any key length");
+    update_cursor_mac(&mut mac, &cursor.updated_at, &cursor.run_id);
+    if cursor.version != 1 || mac.verify_slice(&authenticator).is_err() {
         return Err(RunSummaryListError::InvalidCursor);
     }
     Ok(cursor)
 }
 
-fn cursor_checksum(updated_at: &str, run_id: &str) -> String {
-    let mut digest = Sha256::new();
-    digest.update(b"muniment-run-summary-cursor-v1\0");
-    digest.update(updated_at.as_bytes());
-    digest.update(b"\0");
-    digest.update(run_id.as_bytes());
-    format!("{:x}", digest.finalize())
+fn cursor_authenticator(key: &[u8; 32], updated_at: &str, run_id: &str) -> String {
+    let mut mac = Hmac::<Sha256>::new_from_slice(key).expect("SHA-256 HMAC accepts any key length");
+    update_cursor_mac(&mut mac, updated_at, run_id);
+    URL_SAFE_NO_PAD.encode(mac.finalize().into_bytes())
+}
+
+fn update_cursor_mac(mac: &mut Hmac<Sha256>, updated_at: &str, run_id: &str) {
+    mac.update(b"muniment-run-summary-cursor-v1\0");
+    mac.update(updated_at.as_bytes());
+    mac.update(b"\0");
+    mac.update(run_id.as_bytes());
 }

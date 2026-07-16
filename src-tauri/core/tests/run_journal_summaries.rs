@@ -1,3 +1,4 @@
+use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use muniment_core::journal::{
     summaries::{RunSummaryListError, MAX_PAGE_SIZE, MAX_TITLE_CHARS, UNTITLED_RUN_TITLE},
     EventEnvelope, EventPayload, Provenance, RunJournal,
@@ -138,10 +139,11 @@ fn limits_and_forged_cursors_are_typed_errors() {
     ));
 
     let cursor = journal.run_summaries(1, None).unwrap().next_cursor.unwrap();
-    let mut forged = cursor.into_bytes();
-    let last = forged.len() - 1;
-    forged[last] = if forged[last] == b'A' { b'B' } else { b'A' };
-    let forged = String::from_utf8(forged).unwrap();
+    let mut forged: serde_json::Value =
+        serde_json::from_slice(&URL_SAFE_NO_PAD.decode(cursor).unwrap()).unwrap();
+    forged["updated_at"] = json!("2026-07-10T12:00:00Z");
+    forged["run_id"] = json!(RUN_B);
+    let forged = URL_SAFE_NO_PAD.encode(serde_json::to_vec(&forged).unwrap());
     assert!(matches!(
         journal.run_summaries(1, Some(&forged)),
         Err(RunSummaryListError::InvalidCursor)
