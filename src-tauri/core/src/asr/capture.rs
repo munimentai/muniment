@@ -136,10 +136,7 @@ pub fn bounded_pcm_channel(
             low_pass: (source_rate > SAMPLE_RATE).then(|| LowPassFilter::new(source_rate)),
             gap: gap.clone(),
         },
-        PcmConsumer {
-            receiver,
-            gap,
-        },
+        PcmConsumer { receiver, gap },
     ))
 }
 
