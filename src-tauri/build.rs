@@ -90,9 +90,7 @@ fn main() {
     // The packaged libraries live in Tauri's resource directory. Keep loader
     // lookup relative to the executable so no machine-global install is used.
     match os.as_str() {
-        "linux" => println!(
-            "cargo:rustc-link-arg=-Wl,-rpath,$ORIGIN/../lib/muniment/resources/asr-runtime"
-        ),
+        "linux" => println!("cargo:rustc-link-arg=-Wl,-rpath,$ORIGIN/../lib/muniment/asr-runtime"),
         "macos" => {
             println!("cargo:rustc-link-arg=-Wl,-rpath,@executable_path/../Resources/asr-runtime")
         }
