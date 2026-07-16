@@ -29,6 +29,14 @@ pub struct AsrArtifactManifest {
     pub identity: &'static str,
     pub revision: &'static str,
     pub artifacts: &'static [AsrArtifactDescriptor; 4],
+    pub additional_artifact: Option<AsrSourcedArtifactDescriptor>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AsrSourcedArtifactDescriptor {
+    pub repository: &'static str,
+    pub revision: &'static str,
+    pub artifact: AsrArtifactDescriptor,
 }
 
 pub const PARAKEET_ARTIFACTS: [AsrArtifactDescriptor; 4] = [
@@ -58,6 +66,15 @@ pub const PARAKEET_MODEL_MANIFEST: AsrArtifactManifest = AsrArtifactManifest {
     identity: "parakeet-tdt-0.6b-v3-int8-v1",
     revision: "2bda32ec70b097a55adaa07d9a7173915b43cc78",
     artifacts: &PARAKEET_ARTIFACTS,
+    additional_artifact: Some(AsrSourcedArtifactDescriptor {
+        repository: "csukuangfj/vad",
+        revision: "af4fcfc9b8305246b1fe2ebcaf248975673166f1",
+        artifact: AsrArtifactDescriptor {
+            filename: "silero_vad.onnx",
+            byte_size: 1_807_522,
+            sha256: "a35ebf52fd3ce5f1469b2a36158dba761bc47b973ea3382b3186ca15b1f5af28",
+        },
+    }),
 };
 
 pub const PARAKEET_MODEL_MANIFESTS: [&AsrArtifactManifest; 1] = [&PARAKEET_MODEL_MANIFEST];
@@ -91,7 +108,7 @@ impl std::fmt::Display for AsrModelSetVerificationError {
 impl std::error::Error for AsrModelSetVerificationError {}
 
 /// Verifies the complete pinned Parakeet model set without loading an artifact
-/// into memory. Success is reported only after all four artifacts pass.
+/// into memory. Success is reported only after every compiled artifact passes.
 pub fn verify_parakeet_model_set(
     model_set_directory: impl AsRef<Path>,
 ) -> Result<(), AsrModelSetVerificationError> {
@@ -104,6 +121,12 @@ pub fn verify_model_set(
 ) -> Result<(), AsrModelSetVerificationError> {
     for descriptor in manifest.artifacts {
         verify_artifact(&directory.join(descriptor.filename), descriptor)?;
+    }
+    if let Some(descriptor) = manifest.additional_artifact {
+        verify_artifact(
+            &directory.join(descriptor.artifact.filename),
+            &descriptor.artifact,
+        )?;
     }
     Ok(())
 }
@@ -256,6 +279,9 @@ impl AsrRevisionLifecycle {
         for artifact in self.target.artifacts {
             boundary.sync_file(&staged_directory.join(artifact.filename))?;
         }
+        if let Some(artifact) = self.target.additional_artifact {
+            boundary.sync_file(&staged_directory.join(artifact.artifact.filename))?;
+        }
         boundary.sync_directory(staged_directory)?;
 
         let revisions = self.root.join("revisions");
@@ -393,6 +419,15 @@ fn pointer_value(manifest: &AsrArtifactManifest) -> String {
 fn valid_manifest(manifest: &AsrArtifactManifest) -> bool {
     safe_component(manifest.identity)
         && safe_component(manifest.revision)
+        && manifest.additional_artifact.is_none_or(|additional| {
+            safe_source_component(additional.repository)
+                && safe_component(additional.revision)
+                && safe_component(additional.artifact.filename)
+                && !manifest
+                    .artifacts
+                    .iter()
+                    .any(|artifact| artifact.filename == additional.artifact.filename)
+        })
         && !manifest
             .artifacts
             .iter()
@@ -406,6 +441,12 @@ fn valid_manifest(manifest: &AsrArtifactManifest) -> bool {
                     .iter()
                     .any(|other| artifact.filename == other.filename)
             })
+}
+
+fn safe_source_component(value: &str) -> bool {
+    let mut parts = value.split('/');
+    matches!((parts.next(), parts.next(), parts.next()), (Some(owner), Some(repository), None)
+        if safe_component(owner) && safe_component(repository))
 }
 
 fn safe_component(value: &str) -> bool {
@@ -484,6 +525,7 @@ mod tests {
         identity: "test-manifest-v1",
         revision: "old",
         artifacts: &FIXTURES,
+        additional_artifact: None,
     };
     const UPDATE_FIXTURES: [AsrArtifactDescriptor; 4] = [
         AsrArtifactDescriptor {
@@ -511,6 +553,7 @@ mod tests {
         identity: "test-manifest-v2",
         revision: "new",
         artifacts: &UPDATE_FIXTURES,
+        additional_artifact: None,
     };
     const KNOWN_MANIFESTS: [&AsrArtifactManifest; 2] = [&MANIFEST, &UPDATE_MANIFEST];
 
