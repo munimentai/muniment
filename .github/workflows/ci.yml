@@ -183,7 +183,12 @@ jobs:
           trap 'rm -f "$key"' EXIT
 
           # macOS: .app only — dmg bundling needs a GUI session (release-time step)
-          cmd='cargo test --manifest-path src-tauri/Cargo.toml --locked && npm ci --no-audit --no-fund && npm run tauri build'
+          # --test-threads=1: the linux desktop-ci VM has few cores; the chat
+          # coordinator/receipt tests spawn a stub subprocess that must connect
+          # back within a deadline, and default (num_cpus) test parallelism starves
+          # it under load → intermittent "coordinator did not request its receipt".
+          # Serialize the test run so the spawned process always gets a core.
+          cmd='cargo test --manifest-path src-tauri/Cargo.toml --locked -- --test-threads=1 && npm ci --no-audit --no-fund && npm run tauri build'
           if [ "$PLATFORM" = "windows" ]; then
             cmd='npm ci --no-audit --no-fund && node .github/build-windows-installers.mjs && powershell.exe -NoProfile -ExecutionPolicy Bypass -File test/windows-installers.ps1'
           fi
