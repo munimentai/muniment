@@ -30,6 +30,7 @@ pub enum UtteranceConfigError {
     BoundaryDurationsExceedMaximum,
     BufferTooSmall,
     SampleCountOverflow,
+    BufferCapacityUnavailable,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -82,10 +83,19 @@ impl UtteranceSegmenter {
             return Err(UtteranceConfigError::BufferTooSmall);
         }
 
+        let mut pre_roll = VecDeque::new();
+        pre_roll
+            .try_reserve_exact(config.pre_roll_samples)
+            .map_err(|_| UtteranceConfigError::BufferCapacityUnavailable)?;
+        let mut active = Vec::new();
+        active
+            .try_reserve_exact(config.max_utterance_samples)
+            .map_err(|_| UtteranceConfigError::BufferCapacityUnavailable)?;
+
         Ok(Self {
             config,
-            pre_roll: VecDeque::with_capacity(config.pre_roll_samples),
-            active: Vec::with_capacity(config.max_utterance_samples),
+            pre_roll,
+            active,
             speech_samples: 0,
             trailing_samples: 0,
         })

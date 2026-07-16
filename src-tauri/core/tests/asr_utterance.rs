@@ -59,6 +59,22 @@ fn validates_every_bound_and_overflow_prone_relationship() {
 }
 
 #[test]
+fn rejects_buffer_capacities_that_cannot_be_allocated() {
+    let value = UtteranceConfig {
+        pre_roll_samples: 1,
+        min_speech_samples: 1,
+        trailing_silence_samples: 1,
+        max_utterance_samples: usize::MAX,
+        max_buffered_samples: usize::MAX,
+    };
+
+    assert_eq!(
+        UtteranceSegmenter::new(value).err(),
+        Some(UtteranceConfigError::BufferCapacityUnavailable)
+    );
+}
+
+#[test]
 fn retains_bounded_pre_roll_and_closes_on_silence() {
     let mut segmenter = UtteranceSegmenter::new(config()).unwrap();
     segmenter
