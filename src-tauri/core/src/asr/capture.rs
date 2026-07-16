@@ -158,6 +158,11 @@ impl PcmProducer {
             if let Some(filter) = &mut self.low_pass {
                 mono = filter.process(mono);
             }
+            mono = if mono.is_finite() {
+                mono.clamp(-1.0, 1.0)
+            } else {
+                0.0
+            };
 
             self.resample_accumulator += SAMPLE_RATE;
             while self.resample_accumulator >= self.source_rate {

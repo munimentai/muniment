@@ -64,6 +64,25 @@ fn downsampling_preserves_speech_and_rejects_above_nyquist_content_across_chunks
 }
 
 #[test]
+fn downsampling_transients_remain_finite_and_normalized() {
+    let source_rate = 48_000;
+    let (mut producer, consumer) = bounded_pcm_channel(1, source_rate, 20_000).unwrap();
+    let input: Vec<f32> = (0..source_rate)
+        .map(|index| if (index / 31) % 2 == 0 { 1.0 } else { -1.0 })
+        .collect();
+
+    for chunk in input.chunks(113) {
+        producer.push_f32(chunk);
+    }
+
+    let output = consumer.drain();
+    assert!(output.len().abs_diff(16_000) <= 1);
+    assert!(output
+        .iter()
+        .all(|sample| sample.is_finite() && (-1.0..=1.0).contains(sample)));
+}
+
+#[test]
 fn preserves_frames_and_resampler_state_across_callback_chunks() {
     let (mut producer, consumer) = bounded_pcm_channel(2, 16_000, 8).unwrap();
     producer.push_f32(&[0.2]);
