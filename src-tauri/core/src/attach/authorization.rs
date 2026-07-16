@@ -15,8 +15,26 @@ pub trait AuthorizationClock {
 
 /// Supplies cryptographically random bytes in production and fixed bytes in tests.
 pub trait AuthorizationTokenGenerator {
-    fn fill(&mut self, bytes: &mut [u8]) -> Result<(), ()>;
+    fn fill(&mut self, bytes: &mut [u8]) -> Result<(), AuthorizationRandomnessError>;
 }
+
+/// Redacted failure returned when authorization token randomness is unavailable.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub struct AuthorizationRandomnessError;
+
+impl fmt::Debug for AuthorizationRandomnessError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("AuthorizationRandomnessError([REDACTED])")
+    }
+}
+
+impl fmt::Display for AuthorizationRandomnessError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("authorization randomness is unavailable")
+    }
+}
+
+impl std::error::Error for AuthorizationRandomnessError {}
 
 #[derive(Clone, PartialEq, Eq)]
 pub struct PairingChallenge(String);
@@ -256,7 +274,7 @@ impl<C: AuthorizationClock, G: AuthorizationTokenGenerator> AuthorizationState<C
 
 fn generate_hex<const N: usize>(
     generator: &mut impl AuthorizationTokenGenerator,
-) -> Result<String, ()> {
+) -> Result<String, AuthorizationRandomnessError> {
     let mut bytes = [0; N];
     generator.fill(&mut bytes)?;
     let mut result = String::with_capacity(N * 2);

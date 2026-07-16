@@ -399,8 +399,8 @@ impl AuthorizationClock for SessionClock {
 
 struct SessionTokens;
 impl AuthorizationTokenGenerator for SessionTokens {
-    fn fill(&mut self, bytes: &mut [u8]) -> Result<(), ()> {
-        getrandom::fill(bytes).map_err(|_| ())
+    fn fill(&mut self, bytes: &mut [u8]) -> Result<(), super::AuthorizationRandomnessError> {
+        getrandom::fill(bytes).map_err(|_| super::AuthorizationRandomnessError)
     }
 }
 

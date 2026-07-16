@@ -58,7 +58,10 @@ impl AuthorizationClock for TestClock {
 }
 struct TestTokens(u8);
 impl AuthorizationTokenGenerator for TestTokens {
-    fn fill(&mut self, bytes: &mut [u8]) -> Result<(), ()> {
+    fn fill(
+        &mut self,
+        bytes: &mut [u8],
+    ) -> Result<(), muniment_core::attach::AuthorizationRandomnessError> {
         bytes.fill(self.0);
         self.0 += 1;
         Ok(())
@@ -69,9 +72,12 @@ struct FailingTokens {
     calls_before_failure: usize,
 }
 impl AuthorizationTokenGenerator for FailingTokens {
-    fn fill(&mut self, bytes: &mut [u8]) -> Result<(), ()> {
+    fn fill(
+        &mut self,
+        bytes: &mut [u8],
+    ) -> Result<(), muniment_core::attach::AuthorizationRandomnessError> {
         if self.calls_before_failure == 0 {
-            return Err(());
+            return Err(muniment_core::attach::AuthorizationRandomnessError);
         }
         self.calls_before_failure -= 1;
         bytes.fill(1);

@@ -365,7 +365,10 @@ impl TestClock {
 
 struct TestTokens(u8);
 impl AuthorizationTokenGenerator for TestTokens {
-    fn fill(&mut self, bytes: &mut [u8]) -> Result<(), ()> {
+    fn fill(
+        &mut self,
+        bytes: &mut [u8],
+    ) -> Result<(), muniment_core::attach::AuthorizationRandomnessError> {
         self.0 += 1;
         bytes.fill(self.0);
         Ok(())
