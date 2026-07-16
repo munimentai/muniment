@@ -1,5 +1,6 @@
 <script>
   import { onMount, tick } from 'svelte'
+  import { getCurrentWebview } from '@tauri-apps/api/webview'
   import { open } from '@tauri-apps/plugin-dialog'
 
   import { accessErrorState, accessIdleState, accessLoadingState, accessReadyState, bootState, devicesErrorState, devicesIdleState, devicesLoadingState, devicesReadyState, errorState, statusState, waitingState } from './lib/auth-state.js'
@@ -36,6 +37,7 @@
   let expandedReceipts = $state(new Set())
   let parallelTools = $state(new Map())
   let submissionSequence = 0
+  let draggingFiles = $state(false)
 
   function toggleReceipt(runId) {
     const next = new Set(expandedReceipts)
@@ -197,8 +199,27 @@
     }
     document.addEventListener('click', outside)
     document.addEventListener('keydown', escape)
+    let stopDragDrop
+    let destroyed = false
+    if (tauri) getCurrentWebview().onDragDropEvent(({ payload }) => {
+        if (auth.name !== 'signed-in' || active) {
+          draggingFiles = false
+          return
+        }
+        if (payload.type === 'over') draggingFiles = true
+        if (payload.type === 'leave') draggingFiles = false
+        if (payload.type === 'drop') {
+          draggingFiles = false
+          addFiles(payload.paths)
+        }
+      }).then((stop) => {
+        if (destroyed) stop()
+        else stopDragDrop = stop
+      })
     return () => {
+      destroyed = true
       unlisten?.()
+      stopDragDrop?.()
       document.removeEventListener('click', outside)
       document.removeEventListener('keydown', escape)
     }
@@ -249,10 +270,16 @@
     }
     if (!picked) return
     const paths = Array.isArray(picked) ? picked : [picked]
+    await addFiles(paths)
+  }
+
+  async function addFiles(paths) {
     const known = new Set(selectedFiles.map(({ path }) => path))
     const additions = []
     try {
-      for (const path of paths.filter((path) => !known.has(path))) {
+      for (const path of paths) {
+        if (known.has(path)) continue
+        known.add(path)
         additions.push({ path, ...await tauri.invoke('chat_file_metadata', { path }) })
       }
     } catch (_) {
@@ -340,6 +367,7 @@
       </section>
     {:else if auth.name === 'signed-in'}
       <section class="workspace">
+        {#if draggingFiles}<div class="drop-affordance" role="status"><strong>Drop files to add them</strong><span>Selected locally · not sent to the model</span></div>{/if}
         <header class="titlebar"><span class="thread-title">New thread</span><span class="thread-id">local · durable</span><span class="title-spacer"></span><button class="quiet" aria-label="Open artifact rail">⌘J</button></header>
         <aside class="sidebar">
           <div class="side-brand"><svg width="24" height="24" viewBox="0 0 48 48" aria-hidden="true"><path d={markD} stroke-width="5" /></svg><strong>muniment</strong></div>
@@ -581,6 +609,8 @@
 
   .workspace { position: fixed; inset: 0; display: grid; grid-template-rows: 52px 1fr auto; }
   .workspace { grid-template-columns: 260px 1fr; grid-template-areas: "title title" "side thread" "side composer"; }
+  .drop-affordance { position: fixed; z-index: 4; inset: 52px 0 0 260px; display: grid; place-content: center; gap: 5px; background: color-mix(in srgb, var(--paper) 92%, transparent); border: 1px dashed var(--muted); color: var(--ink); text-align: center; pointer-events: none; }
+  .drop-affordance span { color: var(--muted); font: var(--text-12) var(--font-mono); }
   .titlebar { grid-area: title; display: flex; align-items: center; padding: 0 18px 0 278px; border-bottom: 1px solid var(--border); background: var(--surface); }
   .thread-title { font-weight: 600; }
   .thread-id, kbd { margin-left: 10px; color: var(--muted); font: var(--text-12) var(--font-mono); }

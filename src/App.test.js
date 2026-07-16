@@ -10,6 +10,17 @@ let App
 let invoke
 let chatListener
 let dialogResult
+let dragDropListener
+let dragDropUnlisten
+
+vi.mock('@tauri-apps/api/webview', () => ({
+  getCurrentWebview: () => ({
+    onDragDropEvent: vi.fn((listener) => {
+      dragDropListener = listener
+      return Promise.resolve(dragDropUnlisten)
+    }),
+  }),
+}))
 
 const snapshot = (groups = []) => ({
   snapshot_version: 2,
@@ -49,6 +60,8 @@ beforeAll(async () => {
 
 beforeEach(() => {
   chatListener = undefined
+  dragDropListener = undefined
+  dragDropUnlisten = vi.fn()
   dialogResult = null
   invoke = vi.fn(async (command, payload) => {
     if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
@@ -63,6 +76,48 @@ beforeEach(() => {
 afterEach(() => cleanup())
 
 describe('local file selection', () => {
+  it('shows and clears the native drop affordance, then de-duplicates dropped files', async () => {
+    dialogResult = ['/private/contracts/lease.pdf']
+    render(App)
+    await fireEvent.click(await screen.findByRole('button', { name: 'Add files' }))
+    await waitFor(() => expect(dragDropListener).toBeDefined())
+
+    dragDropListener({ payload: { type: 'over', position: { x: 10, y: 10 } } })
+    expect(await screen.findByRole('status')).toHaveTextContent('Drop files to add themSelected locally · not sent to the model')
+    dragDropListener({ payload: { type: 'leave' } })
+    await waitFor(() => expect(screen.queryByRole('status')).not.toBeInTheDocument())
+
+    dragDropListener({ payload: { type: 'over', position: { x: 20, y: 20 } } })
+    dragDropListener({ payload: { type: 'drop', paths: ['/private/contracts/lease.pdf', '/private/notes.txt', '/private/notes.txt'] } })
+    await waitFor(() => expect(screen.queryByRole('status')).not.toBeInTheDocument())
+    expect(await screen.findByText('notes.txt')).toBeInTheDocument()
+    expect(screen.getAllByText('lease.pdf')).toHaveLength(1)
+    expect(screen.getAllByText('notes.txt')).toHaveLength(1)
+    expect(invoke.mock.calls.filter(([command]) => command === 'chat_file_metadata')).toEqual([
+      ['chat_file_metadata', { path: '/private/contracts/lease.pdf' }],
+      ['chat_file_metadata', { path: '/private/notes.txt' }],
+    ])
+    expect(document.body).not.toHaveTextContent('/private/')
+  })
+
+  it('ignores native drag/drop while signed out and unregisters on teardown', async () => {
+    invoke.mockImplementation(async (command) => {
+      if (command === 'auth_status') return { signed_in: false }
+      throw new Error(`unexpected command: ${command}`)
+    })
+    const view = render(App)
+    await screen.findByRole('button', { name: 'Sign in' })
+    await waitFor(() => expect(dragDropListener).toBeDefined())
+
+    dragDropListener({ payload: { type: 'over', position: { x: 10, y: 10 } } })
+    dragDropListener({ payload: { type: 'drop', paths: ['/secret/evidence.pdf'] } })
+    expect(screen.queryByRole('status')).not.toBeInTheDocument()
+    expect(invoke).not.toHaveBeenCalledWith('chat_file_metadata', expect.anything())
+
+    view.unmount()
+    expect(dragDropUnlisten).toHaveBeenCalledOnce()
+  })
+
   it('treats picker cancel as a no-op and removes a selected file', async () => {
     render(App)
     const add = await screen.findByRole('button', { name: 'Add files' })
