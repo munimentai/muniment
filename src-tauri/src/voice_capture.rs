@@ -107,6 +107,22 @@ impl VoiceCaptureState {
         Ok(())
     }
 
+    /// Stops capture and returns every sample queued before the stream closed.
+    pub fn stop_and_take_samples(&self) -> Result<Vec<f32>, VoiceCaptureError> {
+        let active = self
+            .active
+            .lock()
+            .map_err(|_| VoiceCaptureError::StreamBuildFailed)?
+            .take();
+        Ok(active.map_or_else(Vec::new, |mut capture| {
+            let _ = capture.stop.try_send(());
+            if let Some(thread) = capture.thread.take() {
+                let _ = thread.join();
+            }
+            capture.consumer.drain()
+        }))
+    }
+
     pub fn take_samples(&self) -> Result<Vec<f32>, VoiceCaptureError> {
         if self.runtime_failed.swap(false, Ordering::AcqRel) {
             return Err(VoiceCaptureError::RuntimeStreamFailed);

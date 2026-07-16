@@ -430,7 +430,7 @@ impl ParakeetInstallState {
     }
 }
 
-fn parakeet_lifecycle(root: &Path) -> AsrRevisionLifecycle {
+pub(crate) fn parakeet_lifecycle(root: &Path) -> AsrRevisionLifecycle {
     AsrRevisionLifecycle::new(
         root.to_owned(),
         &PARAKEET_MODEL_MANIFESTS,
