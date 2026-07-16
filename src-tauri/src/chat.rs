@@ -1645,6 +1645,12 @@ mod tests {
 
     static PI_ENV_LOCK: Mutex<()> = Mutex::new(());
 
+    fn lock_pi_environment() -> std::sync::MutexGuard<'static, ()> {
+        PI_ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
     fn accept_receipt_request(listener: std::net::TcpListener) -> std::net::TcpStream {
         listener.set_nonblocking(true).unwrap();
         let deadline = std::time::Instant::now() + Duration::from_secs(10);
@@ -1776,7 +1782,7 @@ mod tests {
 
     #[test]
     fn missing_attachment_returns_non_path_leaking_copy_before_pi_can_start() {
-        let _environment = PI_ENV_LOCK.lock().unwrap();
+        let _environment = lock_pi_environment();
         let directory = std::env::temp_dir().join(format!("muniment-missing-{}", Uuid::now_v7()));
         std::fs::create_dir_all(&directory).unwrap();
         let prompt_log = directory.join("prompt.txt");
@@ -1839,7 +1845,7 @@ mod tests {
 
     #[test]
     fn changed_second_attachment_fails_the_run_without_prompting_pi() {
-        let _environment = PI_ENV_LOCK.lock().unwrap();
+        let _environment = lock_pi_environment();
         let directory = std::env::temp_dir().join(format!("muniment-changed-{}", Uuid::now_v7()));
         std::fs::create_dir_all(&directory).unwrap();
         let first = directory.join("first.txt");
@@ -1891,7 +1897,7 @@ mod tests {
 
     #[test]
     fn prepared_attachments_reach_pi_before_coordinator_events_continue() {
-        let _environment = PI_ENV_LOCK.lock().unwrap();
+        let _environment = lock_pi_environment();
         let app = tauri::test::mock_app();
         let directory =
             std::env::temp_dir().join(format!("muniment-coordinate-{}", Uuid::now_v7()));
@@ -2177,7 +2183,7 @@ mod tests {
 
     #[test]
     fn resume_runtime_failure_leaves_the_existing_journal_event_for_event_unchanged() {
-        let _environment = PI_ENV_LOCK.lock().unwrap();
+        let _environment = lock_pi_environment();
         let app = tauri::test::mock_app();
         let directory = std::env::temp_dir().join(format!("muniment-resume-{}", Uuid::now_v7()));
         std::fs::create_dir_all(&directory).unwrap();
@@ -2258,7 +2264,7 @@ mod tests {
 
     #[test]
     fn resume_reopens_the_stub_session_and_completes_the_same_contiguous_run() {
-        let _environment = PI_ENV_LOCK.lock().unwrap();
+        let _environment = lock_pi_environment();
         let app = tauri::test::mock_app();
         let directory = std::env::temp_dir().join(format!("muniment-resume-{}", Uuid::now_v7()));
         std::fs::create_dir_all(&directory).unwrap();
