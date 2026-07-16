@@ -67,7 +67,7 @@ Phases mirror harness-spec §9. Muniment-cloud Phase 1 native auth and the cloud
 - DONE — Tauri install, status, and cancel commands with redacted public states.
 - DONE foundation — sherpa-onnx 1.13.2 native libraries are packaged for macOS universal2, Windows x86_64, and Linux x86_64, with a safe offline Parakeet recognizer binding that verifies the current model, validates finite normalized mono 16 kHz input, owns and cleans up native handles, and has packaging and contract tests.
 - DONE capture foundation — the native microphone stream is owned outside the webview and feeds normalized mono 16 kHz PCM through a fixed-capacity, nonblocking queue with tested downmixing, anti-aliased resampling, overflow accounting, and deterministic cleanup.
-- BLOCKED — utterance segmentation over the 16 kHz stream is awaiting a Needs Human decision; production VAD selection and lifecycle, desktop recognition command wiring, UI, and target-hardware validation remain as independent slices behind it.
+- NEXT — bounded utterance segmentation/VAD policy, production VAD selection and lifecycle, desktop recognition command wiring, UI, and target-hardware validation remain as independent slices.
 
 ## Phase 4+ — Org surface (§9 items 16–19)
 - Remote MCP consumption, local stdio allowlist, capability install flow, artifact side panel, and projects with the redaction rule (`output withheld · connection not granted`).
