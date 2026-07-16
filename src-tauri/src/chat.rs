@@ -1934,6 +1934,7 @@ mod tests {
     fn prepared_attachments_reach_pi_before_coordinator_events_continue() {
         let _environment = lock_pi_environment();
         let app = tauri::test::mock_app();
+        std::fs::create_dir_all(app.path().app_data_dir().unwrap().join("pi-sessions")).unwrap();
         let directory =
             std::env::temp_dir().join(format!("muniment-coordinate-{}", Uuid::now_v7()));
         std::fs::create_dir_all(&directory).unwrap();
