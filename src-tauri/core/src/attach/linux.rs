@@ -132,8 +132,18 @@ pub struct AttachTransport<'a> {
 impl<'a> AttachTransport<'a> {
     /// Publishes a blocking stream listener. No accept thread is started.
     pub fn bind(filesystem: &'a AttachFilesystem) -> Result<Self, AttachTransportError> {
+        Self::bind_with_hooks(filesystem, || {}, || {})
+    }
+
+    /// Binds while invoking deterministic race hooks used by contract tests.
+    #[doc(hidden)]
+    pub fn bind_with_hooks(
+        filesystem: &'a AttachFilesystem,
+        after_bind: impl FnOnce(),
+        before_stale_remove: impl FnOnce(),
+    ) -> Result<Self, AttachTransportError> {
         let uid = unsafe { libc::geteuid() };
-        recover_stale_endpoint(filesystem, uid)?;
+        recover_stale_endpoint(filesystem, uid, before_stale_remove)?;
 
         let bind_path = pinned_endpoint_path(filesystem);
         let listener = UnixListener::bind(&bind_path).map_err(|_| AttachTransportError::Bind)?;
@@ -144,6 +154,7 @@ impl<'a> AttachTransport<'a> {
                 return Err(AttachTransportError::EndpointMetadata);
             }
         };
+        after_bind();
         if apply_socket_permissions(filesystem, created_identity).is_err() {
             drop(listener);
             remove_if_identity(filesystem, created_identity);
@@ -192,6 +203,13 @@ impl<'a> AttachTransport<'a> {
     /// Closes acceptance and safely withdraws this listener's pathname.
     pub fn shutdown(mut self) {
         self.close_and_remove();
+    }
+
+    /// Shuts down while invoking a deterministic check/remove race hook.
+    #[doc(hidden)]
+    pub fn shutdown_with_hook(mut self, before_remove: impl FnOnce()) {
+        self.listener.take();
+        let _ = remove_exact_endpoint_with_hook(self.filesystem, self.identity, before_remove);
     }
 
     fn close_and_remove(&mut self) {
@@ -317,6 +335,7 @@ fn verified_endpoint(
 fn recover_stale_endpoint(
     filesystem: &AttachFilesystem,
     uid: libc::uid_t,
+    before_remove: impl FnOnce(),
 ) -> Result<(), AttachTransportError> {
     let identity = match endpoint_metadata(filesystem) {
         Ok(metadata) => {
@@ -338,7 +357,7 @@ fn recover_stale_endpoint(
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
         Err(_) => return Err(AttachTransportError::ExistingEndpointProbe),
     }
-    remove_exact_endpoint(filesystem, identity)
+    remove_exact_endpoint_with_hook(filesystem, identity, before_remove)
         .map_err(|_| AttachTransportError::ExistingEndpointRemove)
 }
 
@@ -364,10 +383,7 @@ fn apply_socket_permissions(
         inode: metadata.ino(),
     }) != identity
     {
-        return Err(io::Error::new(
-            io::ErrorKind::Other,
-            "endpoint identity changed",
-        ));
+        return Err(io::Error::other("endpoint identity changed"));
     }
     std::fs::set_permissions(
         PathBuf::from(format!("/proc/self/fd/{}", endpoint.as_raw_fd())),
@@ -409,6 +425,15 @@ fn remove_exact_endpoint(
     filesystem: &AttachFilesystem,
     identity: EndpointIdentity,
 ) -> io::Result<()> {
+    remove_exact_endpoint_with_hook(filesystem, identity, || {})
+}
+
+fn remove_exact_endpoint_with_hook(
+    filesystem: &AttachFilesystem,
+    identity: EndpointIdentity,
+    before_remove: impl FnOnce(),
+) -> io::Result<()> {
+    before_remove();
     let sequence = NEXT_QUARANTINE.fetch_add(1, Ordering::Relaxed);
     let quarantine = format!(".attach-v1.sock.{}.{}", std::process::id(), sequence);
     let from = CString::new(ENDPOINT_NAME).unwrap();
@@ -433,10 +458,7 @@ fn remove_exact_endpoint(
     if unsafe { libc::renameat(directory, to.as_ptr(), directory, from.as_ptr()) } != 0 {
         return Err(io::Error::last_os_error());
     }
-    Err(io::Error::new(
-        io::ErrorKind::Other,
-        "endpoint identity changed",
-    ))
+    Err(io::Error::other("endpoint identity changed"))
 }
 
 fn open_directory(

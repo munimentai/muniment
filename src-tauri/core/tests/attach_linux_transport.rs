@@ -1,8 +1,10 @@
 #![cfg(target_os = "linux")]
 
-use muniment_core::attach::linux::{AttachFilesystem, AttachTransport, AttachTransportError};
+use muniment_core::attach::linux::{
+    AttachAcceptError, AttachFilesystem, AttachTransport, AttachTransportError, PeerCredentials,
+};
 use std::fs;
-use std::os::unix::fs::{FileTypeExt, MetadataExt, PermissionsExt};
+use std::os::unix::fs::{symlink, FileTypeExt, MetadataExt, PermissionsExt};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -94,7 +96,154 @@ fn refuses_unsafe_entries_and_preserves_replacements_on_drop() {
 }
 
 #[test]
+fn refuses_directories_and_symlinks() {
+    for create in [
+        |path: &std::path::Path| fs::create_dir(path).unwrap(),
+        |path: &std::path::Path| symlink(path.parent().unwrap(), path).unwrap(),
+    ] {
+        let runtime = TestDirectory::new();
+        let filesystem = AttachFilesystem::from_runtime_directory(&runtime.0).unwrap();
+        create(filesystem.endpoint_path());
+        assert_eq!(
+            AttachTransport::bind(&filesystem).unwrap_err(),
+            AttachTransportError::ExistingEndpointUnsafe
+        );
+    }
+}
+
+#[test]
+fn refuses_a_wrong_owner_socket_when_test_process_can_change_ownership() {
+    if unsafe { libc::geteuid() } != 0 {
+        return;
+    }
+    let runtime = TestDirectory::new();
+    let filesystem = AttachFilesystem::from_runtime_directory(&runtime.0).unwrap();
+    let stale = UnixListener::bind(filesystem.endpoint_path()).unwrap();
+    drop(stale);
+    assert_eq!(
+        unsafe { libc::chown(path_c_string(filesystem.endpoint_path()).as_ptr(), 1, 0) },
+        0
+    );
+    assert_eq!(
+        AttachTransport::bind(&filesystem).unwrap_err(),
+        AttachTransportError::ExistingEndpointUnsafe
+    );
+}
+
+#[test]
+fn bind_verification_never_removes_a_replacement() {
+    let runtime = TestDirectory::new();
+    let filesystem = AttachFilesystem::from_runtime_directory(&runtime.0).unwrap();
+    let error = AttachTransport::bind_with_hooks(
+        &filesystem,
+        || {
+            fs::remove_file(filesystem.endpoint_path()).unwrap();
+            fs::write(filesystem.endpoint_path(), b"replacement").unwrap();
+        },
+        || {},
+    )
+    .unwrap_err();
+    assert_eq!(error, AttachTransportError::Permissions);
+    assert_eq!(
+        fs::read(filesystem.endpoint_path()).unwrap(),
+        b"replacement"
+    );
+}
+
+#[test]
+fn stale_recovery_never_removes_a_replacement() {
+    let runtime = TestDirectory::new();
+    let filesystem = AttachFilesystem::from_runtime_directory(&runtime.0).unwrap();
+    let stale = UnixListener::bind(filesystem.endpoint_path()).unwrap();
+    drop(stale);
+    let error = AttachTransport::bind_with_hooks(
+        &filesystem,
+        || {},
+        || {
+            fs::remove_file(filesystem.endpoint_path()).unwrap();
+            fs::write(filesystem.endpoint_path(), b"replacement").unwrap();
+        },
+    )
+    .unwrap_err();
+    assert_eq!(error, AttachTransportError::ExistingEndpointRemove);
+    assert_eq!(
+        fs::read(filesystem.endpoint_path()).unwrap(),
+        b"replacement"
+    );
+}
+
+#[test]
+fn shutdown_check_remove_race_preserves_a_replacement() {
+    let runtime = TestDirectory::new();
+    let filesystem = AttachFilesystem::from_runtime_directory(&runtime.0).unwrap();
+    let transport = AttachTransport::bind(&filesystem).unwrap();
+    transport.shutdown_with_hook(|| {
+        fs::remove_file(filesystem.endpoint_path()).unwrap();
+        fs::write(filesystem.endpoint_path(), b"replacement").unwrap();
+    });
+    assert_eq!(
+        fs::read(filesystem.endpoint_path()).unwrap(),
+        b"replacement"
+    );
+}
+
+#[test]
+fn rejects_a_different_uid_peer_with_complete_diagnostics_when_permitted() {
+    if unsafe { libc::geteuid() } != 0 {
+        return;
+    }
+    let runtime = TestDirectory::new();
+    let filesystem = AttachFilesystem::from_runtime_directory(&runtime.0).unwrap();
+    let transport = AttachTransport::bind(&filesystem).unwrap();
+    // Socket permissions normally reject other UIDs before accept. Root temporarily
+    // opens the test endpoint so the transport's independent credential check runs.
+    fs::set_permissions(&runtime.0, fs::Permissions::from_mode(0o711)).unwrap();
+    fs::set_permissions(
+        filesystem.endpoint_path().parent().unwrap(),
+        fs::Permissions::from_mode(0o711),
+    )
+    .unwrap();
+    fs::set_permissions(
+        filesystem.endpoint_path(),
+        fs::Permissions::from_mode(0o666),
+    )
+    .unwrap();
+    let child = unsafe { libc::fork() };
+    assert!(child >= 0);
+    if child == 0 {
+        let uid = 1;
+        if unsafe { libc::setgid(uid) } != 0 || unsafe { libc::setuid(uid) } != 0 {
+            unsafe { libc::_exit(2) };
+        }
+        let status = if UnixStream::connect(filesystem.endpoint_path()).is_ok() {
+            0
+        } else {
+            3
+        };
+        unsafe { libc::_exit(status) };
+    }
+    let expected = PeerCredentials {
+        pid: child,
+        uid: 1,
+        gid: 1,
+    };
+    assert_eq!(
+        transport.accept().unwrap_err(),
+        AttachAcceptError::WrongUid(expected)
+    );
+    let mut status = 0;
+    assert_eq!(unsafe { libc::waitpid(child, &mut status, 0) }, child);
+    assert!(libc::WIFEXITED(status));
+    assert_eq!(libc::WEXITSTATUS(status), 0);
+}
+
+#[test]
 fn displayed_errors_do_not_disclose_runtime_paths() {
     let error = AttachTransportError::EndpointMetadata;
     assert!(!error.to_string().contains("/"));
+}
+
+fn path_c_string(path: &std::path::Path) -> std::ffi::CString {
+    use std::os::unix::ffi::OsStrExt;
+    std::ffi::CString::new(path.as_os_str().as_bytes()).unwrap()
 }
