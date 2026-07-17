@@ -2,11 +2,13 @@ use muniment_attach::{handshake, ClientError, ThreadListPage, ThreadOpenPage};
 use std::ffi::OsString;
 use std::io::{self, BufRead, IsTerminal, Write};
 
-const USAGE: &str = "usage: muniment threads list | muniment threads open <thread-id>";
+const USAGE: &str =
+    "usage: muniment threads list | muniment threads open <thread-id> | muniment run start";
 
 enum Command {
     List,
     Open(String),
+    StartRun,
 }
 
 #[derive(Debug)]
@@ -14,7 +16,9 @@ enum CliError {
     Usage,
     InvalidThreadId,
     NonInteractive,
+    PromptRequired,
     Client(ClientError),
+    RunClient(ClientError),
 }
 
 fn main() {
@@ -59,15 +63,44 @@ fn run_with(
                 .ok_or(CliError::InvalidThreadId)?
                 .to_owned(),
         ),
+        [run, start] if run == "run" && start == "start" => Command::StartRun,
         _ => return Err(CliError::Usage),
     };
     if !stdin_is_terminal || !stdout_is_terminal {
         return Err(CliError::NonInteractive);
     }
+    let prompt = if matches!(command, Command::StartRun) {
+        write!(output, "Prompt: ")
+            .and_then(|_| output.flush())
+            .map_err(|_| CliError::RunClient(ClientError::ConnectionClosed))?;
+        let mut prompt = String::new();
+        if input
+            .read_line(&mut prompt)
+            .map_err(|_| CliError::PromptRequired)?
+            == 0
+            || prompt.trim().is_empty()
+        {
+            return Err(CliError::PromptRequired);
+        }
+        Some(prompt.trim_end_matches(['\r', '\n']).to_owned())
+    } else {
+        None
+    };
     let mut pairing_pending = || {
         writeln!(output, "Pairing requested. Approve the named ‘muniment CLI’ connection in the Muniment desktop.").ok();
     };
-    let mut client = connect(&mut pairing_pending).map_err(CliError::Client)?;
+    let mut client = connect(&mut pairing_pending).map_err(|error| match command {
+        Command::StartRun => CliError::RunClient(error),
+        _ => CliError::Client(error),
+    })?;
+    if let Some(prompt) = prompt {
+        let accepted = client
+            .start_run(&prompt, None)
+            .map_err(CliError::RunClient)?;
+        writeln!(output, "Run committed: {}", one_line(&accepted.run_id))
+            .map_err(|_| CliError::RunClient(ClientError::ConnectionClosed))?;
+        return Ok(());
+    }
     let mut cursor = None;
     loop {
         let (rendered, next_cursor) = match &command {
@@ -83,6 +116,7 @@ fn run_with(
                     .map_err(CliError::Client)?;
                 (render_open_page(&page), page.next_cursor)
             }
+            Command::StartRun => unreachable!("run start returns after its receipt"),
         };
         write!(output, "{rendered}")
             .map_err(|_| CliError::Client(ClientError::ConnectionClosed))?;
@@ -114,33 +148,41 @@ fn guidance(error: &CliError) -> &'static str {
     match error {
         CliError::Usage => "unsupported arguments",
         CliError::InvalidThreadId => "provide a valid thread ID from `muniment threads list`",
-        CliError::NonInteractive => "thread commands require interactive stdin and stdout",
-        CliError::Client(ClientError::DesktopUnavailable)
-        | CliError::Client(ClientError::RuntimeDirectoryMissing)
-        | CliError::Client(ClientError::RuntimeDirectoryRelative) => {
-            "open the Muniment desktop, then try again"
-        }
-        CliError::Client(ClientError::ConnectionClosed) => {
-            "pairing was denied or closed; retry and approve the CLI in the desktop"
-        }
-        CliError::Client(ClientError::Timeout) => {
-            "the desktop timed out; retry and keep the desktop open"
-        }
-        CliError::Client(ClientError::AuthorizationExpired) => {
-            "authorization expired; retry and approve the CLI in the desktop"
-        }
-        CliError::Client(ClientError::DesktopFailed) => {
-            "the desktop could not read threads; retry, then check the desktop"
+        CliError::NonInteractive => "commands require interactive stdin and stdout",
+        CliError::PromptRequired => "enter one non-empty prompt, then try again",
+        CliError::RunClient(ClientError::RequestRejected) => {
+            "the desktop rejected the run request; retry, then check the desktop"
         }
         CliError::Client(ClientError::RequestRejected) => {
             "the desktop rejected the thread request; check the thread ID, retry, then update Muniment if it continues"
         }
-        CliError::Client(ClientError::ProtocolIncompatible) => {
+        CliError::Client(ClientError::DesktopFailed) => {
+            "the desktop could not read threads; retry, then check the desktop"
+        }
+        CliError::RunClient(ClientError::DesktopFailed) => {
+            "the desktop could not start the run; retry, then check the desktop"
+        }
+        CliError::Client(error) | CliError::RunClient(error) => client_guidance(error),
+    }
+}
+
+fn client_guidance(error: &ClientError) -> &'static str {
+    match error {
+        ClientError::DesktopUnavailable
+        | ClientError::RuntimeDirectoryMissing
+        | ClientError::RuntimeDirectoryRelative => "open the Muniment desktop, then try again",
+        ClientError::ConnectionClosed => {
+            "pairing was denied or closed; retry and approve the CLI in the desktop"
+        }
+        ClientError::Timeout => "the desktop timed out; retry and keep the desktop open",
+        ClientError::AuthorizationExpired => {
+            "authorization expired; retry and approve the CLI in the desktop"
+        }
+        ClientError::DesktopFailed => "the desktop request failed; retry, then check the desktop",
+        ClientError::ProtocolIncompatible => {
             "the desktop and CLI are incompatible; update Muniment desktop and the CLI"
         }
-        CliError::Client(ClientError::UnsupportedPlatform) => {
-            "desktop attach is not supported on this platform"
-        }
+        ClientError::UnsupportedPlatform => "desktop attach is not supported on this platform",
         _ => "the desktop pairing response was invalid; update Muniment and try again",
     }
 }
@@ -205,8 +247,8 @@ fn one_line(value: &str) -> String {
 mod tests {
     use super::*;
     use muniment_attach::{
-        authorized, encode_frame, handshake_stream, welcome, Id, Protocol, RedactedThreadSummary,
-        Response, Success,
+        authorized, encode_frame, handshake_stream, welcome, ErrorEnvelope, Failure, Id, Protocol,
+        ProtocolError, RedactedThreadSummary, Response, Success,
     };
     use std::collections::{BTreeMap, BTreeSet};
     use std::io::{Read, Write};
@@ -361,6 +403,161 @@ mod tests {
             assert!(!empty.contains(private));
             assert!(!page.contains(private));
         }
+    }
+
+    #[test]
+    fn run_start_sends_one_prompt_without_context_and_prints_only_the_committed_receipt() {
+        let (client, mut server) = UnixStream::pair().unwrap();
+        let worker = std::thread::spawn(move || {
+            read_frame(&mut server);
+            server
+                .write_all(
+                    &encode_frame(&welcome(
+                        1,
+                        "private-server",
+                        "11".repeat(16),
+                        "22".repeat(16),
+                    ))
+                    .unwrap(),
+                )
+                .unwrap();
+            server
+                .write_all(
+                    &encode_frame(&authorized(
+                        "deadcafe".repeat(8),
+                        3600,
+                        900,
+                        BTreeMap::new(),
+                    ))
+                    .unwrap(),
+                )
+                .unwrap();
+            let request = read_frame(&mut server);
+            assert_eq!(request["operation"], "run.start");
+            assert_eq!(request["body"], serde_json::json!({"text": "ship it"}));
+            assert!(request["idempotency_key"].is_string());
+            let response = Response {
+                protocol: Protocol,
+                request_id: Id::new(request["request_id"].as_str().unwrap()).unwrap(),
+                ok: Success,
+                body: serde_json::json!({
+                    "run_id": "123e4567-e89b-12d3-a456-426614174000",
+                    "committed_seq": 7,
+                    "accepted_at": "2026-07-17T12:00:00Z"
+                }),
+            };
+            server.write_all(&encode_frame(&response).unwrap()).unwrap();
+        });
+        let mut input = io::Cursor::new(b"ship it\nignored prompt\n");
+        let mut output = Vec::new();
+        run_with(
+            &["run".into(), "start".into()],
+            true,
+            true,
+            &mut input,
+            &mut output,
+            |pending| {
+                handshake_stream(
+                    client,
+                    "0.0.1",
+                    Duration::from_secs(1),
+                    Duration::from_secs(1),
+                    pending,
+                )
+            },
+        )
+        .unwrap();
+        worker.join().unwrap();
+        let output = String::from_utf8(output).unwrap();
+        assert!(output.contains("Run committed: 123e4567-e89b-12d3-a456-426614174000"));
+        assert!(!output.contains("ship it"));
+        assert!(!output.to_lowercase().contains("complete"));
+        assert!(!output.contains("deadcafe"));
+    }
+
+    #[test]
+    fn empty_and_eof_run_prompts_fail_before_connecting_without_echoing_input() {
+        for bytes in [b"".as_slice(), b"  \t\n".as_slice()] {
+            let mut input = io::Cursor::new(bytes);
+            let mut output = Vec::new();
+            let error = run_with(
+                &["run".into(), "start".into()],
+                true,
+                true,
+                &mut input,
+                &mut output,
+                |_| panic!("empty prompt connected"),
+            )
+            .unwrap_err();
+            assert!(guidance(&error).contains("non-empty prompt"));
+            assert_eq!(String::from_utf8(output).unwrap(), "Prompt: ");
+        }
+    }
+
+    #[test]
+    fn rejected_run_start_has_redacted_run_specific_guidance() {
+        let (client, mut server) = UnixStream::pair().unwrap();
+        let worker = std::thread::spawn(move || {
+            read_frame(&mut server);
+            server
+                .write_all(
+                    &encode_frame(&welcome(
+                        1,
+                        "private-server",
+                        "11".repeat(16),
+                        "22".repeat(16),
+                    ))
+                    .unwrap(),
+                )
+                .unwrap();
+            server
+                .write_all(
+                    &encode_frame(&authorized(
+                        "deadcafe".repeat(8),
+                        3600,
+                        900,
+                        BTreeMap::new(),
+                    ))
+                    .unwrap(),
+                )
+                .unwrap();
+            let request = read_frame(&mut server);
+            let rejection = ErrorEnvelope {
+                protocol: Protocol,
+                request_id: Some(Id::new(request["request_id"].as_str().unwrap()).unwrap()),
+                ok: Failure,
+                error: ProtocolError::invalid_request(),
+            };
+            server
+                .write_all(&encode_frame(&rejection).unwrap())
+                .unwrap();
+        });
+        let mut input = io::Cursor::new(b"private prompt\n");
+        let mut output = Vec::new();
+        let error = run_with(
+            &["run".into(), "start".into()],
+            true,
+            true,
+            &mut input,
+            &mut output,
+            |pending| {
+                handshake_stream(
+                    client,
+                    "0.0.1",
+                    Duration::from_secs(1),
+                    Duration::from_secs(1),
+                    pending,
+                )
+            },
+        )
+        .unwrap_err();
+        worker.join().unwrap();
+        let message = guidance(&error);
+        assert!(message.contains("rejected the run request"));
+        assert!(!message.contains("private prompt"));
+        assert!(!String::from_utf8(output)
+            .unwrap()
+            .contains("private prompt"));
     }
 
     #[test]
@@ -577,6 +774,12 @@ mod tests {
             ),
             (
                 vec!["threads".into(), "list".into()],
+                false,
+                true,
+                "interactive",
+            ),
+            (
+                vec!["run".into(), "start".into()],
                 false,
                 true,
                 "interactive",
