@@ -17,6 +17,24 @@ makes the desktop supervisor the sole owner of Pi and its stdout dispatcher.
 This ADR defines an implementation contract, not a generic plugin API. It adds
 no listener, client, companion UI, marketplace work, or protocol implementation.
 
+It governs the native IPC attach service used by the human-operated CLI and
+editor companion surfaces. It does **not** govern the browser-control relay in
+[harness-spec §6.8](../spec/harness-spec.md), whose MV3 extension pairing,
+browser-executable check, connect-tab anchor, and loopback lifecycle form a
+separate protocol and threat boundary. Implementations must not reuse this
+ADR's socket discovery, same-user peer approval, or connection capability as
+browser-relay authorization.
+
+The two protocols do share desktop-owned invariants: current session and
+entitlement authorization is checked before work and on every operation;
+workspace/domain policy and ask/allow/deny permission decisions cannot be
+bypassed; successful effects are represented by committed journal events and
+receipt projections rather than raw transport acknowledgements; diagnostics
+are redacted; and sign-out, lock, entitlement revocation, or the desktop/owner
+kill switch stops new work, revokes ephemeral authority, and closes the
+connection. Sharing those invariants does not make either protocol's pairing
+credential valid on the other.
+
 ## Decision
 
 The desktop exposes a versioned, local, message-oriented attach service. It is
