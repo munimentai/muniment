@@ -8,7 +8,8 @@
     "build": "vite build",
     "preview": "vite preview",
     "test": "vitest run --root .",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "browser-control": "npm run build --prefix browser-control && npm run typecheck --prefix browser-control && npm test --prefix browser-control"
   },
   "devDependencies": {
     "@sveltejs/vite-plugin-svelte": "^6",
