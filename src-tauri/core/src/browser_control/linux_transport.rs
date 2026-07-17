@@ -58,6 +58,40 @@ impl Write for BrowserControlWebSocketStream {
     }
 }
 
+/// A stream released only after the Linux browser-process authorization boundary.
+///
+/// Its inner stream is intentionally opaque. A raw [`TcpStream`] cannot be
+/// converted into this type by callers.
+///
+/// ```compile_fail
+/// use muniment_core::browser_control::{ProcessAuthorizedBrowserControlStream, WebSocketHandshakeLimits};
+/// use std::net::TcpStream;
+///
+/// let raw: TcpStream = unimplemented!();
+/// let _ = ProcessAuthorizedBrowserControlStream(raw);
+/// ```
+///
+/// ```compile_fail
+/// use muniment_core::browser_control::BrowserControlProcessAuthorizer;
+///
+/// struct AllowAll;
+/// impl BrowserControlProcessAuthorizer for AllowAll {}
+/// ```
+pub struct ProcessAuthorizedBrowserControlStream(TcpStream);
+
+impl ProcessAuthorizedBrowserControlStream {
+    /// Performs a bounded RFC 6455 opening handshake on this authorized stream.
+    pub fn open_websocket(
+        self,
+        request_target: &str,
+        limits: WebSocketHandshakeLimits,
+    ) -> Result<BrowserControlWebSocketStream, BrowserControlConnectionError> {
+        validate_handshake_configuration(request_target, limits)?;
+        perform_websocket_handshake(self.0, request_target, limits)
+            .map_err(BrowserControlConnectionError::Handshake)
+    }
+}
+
 /// A browser-control listener bound to a numeric loopback address.
 pub struct BrowserControlListener {
     listener: TcpListener,
@@ -103,24 +137,22 @@ impl BrowserControlListener {
         request_target: &str,
         limits: WebSocketHandshakeLimits,
     ) -> Result<BrowserControlWebSocketStream, BrowserControlConnectionError> {
-        self.accept_websocket_with(
-            &self.listener,
-            &LinuxBrowserProcessAuthorizer,
-            request_target,
-            limits,
-        )
+        validate_handshake_configuration(request_target, limits)?;
+        self.accept()?.open_websocket(request_target, limits)
     }
 
-    /// Accepts through injected boundaries for deterministic contract tests.
-    #[doc(hidden)]
-    pub fn accept_websocket_with(
+    /// Accepts one stream and releases it only after browser-process authorization.
+    pub fn accept(
+        &self,
+    ) -> Result<ProcessAuthorizedBrowserControlStream, BrowserControlAcceptError> {
+        self.accept_with(&self.listener, &LinuxBrowserProcessAuthorizer)
+    }
+
+    fn accept_with(
         &self,
         listener: &impl BrowserControlStreamListener,
         authorizer: &impl BrowserControlProcessAuthorizer,
-        request_target: &str,
-        limits: WebSocketHandshakeLimits,
-    ) -> Result<BrowserControlWebSocketStream, BrowserControlConnectionError> {
-        validate_handshake_configuration(request_target, limits)?;
+    ) -> Result<ProcessAuthorizedBrowserControlStream, BrowserControlAcceptError> {
         let stream = listener
             .accept_stream()
             .map_err(|_| BrowserControlAcceptError::Accept)?;
@@ -133,8 +165,7 @@ impl BrowserControlListener {
         authorizer
             .authorize(local, peer, &self.expected_executable)
             .map_err(|_| BrowserControlAcceptError::Unauthorized)?;
-        perform_websocket_handshake(stream, request_target, limits)
-            .map_err(BrowserControlConnectionError::Handshake)
+        Ok(ProcessAuthorizedBrowserControlStream(stream))
     }
 }
 
@@ -166,6 +197,7 @@ fn perform_websocket_handshake(
         .checked_add(limits.read_timeout)
         .ok_or(WebSocketHandshakeError::Timeout)?;
     let mut request = Vec::new();
+    let mut request_line_complete = false;
     loop {
         if request.len() == limits.max_header_bytes {
             return Err(WebSocketHandshakeError::TooLarge);
@@ -189,6 +221,16 @@ fn perform_websocket_handshake(
                 return Err(WebSocketHandshakeError::Timeout)
             }
             Err(_) => return Err(WebSocketHandshakeError::Io),
+        }
+        if !request_line_complete {
+            if request.ends_with(b"\r\n") {
+                request_line_complete = true;
+            } else if request.len() > limits.max_request_line_bytes
+                && !(request.len() == limits.max_request_line_bytes + 1
+                    && request.last() == Some(&b'\r'))
+            {
+                return Err(WebSocketHandshakeError::RequestLineTooLong);
+            }
         }
         if request.ends_with(b"\r\n\r\n") {
             break;
@@ -295,8 +337,7 @@ fn perform_websocket_handshake(
     Ok(BrowserControlWebSocketStream(stream))
 }
 
-/// Injected accepted-stream boundary.
-pub trait BrowserControlStreamListener {
+trait BrowserControlStreamListener {
     fn accept_stream(&self) -> io::Result<TcpStream>;
 }
 
@@ -306,8 +347,7 @@ impl BrowserControlStreamListener for TcpListener {
     }
 }
 
-/// Injected opaque process-authorization boundary.
-pub trait BrowserControlProcessAuthorizer {
+trait BrowserControlProcessAuthorizer {
     fn authorize(
         &self,
         local: SocketAddr,
@@ -317,7 +357,7 @@ pub trait BrowserControlProcessAuthorizer {
 }
 
 #[derive(Clone, Copy, Debug, Default)]
-pub struct LinuxBrowserProcessAuthorizer;
+struct LinuxBrowserProcessAuthorizer;
 
 impl BrowserControlProcessAuthorizer for LinuxBrowserProcessAuthorizer {
     fn authorize(
@@ -415,3 +455,212 @@ impl fmt::Display for WebSocketHandshakeError {
 }
 
 impl std::error::Error for WebSocketHandshakeError {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::cell::RefCell;
+    use std::net::Shutdown;
+
+    const VALID_REQUEST: &str = "GET /control HTTP/1.1\r\nHost: localhost\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n";
+
+    struct Authorizer {
+        calls: RefCell<usize>,
+        result: Result<(), AuthorizationError>,
+    }
+
+    impl BrowserControlProcessAuthorizer for Authorizer {
+        fn authorize(
+            &self,
+            _local: SocketAddr,
+            _peer: SocketAddr,
+            _expected_executable: &Path,
+        ) -> Result<(), AuthorizationError> {
+            *self.calls.borrow_mut() += 1;
+            self.result
+        }
+    }
+
+    fn connected() -> (TcpListener, TcpStream) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        (listener, client)
+    }
+
+    fn handshake(
+        request: &[u8],
+        limits: WebSocketHandshakeLimits,
+    ) -> Result<BrowserControlWebSocketStream, WebSocketHandshakeError> {
+        let (listener, mut client) = connected();
+        client.write_all(request).unwrap();
+        client.shutdown(Shutdown::Write).unwrap();
+        let (server, _) = listener.accept().unwrap();
+        perform_websocket_handshake(server, "/control", limits)
+    }
+
+    #[test]
+    fn authorization_failure_never_invokes_handshake_parsing() {
+        let browser_listener = BrowserControlListener::bind("127.0.0.1:0", "/browser").unwrap();
+        let (injected, mut client) = connected();
+        client.write_all(VALID_REQUEST.as_bytes()).unwrap();
+        let authorizer = Authorizer {
+            calls: RefCell::new(0),
+            result: Err(AuthorizationError::ExecutableVerificationFailed),
+        };
+        assert_eq!(
+            browser_listener.accept_with(&injected, &authorizer).err(),
+            Some(BrowserControlAcceptError::Unauthorized)
+        );
+        assert_eq!(*authorizer.calls.borrow(), 1);
+        client
+            .set_read_timeout(Some(Duration::from_secs(1)))
+            .unwrap();
+        match client.peek(&mut [0]) {
+            Ok(0) => {}
+            Err(error) if error.kind() == io::ErrorKind::ConnectionReset => {}
+            result => panic!("unauthorized stream remained open: {result:?}"),
+        }
+    }
+
+    #[test]
+    fn accepts_fragmented_mixed_case_headers_and_rfc_key_vector() {
+        let (listener, mut client) = connected();
+        let request = b"GET /control HTTP/1.1\r\nconnection: keep-alive, Upgrade\r\nSec-WebSocket-Version: 13\r\nHOST: localhost\r\nsec-websocket-key: dGhlIHNhbXBsZSBub25jZQ==\r\nUpGrAdE: WebSocket\r\n\r\n";
+        for byte in request {
+            client.write_all(&[*byte]).unwrap();
+        }
+        let (server, _) = listener.accept().unwrap();
+        drop(
+            perform_websocket_handshake(server, "/control", WebSocketHandshakeLimits::default())
+                .unwrap(),
+        );
+        let mut response = String::new();
+        client.read_to_string(&mut response).unwrap();
+        assert!(response.contains("Sec-WebSocket-Accept: s3pPLMBiTxaQ9kYGzzhZRbK+xOo=\r\n"));
+        assert!(!response.contains("Sec-WebSocket-Protocol"));
+        assert!(!response.contains("Sec-WebSocket-Extensions"));
+    }
+
+    #[test]
+    fn request_line_limit_is_inclusive_and_independent() {
+        let line = "GET /control HTTP/1.1";
+        let defaults = WebSocketHandshakeLimits::default();
+        assert!(handshake(
+            VALID_REQUEST.as_bytes(),
+            WebSocketHandshakeLimits {
+                max_request_line_bytes: line.len(),
+                ..defaults
+            }
+        )
+        .is_ok());
+        assert_eq!(
+            handshake(
+                VALID_REQUEST.as_bytes(),
+                WebSocketHandshakeLimits {
+                    max_request_line_bytes: line.len() - 1,
+                    ..defaults
+                }
+            )
+            .unwrap_err(),
+            WebSocketHandshakeError::RequestLineTooLong
+        );
+        let overlong = vec![b'G'; 4096];
+        assert_eq!(
+            handshake(
+                &overlong,
+                WebSocketHandshakeLimits {
+                    read_timeout: Duration::from_secs(10),
+                    max_header_bytes: 8192,
+                    max_request_line_bytes: 10,
+                    ..defaults
+                }
+            )
+            .unwrap_err(),
+            WebSocketHandshakeError::RequestLineTooLong
+        );
+    }
+
+    #[test]
+    fn rejects_duplicate_security_critical_headers_with_mixed_casing() {
+        for header in [
+            "hOsT: attacker\r\n",
+            "uPgRaDe: websocket\r\n",
+            "cOnNeCtIoN: Upgrade\r\n",
+            "sEc-WeBsOcKeT-kEy: dGhlIHNhbXBsZSBub25jZQ==\r\n",
+            "sEc-WeBsOcKeT-vErSiOn: 13\r\n",
+        ] {
+            let request = VALID_REQUEST.replacen("\r\n\r\n", &format!("\r\n{header}\r\n"), 1);
+            assert_eq!(
+                handshake(request.as_bytes(), WebSocketHandshakeLimits::default()).unwrap_err(),
+                WebSocketHandshakeError::DuplicateHeader,
+                "{header}"
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_header_byte_and_count_limits() {
+        let defaults = WebSocketHandshakeLimits::default();
+        assert_eq!(
+            handshake(
+                VALID_REQUEST.as_bytes(),
+                WebSocketHandshakeLimits {
+                    max_header_bytes: VALID_REQUEST.len() - 1,
+                    ..defaults
+                }
+            )
+            .unwrap_err(),
+            WebSocketHandshakeError::TooLarge
+        );
+        assert_eq!(
+            handshake(
+                VALID_REQUEST.as_bytes(),
+                WebSocketHandshakeLimits {
+                    max_headers: 4,
+                    ..defaults
+                }
+            )
+            .unwrap_err(),
+            WebSocketHandshakeError::TooManyHeaders
+        );
+
+        let (listener, _client) = connected();
+        let (server, _) = listener.accept().unwrap();
+        assert_eq!(
+            perform_websocket_handshake(
+                server,
+                "/control",
+                WebSocketHandshakeLimits {
+                    read_timeout: Duration::from_millis(10),
+                    ..defaults
+                }
+            )
+            .unwrap_err(),
+            WebSocketHandshakeError::Timeout
+        );
+    }
+
+    #[test]
+    fn malformed_incomplete_wrong_target_and_version_fail_closed() {
+        for request in [
+            VALID_REQUEST.replace(
+                "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==",
+                "Sec-WebSocket-Key: short",
+            ),
+            VALID_REQUEST.replace("GET /control", "GET /wrong"),
+            VALID_REQUEST.replace("Version: 13", "Version: 12"),
+            VALID_REQUEST.replace("\r\n\r\n", "\r\nBroken\r\n\r\n"),
+            VALID_REQUEST.replace("Host: localhost", "Host: local\0host"),
+        ] {
+            assert!(handshake(request.as_bytes(), WebSocketHandshakeLimits::default()).is_err());
+        }
+        assert_eq!(
+            handshake(
+                VALID_REQUEST.trim_end_matches("\r\n").as_bytes(),
+                WebSocketHandshakeLimits::default()
+            )
+            .unwrap_err(),
+            WebSocketHandshakeError::Incomplete
+        );
+    }
+}
