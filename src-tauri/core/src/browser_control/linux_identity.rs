@@ -208,16 +208,17 @@ impl LinuxSocketDiagnostic for SocketDiagnostic {
         };
         request[17] = libc::IPPROTO_TCP as u8;
         request[20..24].copy_from_slice(&(1u32 << TCP_ESTABLISHED).to_ne_bytes());
-        request[24..26].copy_from_slice(&local.port().to_be_bytes());
-        request[26..28].copy_from_slice(&peer.port().to_be_bytes());
+        // Query the browser-owned client half of the accepted connection.
+        request[24..26].copy_from_slice(&peer.port().to_be_bytes());
+        request[26..28].copy_from_slice(&local.port().to_be_bytes());
         match (local.ip(), peer.ip()) {
             (IpAddr::V4(a), IpAddr::V4(b)) => {
-                request[28..32].copy_from_slice(&a.octets());
-                request[44..48].copy_from_slice(&b.octets());
+                request[28..32].copy_from_slice(&b.octets());
+                request[44..48].copy_from_slice(&a.octets());
             }
             (IpAddr::V6(a), IpAddr::V6(b)) => {
-                request[28..44].copy_from_slice(&a.octets());
-                request[44..60].copy_from_slice(&b.octets());
+                request[28..44].copy_from_slice(&b.octets());
+                request[44..60].copy_from_slice(&a.octets());
             }
             _ => return Err(ProcReadError),
         }
@@ -274,12 +275,17 @@ fn netlink_contains_done(bytes: &[u8], sequence: u32) -> Result<bool, ProcReadEr
                 .try_into()
                 .map_err(|_| ProcReadError)?,
         );
+        let flags = u16::from_ne_bytes(
+            bytes[offset + 6..offset + 8]
+                .try_into()
+                .map_err(|_| ProcReadError)?,
+        );
         let seq = u32::from_ne_bytes(
             bytes[offset + 8..offset + 12]
                 .try_into()
                 .map_err(|_| ProcReadError)?,
         );
-        if seq != sequence || kind == libc::NLMSG_ERROR as u16 {
+        if seq != sequence || kind == libc::NLMSG_ERROR as u16 || flags != NLM_F_MULTI {
             return Err(ProcReadError);
         }
         if kind == NLMSG_DONE {
@@ -359,6 +365,7 @@ fn validate_endpoints(local: SocketAddr, peer: SocketAddr) -> Result<(), Resolut
 }
 
 const NLMSG_DONE: u16 = 3;
+const NLM_F_MULTI: u16 = 2;
 const SOCK_DIAG_BY_FAMILY: u16 = 20;
 const TCP_ESTABLISHED: u8 = 1;
 
@@ -371,19 +378,29 @@ fn parse_diagnostic(
     let mut offset = 0usize;
     let mut done = false;
     let mut matches = Vec::new();
+    let mut response_pid = None;
     while offset < bytes.len() {
         if bytes.len() - offset < 16 {
             return Err(ResolutionError::MalformedDiagnostic);
         }
         let len = u32::from_ne_bytes(bytes[offset..offset + 4].try_into().unwrap()) as usize;
         let kind = u16::from_ne_bytes(bytes[offset + 4..offset + 6].try_into().unwrap());
+        let flags = u16::from_ne_bytes(bytes[offset + 6..offset + 8].try_into().unwrap());
         let seq = u32::from_ne_bytes(bytes[offset + 8..offset + 12].try_into().unwrap());
         let pid = u32::from_ne_bytes(bytes[offset + 12..offset + 16].try_into().unwrap());
-        if len < 16 || len > bytes.len() - offset || seq != sequence || pid != 0 || done {
+        if len < 16 || len > bytes.len() - offset || flags != NLM_F_MULTI || seq != sequence || done
+        {
+            return Err(ResolutionError::MalformedDiagnostic);
+        }
+        if response_pid
+            .replace(pid)
+            .is_some_and(|expected| expected != pid)
+        {
             return Err(ResolutionError::MalformedDiagnostic);
         }
         if kind == NLMSG_DONE {
-            if len != 16 {
+            // Some kernels include a zero `nlmsgerr` status in dump completion.
+            if len != 16 && !(len == 20 && bytes[offset + 16..offset + 20] == [0; 4]) {
                 return Err(ResolutionError::MalformedDiagnostic);
             }
             done = true;
@@ -408,14 +425,14 @@ fn parse_diagnostic(
             let dport = u16::from_be_bytes([msg[6], msg[7]]);
             let addresses_match = match (local.ip(), peer.ip()) {
                 (IpAddr::V4(a), IpAddr::V4(b)) => {
-                    msg[8..12] == a.octets() && msg[24..28] == b.octets()
+                    msg[8..12] == b.octets() && msg[24..28] == a.octets()
                 }
                 (IpAddr::V6(a), IpAddr::V6(b)) => {
-                    msg[8..24] == a.octets() && msg[24..40] == b.octets()
+                    msg[8..24] == b.octets() && msg[24..40] == a.octets()
                 }
                 _ => false,
             };
-            if sport != local.port() || dport != peer.port() || !addresses_match {
+            if sport != peer.port() || dport != local.port() || !addresses_match {
                 return Err(ResolutionError::MalformedDiagnostic);
             }
             let inode = u32::from_ne_bytes(msg[68..72].try_into().unwrap());
