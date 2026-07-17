@@ -89,7 +89,7 @@ jobs:
           printf '%s' "$DESKTOP_CI_SSH_KEY" > "$key"
           trap 'rm -f "$key"' EXIT
 
-          build='npm ci --no-audit --no-fund && npm run tauri build'
+          build='npm ci --no-audit --no-fund && bash .github/build-linux.sh'
           if [ "$PLATFORM" = "windows" ]; then
             build='npm ci --no-audit --no-fund && node .github/build-windows-installers.mjs && powershell.exe -NoProfile -ExecutionPolicy Bypass -File test/windows-installers.ps1'
           fi
