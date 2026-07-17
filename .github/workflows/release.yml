@@ -1,0 +1,32 @@
+name: Promote stable desktop release
+on:
+  workflow_dispatch:
+    inputs:
+      source_sha:
+        description: "Exact 40-character SHA finalized by the nightly release"
+        required: true
+        type: string
+      version:
+        description: "Strict stable version (vMAJOR.MINOR.PATCH)"
+        required: true
+        type: string
+permissions:
+  contents: write
+  checks: read
+concurrency:
+  # Share the nightly lock so its tag/assets cannot move between validation
+  # and publication; this also serializes stable promotions.
+  group: nightly-desktop-release
+  cancel-in-progress: false
+jobs:
+  promote:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Promote finalized nightly bytes
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          VERSION: ${{ inputs.version }}
+        run: node .github/lib/release-promotion.mjs "$GH_TOKEN" "$REPOSITORY" "$SOURCE_SHA" "$VERSION"
