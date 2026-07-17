@@ -45,5 +45,6 @@ that user.
 Nightly files include the exact source commit in their names. Select the
 `nightly-<sha>-windows-...-machine.msi` file for managed installation and verify
 the release asset came from the expected commit before deployment. Nightly
-installers are pre-release, unsigned builds and are not recommended for a
-production fleet.
+installers are pre-release builds and are not recommended for a production fleet.
+Windows release builds are signed through Azure Artifact Signing; macOS artifacts
+remain unsigned until Apple credentials are available.
