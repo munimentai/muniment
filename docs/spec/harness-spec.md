@@ -262,13 +262,99 @@ Zero voice bytes leave the machine. This is a selling point; keep it true.
 
 The runtime exposes an actuator that drives the user's real browser — active control (navigate, read, click, type, extract) in the browser and profile where the user already works and is signed in. This is not a chat sidebar; it is the AI acting in the browser under policy.
 
-Mechanism: a muniment browser extension (MV3 service worker using the browser debugger API) pairs with the desktop runtime over a local loopback relay; the desktop app owns the relay and the pairing token. Extension pairing is the only viable path into the user's real profile — modern Chromium (136+) refuses external debugger attachment to the main profile — and it is the same mechanism frontier vendors now ship ungoverned.
+Mechanism: a muniment browser extension (MV3 service worker using
+`chrome.debugger`) pairs with the desktop runtime over a local loopback relay;
+the desktop app owns the relay and pairing. This extension mode is the **only**
+v1 path into a user's real/default profile. External CDP attachment (including
+`--remote-debugging-port` or `--remote-debugging-pipe`) to that profile is
+prohibited, not a fallback: Chromium 136+ ignores those switches for the
+default data directory (the [Chrome security
+notice](https://developer.chrome.com/blog/remote-debugging-port) is the
+upstream constraint). A custom automation profile or Chrome for Testing may
+remain useful for tests, but neither is a substitute for controlling the real
+profile where the user is signed in.
+
+**Relay pairing (fail closed):** for each pairing attempt the desktop issues a
+cryptographically random token of at least 256 bits and establishes the
+expected canonical browser executable path, which remains desktop-side rather
+than being accepted back as a client assertion. The desktop relay independently
+identifies the OS process that owns the accepted loopback connection and
+obtains that process's executable through the platform process/socket APIs;
+this OS-derived identity, not an extension- or browser-supplied path claim, is
+the actual path used in the comparison. The platform adapter passes the process
+handle plus process start identity and resolved executable identity directly
+to the relay, which rejects a PID-reuse or connection-owner change before
+authorization.
+
+Both the expected and actual paths use the same platform canonicalizer before
+comparison. On Linux, resolve the proc-owned executable and every symlink with
+`realpath` and compare the resulting absolute path byte-for-byte. On macOS,
+resolve Finder aliases/application bundles to their executable, resolve
+symlinks with `realpath`, and compare the filesystem's canonical absolute
+paths using that volume's case semantics. On Windows, open the executable,
+resolve junctions and symlinks, obtain its final path and volume/file identity,
+strip the `\\?\` spelling distinction, normalize separators, and compare path
+case-insensitively plus exact volume serial/file ID. Failure to map the socket
+to one live owning process, open or canonicalize either executable, or obtain
+the required file identity fails closed. An extension-provided value or echo
+of the desktop-issued expected path is never proof of executable identity.
+
+The extension/relay session is authorized only when the token matches and the
+independently observed executable identity matches the desktop's expected
+canonical executable; missing, stale, malformed, or contradictory values close
+the attempt without attaching a tab. The token is single-use, expires after
+two minutes, and is rotated on every attempt, successful reconnect, relay
+restart, desktop lock or sign-out, and kill-switch transition. The relay binds
+only numeric loopback
+(`127.0.0.1` and/or `::1`), never wildcard, hostname, LAN, or externally
+reachable interfaces. The token exists only in desktop and extension memory:
+it is never placed in `chrome.storage` (local, sync, session, or managed), logs,
+URLs, or persisted diagnostics. Errors expose a closed reason code and redact
+the token and executable path.
+
+**Connect-tab anchor:** the desktop creates the pairing request, then the
+extension creates and owns one ordinary, visible browser tab for that request.
+Its fixed Muniment page says “Muniment browser control is connected. Keep this
+tab open; closing it disconnects browser control.” The tab is the sole lifetime
+anchor for one extension/relay session; it is not a hidden background page and
+the desktop does not adopt or close a pre-existing user tab. A transport drop
+leaves the anchor visible with “Browser control disconnected. Reconnect from
+the Muniment desktop app.” Reconnect is always desktop-initiated, creates a new
+single-use token, revalidates the expected executable path, and reuses the
+anchor only if the same extension instance still owns it; it never silently
+reattaches or resumes tool work.
+
+Closing the anchor tab immediately detaches every `chrome.debugger` target,
+revokes the token/session, cancels pending browser actions, and closes the
+relay connection. Extension reload/unload performs the same detach/revocation;
+its lifecycle handler also closes its owned anchor when possible. Because an
+ordinary tab can survive extension teardown, the anchor page independently
+watches the relay heartbeat and, on loss, durably replaces the connected copy
+with “Muniment browser control is disconnected. Reconnect from the Muniment
+desktop app.” It must not show connected again without a new authorized
+pairing. After reload there is no session until a new desktop-initiated pairing
+first discovers recorded/tagged Muniment anchors, closes any stale anchors (or
+confirms their durable disconnected state before safely replacing them), and
+creates exactly one new owned anchor. Thus every live session has exactly one
+anchor, and no stale or surviving tab claims a connection after its session
+ends. Relay death deterministically detaches targets and marks the
+anchor disconnected; relay restart does not restore them. The desktop kill
+switch first blocks new actions, then cancels pending actions, commands detach,
+revokes/rotates pairing material, closes the relay, and closes the
+extension-owned anchor when reachable. Cleanup is idempotent, and failure to
+confirm any required detach keeps browser control disabled and surfaces a
+redacted needs-attention state rather than assuming cleanup succeeded.
 
 **Taxonomy (clarifies §1/§12/§13):** *Execution surfaces* — the desktop app, CLI, and editor extension — are each a full place a human does governed AI work; they are peers, and each drives the SAME local runtime. *Runtime capabilities* — local models, MCP tools, sandbox, virtual-key model access, and now browser control — are actuators the runtime exposes to whichever surface is driving. Browser control is a runtime capability, not a surface: a user never "sits in" it. Mobile is a companion surface with no local runtime and therefore can never invoke browser control (§12's existing rule already covers this).
 
 **Governance (existing gates, applied — nothing new invented):** every browser action is a governed runtime tool-call. Entitlement-gated (a browser-control grant). Permission-gated under the same ask/allow/deny model as 6.5: per-domain allowlist, read vs. act distinction, explicit approval on authenticated/sensitive domains. Every action lands in the run journal and its receipts like any other tool call (§11.3). Owner kill switch org-wide, same as local stdio MCP (6.4). Fleet distribution of the extension is admin managed-install via enterprise browser policy, not the public web store.
 
-Implementation base: a thin, closed-source-compatible fork of the Apache-2.0 Playwright extension/CDP-relay core, kept upstream-mergeable (attribution and NOTICE honored; changed files marked; no Microsoft marks).
+Implementation base: a thin, closed-source-compatible fork of the Apache-2.0
+Playwright extension/CDP-relay core, kept upstream-mergeable (attribution and
+NOTICE are mandatory; changed files marked; no Microsoft marks). v1 remains in
+this repository. Developer-mode/unpacked extension loading is sufficient for
+v1; managed enterprise installation remains the fleet-distribution direction,
+not a prerequisite for implementation.
 
 **Non-goal (the boundary):** the browser only. No OS control, no filesystem access via the browser, no control of other applications. Muniment takes the browser slice of computer control because that is where governed knowledge work happens; general computer use stays out of scope. Required capability, not the frontier bet.
 
