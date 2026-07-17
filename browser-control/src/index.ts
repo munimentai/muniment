@@ -16,6 +16,8 @@
 
 export const DEFAULT_MAX_MESSAGE_BYTES = 1024 * 1024;
 
+export * from './pairing.js';
+
 export interface RelayTransport {
   send(message: string): void;
   close(code: number, reason: string): void;
