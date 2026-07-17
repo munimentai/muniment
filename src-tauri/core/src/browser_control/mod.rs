@@ -15,6 +15,8 @@ pub use linux_identity::{
 };
 #[cfg(target_os = "linux")]
 pub use linux_transport::{
-    BrowserControlAcceptError, BrowserControlBindError, BrowserControlListener,
-    BrowserControlProcessAuthorizer, BrowserControlStreamListener, LinuxBrowserProcessAuthorizer,
+    BrowserControlAcceptError, BrowserControlBindError, BrowserControlConnectionError,
+    BrowserControlListener, BrowserControlProcessAuthorizer, BrowserControlStreamListener,
+    BrowserControlWebSocketStream, LinuxBrowserProcessAuthorizer, WebSocketHandshakeError,
+    WebSocketHandshakeLimits,
 };
