@@ -11,7 +11,7 @@ use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 const SHORT: Duration = Duration::from_millis(100);
 static NEXT_SOCKET: AtomicU64 = AtomicU64::new(0);
@@ -61,6 +61,83 @@ fn pathname_socket_handles_fragmented_success_frames() {
     assert_eq!(summary.idle_timeout_seconds, 900);
     server.join().unwrap();
     std::fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn continuous_partial_progress_cannot_extend_receive_deadlines() {
+    let welcome = encode_frame(&welcome(1, "0.0.1", "11".repeat(16), "22".repeat(16))).unwrap();
+    let grant = encode_frame(&authorized("33".repeat(32), 3600, 900, BTreeMap::new())).unwrap();
+
+    for (first, drip) in [(None, welcome.clone()), (Some(welcome), grant)] {
+        let (client, mut server) = UnixStream::pair().unwrap();
+        let sender = thread::spawn(move || {
+            read_client_frame(&mut server);
+            if let Some(first) = first {
+                server.write_all(&first).unwrap();
+            }
+            for byte in drip {
+                if server.write_all(&[byte]).is_err() {
+                    break;
+                }
+                thread::sleep(Duration::from_millis(30));
+            }
+        });
+        let started = Instant::now();
+        assert_eq!(
+            handshake_stream(client, "0.0.1", SHORT, SHORT, || {}),
+            Err(ClientError::Timeout)
+        );
+        assert!(started.elapsed() < Duration::from_millis(250));
+        sender.join().unwrap();
+    }
+}
+
+#[test]
+fn hybrid_messages_are_rejected_at_both_handshake_stages() {
+    let valid_welcome =
+        encode_frame(&welcome(1, "0.0.1", "11".repeat(16), "22".repeat(16))).unwrap();
+    let hybrids = [
+        (
+            None,
+            serde_json::json!({
+                "selected": 1,
+                "desktop_version": "0.0.1",
+                "server_nonce": "11".repeat(16),
+                "authorization": "pairing_required",
+                "approval_challenge": "22".repeat(16),
+                "operation": "thread.list",
+                "capability": "secret"
+            }),
+        ),
+        (
+            Some(valid_welcome),
+            serde_json::json!({
+                "capability": "33".repeat(32),
+                "expires_at": 3600,
+                "idle_timeout_seconds": 900,
+                "workspace_scopes": {},
+                "ok": true,
+                "request_id": "request",
+                "body": {}
+            }),
+        ),
+    ];
+
+    for (first, hybrid) in hybrids {
+        let (client, mut server) = UnixStream::pair().unwrap();
+        let sender = thread::spawn(move || {
+            read_client_frame(&mut server);
+            if let Some(first) = first {
+                server.write_all(&first).unwrap();
+            }
+            server.write_all(&encode_frame(&hybrid).unwrap()).unwrap();
+        });
+        assert_eq!(
+            handshake_stream(client, "0.0.1", SHORT, SHORT, || {}),
+            Err(ClientError::UnexpectedMessage)
+        );
+        sender.join().unwrap();
+    }
 }
 
 #[test]

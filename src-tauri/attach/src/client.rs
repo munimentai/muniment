@@ -56,7 +56,7 @@ mod linux {
     use std::io::{self, Read, Write};
     use std::os::unix::net::UnixStream;
     use std::path::PathBuf;
-    use std::time::Duration;
+    use std::time::{Duration, Instant};
 
     const IO_TIMEOUT: Duration = Duration::from_secs(5);
     const APPROVAL_TIMEOUT: Duration = Duration::from_secs(120);
@@ -94,13 +94,6 @@ mod linux {
         approval_timeout: Duration,
         pairing_pending: impl FnOnce(),
     ) -> Result<AuthorizationSummary, ClientError> {
-        stream
-            .set_write_timeout(Some(io_timeout))
-            .map_err(|_| ClientError::DesktopUnavailable)?;
-        stream
-            .set_read_timeout(Some(io_timeout))
-            .map_err(|_| ClientError::DesktopUnavailable)?;
-
         let hello = Hello {
             protocol: Protocol,
             client: Client {
@@ -111,9 +104,9 @@ mod linux {
             client_nonce: fresh_nonce()?,
         };
         let bytes = encode_frame(&hello).map_err(map_frame_error)?;
-        stream.write_all(&bytes).map_err(map_io_error)?;
+        write_all_before(&mut stream, &bytes, deadline(io_timeout))?;
 
-        let welcome_value = read_value(&mut stream)?;
+        let welcome_value = read_value(&mut stream, deadline(io_timeout))?;
         reject_protocol_error(&welcome_value)?;
         let welcome: Welcome = parse_message(welcome_value)?;
         if welcome.selected != 1 {
@@ -126,10 +119,7 @@ mod linux {
         }
         pairing_pending();
 
-        stream
-            .set_read_timeout(Some(approval_timeout))
-            .map_err(|_| ClientError::DesktopUnavailable)?;
-        let authorized_value = read_value(&mut stream)?;
+        let authorized_value = read_value(&mut stream, deadline(approval_timeout))?;
         reject_protocol_error(&authorized_value)?;
         let authorized: Authorized = parse_message(authorized_value)?;
         if !is_hex_secret(&authorized.capability, 64)
@@ -163,16 +153,63 @@ mod linux {
         value.len() == length && value.bytes().all(|byte| byte.is_ascii_hexdigit())
     }
 
-    fn read_value(stream: &mut UnixStream) -> Result<Value, ClientError> {
+    fn deadline(timeout: Duration) -> Instant {
+        Instant::now()
+            .checked_add(timeout)
+            .unwrap_or_else(Instant::now)
+    }
+
+    fn remaining(deadline: Instant) -> Result<Duration, ClientError> {
+        deadline
+            .checked_duration_since(Instant::now())
+            .filter(|remaining| !remaining.is_zero())
+            .ok_or(ClientError::Timeout)
+    }
+
+    fn read_exact_before(
+        stream: &mut UnixStream,
+        mut bytes: &mut [u8],
+        deadline: Instant,
+    ) -> Result<(), ClientError> {
+        while !bytes.is_empty() {
+            stream
+                .set_read_timeout(Some(remaining(deadline)?))
+                .map_err(|_| ClientError::DesktopUnavailable)?;
+            match stream.read(bytes).map_err(map_io_error)? {
+                0 => return Err(ClientError::ConnectionClosed),
+                read => bytes = &mut bytes[read..],
+            }
+        }
+        Ok(())
+    }
+
+    fn write_all_before(
+        stream: &mut UnixStream,
+        mut bytes: &[u8],
+        deadline: Instant,
+    ) -> Result<(), ClientError> {
+        while !bytes.is_empty() {
+            stream
+                .set_write_timeout(Some(remaining(deadline)?))
+                .map_err(|_| ClientError::DesktopUnavailable)?;
+            match stream.write(bytes).map_err(map_io_error)? {
+                0 => return Err(ClientError::ConnectionClosed),
+                written => bytes = &bytes[written..],
+            }
+        }
+        Ok(())
+    }
+
+    fn read_value(stream: &mut UnixStream, deadline: Instant) -> Result<Value, ClientError> {
         let mut prefix = [0u8; 4];
-        stream.read_exact(&mut prefix).map_err(map_io_error)?;
+        read_exact_before(stream, &mut prefix, deadline)?;
         let length = u32::from_be_bytes(prefix) as usize;
         if length > MAX_FRAME_LENGTH {
             return Err(ClientError::PayloadTooLarge);
         }
         let mut frame = vec![0u8; length + 4];
         frame[..4].copy_from_slice(&prefix);
-        stream.read_exact(&mut frame[4..]).map_err(map_io_error)?;
+        read_exact_before(stream, &mut frame[4..], deadline)?;
         decode_frame(&frame)
             .map_err(map_frame_error)?
             .map(|(value, _)| value)

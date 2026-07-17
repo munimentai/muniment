@@ -84,13 +84,59 @@ pub enum Authorization {
     PairingRequired,
 }
 
-#[derive(Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Serialize)]
 pub struct Welcome {
     pub selected: u32,
     pub desktop_version: String,
     pub server_nonce: String,
     pub authorization: Authorization,
     pub approval_challenge: String,
+}
+
+impl<'de> Deserialize<'de> for Welcome {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        struct WelcomeFields {
+            selected: u32,
+            desktop_version: String,
+            server_nonce: String,
+            authorization: Authorization,
+            approval_challenge: String,
+            #[serde(flatten)]
+            extra: BTreeMap<String, serde_json::Value>,
+        }
+
+        const CONFLICTING_FIELDS: &[&str] = &[
+            "protocol",
+            "client",
+            "supported",
+            "client_nonce",
+            "request_id",
+            "operation",
+            "capability",
+            "idempotency_key",
+            "ok",
+            "error",
+            "subscription_id",
+            "event",
+            "run_id",
+            "run_seq",
+            "body",
+            "expires_at",
+            "idle_timeout_seconds",
+            "workspace_scopes",
+        ];
+
+        let fields = WelcomeFields::deserialize(deserializer)?;
+        reject_conflicting_fields::<D::Error>(&fields.extra, CONFLICTING_FIELDS, "welcome")?;
+        Ok(Self {
+            selected: fields.selected,
+            desktop_version: fields.desktop_version,
+            server_nonce: fields.server_nonce,
+            authorization: fields.authorization,
+            approval_challenge: fields.approval_challenge,
+        })
+    }
 }
 
 impl fmt::Debug for Welcome {
@@ -110,12 +156,73 @@ impl fmt::Debug for Welcome {
 /// `expires_at` is the number of whole seconds remaining when this message is
 /// emitted, rather than an absolute or monotonic timestamp. Monotonic clock
 /// values are deliberately local to the authorization policy.
-#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize)]
 pub struct Authorized {
     pub capability: String,
     pub expires_at: u64,
     pub idle_timeout_seconds: u64,
     pub workspace_scopes: BTreeMap<String, BTreeSet<String>>,
+}
+
+impl<'de> Deserialize<'de> for Authorized {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        struct AuthorizedFields {
+            capability: String,
+            expires_at: u64,
+            idle_timeout_seconds: u64,
+            workspace_scopes: BTreeMap<String, BTreeSet<String>>,
+            #[serde(flatten)]
+            extra: BTreeMap<String, serde_json::Value>,
+        }
+
+        const CONFLICTING_FIELDS: &[&str] = &[
+            "protocol",
+            "client",
+            "supported",
+            "client_nonce",
+            "selected",
+            "desktop_version",
+            "server_nonce",
+            "authorization",
+            "approval_challenge",
+            "request_id",
+            "operation",
+            "idempotency_key",
+            "ok",
+            "error",
+            "subscription_id",
+            "event",
+            "run_id",
+            "run_seq",
+            "body",
+        ];
+
+        let fields = AuthorizedFields::deserialize(deserializer)?;
+        reject_conflicting_fields::<D::Error>(&fields.extra, CONFLICTING_FIELDS, "authorized")?;
+        Ok(Self {
+            capability: fields.capability,
+            expires_at: fields.expires_at,
+            idle_timeout_seconds: fields.idle_timeout_seconds,
+            workspace_scopes: fields.workspace_scopes,
+        })
+    }
+}
+
+fn reject_conflicting_fields<E: de::Error>(
+    extra: &BTreeMap<String, serde_json::Value>,
+    conflicting: &[&str],
+    message: &str,
+) -> Result<(), E> {
+    if extra
+        .keys()
+        .any(|field| conflicting.contains(&field.as_str()))
+    {
+        return Err(E::custom(format_args!(
+            "{message} contains conflicting handshake or envelope fields"
+        )));
+    }
+    Ok(())
 }
 
 impl fmt::Debug for Authorized {
