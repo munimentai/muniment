@@ -68,9 +68,6 @@ jobs:
           echo "companion=$companion" >> "$GITHUB_OUTPUT"
           echo "desktop=$desktop" >> "$GITHUB_OUTPUT"
 
-      - name: Structure smoke
-        run: test/smoke.sh
-
       - name: Node 24 (bootstrap if missing)
         if: steps.changes.outputs.desktop == 'true' || github.event_name != 'pull_request'
         run: |
@@ -103,7 +100,6 @@ jobs:
       # core crate compiles anywhere. The runner container persists, so the
       # rustup bootstrap below is a one-time cost.
       - name: Rust toolchain (bootstrap if missing)
-        if: steps.changes.outputs.docs_only != 'true'
         run: |
           if ! command -v cargo >/dev/null 2>&1 && [ ! -x "$HOME/.cargo/bin/cargo" ]; then
             curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
@@ -116,6 +112,9 @@ jobs:
             apt-get update -qq
             apt-get install -y -qq --no-install-recommends gcc libc6-dev
           fi
+
+      - name: Structure smoke
+        run: test/smoke.sh
 
       - name: Rust formatting
         if: steps.changes.outputs.desktop == 'true' || github.event_name != 'pull_request'
