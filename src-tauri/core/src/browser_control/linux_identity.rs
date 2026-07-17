@@ -2,8 +2,12 @@
 
 use std::fmt;
 use std::fs;
+use std::mem;
+use std::net::{IpAddr, SocketAddr};
 use std::os::unix::ffi::OsStrExt;
+use std::os::unix::io::RawFd;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU32, Ordering};
 
 /// The process identity observed while determining the loopback connection owner.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -26,6 +30,36 @@ pub enum VerificationError {
     ProcessExecutableInvalid,
     ExecutableMismatch,
 }
+
+/// A bounded, redacted failure while resolving a loopback socket owner.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ResolutionError {
+    InvalidEndpoint,
+    DiagnosticUnavailable,
+    MalformedDiagnostic,
+    SocketNotFound,
+    AmbiguousSocket,
+    OwnerUnavailable,
+    AmbiguousOwner,
+    ProcessIdentityChanged,
+}
+
+impl fmt::Display for ResolutionError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::InvalidEndpoint => "connection endpoints are invalid",
+            Self::DiagnosticUnavailable => "socket diagnostic is unavailable",
+            Self::MalformedDiagnostic => "socket diagnostic response is invalid",
+            Self::SocketNotFound => "connection socket was not found",
+            Self::AmbiguousSocket => "connection socket is ambiguous",
+            Self::OwnerUnavailable => "socket owner is unavailable",
+            Self::AmbiguousOwner => "socket owner is ambiguous",
+            Self::ProcessIdentityChanged => "socket owner identity changed",
+        })
+    }
+}
+
+impl std::error::Error for ResolutionError {}
 
 impl fmt::Display for VerificationError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -50,6 +84,9 @@ pub struct ProcReadError;
 pub trait LinuxProcReader {
     fn start_identity(&self, pid: u32) -> Result<u64, ProcReadError>;
     fn executable(&self, pid: u32) -> Result<PathBuf, ProcReadError>;
+    fn socket_owners(&self, _inode: u32) -> Result<Vec<BrowserProcessIdentity>, ProcReadError> {
+        Err(ProcReadError)
+    }
 }
 
 /// Reader for the live Linux procfs.
@@ -67,6 +104,337 @@ impl LinuxProcReader for ProcReader {
         // pathname separately would introduce a replacement race.
         Ok(PathBuf::from(format!("/proc/{pid}/exe")))
     }
+
+    fn socket_owners(&self, inode: u32) -> Result<Vec<BrowserProcessIdentity>, ProcReadError> {
+        let wanted = format!("socket:[{inode}]").into_bytes();
+        let mut owners = Vec::new();
+        for entry in fs::read_dir("/proc").map_err(|_| ProcReadError)? {
+            let entry = entry.map_err(|_| ProcReadError)?;
+            let Some(pid) = entry
+                .file_name()
+                .to_str()
+                .and_then(|s| s.parse::<u32>().ok())
+            else {
+                continue;
+            };
+            let before = self.start_identity(pid).map_err(|_| ProcReadError)?;
+            let fds = fs::read_dir(entry.path().join("fd")).map_err(|_| ProcReadError)?;
+            let mut owns = false;
+            for fd in fds {
+                let target = fs::read_link(fd.map_err(|_| ProcReadError)?.path())
+                    .map_err(|_| ProcReadError)?;
+                if target.as_os_str().as_bytes() == wanted {
+                    owns = true;
+                }
+            }
+            let after = self.start_identity(pid).map_err(|_| ProcReadError)?;
+            if before != after {
+                return Err(ProcReadError);
+            }
+            if owns {
+                owners.push(BrowserProcessIdentity {
+                    pid,
+                    start_identity: before,
+                });
+            }
+        }
+        Ok(owners)
+    }
+}
+
+/// Injected Linux socket-diagnostic boundary.
+pub trait LinuxSocketDiagnostic {
+    fn response(
+        &self,
+        local: SocketAddr,
+        peer: SocketAddr,
+        sequence: u32,
+    ) -> Result<Vec<u8>, ProcReadError>;
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+pub struct SocketDiagnostic;
+
+struct OwnedFd(RawFd);
+impl Drop for OwnedFd {
+    fn drop(&mut self) {
+        unsafe {
+            libc::close(self.0);
+        }
+    }
+}
+
+impl LinuxSocketDiagnostic for SocketDiagnostic {
+    fn response(
+        &self,
+        local: SocketAddr,
+        peer: SocketAddr,
+        sequence: u32,
+    ) -> Result<Vec<u8>, ProcReadError> {
+        let fd = unsafe {
+            libc::socket(
+                libc::AF_NETLINK,
+                libc::SOCK_RAW | libc::SOCK_CLOEXEC,
+                libc::NETLINK_SOCK_DIAG,
+            )
+        };
+        if fd < 0 {
+            return Err(ProcReadError);
+        }
+        let fd = OwnedFd(fd);
+        let mut address: libc::sockaddr_nl = unsafe { mem::zeroed() };
+        address.nl_family = libc::AF_NETLINK as u16;
+        let bound = unsafe {
+            libc::bind(
+                fd.0,
+                &address as *const _ as *const libc::sockaddr,
+                mem::size_of_val(&address) as libc::socklen_t,
+            )
+        };
+        if bound != 0 {
+            return Err(ProcReadError);
+        }
+
+        let mut request = [0u8; 72];
+        request[0..4].copy_from_slice(&(72u32).to_ne_bytes());
+        request[4..6].copy_from_slice(&SOCK_DIAG_BY_FAMILY.to_ne_bytes());
+        request[6..8]
+            .copy_from_slice(&(libc::NLM_F_REQUEST as u16 | libc::NLM_F_DUMP as u16).to_ne_bytes());
+        request[8..12].copy_from_slice(&sequence.to_ne_bytes());
+        request[16] = if local.is_ipv4() {
+            libc::AF_INET as u8
+        } else {
+            libc::AF_INET6 as u8
+        };
+        request[17] = libc::IPPROTO_TCP as u8;
+        request[20..24].copy_from_slice(&(1u32 << TCP_ESTABLISHED).to_ne_bytes());
+        request[24..26].copy_from_slice(&local.port().to_be_bytes());
+        request[26..28].copy_from_slice(&peer.port().to_be_bytes());
+        match (local.ip(), peer.ip()) {
+            (IpAddr::V4(a), IpAddr::V4(b)) => {
+                request[28..32].copy_from_slice(&a.octets());
+                request[44..48].copy_from_slice(&b.octets());
+            }
+            (IpAddr::V6(a), IpAddr::V6(b)) => {
+                request[28..44].copy_from_slice(&a.octets());
+                request[44..60].copy_from_slice(&b.octets());
+            }
+            _ => return Err(ProcReadError),
+        }
+        request[64..72].fill(0xff); // INET_DIAG_NOCOOKIE
+        let sent = unsafe {
+            libc::send(
+                fd.0,
+                request.as_ptr() as *const libc::c_void,
+                request.len(),
+                0,
+            )
+        };
+        if sent != request.len() as isize {
+            return Err(ProcReadError);
+        }
+        let mut result = Vec::new();
+        loop {
+            let mut buffer = [0u8; 16 * 1024];
+            let read = unsafe {
+                libc::recv(
+                    fd.0,
+                    buffer.as_mut_ptr() as *mut libc::c_void,
+                    buffer.len(),
+                    0,
+                )
+            };
+            if read <= 0 {
+                return Err(ProcReadError);
+            }
+            result.extend_from_slice(&buffer[..read as usize]);
+            if netlink_contains_done(&buffer[..read as usize], sequence)? {
+                return Ok(result);
+            }
+        }
+    }
+}
+
+fn netlink_contains_done(bytes: &[u8], sequence: u32) -> Result<bool, ProcReadError> {
+    let mut offset = 0;
+    while offset < bytes.len() {
+        if bytes.len() - offset < 16 {
+            return Err(ProcReadError);
+        }
+        let len = u32::from_ne_bytes(
+            bytes[offset..offset + 4]
+                .try_into()
+                .map_err(|_| ProcReadError)?,
+        ) as usize;
+        if len < 16 || len > bytes.len() - offset {
+            return Err(ProcReadError);
+        }
+        let kind = u16::from_ne_bytes(
+            bytes[offset + 4..offset + 6]
+                .try_into()
+                .map_err(|_| ProcReadError)?,
+        );
+        let seq = u32::from_ne_bytes(
+            bytes[offset + 8..offset + 12]
+                .try_into()
+                .map_err(|_| ProcReadError)?,
+        );
+        if seq != sequence || kind == libc::NLMSG_ERROR as u16 {
+            return Err(ProcReadError);
+        }
+        if kind == NLMSG_DONE {
+            return Ok(true);
+        }
+        offset += (len + 3) & !3;
+    }
+    Ok(false)
+}
+
+static NEXT_SEQUENCE: AtomicU32 = AtomicU32::new(1);
+
+/// Resolves an accepted numeric loopback TCP connection to its live process.
+pub fn resolve_browser_process(
+    local: SocketAddr,
+    peer: SocketAddr,
+) -> Result<BrowserProcessIdentity, ResolutionError> {
+    resolve_browser_process_with_readers(local, peer, &SocketDiagnostic, &ProcReader)
+}
+
+#[doc(hidden)]
+pub fn resolve_browser_process_with_readers(
+    local: SocketAddr,
+    peer: SocketAddr,
+    diagnostic: &impl LinuxSocketDiagnostic,
+    procfs: &impl LinuxProcReader,
+) -> Result<BrowserProcessIdentity, ResolutionError> {
+    validate_endpoints(local, peer)?;
+    let sequence = NEXT_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+    let bytes = diagnostic
+        .response(local, peer, sequence)
+        .map_err(|_| ResolutionError::DiagnosticUnavailable)?;
+    let inodes = parse_diagnostic(&bytes, local, peer, sequence)?;
+    let inode = match inodes.as_slice() {
+        [] => return Err(ResolutionError::SocketNotFound),
+        [inode] => *inode,
+        _ => return Err(ResolutionError::AmbiguousSocket),
+    };
+    let owners = procfs
+        .socket_owners(inode)
+        .map_err(|_| ResolutionError::OwnerUnavailable)?;
+    let owner = match owners.as_slice() {
+        [] => return Err(ResolutionError::OwnerUnavailable),
+        [owner] => *owner,
+        _ => return Err(ResolutionError::AmbiguousOwner),
+    };
+    let after = procfs
+        .start_identity(owner.pid)
+        .map_err(|_| ResolutionError::OwnerUnavailable)?;
+    if after != owner.start_identity {
+        return Err(ResolutionError::ProcessIdentityChanged);
+    }
+    let confirmed = procfs
+        .socket_owners(inode)
+        .map_err(|_| ResolutionError::OwnerUnavailable)?;
+    if confirmed.as_slice() != [owner] {
+        return Err(if confirmed.len() > 1 {
+            ResolutionError::AmbiguousOwner
+        } else {
+            ResolutionError::ProcessIdentityChanged
+        });
+    }
+    Ok(owner)
+}
+
+fn validate_endpoints(local: SocketAddr, peer: SocketAddr) -> Result<(), ResolutionError> {
+    if local.port() == 0
+        || peer.port() == 0
+        || !local.ip().is_loopback()
+        || !peer.ip().is_loopback()
+        || mem::discriminant(&local.ip()) != mem::discriminant(&peer.ip())
+        || local == peer
+    {
+        return Err(ResolutionError::InvalidEndpoint);
+    }
+    Ok(())
+}
+
+const NLMSG_DONE: u16 = 3;
+const SOCK_DIAG_BY_FAMILY: u16 = 20;
+const TCP_ESTABLISHED: u8 = 1;
+
+fn parse_diagnostic(
+    bytes: &[u8],
+    local: SocketAddr,
+    peer: SocketAddr,
+    sequence: u32,
+) -> Result<Vec<u32>, ResolutionError> {
+    let mut offset = 0usize;
+    let mut done = false;
+    let mut matches = Vec::new();
+    while offset < bytes.len() {
+        if bytes.len() - offset < 16 {
+            return Err(ResolutionError::MalformedDiagnostic);
+        }
+        let len = u32::from_ne_bytes(bytes[offset..offset + 4].try_into().unwrap()) as usize;
+        let kind = u16::from_ne_bytes(bytes[offset + 4..offset + 6].try_into().unwrap());
+        let seq = u32::from_ne_bytes(bytes[offset + 8..offset + 12].try_into().unwrap());
+        let pid = u32::from_ne_bytes(bytes[offset + 12..offset + 16].try_into().unwrap());
+        if len < 16 || len > bytes.len() - offset || seq != sequence || pid != 0 || done {
+            return Err(ResolutionError::MalformedDiagnostic);
+        }
+        if kind == NLMSG_DONE {
+            if len != 16 {
+                return Err(ResolutionError::MalformedDiagnostic);
+            }
+            done = true;
+        } else if kind == SOCK_DIAG_BY_FAMILY {
+            if len < 88 {
+                return Err(ResolutionError::MalformedDiagnostic);
+            }
+            let msg = &bytes[offset + 16..offset + 88];
+            let family = msg[0];
+            if msg[1] != TCP_ESTABLISHED {
+                return Err(ResolutionError::MalformedDiagnostic);
+            }
+            let expected_family = if local.is_ipv4() {
+                libc::AF_INET as u8
+            } else {
+                libc::AF_INET6 as u8
+            };
+            if family != expected_family {
+                return Err(ResolutionError::MalformedDiagnostic);
+            }
+            let sport = u16::from_be_bytes([msg[4], msg[5]]);
+            let dport = u16::from_be_bytes([msg[6], msg[7]]);
+            let addresses_match = match (local.ip(), peer.ip()) {
+                (IpAddr::V4(a), IpAddr::V4(b)) => {
+                    msg[8..12] == a.octets() && msg[24..28] == b.octets()
+                }
+                (IpAddr::V6(a), IpAddr::V6(b)) => {
+                    msg[8..24] == a.octets() && msg[24..40] == b.octets()
+                }
+                _ => false,
+            };
+            if sport != local.port() || dport != peer.port() || !addresses_match {
+                return Err(ResolutionError::MalformedDiagnostic);
+            }
+            let inode = u32::from_ne_bytes(msg[68..72].try_into().unwrap());
+            if inode == 0 {
+                return Err(ResolutionError::MalformedDiagnostic);
+            }
+            matches.push(inode);
+        } else {
+            return Err(ResolutionError::MalformedDiagnostic);
+        }
+        offset += (len + 3) & !3;
+        if offset > bytes.len() {
+            return Err(ResolutionError::MalformedDiagnostic);
+        }
+    }
+    if !done {
+        return Err(ResolutionError::MalformedDiagnostic);
+    }
+    Ok(matches)
 }
 
 /// Verifies a live process against the desktop-owned expected browser path.
