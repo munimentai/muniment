@@ -13,12 +13,23 @@ pub struct Client {
     pub version: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Clone, PartialEq, Serialize)]
 pub struct Hello {
     pub protocol: Protocol,
     pub client: Client,
     pub supported: VersionRange,
     pub client_nonce: String,
+}
+
+impl fmt::Debug for Hello {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Hello")
+            .field("protocol", &self.protocol)
+            .field("client", &self.client)
+            .field("supported", &self.supported)
+            .field("client_nonce", &"[REDACTED]")
+            .finish()
+    }
 }
 
 impl<'de> Deserialize<'de> for Hello {
@@ -87,7 +98,7 @@ impl fmt::Debug for Welcome {
         f.debug_struct("Welcome")
             .field("selected", &self.selected)
             .field("desktop_version", &self.desktop_version)
-            .field("server_nonce", &self.server_nonce)
+            .field("server_nonce", &"[REDACTED]")
             .field("authorization", &self.authorization)
             .field("approval_challenge", &"[REDACTED]")
             .finish()
