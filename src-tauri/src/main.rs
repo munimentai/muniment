@@ -2,25 +2,27 @@
 
 mod auth;
 mod chat;
+mod dictation;
 mod model_install;
-// This slice intentionally has no command/UI consumer; the next voice slice
-// will drive this owned native state.
-#[allow(dead_code)]
 mod voice_capture;
 
+use std::sync::Arc;
 use tauri::Manager;
 
 fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .manage(auth::AuthState::new())
-        .manage(voice_capture::VoiceCaptureState::new())
+        .manage(Arc::new(voice_capture::VoiceCaptureState::new()))
         .setup(|app| {
             app.manage(chat::ChatState::new(app.handle())?);
             let model_root = app.path().app_data_dir()?.join("models").join("gemma");
             app.manage(model_install::GemmaInstallState::new(model_root)?);
             let parakeet_root = app.path().app_data_dir()?.join("models").join("parakeet");
-            app.manage(model_install::ParakeetInstallState::new(parakeet_root)?);
+            app.manage(model_install::ParakeetInstallState::new(
+                parakeet_root.clone(),
+            )?);
+            app.manage(dictation::DictationState::new(parakeet_root));
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -41,7 +43,10 @@ fn main() {
             model_install::gemma_install_cancel,
             model_install::parakeet_install_start,
             model_install::parakeet_install_status,
-            model_install::parakeet_install_cancel
+            model_install::parakeet_install_cancel,
+            dictation::dictation_start,
+            dictation::dictation_stop,
+            dictation::dictation_status
         ])
         .run(tauri::generate_context!())
         .expect("error while running muniment");
