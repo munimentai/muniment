@@ -170,6 +170,36 @@ fn thread_list_rejects_correlation_mismatch_and_maps_protocol_errors() {
 }
 
 #[test]
+fn thread_list_rejects_hybrid_success_and_error_envelopes() {
+    for hybrid in [
+        serde_json::json!({
+            "protocol": "muniment.attach/1",
+            "ok": true,
+            "body": {"threads": []},
+            "error": {"code": "invalid_request", "message": "server-secret", "action": "retry"}
+        }),
+        serde_json::json!({
+            "protocol": "muniment.attach/1",
+            "ok": false,
+            "error": {"code": "invalid_request", "message": "server-secret", "action": "retry"},
+            "body": {"threads": []}
+        }),
+    ] {
+        let (client, mut server) = UnixStream::pair().unwrap();
+        let worker = thread::spawn(move || {
+            complete_pairing(&mut server);
+            let request = read_client_value(&mut server);
+            let mut hybrid = hybrid;
+            hybrid["request_id"] = request["request_id"].clone();
+            server.write_all(&encode_frame(&hybrid).unwrap()).unwrap();
+        });
+        let mut client = handshake_stream(client, "0.0.1", SHORT, SHORT, || {}).unwrap();
+        assert_eq!(client.list_threads(), Err(ClientError::UnexpectedMessage));
+        worker.join().unwrap();
+    }
+}
+
+#[test]
 fn thread_list_timeout_is_absolute_and_client_debug_is_redacted() {
     let (client, mut server) = UnixStream::pair().unwrap();
     let worker = thread::spawn(move || {

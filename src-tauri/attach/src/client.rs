@@ -69,7 +69,7 @@ mod linux {
     use super::{AuthorizationSummary, ClientError, ThreadListPage};
     use crate::{
         decode_frame, encode_frame, Authorized, Client, ErrorCode, ErrorEnvelope, FrameError,
-        Hello, Id, Operation, Protocol, Request, Response, VersionRange, Welcome, MAX_FRAME_LENGTH,
+        Envelope, Hello, Id, Operation, Protocol, Request, VersionRange, Welcome, MAX_FRAME_LENGTH,
         MAX_TEXT_LENGTH, PROTOCOL,
     };
     use serde::de::DeserializeOwned;
@@ -125,19 +125,15 @@ mod linux {
             {
                 return Err(ClientError::ProtocolIncompatible);
             }
-            if value.get("ok") == Some(&Value::Bool(false)) {
-                let error: ErrorEnvelope =
-                    serde_json::from_value(value).map_err(|_| ClientError::MalformedFrame)?;
-                if error.request_id.as_ref() != Some(&request_id) {
-                    return Err(ClientError::UnexpectedMessage);
+            let response = match serde_json::from_value(value)
+                .map_err(|_| ClientError::UnexpectedMessage)?
+            {
+                Envelope::Response(response) if response.request_id == request_id => response,
+                Envelope::Error(error) if error.request_id.as_ref() == Some(&request_id) => {
+                    return Err(map_protocol_error(error.error.code()));
                 }
-                return Err(map_protocol_error(error.error.code()));
-            }
-            let response: Response =
-                serde_json::from_value(value).map_err(|_| ClientError::UnexpectedMessage)?;
-            if response.request_id != request_id {
-                return Err(ClientError::UnexpectedMessage);
-            }
+                _ => return Err(ClientError::UnexpectedMessage),
+            };
             let page: ThreadListPage = serde_json::from_value(response.body)
                 .map_err(|_| ClientError::UnexpectedMessage)?;
             if page.threads.len() > usize::from(THREAD_LIST_LIMIT)
