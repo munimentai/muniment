@@ -40,6 +40,7 @@ grep -Fq 'cargo clippy --manifest-path src-tauri/Cargo.toml --package muniment-a
 grep -Fq 'cargo test --manifest-path src-tauri/Cargo.toml --package muniment-attach --package muniment-cli --locked' "$ci"
 grep -Fq 'run: test/cli-dependency-boundary.sh' "$ci"
 test -x test/cli-dependency-boundary.sh
+grep -Fq -- '--locked --target all --prefix none' test/cli-dependency-boundary.sh
 # The allowlist rejects representatives of every forbidden runtime class,
 # including package-name variants and implementations without category words.
 for forbidden in \
@@ -50,6 +51,20 @@ for forbidden in \
   ! test/cli-dependency-boundary.sh muniment-cli muniment-attach "$forbidden" \
     >/dev/null 2>&1
 done
+# Exercise the real Cargo tree path with a dependency hidden from Linux's host
+# graph. The boundary must inspect dependencies for every target platform.
+cli_manifest=src-tauri/cli/Cargo.toml
+cli_manifest_backup=$(mktemp)
+cp "$cli_manifest" "$cli_manifest_backup"
+restore_cli_manifest() {
+  cp "$cli_manifest_backup" "$cli_manifest"
+  rm -f "$cli_manifest_backup"
+}
+trap restore_cli_manifest EXIT
+printf '\n[target.\x27cfg(windows)\x27.dependencies]\nmuniment-core = { path = "../core" }\n' >> "$cli_manifest"
+! test/cli-dependency-boundary.sh >/dev/null 2>&1
+restore_cli_manifest
+trap - EXIT
 grep -Fq "needs.smoke.outputs.desktop == 'true'" "$ci"
 test -f src-tauri/tauri.machine.conf.json
 grep -Fq '"upgradeCode": "c75b4a56-7d8b-5b99-9fc7-61ef0aabe84b"' src-tauri/tauri.machine.conf.json

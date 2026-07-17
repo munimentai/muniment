@@ -5,7 +5,7 @@ if [ "$#" -gt 0 ]; then
   packages=$(printf '%s\n' "$@")
 else
   packages=$(cargo tree --manifest-path src-tauri/Cargo.toml --package muniment-cli \
-    --locked --prefix none --format '{p}' | awk '{print $1}')
+    --locked --target all --prefix none --format '{p}' | awk '{print $1}')
 fi
 
 unexpected=$(printf '%s\n' "$packages" | grep -Ev '^(muniment-cli|muniment-attach)$' || true)
