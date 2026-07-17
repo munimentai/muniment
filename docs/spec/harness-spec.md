@@ -628,13 +628,15 @@ outside this section's scope.
   The first unblocked slice is pure-core protocol types, strict codecs,
   negotiation, authorization state, cursor/idempotency semantics, and tests;
   native listeners and companion UIs remain unimplemented.
-- **E0.5 — repo/CI strategy:** [ADR 0011](../decisions/0011-companion-surface-repo-strategy.md)
-  decides where E1 and E2 code lives and how each is built, tested, and
-  released. It is the SOLE prerequisite before any E1 or E2 scaffolding ticket
-  and remains proposed until explicit owner ratification.
-- **E1 — CLI:** threads list/open, chat/run with inline tool stream,
+- **E0.5 — DONE:** owner-ratified [ADR 0011](../decisions/0011-companion-surface-repo-strategy.md)
+  on 2026-07-17 selects this repository for E1 and E2 and defines how each is
+  built, tested, and released.
+- **E1 — CLI (OPEN):** first scaffold the Rust workspace binary, its independent
+  CI lane, and its ADR 0009 attach-protocol client; then implement threads
+  list/open, chat/run with inline tool stream,
   permission gates answered in-terminal, receipts printout.
-- **E2 — VS Code extension:** thread view + composer, editor-context
+- **E2 — VS Code extension:** independently sequenced in its scoped TypeScript
+  package lane, implement thread view + composer, editor-context
   attach (send selection/file within workspace scope), permission gates
   in-editor. Marketplace publishing is a public act — owner-gated like
   all launch/publicity.
@@ -649,3 +651,89 @@ outside this section's scope.
 | Fork coverage | Decide which VS Code forks (Cursor/Windsurf) are officially claimed vs expected-to-work. |
 | JetBrains | Later; outside this amendment's build scope. |
 | Marketplace publisher account | Owner acquires alongside launch prep. |
+
+## 14. Remote Control (owner decision 2026-07-17)
+
+Remote Control extends the M1 live-session view (§12.4) from mirroring and
+remote approvals to **takeover**: an authenticated mobile user can send prompts
+and commands to, stop, or queue a follow-up for a live local session, while
+continuing to see the mirror banner, tool stream, permission-gate cards, and
+receipts. The session may be owned by any execution surface — desktop, CLI
+(E1), or editor extension (E2) (§13) — on Windows or macOS. Linux follows where
+the shared runtime integration works without platform-specific scope.
+
+### 14.1 Runtime and transport
+
+The desktop runtime remains the single local executor. CLI and editor-extension
+sessions are peers over the E0 attach protocol defined by ADR 0009 and ADR 0011,
+so Remote Control is **one runtime-to-cloud relay integration**, not a tunnel
+implemented separately by each surface. The runtime opens an outbound-only
+HTTPS session leg to `api.muniment.ai`; Remote Control requires no inbound port
+or other inbound connectivity on the user's machine. Messages route through
+the relay encrypted, and the relay does not receive filesystem access,
+environment access, tool execution, or provider credentials. Filesystem,
+environment, tool execution, and the authoritative run journal remain entirely
+on the user's machine. Model inference continues through the existing governed
+LiteLLM/model-routing path (§4.5 and §5), including the optional local-model
+exception in §5.3.
+
+Only one remote-controlled session may be active per local runtime at a time.
+The local process must remain alive. If network connectivity is lost, the
+runtime allows a bounded reconnection window of approximately ten minutes,
+then ends the remote leg cleanly without ending or transferring execution of
+the local session. A new remote client must pair again; stale clients cannot
+resume control from relay state alone.
+
+### 14.2 Entry points and session state
+
+- CLI: a command that starts Remote Control and an in-session slash command.
+- Editor extension: a command that starts Remote Control, an open-in-browser
+  action, and a persistent **Remote controlled** banner while attached.
+- Desktop: the equivalent session action and persistent banner while attached.
+- Handoff: an expiring session URL and QR code that open the authenticated
+  mobile app; cloud and mobile expose a list of eligible live sessions.
+- Disconnect: whichever execution surface owns the session shows the persistent
+  banner and a disconnect affordance. Mobile also exposes Stop and detach.
+
+Session presence is runtime-authoritative. A relay or client must not present a
+stale session as controllable after the runtime disconnects, the owner uses the
+kill switch, entitlement is revoked, or the network-loss window expires.
+
+### 14.3 Governance, identity, and receipts
+
+Remote Control is gated by an explicit entitlement flag set per organization
+and/or user. Session pairing is phishing-resistant: every QR code or URL is
+short-lived, single-use, and bound to the intended session and the
+authenticated organization user; possession of a handoff link alone never
+grants attach authority. The runtime validates authorization before accepting
+the attach and continuously enforces entitlement and policy for the remote leg.
+An organization-owner kill switch disables new attaches and disconnects active
+remote legs.
+
+Remote-issued commands enter the same governed runtime path as commands from
+the owning surface. They never bypass entitlements, workspace scope, policy, or
+the §6.5 ask/allow/deny permission gates. Those gates are answerable from the
+phone, and every answer is recorded in the run journal and projected into the
+run receipt. The journal additionally records a receipt event for remote
+attach, every remote-issued command (including its authenticated actor and
+origin), and detach with its reason. Duplicate or replayed relay messages must
+not produce a second command or approval.
+
+This preserves the §6.8 taxonomy: mobile remains a companion drive surface,
+not an execution surface or runtime capability. It cannot host or execute
+browser control locally; a command issued from mobile may ask the local runtime
+to invoke browser control or another capability, but the runtime does so only
+through its ordinary entitlement, permission, journal, and receipt path.
+
+### 14.4 Non-goals and failure boundaries
+
+- Mobile never executes tools, models, MCP servers, browser control, or
+  sandboxes locally; §12 continues to apply.
+- Remote Control does not move execution into the relay or provide an offline
+  local-session surrogate. Server-side Flue sessions remain the separate M3
+  path (§12.4).
+- Remote Control never bypasses runtime governance, creates per-surface
+  tunnels, or requires inbound connectivity on the user's machine.
+- Relay failure, mobile disconnect, or remote detach cannot silently approve a
+  pending gate or interrupt the still-local session. Stop is an explicit,
+  authenticated, journaled command.
