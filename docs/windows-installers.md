@@ -48,3 +48,18 @@ the release asset came from the expected commit before deployment. Nightly
 installers are pre-release builds and are not recommended for a production fleet.
 Windows release builds are signed through Azure Artifact Signing; macOS artifacts
 remain unsigned until Apple credentials are available.
+
+## WinGet convenience channel
+
+WinGet is an individual/developer convenience channel for stable releases. It
+installs the signed per-machine MSI and therefore prompts for administrator
+approval; managed fleets should continue to deploy the `-machine.msi` directly
+through MDM rather than depend on the community catalog.
+
+After stable promotion succeeds, the release workflow hashes that release's
+machine MSI, generates `Muniment.Muniment` under the current winget-pkgs manifest
+schema, and opens a **draft** pull request against `microsoft/winget-pkgs`. It
+never runs for `nightly`. The owner must create the `mikeydiamonds/winget-pkgs`
+fork and configure `WINGET_PKGS_TOKEN` with permission to push to that fork and
+open pull requests in the upstream repository. Review and manually mark the PR
+ready only after confirming the stable release asset is publicly downloadable.
