@@ -917,7 +917,7 @@ fn large_escaped_projection_continues_losslessly_with_bounded_pages() {
     // replay or retain all 1,001 source envelopes.
     assert_eq!(
         journal
-            .projected_thread_entries("workspace-1", RUN, 1001, 0, 3)
+            .projected_thread_entries("workspace-1", RUN, 1001, -1, 3)
             .unwrap()
             .len(),
         3
@@ -945,6 +945,56 @@ fn large_escaped_projection_continues_losslessly_with_bounded_pages() {
         }
     }
     assert_eq!(found, expected);
+}
+
+#[test]
+fn thread_open_cursor_skips_removed_projection_ordinals_without_duplicates() {
+    const RUN: &str = "0190a250-0000-7000-8000-000000000001";
+    let mut events = Vec::new();
+    for (seq, kind, payload) in [
+        (1, "user.prompt.submitted", json!({"prompt":"first"})),
+        (
+            2,
+            "permission.requested",
+            json!({"gate_id":"gate-1","kind":"confirm","title":"Allow?","message":"Proceed?"}),
+        ),
+        (3, "user.prompt.submitted", json!({"prompt":"second"})),
+        (4, "permission.resolved", json!({"gate_id":"gate-1"})),
+    ] {
+        let mut event = prompt(RUN, "unused", "2026-07-16T03:00:00Z");
+        event.event_id = format!("0190a250-0000-7000-8000-{seq:012}");
+        event.run_seq = seq;
+        event.event_type = kind.into();
+        event.payload = EventPayload::Inline {
+            payload_json: payload,
+        };
+        events.push(event);
+    }
+    let mut journal = RunJournal::open(":memory:").unwrap();
+    journal.append_batch(0, &events).unwrap();
+    journal.bind_run_workspace(RUN, "workspace-1").unwrap();
+
+    let mut cursor = None;
+    let mut found = Vec::new();
+    loop {
+        let page = journal
+            .open_thread(
+                "workspace-1",
+                ThreadOpenRequest {
+                    thread_id: RUN.into(),
+                    limit: 1,
+                    cursor,
+                },
+            )
+            .unwrap();
+        found.extend(page.entries.into_iter().map(|entry| entry.text));
+        cursor = page.next_cursor;
+        if cursor.is_none() {
+            break;
+        }
+    }
+
+    assert_eq!(found, [Some("first".into()), Some("second".into())]);
 }
 
 #[test]

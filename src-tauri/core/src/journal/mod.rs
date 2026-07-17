@@ -159,7 +159,7 @@ struct ThreadProjectionCursor {
     version: u8,
     run_id: String,
     snapshot_seq: u64,
-    after_entry: usize,
+    last_ordinal: i64,
     authenticator: String,
 }
 
@@ -218,7 +218,7 @@ impl RunJournal {
         workspace: &str,
         run_id: &str,
         cursor: Option<&str>,
-    ) -> Result<(u64, usize), RunEventPageError> {
+    ) -> Result<(u64, i64), RunEventPageError> {
         if !self
             .run_belongs_to_workspace(run_id, workspace)
             .map_err(RunEventPageError::Journal)?
@@ -240,16 +240,16 @@ impl RunJournal {
             .map_err(JournalError::from)
             .map_err(RunEventPageError::Journal)?
             .ok_or(RunEventPageError::NotFoundOrInaccessible)?;
-        Ok((snapshot, 0))
+        Ok((snapshot, -1))
     }
 
     pub fn thread_projection_cursor(
         &self,
         run_id: &str,
         snapshot_seq: u64,
-        after_entry: usize,
+        last_ordinal: i64,
     ) -> Result<String, RunEventPageError> {
-        encode_thread_projection_cursor(run_id, snapshot_seq, after_entry, &self.cursor_key)
+        encode_thread_projection_cursor(run_id, snapshot_seq, last_ordinal, &self.cursor_key)
     }
 
     pub fn open(path: impl AsRef<Path>) -> Result<Self, JournalError> {
@@ -746,30 +746,30 @@ fn thread_projection_cursor_mac(
     key: &[u8; 32],
     run_id: &str,
     snapshot_seq: u64,
-    after_entry: usize,
+    last_ordinal: i64,
 ) -> Hmac<Sha256> {
     let mut mac = Hmac::<Sha256>::new_from_slice(key).expect("HMAC accepts all key lengths");
     mac.update(b"muniment-thread-projection-cursor-v1\0");
     mac.update(run_id.as_bytes());
     mac.update(&[0]);
     mac.update(&snapshot_seq.to_be_bytes());
-    mac.update(&(after_entry as u64).to_be_bytes());
+    mac.update(&last_ordinal.to_be_bytes());
     mac
 }
 
 fn encode_thread_projection_cursor(
     run_id: &str,
     snapshot_seq: u64,
-    after_entry: usize,
+    last_ordinal: i64,
     key: &[u8; 32],
 ) -> Result<String, RunEventPageError> {
     let cursor = ThreadProjectionCursor {
         version: 1,
         run_id: run_id.to_owned(),
         snapshot_seq,
-        after_entry,
+        last_ordinal,
         authenticator: URL_SAFE_NO_PAD.encode(
-            thread_projection_cursor_mac(key, run_id, snapshot_seq, after_entry)
+            thread_projection_cursor_mac(key, run_id, snapshot_seq, last_ordinal)
                 .finalize()
                 .into_bytes(),
         ),
@@ -783,7 +783,7 @@ fn decode_thread_projection_cursor(
     value: &str,
     run_id: &str,
     key: &[u8; 32],
-) -> Result<(u64, usize), RunEventPageError> {
+) -> Result<(u64, i64), RunEventPageError> {
     let bytes = URL_SAFE_NO_PAD
         .decode(value)
         .map_err(|_| RunEventPageError::InvalidCursor)?;
@@ -795,10 +795,13 @@ fn decode_thread_projection_cursor(
     let authenticator = URL_SAFE_NO_PAD
         .decode(&cursor.authenticator)
         .map_err(|_| RunEventPageError::InvalidCursor)?;
-    thread_projection_cursor_mac(key, run_id, cursor.snapshot_seq, cursor.after_entry)
+    if cursor.last_ordinal < 0 {
+        return Err(RunEventPageError::InvalidCursor);
+    }
+    thread_projection_cursor_mac(key, run_id, cursor.snapshot_seq, cursor.last_ordinal)
         .verify_slice(&authenticator)
         .map_err(|_| RunEventPageError::InvalidCursor)?;
-    Ok((cursor.snapshot_seq, cursor.after_entry))
+    Ok((cursor.snapshot_seq, cursor.last_ordinal))
 }
 
 fn encode_run_event_cursor(

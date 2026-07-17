@@ -459,7 +459,7 @@ impl ThreadListService for RunJournal {
         workspace: &str,
         request: ThreadOpenRequest,
     ) -> Result<ThreadOpenPage, ProtocolError> {
-        let (snapshot_seq, after_entry) = self
+        let (snapshot_seq, last_ordinal) = self
             .thread_projection_boundary(workspace, &request.thread_id, request.cursor.as_deref())
             .map_err(|error| match error {
                 RunEventPageError::InvalidLimit => ProtocolError::invalid_request(),
@@ -472,7 +472,7 @@ impl ThreadListService for RunJournal {
                 workspace,
                 &request.thread_id,
                 snapshot_seq,
-                after_entry,
+                last_ordinal,
                 usize::from(request.limit) + 1,
             )
             .map_err(|error| match error {
@@ -482,10 +482,15 @@ impl ThreadListService for RunJournal {
             })?;
         let mut expanded = projected
             .into_iter()
-            .map(|entry| RedactedThreadEntry {
-                run_seq: entry.run_seq,
-                kind: entry.kind,
-                text: entry.text,
+            .map(|entry| {
+                (
+                    entry.ordinal,
+                    RedactedThreadEntry {
+                        run_seq: entry.run_seq,
+                        kind: entry.kind,
+                        text: entry.text,
+                    },
+                )
             })
             .collect::<Vec<_>>();
         if request.cursor.is_some() && expanded.is_empty() {
@@ -494,8 +499,8 @@ impl ThreadListService for RunJournal {
         let has_more = expanded.len() > usize::from(request.limit);
         expanded.truncate(usize::from(request.limit));
         let mut entries = Vec::new();
-        let mut consumed = after_entry;
-        for entry in expanded.iter() {
+        let mut emitted_ordinal = last_ordinal;
+        for (ordinal, entry) in expanded.iter() {
             let mut candidate = entries.clone();
             candidate.push(entry.clone());
             let candidate_page = ThreadOpenPage {
@@ -511,11 +516,11 @@ impl ThreadListService for RunJournal {
                 break;
             }
             entries.push(entry.clone());
-            consumed += 1;
+            emitted_ordinal = *ordinal;
         }
-        let next_cursor = if has_more || consumed < after_entry + expanded.len() {
+        let next_cursor = if has_more || entries.len() < expanded.len() {
             Some(
-                self.thread_projection_cursor(&request.thread_id, snapshot_seq, consumed)
+                self.thread_projection_cursor(&request.thread_id, snapshot_seq, emitted_ordinal)
                     .map_err(|_| ProtocolError::persistence_failed())?,
             )
         } else {

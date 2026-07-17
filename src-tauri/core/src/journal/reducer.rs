@@ -7,6 +7,7 @@ use std::fmt;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ProjectedThreadEntry {
+    pub ordinal: i64,
     pub run_seq: u64,
     pub kind: String,
     pub text: Option<String>,
@@ -20,7 +21,7 @@ impl super::RunJournal {
         workspace: &str,
         run_id: &str,
         snapshot_seq: u64,
-        after_entry: usize,
+        last_ordinal: i64,
         limit: usize,
     ) -> Result<Vec<ProjectedThreadEntry>, super::RunEventPageError> {
         let owned = self
@@ -41,8 +42,8 @@ impl super::RunJournal {
             .expect("journal connection is always present outside compaction");
         let mut statement = connection
             .prepare(
-                "SELECT run_seq,kind,text FROM thread_projection_versions INDEXED BY thread_projection_versions_page \
-                 WHERE run_id=?1 AND ordinal>=?4 AND valid_from_seq<=?2 \
+                "SELECT ordinal,run_seq,kind,text FROM thread_projection_versions INDEXED BY thread_projection_versions_page \
+                 WHERE run_id=?1 AND ordinal>?4 AND valid_from_seq<=?2 \
                  AND (valid_until_seq IS NULL OR valid_until_seq>?2) \
                  ORDER BY ordinal LIMIT ?3",
             )
@@ -50,17 +51,18 @@ impl super::RunJournal {
             .map_err(super::RunEventPageError::Journal)?;
         let rows = statement
             .query_map(
-                rusqlite::params![run_id, snapshot_seq, limit, after_entry],
+                rusqlite::params![run_id, snapshot_seq, limit, last_ordinal],
                 |row| {
                     Ok(ProjectedThreadEntry {
-                        run_seq: row.get(0)?,
+                        ordinal: row.get(0)?,
+                        run_seq: row.get(1)?,
                         kind: row
-                            .get::<_, String>(1)?
+                            .get::<_, String>(2)?
                             .split(':')
                             .next()
                             .unwrap_or_default()
                             .to_owned(),
-                        text: row.get(2)?,
+                        text: row.get(3)?,
                     })
                 },
             )

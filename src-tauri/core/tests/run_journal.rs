@@ -105,13 +105,7 @@ fn projection_late_pages_use_keyset_index_and_storage_stays_linear() {
 
     // A late page is addressed by ordinal rather than skipping all earlier rows.
     let late = journal
-        .projected_thread_entries(
-            "workspace-1",
-            RUN,
-            DELTAS + 1,
-            (DELTAS as usize / 64) - 3,
-            3,
-        )
+        .projected_thread_entries("workspace-1", RUN, DELTAS + 1, (DELTAS as i64 / 64) - 4, 3)
         .unwrap();
     assert_eq!(late.len(), 3);
     drop(journal);
