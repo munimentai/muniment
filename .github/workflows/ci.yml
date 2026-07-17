@@ -75,6 +75,10 @@ jobs:
         if: steps.changes.outputs.docs_only != 'true'
         run: npm ci --no-audit --no-fund && npm test
 
+      - name: Browser control relay core
+        if: steps.changes.outputs.docs_only != 'true'
+        run: npm ci --prefix browser-control --no-audit --no-fund && npm run browser-control
+
       # Unit tests cover src-tauri/core (muniment-core), which is kept free of
       # Tauri on purpose: compiling the tauri crate needs the GUI dev stack
       # (webkit2gtk etc.) that only the desktop-ci build VMs carry, while the
