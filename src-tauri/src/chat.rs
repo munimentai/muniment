@@ -10,7 +10,10 @@ use muniment_core::attach::linux::{
     ThreadListPage, ThreadListRequest, ThreadListService,
 };
 #[cfg(target_os = "linux")]
-use muniment_core::attach::{Id, ProtocolError};
+use muniment_core::attach::{
+    CommittedResult, Id, IdempotencyOutcome, IdempotencyStore, Operation, Protocol, ProtocolError,
+    Request as AttachRequest,
+};
 use muniment_core::attachment::{ingest_attachment, AttachmentMetadata};
 use muniment_core::auth::TokenSet;
 use muniment_core::cas::LocalCas;
@@ -384,14 +387,22 @@ impl<R: tauri::Runtime> RunStartBoundaries for TauriRunStartBoundaries<R> {
 #[cfg(target_os = "linux")]
 pub struct DesktopAttachService<B> {
     boundaries: B,
+    idempotency: IdempotencyStore,
 }
 
 #[cfg(target_os = "linux")]
 impl<R: tauri::Runtime> DesktopAttachService<TauriRunStartBoundaries<R>> {
-    pub fn new(app: tauri::AppHandle<R>) -> Self {
-        Self {
+    pub fn new(app: tauri::AppHandle<R>) -> Result<Self, ProtocolError> {
+        let idempotency = IdempotencyStore::open(
+            app.path()
+                .app_data_dir()
+                .map_err(|_| ProtocolError::persistence_failed())?
+                .join("attach-idempotency.sqlite3"),
+        )?;
+        Ok(Self {
             boundaries: TauriRunStartBoundaries { app },
-        }
+            idempotency,
+        })
     }
 }
 
@@ -416,8 +427,22 @@ impl<B: RunStartBoundaries> ThreadListService for DesktopAttachService<B> {
         if request.context.is_some() {
             return Err(ProtocolError::unsupported_operation());
         }
+        let canonical_input = json!({
+            "workspace": workspace,
+            "text": &request.text,
+            "context": &request.context,
+        });
+        let ledger_request = AttachRequest {
+            protocol: Protocol,
+            request_id: request_id.clone(),
+            operation: Operation::RunStart,
+            capability: String::new(),
+            idempotency_key: Some(idempotency_key.clone()),
+            body: canonical_input.clone(),
+        };
         let mut extra = BTreeMap::new();
-        extra.insert("attach_profile".into(), json!(companion.profile));
+        let profile = companion.profile.clone();
+        extra.insert("attach_profile".into(), json!(&companion.profile));
         extra.insert("companion_kind".into(), json!(companion.companion_kind));
         extra.insert(
             "companion_version".into(),
@@ -435,27 +460,42 @@ impl<B: RunStartBoundaries> ThreadListService for DesktopAttachService<B> {
             capability_versions: None,
             extra,
         };
-        let result = start_desktop_run(
-            &self.boundaries,
-            RunStartRequest {
-                prompt: request.text,
-                files: Vec::new(),
-                workspace: Some(workspace.to_owned()),
-                provenance: Some(provenance),
+        let outcome = self.idempotency.execute(
+            &profile,
+            &ledger_request,
+            &canonical_input,
+            || Ok(()),
+            |_| {
+                let result = start_desktop_run(
+                    &self.boundaries,
+                    RunStartRequest {
+                        prompt: request.text,
+                        files: Vec::new(),
+                        workspace: Some(workspace.to_owned()),
+                        provenance: Some(provenance),
+                    },
+                )
+                .map_err(|error| match error.as_str() {
+                    "The capability is not authorized." => ProtocolError::unauthorized(),
+                    "A reply is already in progress." | "Enter a message before sending." => {
+                        ProtocolError::invalid_request()
+                    }
+                    _ => ProtocolError::persistence_failed(),
+                })?;
+                Ok(CommittedResult {
+                    body: json!({
+                        "run_id": result.run_id,
+                        "committed_seq": result.committed_seq,
+                        "accepted_at": result.accepted_at,
+                    }),
+                    cursor: None,
+                })
             },
-        )
-        .map_err(|error| match error.as_str() {
-            "The capability is not authorized." => ProtocolError::unauthorized(),
-            "A reply is already in progress." | "Enter a message before sending." => {
-                ProtocolError::invalid_request()
-            }
-            _ => ProtocolError::persistence_failed(),
-        })?;
-        Ok(RunStartAccepted {
-            run_id: result.run_id,
-            committed_seq: result.committed_seq,
-            accepted_at: result.accepted_at,
-        })
+        )?;
+        let committed = match outcome {
+            IdempotencyOutcome::Committed(result) | IdempotencyOutcome::Replayed(result) => result,
+        };
+        serde_json::from_value(committed.body).map_err(|_| ProtocolError::persistence_failed())
     }
 }
 
@@ -1879,6 +1919,9 @@ mod tests {
     struct FakeRunStartBoundaries {
         active: bool,
         auth_calls: AtomicUsize,
+        configure_calls: AtomicUsize,
+        prepare_calls: AtomicUsize,
+        launch_calls: AtomicUsize,
         launched_run: Mutex<Option<String>>,
         prepare_error: Option<String>,
         prepared_provenance: Mutex<Option<Provenance>>,
@@ -1890,6 +1933,9 @@ mod tests {
             Self {
                 active: false,
                 auth_calls: AtomicUsize::new(0),
+                configure_calls: AtomicUsize::new(0),
+                prepare_calls: AtomicUsize::new(0),
+                launch_calls: AtomicUsize::new(0),
                 launched_run: Mutex::new(None),
                 prepare_error: None,
                 prepared_provenance: Mutex::new(None),
@@ -1919,6 +1965,7 @@ mod tests {
             _prompt: &str,
             _tokens: &TokenSet,
         ) -> Result<ChatGrant, String> {
+            self.configure_calls.fetch_add(1, Ordering::SeqCst);
             Ok(ChatGrant {
                 workspace: "workspace-a".into(),
                 gateway_url: "https://gateway.invalid".into(),
@@ -1940,6 +1987,7 @@ mod tests {
             _files: Vec<SelectedFile>,
             provenance: Option<Provenance>,
         ) -> Result<(u64, ChatProjector), String> {
+            self.prepare_calls.fetch_add(1, Ordering::SeqCst);
             *self.prepared_provenance.lock().unwrap() = provenance;
             if let Some(error) = &self.prepare_error {
                 return Err(error.clone());
@@ -1962,6 +2010,7 @@ mod tests {
         }
 
         fn launch(&self, launch: RunStartLaunch) {
+            self.launch_calls.fetch_add(1, Ordering::SeqCst);
             *self.launched_run.lock().unwrap() = Some(launch.run_id);
         }
     }
@@ -2021,7 +2070,10 @@ mod tests {
         Result<RunStartAccepted, ProtocolError>,
         DesktopAttachService<FakeRunStartBoundaries>,
     ) {
-        let mut service = DesktopAttachService { boundaries };
+        let mut service = DesktopAttachService {
+            boundaries,
+            idempotency: IdempotencyStore::open(":memory:").unwrap(),
+        };
         let result = service.start_run(
             "workspace-a",
             AttachRunStartRequest {
@@ -2039,6 +2091,31 @@ mod tests {
             },
         );
         (result, service)
+    }
+
+    #[cfg(target_os = "linux")]
+    fn attach_start_on(
+        service: &mut DesktopAttachService<FakeRunStartBoundaries>,
+        text: &str,
+        request_id: &str,
+        idempotency_key: &str,
+    ) -> Result<RunStartAccepted, ProtocolError> {
+        service.start_run(
+            "workspace-a",
+            AttachRunStartRequest {
+                text: text.into(),
+                context: None,
+            },
+            &Id::new(request_id).unwrap(),
+            &Id::new(idempotency_key).unwrap(),
+            CompanionProvenance {
+                profile: "default".into(),
+                companion_kind: "cli".into(),
+                companion_version: "1.2.3".into(),
+                peer_uid: 1000,
+                peer_pid: 42,
+            },
+        )
     }
 
     #[cfg(target_os = "linux")]
@@ -2074,6 +2151,67 @@ mod tests {
 
     #[cfg(target_os = "linux")]
     #[test]
+    fn attach_adapter_replays_exact_retry_without_second_coordinator_run() {
+        let mut service = DesktopAttachService {
+            boundaries: FakeRunStartBoundaries::accepting(),
+            idempotency: IdempotencyStore::open(":memory:").unwrap(),
+        };
+        let key = "018f0000-0000-7000-8000-000000000002";
+        let first = attach_start_on(
+            &mut service,
+            "hello",
+            "018f0000-0000-7000-8000-000000000001",
+            key,
+        )
+        .unwrap();
+        let replay = attach_start_on(
+            &mut service,
+            "hello",
+            "018f0000-0000-7000-8000-000000000003",
+            key,
+        )
+        .unwrap();
+
+        assert_eq!(replay, first);
+        assert_eq!(service.boundaries.configure_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(service.boundaries.prepare_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(service.boundaries.launch_calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn attach_adapter_rejects_conflicting_key_without_second_coordinator_run() {
+        let mut service = DesktopAttachService {
+            boundaries: FakeRunStartBoundaries::accepting(),
+            idempotency: IdempotencyStore::open(":memory:").unwrap(),
+        };
+        let key = "018f0000-0000-7000-8000-000000000002";
+        attach_start_on(
+            &mut service,
+            "hello",
+            "018f0000-0000-7000-8000-000000000001",
+            key,
+        )
+        .unwrap();
+        let conflict = attach_start_on(
+            &mut service,
+            "different",
+            "018f0000-0000-7000-8000-000000000003",
+            key,
+        )
+        .unwrap_err();
+
+        assert_eq!(
+            serde_json::to_value(conflict).unwrap()["code"],
+            "idempotency_conflict"
+        );
+        assert_eq!(service.boundaries.configure_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(service.boundaries.prepare_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(service.boundaries.launch_calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
     fn attach_adapter_rejects_in_flight_and_unsupported_context() {
         let boundaries = FakeRunStartBoundaries {
             active: true,
@@ -2101,6 +2239,7 @@ mod tests {
     fn attach_adapter_rejects_a_grant_for_another_workspace() {
         let mut service = DesktopAttachService {
             boundaries: FakeRunStartBoundaries::accepting(),
+            idempotency: IdempotencyStore::open(":memory:").unwrap(),
         };
         let result = service.start_run(
             "workspace-b",
