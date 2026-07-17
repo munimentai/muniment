@@ -710,6 +710,133 @@ fn authorized_thread_list_pages_real_journal_summaries_without_payloads() {
 }
 
 #[test]
+fn authorized_thread_open_pages_a_redacted_journal_projection() {
+    const RUN: &str = "0190a100-0000-7000-8000-000000000001";
+    let mut journal = RunJournal::open(":memory:").unwrap();
+    let first = prompt(RUN, "hello", "2026-07-16T03:00:00Z");
+    let mut second = first.clone();
+    second.event_id = "0190a200-0000-7000-8000-000000000002".into();
+    second.run_seq = 2;
+    second.event_type = "model.stream.delta".into();
+    second.payload = EventPayload::Inline {
+        payload_json: json!({"text": "answer", "secret": "/home/user/private"}),
+    };
+    journal.append_batch(0, &[first, second]).unwrap();
+
+    let (mut client, server) = UnixStream::pair().unwrap();
+    let client_thread = thread::spawn(move || {
+        client.write_all(&hello(1, 1)).unwrap();
+        let _: Welcome = read_frame(&mut client);
+        let _: Authorized = read_frame(&mut client);
+        client
+            .write_all(&request(
+                40,
+                Operation::ThreadOpen,
+                json!({"thread_id": RUN, "limit": 1}),
+            ))
+            .unwrap();
+        let first: Response = read_frame(&mut client);
+        client
+            .write_all(&request(
+                41,
+                Operation::ThreadOpen,
+                json!({"thread_id": RUN, "limit": 1, "cursor": first.body["next_cursor"]}),
+            ))
+            .unwrap();
+        let second: Response = read_frame(&mut client);
+        client.shutdown(Shutdown::Write).unwrap();
+        (first, second)
+    });
+    assert_eq!(
+        run_authenticated_session_with_authorization(
+            server,
+            credentials(),
+            "0.1.0",
+            Duration::from_secs(1),
+            AuthorizationSessionDependencies {
+                fill_random: |bytes: &mut [u8]| {
+                    bytes.fill(9);
+                    Ok(())
+                },
+                clock: TestClock(Rc::new(Cell::new(Duration::ZERO))),
+                tokens: TestTokens(1),
+                approvals: |_: &muniment_core::attach::PairingChallenge, _: Duration| Some(
+                    ApprovalDecision::Approve(approval())
+                ),
+            },
+            &mut journal
+        ),
+        Ok(())
+    );
+    let (first, second) = client_thread.join().unwrap();
+    assert_eq!(
+        first.body["entries"],
+        json!([{"run_seq": 1, "kind": "user_message", "text": "hello"}])
+    );
+    assert_eq!(
+        second.body["entries"],
+        json!([{"run_seq": 2, "kind": "assistant_delta", "text": "answer"}])
+    );
+    assert!(!format!("{first:?}{second:?}").contains("/home"));
+}
+
+#[test]
+fn thread_open_rejects_bad_cursor_missing_thread_and_oversized_body_values() {
+    const RUN: &str = "0190a100-0000-7000-8000-000000000001";
+    let mut journal = RunJournal::open(":memory:").unwrap();
+    journal
+        .append(0, &prompt(RUN, "hello", "2026-07-16T03:00:00Z"))
+        .unwrap();
+    let (mut client, server) = UnixStream::pair().unwrap();
+    client.write_all(&hello(1, 1)).unwrap();
+    client
+        .write_all(&request(
+            50,
+            Operation::ThreadOpen,
+            json!({"thread_id": RUN, "limit": 1, "cursor": "forged"}),
+        ))
+        .unwrap();
+    client
+        .write_all(&request(
+            51,
+            Operation::ThreadOpen,
+            json!({"thread_id": "0190a100-0000-7000-8000-000000000099", "limit": 1}),
+        ))
+        .unwrap();
+    client
+        .write_all(&request(
+            52,
+            Operation::ThreadOpen,
+            json!({"thread_id": RUN, "limit": 101}),
+        ))
+        .unwrap();
+    client.shutdown(Shutdown::Write).unwrap();
+    assert_eq!(
+        dispatch_session(
+            &mut client,
+            server,
+            TestClock(Rc::new(Cell::new(Duration::ZERO))),
+            &mut journal
+        ),
+        Ok(())
+    );
+    let cursor: ErrorEnvelope = read_frame(&mut client);
+    let missing: ErrorEnvelope = read_frame(&mut client);
+    let oversized: ErrorEnvelope = read_frame(&mut client);
+    assert_eq!(cursor.error.code(), ErrorCode::InvalidCursor);
+    assert_eq!(missing.error.code(), ErrorCode::InvalidRequest);
+    assert_eq!(oversized.error.code(), ErrorCode::InvalidRequest);
+    assert_eq!(
+        serde_json::to_value(cursor.error).unwrap().get("details"),
+        None
+    );
+    assert_eq!(
+        serde_json::to_value(missing.error).unwrap().get("details"),
+        None
+    );
+}
+
+#[test]
 fn journal_thread_list_maps_cursor_and_storage_failures_without_details() {
     let mut journal = RunJournal::open(":memory:").unwrap();
     let cursor_error = journal
@@ -811,7 +938,7 @@ fn authorization_is_rechecked_before_every_dispatch() {
 }
 
 #[test]
-fn unsupported_operation_fails_closed_without_dispatch() {
+fn thread_open_without_read_scope_fails_closed_without_dispatch() {
     let (mut client, server) = UnixStream::pair().unwrap();
     client.write_all(&hello(1, 1)).unwrap();
     client
@@ -831,14 +958,14 @@ fn unsupported_operation_fails_closed_without_dispatch() {
             approved,
             &mut service
         ),
-        Ok(())
+        Err(AttachSessionError::Authorization)
     );
     let error: ErrorEnvelope = read_frame(&mut client);
     assert_eq!(
         error.request_id,
         Some(Id::new(format!("{:032x}", 30)).unwrap())
     );
-    assert_eq!(error.error.code(), ErrorCode::UnsupportedOperation);
+    assert_eq!(error.error.code(), ErrorCode::Unauthorized);
 }
 
 #[test]

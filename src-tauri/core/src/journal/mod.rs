@@ -8,10 +8,13 @@ pub mod summaries;
 
 use crate::attachment::ChatAttachment;
 use crate::cas::ContentHash;
+use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use chrono::{DateTime, SecondsFormat, Utc};
+use hmac::{Hmac, Mac};
 use rusqlite::{params, Connection, OptionalExtension, TransactionBehavior};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use sha2::Sha256;
 use std::collections::{BTreeMap, HashSet};
 use std::fmt;
 use std::path::{Component, Path, PathBuf};
@@ -117,6 +120,37 @@ pub struct RunJournal {
     pub(crate) path: Option<PathBuf>,
     pub(crate) coordination: Option<Arc<JournalCoordination>>,
     pub(crate) generation: u64,
+}
+
+/// A bounded, sequence-ordered slice of one run. Callers must project these
+/// envelopes before crossing the journal boundary.
+#[derive(Clone, Debug, PartialEq)]
+pub struct RunEventPage {
+    pub events: Vec<EventEnvelope>,
+    pub next_cursor: Option<String>,
+}
+
+#[derive(Debug)]
+pub enum RunEventPageError {
+    InvalidLimit,
+    InvalidCursor,
+    NotFoundOrInaccessible,
+    Journal(JournalError),
+}
+
+impl From<JournalError> for RunEventPageError {
+    fn from(error: JournalError) -> Self {
+        Self::Journal(error)
+    }
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RunEventCursor {
+    version: u8,
+    run_id: String,
+    after_run_seq: u64,
+    authenticator: String,
 }
 
 pub(crate) struct JournalCoordination {
@@ -318,6 +352,90 @@ impl RunJournal {
         .collect()
     }
 
+    /// Reads at most `limit` envelopes without loading the complete run.
+    pub fn event_page(
+        &mut self,
+        run_id: &str,
+        limit: usize,
+        cursor: Option<&str>,
+    ) -> Result<RunEventPage, RunEventPageError> {
+        const MAX_PAGE_SIZE: usize = 100;
+        if !(1..=MAX_PAGE_SIZE).contains(&limit) {
+            return Err(RunEventPageError::InvalidLimit);
+        }
+        let after = match cursor {
+            Some(value) => decode_run_event_cursor(value, run_id, &self.cursor_key)?,
+            None => 0,
+        };
+        let coordination = self.coordination.clone();
+        let _operation = coordination
+            .as_ref()
+            .map(|state| state.operation.lock().unwrap());
+        self.refresh_after_compaction()
+            .map_err(RunEventPageError::Journal)?;
+        let connection = self
+            .connection
+            .as_ref()
+            .expect("journal connection is always present outside compaction");
+        let exists: bool = connection
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM events WHERE run_id=?1)",
+                [run_id],
+                |row| row.get(0),
+            )
+            .map_err(JournalError::from)
+            .map_err(RunEventPageError::Journal)?;
+        if !exists {
+            return Err(RunEventPageError::NotFoundOrInaccessible);
+        }
+        if after > 0 {
+            let boundary_exists: bool = connection
+                .query_row(
+                    "SELECT EXISTS(SELECT 1 FROM events WHERE run_id=?1 AND run_seq=?2)",
+                    params![run_id, after],
+                    |row| row.get(0),
+                )
+                .map_err(JournalError::from)
+                .map_err(RunEventPageError::Journal)?;
+            if !boundary_exists {
+                return Err(RunEventPageError::InvalidCursor);
+            }
+        }
+        let mut statement = connection
+            .prepare("SELECT envelope_json FROM events WHERE run_id=?1 AND run_seq>?2 ORDER BY run_seq LIMIT ?3")
+            .map_err(JournalError::from)
+            .map_err(RunEventPageError::Journal)?;
+        let rows = statement
+            .query_map(params![run_id, after, (limit + 1) as u64], |row| {
+                row.get::<_, String>(0)
+            })
+            .map_err(JournalError::from)
+            .map_err(RunEventPageError::Journal)?;
+        let mut events = rows
+            .map(|row| {
+                let raw = row.map_err(JournalError::from)?;
+                serde_json::from_str::<EventEnvelope>(&raw).map_err(|error| {
+                    JournalError::Corrupt(format!("invalid stored envelope JSON: {error}"))
+                })
+            })
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(RunEventPageError::Journal)?;
+        let has_more = events.len() > limit;
+        events.truncate(limit);
+        let next_cursor = if has_more {
+            events
+                .last()
+                .map(|event| encode_run_event_cursor(run_id, event.run_seq, &self.cursor_key))
+                .transpose()?
+        } else {
+            None
+        };
+        Ok(RunEventPage {
+            events,
+            next_cursor,
+        })
+    }
+
     /// Atomically removes a run's events and returns their distinct CAS hashes.
     pub fn delete_run(&mut self, run_id: &str) -> Result<HashSet<ContentHash>, JournalError> {
         let coordination = self.coordination.clone();
@@ -387,6 +505,64 @@ impl RunJournal {
         }
         Ok(())
     }
+}
+
+fn run_event_cursor_mac(key: &[u8; 32], run_id: &str, sequence: u64) -> Hmac<Sha256> {
+    let mut mac = Hmac::<Sha256>::new_from_slice(key).expect("HMAC accepts all key lengths");
+    mac.update(b"muniment-run-event-cursor-v1\0");
+    mac.update(run_id.as_bytes());
+    mac.update(&[0]);
+    mac.update(&sequence.to_be_bytes());
+    mac
+}
+
+fn encode_run_event_cursor(
+    run_id: &str,
+    sequence: u64,
+    key: &[u8; 32],
+) -> Result<String, RunEventPageError> {
+    let cursor = RunEventCursor {
+        version: 1,
+        run_id: run_id.to_owned(),
+        after_run_seq: sequence,
+        authenticator: URL_SAFE_NO_PAD.encode(
+            run_event_cursor_mac(key, run_id, sequence)
+                .finalize()
+                .into_bytes(),
+        ),
+    };
+    serde_json::to_vec(&cursor)
+        .map(|bytes| URL_SAFE_NO_PAD.encode(bytes))
+        .map_err(|error| {
+            RunEventPageError::Journal(JournalError::Corrupt(format!(
+                "could not encode run-event cursor: {error}"
+            )))
+        })
+}
+
+fn decode_run_event_cursor(
+    encoded: &str,
+    run_id: &str,
+    key: &[u8; 32],
+) -> Result<u64, RunEventPageError> {
+    let bytes = URL_SAFE_NO_PAD
+        .decode(encoded)
+        .map_err(|_| RunEventPageError::InvalidCursor)?;
+    let cursor: RunEventCursor =
+        serde_json::from_slice(&bytes).map_err(|_| RunEventPageError::InvalidCursor)?;
+    let authenticator = URL_SAFE_NO_PAD
+        .decode(&cursor.authenticator)
+        .map_err(|_| RunEventPageError::InvalidCursor)?;
+    if cursor.version != 1
+        || cursor.run_id != run_id
+        || cursor.after_run_seq == 0
+        || run_event_cursor_mac(key, run_id, cursor.after_run_seq)
+            .verify_slice(&authenticator)
+            .is_err()
+    {
+        return Err(RunEventPageError::InvalidCursor);
+    }
+    Ok(cursor.after_run_seq)
 }
 
 fn load_or_create_cursor_key(connection: &Connection) -> Result<[u8; 32], JournalError> {

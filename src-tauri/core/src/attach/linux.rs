@@ -18,7 +18,7 @@ use super::{
     Failure, FirstMessage, NegotiationError, Operation, Protocol, ProtocolError, Request, Response,
     Success, VersionRange, CHALLENGE_LIFETIME, MAX_FRAME_LENGTH, MAX_TEXT_LENGTH,
 };
-use crate::journal::{summaries::RunSummaryListError, RunJournal};
+use crate::journal::{summaries::RunSummaryListError, EventPayload, RunEventPageError, RunJournal};
 
 const ATTACH_DIRECTORY: &[u8] = b"muniment\0";
 const ENDPOINT_NAME: &str = "attach-v1.sock";
@@ -366,13 +366,44 @@ pub struct ThreadListPage {
     pub next_cursor: Option<String>,
 }
 
-/// Deterministic desktop data seam for the one operation served by this slice.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ThreadOpenRequest {
+    pub thread_id: String,
+    pub limit: u8,
+    pub cursor: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct RedactedThreadEntry {
+    pub run_seq: u64,
+    pub kind: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct ThreadOpenPage {
+    pub thread_id: String,
+    pub entries: Vec<RedactedThreadEntry>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_cursor: Option<String>,
+}
+
+/// Deterministic desktop data seam for the thread reads served by this slice.
 pub trait ThreadListService {
     fn list_threads(
         &mut self,
         workspace: &str,
         request: ThreadListRequest,
     ) -> Result<ThreadListPage, ProtocolError>;
+
+    fn open_thread(
+        &mut self,
+        _workspace: &str,
+        _request: ThreadOpenRequest,
+    ) -> Result<ThreadOpenPage, ProtocolError> {
+        Err(ProtocolError::unsupported_operation())
+    }
 }
 
 impl<F> ThreadListService for F
@@ -413,6 +444,82 @@ impl ThreadListService for RunJournal {
                 .collect(),
             next_cursor: page.next_cursor,
         })
+    }
+
+    fn open_thread(
+        &mut self,
+        _workspace: &str,
+        request: ThreadOpenRequest,
+    ) -> Result<ThreadOpenPage, ProtocolError> {
+        let page = self
+            .event_page(
+                &request.thread_id,
+                usize::from(request.limit),
+                request.cursor.as_deref(),
+            )
+            .map_err(|error| match error {
+                RunEventPageError::InvalidLimit => ProtocolError::invalid_request(),
+                RunEventPageError::InvalidCursor => ProtocolError::invalid_cursor(),
+                RunEventPageError::NotFoundOrInaccessible => ProtocolError::invalid_request(),
+                RunEventPageError::Journal(_) => ProtocolError::persistence_failed(),
+            })?;
+        let entries = page
+            .events
+            .into_iter()
+            .map(|event| {
+                let (kind, text) = match (&*event.event_type, &event.payload) {
+                    ("user.prompt.submitted", EventPayload::Inline { payload_json }) => (
+                        "user_message",
+                        payload_json.get("prompt").and_then(|value| value.as_str()),
+                    ),
+                    ("model.stream.delta", EventPayload::Inline { payload_json }) => (
+                        "assistant_delta",
+                        payload_json.get("text").and_then(|value| value.as_str()),
+                    ),
+                    ("model.prompt.accepted", _) => ("prompt_accepted", None),
+                    ("run.completed", _) => ("completed", None),
+                    ("run.cancelled", _) => ("cancelled", None),
+                    ("run.failed", _) => ("failed", None),
+                    ("permission.requested", _) => ("permission_pending", None),
+                    ("tool.effect.started", EventPayload::Inline { payload_json }) => (
+                        "tool_started",
+                        payload_json
+                            .get("display_name")
+                            .and_then(|value| value.as_str()),
+                    ),
+                    ("tool.effect.completed", _) => ("tool_completed", None),
+                    ("tool.effect.failed", _) => ("tool_failed", None),
+                    ("chat.attachment.ingested", EventPayload::Attachment { attachment }) => {
+                        ("attachment", Some(attachment.display_name()))
+                    }
+                    _ => ("state_changed", None),
+                };
+                RedactedThreadEntry {
+                    run_seq: event.run_seq,
+                    kind: kind.to_owned(),
+                    text: text.map(truncate_text),
+                }
+            })
+            .collect();
+        Ok(ThreadOpenPage {
+            thread_id: request.thread_id,
+            entries,
+            next_cursor: page.next_cursor,
+        })
+    }
+}
+
+fn truncate_text(value: &str) -> String {
+    let end = value
+        .char_indices()
+        .map(|(index, _)| index)
+        .take_while(|index| *index <= MAX_TEXT_LENGTH)
+        .last()
+        .unwrap_or(0);
+    if value.len() <= MAX_TEXT_LENGTH {
+        value.to_owned()
+    } else {
+        value[..end].to_owned()
     }
 }
 
@@ -743,7 +850,11 @@ where
             );
             return Err(AttachSessionError::Authorization);
         }
-        let required_scope = (request.operation == Operation::ThreadList).then_some("thread.read");
+        let required_scope = matches!(
+            request.operation,
+            Operation::ThreadList | Operation::ThreadOpen
+        )
+        .then_some("thread.read");
         if authorization
             .validate_request_with_scope(
                 &request.capability,
@@ -785,10 +896,64 @@ fn dispatch_request<S: ThreadListService>(
     workspace: &str,
     service: &mut S,
 ) -> Result<serde_json::Value, ProtocolError> {
+    request.validate_idempotency_key()?;
+    if request.operation == Operation::ThreadOpen {
+        #[derive(serde::Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Body {
+            thread_id: String,
+            limit: u8,
+            #[serde(default)]
+            cursor: Option<String>,
+        }
+        let body: Body =
+            serde_json::from_value(request.body).map_err(|_| ProtocolError::invalid_request())?;
+        if body.thread_id.is_empty()
+            || body.thread_id.len() > MAX_TEXT_LENGTH
+            || body.limit == 0
+            || body.limit > 100
+            || body
+                .cursor
+                .as_ref()
+                .is_some_and(|cursor| cursor.is_empty() || cursor.len() > MAX_TEXT_LENGTH)
+        {
+            return Err(ProtocolError::invalid_request());
+        }
+        let limit = body.limit;
+        let requested_thread_id = body.thread_id.clone();
+        let page = service.open_thread(
+            workspace,
+            ThreadOpenRequest {
+                thread_id: body.thread_id,
+                limit,
+                cursor: body.cursor,
+            },
+        )?;
+        if page.entries.len() > usize::from(limit)
+            || page.thread_id != requested_thread_id
+            || page.thread_id.is_empty()
+            || page.thread_id.len() > MAX_TEXT_LENGTH
+            || page.entries.iter().any(|entry| {
+                entry.run_seq == 0
+                    || entry.kind.is_empty()
+                    || entry.kind.len() > MAX_TEXT_LENGTH
+                    || entry
+                        .text
+                        .as_ref()
+                        .is_some_and(|text| text.len() > MAX_TEXT_LENGTH)
+            })
+            || page
+                .next_cursor
+                .as_ref()
+                .is_some_and(|cursor| cursor.is_empty() || cursor.len() > MAX_TEXT_LENGTH)
+        {
+            return Err(ProtocolError::persistence_failed());
+        }
+        return serde_json::to_value(page).map_err(|_| ProtocolError::persistence_failed());
+    }
     if request.operation != Operation::ThreadList {
         return Err(ProtocolError::unsupported_operation());
     }
-    request.validate_idempotency_key()?;
     #[derive(serde::Deserialize)]
     #[serde(deny_unknown_fields)]
     struct Body {

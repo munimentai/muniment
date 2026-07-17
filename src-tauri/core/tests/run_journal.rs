@@ -100,6 +100,46 @@ fn first_and_ordered_batch_append_survive_reopen() {
 }
 
 #[test]
+fn event_pages_are_bounded_ordered_and_cursor_is_run_bound() {
+    let mut journal = RunJournal::open(":memory:").unwrap();
+    journal
+        .append_batch(0, &[event(1), event(2), event(3)])
+        .unwrap();
+    let first = journal.event_page(RUN, 2, None).unwrap();
+    assert_eq!(
+        first
+            .events
+            .iter()
+            .map(|event| event.run_seq)
+            .collect::<Vec<_>>(),
+        [1, 2]
+    );
+    let cursor = first.next_cursor.unwrap();
+    let second = journal.event_page(RUN, 2, Some(&cursor)).unwrap();
+    assert_eq!(
+        second
+            .events
+            .iter()
+            .map(|event| event.run_seq)
+            .collect::<Vec<_>>(),
+        [3]
+    );
+    assert!(second.next_cursor.is_none());
+    assert!(matches!(
+        journal.event_page(RUN, 1, Some("forged")),
+        Err(muniment_core::journal::RunEventPageError::InvalidCursor)
+    ));
+    assert!(matches!(
+        journal.event_page("0190a100-0000-7000-8000-000000000099", 1, Some(&cursor)),
+        Err(muniment_core::journal::RunEventPageError::InvalidCursor)
+    ));
+    assert!(matches!(
+        journal.event_page("0190a100-0000-7000-8000-000000000099", 1, None),
+        Err(muniment_core::journal::RunEventPageError::NotFoundOrInaccessible)
+    ));
+}
+
+#[test]
 fn durable_run_index_reopens_in_first_recorded_order() {
     let db = TestDb::new();
     let mut journal = RunJournal::open(db.as_ref()).unwrap();
