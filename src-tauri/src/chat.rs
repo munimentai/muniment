@@ -33,6 +33,7 @@ const QUEUE_TIMEOUT: Duration = Duration::from_secs(2);
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct ChatGrant {
+    workspace: String,
     gateway_url: String,
     virtual_key: String,
     #[serde(default)]
@@ -426,10 +427,12 @@ pub async fn chat_submit(
     let prepared_storage = Arc::clone(&storage);
     let prepared_run_id = run_id.clone();
     let prepared_subject = tokens.subject.clone();
+    let prepared_workspace = grant.workspace.clone();
     let prepared = tauri::async_runtime::spawn_blocking(move || {
         prepare_new_run(
             &prepared_storage,
             &prepared_run_id,
+            &prepared_workspace,
             prepared_subject.as_deref(),
             files.unwrap_or_default(),
         )
@@ -647,18 +650,20 @@ fn open_selected_files(files: Vec<SelectedFile>) -> Result<Vec<OpenSelectedFile>
 fn prepare_new_run(
     storage: &SharedStorage,
     run_id: &str,
+    workspace: &str,
     subject: Option<&str>,
     files: Vec<SelectedFile>,
 ) -> Result<(u64, ChatProjector), String> {
     // Open and validate every selection before creating a run, so ordinary
     // selection failures cannot leave a rejected submission in the journal.
     let files = open_selected_files(files)?;
-    prepare_opened_run(storage, run_id, subject, files)
+    prepare_opened_run(storage, run_id, workspace, subject, files)
 }
 
 fn prepare_opened_run(
     storage: &SharedStorage,
     run_id: &str,
+    workspace: &str,
     subject: Option<&str>,
     files: Vec<OpenSelectedFile>,
 ) -> Result<(u64, ChatProjector), String> {
@@ -668,7 +673,7 @@ fn prepare_opened_run(
     let mut seq = 1;
     let started = event_envelope(run_id, seq, "run.started", json!({}), subject);
     projector.apply(&started).map_err(|_| attachment_error())?;
-    if let Some(workspace) = subject.filter(|value| !value.is_empty()) {
+    if !workspace.is_empty() {
         journal
             .append_new_run(workspace, &started)
             .map_err(|_| attachment_error())?;
@@ -1630,6 +1635,7 @@ fn validate_grant(grant: &ChatGrant) -> Result<(), String> {
     if !grant.gateway_url.starts_with("https://")
         || !grant.receipt_url.starts_with("https://")
         || grant.virtual_key.trim().is_empty()
+        || grant.workspace.trim().is_empty()
     {
         return Err("The chat configuration response was invalid.".into());
     }
@@ -1750,12 +1756,38 @@ mod tests {
         let (seq, mut projector) = prepare_new_run(
             &storage,
             &run_id,
+            "workspace-a",
             Some("owner"),
             vec![SelectedFile { path: first }, SelectedFile { path: second }],
         )
         .unwrap();
         assert_eq!(seq, 3);
         let mut storage = storage.lock().unwrap();
+        assert!(storage
+            .journal
+            .run_belongs_to_workspace(&run_id, "workspace-a")
+            .unwrap());
+        assert!(!storage
+            .journal
+            .run_belongs_to_workspace(&run_id, "owner")
+            .unwrap());
+        assert_eq!(
+            storage
+                .journal
+                .workspace_run_summaries("workspace-a", 10, None)
+                .unwrap()
+                .summaries
+                .len(),
+            1
+        );
+        assert!(storage
+            .journal
+            .projected_thread_entries("workspace-a", &run_id, seq, 0, 10)
+            .is_ok());
+        assert!(storage
+            .journal
+            .projected_thread_entries("owner", &run_id, seq, 0, 10)
+            .is_err());
         let events = storage.journal.events(&run_id).unwrap();
         assert_eq!(
             events
@@ -1832,6 +1864,7 @@ mod tests {
         let error = match prepare_new_run(
             &storage,
             &Uuid::now_v7().to_string(),
+            "workspace-a",
             Some("owner"),
             vec![SelectedFile {
                 path: missing.clone(),
@@ -1862,6 +1895,7 @@ mod tests {
         assert!(prepare_new_run(
             &storage,
             &run_id,
+            "workspace-a",
             Some("owner"),
             vec![SelectedFile {
                 path: directory.clone(),
@@ -1910,10 +1944,11 @@ mod tests {
             .unwrap();
         std::env::set_var("PI_RESUME_STUB_PROMPTS", &prompt_log);
 
-        let error = match prepare_opened_run(&storage, &run_id, Some("owner"), opened) {
-            Ok(_) => panic!("changed attachment length must fail"),
-            Err(error) => error,
-        };
+        let error =
+            match prepare_opened_run(&storage, &run_id, "workspace-a", Some("owner"), opened) {
+                Ok(_) => panic!("changed attachment length must fail"),
+                Err(error) => error,
+            };
         assert_eq!(error, attachment_error());
         assert!(!error.contains(second.to_string_lossy().as_ref()));
         assert!(!prompt_log.exists(), "Pi must receive zero prompts");
@@ -1958,6 +1993,7 @@ mod tests {
         let prepared = prepare_new_run(
             &storage,
             &run_id,
+            "workspace-a",
             Some("owner"),
             vec![SelectedFile { path: first }, SelectedFile { path: second }],
         )
@@ -2024,6 +2060,7 @@ mod tests {
             "token".into(),
             Some("owner".into()),
             ChatGrant {
+                workspace: "workspace-a".into(),
                 gateway_url: "https://gateway.invalid".into(),
                 virtual_key: "virtual-key".into(),
                 model: None,
@@ -2278,6 +2315,7 @@ mod tests {
             "token".into(),
             Some("owner".into()),
             ChatGrant {
+                workspace: "workspace-a".into(),
                 gateway_url: "https://gateway.invalid".into(),
                 virtual_key: "virtual-key".into(),
                 model: None,
@@ -2395,6 +2433,7 @@ mod tests {
             "token".into(),
             Some("owner".into()),
             ChatGrant {
+                workspace: "workspace-a".into(),
                 gateway_url: "https://gateway.invalid".into(),
                 virtual_key: "virtual-key".into(),
                 model: None,

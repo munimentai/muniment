@@ -913,6 +913,15 @@ fn large_escaped_projection_continues_losslessly_with_bounded_pages() {
     let mut journal = RunJournal::open(":memory:").unwrap();
     journal.append_batch(0, &events).unwrap();
     journal.bind_run_workspace(RUN, "workspace-1").unwrap();
+    // The journal projection seam itself is bounded; page formation does not
+    // replay or retain all 1,001 source envelopes.
+    assert_eq!(
+        journal
+            .projected_thread_entries("workspace-1", RUN, 1001, 0, 3)
+            .unwrap()
+            .len(),
+        3
+    );
     let mut cursor = None;
     let mut found = String::new();
     loop {
@@ -936,6 +945,60 @@ fn large_escaped_projection_continues_losslessly_with_bounded_pages() {
         }
     }
     assert_eq!(found, expected);
+}
+
+#[test]
+fn thread_projection_cursor_keeps_its_snapshot_after_later_deltas() {
+    const RUN: &str = "0190a300-0000-7000-8000-000000000001";
+    let mut events = Vec::new();
+    for (seq, kind, payload) in [
+        (1, "run.started", json!({})),
+        (2, "user.prompt.submitted", json!({"prompt":"question"})),
+        (3, "model.stream.delta", json!({"text":"hello"})),
+    ] {
+        let mut event = prompt(RUN, "unused", "2026-07-16T03:00:00Z");
+        event.event_id = format!("0190a300-0000-7000-8000-{seq:012}");
+        event.run_seq = seq;
+        event.event_type = kind.into();
+        event.payload = EventPayload::Inline {
+            payload_json: payload,
+        };
+        events.push(event);
+    }
+    let mut journal = RunJournal::open(":memory:").unwrap();
+    journal.append_batch(0, &events).unwrap();
+    journal.bind_run_workspace(RUN, "workspace-1").unwrap();
+    let first = journal
+        .open_thread(
+            "workspace-1",
+            ThreadOpenRequest {
+                thread_id: RUN.into(),
+                limit: 1,
+                cursor: None,
+            },
+        )
+        .unwrap();
+
+    let mut later = prompt(RUN, "unused", "2026-07-16T03:00:01Z");
+    later.event_id = "0190a300-0000-7000-8000-000000000004".into();
+    later.run_seq = 4;
+    later.event_type = "model.stream.delta".into();
+    later.payload = EventPayload::Inline {
+        payload_json: json!({"text":" world"}),
+    };
+    journal.append(3, &later).unwrap();
+
+    let second = journal
+        .open_thread(
+            "workspace-1",
+            ThreadOpenRequest {
+                thread_id: RUN.into(),
+                limit: 1,
+                cursor: first.next_cursor,
+            },
+        )
+        .unwrap();
+    assert_eq!(second.entries[0].text.as_deref(), Some("hello"));
 }
 
 #[test]

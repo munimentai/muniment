@@ -28,7 +28,6 @@ const HELLO_TIMEOUT: Duration = Duration::from_secs(5);
 const DESKTOP_PROTOCOL: VersionRange = VersionRange { min: 1, max: 1 };
 const MAX_THREAD_ID_LENGTH: usize = 36;
 const MAX_CURSOR_LENGTH: usize = 1024;
-const MAX_ENTRY_TEXT_LENGTH: usize = 8 * 1024;
 const MAX_RESPONSE_BODY_LENGTH: usize = MAX_FRAME_LENGTH - 4096;
 
 /// A verified, pinned filesystem boundary for the Linux attach endpoint.
@@ -469,38 +468,34 @@ impl ThreadListService for RunJournal {
                 RunEventPageError::Journal(_) => ProtocolError::persistence_failed(),
             })?;
         let projected = self
-            .projected_thread_entries(workspace, &request.thread_id, snapshot_seq)
+            .projected_thread_entries(
+                workspace,
+                &request.thread_id,
+                snapshot_seq,
+                after_entry,
+                usize::from(request.limit) + 1,
+            )
             .map_err(|error| match error {
                 RunEventPageError::InvalidCursor => ProtocolError::invalid_cursor(),
                 RunEventPageError::NotFoundOrInaccessible => ProtocolError::invalid_request(),
                 _ => ProtocolError::persistence_failed(),
             })?;
-        // Chunking is based on the stable projection, never storage deltas. The
-        // small UTF-8 bound is conservative even for maximally JSON-escaped text.
-        let expanded = projected
+        let mut expanded = projected
             .into_iter()
-            .flat_map(|entry| {
-                let chunks = entry.text.map_or_else(
-                    || vec![None],
-                    |text| split_text(&text).into_iter().map(Some).collect(),
-                );
-                chunks.into_iter().map(move |text| RedactedThreadEntry {
-                    run_seq: entry.run_seq,
-                    kind: entry.kind.clone(),
-                    text,
-                })
+            .map(|entry| RedactedThreadEntry {
+                run_seq: entry.run_seq,
+                kind: entry.kind,
+                text: entry.text,
             })
             .collect::<Vec<_>>();
-        if after_entry > expanded.len() {
+        if request.cursor.is_some() && expanded.is_empty() {
             return Err(ProtocolError::invalid_cursor());
         }
+        let has_more = expanded.len() > usize::from(request.limit);
+        expanded.truncate(usize::from(request.limit));
         let mut entries = Vec::new();
         let mut consumed = after_entry;
-        for entry in expanded
-            .iter()
-            .skip(after_entry)
-            .take(usize::from(request.limit))
-        {
+        for entry in expanded.iter() {
             let mut candidate = entries.clone();
             candidate.push(entry.clone());
             let candidate_page = ThreadOpenPage {
@@ -518,7 +513,7 @@ impl ThreadListService for RunJournal {
             entries.push(entry.clone());
             consumed += 1;
         }
-        let next_cursor = if consumed < expanded.len() {
+        let next_cursor = if has_more || consumed < after_entry + expanded.len() {
             Some(
                 self.thread_projection_cursor(&request.thread_id, snapshot_seq, consumed)
                     .map_err(|_| ProtocolError::persistence_failed())?,
@@ -532,23 +527,6 @@ impl ThreadListService for RunJournal {
             next_cursor,
         })
     }
-}
-
-fn split_text(value: &str) -> Vec<String> {
-    if value.is_empty() {
-        return vec![String::new()];
-    }
-    let mut chunks = Vec::new();
-    let mut start = 0;
-    while start < value.len() {
-        let mut end = (start + MAX_ENTRY_TEXT_LENGTH.min(1024)).min(value.len());
-        while !value.is_char_boundary(end) {
-            end -= 1;
-        }
-        chunks.push(value[start..end].to_owned());
-        start = end;
-    }
-    chunks
 }
 
 impl std::error::Error for AttachSessionError {}

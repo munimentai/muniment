@@ -187,7 +187,7 @@ fn run_workspace_creation_and_deletion_are_lifecycle_safe() {
 }
 
 #[test]
-fn existing_desktop_runs_backfill_workspace_from_authoritative_provenance() {
+fn account_actor_provenance_is_not_treated_as_workspace_evidence() {
     let db = TestDb::new();
     let mut journal = RunJournal::open(db.as_ref()).unwrap();
     let mut first = event(1);
@@ -195,7 +195,7 @@ fn existing_desktop_runs_backfill_workspace_from_authoritative_provenance() {
     journal.append(0, &first).unwrap();
     drop(journal);
     let journal = RunJournal::open(db.as_ref()).unwrap();
-    assert!(journal
+    assert!(!journal
         .run_belongs_to_workspace(RUN, "workspace-a")
         .unwrap());
 }

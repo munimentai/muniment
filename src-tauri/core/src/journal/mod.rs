@@ -278,18 +278,16 @@ impl RunJournal {
             "CREATE TABLE IF NOT EXISTS run_workspaces( \
              run_id TEXT PRIMARY KEY NOT NULL, workspace TEXT NOT NULL); \
              CREATE INDEX IF NOT EXISTS run_workspaces_workspace_run \
-             ON run_workspaces(workspace, run_id);",
-        )?;
-        // Journals created before workspace ownership was stored can be safely
-        // recovered only when their authoritative desktop provenance names an
-        // actor. Runs without that evidence remain inaccessible.
-        connection.execute(
-            "INSERT OR IGNORE INTO run_workspaces(run_id, workspace) \
-             SELECT run_id, json_extract(envelope_json, '$.provenance.actor_id') \
-             FROM events WHERE run_seq=1 \
-               AND json_type(envelope_json, '$.provenance.actor_id')='text' \
-               AND json_extract(envelope_json, '$.provenance.actor_id') <> ''",
-            [],
+             ON run_workspaces(workspace, run_id); \
+             CREATE TABLE IF NOT EXISTS thread_projection_entries( \
+             run_id TEXT NOT NULL, ordinal INTEGER NOT NULL, run_seq INTEGER NOT NULL, \
+             kind TEXT NOT NULL, text TEXT, PRIMARY KEY(run_id, ordinal)); \
+             CREATE INDEX IF NOT EXISTS thread_projection_run_order \
+             ON thread_projection_entries(run_id, ordinal); \
+             CREATE TABLE IF NOT EXISTS thread_projection_history( \
+             run_id TEXT NOT NULL, ordinal INTEGER NOT NULL, valid_until_seq INTEGER NOT NULL, \
+             run_seq INTEGER NOT NULL, kind TEXT NOT NULL, text TEXT, \
+             PRIMARY KEY(run_id, ordinal, valid_until_seq));",
         )?;
         validate_database(&connection)?;
         let cursor_key = load_or_create_cursor_key(&connection)?;
@@ -352,6 +350,7 @@ impl RunJournal {
             "INSERT INTO events(event_id,run_id,run_seq,event_type,event_version,envelope_version,recorded_at,envelope_json) VALUES(?1,?2,1,?3,?4,?5,?6,?7)",
             params![event.event_id,event.run_id,event.event_type,event.event_version,event.envelope_version,event.recorded_at,canonical],
         )?;
+        update_thread_projection(&tx, event)?;
         tx.execute(
             "INSERT INTO run_workspaces(run_id, workspace) VALUES(?1, ?2)",
             params![event.run_id, workspace],
@@ -439,6 +438,7 @@ impl RunJournal {
                 }
             }
             result?;
+            update_thread_projection(&tx, event)?;
         }
         tx.commit()?;
         Ok(())
@@ -647,6 +647,14 @@ impl RunJournal {
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
         let hashes = referenced_hashes_for_run(&tx, Some(run_id))?;
         tx.execute("DELETE FROM events WHERE run_id=?1", [run_id])?;
+        tx.execute(
+            "DELETE FROM thread_projection_entries WHERE run_id=?1",
+            [run_id],
+        )?;
+        tx.execute(
+            "DELETE FROM thread_projection_history WHERE run_id=?1",
+            [run_id],
+        )?;
         tx.execute("DELETE FROM run_workspaces WHERE run_id=?1", [run_id])?;
         tx.commit()?;
         Ok(hashes)
@@ -1042,9 +1050,171 @@ CREATE TABLE events (
  UNIQUE(run_id, run_seq)
 ) STRICT;
 CREATE INDEX events_run_order ON events(run_id, run_seq);
+CREATE TABLE run_workspaces (
+ run_id TEXT PRIMARY KEY NOT NULL,
+ workspace TEXT NOT NULL
+) STRICT;
+CREATE INDEX run_workspaces_workspace_run ON run_workspaces(workspace, run_id);
+CREATE TABLE thread_projection_entries (
+ run_id TEXT NOT NULL,
+ ordinal INTEGER NOT NULL,
+ run_seq INTEGER NOT NULL,
+ kind TEXT NOT NULL,
+ text TEXT,
+ PRIMARY KEY(run_id, ordinal)
+) STRICT;
+CREATE INDEX thread_projection_run_order ON thread_projection_entries(run_id, ordinal);
+CREATE TABLE thread_projection_history (
+ run_id TEXT NOT NULL,
+ ordinal INTEGER NOT NULL,
+ valid_until_seq INTEGER NOT NULL,
+ run_seq INTEGER NOT NULL,
+ kind TEXT NOT NULL,
+ text TEXT,
+ PRIMARY KEY(run_id, ordinal, valid_until_seq)
+) STRICT;
 CREATE TABLE journal_metadata (
  key TEXT PRIMARY KEY NOT NULL,
  value BLOB NOT NULL
 ) STRICT;
 COMMIT;
 "#;
+
+const PROJECTION_TEXT_CHUNK: usize = 4 * 1024;
+
+fn update_thread_projection(
+    tx: &rusqlite::Transaction<'_>,
+    event: &EventEnvelope,
+) -> Result<(), JournalError> {
+    fn inline_text(event: &EventEnvelope, name: &str) -> Option<String> {
+        let EventPayload::Inline { payload_json } = &event.payload else {
+            return None;
+        };
+        payload_json.get(name)?.as_str().map(str::to_owned)
+    }
+    fn chunks(text: &str) -> Vec<String> {
+        if text.is_empty() {
+            return vec![String::new()];
+        }
+        let mut result = Vec::new();
+        let mut start = 0;
+        while start < text.len() {
+            let mut end = (start + PROJECTION_TEXT_CHUNK).min(text.len());
+            while !text.is_char_boundary(end) {
+                end -= 1;
+            }
+            result.push(text[start..end].to_owned());
+            start = end;
+        }
+        result
+    }
+    let next_ordinal = || -> Result<i64, rusqlite::Error> {
+        tx.query_row(
+            "SELECT COALESCE(MAX(ordinal), -1) + 1 FROM thread_projection_entries WHERE run_id=?1",
+            [&event.run_id],
+            |row| row.get(0),
+        )
+    };
+    let insert_chunks = |kind: &str, text: &str| -> Result<(), JournalError> {
+        let first_ordinal = next_ordinal()?;
+        for (offset, chunk) in chunks(text).into_iter().enumerate() {
+            let ordinal = first_ordinal + offset as i64;
+            tx.execute(
+                "INSERT INTO thread_projection_entries(run_id,ordinal,run_seq,kind,text) VALUES(?1,?2,?3,?4,?5)",
+                params![event.run_id, ordinal, event.run_seq, kind, chunk],
+            )?;
+        }
+        Ok(())
+    };
+    let archive = |kind: &str| -> Result<(), JournalError> {
+        tx.execute(
+            "INSERT INTO thread_projection_history(run_id,ordinal,valid_until_seq,run_seq,kind,text) \
+             SELECT run_id,ordinal,?1,run_seq,kind,text FROM thread_projection_entries \
+             WHERE run_id=?2 AND kind=?3",
+            params![event.run_seq, event.run_id, kind],
+        )?;
+        Ok(())
+    };
+    match event.event_type.as_str() {
+        "user.prompt.submitted" => {
+            if let Some(text) = inline_text(event, "prompt") {
+                insert_chunks("user_message", &text)?;
+            }
+        }
+        "model.stream.delta" => {
+            let Some(mut text) = inline_text(event, "text") else {
+                return Ok(());
+            };
+            let last: Option<(i64, String)> = tx
+                .query_row(
+                    "SELECT ordinal, COALESCE(text,'') FROM thread_projection_entries WHERE run_id=?1 AND kind='assistant_message' ORDER BY ordinal DESC LIMIT 1",
+                    [&event.run_id],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .optional()?;
+            let had_tail = last.is_some();
+            if let Some((ordinal, mut tail)) = last {
+                let available = PROJECTION_TEXT_CHUNK.saturating_sub(tail.len());
+                let mut take = available.min(text.len());
+                while !text.is_char_boundary(take) {
+                    take -= 1;
+                }
+                tail.push_str(&text[..take]);
+                tx.execute(
+                    "INSERT INTO thread_projection_history(run_id,ordinal,valid_until_seq,run_seq,kind,text) \
+                     SELECT run_id,ordinal,?1,run_seq,kind,text FROM thread_projection_entries \
+                     WHERE run_id=?2 AND ordinal=?3",
+                    params![event.run_seq, event.run_id, ordinal],
+                )?;
+                tx.execute(
+                    "UPDATE thread_projection_entries SET text=?1 WHERE run_id=?2 AND ordinal=?3",
+                    params![tail, event.run_id, ordinal],
+                )?;
+                text.drain(..take);
+            }
+            if !text.is_empty() || !had_tail {
+                insert_chunks("assistant_message", &text)?;
+            }
+        }
+        "chat.attachment.ingested" => {
+            if let EventPayload::Attachment { attachment } = &event.payload {
+                insert_chunks("attachment", attachment.display_name())?;
+            }
+        }
+        "tool.effect.started" => {
+            let effect_id = inline_text(event, "effect_id").unwrap_or_default();
+            let display = inline_text(event, "display_name");
+            tx.execute(
+                "INSERT INTO thread_projection_entries(run_id,ordinal,run_seq,kind,text) VALUES(?1,?2,?3,?4,?5)",
+                params![event.run_id, next_ordinal()?, event.run_seq, format!("tool_running:{effect_id}"), display],
+            )?;
+        }
+        "tool.effect.completed" | "tool.effect.failed" => {
+            if let Some(effect_id) = inline_text(event, "effect_id") {
+                let old = format!("tool_running:{effect_id}");
+                let new = if event.event_type == "tool.effect.completed" {
+                    "tool_completed"
+                } else {
+                    "tool_failed"
+                };
+                archive(&old)?;
+                tx.execute(
+                    "UPDATE thread_projection_entries SET kind=?1 WHERE run_id=?2 AND kind=?3",
+                    params![new, event.run_id, old],
+                )?;
+            }
+        }
+        "permission.requested" => {
+            let title = inline_text(event, "title").unwrap_or_default();
+            archive("permission_pending")?;
+            tx.execute("DELETE FROM thread_projection_entries WHERE run_id=?1 AND kind='permission_pending'", [&event.run_id])?;
+            insert_chunks("permission_pending", &title)?;
+        }
+        "permission.resolved" => {
+            archive("permission_pending")?;
+            tx.execute("DELETE FROM thread_projection_entries WHERE run_id=?1 AND kind='permission_pending'", [&event.run_id])?;
+        }
+        _ => {}
+    }
+    Ok(())
+}

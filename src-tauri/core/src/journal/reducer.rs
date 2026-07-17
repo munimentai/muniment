@@ -20,6 +20,8 @@ impl super::RunJournal {
         workspace: &str,
         run_id: &str,
         snapshot_seq: u64,
+        after_entry: usize,
+        limit: usize,
     ) -> Result<Vec<ProjectedThreadEntry>, super::RunEventPageError> {
         let owned = self
             .run_belongs_to_workspace(run_id, workspace)
@@ -39,133 +41,41 @@ impl super::RunJournal {
             .expect("journal connection is always present outside compaction");
         let mut statement = connection
             .prepare(
-                "SELECT envelope_json FROM events WHERE run_id=?1 AND run_seq<=?2 ORDER BY run_seq",
+                "WITH snapshot AS ( \
+                 SELECT e.ordinal,e.run_seq,e.kind,e.text FROM thread_projection_entries e \
+                 WHERE e.run_id=?1 AND e.run_seq<=?2 AND NOT EXISTS( \
+                   SELECT 1 FROM thread_projection_history h WHERE h.run_id=e.run_id \
+                   AND h.ordinal=e.ordinal AND h.valid_until_seq>?2) \
+                 UNION ALL \
+                 SELECT h.ordinal,h.run_seq,h.kind,h.text FROM thread_projection_history h \
+                 WHERE h.run_id=?1 AND h.run_seq<=?2 AND h.valid_until_seq=( \
+                   SELECT MIN(h2.valid_until_seq) FROM thread_projection_history h2 \
+                   WHERE h2.run_id=h.run_id AND h2.ordinal=h.ordinal AND h2.valid_until_seq>?2)) \
+                 SELECT run_seq,kind,text FROM snapshot ORDER BY ordinal LIMIT ?3 OFFSET ?4",
             )
             .map_err(super::JournalError::from)
             .map_err(super::RunEventPageError::Journal)?;
         let rows = statement
-            .query_map(rusqlite::params![run_id, snapshot_seq], |row| {
-                row.get::<_, String>(0)
-            })
+            .query_map(
+                rusqlite::params![run_id, snapshot_seq, limit, after_entry],
+                |row| {
+                    Ok(ProjectedThreadEntry {
+                        run_seq: row.get(0)?,
+                        kind: row
+                            .get::<_, String>(1)?
+                            .split(':')
+                            .next()
+                            .unwrap_or_default()
+                            .to_owned(),
+                        text: row.get(2)?,
+                    })
+                },
+            )
             .map_err(super::JournalError::from)
             .map_err(super::RunEventPageError::Journal)?;
-        let mut projector = ChatProjector::new();
-        let mut entries = Vec::new();
-        let mut first_delta = None;
-        let mut attachment_sequences = Vec::new();
-        let mut tool_sequences = std::collections::BTreeMap::new();
-        let mut permission_sequences = std::collections::BTreeMap::new();
-        let mut legacy_sequence_offset = 0;
-        for row in rows {
-            let raw = row
-                .map_err(super::JournalError::from)
-                .map_err(super::RunEventPageError::Journal)?;
-            let event: EventEnvelope = serde_json::from_str(&raw).map_err(|error| {
-                super::RunEventPageError::Journal(super::JournalError::Corrupt(format!(
-                    "invalid stored envelope JSON: {error}"
-                )))
-            })?;
-            if event.run_seq == 1 && event.event_type != "run.started" {
-                let mut started = event.clone();
-                started.event_type = "run.started".into();
-                started.payload = EventPayload::Inline {
-                    payload_json: serde_json::json!({}),
-                };
-                projector.apply(&started).map_err(|_| {
-                    super::RunEventPageError::Journal(super::JournalError::Corrupt(
-                        "thread projection failed".into(),
-                    ))
-                })?;
-                legacy_sequence_offset = 1;
-            }
-            match event.event_type.as_str() {
-                "user.prompt.submitted" => {
-                    if let Ok(text) = field(&event, "prompt") {
-                        entries.push(ProjectedThreadEntry {
-                            run_seq: event.run_seq,
-                            kind: "user_message".into(),
-                            text: Some(text),
-                        });
-                    }
-                }
-                "model.stream.delta" => {
-                    first_delta.get_or_insert(event.run_seq);
-                }
-                "chat.attachment.ingested" => attachment_sequences.push(event.run_seq),
-                "tool.effect.started" => {
-                    if let Ok(effect_id) = field(&event, "effect_id") {
-                        tool_sequences.entry(effect_id).or_insert(event.run_seq);
-                    }
-                }
-                "permission.requested" => {
-                    if let Ok(gate_id) = field(&event, "gate_id") {
-                        permission_sequences.insert(gate_id, event.run_seq);
-                    }
-                }
-                _ => {}
-            }
-            let mut reducer_event = event.clone();
-            reducer_event.run_seq += legacy_sequence_offset;
-            projector.apply(&reducer_event).map_err(|_| {
-                super::RunEventPageError::Journal(super::JournalError::Corrupt(
-                    "thread projection failed".into(),
-                ))
-            })?;
-        }
-        let projection = projector.projection().map_err(|_| {
-            super::RunEventPageError::Journal(super::JournalError::Corrupt(
-                "thread projection failed".into(),
-            ))
-        })?;
-        if !projection.text.is_empty() {
-            entries.push(ProjectedThreadEntry {
-                run_seq: first_delta.unwrap_or(1),
-                kind: "assistant_message".into(),
-                text: Some(projection.text),
-            });
-        }
-        for (attachment, run_seq) in projection.attachments.into_iter().zip(attachment_sequences) {
-            entries.push(ProjectedThreadEntry {
-                run_seq,
-                kind: "attachment".into(),
-                text: Some(attachment.display_name),
-            });
-        }
-        for activity in projection.tool_activity {
-            let run_seq = tool_sequences
-                .get(&activity.effect_id)
-                .copied()
-                .unwrap_or(1);
-            let kind = match activity.status {
-                ToolActivityStatus::Running => "tool_running",
-                ToolActivityStatus::Completed => "tool_completed",
-                ToolActivityStatus::Failed => "tool_failed",
-            };
-            entries.push(ProjectedThreadEntry {
-                run_seq,
-                kind: kind.into(),
-                text: activity.display_name,
-            });
-        }
-        if let Some(gate) = projection.pending_permission {
-            let run_seq = permission_sequences
-                .get(&gate.gate_id)
-                .copied()
-                .unwrap_or(1);
-            let title = match gate.request {
-                PermissionRequest::Select { title, .. }
-                | PermissionRequest::Confirm { title, .. }
-                | PermissionRequest::Input { title, .. }
-                | PermissionRequest::Editor { title, .. } => title,
-            };
-            entries.push(ProjectedThreadEntry {
-                run_seq,
-                kind: "permission_pending".into(),
-                text: Some(title),
-            });
-        }
-        entries.sort_by_key(|entry| entry.run_seq);
-        Ok(entries)
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(super::JournalError::from)
+            .map_err(super::RunEventPageError::Journal)
     }
 }
 
