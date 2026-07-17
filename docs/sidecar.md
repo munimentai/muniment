@@ -164,6 +164,14 @@ the normal supervisor restart path.
 
 ## Scope boundary
 
+Browser control is not a supervised generic sidecar or an instance of ADR
+0009's companion attach service. The desktop-owned loopback relay and MV3
+`chrome.debugger` extension follow the pairing, executable-path verification,
+connect-tab ownership, and deterministic cleanup contract in
+[harness-spec §6.8](spec/harness-spec.md). Relay loss must detach browser
+targets; `SidecarSupervisor` restart semantics must never silently reconstruct
+or reauthorize a browser session.
+
 Desktop ASR is deliberately outside the sidecar boundary. As decided in
 [ADR 0004](decisions/0004-desktop-asr-runtime.md), `muniment_core` will own
 microphone PCM and invoke the pinned sherpa-onnx v1.13.2 C API in process with
