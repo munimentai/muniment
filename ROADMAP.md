@@ -52,7 +52,8 @@ Phases mirror harness-spec §9. Muniment-cloud Phase 1 native auth and the cloud
 - DONE E3 — Linux pure-core executable identity verification canonicalizes desktop-selected and proc-owned paths, revalidates process start identity against PID reuse, compares exact path bytes, and exposes only redacted failures.
 - DONE E4 — Linux numeric-loopback socket-owner resolution maps one accepted TCP connection through the kernel socket diagnostic interface to exactly one same-user live process/inode and returns its race-checked process start identity.
 - DONE E5 — the Linux connection-owner resolver and executable verifier compose into one fail-closed pure-core authorization seam that returns only an opaque authorized-browser proof.
-- NEXT E6 — open a numeric-loopback-only Linux listener that releases an accepted stream only after E5 authorization. Later slices add the bounded WebSocket handshake and bind the stream to E2 token pairing, add macOS/Windows identity adapters, implement the unpacked MV3 extension/connect-tab lifecycle, integrate runtime tools, enforce entitlement and ask/allow/deny policy (domain/read-vs-act/sensitive approval), write journal receipts, and wire the kill switch.
+- DONE E6 — a numeric-loopback-only Linux listener releases an accepted stream only after E5 authorization.
+- NEXT E7 — perform a bounded, fail-closed RFC 6455 WebSocket opening handshake on the E6-authorized stream. Later slices bind the upgraded stream to E2 token pairing, add macOS/Windows identity adapters, implement the unpacked MV3 extension/connect-tab lifecycle, integrate runtime tools, enforce entitlement and ask/allow/deny policy (domain/read-vs-act/sensitive approval), write journal receipts, and wire the kill switch.
 - Chrome Web Store publication is owner-gated. v1 excludes OS, filesystem, and other-application control.
 
 ## Stable release and distribution
