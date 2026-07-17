@@ -34,8 +34,8 @@ Phases mirror harness-spec §9. Muniment-cloud Phase 1 native auth and the cloud
 ## Phase 3 — Routing metadata + voice (§9 items 12, 15)
 - Routing metadata carriage/policy integration follows item 9; the local classifier contract is complete.
 - Voice direction remains Parakeet capture → Gemma polish → transforms, with Kokoro read-aloud and global hotkeys.
-- DONE — pinned Parakeet/Silero acquisition and publication, sherpa-onnx packaging/bindings, fixed-capacity microphone capture, bounded utterance segmentation, safe VAD boundary, and chunk-invariant pure-core dictation composition.
-- NEXT — desktop recognition command wiring: owned native capture drives the installed Silero/Parakeet pipeline and delivers transcripts through Tauri commands/events with redacted statuses (no UI). This item remains in Needs Human and must not be re-filed until resolved.
+- DONE — pinned Parakeet/Silero acquisition and publication, sherpa-onnx packaging/bindings, fixed-capacity microphone capture, bounded utterance segmentation, safe VAD boundary, chunk-invariant pure-core dictation composition, and desktop command/event wiring from owned native capture through installed Silero/Parakeet recognition with redacted statuses.
+- NEXT — dictation UI and target-hardware validation as independent slices.
 
 ## Companion execution surfaces (§13)
 - DONE E0 — ADR 0009, bounded protocol/codecs, negotiation and explicit pairing authorization, idempotency ledger, cursor/artifact windows, secure Linux filesystem/socket transport, and the first authorized `thread.list` operation through a deterministic seam.
@@ -46,14 +46,13 @@ Phases mirror harness-spec §9. Muniment-cloud Phase 1 native auth and the cloud
 
 ## Browser-control runtime capability (§6.8)
 - OWNER GO 2026-07-16 — open the v1 browser-only actuator line in this repository. It is a governed runtime capability, not another companion surface.
-- NEXT E0 correction — amend the accepted architecture/spec before code so it requires extension-only access to real profiles, token plus executable-path relay pairing, and connect-tab anchor lifecycle semantics.
-- AFTER DOCS — decompose independently reviewable slices for the attributed upstream-mergeable Apache-2.0 relay core, unpacked MV3 extension/desktop loopback pairing, runtime tool integration, entitlement and ask/allow/deny policy (domain/read-vs-act/sensitive approval), journal receipts, and kill switch.
+- DONE E0 correction — the architecture/spec requires extension-only access to real profiles, token plus executable-path relay pairing, and connect-tab anchor lifecycle ownership.
+- NEXT — decompose and implement the first independently reviewable actuator slice: the attributed, upstream-mergeable Apache-2.0 relay core. Later slices cover unpacked MV3 extension/desktop loopback pairing, runtime tool integration, entitlement and ask/allow/deny policy (domain/read-vs-act/sensitive approval), journal receipts, and kill switch.
 - Chrome Web Store publication is owner-gated. v1 excludes OS, filesystem, and other-application control.
 
 ## Stable release and distribution
-- DONE — rolling nightly release builds one pinned SHA across Linux, signed Windows, and unsigned macOS artifacts; Windows signing was verified 2026-07-15.
-- NEXT — add an owner-triggered SemVer promotion that copies one green nightly SHA's exact artifacts to a `vX.Y.Z` stable GitHub Release, documents cadence/version rules, leaves nightly unchanged, and labels unsigned macOS honestly.
-- Package-manager work follows the stable channel. Winget additionally waits for the per-machine MSI; Homebrew and other Apple distribution remain Apple-account/signing gated. No new monetization or promotional surface is implied.
+- DONE — rolling nightly release builds one pinned SHA across Linux, signed Windows, and unsigned macOS artifacts; Windows signing was verified 2026-07-15. An owner-triggered strict-SemVer promotion copies one green nightly SHA's exact artifacts to a `vX.Y.Z` stable GitHub Release, documents cadence/version rules, leaves nightly unchanged, and labels unsigned macOS honestly.
+- NEXT — package-manager work behind its stated prerequisites: Winget waits for the per-machine MSI; Homebrew and other Apple distribution remain Apple-account/signing gated. No new monetization or promotional surface is implied.
 
 ## Phase 4+ — Org surface (§9 items 16–19)
 - Remote MCP consumption, local stdio allowlist, capability install flow, artifact side panel, and projects with the redaction rule (`output withheld · connection not granted`).
