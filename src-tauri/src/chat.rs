@@ -259,6 +259,15 @@ fn start_desktop_run(
     boundaries: &impl RunStartBoundaries,
     request: RunStartRequest,
 ) -> Result<SubmitResult, RunStartError> {
+    let (result, launch) = prepare_desktop_run(boundaries, request)?;
+    boundaries.launch(launch);
+    Ok(result)
+}
+
+fn prepare_desktop_run(
+    boundaries: &impl RunStartBoundaries,
+    request: RunStartRequest,
+) -> Result<(SubmitResult, RunStartLaunch), RunStartError> {
     let prompt = request.prompt.trim().to_owned();
     if prompt.is_empty() {
         return Err(RunStartError::InvalidRequest(
@@ -308,7 +317,7 @@ fn start_desktop_run(
         committed_seq: prepared.0,
         accepted_at: Utc::now().to_rfc3339_opts(SecondsFormat::AutoSi, true),
     };
-    boundaries.launch(RunStartLaunch {
+    let launch = RunStartLaunch {
         run_id,
         prompt,
         tokens,
@@ -317,8 +326,8 @@ fn start_desktop_run(
         transport,
         adapter,
         prepared,
-    });
-    Ok(result)
+    };
+    Ok((result, launch))
 }
 
 struct TauriRunStartBoundaries<R: tauri::Runtime> {
@@ -352,7 +361,7 @@ impl<R: tauri::Runtime> RunStartBoundaries for TauriRunStartBoundaries<R> {
         tokens: &TokenSet,
         requested_workspace: Option<&str>,
     ) -> Result<ChatGrant, RunStartError> {
-        let grant = fetch_grant(&tokens.access_token).map_err(RunStartError::Persistence)?;
+        let grant = fetch_grant(&tokens.access_token).map_err(map_fetch_grant_error)?;
         validate_grant(&grant).map_err(RunStartError::Persistence)?;
         if requested_workspace.is_some_and(|workspace| workspace != grant.workspace) {
             return Err(RunStartError::Unauthorized(
@@ -433,9 +442,44 @@ impl<R: tauri::Runtime> RunStartBoundaries for TauriRunStartBoundaries<R> {
 /// Production adapter from the authorized Linux attach seam into the desktop
 /// coordinator. The listener lifecycle will own this service in a later slice.
 #[cfg(target_os = "linux")]
-pub struct DesktopAttachService<B> {
+trait RunStartIdempotency {
+    fn execute<A, W>(
+        &mut self,
+        profile: &str,
+        request: &AttachRequest,
+        canonical_input: &Value,
+        authorize: A,
+        work: W,
+    ) -> Result<IdempotencyOutcome, ProtocolError>
+    where
+        A: FnOnce() -> Result<(), ProtocolError>,
+        W: FnOnce() -> Result<CommittedResult, ProtocolError>;
+}
+
+#[cfg(target_os = "linux")]
+impl RunStartIdempotency for IdempotencyStore {
+    fn execute<A, W>(
+        &mut self,
+        profile: &str,
+        request: &AttachRequest,
+        canonical_input: &Value,
+        authorize: A,
+        work: W,
+    ) -> Result<IdempotencyOutcome, ProtocolError>
+    where
+        A: FnOnce() -> Result<(), ProtocolError>,
+        W: FnOnce() -> Result<CommittedResult, ProtocolError>,
+    {
+        IdempotencyStore::execute(self, profile, request, canonical_input, authorize, |_| {
+            work()
+        })
+    }
+}
+
+#[cfg(target_os = "linux")]
+pub struct DesktopAttachService<B, I = IdempotencyStore> {
     boundaries: B,
-    idempotency: IdempotencyStore,
+    idempotency: I,
 }
 
 #[cfg(target_os = "linux")]
@@ -455,7 +499,9 @@ impl<R: tauri::Runtime> DesktopAttachService<TauriRunStartBoundaries<R>> {
 }
 
 #[cfg(target_os = "linux")]
-impl<B: RunStartBoundaries> ThreadListService for DesktopAttachService<B> {
+impl<B: RunStartBoundaries, I: RunStartIdempotency> ThreadListService
+    for DesktopAttachService<B, I>
+{
     fn list_threads(
         &mut self,
         _workspace: &str,
@@ -508,13 +554,14 @@ impl<B: RunStartBoundaries> ThreadListService for DesktopAttachService<B> {
             capability_versions: None,
             extra,
         };
+        let mut pending_launch = None;
         let outcome = self.idempotency.execute(
             &profile,
             &ledger_request,
             &canonical_input,
             || Ok(()),
-            |_| {
-                let result = start_desktop_run(
+            || {
+                let (result, launch) = prepare_desktop_run(
                     &self.boundaries,
                     RunStartRequest {
                         prompt: request.text,
@@ -524,6 +571,7 @@ impl<B: RunStartBoundaries> ThreadListService for DesktopAttachService<B> {
                     },
                 )
                 .map_err(|error| error.protocol_error())?;
+                pending_launch = Some(launch);
                 Ok(CommittedResult {
                     body: json!({
                         "run_id": result.run_id,
@@ -533,9 +581,23 @@ impl<B: RunStartBoundaries> ThreadListService for DesktopAttachService<B> {
                     cursor: None,
                 })
             },
-        )?;
+        );
+        let outcome = match outcome {
+            Ok(outcome) => outcome,
+            Err(error) => {
+                if let Some(launch) = pending_launch {
+                    self.boundaries.clear_active_run(&launch.run_id);
+                }
+                return Err(error);
+            }
+        };
         let committed = match outcome {
-            IdempotencyOutcome::Committed(result) | IdempotencyOutcome::Replayed(result) => result,
+            IdempotencyOutcome::Committed(result) => {
+                let launch = pending_launch.ok_or_else(ProtocolError::persistence_failed)?;
+                self.boundaries.launch(launch);
+                result
+            }
+            IdempotencyOutcome::Replayed(result) => result,
         };
         serde_json::from_value(committed.body).map_err(|_| ProtocolError::persistence_failed())
     }
@@ -803,7 +865,7 @@ pub async fn chat_resume(
     );
     let access_token = tokens.access_token.clone();
     let grant = tauri::async_runtime::spawn_blocking(move || {
-        let grant = fetch_grant(&access_token)?;
+        let grant = fetch_grant(&access_token).map_err(FetchGrantError::into_message)?;
         validate_grant(&grant)?;
         Ok::<_, String>(grant)
     })
@@ -1918,7 +1980,38 @@ fn fail_start<R: tauri::Runtime>(
     }
 }
 
-fn fetch_grant(access_token: &str) -> Result<ChatGrant, String> {
+enum FetchGrantError {
+    Unauthorized,
+    Internal(String),
+}
+
+impl FetchGrantError {
+    fn into_message(self) -> String {
+        match self {
+            Self::Unauthorized => "The capability is not authorized.".into(),
+            Self::Internal(message) => message,
+        }
+    }
+}
+
+fn map_fetch_grant_error(error: FetchGrantError) -> RunStartError {
+    match error {
+        FetchGrantError::Unauthorized => {
+            RunStartError::Unauthorized("The capability is not authorized.".into())
+        }
+        FetchGrantError::Internal(message) => RunStartError::Persistence(message),
+    }
+}
+
+fn grant_status_error(status: u16) -> FetchGrantError {
+    if matches!(status, 401 | 403) {
+        FetchGrantError::Unauthorized
+    } else {
+        FetchGrantError::Internal("Chat configuration is temporarily unavailable.".into())
+    }
+}
+
+fn fetch_grant(access_token: &str) -> Result<ChatGrant, FetchGrantError> {
     let issuer =
         std::env::var("MUNIMENT_ISSUER").unwrap_or_else(|_| "https://api.muniment.ai".into());
     ureq::post(&format!(
@@ -1927,9 +2020,12 @@ fn fetch_grant(access_token: &str) -> Result<ChatGrant, String> {
     ))
     .set("Authorization", &format!("Bearer {access_token}"))
     .call()
-    .map_err(|_| "Chat configuration is temporarily unavailable.".to_string())?
+    .map_err(|error| match error {
+        ureq::Error::Status(status, _) => grant_status_error(status),
+        _ => FetchGrantError::Internal("Chat configuration is temporarily unavailable.".into()),
+    })?
     .into_json()
-    .map_err(|_| "The chat configuration response was invalid.".to_string())
+    .map_err(|_| FetchGrantError::Internal("The chat configuration response was invalid.".into()))
 }
 
 fn validate_grant(grant: &ChatGrant) -> Result<(), String> {
@@ -1958,6 +2054,29 @@ mod tests {
     use std::sync::atomic::AtomicUsize;
 
     static PI_ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    #[cfg(target_os = "linux")]
+    struct FailingFinalization;
+
+    #[cfg(target_os = "linux")]
+    impl RunStartIdempotency for FailingFinalization {
+        fn execute<A, W>(
+            &mut self,
+            _profile: &str,
+            _request: &AttachRequest,
+            _canonical_input: &Value,
+            authorize: A,
+            work: W,
+        ) -> Result<IdempotencyOutcome, ProtocolError>
+        where
+            A: FnOnce() -> Result<(), ProtocolError>,
+            W: FnOnce() -> Result<CommittedResult, ProtocolError>,
+        {
+            authorize()?;
+            let _ = work()?;
+            Err(ProtocolError::persistence_failed())
+        }
+    }
 
     struct FakeRunStartBoundaries {
         active: bool,
@@ -2391,6 +2510,37 @@ mod tests {
 
     #[cfg(target_os = "linux")]
     #[test]
+    fn attach_adapter_does_not_launch_when_receipt_finalization_fails() {
+        let mut service = DesktopAttachService {
+            boundaries: FakeRunStartBoundaries::accepting(),
+            idempotency: FailingFinalization,
+        };
+        let result = service.start_run(
+            "workspace-a",
+            AttachRunStartRequest {
+                text: "private prompt".into(),
+                context: None,
+            },
+            &Id::new("018f0000-0000-7000-8000-000000000001").unwrap(),
+            &Id::new("018f0000-0000-7000-8000-000000000002").unwrap(),
+            CompanionProvenance {
+                profile: "default".into(),
+                companion_kind: "cli".into(),
+                companion_version: "1.2.3".into(),
+                peer_uid: 1000,
+                peer_pid: 42,
+            },
+        );
+
+        let encoded = serde_json::to_string(&result.unwrap_err()).unwrap();
+        assert!(encoded.contains("persistence_failed"));
+        assert!(!encoded.contains("private prompt"));
+        assert_eq!(service.boundaries.launch_calls.load(Ordering::SeqCst), 0);
+        assert_eq!(service.boundaries.clear_calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
     fn attach_adapter_classifies_and_redacts_every_coordinator_failure_stage() {
         const DETAIL: &str =
             "prompt private-prompt token secret-token path /private/work sidecar socket";
@@ -2440,6 +2590,25 @@ mod tests {
                 assert!(!encoded.contains(secret), "leaked {secret}: {encoded}");
             }
         }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn grant_http_authentication_statuses_are_unauthorized_and_redacted() {
+        for status in [401, 403] {
+            let error = map_fetch_grant_error(grant_status_error(status)).protocol_error();
+            let encoded = serde_json::to_string(&error).unwrap();
+            assert!(encoded.contains("unauthorized"), "{encoded}");
+            for secret in ["private-prompt", "secret-token", "/private/work", "sidecar"] {
+                assert!(!encoded.contains(secret), "leaked {secret}: {encoded}");
+            }
+        }
+
+        let internal = map_fetch_grant_error(grant_status_error(500)).protocol_error();
+        assert_eq!(
+            serde_json::to_value(internal).unwrap()["code"],
+            "persistence_failed"
+        );
     }
 
     fn lock_unpoisoned<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
