@@ -275,13 +275,37 @@ remain useful for tests, but neither is a substitute for controlling the real
 profile where the user is signed in.
 
 **Relay pairing (fail closed):** for each pairing attempt the desktop issues a
-cryptographically random token of at least 256 bits and the expected canonical
-browser executable path. The extension/relay session is authorized only when
-both the token and executable path exactly match the desktop-issued values;
-missing, stale, malformed, or contradictory values close the attempt without
-attaching a tab. The token is single-use, expires after two minutes, and is
-rotated on every attempt, successful reconnect, relay restart, desktop lock or
-sign-out, and kill-switch transition. The relay binds only numeric loopback
+cryptographically random token of at least 256 bits and establishes the
+expected canonical browser executable path, which remains desktop-side rather
+than being accepted back as a client assertion. The desktop relay independently
+identifies the OS process that owns the accepted loopback connection and
+obtains that process's executable through the platform process/socket APIs;
+this OS-derived identity, not an extension- or browser-supplied path claim, is
+the actual path used in the comparison. The platform adapter passes the process
+handle plus process start identity and resolved executable identity directly
+to the relay, which rejects a PID-reuse or connection-owner change before
+authorization.
+
+Both the expected and actual paths use the same platform canonicalizer before
+comparison. On Linux, resolve the proc-owned executable and every symlink with
+`realpath` and compare the resulting absolute path byte-for-byte. On macOS,
+resolve Finder aliases/application bundles to their executable, resolve
+symlinks with `realpath`, and compare the filesystem's canonical absolute
+paths using that volume's case semantics. On Windows, open the executable,
+resolve junctions and symlinks, obtain its final path and volume/file identity,
+strip the `\\?\` spelling distinction, normalize separators, and compare path
+case-insensitively plus exact volume serial/file ID. Failure to map the socket
+to one live owning process, open or canonicalize either executable, or obtain
+the required file identity fails closed. An extension-provided value or echo
+of the desktop-issued expected path is never proof of executable identity.
+
+The extension/relay session is authorized only when the token matches and the
+independently observed executable identity matches the desktop's expected
+canonical executable; missing, stale, malformed, or contradictory values close
+the attempt without attaching a tab. The token is single-use, expires after
+two minutes, and is rotated on every attempt, successful reconnect, relay
+restart, desktop lock or sign-out, and kill-switch transition. The relay binds
+only numeric loopback
 (`127.0.0.1` and/or `::1`), never wildcard, hostname, LAN, or externally
 reachable interfaces. The token exists only in desktop and extension memory:
 it is never placed in `chrome.storage` (local, sync, session, or managed), logs,
@@ -303,8 +327,17 @@ reattaches or resumes tool work.
 Closing the anchor tab immediately detaches every `chrome.debugger` target,
 revokes the token/session, cancels pending browser actions, and closes the
 relay connection. Extension reload/unload performs the same detach/revocation;
-after reload there is no session until a new desktop-initiated pairing creates
-a new anchor. Relay death deterministically detaches targets and marks the
+its lifecycle handler also closes its owned anchor when possible. Because an
+ordinary tab can survive extension teardown, the anchor page independently
+watches the relay heartbeat and, on loss, durably replaces the connected copy
+with “Muniment browser control is disconnected. Reconnect from the Muniment
+desktop app.” It must not show connected again without a new authorized
+pairing. After reload there is no session until a new desktop-initiated pairing
+first discovers recorded/tagged Muniment anchors, closes any stale anchors (or
+confirms their durable disconnected state before safely replacing them), and
+creates exactly one new owned anchor. Thus every live session has exactly one
+anchor, and no stale or surviving tab claims a connection after its session
+ends. Relay death deterministically detaches targets and marks the
 anchor disconnected; relay restart does not restore them. The desktop kill
 switch first blocks new actions, then cancels pending actions, commands detach,
 revokes/rotates pairing material, closes the relay, and closes the
