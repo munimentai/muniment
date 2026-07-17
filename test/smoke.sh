@@ -51,28 +51,29 @@ for forbidden in \
   ! test/cli-dependency-boundary.sh muniment-cli muniment-attach "$forbidden" \
     >/dev/null 2>&1
 done
-# Exercise the real Cargo tree path with a dependency hidden from Linux's host
-# graph. The boundary must inspect dependencies for every target platform.
-cli_manifest=src-tauri/cli/Cargo.toml
+# Exercise the real Cargo tree path with a transitive dependency hidden from
+# Linux's host graph. The boundary must inspect every dependency pulled in by
+# muniment-attach for every target platform.
+attach_manifest=src-tauri/attach/Cargo.toml
 lockfile=src-tauri/Cargo.lock
-cli_manifest_backup=$(mktemp)
+attach_manifest_backup=$(mktemp)
 lockfile_backup=$(mktemp)
 boundary_output=$(mktemp)
-cp "$cli_manifest" "$cli_manifest_backup"
+cp "$attach_manifest" "$attach_manifest_backup"
 cp "$lockfile" "$lockfile_backup"
 restore_dependency_probe() {
-  cp "$cli_manifest_backup" "$cli_manifest"
+  cp "$attach_manifest_backup" "$attach_manifest"
   cp "$lockfile_backup" "$lockfile"
-  rm -f "$cli_manifest_backup" "$lockfile_backup" "$boundary_output"
+  rm -f "$attach_manifest_backup" "$lockfile_backup" "$boundary_output"
 }
 trap restore_dependency_probe EXIT
-printf '\n[target.\x27cfg(windows)\x27.dependencies]\nmuniment-core = { path = "../core" }\n' >> "$cli_manifest"
+printf '\n[target.\x27cfg(windows)\x27.dependencies]\ntauri = "2"\n' >> "$attach_manifest"
 cargo generate-lockfile --manifest-path src-tauri/Cargo.toml --offline
 if test/cli-dependency-boundary.sh >"$boundary_output" 2>&1; then
-  echo "target-specific forbidden dependency passed the CLI boundary" >&2
+  echo "transitive target-specific forbidden dependency passed the CLI boundary" >&2
   exit 1
 fi
-grep -Fq 'muniment-core' "$boundary_output"
+grep -Fq 'tauri' "$boundary_output"
 restore_dependency_probe
 trap - EXIT
 grep -Fq "needs.smoke.outputs.desktop == 'true'" "$ci"
