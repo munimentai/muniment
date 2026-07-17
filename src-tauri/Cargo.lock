@@ -2094,7 +2094,6 @@ dependencies = [
 name = "muniment-attach"
 version = "0.0.1"
 dependencies = [
- "chrono",
  "serde",
  "serde_json",
  "uuid",
