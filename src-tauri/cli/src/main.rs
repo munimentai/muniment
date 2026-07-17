@@ -1,12 +1,18 @@
-use muniment_attach::{handshake, ClientError, ThreadListPage};
+use muniment_attach::{handshake, ClientError, ThreadListPage, ThreadOpenPage};
 use std::ffi::OsString;
 use std::io::{self, BufRead, IsTerminal, Write};
 
-const USAGE: &str = "usage: muniment threads list";
+const USAGE: &str = "usage: muniment threads list | muniment threads open <thread-id>";
+
+enum Command {
+    List,
+    Open(String),
+}
 
 #[derive(Debug)]
 enum CliError {
     Usage,
+    InvalidThreadId,
     NonInteractive,
     Client(ClientError),
 }
@@ -44,9 +50,17 @@ fn run_with(
     output: &mut impl Write,
     connect: impl FnOnce(&mut dyn FnMut()) -> Result<muniment_attach::AuthorizedClient, ClientError>,
 ) -> Result<(), CliError> {
-    if args != ["threads", "list"] {
-        return Err(CliError::Usage);
-    }
+    let command = match args {
+        [threads, list] if threads == "threads" && list == "list" => Command::List,
+        [threads, open, thread_id] if threads == "threads" && open == "open" => Command::Open(
+            thread_id
+                .to_str()
+                .filter(|thread_id| !thread_id.is_empty() && thread_id.len() <= 36)
+                .ok_or(CliError::InvalidThreadId)?
+                .to_owned(),
+        ),
+        _ => return Err(CliError::Usage),
+    };
     if !stdin_is_terminal || !stdout_is_terminal {
         return Err(CliError::NonInteractive);
     }
@@ -56,12 +70,23 @@ fn run_with(
     let mut client = connect(&mut pairing_pending).map_err(CliError::Client)?;
     let mut cursor = None;
     loop {
-        let page = client
-            .list_threads(cursor.as_deref())
-            .map_err(CliError::Client)?;
-        write!(output, "{}", render_page(&page))
+        let (rendered, next_cursor) = match &command {
+            Command::List => {
+                let page = client
+                    .list_threads(cursor.as_deref())
+                    .map_err(CliError::Client)?;
+                (render_page(&page), page.next_cursor)
+            }
+            Command::Open(thread_id) => {
+                let page = client
+                    .open_thread(thread_id, cursor.as_deref())
+                    .map_err(CliError::Client)?;
+                (render_open_page(&page), page.next_cursor)
+            }
+        };
+        write!(output, "{rendered}")
             .map_err(|_| CliError::Client(ClientError::ConnectionClosed))?;
-        let Some(next_cursor) = page.next_cursor else {
+        let Some(next_cursor) = next_cursor else {
             return Ok(());
         };
         cursor = Some(next_cursor);
@@ -88,7 +113,8 @@ fn run_with(
 fn guidance(error: &CliError) -> &'static str {
     match error {
         CliError::Usage => "unsupported arguments",
-        CliError::NonInteractive => "threads list requires interactive stdin and stdout",
+        CliError::InvalidThreadId => "provide a valid thread ID from `muniment threads list`",
+        CliError::NonInteractive => "thread commands require interactive stdin and stdout",
         CliError::Client(ClientError::DesktopUnavailable)
         | CliError::Client(ClientError::RuntimeDirectoryMissing)
         | CliError::Client(ClientError::RuntimeDirectoryRelative) => {
@@ -104,10 +130,10 @@ fn guidance(error: &CliError) -> &'static str {
             "authorization expired; retry and approve the CLI in the desktop"
         }
         CliError::Client(ClientError::DesktopFailed) => {
-            "the desktop could not list threads; retry, then check the desktop"
+            "the desktop could not read threads; retry, then check the desktop"
         }
         CliError::Client(ClientError::RequestRejected) => {
-            "the desktop rejected the thread-list request; retry, then update Muniment if it continues"
+            "the desktop rejected the thread request; check the thread ID, retry, then update Muniment if it continues"
         }
         CliError::Client(ClientError::ProtocolIncompatible) => {
             "the desktop and CLI are incompatible; update Muniment desktop and the CLI"
@@ -135,6 +161,28 @@ fn render_page(page: &ThreadListPage) -> String {
                 one_line(&thread.thread_id)
             )
             .unwrap();
+        }
+    }
+    output
+}
+
+fn render_open_page(page: &ThreadOpenPage) -> String {
+    use std::fmt::Write as _;
+    let mut output = String::new();
+    let mut entries: Vec<_> = page.entries.iter().collect();
+    entries.sort_by_key(|entry| entry.run_seq);
+    for entry in entries {
+        if let Some(text) = &entry.text {
+            writeln!(
+                output,
+                "{}\t{}\t{}",
+                entry.run_seq,
+                one_line(&entry.kind),
+                one_line(text)
+            )
+            .unwrap();
+        } else {
+            writeln!(output, "{}\t{}", entry.run_seq, one_line(&entry.kind)).unwrap();
         }
     }
     output
@@ -171,7 +219,8 @@ mod tests {
         assert!(guidance(&CliError::Client(ClientError::ConnectionClosed)).contains("denied"));
         assert!(guidance(&CliError::Client(ClientError::ProtocolIncompatible)).contains("update"));
         let rejected = guidance(&CliError::Client(ClientError::RequestRejected));
-        assert!(rejected.contains("thread-list request"));
+        assert!(rejected.contains("thread request"));
+        assert!(rejected.contains("thread ID"));
         assert!(rejected.contains("retry"));
     }
 
@@ -194,6 +243,30 @@ mod tests {
         });
         assert!(output.contains("A Title\t2026-07-17T00:00:00Z\topaque-id"));
         assert!(!output.contains("secret-cursor"));
+    }
+
+    #[test]
+    fn open_rendering_is_sequence_ordered_terminal_safe_and_redacted() {
+        let output = render_open_page(&ThreadOpenPage {
+            thread_id: "thread-1".into(),
+            entries: vec![
+                muniment_attach::RedactedThreadEntry {
+                    run_seq: 2,
+                    kind: "tool\u{1b}[31m".into(),
+                    text: None,
+                },
+                muniment_attach::RedactedThreadEntry {
+                    run_seq: 1,
+                    kind: "message".into(),
+                    text: Some("hello\nworld\t!".into()),
+                },
+            ],
+            next_cursor: Some("private-cursor".into()),
+        });
+        assert_eq!(output, "1\tmessage\thello world !\n2\ttool [31m\n");
+        assert!(!output.contains("thread-1"));
+        assert!(!output.contains("private-cursor"));
+        assert!(!output.contains('\u{1b}'));
     }
 
     fn read_frame(stream: &mut UnixStream) -> serde_json::Value {
@@ -396,6 +469,96 @@ mod tests {
     }
 
     #[test]
+    fn open_pages_reuse_pairing_and_render_entries_with_optional_text() {
+        let (client, mut server) = UnixStream::pair().unwrap();
+        let worker = std::thread::spawn(move || {
+            read_frame(&mut server);
+            server
+                .write_all(
+                    &encode_frame(&welcome(
+                        1,
+                        "server-detail",
+                        "11".repeat(16),
+                        "22".repeat(16),
+                    ))
+                    .unwrap(),
+                )
+                .unwrap();
+            server
+                .write_all(
+                    &encode_frame(&authorized(
+                        "deadcafe".repeat(8),
+                        3600,
+                        900,
+                        BTreeMap::new(),
+                    ))
+                    .unwrap(),
+                )
+                .unwrap();
+            let first = read_frame(&mut server);
+            assert_eq!(first["operation"], "thread.open");
+            assert_eq!(
+                first["body"],
+                serde_json::json!({"thread_id": "thread-1", "limit": 100})
+            );
+            let response = Response {
+                protocol: Protocol,
+                request_id: Id::new(first["request_id"].as_str().unwrap()).unwrap(),
+                ok: Success,
+                body: serde_json::json!({
+                    "thread_id": "thread-1",
+                    "entries": [{"run_seq": 2, "kind": "tool"}],
+                    "next_cursor": "private-cursor"
+                }),
+            };
+            for byte in encode_frame(&response).unwrap() {
+                server.write_all(&[byte]).unwrap();
+            }
+            let second = read_frame(&mut server);
+            assert_eq!(second["body"]["cursor"], "private-cursor");
+            let response = Response {
+                protocol: Protocol,
+                request_id: Id::new(second["request_id"].as_str().unwrap()).unwrap(),
+                ok: Success,
+                body: serde_json::json!({
+                    "thread_id": "thread-1",
+                    "entries": [{"run_seq": 3, "kind": "message", "text": "done\nnow"}]
+                }),
+            };
+            for chunk in encode_frame(&response).unwrap().chunks(2) {
+                server.write_all(chunk).unwrap();
+            }
+        });
+        let mut input = io::Cursor::new(b"\n");
+        let mut output = Vec::new();
+        run_with(
+            &["threads".into(), "open".into(), "thread-1".into()],
+            true,
+            true,
+            &mut input,
+            &mut output,
+            |pending| {
+                handshake_stream(
+                    client,
+                    "0.0.1",
+                    Duration::from_secs(1),
+                    Duration::from_secs(1),
+                    pending,
+                )
+            },
+        )
+        .unwrap();
+        worker.join().unwrap();
+        let output = String::from_utf8(output).unwrap();
+        assert!(output.contains("2\ttool\n"));
+        assert!(output.contains("3\tmessage\tdone now\n"));
+        assert_eq!(output.matches("Pairing requested").count(), 1);
+        for private in ["private-cursor", "deadcafe", "server-detail"] {
+            assert!(!output.contains(private));
+        }
+    }
+
+    #[test]
     fn q_declines_without_requesting_another_page() {
         let output = paginated_output(b"q\n", false);
         assert!(output.contains("First\t2026-07-17T00:00:00Z\topaque-1"));
@@ -423,6 +586,18 @@ mod tests {
                 true,
                 false,
                 "interactive",
+            ),
+            (
+                vec!["threads".into(), "open".into(), "".into()],
+                true,
+                true,
+                "valid thread ID",
+            ),
+            (
+                vec!["threads".into(), "open".into(), "x".repeat(37).into()],
+                true,
+                true,
+                "valid thread ID",
             ),
         ] {
             let mut output = Vec::new();
