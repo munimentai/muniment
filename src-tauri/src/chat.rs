@@ -4,6 +4,13 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use chrono::{SecondsFormat, Utc};
+#[cfg(target_os = "linux")]
+use muniment_core::attach::linux::{
+    CompanionProvenance, RunStartAccepted, RunStartRequest as AttachRunStartRequest,
+    ThreadListPage, ThreadListRequest, ThreadListService,
+};
+#[cfg(target_os = "linux")]
+use muniment_core::attach::{Id, ProtocolError};
 use muniment_core::attachment::{ingest_attachment, AttachmentMetadata};
 use muniment_core::auth::TokenSet;
 use muniment_core::cas::LocalCas;
@@ -47,6 +54,10 @@ struct ChatGrant {
 pub struct SubmitResult {
     run_id: String,
     attachments: Vec<ChatAttachment>,
+    #[serde(skip)]
+    committed_seq: u64,
+    #[serde(skip)]
+    accepted_at: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -171,6 +182,8 @@ pub struct ChatState {
 struct RunStartRequest {
     prompt: String,
     files: Vec<SelectedFile>,
+    workspace: Option<String>,
+    provenance: Option<Provenance>,
 }
 
 struct RunStartLaunch {
@@ -200,6 +213,7 @@ trait RunStartBoundaries {
         grant: &ChatGrant,
         tokens: &TokenSet,
         files: Vec<SelectedFile>,
+        provenance: Option<Provenance>,
     ) -> Result<(u64, ChatProjector), String>;
     fn clear_active_run(&self, run_id: &str);
     fn launch(&self, launch: RunStartLaunch);
@@ -222,22 +236,33 @@ fn start_desktop_run(
     let tokens = boundaries.fresh_tokens()?;
     let run_id = Uuid::now_v7().to_string();
     let grant = boundaries.configure_run(&run_id, &prompt, &tokens)?;
+    if request
+        .workspace
+        .as_deref()
+        .is_some_and(|workspace| workspace != grant.workspace)
+    {
+        return Err("The capability is not authorized.".into());
+    }
     let cancelled = Arc::new(AtomicBool::new(false));
     let transport = Arc::new(Mutex::new(None));
     let adapter = Arc::new(Mutex::new(None));
-    boundaries.install_active_run(ActiveRun {
+    if let Err(error) = boundaries.install_active_run(ActiveRun {
         id: run_id.clone(),
         cancelled: Arc::clone(&cancelled),
         transport: Arc::clone(&transport),
         adapter: Arc::clone(&adapter),
-    })?;
-    let prepared = match boundaries.prepare_run(&run_id, &grant, &tokens, request.files) {
-        Ok(prepared) => prepared,
-        Err(error) => {
-            boundaries.clear_active_run(&run_id);
-            return Err(error);
-        }
-    };
+    }) {
+        boundaries.clear_active_run(&run_id);
+        return Err(error);
+    }
+    let prepared =
+        match boundaries.prepare_run(&run_id, &grant, &tokens, request.files, request.provenance) {
+            Ok(prepared) => prepared,
+            Err(error) => {
+                boundaries.clear_active_run(&run_id);
+                return Err(error);
+            }
+        };
     let attachments = match prepared.1.projection() {
         Ok(projection) => chat_attachments(&projection.attachments),
         Err(_) => {
@@ -248,6 +273,8 @@ fn start_desktop_run(
     let result = SubmitResult {
         run_id: run_id.clone(),
         attachments,
+        committed_seq: prepared.0,
+        accepted_at: Utc::now().to_rfc3339_opts(SecondsFormat::AutoSi, true),
     };
     boundaries.launch(RunStartLaunch {
         run_id,
@@ -307,6 +334,7 @@ impl<R: tauri::Runtime> RunStartBoundaries for TauriRunStartBoundaries<R> {
         grant: &ChatGrant,
         tokens: &TokenSet,
         files: Vec<SelectedFile>,
+        provenance: Option<Provenance>,
     ) -> Result<(u64, ChatProjector), String> {
         prepare_new_run(
             &self.state().storage,
@@ -314,6 +342,7 @@ impl<R: tauri::Runtime> RunStartBoundaries for TauriRunStartBoundaries<R> {
             &grant.workspace,
             tokens.subject.as_deref(),
             files,
+            provenance,
         )
     }
 
@@ -347,6 +376,86 @@ impl<R: tauri::Runtime> RunStartBoundaries for TauriRunStartBoundaries<R> {
                 clear_active_run(&state.active, &launch.run_id);
             }
         });
+    }
+}
+
+/// Production adapter from the authorized Linux attach seam into the desktop
+/// coordinator. The listener lifecycle will own this service in a later slice.
+#[cfg(target_os = "linux")]
+pub struct DesktopAttachService<B> {
+    boundaries: B,
+}
+
+#[cfg(target_os = "linux")]
+impl<R: tauri::Runtime> DesktopAttachService<TauriRunStartBoundaries<R>> {
+    pub fn new(app: tauri::AppHandle<R>) -> Self {
+        Self {
+            boundaries: TauriRunStartBoundaries { app },
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+impl<B: RunStartBoundaries> ThreadListService for DesktopAttachService<B> {
+    fn list_threads(
+        &mut self,
+        _workspace: &str,
+        _request: ThreadListRequest,
+    ) -> Result<ThreadListPage, ProtocolError> {
+        Err(ProtocolError::unsupported_operation())
+    }
+
+    fn start_run(
+        &mut self,
+        workspace: &str,
+        request: AttachRunStartRequest,
+        request_id: &Id,
+        idempotency_key: &Id,
+        companion: CompanionProvenance,
+    ) -> Result<RunStartAccepted, ProtocolError> {
+        if request.context.is_some() {
+            return Err(ProtocolError::unsupported_operation());
+        }
+        let mut extra = BTreeMap::new();
+        extra.insert("attach_profile".into(), json!(companion.profile));
+        extra.insert("companion_kind".into(), json!(companion.companion_kind));
+        extra.insert(
+            "companion_version".into(),
+            json!(companion.companion_version),
+        );
+        extra.insert("peer_uid".into(), json!(companion.peer_uid));
+        extra.insert("peer_pid".into(), json!(companion.peer_pid));
+        extra.insert("idempotency_key".into(), json!(idempotency_key.as_str()));
+        let provenance = Provenance {
+            source: "muniment-attach".into(),
+            source_version: env!("CARGO_PKG_VERSION").into(),
+            actor_id: None,
+            device_id: None,
+            rpc_request_id: Some(request_id.as_str().to_owned()),
+            capability_versions: None,
+            extra,
+        };
+        let result = start_desktop_run(
+            &self.boundaries,
+            RunStartRequest {
+                prompt: request.text,
+                files: Vec::new(),
+                workspace: Some(workspace.to_owned()),
+                provenance: Some(provenance),
+            },
+        )
+        .map_err(|error| match error.as_str() {
+            "The capability is not authorized." => ProtocolError::unauthorized(),
+            "A reply is already in progress." | "Enter a message before sending." => {
+                ProtocolError::invalid_request()
+            }
+            _ => ProtocolError::persistence_failed(),
+        })?;
+        Ok(RunStartAccepted {
+            run_id: result.run_id,
+            committed_seq: result.committed_seq,
+            accepted_at: result.accepted_at,
+        })
     }
 }
 
@@ -575,6 +684,8 @@ pub async fn chat_submit(
             RunStartRequest {
                 prompt,
                 files: files.unwrap_or_default(),
+                workspace: None,
+                provenance: None,
             },
         )
     })
@@ -665,6 +776,8 @@ pub async fn chat_resume(
     Ok(SubmitResult {
         run_id: result_id,
         attachments,
+        committed_seq: 0,
+        accepted_at: String::new(),
     })
 }
 
@@ -750,11 +863,12 @@ fn prepare_new_run(
     workspace: &str,
     subject: Option<&str>,
     files: Vec<SelectedFile>,
+    provenance: Option<Provenance>,
 ) -> Result<(u64, ChatProjector), String> {
     // Open and validate every selection before creating a run, so ordinary
     // selection failures cannot leave a rejected submission in the journal.
     let files = open_selected_files(files)?;
-    prepare_opened_run(storage, run_id, workspace, subject, files)
+    prepare_opened_run(storage, run_id, workspace, subject, files, provenance)
 }
 
 fn prepare_opened_run(
@@ -763,12 +877,19 @@ fn prepare_opened_run(
     workspace: &str,
     subject: Option<&str>,
     files: Vec<OpenSelectedFile>,
+    provenance: Option<Provenance>,
 ) -> Result<(u64, ChatProjector), String> {
     let mut storage = storage.lock().map_err(|_| attachment_error())?;
     let ChatStorage { journal, cas } = &mut *storage;
     let mut projector = ChatProjector::new();
     let mut seq = 1;
-    let started = event_envelope(run_id, seq, "run.started", json!({}), subject);
+    let mut started = event_envelope(run_id, seq, "run.started", json!({}), subject);
+    if let Some(provenance) = provenance {
+        started.provenance = Provenance {
+            actor_id: provenance.actor_id.or_else(|| subject.map(str::to_owned)),
+            ..provenance
+        };
+    }
     projector.apply(&started).map_err(|_| attachment_error())?;
     if !workspace.is_empty() {
         journal
@@ -1759,6 +1880,9 @@ mod tests {
         active: bool,
         auth_calls: AtomicUsize,
         launched_run: Mutex<Option<String>>,
+        prepare_error: Option<String>,
+        prepared_provenance: Mutex<Option<Provenance>>,
+        clear_calls: AtomicUsize,
     }
 
     impl FakeRunStartBoundaries {
@@ -1767,6 +1891,9 @@ mod tests {
                 active: false,
                 auth_calls: AtomicUsize::new(0),
                 launched_run: Mutex::new(None),
+                prepare_error: None,
+                prepared_provenance: Mutex::new(None),
+                clear_calls: AtomicUsize::new(0),
             }
         }
     }
@@ -1811,7 +1938,12 @@ mod tests {
             _grant: &ChatGrant,
             tokens: &TokenSet,
             _files: Vec<SelectedFile>,
+            provenance: Option<Provenance>,
         ) -> Result<(u64, ChatProjector), String> {
+            *self.prepared_provenance.lock().unwrap() = provenance;
+            if let Some(error) = &self.prepare_error {
+                return Err(error.clone());
+            }
             let mut projector = ChatProjector::new();
             projector
                 .apply(&event_envelope(
@@ -1825,7 +1957,9 @@ mod tests {
             Ok((1, projector))
         }
 
-        fn clear_active_run(&self, _run_id: &str) {}
+        fn clear_active_run(&self, _run_id: &str) {
+            self.clear_calls.fetch_add(1, Ordering::SeqCst);
+        }
 
         fn launch(&self, launch: RunStartLaunch) {
             *self.launched_run.lock().unwrap() = Some(launch.run_id);
@@ -1841,6 +1975,8 @@ mod tests {
             RunStartRequest {
                 prompt: "  hello  ".into(),
                 files: Vec::new(),
+                workspace: None,
+                provenance: None,
             },
         )
         .unwrap();
@@ -1865,6 +2001,8 @@ mod tests {
             RunStartRequest {
                 prompt: "hello".into(),
                 files: Vec::new(),
+                workspace: None,
+                provenance: None,
             },
         )
         .err()
@@ -1873,6 +2011,145 @@ mod tests {
         assert_eq!(error, "A reply is already in progress.");
         assert_eq!(boundaries.auth_calls.load(Ordering::SeqCst), 0);
         assert!(boundaries.launched_run.lock().unwrap().is_none());
+    }
+
+    #[cfg(target_os = "linux")]
+    fn attach_start(
+        boundaries: FakeRunStartBoundaries,
+        context: Option<Value>,
+    ) -> (
+        Result<RunStartAccepted, ProtocolError>,
+        DesktopAttachService<FakeRunStartBoundaries>,
+    ) {
+        let mut service = DesktopAttachService { boundaries };
+        let result = service.start_run(
+            "workspace-a",
+            AttachRunStartRequest {
+                text: "hello".into(),
+                context,
+            },
+            &Id::new("018f0000-0000-7000-8000-000000000001").unwrap(),
+            &Id::new("018f0000-0000-7000-8000-000000000002").unwrap(),
+            CompanionProvenance {
+                profile: "default".into(),
+                companion_kind: "cli".into(),
+                companion_version: "1.2.3".into(),
+                peer_uid: 1000,
+                peer_pid: 42,
+            },
+        );
+        (result, service)
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn attach_adapter_returns_receipt_and_records_companion_provenance() {
+        let (result, service) = attach_start(FakeRunStartBoundaries::accepting(), None);
+        let accepted = result.unwrap();
+
+        assert_eq!(accepted.committed_seq, 1);
+        assert!(chrono::DateTime::parse_from_rfc3339(&accepted.accepted_at).is_ok());
+        assert_eq!(
+            service.boundaries.launched_run.lock().unwrap().as_deref(),
+            Some(accepted.run_id.as_str())
+        );
+        let provenance = service
+            .boundaries
+            .prepared_provenance
+            .lock()
+            .unwrap()
+            .clone()
+            .unwrap();
+        assert_eq!(
+            provenance.rpc_request_id.as_deref(),
+            Some("018f0000-0000-7000-8000-000000000001")
+        );
+        assert_eq!(
+            provenance.extra["idempotency_key"],
+            "018f0000-0000-7000-8000-000000000002"
+        );
+        assert_eq!(provenance.extra["companion_kind"], "cli");
+        assert_eq!(provenance.extra["peer_uid"], 1000);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn attach_adapter_rejects_in_flight_and_unsupported_context() {
+        let boundaries = FakeRunStartBoundaries {
+            active: true,
+            ..FakeRunStartBoundaries::accepting()
+        };
+        let (in_flight, _) = attach_start(boundaries, None);
+        assert_eq!(
+            serde_json::to_value(in_flight.unwrap_err()).unwrap()["code"],
+            "invalid_request"
+        );
+
+        let (context, service) = attach_start(
+            FakeRunStartBoundaries::accepting(),
+            Some(json!({"cwd": "/private/path"})),
+        );
+        assert_eq!(
+            serde_json::to_value(context.unwrap_err()).unwrap()["code"],
+            "unsupported_operation"
+        );
+        assert_eq!(service.boundaries.auth_calls.load(Ordering::SeqCst), 0);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn attach_adapter_rejects_a_grant_for_another_workspace() {
+        let mut service = DesktopAttachService {
+            boundaries: FakeRunStartBoundaries::accepting(),
+        };
+        let result = service.start_run(
+            "workspace-b",
+            AttachRunStartRequest {
+                text: "hello".into(),
+                context: None,
+            },
+            &Id::new("018f0000-0000-7000-8000-000000000001").unwrap(),
+            &Id::new("018f0000-0000-7000-8000-000000000002").unwrap(),
+            CompanionProvenance {
+                profile: "default".into(),
+                companion_kind: "cli".into(),
+                companion_version: "1.2.3".into(),
+                peer_uid: 1000,
+                peer_pid: 42,
+            },
+        );
+
+        assert_eq!(
+            serde_json::to_value(result.unwrap_err()).unwrap()["code"],
+            "unauthorized"
+        );
+        assert!(service.boundaries.launched_run.lock().unwrap().is_none());
+        assert!(service
+            .boundaries
+            .prepared_provenance
+            .lock()
+            .unwrap()
+            .is_none());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn attach_adapter_redacts_coordinator_failure_and_clears_active_run() {
+        let boundaries = FakeRunStartBoundaries {
+            prepare_error: Some(
+                "token secret-token path /private/work sidecar socket unavailable".into(),
+            ),
+            ..FakeRunStartBoundaries::accepting()
+        };
+        let (result, service) = attach_start(boundaries, None);
+        let encoded = serde_json::to_string(&result.unwrap_err()).unwrap();
+
+        assert!(encoded.contains("persistence_failed"));
+        assert!(!encoded.contains("secret-token"));
+        assert!(!encoded.contains("/private/work"));
+        assert!(!encoded.contains("sidecar"));
+        assert_eq!(service.boundaries.clear_calls.load(Ordering::SeqCst), 1);
+        assert!(service.boundaries.launched_run.lock().unwrap().is_none());
     }
 
     fn lock_unpoisoned<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
@@ -1977,6 +2254,7 @@ mod tests {
             "workspace-a",
             Some("owner"),
             vec![SelectedFile { path: first }, SelectedFile { path: second }],
+            None,
         )
         .unwrap();
         assert_eq!(seq, 3);
@@ -2087,6 +2365,7 @@ mod tests {
             vec![SelectedFile {
                 path: missing.clone(),
             }],
+            None,
         ) {
             Ok(_) => panic!("missing attachment must fail"),
             Err(error) => error,
@@ -2118,6 +2397,7 @@ mod tests {
             vec![SelectedFile {
                 path: directory.clone(),
             }],
+            None,
         )
         .is_err());
         assert!(storage
@@ -2162,11 +2442,17 @@ mod tests {
             .unwrap();
         std::env::set_var("PI_RESUME_STUB_PROMPTS", &prompt_log);
 
-        let error =
-            match prepare_opened_run(&storage, &run_id, "workspace-a", Some("owner"), opened) {
-                Ok(_) => panic!("changed attachment length must fail"),
-                Err(error) => error,
-            };
+        let error = match prepare_opened_run(
+            &storage,
+            &run_id,
+            "workspace-a",
+            Some("owner"),
+            opened,
+            None,
+        ) {
+            Ok(_) => panic!("changed attachment length must fail"),
+            Err(error) => error,
+        };
         assert_eq!(error, attachment_error());
         assert!(!error.contains(second.to_string_lossy().as_ref()));
         assert!(!prompt_log.exists(), "Pi must receive zero prompts");
@@ -2214,6 +2500,7 @@ mod tests {
             "workspace-a",
             Some("owner"),
             vec![SelectedFile { path: first }, SelectedFile { path: second }],
+            None,
         )
         .unwrap();
 
