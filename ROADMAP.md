@@ -42,7 +42,8 @@ Phases mirror harness-spec §9. Muniment-cloud Phase 1 native auth and the cloud
 - OWNER GO 2026-07-16 — CLI E1 and editor-extension E2 may proceed concurrently after E0.5; the earlier one-front-at-a-time note is superseded.
 - DONE E0.5 — owner-ratified ADR 0011 on 2026-07-17 selects this repository for both surfaces, with their dependency boundaries, path-scoped build/test CI, and distribution implications.
 - DECIDED — ADR 0012 promotes Pi and journal ownership to one per-user background service installed idempotently by any surface. Cross-platform service extraction and installer integration are a separate build line; E1 may ship initial slices against the protocol-identical app-managed owner and is not blocked on extraction.
-- OPEN E1 — self-sequence the CLI first wave into workspace/CI scaffolding and attach/pair, then thread list/read, send, run stream, and permission-answer parity slices. E2 may proceed concurrently in its independently scoped TypeScript package lane per ADR 0011; VSIX sideload testing is sufficient and marketplace publication remains owner-gated.
+- DONE E1 foundation — the Rust workspace, path-scoped CLI CI lane, empty `muniment-cli` binary, and protocol-only `muniment-attach` crate dependency boundary are present.
+- NEXT E1 — implement the Linux CLI attach/pair client over the shared protocol. Later slices add thread list/read, send, run stream, and permission-answer parity. E2 may proceed concurrently in its independently scoped TypeScript package lane per ADR 0011; VSIX sideload testing is sufficient and marketplace publication remains owner-gated.
 - The runtime service is the sole runtime/session/journal owner; desktop, CLI, and editor extension are clients and remain windows, not modes. macOS and Windows attach adapters remain separate future slices.
 
 ## Browser-control runtime capability (§6.8)
@@ -55,7 +56,8 @@ Phases mirror harness-spec §9. Muniment-cloud Phase 1 native auth and the cloud
 - DONE E5 — the Linux connection-owner resolver and executable verifier compose into one fail-closed pure-core authorization seam that returns only an opaque authorized-browser proof.
 - DONE E6 — a numeric-loopback-only Linux listener releases an accepted stream only after E5 authorization.
 - DONE E7 — the E6-authorized Linux stream performs a bounded, fail-closed RFC 6455 WebSocket opening handshake before release.
-- NEXT E8 — bind the upgraded authorized stream to the E2 single-use token pairing session. Later slices add macOS/Windows identity adapters, implement the unpacked MV3 extension/connect-tab lifecycle, integrate runtime tools, enforce entitlement and ask/allow/deny policy (domain/read-vs-act/sensitive approval), write journal receipts, and wire the kill switch.
+- DONE E8 — the upgraded authorized Linux WebSocket is released only after consuming the matching E2 single-use pairing token.
+- Later slices add macOS/Windows identity adapters, implement the unpacked MV3 extension/connect-tab lifecycle, integrate runtime tools, enforce entitlement and ask/allow/deny policy (domain/read-vs-act/sensitive approval), write journal receipts, and wire the kill switch.
 - RESERVED EXTENSION ID — the private Chrome Web Store draft item has permanent ID `cdedcfbgomnhfpifpgdlpfkkanaofkjd`; pin it in the relay's extension-identity allowlist when the MV3 slice lands. Add the store item's public `key` to the development manifest for unpacked-ID parity only after the owner uploads a real package and retrieves that key from the CWS Package tab.
 - Chrome Web Store publication and package upload are owner-gated. v1 excludes OS, filesystem, and other-application control.
 
