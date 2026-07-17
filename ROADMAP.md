@@ -4,78 +4,60 @@ Phases mirror harness-spec §9. Muniment-cloud Phase 1 native auth and the cloud
 
 ## M0 — Scaffold (done 2026-07-09)
 - Tauri v2 desktop shell builds on macOS, Windows, and Linux.
-- Specs, mockups, design reference, Rust/Frontend test harnesses, and CI gates are present.
+- Specs, mockups, design reference, Rust/frontend test harnesses, and CI gates are present.
 
 ## Phase 2 — Client core (§9 items 8–11)
 
 ### 8. Shell, auth, and entitlements
-- DONE — Svelte 5/Vite toolchain, design tokens, generic OIDC PKCE core, keychain storage, refresh-on-expiry, signed-out/signed-in states, pre-chat shell frame, reusable milled ring, and structured server-unreachable recovery.
-- DONE cloud prerequisite — the `muniment-desktop` installation-bound native authorization, token rotation, session, revocation, and entitlement-snapshot contracts are live at `api.muniment.ai` (2026-07-11).
-- CORRECTION — the live desktop contract is `/v1/auth/native/*`, not generic issuer discovery; `/.well-known/openid-configuration` returns 404. The existing generic OIDC core remains useful test groundwork but is not the production handshake.
-- DONE — registration and coherent keychain persistence of the desktop installation identity and one-use registration material through `POST /v1/auth/native/devices`.
-- DONE — construction of the signed installation proof, `POST /v1/auth/native/authorize`, validation of its opaque continuation, persistence of the rotated device challenge, system-browser launch, and receipt of a state-validated loopback callback while retaining the PKCE verifier.
-- DONE — exchange of the callback code through `POST /v1/auth/native/token`, strict validation of the native token/session/entitlement envelope, and coherent persistence of the token set and rotated device challenge in pure core.
-- DONE — refresh of an unexpired native session through `POST /v1/auth/native/token` with a fresh installation proof and coherent rotation of the access token, refresh token, expiries, and device challenge in pure core.
-- DONE — authoritative session inspection through `GET /v1/auth/native/session` in pure core, including strict identity, desktop-role, device-binding, and signed-entitlement-envelope validation.
-- DONE — desktop keychain adapter for one coherent versioned native installation/credential record, including safe migration of the legacy installation-only entry while leaving unrelated generic-OIDC credentials untouched.
-- DONE — first-run registration, native browser authorization, native token exchange, and coherent credential persistence are wired through the Tauri `auth_sign_in` command.
-- DONE — native local status, refresh at the safety skew, authoritative session inspection, and the pre-chat fresh-token path replace their legacy generic-OIDC counterparts end to end.
-- DONE — Sign out atomically clears the production native session locally while preserving the installation identity.
-- DONE — Sign out best-effort revokes the current native refresh family and access sessions before the atomic local clear.
-- DONE — the signed-in profile consumes the live typed entitlement snapshot without exposing signing material.
-- DONE — the signed-in access panel lists server-derived native-device metadata with current, active, revoked, empty, loading, failure, and retry states. No cross-device mutation is selected without a documented live cloud contract.
+- DONE — Svelte 5/Vite shell, design tokens, signed-out/signed-in states, native installation-bound authorization, coherent keychain persistence, refresh/session/revocation flows, live entitlement projection, access-device states, and server-unreachable recovery.
+- The production contract is `/v1/auth/native/*`; generic OIDC remains test groundwork and is not the production handshake.
 
 ### 9. Pi sidecar and cloud chat
-- DONE foundation — ADR 0008 pins Pi 0.73.1, chooses verified first-use acquisition of its platform-native executable, and proves its real `get_state` RPC readiness through `SidecarSupervisor`.
-- DONE — the first signed-in streamed chat runs through the supervised Pi runtime and the user's server-resolved scoped LiteLLM access, with durable event translation and server-authoritative provenance projection.
-- DONE — mid-run steer and queued follow-up from the composer over the live Pi stream.
-- DONE — scroll-follow during streaming with user-scroll disengage, and startup reconciliation that marks interrupted runs `needs_attention` instead of rendering them as perpetually streaming.
-- DONE — typed Pi tool-execution frame parsing, Tauri run-loop journaling of `tool.effect.*`, concurrent-effect reducer semantics, and tool activity in live/history chat payloads.
-- DONE — the provenance line expands into the full receipt record (design-system §6).
-- DONE — projected Pi tool activity renders as inline mono tool cards, including concurrent running effects and restored history.
-- DONE groundwork — typed, validated Pi extension-UI request/response protocol for blocking select, confirm, input, and editor interactions.
-- DONE durability — blocking Pi UI requests are journaled before projection and replay as a typed pending permission gate.
-- DONE — explicit safe resume reopens an eligible interrupted Pi session and continues the same durable run without replaying prompts, permission decisions, or unresolved effects. Answering a pending gate remains blocked on the Needs Human decision.
+- DONE — verified Pi runtime acquisition/supervision, signed-in streamed chat, steering/follow-up, durable tool effects, provenance/receipts, inline tool cards, blocking extension-UI protocol, pending permission-gate replay, and safe interrupted-session resume.
+- Answering a pending permission gate remains blocked on the Needs Human decision.
 
 ### 10. Local Gemma sidecar
-- DONE — supervised JSON-RPC sidecar lifecycle; loopback llama-server launch/health/chat; pinned Gemma descriptor and launch verification; dictation-polish and routing-classifier contracts/evaluations with adversarial framing.
-- DONE — ADR 0006, verified revision publication/recovery, bounded resumable acquisition, the shared native HTTPS/proxy acquisition transport, the pure-core cancellable-lock/free-space install coordinator, exact resumable-stage byte accounting, Gemma acquisition/publication composition through that coordinator, activation-health rollback to the retained verified revision, and standard-library native filesystem/lock/clock/cancellation adapters.
-- DONE — Tauri install, status, and cancel commands with redacted public states.
+- DONE — supervised local runtime, pinned model lifecycle, verified/cancellable acquisition, rollback, native adapters, and Tauri install/status/cancel commands.
 - NEXT — explicit first-use install UI and release notice delivery as separate slices after the approved bundled terms surface is available.
 
 ### 11. Attachments and local CAS
-- DONE groundwork — pure-Rust content-addressed local store with atomic deduplication, constant-memory I/O/verification, and stale-temp cleanup. Cloud file flow follows items 8d/9.
+- DONE groundwork — pure-Rust content-addressed local store with atomic deduplication, constant-memory I/O/verification, stale-temp cleanup, journal reference accounting, retention, export, and compaction. Cloud file flow follows items 8d/9.
 
 ### Durable local run journal
 - DECIDED — ADR 0002 makes a per-run append-only SQLite event journal authoritative; external effects are never silently re-executed and large bodies live in CAS.
-- DONE — schema/envelope/atomic append and deterministic reducer/replay with permission, terminal, unsupported-event, incremental, and crash-boundary coverage.
-- DONE first-chat slice — Pi domain/effect translation and server-authoritative receipt projection are durable and replayable.
-- DONE deletion slice — atomic deletion of a run's events with CAS reference accounting (`delete_run` returns the run's hashes; `referenced_hashes` reports journal-wide references).
-- DONE collection slice — unreferenced CAS objects are collected using the journal's reference accounting (pure core).
-- DONE retention slice — terminal runs older than a supplied policy age out deterministically and their newly unreferenced CAS objects are collected; nonterminal and needs-attention runs are preserved.
-- DONE export slice — deterministic versioned pure-core export preserves canonical envelopes, verifies referenced CAS bodies, deduplicates bodies, and reads from one SQLite snapshot.
-- DONE compaction slice — crash-safe, non-destructive SQLite compaction preserves canonical export and leaves the source journal intact on interruption or failure.
-- NEXT read slice — deterministic, cursor-paginated run-summary listing (`run_id`, derived title, latest `recorded_at`) in pure core, feeding the companion `thread.list` seam. No further journal-maintenance slice is selected.
+- DONE — schema/envelope/atomic append, reducer/replay, Pi event translation, deletion/collection/retention, deterministic export, crash-safe compaction, and deterministic cursor-paginated run-summary listing (`run_id`, derived title, and `updated_at` derived from the latest event's `recorded_at`).
+- NEXT — wire the landed run-summary listing into the authorized Linux companion `thread.list` production seam. No further journal-maintenance slice is selected.
 
 ### Capability vocabulary and provenance
-- DONE — user surfaces say “capabilities” and receipts render `route · model · cost · time · capability@version[, ...]` in both the provenance line and the expandable receipt record. The client never synthesizes values absent from the cloud schema.
+- DONE — user surfaces say “capabilities” and receipts render only server-supplied route/model/cost/time/capability provenance.
 
 ## Phase 3 — Routing metadata + voice (§9 items 12, 15)
 - Routing metadata carriage/policy integration follows item 9; the local classifier contract is complete.
 - Voice direction remains Parakeet capture → Gemma polish → transforms, with Kokoro read-aloud and global hotkeys.
-- DONE — ADRs 0004/0005, pinned Parakeet verification, revision publication/recovery, bounded resumable acquisition, consumption of the shared native HTTPS/proxy transport, the shared pure-core install coordinator, exact resumable-stage byte accounting, Parakeet acquisition/publication composition through that coordinator, and standard-library native filesystem/lock/clock/cancellation adapters.
-- DONE — Tauri install, status, and cancel commands with redacted public states.
-- DONE foundation — sherpa-onnx 1.13.2 native libraries are packaged for macOS universal2, Windows x86_64, and Linux x86_64, with a safe offline Parakeet recognizer binding that verifies the current model, validates finite normalized mono 16 kHz input, owns and cleans up native handles, and has packaging and contract tests.
-- DONE capture foundation — the native microphone stream is owned outside the webview and feeds normalized mono 16 kHz PCM through a fixed-capacity, nonblocking queue with tested downmixing, anti-aliased resampling, overflow accounting, and deterministic cleanup.
-- DONE segmentation foundation — fixed-memory utterance boundaries consume caller-supplied voice-activity decisions with pre-roll, minimum speech, trailing silence, maximum duration, discontinuity, and flush semantics covered by chunk-boundary-invariant tests.
-- DONE VAD foundation — the ADR 0004-pinned Silero VAD artifact is acquired, verified, and published atomically with the Parakeet model set, and a frame-at-a-time detector boundary verifies the installed artifact before constructing the native sherpa-onnx handle, validates 16 kHz 512-sample normalized input, and exposes reset/discontinuity semantics behind a typed error surface.
-- DONE pipeline — pure-core dictation pipeline composition: arbitrary-length capture PCM reframes into fixed 512-sample VAD frames, feeds segmenter decisions, and emits utterances, with chunk-boundary-invariant, flush, and discontinuity coverage.
-- NEXT — desktop recognition command wiring: the owned native capture drives the dictation pipeline with the installed Silero VAD and delivers Parakeet transcripts through Tauri commands/events with redacted statuses (no UI). Dictation UI and target-hardware validation follow as independent slices.
+- DONE — pinned Parakeet/Silero acquisition and publication, sherpa-onnx packaging/bindings, fixed-capacity microphone capture, bounded utterance segmentation, safe VAD boundary, chunk-invariant pure-core dictation composition, and desktop command/event wiring from owned native capture through installed Silero/Parakeet recognition with redacted statuses.
+- NEXT — dictation UI and target-hardware validation as independent slices.
+
+## Companion execution surfaces (§13)
+- DONE E0 — ADR 0009, bounded protocol/codecs, negotiation and explicit pairing authorization, idempotency ledger, cursor/artifact windows, secure Linux filesystem/socket transport, and the first authorized `thread.list` operation through a deterministic seam.
+- OWNER GO 2026-07-16 — CLI E1 and editor-extension E2 may now proceed concurrently; the earlier one-front-at-a-time note is superseded.
+- NEXT E0.5 — owner-ratify one repository/lane-strategy ADR for both surfaces. It must decide code location, dependency boundaries, build/test CI, and distribution implications. No E1/E2 scaffold precedes this decision.
+- AFTER ADR — decompose E1 into attach/pair, thread list/read, send, run stream, and permission-answer parity slices. E2 scaffolding may begin in its selected lane once the same ADR is accepted; VSIX sideload testing is sufficient and marketplace publication remains owner-gated.
+- Desktop remains the sole runtime/session/journal owner; companions are windows, not modes. macOS and Windows attach adapters remain separate future slices.
+
+## Browser-control runtime capability (§6.8)
+- OWNER GO 2026-07-16 — open the v1 browser-only actuator line in this repository. It is a governed runtime capability, not another companion surface.
+- DONE E0 correction — the architecture/spec requires extension-only access to real profiles, token plus executable-path relay pairing, and connect-tab anchor lifecycle ownership.
+- NEXT — decompose and implement the first independently reviewable actuator slice: the attributed, upstream-mergeable Apache-2.0 relay core. Later slices cover unpacked MV3 extension/desktop loopback pairing, runtime tool integration, entitlement and ask/allow/deny policy (domain/read-vs-act/sensitive approval), journal receipts, and kill switch.
+- Chrome Web Store publication is owner-gated. v1 excludes OS, filesystem, and other-application control.
+
+## Stable release and distribution
+- DONE — rolling nightly release builds one pinned SHA across Linux, signed Windows, and unsigned macOS artifacts; Windows signing was verified 2026-07-15. An owner-triggered strict-SemVer promotion copies one green nightly SHA's exact artifacts to a `vX.Y.Z` stable GitHub Release, documents cadence/version rules, leaves nightly unchanged, and labels unsigned macOS honestly.
+- NEXT — package-manager work behind its stated prerequisites: Winget waits for the per-machine MSI; Homebrew and other Apple distribution remain Apple-account/signing gated. No new monetization or promotional surface is implied.
 
 ## Phase 4+ — Org surface (§9 items 16–19)
 - Remote MCP consumption, local stdio allowlist, capability install flow, artifact side panel, and projects with the redaction rule (`output withheld · connection not granted`).
 
 ## Standing gates
 - Code PRs: structure smoke, frontend/Rust tests, then Linux/Windows/macOS desktop builds. Markdown-only PRs gate on structure smoke alone; pushes to `main` run smoke only.
-- Browser-control v1 stays in this repository and uses only the real-profile MV3 `chrome.debugger` extension path defined by [harness-spec §6.8](docs/spec/harness-spec.md). Its desktop-issued token plus expected-browser-path pairing and extension-owned connect-tab lifecycle are prerequisites to actuator decomposition. Developer-mode/unpacked loading is sufficient for v1; Apache-2.0 attribution and NOTICE are mandatory. Scope remains browser-only: no OS, filesystem, or other-application control.
-- Build desktop targets only. Mobile scaffolding remains owner-gated by §12.5's repo-strategy ADR. CLI/editor E0 is decided by [ADR 0009](docs/decisions/0009-companion-attach-protocol.md); pure-core protocol envelope types, bounded frame codec, version negotiation, pairing, capability authorization state, and a durable idempotency ledger for effectful requests are complete with contract tests. DONE — bounded pure-core run-stream cursor/acknowledgement window state and bounded artifact transfer window/acknowledgement state. DONE Linux filesystem foundation — the effective-UID-owned `XDG_RUNTIME_DIR` and private `muniment` directory are validated and pinned without following symlinks. DONE Linux transport foundation — an owned Unix socket is safely published and withdrawn with stale-socket recovery, endpoint identity/mode checks, and same-effective-UID peer authentication through `SO_PEERCRED`. DONE Linux negotiation — the bounded hello/welcome exchange runs on an accepted authenticated stream with per-connection nonces, typed protocol-error replies, and a hard deadline. DONE Linux pairing authorization — the negotiated stream issues an approval challenge from the pure-core `AuthorizationState`, gates the typed `authorized` grant on an explicit desktop approval decision through a deterministic seam, and closes on denial or expiry per ADR 0009. DONE Linux first operation — the authorized stream serves `thread.list` through a deterministic, bounds-validated data seam; production entry remains deny-all until a real data source exists. NEXT — back the `thread.list` seam with the journal's run-summary listing (see the durable-journal NEXT read slice), then serve further operations (`run.stream` cursor window, idempotent effectful requests) as separate slices. macOS and Windows adapters follow separately. No companion UI is complete. E1 (CLI) and E2 (editor extension) scaffolding is gated by companion surfaces E0.5 — [ADR 0011](docs/decisions/0011-companion-surface-repo-strategy.md) decides the repository and CI lanes for both surfaces and is their sole prerequisite; it is proposed until explicit owner ratification.
+- Build desktop targets only unless an accepted repository/lane ADR explicitly changes a companion surface's checks.
+- Distribution accounts, marketplace/store publishing, production launch, and publicity remain owner-gated.
