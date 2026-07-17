@@ -83,9 +83,62 @@ describe('RelayConnection', () => {
     const relay = new RelayConnection(transport);
     const pending = relay.send('Page.enable');
 
-    expect(() => transport.receive('{')).toThrow('transport internals');
+    expect(() => transport.receive('{')).not.toThrow();
 
     await expect(pending).rejects.toThrow('Relay transport closed');
+    expect(transport.messageListeners).toHaveLength(0);
+    expect(transport.closeListeners).toHaveLength(0);
+  });
+
+  it('redacts transport errors when explicitly closed', async () => {
+    const transport = new MemoryTransport();
+    transport.close.mockImplementation(() => { throw new Error('transport internals'); });
+    const relay = new RelayConnection(transport);
+    const pending = relay.send('Page.enable');
+
+    expect(() => relay.close()).not.toThrow();
+
+    await expect(pending).rejects.toThrow('Relay transport closed');
+    expect(transport.messageListeners).toHaveLength(0);
+    expect(transport.closeListeners).toHaveLength(0);
+  });
+
+  it('treats send failure as terminal and rejects every pending request', async () => {
+    const transport = new MemoryTransport();
+    const relay = new RelayConnection(transport);
+    const first = relay.send('Page.enable');
+    transport.send = () => { throw new Error('private send failure'); };
+
+    const second = relay.send('Runtime.enable');
+
+    await expect(first).rejects.toThrow('Relay transport closed');
+    await expect(second).rejects.toThrow('Relay transport closed');
+    await expect(second).rejects.not.toThrow('private send failure');
+    expect(transport.close).toHaveBeenCalledWith(1011, 'Relay transport failure');
+    expect(transport.messageListeners).toHaveLength(0);
+    expect(transport.closeListeners).toHaveLength(0);
+  });
+
+  it('removes listeners when the transport closes during subscription', async () => {
+    const transport = new MemoryTransport();
+    transport.onClose = listener => {
+      transport.closeListeners.add(listener);
+      listener();
+      return () => transport.closeListeners.delete(listener);
+    };
+
+    const relay = new RelayConnection(transport);
+
+    expect(transport.messageListeners).toHaveLength(0);
+    expect(transport.closeListeners).toHaveLength(0);
+    await expect(relay.send('Page.enable')).rejects.toThrow('Relay transport closed');
+  });
+
+  it('rolls back listeners when transport subscription partially fails', () => {
+    const transport = new MemoryTransport();
+    transport.onClose = () => { throw new Error('subscription failure'); };
+
+    expect(() => new RelayConnection(transport)).toThrow('subscription failure');
     expect(transport.messageListeners).toHaveLength(0);
     expect(transport.closeListeners).toHaveLength(0);
   });

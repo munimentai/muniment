@@ -56,10 +56,13 @@ export class RelayConnection {
       throw new RangeError('maxMessageBytes must be a positive safe integer');
     this.#transport = transport;
     this.#maxMessageBytes = maxMessageBytes;
-    this.#removeTransportListeners = [
-      transport.onMessage(message => this.#onMessage(message)),
-      transport.onClose(() => this.#dispose()),
-    ];
+    try {
+      this.#retainTransportListener(transport.onMessage(message => this.#onMessage(message)));
+      this.#retainTransportListener(transport.onClose(() => this.#dispose()));
+    } catch (error) {
+      this.#dispose();
+      throw error;
+    }
   }
 
   send(method: string, params?: unknown): Promise<unknown> {
@@ -74,8 +77,7 @@ export class RelayConnection {
       try {
         this.#transport.send(JSON.stringify({ id, method, params }));
       } catch {
-        this.#pending.delete(id);
-        reject(new Error(CLOSED_ERROR));
+        this.#terminate(1011, 'Relay transport failure');
       }
     });
   }
@@ -90,11 +92,7 @@ export class RelayConnection {
   close(): void {
     if (this.#closed)
       return;
-    try {
-      this.#transport.close(1000, 'Relay closed');
-    } finally {
-      this.#dispose();
-    }
+    this.#terminate(1000, 'Relay closed');
   }
 
   #onMessage(data: string | Uint8Array): void {
@@ -134,11 +132,29 @@ export class RelayConnection {
         }
       }
     } catch {
+      this.#terminate(1002, 'Invalid relay message');
+    }
+  }
+
+  #retainTransportListener(remove: () => void): void {
+    if (this.#closed) {
       try {
-        this.#transport.close(1002, 'Invalid relay message');
-      } finally {
-        this.#dispose();
+        remove();
+      } catch {
+        // The relay is already disposed; transport cleanup details stay private.
       }
+      return;
+    }
+    this.#removeTransportListeners.push(remove);
+  }
+
+  #terminate(code: number, reason: string): void {
+    try {
+      this.#transport.close(code, reason);
+    } catch {
+      // Transport cleanup details must not escape the relay boundary.
+    } finally {
+      this.#dispose();
     }
   }
 
