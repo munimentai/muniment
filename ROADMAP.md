@@ -25,7 +25,7 @@ Phases mirror harness-spec §9. Muniment-cloud Phase 1 native auth and the cloud
 
 ### Durable local run journal
 - DECIDED — ADR 0002 makes a per-run append-only SQLite event journal authoritative; external effects are never silently re-executed and large bodies live in CAS.
-- DONE — schema/envelope/atomic append, reducer/replay, Pi event translation, deletion/collection/retention, deterministic export, crash-safe compaction, deterministic cursor-paginated run-summary listing, and authorized Linux companion `thread.list` backed by those redacted journal summaries.
+- DONE — schema/envelope/atomic append, reducer/replay, Pi event translation, deletion/collection/retention, deterministic export, crash-safe compaction, deterministic cursor-paginated run-summary listing, and authorized Linux companion `thread.list` and `thread.open` backed by redacted journal projections.
 - No further journal-maintenance slice is selected.
 
 ### Capability vocabulary and provenance
@@ -38,12 +38,12 @@ Phases mirror harness-spec §9. Muniment-cloud Phase 1 native auth and the cloud
 - NEXT — dictation UI and target-hardware validation as independent slices.
 
 ## Companion execution surfaces (§13)
-- DONE E0 — ADR 0009, bounded protocol/codecs, negotiation and explicit pairing authorization, idempotency ledger, cursor/artifact windows, secure Linux filesystem/socket transport, and authorized `thread.list` backed by redacted journal run summaries.
+- DONE E0 — ADR 0009, bounded protocol/codecs, negotiation and explicit pairing authorization, idempotency ledger, cursor/artifact windows, secure Linux filesystem/socket transport, and authorized redacted journal-backed thread reads.
 - OWNER GO 2026-07-16 — CLI E1 and editor-extension E2 may proceed concurrently after E0.5; the earlier one-front-at-a-time note is superseded.
 - DONE E0.5 — owner-ratified ADR 0011 on 2026-07-17 selects this repository for both surfaces, with their dependency boundaries, path-scoped build/test CI, and distribution implications.
 - DECIDED — ADR 0012 promotes Pi and journal ownership to one per-user background service installed idempotently by any surface. Cross-platform service extraction and installer integration are a separate build line; E1 may ship initial slices against the protocol-identical app-managed owner and is not blocked on extraction.
-- DONE E1 foundation — the Rust workspace, path-scoped CLI CI lane, protocol-only `muniment-attach` crate dependency boundary, Linux CLI discovery plus explicit pairing handshake, and cursor-navigable `muniment threads list` over one preserved authorized connection are present.
-- NEXT E1 — serve bounded journal-backed `thread.open` pages through the authorized Linux attach service. A later slice adds the interactive CLI thread-read command, followed by send, run stream, and permission-answer parity. E2 may proceed concurrently in its independently scoped TypeScript package lane per ADR 0011; VSIX sideload testing is sufficient and marketplace publication remains owner-gated.
+- DONE E1 foundation — the Rust workspace, path-scoped CLI CI lane, protocol-only `muniment-attach` crate dependency boundary, Linux CLI discovery plus explicit pairing handshake, cursor-navigable `muniment threads list` over one preserved authorized connection, and bounded journal-backed `thread.open` pages served by the authorized Linux attach service are present.
+- NEXT E1 — add the interactive CLI thread-read command over the existing `thread.open` service. Later slices add send, run stream, and permission-answer parity. E2 may proceed concurrently in its independently scoped TypeScript package lane per ADR 0011; VSIX sideload testing is sufficient and marketplace publication remains owner-gated.
 - The runtime service is the sole runtime/session/journal owner; desktop, CLI, and editor extension are clients and remain windows, not modes. macOS and Windows attach adapters remain separate future slices.
 
 ## Browser-control runtime capability (§6.8)
