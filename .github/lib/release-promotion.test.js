@@ -90,7 +90,7 @@ describe("stable release promotion", () => {
 
   it("rejects a later-page CI failure", async () => {
     const successes = Array.from({ length: 100 }, (_, index) => index === 0 ? smoke : { name: `check-${index}`, status: "completed", conclusion: "success" });
-    const { fetchImpl } = promotionFetch({ route: (url) => url.includes("check-runs") ? response({ check_runs: url.includes("page=1") ? successes : [{ name: "late failure", status: "completed", conclusion: "failure" }] }) : null });
+    const { fetchImpl } = promotionFetch({ route: (url) => url.includes("check-runs") ? response({ check_runs: new URL(url).searchParams.get("page") === "1" ? successes : [{ name: "late failure", status: "completed", conclusion: "failure" }] }) : null });
     await expect(promote(fetchImpl)).rejects.toThrow("CI is not green");
   });
 
