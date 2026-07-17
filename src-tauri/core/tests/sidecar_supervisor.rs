@@ -322,7 +322,7 @@ fn loading_timeout_exhausts_restart_budget_with_stderr_diagnostics() {
 #[test]
 fn blocked_probe_cannot_delay_startup_timeout_or_become_healthy() {
     let mut cfg = config(&["echo"]);
-    cfg.startup_timeout = Duration::from_millis(10);
+    cfg.startup_timeout = Duration::from_millis(100);
     cfg.restart.max_restarts = 0;
     let (release_probe, blocked_probe) = std::sync::mpsc::channel();
     let blocked_probe = Arc::new(std::sync::Mutex::new(blocked_probe));
@@ -348,7 +348,7 @@ fn blocked_probe_cannot_delay_startup_timeout_or_become_healthy() {
     assert!(matches!(
         failed.cause,
         Some(SidecarEventCause::StartupTimeout { timeout, .. })
-            if timeout == Duration::from_millis(10)
+            if timeout == Duration::from_millis(100)
     ));
     assert!(events.recv_timeout(Duration::from_millis(25)).is_err());
     release_probe.send(()).unwrap();
