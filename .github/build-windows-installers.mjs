@@ -1,5 +1,5 @@
 import { readdir, rename } from "node:fs/promises";
-import { existsSync, readFileSync, copyFileSync } from "node:fs";
+import { existsSync, readFileSync, copyFileSync, mkdirSync, rmSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import { spawnSync } from "node:child_process";
@@ -103,9 +103,21 @@ const signFile = (file) => {
   if (result.status !== 0) process.exit(result.status ?? 1);
 };
 
+// Tauri signs bundled DLL resources in place. Keep the pinned, hash-checked
+// inputs so later bundling passes validate and package the same upstream bits.
+const runtimeDirectory = join("src-tauri", "third-party", "sherpa-onnx-v1.13.2", "windows-x86_64");
+const runtimeFiles = ["onnxruntime.dll", "onnxruntime_providers_shared.dll", "sherpa-onnx-c-api.dll"];
+const pristineRuntime = join(tmpdir(), `muniment-pristine-asr-runtime-${process.pid}`);
+mkdirSync(pristineRuntime);
+for (const file of runtimeFiles) copyFileSync(join(runtimeDirectory, file), join(pristineRuntime, file));
+const restoreRuntime = () => {
+  for (const file of runtimeFiles) copyFileSync(join(pristineRuntime, file), join(runtimeDirectory, file));
+};
+
 // Preserve the normal MSI while the second bundling pass writes the fleet variant.
 // signArgs makes tauri sign the app .exe (before packaging) and the NSIS installer.
 run("build", ...signArgs);
+restoreRuntime();
 const userMsi = await soleMsi();
 const savedUserMsi = join(dirname(userMsi), `.${basename(userMsi)}.per-user`);
 await rename(userMsi, savedUserMsi);
@@ -118,6 +130,8 @@ const upgradeBaseMsi = join(dirname(msiDirectory), "machine-upgrade-base.msi");
 run("build", "--bundles", "msi", "--config", "src-tauri/tauri.machine.conf.json");
 await rename(await soleMsi(), upgradeBaseMsi);
 run("build", "--bundles", "msi", "--config", "src-tauri/tauri.machine.conf.json", ...signArgs);
+restoreRuntime();
+rmSync(pristineRuntime, { recursive: true });
 const generatedMachineMsi = await soleMsi();
 const machineMsi = generatedMachineMsi.replace(/\.msi$/, "-machine.msi");
 await rename(generatedMachineMsi, machineMsi);
