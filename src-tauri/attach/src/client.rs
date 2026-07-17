@@ -68,9 +68,9 @@ pub struct ThreadListPage {
 mod linux {
     use super::{AuthorizationSummary, ClientError, ThreadListPage};
     use crate::{
-        decode_frame, encode_frame, Authorized, Client, ErrorCode, ErrorEnvelope, FrameError,
-        Envelope, Hello, Id, Operation, Protocol, Request, VersionRange, Welcome, MAX_FRAME_LENGTH,
-        MAX_TEXT_LENGTH, PROTOCOL,
+        decode_frame, encode_frame, Authorized, Client, Envelope, ErrorCode, ErrorEnvelope,
+        FrameError, Hello, Id, Operation, Protocol, Request, VersionRange, Welcome,
+        MAX_FRAME_LENGTH, MAX_TEXT_LENGTH, PROTOCOL,
     };
     use serde::de::DeserializeOwned;
     use serde_json::Value;
@@ -125,15 +125,14 @@ mod linux {
             {
                 return Err(ClientError::ProtocolIncompatible);
             }
-            let response = match serde_json::from_value(value)
-                .map_err(|_| ClientError::UnexpectedMessage)?
-            {
-                Envelope::Response(response) if response.request_id == request_id => response,
-                Envelope::Error(error) if error.request_id.as_ref() == Some(&request_id) => {
-                    return Err(map_protocol_error(error.error.code()));
-                }
-                _ => return Err(ClientError::UnexpectedMessage),
-            };
+            let response =
+                match serde_json::from_value(value).map_err(|_| ClientError::UnexpectedMessage)? {
+                    Envelope::Response(response) if response.request_id == request_id => response,
+                    Envelope::Error(error) if error.request_id.as_ref() == Some(&request_id) => {
+                        return Err(map_protocol_error(error.error.code()));
+                    }
+                    _ => return Err(ClientError::UnexpectedMessage),
+                };
             let page: ThreadListPage = serde_json::from_value(response.body)
                 .map_err(|_| ClientError::UnexpectedMessage)?;
             if page.threads.len() > usize::from(THREAD_LIST_LIMIT)
