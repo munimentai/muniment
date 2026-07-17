@@ -119,6 +119,27 @@ describe('RelayConnection', () => {
     expect(transport.closeListeners).toHaveLength(0);
   });
 
+  it('disposes before transport cleanup can re-enter with messages', async () => {
+    const transport = new MemoryTransport();
+    const relay = new RelayConnection(transport);
+    const eventListener = vi.fn();
+    relay.onEvent(eventListener);
+    const first = relay.send('Page.enable');
+    transport.send = () => { throw new Error('private send failure'); };
+    transport.close.mockImplementation(() => {
+      transport.receive(JSON.stringify({ id: 1, result: { accepted: true } }));
+      transport.receive(JSON.stringify({ method: 'Runtime.event', params: {} }));
+    });
+
+    const second = relay.send('Runtime.enable');
+
+    await expect(first).rejects.toThrow('Relay transport closed');
+    await expect(second).rejects.toThrow('Relay transport closed');
+    expect(eventListener).not.toHaveBeenCalled();
+    expect(transport.messageListeners).toHaveLength(0);
+    expect(transport.closeListeners).toHaveLength(0);
+  });
+
   it('removes listeners when the transport closes during subscription', async () => {
     const transport = new MemoryTransport();
     transport.onClose = listener => {

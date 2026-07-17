@@ -149,12 +149,11 @@ export class RelayConnection {
   }
 
   #terminate(code: number, reason: string): void {
+    this.#dispose();
     try {
       this.#transport.close(code, reason);
     } catch {
       // Transport cleanup details must not escape the relay boundary.
-    } finally {
-      this.#dispose();
     }
   }
 
