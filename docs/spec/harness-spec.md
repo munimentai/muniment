@@ -597,13 +597,16 @@ same single mode, in the places work already happens.
 
 The **muniment CLI** (terminal) and the **muniment editor extension**
 (VS Code and license-compatible forks; JetBrains later) are companion
-surfaces over the SAME local runtime the desktop app owns. They attach to
-the desktop app's managed Pi sidecar and run-journal over a local
+surfaces over the SAME per-user runtime service. Like the desktop UI, they
+attach to the service's managed Pi process and run journal over the local
 IPC/attach protocol; they never spawn a second ungoverned runtime, never
 hold provider keys, and never bypass the virtual-key path. Everything a
 user does in them carries the same entitlements, permission gates,
-receipts, and journal entries as the desktop surface. v1 requires the
-desktop app installed and signed in. The CLI is an interactive human
+receipts, and journal entries as the desktop surface. Any execution-surface
+installer installs the shared per-user service if absent and upgrades an older
+version that does not meet its declared minimum in place; a compatible
+installed service is reused, so there is never a per-surface or second runtime.
+The CLI is an interactive human
 surface — headless/scripted agents remain the server-side agent access
 layer's job, never the CLI's. Execution surfaces may invoke every
 runtime capability, including browser control (§6.8); the browser
@@ -614,11 +617,14 @@ outside this section's scope.
 
 1. **Attach protocol:** local IPC exposing session open/stream/steer,
    permission-gate answers, and artifact fetch — a thin projection of the
-   Pi RPC + run-journal surfaces the app already maintains. Accepted
+   Pi RPC + run-journal surfaces the runtime service maintains. Accepted
    [ADR 0009](../decisions/0009-companion-attach-protocol.md) defines the
    transport, local-process authorization, and journal-backed crash semantics.
-2. **Shared device session:** the CLI/extension reuse the desktop app's
-   authenticated session (no second PKCE flow per surface).
+2. **Shared device session:** the runtime service holds one authenticated
+   device session for all surfaces. Sign-in does not require the desktop: the
+   CLI can initiate the existing §2.8 system-browser PKCE round-trip through
+   the service, and every surface reuses the resulting session rather than
+   storing tokens or creating a per-surface session.
 3. **Entitlement snapshot reuse:** same signed snapshot, same
    display-hints-only rule (§4.4).
 
@@ -634,7 +640,9 @@ outside this section's scope.
 - **E1 — CLI (OPEN):** first scaffold the Rust workspace binary, its independent
   CI lane, and its ADR 0009 attach-protocol client; then implement threads
   list/open, chat/run with inline tool stream,
-  permission gates answered in-terminal, receipts printout.
+  permission gates answered in-terminal, receipts printout. These first slices
+  may attach to the current app-managed owner because the protocol is
+  identical; service extraction is a separate build line and does not block E1.
 - **E2 — VS Code extension:** independently sequenced in its scoped TypeScript
   package lane, implement thread view + composer, editor-context
   attach (send selection/file within workspace scope), permission gates
@@ -647,7 +655,6 @@ outside this section's scope.
 
 | Item | Action |
 |---|---|
-| Desktop-app requirement | v1: CLI/extension REQUIRE the desktop app (runtime owner). Standalone CLI runtime = future owner decision. |
 | Fork coverage | Decide which VS Code forks (Cursor/Windsurf) are officially claimed vs expected-to-work. |
 | JetBrains | Later; outside this amendment's build scope. |
 | Marketplace publisher account | Owner acquires alongside launch prep. |
@@ -664,8 +671,9 @@ the shared runtime integration works without platform-specific scope.
 
 ### 14.1 Runtime and transport
 
-The desktop runtime remains the single local executor. CLI and editor-extension
-sessions are peers over the E0 attach protocol defined by ADR 0009 and ADR 0011,
+The per-user runtime service defined by [ADR 0012](../decisions/0012-user-level-runtime-service.md)
+remains the single local executor. Desktop, CLI, and editor-extension sessions
+are peers over the E0 attach protocol defined by ADR 0009 and ADR 0011,
 so Remote Control is **one runtime-to-cloud relay integration**, not a tunnel
 implemented separately by each surface. The runtime opens an outbound-only
 HTTPS session leg to `api.muniment.ai`; Remote Control requires no inbound port
@@ -677,8 +685,12 @@ on the user's machine. Model inference continues through the existing governed
 LiteLLM/model-routing path (§4.5 and §5), including the optional local-model
 exception in §5.3.
 
+The service owns that outbound leg independently of every surface lifecycle.
+Remote Control therefore remains available for a live local session when no
+desktop or editor window is open and no CLI process is attached.
+
 Only one remote-controlled session may be active per local runtime at a time.
-The local process must remain alive. If network connectivity is lost, the
+The runtime service must remain alive. If network connectivity is lost, the
 runtime allows a bounded reconnection window of approximately ten minutes,
 then ends the remote leg cleanly without ending or transferring execution of
 the local session. A new remote client must pair again; stale clients cannot

@@ -41,8 +41,9 @@ Phases mirror harness-spec §9. Muniment-cloud Phase 1 native auth and the cloud
 - DONE E0 — ADR 0009, bounded protocol/codecs, negotiation and explicit pairing authorization, idempotency ledger, cursor/artifact windows, secure Linux filesystem/socket transport, and authorized `thread.list` backed by redacted journal run summaries.
 - OWNER GO 2026-07-16 — CLI E1 and editor-extension E2 may proceed concurrently after E0.5; the earlier one-front-at-a-time note is superseded.
 - DONE E0.5 — owner-ratified ADR 0011 on 2026-07-17 selects this repository for both surfaces, with their dependency boundaries, path-scoped build/test CI, and distribution implications.
+- DECIDED — ADR 0012 promotes Pi and journal ownership to one per-user background service installed idempotently by any surface. Cross-platform service extraction and installer integration are a separate build line; E1 may ship initial slices against the protocol-identical app-managed owner and is not blocked on extraction.
 - OPEN E1 — self-sequence the CLI first wave into workspace/CI scaffolding and attach/pair, then thread list/read, send, run stream, and permission-answer parity slices. E2 may proceed concurrently in its independently scoped TypeScript package lane per ADR 0011; VSIX sideload testing is sufficient and marketplace publication remains owner-gated.
-- Desktop remains the sole runtime/session/journal owner; companions are windows, not modes. macOS and Windows attach adapters remain separate future slices.
+- The runtime service is the sole runtime/session/journal owner; desktop, CLI, and editor extension are clients and remain windows, not modes. macOS and Windows attach adapters remain separate future slices.
 
 ## Browser-control runtime capability (§6.8)
 - OWNER GO 2026-07-16 — open the v1 browser-only actuator line in this repository. It is a governed runtime capability, not another companion surface.
