@@ -17,6 +17,24 @@ makes the desktop supervisor the sole owner of Pi and its stdout dispatcher.
 This ADR defines an implementation contract, not a generic plugin API. It adds
 no listener, client, companion UI, marketplace work, or protocol implementation.
 
+It governs the native IPC attach service used by the human-operated CLI and
+editor companion surfaces. It does **not** govern the browser-control relay in
+[harness-spec §6.8](../spec/harness-spec.md), whose MV3 extension pairing,
+browser-executable check, connect-tab anchor, and loopback lifecycle form a
+separate protocol and threat boundary. Implementations must not reuse this
+ADR's socket discovery, same-user peer approval, or connection capability as
+browser-relay authorization.
+
+The two protocols do share desktop-owned invariants: current session and
+entitlement authorization is checked before work and on every operation;
+workspace/domain policy and ask/allow/deny permission decisions cannot be
+bypassed; successful effects are represented by committed journal events and
+receipt projections rather than raw transport acknowledgements; diagnostics
+are redacted; and sign-out, lock, entitlement revocation, or the desktop/owner
+kill switch stops new work, revokes ephemeral authority, and closes the
+connection. Sharing those invariants does not make either protocol's pairing
+credential valid on the other.
+
 ## Decision
 
 The desktop exposes a versioned, local, message-oriented attach service. It is
@@ -303,8 +321,10 @@ cursor replay path when the client reconnects.
 3. Wire desktop session/workspace policy, journal replay and revocation using a
    fake companion; test commit-before-ack, duplicates, gaps, restart at every
    effect boundary, unknown outcomes, slow consumers, and redaction goldens.
-4. Build the interactive E1 CLI, then the E2 editor surface. Distribution and
-   marketplace publication remain separately owner-gated.
+4. Build the interactive E1 CLI, then the E2 editor surface, once their
+   repository and CI lanes are decided by [ADR 0011](0011-companion-surface-repo-strategy.md)
+   (§13 E0.5). Distribution and marketplace publication remain separately
+   owner-gated.
 
 Cross-platform golden byte fixtures cover hello/welcome, every request/event,
 errors, unknown optional fields, incompatible versions, malformed/oversized

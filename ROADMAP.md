@@ -25,7 +25,7 @@ Phases mirror harness-spec §9. Muniment-cloud Phase 1 native auth and the cloud
 
 ### Durable local run journal
 - DECIDED — ADR 0002 makes a per-run append-only SQLite event journal authoritative; external effects are never silently re-executed and large bodies live in CAS.
-- DONE — schema/envelope/atomic append, reducer/replay, Pi event translation, deletion/collection/retention, deterministic export, crash-safe compaction, and deterministic cursor-paginated run-summary listing (`run_id`, derived title, latest `recorded_at`).
+- DONE — schema/envelope/atomic append, reducer/replay, Pi event translation, deletion/collection/retention, deterministic export, crash-safe compaction, and deterministic cursor-paginated run-summary listing (`run_id`, derived title, and `updated_at` derived from the latest event's `recorded_at`).
 - NEXT — wire the landed run-summary listing into the authorized Linux companion `thread.list` production seam. No further journal-maintenance slice is selected.
 
 ### Capability vocabulary and provenance
