@@ -294,6 +294,9 @@ fn perform_websocket_handshake(
     );
     stream
         .write_all(response.as_bytes())
+        .map_err(|_| WebSocketHandshakeError::Io)?;
+    stream
+        .set_read_timeout(None)
         .map_err(|_| WebSocketHandshakeError::Io)
 }
 
@@ -398,7 +401,35 @@ fn valid_host(host: &str) -> bool {
     {
         return false;
     }
-    url::Url::parse(&format!("http://{host}/"))
-        .map(|url| url.host().is_some() && url.username().is_empty() && url.password().is_none())
-        .unwrap_or(false)
+
+    let (host_part, port) = if host.starts_with('[') {
+        let Some(close) = host.find(']') else {
+            return false;
+        };
+        let literal = &host[1..close];
+        if literal.parse::<std::net::Ipv6Addr>().is_err() {
+            return false;
+        }
+        let remainder = &host[close + 1..];
+        if remainder.is_empty() {
+            return true;
+        }
+        let Some(port) = remainder.strip_prefix(':') else {
+            return false;
+        };
+        (literal, Some(port))
+    } else {
+        let mut parts = host.split(':');
+        let host_part = parts.next().unwrap_or_default();
+        let port = parts.next();
+        if parts.next().is_some()
+            || host_part.is_empty()
+            || matches!(url::Host::parse(host_part), Err(_) | Ok(url::Host::Ipv6(_)))
+        {
+            return false;
+        }
+        (host_part, port)
+    };
+
+    !host_part.is_empty() && port.is_none_or(|port| !port.is_empty() && port.parse::<u16>().is_ok())
 }

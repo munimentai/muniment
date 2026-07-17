@@ -160,10 +160,24 @@ fn completes_fragmented_handshake_with_rfc_accept_key() {
         &[&request[..7], &request[7..41], &request[41..]],
         &handshake_config(1024, 16, Duration::from_secs(1)),
     );
-    assert!(result.is_ok());
+    let stream = result.unwrap();
+    assert_eq!(stream.read_timeout().unwrap(), None);
     let response = String::from_utf8(response).unwrap();
     assert!(response.starts_with("HTTP/1.1 101 Switching Protocols\r\n"));
     assert!(response.contains("Sec-WebSocket-Accept: s3pPLMBiTxaQ9kYGzzhZRbK+xOo=\r\n"));
+}
+
+#[test]
+fn accepts_bracketed_ipv6_hosts_with_optional_numeric_ports() {
+    for host in ["[::1]", "[2001:db8::1]:443"] {
+        let request = valid_request().replace("127.0.0.1:1234", host);
+        let (result, response) = websocket_exchange(
+            &[request.as_bytes()],
+            &handshake_config(1024, 16, Duration::from_secs(1)),
+        );
+        assert!(result.is_ok(), "{host}");
+        assert!(response.starts_with(b"HTTP/1.1 101"), "{host}");
+    }
 }
 
 #[test]
@@ -222,6 +236,22 @@ fn rejects_malformed_duplicate_wrong_policy_and_bounded_requests() {
         (
             valid_request().replace("dGhlIHNhbXBsZSBub25jZQ==", "c2hvcnQ="),
             WebSocketHandshakeError::PolicyRejected,
+        ),
+        (
+            valid_request().replace("127.0.0.1:1234", "example.com?query"),
+            WebSocketHandshakeError::Malformed,
+        ),
+        (
+            valid_request().replace("127.0.0.1:1234", "example.com#fragment"),
+            WebSocketHandshakeError::Malformed,
+        ),
+        (
+            valid_request().replace("127.0.0.1:1234", "[::1]trailing"),
+            WebSocketHandshakeError::Malformed,
+        ),
+        (
+            valid_request().replace("127.0.0.1:1234", "example.com:not-a-port"),
+            WebSocketHandshakeError::Malformed,
         ),
     ];
     for (request, expected) in cases {
