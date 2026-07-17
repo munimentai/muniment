@@ -223,6 +223,7 @@ trait RunStartBoundaries {
         &self,
         projector: &ChatProjector,
     ) -> Result<Vec<ChatAttachment>, RunStartError>;
+    fn fail_prepared_run(&self, launch: &RunStartLaunch) -> Result<(), RunStartError>;
     fn clear_active_run(&self, run_id: &str);
     fn launch(&self, launch: RunStartLaunch);
 }
@@ -406,6 +407,23 @@ impl<R: tauri::Runtime> RunStartBoundaries for TauriRunStartBoundaries<R> {
             .map_err(|_| RunStartError::Persistence(attachment_error()))
     }
 
+    fn fail_prepared_run(&self, launch: &RunStartLaunch) -> Result<(), RunStartError> {
+        let failed = event_envelope(
+            &launch.run_id,
+            launch.prepared.0 + 1,
+            "run.failed",
+            json!({"reason": "persistence"}),
+            launch.tokens.subject.as_deref(),
+        );
+        self.state()
+            .storage
+            .lock()
+            .map_err(|_| RunStartError::Persistence(attachment_error()))?
+            .journal
+            .append(launch.prepared.0, &failed)
+            .map_err(|_| RunStartError::Persistence(attachment_error()))
+    }
+
     fn clear_active_run(&self, run_id: &str) {
         clear_active_run(&self.state().active, run_id);
     }
@@ -586,6 +604,7 @@ impl<B: RunStartBoundaries, I: RunStartIdempotency> ThreadListService
             Ok(outcome) => outcome,
             Err(error) => {
                 if let Some(launch) = pending_launch {
+                    let _ = self.boundaries.fail_prepared_run(&launch);
                     self.boundaries.clear_active_run(&launch.run_id);
                 }
                 return Err(error);
@@ -2091,6 +2110,7 @@ mod tests {
         prepare_error: Option<String>,
         projection_error: Option<String>,
         prepared_provenance: Mutex<Option<Provenance>>,
+        journaled_events: Mutex<BTreeMap<String, Vec<EventEnvelope>>>,
         clear_calls: AtomicUsize,
     }
 
@@ -2109,6 +2129,7 @@ mod tests {
                 prepare_error: None,
                 projection_error: None,
                 prepared_provenance: Mutex::new(None),
+                journaled_events: Mutex::new(BTreeMap::new()),
                 clear_calls: AtomicUsize::new(0),
             }
         }
@@ -2178,15 +2199,18 @@ mod tests {
                 return Err(RunStartError::Persistence(error.clone()));
             }
             let mut projector = ChatProjector::new();
-            projector
-                .apply(&event_envelope(
-                    run_id,
-                    1,
-                    "run.started",
-                    json!({}),
-                    tokens.subject.as_deref(),
-                ))
-                .unwrap();
+            let started = event_envelope(
+                run_id,
+                1,
+                "run.started",
+                json!({}),
+                tokens.subject.as_deref(),
+            );
+            projector.apply(&started).unwrap();
+            self.journaled_events
+                .lock()
+                .unwrap()
+                .insert(run_id.to_owned(), vec![started]);
             Ok((1, projector))
         }
 
@@ -2201,6 +2225,22 @@ mod tests {
                 .projection()
                 .map(|projection| chat_attachments(&projection.attachments))
                 .map_err(|_| RunStartError::Persistence(attachment_error()))
+        }
+
+        fn fail_prepared_run(&self, launch: &RunStartLaunch) -> Result<(), RunStartError> {
+            self.journaled_events
+                .lock()
+                .unwrap()
+                .get_mut(&launch.run_id)
+                .unwrap()
+                .push(event_envelope(
+                    &launch.run_id,
+                    launch.prepared.0 + 1,
+                    "run.failed",
+                    json!({"reason": "persistence"}),
+                    launch.tokens.subject.as_deref(),
+                ));
+            Ok(())
         }
 
         fn clear_active_run(&self, _run_id: &str) {
@@ -2537,6 +2577,10 @@ mod tests {
         assert!(!encoded.contains("private prompt"));
         assert_eq!(service.boundaries.launch_calls.load(Ordering::SeqCst), 0);
         assert_eq!(service.boundaries.clear_calls.load(Ordering::SeqCst), 1);
+        let journaled_events = service.boundaries.journaled_events.lock().unwrap();
+        let events = journaled_events.values().next().unwrap();
+        assert_eq!(events.last().unwrap().event_type, "run.failed");
+        assert!(reduce(events).unwrap().is_terminal());
     }
 
     #[cfg(target_os = "linux")]
