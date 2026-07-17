@@ -672,8 +672,10 @@ HTTPS session leg to `api.muniment.ai`; Remote Control requires no inbound port
 or other inbound connectivity on the user's machine. Messages route through
 the relay encrypted, and the relay does not receive filesystem access,
 environment access, tool execution, or provider credentials. Filesystem,
-environment, tools, models, and the authoritative run journal remain entirely
-on the user's machine.
+environment, tool execution, and the authoritative run journal remain entirely
+on the user's machine. Model inference continues through the existing governed
+LiteLLM/model-routing path (§4.5 and §5), including the optional local-model
+exception in §5.3.
 
 Only one remote-controlled session may be active per local runtime at a time.
 The local process must remain alive. If network connectivity is lost, the
