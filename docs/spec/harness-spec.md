@@ -628,13 +628,15 @@ outside this section's scope.
   The first unblocked slice is pure-core protocol types, strict codecs,
   negotiation, authorization state, cursor/idempotency semantics, and tests;
   native listeners and companion UIs remain unimplemented.
-- **E0.5 — repo/CI strategy:** [ADR 0011](../decisions/0011-companion-surface-repo-strategy.md)
-  decides where E1 and E2 code lives and how each is built, tested, and
-  released. It is the SOLE prerequisite before any E1 or E2 scaffolding ticket
-  and remains proposed until explicit owner ratification.
-- **E1 — CLI:** threads list/open, chat/run with inline tool stream,
+- **E0.5 — DONE:** owner-ratified [ADR 0011](../decisions/0011-companion-surface-repo-strategy.md)
+  on 2026-07-17 selects this repository for E1 and E2 and defines how each is
+  built, tested, and released.
+- **E1 — CLI (OPEN):** first scaffold the Rust workspace binary, its independent
+  CI lane, and its ADR 0009 attach-protocol client; then implement threads
+  list/open, chat/run with inline tool stream,
   permission gates answered in-terminal, receipts printout.
-- **E2 — VS Code extension:** thread view + composer, editor-context
+- **E2 — VS Code extension:** independently sequenced in its scoped TypeScript
+  package lane, implement thread view + composer, editor-context
   attach (send selection/file within workspace scope), permission gates
   in-editor. Marketplace publishing is a public act — owner-gated like
   all launch/publicity.
