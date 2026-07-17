@@ -542,6 +542,10 @@ outside this section's scope.
   The first unblocked slice is pure-core protocol types, strict codecs,
   negotiation, authorization state, cursor/idempotency semantics, and tests;
   native listeners and companion UIs remain unimplemented.
+- **E0.5 — repo/CI strategy:** [ADR 0011](../decisions/0011-companion-surface-repo-strategy.md)
+  decides where E1 and E2 code lives and how each is built, tested, and
+  released. It is the SOLE prerequisite before any E1 or E2 scaffolding ticket
+  and remains proposed until explicit owner ratification.
 - **E1 — CLI:** threads list/open, chat/run with inline tool stream,
   permission gates answered in-terminal, receipts printout.
 - **E2 — VS Code extension:** thread view + composer, editor-context

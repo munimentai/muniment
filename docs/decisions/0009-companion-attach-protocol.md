@@ -303,8 +303,10 @@ cursor replay path when the client reconnects.
 3. Wire desktop session/workspace policy, journal replay and revocation using a
    fake companion; test commit-before-ack, duplicates, gaps, restart at every
    effect boundary, unknown outcomes, slow consumers, and redaction goldens.
-4. Build the interactive E1 CLI, then the E2 editor surface. Distribution and
-   marketplace publication remain separately owner-gated.
+4. Build the interactive E1 CLI, then the E2 editor surface, once their
+   repository and CI lanes are decided by [ADR 0011](0011-companion-surface-repo-strategy.md)
+   (§13 E0.5). Distribution and marketplace publication remain separately
+   owner-gated.
 
 Cross-platform golden byte fixtures cover hello/welcome, every request/event,
 errors, unknown optional fields, incompatible versions, malformed/oversized
