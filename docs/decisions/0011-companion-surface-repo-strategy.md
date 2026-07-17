@@ -1,6 +1,6 @@
 # 0011 — Repository and CI lanes for the CLI and editor extension
 
-- Status: proposed — awaiting owner ratification
+- Status: accepted — owner ratified 2026-07-17
 - Date: 2026-07-16
 - Context: harness-spec §13 E0.5; ROADMAP standing gates; ADR 0009
 
@@ -56,8 +56,8 @@ sockets on Linux/macOS and named pipes on Windows), so their focused transport
 merge gates use the existing serialized three-platform `desktop-ci` farm. They
 never invoke desktop bundle steps.
 
-This decision is **proposed** until explicit owner ratification. It is the sole
-prerequisite before any E1 or E2 scaffolding ticket.
+This decision was **accepted** by owner ratification on 2026-07-17. E1 CLI
+scaffolding is open; E2 remains independently sequenced in its package lane.
 
 ### Per-surface comparison
 
@@ -213,10 +213,9 @@ farm. Unlike mobile (ADR 0007),
 separate repositories are rejected because the surfaces' tightest coupling is to
 a wire contract that is canonical here.
 
-This decision is **proposed** and takes effect only on explicit owner
-ratification. Until then no scaffold begins. Once ratified, this ADR (§13's
-**E0.5**) is the **sole prerequisite** before the E1 and E2 scaffolding tickets,
-which then execute in this repository:
+This decision was **accepted** by owner ratification on 2026-07-17. ADR 0011
+completes §13's **E0.5** prerequisite: the E1 CLI scaffolding wave is open, and
+E2 remains independently sequenced in its package lane in this repository:
 
 - introduce the Cargo workspace and the `muniment-cli` member;
 - extract the decided `muniment-attach` crate and make the CLI link only its
