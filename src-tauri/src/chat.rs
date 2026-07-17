@@ -202,14 +202,15 @@ struct RunStartLaunch {
 
 trait RunStartBoundaries {
     fn active_run_exists(&self) -> bool;
-    fn fresh_tokens(&self) -> Result<TokenSet, String>;
+    fn fresh_tokens(&self) -> Result<TokenSet, RunStartError>;
     fn configure_run(
         &self,
         run_id: &str,
         prompt: &str,
         tokens: &TokenSet,
-    ) -> Result<ChatGrant, String>;
-    fn install_active_run(&self, run: ActiveRun) -> Result<(), String>;
+        requested_workspace: Option<&str>,
+    ) -> Result<ChatGrant, RunStartError>;
+    fn install_active_run(&self, run: ActiveRun) -> Result<(), RunStartError>;
     fn prepare_run(
         &self,
         run_id: &str,
@@ -217,9 +218,39 @@ trait RunStartBoundaries {
         tokens: &TokenSet,
         files: Vec<SelectedFile>,
         provenance: Option<Provenance>,
-    ) -> Result<(u64, ChatProjector), String>;
+    ) -> Result<(u64, ChatProjector), RunStartError>;
+    fn project_attachments(
+        &self,
+        projector: &ChatProjector,
+    ) -> Result<Vec<ChatAttachment>, RunStartError>;
     fn clear_active_run(&self, run_id: &str);
     fn launch(&self, launch: RunStartLaunch);
+}
+
+#[derive(Debug)]
+enum RunStartError {
+    Unauthorized(String),
+    InvalidRequest(String),
+    Persistence(String),
+}
+
+impl RunStartError {
+    #[cfg(target_os = "linux")]
+    fn protocol_error(&self) -> ProtocolError {
+        match self {
+            Self::Unauthorized(_) => ProtocolError::unauthorized(),
+            Self::InvalidRequest(_) => ProtocolError::invalid_request(),
+            Self::Persistence(_) => ProtocolError::persistence_failed(),
+        }
+    }
+
+    fn into_message(self) -> String {
+        match self {
+            Self::Unauthorized(message)
+            | Self::InvalidRequest(message)
+            | Self::Persistence(message) => message,
+        }
+    }
 }
 
 /// Shared, channel-neutral acceptance path for starting a desktop-owned run.
@@ -227,25 +258,23 @@ trait RunStartBoundaries {
 fn start_desktop_run(
     boundaries: &impl RunStartBoundaries,
     request: RunStartRequest,
-) -> Result<SubmitResult, String> {
+) -> Result<SubmitResult, RunStartError> {
     let prompt = request.prompt.trim().to_owned();
     if prompt.is_empty() {
-        return Err("Enter a message before sending.".into());
+        return Err(RunStartError::InvalidRequest(
+            "Enter a message before sending.".into(),
+        ));
     }
     if boundaries.active_run_exists() {
-        return Err("A reply is already in progress.".into());
+        return Err(RunStartError::InvalidRequest(
+            "A reply is already in progress.".into(),
+        ));
     }
 
     let tokens = boundaries.fresh_tokens()?;
     let run_id = Uuid::now_v7().to_string();
-    let grant = boundaries.configure_run(&run_id, &prompt, &tokens)?;
-    if request
-        .workspace
-        .as_deref()
-        .is_some_and(|workspace| workspace != grant.workspace)
-    {
-        return Err("The capability is not authorized.".into());
-    }
+    let grant =
+        boundaries.configure_run(&run_id, &prompt, &tokens, request.workspace.as_deref())?;
     let cancelled = Arc::new(AtomicBool::new(false));
     let transport = Arc::new(Mutex::new(None));
     let adapter = Arc::new(Mutex::new(None));
@@ -266,11 +295,11 @@ fn start_desktop_run(
                 return Err(error);
             }
         };
-    let attachments = match prepared.1.projection() {
-        Ok(projection) => chat_attachments(&projection.attachments),
-        Err(_) => {
+    let attachments = match boundaries.project_attachments(&prepared.1) {
+        Ok(attachments) => attachments,
+        Err(error) => {
             boundaries.clear_active_run(&run_id);
-            return Err(attachment_error());
+            return Err(error);
         }
     };
     let result = SubmitResult {
@@ -311,8 +340,9 @@ impl<R: tauri::Runtime> RunStartBoundaries for TauriRunStartBoundaries<R> {
             .is_some()
     }
 
-    fn fresh_tokens(&self) -> Result<TokenSet, String> {
+    fn fresh_tokens(&self) -> Result<TokenSet, RunStartError> {
         auth::fresh_tokens(&self.app.state::<auth::AuthState>())
+            .map_err(RunStartError::Unauthorized)
     }
 
     fn configure_run(
@@ -320,15 +350,22 @@ impl<R: tauri::Runtime> RunStartBoundaries for TauriRunStartBoundaries<R> {
         run_id: &str,
         prompt: &str,
         tokens: &TokenSet,
-    ) -> Result<ChatGrant, String> {
-        let grant = fetch_grant(&tokens.access_token)?;
-        validate_grant(&grant)?;
-        protect_prompt(run_id, prompt, tokens.subject.as_deref())?;
+        requested_workspace: Option<&str>,
+    ) -> Result<ChatGrant, RunStartError> {
+        let grant = fetch_grant(&tokens.access_token).map_err(RunStartError::Persistence)?;
+        validate_grant(&grant).map_err(RunStartError::Persistence)?;
+        if requested_workspace.is_some_and(|workspace| workspace != grant.workspace) {
+            return Err(RunStartError::Unauthorized(
+                "The capability is not authorized.".into(),
+            ));
+        }
+        protect_prompt(run_id, prompt, tokens.subject.as_deref())
+            .map_err(RunStartError::Persistence)?;
         Ok(grant)
     }
 
-    fn install_active_run(&self, run: ActiveRun) -> Result<(), String> {
-        install_active_run(&self.state().active, run)
+    fn install_active_run(&self, run: ActiveRun) -> Result<(), RunStartError> {
+        install_active_run(&self.state().active, run).map_err(RunStartError::InvalidRequest)
     }
 
     fn prepare_run(
@@ -338,7 +375,7 @@ impl<R: tauri::Runtime> RunStartBoundaries for TauriRunStartBoundaries<R> {
         tokens: &TokenSet,
         files: Vec<SelectedFile>,
         provenance: Option<Provenance>,
-    ) -> Result<(u64, ChatProjector), String> {
+    ) -> Result<(u64, ChatProjector), RunStartError> {
         prepare_new_run(
             &self.state().storage,
             run_id,
@@ -347,6 +384,17 @@ impl<R: tauri::Runtime> RunStartBoundaries for TauriRunStartBoundaries<R> {
             files,
             provenance,
         )
+        .map_err(RunStartError::Persistence)
+    }
+
+    fn project_attachments(
+        &self,
+        projector: &ChatProjector,
+    ) -> Result<Vec<ChatAttachment>, RunStartError> {
+        projector
+            .projection()
+            .map(|projection| chat_attachments(&projection.attachments))
+            .map_err(|_| RunStartError::Persistence(attachment_error()))
     }
 
     fn clear_active_run(&self, run_id: &str) {
@@ -475,13 +523,7 @@ impl<B: RunStartBoundaries> ThreadListService for DesktopAttachService<B> {
                         provenance: Some(provenance),
                     },
                 )
-                .map_err(|error| match error.as_str() {
-                    "The capability is not authorized." => ProtocolError::unauthorized(),
-                    "A reply is already in progress." | "Enter a message before sending." => {
-                        ProtocolError::invalid_request()
-                    }
-                    _ => ProtocolError::persistence_failed(),
-                })?;
+                .map_err(|error| error.protocol_error())?;
                 Ok(CommittedResult {
                     body: json!({
                         "run_id": result.run_id,
@@ -728,6 +770,7 @@ pub async fn chat_submit(
                 provenance: None,
             },
         )
+        .map_err(RunStartError::into_message)
     })
     .await
     .map_err(|_| "Chat configuration is temporarily unavailable.".to_string())?
@@ -1919,11 +1962,15 @@ mod tests {
     struct FakeRunStartBoundaries {
         active: bool,
         auth_calls: AtomicUsize,
-        configure_calls: AtomicUsize,
+        prompt_protection_calls: AtomicUsize,
         prepare_calls: AtomicUsize,
         launch_calls: AtomicUsize,
         launched_run: Mutex<Option<String>>,
+        auth_error: Option<String>,
+        configure_error: Option<String>,
+        install_error: Option<String>,
         prepare_error: Option<String>,
+        projection_error: Option<String>,
         prepared_provenance: Mutex<Option<Provenance>>,
         clear_calls: AtomicUsize,
     }
@@ -1933,11 +1980,15 @@ mod tests {
             Self {
                 active: false,
                 auth_calls: AtomicUsize::new(0),
-                configure_calls: AtomicUsize::new(0),
+                prompt_protection_calls: AtomicUsize::new(0),
                 prepare_calls: AtomicUsize::new(0),
                 launch_calls: AtomicUsize::new(0),
                 launched_run: Mutex::new(None),
+                auth_error: None,
+                configure_error: None,
+                install_error: None,
                 prepare_error: None,
+                projection_error: None,
                 prepared_provenance: Mutex::new(None),
                 clear_calls: AtomicUsize::new(0),
             }
@@ -1949,8 +2000,11 @@ mod tests {
             self.active
         }
 
-        fn fresh_tokens(&self) -> Result<TokenSet, String> {
+        fn fresh_tokens(&self) -> Result<TokenSet, RunStartError> {
             self.auth_calls.fetch_add(1, Ordering::SeqCst);
+            if let Some(error) = &self.auth_error {
+                return Err(RunStartError::Unauthorized(error.clone()));
+            }
             Ok(TokenSet {
                 access_token: "access-token".into(),
                 refresh_token: None,
@@ -1964,8 +2018,17 @@ mod tests {
             _run_id: &str,
             _prompt: &str,
             _tokens: &TokenSet,
-        ) -> Result<ChatGrant, String> {
-            self.configure_calls.fetch_add(1, Ordering::SeqCst);
+            requested_workspace: Option<&str>,
+        ) -> Result<ChatGrant, RunStartError> {
+            if requested_workspace.is_some_and(|workspace| workspace != "workspace-a") {
+                return Err(RunStartError::Unauthorized(
+                    "sensitive workspace detail".into(),
+                ));
+            }
+            self.prompt_protection_calls.fetch_add(1, Ordering::SeqCst);
+            if let Some(error) = &self.configure_error {
+                return Err(RunStartError::Persistence(error.clone()));
+            }
             Ok(ChatGrant {
                 workspace: "workspace-a".into(),
                 gateway_url: "https://gateway.invalid".into(),
@@ -1975,7 +2038,10 @@ mod tests {
             })
         }
 
-        fn install_active_run(&self, _run: ActiveRun) -> Result<(), String> {
+        fn install_active_run(&self, _run: ActiveRun) -> Result<(), RunStartError> {
+            if let Some(error) = &self.install_error {
+                return Err(RunStartError::InvalidRequest(error.clone()));
+            }
             Ok(())
         }
 
@@ -1986,11 +2052,11 @@ mod tests {
             tokens: &TokenSet,
             _files: Vec<SelectedFile>,
             provenance: Option<Provenance>,
-        ) -> Result<(u64, ChatProjector), String> {
+        ) -> Result<(u64, ChatProjector), RunStartError> {
             self.prepare_calls.fetch_add(1, Ordering::SeqCst);
             *self.prepared_provenance.lock().unwrap() = provenance;
             if let Some(error) = &self.prepare_error {
-                return Err(error.clone());
+                return Err(RunStartError::Persistence(error.clone()));
             }
             let mut projector = ChatProjector::new();
             projector
@@ -2003,6 +2069,19 @@ mod tests {
                 ))
                 .unwrap();
             Ok((1, projector))
+        }
+
+        fn project_attachments(
+            &self,
+            projector: &ChatProjector,
+        ) -> Result<Vec<ChatAttachment>, RunStartError> {
+            if let Some(error) = &self.projection_error {
+                return Err(RunStartError::Persistence(error.clone()));
+            }
+            projector
+                .projection()
+                .map(|projection| chat_attachments(&projection.attachments))
+                .map_err(|_| RunStartError::Persistence(attachment_error()))
         }
 
         fn clear_active_run(&self, _run_id: &str) {
@@ -2057,7 +2136,7 @@ mod tests {
         .err()
         .unwrap();
 
-        assert_eq!(error, "A reply is already in progress.");
+        assert_eq!(error.into_message(), "A reply is already in progress.");
         assert_eq!(boundaries.auth_calls.load(Ordering::SeqCst), 0);
         assert!(boundaries.launched_run.lock().unwrap().is_none());
     }
@@ -2173,7 +2252,13 @@ mod tests {
         .unwrap();
 
         assert_eq!(replay, first);
-        assert_eq!(service.boundaries.configure_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            service
+                .boundaries
+                .prompt_protection_calls
+                .load(Ordering::SeqCst),
+            1
+        );
         assert_eq!(service.boundaries.prepare_calls.load(Ordering::SeqCst), 1);
         assert_eq!(service.boundaries.launch_calls.load(Ordering::SeqCst), 1);
     }
@@ -2205,7 +2290,13 @@ mod tests {
             serde_json::to_value(conflict).unwrap()["code"],
             "idempotency_conflict"
         );
-        assert_eq!(service.boundaries.configure_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            service
+                .boundaries
+                .prompt_protection_calls
+                .load(Ordering::SeqCst),
+            1
+        );
         assert_eq!(service.boundaries.prepare_calls.load(Ordering::SeqCst), 1);
         assert_eq!(service.boundaries.launch_calls.load(Ordering::SeqCst), 1);
     }
@@ -2262,6 +2353,13 @@ mod tests {
             serde_json::to_value(result.unwrap_err()).unwrap()["code"],
             "unauthorized"
         );
+        assert_eq!(
+            service
+                .boundaries
+                .prompt_protection_calls
+                .load(Ordering::SeqCst),
+            0
+        );
         assert!(service.boundaries.launched_run.lock().unwrap().is_none());
         assert!(service
             .boundaries
@@ -2289,6 +2387,59 @@ mod tests {
         assert!(!encoded.contains("sidecar"));
         assert_eq!(service.boundaries.clear_calls.load(Ordering::SeqCst), 1);
         assert!(service.boundaries.launched_run.lock().unwrap().is_none());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn attach_adapter_classifies_and_redacts_every_coordinator_failure_stage() {
+        const DETAIL: &str =
+            "prompt private-prompt token secret-token path /private/work sidecar socket";
+        let cases = [
+            (
+                "unauthorized",
+                FakeRunStartBoundaries {
+                    auth_error: Some(DETAIL.into()),
+                    ..FakeRunStartBoundaries::accepting()
+                },
+            ),
+            (
+                "persistence_failed",
+                FakeRunStartBoundaries {
+                    configure_error: Some(DETAIL.into()),
+                    ..FakeRunStartBoundaries::accepting()
+                },
+            ),
+            (
+                "invalid_request",
+                FakeRunStartBoundaries {
+                    install_error: Some(DETAIL.into()),
+                    ..FakeRunStartBoundaries::accepting()
+                },
+            ),
+            (
+                "persistence_failed",
+                FakeRunStartBoundaries {
+                    prepare_error: Some(DETAIL.into()),
+                    ..FakeRunStartBoundaries::accepting()
+                },
+            ),
+            (
+                "persistence_failed",
+                FakeRunStartBoundaries {
+                    projection_error: Some(DETAIL.into()),
+                    ..FakeRunStartBoundaries::accepting()
+                },
+            ),
+        ];
+
+        for (expected_code, boundaries) in cases {
+            let (result, _) = attach_start(boundaries, None);
+            let encoded = serde_json::to_string(&result.unwrap_err()).unwrap();
+            assert!(encoded.contains(expected_code), "{encoded}");
+            for secret in ["private-prompt", "secret-token", "/private/work", "sidecar"] {
+                assert!(!encoded.contains(secret), "leaked {secret}: {encoded}");
+            }
+        }
     }
 
     fn lock_unpoisoned<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
