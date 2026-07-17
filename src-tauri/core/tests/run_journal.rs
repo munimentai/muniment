@@ -140,6 +140,35 @@ fn event_pages_are_bounded_ordered_and_cursor_is_run_bound() {
 }
 
 #[test]
+fn workspace_event_pages_hide_runs_owned_by_another_workspace() {
+    let mut journal = RunJournal::open(":memory:").unwrap();
+    journal.append(0, &event(1)).unwrap();
+    journal.bind_run_workspace(RUN, "workspace-a").unwrap();
+
+    assert!(matches!(
+        journal.workspace_event_page("workspace-b", RUN, 1, None),
+        Err(muniment_core::journal::RunEventPageError::NotFoundOrInaccessible)
+    ));
+    assert!(matches!(
+        journal.workspace_event_page(
+            "workspace-b",
+            "0190a100-0000-7000-8000-000000000099",
+            1,
+            None
+        ),
+        Err(muniment_core::journal::RunEventPageError::NotFoundOrInaccessible)
+    ));
+    assert_eq!(
+        journal
+            .workspace_event_page("workspace-a", RUN, 1, None)
+            .unwrap()
+            .events
+            .len(),
+        1
+    );
+}
+
+#[test]
 fn durable_run_index_reopens_in_first_recorded_order() {
     let db = TestDb::new();
     let mut journal = RunJournal::open(db.as_ref()).unwrap();

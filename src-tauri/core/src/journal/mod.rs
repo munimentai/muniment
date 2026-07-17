@@ -225,6 +225,12 @@ impl RunJournal {
                 "unsupported schema version {version}"
             )));
         }
+        connection.execute_batch(
+            "CREATE TABLE IF NOT EXISTS run_workspaces( \
+             run_id TEXT PRIMARY KEY NOT NULL, workspace TEXT NOT NULL); \
+             CREATE INDEX IF NOT EXISTS run_workspaces_workspace_run \
+             ON run_workspaces(workspace, run_id);",
+        )?;
         validate_database(&connection)?;
         let cursor_key = load_or_create_cursor_key(&connection)?;
         let generation = coordination.as_ref().map_or(0, |state| {
@@ -330,6 +336,83 @@ impl RunJournal {
         }
         tx.commit()?;
         Ok(())
+    }
+
+    /// Records the authorization boundary that owns a run. A run can never be
+    /// rebound to another workspace.
+    pub fn bind_run_workspace(
+        &mut self,
+        run_id: &str,
+        workspace: &str,
+    ) -> Result<(), JournalError> {
+        if workspace.is_empty() {
+            return Err(JournalError::InvalidEnvelope(
+                "workspace must be non-empty".into(),
+            ));
+        }
+        let connection = self
+            .connection
+            .as_ref()
+            .expect("journal connection is always present outside compaction");
+        connection.execute(
+            "INSERT INTO run_workspaces(run_id, workspace) VALUES(?1, ?2) \
+             ON CONFLICT(run_id) DO UPDATE SET workspace=excluded.workspace \
+             WHERE run_workspaces.workspace=excluded.workspace",
+            params![run_id, workspace],
+        )?;
+        let bound: Option<String> = connection
+            .query_row(
+                "SELECT workspace FROM run_workspaces WHERE run_id=?1",
+                [run_id],
+                |row| row.get(0),
+            )
+            .optional()?;
+        if bound.as_deref() != Some(workspace) {
+            return Err(JournalError::Conflict(Conflict::EventId {
+                event_id: run_id.to_owned(),
+            }));
+        }
+        Ok(())
+    }
+
+    pub fn workspace_event_page(
+        &mut self,
+        workspace: &str,
+        run_id: &str,
+        limit: usize,
+        cursor: Option<&str>,
+    ) -> Result<RunEventPage, RunEventPageError> {
+        let owned: bool = self
+            .connection
+            .as_ref()
+            .expect("journal connection is always present outside compaction")
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM run_workspaces WHERE run_id=?1 AND workspace=?2)",
+                params![run_id, workspace],
+                |row| row.get(0),
+            )
+            .map_err(JournalError::from)
+            .map_err(RunEventPageError::Journal)?;
+        if !owned {
+            return Err(RunEventPageError::NotFoundOrInaccessible);
+        }
+        self.event_page(run_id, limit, cursor)
+    }
+
+    pub fn run_belongs_to_workspace(
+        &self,
+        run_id: &str,
+        workspace: &str,
+    ) -> Result<bool, JournalError> {
+        self.connection
+            .as_ref()
+            .expect("journal connection is always present outside compaction")
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM run_workspaces WHERE run_id=?1 AND workspace=?2)",
+                params![run_id, workspace],
+                |row| row.get(0),
+            )
+            .map_err(Into::into)
     }
 
     pub fn events(&mut self, run_id: &str) -> Result<Vec<EventEnvelope>, JournalError> {

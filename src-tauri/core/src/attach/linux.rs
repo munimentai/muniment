@@ -18,7 +18,11 @@ use super::{
     Failure, FirstMessage, NegotiationError, Operation, Protocol, ProtocolError, Request, Response,
     Success, VersionRange, CHALLENGE_LIFETIME, MAX_FRAME_LENGTH, MAX_TEXT_LENGTH,
 };
-use crate::journal::{summaries::RunSummaryListError, EventPayload, RunEventPageError, RunJournal};
+use crate::journal::{
+    reducer::{project_chat, project_chat_fragment, PermissionRequest, ToolActivityStatus},
+    summaries::RunSummaryListError,
+    EventPayload, RunEventPageError, RunJournal,
+};
 
 const ATTACH_DIRECTORY: &[u8] = b"muniment\0";
 const ENDPOINT_NAME: &str = "attach-v1.sock";
@@ -26,6 +30,10 @@ const PRIVATE_MODE: libc::mode_t = 0o700;
 const SOCKET_MODE: libc::mode_t = 0o600;
 const HELLO_TIMEOUT: Duration = Duration::from_secs(5);
 const DESKTOP_PROTOCOL: VersionRange = VersionRange { min: 1, max: 1 };
+const MAX_THREAD_ID_LENGTH: usize = 36;
+const MAX_CURSOR_LENGTH: usize = 1024;
+const MAX_ENTRY_TEXT_LENGTH: usize = 8 * 1024;
+const MAX_RESPONSE_BODY_LENGTH: usize = MAX_FRAME_LENGTH - 4096;
 
 /// A verified, pinned filesystem boundary for the Linux attach endpoint.
 #[derive(Debug)]
@@ -422,7 +430,7 @@ where
 impl ThreadListService for RunJournal {
     fn list_threads(
         &mut self,
-        _workspace: &str,
+        workspace: &str,
         request: ThreadListRequest,
     ) -> Result<ThreadListPage, ProtocolError> {
         let page =
@@ -432,9 +440,19 @@ impl ThreadListService for RunJournal {
                     | RunSummaryListError::InvalidCursor => ProtocolError::invalid_request(),
                     RunSummaryListError::Journal(_) => ProtocolError::persistence_failed(),
                 })?;
+        let summaries = page
+            .summaries
+            .into_iter()
+            .filter_map(
+                |summary| match self.run_belongs_to_workspace(&summary.run_id, workspace) {
+                    Ok(true) => Some(Ok(summary)),
+                    Ok(false) => None,
+                    Err(_) => Some(Err(ProtocolError::persistence_failed())),
+                },
+            )
+            .collect::<Result<Vec<_>, _>>()?;
         Ok(ThreadListPage {
-            threads: page
-                .summaries
+            threads: summaries
                 .into_iter()
                 .map(|summary| RedactedThreadSummary {
                     thread_id: summary.run_id,
@@ -448,11 +466,12 @@ impl ThreadListService for RunJournal {
 
     fn open_thread(
         &mut self,
-        _workspace: &str,
+        workspace: &str,
         request: ThreadOpenRequest,
     ) -> Result<ThreadOpenPage, ProtocolError> {
         let page = self
-            .event_page(
+            .workspace_event_page(
+                workspace,
                 &request.thread_id,
                 usize::from(request.limit),
                 request.cursor.as_deref(),
@@ -463,44 +482,85 @@ impl ThreadListService for RunJournal {
                 RunEventPageError::NotFoundOrInaccessible => ProtocolError::invalid_request(),
                 RunEventPageError::Journal(_) => ProtocolError::persistence_failed(),
             })?;
-        let entries = page
-            .events
-            .into_iter()
-            .map(|event| {
-                let (kind, text) = match (&*event.event_type, &event.payload) {
-                    ("user.prompt.submitted", EventPayload::Inline { payload_json }) => (
-                        "user_message",
-                        payload_json.get("prompt").and_then(|value| value.as_str()),
-                    ),
-                    ("model.stream.delta", EventPayload::Inline { payload_json }) => (
-                        "assistant_delta",
-                        payload_json.get("text").and_then(|value| value.as_str()),
-                    ),
-                    ("model.prompt.accepted", _) => ("prompt_accepted", None),
-                    ("run.completed", _) => ("completed", None),
-                    ("run.cancelled", _) => ("cancelled", None),
-                    ("run.failed", _) => ("failed", None),
-                    ("permission.requested", _) => ("permission_pending", None),
-                    ("tool.effect.started", EventPayload::Inline { payload_json }) => (
-                        "tool_started",
-                        payload_json
-                            .get("display_name")
-                            .and_then(|value| value.as_str()),
-                    ),
-                    ("tool.effect.completed", _) => ("tool_completed", None),
-                    ("tool.effect.failed", _) => ("tool_failed", None),
-                    ("chat.attachment.ingested", EventPayload::Attachment { attachment }) => {
-                        ("attachment", Some(attachment.display_name()))
-                    }
-                    _ => ("state_changed", None),
-                };
-                RedactedThreadEntry {
-                    run_seq: event.run_seq,
-                    kind: kind.to_owned(),
-                    text: text.map(truncate_text),
+        // Projection is intentionally reducer-backed: storage-only and unknown
+        // envelopes do not become companion entries, and stream deltas collapse
+        // into one user-visible assistant message.
+        let mut projection_events = page.events.clone();
+        if projection_events
+            .first()
+            .is_some_and(|event| event.run_seq > 1)
+        {
+            let mut boundary = projection_events[0].clone();
+            boundary.run_seq = 1;
+            boundary.event_type = "run.started".into();
+            boundary.payload = EventPayload::Inline {
+                payload_json: serde_json::json!({}),
+            };
+            projection_events.insert(0, boundary);
+        }
+        for (index, event) in projection_events.iter_mut().enumerate() {
+            event.run_seq = index as u64 + 1;
+        }
+        let projection = project_chat(&projection_events)
+            .or_else(|_| project_chat_fragment(&page.events))
+            .map_err(|_| ProtocolError::persistence_failed())?;
+        let mut entries = Vec::new();
+        for event in &page.events {
+            if let ("user.prompt.submitted", EventPayload::Inline { payload_json }) =
+                (&*event.event_type, &event.payload)
+            {
+                if let Some(prompt) = payload_json.get("prompt").and_then(|value| value.as_str()) {
+                    entries.push(RedactedThreadEntry {
+                        run_seq: event.run_seq,
+                        kind: "user_message".into(),
+                        text: Some(truncate_text(prompt)),
+                    });
                 }
-            })
-            .collect();
+            }
+        }
+        let last_seq = page.events.last().map_or(1, |event| event.run_seq);
+        if !projection.text.is_empty() {
+            entries.push(RedactedThreadEntry {
+                run_seq: last_seq,
+                kind: "assistant_message".into(),
+                text: Some(truncate_text(&projection.text)),
+            });
+        }
+        entries.extend(
+            projection
+                .attachments
+                .into_iter()
+                .map(|attachment| RedactedThreadEntry {
+                    run_seq: last_seq,
+                    kind: "attachment".into(),
+                    text: Some(truncate_text(&attachment.display_name)),
+                }),
+        );
+        entries.extend(projection.tool_activity.into_iter().map(|activity| {
+            RedactedThreadEntry {
+                run_seq: last_seq,
+                kind: match activity.status {
+                    ToolActivityStatus::Running => "tool_running",
+                    ToolActivityStatus::Completed => "tool_completed",
+                    ToolActivityStatus::Failed => "tool_failed",
+                }
+                .into(),
+                text: activity.display_name.as_deref().map(truncate_text),
+            }
+        }));
+        if let Some(gate) = projection.pending_permission {
+            let title = match gate.request {
+                PermissionRequest::Select { title, .. }
+                | PermissionRequest::Confirm { title, .. }
+                | PermissionRequest::Input { title, .. }
+                | PermissionRequest::Editor { title, .. } => title,
+            };
+            entries.push(RedactedThreadEntry {
+                run_seq: last_seq,
+                kind: "permission_pending".into(),
+                text: Some(truncate_text(&title)),
+            });
+        }
         Ok(ThreadOpenPage {
             thread_id: request.thread_id,
             entries,
@@ -513,10 +573,10 @@ fn truncate_text(value: &str) -> String {
     let end = value
         .char_indices()
         .map(|(index, _)| index)
-        .take_while(|index| *index <= MAX_TEXT_LENGTH)
+        .take_while(|index| *index <= MAX_ENTRY_TEXT_LENGTH)
         .last()
         .unwrap_or(0);
-    if value.len() <= MAX_TEXT_LENGTH {
+    if value.len() <= MAX_ENTRY_TEXT_LENGTH {
         value.to_owned()
     } else {
         value[..end].to_owned()
@@ -909,13 +969,13 @@ fn dispatch_request<S: ThreadListService>(
         let body: Body =
             serde_json::from_value(request.body).map_err(|_| ProtocolError::invalid_request())?;
         if body.thread_id.is_empty()
-            || body.thread_id.len() > MAX_TEXT_LENGTH
+            || body.thread_id.len() > MAX_THREAD_ID_LENGTH
             || body.limit == 0
             || body.limit > 100
             || body
                 .cursor
                 .as_ref()
-                .is_some_and(|cursor| cursor.is_empty() || cursor.len() > MAX_TEXT_LENGTH)
+                .is_some_and(|cursor| cursor.is_empty() || cursor.len() > MAX_CURSOR_LENGTH)
         {
             return Err(ProtocolError::invalid_request());
         }
@@ -949,7 +1009,15 @@ fn dispatch_request<S: ThreadListService>(
         {
             return Err(ProtocolError::persistence_failed());
         }
-        return serde_json::to_value(page).map_err(|_| ProtocolError::persistence_failed());
+        let value = serde_json::to_value(page).map_err(|_| ProtocolError::persistence_failed())?;
+        if serde_json::to_vec(&value)
+            .map_err(|_| ProtocolError::persistence_failed())?
+            .len()
+            > MAX_RESPONSE_BODY_LENGTH
+        {
+            return Err(ProtocolError::persistence_failed());
+        }
+        return Ok(value);
     }
     if request.operation != Operation::ThreadList {
         return Err(ProtocolError::unsupported_operation());

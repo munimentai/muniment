@@ -512,6 +512,18 @@ fn request(id: u128, operation: Operation, body: serde_json::Value) -> Vec<u8> {
     .unwrap()
 }
 
+fn request_with_idempotency(id: u128, operation: Operation, body: serde_json::Value) -> Vec<u8> {
+    encode_frame(&Request {
+        protocol: Protocol,
+        request_id: Id::new(format!("{id:032x}")).unwrap(),
+        operation,
+        capability: "02".repeat(32),
+        idempotency_key: Some(Id::new(format!("{:032x}", id + 1000)).unwrap()),
+        body,
+    })
+    .unwrap()
+}
+
 fn prompt(run_id: &str, title: &str, recorded_at: &str) -> EventEnvelope {
     EventEnvelope {
         event_id: run_id.replacen("a100", "a200", 1),
@@ -644,6 +656,7 @@ fn authorized_thread_list_pages_real_journal_summaries_without_payloads() {
         journal
             .append(0, &prompt(run_id, title, recorded_at))
             .unwrap();
+        journal.bind_run_workspace(run_id, "workspace-1").unwrap();
     }
 
     let (mut client, server) = UnixStream::pair().unwrap();
@@ -722,6 +735,7 @@ fn authorized_thread_open_pages_a_redacted_journal_projection() {
         payload_json: json!({"text": "answer", "secret": "/home/user/private"}),
     };
     journal.append_batch(0, &[first, second]).unwrap();
+    journal.bind_run_workspace(RUN, "workspace-1").unwrap();
 
     let (mut client, server) = UnixStream::pair().unwrap();
     let client_thread = thread::spawn(move || {
@@ -775,7 +789,7 @@ fn authorized_thread_open_pages_a_redacted_journal_projection() {
     );
     assert_eq!(
         second.body["entries"],
-        json!([{"run_seq": 2, "kind": "assistant_delta", "text": "answer"}])
+        json!([{"run_seq": 2, "kind": "assistant_message", "text": "answer"}])
     );
     assert!(!format!("{first:?}{second:?}").contains("/home"));
 }
@@ -783,9 +797,17 @@ fn authorized_thread_open_pages_a_redacted_journal_projection() {
 #[test]
 fn thread_open_rejects_bad_cursor_missing_thread_and_oversized_body_values() {
     const RUN: &str = "0190a100-0000-7000-8000-000000000001";
+    const OTHER_RUN: &str = "0190a100-0000-7000-8000-000000000002";
     let mut journal = RunJournal::open(":memory:").unwrap();
     journal
         .append(0, &prompt(RUN, "hello", "2026-07-16T03:00:00Z"))
+        .unwrap();
+    journal.bind_run_workspace(RUN, "workspace-1").unwrap();
+    journal
+        .append(0, &prompt(OTHER_RUN, "hidden", "2026-07-16T03:01:00Z"))
+        .unwrap();
+    journal
+        .bind_run_workspace(OTHER_RUN, "workspace-2")
         .unwrap();
     let (mut client, server) = UnixStream::pair().unwrap();
     client.write_all(&hello(1, 1)).unwrap();
@@ -810,6 +832,37 @@ fn thread_open_rejects_bad_cursor_missing_thread_and_oversized_body_values() {
             json!({"thread_id": RUN, "limit": 101}),
         ))
         .unwrap();
+    for (id, body) in [
+        (53, json!({"thread_id": "", "limit": 1})),
+        (54, json!({"thread_id": "x".repeat(37), "limit": 1})),
+        (55, json!({"thread_id": RUN, "limit": 1, "cursor": ""})),
+        (
+            56,
+            json!({"thread_id": RUN, "limit": 1, "cursor": "x".repeat(1025)}),
+        ),
+        (
+            57,
+            json!({"thread_id": RUN, "limit": 1, "workspace": "other"}),
+        ),
+    ] {
+        client
+            .write_all(&request(id, Operation::ThreadOpen, body))
+            .unwrap();
+    }
+    client
+        .write_all(&request_with_idempotency(
+            58,
+            Operation::ThreadOpen,
+            json!({"thread_id": RUN, "limit": 1}),
+        ))
+        .unwrap();
+    client
+        .write_all(&request(
+            59,
+            Operation::ThreadOpen,
+            json!({"thread_id": OTHER_RUN, "limit": 1}),
+        ))
+        .unwrap();
     client.shutdown(Shutdown::Write).unwrap();
     assert_eq!(
         dispatch_session(
@@ -826,6 +879,29 @@ fn thread_open_rejects_bad_cursor_missing_thread_and_oversized_body_values() {
     assert_eq!(cursor.error.code(), ErrorCode::InvalidCursor);
     assert_eq!(missing.error.code(), ErrorCode::InvalidRequest);
     assert_eq!(oversized.error.code(), ErrorCode::InvalidRequest);
+    for id in 53..=58 {
+        let hostile: ErrorEnvelope = read_frame(&mut client);
+        assert_eq!(
+            hostile.request_id,
+            Some(Id::new(format!("{id:032x}")).unwrap())
+        );
+        assert!(matches!(
+            hostile.error.code(),
+            ErrorCode::InvalidRequest | ErrorCode::IdempotencyKeyForbidden
+        ));
+        assert_eq!(
+            serde_json::to_value(hostile.error).unwrap().get("details"),
+            None
+        );
+    }
+    let other_workspace: ErrorEnvelope = read_frame(&mut client);
+    assert_eq!(other_workspace.error.code(), missing.error.code());
+    assert_eq!(
+        serde_json::to_value(other_workspace.error)
+            .unwrap()
+            .get("details"),
+        None
+    );
     assert_eq!(
         serde_json::to_value(cursor.error).unwrap().get("details"),
         None
