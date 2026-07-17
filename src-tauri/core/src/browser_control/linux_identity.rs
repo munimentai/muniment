@@ -5,6 +5,7 @@ use std::fs;
 use std::mem;
 use std::net::{IpAddr, SocketAddr};
 use std::os::unix::ffi::OsStrExt;
+use std::os::unix::fs::MetadataExt;
 use std::os::unix::io::RawFd;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -106,40 +107,71 @@ impl LinuxProcReader for ProcReader {
     }
 
     fn socket_owners(&self, inode: u32) -> Result<Vec<BrowserProcessIdentity>, ProcReadError> {
-        let wanted = format!("socket:[{inode}]").into_bytes();
-        let mut owners = Vec::new();
-        for entry in fs::read_dir("/proc").map_err(|_| ProcReadError)? {
-            let entry = entry.map_err(|_| ProcReadError)?;
-            let Some(pid) = entry
-                .file_name()
-                .to_str()
-                .and_then(|s| s.parse::<u32>().ok())
-            else {
+        socket_owners_in(Path::new("/proc"), unsafe { libc::geteuid() }, inode)
+    }
+}
+
+fn socket_owners_in(
+    proc_root: &Path,
+    desktop_uid: u32,
+    inode: u32,
+) -> Result<Vec<BrowserProcessIdentity>, ProcReadError> {
+    let wanted = format!("socket:[{inode}]").into_bytes();
+    let mut owners = Vec::new();
+    for entry in fs::read_dir(proc_root).map_err(|_| ProcReadError)? {
+        let Ok(entry) = entry else { continue };
+        let Some(pid) = entry
+            .file_name()
+            .to_str()
+            .and_then(|s| s.parse::<u32>().ok())
+        else {
+            continue;
+        };
+        if !matches!(entry.metadata(), Ok(metadata) if metadata.uid() == desktop_uid) {
+            continue;
+        }
+        let Ok(stat) = fs::read(entry.path().join("stat")) else {
+            continue;
+        };
+        let Some(before) = parse_start_identity(&stat) else {
+            continue;
+        };
+        let Ok(fds) = fs::read_dir(entry.path().join("fd")) else {
+            continue;
+        };
+        let mut owns = false;
+        for fd in fds {
+            let Ok(fd) = fd else { continue };
+            let Ok(target) = fs::read_link(fd.path()) else {
                 continue;
             };
-            let before = self.start_identity(pid).map_err(|_| ProcReadError)?;
-            let fds = fs::read_dir(entry.path().join("fd")).map_err(|_| ProcReadError)?;
-            let mut owns = false;
-            for fd in fds {
-                let target = fs::read_link(fd.map_err(|_| ProcReadError)?.path())
-                    .map_err(|_| ProcReadError)?;
-                if target.as_os_str().as_bytes() == wanted {
-                    owns = true;
-                }
-            }
-            let after = self.start_identity(pid).map_err(|_| ProcReadError)?;
-            if before != after {
-                return Err(ProcReadError);
-            }
-            if owns {
-                owners.push(BrowserProcessIdentity {
-                    pid,
-                    start_identity: before,
-                });
+            if target.as_os_str().as_bytes() == wanted.as_slice() {
+                owns = true;
             }
         }
-        Ok(owners)
+        let after = fs::read(entry.path().join("stat"))
+            .ok()
+            .and_then(|stat| parse_start_identity(&stat));
+        let Some(after) = after else {
+            if owns {
+                return Err(ProcReadError);
+            }
+            continue;
+        };
+        if before != after {
+            if owns {
+                return Err(ProcReadError);
+            }
+            continue;
+        }
+        if owns {
+            owners.push(BrowserProcessIdentity {
+                pid,
+                start_identity: before,
+            });
+        }
     }
+    Ok(owners)
 }
 
 /// Injected Linux socket-diagnostic boundary.
@@ -519,7 +551,56 @@ fn parse_start_identity(stat: &[u8]) -> Option<u64> {
 
 #[cfg(test)]
 mod tests {
-    use super::parse_start_identity;
+    use super::{parse_start_identity, socket_owners_in, BrowserProcessIdentity};
+    use std::fs;
+    use std::os::unix::fs::{symlink, MetadataExt};
+    use std::path::{Path, PathBuf};
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static NEXT_DIRECTORY: AtomicU64 = AtomicU64::new(0);
+
+    struct TestProc(PathBuf);
+
+    impl TestProc {
+        fn new() -> Self {
+            let path = std::env::temp_dir().join(format!(
+                "muniment-proc-scan-{}-{}",
+                std::process::id(),
+                NEXT_DIRECTORY.fetch_add(1, Ordering::Relaxed)
+            ));
+            fs::create_dir(&path).unwrap();
+            Self(path)
+        }
+
+        fn process(&self, pid: u32, start: Option<u64>) -> PathBuf {
+            let process = self.0.join(pid.to_string());
+            fs::create_dir(&process).unwrap();
+            if let Some(start) = start {
+                let start = start.to_string();
+                let fields = std::iter::repeat_n("0", 19)
+                    .chain(std::iter::once(start.as_str()))
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                fs::write(process.join("stat"), format!("{pid} (test) {fields}")).unwrap();
+            }
+            fs::create_dir(process.join("fd")).unwrap();
+            process
+        }
+    }
+
+    impl Drop for TestProc {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn add_socket(process: &Path, fd: u32, inode: u32) {
+        symlink(
+            format!("socket:[{inode}]"),
+            process.join("fd").join(fd.to_string()),
+        )
+        .unwrap();
+    }
 
     #[test]
     fn parses_starttime_after_a_difficult_comm_field() {
@@ -531,5 +612,34 @@ mod tests {
             ),
             Some(98765)
         );
+    }
+
+    #[test]
+    fn proc_scan_ignores_unrelated_failures_and_finds_stable_owner() {
+        let procfs = TestProc::new();
+        let uid = fs::metadata(&procfs.0).unwrap().uid();
+        let inaccessible = procfs.process(10, Some(1));
+        fs::write(inaccessible.join("fd/3"), b"not a readable link").unwrap();
+        procfs.process(11, None); // The process disappeared before its stat was read.
+        let owner = procfs.process(12, Some(77));
+        add_socket(&owner, 4, 900);
+
+        assert_eq!(
+            socket_owners_in(&procfs.0, uid, 900),
+            Ok(vec![BrowserProcessIdentity {
+                pid: 12,
+                start_identity: 77,
+            }])
+        );
+    }
+
+    #[test]
+    fn unreadable_candidate_cannot_produce_an_owner() {
+        let procfs = TestProc::new();
+        let uid = fs::metadata(&procfs.0).unwrap().uid();
+        let candidate = procfs.process(12, Some(77));
+        fs::write(candidate.join("fd/4"), b"not a readable link").unwrap();
+
+        assert_eq!(socket_owners_in(&procfs.0, uid, 900), Ok(Vec::new()));
     }
 }
