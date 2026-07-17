@@ -3,7 +3,7 @@
 use muniment_core::attach::linux::{
     run_authenticated_session_with, run_authenticated_session_with_authorization, ApprovalDecision,
     AttachSessionError, AuthorizationSessionDependencies, PeerCredentials, RedactedThreadSummary,
-    ThreadListPage, ThreadListRequest, ThreadListService,
+    ThreadListPage, ThreadListRequest, ThreadListService, ThreadOpenRequest,
 };
 use muniment_core::attach::{
     decode_frame, encode_frame, Approval, AuthorizationClock, AuthorizationTokenGenerator,
@@ -647,6 +647,7 @@ fn authorized_thread_list_pages_real_journal_summaries_without_payloads() {
     const RUN_A: &str = "0190a100-0000-7000-8000-000000000001";
     const RUN_B: &str = "0190a100-0000-7000-8000-000000000002";
     const RUN_C: &str = "0190a100-0000-7000-8000-000000000003";
+    const HIDDEN_RUN: &str = "0190a100-0000-7000-8000-000000000004";
     let mut journal = RunJournal::open(":memory:").unwrap();
     for (run_id, title, recorded_at) in [
         (RUN_A, "first", "2026-07-16T03:00:00Z"),
@@ -658,6 +659,12 @@ fn authorized_thread_list_pages_real_journal_summaries_without_payloads() {
             .unwrap();
         journal.bind_run_workspace(run_id, "workspace-1").unwrap();
     }
+    journal
+        .append(0, &prompt(HIDDEN_RUN, "hidden", "2026-07-16T04:00:00Z"))
+        .unwrap();
+    journal
+        .bind_run_workspace(HIDDEN_RUN, "workspace-2")
+        .unwrap();
 
     let (mut client, server) = UnixStream::pair().unwrap();
     let client_thread = thread::spawn(move || {
@@ -792,6 +799,143 @@ fn authorized_thread_open_pages_a_redacted_journal_projection() {
         json!([{"run_seq": 2, "kind": "assistant_message", "text": "answer"}])
     );
     assert!(!format!("{first:?}{second:?}").contains("/home"));
+}
+
+#[test]
+fn projected_pages_preserve_cross_boundary_state_and_ignore_unknown_events() {
+    const RUN: &str = "0190a100-0000-7000-8000-000000000001";
+    let mut events = Vec::new();
+    for (seq, kind, payload) in [
+        (1, "run.started", json!({})),
+        (2, "model.stream.delta", json!({"text":"hello "})),
+        (3, "future.event", json!({"private":"ignored"})),
+        (4, "model.stream.delta", json!({"text":"world"})),
+        (
+            5,
+            "tool.effect.started",
+            json!({"effect_id":"tool-1","display_name":"Search"}),
+        ),
+        (
+            6,
+            "permission.requested",
+            json!({"gate_id":"gate-1","kind":"confirm","title":"Allow?","message":"Proceed?"}),
+        ),
+        (7, "permission.resolved", json!({"gate_id":"gate-1"})),
+        (8, "tool.effect.completed", json!({"effect_id":"tool-1"})),
+    ] {
+        let mut event = prompt(RUN, "unused", "2026-07-16T03:00:00Z");
+        event.event_id = format!("0190a200-0000-7000-8000-{seq:012}");
+        event.run_seq = seq;
+        event.event_type = kind.into();
+        event.payload = EventPayload::Inline {
+            payload_json: payload,
+        };
+        events.push(event);
+    }
+    let mut attachment = prompt(RUN, "unused", "2026-07-16T03:00:00Z");
+    attachment.event_id = "0190a200-0000-7000-8000-000000000009".into();
+    attachment.run_seq = 9;
+    attachment.event_type = "chat.attachment.ingested".into();
+    attachment.payload = EventPayload::Attachment {
+        attachment: serde_json::from_value(json!({
+            "sha256": "00".repeat(32), "display_name": "notes.txt", "byte_length": 12,
+            "media_type": "text/plain"
+        }))
+        .unwrap(),
+    };
+    events.push(attachment);
+    let mut journal = RunJournal::open(":memory:").unwrap();
+    journal.append_batch(0, &events).unwrap();
+    journal.bind_run_workspace(RUN, "workspace-1").unwrap();
+    let first = journal
+        .open_thread(
+            "workspace-1",
+            ThreadOpenRequest {
+                thread_id: RUN.into(),
+                limit: 1,
+                cursor: None,
+            },
+        )
+        .unwrap();
+    let second = journal
+        .open_thread(
+            "workspace-1",
+            ThreadOpenRequest {
+                thread_id: RUN.into(),
+                limit: 1,
+                cursor: first.next_cursor,
+            },
+        )
+        .unwrap();
+    assert_eq!(first.entries[0].text.as_deref(), Some("hello world"));
+    assert_eq!(second.entries[0].kind, "tool_completed");
+    assert_eq!(second.entries[0].text.as_deref(), Some("Search"));
+    let third = journal
+        .open_thread(
+            "workspace-1",
+            ThreadOpenRequest {
+                thread_id: RUN.into(),
+                limit: 1,
+                cursor: second.next_cursor,
+            },
+        )
+        .unwrap();
+    assert_eq!(third.entries[0].kind, "attachment");
+    assert_eq!(third.entries[0].text.as_deref(), Some("notes.txt"));
+    assert!(third.next_cursor.is_none());
+}
+
+#[test]
+fn large_escaped_projection_continues_losslessly_with_bounded_pages() {
+    const RUN: &str = "0190a100-0000-7000-8000-000000000001";
+    let fragment = "\\\"\n".repeat(400);
+    let expected = fragment.repeat(1000);
+    let mut events = Vec::with_capacity(1001);
+    for seq in 1..=1001 {
+        let mut event = prompt(RUN, "unused", "2026-07-16T03:00:00Z");
+        event.event_id = format!("0190a200-0000-7000-8000-{seq:012}");
+        event.run_seq = seq;
+        event.event_type = if seq == 1 {
+            "run.started"
+        } else {
+            "model.stream.delta"
+        }
+        .into();
+        event.payload = EventPayload::Inline {
+            payload_json: if seq == 1 {
+                json!({})
+            } else {
+                json!({"text": fragment})
+            },
+        };
+        events.push(event);
+    }
+    let mut journal = RunJournal::open(":memory:").unwrap();
+    journal.append_batch(0, &events).unwrap();
+    journal.bind_run_workspace(RUN, "workspace-1").unwrap();
+    let mut cursor = None;
+    let mut found = String::new();
+    loop {
+        let page = journal
+            .open_thread(
+                "workspace-1",
+                ThreadOpenRequest {
+                    thread_id: RUN.into(),
+                    limit: 100,
+                    cursor,
+                },
+            )
+            .unwrap();
+        assert!(serde_json::to_vec(&page).unwrap().len() < MAX_FRAME_LENGTH);
+        for entry in page.entries {
+            found.push_str(entry.text.as_deref().unwrap_or(""));
+        }
+        cursor = page.next_cursor;
+        if cursor.is_none() {
+            break;
+        }
+    }
+    assert_eq!(found, expected);
 }
 
 #[test]

@@ -668,9 +668,15 @@ fn prepare_opened_run(
     let mut seq = 1;
     let started = event_envelope(run_id, seq, "run.started", json!({}), subject);
     projector.apply(&started).map_err(|_| attachment_error())?;
-    journal
-        .append(0, &started)
-        .map_err(|_| attachment_error())?;
+    if let Some(workspace) = subject.filter(|value| !value.is_empty()) {
+        journal
+            .append_new_run(workspace, &started)
+            .map_err(|_| attachment_error())?;
+    } else {
+        journal
+            .append(0, &started)
+            .map_err(|_| attachment_error())?;
+    }
 
     for mut selected in files {
         let next_seq = seq + 1;

@@ -169,6 +169,38 @@ fn workspace_event_pages_hide_runs_owned_by_another_workspace() {
 }
 
 #[test]
+fn run_workspace_creation_and_deletion_are_lifecycle_safe() {
+    let mut journal = RunJournal::open(":memory:").unwrap();
+    assert!(journal.bind_run_workspace(RUN, "workspace-a").is_err());
+    journal.append_new_run("workspace-a", &event(1)).unwrap();
+    assert!(journal
+        .run_belongs_to_workspace(RUN, "workspace-a")
+        .unwrap());
+    journal.delete_run(RUN).unwrap();
+    assert!(!journal
+        .run_belongs_to_workspace(RUN, "workspace-a")
+        .unwrap());
+    journal.append_new_run("workspace-b", &event(1)).unwrap();
+    assert!(journal
+        .run_belongs_to_workspace(RUN, "workspace-b")
+        .unwrap());
+}
+
+#[test]
+fn existing_desktop_runs_backfill_workspace_from_authoritative_provenance() {
+    let db = TestDb::new();
+    let mut journal = RunJournal::open(db.as_ref()).unwrap();
+    let mut first = event(1);
+    first.provenance.actor_id = Some("workspace-a".into());
+    journal.append(0, &first).unwrap();
+    drop(journal);
+    let journal = RunJournal::open(db.as_ref()).unwrap();
+    assert!(journal
+        .run_belongs_to_workspace(RUN, "workspace-a")
+        .unwrap());
+}
+
+#[test]
 fn durable_run_index_reopens_in_first_recorded_order() {
     let db = TestDb::new();
     let mut journal = RunJournal::open(db.as_ref()).unwrap();

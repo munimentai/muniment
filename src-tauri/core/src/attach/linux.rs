@@ -18,11 +18,7 @@ use super::{
     Failure, FirstMessage, NegotiationError, Operation, Protocol, ProtocolError, Request, Response,
     Success, VersionRange, CHALLENGE_LIFETIME, MAX_FRAME_LENGTH, MAX_TEXT_LENGTH,
 };
-use crate::journal::{
-    reducer::{project_chat, project_chat_fragment, PermissionRequest, ToolActivityStatus},
-    summaries::RunSummaryListError,
-    EventPayload, RunEventPageError, RunJournal,
-};
+use crate::journal::{summaries::RunSummaryListError, RunEventPageError, RunJournal};
 
 const ATTACH_DIRECTORY: &[u8] = b"muniment\0";
 const ENDPOINT_NAME: &str = "attach-v1.sock";
@@ -433,26 +429,21 @@ impl ThreadListService for RunJournal {
         workspace: &str,
         request: ThreadListRequest,
     ) -> Result<ThreadListPage, ProtocolError> {
-        let page =
-            self.run_summaries(usize::from(request.limit), request.cursor.as_deref())
-                .map_err(|error| match error {
-                    RunSummaryListError::InvalidLimit { .. }
-                    | RunSummaryListError::InvalidCursor => ProtocolError::invalid_request(),
-                    RunSummaryListError::Journal(_) => ProtocolError::persistence_failed(),
-                })?;
-        let summaries = page
-            .summaries
-            .into_iter()
-            .filter_map(
-                |summary| match self.run_belongs_to_workspace(&summary.run_id, workspace) {
-                    Ok(true) => Some(Ok(summary)),
-                    Ok(false) => None,
-                    Err(_) => Some(Err(ProtocolError::persistence_failed())),
-                },
+        let page = self
+            .workspace_run_summaries(
+                workspace,
+                usize::from(request.limit),
+                request.cursor.as_deref(),
             )
-            .collect::<Result<Vec<_>, _>>()?;
+            .map_err(|error| match error {
+                RunSummaryListError::InvalidLimit { .. } | RunSummaryListError::InvalidCursor => {
+                    ProtocolError::invalid_request()
+                }
+                RunSummaryListError::Journal(_) => ProtocolError::persistence_failed(),
+            })?;
         Ok(ThreadListPage {
-            threads: summaries
+            threads: page
+                .summaries
                 .into_iter()
                 .map(|summary| RedactedThreadSummary {
                     thread_id: summary.run_id,
@@ -469,118 +460,95 @@ impl ThreadListService for RunJournal {
         workspace: &str,
         request: ThreadOpenRequest,
     ) -> Result<ThreadOpenPage, ProtocolError> {
-        let page = self
-            .workspace_event_page(
-                workspace,
-                &request.thread_id,
-                usize::from(request.limit),
-                request.cursor.as_deref(),
-            )
+        let (snapshot_seq, after_entry) = self
+            .thread_projection_boundary(workspace, &request.thread_id, request.cursor.as_deref())
             .map_err(|error| match error {
                 RunEventPageError::InvalidLimit => ProtocolError::invalid_request(),
                 RunEventPageError::InvalidCursor => ProtocolError::invalid_cursor(),
                 RunEventPageError::NotFoundOrInaccessible => ProtocolError::invalid_request(),
                 RunEventPageError::Journal(_) => ProtocolError::persistence_failed(),
             })?;
-        // Projection is intentionally reducer-backed: storage-only and unknown
-        // envelopes do not become companion entries, and stream deltas collapse
-        // into one user-visible assistant message.
-        let mut projection_events = page.events.clone();
-        if projection_events
-            .first()
-            .is_some_and(|event| event.run_seq > 1)
-        {
-            let mut boundary = projection_events[0].clone();
-            boundary.run_seq = 1;
-            boundary.event_type = "run.started".into();
-            boundary.payload = EventPayload::Inline {
-                payload_json: serde_json::json!({}),
-            };
-            projection_events.insert(0, boundary);
+        let projected = self
+            .projected_thread_entries(workspace, &request.thread_id, snapshot_seq)
+            .map_err(|error| match error {
+                RunEventPageError::InvalidCursor => ProtocolError::invalid_cursor(),
+                RunEventPageError::NotFoundOrInaccessible => ProtocolError::invalid_request(),
+                _ => ProtocolError::persistence_failed(),
+            })?;
+        // Chunking is based on the stable projection, never storage deltas. The
+        // small UTF-8 bound is conservative even for maximally JSON-escaped text.
+        let expanded = projected
+            .into_iter()
+            .flat_map(|entry| {
+                let chunks = entry.text.map_or_else(
+                    || vec![None],
+                    |text| split_text(&text).into_iter().map(Some).collect(),
+                );
+                chunks.into_iter().map(move |text| RedactedThreadEntry {
+                    run_seq: entry.run_seq,
+                    kind: entry.kind.clone(),
+                    text,
+                })
+            })
+            .collect::<Vec<_>>();
+        if after_entry > expanded.len() {
+            return Err(ProtocolError::invalid_cursor());
         }
-        for (index, event) in projection_events.iter_mut().enumerate() {
-            event.run_seq = index as u64 + 1;
-        }
-        let projection = project_chat(&projection_events)
-            .or_else(|_| project_chat_fragment(&page.events))
-            .map_err(|_| ProtocolError::persistence_failed())?;
         let mut entries = Vec::new();
-        for event in &page.events {
-            if let ("user.prompt.submitted", EventPayload::Inline { payload_json }) =
-                (&*event.event_type, &event.payload)
-            {
-                if let Some(prompt) = payload_json.get("prompt").and_then(|value| value.as_str()) {
-                    entries.push(RedactedThreadEntry {
-                        run_seq: event.run_seq,
-                        kind: "user_message".into(),
-                        text: Some(truncate_text(prompt)),
-                    });
-                }
-            }
-        }
-        let last_seq = page.events.last().map_or(1, |event| event.run_seq);
-        if !projection.text.is_empty() {
-            entries.push(RedactedThreadEntry {
-                run_seq: last_seq,
-                kind: "assistant_message".into(),
-                text: Some(truncate_text(&projection.text)),
-            });
-        }
-        entries.extend(
-            projection
-                .attachments
-                .into_iter()
-                .map(|attachment| RedactedThreadEntry {
-                    run_seq: last_seq,
-                    kind: "attachment".into(),
-                    text: Some(truncate_text(&attachment.display_name)),
-                }),
-        );
-        entries.extend(projection.tool_activity.into_iter().map(|activity| {
-            RedactedThreadEntry {
-                run_seq: last_seq,
-                kind: match activity.status {
-                    ToolActivityStatus::Running => "tool_running",
-                    ToolActivityStatus::Completed => "tool_completed",
-                    ToolActivityStatus::Failed => "tool_failed",
-                }
-                .into(),
-                text: activity.display_name.as_deref().map(truncate_text),
-            }
-        }));
-        if let Some(gate) = projection.pending_permission {
-            let title = match gate.request {
-                PermissionRequest::Select { title, .. }
-                | PermissionRequest::Confirm { title, .. }
-                | PermissionRequest::Input { title, .. }
-                | PermissionRequest::Editor { title, .. } => title,
+        let mut consumed = after_entry;
+        for entry in expanded
+            .iter()
+            .skip(after_entry)
+            .take(usize::from(request.limit))
+        {
+            let mut candidate = entries.clone();
+            candidate.push(entry.clone());
+            let candidate_page = ThreadOpenPage {
+                thread_id: request.thread_id.clone(),
+                entries: candidate,
+                next_cursor: Some("x".repeat(MAX_CURSOR_LENGTH)),
             };
-            entries.push(RedactedThreadEntry {
-                run_seq: last_seq,
-                kind: "permission_pending".into(),
-                text: Some(truncate_text(&title)),
-            });
+            if serde_json::to_vec(&candidate_page)
+                .map_err(|_| ProtocolError::persistence_failed())?
+                .len()
+                > MAX_RESPONSE_BODY_LENGTH
+            {
+                break;
+            }
+            entries.push(entry.clone());
+            consumed += 1;
         }
+        let next_cursor = if consumed < expanded.len() {
+            Some(
+                self.thread_projection_cursor(&request.thread_id, snapshot_seq, consumed)
+                    .map_err(|_| ProtocolError::persistence_failed())?,
+            )
+        } else {
+            None
+        };
         Ok(ThreadOpenPage {
             thread_id: request.thread_id,
             entries,
-            next_cursor: page.next_cursor,
+            next_cursor,
         })
     }
 }
 
-fn truncate_text(value: &str) -> String {
-    let end = value
-        .char_indices()
-        .map(|(index, _)| index)
-        .take_while(|index| *index <= MAX_ENTRY_TEXT_LENGTH)
-        .last()
-        .unwrap_or(0);
-    if value.len() <= MAX_ENTRY_TEXT_LENGTH {
-        value.to_owned()
-    } else {
-        value[..end].to_owned()
+fn split_text(value: &str) -> Vec<String> {
+    if value.is_empty() {
+        return vec![String::new()];
     }
+    let mut chunks = Vec::new();
+    let mut start = 0;
+    while start < value.len() {
+        let mut end = (start + MAX_ENTRY_TEXT_LENGTH.min(1024)).min(value.len());
+        while !value.is_char_boundary(end) {
+            end -= 1;
+        }
+        chunks.push(value[start..end].to_owned());
+        start = end;
+    }
+    chunks
 }
 
 impl std::error::Error for AttachSessionError {}

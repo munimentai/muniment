@@ -153,6 +153,16 @@ struct RunEventCursor {
     authenticator: String,
 }
 
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ThreadProjectionCursor {
+    version: u8,
+    run_id: String,
+    snapshot_seq: u64,
+    after_entry: usize,
+    authenticator: String,
+}
+
 pub(crate) struct JournalCoordination {
     pub(crate) operation: Mutex<()>,
     pub(crate) generation: std::sync::atomic::AtomicU64,
@@ -203,6 +213,45 @@ fn normalized_path(path: &Path) -> PathBuf {
 }
 
 impl RunJournal {
+    pub fn thread_projection_boundary(
+        &self,
+        workspace: &str,
+        run_id: &str,
+        cursor: Option<&str>,
+    ) -> Result<(u64, usize), RunEventPageError> {
+        if !self
+            .run_belongs_to_workspace(run_id, workspace)
+            .map_err(RunEventPageError::Journal)?
+        {
+            return Err(RunEventPageError::NotFoundOrInaccessible);
+        }
+        if let Some(cursor) = cursor {
+            return decode_thread_projection_cursor(cursor, run_id, &self.cursor_key);
+        }
+        let snapshot = self
+            .connection
+            .as_ref()
+            .expect("journal connection is always present outside compaction")
+            .query_row(
+                "SELECT MAX(run_seq) FROM events WHERE run_id=?1",
+                [run_id],
+                |row| row.get::<_, Option<u64>>(0),
+            )
+            .map_err(JournalError::from)
+            .map_err(RunEventPageError::Journal)?
+            .ok_or(RunEventPageError::NotFoundOrInaccessible)?;
+        Ok((snapshot, 0))
+    }
+
+    pub fn thread_projection_cursor(
+        &self,
+        run_id: &str,
+        snapshot_seq: u64,
+        after_entry: usize,
+    ) -> Result<String, RunEventPageError> {
+        encode_thread_projection_cursor(run_id, snapshot_seq, after_entry, &self.cursor_key)
+    }
+
     pub fn open(path: impl AsRef<Path>) -> Result<Self, JournalError> {
         let path = path.as_ref();
         let file_path = (path != Path::new(":memory:") && !path.as_os_str().is_empty())
@@ -231,6 +280,17 @@ impl RunJournal {
              CREATE INDEX IF NOT EXISTS run_workspaces_workspace_run \
              ON run_workspaces(workspace, run_id);",
         )?;
+        // Journals created before workspace ownership was stored can be safely
+        // recovered only when their authoritative desktop provenance names an
+        // actor. Runs without that evidence remain inaccessible.
+        connection.execute(
+            "INSERT OR IGNORE INTO run_workspaces(run_id, workspace) \
+             SELECT run_id, json_extract(envelope_json, '$.provenance.actor_id') \
+             FROM events WHERE run_seq=1 \
+               AND json_type(envelope_json, '$.provenance.actor_id')='text' \
+               AND json_extract(envelope_json, '$.provenance.actor_id') <> ''",
+            [],
+        )?;
         validate_database(&connection)?;
         let cursor_key = load_or_create_cursor_key(&connection)?;
         let generation = coordination.as_ref().map_or(0, |state| {
@@ -252,6 +312,52 @@ impl RunJournal {
         event: &EventEnvelope,
     ) -> Result<(), JournalError> {
         self.append_batch(expected_last_seq, std::slice::from_ref(event))
+    }
+
+    /// Atomically creates a run and records its authoritative workspace.
+    pub fn append_new_run(
+        &mut self,
+        workspace: &str,
+        event: &EventEnvelope,
+    ) -> Result<(), JournalError> {
+        if workspace.is_empty() || event.run_seq != 1 {
+            return Err(JournalError::InvalidEnvelope(
+                "new run workspace and sequence must be valid".into(),
+            ));
+        }
+        validate_envelope(event)?;
+        let canonical = canonical_envelope(event)?;
+        let coordination = self.coordination.clone();
+        let _operation = coordination
+            .as_ref()
+            .map(|state| state.operation.lock().unwrap());
+        self.refresh_after_compaction()?;
+        let tx = self
+            .connection
+            .as_mut()
+            .expect("journal connection is always present outside compaction")
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let exists: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM events WHERE run_id=?1)",
+            [&event.run_id],
+            |row| row.get(0),
+        )?;
+        if exists {
+            return Err(JournalError::Conflict(Conflict::Sequence {
+                run_id: event.run_id.clone(),
+                run_seq: 1,
+            }));
+        }
+        tx.execute(
+            "INSERT INTO events(event_id,run_id,run_seq,event_type,event_version,envelope_version,recorded_at,envelope_json) VALUES(?1,?2,1,?3,?4,?5,?6,?7)",
+            params![event.event_id,event.run_id,event.event_type,event.event_version,event.envelope_version,event.recorded_at,canonical],
+        )?;
+        tx.execute(
+            "INSERT INTO run_workspaces(run_id, workspace) VALUES(?1, ?2)",
+            params![event.run_id, workspace],
+        )?;
+        tx.commit()?;
+        Ok(())
     }
 
     pub fn append_batch(
@@ -354,6 +460,14 @@ impl RunJournal {
             .connection
             .as_ref()
             .expect("journal connection is always present outside compaction");
+        let exists: bool = connection.query_row(
+            "SELECT EXISTS(SELECT 1 FROM events WHERE run_id=?1)",
+            [run_id],
+            |row| row.get(0),
+        )?;
+        if !exists {
+            return Err(JournalError::InvalidEnvelope("run does not exist".into()));
+        }
         connection.execute(
             "INSERT INTO run_workspaces(run_id, workspace) VALUES(?1, ?2) \
              ON CONFLICT(run_id) DO UPDATE SET workspace=excluded.workspace \
@@ -533,6 +647,7 @@ impl RunJournal {
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
         let hashes = referenced_hashes_for_run(&tx, Some(run_id))?;
         tx.execute("DELETE FROM events WHERE run_id=?1", [run_id])?;
+        tx.execute("DELETE FROM run_workspaces WHERE run_id=?1", [run_id])?;
         tx.commit()?;
         Ok(hashes)
     }
@@ -597,6 +712,65 @@ fn run_event_cursor_mac(key: &[u8; 32], run_id: &str, sequence: u64) -> Hmac<Sha
     mac.update(&[0]);
     mac.update(&sequence.to_be_bytes());
     mac
+}
+
+fn thread_projection_cursor_mac(
+    key: &[u8; 32],
+    run_id: &str,
+    snapshot_seq: u64,
+    after_entry: usize,
+) -> Hmac<Sha256> {
+    let mut mac = Hmac::<Sha256>::new_from_slice(key).expect("HMAC accepts all key lengths");
+    mac.update(b"muniment-thread-projection-cursor-v1\0");
+    mac.update(run_id.as_bytes());
+    mac.update(&[0]);
+    mac.update(&snapshot_seq.to_be_bytes());
+    mac.update(&(after_entry as u64).to_be_bytes());
+    mac
+}
+
+fn encode_thread_projection_cursor(
+    run_id: &str,
+    snapshot_seq: u64,
+    after_entry: usize,
+    key: &[u8; 32],
+) -> Result<String, RunEventPageError> {
+    let cursor = ThreadProjectionCursor {
+        version: 1,
+        run_id: run_id.to_owned(),
+        snapshot_seq,
+        after_entry,
+        authenticator: URL_SAFE_NO_PAD.encode(
+            thread_projection_cursor_mac(key, run_id, snapshot_seq, after_entry)
+                .finalize()
+                .into_bytes(),
+        ),
+    };
+    serde_json::to_vec(&cursor)
+        .map(|bytes| URL_SAFE_NO_PAD.encode(bytes))
+        .map_err(|error| RunEventPageError::Journal(JournalError::Corrupt(error.to_string())))
+}
+
+fn decode_thread_projection_cursor(
+    value: &str,
+    run_id: &str,
+    key: &[u8; 32],
+) -> Result<(u64, usize), RunEventPageError> {
+    let bytes = URL_SAFE_NO_PAD
+        .decode(value)
+        .map_err(|_| RunEventPageError::InvalidCursor)?;
+    let cursor: ThreadProjectionCursor =
+        serde_json::from_slice(&bytes).map_err(|_| RunEventPageError::InvalidCursor)?;
+    if cursor.version != 1 || cursor.run_id != run_id || cursor.snapshot_seq == 0 {
+        return Err(RunEventPageError::InvalidCursor);
+    }
+    let authenticator = URL_SAFE_NO_PAD
+        .decode(&cursor.authenticator)
+        .map_err(|_| RunEventPageError::InvalidCursor)?;
+    thread_projection_cursor_mac(key, run_id, cursor.snapshot_seq, cursor.after_entry)
+        .verify_slice(&authenticator)
+        .map_err(|_| RunEventPageError::InvalidCursor)?;
+    Ok((cursor.snapshot_seq, cursor.after_entry))
 }
 
 fn encode_run_event_cursor(
