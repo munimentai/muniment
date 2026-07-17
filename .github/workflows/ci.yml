@@ -143,13 +143,7 @@ jobs:
 
       - name: CLI dependency boundary
         if: steps.changes.outputs.companion == 'true'
-        run: |
-          forbidden='^(muniment-core|muniment-desktop|tauri($|-)|rusqlite|sherpa-onnx|openidconnect|oauth2|oidc|keyring|secret-service|.*sidecar.*)( |$)'
-          if cargo tree --manifest-path src-tauri/Cargo.toml --package muniment-cli --locked --prefix none \
-              | grep -E "$forbidden"; then
-            echo 'muniment-cli includes a forbidden runtime dependency' >&2
-            exit 1
-          fi
+        run: test/cli-dependency-boundary.sh
 
   desktop-compile:
     name: Desktop compile preflight (${{ matrix.platform }})

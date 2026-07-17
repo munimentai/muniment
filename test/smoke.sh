@@ -31,8 +31,25 @@ test -f src-tauri/attach/src/lib.rs
 test -f src-tauri/cli/Cargo.toml
 test -f src-tauri/cli/src/main.rs
 grep -Fq 'muniment-attach = { path = "../attach", default-features = false, features = ["client"] }' src-tauri/cli/Cargo.toml
+grep -Fq 'src-tauri/cli/*|src-tauri/cli/**' "$ci"
+grep -Fq 'src-tauri/attach/*|src-tauri/attach/**|src-tauri/Cargo.toml|src-tauri/Cargo.lock)' "$ci"
+grep -Fq 'echo "companion=$companion" >> "$GITHUB_OUTPUT"' "$ci"
 grep -Fq "if: steps.changes.outputs.companion == 'true'" "$ci"
-grep -Fq 'cargo tree --manifest-path src-tauri/Cargo.toml --package muniment-cli' "$ci"
+grep -Fq 'cargo fmt --manifest-path src-tauri/Cargo.toml --package muniment-attach --package muniment-cli --check' "$ci"
+grep -Fq 'cargo clippy --manifest-path src-tauri/Cargo.toml --package muniment-attach --package muniment-cli --all-targets --locked -- -D warnings' "$ci"
+grep -Fq 'cargo test --manifest-path src-tauri/Cargo.toml --package muniment-attach --package muniment-cli --locked' "$ci"
+grep -Fq 'run: test/cli-dependency-boundary.sh' "$ci"
+test -x test/cli-dependency-boundary.sh
+# The allowlist rejects representatives of every forbidden runtime class,
+# including package-name variants and implementations without category words.
+for forbidden in \
+  muniment-core muniment-desktop tauri tauri-plugin-dialog rusqlite \
+  sherpa-onnx sherpa-onnx-sys sidecar-supervision openidconnect oauth2 \
+  oidc-client keyring keyring-core secret-service dbus-secret-service \
+  security-framework windows-credentials; do
+  ! test/cli-dependency-boundary.sh muniment-cli muniment-attach "$forbidden" \
+    >/dev/null 2>&1
+done
 grep -Fq "needs.smoke.outputs.desktop == 'true'" "$ci"
 test -f src-tauri/tauri.machine.conf.json
 grep -Fq '"upgradeCode": "c75b4a56-7d8b-5b99-9fc7-61ef0aabe84b"' src-tauri/tauri.machine.conf.json
