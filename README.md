@@ -26,6 +26,23 @@ and macOS builds via `desktop-ci`; pushes to `main` run the smoke only.
 Nightly and manually dispatched release builds use the same serialized VMs and
 replace the assets on the private repository's `nightly` pre-release.
 
+## Stable releases
+
+`package.json` is the single source of truth for the desktop version; Tauri reads
+it through `src-tauri/tauri.conf.json`. The owner updates it before the nightly
+build, then manually runs **Promote stable desktop release** with that nightly's
+exact 40-character SHA and matching `vMAJOR.MINOR.PATCH`. Promotion requires
+green CI and the finalized six-asset nightly, and copies those bytes without
+rebuilding or changing `nightly`.
+
+The owner assigns SemVer and promotes when a tested nightly is ready. Patches are
+compatible bug or security fixes, minors add backward-compatible functionality,
+and majors may break compatibility. A bad release is never overwritten: stop
+package-manager publication, mark it yanked in the release title/body, and
+promote a new patch. Delete a tag/release only when nothing was distributed and
+the owner confirms it was accidental. Homebrew, WinGet, and other package-manager
+manifests are published only after stable promotion succeeds.
+
 ### macOS CI note (2026-07-09)
 
 `.dmg` bundling is EXCLUDED from CI targets: Tauri's `bundle_dmg.sh` drives
