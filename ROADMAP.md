@@ -56,7 +56,8 @@ Phases mirror harness-spec §9. Muniment-cloud Phase 1 native auth and the cloud
 - DONE E6 — a numeric-loopback-only Linux listener releases an accepted stream only after E5 authorization.
 - DONE E7 — the E6-authorized Linux stream performs a bounded, fail-closed RFC 6455 WebSocket opening handshake before release.
 - NEXT E8 — bind the upgraded authorized stream to the E2 single-use token pairing session. Later slices add macOS/Windows identity adapters, implement the unpacked MV3 extension/connect-tab lifecycle, integrate runtime tools, enforce entitlement and ask/allow/deny policy (domain/read-vs-act/sensitive approval), write journal receipts, and wire the kill switch.
-- Chrome Web Store publication is owner-gated. v1 excludes OS, filesystem, and other-application control.
+- RESERVED EXTENSION ID — the private Chrome Web Store draft item has permanent ID `cdedcfbgomnhfpifpgdlpfkkanaofkjd`; pin it in the relay's extension-identity allowlist when the MV3 slice lands. Add the store item's public `key` to the development manifest for unpacked-ID parity only after the owner uploads a real package and retrieves that key from the CWS Package tab.
+- Chrome Web Store publication and package upload are owner-gated. v1 excludes OS, filesystem, and other-application control.
 
 ## Stable release and distribution
 - DONE — rolling nightly release builds one pinned SHA across Linux, signed Windows, and unsigned macOS artifacts; Windows signing was verified 2026-07-15. An owner-triggered strict-SemVer promotion copies one green nightly SHA's exact artifacts to a `vX.Y.Z` stable GitHub Release, documents cadence/version rules, leaves nightly unchanged, and labels unsigned macOS honestly.
