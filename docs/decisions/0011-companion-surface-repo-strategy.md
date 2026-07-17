@@ -41,18 +41,20 @@ account, or release.
 **Both surfaces live in this repository, each with its own independent,
 path-scoped PR lane.**
 
-- **E1 CLI — a Rust workspace binary in this repository.** It links only the
-  pure-core attach-protocol partition of `muniment-core`, not the runtime.
+- **E1 CLI — a Rust workspace binary in this repository.** It links a new
+  protocol-only `muniment-attach` crate extracted from `muniment-core`, not
+  `muniment-core` or the runtime.
 - **E2 editor extension — a TypeScript package lane in this repository.** It is
   a thin attach client that consumes the versioned protocol fixtures
-  `muniment-core` emits and never re-derives run state.
+  `muniment-attach` emits and never re-derives run state.
 
 The dominant risk for both surfaces is cross-repo contract drift against a wire
 contract that is canonical here; co-location makes each contract change and its
-consumer atomic in one reviewed PR. Neither surface pays the mobile repo's
-motivating cost: the CLI compiles on the shared runner exactly as `muniment-core`
-does today, and a VS Code extension is host-OS-independent, so neither needs the
-serialized three-platform `desktop-ci` farm for its merge gate.
+consumer atomic in one reviewed PR. Neither surface pays the mobile repo's full
+native-app build cost. Both do implement native local transport (Unix-domain
+sockets on Linux/macOS and named pipes on Windows), so their focused transport
+merge gates use the existing serialized three-platform `desktop-ci` farm. They
+never invoke desktop bundle steps.
 
 This decision is **proposed** until explicit owner ratification. It is the sole
 prerequisite before any E1 or E2 scaffolding ticket.
@@ -67,7 +69,7 @@ ownership, and release cadence.
 
 | Dimension | In this repo (recommended) | Separate `muniment-cli` repo (rejected) |
 |---|---|---|
-| Core/protocol reuse | Links `muniment-core`'s protocol partition directly; the ADR 0009 envelope/codec/negotiation/cursor/idempotency types are a source dependency, not a copy. | Must vendor or re-publish the protocol crate; the CLI cannot reach `muniment-core` without a release/versioning pipeline that does not yet exist. |
+| Core/protocol reuse | Links the protocol-only `muniment-attach` workspace crate directly; the ADR 0009 envelope/codec/negotiation/cursor/idempotency types are a source dependency, not a copy. | Must vendor or publish that crate; the CLI otherwise cannot share canonical types without a release/versioning pipeline. |
 | Toolchain ownership | Reuses the existing Rust toolchain and `Cargo.lock`; no new language or build system. | Owns a duplicate Rust toolchain, lockfile, and pinning discipline for the same stack. |
 | Cross-repo contract drift | None: one PR changes the protocol and the CLI together and both are gated by the same contract-fixture tests. | High: the CLI can lag the desktop's protocol; drift is caught only at runtime by `protocol_incompatible`, not at PR time. |
 | Review ownership | Single owner sees protocol, desktop, and CLI changes together. | Split review; a protocol change needs coordinated PRs across two repos. |
@@ -77,7 +79,7 @@ ownership, and release cadence.
 
 | Dimension | In this repo (recommended) | Separate `muniment-editor` repo (rejected) |
 |---|---|---|
-| Core/protocol reuse | Consumes the versioned golden fixtures `muniment-core` emits (ADR 0009 cross-platform byte goldens) from the same tree; the wire contract is a single source of truth. | Must sync fixtures across repos on every protocol change, reintroducing the exact drift ADR 0007 flagged for the M1 mobile reducer. |
+| Core/protocol reuse | Consumes the versioned golden fixtures `muniment-attach` emits (ADR 0009 cross-platform byte goldens) from the same tree; the wire contract is a single source of truth. | Must sync fixtures across repos on every protocol change, reintroducing the exact drift ADR 0007 flagged for the M1 mobile reducer. |
 | Toolchain ownership | Adds a second npm package alongside the existing Svelte frontend; the repo already runs Node/npm, so the marginal toolchain cost is small and isolated to one directory. | A cleaner language boundary, but the repo still runs npm today, so the separation saves little while costing a fixture-sync pipeline. |
 | Cross-repo contract drift | None: a protocol change and its TypeScript consumer land atomically. | High and silent until a sideloaded build misparses a frame. |
 | Review ownership | One owner sees protocol, redaction rules, and extension together. | Split review of tightly coupled redaction/projection semantics. |
@@ -87,31 +89,29 @@ A VS Code extension is the one surface where a separate repo is genuinely
 arguable — it shares no compiled artifact with the desktop and its language
 differs. It is still rejected because its tightest coupling is to the
 attach-protocol wire contract and redaction rules that are canonical here;
-co-location makes that contract atomic, and its OS-independence means it never
-burdens the desktop build farm (CI below).
+co-location makes that contract atomic. Its package is portable, but its native
+transport is not; CI below limits its build-farm cost to focused tests.
 
 ## Layout and dependency boundary
 
-**CLI.** Introduce a Cargo workspace so `muniment-core`, the desktop crate, and
-a new `muniment-cli` binary crate share one lockfile and target directory (see
-Cargo workspaces reference in Sources). Concretely, `src-tauri/Cargo.toml`
-becomes a `[workspace]` with members `.` (the desktop GUI crate), `core`, and a
-new `src-tauri/cli/` (`muniment-cli`); the exact workspace rooting is finalized
-at scaffold time provided the desktop crate stays isolable behind `-p`/
-`--manifest-path` so it never enters the shared-runner lanes. The desktop
-crate's GUI dependency surface is unchanged.
+**CLI.** `src-tauri/Cargo.toml` is the workspace root and remains the desktop
+package manifest. Its `[workspace]` has exactly `members = [".", "core",
+"attach", "cli"]` and `resolver = "2"`. The new manifests are
+`src-tauri/attach/Cargo.toml` (`muniment-attach`, library) and
+`src-tauri/cli/Cargo.toml` (`muniment-cli`, binary). All members share the root
+`src-tauri/Cargo.lock` and target directory.
 
-The CLI **may** link `muniment-core`, but **only its attach-protocol
-partition** — the ADR 0009 envelope, bounded frame codec, version negotiation,
-authorization state machine, cursor/idempotency, and redaction-projection
-types. It must **not** compile the runtime: no `rusqlite` journal/CAS writer, no
-Pi sidecar spawn/supervision, no `sherpa-onnx` models, and no native OIDC/key
-flow. Because those runtime dependencies are currently non-optional in
-`muniment-core`, E1 scaffolding must partition them behind a Cargo feature
-(default-off for the CLI) or extract a `muniment-attach` sub-crate, so the CLI's
-dependency graph excludes the runtime and it keeps compiling on the shared
-runner without the GUI/build VMs. This partition is the mechanism that keeps the
-CLI a client and not a second runtime, per ADR 0009.
+The ADR 0009 envelope, bounded frame codec, version negotiation, authorization
+state machine, cursor/idempotency, redaction-projection types, and fixture
+exporter move from `muniment-core` into `muniment-attach`. `muniment-core`
+depends on `muniment-attach = { path = "../attach" }`; the CLI depends on
+`muniment-attach = { path = "../attach", default-features = false, features =
+["client"] }` and must not depend on `muniment-core`. The `client` feature adds
+only client transport adapters. `muniment-attach` has no runtime feature and
+may not depend on `rusqlite`, `sherpa-onnx`, sidecar supervision, OIDC/key
+storage, Tauri, or the desktop crate. A CI dependency-tree gate (`cargo tree -p
+muniment-cli`) rejects those crate/package names. This one-way graph prevents
+the CLI from compiling or becoming a second runtime.
 
 **Editor extension.** A self-contained TypeScript package at top-level
 `editor-extension/`, separate from the Svelte frontend `src/`, with its own
@@ -119,33 +119,54 @@ CLI a client and not a second runtime, per ADR 0009.
 **thin attach client**: it renders redacted projections streamed over ADR 0009
 and answers permission gates in-editor; it never opens the journal/CAS, never
 holds keys, and — critically — never re-derives run state from raw events, so
-it introduces no second reducer. It consumes the attach protocol as **versioned
-golden fixtures** exported from `muniment-core`'s contract-test corpus: the
-extension pins a protocol major (`muniment.attach/1`), validates its wire types
-against those fixtures in its own tests, ignores unknown optional fields/events,
-and fails closed on `protocol_incompatible`. The fixtures are the boundary that
-lets the extension track the contract without embedding the runtime.
+it introduces no second reducer. It consumes canonical, checked-in UTF-8 JSON
+fixtures at `protocol-fixtures/muniment.attach/1/*.json`. Each protocol major
+has its own directory; filenames identify the envelope/operation case, and JSON
+uses canonical key order plus a trailing newline. Rust owns serialization in
+`muniment-attach`. From `src-tauri/`, `cargo run -p muniment-attach --bin
+export-attach-fixtures -- ../protocol-fixtures` regenerates them; appending
+`--check` exits nonzero for a missing, extra, or byte-stale fixture.
+
+Extension tests read `../protocol-fixtures/muniment.attach/1/` directly; they do
+not copy or vendor a snapshot. They pin `muniment.attach/1` and decode every
+fixture, plus rejection and unknown-optional-field cases. The extension fails
+closed on `protocol_incompatible` and never imports Rust runtime code. The
+checked-in serialized bytes, not duplicate TypeScript types, are the language
+boundary.
 
 ## CI lanes
 
-Both companions get **independent, path-scoped PR checks** that run only when
-their paths change.
+Both companions get **independent, path-scoped PR checks**. CLI paths are
+`src-tauri/cli/**`; extension paths are `editor-extension/**`. Changes under
+`src-tauri/attach/**`, `protocol-fixtures/**`, `src-tauri/Cargo.toml`, or
+`src-tauri/Cargo.lock` are shared-contract changes and select **both** companion
+lanes (and the desktop lane where its graph is affected), so a shared change
+cannot skip either consumer's required check.
 
 - **CLI lane.** Portable protocol and client logic — including the ADR 0009
-  contract-fixture suite — run as `cargo fmt`/`clippy`/`test` for the
-  `muniment-cli` and protocol-partition crates on the shared self-hosted runner,
+  contract-fixture suite and fixture exporter `--check` — run as `cargo
+  fmt`/`clippy`/`test` for `muniment-cli` and `muniment-attach` on the shared runner,
   exactly as `muniment-core` runs today (no GUI stack needed). The CLI's local
   transport is OS-specific (Unix-domain socket on macOS/Linux, named pipe on
-  Windows, per ADR 0009), so its per-OS transport slices get compile/test
-  coverage through the existing `desktop-ci` VM seam using the same
-  `cargo check`/`cargo test` invocation the desktop preflight uses, added as
-  CLI-scoped jobs that do **not** run the desktop bundle steps.
+  Windows, per ADR 0009), so focused Linux, macOS, and Windows jobs on the
+  existing serialized `desktop-ci` VM seam run `cargo test -p muniment-cli -p
+  muniment-attach`, including real local connect and peer-rejection tests. These
+  jobs consume that farm but do **not** compile or bundle the desktop.
 - **Extension lane.** `npm ci`, typecheck, lint, unit and fixture-contract
-  tests, and `vsce package` on a plain Node runner across the Node LTS the
-  extension targets. A VS Code extension runs on the editor's Node host and is
-  host-OS-independent, so **no native per-OS matrix is required** for the merge
-  gate; multi-OS host validation is the marketplace's concern at publish time,
-  which is owner-gated below.
+  tests, canonical-fixture decoding tests, and `vsce package` on one plain Node
+  runner across the targeted Node LTS. Packaging is single-OS because VSIX
+  output is portable. Transport is not: focused Linux, macOS, and Windows
+  `desktop-ci` jobs compile the extension and run integration tests against
+  each platform's Unix-socket/named-pipe adapter, including connection and
+  rejection behavior. Marketplace validation does not replace this merge gate.
+
+The required checks are named `attach-fixtures-current` and
+`extension-contract`. The former runs the Rust contract tests followed by the
+exporter `--check`; a Rust protocol type or serializer change without regenerated
+checked-in bytes fails it. The latter runs the TypeScript decoder against every
+checked-in fixture; regenerated bytes without compatible TypeScript decoding
+fail it. Shared path selection requires both checks, closing both stale-fixture
+directions.
 
 **Effect on the serialized desktop CI matrix.** Today the smoke job classifies
 PRs only as `docs_only` versus everything-else, and everything-else enqueues the
@@ -156,9 +177,11 @@ scaffolding must therefore **extend the existing change classifier** (the
 `docs_only` seam) into a path partition so that: companion-only PRs run only
 their own lane and never enqueue the desktop matrix; desktop-only PRs do not run
 the companion lanes; and shared changes to the protocol partition in
-`muniment-core` run both, since they can break either consumer. This keeps the
-scarce, serialized `desktop-ci` VMs uncontended by companion work while
-preserving the current desktop gate for desktop and shared-core changes.
+`muniment-attach` or canonical fixtures run both, since they can break either
+consumer. Companion-only PRs skip desktop compile/bundle jobs, but their three
+focused transport jobs still consume the serialized farm. Desktop-only PRs keep
+the current desktop gate; shared-core changes select the lanes whose dependency
+graphs they affect.
 
 ## Distribution boundaries
 
@@ -185,10 +208,10 @@ dependency boundary that keeps each a client rather than a second runtime. It
 accepts a second toolchain package (the TypeScript extension) and a Cargo
 workspace restructure inside this repository, and it requires the CI change
 classifier to grow from a docs/non-docs split into a path partition so companion
-work does not serialize behind the desktop build farm. Unlike mobile (ADR 0007),
+work avoids desktop bundle jobs; native transport tests still serialize on that
+farm. Unlike mobile (ADR 0007),
 separate repositories are rejected because the surfaces' tightest coupling is to
-a wire contract that is canonical here, and neither surface needs the
-three-platform desktop farm its merge gate would otherwise inherit.
+a wire contract that is canonical here.
 
 This decision is **proposed** and takes effect only on explicit owner
 ratification. Until then no scaffold begins. Once ratified, this ADR (§13's
@@ -196,8 +219,8 @@ ratification. Until then no scaffold begins. Once ratified, this ADR (§13's
 which then execute in this repository:
 
 - introduce the Cargo workspace and the `muniment-cli` member;
-- partition `muniment-core`'s runtime dependencies behind a default-off feature
-  (or extract a `muniment-attach` crate) so the CLI links protocol-only;
+- extract the decided `muniment-attach` crate and make the CLI link only its
+  `client` feature;
 - add the `editor-extension/` TypeScript package and its fixture-pinned client;
 - export the versioned attach-protocol golden fixtures for the extension to
   consume;
