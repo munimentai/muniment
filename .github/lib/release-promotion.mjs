@@ -28,11 +28,25 @@ export const expectedNightlyAssets = (assets, sha) => {
 
 export const releaseBody = (sha) => `Stable desktop release promoted from nightly source \`${sha}\`.\n\nWindows installers are signed. macOS artifacts are unsigned pending Apple credentials. Model weights are not included.`;
 
+export const windowsSigningProvenance = (sha) => `Windows installers for \`${sha}\` were signed by the nightly workflow.`;
+
 export const assertGreenCi = (checkRuns, sha) => {
-  const ciRuns = checkRuns.filter((run) => run.name === "smoke" || run.name.startsWith("Desktop compile preflight") || run.name.startsWith("desktop-build"));
-  const smoke = ciRuns.find((run) => run.name === "smoke");
-  if (!smoke || smoke.status !== "completed" || smoke.conclusion !== "success" || ciRuns.some((run) => run.status !== "completed" || !["success", "neutral", "skipped"].includes(run.conclusion))) {
+  // The currently-running promotion job can itself be attached to the selected
+  // commit. It is not source CI and cannot be completed before this gate runs.
+  const sourceChecks = checkRuns.filter((run) => run.name !== "promote");
+  const smoke = sourceChecks.find((run) => run.name === "smoke");
+  if (!smoke || smoke.status !== "completed" || smoke.conclusion !== "success" || sourceChecks.some((run) => run.status !== "completed" || !["success", "neutral", "skipped"].includes(run.conclusion))) {
     throw new Error(`CI is not green for ${sha}`);
+  }
+};
+
+const getAllCheckRuns = async (fetchImpl, token, repoApi, sha) => {
+  const checkRuns = [];
+  for (let page = 1; ; page += 1) {
+    const response = await request(fetchImpl, token, `${repoApi}/commits/${sha}/check-runs?per_page=100&page=${page}`);
+    const batch = (await response.json()).check_runs;
+    checkRuns.push(...batch);
+    if (batch.length < 100) return checkRuns;
   }
 };
 
@@ -45,11 +59,12 @@ export async function promoteRelease({ token, repository, sha, version, fetchImp
   const packageFile = await (await request(fetchImpl, token, `${repoApi}/contents/package.json?ref=${sha}`)).json();
   const packageJson = JSON.parse(Buffer.from(packageFile.content, "base64").toString("utf8"));
   if (packageJson.version !== version.slice(1)) throw new Error(`package.json version ${packageJson.version ?? "missing"} does not match ${version}`);
-  const { check_runs: checkRuns } = await (await request(fetchImpl, token, `${repoApi}/commits/${sha}/check-runs?per_page=100`)).json();
+  const checkRuns = await getAllCheckRuns(fetchImpl, token, repoApi, sha);
   assertGreenCi(checkRuns, sha);
   const nightly = await (await request(fetchImpl, token, `${repoApi}/releases/tags/nightly`)).json();
   const nightlyRef = await (await request(fetchImpl, token, `${repoApi}/git/ref/tags/nightly`)).json();
-  if (nightly.draft || !nightly.prerelease || nightly.target_commitish !== sha || nightlyRef.object.sha !== sha || !nightly.body?.includes(sha)) throw new Error(`nightly release is not finalized at ${sha}`);
+  if (nightly.draft || !nightly.prerelease || nightlyRef.object.sha !== sha || !nightly.body?.includes(sha)) throw new Error(`nightly release is not finalized at ${sha}`);
+  if (!nightly.body.includes(windowsSigningProvenance(sha))) throw new Error(`nightly Windows installers are not verified as signed for ${sha}`);
   const assets = expectedNightlyAssets(nightly.assets, sha);
   let created;
   try {
