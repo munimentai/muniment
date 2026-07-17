@@ -5,6 +5,7 @@ use std::time::Duration;
 
 use chrono::{SecondsFormat, Utc};
 use muniment_core::attachment::{ingest_attachment, AttachmentMetadata};
+use muniment_core::auth::TokenSet;
 use muniment_core::cas::LocalCas;
 use muniment_core::journal::reducer::{
     project_chat, reduce, ChatProjection, ChatProjector, PermissionGate, PermissionRequest,
@@ -165,6 +166,188 @@ pub struct ChatState {
     storage: SharedStorage,
     active: Mutex<Option<ActiveRun>>,
     runtime: Arc<Mutex<Option<PiRuntime>>>,
+}
+
+struct RunStartRequest {
+    prompt: String,
+    files: Vec<SelectedFile>,
+}
+
+struct RunStartLaunch {
+    run_id: String,
+    prompt: String,
+    tokens: TokenSet,
+    grant: ChatGrant,
+    cancelled: Arc<AtomicBool>,
+    transport: Arc<Mutex<Option<Arc<PiRpcTransport>>>>,
+    adapter: Arc<Mutex<Option<Arc<PiRunAdapter>>>>,
+    prepared: (u64, ChatProjector),
+}
+
+trait RunStartBoundaries {
+    fn active_run_exists(&self) -> bool;
+    fn fresh_tokens(&self) -> Result<TokenSet, String>;
+    fn configure_run(
+        &self,
+        run_id: &str,
+        prompt: &str,
+        tokens: &TokenSet,
+    ) -> Result<ChatGrant, String>;
+    fn install_active_run(&self, run: ActiveRun) -> Result<(), String>;
+    fn prepare_run(
+        &self,
+        run_id: &str,
+        grant: &ChatGrant,
+        tokens: &TokenSet,
+        files: Vec<SelectedFile>,
+    ) -> Result<(u64, ChatProjector), String>;
+    fn clear_active_run(&self, run_id: &str);
+    fn launch(&self, launch: RunStartLaunch);
+}
+
+/// Shared, channel-neutral acceptance path for starting a desktop-owned run.
+/// Channel adapters supply boundaries but cannot bypass validation or ownership.
+fn start_desktop_run(
+    boundaries: &impl RunStartBoundaries,
+    request: RunStartRequest,
+) -> Result<SubmitResult, String> {
+    let prompt = request.prompt.trim().to_owned();
+    if prompt.is_empty() {
+        return Err("Enter a message before sending.".into());
+    }
+    if boundaries.active_run_exists() {
+        return Err("A reply is already in progress.".into());
+    }
+
+    let tokens = boundaries.fresh_tokens()?;
+    let run_id = Uuid::now_v7().to_string();
+    let grant = boundaries.configure_run(&run_id, &prompt, &tokens)?;
+    let cancelled = Arc::new(AtomicBool::new(false));
+    let transport = Arc::new(Mutex::new(None));
+    let adapter = Arc::new(Mutex::new(None));
+    boundaries.install_active_run(ActiveRun {
+        id: run_id.clone(),
+        cancelled: Arc::clone(&cancelled),
+        transport: Arc::clone(&transport),
+        adapter: Arc::clone(&adapter),
+    })?;
+    let prepared = match boundaries.prepare_run(&run_id, &grant, &tokens, request.files) {
+        Ok(prepared) => prepared,
+        Err(error) => {
+            boundaries.clear_active_run(&run_id);
+            return Err(error);
+        }
+    };
+    let attachments = match prepared.1.projection() {
+        Ok(projection) => chat_attachments(&projection.attachments),
+        Err(_) => {
+            boundaries.clear_active_run(&run_id);
+            return Err(attachment_error());
+        }
+    };
+    let result = SubmitResult {
+        run_id: run_id.clone(),
+        attachments,
+    };
+    boundaries.launch(RunStartLaunch {
+        run_id,
+        prompt,
+        tokens,
+        grant,
+        cancelled,
+        transport,
+        adapter,
+        prepared,
+    });
+    Ok(result)
+}
+
+struct TauriRunStartBoundaries<R: tauri::Runtime> {
+    app: tauri::AppHandle<R>,
+}
+
+impl<R: tauri::Runtime> TauriRunStartBoundaries<R> {
+    fn state(&self) -> tauri::State<'_, ChatState> {
+        self.app.state::<ChatState>()
+    }
+}
+
+impl<R: tauri::Runtime> RunStartBoundaries for TauriRunStartBoundaries<R> {
+    fn active_run_exists(&self) -> bool {
+        self.state()
+            .active
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .is_some()
+    }
+
+    fn fresh_tokens(&self) -> Result<TokenSet, String> {
+        auth::fresh_tokens(&self.app.state::<auth::AuthState>())
+    }
+
+    fn configure_run(
+        &self,
+        run_id: &str,
+        prompt: &str,
+        tokens: &TokenSet,
+    ) -> Result<ChatGrant, String> {
+        let grant = fetch_grant(&tokens.access_token)?;
+        validate_grant(&grant)?;
+        protect_prompt(run_id, prompt, tokens.subject.as_deref())?;
+        Ok(grant)
+    }
+
+    fn install_active_run(&self, run: ActiveRun) -> Result<(), String> {
+        install_active_run(&self.state().active, run)
+    }
+
+    fn prepare_run(
+        &self,
+        run_id: &str,
+        grant: &ChatGrant,
+        tokens: &TokenSet,
+        files: Vec<SelectedFile>,
+    ) -> Result<(u64, ChatProjector), String> {
+        prepare_new_run(
+            &self.state().storage,
+            run_id,
+            &grant.workspace,
+            tokens.subject.as_deref(),
+            files,
+        )
+    }
+
+    fn clear_active_run(&self, run_id: &str) {
+        clear_active_run(&self.state().active, run_id);
+    }
+
+    fn launch(&self, launch: RunStartLaunch) {
+        let app = self.app.clone();
+        let state = self.state();
+        let storage = Arc::clone(&state.storage);
+        let runtime = Arc::clone(&state.runtime);
+        tauri::async_runtime::spawn_blocking(move || {
+            coordinate(
+                app.clone(),
+                storage,
+                runtime,
+                launch.run_id.clone(),
+                launch.prompt,
+                launch.tokens.access_token,
+                launch.tokens.subject,
+                launch.grant,
+                launch.cancelled,
+                launch.transport,
+                launch.adapter,
+                None,
+                None,
+                Some(launch.prepared),
+            );
+            if let Some(state) = app.try_state::<ChatState>() {
+                clear_active_run(&state.active, &launch.run_id);
+            }
+        });
+    }
 }
 
 impl ChatState {
@@ -383,115 +566,20 @@ pub async fn chat_submit(
     prompt: String,
     files: Option<Vec<SelectedFile>>,
 ) -> Result<SubmitResult, String> {
-    let prompt = prompt.trim().to_owned();
-    if prompt.is_empty() {
-        return Err("Enter a message before sending.".into());
-    }
-    {
-        let active = state
-            .active
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if active.is_some() {
-            return Err("A reply is already in progress.".into());
-        }
-    }
-
-    let tokens = auth::fresh_tokens_async(&auth_state).await?;
-    let run_id = Uuid::now_v7().to_string();
-    let access_token = tokens.access_token.clone();
-    let protected_run_id = run_id.clone();
-    let protected_prompt = prompt.clone();
-    let subject = tokens.subject.clone();
-    let grant = tauri::async_runtime::spawn_blocking(move || {
-        let grant = fetch_grant(&access_token)?;
-        validate_grant(&grant)?;
-        protect_prompt(&protected_run_id, &protected_prompt, subject.as_deref())?;
-        Ok::<_, String>(grant)
-    })
-    .await
-    .map_err(|_| "Chat configuration is temporarily unavailable.".to_string())??;
-    let cancelled = Arc::new(AtomicBool::new(false));
-    let transport = Arc::new(Mutex::new(None));
-    let adapter = Arc::new(Mutex::new(None));
-    install_active_run(
-        &state.active,
-        ActiveRun {
-            id: run_id.clone(),
-            cancelled: Arc::clone(&cancelled),
-            transport: Arc::clone(&transport),
-            adapter: Arc::clone(&adapter),
-        },
-    )?;
-    let storage = Arc::clone(&state.storage);
-    let prepared_storage = Arc::clone(&storage);
-    let prepared_run_id = run_id.clone();
-    let prepared_subject = tokens.subject.clone();
-    let prepared_workspace = grant.workspace.clone();
-    let prepared = tauri::async_runtime::spawn_blocking(move || {
-        prepare_new_run(
-            &prepared_storage,
-            &prepared_run_id,
-            &prepared_workspace,
-            prepared_subject.as_deref(),
-            files.unwrap_or_default(),
+    // Preserve the command argument names while the channel-neutral boundary
+    // resolves the same managed values from the owned app handle.
+    let _ = (&auth_state, &state);
+    tauri::async_runtime::spawn_blocking(move || {
+        start_desktop_run(
+            &TauriRunStartBoundaries { app },
+            RunStartRequest {
+                prompt,
+                files: files.unwrap_or_default(),
+            },
         )
     })
     .await
-    .map_err(|_| attachment_error())
-    .and_then(|result| result);
-    let (seq, projector) = match prepared {
-        Ok(prepared) => prepared,
-        Err(error) => {
-            let mut active = state
-                .active
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            if active.as_ref().is_some_and(|current| current.id == run_id) {
-                *active = None;
-            }
-            return Err(error);
-        }
-    };
-    let attachments = chat_attachments(
-        &projector
-            .projection()
-            .map_err(|_| attachment_error())?
-            .attachments,
-    );
-    let runtime = Arc::clone(&state.runtime);
-    let result_id = run_id.clone();
-    tauri::async_runtime::spawn_blocking(move || {
-        coordinate(
-            app.clone(),
-            storage,
-            runtime,
-            run_id.clone(),
-            prompt,
-            tokens.access_token,
-            tokens.subject,
-            grant,
-            cancelled,
-            transport,
-            adapter,
-            None,
-            None,
-            Some((seq, projector)),
-        );
-        if let Some(state) = app.try_state::<ChatState>() {
-            let mut active = state
-                .active
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            if active.as_ref().is_some_and(|current| current.id == run_id) {
-                *active = None;
-            }
-        }
-    });
-    Ok(SubmitResult {
-        run_id: result_id,
-        attachments,
-    })
+    .map_err(|_| "Chat configuration is temporarily unavailable.".to_string())?
 }
 
 #[tauri::command]
@@ -609,6 +697,15 @@ fn install_active_run(active: &Mutex<Option<ActiveRun>>, run: ActiveRun) -> Resu
     }
     *active = Some(run);
     Ok(())
+}
+
+fn clear_active_run(active: &Mutex<Option<ActiveRun>>, run_id: &str) {
+    let mut active = active
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if active.as_ref().is_some_and(|current| current.id == run_id) {
+        *active = None;
+    }
 }
 
 fn attachment_error() -> String {
@@ -1654,8 +1751,129 @@ fn fetch_receipt(url: &str, access_token: &str, run_id: &str) -> Result<Receipt,
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::AtomicUsize;
 
     static PI_ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    struct FakeRunStartBoundaries {
+        active: bool,
+        auth_calls: AtomicUsize,
+        launched_run: Mutex<Option<String>>,
+    }
+
+    impl FakeRunStartBoundaries {
+        fn accepting() -> Self {
+            Self {
+                active: false,
+                auth_calls: AtomicUsize::new(0),
+                launched_run: Mutex::new(None),
+            }
+        }
+    }
+
+    impl RunStartBoundaries for FakeRunStartBoundaries {
+        fn active_run_exists(&self) -> bool {
+            self.active
+        }
+
+        fn fresh_tokens(&self) -> Result<TokenSet, String> {
+            self.auth_calls.fetch_add(1, Ordering::SeqCst);
+            Ok(TokenSet {
+                access_token: "access-token".into(),
+                refresh_token: None,
+                expires_at: None,
+                subject: Some("owner".into()),
+            })
+        }
+
+        fn configure_run(
+            &self,
+            _run_id: &str,
+            _prompt: &str,
+            _tokens: &TokenSet,
+        ) -> Result<ChatGrant, String> {
+            Ok(ChatGrant {
+                workspace: "workspace-a".into(),
+                gateway_url: "https://gateway.invalid".into(),
+                virtual_key: "virtual-key".into(),
+                model: None,
+                receipt_url: "https://receipt.invalid".into(),
+            })
+        }
+
+        fn install_active_run(&self, _run: ActiveRun) -> Result<(), String> {
+            Ok(())
+        }
+
+        fn prepare_run(
+            &self,
+            run_id: &str,
+            _grant: &ChatGrant,
+            tokens: &TokenSet,
+            _files: Vec<SelectedFile>,
+        ) -> Result<(u64, ChatProjector), String> {
+            let mut projector = ChatProjector::new();
+            projector
+                .apply(&event_envelope(
+                    run_id,
+                    1,
+                    "run.started",
+                    json!({}),
+                    tokens.subject.as_deref(),
+                ))
+                .unwrap();
+            Ok((1, projector))
+        }
+
+        fn clear_active_run(&self, _run_id: &str) {}
+
+        fn launch(&self, launch: RunStartLaunch) {
+            *self.launched_run.lock().unwrap() = Some(launch.run_id);
+        }
+    }
+
+    #[test]
+    fn run_start_coordinator_accepts_through_injected_boundaries() {
+        let boundaries = FakeRunStartBoundaries::accepting();
+
+        let result = start_desktop_run(
+            &boundaries,
+            RunStartRequest {
+                prompt: "  hello  ".into(),
+                files: Vec::new(),
+            },
+        )
+        .unwrap();
+
+        assert_eq!(boundaries.auth_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(result.attachments.len(), 0);
+        assert_eq!(
+            boundaries.launched_run.lock().unwrap().as_deref(),
+            Some(result.run_id.as_str())
+        );
+    }
+
+    #[test]
+    fn run_start_coordinator_rejects_when_another_run_is_active() {
+        let boundaries = FakeRunStartBoundaries {
+            active: true,
+            ..FakeRunStartBoundaries::accepting()
+        };
+
+        let error = start_desktop_run(
+            &boundaries,
+            RunStartRequest {
+                prompt: "hello".into(),
+                files: Vec::new(),
+            },
+        )
+        .err()
+        .unwrap();
+
+        assert_eq!(error, "A reply is already in progress.");
+        assert_eq!(boundaries.auth_calls.load(Ordering::SeqCst), 0);
+        assert!(boundaries.launched_run.lock().unwrap().is_none());
+    }
 
     fn lock_unpoisoned<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
         match mutex.lock() {
