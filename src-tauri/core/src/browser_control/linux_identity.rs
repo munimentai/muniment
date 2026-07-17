@@ -119,7 +119,11 @@ fn socket_owners_in(
     let wanted = format!("socket:[{inode}]").into_bytes();
     let mut owners = Vec::new();
     for entry in fs::read_dir(proc_root).map_err(|_| ProcReadError)? {
-        let Ok(entry) = entry else { continue };
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(_) => return Err(ProcReadError),
+        };
         let Some(pid) = entry
             .file_name()
             .to_str()
@@ -127,36 +131,45 @@ fn socket_owners_in(
         else {
             continue;
         };
-        if !matches!(entry.metadata(), Ok(metadata) if metadata.uid() == desktop_uid) {
+        let metadata = match entry.metadata() {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(_) => return Err(ProcReadError),
+        };
+        if metadata.uid() != desktop_uid {
             continue;
         }
-        let Ok(stat) = fs::read(entry.path().join("stat")) else {
-            continue;
+        let stat = match fs::read(entry.path().join("stat")) {
+            Ok(stat) => stat,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(_) => return Err(ProcReadError),
         };
-        let Some(before) = parse_start_identity(&stat) else {
-            continue;
-        };
-        let Ok(fds) = fs::read_dir(entry.path().join("fd")) else {
-            continue;
+        let before = parse_start_identity(&stat).ok_or(ProcReadError)?;
+        let fds = match fs::read_dir(entry.path().join("fd")) {
+            Ok(fds) => fds,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(_) => return Err(ProcReadError),
         };
         let mut owns = false;
         for fd in fds {
-            let Ok(fd) = fd else { continue };
-            let Ok(target) = fs::read_link(fd.path()) else {
-                continue;
+            let fd = match fd {
+                Ok(fd) => fd,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(_) => return Err(ProcReadError),
+            };
+            let target = match fs::read_link(fd.path()) {
+                Ok(target) => target,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(_) => return Err(ProcReadError),
             };
             if target.as_os_str().as_bytes() == wanted.as_slice() {
                 owns = true;
             }
         }
-        let after = fs::read(entry.path().join("stat"))
-            .ok()
-            .and_then(|stat| parse_start_identity(&stat));
-        let Some(after) = after else {
-            if owns {
-                return Err(ProcReadError);
-            }
-            continue;
+        let after = match fs::read(entry.path().join("stat")) {
+            Ok(stat) => parse_start_identity(&stat).ok_or(ProcReadError)?,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound && !owns => continue,
+            Err(_) => return Err(ProcReadError),
         };
         if before != after {
             if owns {
@@ -618,8 +631,6 @@ mod tests {
     fn proc_scan_ignores_unrelated_failures_and_finds_stable_owner() {
         let procfs = TestProc::new();
         let uid = fs::metadata(&procfs.0).unwrap().uid();
-        let inaccessible = procfs.process(10, Some(1));
-        fs::write(inaccessible.join("fd/3"), b"not a readable link").unwrap();
         procfs.process(11, None); // The process disappeared before its stat was read.
         let owner = procfs.process(12, Some(77));
         add_socket(&owner, 4, 900);
@@ -640,6 +651,24 @@ mod tests {
         let candidate = procfs.process(12, Some(77));
         fs::write(candidate.join("fd/4"), b"not a readable link").unwrap();
 
-        assert_eq!(socket_owners_in(&procfs.0, uid, 900), Ok(Vec::new()));
+        assert_eq!(
+            socket_owners_in(&procfs.0, uid, 900),
+            Err(super::ProcReadError)
+        );
+    }
+
+    #[test]
+    fn unreadable_candidate_concealing_a_duplicate_fails_the_scan() {
+        let procfs = TestProc::new();
+        let uid = fs::metadata(&procfs.0).unwrap().uid();
+        let owner = procfs.process(12, Some(77));
+        add_socket(&owner, 4, 900);
+        let unreadable = procfs.process(13, Some(88));
+        fs::write(unreadable.join("fd/5"), b"not a readable link").unwrap();
+
+        assert_eq!(
+            socket_owners_in(&procfs.0, uid, 900),
+            Err(super::ProcReadError)
+        );
     }
 }
