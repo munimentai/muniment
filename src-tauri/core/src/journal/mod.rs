@@ -287,7 +287,23 @@ impl RunJournal {
              CREATE TABLE IF NOT EXISTS thread_projection_history( \
              run_id TEXT NOT NULL, ordinal INTEGER NOT NULL, valid_until_seq INTEGER NOT NULL, \
              run_seq INTEGER NOT NULL, kind TEXT NOT NULL, text TEXT, \
-             PRIMARY KEY(run_id, ordinal, valid_until_seq));",
+             PRIMARY KEY(run_id, ordinal, valid_until_seq)); \
+             CREATE TABLE IF NOT EXISTS thread_projection_versions( \
+             run_id TEXT NOT NULL, ordinal INTEGER NOT NULL, valid_from_seq INTEGER NOT NULL, \
+             valid_until_seq INTEGER, run_seq INTEGER NOT NULL, kind TEXT NOT NULL, text TEXT, \
+             PRIMARY KEY(run_id, ordinal, valid_from_seq)); \
+             CREATE INDEX IF NOT EXISTS thread_projection_versions_page \
+             ON thread_projection_versions(run_id, ordinal, valid_from_seq, valid_until_seq);",
+        )?;
+        // Journals created by the first projection implementation have only a
+        // current row. Treat that row as the initial version; new writes use
+        // interval versions from this point forward.
+        connection.execute(
+            "INSERT OR IGNORE INTO thread_projection_versions( \
+             run_id,ordinal,valid_from_seq,run_seq,kind,text) \
+             SELECT run_id,ordinal,run_seq,run_seq,kind,text \
+             FROM thread_projection_entries",
+            [],
         )?;
         validate_database(&connection)?;
         let cursor_key = load_or_create_cursor_key(&connection)?;
@@ -654,6 +670,10 @@ impl RunJournal {
         tx.execute(
             "DELETE FROM thread_projection_history WHERE run_id=?1",
             [run_id],
+        )?;
+        tx.execute(
+            "DELETE FROM thread_projection_versions WHERE run_id=?1",
+            [&run_id],
         )?;
         tx.execute("DELETE FROM run_workspaces WHERE run_id=?1", [run_id])?;
         tx.commit()?;
@@ -1073,6 +1093,18 @@ CREATE TABLE thread_projection_history (
  text TEXT,
  PRIMARY KEY(run_id, ordinal, valid_until_seq)
 ) STRICT;
+CREATE TABLE thread_projection_versions (
+ run_id TEXT NOT NULL,
+ ordinal INTEGER NOT NULL,
+ valid_from_seq INTEGER NOT NULL,
+ valid_until_seq INTEGER,
+ run_seq INTEGER NOT NULL,
+ kind TEXT NOT NULL,
+ text TEXT,
+ PRIMARY KEY(run_id, ordinal, valid_from_seq)
+) STRICT;
+CREATE INDEX thread_projection_versions_page
+ ON thread_projection_versions(run_id, ordinal, valid_from_seq, valid_until_seq);
 CREATE TABLE journal_metadata (
  key TEXT PRIMARY KEY NOT NULL,
  value BLOB NOT NULL
@@ -1080,7 +1112,10 @@ CREATE TABLE journal_metadata (
 COMMIT;
 "#;
 
-const PROJECTION_TEXT_CHUNK: usize = 4 * 1024;
+// Mutable chunks are deliberately small: snapshot versioning can copy at most
+// this many bytes per appended byte, so projection storage remains linearly
+// bounded even for a stream made up of one-byte deltas.
+const PROJECTION_TEXT_CHUNK: usize = 64;
 
 fn update_thread_projection(
     tx: &rusqlite::Transaction<'_>,
@@ -1123,14 +1158,17 @@ fn update_thread_projection(
                 "INSERT INTO thread_projection_entries(run_id,ordinal,run_seq,kind,text) VALUES(?1,?2,?3,?4,?5)",
                 params![event.run_id, ordinal, event.run_seq, kind, chunk],
             )?;
+            tx.execute(
+                "INSERT INTO thread_projection_versions(run_id,ordinal,valid_from_seq,run_seq,kind,text) VALUES(?1,?2,?3,?3,?4,?5)",
+                params![event.run_id, ordinal, event.run_seq, kind, chunk],
+            )?;
         }
         Ok(())
     };
     let archive = |kind: &str| -> Result<(), JournalError> {
         tx.execute(
-            "INSERT INTO thread_projection_history(run_id,ordinal,valid_until_seq,run_seq,kind,text) \
-             SELECT run_id,ordinal,?1,run_seq,kind,text FROM thread_projection_entries \
-             WHERE run_id=?2 AND kind=?3",
+            "UPDATE thread_projection_versions SET valid_until_seq=?1 \
+             WHERE run_id=?2 AND kind=?3 AND valid_until_seq IS NULL",
             params![event.run_seq, event.run_id, kind],
         )?;
         Ok(())
@@ -1161,14 +1199,18 @@ fn update_thread_projection(
                 }
                 tail.push_str(&text[..take]);
                 tx.execute(
-                    "INSERT INTO thread_projection_history(run_id,ordinal,valid_until_seq,run_seq,kind,text) \
-                     SELECT run_id,ordinal,?1,run_seq,kind,text FROM thread_projection_entries \
-                     WHERE run_id=?2 AND ordinal=?3",
+                    "UPDATE thread_projection_versions SET valid_until_seq=?1 \
+                     WHERE run_id=?2 AND ordinal=?3 AND valid_until_seq IS NULL",
                     params![event.run_seq, event.run_id, ordinal],
                 )?;
                 tx.execute(
                     "UPDATE thread_projection_entries SET text=?1 WHERE run_id=?2 AND ordinal=?3",
                     params![tail, event.run_id, ordinal],
+                )?;
+                tx.execute(
+                    "INSERT INTO thread_projection_versions(run_id,ordinal,valid_from_seq,run_seq,kind,text) \
+                     VALUES(?1,?2,?3,?3,'assistant_message',?4)",
+                    params![event.run_id, ordinal, event.run_seq, tail],
                 )?;
                 text.drain(..take);
             }
@@ -1184,9 +1226,16 @@ fn update_thread_projection(
         "tool.effect.started" => {
             let effect_id = inline_text(event, "effect_id").unwrap_or_default();
             let display = inline_text(event, "display_name");
+            let ordinal = next_ordinal()?;
+            let kind = format!("tool_running:{effect_id}");
             tx.execute(
                 "INSERT INTO thread_projection_entries(run_id,ordinal,run_seq,kind,text) VALUES(?1,?2,?3,?4,?5)",
-                params![event.run_id, next_ordinal()?, event.run_seq, format!("tool_running:{effect_id}"), display],
+                params![event.run_id, ordinal, event.run_seq, kind, display],
+            )?;
+            tx.execute(
+                "INSERT INTO thread_projection_versions(run_id,ordinal,valid_from_seq,run_seq,kind,text) \
+                 VALUES(?1,?2,?3,?3,?4,?5)",
+                params![event.run_id, ordinal, event.run_seq, kind, display],
             )?;
         }
         "tool.effect.completed" | "tool.effect.failed" => {
@@ -1201,6 +1250,12 @@ fn update_thread_projection(
                 tx.execute(
                     "UPDATE thread_projection_entries SET kind=?1 WHERE run_id=?2 AND kind=?3",
                     params![new, event.run_id, old],
+                )?;
+                tx.execute(
+                    "INSERT INTO thread_projection_versions(run_id,ordinal,valid_from_seq,run_seq,kind,text) \
+                     SELECT run_id,ordinal,?1,?1,?2,text FROM thread_projection_entries \
+                     WHERE run_id=?3 AND kind=?2",
+                    params![event.run_seq, new, event.run_id],
                 )?;
             }
         }

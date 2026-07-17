@@ -41,17 +41,10 @@ impl super::RunJournal {
             .expect("journal connection is always present outside compaction");
         let mut statement = connection
             .prepare(
-                "WITH snapshot AS ( \
-                 SELECT e.ordinal,e.run_seq,e.kind,e.text FROM thread_projection_entries e \
-                 WHERE e.run_id=?1 AND e.run_seq<=?2 AND NOT EXISTS( \
-                   SELECT 1 FROM thread_projection_history h WHERE h.run_id=e.run_id \
-                   AND h.ordinal=e.ordinal AND h.valid_until_seq>?2) \
-                 UNION ALL \
-                 SELECT h.ordinal,h.run_seq,h.kind,h.text FROM thread_projection_history h \
-                 WHERE h.run_id=?1 AND h.run_seq<=?2 AND h.valid_until_seq=( \
-                   SELECT MIN(h2.valid_until_seq) FROM thread_projection_history h2 \
-                   WHERE h2.run_id=h.run_id AND h2.ordinal=h.ordinal AND h2.valid_until_seq>?2)) \
-                 SELECT run_seq,kind,text FROM snapshot ORDER BY ordinal LIMIT ?3 OFFSET ?4",
+                "SELECT run_seq,kind,text FROM thread_projection_versions INDEXED BY thread_projection_versions_page \
+                 WHERE run_id=?1 AND ordinal>=?4 AND valid_from_seq<=?2 \
+                 AND (valid_until_seq IS NULL OR valid_until_seq>?2) \
+                 ORDER BY ordinal LIMIT ?3",
             )
             .map_err(super::JournalError::from)
             .map_err(super::RunEventPageError::Journal)?;
