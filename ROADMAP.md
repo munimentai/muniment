@@ -25,8 +25,8 @@ Phases mirror harness-spec §9. Muniment-cloud Phase 1 native auth and the cloud
 
 ### Durable local run journal
 - DECIDED — ADR 0002 makes a per-run append-only SQLite event journal authoritative; external effects are never silently re-executed and large bodies live in CAS.
-- DONE — schema/envelope/atomic append, reducer/replay, Pi event translation, deletion/collection/retention, deterministic export, crash-safe compaction, and deterministic cursor-paginated run-summary listing (`run_id`, derived title, and `updated_at` derived from the latest event's `recorded_at`).
-- NEXT — wire the landed run-summary listing into the authorized Linux companion `thread.list` production seam. No further journal-maintenance slice is selected.
+- DONE — schema/envelope/atomic append, reducer/replay, Pi event translation, deletion/collection/retention, deterministic export, crash-safe compaction, deterministic cursor-paginated run-summary listing, and authorized Linux companion `thread.list` backed by those redacted journal summaries.
+- No further journal-maintenance slice is selected.
 
 ### Capability vocabulary and provenance
 - DONE — user surfaces say “capabilities” and receipts render only server-supplied route/model/cost/time/capability provenance.
@@ -38,21 +38,22 @@ Phases mirror harness-spec §9. Muniment-cloud Phase 1 native auth and the cloud
 - NEXT — dictation UI and target-hardware validation as independent slices.
 
 ## Companion execution surfaces (§13)
-- DONE E0 — ADR 0009, bounded protocol/codecs, negotiation and explicit pairing authorization, idempotency ledger, cursor/artifact windows, secure Linux filesystem/socket transport, and the first authorized `thread.list` operation through a deterministic seam.
-- OWNER GO 2026-07-16 — CLI E1 and editor-extension E2 may now proceed concurrently; the earlier one-front-at-a-time note is superseded.
-- NEXT E0.5 — owner-ratify one repository/lane-strategy ADR for both surfaces. It must decide code location, dependency boundaries, build/test CI, and distribution implications. No E1/E2 scaffold precedes this decision.
+- DONE E0 — ADR 0009, bounded protocol/codecs, negotiation and explicit pairing authorization, idempotency ledger, cursor/artifact windows, secure Linux filesystem/socket transport, and authorized `thread.list` backed by redacted journal run summaries.
+- OWNER GO 2026-07-16 — CLI E1 and editor-extension E2 may proceed concurrently after E0.5; the earlier one-front-at-a-time note is superseded.
+- NEXT E0.5 — owner-ratify proposed ADR 0011, which selects repository locations, dependency boundaries, path-scoped build/test CI, and distribution implications for both surfaces. No E1/E2 scaffold precedes ratification.
 - AFTER ADR — decompose E1 into attach/pair, thread list/read, send, run stream, and permission-answer parity slices. E2 scaffolding may begin in its selected lane once the same ADR is accepted; VSIX sideload testing is sufficient and marketplace publication remains owner-gated.
 - Desktop remains the sole runtime/session/journal owner; companions are windows, not modes. macOS and Windows attach adapters remain separate future slices.
 
 ## Browser-control runtime capability (§6.8)
 - OWNER GO 2026-07-16 — open the v1 browser-only actuator line in this repository. It is a governed runtime capability, not another companion surface.
 - DONE E0 correction — the architecture/spec requires extension-only access to real profiles, token plus executable-path relay pairing, and connect-tab anchor lifecycle ownership.
-- NEXT — decompose and implement the first independently reviewable actuator slice: the attributed, upstream-mergeable Apache-2.0 relay core. Later slices cover unpacked MV3 extension/desktop loopback pairing, runtime tool integration, entitlement and ask/allow/deny policy (domain/read-vs-act/sensitive approval), journal receipts, and kill switch.
+- NEXT — implement the first independently reviewable actuator slice: the pinned, attributed, upstream-mergeable Apache-2.0 relay core. Later slices cover unpacked MV3 extension/desktop loopback pairing, runtime tool integration, entitlement and ask/allow/deny policy (domain/read-vs-act/sensitive approval), journal receipts, and kill switch.
 - Chrome Web Store publication is owner-gated. v1 excludes OS, filesystem, and other-application control.
 
 ## Stable release and distribution
 - DONE — rolling nightly release builds one pinned SHA across Linux, signed Windows, and unsigned macOS artifacts; Windows signing was verified 2026-07-15. An owner-triggered strict-SemVer promotion copies one green nightly SHA's exact artifacts to a `vX.Y.Z` stable GitHub Release, documents cadence/version rules, leaves nightly unchanged, and labels unsigned macOS honestly.
-- NEXT — package-manager work behind its stated prerequisites: Winget waits for the per-machine MSI; Homebrew and other Apple distribution remain Apple-account/signing gated. No new monetization or promotional surface is implied.
+- DONE groundwork — stable promotion hashes the signed per-machine MSI, generates a current `Muniment.Muniment` WinGet manifest, and opens a draft PR from the owner's configured `winget-pkgs` fork. Fork/token setup, review, publication, and other distribution accounts remain owner-gated.
+- Homebrew and other Apple distribution remain Apple-account/signing gated. No new monetization or promotional surface is implied.
 
 ## Phase 4+ — Org surface (§9 items 16–19)
 - Remote MCP consumption, local stdio allowlist, capability install flow, artifact side panel, and projects with the redaction rule (`output withheld · connection not granted`).
