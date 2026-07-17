@@ -28,6 +28,8 @@ jobs:
     runs-on: self-hosted
     outputs:
       docs_only: ${{ steps.changes.outputs.docs_only }}
+      companion: ${{ steps.changes.outputs.companion }}
+      desktop: ${{ steps.changes.outputs.desktop }}
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -42,19 +44,35 @@ jobs:
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           docs_only=true
+          companion=false
+          desktop=false
           while IFS= read -r path; do
             case "$path" in
               *.md) ;;
-              *) docs_only=false; break ;;
+              src-tauri/cli/*|src-tauri/cli/**)
+                docs_only=false
+                companion=true
+                ;;
+              src-tauri/attach/*|src-tauri/attach/**|src-tauri/Cargo.toml|src-tauri/Cargo.lock)
+                docs_only=false
+                companion=true
+                desktop=true
+                ;;
+              *)
+                docs_only=false
+                desktop=true
+                ;;
             esac
           done < <(git diff --name-only --diff-filter=ACDMRT "$BASE_SHA" "$HEAD_SHA")
           echo "docs_only=$docs_only" >> "$GITHUB_OUTPUT"
+          echo "companion=$companion" >> "$GITHUB_OUTPUT"
+          echo "desktop=$desktop" >> "$GITHUB_OUTPUT"
 
       - name: Structure smoke
         run: test/smoke.sh
 
       - name: Node 24 (bootstrap if missing)
-        if: steps.changes.outputs.docs_only != 'true'
+        if: steps.changes.outputs.desktop == 'true' || github.event_name != 'pull_request'
         run: |
           node_dir="$HOME/.local/node-24"
           if { ! command -v node >/dev/null 2>&1 || [ "$(node -p 'process.versions.node.split(`.`)[0]' 2>/dev/null)" != 24 ]; } \
@@ -72,11 +90,11 @@ jobs:
           echo "$HOME/.local/node-24/bin" >> "$GITHUB_PATH"
 
       - name: Frontend unit tests
-        if: steps.changes.outputs.docs_only != 'true'
+        if: steps.changes.outputs.desktop == 'true' || github.event_name != 'pull_request'
         run: npm ci --no-audit --no-fund && npm test
 
       - name: Browser control relay core
-        if: steps.changes.outputs.docs_only != 'true'
+        if: steps.changes.outputs.desktop == 'true' || github.event_name != 'pull_request'
         run: npm ci --prefix browser-control --no-audit --no-fund && npm run browser-control
 
       # Unit tests cover src-tauri/core (muniment-core), which is kept free of
@@ -100,20 +118,42 @@ jobs:
           fi
 
       - name: Rust formatting
-        if: steps.changes.outputs.docs_only != 'true'
+        if: steps.changes.outputs.desktop == 'true' || github.event_name != 'pull_request'
         run: cargo fmt --manifest-path src-tauri/core/Cargo.toml --check
 
       - name: Rust lint
-        if: steps.changes.outputs.docs_only != 'true'
+        if: steps.changes.outputs.desktop == 'true' || github.event_name != 'pull_request'
         run: cargo clippy --manifest-path src-tauri/core/Cargo.toml --all-targets --locked -- -D warnings
 
       - name: Rust unit tests
-        if: steps.changes.outputs.docs_only != 'true'
+        if: steps.changes.outputs.desktop == 'true' || github.event_name != 'pull_request'
         run: cargo test --manifest-path src-tauri/core/Cargo.toml --locked
+
+      - name: Companion formatting
+        if: steps.changes.outputs.companion == 'true'
+        run: cargo fmt --manifest-path src-tauri/Cargo.toml --package muniment-attach --package muniment-cli --check
+
+      - name: Companion lint
+        if: steps.changes.outputs.companion == 'true'
+        run: cargo clippy --manifest-path src-tauri/Cargo.toml --package muniment-attach --package muniment-cli --all-targets --locked -- -D warnings
+
+      - name: Companion unit tests
+        if: steps.changes.outputs.companion == 'true'
+        run: cargo test --manifest-path src-tauri/Cargo.toml --package muniment-attach --package muniment-cli --locked
+
+      - name: CLI dependency boundary
+        if: steps.changes.outputs.companion == 'true'
+        run: |
+          forbidden='^(muniment-core|muniment-desktop|tauri($|-)|rusqlite|sherpa-onnx|openidconnect|oauth2|oidc|keyring|secret-service|.*sidecar.*)( |$)'
+          if cargo tree --manifest-path src-tauri/Cargo.toml --package muniment-cli --locked --prefix none \
+              | grep -E "$forbidden"; then
+            echo 'muniment-cli includes a forbidden runtime dependency' >&2
+            exit 1
+          fi
 
   desktop-compile:
     name: Desktop compile preflight (${{ matrix.platform }})
-    if: github.event_name == 'pull_request' && needs.smoke.outputs.docs_only != 'true'
+    if: github.event_name == 'pull_request' && needs.smoke.outputs.desktop == 'true'
     needs: smoke
     runs-on: self-hosted
     timeout-minutes: 30
@@ -160,7 +200,7 @@ jobs:
               "sudo desktop-ci $PLATFORM --repo '$repo_url' --ref '$REF' --cmd '$cmd'"
 
   desktop-build:
-    if: github.event_name == 'pull_request' && needs.smoke.outputs.docs_only != 'true'
+    if: github.event_name == 'pull_request' && needs.smoke.outputs.desktop == 'true'
     needs: [smoke, desktop-compile]
     runs-on: self-hosted
     timeout-minutes: 75

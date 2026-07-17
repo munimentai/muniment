@@ -18,11 +18,22 @@ test -f src/fonts/CommitMono-VF.woff2
 # remain smoke-only
 ci=.github/workflows/ci.yml
 grep -Fq 'name: Desktop compile preflight (${{ matrix.platform }})' "$ci"
-grep -Fq "if: github.event_name == 'pull_request' && needs.smoke.outputs.docs_only != 'true'" "$ci"
+grep -Fq "if: github.event_name == 'pull_request' && needs.smoke.outputs.desktop == 'true'" "$ci"
 grep -Fq 'platform: [linux, windows, macos]' "$ci"
 grep -Fq "cmd='cargo check --manifest-path src-tauri/Cargo.toml --locked --all-targets'" "$ci"
 test "$(grep -Fc 'apt-get install -y -qq --no-install-recommends libasound2-dev' "$ci")" -eq 2
 test -f src-tauri/Cargo.lock
+# companion workspace and its path-scoped CI lane
+grep -Fq 'members = [".", "core", "attach", "cli"]' src-tauri/Cargo.toml
+grep -Fq 'resolver = "2"' src-tauri/Cargo.toml
+test -f src-tauri/attach/Cargo.toml
+test -f src-tauri/attach/src/lib.rs
+test -f src-tauri/cli/Cargo.toml
+test -f src-tauri/cli/src/main.rs
+grep -Fq 'muniment-attach = { path = "../attach", default-features = false, features = ["client"] }' src-tauri/cli/Cargo.toml
+grep -Fq "if: steps.changes.outputs.companion == 'true'" "$ci"
+grep -Fq 'cargo tree --manifest-path src-tauri/Cargo.toml --package muniment-cli' "$ci"
+grep -Fq "needs.smoke.outputs.desktop == 'true'" "$ci"
 test -f src-tauri/tauri.machine.conf.json
 grep -Fq '"upgradeCode": "c75b4a56-7d8b-5b99-9fc7-61ef0aabe84b"' src-tauri/tauri.machine.conf.json
 grep -Fq '"template": "./windows/per-machine.wxs"' src-tauri/tauri.machine.conf.json
@@ -36,5 +47,5 @@ grep -Fq 'build-windows-installers.mjs' .github/workflows/nightly.yml
 grep -Fq 'windows-installers.ps1' .github/workflows/nightly.yml
 test -f docs/windows-installers.md
 grep -Fq 'needs: [smoke, desktop-compile]' "$ci"
-test "$(grep -Fc "if: github.event_name == 'pull_request' && needs.smoke.outputs.docs_only != 'true'" "$ci")" -eq 2
+test "$(grep -Fc "if: github.event_name == 'pull_request' && needs.smoke.outputs.desktop == 'true'" "$ci")" -eq 2
 echo "smoke OK"
