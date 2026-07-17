@@ -106,7 +106,7 @@ fn unavailable_service(
 #[derive(Default)]
 struct StartService {
     calls: Vec<(String, RunStartRequest, Id, Id, CompanionProvenance)>,
-    malformed_output: bool,
+    output: Option<RunStartAccepted>,
 }
 
 impl ThreadListService for StartService {
@@ -133,15 +133,11 @@ impl ThreadListService for StartService {
             idempotency_key.clone(),
             provenance,
         ));
-        Ok(RunStartAccepted {
-            run_id: if self.malformed_output {
-                "not-a-run-id".into()
-            } else {
-                "0190a100-0000-7000-8000-000000000001".into()
-            },
+        Ok(self.output.clone().unwrap_or_else(|| RunStartAccepted {
+            run_id: "0190a100-0000-7000-8000-000000000001".into(),
             committed_seq: 2,
             accepted_at: "2026-07-17T00:00:00Z".into(),
-        })
+        }))
     }
 }
 
@@ -1392,6 +1388,45 @@ fn authorized_run_start_dispatches_once_with_bounded_input_and_provenance() {
 }
 
 #[test]
+fn operations_outside_run_start_remain_unsupported_without_dispatch() {
+    let (mut client, server) = UnixStream::pair().unwrap();
+    client.write_all(&hello(1, 1)).unwrap();
+    client
+        .write_all(&request(79, Operation::RunOpen, json!({})))
+        .unwrap();
+    client
+        .write_all(&request_with_idempotency(
+            80,
+            Operation::RunSteer,
+            json!({"text": "private steer"}),
+        ))
+        .unwrap();
+    client.shutdown(Shutdown::Write).unwrap();
+    let mut approved = approval();
+    approved.scopes.insert("run.write".into());
+    let mut service = StartService::default();
+    assert_eq!(
+        dispatch_session_with_approval(
+            &mut client,
+            server,
+            TestClock(Rc::new(Cell::new(Duration::ZERO))),
+            approved,
+            &mut service,
+        ),
+        Ok(())
+    );
+    for id in [79, 80] {
+        let error: ErrorEnvelope = read_frame(&mut client);
+        assert_eq!(
+            error.request_id,
+            Some(Id::new(format!("{id:032x}")).unwrap())
+        );
+        assert_eq!(error.error.code(), ErrorCode::UnsupportedOperation);
+    }
+    assert!(service.calls.is_empty());
+}
+
+#[test]
 fn run_start_rejects_missing_scope_key_and_hostile_bodies_without_dispatch() {
     let cases = [
         (
@@ -1462,38 +1497,84 @@ fn run_start_rejects_missing_scope_key_and_hostile_bodies_without_dispatch() {
 
 #[test]
 fn malformed_run_start_service_output_is_a_redacted_closed_error() {
-    let (mut client, server) = UnixStream::pair().unwrap();
-    client.write_all(&hello(1, 1)).unwrap();
-    client
-        .write_all(&request_with_idempotency(
-            77,
-            Operation::RunStart,
-            json!({"text": "private prompt"}),
-        ))
-        .unwrap();
-    client.shutdown(Shutdown::Write).unwrap();
-    let mut approved = approval();
-    approved.scopes.insert("run.write".into());
-    let mut service = StartService {
-        malformed_output: true,
-        ..Default::default()
-    };
-    assert_eq!(
-        dispatch_session_with_approval(
-            &mut client,
-            server,
-            TestClock(Rc::new(Cell::new(Duration::ZERO))),
-            approved,
-            &mut service,
-        ),
-        Ok(())
-    );
-    let error: ErrorEnvelope = read_frame(&mut client);
-    assert_eq!(error.error.code(), ErrorCode::PersistenceFailed);
-    assert!(!serde_json::to_string(&error)
-        .unwrap()
-        .contains("private prompt"));
-    assert_eq!(service.calls.len(), 1);
+    let valid_run_id = "0190a100-0000-7000-8000-000000000001";
+    let cases = [
+        RunStartAccepted {
+            run_id: "not-a-run-id".into(),
+            committed_seq: 2,
+            accepted_at: "2026-07-17T00:00:00Z".into(),
+        },
+        RunStartAccepted {
+            run_id: valid_run_id.into(),
+            committed_seq: 0,
+            accepted_at: "2026-07-17T00:00:00Z".into(),
+        },
+        RunStartAccepted {
+            run_id: valid_run_id.into(),
+            committed_seq: 2,
+            accepted_at: String::new(),
+        },
+        RunStartAccepted {
+            run_id: valid_run_id.into(),
+            committed_seq: 2,
+            accepted_at: "private malformed timestamp".into(),
+        },
+        RunStartAccepted {
+            run_id: valid_run_id.into(),
+            committed_seq: 2,
+            accepted_at: "private oversized timestamp".repeat(MAX_FRAME_LENGTH),
+        },
+    ];
+    let mut expected_error = None;
+    for (offset, output) in cases.into_iter().enumerate() {
+        let id = 81 + offset as u128;
+        let (mut client, server) = UnixStream::pair().unwrap();
+        client.write_all(&hello(1, 1)).unwrap();
+        client
+            .write_all(&request_with_idempotency(
+                id,
+                Operation::RunStart,
+                json!({"text": "private prompt"}),
+            ))
+            .unwrap();
+        client.shutdown(Shutdown::Write).unwrap();
+        let mut approved = approval();
+        approved.scopes.insert("run.write".into());
+        let mut service = StartService {
+            output: Some(output),
+            ..Default::default()
+        };
+        assert_eq!(
+            dispatch_session_with_approval(
+                &mut client,
+                server,
+                TestClock(Rc::new(Cell::new(Duration::ZERO))),
+                approved,
+                &mut service,
+            ),
+            Ok(())
+        );
+        let error: ErrorEnvelope = read_frame(&mut client);
+        assert_eq!(
+            error.request_id,
+            Some(Id::new(format!("{id:032x}")).unwrap())
+        );
+        assert_eq!(error.error.code(), ErrorCode::PersistenceFailed);
+        let encoded = serde_json::to_string(&error).unwrap();
+        assert!(!encoded.contains("private prompt"));
+        assert!(!encoded.contains("private malformed timestamp"));
+        assert!(!encoded.contains("private oversized timestamp"));
+        assert!(!encoded.contains("profile-1"));
+        assert!(!encoded.contains("1.0.0"));
+        let error_value = serde_json::to_value(error.error).unwrap();
+        assert_eq!(error_value.get("details"), None);
+        if let Some(expected) = &expected_error {
+            assert_eq!(&error_value, expected);
+        } else {
+            expected_error = Some(error_value);
+        }
+        assert_eq!(service.calls.len(), 1);
+    }
 }
 
 #[test]
