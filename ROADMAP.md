@@ -47,7 +47,8 @@ Phases mirror harness-spec §9. Muniment-cloud Phase 1 native auth and the cloud
 ## Browser-control runtime capability (§6.8)
 - OWNER GO 2026-07-16 — open the v1 browser-only actuator line in this repository. It is a governed runtime capability, not another companion surface.
 - DONE E0 correction — the architecture/spec requires extension-only access to real profiles, token plus executable-path relay pairing, and connect-tab anchor lifecycle ownership.
-- NEXT — implement the first independently reviewable actuator slice: the pinned, attributed, upstream-mergeable Apache-2.0 relay core. Later slices cover unpacked MV3 extension/desktop loopback pairing, runtime tool integration, entitlement and ask/allow/deny policy (domain/read-vs-act/sensitive approval), journal receipts, and kill switch.
+- DONE E1 — pinned, attributed, upstream-mergeable Apache-2.0 Playwright relay request/response/event core behind an injected transport, with bounded adversarial tests and independent CI coverage.
+- NEXT E2 — implement the transport-independent, fail-closed pairing session: single-use expiring token, injected OS-owned browser identity verification, rotation/revocation, and redacted reason codes. Later slices add platform peer-identity adapters, desktop loopback transport, the unpacked MV3 extension/connect-tab lifecycle, runtime tool integration, entitlement and ask/allow/deny policy (domain/read-vs-act/sensitive approval), journal receipts, and kill switch.
 - Chrome Web Store publication is owner-gated. v1 excludes OS, filesystem, and other-application control.
 
 ## Stable release and distribution
