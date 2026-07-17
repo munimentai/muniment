@@ -18,11 +18,64 @@ test -f src/fonts/CommitMono-VF.woff2
 # remain smoke-only
 ci=.github/workflows/ci.yml
 grep -Fq 'name: Desktop compile preflight (${{ matrix.platform }})' "$ci"
-grep -Fq "if: github.event_name == 'pull_request' && needs.smoke.outputs.docs_only != 'true'" "$ci"
+grep -Fq "if: github.event_name == 'pull_request' && needs.smoke.outputs.desktop == 'true'" "$ci"
 grep -Fq 'platform: [linux, windows, macos]' "$ci"
 grep -Fq "cmd='cargo check --manifest-path src-tauri/Cargo.toml --locked --all-targets'" "$ci"
 test "$(grep -Fc 'apt-get install -y -qq --no-install-recommends libasound2-dev' "$ci")" -eq 2
 test -f src-tauri/Cargo.lock
+# companion workspace and its path-scoped CI lane
+grep -Fq 'members = [".", "core", "attach", "cli"]' src-tauri/Cargo.toml
+grep -Fq 'resolver = "2"' src-tauri/Cargo.toml
+test -f src-tauri/attach/Cargo.toml
+test -f src-tauri/attach/src/lib.rs
+test -f src-tauri/cli/Cargo.toml
+test -f src-tauri/cli/src/main.rs
+grep -Fq 'muniment-attach = { path = "../attach", default-features = false, features = ["client"] }' src-tauri/cli/Cargo.toml
+grep -Fq 'src-tauri/cli/*|src-tauri/cli/**' "$ci"
+grep -Fq 'src-tauri/attach/*|src-tauri/attach/**|src-tauri/Cargo.toml|src-tauri/Cargo.lock)' "$ci"
+grep -Fq 'echo "companion=$companion" >> "$GITHUB_OUTPUT"' "$ci"
+grep -Fq "if: steps.changes.outputs.companion == 'true'" "$ci"
+grep -Fq 'cargo fmt --manifest-path src-tauri/Cargo.toml --package muniment-attach --package muniment-cli --check' "$ci"
+grep -Fq 'cargo clippy --manifest-path src-tauri/Cargo.toml --package muniment-attach --package muniment-cli --all-targets --locked -- -D warnings' "$ci"
+grep -Fq 'cargo test --manifest-path src-tauri/Cargo.toml --package muniment-attach --package muniment-cli --locked' "$ci"
+grep -Fq 'run: test/cli-dependency-boundary.sh' "$ci"
+test -x test/cli-dependency-boundary.sh
+grep -Fq -- '--locked --target all --prefix none' test/cli-dependency-boundary.sh
+# The allowlist rejects representatives of every forbidden runtime class,
+# including package-name variants and implementations without category words.
+for forbidden in \
+  muniment-core muniment-desktop tauri tauri-plugin-dialog rusqlite \
+  sherpa-onnx sherpa-onnx-sys sidecar-supervision openidconnect oauth2 \
+  oidc-client keyring keyring-core secret-service dbus-secret-service \
+  security-framework windows-credentials; do
+  ! test/cli-dependency-boundary.sh muniment-cli muniment-attach "$forbidden" \
+    >/dev/null 2>&1
+done
+# Exercise the real Cargo tree path with a dependency hidden from Linux's host
+# graph. The boundary must inspect dependencies for every target platform.
+cli_manifest=src-tauri/cli/Cargo.toml
+lockfile=src-tauri/Cargo.lock
+cli_manifest_backup=$(mktemp)
+lockfile_backup=$(mktemp)
+boundary_output=$(mktemp)
+cp "$cli_manifest" "$cli_manifest_backup"
+cp "$lockfile" "$lockfile_backup"
+restore_dependency_probe() {
+  cp "$cli_manifest_backup" "$cli_manifest"
+  cp "$lockfile_backup" "$lockfile"
+  rm -f "$cli_manifest_backup" "$lockfile_backup" "$boundary_output"
+}
+trap restore_dependency_probe EXIT
+printf '\n[target.\x27cfg(windows)\x27.dependencies]\nmuniment-core = { path = "../core" }\n' >> "$cli_manifest"
+cargo generate-lockfile --manifest-path src-tauri/Cargo.toml --offline
+if test/cli-dependency-boundary.sh >"$boundary_output" 2>&1; then
+  echo "target-specific forbidden dependency passed the CLI boundary" >&2
+  exit 1
+fi
+grep -Fq 'muniment-core' "$boundary_output"
+restore_dependency_probe
+trap - EXIT
+grep -Fq "needs.smoke.outputs.desktop == 'true'" "$ci"
 test -f src-tauri/tauri.machine.conf.json
 grep -Fq '"upgradeCode": "c75b4a56-7d8b-5b99-9fc7-61ef0aabe84b"' src-tauri/tauri.machine.conf.json
 grep -Fq '"template": "./windows/per-machine.wxs"' src-tauri/tauri.machine.conf.json
@@ -36,5 +89,5 @@ grep -Fq 'build-windows-installers.mjs' .github/workflows/nightly.yml
 grep -Fq 'windows-installers.ps1' .github/workflows/nightly.yml
 test -f docs/windows-installers.md
 grep -Fq 'needs: [smoke, desktop-compile]' "$ci"
-test "$(grep -Fc "if: github.event_name == 'pull_request' && needs.smoke.outputs.docs_only != 'true'" "$ci")" -eq 2
+test "$(grep -Fc "if: github.event_name == 'pull_request' && needs.smoke.outputs.desktop == 'true'" "$ci")" -eq 2
 echo "smoke OK"
