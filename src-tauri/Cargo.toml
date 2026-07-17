@@ -3,6 +3,10 @@ name = "muniment-desktop"
 version = "0.0.1"
 edition = "2021"
 
+[workspace]
+members = [".", "core", "attach", "cli"]
+resolver = "2"
+
 [build-dependencies]
 sha2 = "0.10"
 tauri-build = { version = "2", features = [] }
