@@ -84,6 +84,65 @@ fn fixture_exporter_check_reports_stale_without_writing() {
     fs::remove_dir_all(root).unwrap();
 }
 
+fn canonical_fixture(name: &str) -> Value {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../protocol-fixtures/muniment.attach/1")
+        .join(name);
+    serde_json::from_slice(&fs::read(path).unwrap()).unwrap()
+}
+
+#[test]
+fn canonical_run_start_fixtures_match_client_contracts() {
+    let request: Envelope =
+        serde_json::from_value(canonical_fixture("request-run-start.json")).unwrap();
+    let Envelope::Request(request) = request else {
+        panic!("expected request fixture");
+    };
+    assert_eq!(request.operation, Operation::RunStart);
+    assert_eq!(
+        request.body,
+        json!({
+            "text": "Summarize the selected file.",
+            "context": {"selected_file": "src/main.rs"}
+        })
+    );
+
+    let response: Envelope =
+        serde_json::from_value(canonical_fixture("response-run-start.json")).unwrap();
+    let Envelope::Response(response) = response else {
+        panic!("expected response fixture");
+    };
+    assert_eq!(response.request_id, request.request_id);
+    let accepted: RunStartAccepted = serde_json::from_value(response.body).unwrap();
+    assert_eq!(accepted.committed_seq, 1);
+}
+
+#[test]
+fn canonical_cursor_ack_and_permission_fixtures_match_client_contracts() {
+    let request: Envelope =
+        serde_json::from_value(canonical_fixture("request-run-cursor-ack.json")).unwrap();
+    let Envelope::Request(request) = request else {
+        panic!("expected request fixture");
+    };
+    assert_eq!(request.operation, Operation::RunCursorAck);
+    assert_eq!(
+        request.body,
+        json!({
+            "subscription_id": "00000000000000000000000000000190",
+            "through_run_seq": 7
+        })
+    );
+
+    let event: Envelope =
+        serde_json::from_value(canonical_fixture("event-permission-pending.json")).unwrap();
+    let Envelope::Event(event) = event else {
+        panic!("expected event fixture");
+    };
+    assert_eq!(event.event, EventName::PermissionPending);
+    let permission: PendingPermission = serde_json::from_value(event.body).unwrap();
+    assert_eq!(permission.kind, PermissionKind::Confirm);
+}
+
 fn id(n: u128) -> Id {
     Id::new(format!("{n:032x}")).unwrap()
 }

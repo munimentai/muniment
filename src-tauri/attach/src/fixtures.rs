@@ -510,10 +510,9 @@ fn fixture_bytes() -> io::Result<BTreeMap<String, Vec<u8>>> {
         "response-run-start.json",
         &Response {
             protocol: Protocol,
-            request_id: id(100)?,
+            request_id: id(103)?,
             ok: Success,
             body: json!({
-                "accepted": true,
                 "run_id": "00000000000000000000000000000191",
                 "committed_seq": 1,
                 "accepted_at": "2026-07-17T00:00:00Z"
@@ -591,13 +590,13 @@ fn request_body(operation: Operation) -> serde_json::Value {
         }
         Operation::RunOpen => json!({"run_id": "00000000000000000000000000000191"}),
         Operation::RunStart => {
-            json!({"prompt": "Summarize the selected file.", "workspace_id": "workspace-1", "context": {"selected_file": "src/main.rs"}})
+            json!({"text": "Summarize the selected file.", "context": {"selected_file": "src/main.rs"}})
         }
         Operation::RunStream => {
             json!({"run_id": "00000000000000000000000000000191", "after_run_seq": 7})
         }
         Operation::RunCursorAck => {
-            json!({"run_id": "00000000000000000000000000000191", "run_seq": 7})
+            json!({"subscription_id": "00000000000000000000000000000190", "through_run_seq": 7})
         }
         Operation::RunSteer => {
             json!({"run_id": "00000000000000000000000000000191", "prompt": "Focus on error handling."})
@@ -658,10 +657,15 @@ fn error_fixture(code: crate::ErrorCode) -> (&'static str, ProtocolError) {
 
 fn event_body(event: &EventName) -> serde_json::Value {
     match event {
-        EventName::RunEvent => json!({"kind": "assistant_message", "text": "Fixture response."}),
+        EventName::RunEvent => json!({
+            "event_type": "assistant.message",
+            "event_version": 1,
+            "recorded_at": "2026-07-17T00:00:00Z",
+            "payload": {"withheld": true}
+        }),
         EventName::SubscriptionCaughtUp => json!({"through_run_seq": 7}),
         EventName::PermissionPending => {
-            json!({"gate_id": "permission-1", "kind": "filesystem_write", "reason": "Update src/main.rs"})
+            json!({"gate_id": "permission-1", "kind": "confirm", "title": "Allow file update?", "message": "Update src/main.rs"})
         }
         EventName::ArtifactChunk => {
             json!({"artifact_id": "artifact-1", "cursor": "artifact-cursor-1", "data": "Zml4dHVyZQ=="})
