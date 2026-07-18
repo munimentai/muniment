@@ -49,8 +49,8 @@ Phases mirror harness-spec §9. Muniment-cloud Phase 1 native auth and the cloud
 - DONE E1 live-tail server — bounded, loss-tolerant journal commit hints wake the authorized Linux attach session, which re-reads the journal and delivers newly committed events without missing the subscription-snapshot race while preserving workspace isolation and flow control.
 - DONE E1 protocol-client live tail — the protocol-only client continues ordered, bounded, redacted consumption after the caught-up marker while acknowledging flow-control windows.
 - DONE E1 terminal progress — `muniment run start` follows the committed run over the preserved authorized connection, renders ordered redacted catch-up/live events, acknowledges flow-control windows, and exits on a terminal event.
-- DONE E1 permission-answer server seam — the authorized Linux attach session validates and dispatches bounded, idempotent `permission.answer` requests through the shared service boundary with companion provenance and redacted failures.
-- NEXT E1 — add protocol-client `permission.answer` encoding and response validation. Interactive terminal prompting follows separately.
+- DONE E1 permission-answer server/client seams — the authorized Linux attach session validates and dispatches bounded, idempotent `permission.answer` requests through the shared service boundary with companion provenance and redacted failures; the protocol-only client encodes correlated allow/deny answers and validates committed receipts.
+- NEXT E1 — deliver a bounded `permission.pending` event over the authorized run stream so clients receive the gate identity and safe decision context. Interactive terminal prompting follows separately.
 - E2 may proceed concurrently in its independently scoped TypeScript package lane per ADR 0011; VSIX sideload testing is sufficient and marketplace publication remains owner-gated.
 - The runtime service is the sole runtime/session/journal owner; desktop, CLI, and editor extension are clients and remain windows, not modes. macOS and Windows attach adapters remain separate future slices.
 
