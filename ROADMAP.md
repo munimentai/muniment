@@ -47,7 +47,8 @@ Phases mirror harness-spec §9. Muniment-cloud Phase 1 native auth and the cloud
 - DONE E1 stream server groundwork — the authorized Linux attach session serves bounded, redacted journal-backed `run.stream` catch-up with workspace isolation, sequence/window validation, an explicit caught-up event, retained per-connection flow-control state, and `run.cursor_ack` handling that resumes a window-paused catch-up.
 - DONE E1 protocol client catch-up — the protocol-only client sends typed `run.stream` subscription requests, validates ordered, bounded, redacted catch-up events through the explicit caught-up marker, acknowledges consumed run-stream windows, and continues paused catch-up.
 - DONE E1 live-tail server — bounded, loss-tolerant journal commit hints wake the authorized Linux attach session, which re-reads the journal and delivers newly committed events without missing the subscription-snapshot race while preserving workspace isolation and flow control.
-- NEXT E1 — protocol-client live consumption after the caught-up marker. Subsequent independent slices wire terminal rendering and permission-answer parity.
+- DONE E1 protocol-client live tail — the protocol-only client continues ordered, bounded, redacted consumption after the caught-up marker while acknowledging flow-control windows.
+- NEXT E1 — render a started run’s redacted catch-up and live progress in the interactive terminal until a terminal event. Permission-answer parity follows as a separate slice.
 - E2 may proceed concurrently in its independently scoped TypeScript package lane per ADR 0011; VSIX sideload testing is sufficient and marketplace publication remains owner-gated.
 - The runtime service is the sole runtime/session/journal owner; desktop, CLI, and editor extension are clients and remain windows, not modes. macOS and Windows attach adapters remain separate future slices.
 
