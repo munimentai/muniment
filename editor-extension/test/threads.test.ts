@@ -4,6 +4,8 @@ import { OPEN_THREAD_COMMAND, ThreadsModel, threadOpenCommand, type AttachConnec
 import {
   AttachTransportError,
   type AttachConnection,
+  type JsonValue,
+  type RunStartAccepted,
   type ThreadListPage,
 } from "../src/transport";
 
@@ -22,6 +24,10 @@ class FakeConnection implements AttachConnection {
   }
 
   async openThread(): Promise<never> {
+    throw new Error("not used");
+  }
+
+  async startRun(_text: string, _context?: JsonValue): Promise<RunStartAccepted> {
     throw new Error("not used");
   }
 

@@ -127,6 +127,121 @@ test("lists and opens bounded thread pages over the authorized connection", asyn
   connection.dispose();
 });
 
+test("starts runs with the canonical request shape and decodes the receipt", async () => {
+  const socket = new FakeSocket();
+  const connection = await authorizedConnection(socket);
+
+  const started = connection.startRun("Summarize the selected file.", { selected_file: "src/main.rs" });
+  const request = lastRequest(socket);
+  assert.equal(request.operation, "run.start");
+  assert.equal(request.capability, "c".repeat(64));
+  assert.deepEqual(request.body, {
+    context: { selected_file: "src/main.rs" }, text: "Summarize the selected file.",
+  });
+  assert.match(request.request_id as string, /^[0-9a-f-]{36}$/);
+  assert.match(request.idempotency_key as string, /^[0-9a-f-]{36}$/);
+  assert.notEqual(request.idempotency_key, request.request_id);
+  socket.emit("data", encodeAttachFrame({
+    protocol: "muniment.attach/1", request_id: request.request_id, ok: true,
+    body: { accepted_at: "2026-07-17T00:00:00Z", committed_seq: 1,
+      run_id: "00000000000000000000000000000191" },
+  }));
+  assert.deepEqual(await started, { acceptedAt: "2026-07-17T00:00:00Z", committedSeq: 1,
+    runId: "00000000000000000000000000000191" });
+
+  const second = connection.startRun("Another prompt");
+  const secondRequest = lastRequest(socket);
+  assert.deepEqual(secondRequest.body, { text: "Another prompt" });
+  assert.notEqual(secondRequest.idempotency_key, request.idempotency_key);
+  socket.emit("data", encodeAttachFrame({ protocol: "muniment.attach/1",
+    request_id: secondRequest.request_id, ok: true,
+    body: { run_id: "01900000-0000-7000-8000-000000000001", committed_seq: 2,
+      accepted_at: "2026-07-17T00:00:00.123+05:30" } }));
+  await second;
+  connection.dispose();
+});
+
+test("rejects invalid run-start inputs before writing", async () => {
+  const socket = new FakeSocket();
+  const connection = await authorizedConnection(socket);
+  const writes = socket.writes.length;
+  for (const [text, context] of [
+    [" \n\t", undefined],
+    ["x".repeat(32 * 1024 + 1), undefined],
+    ["prompt", "x".repeat(64 * 1024)],
+    ["prompt", { invalid: Number.NaN }],
+  ] as const) {
+    await assert.rejects(connection.startRun(text, context), (error: unknown) =>
+      error instanceof AttachTransportError && error.code === "unexpected_message");
+  }
+  assert.equal(socket.writes.length, writes);
+  connection.dispose();
+});
+
+test("fails closed on excessively nested run-start context before writing", async () => {
+  const socket = new FakeSocket();
+  const connection = await authorizedConnection(socket);
+  const writes = socket.writes.length;
+  let context: unknown = null;
+  for (let depth = 0; depth < 20_000; depth++) context = [context];
+
+  await assert.rejects(connection.startRun("prompt", context as never), (error: unknown) =>
+    error instanceof AttachTransportError && error.code === "unexpected_message" &&
+    error.message === "unexpected_message");
+  assert.equal(socket.writes.length, writes);
+  connection.dispose();
+});
+
+test("fails closed while snapshotting stateful run-start context without closing", async () => {
+  const socket = new FakeSocket();
+  const connection = await authorizedConnection(socket);
+  const writes = socket.writes.length;
+  let accesses = 0;
+  const context = Object.defineProperty({}, "selected_file", {
+    enumerable: true,
+    get() {
+      if (++accesses > 1) throw new Error("private getter detail");
+      return "src/main.rs";
+    },
+  });
+
+  await assert.rejects(connection.startRun("prompt", context), (error: unknown) =>
+    error instanceof AttachTransportError && error.code === "unexpected_message" &&
+    error.message === "unexpected_message");
+  assert.equal(socket.writes.length, writes);
+  assert.equal(socket.destroyed, false);
+
+  const listed = connection.listThreads();
+  const request = lastRequest(socket);
+  socket.emit("data", encodeAttachFrame({ protocol: "muniment.attach/1",
+    request_id: request.request_id, ok: true, body: { threads: [] } }));
+  assert.deepEqual(await listed, { threads: [] });
+  connection.dispose();
+});
+
+test("fails closed on malformed run-start receipts", async () => {
+  const invalidBodies = [
+    { run_id: "bad", committed_seq: 1, accepted_at: "2026-07-17T00:00:00Z" },
+    { run_id: "00000000000000000000000000000191", committed_seq: 0,
+      accepted_at: "2026-07-17T00:00:00Z" },
+    { run_id: "00000000000000000000000000000191", committed_seq: 1,
+      accepted_at: "2026-02-30T00:00:00Z" },
+    { run_id: "00000000000000000000000000000191", committed_seq: 1,
+      accepted_at: "2026-07-17T00:00:00Z", detail: "private" },
+  ];
+  for (const body of invalidBodies) {
+    const socket = new FakeSocket();
+    const connection = await authorizedConnection(socket);
+    const started = connection.startRun("prompt");
+    const request = lastRequest(socket);
+    socket.emit("data", encodeAttachFrame({ protocol: "muniment.attach/1",
+      request_id: request.request_id, ok: true, body }));
+    await assert.rejects(started, (error: unknown) => error instanceof AttachTransportError &&
+      error.code === "unexpected_message" && !error.message.includes("private"));
+    connection.dispose();
+  }
+});
+
 test("rejects invalid inputs before writing and bounds concurrent requests", async () => {
   const socket = new FakeSocket();
   const connection = await authorizedConnection(socket);
@@ -138,7 +253,7 @@ test("rejects invalid inputs before writing and bounds concurrent requests", asy
   assert.equal(socket.writes.length, writes);
 
   const first = connection.listThreads();
-  await assert.rejects(connection.openThread("thread-1"), (error: unknown) =>
+  await assert.rejects(connection.startRun("prompt"), (error: unknown) =>
     error instanceof AttachTransportError && error.code === "unexpected_message");
   const request = lastRequest(socket);
   socket.emit("data", encodeAttachFrame({ protocol: "muniment.attach/1",

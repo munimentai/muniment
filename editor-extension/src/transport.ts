@@ -114,7 +114,16 @@ export interface AttachConnection {
   readonly idleTimeoutSeconds: number;
   listThreads(cursor?: string): Promise<ThreadListPage>;
   openThread(threadId: string, cursor?: string): Promise<ThreadOpenPage>;
+  startRun(text: string, context?: JsonValue): Promise<RunStartAccepted>;
   dispose(): void;
+}
+
+export type JsonValue = null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue };
+
+export interface RunStartAccepted {
+  runId: string;
+  committedSeq: number;
+  acceptedAt: string;
 }
 
 export interface RedactedThreadSummary {
@@ -381,12 +390,15 @@ export function connectAttach(options: ConnectOptions): Promise<AttachConnection
               closeUnexpected(transportError(error));
             }
           };
-          const request = (operation: "thread.list" | "thread.open", body: JsonBody): Promise<AttachEnvelope> => {
+          const request = (operation: "thread.list" | "thread.open" | "run.start", body: JsonBody,
+            idempotent = false): Promise<AttachEnvelope> => {
             if (!capability) return Promise.reject(new AttachTransportError("authorization_expired"));
             if (pending) return Promise.reject(new AttachTransportError("unexpected_message"));
             let requestId: string;
+            let idempotencyKey: string | undefined;
             try {
               requestId = freshRequestId();
+              if (idempotent) idempotencyKey = freshRequestId();
             } catch {
               return Promise.reject(new AttachTransportError("randomness_unavailable"));
             }
@@ -398,6 +410,7 @@ export function connectAttach(options: ConnectOptions): Promise<AttachConnection
               try {
                 socket.write(encodeAttachFrame({
                   protocol: ATTACH_PROTOCOL, request_id: requestId, operation, capability, body,
+                  ...(idempotencyKey === undefined ? {} : { idempotency_key: idempotencyKey }),
                 }));
               } catch (error) {
                 closeUnexpected(transportError(error));
@@ -423,6 +436,12 @@ export function connectAttach(options: ConnectOptions): Promise<AttachConnection
               const body: JsonBody = { thread_id: threadId, limit: THREAD_PAGE_LIMIT };
               if (cursor !== undefined) body.cursor = cursor;
               return decodeThreadOpenPage((await request("thread.open", body)).body, threadId);
+            },
+            async startRun(text: string, context?: JsonValue): Promise<RunStartAccepted> {
+              const validatedContext = validateRunStartInput(text, context);
+              const body: JsonBody = { text };
+              if (validatedContext !== undefined) body.context = validatedContext;
+              return decodeRunStartAccepted((await request("run.start", body, true)).body);
             },
             dispose(): void {
               capability = "";
@@ -450,9 +469,11 @@ export function connectAttach(options: ConnectOptions): Promise<AttachConnection
   });
 }
 
-type JsonBody = Record<string, string | number>;
+type JsonBody = Record<string, JsonValue>;
 const THREAD_PAGE_LIMIT = 100;
 const MAX_TEXT_LENGTH = 64 * 1024;
+const MAX_RUN_START_TEXT_LENGTH = 32 * 1024;
+const MAX_RUN_START_CONTEXT_LENGTH = 64 * 1024;
 const MAX_CURSOR_LENGTH = 1024;
 const MAX_THREAD_ID_LENGTH = 36;
 
@@ -472,6 +493,28 @@ function validateBoundedString(value: unknown, maximum: number, allowEmpty: bool
 
 function validateCursor(cursor: string | undefined, maximum: number): void {
   if (cursor !== undefined) validateBoundedString(cursor, maximum, false);
+}
+
+function validateRunStartInput(text: unknown, context: unknown): JsonValue | undefined {
+  if (typeof text !== "string" || text.trim().length === 0 ||
+      Buffer.byteLength(text) > MAX_RUN_START_TEXT_LENGTH) {
+    throw new AttachTransportError("unexpected_message");
+  }
+  if (context !== undefined) {
+    try {
+      if (!isJsonValue(context)) throw new AttachTransportError("unexpected_message");
+      const encoded = JSON.stringify(context);
+      if (encoded === undefined || Buffer.byteLength(encoded) > MAX_RUN_START_CONTEXT_LENGTH) {
+        throw new AttachTransportError("unexpected_message");
+      }
+      const snapshot = JSON.parse(encoded) as unknown;
+      if (!isJsonValue(snapshot)) throw new AttachTransportError("unexpected_message");
+      return snapshot;
+    } catch {
+      throw new AttachTransportError("unexpected_message");
+    }
+  }
+  return undefined;
 }
 
 function exactObject(value: unknown, required: readonly string[], optional: readonly string[] = []): Record<string, unknown> {
@@ -522,12 +565,54 @@ function decodeThreadOpenPage(value: unknown, expectedThreadId: string): ThreadO
     ...(page.next_cursor === undefined ? {} : { nextCursor: page.next_cursor }) };
 }
 
+function decodeRunStartAccepted(value: unknown): RunStartAccepted {
+  const accepted = exactObject(value, ["run_id", "committed_seq", "accepted_at"]);
+  if (!isUuid(accepted.run_id) || typeof accepted.committed_seq !== "number" ||
+      !Number.isSafeInteger(accepted.committed_seq) || accepted.committed_seq <= 0 ||
+      typeof accepted.accepted_at !== "string" || !isRfc3339(accepted.accepted_at)) {
+    throw new AttachTransportError("unexpected_message");
+  }
+  return { runId: accepted.run_id, committedSeq: accepted.committed_seq,
+    acceptedAt: accepted.accepted_at };
+}
+
 function validateOptionalCursor(value: unknown, maximum: number): asserts value is string | undefined {
   if (value !== undefined) validateBoundedString(value, maximum, false);
 }
 
 function isHex(value: unknown, length: number): value is string {
   return typeof value === "string" && value.length === length && /^[0-9a-f]+$/i.test(value);
+}
+
+function isUuid(value: unknown): value is string {
+  return typeof value === "string" && (/^[0-9a-f]{32}$/i.test(value) ||
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value));
+}
+
+function isJsonValue(value: unknown, seen = new Set<object>()): value is JsonValue {
+  if (value === null || typeof value === "string" || typeof value === "boolean") return true;
+  if (typeof value === "number") return Number.isFinite(value);
+  if (typeof value !== "object" || seen.has(value)) return false;
+  seen.add(value);
+  const valid = Array.isArray(value)
+    ? value.every((item) => isJsonValue(item, seen))
+    : Object.getPrototypeOf(value) === Object.prototype &&
+      Object.values(value).every((item) => isJsonValue(item, seen));
+  seen.delete(value);
+  return valid;
+}
+
+function isRfc3339(value: string): boolean {
+  if (Buffer.byteLength(value) > MAX_TEXT_LENGTH) return false;
+  const match = /^(\d{4})-(\d{2})-(\d{2})[Tt](\d{2}):(\d{2}):(\d{2})(?:\.\d+)?(?:[Zz]|([+-])(\d{2}):(\d{2}))$/.exec(value);
+  if (!match) return false;
+  const [, year, month, day, hour, minute, second, , zoneHour, zoneMinute] = match;
+  const y = Number(year), m = Number(month), d = Number(day);
+  const leap = y % 4 === 0 && (y % 100 !== 0 || y % 400 === 0);
+  const days = [0, 31, leap ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+  return m >= 1 && m <= 12 && d >= 1 && d <= days[m] && Number(hour) <= 23 &&
+    Number(minute) <= 59 && Number(second) <= 60 &&
+    (zoneHour === undefined || (Number(zoneHour) <= 23 && Number(zoneMinute) <= 59));
 }
 
 function validAuthorization(envelope: AttachEnvelope): boolean {
