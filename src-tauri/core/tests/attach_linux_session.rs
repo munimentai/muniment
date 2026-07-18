@@ -1495,6 +1495,98 @@ fn real_journal_run_stream_fetches_next_page_after_window_ack() {
 }
 
 #[test]
+fn file_journal_run_stream_stays_live_and_ignores_other_run_commits() {
+    const RUN: &str = "0190a100-0000-7000-8000-000000000028";
+    const OTHER_RUN: &str = "0190a100-0000-7000-8000-000000000029";
+    let path = std::env::temp_dir().join(format!(
+        "muniment-attach-live-{}-{}.sqlite",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    let mut writer = RunJournal::open(&path).unwrap();
+    let mut initial = prompt(RUN, "private-initial", "2026-07-16T02:59:00Z");
+    initial.event_id = "0190a200-0000-7000-8001-000000000027".into();
+    let mut other_initial = prompt(OTHER_RUN, "private-other", "2026-07-16T02:59:00Z");
+    other_initial.event_id = "0190a200-0000-7000-8001-000000000026".into();
+    writer.append_batch(0, &[initial]).unwrap();
+    writer.append_batch(0, &[other_initial]).unwrap();
+    writer.bind_run_workspace(RUN, "workspace-1").unwrap();
+    writer.bind_run_workspace(OTHER_RUN, "workspace-1").unwrap();
+    let mut service = RunJournal::open(&path).unwrap();
+
+    let (mut client, server) = UnixStream::pair().unwrap();
+    let server_thread = thread::spawn(move || {
+        run_authenticated_session_with_authorization(
+            server,
+            credentials(),
+            "0.1.0",
+            Duration::from_secs(2),
+            AuthorizationSessionDependencies {
+                fill_random: |bytes: &mut [u8]| {
+                    bytes.fill(9);
+                    Ok(())
+                },
+                clock: TestClock(Rc::new(Cell::new(Duration::ZERO))),
+                tokens: TestTokens(1),
+                approvals: |_: &muniment_core::attach::PairingChallenge, _: Duration| {
+                    Some(ApprovalDecision::Approve(approval()))
+                },
+            },
+            &mut service,
+        )
+    });
+    client.write_all(&hello(1, 1)).unwrap();
+    let _: Welcome = read_frame(&mut client);
+    let _: Authorized = read_frame(&mut client);
+    client
+        .write_all(&request(
+            75,
+            Operation::RunStream,
+            json!({"run_id": RUN, "after_run_seq": 1}),
+        ))
+        .unwrap();
+    let _: Response = read_frame(&mut client);
+    let Envelope::Event(caught_up) = read_frame::<Envelope>(&mut client) else {
+        panic!("expected caught-up marker")
+    };
+    assert_eq!(caught_up.event, EventName::SubscriptionCaughtUp);
+
+    let mut unrelated = prompt(OTHER_RUN, "private-other", "2026-07-16T03:00:00Z");
+    unrelated.event_id = "0190a200-0000-7000-8001-000000000029".into();
+    unrelated.run_seq = 2;
+    writer.append_batch(1, &[unrelated]).unwrap();
+    client
+        .set_read_timeout(Some(Duration::from_millis(150)))
+        .unwrap();
+    let mut byte = [0];
+    assert!(matches!(
+        client.read(&mut byte).unwrap_err().kind(),
+        std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+    ));
+
+    let mut committed = prompt(RUN, "private-live", "2026-07-16T03:00:01Z");
+    committed.event_id = "0190a200-0000-7000-8001-000000000028".into();
+    committed.run_seq = 2;
+    writer.append_batch(1, &[committed]).unwrap();
+    client
+        .set_read_timeout(Some(Duration::from_secs(2)))
+        .unwrap();
+    let Envelope::Event(event) = read_frame::<Envelope>(&mut client) else {
+        panic!("expected live run event")
+    };
+    assert_eq!(event.event, EventName::RunEvent);
+    assert_eq!(event.run_seq, Some(2));
+    assert_eq!(event.body["payload"], json!({"withheld": true}));
+    assert!(!format!("{event:?}").contains("private-live"));
+
+    client.shutdown(Shutdown::Write).unwrap();
+    assert_eq!(server_thread.join().unwrap(), Ok(()));
+}
+
+#[test]
 fn run_stream_byte_window_counts_exact_framed_bytes_and_pauses_one_byte_over() {
     const RUN: &str = "0190a100-0000-7000-8000-000000000017";
     let event_count = MAX_RUN_STREAM_WINDOW_BYTES.div_ceil(60_000);
