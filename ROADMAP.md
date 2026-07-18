@@ -51,7 +51,8 @@ Phases mirror harness-spec §9. Muniment-cloud Phase 1 native auth and the cloud
 - DONE E1 terminal progress — `muniment run start` follows the committed run over the preserved authorized connection, renders ordered redacted catch-up/live events, acknowledges flow-control windows, and exits on a terminal event.
 - DONE E1 permission-answer server/client seams — the authorized Linux attach session validates and dispatches bounded, idempotent `permission.answer` requests through the shared service boundary with companion provenance and redacted failures; the protocol-only client encodes correlated allow/deny answers and validates committed receipts.
 - DONE E1 pending-gate server delivery — the authorized run stream projects journaled permission requests into bounded `permission.pending` events with gate identity and safe confirm context while preserving workspace isolation, ordering, and flow control.
-- NEXT E1 — decode and validate `permission.pending` in the protocol-only client as a typed, redaction-safe run-stream message. Interactive terminal prompting follows separately.
+- DONE E1 pending-gate protocol client — the protocol-only client decodes and validates `permission.pending` as a typed, redaction-safe run-stream message and includes it in cursor flow control.
+- NEXT E1 — prompt for typed pending permission gates in the interactive terminal, submit allow/deny over the preserved authorized connection, and continue the run stream.
 - E2 may proceed concurrently in its independently scoped TypeScript package lane per ADR 0011; VSIX sideload testing is sufficient and marketplace publication remains owner-gated.
 - The runtime service is the sole runtime/session/journal owner; desktop, CLI, and editor extension are clients and remain windows, not modes. macOS and Windows attach adapters remain separate future slices.
 
