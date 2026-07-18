@@ -44,6 +44,14 @@ test -d protocol-fixtures/muniment.attach/1
 grep -Fq 'name: attach-fixtures-current' "$ci"
 grep -Fq 'run: cargo run -p muniment-attach --bin export-attach-fixtures -- ../protocol-fixtures --check' "$ci"
 grep -Fq 'attach-fixtures-current:' "$ci"
+test -f editor-extension/package.json
+test -f editor-extension/package-lock.json
+test -f editor-extension/src/extension.ts
+test -f editor-extension/src/protocol.ts
+grep -Fq 'editor-extension/*|editor-extension/**)' "$ci"
+grep -Fq 'name: extension-contract' "$ci"
+grep -Fq "needs.smoke.outputs.extension == 'true'" "$ci"
+grep -Fq 'run: npm run package -- --out "$RUNNER_TEMP/muniment-editor.vsix"' "$ci"
 test -f protocol-fixtures/muniment.attach/1/negotiation-hello.json
 test -x test/cli-dependency-boundary.sh
 grep -Fq -- '--locked --target all --prefix none' test/cli-dependency-boundary.sh

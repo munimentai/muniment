@@ -1,0 +1,33 @@
+{
+  "name": "muniment-editor",
+  "displayName": "Muniment",
+  "description": "Muniment editor companion.",
+  "version": "0.0.1",
+  "private": true,
+  "publisher": "muniment",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/mikeydiamonds/muniment-desktop.git"
+  },
+  "engines": {
+    "vscode": "^1.100.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [],
+  "main": "./out/src/extension.js",
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "npm run compile && node --test out/test/*.test.js",
+    "package": "vsce package"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "@types/vscode": "^1.100.0",
+    "@vscode/vsce": "^3.6.0",
+    "typescript": "^5.8.3"
+  }
+}
