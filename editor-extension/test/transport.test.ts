@@ -178,6 +178,20 @@ test("rejects invalid run-start inputs before writing", async () => {
   connection.dispose();
 });
 
+test("fails closed on excessively nested run-start context before writing", async () => {
+  const socket = new FakeSocket();
+  const connection = await authorizedConnection(socket);
+  const writes = socket.writes.length;
+  let context: unknown = null;
+  for (let depth = 0; depth < 20_000; depth++) context = [context];
+
+  await assert.rejects(connection.startRun("prompt", context as never), (error: unknown) =>
+    error instanceof AttachTransportError && error.code === "unexpected_message" &&
+    error.message === "unexpected_message");
+  assert.equal(socket.writes.length, writes);
+  connection.dispose();
+});
+
 test("fails closed on malformed run-start receipts", async () => {
   const invalidBodies = [
     { run_id: "bad", committed_seq: 1, accepted_at: "2026-07-17T00:00:00Z" },

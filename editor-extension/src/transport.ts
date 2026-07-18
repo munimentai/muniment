@@ -501,14 +501,13 @@ function validateRunStartInput(text: unknown, context: unknown): void {
     throw new AttachTransportError("unexpected_message");
   }
   if (context !== undefined) {
-    if (!isJsonValue(context)) throw new AttachTransportError("unexpected_message");
-    let encoded: string | undefined;
     try {
-      encoded = JSON.stringify(context);
+      if (!isJsonValue(context)) throw new AttachTransportError("unexpected_message");
+      const encoded = JSON.stringify(context);
+      if (encoded === undefined || Buffer.byteLength(encoded) > MAX_RUN_START_CONTEXT_LENGTH) {
+        throw new AttachTransportError("unexpected_message");
+      }
     } catch {
-      throw new AttachTransportError("unexpected_message");
-    }
-    if (encoded === undefined || Buffer.byteLength(encoded) > MAX_RUN_START_CONTEXT_LENGTH) {
       throw new AttachTransportError("unexpected_message");
     }
   }
