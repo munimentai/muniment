@@ -418,6 +418,33 @@ fn run_stream_rejects_mismatched_and_duplicate_envelopes() {
 }
 
 #[test]
+fn run_stream_rejects_duplicate_at_max_sequence() {
+    const SUB: &str = "01900000-0000-7000-8000-000000000095";
+    let (client, mut server) = UnixStream::pair().unwrap();
+    let worker = thread::spawn(move || {
+        complete_pairing(&mut server);
+        let request = read_client_value(&mut server);
+        let id = Id::new(request["request_id"].as_str().unwrap()).unwrap();
+        server
+            .write_all(&encode_frame(&stream_response(id, SUB, u64::MAX)).unwrap())
+            .unwrap();
+        server
+            .write_all(&encode_frame(&stream_event(SUB, u64::MAX, EventName::RunEvent)).unwrap())
+            .unwrap();
+    });
+    let mut client = handshake_stream(client, "0.0.1", SHORT, SHORT, || {}).unwrap();
+    let mut subscription = client
+        .stream_run("01900000-0000-7000-8000-000000000001", u64::MAX)
+        .unwrap();
+    assert_eq!(
+        subscription.read_next(),
+        Err(ClientError::UnexpectedMessage)
+    );
+    assert!(!format!("{subscription:?}").contains("safe.event"));
+    worker.join().unwrap();
+}
+
+#[test]
 fn thread_list_uses_exact_envelope_and_accepts_fragmented_page() {
     let (client, mut server) = UnixStream::pair().unwrap();
     let worker = thread::spawn(move || {

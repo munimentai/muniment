@@ -440,7 +440,7 @@ mod linux {
             let accepted: RunStreamAccepted = serde_json::from_value(response.body)
                 .map_err(|_| ClientError::UnexpectedMessage)?;
             let empty =
-                accepted.first_available_run_seq == accepted.current_run_seq.saturating_add(1);
+                accepted.current_run_seq.checked_add(1) == Some(accepted.first_available_run_seq);
             if accepted.run_id != run_id
                 || accepted.first_available_run_seq == 0
                 || (!empty && accepted.first_available_run_seq > accepted.current_run_seq)
@@ -508,7 +508,7 @@ mod linux {
             let run_seq = event.run_seq.ok_or(ClientError::UnexpectedMessage)?;
             match event.event {
                 EventName::RunEvent => {
-                    if run_seq != self.last_run_seq.saturating_add(1)
+                    if self.last_run_seq.checked_add(1) != Some(run_seq)
                         || run_seq > self.current_run_seq
                     {
                         return Err(ClientError::UnexpectedMessage);
