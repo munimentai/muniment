@@ -160,6 +160,7 @@ jobs:
         run: test/cli-dependency-boundary.sh
 
   attach-fixtures-current:
+    name: attach-fixtures-current
     if: github.event_name == 'pull_request' && needs.smoke.outputs.attach_fixtures == 'true'
     needs: smoke
     runs-on: self-hosted
