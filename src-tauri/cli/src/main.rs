@@ -521,7 +521,7 @@ mod tests {
                     .unwrap(),
                 )
                 .unwrap();
-            for event in [
+            let events = [
                 Event {
                     protocol: Protocol,
                     subscription_id: Id::new(subscription_id).unwrap(),
@@ -556,27 +556,28 @@ mod tests {
                         "payload": {"withheld": true}
                     }),
                 },
-            ] {
+            ];
+            for event in &events {
                 server.write_all(&encode_frame(&event).unwrap()).unwrap();
-                if event.event == EventName::RunEvent {
-                    let ack = read_frame(&mut server);
-                    assert_eq!(ack["operation"], "run.cursor_ack");
-                    assert_eq!(ack["body"]["through_run_seq"], event.run_seq.unwrap());
-                    server
-                        .write_all(
-                            &encode_frame(&Response {
-                                protocol: Protocol,
-                                request_id: Id::new(ack["request_id"].as_str().unwrap()).unwrap(),
-                                ok: Success,
-                                body: serde_json::json!({
-                                    "subscription_id": subscription_id,
-                                    "through_run_seq": event.run_seq.unwrap()
-                                }),
-                            })
-                            .unwrap(),
-                        )
-                        .unwrap();
-                }
+            }
+            for sequence in [8, 9] {
+                let ack = read_frame(&mut server);
+                assert_eq!(ack["operation"], "run.cursor_ack");
+                assert_eq!(ack["body"]["through_run_seq"], sequence);
+                server
+                    .write_all(
+                        &encode_frame(&Response {
+                            protocol: Protocol,
+                            request_id: Id::new(ack["request_id"].as_str().unwrap()).unwrap(),
+                            ok: Success,
+                            body: serde_json::json!({
+                                "subscription_id": subscription_id,
+                                "through_run_seq": sequence
+                            }),
+                        })
+                        .unwrap(),
+                    )
+                    .unwrap();
             }
         });
         let mut input = io::Cursor::new(b"ship it\nignored prompt\n");
