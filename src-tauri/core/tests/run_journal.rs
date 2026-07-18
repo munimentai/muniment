@@ -128,6 +128,54 @@ fn pending_permission_projection_is_bounded_and_hostile_inputs_are_invalid() {
 }
 
 #[test]
+fn reopening_pre_projection_journal_backfills_valid_and_hostile_permissions() {
+    let db = TestDb::new();
+    let mut valid = event(1);
+    valid.event_type = "permission.requested".into();
+    valid.payload = EventPayload::Inline {
+        payload_json: json!({
+            "gate_id": "old-gate", "kind": "confirm", "title": "Allow old request?",
+            "private": "do not project"
+        }),
+    };
+    let mut hostile = event(2);
+    hostile.event_type = "permission.requested".into();
+    hostile.payload = EventPayload::Inline {
+        payload_json: json!({
+            "gate_id": "hostile-gate", "kind": "confirm", "title": "Hostile",
+            "message": {"secret": "not text"}, "command": "private command"
+        }),
+    };
+    {
+        let mut journal = RunJournal::open(&db).unwrap();
+        journal.append_batch(0, &[valid, hostile]).unwrap();
+        journal.bind_run_workspace(RUN, "workspace-1").unwrap();
+    }
+    let connection = Connection::open(&db).unwrap();
+    connection
+        .execute_batch("DROP TABLE permission_pending_projection")
+        .unwrap();
+    drop(connection);
+
+    let mut journal = RunJournal::open(&db).unwrap();
+    let page = journal
+        .workspace_catch_up("workspace-1", RUN, 0, 10, 16 * 1024)
+        .unwrap();
+    let valid = page.events[0].pending_permission.as_ref().unwrap();
+    assert!(valid.valid);
+    assert_eq!(valid.gate_id, "old-gate");
+    assert_eq!(valid.kind, "confirm");
+    assert_eq!(valid.title, "Allow old request?");
+    assert_eq!(valid.message, None);
+    let hostile = page.events[1].pending_permission.as_ref().unwrap();
+    assert!(!hostile.valid);
+    assert_eq!(hostile.gate_id, "");
+    assert_eq!(hostile.kind, "");
+    assert_eq!(hostile.title, "");
+    assert_eq!(hostile.message, None);
+}
+
+#[test]
 fn commit_subscription_registration_cannot_miss_a_racing_commit() {
     let db = TestDb::new();
     let mut subscriber = RunJournal::open(&db).unwrap();

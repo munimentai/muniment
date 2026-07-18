@@ -1251,15 +1251,15 @@ fn append_run_stream_page(
             {
                 return Err(ProtocolError::persistence_failed());
             }
-            (
-                EventName::PermissionPending,
-                serde_json::json!({
-                    "gate_id": projection.gate_id,
-                    "kind": projection.kind,
-                    "title": projection.title,
-                    "message": projection.message,
-                }),
-            )
+            let mut body = serde_json::json!({
+                "gate_id": projection.gate_id,
+                "kind": projection.kind,
+                "title": projection.title,
+            });
+            if let Some(message) = &projection.message {
+                body["message"] = serde_json::json!(message);
+            }
+            (EventName::PermissionPending, body)
         } else {
             (
                 EventName::RunEvent,

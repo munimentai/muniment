@@ -522,6 +522,7 @@ impl RunJournal {
              run_id TEXT NOT NULL, run_seq INTEGER NOT NULL, gate_id TEXT, kind TEXT, \
              title TEXT, message TEXT, valid INTEGER NOT NULL, PRIMARY KEY(run_id, run_seq));",
         )?;
+        backfill_permission_pending_projection(&connection)?;
         // Journals created by the first projection implementation have only a
         // current row. Treat that row as the initial version; new writes use
         // interval versions from this point forward.
@@ -1381,7 +1382,8 @@ fn update_permission_pending_projection(
             let gate_id = payload_json.get("gate_id").and_then(Value::as_str);
             let kind = payload_json.get("kind").and_then(Value::as_str);
             let title = payload_json.get("title").and_then(Value::as_str);
-            let message = payload_json.get("message").and_then(Value::as_str);
+            let message_value = payload_json.get("message");
+            let message = message_value.and_then(Value::as_str);
             match (gate_id, kind, title) {
                 (Some(gate_id), Some("confirm"), Some(title))
                     if !gate_id.trim().is_empty()
@@ -1389,7 +1391,9 @@ fn update_permission_pending_projection(
                         && "confirm".len() <= MAX_PENDING_KIND_BYTES
                         && !title.trim().is_empty()
                         && title.len() <= MAX_PENDING_TITLE_BYTES
-                        && message.is_none_or(|value| value.len() <= MAX_PENDING_MESSAGE_BYTES) =>
+                        && (message_value.is_none_or(Value::is_null)
+                            || message
+                                .is_some_and(|value| value.len() <= MAX_PENDING_MESSAGE_BYTES)) =>
                 {
                     Some((gate_id, "confirm", title, message))
                 }
@@ -1410,6 +1414,45 @@ fn update_permission_pending_projection(
             params![event.run_id, event.run_seq],
         )?;
     }
+    Ok(())
+}
+
+fn backfill_permission_pending_projection(connection: &Connection) -> Result<(), JournalError> {
+    connection.execute(
+        "INSERT INTO permission_pending_projection( \
+         run_id,run_seq,gate_id,kind,title,message,valid) \
+         SELECT run_id,run_seq, \
+         CASE WHEN valid THEN gate_id END, CASE WHEN valid THEN kind END, \
+         CASE WHEN valid THEN title END, CASE WHEN valid THEN message END, valid \
+         FROM ( \
+           SELECT run_id,run_seq,gate_id,kind,title,message, \
+             json_type(envelope_json,'$.payload_json')='object' \
+             AND typeof(gate_id)='text' AND trim(gate_id)<>'' \
+             AND length(CAST(gate_id AS BLOB))<=?1 \
+             AND kind='confirm' AND length(CAST(kind AS BLOB))<=?2 \
+             AND typeof(title)='text' AND trim(title)<>'' \
+             AND length(CAST(title AS BLOB))<=?3 \
+             AND (message_type IS NULL OR message_type='null' OR (message_type='text' \
+               AND length(CAST(message AS BLOB))<=?4)) AS valid \
+           FROM ( \
+             SELECT run_id,run_seq,envelope_json, \
+               json_extract(envelope_json,'$.payload_json.gate_id') AS gate_id, \
+               json_extract(envelope_json,'$.payload_json.kind') AS kind, \
+               json_extract(envelope_json,'$.payload_json.title') AS title, \
+               json_extract(envelope_json,'$.payload_json.message') AS message, \
+               json_type(envelope_json,'$.payload_json.message') AS message_type \
+             FROM events WHERE event_type='permission.requested' \
+               AND NOT EXISTS (SELECT 1 FROM permission_pending_projection p \
+                 WHERE p.run_id=events.run_id AND p.run_seq=events.run_seq) \
+           ) \
+         )",
+        params![
+            MAX_PENDING_GATE_ID_BYTES,
+            MAX_PENDING_KIND_BYTES,
+            MAX_PENDING_TITLE_BYTES,
+            MAX_PENDING_MESSAGE_BYTES
+        ],
+    )?;
     Ok(())
 }
 
