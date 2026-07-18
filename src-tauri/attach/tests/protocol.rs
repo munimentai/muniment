@@ -77,9 +77,9 @@ fn fixture_exporter_check_reports_extra_without_writing() {
 #[test]
 fn fixture_exporter_check_reports_stale_without_writing() {
     let root = generated_fixture_dir();
-    let fixture = root.join("muniment.attach/1/response-success.json");
+    let fixture = root.join("muniment.attach/1/response-run-start.json");
     fs::write(&fixture, b"{}\n").unwrap();
-    assert_check_failure(&root, "stale:", "response-success.json");
+    assert_check_failure(&root, "stale:", "response-run-start.json");
     assert_eq!(fs::read(&fixture).unwrap(), b"{}\n");
     fs::remove_dir_all(root).unwrap();
 }

@@ -1,1 +1,1 @@
-{"protocol":"muniment.attach/1","subscription_id":"00000000000000000000000000000190","event":"artifact.chunk","run_id":"00000000000000000000000000000191","run_seq":4,"body":{"fixture":"artifact-chunk"}}
+{"protocol":"muniment.attach/1","subscription_id":"00000000000000000000000000000190","event":"artifact.chunk","run_id":"00000000000000000000000000000191","run_seq":4,"body":{"artifact_id":"artifact-1","cursor":"artifact-cursor-1","data":"Zml4dHVyZQ=="}}

@@ -1,1 +1,1 @@
-{"protocol":"muniment.attach/1","subscription_id":"00000000000000000000000000000190","event":"stream.closed","run_id":"00000000000000000000000000000191","run_seq":8,"body":{"fixture":"stream-closed"}}
+{"protocol":"muniment.attach/1","subscription_id":"00000000000000000000000000000190","event":"stream.closed","run_id":"00000000000000000000000000000191","run_seq":8,"body":{"final_run_seq":7,"reason":"run_completed"}}

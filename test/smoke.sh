@@ -97,4 +97,5 @@ grep -Fq 'windows-installers.ps1' .github/workflows/nightly.yml
 test -f docs/windows-installers.md
 grep -Fq 'needs: [smoke, desktop-compile]' "$ci"
 test "$(grep -Fc "if: github.event_name == 'pull_request' && needs.smoke.outputs.desktop == 'true'" "$ci")" -eq 2
+test -z "$(git ls-files 'protocol-fixtures/muniment.attach/**' | grep -v '^protocol-fixtures/muniment.attach/1/')"
 echo "smoke OK"

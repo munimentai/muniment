@@ -1,1 +1,1 @@
-{"protocol":"muniment.attach/1","subscription_id":"00000000000000000000000000000190","event":"artifact.complete","run_id":"00000000000000000000000000000191","run_seq":5,"body":{"fixture":"artifact-complete"}}
+{"protocol":"muniment.attach/1","subscription_id":"00000000000000000000000000000190","event":"artifact.complete","run_id":"00000000000000000000000000000191","run_seq":5,"body":{"artifact_id":"artifact-1","sha256":"d6f7a76f3582d7281c388af1e0c83b4b8e73ba5ad13d35d5101d1912f0d8c30f","size_bytes":7}}
