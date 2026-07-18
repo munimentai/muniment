@@ -1,4 +1,6 @@
-use muniment_attach::{handshake, ClientError, ThreadListPage, ThreadOpenPage};
+use muniment_attach::{
+    handshake, ClientError, RedactedRunEvent, RunStreamMessage, ThreadListPage, ThreadOpenPage,
+};
 use std::ffi::OsString;
 use std::io::{self, BufRead, IsTerminal, Write};
 
@@ -17,6 +19,7 @@ enum CliError {
     InvalidThreadId,
     NonInteractive,
     PromptRequired,
+    RunFailed,
     Client(ClientError),
     RunClient(ClientError),
 }
@@ -99,7 +102,25 @@ fn run_with(
             .map_err(CliError::RunClient)?;
         writeln!(output, "Run committed: {}", one_line(&accepted.run_id))
             .map_err(|_| CliError::RunClient(ClientError::ConnectionClosed))?;
-        return Ok(());
+        client
+            .subscribe_run(&accepted.run_id, accepted.committed_seq)
+            .map_err(CliError::RunClient)?;
+        loop {
+            let RunStreamMessage::Event(event) = client
+                .read_run_stream_message()
+                .map_err(CliError::RunClient)?
+            else {
+                continue;
+            };
+            writeln!(output, "{}", render_run_event(&event))
+                .map_err(|_| CliError::RunClient(ClientError::ConnectionClosed))?;
+            client
+                .acknowledge_run_cursor(event.run_seq)
+                .map_err(CliError::RunClient)?;
+            if let Some(result) = terminal_result(&event.event_type) {
+                return result;
+            }
+        }
     }
     let mut cursor = None;
     loop {
@@ -150,6 +171,7 @@ fn guidance(error: &CliError) -> &'static str {
         CliError::InvalidThreadId => "provide a valid thread ID from `muniment threads list`",
         CliError::NonInteractive => "commands require interactive stdin and stdout",
         CliError::PromptRequired => "enter one non-empty prompt, then try again",
+        CliError::RunFailed => "the run failed; check the Muniment desktop, then try again",
         CliError::RunClient(ClientError::RequestRejected) => {
             "the desktop rejected the run request; retry, then check the desktop"
         }
@@ -230,6 +252,23 @@ fn render_open_page(page: &ThreadOpenPage) -> String {
     output
 }
 
+fn render_run_event(event: &RedactedRunEvent) -> String {
+    format!(
+        "{}\t{}\t{}",
+        event.run_seq,
+        one_line(&event.event_type),
+        one_line(&event.recorded_at)
+    )
+}
+
+fn terminal_result(event_type: &str) -> Option<Result<(), CliError>> {
+    match event_type {
+        "run.completed" | "run.cancelled" => Some(Ok(())),
+        "run.failed" => Some(Err(CliError::RunFailed)),
+        _ => None,
+    }
+}
+
 fn one_line(value: &str) -> String {
     value
         .chars()
@@ -247,8 +286,8 @@ fn one_line(value: &str) -> String {
 mod tests {
     use super::*;
     use muniment_attach::{
-        authorized, encode_frame, handshake_stream, welcome, ErrorEnvelope, Failure, Id, Protocol,
-        ProtocolError, RedactedThreadSummary, Response, Success,
+        authorized, encode_frame, handshake_stream, welcome, ErrorEnvelope, Event, EventName,
+        Failure, Id, Protocol, ProtocolError, RedactedThreadSummary, Response, Success,
     };
     use std::collections::{BTreeMap, BTreeSet};
     use std::io::{Read, Write};
@@ -309,6 +348,16 @@ mod tests {
         assert!(!output.contains("thread-1"));
         assert!(!output.contains("private-cursor"));
         assert!(!output.contains('\u{1b}'));
+    }
+
+    #[test]
+    fn run_terminal_outcomes_have_the_expected_exit_results() {
+        assert!(terminal_result("run.completed").unwrap().is_ok());
+        assert!(terminal_result("run.cancelled").unwrap().is_ok());
+        let failed = terminal_result("run.failed").unwrap().unwrap_err();
+        assert!(matches!(failed, CliError::RunFailed));
+        assert!(guidance(&failed).contains("run failed"));
+        assert!(terminal_result("assistant.message").is_none());
     }
 
     fn read_frame(stream: &mut UnixStream) -> serde_json::Value {
@@ -406,8 +455,10 @@ mod tests {
     }
 
     #[test]
-    fn run_start_sends_one_prompt_without_context_and_prints_only_the_committed_receipt() {
+    fn run_start_follows_catch_up_and_live_events_on_one_redacted_pairing() {
         let (client, mut server) = UnixStream::pair().unwrap();
+        let run_id = "123e4567-e89b-12d3-a456-426614174000";
+        let subscription_id = "123e4567-e89b-12d3-a456-426614174001";
         let worker = std::thread::spawn(move || {
             read_frame(&mut server);
             server
@@ -441,12 +492,93 @@ mod tests {
                 request_id: Id::new(request["request_id"].as_str().unwrap()).unwrap(),
                 ok: Success,
                 body: serde_json::json!({
-                    "run_id": "123e4567-e89b-12d3-a456-426614174000",
+                    "run_id": run_id,
                     "committed_seq": 7,
                     "accepted_at": "2026-07-17T12:00:00Z"
                 }),
             };
             server.write_all(&encode_frame(&response).unwrap()).unwrap();
+            let subscribe = read_frame(&mut server);
+            assert_eq!(subscribe["operation"], "run.stream");
+            assert_eq!(
+                subscribe["body"],
+                serde_json::json!({"run_id": run_id, "after_run_seq": 7})
+            );
+            server
+                .write_all(
+                    &encode_frame(&Response {
+                        protocol: Protocol,
+                        request_id: Id::new(subscribe["request_id"].as_str().unwrap()).unwrap(),
+                        ok: Success,
+                        body: serde_json::json!({
+                            "subscription_id": subscription_id,
+                            "run_id": run_id,
+                            "first_available_run_seq": 1,
+                            "current_run_seq": 8,
+                            "window": {"max_events": 2, "max_bytes": 4096}
+                        }),
+                    })
+                    .unwrap(),
+                )
+                .unwrap();
+            let events = [
+                Event {
+                    protocol: Protocol,
+                    subscription_id: Id::new(subscription_id).unwrap(),
+                    event: EventName::RunEvent,
+                    run_id: Some(Id::new(run_id).unwrap()),
+                    run_seq: Some(8),
+                    body: serde_json::json!({
+                        "event_type": "assistant\u{1b}[31mmessage\nprivate-marker",
+                        "event_version": 777,
+                        "recorded_at": "2026-07-17T12:00:01Z",
+                        "payload": {"withheld": true}
+                    }),
+                },
+                Event {
+                    protocol: Protocol,
+                    subscription_id: Id::new(subscription_id).unwrap(),
+                    event: EventName::SubscriptionCaughtUp,
+                    run_id: Some(Id::new(run_id).unwrap()),
+                    run_seq: Some(8),
+                    body: serde_json::json!({}),
+                },
+                Event {
+                    protocol: Protocol,
+                    subscription_id: Id::new(subscription_id).unwrap(),
+                    event: EventName::RunEvent,
+                    run_id: Some(Id::new(run_id).unwrap()),
+                    run_seq: Some(9),
+                    body: serde_json::json!({
+                        "event_type": "run.completed",
+                        "event_version": 999,
+                        "recorded_at": "2026-07-17T12:00:02Z",
+                        "payload": {"withheld": true}
+                    }),
+                },
+            ];
+            for event in &events {
+                server.write_all(&encode_frame(&event).unwrap()).unwrap();
+            }
+            for sequence in [8, 9] {
+                let ack = read_frame(&mut server);
+                assert_eq!(ack["operation"], "run.cursor_ack");
+                assert_eq!(ack["body"]["through_run_seq"], sequence);
+                server
+                    .write_all(
+                        &encode_frame(&Response {
+                            protocol: Protocol,
+                            request_id: Id::new(ack["request_id"].as_str().unwrap()).unwrap(),
+                            ok: Success,
+                            body: serde_json::json!({
+                                "subscription_id": subscription_id,
+                                "through_run_seq": sequence
+                            }),
+                        })
+                        .unwrap(),
+                    )
+                    .unwrap();
+            }
         });
         let mut input = io::Cursor::new(b"ship it\nignored prompt\n");
         let mut output = Vec::new();
@@ -470,9 +602,27 @@ mod tests {
         worker.join().unwrap();
         let output = String::from_utf8(output).unwrap();
         assert!(output.contains("Run committed: 123e4567-e89b-12d3-a456-426614174000"));
+        let catch_up_event = output
+            .find("8\tassistant [31mmessage private-marker\t2026-07-17T12:00:01Z\n")
+            .unwrap();
+        let live_event = output
+            .find("9\trun.completed\t2026-07-17T12:00:02Z\n")
+            .unwrap();
+        assert!(catch_up_event < live_event);
         assert!(!output.contains("ship it"));
-        assert!(!output.to_lowercase().contains("complete"));
-        assert!(!output.contains("deadcafe"));
+        assert_eq!(output.matches("Pairing requested").count(), 1);
+        assert_eq!(output.matches("run.completed").count(), 1);
+        assert!(!output.contains('\u{1b}'));
+        for private in [
+            "deadcafe",
+            "private-server",
+            subscription_id,
+            "withheld",
+            "777",
+            "999",
+        ] {
+            assert!(!output.contains(private));
+        }
     }
 
     #[test]
