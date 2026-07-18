@@ -1139,7 +1139,12 @@ fn poll_run_streams<S: ThreadListService>(
 ) -> Result<Vec<Event>, ProtocolError> {
     let mut events = Vec::new();
     for stream in subscriptions {
-        if !stream.caught_up {
+        let window = stream.cursor.window();
+        if !stream.caught_up
+            || !stream.pending.is_empty()
+            || stream.cursor.outstanding_events() == window.max_events
+            || stream.cursor.outstanding_bytes() == window.max_bytes
+        {
             continue;
         }
         let mut wake = false;
