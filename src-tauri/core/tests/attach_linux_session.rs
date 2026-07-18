@@ -8,8 +8,9 @@ use muniment_core::attach::linux::{
 };
 use muniment_core::attach::{
     decode_frame, encode_frame, Approval, AuthorizationClock, AuthorizationTokenGenerator,
-    Authorized, ErrorAction, ErrorCode, ErrorEnvelope, Hello, Id, Operation, Protocol, Request,
-    Response, VersionRange, Welcome, CHALLENGE_LIFETIME, MAX_FRAME_LENGTH, MAX_JSON_DEPTH,
+    Authorized, Envelope, ErrorAction, ErrorCode, ErrorEnvelope, EventName, Hello, Id, Operation,
+    Protocol, Request, Response, VersionRange, Welcome, CHALLENGE_LIFETIME, MAX_FRAME_LENGTH,
+    MAX_JSON_DEPTH,
 };
 use muniment_core::journal::{EventEnvelope, EventPayload, Provenance, RunJournal};
 use serde_json::json;
@@ -679,6 +680,54 @@ fn authorized_thread_list_is_bounded_paginated_and_correlated() {
     );
     assert_eq!(response.body["next_cursor"], "opaque-page-3");
     assert_eq!(calls.get(), 1);
+}
+
+#[test]
+fn authorized_run_stream_catches_up_in_order_with_redacted_projection() {
+    const RUN: &str = "0190a100-0000-7000-8000-000000000011";
+    let mut journal = RunJournal::open(":memory:").unwrap();
+    journal
+        .append(0, &prompt(RUN, "private prompt", "2026-07-16T03:00:00Z"))
+        .unwrap();
+    journal.bind_run_workspace(RUN, "workspace-1").unwrap();
+
+    let (mut client, server) = UnixStream::pair().unwrap();
+    client.write_all(&hello(1, 1)).unwrap();
+    client
+        .write_all(&request(
+            41,
+            Operation::RunStream,
+            json!({"run_id": RUN, "after_run_seq": 0}),
+        ))
+        .unwrap();
+    client.shutdown(Shutdown::Write).unwrap();
+    assert_eq!(
+        dispatch_session(
+            &mut client,
+            server,
+            TestClock(Rc::new(Cell::new(Duration::ZERO))),
+            &mut journal,
+        ),
+        Ok(())
+    );
+    let response: Response = read_frame(&mut client);
+    assert_eq!(response.body["run_id"], RUN);
+    assert_eq!(response.body["first_available_run_seq"], 1);
+    assert_eq!(response.body["current_run_seq"], 1);
+    let subscription = response.body["subscription_id"].as_str().unwrap();
+    let Envelope::Event(event) = read_frame::<Envelope>(&mut client) else {
+        panic!("expected run event")
+    };
+    assert_eq!(event.event, EventName::RunEvent);
+    assert_eq!(event.subscription_id.as_str(), subscription);
+    assert_eq!(event.run_seq, Some(1));
+    assert_eq!(event.body["payload"]["withheld"], true);
+    assert!(!event.body.to_string().contains("private"));
+    let Envelope::Event(caught_up) = read_frame::<Envelope>(&mut client) else {
+        panic!("expected caught-up event")
+    };
+    assert_eq!(caught_up.event, EventName::SubscriptionCaughtUp);
+    assert_eq!(caught_up.subscription_id.as_str(), subscription);
 }
 
 #[test]
