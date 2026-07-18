@@ -1,5 +1,6 @@
 use muniment_attach::{
-    handshake, ClientError, RedactedRunEvent, RunStreamMessage, ThreadListPage, ThreadOpenPage,
+    handshake, ClientError, PendingPermission, PermissionDecision, RedactedRunEvent,
+    RunStreamMessage, ThreadListPage, ThreadOpenPage,
 };
 use std::ffi::OsString;
 use std::io::{self, BufRead, IsTerminal, Write};
@@ -19,9 +20,11 @@ enum CliError {
     InvalidThreadId,
     NonInteractive,
     PromptRequired,
+    PermissionAnswerRequired,
     RunFailed,
     Client(ClientError),
     RunClient(ClientError),
+    PermissionClient(ClientError),
 }
 
 fn main() {
@@ -106,18 +109,28 @@ fn run_with(
             .subscribe_run(&accepted.run_id, accepted.committed_seq)
             .map_err(CliError::RunClient)?;
         loop {
-            let RunStreamMessage::Event(event) = client
+            let message = client
                 .read_run_stream_message()
-                .map_err(CliError::RunClient)?
-            else {
-                continue;
-            };
-            writeln!(output, "{}", render_run_event(&event))
-                .map_err(|_| CliError::RunClient(ClientError::ConnectionClosed))?;
-            client
-                .acknowledge_run_cursor(event.run_seq)
                 .map_err(CliError::RunClient)?;
-            if let Some(result) = terminal_result(&event.event_type) {
+            let (run_seq, terminal) = match message {
+                RunStreamMessage::Event(event) => {
+                    writeln!(output, "{}", render_run_event(&event))
+                        .map_err(|_| CliError::RunClient(ClientError::ConnectionClosed))?;
+                    (event.run_seq, terminal_result(&event.event_type))
+                }
+                RunStreamMessage::PermissionPending(permission) => {
+                    let decision = prompt_permission(input, output, &permission)?;
+                    client
+                        .answer_permission(&accepted.run_id, &permission.gate_id, decision)
+                        .map_err(CliError::PermissionClient)?;
+                    (permission.run_seq, None)
+                }
+                RunStreamMessage::CaughtUp { .. } => continue,
+            };
+            client
+                .acknowledge_run_cursor(run_seq)
+                .map_err(CliError::RunClient)?;
+            if let Some(result) = terminal {
                 return result;
             }
         }
@@ -171,9 +184,15 @@ fn guidance(error: &CliError) -> &'static str {
         CliError::InvalidThreadId => "provide a valid thread ID from `muniment threads list`",
         CliError::NonInteractive => "commands require interactive stdin and stdout",
         CliError::PromptRequired => "enter one non-empty prompt, then try again",
+        CliError::PermissionAnswerRequired => {
+            "answer the pending permission with allow or deny, then try again"
+        }
         CliError::RunFailed => "the run failed; check the Muniment desktop, then try again",
         CliError::RunClient(ClientError::RequestRejected) => {
             "the desktop rejected the run request; retry, then check the desktop"
+        }
+        CliError::PermissionClient(ClientError::RequestRejected) => {
+            "the desktop rejected the permission answer; retry the run, then check the desktop"
         }
         CliError::Client(ClientError::RequestRejected) => {
             "the desktop rejected the thread request; check the thread ID, retry, then update Muniment if it continues"
@@ -184,7 +203,48 @@ fn guidance(error: &CliError) -> &'static str {
         CliError::RunClient(ClientError::DesktopFailed) => {
             "the desktop could not start the run; retry, then check the desktop"
         }
-        CliError::Client(error) | CliError::RunClient(error) => client_guidance(error),
+        CliError::PermissionClient(ClientError::DesktopFailed) => {
+            "the desktop could not record the permission answer; retry the run, then check the desktop"
+        }
+        CliError::Client(error)
+        | CliError::RunClient(error)
+        | CliError::PermissionClient(error) => client_guidance(error),
+    }
+}
+
+fn prompt_permission(
+    input: &mut impl BufRead,
+    output: &mut impl Write,
+    permission: &PendingPermission,
+) -> Result<PermissionDecision, CliError> {
+    writeln!(
+        output,
+        "Permission required: {}",
+        one_line(&permission.title)
+    )
+    .map_err(|_| CliError::RunClient(ClientError::ConnectionClosed))?;
+    if let Some(message) = &permission.message {
+        writeln!(output, "{}", one_line(message))
+            .map_err(|_| CliError::RunClient(ClientError::ConnectionClosed))?;
+    }
+    loop {
+        write!(output, "Allow? [y/n]: ")
+            .and_then(|_| output.flush())
+            .map_err(|_| CliError::RunClient(ClientError::ConnectionClosed))?;
+        let mut answer = String::new();
+        if input
+            .read_line(&mut answer)
+            .map_err(|_| CliError::PermissionAnswerRequired)?
+            == 0
+        {
+            return Err(CliError::PermissionAnswerRequired);
+        }
+        match answer.trim().to_ascii_lowercase().as_str() {
+            "y" | "yes" | "allow" => return Ok(PermissionDecision::Allow),
+            "n" | "no" | "deny" => return Ok(PermissionDecision::Deny),
+            _ => writeln!(output, "Enter y to allow or n to deny.")
+                .map_err(|_| CliError::RunClient(ClientError::ConnectionClosed))?,
+        }
     }
 }
 
@@ -303,6 +363,9 @@ mod tests {
         assert!(rejected.contains("thread request"));
         assert!(rejected.contains("thread ID"));
         assert!(rejected.contains("retry"));
+        let rejected = guidance(&CliError::PermissionClient(ClientError::RequestRejected));
+        assert!(rejected.contains("permission answer"));
+        assert!(rejected.contains("retry"));
     }
 
     #[test]
@@ -358,6 +421,40 @@ mod tests {
         assert!(matches!(failed, CliError::RunFailed));
         assert!(guidance(&failed).contains("run failed"));
         assert!(terminal_result("assistant.message").is_none());
+    }
+
+    #[test]
+    fn permission_prompt_is_terminal_safe_requires_a_choice_and_supports_both_decisions() {
+        let permission = PendingPermission {
+            run_seq: 8,
+            gate_id: "private-gate".into(),
+            kind: muniment_attach::PermissionKind::Confirm,
+            title: "Use camera\nnow\u{1b}[31m".into(),
+            message: Some("Needed\tfor capture".into()),
+        };
+        for (input_bytes, expected) in [
+            (b"maybe\nyes\n".as_slice(), PermissionDecision::Allow),
+            (b"deny\n".as_slice(), PermissionDecision::Deny),
+        ] {
+            let mut input = io::Cursor::new(input_bytes);
+            let mut output = Vec::new();
+            assert_eq!(
+                prompt_permission(&mut input, &mut output, &permission).unwrap(),
+                expected
+            );
+            let output = String::from_utf8(output).unwrap();
+            assert!(output.contains("Permission required: Use camera now [31m"));
+            assert!(output.contains("Needed for capture"));
+            assert!(!output.contains("private-gate"));
+            assert!(!output.contains('\u{1b}'));
+        }
+        let error = prompt_permission(
+            &mut io::Cursor::new(Vec::<u8>::new()),
+            &mut Vec::new(),
+            &permission,
+        )
+        .unwrap_err();
+        assert!(matches!(error, CliError::PermissionAnswerRequired));
     }
 
     fn read_frame(stream: &mut UnixStream) -> serde_json::Value {
@@ -521,20 +618,60 @@ mod tests {
                     .unwrap(),
                 )
                 .unwrap();
+            let pending = Event {
+                protocol: Protocol,
+                subscription_id: Id::new(subscription_id).unwrap(),
+                event: EventName::PermissionPending,
+                run_id: Some(Id::new(run_id).unwrap()),
+                run_seq: Some(8),
+                body: serde_json::json!({
+                    "gate_id": "private-gate",
+                    "kind": "confirm",
+                    "title": "Use camera\nnow",
+                    "message": "Needed for capture"
+                }),
+            };
+            server.write_all(&encode_frame(&pending).unwrap()).unwrap();
+            let answer = read_frame(&mut server);
+            assert_eq!(answer["operation"], "permission.answer");
+            assert_eq!(answer["body"]["run_id"], run_id);
+            assert_eq!(answer["body"]["gate_id"], "private-gate");
+            assert_eq!(answer["body"]["decision"], "allow");
+            server
+                .write_all(
+                    &encode_frame(&Response {
+                        protocol: Protocol,
+                        request_id: Id::new(answer["request_id"].as_str().unwrap()).unwrap(),
+                        ok: Success,
+                        body: serde_json::json!({
+                            "run_id": run_id,
+                            "gate_id": "private-gate",
+                            "decision": "allow",
+                            "committed_seq": 9,
+                            "accepted_at": "2026-07-17T12:00:01Z"
+                        }),
+                    })
+                    .unwrap(),
+                )
+                .unwrap();
+            let ack = read_frame(&mut server);
+            assert_eq!(ack["operation"], "run.cursor_ack");
+            assert_eq!(ack["body"]["through_run_seq"], 8);
+            server
+                .write_all(
+                    &encode_frame(&Response {
+                        protocol: Protocol,
+                        request_id: Id::new(ack["request_id"].as_str().unwrap()).unwrap(),
+                        ok: Success,
+                        body: serde_json::json!({
+                            "subscription_id": subscription_id,
+                            "through_run_seq": 8
+                        }),
+                    })
+                    .unwrap(),
+                )
+                .unwrap();
             let events = [
-                Event {
-                    protocol: Protocol,
-                    subscription_id: Id::new(subscription_id).unwrap(),
-                    event: EventName::RunEvent,
-                    run_id: Some(Id::new(run_id).unwrap()),
-                    run_seq: Some(8),
-                    body: serde_json::json!({
-                        "event_type": "assistant\u{1b}[31mmessage\nprivate-marker",
-                        "event_version": 777,
-                        "recorded_at": "2026-07-17T12:00:01Z",
-                        "payload": {"withheld": true}
-                    }),
-                },
                 Event {
                     protocol: Protocol,
                     subscription_id: Id::new(subscription_id).unwrap(),
@@ -560,27 +697,25 @@ mod tests {
             for event in &events {
                 server.write_all(&encode_frame(&event).unwrap()).unwrap();
             }
-            for sequence in [8, 9] {
-                let ack = read_frame(&mut server);
-                assert_eq!(ack["operation"], "run.cursor_ack");
-                assert_eq!(ack["body"]["through_run_seq"], sequence);
-                server
-                    .write_all(
-                        &encode_frame(&Response {
-                            protocol: Protocol,
-                            request_id: Id::new(ack["request_id"].as_str().unwrap()).unwrap(),
-                            ok: Success,
-                            body: serde_json::json!({
-                                "subscription_id": subscription_id,
-                                "through_run_seq": sequence
-                            }),
-                        })
-                        .unwrap(),
-                    )
-                    .unwrap();
-            }
+            let ack = read_frame(&mut server);
+            assert_eq!(ack["operation"], "run.cursor_ack");
+            assert_eq!(ack["body"]["through_run_seq"], 9);
+            server
+                .write_all(
+                    &encode_frame(&Response {
+                        protocol: Protocol,
+                        request_id: Id::new(ack["request_id"].as_str().unwrap()).unwrap(),
+                        ok: Success,
+                        body: serde_json::json!({
+                            "subscription_id": subscription_id,
+                            "through_run_seq": 9
+                        }),
+                    })
+                    .unwrap(),
+                )
+                .unwrap();
         });
-        let mut input = io::Cursor::new(b"ship it\nignored prompt\n");
+        let mut input = io::Cursor::new(b"ship it\nmaybe\nyes\n");
         let mut output = Vec::new();
         run_with(
             &["run".into(), "start".into()],
@@ -602,13 +737,14 @@ mod tests {
         worker.join().unwrap();
         let output = String::from_utf8(output).unwrap();
         assert!(output.contains("Run committed: 123e4567-e89b-12d3-a456-426614174000"));
-        let catch_up_event = output
-            .find("8\tassistant [31mmessage private-marker\t2026-07-17T12:00:01Z\n")
+        let permission = output
+            .find("Permission required: Use camera now\n")
             .unwrap();
         let live_event = output
             .find("9\trun.completed\t2026-07-17T12:00:02Z\n")
             .unwrap();
-        assert!(catch_up_event < live_event);
+        assert!(permission < live_event);
+        assert!(output.contains("Enter y to allow or n to deny."));
         assert!(!output.contains("ship it"));
         assert_eq!(output.matches("Pairing requested").count(), 1);
         assert_eq!(output.matches("run.completed").count(), 1);
@@ -617,6 +753,7 @@ mod tests {
             "deadcafe",
             "private-server",
             subscription_id,
+            "private-gate",
             "withheld",
             "777",
             "999",
