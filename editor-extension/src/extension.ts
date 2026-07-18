@@ -1,9 +1,11 @@
 import * as vscode from "vscode";
-import { ThreadsModel, type ThreadItem } from "./threads";
+import { ThreadDocumentLoader } from "./thread-document";
+import { OPEN_THREAD_COMMAND, ThreadsModel, threadOpenCommand, type ThreadItem } from "./threads";
 import { connectAttach } from "./transport";
 
 const THREADS_VIEW_ID = "muniment.threads";
 const REFRESH_COMMAND = "muniment.refreshThreads";
+const THREAD_SCHEME = "muniment-thread";
 
 export function activate(context: vscode.ExtensionContext): void {
   const model = new ThreadsModel((onPairingPending) => connectAttach({
@@ -11,12 +13,33 @@ export function activate(context: vscode.ExtensionContext): void {
     onPairingPending,
   }));
   const provider = new ThreadsTreeDataProvider(model);
+  const documents = new ThreadDocumentProvider();
+  const loader = new ThreadDocumentLoader((threadId) => model.openThread(threadId));
 
   context.subscriptions.push(
     model,
     provider,
+    loader,
+    documents,
     vscode.window.registerTreeDataProvider(THREADS_VIEW_ID, provider),
+    vscode.workspace.registerTextDocumentContentProvider(THREAD_SCHEME, documents),
     vscode.commands.registerCommand(REFRESH_COMMAND, () => model.refresh()),
+    vscode.commands.registerCommand(OPEN_THREAD_COMMAND, async (threadId: string, title: string) => {
+      if (typeof threadId !== "string" || typeof title !== "string") return;
+      const result = await vscode.window.withProgress({
+        location: vscode.ProgressLocation.Notification,
+        title: `Opening ${title}…`,
+      }, () => loader.load(threadId, title));
+      if (result.kind === "stale") return;
+      if (result.kind === "error") {
+        void vscode.window.showErrorMessage(result.message);
+        return;
+      }
+      const uri = threadUri(threadId);
+      documents.set(uri, result.content);
+      const document = await vscode.workspace.openTextDocument(uri);
+      await vscode.window.showTextDocument(document, { preview: true });
+    }),
   );
   void model.refresh();
 }
@@ -43,6 +66,7 @@ class ThreadsTreeDataProvider implements vscode.TreeDataProvider<ThreadItem>, vs
     treeItem.id = item.threadId;
     treeItem.description = item.description;
     treeItem.iconPath = new vscode.ThemeIcon("comment-discussion");
+    treeItem.command = threadOpenCommand(item);
     return treeItem;
   }
 
@@ -53,6 +77,30 @@ class ThreadsTreeDataProvider implements vscode.TreeDataProvider<ThreadItem>, vs
 
   dispose(): void {
     this.modelSubscription.dispose();
+    this.emitter.dispose();
+  }
+}
+
+function threadUri(threadId: string): vscode.Uri {
+  return vscode.Uri.from({ scheme: THREAD_SCHEME, path: `/${encodeURIComponent(threadId)}.md` });
+}
+
+class ThreadDocumentProvider implements vscode.TextDocumentContentProvider, vscode.Disposable {
+  private readonly emitter = new vscode.EventEmitter<vscode.Uri>();
+  private readonly contents = new Map<string, string>();
+  readonly onDidChange = this.emitter.event;
+
+  provideTextDocumentContent(uri: vscode.Uri): string {
+    return this.contents.get(uri.toString()) ?? "";
+  }
+
+  set(uri: vscode.Uri, content: string): void {
+    this.contents.set(uri.toString(), content);
+    this.emitter.fire(uri);
+  }
+
+  dispose(): void {
+    this.contents.clear();
     this.emitter.dispose();
   }
 }

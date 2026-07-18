@@ -1,4 +1,6 @@
-import { AttachTransportError, type AttachConnection, type RedactedThreadSummary } from "./transport";
+import { AttachTransportError, type AttachConnection, type RedactedThreadSummary, type ThreadOpenPage } from "./transport";
+
+export const OPEN_THREAD_COMMAND = "muniment.openThread";
 
 export type ThreadsState =
   | { kind: "loading" }
@@ -12,6 +14,20 @@ export interface ThreadItem {
   threadId: string;
   title: string;
   description: string;
+}
+
+export interface ThreadOpenCommand {
+  command: typeof OPEN_THREAD_COMMAND;
+  title: string;
+  arguments: [threadId: string, title: string];
+}
+
+export function threadOpenCommand(item: Pick<ThreadItem, "threadId" | "title">): ThreadOpenCommand {
+  return {
+    command: OPEN_THREAD_COMMAND,
+    title: "Open Thread",
+    arguments: [item.threadId, item.title],
+  };
 }
 
 export type AttachConnector = (
@@ -40,6 +56,13 @@ export class ThreadsModel {
   onDidChange(listener: StateListener): { dispose(): void } {
     this.listeners.add(listener);
     return { dispose: () => this.listeners.delete(listener) };
+  }
+
+  async openThread(threadId: string): Promise<ThreadOpenPage> {
+    if (this.disposed || !this.connection) {
+      throw new AttachTransportError("authorization_expired");
+    }
+    return this.connection.openThread(threadId);
   }
 
   async refresh(): Promise<void> {
