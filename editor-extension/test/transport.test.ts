@@ -108,6 +108,30 @@ test("discovers the macOS endpoint and pairs across coalesced frames", async () 
   connection.dispose();
 });
 
+test("derives the Windows pipe from the canonical SID bytes and completes pairing", async () => {
+  const socket = new FakeSocket();
+  let pending = 0;
+  const result = connecting(socket, {
+    platform: "win32",
+    environment: { USERNAME: "must-not-be-used", USERPROFILE: "C:\\must-not-be-used" },
+    homedir: () => { throw new Error("must not use home"); },
+    discoverWindowsSid: () => "S-1-5-21-1111111111-2222222222-3333333333-1001",
+    createSocket: (endpoint: string) => {
+      assert.equal(endpoint, "\\\\.\\pipe\\Muniment\\attach-v1-44f5a322cb079e3ff5b7a4603370914b");
+      return socket;
+    },
+    onPairingPending: () => pending++,
+  });
+  socket.emit("connect");
+  socket.emit("data", Buffer.concat([encodeAttachFrame(welcome), encodeAttachFrame(authorized)]));
+
+  const connection = await result;
+  assert.equal(pending, 1);
+  assert.equal(connection.capability, "c".repeat(64));
+  connection.dispose();
+  assert.equal(socket.destroyed, true);
+});
+
 test("frame decoder rejects oversize prefixes before receiving payload", () => {
   const prefix = Buffer.alloc(4);
   prefix.writeUInt32BE(MAX_FRAME_LENGTH + 1);
@@ -166,7 +190,7 @@ test("uses a separate bounded approval timeout", async () => {
 });
 
 test("rejects unsupported platforms and invalid or unavailable runtime discovery", async () => {
-  await assert.rejects(connectAttach({ clientVersion: "1", platform: "win32" }),
+  await assert.rejects(connectAttach({ clientVersion: "1", platform: "freebsd" }),
     (error: unknown) => error instanceof AttachTransportError && error.code === "unsupported_platform");
   await assert.rejects(connectAttach({ clientVersion: "1", platform: "linux", environment: {} }),
     (error: unknown) => error instanceof AttachTransportError && error.code === "runtime_unavailable");
@@ -179,4 +203,27 @@ test("rejects unsupported platforms and invalid or unavailable runtime discovery
   await assert.rejects(connectAttach({
     clientVersion: "1", platform: "darwin", homedir: () => { throw new Error("unavailable"); },
   }), (error: unknown) => error instanceof AttachTransportError && error.code === "runtime_unavailable");
+});
+
+test("fails closed when Windows SID discovery is unavailable or malformed", async () => {
+  let socketCreations = 0;
+  const createSocket = () => {
+    socketCreations++;
+    return new FakeSocket();
+  };
+  await assert.rejects(connectAttach({
+    clientVersion: "1",
+    platform: "win32",
+    environment: { USERNAME: "fallback-user", USERPROFILE: "C:\\fallback" },
+    discoverWindowsSid: () => { throw new Error("private process output"); },
+    createSocket,
+  }), (error: unknown) => error instanceof AttachTransportError &&
+    error.code === "runtime_unavailable" && error.message === "runtime_unavailable");
+  await assert.rejects(connectAttach({
+    clientVersion: "1",
+    platform: "win32",
+    discoverWindowsSid: () => "S-1-5-21-not-a-number",
+    createSocket,
+  }), (error: unknown) => error instanceof AttachTransportError && error.code === "runtime_unavailable");
+  assert.equal(socketCreations, 0);
 });

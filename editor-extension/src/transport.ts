@@ -1,4 +1,5 @@
-import { randomBytes } from "node:crypto";
+import { execFileSync } from "node:child_process";
+import { createHash, randomBytes } from "node:crypto";
 import { createConnection } from "node:net";
 import { homedir } from "node:os";
 import { posix } from "node:path";
@@ -117,6 +118,9 @@ export interface ConnectOptions {
   platform?: NodeJS.Platform;
   environment?: NodeJS.ProcessEnv;
   homedir?: () => string;
+  discoverWindowsSid?: () => string;
+  canonicalizeWindowsSid?: (sid: string) => Uint8Array;
+  hashWindowsSid?: (sid: Uint8Array) => string;
   ioTimeoutMs?: number;
   approvalTimeoutMs?: number;
   createSocket?: (path: string) => AttachSocket;
@@ -129,20 +133,76 @@ function transportError(error: unknown): AttachTransportError {
     : new AttachTransportError("desktop_unavailable");
 }
 
+function discoverWindowsSid(): string {
+  const output = execFileSync("whoami.exe", ["/user", "/fo", "csv", "/nh"], {
+    encoding: "utf8",
+    windowsHide: true,
+    timeout: DEFAULT_IO_TIMEOUT_MS,
+    maxBuffer: 64 * 1024,
+  });
+  const fields = output.match(/"(?:[^"]|"")*"/g) ?? [];
+  const sid = fields[1]?.slice(1, -1).replace(/""/g, '"');
+  if (fields.length !== 2 || !sid || !/^S-\d+(?:-\d+)+$/i.test(sid)) {
+    throw new Error("SID unavailable");
+  }
+  return sid;
+}
+
+/** Converts an SDDL SID string to the binary SID representation hashed by ADR 0009. */
+function canonicalizeWindowsSid(value: string): Uint8Array {
+  const parts = value.split("-");
+  if (parts.length < 4 || parts[0].toUpperCase() !== "S") throw new Error("invalid SID");
+  const revision = parseDecimal(parts[1], 0xffn);
+  const authority = parseDecimal(parts[2], 0xffffffffffffn);
+  const subAuthorities = parts.slice(3).map((part) => parseDecimal(part, 0xffffffffn));
+  if (revision !== 1n || subAuthorities.length > 15) throw new Error("invalid SID");
+
+  const bytes = Buffer.alloc(8 + subAuthorities.length * 4);
+  bytes[0] = Number(revision);
+  bytes[1] = subAuthorities.length;
+  let remainingAuthority = authority;
+  for (let index = 7; index >= 2; index--) {
+    bytes[index] = Number(remainingAuthority & 0xffn);
+    remainingAuthority >>= 8n;
+  }
+  subAuthorities.forEach((part, index) => bytes.writeUInt32LE(Number(part), 8 + index * 4));
+  return bytes;
+}
+
+function parseDecimal(value: string | undefined, maximum: bigint): bigint {
+  if (!value || !/^(0|[1-9]\d*)$/.test(value)) throw new Error("invalid SID");
+  const parsed = BigInt(value);
+  if (parsed > maximum) throw new Error("invalid SID");
+  return parsed;
+}
+
+function hashWindowsSid(sid: Uint8Array): string {
+  return createHash("sha256").update(sid).digest("hex").slice(0, 32);
+}
+
 export function connectAttach(options: ConnectOptions): Promise<AttachConnection> {
   const platform = options.platform ?? process.platform;
-  if (platform !== "linux" && platform !== "darwin") {
+  if (platform !== "linux" && platform !== "darwin" && platform !== "win32") {
     return Promise.reject(new AttachTransportError("unsupported_platform"));
   }
-  let runtime: string | undefined;
+  let endpoint: string;
   try {
-    runtime = platform === "linux"
-      ? (options.environment ?? process.env).XDG_RUNTIME_DIR
-      : posix.join((options.homedir ?? homedir)(), "Library", "Application Support", "Muniment", "runtime");
+    if (platform === "win32") {
+      const sid = (options.discoverWindowsSid ?? discoverWindowsSid)();
+      const canonical = (options.canonicalizeWindowsSid ?? canonicalizeWindowsSid)(sid);
+      const hash = (options.hashWindowsSid ?? hashWindowsSid)(canonical);
+      if (!/^[0-9a-f]{32}$/.test(hash)) throw new Error("invalid SID hash");
+      endpoint = `\\\\.\\pipe\\Muniment\\attach-v1-${hash}`;
+    } else {
+      const runtime = platform === "linux"
+        ? (options.environment ?? process.env).XDG_RUNTIME_DIR
+        : posix.join((options.homedir ?? homedir)(), "Library", "Application Support", "Muniment", "runtime");
+      if (!runtime || !posix.isAbsolute(runtime)) throw new Error("invalid runtime");
+      endpoint = platform === "linux"
+        ? posix.join(runtime, "muniment", "attach-v1.sock")
+        : posix.join(runtime, "attach-v1.sock");
+    }
   } catch {
-    return Promise.reject(new AttachTransportError("runtime_unavailable"));
-  }
-  if (!runtime || !posix.isAbsolute(runtime)) {
     return Promise.reject(new AttachTransportError("runtime_unavailable"));
   }
 
@@ -161,9 +221,6 @@ export function connectAttach(options: ConnectOptions): Promise<AttachConnection
   if (!isHex(nonce, 32)) {
     return Promise.reject(new AttachTransportError("randomness_unavailable"));
   }
-  const endpoint = platform === "linux"
-    ? posix.join(runtime, "muniment", "attach-v1.sock")
-    : posix.join(runtime, "attach-v1.sock");
   let socket: AttachSocket;
   try {
     socket = (options.createSocket ?? ((path) => createConnection({ path })))(endpoint);
