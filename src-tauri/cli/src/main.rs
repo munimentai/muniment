@@ -116,6 +116,10 @@ fn run_with(
                 RunStreamMessage::Event(event) => {
                     writeln!(output, "{}", render_run_event(&event))
                         .map_err(|_| CliError::RunClient(ClientError::ConnectionClosed))?;
+                    if let Some(receipt) = &event.receipt {
+                        writeln!(output, "{}", render_receipt(receipt))
+                            .map_err(|_| CliError::RunClient(ClientError::ConnectionClosed))?;
+                    }
                     (event.run_seq, terminal_result(&event.event_type))
                 }
                 RunStreamMessage::PermissionPending(permission) => {
@@ -336,6 +340,40 @@ fn render_run_event(event: &RedactedRunEvent) -> String {
     )
 }
 
+fn render_receipt(receipt: &muniment_attach::RunReceipt) -> String {
+    let mut fields = Vec::new();
+    for (label, value) in [
+        ("route", &receipt.route),
+        ("model", &receipt.model),
+        ("cost", &receipt.cost),
+        ("time", &receipt.time),
+    ] {
+        if let Some(value) = value {
+            fields.push(format!("{label}={}", one_line(value)));
+        }
+    }
+    if !receipt.capabilities.is_empty() {
+        fields.push(format!(
+            "capabilities={}",
+            receipt
+                .capabilities
+                .iter()
+                .map(|capability| format!(
+                    "{}@{}",
+                    one_line(&capability.name),
+                    one_line(&capability.version)
+                ))
+                .collect::<Vec<_>>()
+                .join(",")
+        ));
+    }
+    if fields.is_empty() {
+        "Receipt".to_owned()
+    } else {
+        format!("Receipt\t{}", fields.join("\t"))
+    }
+}
+
 fn terminal_result(event_type: &str) -> Option<Result<(), CliError>> {
     match event_type {
         "run.completed" | "run.cancelled" => Some(Ok(())),
@@ -445,6 +483,7 @@ mod tests {
             event_type: event_type.into(),
             event_version: 1,
             recorded_at: "2026-07-18T15:50:00Z".into(),
+            receipt: None,
         };
         for (event_type, detail) in [
             ("tool.requested", "Tool queued"),
@@ -461,6 +500,27 @@ mod tests {
             render_run_event(&event(5, "tool.effect.future\n\u{1b}[31m")),
             "5\ttool.effect.future  [31m\t2026-07-18T15:50:00Z"
         );
+    }
+
+    #[test]
+    fn receipt_rendering_prints_only_authoritative_present_fields_and_is_terminal_safe() {
+        let receipt = muniment_attach::RunReceipt {
+            route: Some("cloud\nroute".into()),
+            model: None,
+            cost: Some("$0.01".into()),
+            time: None,
+            capabilities: vec![muniment_attach::ReceiptCapability {
+                name: "web\u{1b}[31m".into(),
+                version: "1\tstable".into(),
+            }],
+        };
+        assert_eq!(
+            render_receipt(&receipt),
+            "Receipt\troute=cloud route\tcost=$0.01\tcapabilities=web [31m@1 stable"
+        );
+        assert!(!render_receipt(&receipt).contains("model="));
+        assert!(!render_receipt(&receipt).contains("time="));
+        assert!(!render_receipt(&receipt).contains('\u{1b}'));
     }
 
     #[test]
@@ -730,7 +790,10 @@ mod tests {
                         "event_type": "run.completed",
                         "event_version": 999,
                         "recorded_at": "2026-07-17T12:00:02Z",
-                        "payload": {"withheld": true}
+                        "payload": {"withheld": true, "receipt": {
+                            "route": "cloud", "model": null, "cost": "$0.01", "time": "2s",
+                            "capabilities": [{"name": "search", "version": "1"}]
+                        }}
                     }),
                 },
             ];
@@ -788,6 +851,7 @@ mod tests {
         assert!(!output.contains("ship it"));
         assert_eq!(output.matches("Pairing requested").count(), 1);
         assert_eq!(output.matches("run.completed").count(), 1);
+        assert!(output.contains("Receipt\troute=cloud\tcost=$0.01\ttime=2s\tcapabilities=search@1"));
         assert!(!output.contains('\u{1b}'));
         for private in [
             "deadcafe",
