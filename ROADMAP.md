@@ -44,8 +44,8 @@ Phases mirror harness-spec §9. Muniment-cloud Phase 1 native auth and the cloud
 - DONE E1 permission handling — typed pending-permission prompts with allow/deny submission over the preserved authorized connection are present, alongside the Rust workspace and path-scoped CLI CI lane; protocol-only dependency boundary; Linux discovery and pairing; thread list/open; and run start with ordered catch-up/live terminal progress and flow control.
 - DONE E1 terminal projection — inline tool-stream details and authoritative run receipts are projected and printed in the terminal.
 - DONE E2 groundwork — Rust-owned canonical `muniment.attach/1` fixtures, deterministic drift checking, and the fixture-pinned TypeScript extension package/test/package CI lane are present.
-- DONE E2 Linux transport — the extension has bounded Unix-socket framing, secure runtime discovery, pairing, and authorization over the canonical attach protocol.
-- NEXT E2 — add macOS Unix-socket discovery and the existing pairing/authorization handshake as one UI-neutral native attach transport slice. Then proceed independently with the Windows named-pipe adapter, thread view/composer, workspace-scoped editor context, and in-editor permission gates. VSIX sideload testing is sufficient and marketplace publication remains owner-gated.
+- DONE E2 Linux/macOS transport — the extension has bounded Unix-socket framing, secure platform runtime discovery, pairing, and authorization over the canonical attach protocol.
+- NEXT E2 — add the Windows named-pipe adapter using the existing pairing/authorization handshake as one UI-neutral native attach transport slice. Then proceed independently with thread view/composer, workspace-scoped editor context, and in-editor permission gates. VSIX sideload testing is sufficient and marketplace publication remains owner-gated.
 - The runtime service is the sole runtime/session/journal owner; desktop, CLI, and editor extension are clients and remain windows, not modes.
 
 ## Browser-control runtime capability (§6.8)
