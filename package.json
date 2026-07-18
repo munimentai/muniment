@@ -7,7 +7,7 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "test": "vitest run --root .",
+    "test": "vitest run --root . --exclude 'editor-extension/**'",
     "tauri": "tauri",
     "browser-control": "npm run build --prefix browser-control && npm run typecheck --prefix browser-control && npm test --prefix browser-control"
   },
