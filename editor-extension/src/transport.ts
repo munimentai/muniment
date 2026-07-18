@@ -1,6 +1,7 @@
 import { randomBytes } from "node:crypto";
-import { isAbsolute, join } from "node:path";
 import { createConnection } from "node:net";
+import { homedir } from "node:os";
+import { posix } from "node:path";
 import { TextDecoder } from "node:util";
 import { ATTACH_PROTOCOL, decodeAttachJson, type AttachEnvelope } from "./protocol";
 
@@ -115,6 +116,7 @@ export interface ConnectOptions {
   onPairingPending?: () => void;
   platform?: NodeJS.Platform;
   environment?: NodeJS.ProcessEnv;
+  homedir?: () => string;
   ioTimeoutMs?: number;
   approvalTimeoutMs?: number;
   createSocket?: (path: string) => AttachSocket;
@@ -129,11 +131,18 @@ function transportError(error: unknown): AttachTransportError {
 
 export function connectAttach(options: ConnectOptions): Promise<AttachConnection> {
   const platform = options.platform ?? process.platform;
-  if (platform !== "linux") {
+  if (platform !== "linux" && platform !== "darwin") {
     return Promise.reject(new AttachTransportError("unsupported_platform"));
   }
-  const runtime = (options.environment ?? process.env).XDG_RUNTIME_DIR;
-  if (!runtime || !isAbsolute(runtime)) {
+  let runtime: string | undefined;
+  try {
+    runtime = platform === "linux"
+      ? (options.environment ?? process.env).XDG_RUNTIME_DIR
+      : posix.join((options.homedir ?? homedir)(), "Library", "Application Support", "Muniment", "runtime");
+  } catch {
+    return Promise.reject(new AttachTransportError("runtime_unavailable"));
+  }
+  if (!runtime || !posix.isAbsolute(runtime)) {
     return Promise.reject(new AttachTransportError("runtime_unavailable"));
   }
 
@@ -152,7 +161,9 @@ export function connectAttach(options: ConnectOptions): Promise<AttachConnection
   if (!isHex(nonce, 32)) {
     return Promise.reject(new AttachTransportError("randomness_unavailable"));
   }
-  const endpoint = join(runtime, "muniment", "attach-v1.sock");
+  const endpoint = platform === "linux"
+    ? posix.join(runtime, "muniment", "attach-v1.sock")
+    : posix.join(runtime, "attach-v1.sock");
   let socket: AttachSocket;
   try {
     socket = (options.createSocket ?? ((path) => createConnection({ path })))(endpoint);
