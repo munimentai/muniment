@@ -61,14 +61,17 @@ fn export_repairs_a_stale_regular_checkout_directory() {
     fs::create_dir_all(&live).unwrap();
     fs::write(live.join("response-run-start.json"), b"{}\n").unwrap();
     fs::write(live.join("obsolete.json"), b"obsolete\n").unwrap();
+    let stale = read_fixtures(&live);
     let running = Arc::new(AtomicBool::new(true));
     let reader_live = live.clone();
     let reader_running = Arc::clone(&running);
+    let reader_expected = expected.clone();
     let reader = std::thread::spawn(move || {
         while reader_running.load(Ordering::Acquire) {
+            let observed = read_fixtures(&reader_live);
             assert!(
-                fs::metadata(&reader_live).unwrap().is_dir(),
-                "the canonical fixture directory must remain present during checkout migration"
+                observed == stale || observed == reader_expected,
+                "checkout migration exposed a missing or partial generation"
             );
         }
     });

@@ -35,14 +35,6 @@ pub fn export(root: &Path, mode: Mode) -> io::Result<()> {
         .expect("the fixture directory always has a parent");
     fs::create_dir_all(parent)?;
     let _export_lock = ExportLock::acquire(&target.with_file_name(".1.export.lock"))?;
-    #[cfg(windows)]
-    if target.is_dir() && !is_reparse_point(&target)? && check(&target, &expected).is_ok() {
-        // A Git checkout materializes the checked-in fixture directory as a
-        // regular directory. It already contains the requested generation,
-        // so there is nothing to publish. Subsequent generated targets use a
-        // junction, whose destination can be changed atomically.
-        return Ok(());
-    }
     remove_stale_staging(parent)?;
     #[cfg(windows)]
     remove_stale_generations(parent, &target)?;
@@ -55,8 +47,9 @@ pub fn export(root: &Path, mode: Mode) -> io::Result<()> {
     }
 
     publish(&staging, &target)?;
-    // After an exchange, staging contains the complete displaced generation.
-    // Removing it cannot make the live target absent or partially populated.
+    // After a Unix exchange, staging contains the complete displaced
+    // generation. On Windows the atomic replacement has already removed the
+    // staging name. Either way, cleanup cannot affect the live target.
     remove_if_present(&staging)
 }
 
@@ -244,138 +237,116 @@ fn atomic_exchange(left: &Path, right: &Path) -> io::Result<()> {
 
 #[cfg(windows)]
 fn atomic_exchange(left: &Path, right: &Path) -> io::Result<()> {
-    let generation = left.with_file_name(format!(
-        ".1.generation.{}.{}",
-        std::process::id(),
-        NEXT_EXPORT.fetch_add(1, Ordering::Relaxed)
-    ));
-    fs::rename(left, &generation)?;
-    if right.is_dir() && !is_reparse_point(right)? {
-        if let Err(error) = empty_directory(right) {
-            let _ = fs::rename(&generation, left);
-            return Err(error);
-        }
+    if !right.exists() {
+        return fs::rename(left, right);
     }
-    if let Err(error) = set_junction(right, &generation) {
-        let _ = fs::rename(&generation, left);
-        return Err(error);
-    }
-    Ok(())
+    replace_directory(left, right)
 }
 
 #[cfg(windows)]
-fn empty_directory(directory: &Path) -> io::Result<()> {
-    for entry in fs::read_dir(directory)? {
-        let path = entry?.path();
-        let metadata = fs::symlink_metadata(&path)?;
-        if metadata.is_dir() && !is_reparse_point(&path)? {
-            fs::remove_dir_all(path)?;
-        } else if metadata.is_dir() {
-            fs::remove_dir(path)?;
-        } else {
-            fs::remove_file(path)?;
-        }
+fn replace_directory(source: &Path, destination: &Path) -> io::Result<()> {
+    use std::{mem, os::windows::ffi::OsStrExt, os::windows::fs::OpenOptionsExt};
+
+    #[repr(C)]
+    struct RenameInfo {
+        flags: u32,
+        root_directory: *mut core::ffi::c_void,
+        file_name_length: u32,
+        file_name: [u16; 1],
     }
-    Ok(())
-}
 
-#[cfg(windows)]
-fn is_reparse_point(path: &Path) -> io::Result<bool> {
-    use std::os::windows::fs::MetadataExt;
-
-    const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
-    Ok(fs::symlink_metadata(path)?.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0)
-}
-
-#[cfg(windows)]
-fn set_junction(junction: &Path, destination: &Path) -> io::Result<()> {
-    use std::{
-        os::windows::ffi::OsStrExt, os::windows::fs::OpenOptionsExt, os::windows::io::AsRawHandle,
-    };
-
+    const DELETE: u32 = 0x0001_0000;
     const FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x0200_0000;
-    const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
-    const GENERIC_WRITE: u32 = 0x4000_0000;
-    const IO_REPARSE_TAG_MOUNT_POINT: u32 = 0xA000_0003;
-    const FSCTL_SET_REPARSE_POINT: u32 = 0x0009_00A4;
-    let destination = fs::canonicalize(destination)?;
-    let mut print: Vec<u16> = destination.as_os_str().encode_wide().collect();
-    const VERBATIM_PREFIX: [u16; 4] = [b'\\' as u16, b'\\' as u16, b'?' as u16, b'\\' as u16];
-    if print.starts_with(&VERBATIM_PREFIX) {
-        print.drain(..VERBATIM_PREFIX.len());
+    const FILE_RENAME_INFO_EX: u32 = 22;
+    const FILE_RENAME_REPLACE_IF_EXISTS: u32 = 1;
+    const FILE_RENAME_POSIX_SEMANTICS: u32 = 2;
+    let destination = fs::canonicalize(
+        destination
+            .parent()
+            .expect("fixture destination always has a parent"),
+    )?
+    .join(
+        destination
+            .file_name()
+            .expect("fixture destination has a name"),
+    );
+    let name: Vec<u16> = destination.as_os_str().encode_wide().collect();
+    let file_name_offset = mem::offset_of!(RenameInfo, file_name);
+    let byte_len = file_name_offset + name.len() * mem::size_of::<u16>();
+    let mut buffer = vec![0_usize; byte_len.div_ceil(mem::size_of::<usize>())];
+    let info = buffer.as_mut_ptr().cast::<RenameInfo>();
+    // SAFETY: `buffer` is suitably aligned and large enough for the fixed
+    // fields and the complete UTF-16 name copied immediately after them.
+    unsafe {
+        (*info).flags = FILE_RENAME_REPLACE_IF_EXISTS | FILE_RENAME_POSIX_SEMANTICS;
+        (*info).root_directory = std::ptr::null_mut();
+        (*info).file_name_length = (name.len() * 2) as u32;
+        std::ptr::copy_nonoverlapping(
+            name.as_ptr(),
+            buffer
+                .as_mut_ptr()
+                .cast::<u8>()
+                .add(file_name_offset)
+                .cast(),
+            name.len(),
+        );
     }
-    if print.starts_with(&[b'U' as u16, b'N' as u16, b'C' as u16, b'\\' as u16]) {
-        return Err(io::Error::new(
-            io::ErrorKind::Unsupported,
-            "fixture junction generations must be on a local volume",
-        ));
-    }
-    let mut substitute: Vec<u16> = r"\??\".encode_utf16().collect();
-    substitute.extend(&print);
-    let path_bytes = (substitute.len() + 1 + print.len() + 1) * 2;
-    let data_length = 8 + path_bytes;
-    if data_length > 16 * 1024 - 8 || data_length > u16::MAX as usize {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "fixture junction path is too long",
-        ));
-    }
-    let mut buffer = Vec::with_capacity(8 + data_length);
-    buffer.extend_from_slice(&IO_REPARSE_TAG_MOUNT_POINT.to_le_bytes());
-    buffer.extend_from_slice(&(data_length as u16).to_le_bytes());
-    buffer.extend_from_slice(&0_u16.to_le_bytes());
-    buffer.extend_from_slice(&0_u16.to_le_bytes());
-    buffer.extend_from_slice(&((substitute.len() * 2) as u16).to_le_bytes());
-    buffer.extend_from_slice(&(((substitute.len() + 1) * 2) as u16).to_le_bytes());
-    buffer.extend_from_slice(&((print.len() * 2) as u16).to_le_bytes());
-    for unit in substitute
-        .iter()
-        .chain(std::iter::once(&0))
-        .chain(print.iter())
-        .chain(std::iter::once(&0))
-    {
-        buffer.extend_from_slice(&unit.to_le_bytes());
-    }
-
-    if !junction.exists() {
-        fs::create_dir(junction)?;
-    }
-    let file = OpenOptions::new()
-        .access_mode(GENERIC_WRITE)
+    let source = OpenOptions::new()
+        .access_mode(DELETE)
         .share_mode(7)
-        .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT)
-        .open(junction)?;
+        .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
+        .open(source)?;
     unsafe extern "system" {
-        fn DeviceIoControl(
-            device: *mut core::ffi::c_void,
-            control_code: u32,
-            input: *const core::ffi::c_void,
-            input_size: u32,
-            output: *mut core::ffi::c_void,
-            output_size: u32,
-            returned: *mut u32,
-            overlapped: *mut core::ffi::c_void,
+        fn SetFileInformationByHandle(
+            file: *mut core::ffi::c_void,
+            class: u32,
+            information: *const core::ffi::c_void,
+            size: u32,
         ) -> i32;
     }
-    let mut returned = 0;
-    // SAFETY: the handle and input buffer remain valid for this synchronous
-    // call; no output or OVERLAPPED structure is requested.
+    use std::os::windows::io::AsRawHandle;
+    // SAFETY: the handle and rename buffer remain valid for this synchronous call.
     if unsafe {
-        DeviceIoControl(
-            file.as_raw_handle(),
-            FSCTL_SET_REPARSE_POINT,
+        SetFileInformationByHandle(
+            source.as_raw_handle(),
+            FILE_RENAME_INFO_EX,
             buffer.as_ptr().cast(),
-            buffer.len() as u32,
-            std::ptr::null_mut(),
-            0,
-            &mut returned,
-            std::ptr::null_mut(),
+            byte_len as u32,
         )
     } == 0
     {
         Err(io::Error::last_os_error())
     } else {
         Ok(())
+    }
+}
+
+#[cfg(all(test, windows))]
+mod windows_tests {
+    use super::replace_directory;
+    use std::fs;
+
+    #[test]
+    fn failed_atomic_publication_preserves_the_original_target() {
+        let root = std::env::temp_dir().join(format!(
+            "muniment-attach-publication-failure-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir(&root).unwrap();
+        let source = root.join("not-a-directory");
+        fs::write(&source, b"replacement").unwrap();
+        let target = root.join("live");
+        fs::create_dir(&target).unwrap();
+        fs::write(target.join("original.json"), b"original\n").unwrap();
+
+        assert!(replace_directory(&source, &target).is_err());
+        assert_eq!(
+            fs::read(target.join("original.json")).unwrap(),
+            b"original\n"
+        );
+        assert_eq!(fs::read(&source).unwrap(), b"replacement");
+        fs::remove_dir_all(root).unwrap();
     }
 }
 
