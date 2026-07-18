@@ -22,9 +22,7 @@ use super::{
 use super::{
     RunEventAdmission, RunStreamCursor, MAX_RUN_STREAM_WINDOW_BYTES, MAX_RUN_STREAM_WINDOW_EVENTS,
 };
-use crate::journal::{
-    summaries::RunSummaryListError, EventEnvelope, RunEventPageError, RunJournal,
-};
+use crate::journal::{summaries::RunSummaryListError, RunEventPageError, RunJournal};
 
 const ATTACH_DIRECTORY: &[u8] = b"muniment\0";
 const ENDPOINT_NAME: &str = "attach-v1.sock";
@@ -427,7 +425,7 @@ pub struct RunStreamPage {
     pub run_id: String,
     pub first_available_run_seq: u64,
     pub current_run_seq: u64,
-    pub events: Vec<EventEnvelope>,
+    pub events: Vec<crate::journal::RunEventProjection>,
     pub exhausted: bool,
 }
 
@@ -494,6 +492,7 @@ impl ThreadListService for RunJournal {
                 run_id,
                 after_run_seq,
                 MAX_RUN_STREAM_WINDOW_EVENTS,
+                MAX_RUN_STREAM_WINDOW_BYTES,
             )
             .map_err(|error| match error {
                 RunEventPageError::InvalidCursor => ProtocolError::invalid_cursor(),
@@ -1122,7 +1121,6 @@ fn dispatch_request<S: ThreadListService>(
                 "event_type": journal_event.event_type,
                 "event_version": journal_event.event_version,
                 "recorded_at": journal_event.recorded_at,
-                "occurred_at": journal_event.occurred_at,
                 "payload": { "withheld": true }
             });
             let event = Event {
@@ -1133,7 +1131,7 @@ fn dispatch_request<S: ThreadListService>(
                 run_seq: Some(journal_event.run_seq),
                 body: projection,
             };
-            let bytes = serde_json::to_vec(&event)
+            let bytes = encode_frame(&event)
                 .map_err(|_| ProtocolError::persistence_failed())?
                 .len();
             match cursor
