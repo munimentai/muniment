@@ -20,6 +20,9 @@ export type AttachErrorCode =
   | "payload_too_large"
   | "protocol_incompatible"
   | "randomness_unavailable"
+  | "authorization_expired"
+  | "request_rejected"
+  | "desktop_failed"
   | "unexpected_message";
 
 export class AttachTransportError extends Error {
@@ -109,7 +112,32 @@ export interface AttachConnection {
   readonly capability: string;
   readonly expiresInSeconds: number;
   readonly idleTimeoutSeconds: number;
+  listThreads(cursor?: string): Promise<ThreadListPage>;
+  openThread(threadId: string, cursor?: string): Promise<ThreadOpenPage>;
   dispose(): void;
+}
+
+export interface RedactedThreadSummary {
+  threadId: string;
+  title: string;
+  updatedAt: string;
+}
+
+export interface ThreadListPage {
+  threads: RedactedThreadSummary[];
+  nextCursor?: string;
+}
+
+export interface RedactedThreadEntry {
+  runSeq: number;
+  kind: string;
+  text?: string;
+}
+
+export interface ThreadOpenPage {
+  threadId: string;
+  entries: RedactedThreadEntry[];
+  nextCursor?: string;
 }
 
 export interface ConnectOptions {
@@ -302,20 +330,104 @@ export function connectAttach(options: ConnectOptions): Promise<AttachConnection
           clearTimer();
           removeHandshakeListeners();
           let capability = envelope.capability as string;
+          let pending: {
+            requestId: string;
+            resolve: (envelope: AttachEnvelope) => void;
+            reject: (error: AttachTransportError) => void;
+            timer: NodeJS.Timeout;
+          } | undefined;
+          const rejectPending = (error: AttachTransportError): void => {
+            if (!pending) return;
+            clearTimeout(pending.timer);
+            const reject = pending.reject;
+            pending = undefined;
+            reject(error);
+          };
           const onTerminal = (): void => {
             capability = "";
+            rejectPending(new AttachTransportError("connection_closed"));
+            socket.removeListener("data", onAuthorizedData);
             socket.removeListener("error", onTerminal);
             socket.removeListener("close", onTerminal);
             socket.destroy();
           };
+          const closeUnexpected = (error: AttachTransportError): void => {
+            rejectPending(error);
+            onTerminal();
+          };
+          const onAuthorizedData = (chunk: Buffer): void => {
+            try {
+              for (const message of decoder.push(chunk)) {
+                if (!pending || (message.kind !== "response" && message.kind !== "error") ||
+                    message.request_id !== pending.requestId) {
+                  closeUnexpected(new AttachTransportError("unexpected_message"));
+                  return;
+                }
+                clearTimeout(pending.timer);
+                const current = pending;
+                pending = undefined;
+                if (message.kind === "error") {
+                  const code = (message.error as Record<string, unknown>).code;
+                  current.reject(new AttachTransportError(code === "protocol_incompatible"
+                    ? "protocol_incompatible"
+                    : code === "unauthorized" ? "authorization_expired"
+                    : code === "persistence_failed" ? "desktop_failed"
+                    : "request_rejected"));
+                } else {
+                  current.resolve(message);
+                }
+              }
+            } catch (error) {
+              closeUnexpected(transportError(error));
+            }
+          };
+          const request = (operation: "thread.list" | "thread.open", body: JsonBody): Promise<AttachEnvelope> => {
+            if (!capability) return Promise.reject(new AttachTransportError("authorization_expired"));
+            if (pending) return Promise.reject(new AttachTransportError("unexpected_message"));
+            let requestId: string;
+            try {
+              requestId = freshRequestId();
+            } catch {
+              return Promise.reject(new AttachTransportError("randomness_unavailable"));
+            }
+            return new Promise((requestResolve, requestReject) => {
+              const timer = setTimeout(() => {
+                closeUnexpected(new AttachTransportError("timeout"));
+              }, ioTimeout);
+              pending = { requestId, resolve: requestResolve, reject: requestReject, timer };
+              try {
+                socket.write(encodeAttachFrame({
+                  protocol: ATTACH_PROTOCOL, request_id: requestId, operation, capability, body,
+                }));
+              } catch (error) {
+                closeUnexpected(transportError(error));
+              }
+            });
+          };
+          socket.on("data", onAuthorizedData);
           socket.on("error", onTerminal);
           socket.on("close", onTerminal);
           resolve({
             get capability() { return capability; },
             expiresInSeconds: envelope.expires_at as number,
             idleTimeoutSeconds: envelope.idle_timeout_seconds as number,
+            async listThreads(cursor?: string): Promise<ThreadListPage> {
+              validateCursor(cursor, MAX_TEXT_LENGTH);
+              const body: JsonBody = { limit: THREAD_PAGE_LIMIT };
+              if (cursor !== undefined) body.cursor = cursor;
+              return decodeThreadListPage((await request("thread.list", body)).body);
+            },
+            async openThread(threadId: string, cursor?: string): Promise<ThreadOpenPage> {
+              validateBoundedString(threadId, MAX_THREAD_ID_LENGTH, false);
+              validateCursor(cursor, MAX_CURSOR_LENGTH);
+              const body: JsonBody = { thread_id: threadId, limit: THREAD_PAGE_LIMIT };
+              if (cursor !== undefined) body.cursor = cursor;
+              return decodeThreadOpenPage((await request("thread.open", body)).body, threadId);
+            },
             dispose(): void {
               capability = "";
+              rejectPending(new AttachTransportError("connection_closed"));
+              socket.removeListener("data", onAuthorizedData);
               socket.removeListener("error", onTerminal);
               socket.removeListener("close", onTerminal);
               socket.destroy();
@@ -336,6 +448,82 @@ export function connectAttach(options: ConnectOptions): Promise<AttachConnection
     socket.on("close", onClose);
     armTimer(ioTimeout);
   });
+}
+
+type JsonBody = Record<string, string | number>;
+const THREAD_PAGE_LIMIT = 100;
+const MAX_TEXT_LENGTH = 64 * 1024;
+const MAX_CURSOR_LENGTH = 1024;
+const MAX_THREAD_ID_LENGTH = 36;
+
+function freshRequestId(): string {
+  const bytes = randomBytes(16);
+  bytes[6] = (bytes[6] & 0x0f) | 0x40;
+  bytes[8] = (bytes[8] & 0x3f) | 0x80;
+  const hex = bytes.toString("hex");
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
+
+function validateBoundedString(value: unknown, maximum: number, allowEmpty: boolean): asserts value is string {
+  if (typeof value !== "string" || (!allowEmpty && value.length === 0) || Buffer.byteLength(value) > maximum) {
+    throw new AttachTransportError("unexpected_message");
+  }
+}
+
+function validateCursor(cursor: string | undefined, maximum: number): void {
+  if (cursor !== undefined) validateBoundedString(cursor, maximum, false);
+}
+
+function exactObject(value: unknown, required: readonly string[], optional: readonly string[] = []): Record<string, unknown> {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new AttachTransportError("unexpected_message");
+  }
+  const object = value as Record<string, unknown>;
+  const allowed = new Set([...required, ...optional]);
+  if (!required.every((key) => key in object) || Object.keys(object).some((key) => !allowed.has(key))) {
+    throw new AttachTransportError("unexpected_message");
+  }
+  return object;
+}
+
+function decodeThreadListPage(value: unknown): ThreadListPage {
+  const page = exactObject(value, ["threads"], ["next_cursor"]);
+  if (!Array.isArray(page.threads) || page.threads.length > THREAD_PAGE_LIMIT) {
+    throw new AttachTransportError("unexpected_message");
+  }
+  const threads = page.threads.map((value): RedactedThreadSummary => {
+    const thread = exactObject(value, ["thread_id", "title", "updated_at"]);
+    validateBoundedString(thread.thread_id, MAX_TEXT_LENGTH, false);
+    validateBoundedString(thread.title, MAX_TEXT_LENGTH, true);
+    validateBoundedString(thread.updated_at, MAX_TEXT_LENGTH, false);
+    return { threadId: thread.thread_id, title: thread.title, updatedAt: thread.updated_at };
+  });
+  validateOptionalCursor(page.next_cursor, MAX_TEXT_LENGTH);
+  return { threads, ...(page.next_cursor === undefined ? {} : { nextCursor: page.next_cursor }) };
+}
+
+function decodeThreadOpenPage(value: unknown, expectedThreadId: string): ThreadOpenPage {
+  const page = exactObject(value, ["thread_id", "entries"], ["next_cursor"]);
+  if (page.thread_id !== expectedThreadId || !Array.isArray(page.entries) ||
+      page.entries.length > THREAD_PAGE_LIMIT) {
+    throw new AttachTransportError("unexpected_message");
+  }
+  const entries = page.entries.map((value): RedactedThreadEntry => {
+    const entry = exactObject(value, ["run_seq", "kind"], ["text"]);
+    if (typeof entry.run_seq !== "number" || !Number.isSafeInteger(entry.run_seq) || entry.run_seq <= 0) {
+      throw new AttachTransportError("unexpected_message");
+    }
+    validateBoundedString(entry.kind, MAX_TEXT_LENGTH, false);
+    if (entry.text !== undefined) validateBoundedString(entry.text, MAX_TEXT_LENGTH, true);
+    return { runSeq: entry.run_seq, kind: entry.kind, ...(entry.text === undefined ? {} : { text: entry.text }) };
+  });
+  validateOptionalCursor(page.next_cursor, MAX_CURSOR_LENGTH);
+  return { threadId: expectedThreadId, entries,
+    ...(page.next_cursor === undefined ? {} : { nextCursor: page.next_cursor }) };
+}
+
+function validateOptionalCursor(value: unknown, maximum: number): asserts value is string | undefined {
+  if (value !== undefined) validateBoundedString(value, maximum, false);
 }
 
 function isHex(value: unknown, length: number): value is string {

@@ -54,6 +54,17 @@ function connecting(socket: FakeSocket, overrides: Record<string, unknown> = {})
   });
 }
 
+async function authorizedConnection(socket: FakeSocket) {
+  const result = connecting(socket);
+  socket.emit("connect");
+  socket.emit("data", Buffer.concat([encodeAttachFrame(welcome), encodeAttachFrame(authorized)]));
+  return result;
+}
+
+function lastRequest(socket: FakeSocket) {
+  return new AttachFrameDecoder().push(socket.writes.at(-1)!)[0];
+}
+
 test("pairs across fragmented frames and sends the editor-extension hello", async () => {
   const socket = new FakeSocket();
   let pending = 0;
@@ -84,6 +95,91 @@ test("accepts coalesced welcome and authorization frames", async () => {
   socket.emit("connect");
   socket.emit("data", Buffer.concat([encodeAttachFrame(welcome), encodeAttachFrame(authorized)]));
   assert.equal((await result).expiresInSeconds, 3600);
+});
+
+test("lists and opens bounded thread pages over the authorized connection", async () => {
+  const socket = new FakeSocket();
+  const connection = await authorizedConnection(socket);
+
+  const listed = connection.listThreads("opaque-list-cursor");
+  const listRequest = lastRequest(socket);
+  assert.equal(listRequest.operation, "thread.list");
+  assert.deepEqual(listRequest.body, { limit: 100, cursor: "opaque-list-cursor" });
+  assert.equal(listRequest.capability, "c".repeat(64));
+  socket.emit("data", encodeAttachFrame({
+    protocol: "muniment.attach/1", request_id: listRequest.request_id, ok: true,
+    body: { threads: [{ thread_id: "thread-1", title: "First", updated_at: "2026-07-18T00:00:00Z" }],
+      next_cursor: "opaque-next" },
+  }));
+  assert.deepEqual(await listed, { threads: [{ threadId: "thread-1", title: "First",
+    updatedAt: "2026-07-18T00:00:00Z" }], nextCursor: "opaque-next" });
+
+  const opened = connection.openThread("thread-1");
+  const openRequest = lastRequest(socket);
+  assert.equal(openRequest.operation, "thread.open");
+  assert.deepEqual(openRequest.body, { thread_id: "thread-1", limit: 100 });
+  socket.emit("data", encodeAttachFrame({
+    protocol: "muniment.attach/1", request_id: openRequest.request_id, ok: true,
+    body: { thread_id: "thread-1", entries: [{ run_seq: 1, kind: "message", text: "hello" }] },
+  }));
+  assert.deepEqual(await opened, { threadId: "thread-1",
+    entries: [{ runSeq: 1, kind: "message", text: "hello" }] });
+  connection.dispose();
+});
+
+test("rejects invalid inputs before writing and bounds concurrent requests", async () => {
+  const socket = new FakeSocket();
+  const connection = await authorizedConnection(socket);
+  const writes = socket.writes.length;
+  await assert.rejects(connection.listThreads(""), (error: unknown) =>
+    error instanceof AttachTransportError && error.code === "unexpected_message");
+  await assert.rejects(connection.openThread(""), (error: unknown) =>
+    error instanceof AttachTransportError && error.code === "unexpected_message");
+  assert.equal(socket.writes.length, writes);
+
+  const first = connection.listThreads();
+  await assert.rejects(connection.openThread("thread-1"), (error: unknown) =>
+    error instanceof AttachTransportError && error.code === "unexpected_message");
+  const request = lastRequest(socket);
+  socket.emit("data", encodeAttachFrame({ protocol: "muniment.attach/1",
+    request_id: request.request_id, ok: true, body: { threads: [] } }));
+  assert.deepEqual(await first, { threads: [] });
+  connection.dispose();
+});
+
+test("maps request errors without exposing server details", async () => {
+  const socket = new FakeSocket();
+  const connection = await authorizedConnection(socket);
+  const result = connection.listThreads();
+  const request = lastRequest(socket);
+  socket.emit("data", encodeAttachFrame({ protocol: "muniment.attach/1",
+    request_id: request.request_id, ok: false,
+    error: { code: "unauthorized", message: "private details", retryable: false } }));
+  await assert.rejects(result, (error: unknown) => error instanceof AttachTransportError &&
+    error.code === "authorization_expired" && !error.message.includes("private"));
+  connection.dispose();
+});
+
+test("fails closed on stale correlations and malformed thread projections", async () => {
+  const staleSocket = new FakeSocket();
+  const staleConnection = await authorizedConnection(staleSocket);
+  const stale = staleConnection.listThreads();
+  staleSocket.emit("data", encodeAttachFrame({ protocol: "muniment.attach/1",
+    request_id: "stale", ok: true, body: { threads: [] } }));
+  await assert.rejects(stale, (error: unknown) => error instanceof AttachTransportError &&
+    error.code === "unexpected_message");
+  assert.equal(staleSocket.destroyed, true);
+
+  const malformedSocket = new FakeSocket();
+  const malformedConnection = await authorizedConnection(malformedSocket);
+  const malformed = malformedConnection.openThread("thread-1");
+  const request = lastRequest(malformedSocket);
+  malformedSocket.emit("data", encodeAttachFrame({ protocol: "muniment.attach/1",
+    request_id: request.request_id, ok: true,
+    body: { thread_id: "other-thread", entries: [] } }));
+  await assert.rejects(malformed, (error: unknown) => error instanceof AttachTransportError &&
+    error.code === "unexpected_message");
+  malformedConnection.dispose();
 });
 
 test("discovers the macOS endpoint and pairs across coalesced frames", async () => {
