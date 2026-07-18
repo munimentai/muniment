@@ -3,13 +3,15 @@
 use muniment_core::attach::linux::{
     run_authenticated_session_with, run_authenticated_session_with_authorization, ApprovalDecision,
     AttachSessionError, AuthorizationSessionDependencies, CompanionProvenance, PeerCredentials,
-    RedactedThreadSummary, RunStartAccepted, RunStartRequest, ThreadListPage, ThreadListRequest,
-    ThreadListService, ThreadOpenRequest, MAX_RUN_START_CONTEXT_LENGTH, MAX_RUN_START_TEXT_LENGTH,
+    RedactedRunEvent, RedactedThreadSummary, RunStartAccepted, RunStartRequest, RunStreamPage,
+    ThreadListPage, ThreadListRequest, ThreadListService, ThreadOpenRequest,
+    MAX_RUN_START_CONTEXT_LENGTH, MAX_RUN_START_TEXT_LENGTH,
 };
 use muniment_core::attach::{
     decode_frame, encode_frame, Approval, AuthorizationClock, AuthorizationTokenGenerator,
-    Authorized, ErrorAction, ErrorCode, ErrorEnvelope, Hello, Id, Operation, Protocol, Request,
-    Response, VersionRange, Welcome, CHALLENGE_LIFETIME, MAX_FRAME_LENGTH, MAX_JSON_DEPTH,
+    Authorized, ErrorAction, ErrorCode, ErrorEnvelope, Event, EventName, Hello, Id, Operation,
+    Protocol, Request, Response, VersionRange, Welcome, CHALLENGE_LIFETIME, MAX_FRAME_LENGTH,
+    MAX_JSON_DEPTH,
 };
 use muniment_core::journal::{EventEnvelope, EventPayload, Provenance, RunJournal};
 use serde_json::json;
@@ -107,6 +109,49 @@ fn unavailable_service(
 struct StartService {
     calls: Vec<(String, RunStartRequest, Id, Id, CompanionProvenance)>,
     output: Option<RunStartAccepted>,
+}
+
+#[derive(Default)]
+struct StreamService {
+    calls: usize,
+}
+
+impl ThreadListService for StreamService {
+    fn list_threads(
+        &mut self,
+        _: &str,
+        _: ThreadListRequest,
+    ) -> Result<ThreadListPage, muniment_core::attach::ProtocolError> {
+        panic!("thread reads must not dispatch")
+    }
+
+    fn stream_run(
+        &mut self,
+        workspace: &str,
+        run_id: &Id,
+        after_run_seq: u64,
+        _: usize,
+    ) -> Result<RunStreamPage, muniment_core::attach::ProtocolError> {
+        self.calls += 1;
+        assert_eq!(workspace, "workspace-1");
+        assert_eq!(after_run_seq, 1);
+        Ok(RunStreamPage {
+            subscription_id: Id::new("0190a300-0000-7000-8000-000000000001").unwrap(),
+            run_id: run_id.clone(),
+            first_available_run_seq: 1,
+            current_run_seq: 3,
+            events: vec![
+                RedactedRunEvent {
+                    run_seq: 2,
+                    body: json!({"text":"safe"}),
+                },
+                RedactedRunEvent {
+                    run_seq: 3,
+                    body: json!({"status":"complete"}),
+                },
+            ],
+        })
+    }
 }
 
 impl ThreadListService for StartService {
@@ -1615,6 +1660,88 @@ fn invalid_run_start_idempotency_key_is_terminal_without_dispatch() {
     assert!(!encoded.contains("private prompt"));
     assert!(!encoded.contains("invalid secret key"));
     assert!(service.calls.is_empty());
+}
+
+#[test]
+fn authorized_run_stream_returns_bounds_then_ordered_resume_events() {
+    const RUN: &str = "0190a100-0000-7000-8000-000000000001";
+    let (mut client, server) = UnixStream::pair().unwrap();
+    client.write_all(&hello(1, 1)).unwrap();
+    client
+        .write_all(&request(
+            90,
+            Operation::RunStream,
+            json!({"run_id": RUN, "after_run_seq": 1}),
+        ))
+        .unwrap();
+    client.shutdown(Shutdown::Write).unwrap();
+    let mut approved = approval();
+    approved.scopes.insert("run.read".into());
+    let mut service = StreamService::default();
+    assert_eq!(
+        dispatch_session_with_approval(
+            &mut client,
+            server,
+            TestClock(Rc::new(Cell::new(Duration::ZERO))),
+            approved,
+            &mut service,
+        ),
+        Ok(())
+    );
+    let response: Response = read_frame(&mut client);
+    assert_eq!(response.body["run_id"], RUN);
+    assert_eq!(response.body["first_available_run_seq"], 1);
+    assert_eq!(response.body["current_run_seq"], 3);
+    assert_eq!(response.body["window"]["max_events"], 100);
+    let first: Event = read_frame(&mut client);
+    let second: Event = read_frame(&mut client);
+    assert_eq!(first.event, EventName::RunEvent);
+    assert_eq!((first.run_seq, second.run_seq), (Some(2), Some(3)));
+    assert_eq!(first.subscription_id, second.subscription_id);
+    assert_eq!(service.calls, 1);
+}
+
+#[test]
+fn run_stream_scope_and_malformed_body_fail_before_service_read() {
+    const RUN: &str = "0190a100-0000-7000-8000-000000000001";
+    for (approved, body, terminal) in [
+        (approval(), json!({"run_id": RUN, "after_run_seq": 1}), true),
+        (
+            {
+                let mut value = approval();
+                value.scopes.insert("run.read".into());
+                value
+            },
+            json!({"run_id": RUN, "after_run_seq": -1}),
+            false,
+        ),
+    ] {
+        let (mut client, server) = UnixStream::pair().unwrap();
+        client.write_all(&hello(1, 1)).unwrap();
+        client
+            .write_all(&request(91, Operation::RunStream, body))
+            .unwrap();
+        client.shutdown(Shutdown::Write).unwrap();
+        let mut service = StreamService::default();
+        let result = dispatch_session_with_approval(
+            &mut client,
+            server,
+            TestClock(Rc::new(Cell::new(Duration::ZERO))),
+            approved,
+            &mut service,
+        );
+        assert_eq!(result.is_err(), terminal);
+        let error: ErrorEnvelope = read_frame(&mut client);
+        assert_eq!(
+            error.error.code(),
+            if terminal {
+                ErrorCode::Unauthorized
+            } else {
+                ErrorCode::InvalidRequest
+            }
+        );
+        assert_eq!(service.calls, 0);
+    }
 }
 
 #[test]

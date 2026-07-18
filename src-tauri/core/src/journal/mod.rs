@@ -130,6 +130,14 @@ pub struct RunEventPage {
     pub next_cursor: Option<String>,
 }
 
+/// A bounded snapshot used by authorized companion catch-up. The envelopes
+/// remain inside core so the attach service can project them before writing.
+pub struct RunEventCatchUp {
+    pub first_available_run_seq: u64,
+    pub current_run_seq: u64,
+    pub events: Vec<EventEnvelope>,
+}
+
 #[derive(Debug)]
 pub enum RunEventPageError {
     InvalidLimit,
@@ -527,6 +535,79 @@ impl RunJournal {
             return Err(RunEventPageError::NotFoundOrInaccessible);
         }
         self.event_page(run_id, limit, cursor)
+    }
+
+    pub fn workspace_event_catch_up(
+        &mut self,
+        workspace: &str,
+        run_id: &str,
+        after_run_seq: u64,
+        limit: usize,
+    ) -> Result<RunEventCatchUp, RunEventPageError> {
+        if !(1..=1_024).contains(&limit) {
+            return Err(RunEventPageError::InvalidLimit);
+        }
+        let coordination = self.coordination.clone();
+        let _operation = coordination
+            .as_ref()
+            .map(|state| state.operation.lock().unwrap());
+        self.refresh_after_compaction()
+            .map_err(RunEventPageError::Journal)?;
+        let connection = self
+            .connection
+            .as_ref()
+            .expect("journal connection is always present outside compaction");
+        let owned: bool = connection
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM run_workspaces WHERE run_id=?1 AND workspace=?2)",
+                params![run_id, workspace],
+                |row| row.get(0),
+            )
+            .map_err(JournalError::from)
+            .map_err(RunEventPageError::Journal)?;
+        if !owned {
+            return Err(RunEventPageError::NotFoundOrInaccessible);
+        }
+        let bounds = connection
+            .query_row(
+                "SELECT MIN(run_seq),MAX(run_seq) FROM events WHERE run_id=?1",
+                [run_id],
+                |row| Ok((row.get::<_, Option<u64>>(0)?, row.get::<_, Option<u64>>(1)?)),
+            )
+            .map_err(JournalError::from)
+            .map_err(RunEventPageError::Journal)?;
+        let (Some(first_available_run_seq), Some(current_run_seq)) = bounds else {
+            return Err(RunEventPageError::NotFoundOrInaccessible);
+        };
+        if after_run_seq < first_available_run_seq.saturating_sub(1)
+            || after_run_seq > current_run_seq
+        {
+            return Err(RunEventPageError::InvalidCursor);
+        }
+        let mut statement = connection
+            .prepare("SELECT envelope_json FROM events WHERE run_id=?1 AND run_seq>?2 ORDER BY run_seq LIMIT ?3")
+            .map_err(JournalError::from)
+            .map_err(RunEventPageError::Journal)?;
+        let rows = statement
+            .query_map(params![run_id, after_run_seq, limit as u64], |row| {
+                row.get::<_, String>(0)
+            })
+            .map_err(JournalError::from)
+            .map_err(RunEventPageError::Journal)?;
+        let events = rows
+            .map(|row| {
+                let raw = row.map_err(JournalError::from)?;
+                serde_json::from_str(&raw).map_err(|error| {
+                    JournalError::Corrupt(format!("invalid stored envelope JSON: {error}"))
+                })
+            })
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(RunEventPageError::Journal)?;
+        Ok(RunEventCatchUp {
+            first_available_run_seq,
+            current_run_seq,
+            events,
+        })
     }
 
     pub fn run_belongs_to_workspace(
