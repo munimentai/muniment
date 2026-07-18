@@ -1,0 +1,10 @@
+{
+  "protocol": "muniment.attach/1",
+  "subscription_id": "00000000000000000000000000000190",
+  "event": "future.optional",
+  "run_id": "00000000000000000000000000000191",
+  "run_seq": 9,
+  "body": {
+    "fixture": "unknown"
+  }
+}

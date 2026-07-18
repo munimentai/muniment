@@ -1,8 +1,1 @@
-{
-  "protocol": "muniment.attach/1",
-  "request_id": "00000000000000000000000000000064",
-  "ok": true,
-  "body": {
-    "accepted": true
-  }
-}
+{"protocol":"muniment.attach/1","request_id":"00000000000000000000000000000064","ok":true,"body":{"accepted":true}}
