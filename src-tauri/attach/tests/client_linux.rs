@@ -245,6 +245,330 @@ fn run_stream_returns_window_paused_prefix_without_assuming_caught_up() {
     worker.join().unwrap();
 }
 
+fn valid_run_stream_summary(run_id: &str, subscription_id: &str) -> serde_json::Value {
+    serde_json::json!({
+        "subscription_id": subscription_id,
+        "run_id": run_id,
+        "first_available_run_seq": 1,
+        "current_run_seq": 2,
+        "window": { "max_events": 1024, "max_bytes": 4194304 }
+    })
+}
+
+fn run_stream_event(
+    subscription_id: &str,
+    run_id: &str,
+    run_seq: u64,
+    event: &str,
+    body: serde_json::Value,
+) -> serde_json::Value {
+    serde_json::json!({
+        "protocol": "muniment.attach/1",
+        "subscription_id": subscription_id,
+        "event": event,
+        "run_id": run_id,
+        "run_seq": run_seq,
+        "body": body
+    })
+}
+
+#[test]
+fn run_stream_rejects_hostile_subscription_responses_and_maps_errors() {
+    let run_id = "01900000-0000-7000-8000-000000000001";
+    let subscription_id = "01900000-0000-7000-8000-000000000002";
+    let mut unknown = valid_run_stream_summary(run_id, subscription_id);
+    unknown["secret"] = serde_json::json!("not allowed");
+    for (body, wrong_correlation, error, expected) in [
+        (
+            Some(valid_run_stream_summary(run_id, subscription_id)),
+            true,
+            None,
+            ClientError::UnexpectedMessage,
+        ),
+        (
+            None,
+            false,
+            Some(ProtocolError::unauthorized()),
+            ClientError::AuthorizationExpired,
+        ),
+        (
+            Some(serde_json::json!({
+                "subscription_id": "x".repeat(65), "run_id": run_id,
+                "first_available_run_seq": 1, "current_run_seq": 2,
+                "window": { "max_events": 1, "max_bytes": 1 }
+            })),
+            false,
+            None,
+            ClientError::UnexpectedMessage,
+        ),
+        (Some(unknown), false, None, ClientError::UnexpectedMessage),
+        (
+            Some(serde_json::json!({
+                "subscription_id": subscription_id, "run_id": run_id,
+                "first_available_run_seq": 3, "current_run_seq": 2,
+                "window": { "max_events": 1, "max_bytes": 1 }
+            })),
+            false,
+            None,
+            ClientError::UnexpectedMessage,
+        ),
+        (
+            Some(serde_json::json!({
+                "subscription_id": subscription_id, "run_id": run_id,
+                "first_available_run_seq": 1, "current_run_seq": 2,
+                "window": { "max_events": 0, "max_bytes": 4194305 }
+            })),
+            false,
+            None,
+            ClientError::UnexpectedMessage,
+        ),
+        (
+            Some(serde_json::json!({
+                "subscription_id": subscription_id, "run_id": run_id,
+                "first_available_run_seq": 1, "current_run_seq": 2,
+                "window": { "max_events": 1025, "max_bytes": 1 }
+            })),
+            false,
+            None,
+            ClientError::UnexpectedMessage,
+        ),
+    ] {
+        let (client, mut server) = UnixStream::pair().unwrap();
+        let worker = thread::spawn(move || {
+            complete_pairing(&mut server);
+            let request = read_client_value(&mut server);
+            let request_id = if wrong_correlation {
+                Id::new("00000000-0000-0000-0000-000000000000").unwrap()
+            } else {
+                Id::new(request["request_id"].as_str().unwrap()).unwrap()
+            };
+            let frame = if let Some(error) = error {
+                encode_frame(&ErrorEnvelope {
+                    protocol: Protocol,
+                    request_id: Some(request_id),
+                    ok: Failure,
+                    error,
+                })
+                .unwrap()
+            } else {
+                encode_frame(&Response {
+                    protocol: Protocol,
+                    request_id,
+                    ok: Success,
+                    body: body.unwrap(),
+                })
+                .unwrap()
+            };
+            server.write_all(&frame).unwrap();
+        });
+        let mut client = handshake_stream(client, "0.0.1", SHORT, SHORT, || {}).unwrap();
+        assert_eq!(client.subscribe_run(run_id, 0), Err(expected));
+        worker.join().unwrap();
+    }
+}
+
+#[test]
+fn run_stream_rejects_hostile_event_envelopes_without_leaking_bodies() {
+    let run_id = "01900000-0000-7000-8000-000000000001";
+    let subscription_id = "01900000-0000-7000-8000-000000000002";
+    let valid_body = serde_json::json!({
+        "event_type": "run.started", "event_version": 1,
+        "recorded_at": "2026-07-17T00:00:00Z", "payload": { "withheld": true }
+    });
+    let cases = [
+        run_stream_event(
+            "01900000-0000-7000-8000-000000000003",
+            run_id,
+            1,
+            "run.event",
+            valid_body.clone(),
+        ),
+        run_stream_event(
+            subscription_id,
+            "01900000-0000-7000-8000-000000000003",
+            1,
+            "run.event",
+            valid_body.clone(),
+        ),
+        run_stream_event(subscription_id, run_id, 0, "run.event", valid_body.clone()),
+        run_stream_event(subscription_id, run_id, 2, "run.event", valid_body.clone()),
+        run_stream_event(subscription_id, run_id, 3, "run.event", valid_body.clone()),
+        run_stream_event(
+            subscription_id,
+            run_id,
+            1,
+            "run.event",
+            serde_json::json!({
+                "event_type": " \n\t", "event_version": 1,
+                "recorded_at": "2026-07-17T00:00:00Z",
+                "payload": { "withheld": true, "hostile-secret": "must-not-leak" }
+            }),
+        ),
+        run_stream_event(
+            subscription_id,
+            run_id,
+            2,
+            "subscription.caught_up",
+            serde_json::json!({}),
+        ),
+        run_stream_event(
+            subscription_id,
+            run_id,
+            1,
+            "subscription.caught_up",
+            serde_json::json!({}),
+        ),
+        run_stream_event(
+            subscription_id,
+            run_id,
+            1,
+            "unknown.event",
+            serde_json::json!({}),
+        ),
+        serde_json::json!({
+            "protocol": "muniment.attach/1", "request_id": subscription_id,
+            "ok": true, "body": {}
+        }),
+    ];
+
+    for hostile in cases {
+        let (client, mut server) = UnixStream::pair().unwrap();
+        let worker = thread::spawn(move || {
+            complete_pairing(&mut server);
+            let request = read_client_value(&mut server);
+            server
+                .write_all(
+                    &encode_frame(&Response {
+                        protocol: Protocol,
+                        request_id: Id::new(request["request_id"].as_str().unwrap()).unwrap(),
+                        ok: Success,
+                        body: valid_run_stream_summary(run_id, subscription_id),
+                    })
+                    .unwrap(),
+                )
+                .unwrap();
+            server.write_all(&encode_frame(&hostile).unwrap()).unwrap();
+        });
+        let mut client = handshake_stream(client, "0.0.1", SHORT, SHORT, || {}).unwrap();
+        client.subscribe_run(run_id, 0).unwrap();
+        let error = client.read_run_stream_message().unwrap_err();
+        assert_eq!(error, ClientError::UnexpectedMessage);
+        assert!(!format!("{error:?}").contains("must-not-leak"));
+        worker.join().unwrap();
+    }
+}
+
+#[test]
+fn run_stream_rejects_duplicate_and_invalid_caught_up_and_bad_frames() {
+    let run_id = "01900000-0000-7000-8000-000000000001";
+    let subscription_id = "01900000-0000-7000-8000-000000000002";
+    for (tail, expected) in [
+        (
+            encode_frame(&run_stream_event(
+                subscription_id,
+                run_id,
+                1,
+                "subscription.caught_up",
+                serde_json::json!({ "unexpected": true }),
+            ))
+            .unwrap(),
+            ClientError::UnexpectedMessage,
+        ),
+        (
+            {
+                let mut bytes = 1u32.to_be_bytes().to_vec();
+                bytes.push(b'{');
+                bytes
+            },
+            ClientError::MalformedFrame,
+        ),
+        (
+            ((MAX_FRAME_LENGTH as u32) + 1).to_be_bytes().to_vec(),
+            ClientError::PayloadTooLarge,
+        ),
+    ] {
+        let (client, mut server) = UnixStream::pair().unwrap();
+        let worker = thread::spawn(move || {
+            complete_pairing(&mut server);
+            let request = read_client_value(&mut server);
+            server
+                .write_all(
+                    &encode_frame(&Response {
+                        protocol: Protocol,
+                        request_id: Id::new(request["request_id"].as_str().unwrap()).unwrap(),
+                        ok: Success,
+                        body: valid_run_stream_summary(run_id, subscription_id),
+                    })
+                    .unwrap(),
+                )
+                .unwrap();
+            server.write_all(&tail).unwrap();
+        });
+        let mut client = handshake_stream(client, "0.0.1", SHORT, SHORT, || {}).unwrap();
+        client.subscribe_run(run_id, 0).unwrap();
+        assert_eq!(client.read_run_stream_message(), Err(expected));
+        worker.join().unwrap();
+    }
+
+    let (client, mut server) = UnixStream::pair().unwrap();
+    let worker = thread::spawn(move || {
+        complete_pairing(&mut server);
+        let request = read_client_value(&mut server);
+        server
+            .write_all(
+                &encode_frame(&Response {
+                    protocol: Protocol,
+                    request_id: Id::new(request["request_id"].as_str().unwrap()).unwrap(),
+                    ok: Success,
+                    body: valid_run_stream_summary(run_id, subscription_id),
+                })
+                .unwrap(),
+            )
+            .unwrap();
+        for sequence in [1, 2] {
+            server
+                .write_all(
+                    &encode_frame(&run_stream_event(
+                        subscription_id,
+                        run_id,
+                        sequence,
+                        "run.event",
+                        serde_json::json!({
+                            "event_type": "run.started", "event_version": 1,
+                            "recorded_at": "2026-07-17T00:00:00Z",
+                            "payload": { "withheld": true }
+                        }),
+                    ))
+                    .unwrap(),
+                )
+                .unwrap();
+        }
+        let caught_up = run_stream_event(
+            subscription_id,
+            run_id,
+            2,
+            "subscription.caught_up",
+            serde_json::json!({}),
+        );
+        server
+            .write_all(&encode_frame(&caught_up).unwrap())
+            .unwrap();
+        server
+            .write_all(&encode_frame(&caught_up).unwrap())
+            .unwrap();
+    });
+    let mut client = handshake_stream(client, "0.0.1", SHORT, SHORT, || {}).unwrap();
+    client.subscribe_run(run_id, 0).unwrap();
+    client.read_run_stream_message().unwrap();
+    client.read_run_stream_message().unwrap();
+    client.read_run_stream_message().unwrap();
+    assert_eq!(
+        client.read_run_stream_message(),
+        Err(ClientError::UnexpectedMessage)
+    );
+    worker.join().unwrap();
+}
+
 #[test]
 fn run_start_uses_exact_envelope_fresh_ids_and_accepts_receipts() {
     let (client, mut server) = UnixStream::pair().unwrap();

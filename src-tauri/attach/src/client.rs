@@ -525,7 +525,7 @@ mod linux {
                     }
                     let body: Body = serde_json::from_value(event.body)
                         .map_err(|_| ClientError::UnexpectedMessage)?;
-                    if body.event_type.is_empty()
+                    if body.event_type.trim().is_empty()
                         || body.event_type.len() > MAX_TEXT_LENGTH
                         || body.event_version == 0
                         || body.recorded_at.is_empty()
