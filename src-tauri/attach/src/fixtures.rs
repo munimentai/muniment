@@ -23,18 +23,49 @@ pub enum Mode {
     Check,
 }
 
+/// A stable view of one published fixture generation.
+///
+/// The shared publication lock is held until this value is dropped, so an
+/// exporter cannot replace or reclaim the directory while a reader enumerates
+/// and opens its files. Readers must resolve child paths through [`Self::path`]
+/// rather than through `muniment.attach/1` again.
+pub struct FixtureGeneration {
+    path: PathBuf,
+    _lock: File,
+}
+
+impl FixtureGeneration {
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+}
+
+pub fn open_generation(directory: &Path) -> io::Result<FixtureGeneration> {
+    let lock_path = publication_lock_path(directory)?;
+    let lock = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(lock_path)?;
+    lock_shared(&lock)?;
+    let path = fs::canonicalize(directory)?;
+    Ok(FixtureGeneration { path, _lock: lock })
+}
+
 pub fn export(root: &Path, mode: Mode) -> io::Result<()> {
     let expected = fixture_bytes()?;
     let target = root.join(FIXTURE_DIRECTORY);
     if mode == Mode::Check {
-        return check(&target, &expected);
+        let generation = open_generation(&target)?;
+        return check(generation.path(), &expected);
     }
 
     let parent = target
         .parent()
         .expect("the fixture directory always has a parent");
     fs::create_dir_all(parent)?;
-    let _export_lock = ExportLock::acquire(&target.with_file_name(".1.export.lock"))?;
+    let _export_lock = ExportLock::acquire(&publication_lock_path(&target)?)?;
     remove_stale_staging(parent)?;
     remove_stale_generations(parent, &target)?;
     let export_id = NEXT_EXPORT.fetch_add(1, Ordering::Relaxed);
@@ -53,6 +84,47 @@ pub fn export(root: &Path, mode: Mode) -> io::Result<()> {
         fs::rename(&staging, sibling_path(&target, "generation", export_id))?;
     }
     Ok(())
+}
+
+fn publication_lock_path(target: &Path) -> io::Result<PathBuf> {
+    let parent = fs::canonicalize(
+        target
+            .parent()
+            .expect("the fixture directory always has a parent"),
+    )?;
+    let identity = parent.join(
+        target
+            .file_name()
+            .expect("the fixture directory always has a name"),
+    );
+    let hash = publication_identity_hash(&identity);
+    Ok(std::env::temp_dir().join(format!("muniment-attach-fixtures-{hash:016x}.lock")))
+}
+
+#[cfg(unix)]
+fn publication_identity_hash(identity: &Path) -> u64 {
+    use std::os::unix::ffi::OsStrExt;
+
+    identity
+        .as_os_str()
+        .as_bytes()
+        .iter()
+        .fold(0xcbf2_9ce4_8422_2325_u64, |hash, byte| {
+            (hash ^ u64::from(*byte)).wrapping_mul(0x0000_0100_0000_01b3)
+        })
+}
+
+#[cfg(windows)]
+fn publication_identity_hash(identity: &Path) -> u64 {
+    use std::os::windows::ffi::OsStrExt;
+
+    identity
+        .as_os_str()
+        .encode_wide()
+        .flat_map(u16::to_le_bytes)
+        .fold(0xcbf2_9ce4_8422_2325_u64, |hash, byte| {
+            (hash ^ u64::from(byte)).wrapping_mul(0x0000_0100_0000_01b3)
+        })
 }
 
 struct ExportLock {
@@ -82,6 +154,22 @@ fn lock_exclusive(file: &File) -> io::Result<()> {
     }
     // SAFETY: flock only borrows the valid descriptor for the duration of the call.
     if unsafe { flock(file.as_raw_fd(), LOCK_EX) } == 0 {
+        Ok(())
+    } else {
+        Err(io::Error::last_os_error())
+    }
+}
+
+#[cfg(unix)]
+fn lock_shared(file: &File) -> io::Result<()> {
+    use std::os::fd::AsRawFd;
+
+    const LOCK_SH: i32 = 1;
+    unsafe extern "C" {
+        fn flock(fd: i32, operation: i32) -> i32;
+    }
+    // SAFETY: flock only borrows the valid descriptor for the duration of the call.
+    if unsafe { flock(file.as_raw_fd(), LOCK_SH) } == 0 {
         Ok(())
     } else {
         Err(io::Error::last_os_error())
@@ -137,6 +225,44 @@ fn lock_exclusive(file: &File) -> io::Result<()> {
     }
 }
 
+#[cfg(windows)]
+fn lock_shared(file: &File) -> io::Result<()> {
+    use std::os::windows::io::AsRawHandle;
+
+    #[repr(C)]
+    struct Overlapped {
+        internal: usize,
+        internal_high: usize,
+        offset: u32,
+        offset_high: u32,
+        event: *mut core::ffi::c_void,
+    }
+    unsafe extern "system" {
+        fn LockFileEx(
+            file: *mut core::ffi::c_void,
+            flags: u32,
+            reserved: u32,
+            bytes_low: u32,
+            bytes_high: u32,
+            overlapped: *mut Overlapped,
+        ) -> i32;
+    }
+    let mut overlapped = Overlapped {
+        internal: 0,
+        internal_high: 0,
+        offset: 0,
+        offset_high: 0,
+        event: std::ptr::null_mut(),
+    };
+    // SAFETY: the file and stack-allocated OVERLAPPED remain valid until the
+    // synchronous lock request completes.
+    if unsafe { LockFileEx(file.as_raw_handle(), 0, 0, 1, 0, &mut overlapped) } != 0 {
+        Ok(())
+    } else {
+        Err(io::Error::last_os_error())
+    }
+}
+
 fn remove_stale_staging(parent: &Path) -> io::Result<()> {
     for entry in fs::read_dir(parent)? {
         let entry = entry?;
@@ -153,45 +279,20 @@ fn remove_stale_staging(parent: &Path) -> io::Result<()> {
 
 fn remove_stale_generations(parent: &Path, target: &Path) -> io::Result<()> {
     let live = fs::canonicalize(target).ok();
-    let mut generations = fs::read_dir(parent)?
-        .collect::<io::Result<Vec<_>>>()?
-        .into_iter()
-        .filter(|entry| {
-            entry
-                .file_name()
-                .to_string_lossy()
-                .starts_with(".1.generation.")
-        })
-        .collect::<Vec<_>>();
-    generations.sort_by_key(|entry| entry.file_name());
-    // Publication cannot know when an uncoordinated reader has finished with
-    // a displaced directory. Retain a bounded window so ordinary concurrent
-    // reads can finish, while repeated exports do not grow without limit.
-    const RETAINED_GENERATIONS: usize = 64;
-    let current_process = format!(".1.generation.{}.", std::process::id());
-    let current_count = generations
-        .iter()
-        .filter(|entry| {
-            entry
-                .file_name()
-                .to_string_lossy()
-                .starts_with(&current_process)
-        })
-        .count();
-    let mut current_to_remove = current_count.saturating_sub(RETAINED_GENERATIONS);
-    for entry in generations {
-        let is_current = entry
+    // The exclusive publication lock proves that no reader holding an
+    // `open_generation` lease can still address an older generation. This is
+    // safe for generations left by this process and by a crashed exporter.
+    for entry in fs::read_dir(parent)? {
+        let entry = entry?;
+        if !entry
             .file_name()
             .to_string_lossy()
-            .starts_with(&current_process);
-        if is_current && current_to_remove == 0 {
+            .starts_with(".1.generation.")
+        {
             continue;
         }
         if live.as_ref() != Some(&fs::canonicalize(entry.path())?) {
             remove_if_present(&entry.path())?;
-            if is_current {
-                current_to_remove -= 1;
-            }
         }
     }
     Ok(())

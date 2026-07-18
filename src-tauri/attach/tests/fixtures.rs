@@ -6,7 +6,7 @@ use std::{
 
 use std::sync::{atomic::AtomicBool, Arc};
 
-use muniment_attach::fixtures::{export, Mode, FIXTURE_DIRECTORY};
+use muniment_attach::fixtures::{export, open_generation, Mode, FIXTURE_DIRECTORY};
 
 static NEXT_DIRECTORY: AtomicUsize = AtomicUsize::new(0);
 
@@ -115,6 +115,48 @@ fn replacement_never_exposes_a_missing_or_partial_live_directory() {
     }
     running.store(false, Ordering::Release);
     reader.join().unwrap();
+
+    let generations = fs::read_dir(fixture_dir(&root.0).parent().unwrap())
+        .unwrap()
+        .filter_map(Result::ok)
+        .filter(|entry| {
+            entry
+                .file_name()
+                .to_string_lossy()
+                .starts_with(".1.generation.")
+        })
+        .count();
+    assert!(
+        generations <= 1,
+        "completed reader leases must not prevent bounded reclamation"
+    );
+}
+
+#[test]
+fn an_open_generation_is_pinned_until_the_reader_finishes() {
+    let root = TestDirectory::new();
+    export(&root.0, Mode::Write).unwrap();
+    let live = fixture_dir(&root.0);
+    fs::write(live.join("obsolete.json"), b"obsolete\n").unwrap();
+
+    let generation = open_generation(&live).unwrap();
+    let stale = read_generation(generation.path());
+    let (started_tx, started_rx) = std::sync::mpsc::channel();
+    let (finished_tx, finished_rx) = std::sync::mpsc::channel();
+    let exporter_root = root.0.clone();
+    let exporter = std::thread::spawn(move || {
+        started_tx.send(()).unwrap();
+        export(&exporter_root, Mode::Write).unwrap();
+        finished_tx.send(()).unwrap();
+    });
+    started_rx.recv().unwrap();
+
+    assert_eq!(read_generation(generation.path()), stale);
+    assert!(finished_rx.try_recv().is_err());
+    drop(generation);
+    finished_rx.recv().unwrap();
+    exporter.join().unwrap();
+    assert!(!live.join("obsolete.json").exists());
 }
 
 #[test]
@@ -131,7 +173,6 @@ fn next_export_recovers_interrupted_staging_without_disturbing_live_fixtures() {
     for (name, bytes) in &expected {
         fs::write(displaced.join(name), bytes).unwrap();
     }
-    #[cfg(windows)]
     let abandoned_generation = {
         let path = live.with_file_name(".1.generation.999999.44");
         fs::create_dir(&path).unwrap();
@@ -154,7 +195,6 @@ fn next_export_recovers_interrupted_staging_without_disturbing_live_fixtures() {
 
     assert!(!stale.exists());
     assert!(!displaced.exists());
-    #[cfg(windows)]
     assert!(!abandoned_generation.exists());
     assert_eq!(read_fixtures(&live), expected);
 }
@@ -193,8 +233,12 @@ fn check_rejects_a_byte_stale_fixture_without_writing() {
 }
 
 fn read_fixtures(directory: &Path) -> Vec<(String, Vec<u8>)> {
-    let generation = opened_generation(directory);
-    let mut fixtures = fs::read_dir(&generation.path)
+    let generation = open_generation(directory).unwrap();
+    read_generation(generation.path())
+}
+
+fn read_generation(directory: &Path) -> Vec<(String, Vec<u8>)> {
+    let mut fixtures = fs::read_dir(directory)
         .unwrap()
         .map(|entry| {
             let entry = entry.unwrap();
@@ -206,29 +250,4 @@ fn read_fixtures(directory: &Path) -> Vec<(String, Vec<u8>)> {
         .collect::<Vec<_>>();
     fixtures.sort_by(|left, right| left.0.cmp(&right.0));
     fixtures
-}
-
-#[cfg(target_os = "linux")]
-fn opened_generation(path: &Path) -> OpenedGeneration {
-    use std::os::fd::AsRawFd;
-
-    let directory = fs::File::open(path).unwrap();
-    let generation = PathBuf::from(format!("/proc/self/fd/{}", directory.as_raw_fd()));
-    OpenedGeneration {
-        path: generation,
-        _directory: Some(directory),
-    }
-}
-
-#[cfg(not(target_os = "linux"))]
-fn opened_generation(path: &Path) -> OpenedGeneration {
-    OpenedGeneration {
-        path: fs::canonicalize(path).unwrap(),
-        _directory: None,
-    }
-}
-
-struct OpenedGeneration {
-    path: PathBuf,
-    _directory: Option<fs::File>,
 }
