@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { ThreadsModel, type AttachConnector } from "../src/threads";
+import { OPEN_THREAD_COMMAND, ThreadsModel, threadOpenCommand, type AttachConnector } from "../src/threads";
 import {
   AttachTransportError,
   type AttachConnection,
@@ -60,6 +60,14 @@ test("projects the first thread page into native view data without paging", asyn
   });
   assert.deepEqual(connection.listCalls, [undefined]);
   model.dispose();
+});
+
+test("projects a ready row to an open command carrying only its id and title", () => {
+  assert.deepEqual(threadOpenCommand({ threadId: "thread-1", title: "First thread" }), {
+    command: OPEN_THREAD_COMMAND,
+    title: "Open Thread",
+    arguments: ["thread-1", "First thread"],
+  });
 });
 
 test("maps loading, pairing, empty, runtime unavailable, and connection failure states", async () => {
