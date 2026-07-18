@@ -126,8 +126,17 @@ pub struct PendingPermission {
     pub gate_id: String,
     pub kind: PermissionKind,
     pub title: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_optional_permission_message")]
     pub message: Option<String>,
+}
+
+fn deserialize_optional_permission_message<'de, D>(
+    deserializer: D,
+) -> Result<Option<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    serde::Deserialize::deserialize(deserializer).map(Some)
 }
 
 impl fmt::Debug for PendingPermission {

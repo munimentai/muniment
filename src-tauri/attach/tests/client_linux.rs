@@ -944,6 +944,16 @@ fn run_stream_rejects_hostile_event_envelopes_without_leaking_bodies() {
             "permission.pending",
             serde_json::json!({
                 "gate_id": "gate", "kind": "confirm", "title": "Title",
+                "message": null
+            }),
+        ),
+        run_stream_event(
+            subscription_id,
+            run_id,
+            1,
+            "permission.pending",
+            serde_json::json!({
+                "gate_id": "gate", "kind": "confirm", "title": "Title",
                 "message": "m".repeat(4097)
             }),
         ),
