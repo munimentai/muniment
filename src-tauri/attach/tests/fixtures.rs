@@ -4,6 +4,9 @@ use std::{
     sync::atomic::{AtomicUsize, Ordering},
 };
 
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+use std::sync::{atomic::AtomicBool, Arc};
+
 use muniment_attach::fixtures::{export, Mode, FIXTURE_DIRECTORY};
 
 static NEXT_DIRECTORY: AtomicUsize = AtomicUsize::new(0);
@@ -46,6 +49,41 @@ fn export_is_deterministic_and_replaces_obsolete_files() {
     assert!(before.iter().all(|(_, bytes)| {
         bytes.ends_with(b"\n") && !bytes[..bytes.len() - 1].ends_with(b"\n")
     }));
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[test]
+fn replacement_never_exposes_a_missing_or_partial_live_directory() {
+    let root = TestDirectory::new();
+    export(&root.0, Mode::Write).unwrap();
+    let expected_names: Vec<_> = read_fixtures(&fixture_dir(&root.0))
+        .into_iter()
+        .map(|(name, _)| name)
+        .collect();
+    let running = Arc::new(AtomicBool::new(true));
+    let reader_root = root.0.clone();
+    let reader_running = Arc::clone(&running);
+    let reader = std::thread::spawn(move || {
+        while reader_running.load(Ordering::Acquire) {
+            let live = fixture_dir(&reader_root);
+            assert!(
+                fs::metadata(&live).unwrap().is_dir(),
+                "the live fixture directory must always exist"
+            );
+            for name in &expected_names {
+                assert!(
+                    live.join(name).is_file(),
+                    "every published generation must be complete"
+                );
+            }
+        }
+    });
+
+    for _ in 0..500 {
+        export(&root.0, Mode::Write).unwrap();
+    }
+    running.store(false, Ordering::Release);
+    reader.join().unwrap();
 }
 
 #[test]

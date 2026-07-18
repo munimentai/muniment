@@ -41,18 +41,82 @@ pub fn export(root: &Path, mode: Mode) -> io::Result<()> {
         fs::write(staging.join(name), bytes)?;
     }
 
-    let backup = sibling_path(&target, "previous", export_id);
-    remove_if_present(&backup)?;
-    if target.exists() {
-        fs::rename(&target, &backup)?;
+    publish(&staging, &target)?;
+    // After an exchange, staging contains the complete displaced generation.
+    // Removing it cannot make the live target absent or partially populated.
+    remove_if_present(&staging)
+}
+
+fn publish(staging: &Path, target: &Path) -> io::Result<()> {
+    if !target.exists() {
+        return fs::rename(staging, target);
     }
-    if let Err(error) = fs::rename(&staging, &target) {
-        if backup.exists() {
-            let _ = fs::rename(&backup, &target);
-        }
-        return Err(error);
+
+    atomic_exchange(staging, target)
+}
+
+#[cfg(target_os = "linux")]
+fn atomic_exchange(left: &Path, right: &Path) -> io::Result<()> {
+    use std::{ffi::CString, os::unix::ffi::OsStrExt};
+
+    const AT_FDCWD: i32 = -100;
+    const RENAME_EXCHANGE: u32 = 2;
+    unsafe extern "C" {
+        fn renameat2(
+            olddirfd: i32,
+            oldpath: *const i8,
+            newdirfd: i32,
+            newpath: *const i8,
+            flags: u32,
+        ) -> i32;
     }
-    remove_if_present(&backup)
+
+    let left = CString::new(left.as_os_str().as_bytes()).map_err(io::Error::other)?;
+    let right = CString::new(right.as_os_str().as_bytes()).map_err(io::Error::other)?;
+    // SAFETY: both C strings remain alive for the call, and renameat2 retains
+    // neither pointer.
+    if unsafe {
+        renameat2(
+            AT_FDCWD,
+            left.as_ptr(),
+            AT_FDCWD,
+            right.as_ptr(),
+            RENAME_EXCHANGE,
+        )
+    } == 0
+    {
+        Ok(())
+    } else {
+        Err(io::Error::last_os_error())
+    }
+}
+
+#[cfg(any(target_os = "macos", target_os = "ios"))]
+fn atomic_exchange(left: &Path, right: &Path) -> io::Result<()> {
+    use std::{ffi::CString, os::unix::ffi::OsStrExt};
+
+    const RENAME_SWAP: u32 = 0x0000_0002;
+    unsafe extern "C" {
+        fn renamex_np(from: *const i8, to: *const i8, flags: u32) -> i32;
+    }
+
+    let left = CString::new(left.as_os_str().as_bytes()).map_err(io::Error::other)?;
+    let right = CString::new(right.as_os_str().as_bytes()).map_err(io::Error::other)?;
+    // SAFETY: both C strings remain alive for the call, and renamex_np retains
+    // neither pointer.
+    if unsafe { renamex_np(left.as_ptr(), right.as_ptr(), RENAME_SWAP) } == 0 {
+        Ok(())
+    } else {
+        Err(io::Error::last_os_error())
+    }
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "ios")))]
+fn atomic_exchange(_left: &Path, _right: &Path) -> io::Result<()> {
+    Err(io::Error::new(
+        io::ErrorKind::Unsupported,
+        "atomic fixture directory replacement is not supported on this platform",
+    ))
 }
 
 fn fixture_bytes() -> io::Result<BTreeMap<&'static str, Vec<u8>>> {
