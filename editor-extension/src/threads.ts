@@ -1,0 +1,111 @@
+import { AttachTransportError, type AttachConnection, type RedactedThreadSummary } from "./transport";
+
+export type ThreadsState =
+  | { kind: "loading" }
+  | { kind: "pairing" }
+  | { kind: "empty" }
+  | { kind: "runtime-unavailable" }
+  | { kind: "connection-failed" }
+  | { kind: "ready"; threads: ThreadItem[] };
+
+export interface ThreadItem {
+  threadId: string;
+  title: string;
+  description: string;
+}
+
+export type AttachConnector = (
+  onPairingPending: () => void,
+) => Promise<AttachConnection>;
+
+type StateListener = (state: ThreadsState) => void;
+
+/** Runtime-backed state for the native Threads view, kept independent of VS Code. */
+export class ThreadsModel {
+  private connection: AttachConnection | undefined;
+  private listeners = new Set<StateListener>();
+  private generation = 0;
+  private disposed = false;
+  private _state: ThreadsState = { kind: "loading" };
+
+  constructor(
+    private readonly connect: AttachConnector,
+    private readonly formatUpdatedAt: (updatedAt: string) => string = conciseUpdatedAt,
+  ) {}
+
+  get state(): ThreadsState {
+    return this._state;
+  }
+
+  onDidChange(listener: StateListener): { dispose(): void } {
+    this.listeners.add(listener);
+    return { dispose: () => this.listeners.delete(listener) };
+  }
+
+  async refresh(): Promise<void> {
+    if (this.disposed) return;
+    const generation = ++this.generation;
+    this.connection?.dispose();
+    this.connection = undefined;
+    this.update({ kind: "loading" });
+
+    try {
+      const connection = await this.connect(() => {
+        if (generation === this.generation && !this.disposed) this.update({ kind: "pairing" });
+      });
+      if (generation !== this.generation || this.disposed) {
+        connection.dispose();
+        return;
+      }
+      this.connection = connection;
+      const page = await connection.listThreads();
+      if (generation !== this.generation || this.disposed) return;
+      this.update(page.threads.length === 0
+        ? { kind: "empty" }
+        : { kind: "ready", threads: page.threads.map((thread) => this.project(thread)) });
+    } catch (error) {
+      if (generation !== this.generation || this.disposed) return;
+      this.connection?.dispose();
+      this.connection = undefined;
+      this.update(isRuntimeUnavailable(error)
+        ? { kind: "runtime-unavailable" }
+        : { kind: "connection-failed" });
+    }
+  }
+
+  dispose(): void {
+    if (this.disposed) return;
+    this.disposed = true;
+    this.generation++;
+    this.connection?.dispose();
+    this.connection = undefined;
+    this.listeners.clear();
+  }
+
+  private project(thread: RedactedThreadSummary): ThreadItem {
+    return {
+      threadId: thread.threadId,
+      title: thread.title,
+      description: this.formatUpdatedAt(thread.updatedAt),
+    };
+  }
+
+  private update(state: ThreadsState): void {
+    this._state = state;
+    for (const listener of this.listeners) listener(state);
+  }
+}
+
+function isRuntimeUnavailable(error: unknown): boolean {
+  return error instanceof AttachTransportError &&
+    (error.code === "runtime_unavailable" || error.code === "desktop_unavailable");
+}
+
+export function conciseUpdatedAt(updatedAt: string): string {
+  const date = new Date(updatedAt);
+  if (!Number.isFinite(date.getTime())) return "Updated recently";
+  return `Updated ${new Intl.DateTimeFormat(undefined, {
+    dateStyle: "medium",
+    timeStyle: "short",
+  }).format(date)}`;
+}
