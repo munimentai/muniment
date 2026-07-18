@@ -250,9 +250,31 @@ fn atomic_exchange(left: &Path, right: &Path) -> io::Result<()> {
         NEXT_EXPORT.fetch_add(1, Ordering::Relaxed)
     ));
     fs::rename(left, &generation)?;
+    if right.is_dir() && !is_reparse_point(right)? {
+        if let Err(error) = empty_directory(right) {
+            let _ = fs::rename(&generation, left);
+            return Err(error);
+        }
+    }
     if let Err(error) = set_junction(right, &generation) {
         let _ = fs::rename(&generation, left);
         return Err(error);
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
+fn empty_directory(directory: &Path) -> io::Result<()> {
+    for entry in fs::read_dir(directory)? {
+        let path = entry?.path();
+        let metadata = fs::symlink_metadata(&path)?;
+        if metadata.is_dir() && !is_reparse_point(&path)? {
+            fs::remove_dir_all(path)?;
+        } else if metadata.is_dir() {
+            fs::remove_dir(path)?;
+        } else {
+            fs::remove_file(path)?;
+        }
     }
     Ok(())
 }

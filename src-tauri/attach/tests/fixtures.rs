@@ -51,6 +51,36 @@ fn export_is_deterministic_and_replaces_obsolete_files() {
 }
 
 #[test]
+fn export_repairs_a_stale_regular_checkout_directory() {
+    let expected_root = TestDirectory::new();
+    export(&expected_root.0, Mode::Write).unwrap();
+    let expected = read_fixtures(&fixture_dir(&expected_root.0));
+
+    let root = TestDirectory::new();
+    let live = fixture_dir(&root.0);
+    fs::create_dir_all(&live).unwrap();
+    fs::write(live.join("response-run-start.json"), b"{}\n").unwrap();
+    fs::write(live.join("obsolete.json"), b"obsolete\n").unwrap();
+    let running = Arc::new(AtomicBool::new(true));
+    let reader_live = live.clone();
+    let reader_running = Arc::clone(&running);
+    let reader = std::thread::spawn(move || {
+        while reader_running.load(Ordering::Acquire) {
+            assert!(
+                fs::metadata(&reader_live).unwrap().is_dir(),
+                "the canonical fixture directory must remain present during checkout migration"
+            );
+        }
+    });
+
+    export(&root.0, Mode::Write).unwrap();
+    running.store(false, Ordering::Release);
+    reader.join().unwrap();
+
+    assert_eq!(read_fixtures(&live), expected);
+}
+
+#[test]
 fn replacement_never_exposes_a_missing_or_partial_live_directory() {
     let root = TestDirectory::new();
     export(&root.0, Mode::Write).unwrap();
