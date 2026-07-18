@@ -1,0 +1,6 @@
+.gitignore
+src/**
+test/**
+tsconfig.json
+out/test/**
+*.vsix
