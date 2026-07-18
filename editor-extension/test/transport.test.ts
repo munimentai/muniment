@@ -86,6 +86,28 @@ test("accepts coalesced welcome and authorization frames", async () => {
   assert.equal((await result).expiresInSeconds, 3600);
 });
 
+test("discovers the macOS endpoint and pairs across coalesced frames", async () => {
+  const socket = new FakeSocket();
+  let pending = 0;
+  const result = connecting(socket, {
+    platform: "darwin",
+    environment: { XDG_RUNTIME_DIR: "/must/not/be/used" },
+    homedir: () => "/Users/example",
+    createSocket: (endpoint: string) => {
+      assert.equal(endpoint, "/Users/example/Library/Application Support/Muniment/runtime/attach-v1.sock");
+      return socket;
+    },
+    onPairingPending: () => pending++,
+  });
+  socket.emit("connect");
+  socket.emit("data", Buffer.concat([encodeAttachFrame(welcome), encodeAttachFrame(authorized)]));
+
+  const connection = await result;
+  assert.equal(pending, 1);
+  assert.equal(connection.capability, "c".repeat(64));
+  connection.dispose();
+});
+
 test("frame decoder rejects oversize prefixes before receiving payload", () => {
   const prefix = Buffer.alloc(4);
   prefix.writeUInt32BE(MAX_FRAME_LENGTH + 1);
@@ -143,12 +165,18 @@ test("uses a separate bounded approval timeout", async () => {
   assert.equal(socket.eventNames().length, 0);
 });
 
-test("rejects unsupported platforms and missing or relative runtime discovery", async () => {
+test("rejects unsupported platforms and invalid or unavailable runtime discovery", async () => {
   await assert.rejects(connectAttach({ clientVersion: "1", platform: "win32" }),
     (error: unknown) => error instanceof AttachTransportError && error.code === "unsupported_platform");
   await assert.rejects(connectAttach({ clientVersion: "1", platform: "linux", environment: {} }),
     (error: unknown) => error instanceof AttachTransportError && error.code === "runtime_unavailable");
   await assert.rejects(connectAttach({
     clientVersion: "1", platform: "linux", environment: { XDG_RUNTIME_DIR: "relative" },
+  }), (error: unknown) => error instanceof AttachTransportError && error.code === "runtime_unavailable");
+  await assert.rejects(connectAttach({
+    clientVersion: "1", platform: "darwin", homedir: () => "relative",
+  }), (error: unknown) => error instanceof AttachTransportError && error.code === "runtime_unavailable");
+  await assert.rejects(connectAttach({
+    clientVersion: "1", platform: "darwin", homedir: () => { throw new Error("unavailable"); },
   }), (error: unknown) => error instanceof AttachTransportError && error.code === "runtime_unavailable");
 });
