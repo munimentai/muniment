@@ -56,6 +56,20 @@ pub struct RunStartAccepted {
     pub accepted_at: String,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RedactedRunEvent {
+    pub run_seq: u64,
+    pub event_type: String,
+    pub event_version: u32,
+    pub recorded_at: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum RunStreamItem {
+    Event(RedactedRunEvent),
+    CaughtUp { run_seq: u64 },
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RedactedThreadSummary {
@@ -114,11 +128,12 @@ impl fmt::Debug for ThreadListPage {
 #[cfg(target_os = "linux")]
 mod linux {
     use super::{
-        AuthorizationSummary, ClientError, RunStartAccepted, ThreadListPage, ThreadOpenPage,
+        AuthorizationSummary, ClientError, RedactedRunEvent, RunStartAccepted, RunStreamItem,
+        ThreadListPage, ThreadOpenPage,
     };
     use crate::{
         decode_frame, encode_frame, Authorized, Client, Envelope, ErrorCode, ErrorEnvelope,
-        FrameError, Hello, Id, Operation, Protocol, Request, VersionRange, Welcome,
+        EventName, FrameError, Hello, Id, Operation, Protocol, Request, VersionRange, Welcome,
         MAX_FRAME_LENGTH, MAX_TEXT_LENGTH, PROTOCOL,
     };
     use serde::de::DeserializeOwned;
@@ -138,6 +153,40 @@ mod linux {
     const MAX_CURSOR_LENGTH: usize = 1024;
     const MAX_RUN_START_TEXT_LENGTH: usize = 32 * 1024;
     const MAX_RUN_START_CONTEXT_LENGTH: usize = 64 * 1024;
+    const MAX_RUN_STREAM_WINDOW_EVENTS: usize = 1_024;
+    const MAX_RUN_STREAM_WINDOW_BYTES: usize = 4 * 1024 * 1024;
+
+    #[derive(serde::Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct RunStreamAccepted {
+        subscription_id: Id,
+        run_id: Id,
+        first_available_run_seq: u64,
+        current_run_seq: u64,
+        window: RunStreamWindow,
+    }
+
+    #[derive(serde::Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct RunStreamWindow {
+        max_events: usize,
+        max_bytes: usize,
+    }
+
+    #[derive(serde::Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct RedactedEventBody {
+        event_type: String,
+        event_version: u32,
+        recorded_at: String,
+        payload: WithheldPayload,
+    }
+
+    #[derive(serde::Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct WithheldPayload {
+        withheld: bool,
+    }
 
     /// An authorization bound to the connection on which pairing completed.
     pub struct AuthorizedClient {
@@ -349,6 +398,152 @@ mod linux {
                 return Err(ClientError::UnexpectedMessage);
             }
             Ok(accepted)
+        }
+
+        pub fn stream_run(
+            &mut self,
+            run_id: &str,
+            after_run_seq: u64,
+        ) -> Result<RunSubscription<'_>, ClientError> {
+            let run_id = Id::new(run_id.to_owned()).map_err(|_| ClientError::UnexpectedMessage)?;
+            let request_id = fresh_request_id()?;
+            let request = Request {
+                protocol: Protocol,
+                request_id: request_id.clone(),
+                operation: Operation::RunStream,
+                capability: self.capability.clone(),
+                idempotency_key: None,
+                body: serde_json::json!({
+                    "run_id": run_id,
+                    "after_run_seq": after_run_seq,
+                }),
+            };
+            let deadline = deadline(self.io_timeout);
+            let bytes = encode_frame(&request).map_err(map_frame_error)?;
+            write_all_before(&mut self.stream, &bytes, deadline)?;
+            let value = read_value(&mut self.stream, deadline)?;
+            if value
+                .get("protocol")
+                .and_then(Value::as_str)
+                .is_some_and(|protocol| protocol != PROTOCOL)
+            {
+                return Err(ClientError::ProtocolIncompatible);
+            }
+            let response =
+                match serde_json::from_value(value).map_err(|_| ClientError::UnexpectedMessage)? {
+                    Envelope::Response(response) if response.request_id == request_id => response,
+                    Envelope::Error(error) if error.request_id.as_ref() == Some(&request_id) => {
+                        return Err(map_protocol_error(error.error.code()));
+                    }
+                    _ => return Err(ClientError::UnexpectedMessage),
+                };
+            let accepted: RunStreamAccepted = serde_json::from_value(response.body)
+                .map_err(|_| ClientError::UnexpectedMessage)?;
+            let empty =
+                accepted.first_available_run_seq == accepted.current_run_seq.saturating_add(1);
+            if accepted.run_id != run_id
+                || accepted.first_available_run_seq == 0
+                || (!empty && accepted.first_available_run_seq > accepted.current_run_seq)
+                || after_run_seq < accepted.first_available_run_seq.saturating_sub(1)
+                || after_run_seq > accepted.current_run_seq
+                || accepted.window.max_events == 0
+                || accepted.window.max_events > MAX_RUN_STREAM_WINDOW_EVENTS
+                || accepted.window.max_bytes == 0
+                || accepted.window.max_bytes > MAX_RUN_STREAM_WINDOW_BYTES
+            {
+                return Err(ClientError::UnexpectedMessage);
+            }
+            Ok(RunSubscription {
+                client: self,
+                subscription_id: accepted.subscription_id,
+                run_id,
+                current_run_seq: accepted.current_run_seq,
+                last_run_seq: after_run_seq,
+                finished: false,
+            })
+        }
+    }
+
+    pub struct RunSubscription<'a> {
+        client: &'a mut AuthorizedClient,
+        subscription_id: Id,
+        run_id: Id,
+        current_run_seq: u64,
+        last_run_seq: u64,
+        finished: bool,
+    }
+
+    impl std::fmt::Debug for RunSubscription<'_> {
+        fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            formatter.write_str("RunSubscription { .. }")
+        }
+    }
+
+    impl RunSubscription<'_> {
+        pub fn read_next(&mut self) -> Result<RunStreamItem, ClientError> {
+            if self.finished {
+                return Err(ClientError::UnexpectedMessage);
+            }
+            let value = read_value(&mut self.client.stream, deadline(self.client.io_timeout))?;
+            if value
+                .get("protocol")
+                .and_then(Value::as_str)
+                .is_some_and(|protocol| protocol != PROTOCOL)
+            {
+                return Err(ClientError::ProtocolIncompatible);
+            }
+            let event =
+                match serde_json::from_value(value).map_err(|_| ClientError::UnexpectedMessage)? {
+                    Envelope::Event(event) => event,
+                    Envelope::Error(error) if error.request_id.is_none() => {
+                        return Err(map_protocol_error(error.error.code()));
+                    }
+                    _ => return Err(ClientError::UnexpectedMessage),
+                };
+            if event.subscription_id != self.subscription_id
+                || event.run_id.as_ref() != Some(&self.run_id)
+            {
+                return Err(ClientError::UnexpectedMessage);
+            }
+            let run_seq = event.run_seq.ok_or(ClientError::UnexpectedMessage)?;
+            match event.event {
+                EventName::RunEvent => {
+                    if run_seq != self.last_run_seq.saturating_add(1)
+                        || run_seq > self.current_run_seq
+                    {
+                        return Err(ClientError::UnexpectedMessage);
+                    }
+                    let body: RedactedEventBody = serde_json::from_value(event.body)
+                        .map_err(|_| ClientError::UnexpectedMessage)?;
+                    if body.event_type.trim().is_empty()
+                        || body.event_type.len() > MAX_TEXT_LENGTH
+                        || body.event_version == 0
+                        || body.recorded_at.len() > MAX_TEXT_LENGTH
+                        || !is_rfc3339(&body.recorded_at)
+                        || !body.payload.withheld
+                    {
+                        return Err(ClientError::UnexpectedMessage);
+                    }
+                    self.last_run_seq = run_seq;
+                    Ok(RunStreamItem::Event(RedactedRunEvent {
+                        run_seq,
+                        event_type: body.event_type,
+                        event_version: body.event_version,
+                        recorded_at: body.recorded_at,
+                    }))
+                }
+                EventName::SubscriptionCaughtUp => {
+                    if run_seq != self.current_run_seq
+                        || self.last_run_seq != self.current_run_seq
+                        || event.body != serde_json::json!({})
+                    {
+                        return Err(ClientError::UnexpectedMessage);
+                    }
+                    self.finished = true;
+                    Ok(RunStreamItem::CaughtUp { run_seq })
+                }
+                _ => Err(ClientError::UnexpectedMessage),
+            }
         }
     }
 
@@ -652,7 +847,7 @@ mod linux {
 }
 
 #[cfg(target_os = "linux")]
-pub use linux::{handshake_stream, AuthorizedClient};
+pub use linux::{handshake_stream, AuthorizedClient, RunSubscription};
 
 #[cfg(not(target_os = "linux"))]
 #[derive(Debug)]
@@ -679,7 +874,19 @@ impl AuthorizedClient {
     ) -> Result<RunStartAccepted, ClientError> {
         Err(ClientError::UnsupportedPlatform)
     }
+
+    pub fn stream_run(
+        &mut self,
+        _run_id: &str,
+        _after_run_seq: u64,
+    ) -> Result<RunSubscription<'_>, ClientError> {
+        Err(ClientError::UnsupportedPlatform)
+    }
 }
+
+#[cfg(not(target_os = "linux"))]
+#[derive(Debug)]
+pub struct RunSubscription<'a>(std::marker::PhantomData<&'a mut AuthorizedClient>);
 
 #[cfg(target_os = "linux")]
 pub fn handshake(

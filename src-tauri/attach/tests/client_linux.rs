@@ -2,7 +2,8 @@
 
 use muniment_attach::{
     authorized, encode_frame, handshake_stream, welcome, ClientError, ErrorAction, ErrorEnvelope,
-    Failure, Id, Protocol, ProtocolError, Response, Success, VersionRange, MAX_FRAME_LENGTH,
+    Event, EventName, Failure, Id, Protocol, ProtocolError, Response, RunStreamItem, Success,
+    VersionRange, MAX_FRAME_LENGTH,
 };
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::{Read, Write};
@@ -271,6 +272,149 @@ fn run_start_rejects_correlation_mismatch() {
         Err(ClientError::UnexpectedMessage)
     );
     worker.join().unwrap();
+}
+
+fn stream_response(request_id: Id, subscription_id: &str, current: u64) -> Response {
+    Response {
+        protocol: Protocol,
+        request_id,
+        ok: Success,
+        body: serde_json::json!({
+            "subscription_id": subscription_id,
+            "run_id": "01900000-0000-7000-8000-000000000001",
+            "first_available_run_seq": 1,
+            "current_run_seq": current,
+            "window": { "max_events": 1024, "max_bytes": 4194304 }
+        }),
+    }
+}
+
+fn stream_event(subscription_id: &str, seq: u64, event: EventName) -> Event {
+    Event {
+        protocol: Protocol,
+        subscription_id: Id::new(subscription_id).unwrap(),
+        event: event.clone(),
+        run_id: Some(Id::new("01900000-0000-7000-8000-000000000001").unwrap()),
+        run_seq: Some(seq),
+        body: if event == EventName::RunEvent {
+            serde_json::json!({
+                "event_type": format!("safe.event.{seq}"),
+                "event_version": 1,
+                "recorded_at": "2026-07-17T00:00:00Z",
+                "payload": { "withheld": true }
+            })
+        } else {
+            serde_json::json!({})
+        },
+    }
+}
+
+#[test]
+fn run_stream_resumes_ordered_catch_up_through_marker() {
+    const SUB: &str = "01900000-0000-7000-8000-000000000099";
+    let (client, mut server) = UnixStream::pair().unwrap();
+    let worker = thread::spawn(move || {
+        complete_pairing(&mut server);
+        let request = read_client_value(&mut server);
+        assert_eq!(request["operation"], "run.stream");
+        assert_eq!(
+            request["body"],
+            serde_json::json!({
+                "run_id": "01900000-0000-7000-8000-000000000001", "after_run_seq": 1
+            })
+        );
+        assert!(request.get("idempotency_key").is_none());
+        let id = Id::new(request["request_id"].as_str().unwrap()).unwrap();
+        for frame in [
+            encode_frame(&stream_response(id, SUB, 3)).unwrap(),
+            encode_frame(&stream_event(SUB, 2, EventName::RunEvent)).unwrap(),
+            encode_frame(&stream_event(SUB, 3, EventName::RunEvent)).unwrap(),
+            encode_frame(&stream_event(SUB, 3, EventName::SubscriptionCaughtUp)).unwrap(),
+        ] {
+            server.write_all(&frame).unwrap();
+        }
+    });
+    let mut client = handshake_stream(client, "0.0.1", SHORT, SHORT, || {}).unwrap();
+    let mut subscription = client
+        .stream_run("01900000-0000-7000-8000-000000000001", 1)
+        .unwrap();
+    assert!(
+        matches!(subscription.read_next(), Ok(RunStreamItem::Event(event)) if event.run_seq == 2)
+    );
+    assert!(
+        matches!(subscription.read_next(), Ok(RunStreamItem::Event(event)) if event.run_seq == 3)
+    );
+    assert_eq!(
+        subscription.read_next(),
+        Ok(RunStreamItem::CaughtUp { run_seq: 3 })
+    );
+    assert_eq!(
+        subscription.read_next(),
+        Err(ClientError::UnexpectedMessage)
+    );
+    worker.join().unwrap();
+}
+
+#[test]
+fn run_stream_window_pause_has_no_caught_up_marker() {
+    const SUB: &str = "01900000-0000-7000-8000-000000000098";
+    let (client, mut server) = UnixStream::pair().unwrap();
+    let worker = thread::spawn(move || {
+        complete_pairing(&mut server);
+        let request = read_client_value(&mut server);
+        let id = Id::new(request["request_id"].as_str().unwrap()).unwrap();
+        server
+            .write_all(&encode_frame(&stream_response(id, SUB, 2)).unwrap())
+            .unwrap();
+        server
+            .write_all(&encode_frame(&stream_event(SUB, 1, EventName::RunEvent)).unwrap())
+            .unwrap();
+        thread::sleep(Duration::from_millis(150));
+    });
+    let mut client = handshake_stream(client, "0.0.1", SHORT, SHORT, || {}).unwrap();
+    let mut subscription = client
+        .stream_run("01900000-0000-7000-8000-000000000001", 0)
+        .unwrap();
+    assert!(
+        matches!(subscription.read_next(), Ok(RunStreamItem::Event(event)) if event.run_seq == 1)
+    );
+    assert_eq!(subscription.read_next(), Err(ClientError::Timeout));
+    worker.join().unwrap();
+}
+
+#[test]
+fn run_stream_rejects_mismatched_and_duplicate_envelopes() {
+    const SUB: &str = "01900000-0000-7000-8000-000000000097";
+    for hostile in [
+        stream_event(
+            "01900000-0000-7000-8000-000000000096",
+            1,
+            EventName::RunEvent,
+        ),
+        stream_event(SUB, 2, EventName::RunEvent),
+        stream_event(SUB, 0, EventName::SubscriptionCaughtUp),
+    ] {
+        let (client, mut server) = UnixStream::pair().unwrap();
+        let worker = thread::spawn(move || {
+            complete_pairing(&mut server);
+            let request = read_client_value(&mut server);
+            let id = Id::new(request["request_id"].as_str().unwrap()).unwrap();
+            server
+                .write_all(&encode_frame(&stream_response(id, SUB, 1)).unwrap())
+                .unwrap();
+            server.write_all(&encode_frame(&hostile).unwrap()).unwrap();
+        });
+        let mut client = handshake_stream(client, "0.0.1", SHORT, SHORT, || {}).unwrap();
+        let mut subscription = client
+            .stream_run("01900000-0000-7000-8000-000000000001", 0)
+            .unwrap();
+        assert_eq!(
+            subscription.read_next(),
+            Err(ClientError::UnexpectedMessage)
+        );
+        assert!(!format!("{subscription:?}").contains("safe.event"));
+        worker.join().unwrap();
+    }
 }
 
 #[test]
