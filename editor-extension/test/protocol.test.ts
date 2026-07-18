@@ -56,3 +56,45 @@ test("fails closed for malformed and unrecognized input", () => {
     /invalid attach hello/,
   );
 });
+
+test("rejects conflicting envelope shapes", () => {
+  const base = { protocol: ATTACH_PROTOCOL };
+  const request = {
+    ...base, request_id: "id", operation: "thread.list", capability: "capability", body: {},
+  };
+
+  assert.throws(() => decodeAttachEnvelope({ ...request, ok: true }), /conflicting/);
+  assert.throws(() => decodeAttachEnvelope({ ...request, desktop_version: "0.0.1" }), /conflicting/);
+  assert.throws(
+    () => decodeAttachEnvelope({ ...base, request_id: "id", ok: true, body: {}, error: {
+      code: "invalid_request", message: "invalid", retryable: false,
+    } }),
+    /unrecognized/,
+  );
+  assert.throws(
+    () => decodeAttachEnvelope({ ...base, request_id: "id", ok: false, body: {}, error: {
+      code: "invalid_request", message: "invalid", retryable: false,
+    } }),
+    /unrecognized/,
+  );
+  assert.throws(
+    () => decodeAttachEnvelope({
+      capability: "capability", expires_at: 3600, idle_timeout_seconds: 900,
+      workspace_scopes: {}, operation: "thread.list", request_id: "id", body: {},
+    }),
+    /conflicting/,
+  );
+  assert.throws(
+    () => decodeAttachEnvelope({
+      ...base, subscription_id: "subscription", event: "run.event", request_id: "id", body: {},
+    }),
+    /conflicting/,
+  );
+  assert.throws(
+    () => decodeAttachEnvelope({
+      ...base, client: { kind: "editor-extension", version: "0.0.1" },
+      supported: { min: 1, max: 1 }, client_nonce: "nonce", ok: true,
+    }),
+    /conflicting/,
+  );
+});
