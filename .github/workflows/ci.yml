@@ -194,7 +194,7 @@ jobs:
           trap 'rm -f "$key"' EXIT
 
           repo_url="https://x-access-token:${REPO_TOKEN}@github.com/${REPOSITORY}"
-          cmd='cargo test --manifest-path src-tauri/Cargo.toml --package muniment-attach --test fixtures --locked && cargo run --manifest-path src-tauri/Cargo.toml --package muniment-attach --bin export-attach-fixtures -- protocol-fixtures --check'
+          cmd='cargo test --manifest-path src-tauri/Cargo.toml --package muniment-attach --locked && cargo run --manifest-path src-tauri/Cargo.toml --package muniment-attach --bin export-attach-fixtures -- protocol-fixtures --check'
           ssh -i "$key" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
               -o BatchMode=yes -o ServerAliveInterval=30 -o ServerAliveCountMax=8 \
               desktopci@10.1.10.10 \

@@ -193,16 +193,40 @@ fn check_rejects_a_byte_stale_fixture_without_writing() {
 }
 
 fn read_fixtures(directory: &Path) -> Vec<(String, Vec<u8>)> {
-    let mut fixtures: Vec<_> = fs::read_dir(directory)
-        .unwrap()
-        .map(|entry| {
-            let entry = entry.unwrap();
-            (
-                entry.file_name().to_string_lossy().into_owned(),
-                fs::read(entry.path()).unwrap(),
-            )
-        })
-        .collect();
-    fixtures.sort_by(|left, right| left.0.cmp(&right.0));
-    fixtures
+    loop {
+        let before = directory_identity(directory).unwrap();
+        let fixtures = fs::read_dir(directory).and_then(|entries| {
+            entries
+                .map(|entry| {
+                    let entry = entry?;
+                    Ok((
+                        entry.file_name().to_string_lossy().into_owned(),
+                        fs::read(entry.path())?,
+                    ))
+                })
+                .collect::<std::io::Result<Vec<_>>>()
+        });
+        let after = directory_identity(directory);
+        if let (Ok(mut fixtures), Ok(after)) = (fixtures, after) {
+            if before == after {
+                fixtures.sort_by(|left, right| left.0.cmp(&right.0));
+                return fixtures;
+            }
+        }
+        std::thread::yield_now();
+    }
+}
+
+#[cfg(unix)]
+fn directory_identity(path: &Path) -> std::io::Result<(u64, u64)> {
+    use std::os::unix::fs::MetadataExt;
+    let metadata = fs::metadata(path)?;
+    Ok((metadata.dev(), metadata.ino()))
+}
+
+#[cfg(windows)]
+fn directory_identity(path: &Path) -> std::io::Result<(u64, u64)> {
+    use std::os::windows::fs::MetadataExt;
+    let metadata = fs::metadata(path)?;
+    Ok((metadata.creation_time(), metadata.last_write_time()))
 }

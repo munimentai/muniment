@@ -36,7 +36,6 @@ pub fn export(root: &Path, mode: Mode) -> io::Result<()> {
     fs::create_dir_all(parent)?;
     let _export_lock = ExportLock::acquire(&target.with_file_name(".1.export.lock"))?;
     remove_stale_staging(parent)?;
-    #[cfg(windows)]
     remove_stale_generations(parent, &target)?;
     let export_id = NEXT_EXPORT.fetch_add(1, Ordering::Relaxed);
     let staging = sibling_path(&target, "staging", export_id);
@@ -47,10 +46,13 @@ pub fn export(root: &Path, mode: Mode) -> io::Result<()> {
     }
 
     publish(&staging, &target)?;
-    // After a Unix exchange, staging contains the complete displaced
-    // generation. On Windows the atomic replacement has already removed the
-    // staging name. Either way, cleanup cannot affect the live target.
-    remove_if_present(&staging)
+    // An exchange leaves the displaced directory at `staging`. Keep it for
+    // readers that enumerated that generation before publication. Generations
+    // from a previous exporter process are recovered on the next run.
+    if staging.exists() {
+        fs::rename(&staging, sibling_path(&target, "generation", export_id))?;
+    }
+    Ok(())
 }
 
 struct ExportLock {
@@ -149,15 +151,15 @@ fn remove_stale_staging(parent: &Path) -> io::Result<()> {
     Ok(())
 }
 
-#[cfg(windows)]
 fn remove_stale_generations(parent: &Path, target: &Path) -> io::Result<()> {
     let live = fs::canonicalize(target).ok();
+    let current_process = format!(".1.generation.{}.", std::process::id());
     for entry in fs::read_dir(parent)? {
         let entry = entry?;
-        if entry
-            .file_name()
-            .to_string_lossy()
-            .starts_with(".1.generation.")
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if name.starts_with(".1.generation.")
+            && !name.starts_with(&current_process)
             && live.as_ref() != Some(&fs::canonicalize(entry.path())?)
         {
             remove_if_present(&entry.path())?;
