@@ -193,40 +193,42 @@ fn check_rejects_a_byte_stale_fixture_without_writing() {
 }
 
 fn read_fixtures(directory: &Path) -> Vec<(String, Vec<u8>)> {
-    loop {
-        let before = directory_identity(directory).unwrap();
-        let fixtures = fs::read_dir(directory).and_then(|entries| {
-            entries
-                .map(|entry| {
-                    let entry = entry?;
-                    Ok((
-                        entry.file_name().to_string_lossy().into_owned(),
-                        fs::read(entry.path())?,
-                    ))
-                })
-                .collect::<std::io::Result<Vec<_>>>()
-        });
-        let after = directory_identity(directory);
-        if let (Ok(mut fixtures), Ok(after)) = (fixtures, after) {
-            if before == after {
-                fixtures.sort_by(|left, right| left.0.cmp(&right.0));
-                return fixtures;
-            }
-        }
-        std::thread::yield_now();
+    let generation = opened_generation(directory);
+    let mut fixtures = fs::read_dir(&generation.path)
+        .unwrap()
+        .map(|entry| {
+            let entry = entry.unwrap();
+            (
+                entry.file_name().to_string_lossy().into_owned(),
+                fs::read(entry.path()).unwrap(),
+            )
+        })
+        .collect::<Vec<_>>();
+    fixtures.sort_by(|left, right| left.0.cmp(&right.0));
+    fixtures
+}
+
+#[cfg(target_os = "linux")]
+fn opened_generation(path: &Path) -> OpenedGeneration {
+    use std::os::fd::AsRawFd;
+
+    let directory = fs::File::open(path).unwrap();
+    let generation = PathBuf::from(format!("/proc/self/fd/{}", directory.as_raw_fd()));
+    OpenedGeneration {
+        path: generation,
+        _directory: Some(directory),
     }
 }
 
-#[cfg(unix)]
-fn directory_identity(path: &Path) -> std::io::Result<(u64, u64)> {
-    use std::os::unix::fs::MetadataExt;
-    let metadata = fs::metadata(path)?;
-    Ok((metadata.dev(), metadata.ino()))
+#[cfg(not(target_os = "linux"))]
+fn opened_generation(path: &Path) -> OpenedGeneration {
+    OpenedGeneration {
+        path: fs::canonicalize(path).unwrap(),
+        _directory: None,
+    }
 }
 
-#[cfg(windows)]
-fn directory_identity(path: &Path) -> std::io::Result<(u64, u64)> {
-    use std::os::windows::fs::MetadataExt;
-    let metadata = fs::metadata(path)?;
-    Ok((metadata.creation_time(), metadata.last_write_time()))
+struct OpenedGeneration {
+    path: PathBuf,
+    _directory: Option<fs::File>,
 }

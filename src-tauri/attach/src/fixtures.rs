@@ -153,16 +153,45 @@ fn remove_stale_staging(parent: &Path) -> io::Result<()> {
 
 fn remove_stale_generations(parent: &Path, target: &Path) -> io::Result<()> {
     let live = fs::canonicalize(target).ok();
+    let mut generations = fs::read_dir(parent)?
+        .collect::<io::Result<Vec<_>>>()?
+        .into_iter()
+        .filter(|entry| {
+            entry
+                .file_name()
+                .to_string_lossy()
+                .starts_with(".1.generation.")
+        })
+        .collect::<Vec<_>>();
+    generations.sort_by_key(|entry| entry.file_name());
+    // Publication cannot know when an uncoordinated reader has finished with
+    // a displaced directory. Retain a bounded window so ordinary concurrent
+    // reads can finish, while repeated exports do not grow without limit.
+    const RETAINED_GENERATIONS: usize = 64;
     let current_process = format!(".1.generation.{}.", std::process::id());
-    for entry in fs::read_dir(parent)? {
-        let entry = entry?;
-        let name = entry.file_name();
-        let name = name.to_string_lossy();
-        if name.starts_with(".1.generation.")
-            && !name.starts_with(&current_process)
-            && live.as_ref() != Some(&fs::canonicalize(entry.path())?)
-        {
+    let current_count = generations
+        .iter()
+        .filter(|entry| {
+            entry
+                .file_name()
+                .to_string_lossy()
+                .starts_with(&current_process)
+        })
+        .count();
+    let mut current_to_remove = current_count.saturating_sub(RETAINED_GENERATIONS);
+    for entry in generations {
+        let is_current = entry
+            .file_name()
+            .to_string_lossy()
+            .starts_with(&current_process);
+        if is_current && current_to_remove == 0 {
+            continue;
+        }
+        if live.as_ref() != Some(&fs::canonicalize(entry.path())?) {
             remove_if_present(&entry.path())?;
+            if is_current {
+                current_to_remove -= 1;
+            }
         }
     }
     Ok(())
