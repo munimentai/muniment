@@ -564,6 +564,10 @@ fn fixture_bytes() -> io::Result<BTreeMap<String, Vec<u8>>> {
     ];
     for (index, (name, event)) in events.into_iter().enumerate() {
         let body = event_body(&event);
+        let artifact_event = matches!(
+            event,
+            EventName::ArtifactChunk | EventName::ArtifactComplete
+        );
         insert(
             &mut fixtures,
             &format!("event-{name}.json"),
@@ -571,8 +575,8 @@ fn fixture_bytes() -> io::Result<BTreeMap<String, Vec<u8>>> {
                 protocol: Protocol,
                 subscription_id: id(400)?,
                 event,
-                run_id: Some(id(401)?),
-                run_seq: Some(index as u64 + 1),
+                run_id: (!artifact_event).then(|| id(401)).transpose()?,
+                run_seq: (!artifact_event).then_some(index as u64 + 1),
                 body,
             },
         )?;
@@ -599,20 +603,24 @@ fn request_body(operation: Operation) -> serde_json::Value {
             json!({"subscription_id": "00000000000000000000000000000190", "through_run_seq": 7})
         }
         Operation::RunSteer => {
-            json!({"run_id": "00000000000000000000000000000191", "prompt": "Focus on error handling."})
+            json!({"run_id": "00000000000000000000000000000191", "text": "Focus on error handling."})
         }
         Operation::RunFollowUp => {
-            json!({"run_id": "00000000000000000000000000000191", "prompt": "Now suggest tests."})
+            json!({"run_id": "00000000000000000000000000000191", "text": "Now suggest tests."})
         }
         Operation::RunCancel => json!({"run_id": "00000000000000000000000000000191"}),
         Operation::PermissionAnswer => {
             json!({"run_id": "00000000000000000000000000000191", "gate_id": "permission-1", "decision": "allow"})
         }
-        Operation::ArtifactFetch => json!({"artifact_id": "artifact-1"}),
-        Operation::ArtifactWindow => {
-            json!({"artifact_id": "artifact-1", "cursor": "artifact-cursor-1", "limit": 65536})
+        Operation::ArtifactFetch => {
+            json!({"artifact_id": "00000000000000000000000000000192"})
         }
-        Operation::RequestCancel => json!({"request_id": "00000000000000000000000000000064"}),
+        Operation::ArtifactWindow => {
+            json!({"transfer_id": "00000000000000000000000000000190", "ack_through_chunk": -1, "max_chunks": 1})
+        }
+        Operation::RequestCancel => {
+            json!({"kind": "request", "request_id": "00000000000000000000000000000064"})
+        }
     }
 }
 
@@ -668,16 +676,28 @@ fn event_body(event: &EventName) -> serde_json::Value {
             json!({"gate_id": "permission-1", "kind": "confirm", "title": "Allow file update?", "message": "Update src/main.rs"})
         }
         EventName::ArtifactChunk => {
-            json!({"artifact_id": "artifact-1", "cursor": "artifact-cursor-1", "data": "Zml4dHVyZQ=="})
+            json!({
+                "artifact_id": "00000000000000000000000000000192",
+                "chunk_index": 0,
+                "offset": 0,
+                "byte_length": 7,
+                "chunk_sha256": "f16d05ec6b29248d2c61adb1e9263f78e4f7bace1b955014a2d17872cfe4064d",
+                "data": "Zml4dHVyZQ=="
+            })
         }
         EventName::ArtifactComplete => {
-            json!({"artifact_id": "artifact-1", "size_bytes": 7, "sha256": "d6f7a76f3582d7281c388af1e0c83b4b8e73ba5ad13d35d5101d1912f0d8c30f"})
+            json!({
+                "transfer_id": "00000000000000000000000000000190",
+                "artifact_id": "00000000000000000000000000000192",
+                "total_bytes": 7,
+                "sha256": "f16d05ec6b29248d2c61adb1e9263f78e4f7bace1b955014a2d17872cfe4064d"
+            })
         }
         EventName::RequestCancelled => json!({"request_id": "00000000000000000000000000000064"}),
         EventName::CapabilityRevoked => {
             json!({"capability": "fixture-capability", "reason": "authorization_revoked"})
         }
-        EventName::StreamClosed => json!({"reason": "run_completed", "final_run_seq": 7}),
+        EventName::StreamClosed => json!({"code": "cancelled", "resumable": true}),
         EventName::Unknown(name) => json!({"name": name.as_str(), "optional": true}),
     }
 }

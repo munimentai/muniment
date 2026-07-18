@@ -1,1 +1,1 @@
-{"protocol":"muniment.attach/1","request_id":"0000000000000000000000000000006f","operation":"artifact.window","capability":"fixture-capability","body":{"artifact_id":"artifact-1","cursor":"artifact-cursor-1","limit":65536}}
+{"protocol":"muniment.attach/1","request_id":"0000000000000000000000000000006f","operation":"artifact.window","capability":"fixture-capability","body":{"ack_through_chunk":-1,"max_chunks":1,"transfer_id":"00000000000000000000000000000190"}}

@@ -113,8 +113,13 @@ fn canonical_run_start_fixtures_match_client_contracts() {
         panic!("expected response fixture");
     };
     assert_eq!(response.request_id, request.request_id);
-    let accepted: RunStartAccepted = serde_json::from_value(response.body).unwrap();
-    assert_eq!(accepted.committed_seq, 1);
+    #[cfg(feature = "client")]
+    {
+        let accepted: RunStartAccepted = serde_json::from_value(response.body).unwrap();
+        assert_eq!(accepted.committed_seq, 1);
+    }
+    #[cfg(not(feature = "client"))]
+    assert_eq!(response.body["committed_seq"], 1);
 }
 
 #[test]
@@ -139,8 +144,98 @@ fn canonical_cursor_ack_and_permission_fixtures_match_client_contracts() {
         panic!("expected event fixture");
     };
     assert_eq!(event.event, EventName::PermissionPending);
-    let permission: PendingPermission = serde_json::from_value(event.body).unwrap();
-    assert_eq!(permission.kind, PermissionKind::Confirm);
+    #[cfg(feature = "client")]
+    {
+        let permission: PendingPermission = serde_json::from_value(event.body).unwrap();
+        assert_eq!(permission.kind, PermissionKind::Confirm);
+    }
+    #[cfg(not(feature = "client"))]
+    assert_eq!(event.body["kind"], "confirm");
+}
+
+#[test]
+fn canonical_command_and_artifact_fixtures_match_the_pinned_contract() {
+    for (name, operation, text) in [
+        (
+            "request-run-steer.json",
+            Operation::RunSteer,
+            "Focus on error handling.",
+        ),
+        (
+            "request-run-follow-up.json",
+            Operation::RunFollowUp,
+            "Now suggest tests.",
+        ),
+    ] {
+        let Envelope::Request(request) = serde_json::from_value(canonical_fixture(name)).unwrap()
+        else {
+            panic!("expected request fixture");
+        };
+        assert_eq!(request.operation, operation);
+        assert_eq!(request.body["text"], text);
+        assert!(request.body.get("prompt").is_none());
+        Id::new(request.body["run_id"].as_str().unwrap().to_owned()).unwrap();
+    }
+
+    let transfer_id = "00000000000000000000000000000190";
+    let artifact_id = "00000000000000000000000000000192";
+    let sha256 = "f16d05ec6b29248d2c61adb1e9263f78e4f7bace1b955014a2d17872cfe4064d";
+    Id::new(transfer_id.to_owned()).unwrap();
+    Id::new(artifact_id.to_owned()).unwrap();
+
+    let Envelope::Request(window) =
+        serde_json::from_value(canonical_fixture("request-artifact-window.json")).unwrap()
+    else {
+        panic!("expected artifact window request");
+    };
+    assert_eq!(window.operation, Operation::ArtifactWindow);
+    assert_eq!(
+        window.body,
+        json!({"transfer_id": transfer_id, "ack_through_chunk": -1, "max_chunks": 1})
+    );
+
+    let Envelope::Event(chunk) =
+        serde_json::from_value(canonical_fixture("event-artifact-chunk.json")).unwrap()
+    else {
+        panic!("expected artifact chunk event");
+    };
+    assert_eq!(chunk.subscription_id.as_str(), transfer_id);
+    assert_eq!(chunk.run_id, None);
+    assert_eq!(chunk.run_seq, None);
+    assert_eq!(chunk.body["artifact_id"], artifact_id);
+    assert_eq!(chunk.body["chunk_index"], 0);
+    assert_eq!(chunk.body["offset"], 0);
+    assert_eq!(chunk.body["byte_length"], 7);
+    assert_eq!(chunk.body["chunk_sha256"], sha256);
+    assert_eq!(chunk.body["data"], "Zml4dHVyZQ==");
+
+    let Envelope::Event(complete) =
+        serde_json::from_value(canonical_fixture("event-artifact-complete.json")).unwrap()
+    else {
+        panic!("expected artifact complete event");
+    };
+    assert_eq!(complete.subscription_id.as_str(), transfer_id);
+    assert_eq!(complete.body["transfer_id"], transfer_id);
+    assert_eq!(complete.body["artifact_id"], artifact_id);
+    assert_eq!(complete.body["total_bytes"], 7);
+    assert_eq!(complete.body["sha256"], sha256);
+
+    let Envelope::Request(cancel) =
+        serde_json::from_value(canonical_fixture("request-request-cancel.json")).unwrap()
+    else {
+        panic!("expected cancellation request");
+    };
+    assert_eq!(cancel.operation, Operation::RequestCancel);
+    assert_eq!(cancel.body["kind"], "request");
+    Id::new(cancel.body["request_id"].as_str().unwrap().to_owned()).unwrap();
+
+    let Envelope::Event(closed) =
+        serde_json::from_value(canonical_fixture("event-stream-closed.json")).unwrap()
+    else {
+        panic!("expected stream close event");
+    };
+    assert_eq!(closed.event, EventName::StreamClosed);
+    assert_eq!(closed.body, json!({"code": "cancelled", "resumable": true}));
 }
 
 fn id(n: u128) -> Id {
