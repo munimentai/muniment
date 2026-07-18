@@ -17,7 +17,8 @@
   ],
   "activationEvents": [
     "onView:muniment.threads",
-    "onCommand:muniment.refreshThreads"
+    "onCommand:muniment.refreshThreads",
+    "onCommand:muniment.openThread"
   ],
   "main": "./out/src/extension.js",
   "contributes": {
@@ -26,6 +27,11 @@
         "command": "muniment.refreshThreads",
         "title": "Refresh Threads",
         "icon": "$(refresh)"
+      },
+      {
+        "command": "muniment.openThread",
+        "title": "Open Thread",
+        "category": "Muniment"
       }
     ],
     "viewsContainers": {
