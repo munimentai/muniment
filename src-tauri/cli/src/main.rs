@@ -313,11 +313,26 @@ fn render_open_page(page: &ThreadOpenPage) -> String {
 }
 
 fn render_run_event(event: &RedactedRunEvent) -> String {
+    let detail = match event.event_type.as_str() {
+        "tool.requested" => "Tool queued",
+        "tool.effect.started" => "Tool running",
+        "tool.effect.completed" => "Tool completed",
+        "tool.effect.failed" => "Tool failed",
+        _ => {
+            return format!(
+                "{}\t{}\t{}",
+                event.run_seq,
+                one_line(&event.event_type),
+                one_line(&event.recorded_at)
+            );
+        }
+    };
     format!(
-        "{}\t{}\t{}",
+        "{}\t{}\t{}\t{}",
         event.run_seq,
         one_line(&event.event_type),
-        one_line(&event.recorded_at)
+        one_line(&event.recorded_at),
+        detail
     )
 }
 
@@ -421,6 +436,31 @@ mod tests {
         assert!(matches!(failed, CliError::RunFailed));
         assert!(guidance(&failed).contains("run failed"));
         assert!(terminal_result("assistant.message").is_none());
+    }
+
+    #[test]
+    fn run_rendering_adds_bounded_inline_tool_lifecycle_details() {
+        let event = |run_seq, event_type: &str| RedactedRunEvent {
+            run_seq,
+            event_type: event_type.into(),
+            event_version: 1,
+            recorded_at: "2026-07-18T15:50:00Z".into(),
+        };
+        for (event_type, detail) in [
+            ("tool.requested", "Tool queued"),
+            ("tool.effect.started", "Tool running"),
+            ("tool.effect.completed", "Tool completed"),
+            ("tool.effect.failed", "Tool failed"),
+        ] {
+            assert_eq!(
+                render_run_event(&event(4, event_type)),
+                format!("4\t{event_type}\t2026-07-18T15:50:00Z\t{detail}")
+            );
+        }
+        assert_eq!(
+            render_run_event(&event(5, "tool.effect.future\n\u{1b}[31m")),
+            "5\ttool.effect.future  [31m\t2026-07-18T15:50:00Z"
+        );
     }
 
     #[test]
