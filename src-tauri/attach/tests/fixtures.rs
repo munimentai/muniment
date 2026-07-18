@@ -98,6 +98,13 @@ fn next_export_recovers_interrupted_staging_without_disturbing_live_fixtures() {
     for (name, bytes) in &expected {
         fs::write(displaced.join(name), bytes).unwrap();
     }
+    #[cfg(windows)]
+    let abandoned_generation = {
+        let path = live.with_file_name(".1.generation.999999.44");
+        fs::create_dir(&path).unwrap();
+        fs::write(path.join("partial.json"), b"partial\n").unwrap();
+        path
+    };
     let running = Arc::new(AtomicBool::new(true));
     let reader_live = live.clone();
     let reader_running = Arc::clone(&running);
@@ -114,6 +121,8 @@ fn next_export_recovers_interrupted_staging_without_disturbing_live_fixtures() {
 
     assert!(!stale.exists());
     assert!(!displaced.exists());
+    #[cfg(windows)]
+    assert!(!abandoned_generation.exists());
     assert_eq!(read_fixtures(&live), expected);
 }
 

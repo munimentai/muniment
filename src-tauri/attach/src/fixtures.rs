@@ -35,7 +35,17 @@ pub fn export(root: &Path, mode: Mode) -> io::Result<()> {
         .expect("the fixture directory always has a parent");
     fs::create_dir_all(parent)?;
     let _export_lock = ExportLock::acquire(&target.with_file_name(".1.export.lock"))?;
+    #[cfg(windows)]
+    if target.is_dir() && !is_reparse_point(&target)? && check(&target, &expected).is_ok() {
+        // A Git checkout materializes the checked-in fixture directory as a
+        // regular directory. It already contains the requested generation,
+        // so there is nothing to publish. Subsequent generated targets use a
+        // junction, whose destination can be changed atomically.
+        return Ok(());
+    }
     remove_stale_staging(parent)?;
+    #[cfg(windows)]
+    remove_stale_generations(parent, &target)?;
     let export_id = NEXT_EXPORT.fetch_add(1, Ordering::Relaxed);
     let staging = sibling_path(&target, "staging", export_id);
     remove_if_present(&staging)?;
@@ -146,11 +156,33 @@ fn remove_stale_staging(parent: &Path) -> io::Result<()> {
     Ok(())
 }
 
+#[cfg(windows)]
+fn remove_stale_generations(parent: &Path, target: &Path) -> io::Result<()> {
+    let live = fs::canonicalize(target).ok();
+    for entry in fs::read_dir(parent)? {
+        let entry = entry?;
+        if entry
+            .file_name()
+            .to_string_lossy()
+            .starts_with(".1.generation.")
+            && live.as_ref() != Some(&fs::canonicalize(entry.path())?)
+        {
+            remove_if_present(&entry.path())?;
+        }
+    }
+    Ok(())
+}
+
 fn publish(staging: &Path, target: &Path) -> io::Result<()> {
+    #[cfg(windows)]
+    return atomic_exchange(staging, target);
+
+    #[cfg(not(windows))]
     if !target.exists() {
         return fs::rename(staging, target);
     }
 
+    #[cfg(not(windows))]
     atomic_exchange(staging, target)
 }
 
@@ -212,89 +244,117 @@ fn atomic_exchange(left: &Path, right: &Path) -> io::Result<()> {
 
 #[cfg(windows)]
 fn atomic_exchange(left: &Path, right: &Path) -> io::Result<()> {
-    use std::{os::windows::ffi::OsStrExt, ptr};
-
-    type Handle = *mut core::ffi::c_void;
-    const MOVEFILE_REPLACE_EXISTING: u32 = 1;
-    const INVALID_HANDLE_VALUE: Handle = -1_isize as Handle;
-    #[link(name = "KtmW32")]
-    unsafe extern "system" {
-        fn CreateTransaction(
-            attributes: *const core::ffi::c_void,
-            uow: *const core::ffi::c_void,
-            options: u32,
-            isolation_level: u32,
-            isolation_flags: u32,
-            timeout: u32,
-            description: *const u16,
-        ) -> Handle;
-        fn CommitTransaction(transaction: Handle) -> i32;
-    }
-    unsafe extern "system" {
-        fn MoveFileTransactedW(
-            existing: *const u16,
-            new: *const u16,
-            progress: *const core::ffi::c_void,
-            data: *const core::ffi::c_void,
-            flags: u32,
-            transaction: Handle,
-        ) -> i32;
-        fn CloseHandle(handle: Handle) -> i32;
-    }
-
-    let displaced = left.with_file_name(format!(
-        ".1.staging.{}.{}.displaced",
+    let generation = left.with_file_name(format!(
+        ".1.generation.{}.{}",
         std::process::id(),
         NEXT_EXPORT.fetch_add(1, Ordering::Relaxed)
     ));
-    let wide = |path: &Path| {
-        path.as_os_str()
-            .encode_wide()
-            .chain(std::iter::once(0))
-            .collect::<Vec<_>>()
-    };
-    let left = wide(left);
-    let right = wide(right);
-    let displaced_wide = wide(&displaced);
-    // SAFETY: all pointers passed below reference live, NUL-terminated buffers;
-    // the transaction handle is closed on every path after successful creation.
-    let transaction =
-        unsafe { CreateTransaction(ptr::null(), ptr::null(), 0, 0, 0, 0, ptr::null()) };
-    if transaction == INVALID_HANDLE_VALUE {
-        return Err(io::Error::last_os_error());
-    }
-    let moved_old = unsafe {
-        MoveFileTransactedW(
-            right.as_ptr(),
-            displaced_wide.as_ptr(),
-            ptr::null(),
-            ptr::null(),
-            MOVEFILE_REPLACE_EXISTING,
-            transaction,
-        )
-    } != 0;
-    let moved_new = moved_old
-        && unsafe {
-            MoveFileTransactedW(
-                left.as_ptr(),
-                right.as_ptr(),
-                ptr::null(),
-                ptr::null(),
-                MOVEFILE_REPLACE_EXISTING,
-                transaction,
-            )
-        } != 0;
-    let committed = moved_new && unsafe { CommitTransaction(transaction) } != 0;
-    let error = if committed {
-        None
-    } else {
-        Some(io::Error::last_os_error())
-    };
-    unsafe { CloseHandle(transaction) };
-    if let Some(error) = error {
+    fs::rename(left, &generation)?;
+    if let Err(error) = set_junction(right, &generation) {
+        let _ = fs::rename(&generation, left);
         return Err(error);
     }
-    remove_if_present(&displaced)
+    Ok(())
+}
+
+#[cfg(windows)]
+fn is_reparse_point(path: &Path) -> io::Result<bool> {
+    use std::os::windows::fs::MetadataExt;
+
+    const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
+    Ok(fs::symlink_metadata(path)?.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0)
+}
+
+#[cfg(windows)]
+fn set_junction(junction: &Path, destination: &Path) -> io::Result<()> {
+    use std::{
+        os::windows::ffi::OsStrExt, os::windows::fs::OpenOptionsExt, os::windows::io::AsRawHandle,
+    };
+
+    const FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x0200_0000;
+    const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+    const GENERIC_WRITE: u32 = 0x4000_0000;
+    const IO_REPARSE_TAG_MOUNT_POINT: u32 = 0xA000_0003;
+    const FSCTL_SET_REPARSE_POINT: u32 = 0x0009_00A4;
+    let destination = fs::canonicalize(destination)?;
+    let mut print: Vec<u16> = destination.as_os_str().encode_wide().collect();
+    const VERBATIM_PREFIX: [u16; 4] = [b'\\' as u16, b'\\' as u16, b'?' as u16, b'\\' as u16];
+    if print.starts_with(&VERBATIM_PREFIX) {
+        print.drain(..VERBATIM_PREFIX.len());
+    }
+    if print.starts_with(&[b'U' as u16, b'N' as u16, b'C' as u16, b'\\' as u16]) {
+        return Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "fixture junction generations must be on a local volume",
+        ));
+    }
+    let mut substitute: Vec<u16> = r"\??\".encode_utf16().collect();
+    substitute.extend(&print);
+    let path_bytes = (substitute.len() + 1 + print.len() + 1) * 2;
+    let data_length = 8 + path_bytes;
+    if data_length > 16 * 1024 - 8 || data_length > u16::MAX as usize {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "fixture junction path is too long",
+        ));
+    }
+    let mut buffer = Vec::with_capacity(8 + data_length);
+    buffer.extend_from_slice(&IO_REPARSE_TAG_MOUNT_POINT.to_le_bytes());
+    buffer.extend_from_slice(&(data_length as u16).to_le_bytes());
+    buffer.extend_from_slice(&0_u16.to_le_bytes());
+    buffer.extend_from_slice(&0_u16.to_le_bytes());
+    buffer.extend_from_slice(&((substitute.len() * 2) as u16).to_le_bytes());
+    buffer.extend_from_slice(&(((substitute.len() + 1) * 2) as u16).to_le_bytes());
+    buffer.extend_from_slice(&((print.len() * 2) as u16).to_le_bytes());
+    for unit in substitute
+        .iter()
+        .chain(std::iter::once(&0))
+        .chain(print.iter())
+        .chain(std::iter::once(&0))
+    {
+        buffer.extend_from_slice(&unit.to_le_bytes());
+    }
+
+    if !junction.exists() {
+        fs::create_dir(junction)?;
+    }
+    let file = OpenOptions::new()
+        .access_mode(GENERIC_WRITE)
+        .share_mode(7)
+        .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT)
+        .open(junction)?;
+    unsafe extern "system" {
+        fn DeviceIoControl(
+            device: *mut core::ffi::c_void,
+            control_code: u32,
+            input: *const core::ffi::c_void,
+            input_size: u32,
+            output: *mut core::ffi::c_void,
+            output_size: u32,
+            returned: *mut u32,
+            overlapped: *mut core::ffi::c_void,
+        ) -> i32;
+    }
+    let mut returned = 0;
+    // SAFETY: the handle and input buffer remain valid for this synchronous
+    // call; no output or OVERLAPPED structure is requested.
+    if unsafe {
+        DeviceIoControl(
+            file.as_raw_handle(),
+            FSCTL_SET_REPARSE_POINT,
+            buffer.as_ptr().cast(),
+            buffer.len() as u32,
+            std::ptr::null_mut(),
+            0,
+            &mut returned,
+            std::ptr::null_mut(),
+        )
+    } == 0
+    {
+        Err(io::Error::last_os_error())
+    } else {
+        Ok(())
+    }
 }
 
 #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "ios", windows)))]
