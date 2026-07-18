@@ -4,7 +4,6 @@ use std::{
     sync::atomic::{AtomicUsize, Ordering},
 };
 
-#[cfg(any(target_os = "linux", target_os = "macos"))]
 use std::sync::{atomic::AtomicBool, Arc};
 
 use muniment_attach::fixtures::{export, Mode, FIXTURE_DIRECTORY};
@@ -51,7 +50,6 @@ fn export_is_deterministic_and_replaces_obsolete_files() {
     }));
 }
 
-#[cfg(any(target_os = "linux", target_os = "macos"))]
 #[test]
 fn replacement_never_exposes_a_missing_or_partial_live_directory() {
     let root = TestDirectory::new();
@@ -84,6 +82,39 @@ fn replacement_never_exposes_a_missing_or_partial_live_directory() {
     }
     running.store(false, Ordering::Release);
     reader.join().unwrap();
+}
+
+#[test]
+fn next_export_recovers_interrupted_staging_without_disturbing_live_fixtures() {
+    let root = TestDirectory::new();
+    export(&root.0, Mode::Write).unwrap();
+    let live = fixture_dir(&root.0);
+    let expected = read_fixtures(&live);
+    let stale = live.with_file_name(".1.staging.999999.42");
+    fs::create_dir(&stale).unwrap();
+    fs::write(stale.join("partial.json"), b"partial\n").unwrap();
+    let displaced = live.with_file_name(".1.staging.999999.43.displaced");
+    fs::create_dir(&displaced).unwrap();
+    for (name, bytes) in &expected {
+        fs::write(displaced.join(name), bytes).unwrap();
+    }
+    let running = Arc::new(AtomicBool::new(true));
+    let reader_live = live.clone();
+    let reader_running = Arc::clone(&running);
+    let reader_expected = expected.clone();
+    let reader = std::thread::spawn(move || {
+        while reader_running.load(Ordering::Acquire) {
+            assert_eq!(read_fixtures(&reader_live), reader_expected);
+        }
+    });
+
+    export(&root.0, Mode::Write).unwrap();
+    running.store(false, Ordering::Release);
+    reader.join().unwrap();
+
+    assert!(!stale.exists());
+    assert!(!displaced.exists());
+    assert_eq!(read_fixtures(&live), expected);
 }
 
 #[test]

@@ -1,6 +1,7 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
-    fs, io,
+    fs::{self, File, OpenOptions},
+    io,
     path::{Path, PathBuf},
     sync::atomic::{AtomicUsize, Ordering},
 };
@@ -33,6 +34,8 @@ pub fn export(root: &Path, mode: Mode) -> io::Result<()> {
         .parent()
         .expect("the fixture directory always has a parent");
     fs::create_dir_all(parent)?;
+    let _export_lock = ExportLock::acquire(&target.with_file_name(".1.export.lock"))?;
+    remove_stale_staging(parent)?;
     let export_id = NEXT_EXPORT.fetch_add(1, Ordering::Relaxed);
     let staging = sibling_path(&target, "staging", export_id);
     remove_if_present(&staging)?;
@@ -45,6 +48,102 @@ pub fn export(root: &Path, mode: Mode) -> io::Result<()> {
     // After an exchange, staging contains the complete displaced generation.
     // Removing it cannot make the live target absent or partially populated.
     remove_if_present(&staging)
+}
+
+struct ExportLock {
+    _file: File,
+}
+
+impl ExportLock {
+    fn acquire(path: &Path) -> io::Result<Self> {
+        let file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(path)?;
+        lock_exclusive(&file)?;
+        Ok(Self { _file: file })
+    }
+}
+
+#[cfg(unix)]
+fn lock_exclusive(file: &File) -> io::Result<()> {
+    use std::os::fd::AsRawFd;
+
+    const LOCK_EX: i32 = 2;
+    unsafe extern "C" {
+        fn flock(fd: i32, operation: i32) -> i32;
+    }
+    // SAFETY: flock only borrows the valid descriptor for the duration of the call.
+    if unsafe { flock(file.as_raw_fd(), LOCK_EX) } == 0 {
+        Ok(())
+    } else {
+        Err(io::Error::last_os_error())
+    }
+}
+
+#[cfg(windows)]
+fn lock_exclusive(file: &File) -> io::Result<()> {
+    use std::os::windows::io::AsRawHandle;
+
+    #[repr(C)]
+    struct Overlapped {
+        internal: usize,
+        internal_high: usize,
+        offset: u32,
+        offset_high: u32,
+        event: *mut core::ffi::c_void,
+    }
+    unsafe extern "system" {
+        fn LockFileEx(
+            file: *mut core::ffi::c_void,
+            flags: u32,
+            reserved: u32,
+            bytes_low: u32,
+            bytes_high: u32,
+            overlapped: *mut Overlapped,
+        ) -> i32;
+    }
+    const LOCKFILE_EXCLUSIVE_LOCK: u32 = 2;
+    let mut overlapped = Overlapped {
+        internal: 0,
+        internal_high: 0,
+        offset: 0,
+        offset_high: 0,
+        event: std::ptr::null_mut(),
+    };
+    // SAFETY: the file and stack-allocated OVERLAPPED remain valid until the
+    // synchronous lock request completes.
+    if unsafe {
+        LockFileEx(
+            file.as_raw_handle(),
+            LOCKFILE_EXCLUSIVE_LOCK,
+            0,
+            1,
+            0,
+            &mut overlapped,
+        )
+    } != 0
+    {
+        Ok(())
+    } else {
+        Err(io::Error::last_os_error())
+    }
+}
+
+fn remove_stale_staging(parent: &Path) -> io::Result<()> {
+    for entry in fs::read_dir(parent)? {
+        let entry = entry?;
+        if entry
+            .file_name()
+            .to_string_lossy()
+            .starts_with(".1.staging.")
+        {
+            remove_if_present(&entry.path())?;
+        }
+    }
+    Ok(())
 }
 
 fn publish(staging: &Path, target: &Path) -> io::Result<()> {
@@ -111,13 +210,95 @@ fn atomic_exchange(left: &Path, right: &Path) -> io::Result<()> {
     }
 }
 
-#[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "ios")))]
-fn atomic_exchange(_left: &Path, _right: &Path) -> io::Result<()> {
-    Err(io::Error::new(
-        io::ErrorKind::Unsupported,
-        "atomic fixture directory replacement is not supported on this platform",
-    ))
+#[cfg(windows)]
+fn atomic_exchange(left: &Path, right: &Path) -> io::Result<()> {
+    use std::{os::windows::ffi::OsStrExt, ptr};
+
+    type Handle = *mut core::ffi::c_void;
+    const MOVEFILE_REPLACE_EXISTING: u32 = 1;
+    const INVALID_HANDLE_VALUE: Handle = -1_isize as Handle;
+    #[link(name = "KtmW32")]
+    unsafe extern "system" {
+        fn CreateTransaction(
+            attributes: *const core::ffi::c_void,
+            uow: *const core::ffi::c_void,
+            options: u32,
+            isolation_level: u32,
+            isolation_flags: u32,
+            timeout: u32,
+            description: *const u16,
+        ) -> Handle;
+        fn CommitTransaction(transaction: Handle) -> i32;
+    }
+    unsafe extern "system" {
+        fn MoveFileTransactedW(
+            existing: *const u16,
+            new: *const u16,
+            progress: *const core::ffi::c_void,
+            data: *const core::ffi::c_void,
+            flags: u32,
+            transaction: Handle,
+        ) -> i32;
+        fn CloseHandle(handle: Handle) -> i32;
+    }
+
+    let displaced = left.with_file_name(format!(
+        ".1.staging.{}.{}.displaced",
+        std::process::id(),
+        NEXT_EXPORT.fetch_add(1, Ordering::Relaxed)
+    ));
+    let wide = |path: &Path| {
+        path.as_os_str()
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect::<Vec<_>>()
+    };
+    let left = wide(left);
+    let right = wide(right);
+    let displaced_wide = wide(&displaced);
+    // SAFETY: all pointers passed below reference live, NUL-terminated buffers;
+    // the transaction handle is closed on every path after successful creation.
+    let transaction =
+        unsafe { CreateTransaction(ptr::null(), ptr::null(), 0, 0, 0, 0, ptr::null()) };
+    if transaction == INVALID_HANDLE_VALUE {
+        return Err(io::Error::last_os_error());
+    }
+    let moved_old = unsafe {
+        MoveFileTransactedW(
+            right.as_ptr(),
+            displaced_wide.as_ptr(),
+            ptr::null(),
+            ptr::null(),
+            MOVEFILE_REPLACE_EXISTING,
+            transaction,
+        )
+    } != 0;
+    let moved_new = moved_old
+        && unsafe {
+            MoveFileTransactedW(
+                left.as_ptr(),
+                right.as_ptr(),
+                ptr::null(),
+                ptr::null(),
+                MOVEFILE_REPLACE_EXISTING,
+                transaction,
+            )
+        } != 0;
+    let committed = moved_new && unsafe { CommitTransaction(transaction) } != 0;
+    let error = if committed {
+        None
+    } else {
+        Some(io::Error::last_os_error())
+    };
+    unsafe { CloseHandle(transaction) };
+    if let Some(error) = error {
+        return Err(error);
+    }
+    remove_if_present(&displaced)
 }
+
+#[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "ios", windows)))]
+compile_error!("atomic fixture publication is not implemented for this platform");
 
 fn fixture_bytes() -> io::Result<BTreeMap<&'static str, Vec<u8>>> {
     let request_id = id(1)?;
