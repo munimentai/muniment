@@ -159,7 +159,23 @@ pub struct RunEventProjection {
     pub event_type: String,
     pub event_version: u32,
     pub recorded_at: String,
+    pub pending_permission: Option<PendingPermissionProjection>,
 }
+
+/// The bounded allow/deny context retained separately from a journal envelope.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PendingPermissionProjection {
+    pub gate_id: String,
+    pub kind: String,
+    pub title: String,
+    pub message: Option<String>,
+    pub valid: bool,
+}
+
+const MAX_PENDING_GATE_ID_BYTES: usize = 256;
+const MAX_PENDING_KIND_BYTES: usize = 32;
+const MAX_PENDING_TITLE_BYTES: usize = 1_024;
+const MAX_PENDING_MESSAGE_BYTES: usize = 4_096;
 
 #[derive(Debug)]
 pub enum RunEventPageError {
@@ -350,11 +366,15 @@ impl RunJournal {
         }
         let mut statement = connection
             .prepare(
-                "SELECT run_id,run_seq,event_type,event_version,recorded_at, \
-                 length(CAST(run_id AS BLOB))+length(CAST(event_type AS BLOB))+ \
-                 length(CAST(recorded_at AS BLOB)) \
-                 FROM events WHERE run_id=?1 AND run_seq>?2 \
-                 AND run_seq<=?3 ORDER BY run_seq LIMIT ?4",
+                "SELECT e.run_id,e.run_seq,e.event_type,e.event_version,e.recorded_at, \
+                 length(CAST(e.run_id AS BLOB))+length(CAST(e.event_type AS BLOB))+ \
+                 length(CAST(e.recorded_at AS BLOB))+COALESCE(length(CAST(p.gate_id AS BLOB)),0)+ \
+                 COALESCE(length(CAST(p.kind AS BLOB)),0)+COALESCE(length(CAST(p.title AS BLOB)),0)+ \
+                 COALESCE(length(CAST(p.message AS BLOB)),0),p.gate_id,p.kind,p.title,p.message,p.valid \
+                 FROM events e LEFT JOIN permission_pending_projection p \
+                 ON p.run_id=e.run_id AND p.run_seq=e.run_seq \
+                 WHERE e.run_id=?1 AND e.run_seq>?2 \
+                 AND e.run_seq<=?3 ORDER BY e.run_seq LIMIT ?4",
             )
             .map_err(JournalError::from)
             .map_err(RunEventPageError::Journal)?;
@@ -381,6 +401,31 @@ impl RunJournal {
                 event_type: row.get(2).map_err(JournalError::from)?,
                 event_version: row.get(3).map_err(JournalError::from)?,
                 recorded_at: row.get(4).map_err(JournalError::from)?,
+                pending_permission: if row.get::<_, String>(2).map_err(JournalError::from)?
+                    == "permission.requested"
+                {
+                    Some(PendingPermissionProjection {
+                        gate_id: row
+                            .get::<_, Option<String>>(6)
+                            .map_err(JournalError::from)?
+                            .unwrap_or_default(),
+                        kind: row
+                            .get::<_, Option<String>>(7)
+                            .map_err(JournalError::from)?
+                            .unwrap_or_default(),
+                        title: row
+                            .get::<_, Option<String>>(8)
+                            .map_err(JournalError::from)?
+                            .unwrap_or_default(),
+                        message: row.get(9).map_err(JournalError::from)?,
+                        valid: row
+                            .get::<_, Option<bool>>(10)
+                            .map_err(JournalError::from)?
+                            .unwrap_or(false),
+                    })
+                } else {
+                    None
+                },
             });
             retained_bytes += field_bytes;
         }
@@ -472,7 +517,10 @@ impl RunJournal {
              valid_until_seq INTEGER, run_seq INTEGER NOT NULL, kind TEXT NOT NULL, text TEXT, \
              PRIMARY KEY(run_id, ordinal, valid_from_seq)); \
              CREATE INDEX IF NOT EXISTS thread_projection_versions_page \
-             ON thread_projection_versions(run_id, ordinal, valid_from_seq, valid_until_seq);",
+             ON thread_projection_versions(run_id, ordinal, valid_from_seq, valid_until_seq); \
+             CREATE TABLE IF NOT EXISTS permission_pending_projection( \
+             run_id TEXT NOT NULL, run_seq INTEGER NOT NULL, gate_id TEXT, kind TEXT, \
+             title TEXT, message TEXT, valid INTEGER NOT NULL, PRIMARY KEY(run_id, run_seq));",
         )?;
         // Journals created by the first projection implementation have only a
         // current row. Treat that row as the initial version; new writes use
@@ -546,6 +594,7 @@ impl RunJournal {
             params![event.event_id,event.run_id,event.event_type,event.event_version,event.envelope_version,event.recorded_at,canonical],
         )?;
         update_thread_projection(&tx, event)?;
+        update_permission_pending_projection(&tx, event)?;
         tx.execute(
             "INSERT INTO run_workspaces(run_id, workspace) VALUES(?1, ?2)",
             params![event.run_id, workspace],
@@ -635,6 +684,7 @@ impl RunJournal {
             }
             result?;
             update_thread_projection(&tx, event)?;
+            update_permission_pending_projection(&tx, event)?;
         }
         tx.commit()?;
         publish_commit_hint(
@@ -848,6 +898,10 @@ impl RunJournal {
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
         let hashes = referenced_hashes_for_run(&tx, Some(run_id))?;
         tx.execute("DELETE FROM events WHERE run_id=?1", [run_id])?;
+        tx.execute(
+            "DELETE FROM permission_pending_projection WHERE run_id=?1",
+            [run_id],
+        )?;
         tx.execute(
             "DELETE FROM thread_projection_entries WHERE run_id=?1",
             [run_id],
@@ -1258,6 +1312,16 @@ CREATE TABLE events (
  UNIQUE(run_id, run_seq)
 ) STRICT;
 CREATE INDEX events_run_order ON events(run_id, run_seq);
+CREATE TABLE permission_pending_projection (
+ run_id TEXT NOT NULL,
+ run_seq INTEGER NOT NULL,
+ gate_id TEXT,
+ kind TEXT,
+ title TEXT,
+ message TEXT,
+ valid INTEGER NOT NULL,
+ PRIMARY KEY(run_id, run_seq)
+) STRICT;
 CREATE TABLE run_workspaces (
  run_id TEXT PRIMARY KEY NOT NULL,
  workspace TEXT NOT NULL
@@ -1304,6 +1368,50 @@ COMMIT;
 // this many bytes per appended byte, so projection storage remains linearly
 // bounded even for a stream made up of one-byte deltas.
 const PROJECTION_TEXT_CHUNK: usize = 64;
+
+fn update_permission_pending_projection(
+    tx: &rusqlite::Transaction<'_>,
+    event: &EventEnvelope,
+) -> Result<(), JournalError> {
+    if event.event_type != "permission.requested" {
+        return Ok(());
+    }
+    let fields = match &event.payload {
+        EventPayload::Inline { payload_json } => {
+            let gate_id = payload_json.get("gate_id").and_then(Value::as_str);
+            let kind = payload_json.get("kind").and_then(Value::as_str);
+            let title = payload_json.get("title").and_then(Value::as_str);
+            let message = payload_json.get("message").and_then(Value::as_str);
+            match (gate_id, kind, title) {
+                (Some(gate_id), Some("confirm"), Some(title))
+                    if !gate_id.trim().is_empty()
+                        && gate_id.len() <= MAX_PENDING_GATE_ID_BYTES
+                        && "confirm".len() <= MAX_PENDING_KIND_BYTES
+                        && !title.trim().is_empty()
+                        && title.len() <= MAX_PENDING_TITLE_BYTES
+                        && message.is_none_or(|value| value.len() <= MAX_PENDING_MESSAGE_BYTES) =>
+                {
+                    Some((gate_id, "confirm", title, message))
+                }
+                _ => None,
+            }
+        }
+        _ => None,
+    };
+    if let Some((gate_id, kind, title, message)) = fields {
+        tx.execute(
+            "INSERT INTO permission_pending_projection(run_id,run_seq,gate_id,kind,title,message,valid) \
+             VALUES(?1,?2,?3,?4,?5,?6,1)",
+            params![event.run_id, event.run_seq, gate_id, kind, title, message],
+        )?;
+    } else {
+        tx.execute(
+            "INSERT INTO permission_pending_projection(run_id,run_seq,valid) VALUES(?1,?2,0)",
+            params![event.run_id, event.run_seq],
+        )?;
+    }
+    Ok(())
+}
 
 fn update_thread_projection(
     tx: &rusqlite::Transaction<'_>,

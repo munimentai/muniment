@@ -303,6 +303,7 @@ fn stream_projection(run_id: &str, run_seq: u64, event_type: String) -> RunEvent
         event_type,
         event_version: 1,
         recorded_at: "2026-07-16T03:00:00Z".into(),
+        pending_permission: None,
     }
 }
 
@@ -942,6 +943,71 @@ fn authorized_run_stream_catches_up_in_order_with_redacted_projection() {
     };
     assert_eq!(caught_up.event, EventName::SubscriptionCaughtUp);
     assert_eq!(caught_up.subscription_id.as_str(), subscription);
+}
+
+#[test]
+fn authorized_run_stream_delivers_exact_bounded_pending_permission() {
+    const RUN: &str = "0190a100-0000-7000-8000-000000000041";
+    let mut started = prompt(RUN, "private prompt", "2026-07-16T03:00:00Z");
+    let mut permission = prompt(RUN, "unused", "2026-07-16T03:00:01Z");
+    permission.event_id = "0190a200-0000-7000-8001-000000000041".into();
+    permission.run_seq = 2;
+    permission.event_type = "permission.requested".into();
+    permission.payload = EventPayload::Inline {
+        payload_json: json!({
+            "gate_id": "gate-41", "kind": "confirm", "title": "Allow search?",
+            "message": "Search the public web", "secret": "never emit me",
+            "command": "rm private", "path": "/private/path"
+        }),
+    };
+    started.event_id = "0190a200-0000-7000-8001-000000000040".into();
+    let mut journal = RunJournal::open(":memory:").unwrap();
+    journal.append_batch(0, &[started, permission]).unwrap();
+    journal.bind_run_workspace(RUN, "workspace-1").unwrap();
+
+    let (mut client, server) = UnixStream::pair().unwrap();
+    client.write_all(&hello(1, 1)).unwrap();
+    client
+        .write_all(&request(
+            43,
+            Operation::RunStream,
+            json!({"run_id": RUN, "after_run_seq": 0}),
+        ))
+        .unwrap();
+    client.shutdown(Shutdown::Write).unwrap();
+    assert_eq!(
+        dispatch_session(
+            &mut client,
+            server,
+            TestClock(Rc::new(Cell::new(Duration::ZERO))),
+            &mut journal,
+        ),
+        Ok(())
+    );
+    let response: Response = read_frame(&mut client);
+    let subscription = response.body["subscription_id"].as_str().unwrap();
+    let Envelope::Event(first) = read_frame::<Envelope>(&mut client) else {
+        panic!("expected withheld run event")
+    };
+    assert_eq!(first.event, EventName::RunEvent);
+    let Envelope::Event(pending) = read_frame::<Envelope>(&mut client) else {
+        panic!("expected pending permission")
+    };
+    assert_eq!(pending.event, EventName::PermissionPending);
+    assert_eq!(pending.subscription_id.as_str(), subscription);
+    assert_eq!(pending.run_id.as_ref().unwrap().as_str(), RUN);
+    assert_eq!(pending.run_seq, Some(2));
+    assert_eq!(
+        pending.body,
+        json!({
+            "gate_id": "gate-41", "kind": "confirm", "title": "Allow search?",
+            "message": "Search the public web"
+        })
+    );
+    let Envelope::Event(caught_up) = read_frame::<Envelope>(&mut client) else {
+        panic!("expected caught-up marker")
+    };
+    assert_eq!(caught_up.event, EventName::SubscriptionCaughtUp);
 }
 
 #[test]
@@ -1728,6 +1794,13 @@ fn file_journal_run_stream_stays_live_and_ignores_other_run_commits() {
     let mut committed = prompt(RUN, "private-live", "2026-07-16T03:00:01Z");
     committed.event_id = "0190a200-0000-7000-8001-000000000028".into();
     committed.run_seq = 2;
+    committed.event_type = "permission.requested".into();
+    committed.payload = EventPayload::Inline {
+        payload_json: json!({
+            "gate_id": "live-gate", "kind": "confirm", "title": "Allow live action?",
+            "message": "Continue the running task", "private": "private-live"
+        }),
+    };
     writer.append_batch(1, &[committed]).unwrap();
     client
         .set_read_timeout(Some(Duration::from_secs(2)))
@@ -1735,9 +1808,15 @@ fn file_journal_run_stream_stays_live_and_ignores_other_run_commits() {
     let Envelope::Event(event) = read_frame::<Envelope>(&mut client) else {
         panic!("expected live run event")
     };
-    assert_eq!(event.event, EventName::RunEvent);
+    assert_eq!(event.event, EventName::PermissionPending);
     assert_eq!(event.run_seq, Some(2));
-    assert_eq!(event.body["payload"], json!({"withheld": true}));
+    assert_eq!(
+        event.body,
+        json!({
+            "gate_id": "live-gate", "kind": "confirm", "title": "Allow live action?",
+            "message": "Continue the running task"
+        })
+    );
     assert!(!format!("{event:?}").contains("private-live"));
 
     client.shutdown(Shutdown::Write).unwrap();

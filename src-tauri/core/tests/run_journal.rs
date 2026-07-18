@@ -86,6 +86,48 @@ fn cas_payload(hash: &str) -> EventPayload {
 }
 
 #[test]
+fn pending_permission_projection_is_bounded_and_hostile_inputs_are_invalid() {
+    let cases = [
+        EventPayload::Inline {
+            payload_json: json!({
+                "gate_id": "g", "kind": "select", "title": "Unsupported",
+                "options": ["private option"]
+            }),
+        },
+        EventPayload::Inline {
+            payload_json: json!({
+                "gate_id": "g", "kind": "confirm", "title": "x".repeat(1_025),
+                "message": "private"
+            }),
+        },
+        cas_payload(&"ab".repeat(32)),
+    ];
+    let mut events = Vec::new();
+    for (index, payload) in cases.into_iter().enumerate() {
+        let seq = index as u64 + 1;
+        let mut pending = event(seq);
+        pending.event_type = "permission.requested".into();
+        pending.payload = payload;
+        events.push(pending);
+    }
+    let mut journal = RunJournal::open(":memory:").unwrap();
+    journal.append_batch(0, &events).unwrap();
+    journal.bind_run_workspace(RUN, "workspace-1").unwrap();
+
+    let page = journal
+        .workspace_catch_up("workspace-1", RUN, 0, 10, 16 * 1024)
+        .unwrap();
+    assert_eq!(page.events.len(), 3);
+    assert!(page.events.iter().all(|event| {
+        event
+            .pending_permission
+            .as_ref()
+            .is_some_and(|projection| !projection.valid)
+    }));
+    assert!(format!("{:?}", page.events).len() < 2_000);
+}
+
+#[test]
 fn commit_subscription_registration_cannot_miss_a_racing_commit() {
     let db = TestDb::new();
     let mut subscriber = RunJournal::open(&db).unwrap();
