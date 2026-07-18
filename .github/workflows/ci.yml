@@ -167,6 +167,14 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7
 
+      - name: Rust toolchain (bootstrap if missing)
+        run: |
+          if ! command -v cargo >/dev/null 2>&1 && [ ! -x "$HOME/.cargo/bin/cargo" ]; then
+            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+              | sh -s -- -y --profile minimal --default-toolchain stable
+          fi
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+
       - name: Rust contract tests
         run: cargo test --manifest-path src-tauri/Cargo.toml --package muniment-attach --locked
 
