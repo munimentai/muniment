@@ -1189,9 +1189,16 @@ fn run_stream_rejects_missing_scope_other_workspace_and_strictly_malformed_bodie
     ];
     for (has_scope, body, expected) in cases {
         let mut journal = RunJournal::open(":memory:").unwrap();
-        journal
-            .append(0, &prompt(RUN, "private", "2026-07-16T03:00:00Z"))
-            .unwrap();
+        let mut permission = prompt(RUN, "unused", "2026-07-16T03:00:00Z");
+        permission.event_type = "permission.requested".into();
+        permission.payload = EventPayload::Inline {
+            payload_json: json!({
+                "gate_id": "other-workspace-private-gate", "kind": "confirm",
+                "title": "Other workspace private title",
+                "message": "other-workspace-private-context"
+            }),
+        };
+        journal.append(0, &permission).unwrap();
         journal.bind_run_workspace(RUN, "workspace-2").unwrap();
         let (mut client, server) = UnixStream::pair().unwrap();
         client.write_all(&hello(1, 1)).unwrap();
@@ -1212,7 +1219,13 @@ fn run_stream_rejects_missing_scope_other_workspace_and_strictly_malformed_bodie
         );
         let error: ErrorEnvelope = read_frame(&mut client);
         assert_eq!(error.error.code(), expected);
-        assert!(!serde_json::to_string(&error).unwrap().contains("private"));
+        let encoded = serde_json::to_string(&error).unwrap();
+        assert!(!encoded.contains("other-workspace-private-gate"));
+        assert!(!encoded.contains("Other workspace private title"));
+        assert!(!encoded.contains("other-workspace-private-context"));
+        let mut remaining = Vec::new();
+        client.read_to_end(&mut remaining).unwrap();
+        assert!(remaining.is_empty());
     }
 }
 

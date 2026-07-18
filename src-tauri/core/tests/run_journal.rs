@@ -146,9 +146,19 @@ fn reopening_pre_projection_journal_backfills_valid_and_hostile_permissions() {
             "message": {"secret": "not text"}, "command": "private command"
         }),
     };
+    let mut oversized = event(3);
+    oversized.event_type = "permission.requested".into();
+    oversized.payload = EventPayload::Inline {
+        payload_json: json!({
+            "gate_id": "oversized-private-gate", "kind": "confirm", "title": "Hostile",
+            "message": "oversized-private-context", "private": "x".repeat(1_000_000)
+        }),
+    };
     {
         let mut journal = RunJournal::open(&db).unwrap();
-        journal.append_batch(0, &[valid, hostile]).unwrap();
+        journal
+            .append_batch(0, &[valid, hostile, oversized])
+            .unwrap();
         journal.bind_run_workspace(RUN, "workspace-1").unwrap();
     }
     let connection = Connection::open(&db).unwrap();
@@ -173,6 +183,15 @@ fn reopening_pre_projection_journal_backfills_valid_and_hostile_permissions() {
     assert_eq!(hostile.kind, "");
     assert_eq!(hostile.title, "");
     assert_eq!(hostile.message, None);
+    let oversized = page.events[2].pending_permission.as_ref().unwrap();
+    assert!(!oversized.valid);
+    assert_eq!(oversized.gate_id, "");
+    assert_eq!(oversized.kind, "");
+    assert_eq!(oversized.title, "");
+    assert_eq!(oversized.message, None);
+    let projected = format!("{oversized:?}");
+    assert!(projected.len() < 200);
+    assert!(!projected.contains("oversized-private"));
 }
 
 #[test]

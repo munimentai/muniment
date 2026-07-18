@@ -176,6 +176,7 @@ const MAX_PENDING_GATE_ID_BYTES: usize = 256;
 const MAX_PENDING_KIND_BYTES: usize = 32;
 const MAX_PENDING_TITLE_BYTES: usize = 1_024;
 const MAX_PENDING_MESSAGE_BYTES: usize = 4_096;
+const MAX_PENDING_BACKFILL_ENVELOPE_BYTES: usize = 16 * 1024;
 
 #[derive(Debug)]
 pub enum RunEventPageError {
@@ -1426,27 +1427,36 @@ fn backfill_permission_pending_projection(connection: &Connection) -> Result<(),
          CASE WHEN valid THEN title END, CASE WHEN valid THEN message END, valid \
          FROM ( \
            SELECT run_id,run_seq,gate_id,kind,title,message, \
-             json_type(envelope_json,'$.payload_json')='object' \
+             bounded AND payload_type='object' \
              AND typeof(gate_id)='text' AND trim(gate_id)<>'' \
-             AND length(CAST(gate_id AS BLOB))<=?1 \
-             AND kind='confirm' AND length(CAST(kind AS BLOB))<=?2 \
+             AND length(CAST(gate_id AS BLOB))<=?2 \
+             AND kind='confirm' AND length(CAST(kind AS BLOB))<=?3 \
              AND typeof(title)='text' AND trim(title)<>'' \
-             AND length(CAST(title AS BLOB))<=?3 \
+             AND length(CAST(title AS BLOB))<=?4 \
              AND (message_type IS NULL OR message_type='null' OR (message_type='text' \
-               AND length(CAST(message AS BLOB))<=?4)) AS valid \
+               AND length(CAST(message AS BLOB))<=?5)) AS valid \
            FROM ( \
-             SELECT run_id,run_seq,envelope_json, \
-               json_extract(envelope_json,'$.payload_json.gate_id') AS gate_id, \
-               json_extract(envelope_json,'$.payload_json.kind') AS kind, \
-               json_extract(envelope_json,'$.payload_json.title') AS title, \
-               json_extract(envelope_json,'$.payload_json.message') AS message, \
-               json_type(envelope_json,'$.payload_json.message') AS message_type \
+             SELECT run_id,run_seq, \
+               length(CAST(envelope_json AS BLOB))<=?1 AS bounded, \
+               CASE WHEN length(CAST(envelope_json AS BLOB))<=?1 \
+                 THEN json_type(envelope_json,'$.payload_json') END AS payload_type, \
+               CASE WHEN length(CAST(envelope_json AS BLOB))<=?1 \
+                 THEN json_extract(envelope_json,'$.payload_json.gate_id') END AS gate_id, \
+               CASE WHEN length(CAST(envelope_json AS BLOB))<=?1 \
+                 THEN json_extract(envelope_json,'$.payload_json.kind') END AS kind, \
+               CASE WHEN length(CAST(envelope_json AS BLOB))<=?1 \
+                 THEN json_extract(envelope_json,'$.payload_json.title') END AS title, \
+               CASE WHEN length(CAST(envelope_json AS BLOB))<=?1 \
+                 THEN json_extract(envelope_json,'$.payload_json.message') END AS message, \
+               CASE WHEN length(CAST(envelope_json AS BLOB))<=?1 \
+                 THEN json_type(envelope_json,'$.payload_json.message') END AS message_type \
              FROM events WHERE event_type='permission.requested' \
                AND NOT EXISTS (SELECT 1 FROM permission_pending_projection p \
                  WHERE p.run_id=events.run_id AND p.run_seq=events.run_seq) \
            ) \
          )",
         params![
+            MAX_PENDING_BACKFILL_ENVELOPE_BYTES,
             MAX_PENDING_GATE_ID_BYTES,
             MAX_PENDING_KIND_BYTES,
             MAX_PENDING_TITLE_BYTES,
