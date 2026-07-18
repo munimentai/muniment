@@ -377,80 +377,26 @@ fn atomic_exchange(left: &Path, right: &Path) -> io::Result<()> {
 
 #[cfg(windows)]
 fn replace_directory(source: &Path, destination: &Path) -> io::Result<()> {
-    use std::{mem, os::windows::ffi::OsStrExt, os::windows::fs::OpenOptionsExt};
-
-    #[repr(C)]
-    struct RenameInfo {
-        flags: u32,
-        root_directory: *mut core::ffi::c_void,
-        file_name_length: u32,
-        file_name: [u16; 1],
+    if !source.is_dir() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "fixture generation is not a directory",
+        ));
     }
 
-    const DELETE: u32 = 0x0001_0000;
-    const FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x0200_0000;
-    const FILE_RENAME_INFO_EX: u32 = 22;
-    const FILE_RENAME_REPLACE_IF_EXISTS: u32 = 1;
-    const FILE_RENAME_POSIX_SEMANTICS: u32 = 2;
-    let destination = fs::canonicalize(
-        destination
-            .parent()
-            .expect("fixture destination always has a parent"),
-    )?
-    .join(
-        destination
-            .file_name()
-            .expect("fixture destination has a name"),
-    );
-    let name: Vec<u16> = destination.as_os_str().encode_wide().collect();
-    let file_name_offset = mem::offset_of!(RenameInfo, file_name);
-    let byte_len = file_name_offset + name.len() * mem::size_of::<u16>();
-    let mut buffer = vec![0_usize; byte_len.div_ceil(mem::size_of::<usize>())];
-    let info = buffer.as_mut_ptr().cast::<RenameInfo>();
-    // SAFETY: `buffer` is suitably aligned and large enough for the fixed
-    // fields and the complete UTF-16 name copied immediately after them.
-    unsafe {
-        (*info).flags = FILE_RENAME_REPLACE_IF_EXISTS | FILE_RENAME_POSIX_SEMANTICS;
-        (*info).root_directory = std::ptr::null_mut();
-        (*info).file_name_length = (name.len() * 2) as u32;
-        std::ptr::copy_nonoverlapping(
-            name.as_ptr(),
-            buffer
-                .as_mut_ptr()
-                .cast::<u8>()
-                .add(file_name_offset)
-                .cast(),
-            name.len(),
-        );
+    let displaced = source.with_extension("displaced");
+    remove_if_present(&displaced)?;
+    fs::rename(destination, &displaced)?;
+    if let Err(error) = fs::rename(source, destination) {
+        fs::rename(&displaced, destination)?;
+        return Err(error);
     }
-    let source = OpenOptions::new()
-        .access_mode(DELETE)
-        .share_mode(7)
-        .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
-        .open(source)?;
-    unsafe extern "system" {
-        fn SetFileInformationByHandle(
-            file: *mut core::ffi::c_void,
-            class: u32,
-            information: *const core::ffi::c_void,
-            size: u32,
-        ) -> i32;
+    if let Err(error) = fs::rename(&displaced, source) {
+        // Publication succeeded, but retain an exporter-owned name so the next
+        // run can reclaim the displaced generation.
+        return Err(error);
     }
-    use std::os::windows::io::AsRawHandle;
-    // SAFETY: the handle and rename buffer remain valid for this synchronous call.
-    if unsafe {
-        SetFileInformationByHandle(
-            source.as_raw_handle(),
-            FILE_RENAME_INFO_EX,
-            buffer.as_ptr().cast(),
-            byte_len as u32,
-        )
-    } == 0
-    {
-        Err(io::Error::last_os_error())
-    } else {
-        Ok(())
-    }
+    Ok(())
 }
 
 #[cfg(all(test, windows))]

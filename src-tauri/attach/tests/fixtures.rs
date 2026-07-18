@@ -87,10 +87,7 @@ fn export_repairs_a_stale_regular_checkout_directory() {
 fn replacement_never_exposes_a_missing_or_partial_live_directory() {
     let root = TestDirectory::new();
     export(&root.0, Mode::Write).unwrap();
-    let expected_names: Vec<_> = read_fixtures(&fixture_dir(&root.0))
-        .into_iter()
-        .map(|(name, _)| name)
-        .collect();
+    let expected = read_fixtures(&fixture_dir(&root.0));
     let running = Arc::new(AtomicBool::new(true));
     let reader_root = root.0.clone();
     let reader_running = Arc::clone(&running);
@@ -98,15 +95,9 @@ fn replacement_never_exposes_a_missing_or_partial_live_directory() {
         while reader_running.load(Ordering::Acquire) {
             let live = fixture_dir(&reader_root);
             assert!(
-                fs::metadata(&live).unwrap().is_dir(),
-                "the live fixture directory must always exist"
+                read_fixtures(&live) == expected,
+                "every leased generation must be complete"
             );
-            for name in &expected_names {
-                assert!(
-                    live.join(name).is_file(),
-                    "every published generation must be complete"
-                );
-            }
         }
     });
 
