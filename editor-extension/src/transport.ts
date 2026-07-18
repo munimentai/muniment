@@ -438,9 +438,9 @@ export function connectAttach(options: ConnectOptions): Promise<AttachConnection
               return decodeThreadOpenPage((await request("thread.open", body)).body, threadId);
             },
             async startRun(text: string, context?: JsonValue): Promise<RunStartAccepted> {
-              validateRunStartInput(text, context);
+              const validatedContext = validateRunStartInput(text, context);
               const body: JsonBody = { text };
-              if (context !== undefined) body.context = context;
+              if (validatedContext !== undefined) body.context = validatedContext;
               return decodeRunStartAccepted((await request("run.start", body, true)).body);
             },
             dispose(): void {
@@ -495,7 +495,7 @@ function validateCursor(cursor: string | undefined, maximum: number): void {
   if (cursor !== undefined) validateBoundedString(cursor, maximum, false);
 }
 
-function validateRunStartInput(text: unknown, context: unknown): void {
+function validateRunStartInput(text: unknown, context: unknown): JsonValue | undefined {
   if (typeof text !== "string" || text.trim().length === 0 ||
       Buffer.byteLength(text) > MAX_RUN_START_TEXT_LENGTH) {
     throw new AttachTransportError("unexpected_message");
@@ -507,10 +507,14 @@ function validateRunStartInput(text: unknown, context: unknown): void {
       if (encoded === undefined || Buffer.byteLength(encoded) > MAX_RUN_START_CONTEXT_LENGTH) {
         throw new AttachTransportError("unexpected_message");
       }
+      const snapshot = JSON.parse(encoded) as unknown;
+      if (!isJsonValue(snapshot)) throw new AttachTransportError("unexpected_message");
+      return snapshot;
     } catch {
       throw new AttachTransportError("unexpected_message");
     }
   }
+  return undefined;
 }
 
 function exactObject(value: unknown, required: readonly string[], optional: readonly string[] = []): Record<string, unknown> {

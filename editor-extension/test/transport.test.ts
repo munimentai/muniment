@@ -192,6 +192,33 @@ test("fails closed on excessively nested run-start context before writing", asyn
   connection.dispose();
 });
 
+test("fails closed while snapshotting stateful run-start context without closing", async () => {
+  const socket = new FakeSocket();
+  const connection = await authorizedConnection(socket);
+  const writes = socket.writes.length;
+  let accesses = 0;
+  const context = Object.defineProperty({}, "selected_file", {
+    enumerable: true,
+    get() {
+      if (++accesses > 1) throw new Error("private getter detail");
+      return "src/main.rs";
+    },
+  });
+
+  await assert.rejects(connection.startRun("prompt", context), (error: unknown) =>
+    error instanceof AttachTransportError && error.code === "unexpected_message" &&
+    error.message === "unexpected_message");
+  assert.equal(socket.writes.length, writes);
+  assert.equal(socket.destroyed, false);
+
+  const listed = connection.listThreads();
+  const request = lastRequest(socket);
+  socket.emit("data", encodeAttachFrame({ protocol: "muniment.attach/1",
+    request_id: request.request_id, ok: true, body: { threads: [] } }));
+  assert.deepEqual(await listed, { threads: [] });
+  connection.dispose();
+});
+
 test("fails closed on malformed run-start receipts", async () => {
   const invalidBodies = [
     { run_id: "bad", committed_seq: 1, accepted_at: "2026-07-17T00:00:00Z" },
