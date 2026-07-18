@@ -13,8 +13,7 @@ Phases mirror harness-spec §9. Muniment-cloud Phase 1 native auth and the cloud
 - The production contract is `/v1/auth/native/*`; generic OIDC remains test groundwork and is not the production handshake.
 
 ### 9. Pi sidecar and cloud chat
-- DONE — verified Pi runtime acquisition/supervision, signed-in streamed chat, steering/follow-up, durable tool effects, provenance/receipts, inline tool cards, blocking extension-UI protocol, pending permission-gate replay, and safe interrupted-session resume.
-- Answering a pending permission gate remains blocked on the Needs Human decision.
+- DONE — verified Pi runtime acquisition/supervision, signed-in streamed chat, steering/follow-up, durable tool effects, provenance/receipts, inline tool cards, blocking extension-UI protocol, pending permission-gate replay and answers, and safe interrupted-session resume.
 
 ### 10. Local Gemma sidecar
 - DONE — supervised local runtime, pinned model lifecycle, verified/cancellable acquisition, rollback, native adapters, and Tauri install/status/cancel commands.
@@ -42,18 +41,9 @@ Phases mirror harness-spec §9. Muniment-cloud Phase 1 native auth and the cloud
 - OWNER GO 2026-07-16 — CLI E1 and editor-extension E2 may proceed concurrently after E0.5; the earlier one-front-at-a-time note is superseded.
 - DONE E0.5 — owner-ratified ADR 0011 on 2026-07-17 selects this repository for both surfaces, with their dependency boundaries, path-scoped build/test CI, and distribution implications.
 - DECIDED — ADR 0012 promotes Pi and journal ownership to one per-user background service installed idempotently by any surface. Cross-platform service extraction and installer integration are a separate build line; E1 may ship initial slices against the protocol-identical app-managed owner and is not blocked on extraction.
-- DONE E1 read path — the Rust workspace, path-scoped CLI CI lane, protocol-only `muniment-attach` crate dependency boundary, Linux CLI discovery plus explicit pairing handshake, cursor-navigable `muniment threads list`, bounded journal-backed `thread.open`, and interactive `muniment threads open <thread-id>` over one preserved authorized connection are present.
-- DONE E1 write path groundwork — the Linux attach session authorizes and bounds `run.start`; the protocol-only client sends and validates correlated requests with fresh request/idempotency identities; the shared desktop coordinator owns run acceptance; the production attach service adapter invokes that coordinator, preserves durable idempotency, and returns the committed acceptance receipt without duplicating launch behavior; and the receipt-only interactive `muniment run start` command exposes that path with focused coverage.
-- DONE E1 stream server groundwork — the authorized Linux attach session serves bounded, redacted journal-backed `run.stream` catch-up with workspace isolation, sequence/window validation, an explicit caught-up event, retained per-connection flow-control state, and `run.cursor_ack` handling that resumes a window-paused catch-up.
-- DONE E1 protocol client catch-up — the protocol-only client sends typed `run.stream` subscription requests, validates ordered, bounded, redacted catch-up events through the explicit caught-up marker, acknowledges consumed run-stream windows, and continues paused catch-up.
-- DONE E1 live-tail server — bounded, loss-tolerant journal commit hints wake the authorized Linux attach session, which re-reads the journal and delivers newly committed events without missing the subscription-snapshot race while preserving workspace isolation and flow control.
-- DONE E1 protocol-client live tail — the protocol-only client continues ordered, bounded, redacted consumption after the caught-up marker while acknowledging flow-control windows.
-- DONE E1 terminal progress — `muniment run start` follows the committed run over the preserved authorized connection, renders ordered redacted catch-up/live events, acknowledges flow-control windows, and exits on a terminal event.
-- DONE E1 permission-answer server/client seams — the authorized Linux attach session validates and dispatches bounded, idempotent `permission.answer` requests through the shared service boundary with companion provenance and redacted failures; the protocol-only client encodes correlated allow/deny answers and validates committed receipts.
-- DONE E1 pending-gate server delivery — the authorized run stream projects journaled permission requests into bounded `permission.pending` events with gate identity and safe confirm context while preserving workspace isolation, ordering, and flow control.
-- DONE E1 pending-gate protocol client — the protocol-only client decodes and validates `permission.pending` as a typed, redaction-safe run-stream message and includes it in cursor flow control.
-- NEXT E1 — prompt for typed pending permission gates in the interactive terminal, submit allow/deny over the preserved authorized connection, and continue the run stream.
-- E2 may proceed concurrently in its independently scoped TypeScript package lane per ADR 0011; VSIX sideload testing is sufficient and marketplace publication remains owner-gated.
+- DONE E1 — the Rust workspace and path-scoped CLI CI lane; protocol-only dependency boundary; Linux discovery and pairing; thread list/open; run start with ordered catch-up/live terminal progress and flow control; and typed pending-permission prompts with allow/deny submission over the preserved authorized connection are present.
+- NEXT E2 groundwork — export canonical, versioned `muniment.attach/1` JSON fixtures from Rust with deterministic drift checking before scaffolding the fixture-pinned TypeScript client.
+- E2 then proceeds in independently reviewable slices: package/test lane, native attach transport, thread view/composer, workspace-scoped editor context, and in-editor permission gates. VSIX sideload testing is sufficient and marketplace publication remains owner-gated.
 - The runtime service is the sole runtime/session/journal owner; desktop, CLI, and editor extension are clients and remain windows, not modes. macOS and Windows attach adapters remain separate future slices.
 
 ## Browser-control runtime capability (§6.8)
