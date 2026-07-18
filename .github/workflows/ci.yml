@@ -53,7 +53,7 @@ jobs:
                 docs_only=false
                 companion=true
                 ;;
-              src-tauri/attach/*|src-tauri/attach/**|src-tauri/Cargo.toml|src-tauri/Cargo.lock)
+              src-tauri/attach/*|src-tauri/attach/**|protocol-fixtures/*|protocol-fixtures/**|src-tauri/Cargo.toml|src-tauri/Cargo.lock)
                 docs_only=false
                 companion=true
                 desktop=true
@@ -143,6 +143,30 @@ jobs:
       - name: CLI dependency boundary
         if: steps.changes.outputs.companion == 'true'
         run: test/cli-dependency-boundary.sh
+
+  attach-fixtures-current:
+    name: attach-fixtures-current
+    if: github.event_name == 'pull_request' && needs.smoke.outputs.companion == 'true'
+    needs: smoke
+    runs-on: self-hosted
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Rust toolchain (bootstrap if missing)
+        run: |
+          if ! command -v cargo >/dev/null 2>&1 && [ ! -x "$HOME/.cargo/bin/cargo" ]; then
+            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+              | sh -s -- -y --profile minimal --default-toolchain stable
+          fi
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+
+      - name: Attach protocol tests
+        run: cargo test --manifest-path src-tauri/Cargo.toml --package muniment-attach --locked
+
+      - name: Check canonical attach fixtures
+        working-directory: src-tauri
+        run: cargo run -p muniment-attach --bin export-attach-fixtures -- ../protocol-fixtures --check
 
   desktop-compile:
     name: Desktop compile preflight (${{ matrix.platform }})

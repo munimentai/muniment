@@ -1,5 +1,88 @@
 use muniment_attach::*;
 use serde_json::{json, Value};
+use std::{
+    fs,
+    path::PathBuf,
+    process::{Command, Output},
+    sync::atomic::{AtomicU64, Ordering},
+};
+
+static TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+
+fn fixture_temp_dir() -> PathBuf {
+    let path = std::env::temp_dir().join(format!(
+        "muniment-attach-fixtures-{}-{}",
+        std::process::id(),
+        TEMP_SEQUENCE.fetch_add(1, Ordering::Relaxed)
+    ));
+    fs::create_dir(&path).unwrap();
+    path
+}
+
+fn exporter(root: &PathBuf, check: bool) -> Output {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_export-attach-fixtures"));
+    command.arg(root);
+    if check {
+        command.arg("--check");
+    }
+    command.output().unwrap()
+}
+
+fn generated_fixture_dir() -> PathBuf {
+    let root = fixture_temp_dir();
+    let output = exporter(&root, false);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    root
+}
+
+fn assert_check_failure(root: &PathBuf, classification: &str, filename: &str) {
+    let output = exporter(root, true);
+    assert!(!output.status.success());
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(stderr.contains(classification), "{stderr}");
+    assert!(stderr.contains(filename), "{stderr}");
+}
+
+#[test]
+fn fixture_exporter_check_accepts_a_clean_corpus() {
+    let root = generated_fixture_dir();
+    assert!(exporter(&root, true).status.success());
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn fixture_exporter_check_reports_missing_without_writing() {
+    let root = generated_fixture_dir();
+    let fixture = root.join("muniment.attach/1/request-thread-list.json");
+    fs::remove_file(&fixture).unwrap();
+    assert_check_failure(&root, "missing:", "request-thread-list.json");
+    assert!(!fixture.exists());
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn fixture_exporter_check_reports_extra_without_writing() {
+    let root = generated_fixture_dir();
+    let fixture = root.join("muniment.attach/1/extra.json");
+    fs::write(&fixture, b"{}\n").unwrap();
+    assert_check_failure(&root, "extra:", "extra.json");
+    assert_eq!(fs::read(&fixture).unwrap(), b"{}\n");
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn fixture_exporter_check_reports_stale_without_writing() {
+    let root = generated_fixture_dir();
+    let fixture = root.join("muniment.attach/1/response-success.json");
+    fs::write(&fixture, b"{}\n").unwrap();
+    assert_check_failure(&root, "stale:", "response-success.json");
+    assert_eq!(fs::read(&fixture).unwrap(), b"{}\n");
+    fs::remove_dir_all(root).unwrap();
+}
 
 fn id(n: u128) -> Id {
     Id::new(format!("{n:032x}")).unwrap()

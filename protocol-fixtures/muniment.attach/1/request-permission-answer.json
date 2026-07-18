@@ -1,0 +1,10 @@
+{
+  "protocol": "muniment.attach/1",
+  "request_id": "0000000000000000000000000000006d",
+  "operation": "permission.answer",
+  "capability": "fixture-capability",
+  "idempotency_key": "000000000000000000000000000000d1",
+  "body": {
+    "fixture": "permission.answer"
+  }
+}
