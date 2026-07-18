@@ -49,7 +49,7 @@ fn event_and_byte_windows_pause_independently_without_consuming_the_event() {
 
 #[test]
 fn duplicate_partial_and_full_acknowledgements_release_exact_budget_and_resume() {
-    let mut state = cursor(0, 3, 30);
+    let mut state = RunStreamCursor::new(id(1), id(2), 1, 4, 0, 3, 30).unwrap();
     for (seq, bytes) in [(1, 5), (2, 10), (3, 15)] {
         state.admit_event(&id(2), seq, bytes).unwrap();
     }
@@ -112,6 +112,12 @@ fn invalid_inputs_close_only_the_offending_subscription_without_mutation() {
     let snapshot = format!("{state:?}");
     assert!(state.acknowledge(0).is_err());
     assert_eq!(format!("{state:?}"), snapshot);
+
+    let mut snapshot_bound = RunStreamCursor::new(id(1), id(2), 1, 1, 0, 3, 30).unwrap();
+    snapshot_bound.admit_event(&id(2), 1, 1).unwrap();
+    let before = format!("{snapshot_bound:?}");
+    assert!(snapshot_bound.admit_event(&id(2), 2, 1).is_err());
+    assert_eq!(format!("{snapshot_bound:?}"), before);
 }
 
 #[test]

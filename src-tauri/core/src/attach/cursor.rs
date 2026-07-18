@@ -151,7 +151,8 @@ impl RunStreamCursor {
         projected_bytes: usize,
     ) -> Result<RunEventAdmission, RunStreamError> {
         let next_run_seq = self.highest_sent_run_seq.checked_add(1);
-        if run_id != &self.run_id || Some(run_seq) != next_run_seq {
+        if run_id != &self.run_id || Some(run_seq) != next_run_seq || run_seq > self.current_run_seq
+        {
             return Err(RunStreamError::invalid_cursor());
         }
         if self.outstanding.len() == self.window.max_events
@@ -165,7 +166,6 @@ impl RunStreamCursor {
         });
         self.outstanding_bytes += projected_bytes;
         self.highest_sent_run_seq = run_seq;
-        self.current_run_seq = self.current_run_seq.max(run_seq);
         Ok(RunEventAdmission::Sent)
     }
 

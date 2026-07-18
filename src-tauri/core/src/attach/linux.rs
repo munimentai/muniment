@@ -420,10 +420,27 @@ pub struct RunStartAccepted {
     pub accepted_at: String,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, PartialEq, Eq, serde::Serialize)]
 pub struct RedactedRunEvent {
+    #[serde(skip)]
     pub run_seq: u64,
-    pub body: serde_json::Value,
+    pub event_type: String,
+    pub recorded_at: String,
+    pub content_withheld: bool,
+    pub content: Option<String>,
+}
+
+impl fmt::Debug for RedactedRunEvent {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("RedactedRunEvent")
+            .field("run_seq", &self.run_seq)
+            .field("event_type", &self.event_type)
+            .field("recorded_at", &self.recorded_at)
+            .field("content_withheld", &self.content_withheld)
+            .field("content", &self.content.as_ref().map(|_| "[REDACTED]"))
+            .finish()
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -627,31 +644,30 @@ impl ThreadListService for RunJournal {
             events: page
                 .events
                 .into_iter()
-                .map(|event| RedactedRunEvent {
-                    run_seq: event.run_seq,
-                    body: {
-                        let mut projection = serde_json::json!({
-                            "event_type": event.event_type,
-                            "recorded_at": event.recorded_at,
-                            "content_withheld": true
-                        });
-                        if let EventPayload::Inline { payload_json } = event.payload {
-                            let safe_field = match projection["event_type"].as_str() {
-                                Some("user.prompt.submitted") => "prompt",
-                                Some("model.stream.delta") => "text",
-                                Some("tool.effect.started") => "display_name",
+                .map(|event| {
+                    let content = match event.payload {
+                        EventPayload::Inline { payload_json } => {
+                            let safe_field = match event.event_type.as_str() {
+                                "user.prompt.submitted" => "prompt",
+                                "model.stream.delta" => "text",
+                                "tool.effect.started" => "display_name",
                                 _ => "",
                             };
-                            if let Some(value) = payload_json
+                            payload_json
                                 .get(safe_field)
                                 .and_then(serde_json::Value::as_str)
-                            {
-                                projection["content"] = serde_json::Value::String(value.into());
-                                projection["content_withheld"] = serde_json::Value::Bool(false);
-                            }
+                                .filter(|value| value.len() <= MAX_TEXT_LENGTH)
+                                .map(str::to_owned)
                         }
-                        projection
-                    },
+                        _ => None,
+                    };
+                    RedactedRunEvent {
+                        run_seq: event.run_seq,
+                        event_type: event.event_type,
+                        recorded_at: event.recorded_at,
+                        content_withheld: content.is_none(),
+                        content,
+                    }
                 })
                 .collect(),
         })
@@ -1079,9 +1095,31 @@ fn dispatch_request<S: ThreadListService>(
             body.after_run_seq,
             RUN_STREAM_WINDOW_EVENTS,
         )?;
+        let bounds_valid = page.first_available_run_seq > 0
+            && page.first_available_run_seq <= page.current_run_seq
+            && body.after_run_seq >= page.first_available_run_seq.saturating_sub(1)
+            && body.after_run_seq <= page.current_run_seq;
+        let remaining = page.current_run_seq.saturating_sub(body.after_run_seq) as usize;
+        let expected_events = remaining.min(RUN_STREAM_WINDOW_EVENTS);
+        let invalid_projection = |event: &RedactedRunEvent| {
+            event.event_type.is_empty()
+                || event.event_type.len() > MAX_TEXT_LENGTH
+                || event.recorded_at.is_empty()
+                || event.recorded_at.len() > MAX_TEXT_LENGTH
+                || event
+                    .content
+                    .as_ref()
+                    .is_some_and(|value| value.len() > MAX_TEXT_LENGTH)
+                || event.content_withheld != event.content.is_none()
+        };
         if page.run_id != body.run_id
-            || page.events.len() > RUN_STREAM_WINDOW_EVENTS
-            || page.events.iter().any(|event| event.run_seq == 0)
+            || !bounds_valid
+            || page.events.len() != expected_events
+            || page.events.iter().enumerate().any(|(offset, event)| {
+                event.run_seq != body.after_run_seq.saturating_add(offset as u64 + 1)
+                    || event.run_seq > page.current_run_seq
+                    || invalid_projection(event)
+            })
         {
             return Err(ProtocolError::persistence_failed());
         }
@@ -1103,7 +1141,8 @@ fn dispatch_request<S: ThreadListService>(
                 event: EventName::RunEvent,
                 run_id: Some(page.run_id.clone()),
                 run_seq: Some(projected.run_seq),
-                body: projected.body,
+                body: serde_json::to_value(&projected)
+                    .map_err(|_| ProtocolError::persistence_failed())?,
             };
             let projected_bytes = encode_frame(&event)
                 .map_err(|_| ProtocolError::persistence_failed())?

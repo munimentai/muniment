@@ -5,13 +5,14 @@ use muniment_core::attach::linux::{
     AttachSessionError, AuthorizationSessionDependencies, CompanionProvenance, PeerCredentials,
     RedactedRunEvent, RedactedThreadSummary, RunStartAccepted, RunStartRequest, RunStreamPage,
     ThreadListPage, ThreadListRequest, ThreadListService, ThreadOpenRequest,
-    MAX_RUN_START_CONTEXT_LENGTH, MAX_RUN_START_TEXT_LENGTH,
+    MAX_RUN_START_CONTEXT_LENGTH, MAX_RUN_START_TEXT_LENGTH, RUN_STREAM_WINDOW_BYTES,
+    RUN_STREAM_WINDOW_EVENTS,
 };
 use muniment_core::attach::{
     decode_frame, encode_frame, Approval, AuthorizationClock, AuthorizationTokenGenerator,
     Authorized, ErrorAction, ErrorCode, ErrorEnvelope, Event, EventName, Hello, Id, Operation,
     Protocol, Request, Response, VersionRange, Welcome, CHALLENGE_LIFETIME, MAX_FRAME_LENGTH,
-    MAX_JSON_DEPTH,
+    MAX_JSON_DEPTH, MAX_TEXT_LENGTH,
 };
 use muniment_core::journal::{EventEnvelope, EventPayload, Provenance, RunJournal};
 use serde_json::json;
@@ -116,6 +117,63 @@ struct StreamService {
     calls: usize,
 }
 
+struct PageService {
+    page: Option<RunStreamPage>,
+    fail: bool,
+    calls: usize,
+}
+
+impl ThreadListService for PageService {
+    fn list_threads(
+        &mut self,
+        _: &str,
+        _: ThreadListRequest,
+    ) -> Result<ThreadListPage, muniment_core::attach::ProtocolError> {
+        panic!("thread reads must not dispatch")
+    }
+
+    fn stream_run(
+        &mut self,
+        _: &str,
+        _: &Id,
+        _: u64,
+        limit: usize,
+    ) -> Result<RunStreamPage, muniment_core::attach::ProtocolError> {
+        self.calls += 1;
+        assert_eq!(limit, RUN_STREAM_WINDOW_EVENTS);
+        if self.fail {
+            Err(muniment_core::attach::ProtocolError::persistence_failed())
+        } else {
+            Ok(self.page.take().unwrap())
+        }
+    }
+}
+
+fn projected(run_seq: u64, content: Option<String>) -> RedactedRunEvent {
+    RedactedRunEvent {
+        run_seq,
+        event_type: "model.stream.delta".into(),
+        recorded_at: "2026-07-17T00:00:00Z".into(),
+        content_withheld: content.is_none(),
+        content,
+    }
+}
+
+fn stream_page(after: u64, current: u64, events: Vec<RedactedRunEvent>) -> RunStreamPage {
+    RunStreamPage {
+        subscription_id: Id::new("0190a300-0000-7000-8000-000000000001").unwrap(),
+        run_id: Id::new("0190a100-0000-7000-8000-000000000001").unwrap(),
+        first_available_run_seq: 1,
+        current_run_seq: current,
+        events: events
+            .into_iter()
+            .inspect(|event| {
+                assert!(event.run_seq > after);
+            })
+            .collect(),
+    }
+}
+
 impl ThreadListService for StreamService {
     fn list_threads(
         &mut self,
@@ -143,11 +201,17 @@ impl ThreadListService for StreamService {
             events: vec![
                 RedactedRunEvent {
                     run_seq: 2,
-                    body: json!({"text":"safe"}),
+                    event_type: "model.stream.delta".into(),
+                    recorded_at: "2026-07-17T00:00:00Z".into(),
+                    content_withheld: false,
+                    content: Some("safe".into()),
                 },
                 RedactedRunEvent {
                     run_seq: 3,
-                    body: json!({"status":"complete"}),
+                    event_type: "run.completed".into(),
+                    recorded_at: "2026-07-17T00:00:01Z".into(),
+                    content_withheld: true,
+                    content: None,
                 },
             ],
         })
@@ -1446,6 +1510,26 @@ fn operations_outside_run_start_remain_unsupported_without_dispatch() {
             json!({"text": "private steer"}),
         ))
         .unwrap();
+    client
+        .write_all(&request(81, Operation::RunCursorAck, json!({})))
+        .unwrap();
+    client
+        .write_all(&request_with_idempotency(
+            82,
+            Operation::RunCancel,
+            json!({}),
+        ))
+        .unwrap();
+    client
+        .write_all(&request(83, Operation::RequestCancel, json!({})))
+        .unwrap();
+    client
+        .write_all(&request_with_idempotency(
+            84,
+            Operation::PermissionAnswer,
+            json!({}),
+        ))
+        .unwrap();
     client.shutdown(Shutdown::Write).unwrap();
     let mut approved = approval();
     approved.scopes.insert("run.write".into());
@@ -1460,7 +1544,7 @@ fn operations_outside_run_start_remain_unsupported_without_dispatch() {
         ),
         Ok(())
     );
-    for id in [79, 80] {
+    for id in [79, 80, 81, 82, 83, 84] {
         let error: ErrorEnvelope = read_frame(&mut client);
         assert_eq!(
             error.request_id,
@@ -1702,20 +1786,207 @@ fn authorized_run_stream_returns_bounds_then_ordered_resume_events() {
 }
 
 #[test]
+fn run_stream_empty_current_catch_up_emits_no_events() {
+    const RUN: &str = "0190a100-0000-7000-8000-000000000001";
+    let (mut client, server) = UnixStream::pair().unwrap();
+    client.write_all(&hello(1, 1)).unwrap();
+    client
+        .write_all(&request(
+            92,
+            Operation::RunStream,
+            json!({"run_id": RUN, "after_run_seq": 3}),
+        ))
+        .unwrap();
+    client.shutdown(Shutdown::Write).unwrap();
+    let mut approved = approval();
+    approved.scopes.insert("run.read".into());
+    let mut service = PageService {
+        page: Some(stream_page(3, 3, vec![])),
+        fail: false,
+        calls: 0,
+    };
+    assert_eq!(
+        dispatch_session_with_approval(
+            &mut client,
+            server,
+            TestClock(Rc::new(Cell::new(Duration::ZERO))),
+            approved,
+            &mut service
+        ),
+        Ok(())
+    );
+    let response: Response = read_frame(&mut client);
+    assert_eq!(response.body["current_run_seq"], 3);
+    assert_eq!(response.body["first_available_run_seq"], 1);
+    assert_eq!(
+        response.body["window"]["max_bytes"],
+        RUN_STREAM_WINDOW_BYTES
+    );
+    assert_eq!(client.read(&mut [0]).unwrap(), 0);
+}
+
+#[test]
+fn run_stream_stops_at_the_advertised_event_window() {
+    const RUN: &str = "0190a100-0000-7000-8000-000000000001";
+    let events = (1..=RUN_STREAM_WINDOW_EVENTS as u64)
+        .map(|seq| projected(seq, None))
+        .collect();
+    let (mut client, server) = UnixStream::pair().unwrap();
+    client.write_all(&hello(1, 1)).unwrap();
+    client
+        .write_all(&request(
+            93,
+            Operation::RunStream,
+            json!({"run_id": RUN, "after_run_seq": 0}),
+        ))
+        .unwrap();
+    client.shutdown(Shutdown::Write).unwrap();
+    let mut approved = approval();
+    approved.scopes.insert("run.read".into());
+    let mut service = PageService {
+        page: Some(stream_page(0, 101, events)),
+        fail: false,
+        calls: 0,
+    };
+    assert_eq!(
+        dispatch_session_with_approval(
+            &mut client,
+            server,
+            TestClock(Rc::new(Cell::new(Duration::ZERO))),
+            approved,
+            &mut service
+        ),
+        Ok(())
+    );
+    let response: Response = read_frame(&mut client);
+    assert_eq!(response.body["current_run_seq"], 101);
+    for seq in 1..=RUN_STREAM_WINDOW_EVENTS as u64 {
+        let event: Event = read_frame(&mut client);
+        assert_eq!(event.run_seq, Some(seq));
+        assert_eq!(event.run_id.as_ref().unwrap().as_str(), RUN);
+        assert_eq!(
+            event.subscription_id,
+            Id::new(response.body["subscription_id"].as_str().unwrap()).unwrap()
+        );
+    }
+    assert_eq!(client.read(&mut [0]).unwrap(), 0);
+}
+
+#[test]
+fn run_stream_byte_window_allows_exact_fit_and_rejects_one_over() {
+    const RUN: &str = "0190a100-0000-7000-8000-000000000001";
+    let subscription = Id::new("0190a300-0000-7000-8000-000000000001").unwrap();
+    let run_id = Id::new(RUN).unwrap();
+    let frame_len = |event: &RedactedRunEvent| {
+        encode_frame(&Event {
+            protocol: Protocol,
+            subscription_id: subscription.clone(),
+            event: EventName::RunEvent,
+            run_id: Some(run_id.clone()),
+            run_seq: Some(event.run_seq),
+            body: serde_json::to_value(event).unwrap(),
+        })
+        .unwrap()
+        .len()
+    };
+    let mut events = (1..=3)
+        .map(|seq| projected(seq, Some("x".repeat(MAX_TEXT_LENGTH))))
+        .collect::<Vec<_>>();
+    let used: usize = events.iter().map(&frame_len).sum();
+    let empty = projected(4, Some(String::new()));
+    let exact_content_len = RUN_STREAM_WINDOW_BYTES - used - frame_len(&empty);
+    assert!(exact_content_len <= MAX_TEXT_LENGTH);
+    events.push(projected(4, Some("x".repeat(exact_content_len))));
+    assert_eq!(
+        events.iter().map(&frame_len).sum::<usize>(),
+        RUN_STREAM_WINDOW_BYTES
+    );
+    events.push(projected(5, Some("x".into())));
+
+    let (mut client, server) = UnixStream::pair().unwrap();
+    client.write_all(&hello(1, 1)).unwrap();
+    client
+        .write_all(&request(
+            94,
+            Operation::RunStream,
+            json!({"run_id": RUN, "after_run_seq": 0}),
+        ))
+        .unwrap();
+    client.shutdown(Shutdown::Write).unwrap();
+    let mut approved = approval();
+    approved.scopes.insert("run.read".into());
+    let mut service = PageService {
+        page: Some(stream_page(0, 5, events)),
+        fail: false,
+        calls: 0,
+    };
+    let server_thread = thread::spawn(move || {
+        run_authenticated_session_with_authorization(
+            server,
+            credentials(),
+            "0.1.0",
+            Duration::from_secs(1),
+            AuthorizationSessionDependencies {
+                fill_random: |bytes: &mut [u8]| {
+                    bytes.fill(9);
+                    Ok(())
+                },
+                clock: TestClock(Rc::new(Cell::new(Duration::ZERO))),
+                tokens: TestTokens(1),
+                approvals: move |_: &muniment_core::attach::PairingChallenge, _: Duration| {
+                    Some(ApprovalDecision::Approve(approved.clone()))
+                },
+            },
+            &mut service,
+        )
+    });
+    let _: Welcome = read_frame(&mut client);
+    let _: Authorized = read_frame(&mut client);
+    let _: Response = read_frame(&mut client);
+    for seq in 1..=4 {
+        let event: Event = read_frame(&mut client);
+        assert_eq!(event.run_seq, Some(seq));
+    }
+    assert_eq!(client.read(&mut [0]).unwrap(), 0);
+    assert_eq!(server_thread.join().unwrap(), Ok(()));
+}
+
+#[test]
 fn run_stream_scope_and_malformed_body_fail_before_service_read() {
     const RUN: &str = "0190a100-0000-7000-8000-000000000001";
-    for (approved, body, terminal) in [
+    let mut scoped = approval();
+    scoped.scopes.insert("run.read".into());
+    let cases = vec![
         (approval(), json!({"run_id": RUN, "after_run_seq": 1}), true),
         (
-            {
-                let mut value = approval();
-                value.scopes.insert("run.read".into());
-                value
-            },
+            scoped.clone(),
             json!({"run_id": RUN, "after_run_seq": -1}),
             false,
         ),
-    ] {
+        (scoped.clone(), json!({"run_id": RUN}), false),
+        (scoped.clone(), json!({"after_run_seq": 0}), false),
+        (
+            scoped.clone(),
+            json!({"run_id": 7, "after_run_seq": 0}),
+            false,
+        ),
+        (
+            scoped.clone(),
+            json!({"run_id": "not-a-uuid", "after_run_seq": 0}),
+            false,
+        ),
+        (
+            scoped.clone(),
+            json!({"run_id": RUN, "after_run_seq": "0"}),
+            false,
+        ),
+        (
+            scoped,
+            json!({"run_id": RUN, "after_run_seq": 0, "extra": true}),
+            false,
+        ),
+    ];
+    for (approved, body, terminal) in cases {
         let (mut client, server) = UnixStream::pair().unwrap();
         client.write_all(&hello(1, 1)).unwrap();
         client
@@ -1741,6 +2012,116 @@ fn run_stream_scope_and_malformed_body_fail_before_service_read() {
             }
         );
         assert_eq!(service.calls, 0);
+    }
+}
+
+#[test]
+fn malformed_run_stream_pages_and_service_failures_are_closed_and_redacted() {
+    const RUN: &str = "0190a100-0000-7000-8000-000000000001";
+    let secret = "DIAGNOSTIC_SECRET_/home/private/raw-pi";
+    let mut pages = Vec::new();
+    let mut wrong_id = stream_page(0, 1, vec![projected(1, None)]);
+    wrong_id.run_id = Id::new("0190a100-0000-7000-8000-000000000002").unwrap();
+    pages.push(wrong_id);
+    pages.push(stream_page(0, 2, vec![projected(1, None)]));
+    pages.push(stream_page(
+        0,
+        2,
+        vec![projected(1, None), projected(3, None)],
+    ));
+    pages.push(stream_page(
+        0,
+        1,
+        vec![projected(1, None), projected(2, None)],
+    ));
+    let mut oversized = projected(1, Some("x".repeat(MAX_TEXT_LENGTH + 1)));
+    oversized.content_withheld = false;
+    pages.push(stream_page(0, 1, vec![oversized]));
+    let mut contradictory = projected(1, Some(secret.into()));
+    contradictory.content_withheld = true;
+    pages.push(stream_page(0, 1, vec![contradictory]));
+
+    for page in pages.into_iter().map(Some).chain(std::iter::once(None)) {
+        let (mut client, server) = UnixStream::pair().unwrap();
+        client.write_all(&hello(1, 1)).unwrap();
+        client
+            .write_all(&request(
+                95,
+                Operation::RunStream,
+                json!({"run_id": RUN, "after_run_seq": 0}),
+            ))
+            .unwrap();
+        client.shutdown(Shutdown::Write).unwrap();
+        let mut approved = approval();
+        approved.scopes.insert("run.read".into());
+        let mut service = PageService {
+            fail: page.is_none(),
+            page,
+            calls: 0,
+        };
+        let result = dispatch_session_with_approval(
+            &mut client,
+            server,
+            TestClock(Rc::new(Cell::new(Duration::ZERO))),
+            approved,
+            &mut service,
+        );
+        assert_eq!(result, Ok(()));
+        let error: ErrorEnvelope = read_frame(&mut client);
+        assert_eq!(error.error.code(), ErrorCode::PersistenceFailed);
+        let wire = serde_json::to_string(&error).unwrap();
+        assert!(!wire.contains(secret));
+        assert!(!format!("{result:?} {error:?}").contains(secret));
+        assert_eq!(client.read(&mut [0]).unwrap(), 0);
+    }
+}
+
+#[test]
+fn run_stream_real_journal_rejects_cross_workspace_and_missing_runs() {
+    const HIDDEN_RUN: &str = "0190a100-0000-7000-8000-000000000009";
+    let mut journal = RunJournal::open(":memory:").unwrap();
+    journal
+        .append(
+            0,
+            &prompt(
+                HIDDEN_RUN,
+                "private journal payload",
+                "2026-07-17T00:00:00Z",
+            ),
+        )
+        .unwrap();
+    journal
+        .bind_run_workspace(HIDDEN_RUN, "workspace-2")
+        .unwrap();
+    for run_id in [HIDDEN_RUN, "0190a100-0000-7000-8000-000000000099"] {
+        let (mut client, server) = UnixStream::pair().unwrap();
+        client.write_all(&hello(1, 1)).unwrap();
+        client
+            .write_all(&request(
+                96,
+                Operation::RunStream,
+                json!({"run_id": run_id, "after_run_seq": 0}),
+            ))
+            .unwrap();
+        client.shutdown(Shutdown::Write).unwrap();
+        let mut approved = approval();
+        approved.scopes.insert("run.read".into());
+        assert_eq!(
+            dispatch_session_with_approval(
+                &mut client,
+                server,
+                TestClock(Rc::new(Cell::new(Duration::ZERO))),
+                approved,
+                &mut journal
+            ),
+            Ok(())
+        );
+        let error: ErrorEnvelope = read_frame(&mut client);
+        assert_eq!(error.error.code(), ErrorCode::InvalidRequest);
+        assert!(!serde_json::to_string(&error)
+            .unwrap()
+            .contains("private journal payload"));
+        assert_eq!(client.read(&mut [0]).unwrap(), 0);
     }
 }
 
