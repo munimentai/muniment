@@ -32,13 +32,17 @@ test -f src-tauri/cli/Cargo.toml
 test -f src-tauri/cli/src/main.rs
 grep -Fq 'muniment-attach = { path = "../attach", default-features = false, features = ["client"] }' src-tauri/cli/Cargo.toml
 grep -Fq 'src-tauri/cli/*|src-tauri/cli/**' "$ci"
-grep -Fq 'src-tauri/attach/*|src-tauri/attach/**|src-tauri/Cargo.toml|src-tauri/Cargo.lock)' "$ci"
+grep -Fq 'src-tauri/attach/*|src-tauri/attach/**)' "$ci"
+grep -Fq 'protocol-fixtures/*|protocol-fixtures/**)' "$ci"
 grep -Fq 'echo "companion=$companion" >> "$GITHUB_OUTPUT"' "$ci"
 grep -Fq "if: steps.changes.outputs.companion == 'true'" "$ci"
 grep -Fq 'cargo fmt --manifest-path src-tauri/Cargo.toml --package muniment-attach --package muniment-cli --check' "$ci"
 grep -Fq 'cargo clippy --manifest-path src-tauri/Cargo.toml --package muniment-attach --package muniment-cli --all-targets --locked -- -D warnings' "$ci"
 grep -Fq 'cargo test --manifest-path src-tauri/Cargo.toml --package muniment-attach --package muniment-cli --locked' "$ci"
 grep -Fq 'run: test/cli-dependency-boundary.sh' "$ci"
+grep -Fq 'attach-fixtures-current:' "$ci"
+grep -Fq 'cargo run -p muniment-attach --bin export-attach-fixtures -- ../protocol-fixtures --check' "$ci"
+test -f protocol-fixtures/muniment.attach/1/negotiation-hello.json
 test -x test/cli-dependency-boundary.sh
 grep -Fq -- '--locked --target all --prefix none' test/cli-dependency-boundary.sh
 # The allowlist rejects representatives of every forbidden runtime class,
