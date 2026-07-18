@@ -15,8 +15,74 @@
   "categories": [
     "Other"
   ],
-  "activationEvents": [],
+  "activationEvents": [
+    "onView:muniment.threads",
+    "onCommand:muniment.refreshThreads"
+  ],
   "main": "./out/src/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "muniment.refreshThreads",
+        "title": "Refresh Threads",
+        "icon": "$(refresh)"
+      }
+    ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "muniment",
+          "title": "Muniment",
+          "icon": "media/muniment.svg"
+        }
+      ]
+    },
+    "views": {
+      "muniment": [
+        {
+          "id": "muniment.threads",
+          "name": "Threads",
+          "icon": "$(comment-discussion)"
+        }
+      ]
+    },
+    "viewsWelcome": [
+      {
+        "view": "muniment.threads",
+        "contents": "Loading recent threads…",
+        "when": "muniment.threadsState == loading"
+      },
+      {
+        "view": "muniment.threads",
+        "contents": "Approve the connection in Muniment to continue.",
+        "when": "muniment.threadsState == pairing"
+      },
+      {
+        "view": "muniment.threads",
+        "contents": "No recent threads.\n[Refresh](command:muniment.refreshThreads)",
+        "when": "muniment.threadsState == empty"
+      },
+      {
+        "view": "muniment.threads",
+        "contents": "Muniment isn’t available. Open the desktop app, then try again.\n[Refresh](command:muniment.refreshThreads)",
+        "when": "muniment.threadsState == runtime-unavailable"
+      },
+      {
+        "view": "muniment.threads",
+        "contents": "Couldn’t connect securely to Muniment.\n[Try Again](command:muniment.refreshThreads)",
+        "when": "muniment.threadsState == connection-failed"
+      }
+    ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "muniment.refreshThreads",
+          "when": "view == muniment.threads",
+          "group": "navigation"
+        }
+      ]
+    }
+  },
   "scripts": {
     "vscode:prepublish": "npm run compile",
     "compile": "tsc -p tsconfig.json",
