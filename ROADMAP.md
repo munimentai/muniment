@@ -43,9 +43,9 @@ Phases mirror harness-spec §9. Muniment-cloud Phase 1 native auth and the cloud
 - DECIDED — ADR 0012 promotes Pi and journal ownership to one per-user background service installed idempotently by any surface. Cross-platform service extraction and installer integration are a separate build line; E1 may ship initial slices against the protocol-identical app-managed owner and is not blocked on extraction.
 - DONE E1 permission handling — typed pending-permission prompts with allow/deny submission over the preserved authorized connection are present, alongside the Rust workspace and path-scoped CLI CI lane; protocol-only dependency boundary; Linux discovery and pairing; thread list/open; and run start with ordered catch-up/live terminal progress and flow control.
 - DONE E1 terminal projection — inline tool-stream details and authoritative run receipts are projected and printed in the terminal.
-- NEXT E2 groundwork (concurrent) — export canonical, versioned `muniment.attach/1` JSON fixtures from Rust with deterministic drift checking before scaffolding the fixture-pinned TypeScript client.
-- E2 then proceeds in independently reviewable slices: package/test lane, native attach transport, thread view/composer, workspace-scoped editor context, and in-editor permission gates. VSIX sideload testing is sufficient and marketplace publication remains owner-gated.
-- The runtime service is the sole runtime/session/journal owner; desktop, CLI, and editor extension are clients and remain windows, not modes. macOS and Windows attach adapters remain separate future slices.
+- DONE E2 groundwork — Rust-owned canonical `muniment.attach/1` fixtures, deterministic drift checking, and the fixture-pinned TypeScript extension package/test/package CI lane are present.
+- NEXT E2 — add bounded Linux Unix-socket framing, discovery, pairing, and authorization as one UI-neutral native attach transport slice. Then proceed independently with macOS/Windows transport adapters, thread view/composer, workspace-scoped editor context, and in-editor permission gates. VSIX sideload testing is sufficient and marketplace publication remains owner-gated.
+- The runtime service is the sole runtime/session/journal owner; desktop, CLI, and editor extension are clients and remain windows, not modes.
 
 ## Browser-control runtime capability (§6.8)
 - OWNER GO 2026-07-16 — open the v1 browser-only actuator line in this repository. It is a governed runtime capability, not another companion surface.
