@@ -1100,6 +1100,83 @@ fn run_stream_event_window_ack_resumes_and_catches_up_once() {
 }
 
 #[test]
+fn real_journal_run_stream_fetches_next_page_after_window_ack() {
+    const RUN: &str = "0190a100-0000-7000-8000-000000000018";
+    let events = (1..=(MAX_RUN_STREAM_WINDOW_EVENTS as u64 + 1))
+        .map(|seq| {
+            let mut event = prompt(RUN, "private", "2026-07-16T03:00:00Z");
+            event.event_id = format!("0190a200-0000-7000-8001-{seq:012x}");
+            event.run_seq = seq;
+            event
+        })
+        .collect::<Vec<_>>();
+    let mut journal = RunJournal::open(":memory:").unwrap();
+    journal.append_batch(0, &events).unwrap();
+    journal.bind_run_workspace(RUN, "workspace-1").unwrap();
+
+    let (mut client, server) = UnixStream::pair().unwrap();
+    let server_thread = thread::spawn(move || {
+        run_authenticated_session_with_authorization(
+            server,
+            credentials(),
+            "0.1.0",
+            Duration::from_secs(2),
+            AuthorizationSessionDependencies {
+                fill_random: |bytes: &mut [u8]| {
+                    bytes.fill(9);
+                    Ok(())
+                },
+                clock: TestClock(Rc::new(Cell::new(Duration::ZERO))),
+                tokens: TestTokens(1),
+                approvals: |_: &muniment_core::attach::PairingChallenge, _: Duration| {
+                    Some(ApprovalDecision::Approve(approval()))
+                },
+            },
+            &mut journal,
+        )
+    });
+    client.write_all(&hello(1, 1)).unwrap();
+    let _: Welcome = read_frame(&mut client);
+    let _: Authorized = read_frame(&mut client);
+    client
+        .write_all(&request(
+            50,
+            Operation::RunStream,
+            json!({"run_id": RUN, "after_run_seq": 0}),
+        ))
+        .unwrap();
+    let response: Response = read_frame(&mut client);
+    let subscription = response.body["subscription_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    for expected in 1..=MAX_RUN_STREAM_WINDOW_EVENTS as u64 {
+        let Envelope::Event(event) = read_frame::<Envelope>(&mut client) else {
+            panic!("expected first-page event")
+        };
+        assert_eq!(event.run_seq, Some(expected));
+    }
+    client
+        .write_all(&request(
+            51,
+            Operation::RunCursorAck,
+            json!({"subscription_id": subscription, "through_run_seq": MAX_RUN_STREAM_WINDOW_EVENTS}),
+        ))
+        .unwrap();
+    let _: Response = read_frame(&mut client);
+    let Envelope::Event(event) = read_frame::<Envelope>(&mut client) else {
+        panic!("expected second-page event")
+    };
+    assert_eq!(event.run_seq, Some(MAX_RUN_STREAM_WINDOW_EVENTS as u64 + 1));
+    let Envelope::Event(caught_up) = read_frame::<Envelope>(&mut client) else {
+        panic!("expected caught-up event")
+    };
+    assert_eq!(caught_up.event, EventName::SubscriptionCaughtUp);
+    client.shutdown(Shutdown::Write).unwrap();
+    assert_eq!(server_thread.join().unwrap(), Ok(()));
+}
+
+#[test]
 fn run_stream_byte_window_counts_exact_framed_bytes_and_pauses_one_byte_over() {
     const RUN: &str = "0190a100-0000-7000-8000-000000000017";
     let event_count = MAX_RUN_STREAM_WINDOW_BYTES.div_ceil(60_000);
@@ -1159,7 +1236,6 @@ fn run_stream_byte_window_counts_exact_framed_bytes_and_pauses_one_byte_over() {
             json!({"run_id": RUN, "after_run_seq": 0}),
         ))
         .unwrap();
-    client.shutdown(Shutdown::Write).unwrap();
     let response: Response = read_frame(&mut client);
     assert_eq!(
         response.body["window"]["max_bytes"],
@@ -1167,11 +1243,9 @@ fn run_stream_byte_window_counts_exact_framed_bytes_and_pauses_one_byte_over() {
     );
     let mut event_bytes = 0;
     let mut sequences = Vec::new();
-    loop {
+    for _ in 0..targets.len() {
         let mut prefix = [0; 4];
-        if client.read_exact(&mut prefix).is_err() {
-            break;
-        }
+        client.read_exact(&mut prefix).unwrap();
         let mut frame = vec![0; 4 + u32::from_be_bytes(prefix) as usize];
         frame[..4].copy_from_slice(&prefix);
         client.read_exact(&mut frame[4..]).unwrap();
@@ -1182,10 +1256,27 @@ fn run_stream_byte_window_counts_exact_framed_bytes_and_pauses_one_byte_over() {
         assert_eq!(event.event, EventName::RunEvent);
         sequences.push(event.run_seq.unwrap());
     }
-    assert_eq!(server_thread.join().unwrap(), Ok(()));
     assert_eq!(sequences.len(), targets.len());
     assert_eq!(sequences.last(), Some(&(targets.len() as u64)));
     assert_eq!(event_bytes, MAX_RUN_STREAM_WINDOW_BYTES);
+    client
+        .write_all(&request(
+            49,
+            Operation::RunCursorAck,
+            json!({"subscription_id": response.body["subscription_id"], "through_run_seq": targets.len()}),
+        ))
+        .unwrap();
+    let _: Response = read_frame(&mut client);
+    let Envelope::Event(resumed) = read_frame::<Envelope>(&mut client) else {
+        panic!("expected byte-window resumed event")
+    };
+    assert_eq!(resumed.run_seq, Some(over_seq));
+    let Envelope::Event(caught_up) = read_frame::<Envelope>(&mut client) else {
+        panic!("expected caught-up event")
+    };
+    assert_eq!(caught_up.event, EventName::SubscriptionCaughtUp);
+    client.shutdown(Shutdown::Write).unwrap();
+    assert_eq!(server_thread.join().unwrap(), Ok(()));
 }
 
 #[test]
