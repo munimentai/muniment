@@ -52,6 +52,12 @@ Phases mirror harness-spec §9. Muniment-cloud Phase 1 native auth and the cloud
 - RESERVED EXTENSION ID — `cdedcfbgomnhfpifpgdlpfkkanaofkjd`; pin it when the MV3 slice lands. Add the store item's public `key` to the development manifest only after owner upload and retrieval.
 - Chrome Web Store publication/upload are owner-gated. v1 excludes OS, filesystem, and other-application control.
 
+## Desktop QA automation
+- RATIFIED 2026-07-19 — add a layered desktop QA lane: cheap frontend browser coverage plus installed-nightly real-app validation on the serialized pve01 desktop-ci VMs.
+- Windows and Linux receive full WebdriverIO automation through the Tauri WebDriver seam; macOS remains install/launch smoke plus Proxmox screendumps and a short manual owner pass. Do not substitute paid device clouds or claim full macOS desktop automation.
+- NEXT — record the harness, security boundary, VM/install lifecycle, real-auth fixture ownership, artifact/log retention, and serialization contract in an ADR. Then land launch + sign-in smoke before chat/attachment flows, macOS smoke, and automatic failure-to-ticket reporting as separate slices.
+- Nightly QA must test the finalized installer artifact for one pinned SHA and must not introduce mocked production paths. Signing/notarization and the web/API suite remain out of scope.
+
 ## Stable release and distribution
 - DONE — rolling nightly builds one pinned SHA across Linux, signed Windows, and unsigned macOS; owner-triggered strict-SemVer promotion copies one green nightly SHA's exact artifacts to a stable GitHub Release and labels unsigned macOS honestly.
 - DONE groundwork — promotion hashes the signed per-machine MSI, generates a `Muniment.Muniment` WinGet manifest, and opens a draft PR from the configured fork. Fork/token setup, review, publication, Homebrew, and Apple accounts/signing remain owner-gated.
