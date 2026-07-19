@@ -4,7 +4,7 @@ set +x
 umask 077
 
 artifacts=${DCI_ARTIFACTS_DIR:-/tmp/dci-artifacts}
-run_root=$(mktemp -d /tmp/muniment-e2e-macos.XXXXXX) || exit 1
+run_root=$(mktemp -d "${TMPDIR:-/tmp}/muniment-e2e-macos.XXXXXX") || exit 1
 raw="$run_root/raw"
 safe="$run_root/safe"
 archive="$run_root/muniment-nightly.app.zip"
@@ -17,6 +17,7 @@ cleanup_status=0
 installed=0
 app_pid=
 process_name=
+finalized=0
 
 # shellcheck source=../support/cleanup-ledger.sh
 source test/e2e/support/cleanup-ledger.sh
@@ -33,6 +34,8 @@ stop_app() {
 }
 
 finalize() {
+  (( finalized == 0 )) || return
+  finalized=1
   trap - EXIT INT TERM
   cleanup_step stop-app stop_app
   if (( installed )); then cleanup_step remove-bundle rm -rf -- "$installed_bundle"; fi
@@ -65,11 +68,19 @@ finalize() {
   cleanup_step expanded-gone cleanup_absent "$expanded"
   cleanup_step safe-gone cleanup_absent "$safe"
   cleanup_step remove-cleanup-log rm -f -- "$cleanup_log"
-  rmdir "$run_root" 2>/dev/null || cleanup_status=1
+  if [[ ${MUNIMENT_E2E_FINALIZER_TEST_MODE:-0} != 1 ]]; then
+    rmdir "$run_root" 2>/dev/null || cleanup_status=1
+  fi
   if (( status != 0 || cleanup_status != 0 || redaction_status != 0 )); then exit 1; fi
 }
 
-trap finalize EXIT INT TERM
+handle_signal() {
+  status=1
+  finalize
+}
+
+trap finalize EXIT
+trap 'handle_signal' INT TERM
 mkdir -p "$raw" "$safe" "$expanded" "$state_root" || { status=1; exit; }
 : >"$cleanup_log" || { status=1; exit; }
 
@@ -77,6 +88,10 @@ if [[ ${MUNIMENT_E2E_FINALIZER_TEST_MODE:-0} == 1 ]]; then
   installed=${MUNIMENT_E2E_FINALIZER_TEST_INSTALLED:-1}
   installed_bundle="$expanded/test.app"
   mkdir -p "$installed_bundle"
+  if [[ -n ${MUNIMENT_E2E_FINALIZER_TEST_READY:-} ]]; then
+    : >"$MUNIMENT_E2E_FINALIZER_TEST_READY"
+    while :; do sleep 1; done
+  fi
   finalize
   exit
 fi

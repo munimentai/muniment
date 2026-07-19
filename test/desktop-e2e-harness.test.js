@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest'
-import { execFileSync, spawnSync } from 'node:child_process'
+import { execFileSync, spawn, spawnSync } from 'node:child_process'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -95,8 +95,39 @@ describe('Windows auth URL capture seam', () => {
 })
 
 describe('macOS installed launch harness', () => {
+  const runnerPath = path.join(root, 'test/e2e/runner/macos.sh')
   const runner = fs.readFileSync(path.join(root, 'test/e2e/runner/macos.sh'), 'utf8')
   const finalizer = runner.slice(runner.indexOf('finalize()'), runner.indexOf('\nif [[ ${MUNIMENT_E2E_FINALIZER_TEST_MODE'))
+  const finalizerPhases = [...finalizer.matchAll(/cleanup_step ([a-z-]+)/g)].map((match) => match[1])
+
+  const macosFixture = (failed = '') => {
+    const directory = temp(); const ledger = path.join(directory, 'ledger'); const statusLedger = path.join(directory, 'status-ledger'); const artifacts = path.join(directory, 'artifacts')
+    const env = { ...process.env, TMPDIR: directory, DCI_ARTIFACTS_DIR: artifacts, MUNIMENT_E2E_FINALIZER_TEST_MODE: '1', MUNIMENT_E2E_FINALIZER_TEST_LEDGER: ledger, MUNIMENT_E2E_FINALIZER_TEST_STATUS_LEDGER: statusLedger, MUNIMENT_E2E_FINALIZER_TEST_FAIL: failed }
+    const read = (file) => fs.existsSync(file) ? fs.readFileSync(file, 'utf8').trim().split(/\r?\n/).filter(Boolean) : []
+    const outcome = (result) => ({ result, invoked: read(ledger).map((line) => line.split('\t')[0]), statuses: Object.fromEntries(read(statusLedger).map((line) => line.split('\t'))) })
+    return { directory, env, outcome }
+  }
+
+  const runMacosFinalizer = (failed = '') => {
+    const fixture = macosFixture(failed)
+    return fixture.outcome(spawnSync('bash', [runnerPath], { encoding: 'utf8', env: fixture.env }))
+  }
+
+  const signalMacosFinalizer = (signal) => new Promise((resolve, reject) => {
+    const fixture = macosFixture(); const ready = path.join(fixture.directory, 'ready')
+    const child = spawn('bash', [runnerPath], { env: { ...fixture.env, MUNIMENT_E2E_FINALIZER_TEST_READY: ready }, stdio: 'ignore' })
+    const deadline = Date.now() + 5000
+    const poll = setInterval(() => {
+      if (fs.existsSync(ready)) {
+        clearInterval(poll)
+        child.kill(signal)
+      } else if (Date.now() >= deadline) {
+        clearInterval(poll); child.kill('SIGKILL'); reject(new Error('macOS finalizer fixture did not become ready'))
+      }
+    }, 10)
+    child.once('error', reject)
+    child.once('close', (code, receivedSignal) => resolve(fixture.outcome({ status: code, signal: receivedSignal })))
+  })
 
   it('uses the native metadata-preserving install and bounded visible-window probe', () => {
     expect(runner).toContain('ditto -x -k "$archive" "$expanded"')
@@ -115,12 +146,39 @@ describe('macOS installed launch harness', () => {
   })
 
   it('cleans processes, the installed bundle, and state before redaction and publication', () => {
-    const phases = [...finalizer.matchAll(/cleanup_step ([a-z-]+)/g)].map((match) => match[1])
+    const phases = finalizerPhases
     expect(phases.slice(0, 6)).toEqual(['stop-app', 'remove-bundle', 'remove-state', 'bundle-gone', 'processes-gone', 'state-gone'])
     expect(phases.indexOf('processes-gone')).toBeLessThan(phases.indexOf('redact-artifacts'))
     expect(phases.indexOf('redact-artifacts')).toBeLessThan(phases.indexOf('publish-artifacts'))
     expect(finalizer).toContain('suppress-artifacts')
   })
+
+  it('runs every finalizer phase and succeeds after a normal smoke', () => {
+    const { result, invoked } = runMacosFinalizer()
+    expect(result.status).toBe(0)
+    expect(invoked).toEqual(finalizerPhases.filter((phase) => phase !== 'suppress-artifacts'))
+  })
+
+  it.each(['SIGTERM', 'SIGINT'])('fails closed and finalizes after %s', async (signal) => {
+    const { result, invoked } = await signalMacosFinalizer(signal)
+    expect(result.status).not.toBe(0)
+    expect(result.signal).toBeNull()
+    expect(invoked).toEqual(finalizerPhases.filter((phase) => phase !== 'suppress-artifacts'))
+    expect(invoked).toEqual(expect.arrayContaining(['stop-app', 'remove-bundle', 'remove-state', 'processes-gone', 'redact-artifacts']))
+  })
+
+  it.each(['stop-app', 'remove-bundle', 'remove-state', 'processes-gone', 'redact-artifacts', 'replace-artifacts', 'publish-artifacts'])(
+    'continues cleanup and fails after injected %s failure', (failed) => {
+      const { result, invoked, statuses } = runMacosFinalizer(failed)
+      expect(result.status).not.toBe(0)
+      expect(statuses[failed]).toBe('1')
+      expect(invoked).toContain('redact-artifacts')
+      expect(invoked).toContain('remove-cleanup-log')
+      if (failed === 'redact-artifacts') expect(invoked).toContain('suppress-artifacts')
+      else if (!['replace-artifacts', 'publish-artifacts'].includes(failed)) expect(invoked).toContain('publish-artifacts')
+      else expect(invoked).toContain('suppress-artifacts')
+    },
+  )
 })
 
 describe('Windows finalizer contract', () => {
