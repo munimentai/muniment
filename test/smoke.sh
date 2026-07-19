@@ -28,7 +28,7 @@ e2e_adr=docs/decisions/0013-desktop-e2e-harness.md
 test -f "$e2e_adr"
 grep -Fq -- '- Status: accepted' "$e2e_adr"
 grep -Fq '@wdio/tauri-service' "$e2e_adr"
-grep -Fq "official' driver provider" "$e2e_adr"
+grep -Fq '(`tauri-driver`) for Windows and Linux' "$e2e_adr"
 grep -Fq 'Windows/Linux installed launch plus real sign-in smoke.' "$e2e_adr"
 grep -Fq 'macOS install/launch plus Proxmox screendump' "$e2e_adr"
 grep -Fq 'Do not automate sign-in.' "$e2e_adr"

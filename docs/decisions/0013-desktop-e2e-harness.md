@@ -104,8 +104,12 @@ altering a VM. Once acquired, the runner holds the lock through guest cleanup
 and releases it in an unconditional finalizer. Platform cases run sequentially,
 never in a parallel matrix.
 
-Each case starts from the named clean template, creates one ephemeral clone,
-injects secrets as described below, then performs:
+Each platform case starts from the named clean template and creates one
+ephemeral platform clone. Before each artifact, including the first, the runner
+reverts that clone to the named verified clean snapshot and injects secrets as
+described below. The clone may be reused only after that verified revert; no
+dirty guest state or signed-in profile crosses artifact boundaries. It then
+performs:
 
 - **Windows:** download the pinned per-user MSI, per-machine MSI, and NSIS
   assets inside the guest; for each installer in a fresh snapshot, install
@@ -128,12 +132,17 @@ injects secrets as described below, then performs:
   Terminate the app, remove the copied bundle and per-run application state,
   and assert no test process remains.
 
-Every success or failure enters the same finalizer: stop WDIO/driver and app
-processes, collect and redact diagnostics, uninstall/remove the tested artifact
-and per-run profile, destroy the clone, then release the pve01 lock. Cleanup is
-idempotent and continues after individual cleanup errors; cleanup errors are
-reported and make the job fail. No VM or signed-in profile is reused across
-artifacts, platforms, or nightly runs.
+Every success or failure, including timeout or partial setup, enters the same
+finalizer: stop WDIO/driver and app processes; collect and redact diagnostics;
+best-effort sign out and revoke any fixture session; uninstall/remove the tested
+artifact, secrets, and per-run profile; destroy the platform clone; release the
+fixture lease; then release the pve01 lock. Session disposal and lease release
+are attempted even if an earlier cleanup step fails. Cleanup is idempotent and
+continues after individual cleanup errors; cleanup errors are reported without
+fixture identifiers and make the job fail. A platform clone is destroyed after
+its platform case and is never shared across platforms or nightly runs; within
+a case it may be reset to the verified clean snapshot between artifacts, but
+dirty guest state and signed-in profiles are never reused.
 
 ### Real-auth fixture and diagnostic contract
 
