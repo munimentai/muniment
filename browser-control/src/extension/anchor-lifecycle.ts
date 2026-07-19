@@ -14,13 +14,12 @@ export interface ChromeTabs {
   query(queryInfo: { url: string }): Promise<ChromeTab[]>;
   update(tabId: number, properties: { url: string }): Promise<ChromeTab>;
   onRemoved: { addListener(listener: (tabId: number) => void): void };
+  onUpdated: { addListener(listener: (tabId: number, changeInfo: { url?: string }) => void): void };
+  onReplaced: { addListener(listener: (addedTabId: number, removedTabId: number) => void): void };
 }
 
 export interface ChromeRuntime {
   getURL(path: string): string;
-  onMessage: {
-    addListener(listener: (message: unknown) => boolean | void | Promise<unknown>): void;
-  };
   onConnect: {
     addListener(listener: (port: ChromePort) => void): void;
   };
@@ -29,7 +28,9 @@ export interface ChromeRuntime {
 
 export interface ChromePort {
   name: string;
+  onMessage: { addListener(listener: (message: unknown) => void): void };
   onDisconnect: { addListener(listener: () => void): void };
+  disconnect(): void;
 }
 
 export interface ExtensionChrome {
@@ -40,20 +41,34 @@ export interface ExtensionChrome {
 export class AnchorLifecycle {
   readonly #chrome: ExtensionChrome;
   readonly #anchorBaseUrl: string;
+  readonly #onAnchorLost: () => void;
   #ownedTabId: number | undefined;
   #operation = Promise.resolve<unknown>(undefined);
 
-  constructor(chrome: ExtensionChrome) {
+  constructor(chrome: ExtensionChrome, onAnchorLost: () => void = () => {}) {
     this.#chrome = chrome;
     this.#anchorBaseUrl = chrome.runtime.getURL('anchor.html');
+    this.#onAnchorLost = onAnchorLost;
   }
 
   start(): Promise<void> {
     this.#chrome.tabs.onRemoved.addListener(tabId => {
       if (tabId === this.#ownedTabId)
-        void this.teardown();
+        this.#onAnchorLost();
+    });
+    this.#chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
+      if (tabId === this.#ownedTabId && changeInfo.url !== undefined && changeInfo.url !== this.connectedUrl)
+        this.#onAnchorLost();
+    });
+    this.#chrome.tabs.onReplaced.addListener((_addedTabId, removedTabId) => {
+      if (removedTabId === this.#ownedTabId)
+        this.#onAnchorLost();
     });
     return this.teardown();
+  }
+
+  get connectedUrl(): string {
+    return `${this.#anchorBaseUrl}${CONNECTED_HASH}`;
   }
 
   connect(): Promise<number> {
@@ -64,7 +79,7 @@ export class AnchorLifecycle {
       await this.#disconnectTaggedAnchors();
       const tab = await this.#chrome.tabs.create({
         active: true,
-        url: `${this.#anchorBaseUrl}${CONNECTED_HASH}`,
+        url: this.connectedUrl,
       });
       if (tab.id === undefined)
         throw new Error('Chrome did not assign the Muniment anchor a tab id');

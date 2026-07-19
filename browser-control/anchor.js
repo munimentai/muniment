@@ -5,15 +5,21 @@ const DISCONNECTED_COPY = 'Browser control disconnected. Reconnect from the Muni
 // loaded page defaults to disconnected unless the current worker explicitly
 // created it as this session's anchor.
 const status = document.querySelector('#status');
+const stateLabel = document.querySelector('#state-label');
 const connected = location.hash === '#muniment-owned-connected';
-if (status)
-  status.textContent = connected ? CONNECTED_COPY : DISCONNECTED_COPY;
+function render(isConnected) {
+  document.body.dataset.state = isConnected ? 'connected' : 'disconnected';
+  if (stateLabel)
+    stateLabel.textContent = isConnected ? 'Connected' : 'Disconnected';
+  if (status)
+    status.textContent = isConnected ? CONNECTED_COPY : DISCONNECTED_COPY;
+}
+render(connected);
 
 if (connected) {
   const worker = chrome.runtime.connect({ name: 'muniment-anchor-lifecycle' });
   worker.onDisconnect.addListener(() => {
     history.replaceState(null, '', '#muniment-owned-disconnected');
-    if (status)
-      status.textContent = DISCONNECTED_COPY;
+    render(false);
   });
 }

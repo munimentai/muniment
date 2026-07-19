@@ -13,7 +13,8 @@ class FakeChrome implements ExtensionChrome {
   readonly extensionBase = 'chrome-extension://cdedcfbgomnhfpifpgdlpfkkanaofkjd/';
   readonly records = new Map<number, ChromeTab>();
   readonly removedListeners = new Set<(tabId: number) => void>();
-  readonly messageListeners = new Set<(message: unknown) => boolean | void | Promise<unknown>>();
+  readonly updatedListeners = new Set<(tabId: number, changeInfo: { url?: string }) => void>();
+  readonly replacedListeners = new Set<(addedTabId: number, removedTabId: number) => void>();
   readonly connectListeners = new Set<(port: ChromePort) => void>();
   readonly suspendListeners = new Set<() => void>();
   nextId = 1;
@@ -40,11 +41,12 @@ class FakeChrome implements ExtensionChrome {
       return tab;
     },
     onRemoved: { addListener: (listener: (tabId: number) => void) => this.removedListeners.add(listener) },
+    onUpdated: { addListener: (listener: (tabId: number, changeInfo: { url?: string }) => void) => this.updatedListeners.add(listener) },
+    onReplaced: { addListener: (listener: (addedTabId: number, removedTabId: number) => void) => this.replacedListeners.add(listener) },
   };
 
   runtime = {
     getURL: (path: string) => `${this.extensionBase}${path}`,
-    onMessage: { addListener: (listener: (message: unknown) => boolean | void | Promise<unknown>) => this.messageListeners.add(listener) },
     onConnect: { addListener: (listener: (port: ChromePort) => void) => this.connectListeners.add(listener) },
     onSuspend: { addListener: (listener: () => void) => this.suspendListeners.add(listener) },
   };
