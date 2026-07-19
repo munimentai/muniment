@@ -81,13 +81,15 @@ cargo run --release --manifest-path src-tauri/Cargo.toml -p muniment-core \
 This loads one verified recognizer, then performs exactly 100 consecutive
 decodes by cycling through the manifest in order. The report's `decode_run`
 object must show both `requested_decode_count` and `completed_decode_count` as
-100. Its `start_process_peak_rss_bytes` and `end_process_peak_rss_bytes` are
-bounded observations taken immediately before and after those decodes; compare
-them, together with aggregate `process_peak_rss_bytes`, for ADR 0004's no-
-unbounded-growth and 2 GiB peak-RSS gates. Unsupported RSS measurements are
-JSON `null`. The report retains at most one case object per manifest case rather
-than one object per endurance iteration. A decode failure exits in the existing
-redacted CLI error format and does not write a partial report.
+100. Its `start_process_resident_memory_bytes` and
+`end_process_resident_memory_bytes` are current resident-memory observations
+taken immediately before and after those decodes; compare them for ADR 0004's
+no-unbounded-growth gate. The aggregate `process_peak_rss_bytes` is the process
+lifetime high-water mark used for the separate 2 GiB peak-RSS gate. Unsupported
+memory measurements are JSON `null`. The report retains at most one case object
+per manifest case rather than one object per endurance iteration. A decode
+failure exits in the existing redacted CLI error format and does not write a
+partial report.
 
 Omitting `--endurance-utterances` preserves the normal single-pass behavior:
 each manifest case is decoded once. Values outside 1 through 100 are rejected.
