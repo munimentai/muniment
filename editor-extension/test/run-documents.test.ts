@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { acceptedRunUri, openAcceptedRun, RunDocumentStore } from "../src/run-documents";
+import { acceptedRunUri, openAcceptedRun, permissionDecision, RunDocumentStore } from "../src/run-documents";
 import type { RunStreamMessage, RunStreamSubscription } from "../src/transport";
 
 class FakeSubscription implements RunStreamSubscription {
@@ -23,6 +23,12 @@ class FakeSubscription implements RunStreamSubscription {
 
 const settle = () => new Promise<void>((resolve) => setImmediate(resolve));
 
+test("permission modal actions fail closed on denial or dismissal", () => {
+  assert.equal(permissionDecision("Allow"), "allow");
+  assert.equal(permissionDecision("Deny"), "deny");
+  assert.equal(permissionDecision(undefined), "deny");
+});
+
 test("accepted workflow opens a native run URI and streams from the authoritative cursor", async () => {
   const documents = new RunDocumentStore();
   const subscription = new FakeSubscription();
@@ -34,6 +40,8 @@ test("accepted workflow opens a native run URI and streams from the authoritativ
       streamCalls.push([runId, cursor]);
       return subscription;
     },
+    promptPermission: async () => "deny",
+    answerPermission: async () => undefined,
     showDocument: async (uri) => { shown.push(uri); },
   });
   await settle();

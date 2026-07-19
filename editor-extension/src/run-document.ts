@@ -1,9 +1,15 @@
 import { WITHHELD_OUTPUT } from "./thread-document";
-import type { RunReceipt, RunStreamMessage, RunStreamSubscription } from "./transport";
+import type { PendingPermission, PermissionDecision, RunReceipt, RunStreamMessage,
+  RunStreamSubscription } from "./transport";
 
 const MAX_HISTORY = 100;
 
 export type RunDocumentListener = (content: string) => void;
+
+export interface RunPermissionHandler {
+  prompt(permission: Pick<PendingPermission, "title" | "message">): Promise<PermissionDecision>;
+  answer(runId: string, gateId: string, decision: PermissionDecision): Promise<void>;
+}
 
 /** Owns one ordered run stream and its bounded, read-only document projection. */
 export class RunDocument {
@@ -19,7 +25,8 @@ export class RunDocument {
   private finalStatus: string | undefined;
   private deliveryWarning: string | undefined;
 
-  constructor(readonly runId: string, committedSeq: number) {
+  constructor(readonly runId: string, committedSeq: number,
+    private readonly permissions?: RunPermissionHandler) {
     this.lastRunSeq = committedSeq;
     this._content = this.render("Connecting…");
   }
@@ -82,12 +89,23 @@ export class RunDocument {
     }
 
     if (message.type === "permission.pending") {
-      this.lastRunSeq = message.runSeq;
+      this.update(this.render("Waiting for permission…"));
       try {
+        if (!this.permissions) throw new Error("permission handler unavailable");
+        const decision = await this.permissions.prompt({
+          title: message.title,
+          ...(message.message === undefined ? {} : { message: message.message }),
+        });
+        if (this.disposed || generation !== this.generation) return;
+        await this.permissions.answer(this.runId, message.gateId, decision);
+        if (this.disposed || generation !== this.generation) return;
         await this.subscription?.acknowledge(message.runSeq);
+        if (this.disposed || generation !== this.generation) return;
+        this.lastRunSeq = message.runSeq;
+        this.update(this.render("Running"));
       } catch {
         if (!this.disposed && generation === this.generation) {
-          this.update(this.render("Stream interrupted · Refresh Threads to resume this run."));
+          this.update(this.render("Permission couldn’t be completed · Refresh Threads to resume this run."));
           this.closeSubscription();
         }
       }
@@ -115,6 +133,7 @@ export class RunDocument {
   }
 
   private closeSubscription(): void {
+    this.generation++;
     this.listenerSubscription?.dispose();
     this.listenerSubscription = undefined;
     this.subscription?.dispose();

@@ -1,5 +1,6 @@
-import { RunDocument } from "./run-document";
-import type { RunStartAccepted, RunStreamSubscription } from "./transport";
+import { RunDocument, type RunPermissionHandler } from "./run-document";
+import type { PendingPermission, PermissionDecision, RunStartAccepted,
+  RunStreamSubscription } from "./transport";
 
 /** VS Code-independent ownership and coordination for live run documents. */
 export class RunDocumentStore {
@@ -11,9 +12,10 @@ export class RunDocumentStore {
     return this.documents.get(uri)?.content ?? "";
   }
 
-  open(uri: string, runId: string, committedSeq: number): RunDocument {
+  open(uri: string, runId: string, committedSeq: number,
+    permissions?: RunPermissionHandler): RunDocument {
     this.documents.get(uri)?.dispose();
-    const document = new RunDocument(runId, committedSeq);
+    const document = new RunDocument(runId, committedSeq, permissions);
     document.onDidChange(() => this.changed(uri));
     this.documents.set(uri, document);
     this.changed(uri);
@@ -28,11 +30,17 @@ export class RunDocumentStore {
 
 export interface AcceptedRunHost {
   streamRun(runId: string, afterRunSeq: number): Promise<RunStreamSubscription>;
+  promptPermission(permission: Pick<PendingPermission, "title" | "message">): Promise<PermissionDecision>;
+  answerPermission(runId: string, gateId: string, decision: PermissionDecision): Promise<void>;
   showDocument(uri: string): Promise<void>;
 }
 
 export function acceptedRunUri(runId: string): string {
   return `muniment-run:/${encodeURIComponent(runId)}.md`;
+}
+
+export function permissionDecision(action: "Allow" | "Deny" | undefined): PermissionDecision {
+  return action === "Allow" ? "allow" : "deny";
 }
 
 export async function openAcceptedRun(
@@ -41,7 +49,10 @@ export async function openAcceptedRun(
   host: AcceptedRunHost,
 ): Promise<void> {
   const uri = acceptedRunUri(accepted.runId);
-  const run = documents.open(uri, accepted.runId, accepted.committedSeq);
+  const run = documents.open(uri, accepted.runId, accepted.committedSeq, {
+    prompt: (permission) => host.promptPermission(permission),
+    answer: (runId, gateId, decision) => host.answerPermission(runId, gateId, decision),
+  });
   void run.attach(host.streamRun(accepted.runId, accepted.committedSeq));
   await host.showDocument(uri);
 }
