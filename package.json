@@ -18,6 +18,7 @@
     "@testing-library/jest-dom": "^6.9.1",
     "@testing-library/svelte": "^5.4.2",
     "@wdio/cli": "9.29.1",
+    "@wdio/junit-reporter": "9.29.1",
     "@wdio/local-runner": "9.29.1",
     "@wdio/mocha-framework": "9.29.1",
     "@wdio/spec-reporter": "9.29.1",

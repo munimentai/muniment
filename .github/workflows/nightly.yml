@@ -191,8 +191,11 @@ jobs:
             });
 
   linux-e2e:
-    needs: [prepare, publish]
-    if: always() && needs.publish.result == 'success'
+    needs: [prepare, build, publish]
+    if: >-
+      always() && needs.build.result == 'success' &&
+      (needs.publish.result == 'success' ||
+      (github.event_name == 'workflow_dispatch' && github.event.inputs.platform == 'linux' && needs.publish.result == 'skipped'))
     runs-on: self-hosted
     timeout-minutes: 45
     env:
@@ -205,6 +208,35 @@ jobs:
       - name: Validate pinned source identity
         run: |
           [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo 'source_sha must be exactly 40 lowercase hex characters' >&2; exit 1; }
+
+      - name: Finalize targeted Linux pre-release identity
+        if: github.event_name == 'workflow_dispatch' && github.event.inputs.platform == 'linux'
+        uses: actions/github-script@v8
+        env:
+          SOURCE_SHA: ${{ needs.prepare.outputs.source_sha }}
+        with:
+          script: |
+            const sha = process.env.SOURCE_SHA;
+            const { data: release } = await github.rest.repos.getReleaseByTag({
+              ...context.repo,
+              tag: "nightly",
+            });
+            const assetName = `nightly-${sha}-linux-muniment.deb`;
+            if (release.assets.filter((asset) => asset.name === assetName).length !== 1) {
+              core.setFailed(`expected one ${assetName} asset before Linux E2E`);
+              return;
+            }
+            await github.rest.repos.updateRelease({
+              ...context.repo,
+              release_id: release.id,
+              target_commitish: sha,
+            });
+            await github.rest.git.updateRef({
+              ...context.repo,
+              ref: "tags/nightly",
+              sha,
+              force: true,
+            });
 
       - name: Run installed Linux sign-in via desktop-ci
         id: e2e
@@ -256,6 +288,15 @@ jobs:
         with:
           name: linux-e2e-${{ needs.prepare.outputs.source_sha }}-failure
           path: ${{ runner.temp }}/muniment-e2e-artifacts
+          retention-days: 30
+          if-no-files-found: error
+
+      - name: Upload stable JUnit report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-e2e-report
+          path: ${{ runner.temp }}/muniment-e2e-artifacts/junit-*.xml
           retention-days: 30
           if-no-files-found: error
 
