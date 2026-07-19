@@ -61,6 +61,13 @@
     return dictationCommandPending || isDictationActive(dictation)
   }
 
+  function clearDictationSession(session) {
+    if (session && dictationSession?.id !== session.id) return
+    dictationSession = undefined
+    dictationUnlisten?.()
+    dictationUnlisten = undefined
+  }
+
   function applyDictationStatus(status) {
     dictation = status
     if (status.state === 'modelNotInstalled' || status.state === 'failed') {
@@ -68,7 +75,7 @@
     } else dictationError = ''
     if (!isDictationActive(status)) {
       stopDictationPolling()
-      dictationSession = undefined
+      clearDictationSession(dictationSession)
     }
   }
 
@@ -99,13 +106,20 @@
     dictationPendingCommand = 'start'
     dictationError = ''
     try {
+      const stopListening = await window.__TAURI__?.event?.listen('dictation-event', ({ payload }) => {
+        if (payload.type === 'transcript' && dictationSession?.id === session.id && isDictationActive(dictation)) {
+          draft = appendTranscript(draft, payload.text)
+        }
+      })
+      if (destroyed || dictationSession?.id !== session.id) stopListening?.()
+      else dictationUnlisten = stopListening
       const status = await tauri.invoke('dictation_start')
       if (destroyed) return
       applyDictationStatus(status)
       if (isDictationActive(dictation)) pollDictation()
     } catch (error) {
       if (destroyed) return
-      if (dictationSession?.id === session.id) dictationSession = undefined
+      clearDictationSession(session)
       dictation = { state: 'failed' }
       dictationError = typeof error === 'string' ? error : 'Dictation could not be started.'
     } finally {
@@ -145,7 +159,7 @@
 
   function cancelDictationDraft() {
     const session = dictationSession
-    dictationSession = undefined
+    clearDictationSession(session)
     if (!session) return
     draft = session.draft
     tick().then(() => {
@@ -325,12 +339,6 @@
       if (projected) messages = messages.map((message) => message.run?.id === projected.id ? { ...message, run: projected } : message)
       if (active?.id === payload.runId) active = projected && !['complete', 'cancelled', 'failed', 'interrupted'].includes(projected.phase) ? projected : null
     }).then((stop) => { unlisten = stop })
-    window.__TAURI__?.event?.listen('dictation-event', ({ payload }) => {
-      if (payload.type === 'transcript' && dictationSession && isDictationActive(dictation)) draft = appendTranscript(draft, payload.text)
-    }).then((stop) => {
-      if (destroyed) stop()
-      else dictationUnlisten = stop
-    })
     const outside = (event) => {
       if (accessOpen && !accessPopover?.contains(event.target) && !profileButton?.contains(event.target)) closeAccess()
     }

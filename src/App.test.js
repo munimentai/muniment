@@ -166,6 +166,35 @@ describe('voice dictation', () => {
     await waitFor(() => expect(voice).toHaveAttribute('aria-pressed', 'false'))
   })
 
+  it('ignores a cancelled session transcript after a new session starts', async () => {
+    invoke.mockImplementation(async (command) => {
+      if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
+      if (command === 'chat_history') return []
+      if (command === 'auth_entitlement_snapshot') return snapshot()
+      if (command === 'auth_devices') return []
+      if (command === 'dictation_start') return { state: 'running' }
+      if (command === 'dictation_stop') return { state: 'stopped' }
+      throw new Error(`unexpected command: ${command}`)
+    })
+    render(App)
+    const composer = await screen.findByPlaceholderText('Ask anything')
+    await fireEvent.input(composer, { target: { value: 'Original' } })
+    const voice = screen.getByRole('button', { name: 'Voice' })
+    await fireEvent.click(voice)
+    const cancelledSessionListener = dictationListener
+    await fireEvent.keyDown(document, { key: 'Escape' })
+    await waitFor(() => expect(voice).toHaveAttribute('aria-pressed', 'false'))
+
+    await fireEvent.input(composer, { target: { value: 'New draft' } })
+    await fireEvent.click(voice)
+    await waitFor(() => expect(voice).toHaveAttribute('aria-pressed', 'true'))
+    const currentSessionListener = dictationListener
+    cancelledSessionListener({ payload: { type: 'transcript', text: 'stale words' } })
+    expect(composer).toHaveValue('New draft')
+    currentSessionListener({ payload: { type: 'transcript', text: 'current words' } })
+    await waitFor(() => expect(composer).toHaveValue('New draft current words'))
+  })
+
   it('starts, appends transcript to an editable draft, and stops', async () => {
     invoke.mockImplementation(async (command) => {
       if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
