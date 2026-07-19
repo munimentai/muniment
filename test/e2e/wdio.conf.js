@@ -2,6 +2,7 @@ import path from 'node:path'
 
 const appBinary = process.env.MUNIMENT_E2E_APP_BINARY
 const artifactDir = process.env.MUNIMENT_E2E_RAW_DIR
+const reportName = process.env.MUNIMENT_E2E_CLEANUP_ONLY === '1' ? 'cleanup' : 'sign-in'
 
 if (!appBinary || !path.isAbsolute(appBinary)) throw new Error('MUNIMENT_E2E_APP_BINARY must be an absolute path')
 if (!artifactDir || !path.isAbsolute(artifactDir)) throw new Error('MUNIMENT_E2E_RAW_DIR must be an absolute path')
@@ -14,7 +15,13 @@ export const config = {
   logLevel: 'info',
   outputDir: artifactDir,
   framework: 'mocha',
-  reporters: [['spec', { addConsoleLogs: true }]],
+  reporters: [
+    ['spec', { addConsoleLogs: true }],
+    ['junit', {
+      outputDir: artifactDir,
+      outputFileFormat: ({ cid }) => `junit-${reportName}-${cid}.xml`,
+    }],
+  ],
   mochaOpts: { timeout: 180000 },
   waitforTimeout: 30000,
   services: [['@wdio/tauri-service', {
