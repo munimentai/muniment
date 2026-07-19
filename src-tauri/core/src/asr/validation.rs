@@ -11,6 +11,8 @@ use super::OfflineParakeetRecognizer;
 
 pub const CORPUS_SCHEMA_VERSION: u32 = 1;
 pub const REPORT_SCHEMA_VERSION: u32 = 1;
+pub const REQUIRED_DURATIONS_SECONDS: [f64; 3] = [5.0, 15.0, 60.0];
+pub const MATRIX_DURATION_TOLERANCE_SECONDS: f64 = 0.25;
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -30,7 +32,7 @@ pub struct CorpusCase {
     pub reference_transcript: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum AudioClass {
     Clean,
@@ -80,8 +82,12 @@ pub struct WordError {
 #[derive(Debug, Serialize, PartialEq)]
 pub struct AggregateReport {
     pub cold_model_load_seconds: f64,
-    pub p50_decode_latency_seconds: f64,
-    pub p95_decode_latency_seconds: f64,
+    pub p50_first_transcript_latency_seconds: f64,
+    pub p95_first_transcript_latency_seconds: f64,
+    pub p50_final_transcript_latency_seconds: f64,
+    pub p95_final_transcript_latency_seconds: f64,
+    pub p50_post_eos_decode_latency_seconds: f64,
+    pub p95_post_eos_decode_latency_seconds: f64,
     /// Null when the operating system has no supported peak-RSS measurement.
     pub process_peak_rss_bytes: Option<u64>,
 }
@@ -151,6 +157,23 @@ pub fn validate_manifest(manifest: &CorpusManifest, base: &Path) -> Result<(), S
             ));
         }
     }
+    for audio_class in [AudioClass::Clean, AudioClass::Noisy] {
+        for required_duration in REQUIRED_DURATIONS_SECONDS {
+            if !manifest.cases.iter().any(|case| {
+                case.audio_class == audio_class
+                    && (case.duration_seconds - required_duration).abs()
+                        <= MATRIX_DURATION_TOLERANCE_SECONDS
+            }) {
+                return Err(format!(
+                    "corpus manifest is missing required {} {required_duration}-second case (tolerance +/- {MATRIX_DURATION_TOLERANCE_SECONDS} seconds)",
+                    match audio_class {
+                        AudioClass::Clean => "clean",
+                        AudioClass::Noisy => "noisy",
+                    }
+                ));
+            }
+        }
+    }
     Ok(())
 }
 
@@ -199,8 +222,7 @@ pub fn run_cases(
             transcript,
         });
     }
-    let mut latencies: Vec<f64> = cases.iter().map(|case| case.decode_wall_seconds).collect();
-    latencies.sort_by(f64::total_cmp);
+    let (first_latencies, final_latencies, post_eos_latencies) = aggregate_latencies(&cases);
     Ok(ValidationReport {
         schema_version: REPORT_SCHEMA_VERSION,
         model_revision: model_revision.into(),
@@ -211,12 +233,35 @@ pub fn run_cases(
         machine_tier: machine_tier.into(),
         aggregate: AggregateReport {
             cold_model_load_seconds,
-            p50_decode_latency_seconds: percentile(&latencies, 0.50),
-            p95_decode_latency_seconds: percentile(&latencies, 0.95),
+            p50_first_transcript_latency_seconds: percentile(&first_latencies, 0.50),
+            p95_first_transcript_latency_seconds: percentile(&first_latencies, 0.95),
+            p50_final_transcript_latency_seconds: percentile(&final_latencies, 0.50),
+            p95_final_transcript_latency_seconds: percentile(&final_latencies, 0.95),
+            p50_post_eos_decode_latency_seconds: percentile(&post_eos_latencies, 0.50),
+            p95_post_eos_decode_latency_seconds: percentile(&post_eos_latencies, 0.95),
             process_peak_rss_bytes: process_peak_rss_bytes(),
         },
         cases,
     })
+}
+
+fn aggregate_latencies(cases: &[CaseReport]) -> (Vec<f64>, Vec<f64>, Vec<f64>) {
+    let mut first: Vec<_> = cases
+        .iter()
+        .map(|case| case.first_transcript_latency_seconds)
+        .collect();
+    let mut final_: Vec<_> = cases
+        .iter()
+        .map(|case| case.final_transcript_latency_seconds)
+        .collect();
+    let mut post_eos: Vec<_> = cases
+        .iter()
+        .map(|case| case.decode_wall_seconds)
+        .collect();
+    first.sort_by(f64::total_cmp);
+    final_.sort_by(f64::total_cmp);
+    post_eos.sort_by(f64::total_cmp);
+    (first, final_, post_eos)
 }
 
 fn read_wav(path: &Path) -> Result<(u32, Vec<f32>, f64), String> {
@@ -434,7 +479,6 @@ mod tests {
                 reference_transcript: Some("hello world".into()),
             }],
         };
-        validate_manifest(&manifest, &root).unwrap();
         let decoder = FakeDecoder(AtomicUsize::new(0));
         let report = run_cases(&manifest, &root, &decoder, 1.25, "revision", "tier").unwrap();
         assert_eq!(decoder.0.load(Ordering::Relaxed), 1);
@@ -479,14 +523,94 @@ mod tests {
             cases: Vec::new(),
             aggregate: AggregateReport {
                 cold_model_load_seconds: 1.0,
-                p50_decode_latency_seconds: 2.0,
-                p95_decode_latency_seconds: 3.0,
+                p50_first_transcript_latency_seconds: 2.0,
+                p95_first_transcript_latency_seconds: 3.0,
+                p50_final_transcript_latency_seconds: 4.0,
+                p95_final_transcript_latency_seconds: 5.0,
+                p50_post_eos_decode_latency_seconds: 0.2,
+                p95_post_eos_decode_latency_seconds: 0.3,
                 process_peak_rss_bytes: None,
             },
         };
         assert_eq!(
             serde_json::to_string(&report).unwrap(),
-            r#"{"schema_version":1,"model_revision":"rev","platform":{"os":"test-os","architecture":"test-arch"},"machine_tier":"test-tier","cases":[],"aggregate":{"cold_model_load_seconds":1.0,"p50_decode_latency_seconds":2.0,"p95_decode_latency_seconds":3.0,"process_peak_rss_bytes":null}}"#
+            r#"{"schema_version":1,"model_revision":"rev","platform":{"os":"test-os","architecture":"test-arch"},"machine_tier":"test-tier","cases":[],"aggregate":{"cold_model_load_seconds":1.0,"p50_first_transcript_latency_seconds":2.0,"p95_first_transcript_latency_seconds":3.0,"p50_final_transcript_latency_seconds":4.0,"p95_final_transcript_latency_seconds":5.0,"p50_post_eos_decode_latency_seconds":0.2,"p95_post_eos_decode_latency_seconds":0.3,"process_peak_rss_bytes":null}}"#
         );
+    }
+
+    #[test]
+    fn manifest_requires_each_clean_and_noisy_duration_slot() {
+        let root = std::env::temp_dir().join(format!(
+            "muniment-asr-matrix-{}-{}",
+            std::process::id(),
+            std::thread::current().name().unwrap_or("test")
+        ));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        fs::write(root.join("fixture.wav"), b"fixture").unwrap();
+
+        let make_manifest = || CorpusManifest {
+            schema_version: CORPUS_SCHEMA_VERSION,
+            cases: [AudioClass::Clean, AudioClass::Noisy]
+                .into_iter()
+                .flat_map(|audio_class| {
+                    REQUIRED_DURATIONS_SECONDS
+                        .into_iter()
+                        .map(move |duration_seconds| CorpusCase {
+                            id: format!("{audio_class:?}-{duration_seconds}"),
+                            language: "en".into(),
+                            audio_class,
+                            duration_seconds,
+                            audio_path: "fixture.wav".into(),
+                            reference_transcript: None,
+                        })
+                })
+                .collect(),
+        };
+
+        validate_manifest(&make_manifest(), &root).unwrap();
+        for audio_class in [AudioClass::Clean, AudioClass::Noisy] {
+            for required_duration in REQUIRED_DURATIONS_SECONDS {
+                let mut manifest = make_manifest();
+                manifest.cases.retain(|case| {
+                    case.audio_class != audio_class
+                        || case.duration_seconds != required_duration
+                });
+                let error = validate_manifest(&manifest, &root).unwrap_err();
+                assert!(error.contains(&format!("{required_duration}-second")));
+            }
+        }
+
+        let mut within_tolerance = make_manifest();
+        within_tolerance.cases[0].duration_seconds =
+            REQUIRED_DURATIONS_SECONDS[0] + MATRIX_DURATION_TOLERANCE_SECONDS;
+        validate_manifest(&within_tolerance, &root).unwrap();
+        within_tolerance.cases[0].duration_seconds += f64::EPSILON * 8.0;
+        assert!(validate_manifest(&within_tolerance, &root).is_err());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn aggregate_latency_percentiles_use_each_documented_reference_point() {
+        let case = |first, final_, post_eos| CaseReport {
+            id: String::new(),
+            language: String::new(),
+            audio_class: String::new(),
+            duration_seconds: 1.0,
+            decode_wall_seconds: post_eos,
+            real_time_factor: post_eos,
+            first_transcript_latency_seconds: first,
+            final_transcript_latency_seconds: final_,
+            transcript: String::new(),
+            word_error: None,
+        };
+        let cases = vec![case(4.0, 40.0, 0.4), case(1.0, 10.0, 0.1), case(3.0, 30.0, 0.3)];
+        let (first, final_, post_eos) = aggregate_latencies(&cases);
+        assert_eq!(percentile(&first, 0.50), 3.0);
+        assert_eq!(percentile(&first, 0.95), 4.0);
+        assert_eq!(percentile(&final_, 0.50), 30.0);
+        assert_eq!(percentile(&final_, 0.95), 40.0);
+        assert_eq!(percentile(&post_eos, 0.50), 0.3);
+        assert_eq!(percentile(&post_eos, 0.95), 0.4);
     }
 }
