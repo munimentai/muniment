@@ -165,7 +165,7 @@ class SocketAttempt implements RelayTransport {
     let message: string | Uint8Array;
     if (typeof data === 'string')
       message = data;
-    else if (data instanceof ArrayBuffer)
+    else if (isArrayBuffer(data))
       message = new Uint8Array(data);
     else if (ArrayBuffer.isView(data))
       message = new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
@@ -207,6 +207,17 @@ class SocketAttempt implements RelayTransport {
       return;
     this.timers.clearTimeout(this.#heartbeatDeadline);
     this.#heartbeatDeadline = undefined;
+  }
+}
+
+function isArrayBuffer(value: unknown): value is ArrayBuffer {
+  if (value instanceof ArrayBuffer)
+    return true;
+  try {
+    ArrayBuffer.prototype.slice.call(value, 0, 0);
+    return true;
+  } catch {
+    return false;
   }
 }
 
