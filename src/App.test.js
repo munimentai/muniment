@@ -84,6 +84,88 @@ beforeEach(() => {
 afterEach(() => cleanup())
 
 describe('voice dictation', () => {
+  it('captures while the pointer is held and stops on release or pointer cancellation', async () => {
+    invoke.mockImplementation(async (command) => {
+      if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
+      if (command === 'chat_history') return []
+      if (command === 'auth_entitlement_snapshot') return snapshot()
+      if (command === 'auth_devices') return []
+      if (command === 'dictation_start') return { state: 'running' }
+      if (command === 'dictation_stop') return { state: 'stopped' }
+      throw new Error(`unexpected command: ${command}`)
+    })
+    render(App)
+    const voice = await screen.findByRole('button', { name: 'Voice' })
+
+    await fireEvent.pointerDown(voice, { button: 0, pointerId: 1 })
+    expect(voice).toHaveAttribute('aria-pressed', 'true')
+    await fireEvent.pointerUp(voice, { pointerId: 1 })
+    expect(voice).toHaveAttribute('aria-pressed', 'false')
+
+    await fireEvent.pointerDown(voice, { button: 0, pointerId: 2 })
+    await fireEvent.pointerCancel(voice, { pointerId: 2 })
+    expect(invoke.mock.calls.filter(([command]) => command === 'dictation_start')).toHaveLength(2)
+    expect(invoke.mock.calls.filter(([command]) => command === 'dictation_stop')).toHaveLength(2)
+    expect(voice).toHaveAttribute('aria-pressed', 'false')
+  })
+
+  it('stops after a quick release even when startup is still resolving', async () => {
+    let resolveStart
+    invoke.mockImplementation(async (command) => {
+      if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
+      if (command === 'chat_history') return []
+      if (command === 'auth_entitlement_snapshot') return snapshot()
+      if (command === 'auth_devices') return []
+      if (command === 'dictation_start') return new Promise((resolve) => { resolveStart = resolve })
+      if (command === 'dictation_stop') return { state: 'stopped' }
+      throw new Error(`unexpected command: ${command}`)
+    })
+    render(App)
+    const voice = await screen.findByRole('button', { name: 'Voice' })
+    await fireEvent.pointerDown(voice, { button: 0, pointerId: 1 })
+    await fireEvent.pointerUp(voice, { pointerId: 1 })
+    resolveStart({ state: 'running' })
+
+    await waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith('dictation_stop')
+      expect(voice).toHaveAttribute('aria-pressed', 'false')
+    })
+  })
+
+  it('Escape restores the exact pre-capture draft and selection and ignores late transcripts', async () => {
+    let resolveStop
+    invoke.mockImplementation(async (command) => {
+      if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
+      if (command === 'chat_history') return []
+      if (command === 'auth_entitlement_snapshot') return snapshot()
+      if (command === 'auth_devices') return []
+      if (command === 'dictation_start') return { state: 'running' }
+      if (command === 'dictation_stop') return new Promise((resolve) => { resolveStop = resolve })
+      throw new Error(`unexpected command: ${command}`)
+    })
+    render(App)
+    const composer = await screen.findByPlaceholderText('Ask anything')
+    await fireEvent.input(composer, { target: { value: 'Exact draft' } })
+    composer.focus()
+    composer.setSelectionRange(2, 7, 'backward')
+    const voice = screen.getByRole('button', { name: 'Voice' })
+    await fireEvent.click(voice)
+    dictationListener({ payload: { type: 'transcript', text: 'temporary words' } })
+    await waitFor(() => expect(composer).toHaveValue('Exact draft temporary words'))
+
+    await fireEvent.keyDown(document, { key: 'Escape' })
+    expect(composer).toHaveValue('Exact draft')
+    dictationListener({ payload: { type: 'transcript', text: 'late words' } })
+    expect(composer).toHaveValue('Exact draft')
+    await waitFor(() => {
+      expect(composer.selectionStart).toBe(2)
+      expect(composer.selectionEnd).toBe(7)
+      expect(composer.selectionDirection).toBe('backward')
+    })
+    resolveStop({ state: 'stopped' })
+    await waitFor(() => expect(voice).toHaveAttribute('aria-pressed', 'false'))
+  })
+
   it('starts, appends transcript to an editable draft, and stops', async () => {
     invoke.mockImplementation(async (command) => {
       if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
