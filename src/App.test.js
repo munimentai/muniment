@@ -114,6 +114,34 @@ describe('voice dictation', () => {
     expect(composer).toHaveValue('Edited transcript')
   })
 
+  it('keeps an active capture stoppable and prevents starting a chat', async () => {
+    invoke.mockImplementation(async (command) => {
+      if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
+      if (command === 'chat_history') return []
+      if (command === 'auth_entitlement_snapshot') return snapshot()
+      if (command === 'auth_devices') return []
+      if (command === 'dictation_start') return { state: 'starting' }
+      if (command === 'dictation_stop') return { state: 'stopped' }
+      throw new Error(`unexpected command: ${command}`)
+    })
+    render(App)
+    const composer = await screen.findByPlaceholderText('Ask anything')
+    await fireEvent.input(composer, { target: { value: 'Question' } })
+    const voice = screen.getByRole('button', { name: 'Voice' })
+    await fireEvent.click(voice)
+
+    const send = screen.getByRole('button', { name: 'Send' })
+    expect(send).toBeDisabled()
+    expect(voice).toBeEnabled()
+    await fireEvent.click(send)
+    expect(invoke).not.toHaveBeenCalledWith('chat_submit', expect.anything())
+
+    await fireEvent.click(voice)
+    expect(invoke).toHaveBeenCalledWith('dictation_stop')
+    expect(voice).toHaveAttribute('aria-pressed', 'false')
+    expect(send).toBeEnabled()
+  })
+
   it.each([
     ['modelNotInstalled', 'The speech model is not installed.'],
     ['failed', 'Microphone capture failed.'],

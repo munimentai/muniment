@@ -43,12 +43,16 @@
   let dictationError = $state('')
   let dictationTimer
   let dictationUnlisten
-  let dictationCommandPending = false
+  let dictationCommandPending = $state(false)
   let destroyed = false
 
   function stopDictationPolling() {
     clearTimeout(dictationTimer)
     dictationTimer = undefined
+  }
+
+  function dictationBusy() {
+    return dictationCommandPending || isDictationActive(dictation)
   }
 
   function applyDictationStatus(status) {
@@ -287,7 +291,7 @@
 
   async function send() {
     const prompt = draft.trim()
-    if (!prompt || active) return
+    if (!prompt || active || dictationBusy()) return
     submitError = ''
     const submissionId = ++submissionSequence
     const userMessage = { role: 'user', text: prompt, attachments: [], submissionId }
@@ -359,7 +363,7 @@
   }
 
   async function resume(run) {
-    if (active || !run.resumable || run.phase !== 'interrupted') return
+    if (active || dictationBusy() || !run.resumable || run.phase !== 'interrupted') return
     const resuming = { ...run, phase: 'resuming', resumeError: '' }
     active = resuming
     messages = messages.map((message) => message.run?.id === run.id ? { ...message, run: resuming } : message)
@@ -383,7 +387,7 @@
 
   async function queue(delivery) {
     const message = draft.trim()
-    if (!message || !active || active.id === 'pending') return
+    if (!message || !active || active.id === 'pending' || dictationBusy()) return
     const runId = active.id
     queueError = ''
     try {
@@ -510,8 +514,8 @@
               {#if message.run.phase === 'thinking'}
                 <span class="thinking"><svg width="17" height="17" viewBox="0 0 48 48" aria-label="Thinking"><path d={markD} stroke-width="5" /></svg><span>Routing</span></span>
               {:else}<p class:streaming={message.run.phase === 'streaming'}>{message.run.text}{#if message.run.phase === 'streaming'}<span class="caret" aria-hidden="true"></span>{/if}</p>{/if}
-              {#if message.run.phase === 'failed'}<div class="run-error">Reply failed. <button onclick={() => { draft = message.run.prompt; send() }}>Try again</button></div>{/if}
-              {#if message.run.phase === 'interrupted'}<div class="run-error" role={message.run.resumeError ? 'alert' : undefined}>{message.run.resumeError ?? 'Reply interrupted.'} {#if message.run.resumable}<button disabled={!!active} onclick={() => resume(message.run)}>Resume</button>{:else if message.run.prompt}<button onclick={() => { draft = message.run.prompt; send() }}>Try again</button>{/if}</div>{/if}
+              {#if message.run.phase === 'failed'}<div class="run-error">Reply failed. <button disabled={dictationBusy()} onclick={() => { draft = message.run.prompt; send() }}>Try again</button></div>{/if}
+              {#if message.run.phase === 'interrupted'}<div class="run-error" role={message.run.resumeError ? 'alert' : undefined}>{message.run.resumeError ?? 'Reply interrupted.'} {#if message.run.resumable}<button disabled={!!active || dictationBusy()} onclick={() => resume(message.run)}>Resume</button>{:else if message.run.prompt}<button disabled={dictationBusy()} onclick={() => { draft = message.run.prompt; send() }}>Try again</button>{/if}</div>{/if}
               {#if groupedTools.length}
                 <div class="tool-card tool-group" role="group" aria-label={`Parallel tool activity: ${groupedTools.map((tool) => `${toolName(tool)} ${toolStatus(tool)}`).join(', ')}`}>
                   <div class="tool-group-title">Parallel tool activity</div>
@@ -569,7 +573,7 @@
               <span>{active?.phase === 'resuming' ? 'Reopening the existing secure session…' : active && active.id !== 'pending' ? '⏎ steers this reply · queue as follow-up' : 'Routing is automatic. Every reply carries its receipt.'}</span>
             {/if}
             <div class="composer-actions">
-              <button type="button" class="quiet voice" aria-pressed={isDictationActive(dictation)} disabled={!!active} onclick={toggleDictation}>Voice</button>
+              <button type="button" class="quiet voice" aria-pressed={isDictationActive(dictation)} disabled={!!active || dictationCommandPending} onclick={toggleDictation}>Voice</button>
               {#if !active}<button type="button" class="quiet attach" onclick={chooseFiles}>Add files</button>{/if}
               {#if active?.phase === 'resuming'}
                 <button disabled>Resuming…</button>
@@ -577,7 +581,7 @@
                 <button class="quiet follow-up" disabled={!draft.trim()} onclick={() => queue('followUp')}>Queue follow-up</button>
                 <button onclick={cancel}>Stop</button>
                 <button disabled={!draft.trim()} onclick={() => queue('steer')}>Send</button>
-              {:else if !active}<button disabled={!draft.trim()} onclick={send}>Send</button>{/if}
+              {:else if !active}<button disabled={!draft.trim() || dictationBusy()} onclick={send}>Send</button>{/if}
             </div>
           </div>
           {#if dictationError}<div class="dictation-error" role="alert">{dictationError}</div>{/if}
