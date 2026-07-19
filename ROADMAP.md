@@ -57,7 +57,7 @@ Phases mirror harness-spec §9. Muniment-cloud Phase 1 native auth and the cloud
 - RATIFIED 2026-07-19 — add a layered desktop QA lane: cheap frontend browser coverage plus installed-nightly real-app validation on the serialized pve01 desktop-ci VMs.
 - Windows and Linux receive full WebdriverIO automation through the Tauri WebDriver seam; macOS remains install/launch smoke plus Proxmox screendumps and a short manual owner pass. Do not substitute paid device clouds or claim full macOS desktop automation.
 - DONE groundwork — accepted ADR 0013 records the harness, security boundary, VM/install lifecycle, real-auth fixture ownership, artifact/log retention, and serialization contract.
-- BLOCKED — Windows/Linux installed launch + real-sign-in smoke waits for the canonical cross-repository `desktop E2E runner contract` named by ADR 0013; this repository must not invent pve01 operations, VM paths, or fixture secrets. After that contract lands, proceed with launch + sign-in smoke before chat/attachment flows, macOS smoke, and automatic failure-to-ticket reporting as separate slices.
+- UNGATED 2026-07-19 — the canonical desktop E2E runner contract is published with `--collect-artifacts`, `--screendump`, and `--env-stdin`. NEXT — implement the canonical Linux `.deb` installed launch + real-sign-in smoke as the first bounded platform slice; follow with Windows, chat/attachment flows, macOS smoke, and automatic failure-to-ticket reporting as separate slices.
 - Nightly QA must test the finalized installer artifact for one pinned SHA and must not introduce mocked production paths. Signing/notarization and the web/API suite remain out of scope.
 
 ## Stable release and distribution
