@@ -4,17 +4,21 @@ use std::collections::{HashMap, VecDeque};
 use std::net::{Ipv4Addr, Ipv6Addr};
 
 type StartResults = HashMap<u32, VecDeque<Result<(u64, u64), ProcessReadError>>>;
+type SocketResults = HashMap<u32, VecDeque<Result<Vec<ProcessSocket>, ProcessReadError>>>;
 
 struct FakeReader {
-    pids: Result<Vec<u32>, ProcessReadError>,
+    pids: RefCell<VecDeque<Result<Vec<u32>, ProcessReadError>>>,
     starts: RefCell<StartResults>,
-    executables: HashMap<u32, Result<PathBuf, ProcessReadError>>,
-    sockets: HashMap<u32, Result<Vec<ProcessSocket>, ProcessReadError>>,
+    executables: HashMap<u32, Result<ExecutableIdentity, ProcessReadError>>,
+    sockets: RefCell<SocketResults>,
 }
 
 impl NativeProcessReader for FakeReader {
     fn process_ids(&self) -> Result<Vec<u32>, ProcessReadError> {
-        self.pids.clone()
+        self.pids
+            .borrow_mut()
+            .pop_front()
+            .unwrap_or(Err(ProcessReadError))
     }
 
     fn start_identity(&self, pid: u32) -> Result<(u64, u64), ProcessReadError> {
@@ -25,7 +29,7 @@ impl NativeProcessReader for FakeReader {
             .unwrap_or(Err(ProcessReadError))
     }
 
-    fn executable(&self, pid: u32) -> Result<PathBuf, ProcessReadError> {
+    fn executable_identity(&self, pid: u32) -> Result<ExecutableIdentity, ProcessReadError> {
         self.executables
             .get(&pid)
             .cloned()
@@ -34,8 +38,9 @@ impl NativeProcessReader for FakeReader {
 
     fn tcp_sockets(&self, pid: u32) -> Result<Vec<ProcessSocket>, ProcessReadError> {
         self.sockets
-            .get(&pid)
-            .cloned()
+            .borrow_mut()
+            .get_mut(&pid)
+            .and_then(VecDeque::pop_front)
             .unwrap_or(Err(ProcessReadError))
     }
 }
@@ -52,11 +57,15 @@ fn identity() -> (u64, u64) {
 }
 
 fn reader(pids: Vec<u32>) -> FakeReader {
+    reader_scans([Ok(pids.clone()), Ok(pids)])
+}
+
+fn reader_scans(scans: impl IntoIterator<Item = Result<Vec<u32>, ProcessReadError>>) -> FakeReader {
     FakeReader {
-        pids: Ok(pids),
+        pids: RefCell::new(scans.into_iter().collect()),
         starts: RefCell::new(HashMap::new()),
         executables: HashMap::new(),
-        sockets: HashMap::new(),
+        sockets: RefCell::new(HashMap::new()),
     }
 }
 
@@ -70,7 +79,18 @@ fn add_process(
         .starts
         .get_mut()
         .insert(pid, starts.into_iter().collect());
-    reader.sockets.insert(pid, sockets);
+    reader
+        .sockets
+        .get_mut()
+        .insert(pid, [sockets.clone(), sockets].into_iter().collect());
+}
+
+fn executable_identity(path: &Path) -> ExecutableIdentity {
+    let metadata = path.metadata().unwrap();
+    ExecutableIdentity {
+        device: metadata.dev(),
+        inode: metadata.ino(),
+    }
 }
 
 fn browser_half() -> ProcessSocket {
@@ -212,6 +232,56 @@ fn rejects_owner_churn_pid_reuse_and_inspection_failure() {
 }
 
 #[test]
+fn rejects_owner_set_changes_during_confirmation_scan() {
+    let (local, peer) = endpoints();
+
+    let mut disappeared = reader_scans([Ok(vec![42]), Ok(vec![])]);
+    add_process(
+        &mut disappeared,
+        42,
+        [Ok(identity()), Ok(identity())],
+        Ok(vec![browser_half()]),
+    );
+    assert_eq!(
+        resolve_browser_process_with_reader(local, peer, &disappeared),
+        Err(ResolutionError::ProcessIdentityChanged)
+    );
+
+    let mut changed_pid = reader_scans([Ok(vec![42]), Ok(vec![43])]);
+    for pid in [42, 43] {
+        add_process(
+            &mut changed_pid,
+            pid,
+            [Ok(identity()), Ok(identity())],
+            Ok(vec![browser_half()]),
+        );
+    }
+    assert_eq!(
+        resolve_browser_process_with_reader(local, peer, &changed_pid),
+        Err(ResolutionError::ProcessIdentityChanged)
+    );
+
+    let mut second_appeared = reader_scans([Ok(vec![42]), Ok(vec![42, 43])]);
+    for pid in [42, 43] {
+        add_process(
+            &mut second_appeared,
+            pid,
+            [
+                Ok(identity()),
+                Ok(identity()),
+                Ok(identity()),
+                Ok(identity()),
+            ],
+            Ok(vec![browser_half()]),
+        );
+    }
+    assert_eq!(
+        resolve_browser_process_with_reader(local, peer, &second_appeared),
+        Err(ResolutionError::AmbiguousOwner)
+    );
+}
+
+#[test]
 fn rejects_invalid_loopback_endpoints() {
     for (local, peer) in [
         (
@@ -256,7 +326,9 @@ fn authorizes_canonical_executable_and_rejects_mismatch_or_reuse() {
         .starts
         .get_mut()
         .insert(42, [Ok(identity()), Ok(identity())].into_iter().collect());
-    success.executables.insert(42, Ok(executable.clone()));
+    success
+        .executables
+        .insert(42, Ok(executable_identity(&executable)));
     assert!(verify_browser_process_with_reader(observed, &executable, &success).is_ok());
 
     let mut mismatch = reader(vec![]);
@@ -264,7 +336,9 @@ fn authorizes_canonical_executable_and_rejects_mismatch_or_reuse() {
         .starts
         .get_mut()
         .insert(42, [Ok(identity()), Ok(identity())].into_iter().collect());
-    mismatch.executables.insert(42, Ok(other));
+    mismatch
+        .executables
+        .insert(42, Ok(executable_identity(&other)));
     assert_eq!(
         verify_browser_process_with_reader(observed, &executable, &mismatch),
         Err(VerificationError::ExecutableMismatch)
@@ -275,11 +349,46 @@ fn authorizes_canonical_executable_and_rejects_mismatch_or_reuse() {
         .starts
         .get_mut()
         .insert(42, [Ok(identity()), Ok((78, 0))].into_iter().collect());
-    reused.executables.insert(42, Ok(executable.clone()));
+    reused
+        .executables
+        .insert(42, Ok(executable_identity(&executable)));
     assert_eq!(
         verify_browser_process_with_reader(observed, &executable, &reused),
         Err(VerificationError::ProcessIdentityChanged)
     );
+}
+
+#[test]
+fn rejects_expected_path_replaced_after_process_started() {
+    let directory = std::env::temp_dir().join(format!(
+        "muniment-macos-identity-{}-{}",
+        std::process::id(),
+        identity().1
+    ));
+    std::fs::create_dir(&directory).unwrap();
+    let expected = directory.join("browser");
+    let replacement = directory.join("replacement");
+    std::fs::write(&expected, b"running image").unwrap();
+    std::fs::write(&replacement, b"selected image").unwrap();
+    let running_identity = executable_identity(&expected);
+    std::fs::rename(&replacement, &expected).unwrap();
+
+    let observed = BrowserProcessIdentity {
+        pid: 42,
+        start_identity: identity(),
+    };
+    let mut replaced = reader(vec![]);
+    replaced
+        .starts
+        .get_mut()
+        .insert(42, [Ok(identity()), Ok(identity())].into_iter().collect());
+    replaced.executables.insert(42, Ok(running_identity));
+    assert_eq!(
+        verify_browser_process_with_reader(observed, &expected, &replaced),
+        Err(VerificationError::ExecutableMismatch)
+    );
+
+    std::fs::remove_dir_all(directory).unwrap();
 }
 
 #[test]
@@ -293,7 +402,9 @@ fn composition_authorizes_only_the_resolved_executable() {
         std::iter::repeat_n(Ok(identity()), 6),
         Ok(vec![browser_half()]),
     );
-    success.executables.insert(42, Ok(executable.clone()));
+    success
+        .executables
+        .insert(42, Ok(executable_identity(&executable)));
     assert!(authorize_browser_process_with_reader(local, peer, &executable, &success).is_ok());
 
     let mut wrong = reader(vec![42]);
@@ -303,7 +414,9 @@ fn composition_authorizes_only_the_resolved_executable() {
         std::iter::repeat_n(Ok(identity()), 6),
         Ok(vec![browser_half()]),
     );
-    wrong.executables.insert(42, Ok(std::env::temp_dir()));
+    wrong
+        .executables
+        .insert(42, Ok(executable_identity(&std::env::temp_dir())));
     assert_eq!(
         authorize_browser_process_with_reader(local, peer, &executable, &wrong),
         Err(AuthorizationError::ExecutableVerificationFailed)

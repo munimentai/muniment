@@ -1,10 +1,13 @@
 //! macOS browser executable identity verification.
 
 use std::fmt;
-use std::fs;
+use std::fs::File;
 use std::mem;
 use std::net::SocketAddr;
-use std::path::{Path, PathBuf};
+use std::path::Path;
+
+#[cfg(unix)]
+use std::os::unix::fs::MetadataExt;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct BrowserProcessIdentity {
@@ -87,11 +90,17 @@ pub struct ProcessSocket {
     pub peer: SocketAddr,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ExecutableIdentity {
+    device: u64,
+    inode: u64,
+}
+
 /// Injected boundary around macOS libproc process and descriptor inspection.
 pub trait NativeProcessReader {
     fn process_ids(&self) -> Result<Vec<u32>, ProcessReadError>;
     fn start_identity(&self, pid: u32) -> Result<(u64, u64), ProcessReadError>;
-    fn executable(&self, pid: u32) -> Result<PathBuf, ProcessReadError>;
+    fn executable_identity(&self, pid: u32) -> Result<ExecutableIdentity, ProcessReadError>;
     fn tcp_sockets(&self, pid: u32) -> Result<Vec<ProcessSocket>, ProcessReadError>;
 }
 
@@ -218,15 +227,18 @@ fn verify_browser_process_with_reader(
         return Err(VerificationError::ProcessIdentityChanged);
     }
     let actual = reader
-        .executable(observed.pid)
+        .executable_identity(observed.pid)
         .map_err(|_| VerificationError::ProcessExecutableInvalid)?;
-    if !actual.is_absolute() {
-        return Err(VerificationError::ProcessExecutableInvalid);
-    }
-    let expected = fs::canonicalize(expected_executable)
+    let expected = expected_executable
+        .canonicalize()
         .map_err(|_| VerificationError::ExpectedExecutableInvalid)?;
-    let actual =
-        fs::canonicalize(actual).map_err(|_| VerificationError::ProcessExecutableInvalid)?;
+    let expected = File::open(expected)
+        .and_then(|file| file.metadata())
+        .map(|metadata| ExecutableIdentity {
+            device: metadata.dev(),
+            inode: metadata.ino(),
+        })
+        .map_err(|_| VerificationError::ExpectedExecutableInvalid)?;
     let after = reader
         .start_identity(observed.pid)
         .map_err(|_| VerificationError::ProcessUnavailable)?;

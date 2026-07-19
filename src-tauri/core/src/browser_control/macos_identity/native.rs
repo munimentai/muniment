@@ -1,24 +1,62 @@
-use super::{MacOsProcessReader, NativeProcessReader, ProcessReadError, ProcessSocket};
-use std::ffi::CStr;
+use super::{
+    ExecutableIdentity, MacOsProcessReader, NativeProcessReader, ProcessReadError, ProcessSocket,
+};
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::os::raw::{c_char, c_int, c_void};
-use std::path::PathBuf;
 
-const PROC_UID_ONLY: u32 = 5;
+// Values exported by the macOS SDK's <libproc.h> and <sys/proc_info.h>.
+const PROC_UID_ONLY: u32 = 4;
 const PROC_PIDLISTFDS: c_int = 1;
 const PROC_PIDTBSDINFO: c_int = 3;
 const PROC_PIDFDSOCKETINFO: c_int = 3;
+const PROC_PIDREGIONPATHINFO: c_int = 8;
 const PROX_FDTYPE_SOCKET: u32 = 2;
 const SOCKINFO_TCP: i32 = 2;
 const AF_INET: i32 = 2;
 const AF_INET6: i32 = 30;
 const INI_IPV4: u8 = 1;
 const INI_IPV6: u8 = 2;
-const MAX_PATH: usize = 4096;
 const BSD_INFO_SIZE: usize = 136;
 // `sizeof(struct socket_fdinfo)` in the macOS SDK. The large tail is the
 // `socket_info.soi_proto` union (not merely its TCP member).
 const SOCKET_INFO_SIZE: usize = 792;
+
+const _: () = assert!(PROC_UID_ONLY == 4);
+const _: () = assert!(PROC_PIDLISTFDS == 1);
+const _: () = assert!(PROC_PIDTBSDINFO == 3);
+const _: () = assert!(PROC_PIDFDSOCKETINFO == 3);
+const _: () = assert!(PROC_PIDREGIONPATHINFO == 8);
+
+#[repr(C)]
+struct ProcRegionInfo {
+    protection: u32,
+    max_protection: u32,
+    inheritance: u32,
+    flags: u32,
+    offset: u64,
+    behavior: u32,
+    user_wired_count: u32,
+    user_tag: u32,
+    pages_resident: u32,
+    pages_shared_now_private: u32,
+    pages_swapped_out: u32,
+    pages_dirtied: u32,
+    ref_count: u32,
+    shadow_depth: u32,
+    share_mode: u32,
+    private_pages_resident: u32,
+    shared_pages_resident: u32,
+    obj_id: u32,
+    depth: u32,
+    address: u64,
+    size: u64,
+}
+
+#[repr(C)]
+struct ProcRegionWithPathInfo {
+    region: ProcRegionInfo,
+    vnode: libc::vnode_info_path,
+}
 
 #[link(name = "proc")]
 extern "C" {
@@ -37,7 +75,6 @@ extern "C" {
         buffer: *mut c_void,
         buffersize: c_int,
     ) -> c_int;
-    fn proc_pidpath(pid: c_int, buffer: *mut c_void, buffersize: u32) -> c_int;
 }
 
 impl NativeProcessReader for MacOsProcessReader {
@@ -81,23 +118,42 @@ impl NativeProcessReader for MacOsProcessReader {
         Ok((read_u64(&bytes, 120)?, read_u64(&bytes, 128)?))
     }
 
-    fn executable(&self, pid: u32) -> Result<PathBuf, ProcessReadError> {
-        let mut bytes = [0u8; MAX_PATH];
-        let read = unsafe {
-            proc_pidpath(
-                pid.try_into().map_err(|_| ProcessReadError)?,
-                bytes.as_mut_ptr().cast(),
-                MAX_PATH as u32,
-            )
-        };
-        if read <= 0 || read as usize >= bytes.len() {
-            return Err(ProcessReadError);
+    fn executable_identity(&self, pid: u32) -> Result<ExecutableIdentity, ProcessReadError> {
+        let pid = pid.try_into().map_err(|_| ProcessReadError)?;
+        let mut address = 0;
+        // The first region can be an anonymous __PAGEZERO mapping. The first
+        // file-backed mapping is the process image; keep this walk bounded and
+        // reject malformed or unexpectedly fragmented maps.
+        for _ in 0..256 {
+            let mut info = std::mem::MaybeUninit::<ProcRegionWithPathInfo>::zeroed();
+            let read = unsafe {
+                proc_pidinfo(
+                    pid,
+                    PROC_PIDREGIONPATHINFO,
+                    address,
+                    info.as_mut_ptr().cast(),
+                    size_of::<ProcRegionWithPathInfo>() as c_int,
+                )
+            };
+            if read != size_of::<ProcRegionWithPathInfo>() as c_int {
+                return Err(ProcessReadError);
+            }
+            let info = unsafe { info.assume_init() };
+            let stat = info.vnode.vip_vi.vi_stat;
+            if stat.vst_dev != 0 && stat.vst_ino != 0 {
+                return Ok(ExecutableIdentity {
+                    device: stat.vst_dev.into(),
+                    inode: stat.vst_ino,
+                });
+            }
+            address = info
+                .region
+                .address
+                .checked_add(info.region.size)
+                .filter(|next| *next > address)
+                .ok_or(ProcessReadError)?;
         }
-        let path = CStr::from_bytes_until_nul(&bytes)
-            .map_err(|_| ProcessReadError)?
-            .to_str()
-            .map_err(|_| ProcessReadError)?;
-        Ok(PathBuf::from(path))
+        Err(ProcessReadError)
     }
 
     fn tcp_sockets(&self, pid: u32) -> Result<Vec<ProcessSocket>, ProcessReadError> {
