@@ -34,10 +34,10 @@ function Invoke-BoundedProcess([string]$File, [string]$Arguments, [int]$TimeoutS
   if ($process.ExitCode -notin @(0, 3010)) { throw "$File failed with exit code $($process.ExitCode)" }
 }
 
-function Get-ProductRegistration {
+function Get-UninstallEntries {
   if ($env:MUNIMENT_E2E_FINALIZER_TEST_MODE -eq "1") {
     if ($testRegistration -and (Test-Path -LiteralPath $testRegistration)) {
-      return @([pscustomobject]@{ PSChildName = "test-product" })
+      return @([pscustomobject]@{ PSChildName = "test-product"; DisplayName = (Get-Content -LiteralPath $testRegistration -Raw) })
     }
     return @()
   }
@@ -45,9 +45,22 @@ function Get-ProductRegistration {
     "HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall",
     "HKCU:\Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall"
   )
-  return @($roots | Where-Object { Test-Path $_ } | ForEach-Object {
-    Get-ChildItem $_ | Where-Object { (Get-ItemProperty $_.PSPath -ErrorAction SilentlyContinue).DisplayName -eq "muniment" }
-  })
+  return @($roots | Where-Object { Test-Path $_ } | ForEach-Object { Get-ChildItem $_ | ForEach-Object {
+    $properties = Get-ItemProperty $_.PSPath -ErrorAction SilentlyContinue
+    if ($properties) { [pscustomobject]@{ PSChildName = $_.PSChildName; PSPath = $_.PSPath; DisplayName = $properties.DisplayName } }
+  } })
+}
+
+function Get-ProductRegistration {
+  return @(Get-UninstallEntries | Where-Object { $_.DisplayName -eq "muniment" })
+}
+
+function Get-HarnessProcesses {
+  if ($env:MUNIMENT_E2E_FINALIZER_TEST_MODE -eq "1") {
+    if ($testProcess -and (Test-Path -LiteralPath $testProcess)) { return @([pscustomobject]@{ ProcessName = "muniment" }) }
+    return @()
+  }
+  return @(Get-Process muniment, tauri-driver, msedgedriver -ErrorAction SilentlyContinue)
 }
 
 function Invoke-Cleanup([string]$Name, [scriptblock]$Action) {
@@ -107,9 +120,7 @@ function Finalize-Run {
   Invoke-Cleanup "remove-auth-handler" { Remove-AuthHandler }
   Invoke-Cleanup "remove-state" { if ($stateRoot) { Remove-Item $stateRoot -Recurse -Force -ErrorAction SilentlyContinue } }
   Invoke-Cleanup "processes-gone" {
-    if ($env:MUNIMENT_E2E_FINALIZER_TEST_MODE -eq "1") {
-      if ($testProcess -and (Test-Path -LiteralPath $testProcess)) { throw "test process remains" }
-    } elseif (Get-Process muniment, tauri-driver, msedgedriver -ErrorAction SilentlyContinue) { throw "test process remains" }
+    if (@(Get-HarnessProcesses).Count -ne 0) { throw "test process remains" }
   }
   if ($cleanupLog -and $raw) { Copy-Item $cleanupLog (Join-Path $raw "cleanup.log") -Force -ErrorAction SilentlyContinue }
   Invoke-Cleanup "redact-artifacts" {
@@ -150,7 +161,8 @@ try {
     $testRegistration = Join-Path $runRoot "registration"
     $testProcess = Join-Path $runRoot "process"
     New-Item -ItemType Directory -Force $installDirectory | Out-Null
-    New-Item -ItemType File -Force $testRegistration | Out-Null
+    $testDisplayName = if ($env:MUNIMENT_E2E_FINALIZER_TEST_REGISTRATION_NAME) { $env:MUNIMENT_E2E_FINALIZER_TEST_REGISTRATION_NAME } else { "muniment" }
+    Set-Content -LiteralPath $testRegistration -Value $testDisplayName -NoNewline
     if ($env:MUNIMENT_E2E_FINALIZER_TEST_REMAIN_PROCESS -eq "1") { New-Item -ItemType File -Force $testProcess | Out-Null }
     $ready = $true
     $installAttempted = $true

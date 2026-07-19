@@ -95,7 +95,8 @@ describe('Windows finalizer contract', () => {
     expect(phases.indexOf('installed-files-gone')).toBeLessThan(phases.indexOf('remove-state'))
     expect(finalizer).toMatch(/registration-gone[^\n]+Get-ProductRegistration/)
     expect(finalizer).toMatch(/installed-files-gone[^\n]+Test-Path -LiteralPath \$installDirectory/)
-    expect(finalizer).toMatch(/processes-gone[\s\S]+Get-Process muniment, tauri-driver, msedgedriver/)
+    expect(finalizer).toMatch(/processes-gone[\s\S]+Get-HarnessProcesses/)
+    expect(runner).toMatch(/function Get-HarnessProcesses[\s\S]+Get-Process muniment, tauri-driver, msedgedriver/)
     expect(finalizer).toMatch(/publicationStatus = \$cleanupStatus[\s\S]+cleanupStatus -ne \$publicationStatus[\s\S]+suppress-artifacts/)
   })
 
@@ -140,6 +141,15 @@ describe('Windows finalizer contract', () => {
     expect(invoked).toContain('publish-artifacts')
   })
 
+  it.skipIf(process.platform !== 'win32')('ignores a remaining unrelated uninstall registration', () => {
+    const { result, statuses } = runWindowsFinalizer('', '', {
+      MUNIMENT_E2E_FINALIZER_TEST_REMAIN_REGISTRATION: '1',
+      MUNIMENT_E2E_FINALIZER_TEST_REGISTRATION_NAME: 'another product',
+    })
+    expect(result.status).toBe(0)
+    expect(statuses['registration-gone']).toBe('0')
+  })
+
   it.skipIf(process.platform !== 'win32').each(injectablePhases)('continues every Windows cleanup step after injected %s failure', (failed) => {
     const { result, invoked } = runWindowsFinalizer(failed)
     expect(result.status).not.toBe(0)
@@ -165,6 +175,35 @@ describe('Windows finalizer contract', () => {
     expect(invoked).toContain('suppress-artifacts')
     expect(fs.existsSync(artifacts)).toBe(false)
     expect(fs.readdirSync(directory).filter((name) => name.startsWith('muniment-e2e-'))).toEqual([])
+  })
+})
+
+describe('Windows nightly workflow gate', () => {
+  const workflow = fs.readFileSync(path.join(root, '.github/workflows/nightly.yml'), 'utf8')
+  const job = workflow.slice(workflow.indexOf('\n  windows-e2e:'), workflow.indexOf('\n    runs-on:', workflow.indexOf('\n  windows-e2e:')))
+  const condition = job.match(/\n    if: >-\n([\s\S]+)$/)?.[1].trim().replace(/\n\s*/g, ' ')
+  const evaluate = ({ eventName, platform, prepare = 'success', linux = 'success' }) => Function(
+    'always', 'needs', 'github',
+    `return ${condition.replaceAll('needs.linux-e2e', 'needs.linuxE2e')}`,
+  )(() => true, { prepare: { result: prepare }, linuxE2e: { result: linux } }, { event_name: eventName, event: { inputs: { platform } } })
+
+  it.each([
+    ['schedule', undefined],
+    ['workflow_dispatch', 'all'],
+  ])('runs after Linux for a full %s nightly', (eventName, platform) => {
+    expect(evaluate({ eventName, platform })).toBe(true)
+  })
+
+  it('excludes a Linux-only dispatch', () => {
+    expect(evaluate({ eventName: 'workflow_dispatch', platform: 'linux' })).toBe(false)
+  })
+
+  it.each([
+    ['workflow_dispatch', 'windows', 'success', 'skipped'],
+    ['schedule', undefined, 'failure', 'success'],
+    ['schedule', undefined, 'success', 'skipped'],
+  ])('does not run without the full serialized prerequisites', (eventName, platform, prepare, linux) => {
+    expect(evaluate({ eventName, platform, prepare, linux })).toBe(false)
   })
 })
 

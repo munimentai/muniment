@@ -310,7 +310,9 @@ jobs:
     needs: [prepare, linux-e2e]
     # The shared real-auth fixture is exclusive: Windows starts only after the
     # Linux case has completely finished, including its finalizer.
-    if: always() && needs.prepare.result == 'success' && needs.linux-e2e.result != 'skipped'
+    if: >-
+      always() && needs.prepare.result == 'success' && needs.linux-e2e.result != 'skipped' &&
+      (github.event_name != 'workflow_dispatch' || github.event.inputs.platform == 'all')
     runs-on: self-hosted
     timeout-minutes: 45
     env:
