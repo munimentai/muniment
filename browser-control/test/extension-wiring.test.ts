@@ -1,9 +1,16 @@
 import { readFile } from 'node:fs/promises';
+import { resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { describe, expect, it, vi } from 'vitest';
 
 import { RelayConnection, type RelayTransport } from '../src/index.js';
 import { ANCHOR_PORT, installSessionLifecycle } from '../src/extension/session-lifecycle.js';
 import type { ChromePort, ChromeTab, ExtensionChrome } from '../src/extension/anchor-lifecycle.js';
+
+function fixturePath(relative: string): string {
+  const url = new URL(relative, import.meta.url);
+  return url.protocol === 'file:' ? fileURLToPath(url) : resolve(process.cwd(), `.${url.pathname}`);
+}
 
 class Event<T extends (...args: never[]) => void> {
   listeners: T[] = [];
@@ -165,7 +172,7 @@ describe('MV3 session wiring', () => {
 
 describe('anchor page fallback', () => {
   it('renders exact connected copy and durably marks worker-port loss disconnected', async () => {
-    const script = await readFile(new URL('../anchor.js', import.meta.url), 'utf8');
+    const script = await readFile(fixturePath('../anchor.js'), 'utf8');
     const status = { textContent: '' }; const label = { textContent: '' }; const body = { dataset: { state: '' } };
     const disconnect = new Event<() => void>(); const replaceState = vi.fn((_a, _b, hash: string) => { location.hash = hash; });
     const location = { hash: '#muniment-owned-connected' };
@@ -182,7 +189,7 @@ describe('anchor page fallback', () => {
   });
 
   it('keeps the required copy and responsive light/dark treatment in the page', async () => {
-    const html = await readFile(new URL('../anchor.html', import.meta.url), 'utf8');
+    const html = await readFile(fixturePath('../anchor.html'), 'utf8');
     expect(html).toContain('Browser control disconnected. Reconnect from the Muniment desktop app.');
     expect(html).toContain('prefers-color-scheme: dark');
     expect(html).toContain('width: min(100%, 560px)');
