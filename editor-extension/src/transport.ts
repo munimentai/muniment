@@ -7,6 +7,7 @@ import { TextDecoder } from "node:util";
 import { ATTACH_PROTOCOL, decodeAttachJson, type AttachEnvelope } from "./protocol";
 
 export const MAX_FRAME_LENGTH = 1024 * 1024;
+export const MAX_PENDING_REQUESTS = 8;
 const DEFAULT_IO_TIMEOUT_MS = 5_000;
 const DEFAULT_APPROVAL_TIMEOUT_MS = 120_000;
 
@@ -115,7 +116,49 @@ export interface AttachConnection {
   listThreads(cursor?: string): Promise<ThreadListPage>;
   openThread(threadId: string, cursor?: string): Promise<ThreadOpenPage>;
   startRun(text: string, context?: JsonValue): Promise<RunStartAccepted>;
+  streamRun(runId: string, afterRunSeq: number): Promise<RunStreamSubscription>;
   dispose(): void;
+}
+
+export interface Disposable { dispose(): void; }
+export type Event<T> = (listener: (event: T) => void) => Disposable;
+
+export interface RunStreamWindow { maxEvents: number; maxBytes: number; }
+export interface ReceiptCapability { name: string; version: string; }
+export interface RunReceipt {
+  route?: string;
+  model?: string;
+  cost?: string;
+  time?: string;
+  capabilities: ReceiptCapability[];
+}
+export interface RedactedRunEvent {
+  type: "run.event";
+  runSeq: number;
+  eventType: string;
+  eventVersion: number;
+  recordedAt: string;
+  payload: { withheld: true; receipt?: RunReceipt };
+}
+export interface RunStreamCaughtUp {
+  type: "subscription.caught_up";
+  runSeq: number;
+}
+export interface RunStreamClosed {
+  type: "stream.closed";
+  runSeq: number;
+  code: string;
+  resumable: boolean;
+}
+export type RunStreamMessage = RedactedRunEvent | RunStreamCaughtUp | RunStreamClosed;
+export interface RunStreamSubscription extends Disposable {
+  readonly subscriptionId: string;
+  readonly runId: string;
+  readonly firstAvailableRunSeq: number;
+  readonly currentRunSeq: number;
+  readonly window: RunStreamWindow;
+  readonly onDidReceiveMessage: Event<RunStreamMessage>;
+  acknowledge(throughRunSeq: number): Promise<void>;
 }
 
 export type JsonValue = null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue };
@@ -339,22 +382,34 @@ export function connectAttach(options: ConnectOptions): Promise<AttachConnection
           clearTimer();
           removeHandshakeListeners();
           let capability = envelope.capability as string;
-          let pending: {
+          const pending = new Map<string, {
             requestId: string;
             resolve: (envelope: AttachEnvelope) => void;
             reject: (error: AttachTransportError) => void;
             timer: NodeJS.Timeout;
-          } | undefined;
+            deadline: number;
+            owner?: Set<string>;
+            onResponse?: (envelope: AttachEnvelope) => void;
+          }>();
+          const subscriptions = new Map<string, ActiveRunSubscription>();
+          const ignoredResponses = new Map<string, NodeJS.Timeout>();
           const rejectPending = (error: AttachTransportError): void => {
-            if (!pending) return;
-            clearTimeout(pending.timer);
-            const reject = pending.reject;
-            pending = undefined;
-            reject(error);
+            for (const item of pending.values()) {
+              clearTimeout(item.timer);
+              item.reject(error);
+            }
+            pending.clear();
+          };
+          const clearIgnoredResponses = (): void => {
+            for (const timer of ignoredResponses.values()) clearTimeout(timer);
+            ignoredResponses.clear();
           };
           const onTerminal = (): void => {
             capability = "";
             rejectPending(new AttachTransportError("connection_closed"));
+            for (const subscription of subscriptions.values()) subscription.dispose();
+            subscriptions.clear();
+            clearIgnoredResponses();
             socket.removeListener("data", onAuthorizedData);
             socket.removeListener("error", onTerminal);
             socket.removeListener("close", onTerminal);
@@ -367,14 +422,34 @@ export function connectAttach(options: ConnectOptions): Promise<AttachConnection
           const onAuthorizedData = (chunk: Buffer): void => {
             try {
               for (const message of decoder.push(chunk)) {
-                if (!pending || (message.kind !== "response" && message.kind !== "error") ||
-                    message.request_id !== pending.requestId) {
+                if (message.kind === "event") {
+                  const subscription = subscriptions.get(message.subscription_id as string);
+                  if (!subscription) {
+                    closeUnexpected(new AttachTransportError("unexpected_message"));
+                    return;
+                  }
+                  subscription.deliver(message);
+                  continue;
+                }
+                if (message.kind !== "response" && message.kind !== "error") {
                   closeUnexpected(new AttachTransportError("unexpected_message"));
                   return;
                 }
-                clearTimeout(pending.timer);
-                const current = pending;
-                pending = undefined;
+                const responseId = message.request_id as string;
+                const ignoredTimer = ignoredResponses.get(responseId);
+                if (ignoredTimer) {
+                  clearTimeout(ignoredTimer);
+                  ignoredResponses.delete(responseId);
+                  continue;
+                }
+                if (!pending.has(responseId)) {
+                  closeUnexpected(new AttachTransportError("unexpected_message"));
+                  return;
+                }
+                const current = pending.get(message.request_id as string)!;
+                clearTimeout(current.timer);
+                pending.delete(current.requestId);
+                current.owner?.delete(current.requestId);
                 if (message.kind === "error") {
                   const code = (message.error as Record<string, unknown>).code;
                   current.reject(new AttachTransportError(code === "protocol_incompatible"
@@ -383,6 +458,12 @@ export function connectAttach(options: ConnectOptions): Promise<AttachConnection
                     : code === "persistence_failed" ? "desktop_failed"
                     : "request_rejected"));
                 } else {
+                  try {
+                    current.onResponse?.(message);
+                  } catch (error) {
+                    current.reject(transportError(error));
+                    throw error;
+                  }
                   current.resolve(message);
                 }
               }
@@ -390,10 +471,14 @@ export function connectAttach(options: ConnectOptions): Promise<AttachConnection
               closeUnexpected(transportError(error));
             }
           };
-          const request = (operation: "thread.list" | "thread.open" | "run.start", body: JsonBody,
-            idempotent = false): Promise<AttachEnvelope> => {
+          const request = (operation: "thread.list" | "thread.open" | "run.start" | "run.stream" |
+            "run.cursor_ack", body: JsonBody,
+            idempotent = false, owner?: Set<string>,
+            onResponse?: (envelope: AttachEnvelope) => void): Promise<AttachEnvelope> => {
             if (!capability) return Promise.reject(new AttachTransportError("authorization_expired"));
-            if (pending) return Promise.reject(new AttachTransportError("unexpected_message"));
+            if (pending.size + ignoredResponses.size >= MAX_PENDING_REQUESTS) {
+              return Promise.reject(new AttachTransportError("request_rejected"));
+            }
             let requestId: string;
             let idempotencyKey: string | undefined;
             try {
@@ -406,7 +491,9 @@ export function connectAttach(options: ConnectOptions): Promise<AttachConnection
               const timer = setTimeout(() => {
                 closeUnexpected(new AttachTransportError("timeout"));
               }, ioTimeout);
-              pending = { requestId, resolve: requestResolve, reject: requestReject, timer };
+              pending.set(requestId, { requestId, resolve: requestResolve, reject: requestReject,
+                timer, deadline: Date.now() + ioTimeout, owner, onResponse });
+              owner?.add(requestId);
               try {
                 socket.write(encodeAttachFrame({
                   protocol: ATTACH_PROTOCOL, request_id: requestId, operation, capability, body,
@@ -443,9 +530,28 @@ export function connectAttach(options: ConnectOptions): Promise<AttachConnection
               if (validatedContext !== undefined) body.context = validatedContext;
               return decodeRunStartAccepted((await request("run.start", body, true)).body);
             },
+            async streamRun(runId: string, afterRunSeq: number): Promise<RunStreamSubscription> {
+              validateRunStreamInput(runId, afterRunSeq);
+              let state: ActiveRunSubscription | undefined;
+              await request("run.stream", { run_id: runId, after_run_seq: afterRunSeq }, false,
+                undefined, (response) => {
+                  const summary = decodeRunStreamSummary(response.body, runId, afterRunSeq);
+                  if (subscriptions.has(summary.subscriptionId)) {
+                    throw new AttachTransportError("unexpected_message");
+                  }
+                  state = createRunSubscription(summary, afterRunSeq, request, pending,
+                    ignoredResponses, () => subscriptions.delete(summary.subscriptionId));
+                  subscriptions.set(summary.subscriptionId, state);
+                });
+              if (!state) throw new AttachTransportError("unexpected_message");
+              return state.public;
+            },
             dispose(): void {
               capability = "";
               rejectPending(new AttachTransportError("connection_closed"));
+              for (const subscription of subscriptions.values()) subscription.dispose();
+              subscriptions.clear();
+              clearIgnoredResponses();
               socket.removeListener("data", onAuthorizedData);
               socket.removeListener("error", onTerminal);
               socket.removeListener("close", onTerminal);
@@ -476,6 +582,229 @@ const MAX_RUN_START_TEXT_LENGTH = 32 * 1024;
 const MAX_RUN_START_CONTEXT_LENGTH = 64 * 1024;
 const MAX_CURSOR_LENGTH = 1024;
 const MAX_THREAD_ID_LENGTH = 36;
+const MAX_SUBSCRIPTION_ID_LENGTH = 64;
+const MAX_RUN_STREAM_WINDOW_EVENTS = 1024;
+const MAX_RUN_STREAM_WINDOW_BYTES = 4 * 1024 * 1024;
+
+interface RunStreamSummary {
+  subscriptionId: string;
+  runId: string;
+  firstAvailableRunSeq: number;
+  currentRunSeq: number;
+  window: RunStreamWindow;
+}
+
+interface ActiveRunSubscription {
+  public: RunStreamSubscription;
+  deliver(envelope: AttachEnvelope): void;
+  dispose(): void;
+}
+
+function validateRunStreamInput(runId: unknown, afterRunSeq: unknown): void {
+  if (!isUuid(runId) || typeof afterRunSeq !== "number" ||
+      !Number.isSafeInteger(afterRunSeq) || afterRunSeq < 0) {
+    throw new AttachTransportError("unexpected_message");
+  }
+}
+
+function decodeRunStreamSummary(value: unknown, expectedRunId: string,
+  afterRunSeq: number): RunStreamSummary {
+  const summary = exactObject(value, ["subscription_id", "run_id", "first_available_run_seq",
+    "current_run_seq", "window"]);
+  const window = exactObject(summary.window, ["max_events", "max_bytes"]);
+  validateBoundedString(summary.subscription_id, MAX_SUBSCRIPTION_ID_LENGTH, false);
+  const first = summary.first_available_run_seq;
+  const current = summary.current_run_seq;
+  if (summary.run_id !== expectedRunId || typeof first !== "number" ||
+      !Number.isSafeInteger(first) || first <= 0 || typeof current !== "number" ||
+      !Number.isSafeInteger(current) || current < first || afterRunSeq > current ||
+      afterRunSeq + 1 < first || !boundedPositiveInteger(window.max_events,
+        MAX_RUN_STREAM_WINDOW_EVENTS) || !boundedPositiveInteger(window.max_bytes,
+        MAX_RUN_STREAM_WINDOW_BYTES)) {
+    throw new AttachTransportError("unexpected_message");
+  }
+  return { subscriptionId: summary.subscription_id, runId: expectedRunId,
+    firstAvailableRunSeq: first, currentRunSeq: current,
+    window: { maxEvents: window.max_events, maxBytes: window.max_bytes } };
+}
+
+function createRunSubscription(summary: RunStreamSummary, afterRunSeq: number,
+  request: (operation: "run.cursor_ack", body: JsonBody, idempotent?: boolean,
+    owner?: Set<string>) => Promise<AttachEnvelope>,
+  pending: Map<string, { reject: (error: AttachTransportError) => void; timer: NodeJS.Timeout;
+    deadline: number; owner?: Set<string> }>, ignoredResponses: Map<string, NodeJS.Timeout>,
+  onDispose: () => void): ActiveRunSubscription {
+  let disposed = false;
+  let highest = afterRunSeq;
+  let acknowledged = afterRunSeq;
+  let acknowledging = false;
+  let caughtUp = false;
+  const listeners = new Set<(event: RunStreamMessage) => void>();
+  const queuedMessages: RunStreamMessage[] = [];
+  const acknowledgementRequests = new Set<string>();
+  const dispose = (): void => {
+    if (disposed) return;
+    disposed = true;
+    listeners.clear();
+    queuedMessages.length = 0;
+    for (const requestId of acknowledgementRequests) {
+      const item = pending.get(requestId);
+      if (!item) continue;
+      clearTimeout(item.timer);
+      pending.delete(requestId);
+      const retention = Math.max(0, item.deadline - Date.now());
+      ignoredResponses.set(requestId, setTimeout(() => ignoredResponses.delete(requestId), retention));
+      item.reject(new AttachTransportError("connection_closed"));
+    }
+    acknowledgementRequests.clear();
+    onDispose();
+  };
+  const closeWithMessage = (): void => {
+    if (disposed) return;
+    disposed = true;
+    listeners.clear();
+    for (const requestId of acknowledgementRequests) {
+      const item = pending.get(requestId);
+      if (!item) continue;
+      clearTimeout(item.timer);
+      pending.delete(requestId);
+      const retention = Math.max(0, item.deadline - Date.now());
+      ignoredResponses.set(requestId, setTimeout(() => ignoredResponses.delete(requestId), retention));
+      item.reject(new AttachTransportError("connection_closed"));
+    }
+    acknowledgementRequests.clear();
+    onDispose();
+  };
+  const state: ActiveRunSubscription = {
+    dispose,
+    deliver(envelope): void {
+      if (disposed || envelope.subscription_id !== summary.subscriptionId ||
+          envelope.run_id !== summary.runId) throw new AttachTransportError("unexpected_message");
+      const runSeq = envelope.run_seq;
+      if (typeof runSeq !== "number" || !Number.isSafeInteger(runSeq) || runSeq <= 0) {
+        throw new AttachTransportError("unexpected_message");
+      }
+      let message: RunStreamMessage;
+      if (envelope.event === "run.event") {
+        if (highest + 1 !== runSeq || (!caughtUp && runSeq > summary.currentRunSeq) ||
+            runSeq - acknowledged > summary.window.maxEvents) {
+          throw new AttachTransportError("unexpected_message");
+        }
+        const body = exactObject(envelope.body, ["event_type", "event_version", "payload", "recorded_at"]);
+        const payload = exactObject(body.payload, ["withheld"], ["receipt"]);
+        validateBoundedString(body.event_type, MAX_TEXT_LENGTH, false);
+        if ((body.event_type as string).trim().length === 0 ||
+            typeof body.event_version !== "number" || !Number.isSafeInteger(body.event_version) ||
+            body.event_version <= 0 || typeof body.recorded_at !== "string" ||
+            !isRfc3339(body.recorded_at) || payload.withheld !== true ||
+            (payload.receipt !== undefined && body.event_type !== "run.completed")) {
+          throw new AttachTransportError("unexpected_message");
+        }
+        const receipt = payload.receipt === undefined ? undefined : decodeRunReceipt(payload.receipt);
+        highest = runSeq;
+        message = { type: "run.event", runSeq, eventType: body.event_type,
+          eventVersion: body.event_version, recordedAt: body.recorded_at,
+          payload: { withheld: true, ...(receipt === undefined ? {} : { receipt }) } };
+      } else if (envelope.event === "subscription.caught_up") {
+        if (caughtUp || runSeq !== summary.currentRunSeq || highest !== summary.currentRunSeq ||
+            Object.keys(exactObject(envelope.body, [])).length !== 0) {
+          throw new AttachTransportError("unexpected_message");
+        }
+        caughtUp = true;
+        message = { type: "subscription.caught_up", runSeq };
+      } else if (envelope.event === "stream.closed") {
+        if (runSeq !== highest + 1) throw new AttachTransportError("unexpected_message");
+        const body = exactObject(envelope.body, ["code", "resumable"]);
+        validateBoundedString(body.code, MAX_TEXT_LENGTH, false);
+        if (typeof body.resumable !== "boolean") throw new AttachTransportError("unexpected_message");
+        highest = runSeq;
+        message = { type: "stream.closed", runSeq, code: body.code, resumable: body.resumable };
+      } else {
+        throw new AttachTransportError("unexpected_message");
+      }
+      if (listeners.size === 0) queuedMessages.push(message);
+      else for (const listener of [...listeners]) {
+        try { listener(message); } catch { /* Consumer errors do not invalidate transport. */ }
+      }
+      if (message.type === "stream.closed") closeWithMessage();
+    },
+    public: {
+      subscriptionId: summary.subscriptionId,
+      runId: summary.runId,
+      firstAvailableRunSeq: summary.firstAvailableRunSeq,
+      currentRunSeq: summary.currentRunSeq,
+      window: summary.window,
+      onDidReceiveMessage(listener): Disposable {
+        if (disposed && queuedMessages.length === 0) return { dispose() {} };
+        listeners.add(listener);
+        for (const message of queuedMessages.splice(0)) {
+          try { listener(message); } catch { /* Match VS Code event listener isolation. */ }
+        }
+        if (disposed) listeners.delete(listener);
+        return { dispose: () => listeners.delete(listener) };
+      },
+      async acknowledge(throughRunSeq: number): Promise<void> {
+        if (disposed || acknowledging || typeof throughRunSeq !== "number" ||
+            !Number.isSafeInteger(throughRunSeq) ||
+            throughRunSeq <= acknowledged || throughRunSeq > highest) {
+          throw new AttachTransportError("unexpected_message");
+        }
+        acknowledging = true;
+        let response: AttachEnvelope;
+        try {
+          response = await request("run.cursor_ack", {
+            subscription_id: summary.subscriptionId, through_run_seq: throughRunSeq,
+          }, false, acknowledgementRequests);
+        } finally {
+          acknowledging = false;
+        }
+        if (disposed) throw new AttachTransportError("connection_closed");
+        const body = exactObject(response.body, ["subscription_id", "through_run_seq"]);
+        if (body.subscription_id !== summary.subscriptionId || body.through_run_seq !== throughRunSeq) {
+          throw new AttachTransportError("unexpected_message");
+        }
+        acknowledged = throughRunSeq;
+      },
+      dispose,
+    },
+  };
+  return state;
+}
+
+function boundedPositiveInteger(value: unknown, maximum: number): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value > 0 && value <= maximum;
+}
+
+function decodeRunReceipt(value: unknown): RunReceipt {
+  const receipt = exactObject(value, ["capabilities"], ["route", "model", "cost", "time"]);
+  for (const field of ["route", "model", "cost", "time"] as const) {
+    if (receipt[field] !== undefined && receipt[field] !== null) {
+      validateBoundedString(receipt[field], 1_024, false);
+      if ((receipt[field] as string).trim().length === 0) {
+        throw new AttachTransportError("unexpected_message");
+      }
+    }
+  }
+  if (!Array.isArray(receipt.capabilities) || receipt.capabilities.length > 64) {
+    throw new AttachTransportError("unexpected_message");
+  }
+  const capabilities = receipt.capabilities.map((value): ReceiptCapability => {
+    const capability = exactObject(value, ["name", "version"]);
+    validateBoundedString(capability.name, 1_024, false);
+    validateBoundedString(capability.version, 1_024, false);
+    if (capability.name.trim().length === 0 || capability.version.trim().length === 0) {
+      throw new AttachTransportError("unexpected_message");
+    }
+    return { name: capability.name, version: capability.version };
+  });
+  return {
+    ...(typeof receipt.route !== "string" ? {} : { route: receipt.route }),
+    ...(typeof receipt.model !== "string" ? {} : { model: receipt.model }),
+    ...(typeof receipt.cost !== "string" ? {} : { cost: receipt.cost }),
+    ...(typeof receipt.time !== "string" ? {} : { time: receipt.time }),
+    capabilities,
+  };
+}
 
 function freshRequestId(): string {
   const bytes = randomBytes(16);
