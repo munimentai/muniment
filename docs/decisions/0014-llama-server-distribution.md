@@ -66,11 +66,23 @@ every app update even where local Gemma features are unused.
 Acquisition follows ADR 0006's bounded HTTPS download, owned same-filesystem
 staging, install lock, free-space check, atomic publication, and
 `current`/`previous` pointer pattern, as extended for executable archives by
-ADR 0008. Extraction accepts only regular files and directories below the
-expected top-level directory and rejects absolute paths, parent traversal,
-links, and special files. The compressed byte count and SHA-256 are verified
-before extraction; publication also requires the expected server and its
-runtime libraries to be regular files in the declared layout. No executable
+ADR 0008. The verified archive is retained as the revision's integrity
+evidence. Its complete entry manifest (relative path, entry type, regular-file
+byte count and SHA-256, or link target) defines the only publishable extracted
+tree; publication rejects missing, additional, or mismatched entries.
+
+Extraction accepts only regular files, directories, and symlinks beneath the
+expected `llama-b10068/` directory. A symlink is admitted only when it is an
+exact entry in the manifest derived from the size- and SHA-256-verified pinned
+archive, has a relative target, and resolves lexically and after following the
+complete manifest's link chain to a regular file within `llama-b10068/`.
+Absolute, escaping, dangling, cyclic, and unexpected links, hard links, and
+special files are rejected, as are duplicate or platform-case-colliding paths.
+Extraction creates directories and regular files without following links, then
+creates the validated symlinks. This admits the pinned archives' required
+library soname chains without permitting archive-controlled traversal. The
+expected server must be a regular executable, and every loadable runtime file
+and link must match the complete manifest before publication. No executable
 may spawn from staging.
 
 The app owns the runtime root beneath platform application data and makes each
@@ -82,14 +94,22 @@ llama-server/
   current
   previous
   revisions/
-    b10068/<verified archive contents>
+    b10068/
+      archive/<exact pinned upstream archive>
+      tree/llama-b10068/<verified archive contents>
   staging/<random-install-id>/...
 ```
 
 Pointer resolution accepts only descriptors compiled into the signed client.
-Immediately before every spawn it resolves one pointer snapshot, re-verifies
-the archive identity recorded at publication and the expected executable and
-runtime layout, and launches that owned executable through the existing
+Immediately before every spawn it resolves one pointer snapshot, rechecks the
+retained archive's compiled filename, byte count, and SHA-256, derives its
+complete manifest again, and walks the extracted tree without following links.
+Every directory, regular file byte count and SHA-256, and symlink target must
+exactly match that authenticated manifest, with no extra or missing entries;
+the link-safety rules above are re-evaluated. Thus modification of the server,
+a runtime library, or a link after extraction fails verification even though
+the archive is stored separately. Only then does it launch the owned
+`tree/llama-b10068/llama-server[.exe]` through the existing
 `SupervisedLlamaServer`. The existing `LlamaServerConfig` remains authoritative
 for separate arguments and loopback-only `127.0.0.1` or `::1` binding; a
 verified runtime must not weaken the boundary documented in
@@ -100,7 +120,11 @@ previous revision, select a new revision only after its normal health-checked
 activation, atomically restore `previous` after activation failure, and never
 promote staging or scan for an arbitrary executable. Concurrent readers keep
 their opened immutable revision while the lock holder alone publishes,
-repoints, or cleans. If neither known revision verifies, Gemma-dependent
+repoints, or cleans. Cleanup treats each revision's retained archive and tree
+as one unit and preserves both for `current` and the one `previous` revision;
+stale staging and older revision units may be removed only under the install
+lock. If either the archive or tree of a revision fails verification, that
+revision is unusable. If neither known revision verifies, Gemma-dependent
 features fail closed and offer repair; the rest of the app continues.
 
 The downloaded archive is not covered by Muniment's installer signature.
