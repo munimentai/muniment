@@ -6,6 +6,7 @@ import {
   type AttachConnection,
   type JsonValue,
   type RunStartAccepted,
+  type RunStreamSubscription,
   type ThreadListPage,
 } from "../src/transport";
 
@@ -16,6 +17,8 @@ class FakeConnection implements AttachConnection {
   listCalls: Array<string | undefined> = [];
   disposed = false;
   startCalls: Array<{ text: string; context: JsonValue | undefined }> = [];
+  streamCalls: Array<{ runId: string; afterRunSeq: number }> = [];
+  streamResult: Promise<RunStreamSubscription> | undefined;
   startResult: Promise<RunStartAccepted> = Promise.resolve({
     runId: "run-1",
     committedSeq: 1,
@@ -38,8 +41,10 @@ class FakeConnection implements AttachConnection {
     return this.startResult;
   }
 
-  async streamRun(): Promise<never> {
-    throw new Error("not used");
+  async streamRun(runId: string, afterRunSeq: number): Promise<RunStreamSubscription> {
+    this.streamCalls.push({ runId, afterRunSeq });
+    if (!this.streamResult) throw new Error("not configured");
+    return this.streamResult;
   }
 
   dispose(): void {
@@ -167,8 +172,22 @@ test("submits a nonblank run once without context and reports acceptance", async
   const model = new ThreadsModel(connectorFor(connection));
   await model.refresh();
 
-  assert.deepEqual(await model.submitRun("Summarize this change."), { kind: "accepted" });
+  assert.deepEqual(await model.submitRun("Summarize this change."), {
+    kind: "accepted", runId: "run-1", committedSeq: 1, acceptedAt: "2026-07-18T12:00:00Z",
+  });
   assert.deepEqual(connection.startCalls, [{ text: "Summarize this change.", context: undefined }]);
+  model.dispose();
+});
+
+test("subscribes from the accepted run cursor without changing it", async () => {
+  const connection = new FakeConnection({ threads: [] });
+  const subscription = { dispose() {} } as RunStreamSubscription;
+  connection.streamResult = Promise.resolve(subscription);
+  const model = new ThreadsModel(connectorFor(connection));
+  await model.refresh();
+
+  assert.equal(await model.streamRun("run-1", 7), subscription);
+  assert.deepEqual(connection.streamCalls, [{ runId: "run-1", afterRunSeq: 7 }]);
   model.dispose();
 });
 
@@ -220,6 +239,8 @@ test("guards against concurrent run submissions while one is pending", async () 
   assert.deepEqual(await model.submitRun("Second"), { kind: "busy" });
   assert.deepEqual(connection.startCalls, [{ text: "First", context: undefined }]);
   accept!({ runId: "run-1", committedSeq: 1, acceptedAt: "2026-07-18T12:00:00Z" });
-  assert.deepEqual(await first, { kind: "accepted" });
+  assert.deepEqual(await first, {
+    kind: "accepted", runId: "run-1", committedSeq: 1, acceptedAt: "2026-07-18T12:00:00Z",
+  });
   model.dispose();
 });

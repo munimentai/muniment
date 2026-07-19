@@ -1,11 +1,13 @@
 import * as vscode from "vscode";
 import { ThreadDocumentLoader } from "./thread-document";
+import { RunDocument } from "./run-document";
 import { NEW_RUN_COMMAND, OPEN_THREAD_COMMAND, ThreadsModel, threadOpenCommand, type ThreadItem } from "./threads";
 import { connectAttach } from "./transport";
 
 const THREADS_VIEW_ID = "muniment.threads";
 const REFRESH_COMMAND = "muniment.refreshThreads";
 const THREAD_SCHEME = "muniment-thread";
+const RUN_SCHEME = "muniment-run";
 
 export function activate(context: vscode.ExtensionContext): void {
   const model = new ThreadsModel((onPairingPending) => connectAttach({
@@ -14,6 +16,7 @@ export function activate(context: vscode.ExtensionContext): void {
   }));
   const provider = new ThreadsTreeDataProvider(model);
   const documents = new ThreadDocumentProvider();
+  const runDocuments = new RunDocumentProvider();
   const loader = new ThreadDocumentLoader((threadId) => model.openThread(threadId));
 
   context.subscriptions.push(
@@ -21,9 +24,14 @@ export function activate(context: vscode.ExtensionContext): void {
     provider,
     loader,
     documents,
+    runDocuments,
     vscode.window.registerTreeDataProvider(THREADS_VIEW_ID, provider),
     vscode.workspace.registerTextDocumentContentProvider(THREAD_SCHEME, documents),
-    vscode.commands.registerCommand(REFRESH_COMMAND, () => model.refresh()),
+    vscode.workspace.registerTextDocumentContentProvider(RUN_SCHEME, runDocuments),
+    vscode.commands.registerCommand(REFRESH_COMMAND, () => {
+      runDocuments.clear();
+      return model.refresh();
+    }),
     vscode.commands.registerCommand(NEW_RUN_COMMAND, async () => {
       const text = await vscode.window.showInputBox({
         prompt: "Start a new Muniment run",
@@ -35,7 +43,11 @@ export function activate(context: vscode.ExtensionContext): void {
         title: "Starting Muniment run…",
       }, () => model.submitRun(text));
       if (result.kind === "accepted") {
-        void vscode.window.showInformationMessage("Muniment run accepted.");
+        const uri = runUri(result.runId);
+        const run = runDocuments.open(uri, result.runId, result.committedSeq);
+        const document = await vscode.workspace.openTextDocument(uri);
+        await vscode.window.showTextDocument(document, { preview: true });
+        void run.attach(model.streamRun(result.runId, result.committedSeq));
       } else if (result.kind === "busy") {
         void vscode.window.showWarningMessage("A Muniment run is already being submitted.");
       } else if (result.kind === "unavailable") {
@@ -105,6 +117,10 @@ function threadUri(threadId: string): vscode.Uri {
   return vscode.Uri.from({ scheme: THREAD_SCHEME, path: `/${encodeURIComponent(threadId)}.md` });
 }
 
+function runUri(runId: string): vscode.Uri {
+  return vscode.Uri.from({ scheme: RUN_SCHEME, path: `/${encodeURIComponent(runId)}.md` });
+}
+
 class ThreadDocumentProvider implements vscode.TextDocumentContentProvider, vscode.Disposable {
   private readonly emitter = new vscode.EventEmitter<vscode.Uri>();
   private readonly contents = new Map<string, string>();
@@ -122,5 +138,35 @@ class ThreadDocumentProvider implements vscode.TextDocumentContentProvider, vsco
   dispose(): void {
     this.contents.clear();
     this.emitter.dispose();
+  }
+}
+
+class RunDocumentProvider implements vscode.TextDocumentContentProvider, vscode.Disposable {
+  private readonly emitter = new vscode.EventEmitter<vscode.Uri>();
+  private readonly documents = new Map<string, RunDocument>();
+  readonly onDidChange = this.emitter.event;
+
+  provideTextDocumentContent(uri: vscode.Uri): string {
+    return this.documents.get(uri.toString())?.content ?? "";
+  }
+
+  open(uri: vscode.Uri, runId: string, committedSeq: number): RunDocument {
+    const key = uri.toString();
+    this.documents.get(key)?.dispose();
+    const document = new RunDocument(runId, committedSeq);
+    document.onDidChange(() => this.emitter.fire(uri));
+    this.documents.set(key, document);
+    this.emitter.fire(uri);
+    return document;
+  }
+
+  dispose(): void {
+    this.clear();
+    this.emitter.dispose();
+  }
+
+  clear(): void {
+    for (const document of this.documents.values()) document.dispose();
+    this.documents.clear();
   }
 }
