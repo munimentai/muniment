@@ -203,6 +203,18 @@ test("rejects oversize editor context before starting a run", async () => {
   model.dispose();
 });
 
+test("rejects oversize whole-file context before starting a run", async () => {
+  const connection = new FakeConnection({ threads: [] });
+  const model = new ThreadsModel(connectorFor(connection));
+  await model.refresh();
+
+  assert.equal((await model.submitRun("Explain this.", {
+    file_text: "x".repeat(64 * 1024), file: "src/large.ts",
+  })).kind, "failed");
+  assert.deepEqual(connection.startCalls, []);
+  model.dispose();
+});
+
 test("subscribes from the accepted run cursor without changing it", async () => {
   const connection = new FakeConnection({ threads: [] });
   const subscription = { dispose() {} } as RunStreamSubscription;

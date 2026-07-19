@@ -1,6 +1,21 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { editorSelectionContext } from "../src/editor-context";
+import { editorFileContext, editorSelectionContext } from "../src/editor-context";
+
+test("projects a current unsaved file buffer with a normalized Windows path", () => {
+  assert.deepEqual(editorFileContext({
+    scheme: "file",
+    text: "unsaved contents",
+    workspaceRelativePath: "packages\\app\\src\\draft.ts",
+  }), {
+    file_text: "unsaved contents",
+    file: "packages/app/src/draft.ts",
+  });
+});
+
+test("rejects a current file outside an open workspace", () => {
+  assert.equal(editorFileContext({ scheme: "file", text: "contents" }), undefined);
+});
 
 test("projects an in-workspace selection with a normalized relative file identity", () => {
   assert.deepEqual(editorSelectionContext({

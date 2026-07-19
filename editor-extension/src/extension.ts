@@ -1,9 +1,9 @@
 import * as vscode from "vscode";
 import { ThreadDocumentLoader } from "./thread-document";
 import { openAcceptedRun, RunDocumentStore } from "./run-documents";
-import { NEW_RUN_COMMAND, OPEN_THREAD_COMMAND, ThreadsModel, threadOpenCommand, type ThreadItem } from "./threads";
+import { NEW_RUN_COMMAND, NEW_RUN_WITH_CURRENT_FILE_COMMAND, OPEN_THREAD_COMMAND, ThreadsModel, threadOpenCommand, type ThreadItem } from "./threads";
 import { connectAttach } from "./transport";
-import { editorSelectionContext, type ActiveSelection } from "./editor-context";
+import { editorFileContext, editorSelectionContext, type ActiveFile, type ActiveSelection } from "./editor-context";
 
 const THREADS_VIEW_ID = "muniment.threads";
 const REFRESH_COMMAND = "muniment.refreshThreads";
@@ -33,32 +33,14 @@ export function activate(context: vscode.ExtensionContext): void {
       runDocuments.clear();
       return model.refresh();
     }),
-    vscode.commands.registerCommand(NEW_RUN_COMMAND, async () => {
-      const runContext = activeEditorSelectionContext();
-      const text = await vscode.window.showInputBox({
-        prompt: "Start a new Muniment run",
-        placeHolder: "What would you like Muniment to do?",
-      });
-      if (text === undefined || text.trim().length === 0) return;
-      const result = await vscode.window.withProgress({
-        location: vscode.ProgressLocation.Notification,
-        title: "Starting Muniment run…",
-      }, () => model.submitRun(text, runContext));
-      if (result.kind === "accepted") {
-        await openAcceptedRun(result, runDocuments.store, {
-          streamRun: (runId, afterRunSeq) => model.streamRun(runId, afterRunSeq),
-          showDocument: async (uri) => {
-            const document = await vscode.workspace.openTextDocument(vscode.Uri.parse(uri));
-            await vscode.window.showTextDocument(document, { preview: true });
-          },
-        });
-      } else if (result.kind === "busy") {
-        void vscode.window.showWarningMessage("A Muniment run is already being submitted.");
-      } else if (result.kind === "unavailable") {
-        void vscode.window.showErrorMessage("Muniment isn’t connected. Refresh Threads and try again.");
-      } else if (result.kind === "failed") {
-        void vscode.window.showErrorMessage(result.message);
+    vscode.commands.registerCommand(NEW_RUN_COMMAND, () => submitRun(activeEditorSelectionContext())),
+    vscode.commands.registerCommand(NEW_RUN_WITH_CURRENT_FILE_COMMAND, async () => {
+      const runContext = activeEditorFileContext();
+      if (runContext === undefined) {
+        await vscode.window.showWarningMessage("Open a file in the current workspace and try again.");
+        return;
       }
+      await submitRun(runContext);
     }),
     vscode.commands.registerCommand(OPEN_THREAD_COMMAND, async (threadId: string, title: string) => {
       if (typeof threadId !== "string" || typeof title !== "string") return;
@@ -78,6 +60,49 @@ export function activate(context: vscode.ExtensionContext): void {
     }),
   );
   void model.refresh();
+
+  async function submitRun(runContext?: ReturnType<typeof editorSelectionContext>): Promise<void> {
+    const text = await vscode.window.showInputBox({
+      prompt: "Start a new Muniment run",
+      placeHolder: "What would you like Muniment to do?",
+    });
+    if (text === undefined || text.trim().length === 0) return;
+    const result = await vscode.window.withProgress({
+      location: vscode.ProgressLocation.Notification,
+      title: "Starting Muniment run…",
+    }, () => model.submitRun(text, runContext));
+    if (result.kind === "accepted") {
+      await openAcceptedRun(result, runDocuments.store, {
+        streamRun: (runId, afterRunSeq) => model.streamRun(runId, afterRunSeq),
+        showDocument: async (uri) => {
+          const document = await vscode.workspace.openTextDocument(vscode.Uri.parse(uri));
+          await vscode.window.showTextDocument(document, { preview: true });
+        },
+      });
+    } else if (result.kind === "busy") {
+      void vscode.window.showWarningMessage("A Muniment run is already being submitted.");
+    } else if (result.kind === "unavailable") {
+      void vscode.window.showErrorMessage("Muniment isn’t connected. Refresh Threads and try again.");
+    } else if (result.kind === "failed") {
+      void vscode.window.showErrorMessage(result.message);
+    }
+  }
+}
+
+function activeEditorFileContext() {
+  const document = vscode.window.activeTextEditor?.document;
+  if (!document) return undefined;
+  const workspaceFolder = document.uri.scheme === "file"
+    ? vscode.workspace.getWorkspaceFolder(document.uri)
+    : undefined;
+  const snapshot: ActiveFile = {
+    scheme: document.uri.scheme,
+    text: workspaceFolder ? document.getText() : "",
+    workspaceRelativePath: workspaceFolder
+      ? vscode.workspace.asRelativePath(document.uri, false)
+      : undefined,
+  };
+  return editorFileContext(snapshot);
 }
 
 function activeEditorSelectionContext() {

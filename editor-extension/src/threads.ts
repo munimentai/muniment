@@ -2,6 +2,7 @@ import { AttachTransportError, MAX_RUN_START_CONTEXT_LENGTH, type AttachConnecti
 
 export const OPEN_THREAD_COMMAND = "muniment.openThread";
 export const NEW_RUN_COMMAND = "muniment.newRun";
+export const NEW_RUN_WITH_CURRENT_FILE_COMMAND = "muniment.newRunWithCurrentFile";
 
 export type RunSubmissionResult =
   | ({ kind: "accepted" } & RunStartAccepted)
