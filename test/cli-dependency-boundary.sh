@@ -4,7 +4,8 @@ set -eu
 if [ "$#" -gt 0 ]; then
   packages=$(printf '%s\n' "$@")
 else
-  packages=$(cargo tree --manifest-path src-tauri/Cargo.toml --package muniment-cli \
+  manifest=${MUNIMENT_CARGO_MANIFEST:-src-tauri/Cargo.toml}
+  packages=$(cargo tree --manifest-path "$manifest" --package muniment-cli \
     --locked --target all --prefix none --format '{p}' | awk '{print $1}')
 fi
 
