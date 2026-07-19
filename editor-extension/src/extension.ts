@@ -1,6 +1,6 @@
 import * as vscode from "vscode";
 import { ThreadDocumentLoader } from "./thread-document";
-import { OPEN_THREAD_COMMAND, ThreadsModel, threadOpenCommand, type ThreadItem } from "./threads";
+import { NEW_RUN_COMMAND, OPEN_THREAD_COMMAND, ThreadsModel, threadOpenCommand, type ThreadItem } from "./threads";
 import { connectAttach } from "./transport";
 
 const THREADS_VIEW_ID = "muniment.threads";
@@ -24,6 +24,26 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.window.registerTreeDataProvider(THREADS_VIEW_ID, provider),
     vscode.workspace.registerTextDocumentContentProvider(THREAD_SCHEME, documents),
     vscode.commands.registerCommand(REFRESH_COMMAND, () => model.refresh()),
+    vscode.commands.registerCommand(NEW_RUN_COMMAND, async () => {
+      const text = await vscode.window.showInputBox({
+        prompt: "Start a new Muniment run",
+        placeHolder: "What would you like Muniment to do?",
+      });
+      if (text === undefined || text.trim().length === 0) return;
+      const result = await vscode.window.withProgress({
+        location: vscode.ProgressLocation.Notification,
+        title: "Starting Muniment run…",
+      }, () => model.submitRun(text));
+      if (result.kind === "accepted") {
+        void vscode.window.showInformationMessage("Muniment run accepted.");
+      } else if (result.kind === "busy") {
+        void vscode.window.showWarningMessage("A Muniment run is already being submitted.");
+      } else if (result.kind === "unavailable") {
+        void vscode.window.showErrorMessage("Muniment isn’t connected. Refresh Threads and try again.");
+      } else if (result.kind === "failed") {
+        void vscode.window.showErrorMessage(result.message);
+      }
+    }),
     vscode.commands.registerCommand(OPEN_THREAD_COMMAND, async (threadId: string, title: string) => {
       if (typeof threadId !== "string" || typeof title !== "string") return;
       const result = await vscode.window.withProgress({
