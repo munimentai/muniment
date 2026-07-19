@@ -48,9 +48,9 @@ Phases mirror harness-spec §9. Muniment-cloud Phase 1 native auth and the cloud
 ## Browser-control runtime capability (§6.8)
 - OWNER GO 2026-07-16 — open the v1 browser-only actuator line in this repository; it is a governed runtime capability, not another companion surface.
 - DONE E0–E14 — extension-only real-profile architecture; attributed upstream-mergeable relay core; fail-closed single-use pairing; Linux executable identity and loopback socket-owner verification; composed authorization; authorized loopback listener; bounded RFC 6455 upgrade; pairing-token consumption; fail-closed macOS loopback browser-process identity; macOS authorized-listener composition; fail-closed Windows loopback browser-process identity; Windows authorized-listener composition; the unpacked MV3 extension with its exactly-one visible connect-tab anchor lifecycle; and an injected, memory-only pairing handoff bridged to the MV3 worker's authorized relay provider through a fail-closed numeric-loopback WebSocket adapter.
-- NEXT E15 — compose desktop-to-extension handoff delivery.
-- Later slices add runtime tools, entitlement and ask/allow/deny policy, journal receipts, and kill switch.
-- RESERVED EXTENSION ID — `cdedcfbgomnhfpifpgdlpfkkanaofkjd`; pinning the unpacked manifest through a repository development key remains pending and must land before E15 desktop-to-extension handoff delivery relies on this ID. Replace that development key only after owner store upload and retrieval of the public store key.
+- BLOCKED E15 — desktop-to-extension handoff delivery waits for the owner to upload a real package to the existing private Chrome Web Store draft and provide its public key. The development manifest must use that matching public key so the unpacked extension actually receives the reserved origin; this repository must not generate a replacement key/ID or claim real handoff validation against an unpinned extension.
+- After the matching public key lands, compose and validate E15 as one slice. Later slices add runtime tools, entitlement and ask/allow/deny policy, journal receipts, and kill switch.
+- RESERVED EXTENSION ID — `cdedcfbgomnhfpifpgdlpfkkanaofkjd`; the private Chrome Web Store draft owns this permanent ID. Add its public `key` to the development manifest only after owner package upload and retrieval from the CWS Package tab; replace it only after an explicit owner-directed store migration.
 - Chrome Web Store publication/upload are owner-gated. v1 excludes OS, filesystem, and other-application control.
 
 ## Desktop QA automation
