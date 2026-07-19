@@ -20,6 +20,7 @@ export * from './pairing.js';
 export * from './extension/anchor-lifecycle.js';
 export * from './extension/session-lifecycle.js';
 export * from './extension/relay-provider.js';
+export * from './extension/loopback-relay.js';
 
 export interface RelayTransport {
   send(message: string): void;
