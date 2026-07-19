@@ -10,6 +10,12 @@ const temp = () => { const value = fs.mkdtempSync(path.join(os.tmpdir(), 'munime
 afterEach(() => { for (const value of temporary.splice(0)) fs.rmSync(value, { recursive: true, force: true }) })
 const runNode = (script, args, options = {}) => spawnSync(process.execPath, [path.join(root, script), ...args], { encoding: 'utf8', ...options })
 
+describe('WDIO Tauri service dependency contract', () => {
+  it('loads the installed ESM entry with compatible transitive named exports', async () => {
+    await expect(import('@wdio/tauri-service')).resolves.toBeDefined()
+  })
+})
+
 describe('nightly asset identity', () => {
   const sha = 'a'.repeat(40)
   const asset = { name: `nightly-${sha}-linux-muniment.deb`, id: 42 }
