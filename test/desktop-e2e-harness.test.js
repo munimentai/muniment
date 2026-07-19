@@ -13,7 +13,7 @@ const runNode = (script, args, options = {}) => spawnSync(process.execPath, [pat
 describe('nightly asset identity', () => {
   const sha = 'a'.repeat(40)
   const asset = { name: `nightly-${sha}-linux-muniment.deb`, id: 42 }
-  const validate = (release, candidate = sha) => runNode('test/e2e/support/asset-identity.mjs', [candidate], { input: JSON.stringify(release) })
+  const validate = (release, candidate = sha, platform = 'linux') => runNode('test/e2e/support/asset-identity.mjs', [candidate, platform], { input: JSON.stringify(release) })
   it('accepts exactly one pinned asset', () => expect(validate({ target_commitish: sha, assets: [asset] }).stdout).toBe('42'))
   it.each([
     ['missing', { target_commitish: sha, assets: [] }],
@@ -21,6 +21,190 @@ describe('nightly asset identity', () => {
     ['mismatched release', { target_commitish: 'b'.repeat(40), assets: [asset] }],
   ])('rejects %s identity', (_name, release) => expect(validate(release).status).not.toBe(0))
   it('rejects a noncanonical SHA', () => expect(validate({ target_commitish: sha, assets: [asset] }, 'A'.repeat(40)).status).not.toBe(0))
+  it('accepts only the per-user Windows MSI', () => {
+    const perUser = { name: `nightly-${sha}-windows-muniment_0.0.1_x64_en-US.msi`, id: 84 }
+    const machine = { name: `nightly-${sha}-windows-muniment-machine.msi`, id: 85 }
+    expect(validate({ target_commitish: sha, assets: [perUser, machine] }, sha, 'windows').stdout).toBe('84')
+  })
+  it('rejects duplicate Windows per-user assets', () => {
+    const perUser = { name: `nightly-${sha}-windows-muniment_0.0.1_x64_en-US.msi`, id: 84 }
+    expect(validate({ target_commitish: sha, assets: [perUser, perUser] }, sha, 'windows').status).not.toBe(0)
+  })
+  it.each([
+    `nightly-${sha}-windows-unrelated.msi`,
+    `nightly-${sha}-windows-muniment.msi`,
+    `nightly-${sha}-windows-muniment_1.2_x64_en-US.msi`,
+    `nightly-${sha}-windows-muniment_1.2.3_arm64_en-US.msi`,
+    `nightly-${sha}-windows-muniment_1.2.3_x64_en-US.msi.zip`,
+  ])('rejects unrelated or malformed Windows MSI %s', (name) => {
+    expect(validate({ target_commitish: sha, assets: [{ name, id: 84 }] }, sha, 'windows').status).not.toBe(0)
+  })
+})
+
+describe('Windows auth URL capture seam', () => {
+  const capture = (candidate, initial = undefined) => {
+    const directory = temp(); const destination = path.join(directory, 'auth-url')
+    if (initial !== undefined) fs.writeFileSync(destination, initial)
+    const result = runNode('test/e2e/support/capture-auth-url.mjs', [destination, candidate])
+    return { result, destination }
+  }
+  it('captures an HTTPS URL without adding a BOM', () => {
+    const candidate = 'https://auth.example.test/sign-in?state=abc%20123'
+    const { result, destination } = capture(candidate)
+    expect(result.status).toBe(0)
+    expect(fs.readFileSync(destination)).toEqual(Buffer.from(candidate))
+  })
+  it.each(['http://auth.example.test', 'not a URL', 'https://user:secret@auth.example.test', 'https://auth.example.test\nsecond'])('rejects unsafe URL %s without replacing the destination', (candidate) => {
+    const { result, destination } = capture(candidate, 'previous')
+    expect(result.status).not.toBe(0)
+    expect(fs.readFileSync(destination, 'utf8')).toBe('previous')
+  })
+  it('keeps browser-launcher.ps1 as a test-only delegate to the validated capture helper', () => {
+    const launcher = fs.readFileSync(path.join(root, 'test/e2e/support/browser-launcher.ps1'), 'utf8')
+    expect(launcher).toContain('capture-auth-url.mjs')
+    expect(launcher).toContain('MUNIMENT_E2E_AUTH_URL_FILE')
+  })
+  it.skipIf(process.platform !== 'win32')('invokes browser-launcher.ps1 and preserves an existing capture on rejection', () => {
+    const directory = temp(); const destination = path.join(directory, 'auth-url')
+    const invoke = (candidate) => spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', path.join(root, 'test/e2e/support/browser-launcher.ps1'), candidate], {
+      encoding: 'utf8', env: { ...process.env, MUNIMENT_E2E_AUTH_URL_FILE: destination },
+    })
+    expect(invoke('https://auth.example.test/sign-in?state=abc').status).toBe(0)
+    expect(fs.readFileSync(destination, 'utf8')).toBe('https://auth.example.test/sign-in?state=abc')
+    expect(invoke('http://auth.example.test/sign-in').status).not.toBe(0)
+    expect(fs.readFileSync(destination, 'utf8')).toBe('https://auth.example.test/sign-in?state=abc')
+    expect(invoke('https://user:secret@auth.example.test/sign-in').status).not.toBe(0)
+    expect(fs.readFileSync(destination, 'utf8')).toBe('https://auth.example.test/sign-in?state=abc')
+    const missingDestination = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', path.join(root, 'test/e2e/support/browser-launcher.ps1'), 'https://auth.example.test'], {
+      encoding: 'utf8', env: { ...process.env, MUNIMENT_E2E_AUTH_URL_FILE: '' },
+    })
+    expect(missingDestination.status).not.toBe(0)
+  })
+})
+
+describe('Windows finalizer contract', () => {
+  const runnerPath = path.join(root, 'test/e2e/runner/windows.ps1')
+  const runner = fs.readFileSync(runnerPath, 'utf8')
+  const finalizer = runner.slice(runner.indexOf('function Finalize-Run'), runner.indexOf('\ntry {'))
+  const phases = [...finalizer.matchAll(/Invoke-Cleanup "([^"]+)"/g)].map((match) => match[1])
+  const injectablePhases = [...new Set(phases)].filter((phase) => phase !== 'suppress-artifacts')
+
+  it('asserts installer registration and files before generic state removal', () => {
+    expect(phases.indexOf('uninstall')).toBeLessThan(phases.indexOf('registration-gone'))
+    expect(phases.indexOf('registration-gone')).toBeLessThan(phases.indexOf('installed-files-gone'))
+    expect(phases.indexOf('installed-files-gone')).toBeLessThan(phases.indexOf('remove-state'))
+    expect(finalizer).toMatch(/registration-gone[^\n]+Get-ProductRegistration/)
+    expect(finalizer).toMatch(/installed-files-gone[^\n]+Test-Path -LiteralPath \$installDirectory/)
+    expect(finalizer).toMatch(/processes-gone[\s\S]+Get-HarnessProcesses/)
+    expect(runner).toMatch(/function Get-HarnessProcesses[\s\S]+Get-Process muniment, tauri-driver, msedgedriver/)
+    expect(finalizer).toMatch(/publicationStatus = \$cleanupStatus[\s\S]+cleanupStatus -ne \$publicationStatus[\s\S]+suppress-artifacts/)
+  })
+
+  it('establishes try/finally before directory and cleanup-log creation', () => {
+    const boundary = runner.indexOf('\ntry {')
+    expect(runner.indexOf('New-Item -ItemType Directory -Force $raw, $stateRoot')).toBeGreaterThan(boundary)
+    expect(runner.indexOf('New-Item -ItemType File -Force $cleanupLog')).toBeGreaterThan(boundary)
+    expect(runner).toMatch(/finally \{\s*Finalize-Run\s*\}/)
+  })
+
+  const runWindowsFinalizer = (failed = '', setupFail = '', extraEnv = {}) => {
+    const directory = temp(); const ledger = path.join(directory, 'ledger'); const statusLedger = path.join(directory, 'status-ledger'); const artifacts = path.join(directory, 'artifacts')
+    fs.mkdirSync(artifacts)
+    fs.writeFileSync(path.join(artifacts, 'stale-or-partial'), 'unsafe')
+    const result = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', runnerPath], {
+      encoding: 'utf8',
+      env: { ...process.env, TEMP: directory, TMP: directory, DCI_ARTIFACTS_DIR: artifacts, MUNIMENT_E2E_FINALIZER_TEST_MODE: '1', MUNIMENT_E2E_FINALIZER_TEST_LEDGER: ledger, MUNIMENT_E2E_FINALIZER_TEST_STATUS_LEDGER: statusLedger, MUNIMENT_E2E_FINALIZER_TEST_FAIL: failed, MUNIMENT_E2E_FINALIZER_TEST_SETUP_FAIL: setupFail, ...extraEnv },
+    })
+    const statuses = fs.existsSync(statusLedger) ? Object.fromEntries(fs.readFileSync(statusLedger, 'utf8').trim().split(/\r?\n/).map((entry) => entry.split('\t'))) : {}
+    return { result, artifacts, directory, statuses, invoked: fs.existsSync(ledger) ? fs.readFileSync(ledger, 'utf8').trim().split(/\r?\n/) : [] }
+  }
+
+  const runWindowsAbsenceFailure = (variable) => runWindowsFinalizer('', '', { [variable]: '1' })
+
+  it.skipIf(process.platform !== 'win32')('passes all lifecycle absence actions after fixture uninstall', () => {
+    const { result, statuses } = runWindowsFinalizer()
+    expect(result.status).toBe(0)
+    expect(statuses['registration-gone']).toBe('0')
+    expect(statuses['installed-files-gone']).toBe('0')
+    expect(statuses['processes-gone']).toBe('0')
+  })
+
+  it.skipIf(process.platform !== 'win32').each([
+    ['MUNIMENT_E2E_FINALIZER_TEST_REMAIN_REGISTRATION', 'registration-gone'],
+    ['MUNIMENT_E2E_FINALIZER_TEST_REMAIN_FILES', 'installed-files-gone'],
+    ['MUNIMENT_E2E_FINALIZER_TEST_REMAIN_PROCESS', 'processes-gone'],
+  ])('fails the real %s fixture absence action and continues cleanup', (variable, phase) => {
+    const { result, invoked, statuses } = runWindowsAbsenceFailure(variable)
+    expect(result.status).not.toBe(0)
+    expect(statuses[phase]).toBe('1')
+    expect(invoked.indexOf('redact-artifacts')).toBeGreaterThan(invoked.indexOf(phase))
+    expect(invoked).toContain('publish-artifacts')
+  })
+
+  it.skipIf(process.platform !== 'win32')('ignores a remaining unrelated uninstall registration', () => {
+    const { result, statuses } = runWindowsFinalizer('', '', {
+      MUNIMENT_E2E_FINALIZER_TEST_REMAIN_REGISTRATION: '1',
+      MUNIMENT_E2E_FINALIZER_TEST_REGISTRATION_NAME: 'another product',
+    })
+    expect(result.status).toBe(0)
+    expect(statuses['registration-gone']).toBe('0')
+  })
+
+  it.skipIf(process.platform !== 'win32').each(injectablePhases)('continues every Windows cleanup step after injected %s failure', (failed) => {
+    const { result, invoked } = runWindowsFinalizer(failed)
+    expect(result.status).not.toBe(0)
+    expect(invoked).toContain(failed)
+    for (const later of injectablePhases.slice(injectablePhases.indexOf(failed) + 1)) {
+      if (failed === 'redact-artifacts' && later === 'publish-artifacts') continue
+      expect(invoked).toContain(later)
+    }
+    if (['redact-artifacts', 'publish-artifacts'].includes(failed)) expect(invoked).toContain('suppress-artifacts')
+  })
+
+  it.skipIf(process.platform !== 'win32')('finalizes a failure during partial setup', () => {
+    const { result, invoked } = runWindowsFinalizer('', 'before-directories')
+    expect(result.status).not.toBe(0)
+    expect(invoked).toContain('redact-artifacts')
+    expect(invoked).toContain('suppress-artifacts')
+    expect(invoked.at(-1)).toBe('suppress-artifacts')
+  })
+
+  it.skipIf(process.platform !== 'win32').each(['redact-artifacts', 'publish-artifacts'])('destroys raw/safe staging and suppresses publication after %s failure', (failed) => {
+    const { result, artifacts, directory, invoked } = runWindowsFinalizer(failed)
+    expect(result.status).not.toBe(0)
+    expect(invoked).toContain('suppress-artifacts')
+    expect(fs.existsSync(artifacts)).toBe(false)
+    expect(fs.readdirSync(directory).filter((name) => name.startsWith('muniment-e2e-'))).toEqual([])
+  })
+})
+
+describe('Windows nightly workflow gate', () => {
+  const workflow = fs.readFileSync(path.join(root, '.github/workflows/nightly.yml'), 'utf8')
+  const job = workflow.slice(workflow.indexOf('\n  windows-e2e:'), workflow.indexOf('\n    runs-on:', workflow.indexOf('\n  windows-e2e:')))
+  const condition = job.match(/\n    if: >-\n([\s\S]+)$/)?.[1].trim().replace(/\n\s*/g, ' ')
+  const evaluate = ({ eventName, platform, prepare = 'success', linux = 'success' }) => Function(
+    'always', 'needs', 'github',
+    `return ${condition.replaceAll('needs.linux-e2e', 'needs.linuxE2e')}`,
+  )(() => true, { prepare: { result: prepare }, linuxE2e: { result: linux } }, { event_name: eventName, event: { inputs: { platform } } })
+
+  it.each([
+    ['schedule', undefined],
+    ['workflow_dispatch', 'all'],
+  ])('runs after Linux for a full %s nightly', (eventName, platform) => {
+    expect(evaluate({ eventName, platform })).toBe(true)
+  })
+
+  it('excludes a Linux-only dispatch', () => {
+    expect(evaluate({ eventName: 'workflow_dispatch', platform: 'linux' })).toBe(false)
+  })
+
+  it.each([
+    ['workflow_dispatch', 'windows', 'success', 'skipped'],
+    ['schedule', undefined, 'failure', 'success'],
+    ['schedule', undefined, 'success', 'skipped'],
+  ])('does not run without the full serialized prerequisites', (eventName, platform, prepare, linux) => {
+    expect(evaluate({ eventName, platform, prepare, linux })).toBe(false)
+  })
 })
 
 describe('artifact redaction boundary', () => {

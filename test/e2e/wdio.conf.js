@@ -28,6 +28,7 @@ export const config = {
     appBinaryPath: appBinary,
     driverProvider: 'official',
     tauriDriverPath: process.env.MUNIMENT_E2E_TAURI_DRIVER || 'tauri-driver',
+    autoDownloadEdgeDriver: true,
     captureFrontendLogs: true,
     captureBackendLogs: true,
   }]],
