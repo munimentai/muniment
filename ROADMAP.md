@@ -47,9 +47,9 @@ Phases mirror harness-spec §9. Muniment-cloud Phase 1 native auth and the cloud
 
 ## Browser-control runtime capability (§6.8)
 - OWNER GO 2026-07-16 — open the v1 browser-only actuator line in this repository; it is a governed runtime capability, not another companion surface.
-- DONE E0–E11 — extension-only real-profile architecture; attributed upstream-mergeable relay core; fail-closed single-use pairing; Linux executable identity and loopback socket-owner verification; composed authorization; authorized loopback listener; bounded RFC 6455 upgrade; pairing-token consumption; fail-closed macOS loopback browser-process identity; macOS authorized-listener composition preserving the shared transport and handshake invariants; and fail-closed Windows loopback browser-process identity.
-- NEXT — compose the Windows authorized loopback WebSocket listener from the shared transport and shipped Windows identity adapter as its own bounded slice.
-- Later slices add the unpacked MV3 extension/connect-tab lifecycle, runtime tools, entitlement and ask/allow/deny policy, journal receipts, and kill switch.
+- DONE E0–E12 — extension-only real-profile architecture; attributed upstream-mergeable relay core; fail-closed single-use pairing; Linux executable identity and loopback socket-owner verification; composed authorization; authorized loopback listener; bounded RFC 6455 upgrade; pairing-token consumption; fail-closed macOS loopback browser-process identity; macOS authorized-listener composition preserving the shared transport and handshake invariants; fail-closed Windows loopback browser-process identity; and Windows authorized-listener composition preserving the shared transport and handshake invariants.
+- NEXT — scaffold the unpacked MV3 extension and its exactly-one visible connect-tab anchor lifecycle as a bounded slice.
+- Later slices connect the extension to the authorized relay, then add runtime tools, entitlement and ask/allow/deny policy, journal receipts, and kill switch.
 - RESERVED EXTENSION ID — `cdedcfbgomnhfpifpgdlpfkkanaofkjd`; pin it when the MV3 slice lands. Add the store item's public `key` to the development manifest only after owner upload and retrieval.
 - Chrome Web Store publication/upload are owner-gated. v1 excludes OS, filesystem, and other-application control.
 
