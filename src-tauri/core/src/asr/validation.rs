@@ -254,10 +254,7 @@ fn aggregate_latencies(cases: &[CaseReport]) -> (Vec<f64>, Vec<f64>, Vec<f64>) {
         .iter()
         .map(|case| case.final_transcript_latency_seconds)
         .collect();
-    let mut post_eos: Vec<_> = cases
-        .iter()
-        .map(|case| case.decode_wall_seconds)
-        .collect();
+    let mut post_eos: Vec<_> = cases.iter().map(|case| case.decode_wall_seconds).collect();
     first.sort_by(f64::total_cmp);
     final_.sort_by(f64::total_cmp);
     post_eos.sort_by(f64::total_cmp);
@@ -573,8 +570,7 @@ mod tests {
             for required_duration in REQUIRED_DURATIONS_SECONDS {
                 let mut manifest = make_manifest();
                 manifest.cases.retain(|case| {
-                    case.audio_class != audio_class
-                        || case.duration_seconds != required_duration
+                    case.audio_class != audio_class || case.duration_seconds != required_duration
                 });
                 let error = validate_manifest(&manifest, &root).unwrap_err();
                 assert!(error.contains(&format!("{required_duration}-second")));
@@ -604,7 +600,11 @@ mod tests {
             transcript: String::new(),
             word_error: None,
         };
-        let cases = vec![case(4.0, 40.0, 0.4), case(1.0, 10.0, 0.1), case(3.0, 30.0, 0.3)];
+        let cases = vec![
+            case(4.0, 40.0, 0.4),
+            case(1.0, 10.0, 0.1),
+            case(3.0, 30.0, 0.3),
+        ];
         let (first, final_, post_eos) = aggregate_latencies(&cases);
         assert_eq!(percentile(&first, 0.50), 3.0);
         assert_eq!(percentile(&first, 0.95), 4.0);
