@@ -30,6 +30,103 @@ describe('nightly asset identity', () => {
     const perUser = { name: `nightly-${sha}-windows-muniment_0.0.1_x64_en-US.msi`, id: 84 }
     expect(validate({ target_commitish: sha, assets: [perUser, perUser] }, sha, 'windows').status).not.toBe(0)
   })
+  it.each([
+    `nightly-${sha}-windows-unrelated.msi`,
+    `nightly-${sha}-windows-muniment.msi`,
+    `nightly-${sha}-windows-muniment_1.2_x64_en-US.msi`,
+    `nightly-${sha}-windows-muniment_1.2.3_arm64_en-US.msi`,
+    `nightly-${sha}-windows-muniment_1.2.3_x64_en-US.msi.zip`,
+  ])('rejects unrelated or malformed Windows MSI %s', (name) => {
+    expect(validate({ target_commitish: sha, assets: [{ name, id: 84 }] }, sha, 'windows').status).not.toBe(0)
+  })
+})
+
+describe('Windows auth URL capture seam', () => {
+  const capture = (candidate, initial = undefined) => {
+    const directory = temp(); const destination = path.join(directory, 'auth-url')
+    if (initial !== undefined) fs.writeFileSync(destination, initial)
+    const result = runNode('test/e2e/support/capture-auth-url.mjs', [destination, candidate])
+    return { result, destination }
+  }
+  it('captures an HTTPS URL without adding a BOM', () => {
+    const candidate = 'https://auth.example.test/sign-in?state=abc%20123'
+    const { result, destination } = capture(candidate)
+    expect(result.status).toBe(0)
+    expect(fs.readFileSync(destination)).toEqual(Buffer.from(candidate))
+  })
+  it.each(['http://auth.example.test', 'not a URL', 'https://user:secret@auth.example.test', 'https://auth.example.test\nsecond'])('rejects unsafe URL %s without replacing the destination', (candidate) => {
+    const { result, destination } = capture(candidate, 'previous')
+    expect(result.status).not.toBe(0)
+    expect(fs.readFileSync(destination, 'utf8')).toBe('previous')
+  })
+  it('keeps browser-launcher.ps1 as a test-only delegate to the validated capture helper', () => {
+    const launcher = fs.readFileSync(path.join(root, 'test/e2e/support/browser-launcher.ps1'), 'utf8')
+    expect(launcher).toContain('capture-auth-url.mjs')
+    expect(launcher).toContain('MUNIMENT_E2E_AUTH_URL_FILE')
+  })
+})
+
+describe('Windows finalizer contract', () => {
+  const runnerPath = path.join(root, 'test/e2e/runner/windows.ps1')
+  const runner = fs.readFileSync(runnerPath, 'utf8')
+  const finalizer = runner.slice(runner.indexOf('function Finalize-Run'), runner.indexOf('\ntry {'))
+  const phases = [...finalizer.matchAll(/Invoke-Cleanup "([^"]+)"/g)].map((match) => match[1])
+  const injectablePhases = [...new Set(phases)].filter((phase) => phase !== 'suppress-artifacts')
+
+  it('asserts installer registration and files before generic state removal', () => {
+    expect(phases.indexOf('uninstall')).toBeLessThan(phases.indexOf('registration-gone'))
+    expect(phases.indexOf('registration-gone')).toBeLessThan(phases.indexOf('installed-files-gone'))
+    expect(phases.indexOf('installed-files-gone')).toBeLessThan(phases.indexOf('remove-state'))
+    expect(finalizer).toMatch(/registration-gone[^\n]+Get-ProductRegistration/)
+    expect(finalizer).toMatch(/installed-files-gone[^\n]+Test-Path -LiteralPath \$installDirectory/)
+    expect(finalizer).toMatch(/processes-gone[^\n]+Get-Process muniment, tauri-driver, msedgedriver/)
+    expect(finalizer).toMatch(/publicationStatus = \$cleanupStatus[\s\S]+cleanupStatus -ne \$publicationStatus[\s\S]+suppress-artifacts/)
+  })
+
+  it('establishes try/finally before directory and cleanup-log creation', () => {
+    const boundary = runner.indexOf('\ntry {')
+    expect(runner.indexOf('New-Item -ItemType Directory -Force $raw, $stateRoot')).toBeGreaterThan(boundary)
+    expect(runner.indexOf('New-Item -ItemType File -Force $cleanupLog')).toBeGreaterThan(boundary)
+    expect(runner).toMatch(/finally \{\s*Finalize-Run\s*\}/)
+  })
+
+  const runWindowsFinalizer = (failed = '', setupFail = '') => {
+    const directory = temp(); const ledger = path.join(directory, 'ledger'); const artifacts = path.join(directory, 'artifacts')
+    fs.mkdirSync(artifacts)
+    fs.writeFileSync(path.join(artifacts, 'stale-or-partial'), 'unsafe')
+    const result = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', runnerPath], {
+      encoding: 'utf8',
+      env: { ...process.env, TEMP: directory, TMP: directory, DCI_ARTIFACTS_DIR: artifacts, MUNIMENT_E2E_FINALIZER_TEST_MODE: '1', MUNIMENT_E2E_FINALIZER_TEST_LEDGER: ledger, MUNIMENT_E2E_FINALIZER_TEST_FAIL: failed, MUNIMENT_E2E_FINALIZER_TEST_SETUP_FAIL: setupFail },
+    })
+    return { result, artifacts, directory, invoked: fs.existsSync(ledger) ? fs.readFileSync(ledger, 'utf8').trim().split(/\r?\n/) : [] }
+  }
+
+  it.skipIf(process.platform !== 'win32').each(injectablePhases)('continues every Windows cleanup step after injected %s failure', (failed) => {
+    const { result, invoked } = runWindowsFinalizer(failed)
+    expect(result.status).not.toBe(0)
+    expect(invoked).toContain(failed)
+    for (const later of injectablePhases.slice(injectablePhases.indexOf(failed) + 1)) {
+      if (failed === 'redact-artifacts' && later === 'publish-artifacts') continue
+      expect(invoked).toContain(later)
+    }
+    if (['redact-artifacts', 'publish-artifacts'].includes(failed)) expect(invoked).toContain('suppress-artifacts')
+  })
+
+  it.skipIf(process.platform !== 'win32')('finalizes a failure during partial setup', () => {
+    const { result, invoked } = runWindowsFinalizer('', 'before-directories')
+    expect(result.status).not.toBe(0)
+    expect(invoked).toContain('redact-artifacts')
+    expect(invoked).toContain('suppress-artifacts')
+    expect(invoked.at(-1)).toBe('suppress-artifacts')
+  })
+
+  it.skipIf(process.platform !== 'win32').each(['redact-artifacts', 'publish-artifacts'])('destroys raw/safe staging and suppresses publication after %s failure', (failed) => {
+    const { result, artifacts, directory, invoked } = runWindowsFinalizer(failed)
+    expect(result.status).not.toBe(0)
+    expect(invoked).toContain('suppress-artifacts')
+    expect(fs.existsSync(artifacts)).toBe(false)
+    expect(fs.readdirSync(directory).filter((name) => name.startsWith('muniment-e2e-'))).toEqual([])
+  })
 })
 
 describe('artifact redaction boundary', () => {

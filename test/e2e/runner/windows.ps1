@@ -4,15 +4,15 @@ $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
 $ProgressPreference = "SilentlyContinue"
 
-$artifacts = if ($env:DCI_ARTIFACTS_DIR) { $env:DCI_ARTIFACTS_DIR } else { "C:\dci-artifacts" }
-$runRoot = Join-Path $env:TEMP ("muniment-e2e-" + [guid]::NewGuid().ToString("N"))
-$raw = Join-Path $runRoot "raw"
-$safe = Join-Path $runRoot "safe"
-$stateRoot = Join-Path $runRoot "state"
-$msi = Join-Path $runRoot "muniment-nightly.msi"
-$authUrlFile = Join-Path $runRoot "auth-url"
-$cleanupLog = Join-Path $runRoot "cleanup.log"
-$installerLog = Join-Path $raw "installer.log"
+$artifacts = $null
+$runRoot = $null
+$raw = $null
+$safe = $null
+$stateRoot = $null
+$msi = $null
+$authUrlFile = $null
+$cleanupLog = $null
+$installerLog = $null
 $status = 0
 $cleanupStatus = 0
 $script:redacted = $true
@@ -22,9 +22,6 @@ $installDirectory = $null
 $productCode = $null
 $handlerKey = "HKCU:\Software\Classes\muniment-e2e-https"
 $httpsKey = "HKCU:\Software\Classes\https"
-
-New-Item -ItemType Directory -Force $raw, $stateRoot | Out-Null
-New-Item -ItemType File -Force $cleanupLog | Out-Null
 
 function Invoke-BoundedProcess([string]$File, [string]$Arguments, [int]$TimeoutSeconds, [string]$Log) {
   $process = Start-Process $File -ArgumentList $Arguments -PassThru -RedirectStandardOutput $Log -RedirectStandardError ($Log + ".err")
@@ -47,10 +44,20 @@ function Get-ProductRegistration {
 
 function Invoke-Cleanup([string]$Name, [scriptblock]$Action) {
   try {
-    & $Action *>> $cleanupLog
-    Add-Content $cleanupLog "$Name`: ok"
+    if ($env:MUNIMENT_E2E_FINALIZER_TEST_LEDGER) { Add-Content $env:MUNIMENT_E2E_FINALIZER_TEST_LEDGER $Name }
+    if ($env:MUNIMENT_E2E_FINALIZER_TEST_FAIL -eq $Name) {
+      if ($Name -eq "redact-artifacts") { $script:redacted = $false }
+      if ($Name -eq "publish-artifacts" -and $env:MUNIMENT_E2E_FINALIZER_TEST_MODE -eq "1") {
+        New-Item -ItemType Directory -Force $artifacts | Out-Null
+        Set-Content (Join-Path $artifacts "partial-publication") "unsafe"
+      }
+      throw "injected $Name failure"
+    }
+    $testFilePhases = @("redact-artifacts", "remove-raw", "remove-msi", "remove-auth-url", "publish-artifacts", "suppress-artifacts")
+    if ($env:MUNIMENT_E2E_FINALIZER_TEST_MODE -eq "1" -and $Name -notin $testFilePhases) { return }
+    if ($cleanupLog) { & $Action *>> $cleanupLog; Add-Content $cleanupLog "$Name`: ok" } else { & $Action | Out-Null }
   } catch {
-    Add-Content $cleanupLog "$Name`: failed"
+    if ($cleanupLog) { Add-Content $cleanupLog "$Name`: failed" -ErrorAction SilentlyContinue }
     $script:cleanupStatus = 1
   }
 }
@@ -78,30 +85,47 @@ function Finalize-Run {
       if ($code) { Invoke-BoundedProcess "msiexec.exe" "/x $code /qn /norestart" 180 (Join-Path $raw "uninstaller.log") }
     }
   }
-  Invoke-Cleanup "remove-auth-handler" { Remove-AuthHandler }
-  Invoke-Cleanup "remove-state" { Remove-Item $stateRoot -Recurse -Force -ErrorAction SilentlyContinue }
   Invoke-Cleanup "registration-gone" { if (@(Get-ProductRegistration).Count -ne 0) { throw "product registration remains" } }
   Invoke-Cleanup "installed-files-gone" { if ($installDirectory -and (Test-Path -LiteralPath $installDirectory)) { throw "installed files remain" } }
+  Invoke-Cleanup "remove-auth-handler" { Remove-AuthHandler }
+  Invoke-Cleanup "remove-state" { if ($stateRoot) { Remove-Item $stateRoot -Recurse -Force -ErrorAction SilentlyContinue } }
   Invoke-Cleanup "processes-gone" { if (Get-Process muniment, tauri-driver, msedgedriver -ErrorAction SilentlyContinue) { throw "test process remains" } }
-  Copy-Item $cleanupLog (Join-Path $raw "cleanup.log") -Force -ErrorAction SilentlyContinue
+  if ($cleanupLog -and $raw) { Copy-Item $cleanupLog (Join-Path $raw "cleanup.log") -Force -ErrorAction SilentlyContinue }
   Invoke-Cleanup "redact-artifacts" {
+    if (-not $raw -or -not (Test-Path $raw)) { throw "raw staging is unavailable" }
     & node test/e2e/support/redact.mjs $raw $safe
     if ($LASTEXITCODE -ne 0) { $script:redacted = $false; throw "artifact redaction failed" }
   }
-  Invoke-Cleanup "remove-raw" { Remove-Item $raw -Recurse -Force -ErrorAction SilentlyContinue }
-  Invoke-Cleanup "remove-msi" { Remove-Item $msi -Force -ErrorAction SilentlyContinue }
-  Invoke-Cleanup "remove-auth-url" { Remove-Item $authUrlFile -Force -ErrorAction SilentlyContinue }
+  Invoke-Cleanup "remove-raw" { if ($raw) { Remove-Item $raw -Recurse -Force -ErrorAction SilentlyContinue } }
+  Invoke-Cleanup "remove-msi" { if ($msi) { Remove-Item $msi -Force -ErrorAction SilentlyContinue } }
+  Invoke-Cleanup "remove-auth-url" { if ($authUrlFile) { Remove-Item $authUrlFile -Force -ErrorAction SilentlyContinue } }
   if ($script:redacted) {
-    Invoke-Cleanup "publish-artifacts" { Remove-Item $artifacts -Recurse -Force -ErrorAction SilentlyContinue; Move-Item $safe $artifacts }
+    $publicationStatus = $cleanupStatus
+    Invoke-Cleanup "publish-artifacts" { if (-not $safe -or -not (Test-Path $safe)) { throw "safe staging is unavailable" }; Remove-Item $artifacts -Recurse -Force -ErrorAction SilentlyContinue; Move-Item $safe $artifacts }
+    if ($cleanupStatus -ne $publicationStatus) { Invoke-Cleanup "suppress-artifacts" { Remove-Item $artifacts -Recurse -Force -ErrorAction SilentlyContinue; if ($safe) { Remove-Item $safe -Recurse -Force -ErrorAction SilentlyContinue } } }
   } else {
-    Invoke-Cleanup "suppress-artifacts" { Remove-Item $artifacts -Recurse -Force -ErrorAction SilentlyContinue; Remove-Item $safe -Recurse -Force -ErrorAction SilentlyContinue }
+    Invoke-Cleanup "suppress-artifacts" { if ($artifacts) { Remove-Item $artifacts -Recurse -Force -ErrorAction SilentlyContinue }; if ($safe) { Remove-Item $safe -Recurse -Force -ErrorAction SilentlyContinue } }
   }
-  Remove-Item $cleanupLog -Force -ErrorAction SilentlyContinue
-  Remove-Item $runRoot -Recurse -Force -ErrorAction SilentlyContinue
+  if ($cleanupLog) { Remove-Item $cleanupLog -Force -ErrorAction SilentlyContinue }
+  if ($runRoot) { Remove-Item $runRoot -Recurse -Force -ErrorAction SilentlyContinue }
   if ($status -ne 0 -or $cleanupStatus -ne 0 -or -not $script:redacted) { exit 1 }
 }
 
 try {
+  $artifacts = if ($env:DCI_ARTIFACTS_DIR) { $env:DCI_ARTIFACTS_DIR } else { "C:\dci-artifacts" }
+  $runRoot = Join-Path $env:TEMP ("muniment-e2e-" + [guid]::NewGuid().ToString("N"))
+  $raw = Join-Path $runRoot "raw"
+  $safe = Join-Path $runRoot "safe"
+  $stateRoot = Join-Path $runRoot "state"
+  $msi = Join-Path $runRoot "muniment-nightly.msi"
+  $authUrlFile = Join-Path $runRoot "auth-url"
+  $cleanupLog = Join-Path $runRoot "cleanup.log"
+  $installerLog = Join-Path $raw "installer.log"
+  if ($env:MUNIMENT_E2E_FINALIZER_TEST_SETUP_FAIL -eq "before-directories") { throw "injected setup failure" }
+  New-Item -ItemType Directory -Force $raw, $stateRoot | Out-Null
+  New-Item -ItemType File -Force $cleanupLog | Out-Null
+  if ($env:MUNIMENT_E2E_FINALIZER_TEST_MODE -eq "1") { $ready = $true; $installAttempted = $true; return }
+
   $sha = $env:MUNIMENT_E2E_SOURCE_SHA
   if ($sha -notmatch '^[0-9a-f]{40}$') { throw "invalid source SHA" }
   if (-not $env:GH_TOKEN -or -not $env:GITHUB_REPOSITORY -or -not $env:MUNIMENT_E2E_USERNAME -or -not $env:MUNIMENT_E2E_PASSWORD) {
@@ -176,7 +200,8 @@ try {
   & npm.cmd run test:e2e 1> $wdioLog 2> $driverAppLog
   if ($LASTEXITCODE -ne 0) { $status = 1 }
 } catch {
-  Add-Content $installerLog "runner failed: $($_.Exception.Message)"
+  if ($env:MUNIMENT_E2E_FINALIZER_TEST_SETUP_FAIL) { $script:redacted = $false }
+  if ($installerLog) { Add-Content $installerLog "runner failed: $($_.Exception.Message)" -ErrorAction SilentlyContinue }
   $status = 1
 } finally {
   Finalize-Run
