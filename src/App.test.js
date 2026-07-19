@@ -9,6 +9,8 @@ import { historyMessages } from './lib/chat-state.js'
 let App
 let invoke
 let chatListener
+let dictationListener
+let eventUnlisten
 let dialogResult
 let dragDropListener
 let dragDropUnlisten
@@ -49,7 +51,11 @@ beforeAll(async () => {
   HTMLElement.prototype.scrollTo = vi.fn()
   window.__TAURI__ = {
     core: { invoke: (...args) => invoke(...args) },
-    event: { listen: vi.fn((_, listener) => { chatListener = listener; return Promise.resolve(vi.fn()) }) },
+    event: { listen: vi.fn((event, listener) => {
+      if (event === 'chat-event') chatListener = listener
+      if (event === 'dictation-event') dictationListener = listener
+      return Promise.resolve(eventUnlisten)
+    }) },
   }
   window.__TAURI_INTERNALS__ = {
     invoke: (command) => command === 'plugin:dialog|open' ? Promise.resolve(dialogResult) : Promise.reject(new Error(`unexpected internal command: ${command}`)),
@@ -60,6 +66,8 @@ beforeAll(async () => {
 
 beforeEach(() => {
   chatListener = undefined
+  dictationListener = undefined
+  eventUnlisten = vi.fn()
   dragDropListener = undefined
   dragDropUnlisten = vi.fn()
   dialogResult = null
@@ -74,6 +82,92 @@ beforeEach(() => {
 })
 
 afterEach(() => cleanup())
+
+describe('voice dictation', () => {
+  it('starts, appends transcript to an editable draft, and stops', async () => {
+    invoke.mockImplementation(async (command) => {
+      if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
+      if (command === 'chat_history') return []
+      if (command === 'auth_entitlement_snapshot') return snapshot()
+      if (command === 'auth_devices') return []
+      if (command === 'dictation_start') return { state: 'starting' }
+      if (command === 'dictation_status') return { state: 'running' }
+      if (command === 'dictation_stop') return { state: 'stopped' }
+      throw new Error(`unexpected command: ${command}`)
+    })
+    render(App)
+    const composer = await screen.findByPlaceholderText('Ask anything')
+    await fireEvent.input(composer, { target: { value: 'Existing draft' } })
+    const voice = screen.getByRole('button', { name: 'Voice' })
+    await fireEvent.click(voice)
+
+    expect(voice).toHaveAttribute('aria-pressed', 'true')
+    expect(screen.getByRole('status')).toHaveTextContent('Starting local dictation…')
+    dictationListener({ payload: { type: 'transcript', text: 'spoken words' } })
+    await waitFor(() => expect(composer).toHaveValue('Existing draft spoken words'))
+    await fireEvent.input(composer, { target: { value: 'Edited transcript' } })
+    await fireEvent.click(voice)
+
+    expect(invoke).toHaveBeenCalledWith('dictation_start')
+    expect(invoke).toHaveBeenCalledWith('dictation_stop')
+    expect(voice).toHaveAttribute('aria-pressed', 'false')
+    expect(composer).toHaveValue('Edited transcript')
+  })
+
+  it.each([
+    ['modelNotInstalled', 'The speech model is not installed.'],
+    ['failed', 'Microphone capture failed.'],
+  ])('renders a terminal %s message and becomes retryable', async (state, message) => {
+    invoke.mockImplementation(async (command) => {
+      if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
+      if (command === 'chat_history') return []
+      if (command === 'auth_entitlement_snapshot') return snapshot()
+      if (command === 'auth_devices') return []
+      if (command === 'dictation_start') return { state: 'starting' }
+      if (command === 'dictation_status') return { state, category: 'redacted', message }
+      throw new Error(`unexpected command: ${command}`)
+    })
+    render(App)
+    const composer = await screen.findByPlaceholderText('Ask anything')
+    await fireEvent.input(composer, { target: { value: 'Keep this' } })
+    const voice = screen.getByRole('button', { name: 'Voice' })
+    await fireEvent.click(voice)
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(message)
+    expect(voice).toHaveAttribute('aria-pressed', 'false')
+    expect(voice).toBeEnabled()
+    expect(composer).toHaveValue('Keep this')
+  })
+
+  it('disables voice during an active chat and cleans up its listener and timer', async () => {
+    let resolveSubmit
+    invoke.mockImplementation(async (command) => {
+      if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
+      if (command === 'chat_history') return []
+      if (command === 'auth_entitlement_snapshot') return snapshot()
+      if (command === 'auth_devices') return []
+      if (command === 'dictation_start') return { state: 'starting' }
+      if (command === 'dictation_status') return { state: 'running' }
+      if (command === 'chat_submit') return new Promise((resolve) => { resolveSubmit = resolve })
+      throw new Error(`unexpected command: ${command}`)
+    })
+    const view = render(App)
+    const composer = await screen.findByPlaceholderText('Ask anything')
+    const voice = screen.getByRole('button', { name: 'Voice' })
+    await fireEvent.click(voice)
+    view.unmount()
+    expect(eventUnlisten).toHaveBeenCalledTimes(2)
+    await new Promise((resolve) => setTimeout(resolve, 130))
+    expect(invoke).not.toHaveBeenCalledWith('dictation_status')
+
+    render(App)
+    const nextComposer = await screen.findByPlaceholderText('Ask anything')
+    await fireEvent.input(nextComposer, { target: { value: 'Question' } })
+    await fireEvent.click(screen.getByRole('button', { name: 'Send' }))
+    expect(screen.getByRole('button', { name: 'Voice' })).toBeDisabled()
+    resolveSubmit({ runId: 'run-1' })
+  })
+})
 
 describe('local file selection', () => {
   it('shows and clears the native drop affordance, then de-duplicates dropped files', async () => {
