@@ -1,4 +1,4 @@
-import { AttachTransportError, MAX_RUN_START_CONTEXT_LENGTH, type AttachConnection, type JsonValue, type RedactedThreadSummary, type RunStartAccepted, type RunStreamSubscription, type ThreadOpenPage } from "./transport";
+import { AttachTransportError, MAX_RUN_START_CONTEXT_LENGTH, type AttachConnection, type JsonValue, type PermissionDecision, type RedactedThreadSummary, type RunStartAccepted, type RunStreamSubscription, type ThreadOpenPage } from "./transport";
 
 export const OPEN_THREAD_COMMAND = "muniment.openThread";
 export const NEW_RUN_COMMAND = "muniment.newRun";
@@ -99,6 +99,14 @@ export class ThreadsModel {
       throw new AttachTransportError("authorization_expired");
     }
     return this.connection.streamRun(runId, afterRunSeq);
+  }
+
+  async answerPermission(runId: string, gateId: string,
+    decision: PermissionDecision): Promise<void> {
+    if (this.disposed || !this.connection) {
+      throw new AttachTransportError("authorization_expired");
+    }
+    await this.connection.answerPermission(runId, gateId, decision);
   }
 
   async refresh(): Promise<void> {
