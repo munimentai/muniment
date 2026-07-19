@@ -1,10 +1,10 @@
-import { AttachTransportError, type AttachConnection, type RedactedThreadSummary, type ThreadOpenPage } from "./transport";
+import { AttachTransportError, type AttachConnection, type RedactedThreadSummary, type RunStartAccepted, type RunStreamSubscription, type ThreadOpenPage } from "./transport";
 
 export const OPEN_THREAD_COMMAND = "muniment.openThread";
 export const NEW_RUN_COMMAND = "muniment.newRun";
 
 export type RunSubmissionResult =
-  | { kind: "accepted" }
+  | ({ kind: "accepted" } & RunStartAccepted)
   | { kind: "no-op" }
   | { kind: "busy" }
   | { kind: "unavailable" }
@@ -81,13 +81,20 @@ export class ThreadsModel {
 
     this.submittingRun = true;
     try {
-      await this.connection.startRun(text);
-      return { kind: "accepted" };
+      const accepted = await this.connection.startRun(text);
+      return { kind: "accepted", ...accepted };
     } catch (error) {
       return { kind: "failed", message: runStartFailureMessage(error) };
     } finally {
       this.submittingRun = false;
     }
+  }
+
+  async streamRun(runId: string, afterRunSeq: number): Promise<RunStreamSubscription> {
+    if (this.disposed || !this.connection) {
+      throw new AttachTransportError("authorization_expired");
+    }
+    return this.connection.streamRun(runId, afterRunSeq);
   }
 
   async refresh(): Promise<void> {
