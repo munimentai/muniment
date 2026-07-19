@@ -1,11 +1,13 @@
 import * as vscode from "vscode";
 import { ThreadDocumentLoader } from "./thread-document";
+import { openAcceptedRun, RunDocumentStore } from "./run-documents";
 import { NEW_RUN_COMMAND, OPEN_THREAD_COMMAND, ThreadsModel, threadOpenCommand, type ThreadItem } from "./threads";
 import { connectAttach } from "./transport";
 
 const THREADS_VIEW_ID = "muniment.threads";
 const REFRESH_COMMAND = "muniment.refreshThreads";
 const THREAD_SCHEME = "muniment-thread";
+const RUN_SCHEME = "muniment-run";
 
 export function activate(context: vscode.ExtensionContext): void {
   const model = new ThreadsModel((onPairingPending) => connectAttach({
@@ -14,6 +16,7 @@ export function activate(context: vscode.ExtensionContext): void {
   }));
   const provider = new ThreadsTreeDataProvider(model);
   const documents = new ThreadDocumentProvider();
+  const runDocuments = new RunDocumentProvider();
   const loader = new ThreadDocumentLoader((threadId) => model.openThread(threadId));
 
   context.subscriptions.push(
@@ -21,9 +24,14 @@ export function activate(context: vscode.ExtensionContext): void {
     provider,
     loader,
     documents,
+    runDocuments,
     vscode.window.registerTreeDataProvider(THREADS_VIEW_ID, provider),
     vscode.workspace.registerTextDocumentContentProvider(THREAD_SCHEME, documents),
-    vscode.commands.registerCommand(REFRESH_COMMAND, () => model.refresh()),
+    vscode.workspace.registerTextDocumentContentProvider(RUN_SCHEME, runDocuments),
+    vscode.commands.registerCommand(REFRESH_COMMAND, () => {
+      runDocuments.clear();
+      return model.refresh();
+    }),
     vscode.commands.registerCommand(NEW_RUN_COMMAND, async () => {
       const text = await vscode.window.showInputBox({
         prompt: "Start a new Muniment run",
@@ -35,7 +43,13 @@ export function activate(context: vscode.ExtensionContext): void {
         title: "Starting Muniment run…",
       }, () => model.submitRun(text));
       if (result.kind === "accepted") {
-        void vscode.window.showInformationMessage("Muniment run accepted.");
+        await openAcceptedRun(result, runDocuments.store, {
+          streamRun: (runId, afterRunSeq) => model.streamRun(runId, afterRunSeq),
+          showDocument: async (uri) => {
+            const document = await vscode.workspace.openTextDocument(vscode.Uri.parse(uri));
+            await vscode.window.showTextDocument(document, { preview: true });
+          },
+        });
       } else if (result.kind === "busy") {
         void vscode.window.showWarningMessage("A Muniment run is already being submitted.");
       } else if (result.kind === "unavailable") {
@@ -122,5 +136,24 @@ class ThreadDocumentProvider implements vscode.TextDocumentContentProvider, vsco
   dispose(): void {
     this.contents.clear();
     this.emitter.dispose();
+  }
+}
+
+class RunDocumentProvider implements vscode.TextDocumentContentProvider, vscode.Disposable {
+  private readonly emitter = new vscode.EventEmitter<vscode.Uri>();
+  readonly store = new RunDocumentStore((uri) => this.emitter.fire(vscode.Uri.parse(uri)));
+  readonly onDidChange = this.emitter.event;
+
+  provideTextDocumentContent(uri: vscode.Uri): string {
+    return this.store.content(uri.toString());
+  }
+
+  dispose(): void {
+    this.store.clear();
+    this.emitter.dispose();
+  }
+
+  clear(): void {
+    this.store.clear();
   }
 }

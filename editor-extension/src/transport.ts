@@ -713,11 +713,13 @@ function createRunSubscription(summary: RunStreamSummary, afterRunSeq: number,
         caughtUp = true;
         message = { type: "subscription.caught_up", runSeq };
       } else if (envelope.event === "stream.closed") {
-        if (runSeq !== highest + 1) throw new AttachTransportError("unexpected_message");
+        if (runSeq !== highest && runSeq !== highest + 1) {
+          throw new AttachTransportError("unexpected_message");
+        }
         const body = exactObject(envelope.body, ["code", "resumable"]);
         validateBoundedString(body.code, MAX_TEXT_LENGTH, false);
         if (typeof body.resumable !== "boolean") throw new AttachTransportError("unexpected_message");
-        highest = runSeq;
+        highest = Math.max(highest, runSeq);
         message = { type: "stream.closed", runSeq, code: body.code, resumable: body.resumable };
       } else {
         throw new AttachTransportError("unexpected_message");
