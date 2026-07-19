@@ -88,7 +88,8 @@ export class RunDocument {
       await this.subscription?.acknowledge(message.runSeq);
     } catch {
       if (!this.disposed && generation === this.generation) {
-        this.update(this.render("Stream interrupted · Refresh Threads to resume this run."));
+        this.update(this.render(terminal ?? "Stream interrupted · Refresh Threads to resume this run.",
+          terminal ? "Final delivery acknowledgement failed." : undefined));
         this.closeSubscription();
       }
       return;
@@ -103,10 +104,11 @@ export class RunDocument {
     this.subscription = undefined;
   }
 
-  private render(status: string): string {
+  private render(status: string, deliveryWarning?: string): string {
     const omitted = this.history.length === MAX_HISTORY ? "_Earlier activity omitted._\n\n" : "";
     const events = this.history.length === 0 ? "_Waiting for activity._" : this.history.join("\n\n");
-    return `# Muniment run\n\n**Status:** ${status}\n\n${omitted}${events}\n`;
+    const warning = deliveryWarning ? `\n\n**Delivery:** ${deliveryWarning}` : "";
+    return `# Muniment run\n\n**Status:** ${status}${warning}\n\n${omitted}${events}\n`;
   }
 
   private update(content: string): void {

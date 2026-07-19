@@ -1,6 +1,6 @@
 import * as vscode from "vscode";
 import { ThreadDocumentLoader } from "./thread-document";
-import { RunDocument } from "./run-document";
+import { openAcceptedRun, RunDocumentStore } from "./run-documents";
 import { NEW_RUN_COMMAND, OPEN_THREAD_COMMAND, ThreadsModel, threadOpenCommand, type ThreadItem } from "./threads";
 import { connectAttach } from "./transport";
 
@@ -43,11 +43,13 @@ export function activate(context: vscode.ExtensionContext): void {
         title: "Starting Muniment run…",
       }, () => model.submitRun(text));
       if (result.kind === "accepted") {
-        const uri = runUri(result.runId);
-        const run = runDocuments.open(uri, result.runId, result.committedSeq);
-        const document = await vscode.workspace.openTextDocument(uri);
-        await vscode.window.showTextDocument(document, { preview: true });
-        void run.attach(model.streamRun(result.runId, result.committedSeq));
+        await openAcceptedRun(result, runDocuments.store, {
+          streamRun: (runId, afterRunSeq) => model.streamRun(runId, afterRunSeq),
+          showDocument: async (uri) => {
+            const document = await vscode.workspace.openTextDocument(vscode.Uri.parse(uri));
+            await vscode.window.showTextDocument(document, { preview: true });
+          },
+        });
       } else if (result.kind === "busy") {
         void vscode.window.showWarningMessage("A Muniment run is already being submitted.");
       } else if (result.kind === "unavailable") {
@@ -117,10 +119,6 @@ function threadUri(threadId: string): vscode.Uri {
   return vscode.Uri.from({ scheme: THREAD_SCHEME, path: `/${encodeURIComponent(threadId)}.md` });
 }
 
-function runUri(runId: string): vscode.Uri {
-  return vscode.Uri.from({ scheme: RUN_SCHEME, path: `/${encodeURIComponent(runId)}.md` });
-}
-
 class ThreadDocumentProvider implements vscode.TextDocumentContentProvider, vscode.Disposable {
   private readonly emitter = new vscode.EventEmitter<vscode.Uri>();
   private readonly contents = new Map<string, string>();
@@ -143,30 +141,19 @@ class ThreadDocumentProvider implements vscode.TextDocumentContentProvider, vsco
 
 class RunDocumentProvider implements vscode.TextDocumentContentProvider, vscode.Disposable {
   private readonly emitter = new vscode.EventEmitter<vscode.Uri>();
-  private readonly documents = new Map<string, RunDocument>();
+  readonly store = new RunDocumentStore((uri) => this.emitter.fire(vscode.Uri.parse(uri)));
   readonly onDidChange = this.emitter.event;
 
   provideTextDocumentContent(uri: vscode.Uri): string {
-    return this.documents.get(uri.toString())?.content ?? "";
-  }
-
-  open(uri: vscode.Uri, runId: string, committedSeq: number): RunDocument {
-    const key = uri.toString();
-    this.documents.get(key)?.dispose();
-    const document = new RunDocument(runId, committedSeq);
-    document.onDidChange(() => this.emitter.fire(uri));
-    this.documents.set(key, document);
-    this.emitter.fire(uri);
-    return document;
+    return this.store.content(uri.toString());
   }
 
   dispose(): void {
-    this.clear();
+    this.store.clear();
     this.emitter.dispose();
   }
 
   clear(): void {
-    for (const document of this.documents.values()) document.dispose();
-    this.documents.clear();
+    this.store.clear();
   }
 }

@@ -14,6 +14,7 @@ class FakeSubscription implements RunStreamSubscription {
   snapshotsAtAck: string[] = [];
   disposed = false;
   content = () => "";
+  acknowledgeError: Error | undefined;
 
   onDidReceiveMessage(listener: (message: RunStreamMessage) => void): { dispose(): void } {
     this.listener = listener;
@@ -22,6 +23,7 @@ class FakeSubscription implements RunStreamSubscription {
   async acknowledge(runSeq: number): Promise<void> {
     this.snapshotsAtAck.push(this.content());
     this.acknowledgements.push(runSeq);
+    if (this.acknowledgeError) throw this.acknowledgeError;
   }
   emit(message: RunStreamMessage): void { this.listener?.(message); }
   dispose(): void { this.disposed = true; this.listener = undefined; }
@@ -68,6 +70,26 @@ test("renders only present receipt fields and terminal status", async () => {
   assert.deepEqual(subscription.acknowledgements, [2]);
   assert.equal(subscription.disposed, true);
 });
+
+for (const [eventType, status] of [
+  ["run.completed", "Completed"],
+  ["run.failed", "Failed · Refresh Threads to retry."],
+  ["run.cancelled", "Cancelled"],
+] as const) {
+  test(`preserves ${eventType} when its acknowledgement fails`, async () => {
+    const subscription = new FakeSubscription();
+    subscription.acknowledgeError = new Error("raw secret transport failure");
+    const document = new RunDocument("run-1", 1);
+    await document.attach(Promise.resolve(subscription));
+    subscription.emit(event(2, eventType));
+    await settle();
+
+    assert.match(document.content, new RegExp(`Status:\\*\\* ${status.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`));
+    assert.match(document.content, /Final delivery acknowledgement failed/);
+    assert.doesNotMatch(document.content, /raw secret|Stream interrupted/);
+    assert.equal(subscription.disposed, true);
+  });
+}
 
 test("caught-up is silent and closures use sanitized retry instructions", async () => {
   const subscription = new FakeSubscription();
