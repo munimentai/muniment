@@ -47,10 +47,10 @@ Phases mirror harness-spec §9. Muniment-cloud Phase 1 native auth and the cloud
 
 ## Browser-control runtime capability (§6.8)
 - OWNER GO 2026-07-16 — open the v1 browser-only actuator line in this repository; it is a governed runtime capability, not another companion surface.
-- DONE E0–E13 — extension-only real-profile architecture; attributed upstream-mergeable relay core; fail-closed single-use pairing; Linux executable identity and loopback socket-owner verification; composed authorization; authorized loopback listener; bounded RFC 6455 upgrade; pairing-token consumption; fail-closed macOS loopback browser-process identity; macOS authorized-listener composition; fail-closed Windows loopback browser-process identity; Windows authorized-listener composition; and the unpacked MV3 extension with its exactly-one visible connect-tab anchor lifecycle.
-- NEXT E14 — bridge one injected, memory-only pairing handoff to the MV3 worker's authorized relay provider through a fail-closed numeric-loopback WebSocket adapter.
-- Later slices compose desktop-to-extension handoff delivery, then add runtime tools, entitlement and ask/allow/deny policy, journal receipts, and kill switch.
-- RESERVED EXTENSION ID — `cdedcfbgomnhfpifpgdlpfkkanaofkjd`; pinning the unpacked manifest through a repository development key remains pending and must land before E14 relies on this ID. Replace that development key only after owner store upload and retrieval of the public store key.
+- DONE E0–E14 — extension-only real-profile architecture; attributed upstream-mergeable relay core; fail-closed single-use pairing; Linux executable identity and loopback socket-owner verification; composed authorization; authorized loopback listener; bounded RFC 6455 upgrade; pairing-token consumption; fail-closed macOS loopback browser-process identity; macOS authorized-listener composition; fail-closed Windows loopback browser-process identity; Windows authorized-listener composition; the unpacked MV3 extension with its exactly-one visible connect-tab anchor lifecycle; and an injected, memory-only pairing handoff bridged to the MV3 worker's authorized relay provider through a fail-closed numeric-loopback WebSocket adapter.
+- NEXT E15 — compose desktop-to-extension handoff delivery.
+- Later slices add runtime tools, entitlement and ask/allow/deny policy, journal receipts, and kill switch.
+- RESERVED EXTENSION ID — `cdedcfbgomnhfpifpgdlpfkkanaofkjd`; pinning the unpacked manifest through a repository development key remains pending and must land before E15 desktop-to-extension handoff delivery relies on this ID. Replace that development key only after owner store upload and retrieval of the public store key.
 - Chrome Web Store publication/upload are owner-gated. v1 excludes OS, filesystem, and other-application control.
 
 ## Desktop QA automation
