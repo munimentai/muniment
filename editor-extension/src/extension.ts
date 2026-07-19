@@ -3,6 +3,7 @@ import { ThreadDocumentLoader } from "./thread-document";
 import { openAcceptedRun, RunDocumentStore } from "./run-documents";
 import { NEW_RUN_COMMAND, OPEN_THREAD_COMMAND, ThreadsModel, threadOpenCommand, type ThreadItem } from "./threads";
 import { connectAttach } from "./transport";
+import { editorSelectionContext, type ActiveSelection } from "./editor-context";
 
 const THREADS_VIEW_ID = "muniment.threads";
 const REFRESH_COMMAND = "muniment.refreshThreads";
@@ -33,6 +34,7 @@ export function activate(context: vscode.ExtensionContext): void {
       return model.refresh();
     }),
     vscode.commands.registerCommand(NEW_RUN_COMMAND, async () => {
+      const runContext = activeEditorSelectionContext();
       const text = await vscode.window.showInputBox({
         prompt: "Start a new Muniment run",
         placeHolder: "What would you like Muniment to do?",
@@ -41,7 +43,7 @@ export function activate(context: vscode.ExtensionContext): void {
       const result = await vscode.window.withProgress({
         location: vscode.ProgressLocation.Notification,
         title: "Starting Muniment run…",
-      }, () => model.submitRun(text));
+      }, () => model.submitRun(text, runContext));
       if (result.kind === "accepted") {
         await openAcceptedRun(result, runDocuments.store, {
           streamRun: (runId, afterRunSeq) => model.streamRun(runId, afterRunSeq),
@@ -76,6 +78,24 @@ export function activate(context: vscode.ExtensionContext): void {
     }),
   );
   void model.refresh();
+}
+
+function activeEditorSelectionContext() {
+  const editor = vscode.window.activeTextEditor;
+  if (!editor) return undefined;
+  const { document, selection } = editor;
+  const workspaceFolder = document.uri.scheme === "file" && !selection.isEmpty
+    ? vscode.workspace.getWorkspaceFolder(document.uri)
+    : undefined;
+  const snapshot: ActiveSelection = {
+    scheme: document.uri.scheme,
+    isEmpty: selection.isEmpty,
+    selectedText: workspaceFolder ? document.getText(selection) : "",
+    workspaceRelativePath: workspaceFolder
+      ? vscode.workspace.asRelativePath(document.uri, false)
+      : undefined,
+  };
+  return editorSelectionContext(snapshot);
 }
 
 export function deactivate(): void {
