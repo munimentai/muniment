@@ -1,9 +1,10 @@
 import { readdir, readFile } from "node:fs/promises";
 import { basename, join } from "node:path";
 
-const [token, repository, sha, platform] = process.argv.slice(2);
+const token = process.env.GH_TOKEN;
+const [repository, sha, platform] = process.argv.slice(2);
 if (!token || !repository || !/^[0-9a-f]{40}$/.test(sha) || !platform) {
-  throw new Error("usage: upload-nightly-assets.mjs <token> <owner/repo> <sha> <platform>");
+  throw new Error("usage: GH_TOKEN=<injected> upload-nightly-assets.mjs <owner/repo> <sha> <platform>");
 }
 
 const specs = {
@@ -44,7 +45,9 @@ for (const [directory, suffix, excludeSuffix] of specs[platform]) {
   }
 
   const path = join(bundleDirectory, matches[0]);
-  const assetName = `nightly-${sha}-${platform}-${basename(path).replace("-setup.exe", "-nsis.exe")}`;
+  const assetName = platform === "linux" && directory === "deb"
+    ? `nightly-${sha}-linux-muniment.deb`
+    : `nightly-${sha}-${platform}-${basename(path).replace("-setup.exe", "-nsis.exe")}`;
   const old = release.assets.find((asset) => asset.name === assetName);
   if (old) await api(`https://api.github.com/repos/${repository}/releases/assets/${old.id}`, { method: "DELETE" });
 
