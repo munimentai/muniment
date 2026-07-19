@@ -40,3 +40,31 @@ describe('nightly Linux E2E workflow', () => {
     expect(reportStep).not.toContain('path: ${{ runner.temp }}/muniment-e2e-artifacts\n')
   })
 })
+
+describe('nightly macOS E2E workflow', () => {
+  const start = workflow.indexOf('  macos-e2e:')
+  const macosE2e = workflow.slice(start)
+
+  it('is serialized after Windows and requests collection plus a screendump', () => {
+    expect(start).toBeGreaterThan(-1)
+    expect(macosE2e).toContain('needs: [prepare, windows-e2e]')
+    expect(macosE2e).toContain('needs.windows-e2e.result')
+    expect(macosE2e).toContain('sudo desktop-ci macos')
+    expect(macosE2e).toContain('--env-stdin')
+    expect(macosE2e).toContain('--collect-artifacts --screendump')
+  })
+
+  it('validates the pinned SHA and sends no sign-in fixture credentials', () => {
+    expect(macosE2e).toContain('^[0-9a-f]{40}$')
+    expect(macosE2e).not.toContain('DESKTOP_E2E_USERNAME')
+    expect(macosE2e).not.toContain('DESKTOP_E2E_PASSWORD')
+    expect(macosE2e).not.toContain('MUNIMENT_E2E_USERNAME')
+    expect(macosE2e).not.toContain('MUNIMENT_E2E_PASSWORD')
+  })
+
+  it('publishes success and failure diagnostics with the required retention', () => {
+    expect(macosE2e).toContain('name: macos-e2e-${{ needs.prepare.outputs.source_sha }}-success')
+    expect(macosE2e).toMatch(/name: macos-e2e-\$\{\{ needs\.prepare\.outputs\.source_sha \}\}-success[\s\S]*?retention-days: 7/)
+    expect(macosE2e).toMatch(/name: macos-e2e-\$\{\{ needs\.prepare\.outputs\.source_sha \}\}-failure[\s\S]*?retention-days: 30/)
+  })
+})
