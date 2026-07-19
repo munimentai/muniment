@@ -1,10 +1,11 @@
 import path from 'node:path'
 import { appendFile, readFile } from 'node:fs/promises'
+import { spawn } from 'node:child_process'
 import { remote } from 'webdriverio'
 
 const rawDir = process.env.MUNIMENT_E2E_RAW_DIR
 
-describe('installed Linux nightly', () => {
+describe('installed nightly', () => {
   afterEach(async () => {
     const profile = await $('.profile-button')
     if (await profile.isExisting()) {
@@ -35,9 +36,24 @@ describe('installed Linux nightly', () => {
       timeout: 60000,
       timeoutMsg: 'production sign-in continuation was not opened',
     })
+    let edgeDriver
+    if (process.platform === 'win32') {
+      // The Tauri service has already put the WebView2-matched Edge driver on
+      // PATH. Reuse those exact test-side bytes for the hosted auth window.
+      edgeDriver = spawn('msedgedriver.exe', ['--port=9515', '--allowed-ips=127.0.0.1', '--log-level=WARNING'], {
+        stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true,
+      })
+      edgeDriver.stdout.pipe((await import('node:fs')).createWriteStream(path.join(rawDir, 'edge-auth-driver.log')))
+      edgeDriver.stderr.pipe((await import('node:fs')).createWriteStream(path.join(rawDir, 'edge-auth-driver.log'), { flags: 'a' }))
+      await browser.waitUntil(async () => {
+        try { return (await fetch('http://127.0.0.1:9515/status')).ok } catch { return false }
+      }, { timeout: 30000, timeoutMsg: 'matching Edge WebDriver did not start' })
+    }
     const signInBrowser = await remote({
       hostname: '127.0.0.1', port: 9515, logLevel: 'error',
-      capabilities: { browserName: 'chrome', 'goog:chromeOptions': { args: ['--headless=new', '--no-sandbox', '--disable-dev-shm-usage'] } },
+      capabilities: process.platform === 'win32'
+        ? { browserName: 'MicrosoftEdge', 'ms:edgeOptions': { args: ['--headless=new', '--disable-gpu'] } }
+        : { browserName: 'chrome', 'goog:chromeOptions': { args: ['--headless=new', '--no-sandbox', '--disable-dev-shm-usage'] } },
     })
     try {
       await signInBrowser.url(authUrl)
@@ -55,6 +71,7 @@ describe('installed Linux nightly', () => {
       await signInBrowser.waitUntil(async () => (await signInBrowser.getUrl()).startsWith('http://127.0.0.1:'), { timeout: 120000 })
     } finally {
       await signInBrowser.deleteSession()
+      if (edgeDriver) edgeDriver.kill()
     }
 
     const authenticatedMarker = await $('textarea[placeholder="Ask anything"]')
