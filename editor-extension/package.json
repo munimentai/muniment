@@ -19,6 +19,7 @@
     "onView:muniment.threads",
     "onCommand:muniment.refreshThreads",
     "onCommand:muniment.newRun",
+    "onCommand:muniment.newRunWithCurrentFile",
     "onCommand:muniment.openThread"
   ],
   "main": "./out/src/extension.js",
@@ -39,6 +40,11 @@
         "title": "New Run",
         "category": "Muniment",
         "icon": "$(add)"
+      },
+      {
+        "command": "muniment.newRunWithCurrentFile",
+        "title": "New Run with Current File",
+        "category": "Muniment"
       }
     ],
     "viewsContainers": {
@@ -97,6 +103,13 @@
           "command": "muniment.refreshThreads",
           "when": "view == muniment.threads",
           "group": "navigation@2"
+        }
+      ],
+      "editor/context": [
+        {
+          "command": "muniment.newRunWithCurrentFile",
+          "when": "resourceScheme == file",
+          "group": "navigation"
         }
       ]
     }
