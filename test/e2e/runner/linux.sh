@@ -29,11 +29,14 @@ stop_matching() {
 
 finalize() {
   trap - EXIT INT TERM
+  # A crashed run may leave the official driver session owning its ports.
+  # Clear stale automation before opening the bounded recovery session, while
+  # retaining the app, browser driver, and state that recovery needs.
+  cleanup_step stop-wdio stop_matching '[w]dio.*test/e2e/wdio.conf.js'
+  cleanup_step stop-driver stop_matching '[t]auri-driver'
   # Launch a fresh official-driver session against the same app state. This is
   # bounded and idempotent, and still runs if the main WDIO process crashed.
   if (( ready )); then cleanup_step revoke-session timeout 45 env MUNIMENT_E2E_CLEANUP_ONLY=1 xvfb-run -a npm run test:e2e; fi
-  cleanup_step stop-wdio stop_matching '[w]dio.*test/e2e/wdio.conf.js'
-  cleanup_step stop-driver stop_matching '[t]auri-driver'
   cleanup_step stop-browser-driver stop_matching '[c]hromedriver.*9515'
   cleanup_step stop-app bash -c 'pkill -x muniment 2>/dev/null || true; ! pgrep -x muniment >/dev/null'
   if (( installed )); then cleanup_step remove-package sudo apt-get remove -y muniment; fi
@@ -55,6 +58,9 @@ finalize() {
       cleanup_step publish-artifacts mv -- "$safe" "$artifacts"
       collection_status=$cleanup_last_status
     fi
+    # Let the failure-path test exercise suppression itself without performing
+    # any filesystem operations or changing production control flow.
+    if [[ ${MUNIMENT_E2E_FINALIZER_TEST_FAIL:-} == suppress-artifacts ]]; then collection_status=1; fi
     if (( collection_status != 0 )); then cleanup_step suppress-artifacts rm -rf -- "$artifacts"; fi
   else
     cleanup_step suppress-artifacts rm -rf -- "$artifacts"
@@ -67,6 +73,13 @@ finalize() {
   cleanup_step remove-cleanup-log rm -f -- "$cleanup_log"
   if (( status != 0 || cleanup_status != 0 || redaction_status != 0 )); then exit 1; fi
 }
+
+if [[ ${MUNIMENT_E2E_FINALIZER_TEST_MODE:-0} == 1 ]]; then
+  ready=${MUNIMENT_E2E_FINALIZER_TEST_READY:-1}
+  installed=${MUNIMENT_E2E_FINALIZER_TEST_INSTALLED:-1}
+  finalize
+  exit
+fi
 trap finalize EXIT INT TERM
 
 sha=${MUNIMENT_E2E_SOURCE_SHA:-}

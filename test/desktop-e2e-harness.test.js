@@ -69,16 +69,43 @@ describe('desktop-ci payload extraction', () => {
 })
 
 describe('cleanup failure accounting', () => {
-  const phases = ['revoke-session', 'stop-wdio', 'stop-driver', 'stop-browser-driver', 'stop-app', 'remove-package', 'remove-state', 'redact-artifacts', 'remove-raw', 'remove-package-file', 'remove-auth-url', 'replace-artifacts', 'publish-artifacts', 'remove-safe']
-  it.each(phases)('continues after and records a %s failure', (failed) => {
-    const ledger = path.join(root, 'test/e2e/support/cleanup-ledger.sh')
-    const script = `cleanup_log=$(mktemp); cleanup_status=0; source "$1"; for phase in ${phases.join(' ')}; do if [[ $phase == "$2" ]]; then cleanup_step "$phase" false; else cleanup_step "$phase" true; fi; done; grep -q "$2: failed" "$cleanup_log" && [[ $(wc -l <"$cleanup_log") == ${phases.length} && $cleanup_status == 1 ]]`
-    expect(spawnSync('bash', ['-c', script, 'test', ledger, failed]).status).toBe(0)
+  const phases = ['stop-wdio', 'stop-driver', 'revoke-session', 'stop-browser-driver', 'stop-app', 'remove-package', 'remove-state', 'package-gone', 'processes-gone', 'state-gone', 'stage-cleanup-log', 'redact-artifacts', 'remove-raw', 'remove-package-file', 'remove-auth-url', 'replace-artifacts', 'publish-artifacts', 'suppress-artifacts', 'remove-safe', 'raw-gone', 'package-file-gone', 'auth-url-gone', 'safe-gone', 'remove-cleanup-log']
+  const runFinalizer = (failed = '', extraEnv = {}) => {
+    const dir = temp(); const ledger = path.join(dir, 'ledger')
+    const result = spawnSync('bash', [path.join(root, 'test/e2e/runner/linux.sh')], {
+      encoding: 'utf8',
+      env: { ...process.env, MUNIMENT_E2E_FINALIZER_TEST_MODE: '1', MUNIMENT_E2E_FINALIZER_TEST_LEDGER: ledger, MUNIMENT_E2E_FINALIZER_TEST_FAIL: failed, ...extraEnv },
+    })
+    const entries = fs.readFileSync(ledger, 'utf8').trim().split('\n')
+    return { result, entries, invoked: entries.map((entry) => entry.split('\t')[0]) }
+  }
+  it('clears stale automation before reaching recovery, then tears down the app', () => {
+    const { result, entries, invoked } = runFinalizer()
+    expect(result.status).toBe(0)
+    expect(invoked.slice(0, 5)).toEqual(['stop-wdio', 'stop-driver', 'revoke-session', 'stop-browser-driver', 'stop-app'])
+    expect(entries[2]).toContain('timeout 45 env MUNIMENT_E2E_CLEANUP_ONLY=1 xvfb-run -a npm run test:e2e')
+    expect(entries.find((entry) => entry.startsWith('package-gone\t'))).toContain('package_absent')
+    expect(entries.find((entry) => entry.startsWith('state-gone\t'))).toContain('cleanup_absent')
   })
-  it('routes every required finalizer phase through the ledger', () => {
-    const runner = fs.readFileSync(path.join(root, 'test/e2e/runner/linux.sh'), 'utf8')
-    for (const phase of phases) expect(runner).toContain(`cleanup_step ${phase}`)
-    expect(runner).toContain("'[c]hromedriver.*9515'")
-    expect(runner).toContain('package-gone package_absent')
+  it('honors finalizer readiness and installation conditions', () => {
+    const { result, invoked } = runFinalizer('', { MUNIMENT_E2E_FINALIZER_TEST_READY: '0', MUNIMENT_E2E_FINALIZER_TEST_INSTALLED: '0' })
+    expect(result.status).toBe(0)
+    expect(invoked).not.toContain('revoke-session')
+    expect(invoked).not.toContain('remove-package')
+    expect(invoked).toContain('package-gone')
+  })
+  it.each(phases)('executes the real finalizer after an injected %s failure', (failed) => {
+    const { result, invoked } = runFinalizer(failed)
+    expect(result.status).not.toBe(0)
+    expect(invoked).toContain(failed)
+    const failureIndex = invoked.indexOf(failed)
+    const applicableLater = phases.slice(phases.indexOf(failed) + 1).filter((phase) => {
+      if (failed === 'redact-artifacts') return !['replace-artifacts', 'publish-artifacts'].includes(phase)
+      if (failed === 'replace-artifacts') return phase !== 'publish-artifacts'
+      if (failed === 'suppress-artifacts') return true
+      return phase !== 'suppress-artifacts'
+    })
+    for (const phase of applicableLater) expect(invoked.indexOf(phase)).toBeGreaterThan(failureIndex)
+    if (['redact-artifacts', 'replace-artifacts', 'publish-artifacts'].includes(failed)) expect(invoked).toContain('suppress-artifacts')
   })
 })
