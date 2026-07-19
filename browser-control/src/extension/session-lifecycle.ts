@@ -18,6 +18,7 @@ export interface SessionLifecycle {
 export function installSessionLifecycle(
   chrome: ExtensionChrome,
   onError: (error: unknown) => void = error => console.error('Muniment lifecycle cleanup failed', error),
+  onTeardown: () => void = () => {},
 ): SessionLifecycle {
   let relay: LifecycleRelay | undefined;
   let removeRelayListeners: Array<() => void> = [];
@@ -43,6 +44,7 @@ export function installSessionLifecycle(
     removeRelayListeners = [];
     // Relay revocation is synchronous even when MV3 discards asynchronous work.
     activeRelay?.close();
+    onTeardown();
     tearingDown = lifecycle.teardown().finally(() => { tearingDown = undefined; });
     return tearingDown;
   }
