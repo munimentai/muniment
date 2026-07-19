@@ -116,6 +116,8 @@ export interface AttachConnection {
   listThreads(cursor?: string): Promise<ThreadListPage>;
   openThread(threadId: string, cursor?: string): Promise<ThreadOpenPage>;
   startRun(text: string, context?: JsonValue): Promise<RunStartAccepted>;
+  answerPermission(runId: string, gateId: string,
+    decision: PermissionDecision): Promise<PermissionAnswerAccepted>;
   streamRun(runId: string, afterRunSeq: number): Promise<RunStreamSubscription>;
   dispose(): void;
 }
@@ -150,7 +152,16 @@ export interface RunStreamClosed {
   code: string;
   resumable: boolean;
 }
-export type RunStreamMessage = RedactedRunEvent | RunStreamCaughtUp | RunStreamClosed;
+export interface PendingPermission {
+  type: "permission.pending";
+  runSeq: number;
+  gateId: string;
+  kind: "confirm";
+  title: string;
+  message?: string;
+}
+export type RunStreamMessage = RedactedRunEvent | PendingPermission |
+  RunStreamCaughtUp | RunStreamClosed;
 export interface RunStreamSubscription extends Disposable {
   readonly subscriptionId: string;
   readonly runId: string;
@@ -165,6 +176,15 @@ export type JsonValue = null | boolean | number | string | JsonValue[] | { [key:
 
 export interface RunStartAccepted {
   runId: string;
+  committedSeq: number;
+  acceptedAt: string;
+}
+
+export type PermissionDecision = "allow" | "deny";
+export interface PermissionAnswerAccepted {
+  runId: string;
+  gateId: string;
+  decision: PermissionDecision;
   committedSeq: number;
   acceptedAt: string;
 }
@@ -472,7 +492,7 @@ export function connectAttach(options: ConnectOptions): Promise<AttachConnection
             }
           };
           const request = (operation: "thread.list" | "thread.open" | "run.start" | "run.stream" |
-            "run.cursor_ack", body: JsonBody,
+            "run.cursor_ack" | "permission.answer", body: JsonBody,
             idempotent = false, owner?: Set<string>,
             onResponse?: (envelope: AttachEnvelope) => void): Promise<AttachEnvelope> => {
             if (!capability) return Promise.reject(new AttachTransportError("authorization_expired"));
@@ -530,6 +550,17 @@ export function connectAttach(options: ConnectOptions): Promise<AttachConnection
               if (validatedContext !== undefined) body.context = validatedContext;
               return decodeRunStartAccepted((await request("run.start", body, true)).body);
             },
+            async answerPermission(runId: string, gateId: string,
+              decision: PermissionDecision): Promise<PermissionAnswerAccepted> {
+              if (!isUuid(runId) || typeof gateId !== "string" || gateId.trim().length === 0 ||
+                  Buffer.byteLength(gateId) > MAX_PERMISSION_GATE_ID_LENGTH ||
+                  (decision !== "allow" && decision !== "deny")) {
+                throw new AttachTransportError("unexpected_message");
+              }
+              const response = await request("permission.answer",
+                { run_id: runId, gate_id: gateId, decision }, true);
+              return decodePermissionAnswerAccepted(response.body, runId, gateId, decision);
+            },
             async streamRun(runId: string, afterRunSeq: number): Promise<RunStreamSubscription> {
               validateRunStreamInput(runId, afterRunSeq);
               let state: ActiveRunSubscription | undefined;
@@ -583,6 +614,9 @@ export const MAX_RUN_START_CONTEXT_LENGTH = 64 * 1024;
 const MAX_CURSOR_LENGTH = 1024;
 const MAX_THREAD_ID_LENGTH = 36;
 const MAX_SUBSCRIPTION_ID_LENGTH = 64;
+const MAX_PERMISSION_GATE_ID_LENGTH = 256;
+const MAX_PERMISSION_TITLE_LENGTH = 1_024;
+const MAX_PERMISSION_MESSAGE_LENGTH = 4_096;
 const MAX_RUN_STREAM_WINDOW_EVENTS = 1024;
 const MAX_RUN_STREAM_WINDOW_BYTES = 4 * 1024 * 1024;
 
@@ -705,6 +739,24 @@ function createRunSubscription(summary: RunStreamSummary, afterRunSeq: number,
         message = { type: "run.event", runSeq, eventType: body.event_type,
           eventVersion: body.event_version, recordedAt: body.recorded_at,
           payload: { withheld: true, ...(receipt === undefined ? {} : { receipt }) } };
+      } else if (envelope.event === "permission.pending") {
+        if (highest + 1 !== runSeq || (!caughtUp && runSeq > summary.currentRunSeq) ||
+            runSeq - acknowledged > summary.window.maxEvents) {
+          throw new AttachTransportError("unexpected_message");
+        }
+        const body = exactObject(envelope.body, ["gate_id", "kind", "title"], ["message"]);
+        validateBoundedString(body.gate_id, MAX_PERMISSION_GATE_ID_LENGTH, false);
+        validateBoundedString(body.title, MAX_PERMISSION_TITLE_LENGTH, false);
+        if (body.gate_id.trim().length === 0 || body.title.trim().length === 0 ||
+            body.kind !== "confirm") throw new AttachTransportError("unexpected_message");
+        if (body.message !== undefined) {
+          validateBoundedString(body.message, MAX_PERMISSION_MESSAGE_LENGTH, true);
+        }
+        highest = runSeq;
+        if (caughtUp) summary.currentRunSeq = runSeq;
+        message = { type: "permission.pending", runSeq, gateId: body.gate_id,
+          kind: "confirm", title: body.title,
+          ...(body.message === undefined ? {} : { message: body.message }) };
       } else if (envelope.event === "subscription.caught_up") {
         if (caughtUp || runSeq !== summary.currentRunSeq || highest !== summary.currentRunSeq ||
             Object.keys(exactObject(envelope.body, [])).length !== 0) {
@@ -905,6 +957,20 @@ function decodeRunStartAccepted(value: unknown): RunStartAccepted {
   }
   return { runId: accepted.run_id, committedSeq: accepted.committed_seq,
     acceptedAt: accepted.accepted_at };
+}
+
+function decodePermissionAnswerAccepted(value: unknown, expectedRunId: string,
+  expectedGateId: string, expectedDecision: PermissionDecision): PermissionAnswerAccepted {
+  const accepted = exactObject(value,
+    ["run_id", "gate_id", "decision", "committed_seq", "accepted_at"]);
+  if (accepted.run_id !== expectedRunId || accepted.gate_id !== expectedGateId ||
+      accepted.decision !== expectedDecision || typeof accepted.committed_seq !== "number" ||
+      !Number.isSafeInteger(accepted.committed_seq) || accepted.committed_seq <= 0 ||
+      typeof accepted.accepted_at !== "string" || !isRfc3339(accepted.accepted_at)) {
+    throw new AttachTransportError("unexpected_message");
+  }
+  return { runId: expectedRunId, gateId: expectedGateId, decision: expectedDecision,
+    committedSeq: accepted.committed_seq, acceptedAt: accepted.accepted_at };
 }
 
 function validateOptionalCursor(value: unknown, maximum: number): asserts value is string | undefined {

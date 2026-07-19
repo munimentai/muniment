@@ -36,6 +36,10 @@ class FakeConnection implements AttachConnection {
     throw new Error("not used");
   }
 
+  async answerPermission(): Promise<never> {
+    throw new Error("not implemented by this fake");
+  }
+
   async startRun(text: string, context?: JsonValue): Promise<RunStartAccepted> {
     this.startCalls.push({ text, context });
     return this.startResult;
