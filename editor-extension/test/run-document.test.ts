@@ -91,6 +91,29 @@ for (const [eventType, status] of [
   });
 }
 
+for (const [eventType, status] of [
+  ["run.completed", "Completed"],
+  ["run.failed", "Failed · Refresh Threads to retry."],
+  ["run.cancelled", "Cancelled"],
+] as const) {
+  for (const acknowledgeFails of [false, true]) {
+    test(`preserves coalesced ${eventType} through close${acknowledgeFails ? " when acknowledgement fails" : ""}`, async () => {
+      const subscription = new FakeSubscription();
+      if (acknowledgeFails) subscription.acknowledgeError = new Error("raw secret transport failure");
+      const document = new RunDocument("run-1", 1);
+      await document.attach(Promise.resolve(subscription));
+      subscription.emit(event(2, eventType));
+      subscription.emit({ type: "stream.closed", runSeq: 3, code: "hostile-close-code", resumable: true });
+      await settle();
+
+      assert.match(document.content, new RegExp(`Status:\\*\\* ${status.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`));
+      assert.doesNotMatch(document.content, /Stream closed|hostile-close-code|raw secret/);
+      if (acknowledgeFails) assert.match(document.content, /Final delivery acknowledgement failed/);
+      assert.equal(subscription.disposed, true);
+    });
+  }
+}
+
 test("caught-up is silent and closures use sanitized retry instructions", async () => {
   const subscription = new FakeSubscription();
   const document = new RunDocument("run-1", 1);

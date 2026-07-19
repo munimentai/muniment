@@ -16,6 +16,8 @@ export class RunDocument {
   private disposed = false;
   private generation = 0;
   private processing = Promise.resolve();
+  private finalStatus: string | undefined;
+  private deliveryWarning: string | undefined;
 
   constructor(readonly runId: string, committedSeq: number) {
     this.lastRunSeq = committedSeq;
@@ -62,14 +64,14 @@ export class RunDocument {
     if (this.disposed || generation !== this.generation) return;
     if (message.type === "subscription.caught_up") return;
     if (message.type === "stream.closed") {
-      if (message.runSeq <= this.lastRunSeq) return;
-      this.lastRunSeq = message.runSeq;
+      if (message.runSeq < this.lastRunSeq || message.runSeq > this.lastRunSeq + 1) return;
+      this.lastRunSeq = Math.max(this.lastRunSeq, message.runSeq);
       const status = message.code === "completed"
         ? "Completed"
         : message.resumable
           ? "Stream closed · Refresh Threads to resume this run."
           : "Stream closed · This run cannot be resumed. Start a new run.";
-      this.update(this.render(status));
+      this.update(this.render(this.finalStatus ?? status, this.deliveryWarning));
       this.closeSubscription();
       return;
     }
@@ -83,13 +85,15 @@ export class RunDocument {
     this.history.push(formatEvent(message.runSeq, message.eventType, message.recordedAt, message.payload.receipt));
     if (this.history.length > MAX_HISTORY) this.history.splice(0, this.history.length - MAX_HISTORY);
     const terminal = terminalStatus(message.eventType);
+    if (terminal) this.finalStatus = terminal;
     this.update(this.render(terminal ?? "Running"));
     try {
       await this.subscription?.acknowledge(message.runSeq);
     } catch {
       if (!this.disposed && generation === this.generation) {
+        this.deliveryWarning = terminal ? "Final delivery acknowledgement failed." : undefined;
         this.update(this.render(terminal ?? "Stream interrupted · Refresh Threads to resume this run.",
-          terminal ? "Final delivery acknowledgement failed." : undefined));
+          this.deliveryWarning));
         this.closeSubscription();
       }
       return;

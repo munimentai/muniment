@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
 import test from "node:test";
+import { RunDocument } from "../src/run-document";
 import {
   AttachFrameDecoder,
   AttachTransportError,
@@ -284,6 +285,45 @@ test("atomically routes concurrent stream responses and coalesced terminal event
   const deliveredB: unknown[] = [];
   streamB.onDidReceiveMessage((message) => deliveredB.push(message));
   assert.equal(deliveredB.length, 1);
+  connection.dispose();
+});
+
+test("projects a same-cursor resumable close without losing the terminal event", async () => {
+  const socket = new FakeSocket();
+  const connection = await authorizedConnection(socket);
+  const runId = "00000000000000000000000000000191";
+  const pendingStream = connection.streamRun(runId, 0);
+  const streamRequest = lastRequest(socket);
+  const subscriptionId = "00000000000000000000000000000190";
+  socket.emit("data", encodeAttachFrame({ protocol: "muniment.attach/1",
+    request_id: streamRequest.request_id, ok: true, body: { subscription_id: subscriptionId,
+      run_id: runId, first_available_run_seq: 1, current_run_seq: 1,
+      window: { max_events: 4, max_bytes: 4096 } } }));
+  const document = new RunDocument(runId, 0);
+  await document.attach(pendingStream);
+
+  socket.emit("data", encodeAttachFrame({ protocol: "muniment.attach/1",
+    subscription_id: subscriptionId, event: "run.event", run_id: runId, run_seq: 1,
+    body: { event_type: "run.failed", event_version: 1,
+      recorded_at: "2026-07-17T00:00:00Z", payload: { withheld: true } } }));
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  const acknowledgement = lastRequest(socket);
+  assert.equal(acknowledgement.operation, "run.cursor_ack");
+
+  socket.emit("data", Buffer.concat([
+    encodeAttachFrame({ protocol: "muniment.attach/1", request_id: acknowledgement.request_id,
+      ok: false, error: { code: "invalid_cursor", message: "private details", retryable: true } }),
+    encodeAttachFrame({ protocol: "muniment.attach/1", subscription_id: subscriptionId,
+      event: "stream.closed", run_id: runId, run_seq: 1,
+      body: { code: "invalid_cursor", resumable: true } }),
+  ]));
+  await new Promise<void>((resolve) => setImmediate(resolve));
+
+  assert.match(document.content, /Status:\*\* Failed · Refresh Threads to retry\./);
+  assert.match(document.content, /Final delivery acknowledgement failed/);
+  assert.doesNotMatch(document.content, /private details|invalid_cursor|Stream closed/);
+  assert.equal(socket.destroyed, false);
+  document.dispose();
   connection.dispose();
 });
 
