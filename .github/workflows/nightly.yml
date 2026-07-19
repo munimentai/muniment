@@ -104,8 +104,8 @@ jobs:
           # advances mid-run (a shallow branch clone can't check out a commit
           # that is no longer the tip -> "unable to read tree", macOS built last
           # so hit it most).
-          cmd="git fetch --depth 1 origin $SOURCE_SHA && git checkout --detach $SOURCE_SHA && $build && node .github/upload-nightly-assets.mjs $REPO_TOKEN $REPOSITORY $SOURCE_SHA $PLATFORM"
-          repo_url="https://x-access-token:${REPO_TOKEN}@github.com/${REPOSITORY}"
+          cmd="git fetch --depth 1 origin $SOURCE_SHA && git checkout --detach $SOURCE_SHA && $build && node .github/upload-nightly-assets.mjs $REPOSITORY $SOURCE_SHA $PLATFORM"
+          repo_url="https://github.com/${REPOSITORY}.git"
           ssh_cmd="sudo desktop-ci $PLATFORM --repo '$repo_url' --ref 'main' --cmd '$cmd'"
 
           # Windows code signing: when the Azure Artifact Signing secrets exist,
@@ -113,21 +113,18 @@ jobs:
           # so they stay out of pve01's sudo log and process list) and it injects
           # them into the ephemeral build VM. Absent secret => unchanged unsigned build.
           if [ "$PLATFORM" = "windows" ] && [ -n "${AZURE_CLIENT_SECRET:-}" ]; then
-            printf '%s\n' \
+            signing_env=$(printf '%s\n' \
               "AZURE_TENANT_ID=$AZURE_TENANT_ID" \
               "AZURE_CLIENT_ID=$AZURE_CLIENT_ID" \
               "AZURE_CLIENT_SECRET=$AZURE_CLIENT_SECRET" \
               "AZURE_SIGNING_ENDPOINT=$AZURE_SIGNING_ENDPOINT" \
               "AZURE_SIGNING_ACCOUNT=$AZURE_SIGNING_ACCOUNT" \
-              "AZURE_SIGNING_PROFILE=$AZURE_SIGNING_PROFILE" \
-            | ssh -i "$key" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
-                  -o BatchMode=yes -o ServerAliveInterval=30 -o ServerAliveCountMax=8 \
-                  desktopci@10.1.10.10 "$ssh_cmd --env-stdin"
-          else
-            ssh -i "$key" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
-                -o BatchMode=yes -o ServerAliveInterval=30 -o ServerAliveCountMax=8 \
-                desktopci@10.1.10.10 "$ssh_cmd"
+              "AZURE_SIGNING_PROFILE=$AZURE_SIGNING_PROFILE")
           fi
+          { printf '%s\n' "GH_TOKEN=$REPO_TOKEN"; if [ -n "${signing_env:-}" ]; then printf '%s\n' "$signing_env"; fi; } \
+          | ssh -i "$key" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+                -o BatchMode=yes -o ServerAliveInterval=30 -o ServerAliveCountMax=8 \
+                desktopci@10.1.10.10 "$ssh_cmd --env-stdin"
 
   publish:
     needs: [prepare, build]
@@ -192,3 +189,78 @@ jobs:
               sha,
               force: true,
             });
+
+  linux-e2e:
+    needs: [prepare, publish]
+    if: always() && needs.publish.result == 'success'
+    runs-on: self-hosted
+    timeout-minutes: 45
+    env:
+      SOURCE_SHA: ${{ needs.prepare.outputs.source_sha }}
+      REPOSITORY: ${{ github.repository }}
+      RELEASE_TOKEN: ${{ github.token }}
+      FIXTURE_USERNAME: ${{ secrets.DESKTOP_E2E_USERNAME }}
+      FIXTURE_PASSWORD: ${{ secrets.DESKTOP_E2E_PASSWORD }}
+    steps:
+      - name: Validate pinned source identity
+        run: |
+          [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo 'source_sha must be exactly 40 lowercase hex characters' >&2; exit 1; }
+
+      - name: Run installed Linux sign-in via desktop-ci
+        id: e2e
+        env:
+          DESKTOP_CI_SSH_KEY: ${{ secrets.DESKTOP_CI_SSH_KEY }}
+        run: |
+          set -uo pipefail
+          set +x
+          umask 077
+          key="$RUNNER_TEMP/desktop_ci_key"
+          output="$RUNNER_TEMP/desktop_ci_output"
+          printf '%s' "$DESKTOP_CI_SSH_KEY" >"$key"
+          trap 'rm -f "$key" "$output"' EXIT
+
+          cmd='bash test/e2e/runner/linux.sh'
+          remote="sudo desktop-ci linux --repo 'https://github.com/${REPOSITORY}.git' --ref '$SOURCE_SHA' --cmd '$cmd' --env-stdin --memory 8192 --build-timeout 2400 --collect-artifacts"
+          set +e
+          printf '%s\n' \
+            "GH_TOKEN=$RELEASE_TOKEN" \
+            "GITHUB_REPOSITORY=$REPOSITORY" \
+            "MUNIMENT_E2E_SOURCE_SHA=$SOURCE_SHA" \
+            "MUNIMENT_E2E_USERNAME=$FIXTURE_USERNAME" \
+            "MUNIMENT_E2E_PASSWORD=$FIXTURE_PASSWORD" \
+          | ssh -i "$key" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+              -o BatchMode=yes -o ServerAliveInterval=30 -o ServerAliveCountMax=8 \
+              desktopci@10.1.10.10 "$remote" >"$output" 2>&1
+          run_status=$?
+          set -e
+
+          # Require the contract's one exact, ordered marker pair, strict base64,
+          # and a regular-file/directory-only archive before extracting.
+          extract_status=0
+          bash test/e2e/support/extract-artifacts.sh "$output" "$RUNNER_TEMP/muniment-e2e-artifacts" || extract_status=$?
+          if (( run_status != 0 || extract_status != 0 )); then final_status=1; else final_status=0; fi
+          printf 'status=%s\n' "$final_status" >>"$GITHUB_OUTPUT"
+
+      - name: Upload successful diagnostics
+        if: always() && steps.e2e.outputs.status == '0'
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-e2e-${{ needs.prepare.outputs.source_sha }}-success
+          path: ${{ runner.temp }}/muniment-e2e-artifacts
+          retention-days: 7
+          if-no-files-found: error
+
+      - name: Upload failure diagnostics
+        if: always() && steps.e2e.outputs.status != '0'
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-e2e-${{ needs.prepare.outputs.source_sha }}-failure
+          path: ${{ runner.temp }}/muniment-e2e-artifacts
+          retention-days: 30
+          if-no-files-found: error
+
+      - name: Preserve E2E result
+        if: always()
+        env:
+          E2E_STATUS: ${{ steps.e2e.outputs.status }}
+        run: test "$E2E_STATUS" = 0
