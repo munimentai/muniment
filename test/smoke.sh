@@ -23,6 +23,20 @@ grep -Fq 'platform: [linux, windows, macos]' "$ci"
 grep -Fq "cmd='cargo check --manifest-path src-tauri/Cargo.toml --locked --all-targets'" "$ci"
 test "$(grep -Fc 'apt-get install -y -qq --no-install-recommends libasound2-dev' "$ci")" -eq 2
 test -f src-tauri/Cargo.lock
+# installed-nightly E2E architecture remains accepted and platform-bounded
+e2e_adr=docs/decisions/0013-desktop-e2e-harness.md
+test -f "$e2e_adr"
+grep -Fq -- '- Status: accepted' "$e2e_adr"
+grep -Fq '@wdio/tauri-service' "$e2e_adr"
+grep -Fq '(`tauri-driver`) for Windows and Linux' "$e2e_adr"
+grep -Fq 'Windows/Linux installed launch plus real sign-in smoke.' "$e2e_adr"
+grep -Fq 'macOS install/launch plus Proxmox screendump' "$e2e_adr"
+grep -Fq 'Do not automate sign-in.' "$e2e_adr"
+grep -Fq 'test/e2e/specs/' "$e2e_adr"
+grep -Fq 'ci_gate_wait_minutes' "$e2e_adr"
+grep -Fq 'non-human E2E identity' "$e2e_adr"
+grep -Fq 'desktop E2E runner contract' "$e2e_adr"
+grep -Fq '0013-desktop-e2e-harness.md' README.md
 # companion workspace and its path-scoped CI lane
 grep -Fq 'members = [".", "core", "attach", "cli"]' src-tauri/Cargo.toml
 grep -Fq 'resolver = "2"' src-tauri/Cargo.toml
