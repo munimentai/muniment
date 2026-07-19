@@ -80,24 +80,31 @@ for forbidden in \
     >/dev/null 2>&1
 done
 # Exercise the real Cargo tree path with a transitive dependency hidden from
-# Linux's host graph. The boundary must inspect every dependency pulled in by
-# muniment-attach for every target platform.
-attach_manifest=src-tauri/attach/Cargo.toml
-lockfile=src-tauri/Cargo.lock
-attach_manifest_backup=$(mktemp)
-lockfile_backup=$(mktemp)
+# Linux's host graph. Use an all-local fixture so this smoke check does not
+# depend on which crates.io index entries happen to be cached on the runner.
+boundary_fixture=$(mktemp -d)
 boundary_output=$(mktemp)
-cp "$attach_manifest" "$attach_manifest_backup"
-cp "$lockfile" "$lockfile_backup"
 restore_dependency_probe() {
-  cp "$attach_manifest_backup" "$attach_manifest"
-  cp "$lockfile_backup" "$lockfile"
-  rm -f "$attach_manifest_backup" "$lockfile_backup" "$boundary_output"
+  rm -rf "$boundary_fixture"
+  rm -f "$boundary_output"
 }
 trap restore_dependency_probe EXIT
-printf '\n[target.\x27cfg(windows)\x27.dependencies]\ntauri = "2"\n' >> "$attach_manifest"
-cargo generate-lockfile --manifest-path src-tauri/Cargo.toml --offline
-if test/cli-dependency-boundary.sh >"$boundary_output" 2>&1; then
+mkdir -p "$boundary_fixture/cli/src" "$boundary_fixture/attach/src" \
+  "$boundary_fixture/tauri/src"
+printf '[workspace]\nmembers = ["cli", "attach", "tauri"]\nresolver = "2"\n' \
+  > "$boundary_fixture/Cargo.toml"
+printf '[package]\nname = "muniment-cli"\nversion = "0.0.0"\nedition = "2021"\n\n[dependencies]\nmuniment-attach = { path = "../attach" }\n' \
+  > "$boundary_fixture/cli/Cargo.toml"
+printf 'fn main() {}\n' > "$boundary_fixture/cli/src/main.rs"
+printf '[package]\nname = "muniment-attach"\nversion = "0.0.0"\nedition = "2021"\n\n[target.\x27cfg(windows)\x27.dependencies]\ntauri = { path = "../tauri" }\n' \
+  > "$boundary_fixture/attach/Cargo.toml"
+printf '' > "$boundary_fixture/attach/src/lib.rs"
+printf '[package]\nname = "tauri"\nversion = "0.0.0"\nedition = "2021"\n' \
+  > "$boundary_fixture/tauri/Cargo.toml"
+printf '' > "$boundary_fixture/tauri/src/lib.rs"
+cargo generate-lockfile --manifest-path "$boundary_fixture/Cargo.toml" --offline
+if MUNIMENT_CARGO_MANIFEST="$boundary_fixture/Cargo.toml" \
+    test/cli-dependency-boundary.sh >"$boundary_output" 2>&1; then
   echo "transitive target-specific forbidden dependency passed the CLI boundary" >&2
   exit 1
 fi
