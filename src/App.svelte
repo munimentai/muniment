@@ -6,6 +6,7 @@
   import { accessErrorState, accessIdleState, accessLoadingState, accessReadyState, bootState, devicesErrorState, devicesIdleState, devicesLoadingState, devicesReadyState, errorState, statusState, waitingState } from './lib/auth-state.js'
   import { ringPath } from './lib/mark.js'
   import { applyBufferedChatEvents, applyChatEvent, composerAction, formatByteSize, historyMessages, receiptParts, receiptRows, toolName, toolStatus } from './lib/chat-state.js'
+  import { appendTranscript, isDictationActive } from './lib/dictation-state.js'
   import { scrollFollowState } from './lib/scroll-follow.js'
 
   const markD = ringPath()
@@ -38,6 +39,63 @@
   let parallelTools = $state(new Map())
   let submissionSequence = 0
   let draggingFiles = $state(false)
+  let dictation = $state({ state: 'idle' })
+  let dictationError = $state('')
+  let dictationTimer
+  let dictationUnlisten
+  let dictationCommandPending = $state(false)
+  let destroyed = false
+
+  function stopDictationPolling() {
+    clearTimeout(dictationTimer)
+    dictationTimer = undefined
+  }
+
+  function dictationBusy() {
+    return dictationCommandPending || isDictationActive(dictation)
+  }
+
+  function applyDictationStatus(status) {
+    dictation = status
+    if (status.state === 'modelNotInstalled' || status.state === 'failed') {
+      dictationError = status.message
+    } else dictationError = ''
+    if (!isDictationActive(status)) stopDictationPolling()
+  }
+
+  function pollDictation() {
+    stopDictationPolling()
+    dictationTimer = setTimeout(async () => {
+      if (destroyed || !isDictationActive(dictation)) return
+      try {
+        applyDictationStatus(await tauri.invoke('dictation_status'))
+      } catch (error) {
+        dictationError = typeof error === 'string' ? error : 'Dictation status could not be checked.'
+      }
+      if (!destroyed && isDictationActive(dictation)) pollDictation()
+    }, 100)
+  }
+
+  async function toggleDictation() {
+    if (active || dictationCommandPending) return
+    const wasActive = isDictationActive(dictation)
+    dictationCommandPending = true
+    dictationError = ''
+    try {
+      const command = wasActive ? 'dictation_stop' : 'dictation_start'
+      const status = await tauri.invoke(command)
+      if (destroyed) return
+      applyDictationStatus(status)
+      if (isDictationActive(dictation)) pollDictation()
+    } catch (error) {
+      if (destroyed) return
+      if (!wasActive) dictation = { state: 'failed' }
+      dictationError = typeof error === 'string' ? error : `Dictation could not be ${wasActive ? 'stopped' : 'started'}.`
+      if (wasActive) pollDictation()
+    } finally {
+      dictationCommandPending = false
+    }
+  }
 
   function toggleReceipt(runId) {
     const next = new Set(expandedReceipts)
@@ -188,6 +246,12 @@
       if (projected) messages = messages.map((message) => message.run?.id === projected.id ? { ...message, run: projected } : message)
       if (active?.id === payload.runId) active = projected && !['complete', 'cancelled', 'failed', 'interrupted'].includes(projected.phase) ? projected : null
     }).then((stop) => { unlisten = stop })
+    window.__TAURI__?.event?.listen('dictation-event', ({ payload }) => {
+      if (payload.type === 'transcript') draft = appendTranscript(draft, payload.text)
+    }).then((stop) => {
+      if (destroyed) stop()
+      else dictationUnlisten = stop
+    })
     const outside = (event) => {
       if (accessOpen && !accessPopover?.contains(event.target) && !profileButton?.contains(event.target)) closeAccess()
     }
@@ -200,7 +264,6 @@
     document.addEventListener('click', outside)
     document.addEventListener('keydown', escape)
     let stopDragDrop
-    let destroyed = false
     if (tauri) getCurrentWebview().onDragDropEvent(({ payload }) => {
         if (auth.name !== 'signed-in' || active) {
           draggingFiles = false
@@ -219,6 +282,8 @@
     return () => {
       destroyed = true
       unlisten?.()
+      dictationUnlisten?.()
+      stopDictationPolling()
       stopDragDrop?.()
       document.removeEventListener('click', outside)
       document.removeEventListener('keydown', escape)
@@ -227,7 +292,7 @@
 
   async function send() {
     const prompt = draft.trim()
-    if (!prompt || active) return
+    if (!prompt || active || dictationBusy()) return
     submitError = ''
     const submissionId = ++submissionSequence
     const userMessage = { role: 'user', text: prompt, attachments: [], submissionId }
@@ -299,7 +364,7 @@
   }
 
   async function resume(run) {
-    if (active || !run.resumable || run.phase !== 'interrupted') return
+    if (active || dictationBusy() || !run.resumable || run.phase !== 'interrupted') return
     const resuming = { ...run, phase: 'resuming', resumeError: '' }
     active = resuming
     messages = messages.map((message) => message.run?.id === run.id ? { ...message, run: resuming } : message)
@@ -323,7 +388,7 @@
 
   async function queue(delivery) {
     const message = draft.trim()
-    if (!message || !active || active.id === 'pending') return
+    if (!message || !active || active.id === 'pending' || dictationBusy()) return
     const runId = active.id
     queueError = ''
     try {
@@ -450,8 +515,8 @@
               {#if message.run.phase === 'thinking'}
                 <span class="thinking"><svg width="17" height="17" viewBox="0 0 48 48" aria-label="Thinking"><path d={markD} stroke-width="5" /></svg><span>Routing</span></span>
               {:else}<p class:streaming={message.run.phase === 'streaming'}>{message.run.text}{#if message.run.phase === 'streaming'}<span class="caret" aria-hidden="true"></span>{/if}</p>{/if}
-              {#if message.run.phase === 'failed'}<div class="run-error">Reply failed. <button onclick={() => { draft = message.run.prompt; send() }}>Try again</button></div>{/if}
-              {#if message.run.phase === 'interrupted'}<div class="run-error" role={message.run.resumeError ? 'alert' : undefined}>{message.run.resumeError ?? 'Reply interrupted.'} {#if message.run.resumable}<button disabled={!!active} onclick={() => resume(message.run)}>Resume</button>{:else if message.run.prompt}<button onclick={() => { draft = message.run.prompt; send() }}>Try again</button>{/if}</div>{/if}
+              {#if message.run.phase === 'failed'}<div class="run-error">Reply failed. <button disabled={dictationBusy()} onclick={() => { draft = message.run.prompt; send() }}>Try again</button></div>{/if}
+              {#if message.run.phase === 'interrupted'}<div class="run-error" role={message.run.resumeError ? 'alert' : undefined}>{message.run.resumeError ?? 'Reply interrupted.'} {#if message.run.resumable}<button disabled={!!active || dictationBusy()} onclick={() => resume(message.run)}>Resume</button>{:else if message.run.prompt}<button disabled={dictationBusy()} onclick={() => { draft = message.run.prompt; send() }}>Try again</button>{/if}</div>{/if}
               {#if groupedTools.length}
                 <div class="tool-card tool-group" role="group" aria-label={`Parallel tool activity: ${groupedTools.map((tool) => `${toolName(tool)} ${toolStatus(tool)}`).join(', ')}`}>
                   <div class="tool-group-title">Parallel tool activity</div>
@@ -500,8 +565,16 @@
           {#if cancelError}<p class="cancel-error" role="alert">{cancelError}</p>{/if}
           {#if queueError}<p class="cancel-error" role="alert">{queueError}</p>{/if}
           <div class="composer-row">
-            <span>{active?.phase === 'resuming' ? 'Reopening the existing secure session…' : active && active.id !== 'pending' ? '⏎ steers this reply · queue as follow-up' : 'Routing is automatic. Every reply carries its receipt.'}</span>
+            {#if isDictationActive(dictation)}
+              <span class="capture-status" role="status">
+                <span class="capture-meter" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></span>
+                {dictation.state === 'starting' ? 'Starting local dictation…' : 'Listening on this device…'}
+              </span>
+            {:else}
+              <span>{active?.phase === 'resuming' ? 'Reopening the existing secure session…' : active && active.id !== 'pending' ? '⏎ steers this reply · queue as follow-up' : 'Routing is automatic. Every reply carries its receipt.'}</span>
+            {/if}
             <div class="composer-actions">
+              <button type="button" class="quiet voice" aria-pressed={isDictationActive(dictation)} disabled={!!active || dictationCommandPending} onclick={toggleDictation}>Voice</button>
               {#if !active}<button type="button" class="quiet attach" onclick={chooseFiles}>Add files</button>{/if}
               {#if active?.phase === 'resuming'}
                 <button disabled>Resuming…</button>
@@ -509,9 +582,10 @@
                 <button class="quiet follow-up" disabled={!draft.trim()} onclick={() => queue('followUp')}>Queue follow-up</button>
                 <button onclick={cancel}>Stop</button>
                 <button disabled={!draft.trim()} onclick={() => queue('steer')}>Send</button>
-              {:else if !active}<button disabled={!draft.trim()} onclick={send}>Send</button>{/if}
+              {:else if !active}<button disabled={!draft.trim() || dictationBusy()} onclick={send}>Send</button>{/if}
             </div>
           </div>
+          {#if dictationError}<div class="dictation-error" role="alert">{dictationError}</div>{/if}
         </div>
       </section>
     {:else if auth.name === 'error'}
@@ -701,9 +775,16 @@
   textarea { width: 100%; resize: none; border: 0; outline: 0; background: transparent; color: var(--ink); font: inherit; }
   .composer-row { display: flex; justify-content: space-between; align-items: center; color: var(--muted); font-size: 11px; }
   .composer-actions { display: flex; align-items: center; gap: 6px; }
+  .capture-status { display: flex; align-items: center; gap: 8px; font-family: var(--font-mono); }
+  .capture-meter { height: 14px; display: flex; align-items: center; gap: 2px; }
+  .capture-meter i { width: 2px; height: 6px; background: var(--muted); animation: capture 900ms ease-in-out infinite alternate; }
+  .capture-meter i:nth-child(2), .capture-meter i:nth-child(4) { height: 10px; animation-delay: -300ms; }
+  .capture-meter i:nth-child(3) { height: 14px; animation-delay: -600ms; }
+  .dictation-error { margin-top: 7px; color: var(--muted); font: var(--text-12) var(--font-mono); }
   .follow-up { color: var(--muted); font-family: var(--font-mono); }
   @keyframes blink { 50% { opacity: 0; } }
   @keyframes breathe { 50% { opacity: .45; } }
   @keyframes tool-pulse { 50% { opacity: .3; transform: scale(.75); } }
-  @media (prefers-reduced-motion: reduce) { .caret, .thinking path, .tool-running .tool-dot { animation: none; } }
+  @keyframes capture { to { transform: scaleY(.55); } }
+  @media (prefers-reduced-motion: reduce) { .caret, .thinking path, .tool-running .tool-dot, .capture-meter i { animation: none; } }
 </style>
