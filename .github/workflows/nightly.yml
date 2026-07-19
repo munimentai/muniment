@@ -264,3 +264,78 @@ jobs:
         env:
           E2E_STATUS: ${{ steps.e2e.outputs.status }}
         run: test "$E2E_STATUS" = 0
+
+  windows-e2e:
+    needs: [prepare, linux-e2e]
+    # The shared real-auth fixture is exclusive: Windows starts only after the
+    # Linux case has completely finished, including its finalizer.
+    if: always() && needs.prepare.result == 'success' && needs.linux-e2e.result != 'skipped'
+    runs-on: self-hosted
+    timeout-minutes: 45
+    env:
+      SOURCE_SHA: ${{ needs.prepare.outputs.source_sha }}
+      REPOSITORY: ${{ github.repository }}
+      RELEASE_TOKEN: ${{ github.token }}
+      FIXTURE_USERNAME: ${{ secrets.DESKTOP_E2E_USERNAME }}
+      FIXTURE_PASSWORD: ${{ secrets.DESKTOP_E2E_PASSWORD }}
+    steps:
+      - name: Validate pinned source identity
+        run: |
+          [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo 'source_sha must be exactly 40 lowercase hex characters' >&2; exit 1; }
+
+      - name: Run installed Windows sign-in via desktop-ci
+        id: e2e
+        env:
+          DESKTOP_CI_SSH_KEY: ${{ secrets.DESKTOP_CI_SSH_KEY }}
+        run: |
+          set -uo pipefail
+          set +x
+          umask 077
+          key="$RUNNER_TEMP/desktop_ci_key"
+          output="$RUNNER_TEMP/desktop_ci_output"
+          printf '%s' "$DESKTOP_CI_SSH_KEY" >"$key"
+          trap 'rm -f "$key" "$output"' EXIT
+
+          cmd='powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File test/e2e/runner/windows.ps1'
+          remote="sudo desktop-ci windows --repo 'https://github.com/${REPOSITORY}.git' --ref '$SOURCE_SHA' --cmd '$cmd' --env-stdin --memory 8192 --build-timeout 2400 --collect-artifacts"
+          set +e
+          printf '%s\n' \
+            "GH_TOKEN=$RELEASE_TOKEN" \
+            "GITHUB_REPOSITORY=$REPOSITORY" \
+            "MUNIMENT_E2E_SOURCE_SHA=$SOURCE_SHA" \
+            "MUNIMENT_E2E_USERNAME=$FIXTURE_USERNAME" \
+            "MUNIMENT_E2E_PASSWORD=$FIXTURE_PASSWORD" \
+          | ssh -i "$key" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+              -o BatchMode=yes -o ServerAliveInterval=30 -o ServerAliveCountMax=8 \
+              desktopci@10.1.10.10 "$remote" >"$output" 2>&1
+          run_status=$?
+          set -e
+
+          extract_status=0
+          bash test/e2e/support/extract-artifacts.sh "$output" "$RUNNER_TEMP/muniment-windows-e2e-artifacts" || extract_status=$?
+          if (( run_status != 0 || extract_status != 0 )); then final_status=1; else final_status=0; fi
+          printf 'status=%s\n' "$final_status" >>"$GITHUB_OUTPUT"
+
+      - name: Upload successful diagnostics
+        if: always() && steps.e2e.outputs.status == '0'
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-e2e-${{ needs.prepare.outputs.source_sha }}-success
+          path: ${{ runner.temp }}/muniment-windows-e2e-artifacts
+          retention-days: 7
+          if-no-files-found: error
+
+      - name: Upload failure diagnostics
+        if: always() && steps.e2e.outputs.status != '0'
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-e2e-${{ needs.prepare.outputs.source_sha }}-failure
+          path: ${{ runner.temp }}/muniment-windows-e2e-artifacts
+          retention-days: 30
+          if-no-files-found: error
+
+      - name: Preserve E2E result
+        if: always()
+        env:
+          E2E_STATUS: ${{ steps.e2e.outputs.status }}
+        run: test "$E2E_STATUS" = 0

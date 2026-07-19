@@ -13,7 +13,7 @@ const runNode = (script, args, options = {}) => spawnSync(process.execPath, [pat
 describe('nightly asset identity', () => {
   const sha = 'a'.repeat(40)
   const asset = { name: `nightly-${sha}-linux-muniment.deb`, id: 42 }
-  const validate = (release, candidate = sha) => runNode('test/e2e/support/asset-identity.mjs', [candidate], { input: JSON.stringify(release) })
+  const validate = (release, candidate = sha, platform = 'linux') => runNode('test/e2e/support/asset-identity.mjs', [candidate, platform], { input: JSON.stringify(release) })
   it('accepts exactly one pinned asset', () => expect(validate({ target_commitish: sha, assets: [asset] }).stdout).toBe('42'))
   it.each([
     ['missing', { target_commitish: sha, assets: [] }],
@@ -21,6 +21,15 @@ describe('nightly asset identity', () => {
     ['mismatched release', { target_commitish: 'b'.repeat(40), assets: [asset] }],
   ])('rejects %s identity', (_name, release) => expect(validate(release).status).not.toBe(0))
   it('rejects a noncanonical SHA', () => expect(validate({ target_commitish: sha, assets: [asset] }, 'A'.repeat(40)).status).not.toBe(0))
+  it('accepts only the per-user Windows MSI', () => {
+    const perUser = { name: `nightly-${sha}-windows-muniment_0.0.1_x64_en-US.msi`, id: 84 }
+    const machine = { name: `nightly-${sha}-windows-muniment-machine.msi`, id: 85 }
+    expect(validate({ target_commitish: sha, assets: [perUser, machine] }, sha, 'windows').stdout).toBe('84')
+  })
+  it('rejects duplicate Windows per-user assets', () => {
+    const perUser = { name: `nightly-${sha}-windows-muniment_0.0.1_x64_en-US.msi`, id: 84 }
+    expect(validate({ target_commitish: sha, assets: [perUser, perUser] }, sha, 'windows').status).not.toBe(0)
+  })
 })
 
 describe('artifact redaction boundary', () => {
