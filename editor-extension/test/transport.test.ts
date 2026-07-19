@@ -161,6 +161,100 @@ test("starts runs with the canonical request shape and decodes the receipt", asy
   connection.dispose();
 });
 
+test("delivers an ordered run stream while correlated requests and events interleave", async () => {
+  const socket = new FakeSocket();
+  const connection = await authorizedConnection(socket);
+  const runId = "00000000000000000000000000000191";
+  const subscribing = connection.streamRun(runId, 0);
+  const request = lastRequest(socket);
+  assert.equal(request.operation, "run.stream");
+  assert.deepEqual(request.body, {
+    run_id: "00000000000000000000000000000191", after_run_seq: 0,
+  });
+  const subscriptionId = "00000000000000000000000000000190";
+  socket.emit("data", Buffer.concat([
+    encodeAttachFrame({ protocol: "muniment.attach/1", request_id: request.request_id, ok: true,
+      body: { subscription_id: subscriptionId, run_id: runId,
+        first_available_run_seq: 1, current_run_seq: 2,
+        window: { max_events: 4, max_bytes: 4096 } } }),
+    encodeAttachFrame({ protocol: "muniment.attach/1", subscription_id: subscriptionId,
+      event: "run.event", run_id: runId, run_seq: 1,
+      body: { event_type: "assistant.message", event_version: 1,
+        recorded_at: "2026-07-17T00:00:00Z", payload: { withheld: true } } }),
+  ]));
+  const subscription = await subscribing;
+  const delivered: unknown[] = [];
+  const listener = subscription.onDidReceiveMessage((event) => delivered.push(event));
+
+  const listing = connection.listThreads();
+  const listRequest = lastRequest(socket);
+  socket.emit("data", Buffer.concat([
+    encodeAttachFrame({ protocol: "muniment.attach/1", subscription_id: subscriptionId,
+      event: "run.event", run_id: runId, run_seq: 2,
+      body: { event_type: "run.completed", event_version: 1,
+        recorded_at: "2026-07-17T00:00:01Z", payload: { withheld: true } } }),
+    encodeAttachFrame({ protocol: "muniment.attach/1", request_id: listRequest.request_id,
+      ok: true, body: { threads: [] } }),
+    encodeAttachFrame({ protocol: "muniment.attach/1", subscription_id: subscriptionId,
+      event: "subscription.caught_up", run_id: runId, run_seq: 2, body: {} }),
+    encodeAttachFrame({ protocol: "muniment.attach/1", subscription_id: subscriptionId,
+      event: "run.event", run_id: runId, run_seq: 3,
+      body: { event_type: "assistant.message", event_version: 1,
+        recorded_at: "2026-07-17T00:00:02Z", payload: { withheld: true } } }),
+  ]));
+  assert.deepEqual(await listing, { threads: [] });
+  assert.deepEqual(delivered.map((event: any) => [event.type, event.runSeq]), [
+    ["run.event", 1], ["run.event", 2], ["subscription.caught_up", 2], ["run.event", 3],
+  ]);
+
+  const acknowledged = subscription.acknowledge(3);
+  const ack = lastRequest(socket);
+  assert.equal(ack.operation, "run.cursor_ack");
+  assert.deepEqual(ack.body, { subscription_id: subscriptionId, through_run_seq: 3 });
+  socket.emit("data", encodeAttachFrame({ protocol: "muniment.attach/1",
+    request_id: ack.request_id, ok: true,
+    body: { subscription_id: subscriptionId, through_run_seq: 3 } }));
+  await acknowledged;
+  listener.dispose();
+  connection.dispose();
+});
+
+test("fails closed for invalid stream sequence and rejects acknowledgements after disposal", async () => {
+  const socket = new FakeSocket();
+  const connection = await authorizedConnection(socket);
+  const runId = "00000000000000000000000000000191";
+  const subscribing = connection.streamRun(runId, 0);
+  const request = lastRequest(socket);
+  const subscriptionId = "00000000000000000000000000000190";
+  socket.emit("data", encodeAttachFrame({ protocol: "muniment.attach/1",
+    request_id: request.request_id, ok: true, body: { subscription_id: subscriptionId,
+      run_id: runId, first_available_run_seq: 1, current_run_seq: 2,
+      window: { max_events: 2, max_bytes: 4096 } } }));
+  const subscription = await subscribing;
+  await assert.rejects(subscription.acknowledge(1), (error: unknown) =>
+    error instanceof AttachTransportError && error.code === "unexpected_message");
+  socket.emit("data", encodeAttachFrame({ protocol: "muniment.attach/1",
+    subscription_id: subscriptionId, event: "run.event", run_id: runId,
+    run_seq: 2, body: { event_type: "assistant.message", event_version: 1,
+      recorded_at: "2026-07-17T00:00:00Z", payload: { withheld: true } } }));
+  assert.equal(socket.destroyed, true);
+  await assert.rejects(subscription.acknowledge(1), (error: unknown) =>
+    error instanceof AttachTransportError);
+});
+
+test("connection disposal rejects pending work and removes stream listeners", async () => {
+  const socket = new FakeSocket();
+  const connection = await authorizedConnection(socket);
+  const pending = connection.listThreads();
+  connection.dispose();
+  await assert.rejects(pending, (error: unknown) => error instanceof AttachTransportError &&
+    error.code === "connection_closed");
+  await assert.rejects(connection.streamRun("00000000000000000000000000000191", 0),
+    (error: unknown) => error instanceof AttachTransportError &&
+      error.code === "authorization_expired");
+  assert.equal(socket.listenerCount("data"), 0);
+});
+
 test("rejects invalid run-start inputs before writing", async () => {
   const socket = new FakeSocket();
   const connection = await authorizedConnection(socket);
@@ -242,7 +336,7 @@ test("fails closed on malformed run-start receipts", async () => {
   }
 });
 
-test("rejects invalid inputs before writing and bounds concurrent requests", async () => {
+test("rejects invalid inputs before writing and correlates concurrent requests", async () => {
   const socket = new FakeSocket();
   const connection = await authorizedConnection(socket);
   const writes = socket.writes.length;
@@ -253,12 +347,18 @@ test("rejects invalid inputs before writing and bounds concurrent requests", asy
   assert.equal(socket.writes.length, writes);
 
   const first = connection.listThreads();
-  await assert.rejects(connection.startRun("prompt"), (error: unknown) =>
-    error instanceof AttachTransportError && error.code === "unexpected_message");
-  const request = lastRequest(socket);
+  const firstRequest = lastRequest(socket);
+  const second = connection.startRun("prompt");
+  const secondRequest = lastRequest(socket);
   socket.emit("data", encodeAttachFrame({ protocol: "muniment.attach/1",
-    request_id: request.request_id, ok: true, body: { threads: [] } }));
+    request_id: secondRequest.request_id, ok: true, body: {
+      run_id: "00000000000000000000000000000191", committed_seq: 1,
+      accepted_at: "2026-07-17T00:00:00Z",
+    } }));
+  socket.emit("data", encodeAttachFrame({ protocol: "muniment.attach/1",
+    request_id: firstRequest.request_id, ok: true, body: { threads: [] } }));
   assert.deepEqual(await first, { threads: [] });
+  assert.equal((await second).committedSeq, 1);
   connection.dispose();
 });
 

@@ -38,6 +38,10 @@ class FakeConnection implements AttachConnection {
     return this.startResult;
   }
 
+  async streamRun(): Promise<never> {
+    throw new Error("not used");
+  }
+
   dispose(): void {
     this.disposed = true;
   }
