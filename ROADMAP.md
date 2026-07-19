@@ -32,8 +32,8 @@ Phases mirror harness-spec §9. Muniment-cloud Phase 1 native auth and the cloud
 ## Phase 3 — Routing metadata + voice (§9 items 12, 15)
 - Routing metadata carriage/policy integration follows item 9; the local classifier contract is complete.
 - Voice direction remains Parakeet capture → Gemma polish → transforms, with Kokoro read-aloud and global hotkeys.
-- DONE — pinned Parakeet/Silero acquisition and publication, sherpa-onnx packaging/bindings, fixed-capacity microphone capture, bounded utterance segmentation, safe VAD boundary, chunk-invariant dictation composition, desktop command/event wiring from native capture through recognition with redacted statuses, basic composer dictation controls/transcript insertion, a reproducible target-hardware evaluator, and a bounded 100-utterance endurance mode.
-- NEXT — add composer press-and-hold and Escape-to-cancel/restore before global OS hotkeys, Gemma polish, and transforms. Physical target-hardware runs still require the approved external corpus and representative machines.
+- DONE — pinned Parakeet/Silero acquisition and publication, sherpa-onnx packaging/bindings, fixed-capacity microphone capture, bounded utterance segmentation, safe VAD boundary, chunk-invariant dictation composition, desktop command/event wiring from native capture through recognition with redacted statuses, basic composer dictation controls/transcript insertion, a reproducible target-hardware evaluator, a bounded 100-utterance endurance mode, and composer press-and-hold dictation with Escape-to-cancel/restore.
+- NEXT — the typed dictation-polish and routing-classifier contracts are core-complete against a supervised loopback llama-server, but nothing pins where the llama-server executable comes from; decide its distribution (ADR, mirroring ADR 0008) before implementing acquisition, the desktop polish command, composer polish UI, transforms, and global OS hotkeys. Physical target-hardware runs still require the approved external corpus and representative machines.
 
 ## Companion execution surfaces (§13)
 - DONE E0 — ADR 0009, bounded protocol/codecs, negotiation and explicit pairing authorization, idempotency ledger, cursor/artifact windows, secure Linux filesystem/socket transport, and authorized redacted journal-backed thread reads.
@@ -57,7 +57,9 @@ Phases mirror harness-spec §9. Muniment-cloud Phase 1 native auth and the cloud
 - RATIFIED 2026-07-19 — add a layered desktop QA lane: cheap frontend browser coverage plus installed-nightly real-app validation on the serialized pve01 desktop-ci VMs.
 - Windows and Linux receive full WebdriverIO automation through the Tauri WebDriver seam; macOS remains install/launch smoke plus Proxmox screendumps and a short manual owner pass. Do not substitute paid device clouds or claim full macOS desktop automation.
 - DONE groundwork — accepted ADR 0013 records the harness, security boundary, VM/install lifecycle, real-auth fixture ownership, artifact/log retention, and serialization contract.
-- UNGATED 2026-07-19 — the canonical desktop E2E runner contract is published with `--collect-artifacts`, `--screendump`, and `--env-stdin`. NEXT — implement the canonical Linux `.deb` installed launch + real-sign-in smoke as the first bounded platform slice; follow with Windows, chat/attachment flows, macOS smoke, and automatic failure-to-ticket reporting as separate slices.
+- UNGATED 2026-07-19 — the canonical desktop E2E runner contract is published with `--collect-artifacts`, `--screendump`, and `--env-stdin`.
+- DONE 2026-07-19 — the canonical Linux `.deb` installed launch + real-sign-in WDIO smoke runs in nightly via desktop-ci with fail-closed pinned-asset identity, secret-stdin fixture credentials, an idempotent finalizer, and redacted diagnostic bundles retained 7/30 days.
+- NEXT — the Windows per-user MSI installed launch + real-sign-in smoke, serialized with the Linux case on the pve01 lock and the exclusive fixture lease. Chat/attachment flows, macOS smoke, and automatic failure-to-ticket reporting follow as separate slices.
 - Nightly QA must test the finalized installer artifact for one pinned SHA and must not introduce mocked production paths. Signing/notarization and the web/API suite remain out of scope.
 
 ## Stable release and distribution
