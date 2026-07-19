@@ -123,13 +123,21 @@ export interface Disposable { dispose(): void; }
 export type Event<T> = (listener: (event: T) => void) => Disposable;
 
 export interface RunStreamWindow { maxEvents: number; maxBytes: number; }
+export interface ReceiptCapability { name: string; version: string; }
+export interface RunReceipt {
+  route?: string;
+  model?: string;
+  cost?: string;
+  time?: string;
+  capabilities: ReceiptCapability[];
+}
 export interface RedactedRunEvent {
   type: "run.event";
   runSeq: number;
   eventType: string;
   eventVersion: number;
   recordedAt: string;
-  payload: { withheld: true; receipt?: JsonValue };
+  payload: { withheld: true; receipt?: RunReceipt };
 }
 export interface RunStreamCaughtUp {
   type: "subscription.caught_up";
@@ -378,10 +386,11 @@ export function connectAttach(options: ConnectOptions): Promise<AttachConnection
             resolve: (envelope: AttachEnvelope) => void;
             reject: (error: AttachTransportError) => void;
             timer: NodeJS.Timeout;
+            owner?: Set<string>;
+            onResponse?: (envelope: AttachEnvelope) => void;
           }>();
           const subscriptions = new Map<string, ActiveRunSubscription>();
-          const deferredEvents: AttachEnvelope[] = [];
-          let awaitingSubscription = 0;
+          const ignoredResponses = new Set<string>();
           const rejectPending = (error: AttachTransportError): void => {
             for (const item of pending.values()) {
               clearTimeout(item.timer);
@@ -409,24 +418,26 @@ export function connectAttach(options: ConnectOptions): Promise<AttachConnection
                 if (message.kind === "event") {
                   const subscription = subscriptions.get(message.subscription_id as string);
                   if (!subscription) {
-                    if (awaitingSubscription > 0 && deferredEvents.length < MAX_RUN_STREAM_WINDOW_EVENTS) {
-                      deferredEvents.push(message);
-                      continue;
-                    }
                     closeUnexpected(new AttachTransportError("unexpected_message"));
                     return;
                   }
                   subscription.deliver(message);
                   continue;
                 }
-                if ((message.kind !== "response" && message.kind !== "error") ||
-                    !pending.has(message.request_id as string)) {
+                if (message.kind !== "response" && message.kind !== "error") {
+                  closeUnexpected(new AttachTransportError("unexpected_message"));
+                  return;
+                }
+                const responseId = message.request_id as string;
+                if (ignoredResponses.delete(responseId)) continue;
+                if (!pending.has(responseId)) {
                   closeUnexpected(new AttachTransportError("unexpected_message"));
                   return;
                 }
                 const current = pending.get(message.request_id as string)!;
                 clearTimeout(current.timer);
                 pending.delete(current.requestId);
+                current.owner?.delete(current.requestId);
                 if (message.kind === "error") {
                   const code = (message.error as Record<string, unknown>).code;
                   current.reject(new AttachTransportError(code === "protocol_incompatible"
@@ -435,6 +446,12 @@ export function connectAttach(options: ConnectOptions): Promise<AttachConnection
                     : code === "persistence_failed" ? "desktop_failed"
                     : "request_rejected"));
                 } else {
+                  try {
+                    current.onResponse?.(message);
+                  } catch (error) {
+                    current.reject(transportError(error));
+                    throw error;
+                  }
                   current.resolve(message);
                 }
               }
@@ -444,7 +461,8 @@ export function connectAttach(options: ConnectOptions): Promise<AttachConnection
           };
           const request = (operation: "thread.list" | "thread.open" | "run.start" | "run.stream" |
             "run.cursor_ack", body: JsonBody,
-            idempotent = false): Promise<AttachEnvelope> => {
+            idempotent = false, owner?: Set<string>,
+            onResponse?: (envelope: AttachEnvelope) => void): Promise<AttachEnvelope> => {
             if (!capability) return Promise.reject(new AttachTransportError("authorization_expired"));
             let requestId: string;
             let idempotencyKey: string | undefined;
@@ -458,7 +476,9 @@ export function connectAttach(options: ConnectOptions): Promise<AttachConnection
               const timer = setTimeout(() => {
                 closeUnexpected(new AttachTransportError("timeout"));
               }, ioTimeout);
-              pending.set(requestId, { requestId, resolve: requestResolve, reject: requestReject, timer });
+              pending.set(requestId, { requestId, resolve: requestResolve, reject: requestReject,
+                timer, owner, onResponse });
+              owner?.add(requestId);
               try {
                 socket.write(encodeAttachFrame({
                   protocol: ATTACH_PROTOCOL, request_id: requestId, operation, capability, body,
@@ -497,32 +517,18 @@ export function connectAttach(options: ConnectOptions): Promise<AttachConnection
             },
             async streamRun(runId: string, afterRunSeq: number): Promise<RunStreamSubscription> {
               validateRunStreamInput(runId, afterRunSeq);
-              awaitingSubscription++;
-              let summary: RunStreamSummary;
-              try {
-                summary = decodeRunStreamSummary((await request("run.stream", {
-                  run_id: runId, after_run_seq: afterRunSeq,
-                })).body, runId, afterRunSeq);
-              } finally {
-                awaitingSubscription--;
-              }
-              if (subscriptions.has(summary.subscriptionId)) {
-                throw new AttachTransportError("unexpected_message");
-              }
-              const state = createRunSubscription(summary, afterRunSeq, request, () => {
-                subscriptions.delete(summary.subscriptionId);
-              });
-              subscriptions.set(summary.subscriptionId, state);
-              try {
-                for (const event of deferredEvents.splice(0)) {
-                  const target = subscriptions.get(event.subscription_id as string);
-                  if (!target) throw new AttachTransportError("unexpected_message");
-                  target.deliver(event);
-                }
-              } catch (error) {
-                closeUnexpected(transportError(error));
-                throw transportError(error);
-              }
+              let state: ActiveRunSubscription | undefined;
+              await request("run.stream", { run_id: runId, after_run_seq: afterRunSeq }, false,
+                undefined, (response) => {
+                  const summary = decodeRunStreamSummary(response.body, runId, afterRunSeq);
+                  if (subscriptions.has(summary.subscriptionId)) {
+                    throw new AttachTransportError("unexpected_message");
+                  }
+                  state = createRunSubscription(summary, afterRunSeq, request, pending,
+                    ignoredResponses, () => subscriptions.delete(summary.subscriptionId));
+                  subscriptions.set(summary.subscriptionId, state);
+                });
+              if (!state) throw new AttachTransportError("unexpected_message");
               return state.public;
             },
             dispose(): void {
@@ -607,7 +613,10 @@ function decodeRunStreamSummary(value: unknown, expectedRunId: string,
 }
 
 function createRunSubscription(summary: RunStreamSummary, afterRunSeq: number,
-  request: (operation: "run.cursor_ack", body: JsonBody) => Promise<AttachEnvelope>,
+  request: (operation: "run.cursor_ack", body: JsonBody, idempotent?: boolean,
+    owner?: Set<string>) => Promise<AttachEnvelope>,
+  pending: Map<string, { reject: (error: AttachTransportError) => void; timer: NodeJS.Timeout;
+    owner?: Set<string> }>, ignoredResponses: Set<string>,
   onDispose: () => void): ActiveRunSubscription {
   let disposed = false;
   let highest = afterRunSeq;
@@ -616,11 +625,36 @@ function createRunSubscription(summary: RunStreamSummary, afterRunSeq: number,
   let caughtUp = false;
   const listeners = new Set<(event: RunStreamMessage) => void>();
   const queuedMessages: RunStreamMessage[] = [];
+  const acknowledgementRequests = new Set<string>();
   const dispose = (): void => {
     if (disposed) return;
     disposed = true;
     listeners.clear();
     queuedMessages.length = 0;
+    for (const requestId of acknowledgementRequests) {
+      const item = pending.get(requestId);
+      if (!item) continue;
+      clearTimeout(item.timer);
+      pending.delete(requestId);
+      ignoredResponses.add(requestId);
+      item.reject(new AttachTransportError("connection_closed"));
+    }
+    acknowledgementRequests.clear();
+    onDispose();
+  };
+  const closeWithMessage = (): void => {
+    if (disposed) return;
+    disposed = true;
+    listeners.clear();
+    for (const requestId of acknowledgementRequests) {
+      const item = pending.get(requestId);
+      if (!item) continue;
+      clearTimeout(item.timer);
+      pending.delete(requestId);
+      ignoredResponses.add(requestId);
+      item.reject(new AttachTransportError("connection_closed"));
+    }
+    acknowledgementRequests.clear();
     onDispose();
   };
   const state: ActiveRunSubscription = {
@@ -645,14 +679,14 @@ function createRunSubscription(summary: RunStreamSummary, afterRunSeq: number,
             typeof body.event_version !== "number" || !Number.isSafeInteger(body.event_version) ||
             body.event_version <= 0 || typeof body.recorded_at !== "string" ||
             !isRfc3339(body.recorded_at) || payload.withheld !== true ||
-            (payload.receipt !== undefined && !isJsonValue(payload.receipt))) {
+            (payload.receipt !== undefined && body.event_type !== "run.completed")) {
           throw new AttachTransportError("unexpected_message");
         }
+        const receipt = payload.receipt === undefined ? undefined : decodeRunReceipt(payload.receipt);
         highest = runSeq;
         message = { type: "run.event", runSeq, eventType: body.event_type,
           eventVersion: body.event_version, recordedAt: body.recorded_at,
-          payload: { withheld: true, ...(payload.receipt === undefined ? {} :
-            { receipt: payload.receipt as JsonValue }) } };
+          payload: { withheld: true, ...(receipt === undefined ? {} : { receipt }) } };
       } else if (envelope.event === "subscription.caught_up") {
         if (caughtUp || runSeq !== summary.currentRunSeq || highest !== summary.currentRunSeq ||
             Object.keys(exactObject(envelope.body, [])).length !== 0) {
@@ -671,8 +705,10 @@ function createRunSubscription(summary: RunStreamSummary, afterRunSeq: number,
         throw new AttachTransportError("unexpected_message");
       }
       if (listeners.size === 0) queuedMessages.push(message);
-      else for (const listener of [...listeners]) listener(message);
-      if (message.type === "stream.closed") dispose();
+      else for (const listener of [...listeners]) {
+        try { listener(message); } catch { /* Consumer errors do not invalidate transport. */ }
+      }
+      if (message.type === "stream.closed") closeWithMessage();
     },
     public: {
       subscriptionId: summary.subscriptionId,
@@ -681,9 +717,12 @@ function createRunSubscription(summary: RunStreamSummary, afterRunSeq: number,
       currentRunSeq: summary.currentRunSeq,
       window: summary.window,
       onDidReceiveMessage(listener): Disposable {
-        if (disposed) return { dispose() {} };
+        if (disposed && queuedMessages.length === 0) return { dispose() {} };
         listeners.add(listener);
-        for (const message of queuedMessages.splice(0)) listener(message);
+        for (const message of queuedMessages.splice(0)) {
+          try { listener(message); } catch { /* Match VS Code event listener isolation. */ }
+        }
+        if (disposed) listeners.delete(listener);
         return { dispose: () => listeners.delete(listener) };
       },
       async acknowledge(throughRunSeq: number): Promise<void> {
@@ -697,7 +736,7 @@ function createRunSubscription(summary: RunStreamSummary, afterRunSeq: number,
         try {
           response = await request("run.cursor_ack", {
             subscription_id: summary.subscriptionId, through_run_seq: throughRunSeq,
-          });
+          }, false, acknowledgementRequests);
         } finally {
           acknowledging = false;
         }
@@ -716,6 +755,37 @@ function createRunSubscription(summary: RunStreamSummary, afterRunSeq: number,
 
 function boundedPositiveInteger(value: unknown, maximum: number): value is number {
   return typeof value === "number" && Number.isSafeInteger(value) && value > 0 && value <= maximum;
+}
+
+function decodeRunReceipt(value: unknown): RunReceipt {
+  const receipt = exactObject(value, ["capabilities"], ["route", "model", "cost", "time"]);
+  for (const field of ["route", "model", "cost", "time"] as const) {
+    if (receipt[field] !== undefined && receipt[field] !== null) {
+      validateBoundedString(receipt[field], 1_024, false);
+      if ((receipt[field] as string).trim().length === 0) {
+        throw new AttachTransportError("unexpected_message");
+      }
+    }
+  }
+  if (!Array.isArray(receipt.capabilities) || receipt.capabilities.length > 64) {
+    throw new AttachTransportError("unexpected_message");
+  }
+  const capabilities = receipt.capabilities.map((value): ReceiptCapability => {
+    const capability = exactObject(value, ["name", "version"]);
+    validateBoundedString(capability.name, 1_024, false);
+    validateBoundedString(capability.version, 1_024, false);
+    if (capability.name.trim().length === 0 || capability.version.trim().length === 0) {
+      throw new AttachTransportError("unexpected_message");
+    }
+    return { name: capability.name, version: capability.version };
+  });
+  return {
+    ...(typeof receipt.route !== "string" ? {} : { route: receipt.route }),
+    ...(typeof receipt.model !== "string" ? {} : { model: receipt.model }),
+    ...(typeof receipt.cost !== "string" ? {} : { cost: receipt.cost }),
+    ...(typeof receipt.time !== "string" ? {} : { time: receipt.time }),
+    capabilities,
+  };
 }
 
 function freshRequestId(): string {
