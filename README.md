@@ -26,6 +26,10 @@ and macOS builds via `desktop-ci`; pushes to `main` run the smoke only.
 Nightly and manually dispatched release builds use the same serialized VMs and
 replace the assets on the private repository's `nightly` pre-release.
 
+The accepted [installed-nightly desktop E2E architecture](docs/decisions/0013-desktop-e2e-harness.md)
+defines the Windows/Linux WDIO real-auth lane, macOS smoke-only contract, and
+pinned-artifact lifecycle for later implementation.
+
 ## Stable releases
 
 `package.json` is the single source of truth for the desktop version; Tauri reads
