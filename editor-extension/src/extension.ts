@@ -1,6 +1,6 @@
 import * as vscode from "vscode";
 import { ThreadDocumentLoader } from "./thread-document";
-import { openAcceptedRun, RunDocumentStore } from "./run-documents";
+import { openAcceptedRun, permissionDecision, RunDocumentStore } from "./run-documents";
 import { NEW_RUN_COMMAND, NEW_RUN_WITH_CURRENT_FILE_COMMAND, OPEN_THREAD_COMMAND, ThreadsModel, threadOpenCommand, type ThreadItem } from "./threads";
 import { connectAttach } from "./transport";
 import { editorFileContext, editorSelectionContext, type ActiveFile, type ActiveSelection } from "./editor-context";
@@ -74,6 +74,17 @@ export function activate(context: vscode.ExtensionContext): void {
     if (result.kind === "accepted") {
       await openAcceptedRun(result, runDocuments.store, {
         streamRun: (runId, afterRunSeq) => model.streamRun(runId, afterRunSeq),
+        promptPermission: async ({ title, message }) => {
+          const action = await vscode.window.showWarningMessage(
+            `Permission required: ${title}`,
+            { modal: true, ...(message === undefined ? {} : { detail: message }) },
+            "Allow",
+            "Deny",
+          );
+          return permissionDecision(action);
+        },
+        answerPermission: (runId, gateId, decision) =>
+          model.answerPermission(runId, gateId, decision),
         showDocument: async (uri) => {
           const document = await vscode.workspace.openTextDocument(vscode.Uri.parse(uri));
           await vscode.window.showTextDocument(document, { preview: true });
