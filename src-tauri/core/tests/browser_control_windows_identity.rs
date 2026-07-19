@@ -13,7 +13,8 @@ use std::path::{Path, PathBuf};
 
 struct FakeReader {
     scans: RefCell<VecDeque<Result<Vec<TcpConnection>, NativeReadError>>>,
-    image: Result<PathBuf, NativeProcessError>,
+    identities: RefCell<VecDeque<Result<u64, NativeProcessError>>>,
+    image: Result<(u64, PathBuf), NativeProcessError>,
     image_pids: RefCell<Vec<u32>>,
 }
 
@@ -22,7 +23,11 @@ impl WindowsIdentityReader for FakeReader {
         self.scans.borrow_mut().pop_front().unwrap()
     }
 
-    fn process_image(&self, pid: u32) -> Result<PathBuf, NativeProcessError> {
+    fn process_identity(&self, _pid: u32) -> Result<u64, NativeProcessError> {
+        self.identities.borrow_mut().pop_front().unwrap()
+    }
+
+    fn process_image(&self, pid: u32) -> Result<(u64, PathBuf), NativeProcessError> {
         self.image_pids.borrow_mut().push(pid);
         self.image.clone()
     }
@@ -47,7 +52,8 @@ fn connection(pid: u32) -> TcpConnection {
 fn reader(scans: impl IntoIterator<Item = Vec<TcpConnection>>) -> FakeReader {
     FakeReader {
         scans: RefCell::new(scans.into_iter().map(Ok).collect()),
-        image: Ok(PathBuf::from(r"C:\Program Files\Browser\browser.exe")),
+        identities: RefCell::new([Ok(100)].into()),
+        image: Ok((100, PathBuf::from(r"C:\Program Files\Browser\browser.exe"))),
         image_pids: RefCell::new(Vec::new()),
     }
 }
@@ -61,7 +67,10 @@ fn resolves_exact_stable_ipv4_and_ipv6_connections() {
             peer,
             &reader([vec![connection(42)], vec![connection(42)]])
         ),
-        Ok(BrowserProcessIdentity { pid: 42 })
+        Ok(BrowserProcessIdentity {
+            pid: 42,
+            creation_time: 100
+        })
     );
 
     let local: SocketAddr = (Ipv6Addr::LOCALHOST, 42000).into();
@@ -73,7 +82,10 @@ fn resolves_exact_stable_ipv4_and_ipv6_connections() {
     };
     assert_eq!(
         resolve_browser_process_with_reader(local, peer, &reader([vec![row], vec![row]])),
-        Ok(BrowserProcessIdentity { pid: 43 })
+        Ok(BrowserProcessIdentity {
+            pid: 43,
+            creation_time: 100
+        })
     );
 }
 
@@ -129,7 +141,10 @@ fn rejects_invalid_missing_mismatched_ambiguous_and_changing_connections() {
 
 #[test]
 fn process_lookup_and_image_query_fail_closed() {
-    let observed = BrowserProcessIdentity { pid: 42 };
+    let observed = BrowserProcessIdentity {
+        pid: 42,
+        creation_time: 100,
+    };
     for (failure, expected) in [
         (
             NativeProcessError::OpenFailed,
@@ -169,7 +184,10 @@ fn authorizes_only_windows_equivalent_executable_and_only_after_resolution() {
     let mismatch = reader([]);
     assert_eq!(
         verify_browser_process_with_reader(
-            BrowserProcessIdentity { pid: 42 },
+            BrowserProcessIdentity {
+                pid: 42,
+                creation_time: 100,
+            },
             Path::new(r"C:\Program Files\Other\browser.exe"),
             &mismatch
         ),
@@ -187,6 +205,24 @@ fn authorizes_only_windows_equivalent_executable_and_only_after_resolution() {
         Err(AuthorizationError::OwnerResolutionFailed)
     );
     assert!(unresolved.image_pids.borrow().is_empty());
+}
+
+#[test]
+fn rejects_pid_reuse_between_resolution_and_verification() {
+    let (local, peer) = endpoints();
+    let mut reused = reader([vec![connection(42)], vec![connection(42)]]);
+    reused.image = Ok((101, PathBuf::from(r"C:\Program Files\Browser\browser.exe")));
+
+    assert_eq!(
+        authorize_browser_process_with_reader(
+            local,
+            peer,
+            Path::new(r"C:\Program Files\Browser\browser.exe"),
+            &reused
+        ),
+        Err(AuthorizationError::ExecutableVerificationFailed)
+    );
+    assert_eq!(reused.image_pids.borrow().as_slice(), &[42]);
 }
 
 #[test]

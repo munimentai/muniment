@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct BrowserProcessIdentity {
     pub pid: u32,
+    pub creation_time: u64,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -27,6 +28,7 @@ pub enum VerificationError {
     ExpectedExecutableInvalid,
     ProcessUnavailable,
     ProcessExecutableInvalid,
+    ProcessIdentityChanged,
     ExecutableMismatch,
 }
 
@@ -54,6 +56,7 @@ impl fmt::Display for VerificationError {
             Self::ExpectedExecutableInvalid => "expected browser executable is invalid",
             Self::ProcessUnavailable => "browser process is unavailable",
             Self::ProcessExecutableInvalid => "browser process executable is invalid",
+            Self::ProcessIdentityChanged => "browser process identity changed",
             Self::ExecutableMismatch => "browser executable does not match",
         })
     }
@@ -91,7 +94,8 @@ pub struct TcpConnection {
 /// Injected boundary around the Windows TCP table and process APIs.
 pub trait WindowsIdentityReader {
     fn tcp_connections(&self, ipv6: bool) -> Result<Vec<TcpConnection>, NativeReadError>;
-    fn process_image(&self, pid: u32) -> Result<PathBuf, NativeProcessError>;
+    fn process_identity(&self, pid: u32) -> Result<u64, NativeProcessError>;
+    fn process_image(&self, pid: u32) -> Result<(u64, PathBuf), NativeProcessError>;
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -133,11 +137,17 @@ pub fn resolve_browser_process_with_reader(
 ) -> Result<BrowserProcessIdentity, ResolutionError> {
     validate_endpoints(local, peer)?;
     let first = unique_owner(local, peer, reader)?;
+    let creation_time = reader
+        .process_identity(first)
+        .map_err(|_| ResolutionError::InspectionUnavailable)?;
     let second = unique_owner(local, peer, reader)?;
     if first != second {
         return Err(ResolutionError::OwnerChanged);
     }
-    Ok(BrowserProcessIdentity { pid: first })
+    Ok(BrowserProcessIdentity {
+        pid: first,
+        creation_time,
+    })
 }
 
 fn unique_owner(
@@ -189,12 +199,16 @@ pub fn verify_browser_process_with_reader(
     if !expected_executable.is_absolute() {
         return Err(VerificationError::ExpectedExecutableInvalid);
     }
-    let actual = reader
-        .process_image(observed.pid)
-        .map_err(|error| match error {
-            NativeProcessError::OpenFailed => VerificationError::ProcessUnavailable,
-            NativeProcessError::ImageQueryFailed => VerificationError::ProcessExecutableInvalid,
-        })?;
+    let (creation_time, actual) =
+        reader
+            .process_image(observed.pid)
+            .map_err(|error| match error {
+                NativeProcessError::OpenFailed => VerificationError::ProcessUnavailable,
+                NativeProcessError::ImageQueryFailed => VerificationError::ProcessExecutableInvalid,
+            })?;
+    if creation_time != observed.creation_time {
+        return Err(VerificationError::ProcessIdentityChanged);
+    }
     if !actual.is_absolute() {
         return Err(VerificationError::ProcessExecutableInvalid);
     }
@@ -250,7 +264,11 @@ impl WindowsIdentityReader for WindowsNativeReader {
         native_tcp_connections(ipv6)
     }
 
-    fn process_image(&self, pid: u32) -> Result<PathBuf, NativeProcessError> {
+    fn process_identity(&self, pid: u32) -> Result<u64, NativeProcessError> {
+        native_process(pid, false).map(|(creation_time, _)| creation_time)
+    }
+
+    fn process_image(&self, pid: u32) -> Result<(u64, PathBuf), NativeProcessError> {
         native_process_image(pid)
     }
 }
@@ -399,11 +417,14 @@ fn native_tcp_connections(ipv6: bool) -> Result<Vec<TcpConnection>, NativeReadEr
     Err(NativeReadError)
 }
 
-fn native_process_image(pid: u32) -> Result<PathBuf, NativeProcessError> {
+fn native_process(
+    pid: u32,
+    query_image: bool,
+) -> Result<(u64, Option<PathBuf>), NativeProcessError> {
     use std::os::windows::ffi::OsStringExt;
-    use windows_sys::Win32::Foundation::{CloseHandle, MAX_PATH};
+    use windows_sys::Win32::Foundation::{CloseHandle, FILETIME, MAX_PATH};
     use windows_sys::Win32::System::Threading::{
-        OpenProcess, QueryFullProcessImageNameW, PROCESS_QUERY_LIMITED_INFORMATION,
+        GetProcessTimes, OpenProcess, QueryFullProcessImageNameW, PROCESS_QUERY_LIMITED_INFORMATION,
     };
 
     let handle = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid) };
@@ -417,6 +438,21 @@ fn native_process_image(pid: u32) -> Result<PathBuf, NativeProcessError> {
         }
     }
     let handle = ProcessHandle(handle);
+    let mut creation = FILETIME::default();
+    let mut exit = FILETIME::default();
+    let mut kernel = FILETIME::default();
+    let mut user = FILETIME::default();
+    if unsafe { GetProcessTimes(handle.0, &mut creation, &mut exit, &mut kernel, &mut user) } == 0 {
+        return Err(NativeProcessError::ImageQueryFailed);
+    }
+    let creation_time =
+        (u64::from(creation.dwHighDateTime) << 32) | u64::from(creation.dwLowDateTime);
+    if creation_time == 0 {
+        return Err(NativeProcessError::ImageQueryFailed);
+    }
+    if !query_image {
+        return Ok((creation_time, None));
+    }
     let mut buffer = vec![0u16; MAX_PATH as usize];
     loop {
         let mut length =
@@ -424,11 +460,21 @@ fn native_process_image(pid: u32) -> Result<PathBuf, NativeProcessError> {
         if unsafe { QueryFullProcessImageNameW(handle.0, 0, buffer.as_mut_ptr(), &mut length) } != 0
         {
             buffer.truncate(length as usize);
-            return Ok(std::ffi::OsString::from_wide(&buffer).into());
+            return Ok((
+                creation_time,
+                Some(std::ffi::OsString::from_wide(&buffer).into()),
+            ));
         }
         if buffer.len() >= 32_768 {
             return Err(NativeProcessError::ImageQueryFailed);
         }
         buffer.resize((buffer.len() * 2).min(32_768), 0);
     }
+}
+
+fn native_process_image(pid: u32) -> Result<(u64, PathBuf), NativeProcessError> {
+    let (creation_time, image) = native_process(pid, true)?;
+    image
+        .map(|image| (creation_time, image))
+        .ok_or(NativeProcessError::ImageQueryFailed)
 }
