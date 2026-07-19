@@ -26,6 +26,18 @@ describe('nightly asset identity', () => {
     const machine = { name: `nightly-${sha}-windows-muniment-machine.msi`, id: 85 }
     expect(validate({ target_commitish: sha, assets: [perUser, machine] }, sha, 'windows').stdout).toBe('84')
   })
+  it('accepts exactly the pinned macOS app archive', () => {
+    const app = { name: `nightly-${sha}-macos-muniment.app.zip`, id: 126 }
+    expect(validate({ target_commitish: sha, assets: [app] }, sha, 'macos').stdout).toBe('126')
+    expect(validate({ target_commitish: sha, assets: [app, app] }, sha, 'macos').status).not.toBe(0)
+  })
+  it.each([
+    `nightly-${sha}-macos-muniment.zip`,
+    `nightly-${sha}-macos-other.app.zip`,
+    `nightly-${sha}-macos-muniment.app.zip.extra`,
+  ])('rejects unrelated or malformed macOS archive %s', (name) => {
+    expect(validate({ target_commitish: sha, assets: [{ name, id: 126 }] }, sha, 'macos').status).not.toBe(0)
+  })
   it('rejects duplicate Windows per-user assets', () => {
     const perUser = { name: `nightly-${sha}-windows-muniment_0.0.1_x64_en-US.msi`, id: 84 }
     expect(validate({ target_commitish: sha, assets: [perUser, perUser] }, sha, 'windows').status).not.toBe(0)
@@ -79,6 +91,35 @@ describe('Windows auth URL capture seam', () => {
       encoding: 'utf8', env: { ...process.env, MUNIMENT_E2E_AUTH_URL_FILE: '' },
     })
     expect(missingDestination.status).not.toBe(0)
+  })
+})
+
+describe('macOS installed launch harness', () => {
+  const runner = fs.readFileSync(path.join(root, 'test/e2e/runner/macos.sh'), 'utf8')
+  const finalizer = runner.slice(runner.indexOf('finalize()'), runner.indexOf('\nif [[ ${MUNIMENT_E2E_FINALIZER_TEST_MODE'))
+
+  it('uses the native metadata-preserving install and bounded visible-window probe', () => {
+    expect(runner).toContain('ditto -x -k "$archive" "$expanded"')
+    expect(runner).toContain('ditto "$source_bundle" "$installed_bundle"')
+    expect(runner).toContain("Print :CFBundleExecutable")
+    expect(runner).toContain("stat -f '%Su' /dev/console")
+    expect(runner).toContain('window_deadline=$((SECONDS + 60))')
+    expect(runner).toContain('with timeout of 2 seconds')
+    expect(runner).toContain('whose visible is true')
+    expect(runner).toContain('screendump=requested-by-desktop-ci')
+  })
+
+  it('contains no sign-in or WebDriver automation', () => {
+    expect(runner).not.toMatch(/MUNIMENT_E2E_(?:USERNAME|PASSWORD)/)
+    expect(runner).not.toMatch(/wdio|tauri-driver/i)
+  })
+
+  it('cleans processes, the installed bundle, and state before redaction and publication', () => {
+    const phases = [...finalizer.matchAll(/cleanup_step ([a-z-]+)/g)].map((match) => match[1])
+    expect(phases.slice(0, 6)).toEqual(['stop-app', 'remove-bundle', 'remove-state', 'bundle-gone', 'processes-gone', 'state-gone'])
+    expect(phases.indexOf('processes-gone')).toBeLessThan(phases.indexOf('redact-artifacts'))
+    expect(phases.indexOf('redact-artifacts')).toBeLessThan(phases.indexOf('publish-artifacts'))
+    expect(finalizer).toContain('suppress-artifacts')
   })
 })
 
