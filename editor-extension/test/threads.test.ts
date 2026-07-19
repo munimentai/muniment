@@ -15,6 +15,12 @@ class FakeConnection implements AttachConnection {
   readonly idleTimeoutSeconds = 900;
   listCalls: Array<string | undefined> = [];
   disposed = false;
+  startCalls: Array<{ text: string; context: JsonValue | undefined }> = [];
+  startResult: Promise<RunStartAccepted> = Promise.resolve({
+    runId: "run-1",
+    committedSeq: 1,
+    acceptedAt: "2026-07-18T12:00:00Z",
+  });
 
   constructor(private readonly page: ThreadListPage) {}
 
@@ -27,8 +33,9 @@ class FakeConnection implements AttachConnection {
     throw new Error("not used");
   }
 
-  async startRun(_text: string, _context?: JsonValue): Promise<RunStartAccepted> {
-    throw new Error("not used");
+  async startRun(text: string, context?: JsonValue): Promise<RunStartAccepted> {
+    this.startCalls.push({ text, context });
+    return this.startResult;
   }
 
   dispose(): void {
@@ -149,4 +156,66 @@ test("dispose closes active and late attach connections and stops updates", asyn
   await refresh;
   assert.equal(late.disposed, true);
   assert.equal(pendingModel.state.kind, "loading");
+});
+
+test("submits a nonblank run once without context and reports acceptance", async () => {
+  const connection = new FakeConnection({ threads: [] });
+  const model = new ThreadsModel(connectorFor(connection));
+  await model.refresh();
+
+  assert.deepEqual(await model.submitRun("Summarize this change."), { kind: "accepted" });
+  assert.deepEqual(connection.startCalls, [{ text: "Summarize this change.", context: undefined }]);
+  model.dispose();
+});
+
+test("treats canceled and blank run submissions as no-ops", async () => {
+  const connection = new FakeConnection({ threads: [] });
+  const model = new ThreadsModel(connectorFor(connection));
+  await model.refresh();
+
+  assert.deepEqual(await model.submitRun(undefined), { kind: "no-op" });
+  assert.deepEqual(await model.submitRun("  \n\t"), { kind: "no-op" });
+  assert.deepEqual(connection.startCalls, []);
+  model.dispose();
+});
+
+test("reports an unavailable connection without attempting a run", async () => {
+  const model = new ThreadsModel(async () => { throw new AttachTransportError("runtime_unavailable"); });
+  await model.refresh();
+
+  assert.deepEqual(await model.submitRun("Start it"), { kind: "unavailable" });
+  model.dispose();
+});
+
+test("maps run failures to sanitized actionable messages", async () => {
+  const connection = new FakeConnection({ threads: [] });
+  connection.startResult = Promise.reject(new AttachTransportError("authorization_expired"));
+  const model = new ThreadsModel(connectorFor(connection));
+  await model.refresh();
+
+  assert.deepEqual(await model.submitRun("Start it"), {
+    kind: "failed",
+    message: "Muniment authorization expired. Refresh Threads and try again.",
+  });
+  connection.startResult = Promise.reject(new Error("secret capability and protocol payload"));
+  assert.deepEqual(await model.submitRun("Try again"), {
+    kind: "failed",
+    message: "Muniment couldn’t start the run. Try again.",
+  });
+  model.dispose();
+});
+
+test("guards against concurrent run submissions while one is pending", async () => {
+  let accept: ((value: RunStartAccepted) => void) | undefined;
+  const connection = new FakeConnection({ threads: [] });
+  connection.startResult = new Promise((resolve) => { accept = resolve; });
+  const model = new ThreadsModel(connectorFor(connection));
+  await model.refresh();
+
+  const first = model.submitRun("First");
+  assert.deepEqual(await model.submitRun("Second"), { kind: "busy" });
+  assert.deepEqual(connection.startCalls, [{ text: "First", context: undefined }]);
+  accept!({ runId: "run-1", committedSeq: 1, acceptedAt: "2026-07-18T12:00:00Z" });
+  assert.deepEqual(await first, { kind: "accepted" });
+  model.dispose();
 });

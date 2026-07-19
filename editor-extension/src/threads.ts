@@ -1,6 +1,14 @@
 import { AttachTransportError, type AttachConnection, type RedactedThreadSummary, type ThreadOpenPage } from "./transport";
 
 export const OPEN_THREAD_COMMAND = "muniment.openThread";
+export const NEW_RUN_COMMAND = "muniment.newRun";
+
+export type RunSubmissionResult =
+  | { kind: "accepted" }
+  | { kind: "no-op" }
+  | { kind: "busy" }
+  | { kind: "unavailable" }
+  | { kind: "failed"; message: string };
 
 export type ThreadsState =
   | { kind: "loading" }
@@ -42,6 +50,7 @@ export class ThreadsModel {
   private listeners = new Set<StateListener>();
   private generation = 0;
   private disposed = false;
+  private submittingRun = false;
   private _state: ThreadsState = { kind: "loading" };
 
   constructor(
@@ -63,6 +72,22 @@ export class ThreadsModel {
       throw new AttachTransportError("authorization_expired");
     }
     return this.connection.openThread(threadId);
+  }
+
+  async submitRun(text: string | undefined): Promise<RunSubmissionResult> {
+    if (text === undefined || text.trim().length === 0) return { kind: "no-op" };
+    if (this.submittingRun) return { kind: "busy" };
+    if (this.disposed || !this.connection) return { kind: "unavailable" };
+
+    this.submittingRun = true;
+    try {
+      await this.connection.startRun(text);
+      return { kind: "accepted" };
+    } catch (error) {
+      return { kind: "failed", message: runStartFailureMessage(error) };
+    } finally {
+      this.submittingRun = false;
+    }
   }
 
   async refresh(): Promise<void> {
@@ -122,6 +147,16 @@ export class ThreadsModel {
 function isRuntimeUnavailable(error: unknown): boolean {
   return error instanceof AttachTransportError &&
     (error.code === "runtime_unavailable" || error.code === "desktop_unavailable");
+}
+
+function runStartFailureMessage(error: unknown): string {
+  if (error instanceof AttachTransportError && error.code === "authorization_expired") {
+    return "Muniment authorization expired. Refresh Threads and try again.";
+  }
+  if (isRuntimeUnavailable(error)) {
+    return "Muniment isn’t available. Open the desktop app and try again.";
+  }
+  return "Muniment couldn’t start the run. Try again.";
 }
 
 export function conciseUpdatedAt(updatedAt: string): string {

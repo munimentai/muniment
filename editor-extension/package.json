@@ -18,6 +18,7 @@
   "activationEvents": [
     "onView:muniment.threads",
     "onCommand:muniment.refreshThreads",
+    "onCommand:muniment.newRun",
     "onCommand:muniment.openThread"
   ],
   "main": "./out/src/extension.js",
@@ -32,6 +33,12 @@
         "command": "muniment.openThread",
         "title": "Open Thread",
         "category": "Muniment"
+      },
+      {
+        "command": "muniment.newRun",
+        "title": "New Run",
+        "category": "Muniment",
+        "icon": "$(add)"
       }
     ],
     "viewsContainers": {
@@ -82,9 +89,14 @@
     "menus": {
       "view/title": [
         {
+          "command": "muniment.newRun",
+          "when": "view == muniment.threads",
+          "group": "navigation@1"
+        },
+        {
           "command": "muniment.refreshThreads",
           "when": "view == muniment.threads",
-          "group": "navigation"
+          "group": "navigation@2"
         }
       ]
     }
