@@ -32,9 +32,8 @@ Phases mirror harness-spec §9. Muniment-cloud Phase 1 native auth and the cloud
 ## Phase 3 — Routing metadata + voice (§9 items 12, 15)
 - Routing metadata carriage/policy integration follows item 9; the local classifier contract is complete.
 - Voice direction remains Parakeet capture → Gemma polish → transforms, with Kokoro read-aloud and global hotkeys.
-- DONE — pinned Parakeet/Silero acquisition and publication, sherpa-onnx packaging/bindings, fixed-capacity microphone capture, bounded utterance segmentation, safe VAD boundary, chunk-invariant dictation composition, desktop command/event wiring from native capture through recognition with redacted statuses, and basic composer dictation controls/transcript insertion.
-- DONE validation groundwork — a network-free `parakeet-eval` release runner validates the versioned external WAV manifest, uses the verified current model, and emits comparable timing, WER, and peak-RSS JSON reports.
-- NEXT — add a bounded 100-utterance endurance mode to close ADR 0004's stability-evidence gap; independently add composer press-and-hold and Escape-to-cancel/restore before global OS hotkeys, Gemma polish, and transforms. Physical target-hardware runs still require the approved external corpus and representative machines.
+- DONE — pinned Parakeet/Silero acquisition and publication, sherpa-onnx packaging/bindings, fixed-capacity microphone capture, bounded utterance segmentation, safe VAD boundary, chunk-invariant dictation composition, desktop command/event wiring from native capture through recognition with redacted statuses, basic composer dictation controls/transcript insertion, a reproducible target-hardware evaluator, and a bounded 100-utterance endurance mode.
+- NEXT — add composer press-and-hold and Escape-to-cancel/restore before global OS hotkeys, Gemma polish, and transforms. Physical target-hardware runs still require the approved external corpus and representative machines.
 
 ## Companion execution surfaces (§13)
 - DONE E0 — ADR 0009, bounded protocol/codecs, negotiation and explicit pairing authorization, idempotency ledger, cursor/artifact windows, secure Linux filesystem/socket transport, and authorized redacted journal-backed thread reads.
@@ -48,10 +47,10 @@ Phases mirror harness-spec §9. Muniment-cloud Phase 1 native auth and the cloud
 
 ## Browser-control runtime capability (§6.8)
 - OWNER GO 2026-07-16 — open the v1 browser-only actuator line in this repository; it is a governed runtime capability, not another companion surface.
-- DONE E0–E14 — extension-only real-profile architecture; attributed upstream-mergeable relay core; fail-closed single-use pairing; Linux executable identity and loopback socket-owner verification; composed authorization; authorized loopback listener; bounded RFC 6455 upgrade; pairing-token consumption; fail-closed macOS loopback browser-process identity; macOS authorized-listener composition; fail-closed Windows loopback browser-process identity; Windows authorized-listener composition; the unpacked MV3 extension with its exactly-one visible connect-tab anchor lifecycle; and an injected, memory-only pairing handoff bridged to the MV3 worker's authorized relay provider through a fail-closed numeric-loopback WebSocket adapter.
-- BLOCKED E15 — desktop-to-extension handoff delivery waits for the owner to upload a real package to the existing private Chrome Web Store draft and provide its public key. The development manifest must use that matching public key so the unpacked extension actually receives the reserved origin; this repository must not generate a replacement key/ID or claim real handoff validation against an unpinned extension.
+- DONE E0–E14 — extension-only real-profile architecture through the injected, memory-only pairing handoff and MV3 worker authorized relay provider.
+- BLOCKED E15 — desktop-to-extension handoff delivery waits for the owner to upload a real package to the existing private Chrome Web Store draft and provide its public key. The development manifest must use that matching public key; this repository must not generate a replacement key/ID or claim real handoff validation against an unpinned extension.
 - After the matching public key lands, compose and validate E15 as one slice. Later slices add runtime tools, entitlement and ask/allow/deny policy, journal receipts, and kill switch.
-- RESERVED EXTENSION ID — `cdedcfbgomnhfpifpgdlpfkkanaofkjd`; the private Chrome Web Store draft owns this permanent ID. Add its public `key` to the development manifest only after owner package upload and retrieval from the CWS Package tab; replace it only after an explicit owner-directed store migration.
+- RESERVED EXTENSION ID — `cdedcfbgomnhfpifpgdlpfkkanaofkjd`; add its public `key` only after owner package upload and retrieval from the CWS Package tab, and replace it only after an explicit owner-directed store migration.
 - Chrome Web Store publication/upload are owner-gated. v1 excludes OS, filesystem, and other-application control.
 
 ## Desktop QA automation
