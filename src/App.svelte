@@ -42,13 +42,27 @@
   let dictation = $state({ state: 'idle' })
   let dictationError = $state('')
   let dictationTimer
+  let dictationPollEpoch = 0
   let dictationUnlisten
   let dictationCommandPending = $state(false)
+  let dictationRequested = false
+  let dictationCancelled = true
+  let dictationDraftSnapshot = ''
+  let suppressVoiceClick = false
+  let voiceClickTimer
+  let voicePointerId
+  let voiceKey
+  let composer = $state()
   let destroyed = false
 
   function stopDictationPolling() {
     clearTimeout(dictationTimer)
     dictationTimer = undefined
+  }
+
+  function invalidateDictationPolls() {
+    dictationPollEpoch += 1
+    stopDictationPolling()
   }
 
   function dictationBusy() {
@@ -65,36 +79,127 @@
 
   function pollDictation() {
     stopDictationPolling()
+    const epoch = dictationPollEpoch
     dictationTimer = setTimeout(async () => {
-      if (destroyed || !isDictationActive(dictation)) return
+      if (destroyed || epoch !== dictationPollEpoch || !isDictationActive(dictation)) return
       try {
-        applyDictationStatus(await tauri.invoke('dictation_status'))
+        const status = await tauri.invoke('dictation_status')
+        if (destroyed || epoch !== dictationPollEpoch) return
+        applyDictationStatus(status)
       } catch (error) {
+        if (destroyed || epoch !== dictationPollEpoch) return
         dictationError = typeof error === 'string' ? error : 'Dictation status could not be checked.'
       }
-      if (!destroyed && isDictationActive(dictation)) pollDictation()
+      if (!destroyed && epoch === dictationPollEpoch && isDictationActive(dictation)) pollDictation()
     }, 100)
   }
 
-  async function toggleDictation() {
-    if (active || dictationCommandPending) return
-    const wasActive = isDictationActive(dictation)
+  async function stopDictation(cancelled = false) {
+    dictationRequested = false
+    invalidateDictationPolls()
+    if (cancelled) {
+      dictationCancelled = true
+      voicePointerId = undefined
+      voiceKey = undefined
+      draft = dictationDraftSnapshot
+      tick().then(() => composer?.focus())
+    }
+    if (dictationCommandPending || !isDictationActive(dictation)) return
     dictationCommandPending = true
     dictationError = ''
     try {
-      const command = wasActive ? 'dictation_stop' : 'dictation_start'
-      const status = await tauri.invoke(command)
+      const status = await tauri.invoke('dictation_stop')
       if (destroyed) return
       applyDictationStatus(status)
       if (isDictationActive(dictation)) pollDictation()
     } catch (error) {
       if (destroyed) return
-      if (!wasActive) dictation = { state: 'failed' }
-      dictationError = typeof error === 'string' ? error : `Dictation could not be ${wasActive ? 'stopped' : 'started'}.`
-      if (wasActive) pollDictation()
+      dictationError = typeof error === 'string' ? error : 'Dictation could not be stopped.'
+      pollDictation()
     } finally {
       dictationCommandPending = false
     }
+  }
+
+  async function startDictation() {
+    if (active || dictationCommandPending || dictationRequested) return
+    if (isDictationActive(dictation)) {
+      await stopDictation()
+      return
+    }
+    invalidateDictationPolls()
+    dictationRequested = true
+    dictationCancelled = false
+    dictationDraftSnapshot = draft
+    dictationCommandPending = true
+    dictationError = ''
+    try {
+      const status = await tauri.invoke('dictation_start')
+      if (destroyed) return
+      applyDictationStatus(status)
+      if (!dictationRequested && isDictationActive(dictation)) {
+        dictationCommandPending = false
+        await stopDictation()
+      } else if (isDictationActive(dictation)) pollDictation()
+    } catch (error) {
+      if (destroyed) return
+      dictation = { state: 'failed' }
+      dictationError = typeof error === 'string' ? error : 'Dictation could not be started.'
+      dictationRequested = false
+    } finally {
+      dictationCommandPending = false
+    }
+  }
+
+  function expectVoiceClick() {
+    suppressVoiceClick = true
+    clearTimeout(voiceClickTimer)
+    voiceClickTimer = setTimeout(() => { suppressVoiceClick = false })
+  }
+
+  function voicePointerDown(event) {
+    if (event.button !== 0 || voicePointerId !== undefined || voiceKey !== undefined) return
+    event.preventDefault()
+    expectVoiceClick()
+    voicePointerId = event.pointerId
+    event.currentTarget.setPointerCapture?.(event.pointerId)
+    startDictation()
+  }
+
+  function voicePointerEnd(event) {
+    if (event.pointerId !== voicePointerId) return
+    event.preventDefault()
+    expectVoiceClick()
+    voicePointerId = undefined
+    stopDictation(event.type === 'pointercancel')
+  }
+
+  function voiceKeyDown(event) {
+    if (event.key !== ' ' && event.key !== 'Enter') return
+    event.preventDefault()
+    expectVoiceClick()
+    if (!event.repeat) {
+      if (voiceKey !== undefined || voicePointerId !== undefined) return
+      voiceKey = event.key
+      startDictation()
+    }
+  }
+
+  function voiceKeyUp(event) {
+    if (event.key !== voiceKey) return
+    event.preventDefault()
+    expectVoiceClick()
+    voiceKey = undefined
+    stopDictation()
+  }
+
+  function voiceClick() {
+    if (suppressVoiceClick) {
+      suppressVoiceClick = false
+      clearTimeout(voiceClickTimer)
+      return
+    }
+    dictationRequested || isDictationActive(dictation) ? stopDictation() : startDictation()
   }
 
   function toggleReceipt(runId) {
@@ -247,7 +352,7 @@
       if (active?.id === payload.runId) active = projected && !['complete', 'cancelled', 'failed', 'interrupted'].includes(projected.phase) ? projected : null
     }).then((stop) => { unlisten = stop })
     window.__TAURI__?.event?.listen('dictation-event', ({ payload }) => {
-      if (payload.type === 'transcript') draft = appendTranscript(draft, payload.text)
+      if (payload.type === 'transcript' && !dictationCancelled) draft = appendTranscript(draft, payload.text)
     }).then((stop) => {
       if (destroyed) stop()
       else dictationUnlisten = stop
@@ -256,6 +361,11 @@
       if (accessOpen && !accessPopover?.contains(event.target) && !profileButton?.contains(event.target)) closeAccess()
     }
     const escape = (event) => {
+      if (event.key === 'Escape' && (dictationRequested || isDictationActive(dictation))) {
+        event.preventDefault()
+        stopDictation(true)
+        return
+      }
       if (accessOpen && event.key === 'Escape') {
         event.preventDefault()
         closeAccess()
@@ -284,6 +394,7 @@
       unlisten?.()
       dictationUnlisten?.()
       stopDictationPolling()
+      clearTimeout(voiceClickTimer)
       stopDragDrop?.()
       document.removeEventListener('click', outside)
       document.removeEventListener('keydown', escape)
@@ -560,7 +671,7 @@
               {/each}
             </ul>
           {/if}
-          <textarea bind:value={draft} onkeydown={keydown} rows="2" placeholder={active?.phase === 'resuming' ? 'Resuming interrupted reply…' : 'Ask anything'} disabled={active?.phase === 'resuming'}></textarea>
+          <textarea bind:this={composer} bind:value={draft} onkeydown={keydown} rows="2" placeholder={active?.phase === 'resuming' ? 'Resuming interrupted reply…' : 'Ask anything'} disabled={active?.phase === 'resuming'}></textarea>
           {#if submitError}<p class="cancel-error" role="alert">{submitError}</p>{/if}
           {#if cancelError}<p class="cancel-error" role="alert">{cancelError}</p>{/if}
           {#if queueError}<p class="cancel-error" role="alert">{queueError}</p>{/if}
@@ -574,7 +685,7 @@
               <span>{active?.phase === 'resuming' ? 'Reopening the existing secure session…' : active && active.id !== 'pending' ? '⏎ steers this reply · queue as follow-up' : 'Routing is automatic. Every reply carries its receipt.'}</span>
             {/if}
             <div class="composer-actions">
-              <button type="button" class="quiet voice" aria-pressed={isDictationActive(dictation)} disabled={!!active || dictationCommandPending} onclick={toggleDictation}>Voice</button>
+              <button type="button" class="quiet voice" aria-pressed={isDictationActive(dictation)} disabled={!!active} onpointerdown={voicePointerDown} onpointerup={voicePointerEnd} onpointercancel={voicePointerEnd} onkeydown={voiceKeyDown} onkeyup={voiceKeyUp} onclick={voiceClick}>Voice</button>
               {#if !active}<button type="button" class="quiet attach" onclick={chooseFiles}>Add files</button>{/if}
               {#if active?.phase === 'resuming'}
                 <button disabled>Resuming…</button>
