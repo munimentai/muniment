@@ -253,6 +253,7 @@ describe('desktop-ci payload extraction', () => {
 })
 
 describe('cleanup failure accounting', () => {
+  const runner = fs.readFileSync(path.join(root, 'test/e2e/runner/linux.sh'), 'utf8')
   const phases = ['stop-wdio', 'stop-driver', 'revoke-session', 'stop-browser-driver', 'stop-app', 'remove-package', 'remove-state', 'package-gone', 'processes-gone', 'state-gone', 'stage-cleanup-log', 'redact-artifacts', 'remove-raw', 'remove-package-file', 'remove-auth-url', 'replace-artifacts', 'publish-artifacts', 'suppress-artifacts', 'remove-safe', 'raw-gone', 'package-file-gone', 'auth-url-gone', 'safe-gone', 'remove-cleanup-log']
   const runFinalizer = (failed = '', extraEnv = {}) => {
     const dir = temp(); const ledger = path.join(dir, 'ledger'); const statusLedger = path.join(dir, 'status-ledger')
@@ -265,6 +266,9 @@ describe('cleanup failure accounting', () => {
     return { result, entries, statuses, invoked: entries.map((entry) => entry.split('\t')[0]) }
   }
   const commands = (entries) => Object.fromEntries(entries.map((entry) => entry.split('\t', 2)))
+  it('prefers the packaged binary name and retains the legacy fallback', () => {
+    expect(runner).toContain('app_binary=$(command -v muniment-desktop || command -v muniment)')
+  })
   it('clears stale automation before reaching recovery, then tears down the app', () => {
     const { result, entries, invoked } = runFinalizer()
     const command = commands(entries)
@@ -274,10 +278,10 @@ describe('cleanup failure accounting', () => {
     expect(command['stop-driver']).toBe("stop_matching \\[t\\]auri-driver ")
     expect(command['revoke-session']).toBe('timeout 45 env MUNIMENT_E2E_CLEANUP_ONLY=1 xvfb-run -a npm run test:e2e ')
     expect(command['stop-browser-driver']).toBe("stop_matching \\[c\\]hromedriver.\\\*9515 ")
-    expect(command['stop-app']).toBe("bash -c pkill\\ -x\\ muniment\\ 2\\\>/dev/null\\ \\|\\|\\ true\\\;\\ \\!\\ pgrep\\ -x\\ muniment\\ \\>/dev/null ")
+    expect(command['stop-app']).toBe("bash -c pkill\\ -f\\ \\\'\\(\\^\\|/\\)muniment-desktop\\(\\ \\|\\\$\\)\\\'\\ 2\\\>/dev/null\\ \\|\\|\\ true\\\;\\ pkill\\ -x\\ muniment\\ 2\\\>/dev/null\\ \\|\\|\\ true\\\;\\ \\!\\ pgrep\\ -f\\ \\\'\\(\\^\\|/\\)muniment-desktop\\(\\ \\|\\\$\\)\\\'\\ \\>/dev/null\\ \\&\\&\\ \\!\\ pgrep\\ -x\\ muniment\\ \\>/dev/null ")
     expect(command['remove-package']).toBe('sudo apt-get remove -y muniment ')
     expect(command['package-gone']).toBe('package_absent ')
-    expect(command['processes-gone']).toBe("bash -c \\!\\ pgrep\\ -x\\ muniment\\ \\&\\&\\ \\!\\ pgrep\\ -f\\ \\\"\\\[t\\\]auri-driver\\\"\\ \\&\\&\\ \\!\\ pgrep\\ -f\\ \\\"\\\[c\\\]hromedriver.\\\*9515\\\"\\ \\&\\&\\ \\!\\ pgrep\\ -f\\ \\\"\\\[w\\\]dio.\\\*test/e2e/wdio.conf.js\\\" ")
+    expect(command['processes-gone']).toBe("bash -c \\!\\ pgrep\\ -f\\ \\\'\\(\\^\\|/\\)muniment-desktop\\(\\ \\|\\\$\\)\\\'\\ \\&\\&\\ \\!\\ pgrep\\ -x\\ muniment\\ \\&\\&\\ \\!\\ pgrep\\ -f\\ \\\'\\\[t\\\]auri-driver\\\'\\ \\&\\&\\ \\!\\ pgrep\\ -f\\ \\\'\\\[c\\\]hromedriver.\\\*9515\\\'\\ \\&\\&\\ \\!\\ pgrep\\ -f\\ \\\'\\\[w\\\]dio.\\\*test/e2e/wdio.conf.js\\\' ")
 
     const target = (label, operation) => {
       const match = command[label].match(new RegExp(`^${operation} ((?:/tmp/[^ ]+)) $`))
