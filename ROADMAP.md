@@ -47,9 +47,9 @@ Phases mirror harness-spec §9. Muniment-cloud Phase 1 native auth and the cloud
 
 ## Browser-control runtime capability (§6.8)
 - OWNER GO 2026-07-16 — open the v1 browser-only actuator line in this repository; it is a governed runtime capability, not another companion surface.
-- DONE E0–E8 — extension-only real-profile architecture; attributed upstream-mergeable relay core; fail-closed single-use pairing; Linux executable identity and loopback socket-owner verification; composed authorization; authorized loopback listener; bounded RFC 6455 upgrade; and pairing-token consumption.
-- NEXT — add a fail-closed macOS loopback browser-process identity adapter, preserving the Linux authorization invariants, before macOS listener composition.
-- Later slices add macOS listener composition, Windows identity/listener adapters, the unpacked MV3 extension/connect-tab lifecycle, runtime tools, entitlement and ask/allow/deny policy, journal receipts, and kill switch.
+- DONE E0–E9 — extension-only real-profile architecture; attributed upstream-mergeable relay core; fail-closed single-use pairing; Linux executable identity and loopback socket-owner verification; composed authorization; authorized loopback listener; bounded RFC 6455 upgrade; pairing-token consumption; and fail-closed macOS loopback browser-process identity.
+- NEXT — compose the macOS authorized loopback listener while preserving the Linux transport, handshake, origin, and pairing invariants.
+- Later slices add Windows identity/listener adapters, the unpacked MV3 extension/connect-tab lifecycle, runtime tools, entitlement and ask/allow/deny policy, journal receipts, and kill switch.
 - RESERVED EXTENSION ID — `cdedcfbgomnhfpifpgdlpfkkanaofkjd`; pin it when the MV3 slice lands. Add the store item's public `key` to the development manifest only after owner upload and retrieval.
 - Chrome Web Store publication/upload are owner-gated. v1 excludes OS, filesystem, and other-application control.
 
