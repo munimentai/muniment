@@ -13,6 +13,7 @@ export interface ChromeTabs {
   create(properties: { active: boolean; url: string }): Promise<ChromeTab>;
   query(queryInfo: { url: string }): Promise<ChromeTab[]>;
   update(tabId: number, properties: { url: string }): Promise<ChromeTab>;
+  remove(tabId: number): Promise<void>;
   onRemoved: { addListener(listener: (tabId: number) => void): void };
   onUpdated: { addListener(listener: (tabId: number, changeInfo: { url?: string }) => void): void };
   onReplaced: { addListener(listener: (addedTabId: number, removedTabId: number) => void): void };
@@ -106,8 +107,28 @@ export class AnchorLifecycle {
     await Promise.all(tabs.map(async tab => {
       if (tab.id === undefined)
         return;
-      await this.#chrome.tabs.update(tab.id, { url: `${this.#anchorBaseUrl}${DISCONNECTED_HASH}` });
+      try {
+        await this.#chrome.tabs.update(tab.id, { url: `${this.#anchorBaseUrl}${DISCONNECTED_HASH}` });
+      } catch {
+        try {
+          await this.#chrome.tabs.remove(tab.id);
+        } catch {
+          // The tab may have disappeared between query, update, and remove.
+        }
+      }
     }));
+    const survivors = (await this.#chrome.tabs.query({ url: `${this.#anchorBaseUrl}*` }))
+      .filter(tab => tab.url === this.connectedUrl && tab.id !== undefined);
+    await Promise.all(survivors.map(async tab => {
+      try {
+        await this.#chrome.tabs.remove(tab.id!);
+      } catch {
+        // A final query distinguishes a benign disappearance from a survivor.
+      }
+    }));
+    const remaining = await this.#chrome.tabs.query({ url: `${this.#anchorBaseUrl}*` });
+    if (remaining.some(tab => tab.url === this.connectedUrl))
+      throw new Error('Unable to confirm Muniment anchor disconnection');
   }
 }
 

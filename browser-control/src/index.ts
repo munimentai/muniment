@@ -50,6 +50,7 @@ export class RelayConnection {
   readonly #maxMessageBytes: number;
   readonly #pending = new Map<number, PendingRequest>();
   readonly #eventListeners = new Set<(event: RelayEvent) => void>();
+  readonly #closeListeners = new Set<() => void>();
   #removeTransportListeners: Array<() => void> = [];
   #lastId = 0;
   #closed = false;
@@ -91,6 +92,15 @@ export class RelayConnection {
       return () => {};
     this.#eventListeners.add(listener);
     return () => this.#eventListeners.delete(listener);
+  }
+
+  onClose(listener: () => void): () => void {
+    if (this.#closed) {
+      listener();
+      return () => {};
+    }
+    this.#closeListeners.add(listener);
+    return () => this.#closeListeners.delete(listener);
   }
 
   close(): void {
@@ -165,6 +175,14 @@ export class RelayConnection {
     if (this.#closed)
       return;
     this.#closed = true;
+    for (const listener of [...this.#closeListeners]) {
+      try {
+        listener();
+      } catch {
+        // A consumer callback cannot interrupt relay disposal.
+      }
+    }
+    this.#closeListeners.clear();
     for (const remove of this.#removeTransportListeners) {
       try {
         remove();

@@ -1,59 +1,77 @@
-import { AnchorLifecycle, isLifecycleCommand, type ChromePort, type ExtensionChrome } from './anchor-lifecycle.js';
+import { AnchorLifecycle, type ExtensionChrome } from './anchor-lifecycle.js';
+import type { RelayEvent } from '../index.js';
 
-export const DESKTOP_RELAY_PORT = 'muniment-desktop-relay';
 export const ANCHOR_PORT = 'muniment-anchor-lifecycle';
 
-export function installSessionLifecycle(chrome: ExtensionChrome): { ready: Promise<void>; teardown(): Promise<void> } {
-  let relay: ChromePort | undefined;
+export interface LifecycleRelay {
+  onEvent(listener: (event: RelayEvent) => void): () => void;
+  onClose(listener: () => void): () => void;
+  close(): void;
+}
+
+export interface SessionLifecycle {
+  ready: Promise<void>;
+  attach(relay: LifecycleRelay): void;
+  teardown(): Promise<void>;
+}
+
+export function installSessionLifecycle(
+  chrome: ExtensionChrome,
+  onError: (error: unknown) => void = error => console.error('Muniment lifecycle cleanup failed', error),
+): SessionLifecycle {
+  let relay: LifecycleRelay | undefined;
+  let removeRelayListeners: Array<() => void> = [];
   let tearingDown: Promise<void> | undefined;
-  const lifecycle = new AnchorLifecycle(chrome, () => { void teardown(); });
+  const lifecycle = new AnchorLifecycle(chrome, () => { runTeardown(); });
   const ready = lifecycle.start();
+
+  function report(promise: Promise<unknown>): void {
+    void promise.catch(onError);
+  }
+
+  function runTeardown(): void {
+    report(teardown());
+  }
 
   function teardown(): Promise<void> {
     if (tearingDown)
       return tearingDown;
     const activeRelay = relay;
     relay = undefined;
-    // Disconnecting the transport is synchronous, so suspend cannot leave the
-    // desktop session live while Chrome discards the cleanup promise.
-    if (activeRelay) {
-      try { activeRelay.disconnect(); } catch { /* The transport is already gone. */ }
-    }
+    for (const remove of removeRelayListeners)
+      remove();
+    removeRelayListeners = [];
+    // Relay revocation is synchronous even when MV3 discards asynchronous work.
+    activeRelay?.close();
     tearingDown = lifecycle.teardown().finally(() => { tearingDown = undefined; });
     return tearingDown;
   }
 
+  function attach(nextRelay: LifecycleRelay): void {
+    if (relay) {
+      nextRelay.close();
+      return;
+    }
+    relay = nextRelay;
+    removeRelayListeners = [
+      nextRelay.onEvent(event => {
+        if (event.method === 'muniment.connect')
+          report(ready.then(() => relay === nextRelay ? lifecycle.connect() : undefined));
+        else if (event.method === 'muniment.teardown')
+          runTeardown();
+      }),
+      nextRelay.onClose(() => {
+        if (relay === nextRelay)
+          runTeardown();
+      }),
+    ];
+  }
+
   chrome.runtime.onConnect.addListener(port => {
-    if (port.name === ANCHOR_PORT) {
-      port.onDisconnect.addListener(() => { void teardown(); });
-      return;
-    }
-    if (port.name !== DESKTOP_RELAY_PORT)
-      return;
-
-    if (relay && relay !== port) {
-      try { port.disconnect(); } catch { /* Reject a second session transport. */ }
-      return;
-    }
-    relay = port;
-    port.onMessage.addListener(message => {
-      if (!isLifecycleCommand(message))
-        return;
-      void ready.then(async () => {
-        if (relay !== port)
-          return;
-        if (message.type === 'muniment.connect')
-          await lifecycle.connect();
-        else
-          await teardown();
-      });
-    });
-    port.onDisconnect.addListener(() => {
-      if (relay === port)
-        void teardown();
-    });
+    if (port.name === ANCHOR_PORT)
+      port.onDisconnect.addListener(runTeardown);
   });
-
-  chrome.runtime.onSuspend.addListener(() => { void teardown(); });
-  return { ready, teardown };
+  chrome.runtime.onSuspend.addListener(runTeardown);
+  report(ready);
+  return { ready, attach, teardown };
 }

@@ -40,6 +40,7 @@ class FakeChrome implements ExtensionChrome {
       this.updated.push({ tabId, url });
       return tab;
     },
+    remove: async (tabId: number) => { this.records.delete(tabId); },
     onRemoved: { addListener: (listener: (tabId: number) => void) => this.removedListeners.add(listener) },
     onUpdated: { addListener: (listener: (tabId: number, changeInfo: { url?: string }) => void) => this.updatedListeners.add(listener) },
     onReplaced: { addListener: (listener: (addedTabId: number, removedTabId: number) => void) => this.replacedListeners.add(listener) },
