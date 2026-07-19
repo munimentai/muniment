@@ -59,7 +59,7 @@
     dictation = status
     if (status.state === 'modelNotInstalled' || status.state === 'failed') {
       dictationError = status.message
-    }
+    } else dictationError = ''
     if (!isDictationActive(status)) stopDictationPolling()
   }
 
@@ -70,7 +70,6 @@
       try {
         applyDictationStatus(await tauri.invoke('dictation_status'))
       } catch (error) {
-        dictation = { state: 'failed' }
         dictationError = typeof error === 'string' ? error : 'Dictation status could not be checked.'
       }
       if (!destroyed && isDictationActive(dictation)) pollDictation()
@@ -79,18 +78,20 @@
 
   async function toggleDictation() {
     if (active || dictationCommandPending) return
+    const wasActive = isDictationActive(dictation)
     dictationCommandPending = true
     dictationError = ''
     try {
-      const command = isDictationActive(dictation) ? 'dictation_stop' : 'dictation_start'
+      const command = wasActive ? 'dictation_stop' : 'dictation_start'
       const status = await tauri.invoke(command)
       if (destroyed) return
       applyDictationStatus(status)
       if (isDictationActive(dictation)) pollDictation()
     } catch (error) {
       if (destroyed) return
-      dictation = { state: 'failed' }
-      dictationError = typeof error === 'string' ? error : 'Dictation could not be started.'
+      if (!wasActive) dictation = { state: 'failed' }
+      dictationError = typeof error === 'string' ? error : `Dictation could not be ${wasActive ? 'stopped' : 'started'}.`
+      if (wasActive) pollDictation()
     } finally {
       dictationCommandPending = false
     }

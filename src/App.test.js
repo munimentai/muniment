@@ -167,6 +167,65 @@ describe('voice dictation', () => {
     expect(composer).toHaveValue('Keep this')
   })
 
+  it('keeps capture active and stoppable when status IPC rejects', async () => {
+    let statusCalls = 0
+    invoke.mockImplementation(async (command) => {
+      if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
+      if (command === 'chat_history') return []
+      if (command === 'auth_entitlement_snapshot') return snapshot()
+      if (command === 'auth_devices') return []
+      if (command === 'dictation_start') return { state: 'starting' }
+      if (command === 'dictation_status') {
+        statusCalls += 1
+        throw 'Dictation status is temporarily unavailable.'
+      }
+      if (command === 'dictation_stop') return { state: 'stopped' }
+      throw new Error(`unexpected command: ${command}`)
+    })
+    render(App)
+    const voice = await screen.findByRole('button', { name: 'Voice' })
+    await fireEvent.click(voice)
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Dictation status is temporarily unavailable.')
+    expect(statusCalls).toBeGreaterThan(0)
+    expect(voice).toHaveAttribute('aria-pressed', 'true')
+    expect(voice).toBeEnabled()
+
+    await fireEvent.click(voice)
+    expect(invoke).toHaveBeenCalledWith('dictation_stop')
+    expect(voice).toHaveAttribute('aria-pressed', 'false')
+  })
+
+  it('keeps capture active and allows Stop to be retried when stop IPC rejects', async () => {
+    let stopCalls = 0
+    invoke.mockImplementation(async (command) => {
+      if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
+      if (command === 'chat_history') return []
+      if (command === 'auth_entitlement_snapshot') return snapshot()
+      if (command === 'auth_devices') return []
+      if (command === 'dictation_start') return { state: 'running' }
+      if (command === 'dictation_status') return { state: 'running' }
+      if (command === 'dictation_stop') {
+        stopCalls += 1
+        if (stopCalls === 1) throw 'Dictation could not be stopped.'
+        return { state: 'stopped' }
+      }
+      throw new Error(`unexpected command: ${command}`)
+    })
+    render(App)
+    const voice = await screen.findByRole('button', { name: 'Voice' })
+    await fireEvent.click(voice)
+    await fireEvent.click(voice)
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Dictation could not be stopped.')
+    expect(voice).toHaveAttribute('aria-pressed', 'true')
+    expect(voice).toBeEnabled()
+
+    await fireEvent.click(voice)
+    expect(stopCalls).toBe(2)
+    expect(voice).toHaveAttribute('aria-pressed', 'false')
+  })
+
   it('disables voice during an active chat and cleans up its listener and timer', async () => {
     let resolveSubmit
     invoke.mockImplementation(async (command) => {
