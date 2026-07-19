@@ -19,17 +19,17 @@ pub use linux_identity::{
 };
 #[cfg(target_os = "linux")]
 pub use linux_transport::{
-    BrowserControlAcceptError, BrowserControlBindError, BrowserControlListener,
-    BrowserControlPairingAuthorizer, BrowserControlProcessAuthorizer, BrowserControlStreamListener,
-    LinuxBrowserProcessAuthorizer, PairingAuthorizationError, WebSocketHandshakeConfig,
-    WebSocketHandshakeError,
+    BrowserControlAcceptError, BrowserControlBindError, BrowserControlEndpointInspector,
+    BrowserControlListener, BrowserControlPairingAuthorizer, BrowserControlProcessAuthorizer,
+    BrowserControlStreamListener, LinuxBrowserProcessAuthorizer, PairingAuthorizationError,
+    WebSocketHandshakeConfig, WebSocketHandshakeError,
 };
 #[cfg(target_os = "macos")]
 pub use macos_transport::{
-    BrowserControlAcceptError, BrowserControlBindError, BrowserControlListener,
-    BrowserControlPairingAuthorizer, BrowserControlProcessAuthorizer, BrowserControlStreamListener,
-    MacOsBrowserProcessAuthorizer, PairingAuthorizationError, WebSocketHandshakeConfig,
-    WebSocketHandshakeError,
+    BrowserControlAcceptError, BrowserControlBindError, BrowserControlEndpointInspector,
+    BrowserControlListener, BrowserControlPairingAuthorizer, BrowserControlProcessAuthorizer,
+    BrowserControlStreamListener, MacOsBrowserProcessAuthorizer, PairingAuthorizationError,
+    WebSocketHandshakeConfig, WebSocketHandshakeError,
 };
 
 #[cfg(target_os = "macos")]

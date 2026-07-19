@@ -120,7 +120,27 @@ impl BrowserControlListener {
         pairing_authorizer: &impl BrowserControlPairingAuthorizer,
         config: &WebSocketHandshakeConfig,
     ) -> Result<TcpStream, WebSocketHandshakeError> {
-        let mut stream = self.accept_with(listener, authorizer)?;
+        self.accept_websocket_with_endpoint_inspector(
+            listener,
+            &NATIVE_ENDPOINT_INSPECTOR,
+            authorizer,
+            pairing_authorizer,
+            config,
+        )
+    }
+
+    /// Injected endpoint-inspection variant used by fail-closed contract tests.
+    #[doc(hidden)]
+    pub fn accept_websocket_with_endpoint_inspector(
+        &self,
+        listener: &impl BrowserControlStreamListener,
+        endpoint_inspector: &impl BrowserControlEndpointInspector,
+        authorizer: &impl BrowserControlProcessAuthorizer,
+        pairing_authorizer: &impl BrowserControlPairingAuthorizer,
+        config: &WebSocketHandshakeConfig,
+    ) -> Result<TcpStream, WebSocketHandshakeError> {
+        let mut stream =
+            self.accept_with_endpoint_inspector(listener, endpoint_inspector, authorizer)?;
         perform_websocket_handshake(&mut stream, config, pairing_authorizer)?;
         Ok(stream)
     }
@@ -132,14 +152,25 @@ impl BrowserControlListener {
         listener: &impl BrowserControlStreamListener,
         authorizer: &impl BrowserControlProcessAuthorizer,
     ) -> Result<TcpStream, BrowserControlAcceptError> {
+        self.accept_with_endpoint_inspector(listener, &NATIVE_ENDPOINT_INSPECTOR, authorizer)
+    }
+
+    /// Injected endpoint-inspection variant used by fail-closed contract tests.
+    #[doc(hidden)]
+    pub fn accept_with_endpoint_inspector(
+        &self,
+        listener: &impl BrowserControlStreamListener,
+        endpoint_inspector: &impl BrowserControlEndpointInspector,
+        authorizer: &impl BrowserControlProcessAuthorizer,
+    ) -> Result<TcpStream, BrowserControlAcceptError> {
         let stream = listener
             .accept_stream()
             .map_err(|_| BrowserControlAcceptError::Accept)?;
-        let local = stream
-            .local_addr()
+        let local = endpoint_inspector
+            .local_addr(&stream)
             .map_err(|_| BrowserControlAcceptError::EndpointUnavailable)?;
-        let peer = stream
-            .peer_addr()
+        let peer = endpoint_inspector
+            .peer_addr(&stream)
             .map_err(|_| BrowserControlAcceptError::EndpointUnavailable)?;
         authorizer
             .authorize(local, peer, &self.expected_executable)
@@ -147,6 +178,27 @@ impl BrowserControlListener {
         Ok(stream)
     }
 }
+
+/// Injected accepted-stream endpoint-inspection boundary.
+pub trait BrowserControlEndpointInspector {
+    fn local_addr(&self, stream: &TcpStream) -> io::Result<SocketAddr>;
+    fn peer_addr(&self, stream: &TcpStream) -> io::Result<SocketAddr>;
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+struct NativeEndpointInspector;
+
+impl BrowserControlEndpointInspector for NativeEndpointInspector {
+    fn local_addr(&self, stream: &TcpStream) -> io::Result<SocketAddr> {
+        stream.local_addr()
+    }
+
+    fn peer_addr(&self, stream: &TcpStream) -> io::Result<SocketAddr> {
+        stream.peer_addr()
+    }
+}
+
+const NATIVE_ENDPOINT_INSPECTOR: NativeEndpointInspector = NativeEndpointInspector;
 
 /// Injected single-use pairing-token boundary. Implementations own expiry and revocation state.
 pub trait BrowserControlPairingAuthorizer {
