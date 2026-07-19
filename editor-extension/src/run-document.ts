@@ -81,6 +81,19 @@ export class RunDocument {
       return;
     }
 
+    if (message.type === "permission.pending") {
+      this.lastRunSeq = message.runSeq;
+      try {
+        await this.subscription?.acknowledge(message.runSeq);
+      } catch {
+        if (!this.disposed && generation === this.generation) {
+          this.update(this.render("Stream interrupted · Refresh Threads to resume this run."));
+          this.closeSubscription();
+        }
+      }
+      return;
+    }
+
     this.lastRunSeq = message.runSeq;
     this.history.push(formatEvent(message.runSeq, message.eventType, message.recordedAt, message.payload.receipt));
     if (this.history.length > MAX_HISTORY) this.history.splice(0, this.history.length - MAX_HISTORY);

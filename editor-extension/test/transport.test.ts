@@ -288,6 +288,111 @@ test("atomically routes concurrent stream responses and coalesced terminal event
   connection.dispose();
 });
 
+test("delivers bounded pending permissions while allow and deny answers are interleaved", async () => {
+  const socket = new FakeSocket();
+  const connection = await authorizedConnection(socket);
+  const runId = "01900000-0000-7000-8000-000000000001";
+  const subscriptionId = "01900000-0000-7000-8000-000000000002";
+  const subscribing = connection.streamRun(runId, 0);
+  const streamRequest = lastRequest(socket);
+  socket.emit("data", encodeAttachFrame({ protocol: "muniment.attach/1",
+    request_id: streamRequest.request_id, ok: true, body: { subscription_id: subscriptionId,
+      run_id: runId, first_available_run_seq: 1, current_run_seq: 2,
+      window: { max_events: 4, max_bytes: 4096 } } }));
+  const stream = await subscribing;
+  const delivered: unknown[] = [];
+  stream.onDidReceiveMessage((message) => delivered.push(message));
+
+  const allowing = connection.answerPermission(runId, "secret-gate", "allow");
+  const allowRequest = lastRequest(socket);
+  assert.equal(allowRequest.operation, "permission.answer");
+  assert.deepEqual(allowRequest.body,
+    { run_id: runId, gate_id: "secret-gate", decision: "allow" });
+  assert.match(allowRequest.request_id as string, /^[0-9a-f-]{36}$/);
+  assert.match(allowRequest.idempotency_key as string, /^[0-9a-f-]{36}$/);
+  assert.notEqual(allowRequest.request_id, allowRequest.idempotency_key);
+  socket.emit("data", Buffer.concat([
+    encodeAttachFrame({ protocol: "muniment.attach/1", subscription_id: subscriptionId,
+      event: "permission.pending", run_id: runId, run_seq: 1,
+      body: { gate_id: "next-secret", kind: "confirm", title: "Allow access?",
+        message: "Sensitive details" } }),
+    encodeAttachFrame({ protocol: "muniment.attach/1", request_id: allowRequest.request_id,
+      ok: true, body: { run_id: runId, gate_id: "secret-gate", decision: "allow",
+        committed_seq: 2, accepted_at: "2026-07-17T00:00:00Z" } }),
+  ]));
+  assert.deepEqual(await allowing, { runId, gateId: "secret-gate", decision: "allow",
+    committedSeq: 2, acceptedAt: "2026-07-17T00:00:00Z" });
+  assert.deepEqual(delivered, [{ type: "permission.pending", runSeq: 1,
+    gateId: "next-secret", kind: "confirm", title: "Allow access?",
+    message: "Sensitive details" }]);
+
+  const denying = connection.answerPermission(runId, "next-secret", "deny");
+  const denyRequest = lastRequest(socket);
+  assert.notEqual(denyRequest.request_id, allowRequest.request_id);
+  assert.notEqual(denyRequest.idempotency_key, allowRequest.idempotency_key);
+  socket.emit("data", encodeAttachFrame({ protocol: "muniment.attach/1",
+    request_id: denyRequest.request_id, ok: true, body: { run_id: runId,
+      gate_id: "next-secret", decision: "deny", committed_seq: 3,
+      accepted_at: "2026-07-17T00:00:01Z" } }));
+  assert.equal((await denying).decision, "deny");
+  connection.dispose();
+});
+
+test("fails closed on hostile permission events and receipts without leaking gate content", async (t) => {
+  const hostileBodies = [
+    { gate_id: "gate", kind: "other", title: "Title" },
+    { gate_id: " ", kind: "confirm", title: "Title" },
+    { gate_id: "x".repeat(257), kind: "confirm", title: "Title" },
+    { gate_id: "gate", kind: "confirm", title: " " },
+    { gate_id: "gate", kind: "confirm", title: "x".repeat(1025) },
+    { gate_id: "gate", kind: "confirm", title: "Title", message: "x".repeat(4097) },
+    { gate_id: "gate", kind: "confirm", title: "Title", payload: "unapproved" },
+  ];
+  for (const [index, body] of hostileBodies.entries()) await t.test(`event ${index}`, async () => {
+    const socket = new FakeSocket();
+    const connection = await authorizedConnection(socket);
+    const runId = "01900000-0000-7000-8000-000000000001";
+    const subscribing = connection.streamRun(runId, 0);
+    const request = lastRequest(socket);
+    socket.emit("data", encodeAttachFrame({ protocol: "muniment.attach/1",
+      request_id: request.request_id, ok: true, body: {
+        subscription_id: "sub", run_id: runId, first_available_run_seq: 1,
+        current_run_seq: 1, window: { max_events: 4, max_bytes: 4096 } } }));
+    await subscribing;
+    socket.emit("data", encodeAttachFrame({ protocol: "muniment.attach/1",
+      subscription_id: "sub", event: "permission.pending", run_id: runId, run_seq: 1, body }));
+    assert.equal(socket.destroyed, true);
+  });
+
+  const socket = new FakeSocket();
+  const connection = await authorizedConnection(socket);
+  const runId = "01900000-0000-7000-8000-000000000001";
+  const writesBeforeInvalid = socket.writes.length;
+  await assert.rejects(connection.answerPermission("bad-run", "gate", "allow"),
+    (error: unknown) => error instanceof AttachTransportError && error.code === "unexpected_message");
+  await assert.rejects(connection.answerPermission(runId, " ", "allow"),
+    (error: unknown) => error instanceof AttachTransportError && error.code === "unexpected_message");
+  await assert.rejects(connection.answerPermission(runId, "gate", "invalid" as any),
+    (error: unknown) => error instanceof AttachTransportError && error.code === "unexpected_message");
+  assert.equal(socket.writes.length, writesBeforeInvalid);
+  const answer = connection.answerPermission(runId, "top-secret-gate", "allow");
+  const request = lastRequest(socket);
+  socket.emit("data", encodeAttachFrame({ protocol: "muniment.attach/1",
+    request_id: request.request_id, ok: false,
+    error: { code: "persistence_failed", message: "top-secret-gate details", retryable: false } }));
+  await assert.rejects(answer, (error: unknown) => error instanceof AttachTransportError &&
+    error.code === "desktop_failed" && !error.message.includes("top-secret-gate"));
+
+  const hostile = connection.answerPermission(runId, "another-secret", "deny");
+  const hostileRequest = lastRequest(socket);
+  socket.emit("data", encodeAttachFrame({ protocol: "muniment.attach/1",
+    request_id: hostileRequest.request_id, ok: true, body: { run_id: runId,
+      gate_id: "wrong-secret", decision: "deny", committed_seq: 2,
+      accepted_at: "2026-07-17T00:00:00Z" } }));
+  await assert.rejects(hostile, (error: unknown) => error instanceof AttachTransportError &&
+    error.code === "unexpected_message" && !error.message.includes("secret"));
+});
+
 test("projects a same-cursor resumable close without losing the terminal event", async () => {
   const socket = new FakeSocket();
   const connection = await authorizedConnection(socket);
