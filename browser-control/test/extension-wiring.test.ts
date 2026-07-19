@@ -151,6 +151,12 @@ describe('MV3 session wiring', () => {
     chrome.suspended.emit(); expect(transport.disconnected).toBe(true); await chrome.settle(); expect(chrome.live()).toHaveLength(0);
   });
 
+  it('synchronously revokes an injected adapter when teardown precedes relay authorization', async () => {
+    const chrome = new FakeChrome(); const close = vi.fn();
+    const session = installSessionLifecycle(chrome, undefined, close); await session.ready;
+    await session.teardown(); expect(close).toHaveBeenCalledOnce();
+  });
+
   it('closes an anchor when its disconnected rewrite fails', async () => {
     const chrome = new FakeChrome(); const errors: unknown[] = []; const session = installSessionLifecycle(chrome, error => errors.push(error)); await session.ready;
     const { transport } = chrome.relay(session); transport.event('muniment.connect'); await chrome.settle();
