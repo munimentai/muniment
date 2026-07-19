@@ -38,11 +38,11 @@ finalize() {
   # bounded and idempotent, and still runs if the main WDIO process crashed.
   if (( ready )); then cleanup_step revoke-session timeout 45 env MUNIMENT_E2E_CLEANUP_ONLY=1 xvfb-run -a npm run test:e2e; fi
   cleanup_step stop-browser-driver stop_matching '[c]hromedriver.*9515'
-  cleanup_step stop-app bash -c 'pkill -x muniment 2>/dev/null || true; ! pgrep -x muniment >/dev/null'
+  cleanup_step stop-app bash -c "pkill -f '(^|/)muniment-desktop( |$)' 2>/dev/null || true; pkill -x muniment 2>/dev/null || true; ! pgrep -f '(^|/)muniment-desktop( |$)' >/dev/null && ! pgrep -x muniment >/dev/null"
   if (( installed )); then cleanup_step remove-package sudo apt-get remove -y muniment; fi
   cleanup_step remove-state rm -rf -- "$state_root"
   cleanup_step package-gone package_absent
-  cleanup_step processes-gone bash -c '! pgrep -x muniment && ! pgrep -f "[t]auri-driver" && ! pgrep -f "[c]hromedriver.*9515" && ! pgrep -f "[w]dio.*test/e2e/wdio.conf.js"'
+  cleanup_step processes-gone bash -c "! pgrep -f '(^|/)muniment-desktop( |$)' && ! pgrep -x muniment && ! pgrep -f '[t]auri-driver' && ! pgrep -f '[c]hromedriver.*9515' && ! pgrep -f '[w]dio.*test/e2e/wdio.conf.js'"
   cleanup_step state-gone cleanup_absent "$state_root"
 
   cleanup_step stage-cleanup-log cp "$cleanup_log" "$raw/cleanup.log"
@@ -97,7 +97,7 @@ installed=1
 sudo apt-get install -y -qq webkit2gtk-driver xvfb chromium chromium-driver "$deb" >>"$installer_log" 2>&1 || { status=1; exit; }
 npm ci --no-audit --no-fund >>"$installer_log" 2>&1 || { status=1; exit; }
 command -v tauri-driver >/dev/null || cargo install tauri-driver --version 2.0.5 --locked >>"$installer_log" 2>&1 || { status=1; exit; }
-app_binary=$(command -v muniment)
+app_binary=$(command -v muniment-desktop || command -v muniment) || { echo 'installed application binary is unavailable' >&2; status=1; exit; }
 chromedriver --port=9515 --allowed-ips=127.0.0.1 >>"$raw/chromedriver.log" 2>&1 &
 export MUNIMENT_E2E_APP_BINARY="$app_binary" MUNIMENT_E2E_RAW_DIR="$raw"
 export MUNIMENT_E2E_AUTH_URL_FILE="$auth_url_file" BROWSER="$PWD/test/e2e/support/browser-launcher.sh"
