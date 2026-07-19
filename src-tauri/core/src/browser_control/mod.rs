@@ -6,6 +6,8 @@ mod linux_identity;
 mod linux_transport;
 #[cfg(any(target_os = "macos", test))]
 mod macos_identity;
+#[cfg(target_os = "macos")]
+mod macos_transport;
 
 #[cfg(target_os = "linux")]
 pub use linux_identity::{
@@ -20,6 +22,13 @@ pub use linux_transport::{
     BrowserControlAcceptError, BrowserControlBindError, BrowserControlListener,
     BrowserControlPairingAuthorizer, BrowserControlProcessAuthorizer, BrowserControlStreamListener,
     LinuxBrowserProcessAuthorizer, PairingAuthorizationError, WebSocketHandshakeConfig,
+    WebSocketHandshakeError,
+};
+#[cfg(target_os = "macos")]
+pub use macos_transport::{
+    BrowserControlAcceptError, BrowserControlBindError, BrowserControlListener,
+    BrowserControlPairingAuthorizer, BrowserControlProcessAuthorizer, BrowserControlStreamListener,
+    MacOsBrowserProcessAuthorizer, PairingAuthorizationError, WebSocketHandshakeConfig,
     WebSocketHandshakeError,
 };
 

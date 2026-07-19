@@ -1,4 +1,4 @@
-//! Fail-closed Linux transport for browser-control connections.
+// Fail-closed native transport for browser-control connections.
 
 use super::{authorize_browser_process, AuthorizationError};
 use base64::{engine::general_purpose::STANDARD, Engine as _};
@@ -94,7 +94,7 @@ impl BrowserControlListener {
 
     /// Accepts one stream and releases it only after browser-process authorization.
     pub fn accept(&self) -> Result<TcpStream, BrowserControlAcceptError> {
-        self.accept_with(&self.listener, &LinuxBrowserProcessAuthorizer)
+        self.accept_with(&self.listener, &NATIVE_BROWSER_PROCESS_AUTHORIZER)
     }
 
     /// Authorizes one peer, completes its bounded WebSocket handshake, then releases it.
@@ -105,7 +105,7 @@ impl BrowserControlListener {
     ) -> Result<TcpStream, WebSocketHandshakeError> {
         self.accept_websocket_with(
             &self.listener,
-            &LinuxBrowserProcessAuthorizer,
+            &NATIVE_BROWSER_PROCESS_AUTHORIZER,
             pairing_authorizer,
             config,
         )
@@ -178,9 +178,11 @@ pub trait BrowserControlProcessAuthorizer {
     ) -> Result<(), AuthorizationError>;
 }
 
+#[cfg(target_os = "linux")]
 #[derive(Clone, Copy, Debug, Default)]
 pub struct LinuxBrowserProcessAuthorizer;
 
+#[cfg(target_os = "linux")]
 impl BrowserControlProcessAuthorizer for LinuxBrowserProcessAuthorizer {
     fn authorize(
         &self,
@@ -191,6 +193,29 @@ impl BrowserControlProcessAuthorizer for LinuxBrowserProcessAuthorizer {
         authorize_browser_process(local, peer, expected_executable).map(|_| ())
     }
 }
+
+#[cfg(target_os = "macos")]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct MacOsBrowserProcessAuthorizer;
+
+#[cfg(target_os = "macos")]
+impl BrowserControlProcessAuthorizer for MacOsBrowserProcessAuthorizer {
+    fn authorize(
+        &self,
+        local: SocketAddr,
+        peer: SocketAddr,
+        expected_executable: &Path,
+    ) -> Result<(), AuthorizationError> {
+        authorize_browser_process(local, peer, expected_executable).map(|_| ())
+    }
+}
+
+#[cfg(target_os = "linux")]
+const NATIVE_BROWSER_PROCESS_AUTHORIZER: LinuxBrowserProcessAuthorizer =
+    LinuxBrowserProcessAuthorizer;
+#[cfg(target_os = "macos")]
+const NATIVE_BROWSER_PROCESS_AUTHORIZER: MacOsBrowserProcessAuthorizer =
+    MacOsBrowserProcessAuthorizer;
 
 /// A bounded, redacted listener-creation failure.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

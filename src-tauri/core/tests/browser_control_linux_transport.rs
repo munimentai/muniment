@@ -1,4 +1,4 @@
-#![cfg(target_os = "linux")]
+#![cfg(any(target_os = "linux", target_os = "macos"))]
 
 use muniment_core::browser_control::{
     AuthorizationError, BrowserControlAcceptError, BrowserControlBindError, BrowserControlListener,
