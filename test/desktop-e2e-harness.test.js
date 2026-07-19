@@ -71,21 +71,61 @@ describe('desktop-ci payload extraction', () => {
 describe('cleanup failure accounting', () => {
   const phases = ['stop-wdio', 'stop-driver', 'revoke-session', 'stop-browser-driver', 'stop-app', 'remove-package', 'remove-state', 'package-gone', 'processes-gone', 'state-gone', 'stage-cleanup-log', 'redact-artifacts', 'remove-raw', 'remove-package-file', 'remove-auth-url', 'replace-artifacts', 'publish-artifacts', 'suppress-artifacts', 'remove-safe', 'raw-gone', 'package-file-gone', 'auth-url-gone', 'safe-gone', 'remove-cleanup-log']
   const runFinalizer = (failed = '', extraEnv = {}) => {
-    const dir = temp(); const ledger = path.join(dir, 'ledger')
+    const dir = temp(); const ledger = path.join(dir, 'ledger'); const statusLedger = path.join(dir, 'status-ledger')
     const result = spawnSync('bash', [path.join(root, 'test/e2e/runner/linux.sh')], {
       encoding: 'utf8',
-      env: { ...process.env, MUNIMENT_E2E_FINALIZER_TEST_MODE: '1', MUNIMENT_E2E_FINALIZER_TEST_LEDGER: ledger, MUNIMENT_E2E_FINALIZER_TEST_FAIL: failed, ...extraEnv },
+      env: { ...process.env, MUNIMENT_E2E_FINALIZER_TEST_MODE: '1', MUNIMENT_E2E_FINALIZER_TEST_LEDGER: ledger, MUNIMENT_E2E_FINALIZER_TEST_STATUS_LEDGER: statusLedger, MUNIMENT_E2E_FINALIZER_TEST_FAIL: failed, ...extraEnv },
     })
     const entries = fs.readFileSync(ledger, 'utf8').trim().split('\n')
-    return { result, entries, invoked: entries.map((entry) => entry.split('\t')[0]) }
+    const statuses = Object.fromEntries(fs.readFileSync(statusLedger, 'utf8').trim().split('\n').map((entry) => entry.split('\t')))
+    return { result, entries, statuses, invoked: entries.map((entry) => entry.split('\t')[0]) }
   }
+  const commands = (entries) => Object.fromEntries(entries.map((entry) => entry.split('\t', 2)))
   it('clears stale automation before reaching recovery, then tears down the app', () => {
     const { result, entries, invoked } = runFinalizer()
+    const command = commands(entries)
     expect(result.status).toBe(0)
     expect(invoked.slice(0, 5)).toEqual(['stop-wdio', 'stop-driver', 'revoke-session', 'stop-browser-driver', 'stop-app'])
-    expect(entries[2]).toContain('timeout 45 env MUNIMENT_E2E_CLEANUP_ONLY=1 xvfb-run -a npm run test:e2e')
-    expect(entries.find((entry) => entry.startsWith('package-gone\t'))).toContain('package_absent')
-    expect(entries.find((entry) => entry.startsWith('state-gone\t'))).toContain('cleanup_absent')
+    expect(command['stop-wdio']).toBe("stop_matching \\[w\\]dio.\\\*test/e2e/wdio.conf.js ")
+    expect(command['stop-driver']).toBe("stop_matching \\[t\\]auri-driver ")
+    expect(command['revoke-session']).toBe('timeout 45 env MUNIMENT_E2E_CLEANUP_ONLY=1 xvfb-run -a npm run test:e2e ')
+    expect(command['stop-browser-driver']).toBe("stop_matching \\[c\\]hromedriver.\\\*9515 ")
+    expect(command['stop-app']).toBe("bash -c pkill\\ -x\\ muniment\\ 2\\\>/dev/null\\ \\|\\|\\ true\\\;\\ \\!\\ pgrep\\ -x\\ muniment\\ \\>/dev/null ")
+    expect(command['remove-package']).toBe('sudo apt-get remove -y muniment ')
+    expect(command['package-gone']).toBe('package_absent ')
+    expect(command['processes-gone']).toBe("bash -c \\!\\ pgrep\\ -x\\ muniment\\ \\&\\&\\ \\!\\ pgrep\\ -f\\ \\\"\\\[t\\\]auri-driver\\\"\\ \\&\\&\\ \\!\\ pgrep\\ -f\\ \\\"\\\[c\\\]hromedriver.\\\*9515\\\"\\ \\&\\&\\ \\!\\ pgrep\\ -f\\ \\\"\\\[w\\\]dio.\\\*test/e2e/wdio.conf.js\\\" ")
+
+    const target = (label, operation) => {
+      const match = command[label].match(new RegExp(`^${operation} ((?:/tmp/[^ ]+)) $`))
+      expect(match, `${label} command and target`).not.toBeNull()
+      return match[1]
+    }
+    const state = target('remove-state', 'rm -rf --')
+    const raw = target('remove-raw', 'rm -rf --')
+    const deb = target('remove-package-file', 'rm -f --')
+    const auth = target('remove-auth-url', 'rm -f --')
+    const safe = target('remove-safe', 'rm -rf --')
+    expect(command['state-gone']).toBe(`cleanup_absent ${state} `)
+    expect(command['raw-gone']).toBe(`cleanup_absent ${raw} `)
+    expect(command['package-file-gone']).toBe(`cleanup_absent ${deb} `)
+    expect(command['auth-url-gone']).toBe(`cleanup_absent ${auth} `)
+    expect(command['safe-gone']).toBe(`cleanup_absent ${safe} `)
+    expect(command['redact-artifacts']).toBe(`node test/e2e/support/redact.mjs ${raw} ${safe} `)
+    expect(command['stage-cleanup-log']).toMatch(new RegExp(`^cp /tmp/muniment-e2e-cleanup\\.[^ ]+\\.log ${raw}/cleanup\\.log $`))
+    const cleanupLog = command['stage-cleanup-log'].split(' ')[1]
+    expect(command['replace-artifacts']).toBe('rm -rf -- /tmp/dci-artifacts ')
+    expect(command['publish-artifacts']).toBe(`mv -- ${safe} /tmp/dci-artifacts `)
+    expect(command['remove-cleanup-log']).toBe(`rm -f -- ${cleanupLog}`)
+  })
+  it.each([
+    ['remove-package', 'package-gone'], ['remove-state', 'state-gone'], ['remove-raw', 'raw-gone'],
+    ['remove-package-file', 'package-file-gone'], ['remove-auth-url', 'auth-url-gone'], ['remove-safe', 'safe-gone'],
+  ])('fails %s absence verification when removal is unsuccessful', (removal, verification) => {
+    const { result, entries, statuses } = runFinalizer(removal)
+    expect(result.status).not.toBe(0)
+    expect(commands(entries)[verification]).toMatch(/^(?:package_absent|cleanup_absent \/tmp\/)/)
+    expect(statuses[removal]).toBe('1')
+    expect(statuses[verification]).toBe('1')
   })
   it('honors finalizer readiness and installation conditions', () => {
     const { result, invoked } = runFinalizer('', { MUNIMENT_E2E_FINALIZER_TEST_READY: '0', MUNIMENT_E2E_FINALIZER_TEST_INSTALLED: '0' })
