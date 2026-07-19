@@ -1,4 +1,4 @@
-import { AttachTransportError, type AttachConnection, type RedactedThreadSummary, type RunStartAccepted, type RunStreamSubscription, type ThreadOpenPage } from "./transport";
+import { AttachTransportError, MAX_RUN_START_CONTEXT_LENGTH, type AttachConnection, type JsonValue, type RedactedThreadSummary, type RunStartAccepted, type RunStreamSubscription, type ThreadOpenPage } from "./transport";
 
 export const OPEN_THREAD_COMMAND = "muniment.openThread";
 export const NEW_RUN_COMMAND = "muniment.newRun";
@@ -74,14 +74,17 @@ export class ThreadsModel {
     return this.connection.openThread(threadId);
   }
 
-  async submitRun(text: string | undefined): Promise<RunSubmissionResult> {
+  async submitRun(text: string | undefined, context?: JsonValue): Promise<RunSubmissionResult> {
     if (text === undefined || text.trim().length === 0) return { kind: "no-op" };
+    if (context !== undefined && Buffer.byteLength(JSON.stringify(context), "utf8") > MAX_RUN_START_CONTEXT_LENGTH) {
+      return { kind: "failed", message: "The selected editor text is too large to attach (64 KiB maximum)." };
+    }
     if (this.submittingRun) return { kind: "busy" };
     if (this.disposed || !this.connection) return { kind: "unavailable" };
 
     this.submittingRun = true;
     try {
-      const accepted = await this.connection.startRun(text);
+      const accepted = await this.connection.startRun(text, context);
       return { kind: "accepted", ...accepted };
     } catch (error) {
       return { kind: "failed", message: runStartFailureMessage(error) };

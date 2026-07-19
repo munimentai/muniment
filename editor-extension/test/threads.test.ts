@@ -179,6 +179,30 @@ test("submits a nonblank run once without context and reports acceptance", async
   model.dispose();
 });
 
+test("propagates editor context through run submission", async () => {
+  const connection = new FakeConnection({ threads: [] });
+  const model = new ThreadsModel(connectorFor(connection));
+  await model.refresh();
+  const context = { selected_text: "answer", selected_file: "src/answer.ts" };
+
+  assert.equal((await model.submitRun("Explain this.", context)).kind, "accepted");
+  assert.deepEqual(connection.startCalls, [{ text: "Explain this.", context }]);
+  model.dispose();
+});
+
+test("rejects oversize editor context before starting a run", async () => {
+  const connection = new FakeConnection({ threads: [] });
+  const model = new ThreadsModel(connectorFor(connection));
+  await model.refresh();
+
+  assert.deepEqual(await model.submitRun("Explain this.", { selected_text: "x".repeat(64 * 1024) }), {
+    kind: "failed",
+    message: "The selected editor text is too large to attach (64 KiB maximum).",
+  });
+  assert.deepEqual(connection.startCalls, []);
+  model.dispose();
+});
+
 test("subscribes from the accepted run cursor without changing it", async () => {
   const connection = new FakeConnection({ threads: [] });
   const subscription = { dispose() {} } as RunStreamSubscription;
