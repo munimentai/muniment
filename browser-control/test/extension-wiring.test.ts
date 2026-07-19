@@ -86,9 +86,23 @@ describe('MV3 session wiring', () => {
     vi.stubGlobal('chrome', chrome);
     vi.resetModules();
     const worker = await import('../src/extension/service-worker.js');
+    const { authorizedRelayProvider } = await import('../src/extension/relay-provider.js');
     await chrome.settle();
-    const { transport } = chrome.relay(worker.sessionLifecycle); transport.event('muniment.connect'); await chrome.settle();
+    const transport = new FakeRelayTransport();
+    authorizedRelayProvider.accept(new RelayConnection(transport));
+    transport.event('muniment.connect'); await chrome.settle();
     expect(chrome.live()).toHaveLength(1);
+    const id = chrome.live()[0]!.id!;
+    chrome.records.delete(id); chrome.removed.emit(id); await chrome.settle();
+    expect(transport.disconnected).toBe(true); expect(chrome.live()).toHaveLength(0);
+
+    const replacement = new FakeRelayTransport();
+    authorizedRelayProvider.accept(new RelayConnection(replacement));
+    replacement.event('muniment.connect'); await chrome.settle();
+    expect(chrome.live()).toHaveLength(1);
+    replacement.close(); await chrome.settle();
+    expect(chrome.live()).toHaveLength(0);
+    await worker.sessionLifecycle.teardown();
     vi.unstubAllGlobals();
   });
 
