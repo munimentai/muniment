@@ -296,6 +296,9 @@ jobs:
           if [ "$PLATFORM" = "linux" ]; then
             cmd='sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends libasound2-dev && cargo check --manifest-path src-tauri/Cargo.toml --locked --all-targets'
           fi
+          if [ "$PLATFORM" = "windows" ]; then
+            cmd='cargo test --manifest-path src-tauri/core/Cargo.toml --locked --test browser_control_windows_transport && cargo check --manifest-path src-tauri/Cargo.toml --locked --all-targets'
+          fi
           # macOS ships a universal app — preflight the arm64 cross slice too.
           if [ "$PLATFORM" = "macos" ]; then
             cmd='rustup target add aarch64-apple-darwin && cargo check --manifest-path src-tauri/Cargo.toml --locked --all-targets --target aarch64-apple-darwin'
