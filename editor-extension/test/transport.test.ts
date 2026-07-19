@@ -5,6 +5,7 @@ import {
   AttachFrameDecoder,
   AttachTransportError,
   MAX_FRAME_LENGTH,
+  MAX_PENDING_REQUESTS,
   connectAttach,
   encodeAttachFrame,
 } from "../src/transport";
@@ -502,6 +503,90 @@ test("rejects invalid inputs before writing and correlates concurrent requests",
   assert.deepEqual(await first, { threads: [] });
   assert.equal((await second).committedSeq, 1);
   connection.dispose();
+});
+
+test("bounds concurrent requests and releases capacity after a response", async () => {
+  const socket = new FakeSocket();
+  const connection = await authorizedConnection(socket);
+  const pending = Array.from({ length: MAX_PENDING_REQUESTS }, () => connection.listThreads());
+  const requests = socket.writes.slice(-MAX_PENDING_REQUESTS)
+    .map((frame) => new AttachFrameDecoder().push(frame)[0]);
+  const writesAtLimit = socket.writes.length;
+
+  await assert.rejects(connection.listThreads(), (error: unknown) =>
+    error instanceof AttachTransportError && error.code === "request_rejected");
+  assert.equal(socket.writes.length, writesAtLimit);
+  assert.equal(socket.destroyed, false);
+
+  socket.emit("data", encodeAttachFrame({ protocol: "muniment.attach/1",
+    request_id: requests[0].request_id, ok: true, body: { threads: [] } }));
+  assert.deepEqual(await pending[0], { threads: [] });
+  const replacement = connection.listThreads();
+  const replacementRequest = lastRequest(socket);
+  assert.equal(socket.writes.length, writesAtLimit + 1);
+  socket.emit("data", encodeAttachFrame({ protocol: "muniment.attach/1",
+    request_id: replacementRequest.request_id, ok: true, body: { threads: [] } }));
+  await replacement;
+  connection.dispose();
+  await Promise.allSettled(pending.slice(1));
+});
+
+test("bounds acknowledgement tombstones, ignores late responses, and expires them", async () => {
+  const socket = new FakeSocket();
+  const connection = await authorizedConnection(socket);
+  const runId = "00000000000000000000000000000191";
+  const subscribing = connection.streamRun(runId, 0);
+  const streamRequest = lastRequest(socket);
+  const subscriptionId = "00000000000000000000000000000190";
+  socket.emit("data", encodeAttachFrame({ protocol: "muniment.attach/1",
+    request_id: streamRequest.request_id, ok: true, body: { subscription_id: subscriptionId,
+      run_id: runId, first_available_run_seq: 1, current_run_seq: 1,
+      window: { max_events: 4, max_bytes: 4096 } } }));
+  const stream = await subscribing;
+  socket.emit("data", encodeAttachFrame({ protocol: "muniment.attach/1",
+    subscription_id: subscriptionId, event: "run.event", run_id: runId, run_seq: 1,
+    body: { event_type: "assistant.message", event_version: 1,
+      recorded_at: "2026-07-17T00:00:00Z", payload: { withheld: true } } }));
+  const acknowledging = stream.acknowledge(1);
+  const ackRequest = lastRequest(socket);
+  stream.dispose();
+  await assert.rejects(acknowledging, (error: unknown) =>
+    error instanceof AttachTransportError && error.code === "connection_closed");
+
+  const pending = Array.from({ length: MAX_PENDING_REQUESTS - 1 }, () => connection.listThreads());
+  await assert.rejects(connection.listThreads(), (error: unknown) =>
+    error instanceof AttachTransportError && error.code === "request_rejected");
+  socket.emit("data", encodeAttachFrame({ protocol: "muniment.attach/1",
+    request_id: ackRequest.request_id, ok: true,
+    body: { subscription_id: subscriptionId, through_run_seq: 1 } }));
+  assert.equal(socket.destroyed, false);
+  const afterLateResponse = connection.listThreads();
+  assert.equal(lastRequest(socket).operation, "thread.list");
+
+  connection.dispose();
+  await Promise.allSettled([...pending, afterLateResponse]);
+
+  const expirySocket = new FakeSocket();
+  const expiryConnection = await authorizedConnection(expirySocket);
+  const expiryStreamPending = expiryConnection.streamRun(runId, 0);
+  const expiryStreamRequest = lastRequest(expirySocket);
+  expirySocket.emit("data", encodeAttachFrame({ protocol: "muniment.attach/1",
+    request_id: expiryStreamRequest.request_id, ok: true, body: { subscription_id: subscriptionId,
+      run_id: runId, first_available_run_seq: 1, current_run_seq: 1,
+      window: { max_events: 4, max_bytes: 4096 } } }));
+  const expiryStream = await expiryStreamPending;
+  expirySocket.emit("data", encodeAttachFrame({ protocol: "muniment.attach/1",
+    subscription_id: subscriptionId, event: "run.event", run_id: runId, run_seq: 1,
+    body: { event_type: "assistant.message", event_version: 1,
+      recorded_at: "2026-07-17T00:00:00Z", payload: { withheld: true } } }));
+  const expiryAck = expiryStream.acknowledge(1);
+  expiryStream.dispose();
+  await assert.rejects(expiryAck);
+  await new Promise((resolve) => setTimeout(resolve, 60));
+  const afterExpiry = Array.from({ length: MAX_PENDING_REQUESTS }, () => expiryConnection.listThreads());
+  assert.equal(expirySocket.destroyed, false);
+  expiryConnection.dispose();
+  await Promise.allSettled(afterExpiry);
 });
 
 test("maps request errors without exposing server details", async () => {

@@ -7,6 +7,7 @@ import { TextDecoder } from "node:util";
 import { ATTACH_PROTOCOL, decodeAttachJson, type AttachEnvelope } from "./protocol";
 
 export const MAX_FRAME_LENGTH = 1024 * 1024;
+export const MAX_PENDING_REQUESTS = 8;
 const DEFAULT_IO_TIMEOUT_MS = 5_000;
 const DEFAULT_APPROVAL_TIMEOUT_MS = 120_000;
 
@@ -386,11 +387,12 @@ export function connectAttach(options: ConnectOptions): Promise<AttachConnection
             resolve: (envelope: AttachEnvelope) => void;
             reject: (error: AttachTransportError) => void;
             timer: NodeJS.Timeout;
+            deadline: number;
             owner?: Set<string>;
             onResponse?: (envelope: AttachEnvelope) => void;
           }>();
           const subscriptions = new Map<string, ActiveRunSubscription>();
-          const ignoredResponses = new Set<string>();
+          const ignoredResponses = new Map<string, NodeJS.Timeout>();
           const rejectPending = (error: AttachTransportError): void => {
             for (const item of pending.values()) {
               clearTimeout(item.timer);
@@ -398,11 +400,16 @@ export function connectAttach(options: ConnectOptions): Promise<AttachConnection
             }
             pending.clear();
           };
+          const clearIgnoredResponses = (): void => {
+            for (const timer of ignoredResponses.values()) clearTimeout(timer);
+            ignoredResponses.clear();
+          };
           const onTerminal = (): void => {
             capability = "";
             rejectPending(new AttachTransportError("connection_closed"));
             for (const subscription of subscriptions.values()) subscription.dispose();
             subscriptions.clear();
+            clearIgnoredResponses();
             socket.removeListener("data", onAuthorizedData);
             socket.removeListener("error", onTerminal);
             socket.removeListener("close", onTerminal);
@@ -429,7 +436,12 @@ export function connectAttach(options: ConnectOptions): Promise<AttachConnection
                   return;
                 }
                 const responseId = message.request_id as string;
-                if (ignoredResponses.delete(responseId)) continue;
+                const ignoredTimer = ignoredResponses.get(responseId);
+                if (ignoredTimer) {
+                  clearTimeout(ignoredTimer);
+                  ignoredResponses.delete(responseId);
+                  continue;
+                }
                 if (!pending.has(responseId)) {
                   closeUnexpected(new AttachTransportError("unexpected_message"));
                   return;
@@ -464,6 +476,9 @@ export function connectAttach(options: ConnectOptions): Promise<AttachConnection
             idempotent = false, owner?: Set<string>,
             onResponse?: (envelope: AttachEnvelope) => void): Promise<AttachEnvelope> => {
             if (!capability) return Promise.reject(new AttachTransportError("authorization_expired"));
+            if (pending.size + ignoredResponses.size >= MAX_PENDING_REQUESTS) {
+              return Promise.reject(new AttachTransportError("request_rejected"));
+            }
             let requestId: string;
             let idempotencyKey: string | undefined;
             try {
@@ -477,7 +492,7 @@ export function connectAttach(options: ConnectOptions): Promise<AttachConnection
                 closeUnexpected(new AttachTransportError("timeout"));
               }, ioTimeout);
               pending.set(requestId, { requestId, resolve: requestResolve, reject: requestReject,
-                timer, owner, onResponse });
+                timer, deadline: Date.now() + ioTimeout, owner, onResponse });
               owner?.add(requestId);
               try {
                 socket.write(encodeAttachFrame({
@@ -536,6 +551,7 @@ export function connectAttach(options: ConnectOptions): Promise<AttachConnection
               rejectPending(new AttachTransportError("connection_closed"));
               for (const subscription of subscriptions.values()) subscription.dispose();
               subscriptions.clear();
+              clearIgnoredResponses();
               socket.removeListener("data", onAuthorizedData);
               socket.removeListener("error", onTerminal);
               socket.removeListener("close", onTerminal);
@@ -616,7 +632,7 @@ function createRunSubscription(summary: RunStreamSummary, afterRunSeq: number,
   request: (operation: "run.cursor_ack", body: JsonBody, idempotent?: boolean,
     owner?: Set<string>) => Promise<AttachEnvelope>,
   pending: Map<string, { reject: (error: AttachTransportError) => void; timer: NodeJS.Timeout;
-    owner?: Set<string> }>, ignoredResponses: Set<string>,
+    deadline: number; owner?: Set<string> }>, ignoredResponses: Map<string, NodeJS.Timeout>,
   onDispose: () => void): ActiveRunSubscription {
   let disposed = false;
   let highest = afterRunSeq;
@@ -636,7 +652,8 @@ function createRunSubscription(summary: RunStreamSummary, afterRunSeq: number,
       if (!item) continue;
       clearTimeout(item.timer);
       pending.delete(requestId);
-      ignoredResponses.add(requestId);
+      const retention = Math.max(0, item.deadline - Date.now());
+      ignoredResponses.set(requestId, setTimeout(() => ignoredResponses.delete(requestId), retention));
       item.reject(new AttachTransportError("connection_closed"));
     }
     acknowledgementRequests.clear();
@@ -651,7 +668,8 @@ function createRunSubscription(summary: RunStreamSummary, afterRunSeq: number,
       if (!item) continue;
       clearTimeout(item.timer);
       pending.delete(requestId);
-      ignoredResponses.add(requestId);
+      const retention = Math.max(0, item.deadline - Date.now());
+      ignoredResponses.set(requestId, setTimeout(() => ignoredResponses.delete(requestId), retention));
       item.reject(new AttachTransportError("connection_closed"));
     }
     acknowledgementRequests.clear();
