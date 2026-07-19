@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { HEARTBEAT_INTERVAL_MS, LoopbackRelayAdapter, PAIRING_PROTOCOL, type RelayWebSocket } from '../src/extension/loopback-relay.js';
+import { HEARTBEAT_ACK_TIMEOUT_MS, HEARTBEAT_INTERVAL_MS, LoopbackRelayAdapter, PAIRING_PROTOCOL, type RelayWebSocket } from '../src/extension/loopback-relay.js';
 import { AuthorizedRelayProvider } from '../src/extension/relay-provider.js';
 
 type SocketEvent = 'open' | 'message' | 'error' | 'close';
@@ -103,14 +103,53 @@ describe('loopback relay handoff', () => {
     sockets[1]!.emit('open'); expect(accepted).toHaveBeenCalledOnce();
   });
 
-  it('keeps the worker alive inside 30 seconds and terminates on heartbeat failure without reconnecting', () => {
+  it.each(['connecting', 'open'] as const)('revokes a %s relay before rejecting an invalid superseding handoff', state => {
+    const { provider, sockets, calls, adapter } = setup(); const accepted = vi.fn(); provider.subscribe(accepted);
+    adapter.accept({ endpoint: 'ws://127.0.0.1:1/a', token: 'first' });
+    if (state === 'open') sockets[0]!.emit('open');
+    expect(adapter.accept({ endpoint: 'ws://localhost:2/b', token: 'second' })).toBe(false);
+    expect(sockets[0]!.closes).toEqual([[1000, 'Relay revoked']]);
+    expect(calls).toHaveLength(1);
+    sockets[0]!.emit('open');
+    expect(accepted).toHaveBeenCalledTimes(state === 'open' ? 1 : 0);
+  });
+
+  it.each(['connecting', 'open'] as const)('revokes a %s relay before rejecting an empty-token superseding handoff', state => {
+    const { provider, sockets, calls, adapter } = setup(); const accepted = vi.fn(); provider.subscribe(accepted);
+    adapter.accept({ endpoint: 'ws://127.0.0.1:1/a', token: 'first' });
+    if (state === 'open') sockets[0]!.emit('open');
+    expect(adapter.accept({ endpoint: 'ws://127.0.0.1:2/b', token: '' })).toBe(false);
+    expect(sockets[0]!.closes).toEqual([[1000, 'Relay revoked']]);
+    expect(calls).toHaveLength(1);
+    sockets[0]!.emit('open');
+    expect(accepted).toHaveBeenCalledTimes(state === 'open' ? 1 : 0);
+  });
+
+  it('keeps the worker alive inside 30 seconds and terminates on heartbeat failure without reconnecting', async () => {
     vi.useFakeTimers();
     const { provider, sockets, calls, adapter } = setup(); const accepted = vi.fn(); provider.subscribe(accepted);
     adapter.accept({ endpoint: 'ws://127.0.0.1:1/a', token: 'secret' }); sockets[0]!.emit('open');
+    await vi.advanceTimersByTimeAsync(HEARTBEAT_INTERVAL_MS);
+    expect(sockets[0]!.sent).toEqual([JSON.stringify({ id: 1, method: 'muniment.heartbeat' })]);
+    sockets[0]!.emit('message', JSON.stringify({ id: 1, result: null }));
+    await vi.advanceTimersByTimeAsync(HEARTBEAT_INTERVAL_MS);
+    expect(sockets[0]!.sent).toHaveLength(2);
+    sockets[0]!.emit('message', JSON.stringify({ id: 2, result: null }));
+    sockets[0]!.failSend = true; await vi.advanceTimersByTimeAsync(HEARTBEAT_INTERVAL_MS);
+    expect(sockets[0]!.closes).toEqual([[1011, 'Relay transport failure']]);
+    vi.advanceTimersByTime(HEARTBEAT_INTERVAL_MS * 2);
+    expect(calls).toHaveLength(1); expect(vi.getTimerCount()).toBe(0);
+    vi.useRealTimers();
+  });
+
+  it('terminates when heartbeat sends succeed but no acknowledgement arrives', () => {
+    vi.useFakeTimers();
+    const { provider, sockets, calls, adapter } = setup(); provider.subscribe(vi.fn());
+    adapter.accept({ endpoint: 'ws://127.0.0.1:1/a', token: 'secret' }); sockets[0]!.emit('open');
     vi.advanceTimersByTime(HEARTBEAT_INTERVAL_MS);
-    expect(sockets[0]!.sent).toEqual([JSON.stringify({ method: 'muniment.heartbeat' })]);
-    sockets[0]!.failSend = true; vi.advanceTimersByTime(HEARTBEAT_INTERVAL_MS);
-    expect(sockets[0]!.closes).toEqual([[1011, 'Heartbeat failed']]);
+    expect(sockets[0]!.sent).toEqual([JSON.stringify({ id: 1, method: 'muniment.heartbeat' })]);
+    vi.advanceTimersByTime(HEARTBEAT_ACK_TIMEOUT_MS);
+    expect(sockets[0]!.closes).toEqual([[1011, 'Heartbeat acknowledgement timed out']]);
     vi.advanceTimersByTime(HEARTBEAT_INTERVAL_MS * 2);
     expect(calls).toHaveLength(1); expect(vi.getTimerCount()).toBe(0);
     vi.useRealTimers();

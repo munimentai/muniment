@@ -3,6 +3,7 @@ import type { AuthorizedRelayProvider } from './relay-provider.js';
 
 export const PAIRING_PROTOCOL = 'muniment-pairing';
 export const HEARTBEAT_INTERVAL_MS = 20_000;
+export const HEARTBEAT_ACK_TIMEOUT_MS = 9_000;
 
 export interface RelayPairingHandoff {
   endpoint: string;
@@ -26,11 +27,15 @@ export type RelayWebSocketFactory = (endpoint: string, protocols: string[]) => R
 interface TimerApi {
   setInterval(callback: () => void, delay: number): ReturnType<typeof setInterval>;
   clearInterval(timer: ReturnType<typeof setInterval>): void;
+  setTimeout(callback: () => void, delay: number): ReturnType<typeof setTimeout>;
+  clearTimeout(timer: ReturnType<typeof setTimeout>): void;
 }
 
 const nativeTimers: TimerApi = {
   setInterval: (callback, delay) => setInterval(callback, delay),
   clearInterval: timer => clearInterval(timer),
+  setTimeout: (callback, delay) => setTimeout(callback, delay),
+  clearTimeout: timer => clearTimeout(timer),
 };
 
 /** One-shot, in-memory bridge from a desktop pairing handoff to an authorized relay. */
@@ -44,10 +49,10 @@ export class LoopbackRelayAdapter {
   ) {}
 
   accept(handoff: RelayPairingHandoff): boolean {
+    this.close();
     if (!isPairingHandoff(handoff) || !isNumericLoopbackWebSocket(handoff.endpoint))
       return false;
 
-    this.close();
     let token: string | undefined = handoff.token;
     let socket: RelayWebSocket;
     try {
@@ -77,6 +82,8 @@ class SocketAttempt implements RelayTransport {
   readonly #messageListeners = new Set<(message: string | Uint8Array) => void>();
   readonly #closeListeners = new Set<() => void>();
   #heartbeat: ReturnType<typeof setInterval> | undefined;
+  #heartbeatDeadline: ReturnType<typeof setTimeout> | undefined;
+  #relay: RelayConnection | undefined;
   #terminal = false;
   #opened = false;
 
@@ -130,14 +137,22 @@ class SocketAttempt implements RelayTransport {
     }
     this.#opened = true;
     this.#heartbeat = this.timers.setInterval(() => {
-      try {
-        this.socket.send(JSON.stringify({ method: 'muniment.heartbeat' }));
-      } catch {
-        this.close(1011, 'Heartbeat failed');
-      }
+      const relay = this.#relay;
+      if (!relay || this.#heartbeatDeadline !== undefined)
+        return;
+      this.#heartbeatDeadline = this.timers.setTimeout(
+        () => this.close(1011, 'Heartbeat acknowledgement timed out'),
+        HEARTBEAT_ACK_TIMEOUT_MS,
+      );
+      void relay.send('muniment.heartbeat').then(
+        () => this.#clearHeartbeatDeadline(),
+        () => this.close(1011, 'Heartbeat failed'),
+      );
     }, HEARTBEAT_INTERVAL_MS);
     try {
-      this.provider.accept(new RelayConnection(this));
+      const relay = new RelayConnection(this);
+      this.#relay = relay;
+      this.provider.accept(relay);
     } catch {
       this.close(1011, 'Relay composition failed');
     }
@@ -174,6 +189,8 @@ class SocketAttempt implements RelayTransport {
       this.timers.clearInterval(this.#heartbeat);
       this.#heartbeat = undefined;
     }
+    this.#clearHeartbeatDeadline();
+    this.#relay = undefined;
     this.socket.removeEventListener('open', this.#onOpen);
     this.socket.removeEventListener('message', this.#onMessage);
     this.socket.removeEventListener('error', this.#onError);
@@ -183,6 +200,13 @@ class SocketAttempt implements RelayTransport {
       listener();
     this.#closeListeners.clear();
     this.#messageListeners.clear();
+  }
+
+  #clearHeartbeatDeadline(): void {
+    if (this.#heartbeatDeadline === undefined)
+      return;
+    this.timers.clearTimeout(this.#heartbeatDeadline);
+    this.#heartbeatDeadline = undefined;
   }
 }
 
