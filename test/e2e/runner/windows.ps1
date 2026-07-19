@@ -22,6 +22,8 @@ $installDirectory = $null
 $productCode = $null
 $handlerKey = "HKCU:\Software\Classes\muniment-e2e-https"
 $httpsKey = "HKCU:\Software\Classes\https"
+$testRegistration = $null
+$testProcess = $null
 
 function Invoke-BoundedProcess([string]$File, [string]$Arguments, [int]$TimeoutSeconds, [string]$Log) {
   $process = Start-Process $File -ArgumentList $Arguments -PassThru -RedirectStandardOutput $Log -RedirectStandardError ($Log + ".err")
@@ -33,6 +35,12 @@ function Invoke-BoundedProcess([string]$File, [string]$Arguments, [int]$TimeoutS
 }
 
 function Get-ProductRegistration {
+  if ($env:MUNIMENT_E2E_FINALIZER_TEST_MODE -eq "1") {
+    if ($testRegistration -and (Test-Path -LiteralPath $testRegistration)) {
+      return @([pscustomobject]@{ PSChildName = "test-product" })
+    }
+    return @()
+  }
   $roots = @(
     "HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall",
     "HKCU:\Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall"
@@ -43,6 +51,7 @@ function Get-ProductRegistration {
 }
 
 function Invoke-Cleanup([string]$Name, [scriptblock]$Action) {
+  $phaseStatus = 0
   try {
     if ($env:MUNIMENT_E2E_FINALIZER_TEST_LEDGER) { Add-Content $env:MUNIMENT_E2E_FINALIZER_TEST_LEDGER $Name }
     if ($env:MUNIMENT_E2E_FINALIZER_TEST_FAIL -eq $Name) {
@@ -53,12 +62,17 @@ function Invoke-Cleanup([string]$Name, [scriptblock]$Action) {
       }
       throw "injected $Name failure"
     }
-    $testFilePhases = @("redact-artifacts", "remove-raw", "remove-msi", "remove-auth-url", "publish-artifacts", "suppress-artifacts")
+    $testFilePhases = @("uninstall", "registration-gone", "installed-files-gone", "processes-gone", "redact-artifacts", "remove-raw", "remove-msi", "remove-auth-url", "publish-artifacts", "suppress-artifacts")
     if ($env:MUNIMENT_E2E_FINALIZER_TEST_MODE -eq "1" -and $Name -notin $testFilePhases) { return }
     if ($cleanupLog) { & $Action *>> $cleanupLog; Add-Content $cleanupLog "$Name`: ok" } else { & $Action | Out-Null }
   } catch {
+    $phaseStatus = 1
     if ($cleanupLog) { Add-Content $cleanupLog "$Name`: failed" -ErrorAction SilentlyContinue }
     $script:cleanupStatus = 1
+  } finally {
+    if ($env:MUNIMENT_E2E_FINALIZER_TEST_STATUS_LEDGER) {
+      Add-Content $env:MUNIMENT_E2E_FINALIZER_TEST_STATUS_LEDGER "$Name`t$phaseStatus" -ErrorAction SilentlyContinue
+    }
   }
 }
 
@@ -82,14 +96,21 @@ function Finalize-Run {
       $registration = @(Get-ProductRegistration)
       if ($registration.Count -gt 1) { throw "product is registered more than once" }
       $code = if ($registration.Count -eq 1) { $registration[0].PSChildName } else { $productCode }
-      if ($code) { Invoke-BoundedProcess "msiexec.exe" "/x $code /qn /norestart" 180 (Join-Path $raw "uninstaller.log") }
+      if ($env:MUNIMENT_E2E_FINALIZER_TEST_MODE -eq "1") {
+        if ($env:MUNIMENT_E2E_FINALIZER_TEST_REMAIN_REGISTRATION -ne "1" -and $testRegistration) { Remove-Item $testRegistration -Force }
+        if ($env:MUNIMENT_E2E_FINALIZER_TEST_REMAIN_FILES -ne "1" -and $installDirectory) { Remove-Item $installDirectory -Recurse -Force }
+      } elseif ($code) { Invoke-BoundedProcess "msiexec.exe" "/x $code /qn /norestart" 180 (Join-Path $raw "uninstaller.log") }
     }
   }
   Invoke-Cleanup "registration-gone" { if (@(Get-ProductRegistration).Count -ne 0) { throw "product registration remains" } }
   Invoke-Cleanup "installed-files-gone" { if ($installDirectory -and (Test-Path -LiteralPath $installDirectory)) { throw "installed files remain" } }
   Invoke-Cleanup "remove-auth-handler" { Remove-AuthHandler }
   Invoke-Cleanup "remove-state" { if ($stateRoot) { Remove-Item $stateRoot -Recurse -Force -ErrorAction SilentlyContinue } }
-  Invoke-Cleanup "processes-gone" { if (Get-Process muniment, tauri-driver, msedgedriver -ErrorAction SilentlyContinue) { throw "test process remains" } }
+  Invoke-Cleanup "processes-gone" {
+    if ($env:MUNIMENT_E2E_FINALIZER_TEST_MODE -eq "1") {
+      if ($testProcess -and (Test-Path -LiteralPath $testProcess)) { throw "test process remains" }
+    } elseif (Get-Process muniment, tauri-driver, msedgedriver -ErrorAction SilentlyContinue) { throw "test process remains" }
+  }
   if ($cleanupLog -and $raw) { Copy-Item $cleanupLog (Join-Path $raw "cleanup.log") -Force -ErrorAction SilentlyContinue }
   Invoke-Cleanup "redact-artifacts" {
     if (-not $raw -or -not (Test-Path $raw)) { throw "raw staging is unavailable" }
@@ -124,7 +145,22 @@ try {
   if ($env:MUNIMENT_E2E_FINALIZER_TEST_SETUP_FAIL -eq "before-directories") { throw "injected setup failure" }
   New-Item -ItemType Directory -Force $raw, $stateRoot | Out-Null
   New-Item -ItemType File -Force $cleanupLog | Out-Null
-  if ($env:MUNIMENT_E2E_FINALIZER_TEST_MODE -eq "1") { $ready = $true; $installAttempted = $true; return }
+  if ($env:MUNIMENT_E2E_FINALIZER_TEST_MODE -eq "1") {
+    $installDirectory = Join-Path $runRoot "installed"
+    $testRegistration = Join-Path $runRoot "registration"
+    $testProcess = Join-Path $runRoot "process"
+    New-Item -ItemType Directory -Force $installDirectory | Out-Null
+    New-Item -ItemType File -Force $testRegistration | Out-Null
+    if ($env:MUNIMENT_E2E_FINALIZER_TEST_REMAIN_PROCESS -eq "1") { New-Item -ItemType File -Force $testProcess | Out-Null }
+    $ready = $true
+    $installAttempted = $true
+    return
+  }
+
+  & npm.cmd ci --no-audit --no-fund *>> $installerLog
+  if ($LASTEXITCODE -ne 0) { throw "npm dependency installation failed" }
+  & npm.cmd test *>> $installerLog
+  if ($LASTEXITCODE -ne 0) { throw "Windows contract tests failed" }
 
   $sha = $env:MUNIMENT_E2E_SOURCE_SHA
   if ($sha -notmatch '^[0-9a-f]{40}$') { throw "invalid source SHA" }
@@ -169,8 +205,6 @@ try {
   }
   if (-not $installDirectory) { $installDirectory = Split-Path $appBinary -Parent }
 
-  & npm.cmd ci --no-audit --no-fund *>> $installerLog
-  if ($LASTEXITCODE -ne 0) { throw "npm dependency installation failed" }
   if (-not (Get-Command tauri-driver.exe -ErrorAction SilentlyContinue)) {
     & cargo install tauri-driver --version 2.0.5 --locked *>> $installerLog
     if ($LASTEXITCODE -ne 0) { throw "tauri-driver installation failed" }

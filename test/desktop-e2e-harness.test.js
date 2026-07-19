@@ -64,6 +64,22 @@ describe('Windows auth URL capture seam', () => {
     expect(launcher).toContain('capture-auth-url.mjs')
     expect(launcher).toContain('MUNIMENT_E2E_AUTH_URL_FILE')
   })
+  it.skipIf(process.platform !== 'win32')('invokes browser-launcher.ps1 and preserves an existing capture on rejection', () => {
+    const directory = temp(); const destination = path.join(directory, 'auth-url')
+    const invoke = (candidate) => spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', path.join(root, 'test/e2e/support/browser-launcher.ps1'), candidate], {
+      encoding: 'utf8', env: { ...process.env, MUNIMENT_E2E_AUTH_URL_FILE: destination },
+    })
+    expect(invoke('https://auth.example.test/sign-in?state=abc').status).toBe(0)
+    expect(fs.readFileSync(destination, 'utf8')).toBe('https://auth.example.test/sign-in?state=abc')
+    expect(invoke('http://auth.example.test/sign-in').status).not.toBe(0)
+    expect(fs.readFileSync(destination, 'utf8')).toBe('https://auth.example.test/sign-in?state=abc')
+    expect(invoke('https://user:secret@auth.example.test/sign-in').status).not.toBe(0)
+    expect(fs.readFileSync(destination, 'utf8')).toBe('https://auth.example.test/sign-in?state=abc')
+    const missingDestination = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', path.join(root, 'test/e2e/support/browser-launcher.ps1'), 'https://auth.example.test'], {
+      encoding: 'utf8', env: { ...process.env, MUNIMENT_E2E_AUTH_URL_FILE: '' },
+    })
+    expect(missingDestination.status).not.toBe(0)
+  })
 })
 
 describe('Windows finalizer contract', () => {
@@ -79,7 +95,7 @@ describe('Windows finalizer contract', () => {
     expect(phases.indexOf('installed-files-gone')).toBeLessThan(phases.indexOf('remove-state'))
     expect(finalizer).toMatch(/registration-gone[^\n]+Get-ProductRegistration/)
     expect(finalizer).toMatch(/installed-files-gone[^\n]+Test-Path -LiteralPath \$installDirectory/)
-    expect(finalizer).toMatch(/processes-gone[^\n]+Get-Process muniment, tauri-driver, msedgedriver/)
+    expect(finalizer).toMatch(/processes-gone[\s\S]+Get-Process muniment, tauri-driver, msedgedriver/)
     expect(finalizer).toMatch(/publicationStatus = \$cleanupStatus[\s\S]+cleanupStatus -ne \$publicationStatus[\s\S]+suppress-artifacts/)
   })
 
@@ -90,16 +106,39 @@ describe('Windows finalizer contract', () => {
     expect(runner).toMatch(/finally \{\s*Finalize-Run\s*\}/)
   })
 
-  const runWindowsFinalizer = (failed = '', setupFail = '') => {
-    const directory = temp(); const ledger = path.join(directory, 'ledger'); const artifacts = path.join(directory, 'artifacts')
+  const runWindowsFinalizer = (failed = '', setupFail = '', extraEnv = {}) => {
+    const directory = temp(); const ledger = path.join(directory, 'ledger'); const statusLedger = path.join(directory, 'status-ledger'); const artifacts = path.join(directory, 'artifacts')
     fs.mkdirSync(artifacts)
     fs.writeFileSync(path.join(artifacts, 'stale-or-partial'), 'unsafe')
     const result = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', runnerPath], {
       encoding: 'utf8',
-      env: { ...process.env, TEMP: directory, TMP: directory, DCI_ARTIFACTS_DIR: artifacts, MUNIMENT_E2E_FINALIZER_TEST_MODE: '1', MUNIMENT_E2E_FINALIZER_TEST_LEDGER: ledger, MUNIMENT_E2E_FINALIZER_TEST_FAIL: failed, MUNIMENT_E2E_FINALIZER_TEST_SETUP_FAIL: setupFail },
+      env: { ...process.env, TEMP: directory, TMP: directory, DCI_ARTIFACTS_DIR: artifacts, MUNIMENT_E2E_FINALIZER_TEST_MODE: '1', MUNIMENT_E2E_FINALIZER_TEST_LEDGER: ledger, MUNIMENT_E2E_FINALIZER_TEST_STATUS_LEDGER: statusLedger, MUNIMENT_E2E_FINALIZER_TEST_FAIL: failed, MUNIMENT_E2E_FINALIZER_TEST_SETUP_FAIL: setupFail, ...extraEnv },
     })
-    return { result, artifacts, directory, invoked: fs.existsSync(ledger) ? fs.readFileSync(ledger, 'utf8').trim().split(/\r?\n/) : [] }
+    const statuses = fs.existsSync(statusLedger) ? Object.fromEntries(fs.readFileSync(statusLedger, 'utf8').trim().split(/\r?\n/).map((entry) => entry.split('\t'))) : {}
+    return { result, artifacts, directory, statuses, invoked: fs.existsSync(ledger) ? fs.readFileSync(ledger, 'utf8').trim().split(/\r?\n/) : [] }
   }
+
+  const runWindowsAbsenceFailure = (variable) => runWindowsFinalizer('', '', { [variable]: '1' })
+
+  it.skipIf(process.platform !== 'win32')('passes all lifecycle absence actions after fixture uninstall', () => {
+    const { result, statuses } = runWindowsFinalizer()
+    expect(result.status).toBe(0)
+    expect(statuses['registration-gone']).toBe('0')
+    expect(statuses['installed-files-gone']).toBe('0')
+    expect(statuses['processes-gone']).toBe('0')
+  })
+
+  it.skipIf(process.platform !== 'win32').each([
+    ['MUNIMENT_E2E_FINALIZER_TEST_REMAIN_REGISTRATION', 'registration-gone'],
+    ['MUNIMENT_E2E_FINALIZER_TEST_REMAIN_FILES', 'installed-files-gone'],
+    ['MUNIMENT_E2E_FINALIZER_TEST_REMAIN_PROCESS', 'processes-gone'],
+  ])('fails the real %s fixture absence action and continues cleanup', (variable, phase) => {
+    const { result, invoked, statuses } = runWindowsAbsenceFailure(variable)
+    expect(result.status).not.toBe(0)
+    expect(statuses[phase]).toBe('1')
+    expect(invoked.indexOf('redact-artifacts')).toBeGreaterThan(invoked.indexOf(phase))
+    expect(invoked).toContain('publish-artifacts')
+  })
 
   it.skipIf(process.platform !== 'win32').each(injectablePhases)('continues every Windows cleanup step after injected %s failure', (failed) => {
     const { result, invoked } = runWindowsFinalizer(failed)
