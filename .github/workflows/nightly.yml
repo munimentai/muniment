@@ -216,9 +216,8 @@ jobs:
           umask 077
           key="$RUNNER_TEMP/desktop_ci_key"
           output="$RUNNER_TEMP/desktop_ci_output"
-          payload="$RUNNER_TEMP/desktop_ci_artifacts"
           printf '%s' "$DESKTOP_CI_SSH_KEY" >"$key"
-          trap 'rm -f "$key" "$output" "$payload"' EXIT
+          trap 'rm -f "$key" "$output"' EXIT
 
           cmd='bash test/e2e/runner/linux.sh'
           remote="sudo desktop-ci linux --repo 'https://github.com/${REPOSITORY}.git' --ref '$SOURCE_SHA' --cmd '$cmd' --env-stdin --memory 8192 --build-timeout 2400 --collect-artifacts"
@@ -235,17 +234,12 @@ jobs:
           run_status=$?
           set -e
 
-          # desktop-ci's published contract returns a base64 tar payload between
-          # these markers. Keep its potentially sensitive complete output out of
-          # the Actions log and upload only the guest-redacted payload.
-          awk '{ line=tolower($0) }
-               index(line,"desktop") && index(line,"artifact") && index(line,"begin") { inside=1; next }
-               index(line,"desktop") && index(line,"artifact") && index(line,"end") { inside=0 }
-               inside' "$output" >"$payload"
-          test -s "$payload" || { echo 'desktop-ci returned no artifact payload' >&2; exit 1; }
-          mkdir -p "$RUNNER_TEMP/muniment-e2e-artifacts"
-          base64 -d "$payload" | tar -xz -C "$RUNNER_TEMP/muniment-e2e-artifacts"
-          printf 'status=%s\n' "$run_status" >>"$GITHUB_OUTPUT"
+          # Require the contract's one exact, ordered marker pair, strict base64,
+          # and a regular-file/directory-only archive before extracting.
+          extract_status=0
+          bash test/e2e/support/extract-artifacts.sh "$output" "$RUNNER_TEMP/muniment-e2e-artifacts" || extract_status=$?
+          if (( run_status != 0 || extract_status != 0 )); then final_status=1; else final_status=0; fi
+          printf 'status=%s\n' "$final_status" >>"$GITHUB_OUTPUT"
 
       - name: Upload successful diagnostics
         if: always() && steps.e2e.outputs.status == '0'

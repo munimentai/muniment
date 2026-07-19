@@ -8,7 +8,7 @@ if (!artifactDir || !path.isAbsolute(artifactDir)) throw new Error('MUNIMENT_E2E
 
 export const config = {
   runner: 'local',
-  specs: ['./specs/**/*.spec.js'],
+  specs: [process.env.MUNIMENT_E2E_CLEANUP_ONLY === '1' ? './specs/cleanup.spec.js' : './specs/real-sign-in.spec.js'],
   maxInstances: 1,
   capabilities: [{ browserName: 'wry' }],
   logLevel: 'info',
@@ -24,7 +24,4 @@ export const config = {
     captureFrontendLogs: true,
     captureBackendLogs: true,
   }]],
-  afterTest: async (_test, _context, result) => {
-    if (!result.passed) await browser.saveScreenshot(path.join(artifactDir, 'failure-current-window.png'))
-  },
 }

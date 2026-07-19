@@ -14,6 +14,44 @@ const tokenPatterns = [
   /\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b/g,
 ]
 
+const safeScreenshots = new Set(['01-signed-out.png', '02-authenticated.png'])
+function inspectScreenshot(input) {
+  const data = fs.readFileSync(input)
+  if (data.length < 33 || !data.subarray(0, 8).equals(Buffer.from([137,80,78,71,13,10,26,10]))) throw new Error('unsafe screenshot format')
+  // Boundary captures are element crops. Reject textual metadata and any
+  // injected value embedded in the binary; only structural PNG chunks pass.
+  for (const secret of secrets) if (data.includes(Buffer.from(secret))) throw new Error('sensitive screenshot content')
+  let offset = 8
+  const allowed = new Set(['IHDR', 'PLTE', 'IDAT', 'IEND', 'tRNS'])
+  while (offset + 12 <= data.length) {
+    const length = data.readUInt32BE(offset); const type = data.toString('ascii', offset + 4, offset + 8)
+    if (!allowed.has(type) || offset + 12 + length > data.length) throw new Error('unsafe screenshot metadata')
+    offset += 12 + length
+    if (type === 'IEND') {
+      if (offset !== data.length) throw new Error('unsafe screenshot trailing data')
+      return
+    }
+  }
+  throw new Error('truncated screenshot')
+}
+
+// Inspect the complete source set before creating the destination. A known
+// credential form is evidence the capture boundary failed, not something safe
+// to paper over after collection.
+for (const entry of fs.readdirSync(source, { withFileTypes: true })) {
+  if (!entry.isFile()) continue
+  const input = path.join(source, entry.name)
+  if (/\.png$/i.test(entry.name)) {
+    if (!safeScreenshots.has(entry.name)) throw new Error('unapproved screenshot')
+    inspectScreenshot(input)
+  } else {
+    const text = fs.readFileSync(input, 'utf8')
+    if (secrets.some((secret) => text.includes(secret)) || tokenPatterns.some((pattern) => { pattern.lastIndex = 0; return pattern.test(text) })) {
+      throw new Error('artifact source scan failed: sensitive-value category detected')
+    }
+  }
+}
+
 fs.mkdirSync(destination, { recursive: true, mode: 0o700 })
 for (const entry of fs.readdirSync(source, { withFileTypes: true })) {
   if (!entry.isFile()) continue
