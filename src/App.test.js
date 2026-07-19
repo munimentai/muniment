@@ -85,13 +85,18 @@ afterEach(() => cleanup())
 
 describe('voice dictation', () => {
   it('starts on primary pointer down and stops on release while preserving transcript', async () => {
+    let stopping = false
     invoke.mockImplementation(async (command) => {
       if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
       if (command === 'chat_history') return []
       if (command === 'auth_entitlement_snapshot') return snapshot()
       if (command === 'auth_devices') return []
       if (command === 'dictation_start') return { state: 'running' }
-      if (command === 'dictation_stop') return { state: 'stopped' }
+      if (command === 'dictation_stop') {
+        stopping = true
+        return { state: 'running' }
+      }
+      if (command === 'dictation_status' && stopping) return { state: 'stopped' }
       throw new Error(`unexpected command: ${command}`)
     })
     render(App)
@@ -108,6 +113,93 @@ describe('voice dictation', () => {
     expect(composer).toHaveValue('Before after')
     expect(invoke.mock.calls.filter(([command]) => command === 'dictation_start')).toHaveLength(1)
     expect(invoke.mock.calls.filter(([command]) => command === 'dictation_stop')).toHaveLength(1)
+  })
+
+  it('cancels a primary pointer capture, restores the snapshot, and focuses the composer', async () => {
+    let stopping = false
+    invoke.mockImplementation(async (command) => {
+      if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
+      if (command === 'chat_history') return []
+      if (command === 'auth_entitlement_snapshot') return snapshot()
+      if (command === 'auth_devices') return []
+      if (command === 'dictation_start') return { state: 'running' }
+      if (command === 'dictation_stop') {
+        stopping = true
+        return { state: 'running' }
+      }
+      if (command === 'dictation_status' && stopping) return { state: 'stopped' }
+      throw new Error(`unexpected command: ${command}`)
+    })
+    render(App)
+    const composer = await screen.findByPlaceholderText('Ask anything')
+    await fireEvent.input(composer, { target: { value: 'Exact draft  ' } })
+    const voice = screen.getByRole('button', { name: 'Voice' })
+
+    await fireEvent.pointerDown(voice, { button: 0, pointerId: 7 })
+    dictationListener({ payload: { type: 'transcript', text: 'temporary' } })
+    await fireEvent.pointerCancel(voice, { pointerId: 7 })
+
+    expect(composer).toHaveValue('Exact draft  ')
+    expect(composer).toHaveFocus()
+    expect(invoke.mock.calls.filter(([command]) => command === 'dictation_stop')).toHaveLength(1)
+    dictationListener({ payload: { type: 'transcript', text: 'late' } })
+    expect(composer).toHaveValue('Exact draft  ')
+    await waitFor(() => expect(voice).toHaveAttribute('aria-pressed', 'false'))
+  })
+
+  it('ignores an out-of-order status after Escape and accepts a later capture', async () => {
+    let resolveStaleStatus
+    let starts = 0
+    let stops = 0
+    let statusCalls = 0
+    invoke.mockImplementation(async (command) => {
+      if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
+      if (command === 'chat_history') return []
+      if (command === 'auth_entitlement_snapshot') return snapshot()
+      if (command === 'auth_devices') return []
+      if (command === 'dictation_start') {
+        starts += 1
+        return { state: 'running' }
+      }
+      if (command === 'dictation_stop') {
+        stops += 1
+        return { state: 'running' }
+      }
+      if (command === 'dictation_status') {
+        statusCalls += 1
+        if (statusCalls === 1) return new Promise((resolve) => { resolveStaleStatus = resolve })
+        return { state: 'stopped' }
+      }
+      throw new Error(`unexpected command: ${command}`)
+    })
+    render(App)
+    const composer = await screen.findByPlaceholderText('Ask anything')
+    await fireEvent.input(composer, { target: { value: 'Snapshot' } })
+    const voice = screen.getByRole('button', { name: 'Voice' })
+
+    await fireEvent.pointerDown(voice, { button: 0, pointerId: 1 })
+    dictationListener({ payload: { type: 'transcript', text: 'temporary' } })
+    await waitFor(() => expect(statusCalls).toBe(1))
+    await fireEvent.keyDown(document, { key: 'Escape' })
+    expect(composer).toHaveValue('Snapshot')
+    expect(composer).toHaveFocus()
+
+    dictationListener({ payload: { type: 'transcript', text: 'during stop' } })
+    expect(composer).toHaveValue('Snapshot')
+    await waitFor(() => expect(statusCalls).toBe(2))
+    await waitFor(() => expect(voice).toHaveAttribute('aria-pressed', 'false'))
+    resolveStaleStatus({ state: 'running' })
+    await Promise.resolve()
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    expect(voice).toHaveAttribute('aria-pressed', 'false')
+    expect(composer).toHaveValue('Snapshot')
+    await fireEvent.pointerDown(voice, { button: 0, pointerId: 2 })
+    expect(starts).toBe(2)
+    expect(stops).toBe(1)
+    dictationListener({ payload: { type: 'transcript', text: 'accepted' } })
+    await waitFor(() => expect(composer).toHaveValue('Snapshot accepted'))
+    await fireEvent.pointerUp(voice, { pointerId: 2 })
   })
 
   it.each([' ', 'Enter'])('supports a %s key hold without synthesized-click duplicates', async (key) => {

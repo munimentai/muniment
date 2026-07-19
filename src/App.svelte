@@ -42,6 +42,7 @@
   let dictation = $state({ state: 'idle' })
   let dictationError = $state('')
   let dictationTimer
+  let dictationPollEpoch = 0
   let dictationUnlisten
   let dictationCommandPending = $state(false)
   let dictationRequested = false
@@ -59,6 +60,11 @@
     dictationTimer = undefined
   }
 
+  function invalidateDictationPolls() {
+    dictationPollEpoch += 1
+    stopDictationPolling()
+  }
+
   function dictationBusy() {
     return dictationCommandPending || isDictationActive(dictation)
   }
@@ -73,19 +79,24 @@
 
   function pollDictation() {
     stopDictationPolling()
+    const epoch = dictationPollEpoch
     dictationTimer = setTimeout(async () => {
-      if (destroyed || !isDictationActive(dictation)) return
+      if (destroyed || epoch !== dictationPollEpoch || !isDictationActive(dictation)) return
       try {
-        applyDictationStatus(await tauri.invoke('dictation_status'))
+        const status = await tauri.invoke('dictation_status')
+        if (destroyed || epoch !== dictationPollEpoch) return
+        applyDictationStatus(status)
       } catch (error) {
+        if (destroyed || epoch !== dictationPollEpoch) return
         dictationError = typeof error === 'string' ? error : 'Dictation status could not be checked.'
       }
-      if (!destroyed && isDictationActive(dictation)) pollDictation()
+      if (!destroyed && epoch === dictationPollEpoch && isDictationActive(dictation)) pollDictation()
     }, 100)
   }
 
   async function stopDictation(cancelled = false) {
     dictationRequested = false
+    invalidateDictationPolls()
     if (cancelled) {
       dictationCancelled = true
       voicePointerId = undefined
@@ -100,6 +111,7 @@
       const status = await tauri.invoke('dictation_stop')
       if (destroyed) return
       applyDictationStatus(status)
+      if (isDictationActive(dictation)) pollDictation()
     } catch (error) {
       if (destroyed) return
       dictationError = typeof error === 'string' ? error : 'Dictation could not be stopped.'
@@ -115,6 +127,7 @@
       await stopDictation()
       return
     }
+    invalidateDictationPolls()
     dictationRequested = true
     dictationCancelled = false
     dictationDraftSnapshot = draft
