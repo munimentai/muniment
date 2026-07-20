@@ -20,8 +20,8 @@ use muniment_core::llama::lifecycle::{
 };
 use muniment_core::llama::runtime::{acquire_runtime, resolve_runtime};
 use muniment_core::llama::{
-    ChatCompletionRequest, ChatMessage, DictationPolishRequest, LlamaChatClient, LlamaServer,
-    LlamaServerConfig, ResidentModelDescriptor,
+    ChatCompletionRequest, ChatMessage, DictationPolishRequest, LlamaChatClient, LlamaChatError,
+    LlamaServer, LlamaServerConfig, ResidentModelDescriptor,
 };
 use muniment_core::model_acquisition_transport::NativeModelAcquisitionTransport;
 use muniment_core::model_install::ModelInstallError;
@@ -372,12 +372,19 @@ impl GemmaInstallState {
     }
 
     fn polish_dictation(&self, transcript: String) -> Result<String, DictationPolishFailure> {
+        Self::polish_dictation_with_inner(Arc::clone(&self.inner), transcript)
+    }
+
+    fn polish_dictation_with_inner(
+        inner: Arc<Mutex<Inner>>,
+        transcript: String,
+    ) -> Result<String, DictationPolishFailure> {
         if transcript.trim().is_empty() {
             return Err(DictationPolishFailure::invalid_transcript());
         }
         let base_url = {
-            let inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
-            let server = inner
+            let guard = inner.lock().unwrap_or_else(|e| e.into_inner());
+            let server = guard
                 .server
                 .as_ref()
                 .filter(|server| server.is_ready())
@@ -388,9 +395,10 @@ impl GemmaInstallState {
             .and_then(|client| client.polish_dictation(&DictationPolishRequest::new(transcript)));
         match result {
             Ok(response) => Ok(response.polished_text),
+            Err(LlamaChatError::Transport(_)) => Err(DictationPolishFailure::unavailable()),
             Err(_) => {
-                let inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
-                if !inner.server.as_ref().is_some_and(ServingServer::is_ready) {
+                let guard = inner.lock().unwrap_or_else(|e| e.into_inner());
+                if !guard.server.as_ref().is_some_and(ServingServer::is_ready) {
                     Err(DictationPolishFailure::unavailable())
                 } else {
                     Err(DictationPolishFailure::request_failed())
@@ -901,11 +909,16 @@ pub async fn required_model_acquisition_status(
 }
 
 #[tauri::command]
-pub fn dictation_polish(
+pub async fn dictation_polish(
     transcript: String,
     state: State<'_, GemmaInstallState>,
 ) -> Result<String, DictationPolishFailure> {
-    state.polish_dictation(transcript)
+    let inner = Arc::clone(&state.inner);
+    tauri::async_runtime::spawn_blocking(move || {
+        GemmaInstallState::polish_dictation_with_inner(inner, transcript)
+    })
+    .await
+    .unwrap_or_else(|_| Err(DictationPolishFailure::request_failed()))
 }
 
 #[tauri::command]
@@ -1069,12 +1082,35 @@ mod tests {
         let app = app_with_state(state);
 
         assert_eq!(
-            dictation_polish("um meet me at noon".into(), app.state()).unwrap(),
+            tauri::async_runtime::block_on(dictation_polish(
+                "um meet me at noon".into(),
+                app.state(),
+            ))
+            .unwrap(),
             "Meet me at noon."
         );
         let request = worker.join().unwrap();
         assert!(request.starts_with("POST /v1/chat/completions "));
         assert!(request.contains("um meet me at noon"));
+    }
+
+    #[test]
+    fn dictation_polish_treats_transport_failure_as_unavailable_with_stale_health() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        drop(listener);
+        let state = state(
+            GemmaInstallStatus::Installed,
+            Arc::new(|root, _, _| Ok(root.into())),
+        );
+        state.inner.lock().unwrap().server = Some(ServingServer::Test(url));
+        let app = app_with_state(state);
+
+        assert_eq!(
+            tauri::async_runtime::block_on(dictation_polish("hello".into(), app.state()))
+                .unwrap_err(),
+            DictationPolishFailure::unavailable()
+        );
     }
 
     #[test]
