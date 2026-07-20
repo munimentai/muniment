@@ -1,12 +1,15 @@
 use muniment_attach::{
-    handshake, ClientError, PendingPermission, PermissionDecision, RedactedRunEvent,
-    RunStreamMessage, ThreadListPage, ThreadOpenPage,
+    handshake_as_with_credential, ClientError, Id, PendingPermission, PermissionDecision,
+    RedactedRunEvent, RunStreamMessage, ThreadListPage, ThreadOpenPage,
 };
 use std::ffi::OsString;
-use std::io::{self, BufRead, IsTerminal, Write};
+use std::io::{self, BufRead, IsTerminal, Read, Write};
+#[cfg(unix)]
+use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
+use std::path::{Path, PathBuf};
 
 const USAGE: &str =
-    "usage: muniment threads list | muniment threads open <thread-id> | muniment run start";
+    "usage: muniment [--workspace <directory>] threads list | muniment [--workspace <directory>] threads open <thread-id> | muniment [--workspace <directory>] run start | muniment [--workspace <directory>] workspace init";
 
 enum Command {
     List,
@@ -25,6 +28,7 @@ enum CliError {
     Client(ClientError),
     RunClient(ClientError),
     PermissionClient(ClientError),
+    Workspace,
 }
 
 fn main() {
@@ -38,22 +42,274 @@ fn main() {
 }
 
 fn run() -> Result<(), CliError> {
-    let args: Vec<_> = std::env::args_os().skip(1).collect();
+    let mut args: Vec<_> = std::env::args_os().skip(1).collect();
+    let opened = std::env::current_dir().map_err(|_| CliError::Workspace)?;
+    let workspace = workspace_argument(&mut args)?.unwrap_or_else(|| opened.clone());
+    if !recognized_command(&args) {
+        return Err(CliError::Usage);
+    }
+    let client_identity = authorized_client_identity()?;
+    let client_credential = authorized_client_credential()?;
+    if args == [OsString::from("workspace"), OsString::from("init")] {
+        let mut client = handshake_as_with_credential(
+            env!("CARGO_PKG_VERSION"),
+            &client_identity,
+            client_credential.as_deref(),
+            || {},
+        )
+        .map_err(CliError::Client)?;
+        persist_authorized_client_credential(client.authorized_client_credential())?;
+        client
+            .onboard_workspace(&opened.to_string_lossy(), &workspace.to_string_lossy())
+            .map_err(CliError::Client)?;
+        return Ok(());
+    }
     let stdin = io::stdin();
     let mut input = stdin.lock();
     let mut stdout = io::stdout();
     run_with(
         &args,
+        &workspace.to_string_lossy(),
         io::stdin().is_terminal(),
         io::stdout().is_terminal(),
         &mut input,
         &mut stdout,
-        |pairing_pending| handshake(env!("CARGO_PKG_VERSION"), pairing_pending),
+        |pairing_pending| {
+            let mut client = handshake_as_with_credential(
+                env!("CARGO_PKG_VERSION"),
+                &client_identity,
+                client_credential.as_deref(),
+                pairing_pending,
+            )?;
+            persist_authorized_client_credential(client.authorized_client_credential())
+                .map_err(|_| ClientError::UnexpectedMessage)?;
+            client.onboard_workspace(&opened.to_string_lossy(), &workspace.to_string_lossy())?;
+            if args.first().is_some_and(|command| command == "threads") {
+                client.ensure_home()?;
+            }
+            Ok(client)
+        },
     )
+}
+
+fn authorized_client_identity() -> Result<String, CliError> {
+    let base = std::env::var_os("XDG_CONFIG_HOME")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".config")))
+        .filter(|path| path.is_absolute())
+        .ok_or(CliError::Workspace)?;
+    let directory = base.join("muniment");
+    let path = directory.join("cli-client-id");
+    match read_private_file(&path) {
+        Ok(value) => {
+            let value = value.trim();
+            Id::new(value).map_err(|_| CliError::Workspace)?;
+            return Ok(value.to_owned());
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(_) => return Err(CliError::Workspace),
+    }
+    std::fs::create_dir_all(&directory).map_err(|_| CliError::Workspace)?;
+    let mut bytes = [0u8; 16];
+    std::fs::File::open("/dev/urandom")
+        .and_then(|mut file| file.read_exact(&mut bytes))
+        .map_err(|_| CliError::Workspace)?;
+    bytes[6] = (bytes[6] & 0x0f) | 0x40;
+    bytes[8] = (bytes[8] & 0x3f) | 0x80;
+    let value = format!("{:02x}{:02x}{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}",
+        bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7],
+        bytes[8], bytes[9], bytes[10], bytes[11], bytes[12], bytes[13], bytes[14], bytes[15]);
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    options.mode(0o600);
+    match options
+        .open(&path)
+        .and_then(|mut file| file.write_all(value.as_bytes()))
+    {
+        Ok(()) => Ok(value),
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+            let existing = read_private_file(&path).map_err(|_| CliError::Workspace)?;
+            let existing = existing.trim();
+            Id::new(existing).map_err(|_| CliError::Workspace)?;
+            Ok(existing.to_owned())
+        }
+        Err(_) => Err(CliError::Workspace),
+    }
+}
+
+fn authorized_client_credential() -> Result<Option<String>, CliError> {
+    let Some(base) = std::env::var_os("XDG_CONFIG_HOME")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".config")))
+        .filter(|path| path.is_absolute())
+    else {
+        return Err(CliError::Workspace);
+    };
+    let path = base.join("muniment").join("cli-client-credential");
+    match read_private_file(&path) {
+        Ok(value)
+            if value.trim().len() == 64
+                && value.trim().bytes().all(|byte| byte.is_ascii_hexdigit()) =>
+        {
+            Ok(Some(value.trim().to_owned()))
+        }
+        Ok(_) => Err(CliError::Workspace),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(_) => Err(CliError::Workspace),
+    }
+}
+
+fn persist_authorized_client_credential(credential: &str) -> Result<(), CliError> {
+    let base = std::env::var_os("XDG_CONFIG_HOME")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".config")))
+        .filter(|path| path.is_absolute())
+        .ok_or(CliError::Workspace)?;
+    let directory = base.join("muniment");
+    std::fs::create_dir_all(&directory).map_err(|_| CliError::Workspace)?;
+    let path = directory.join("cli-client-credential");
+    atomic_write_private_file(&path, credential.as_bytes()).map_err(|_| CliError::Workspace)
+}
+
+#[cfg(unix)]
+fn read_private_file(path: &Path) -> io::Result<String> {
+    let mut options = std::fs::OpenOptions::new();
+    options
+        .read(true)
+        .custom_flags(unix_abi::O_NOFOLLOW | unix_abi::O_NONBLOCK);
+    let mut file = options.open(path)?;
+    let metadata = file.metadata()?;
+    if !private_file_metadata_is_valid(&metadata, unix_abi::effective_uid()) {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "client authorization file is not private",
+        ));
+    }
+    let mut value = String::new();
+    file.read_to_string(&mut value)?;
+    Ok(value)
+}
+
+#[cfg(unix)]
+fn private_file_metadata_is_valid(metadata: &std::fs::Metadata, effective_uid: u32) -> bool {
+    metadata.is_file() && metadata.uid() == effective_uid && metadata.mode() & 0o077 == 0
+}
+
+#[cfg(unix)]
+fn atomic_write_private_file(path: &Path, value: &[u8]) -> io::Result<()> {
+    let directory = path
+        .parent()
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "missing parent directory"))?;
+    let mut random = [0u8; 16];
+    std::fs::File::open("/dev/urandom")?.read_exact(&mut random)?;
+    let temporary = directory.join(format!(
+        ".cli-client-credential.{}.tmp",
+        random
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>()
+    ));
+    let mut options = std::fs::OpenOptions::new();
+    options
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .custom_flags(unix_abi::O_NOFOLLOW);
+    let result = (|| {
+        let mut file = options.open(&temporary)?;
+        file.write_all(value)?;
+        file.sync_all()?;
+        std::fs::rename(&temporary, path)
+    })();
+    if result.is_err() {
+        let _ = std::fs::remove_file(&temporary);
+    }
+    result
+}
+
+#[cfg(unix)]
+mod unix_abi {
+    #[cfg(any(
+        target_os = "linux",
+        target_os = "android",
+        target_os = "solaris",
+        target_os = "illumos"
+    ))]
+    pub const O_NOFOLLOW: i32 = 0x20000;
+    #[cfg(any(
+        target_os = "macos",
+        target_os = "ios",
+        target_os = "freebsd",
+        target_os = "dragonfly",
+        target_os = "netbsd",
+        target_os = "openbsd"
+    ))]
+    pub const O_NOFOLLOW: i32 = 0x100;
+    pub const O_NONBLOCK: i32 = 0x4;
+
+    unsafe extern "C" {
+        fn geteuid() -> u32;
+        #[cfg(test)]
+        fn chown(path: *const std::ffi::c_char, owner: u32, group: u32) -> i32;
+    }
+
+    pub fn effective_uid() -> u32 {
+        // SAFETY: geteuid takes no arguments and has no preconditions.
+        unsafe { geteuid() }
+    }
+
+    #[cfg(test)]
+    pub unsafe fn change_owner(path: *const std::ffi::c_char, owner: u32, group: u32) -> i32 {
+        // SAFETY: the caller supplies the NUL-terminated path required by chown.
+        unsafe { chown(path, owner, group) }
+    }
+}
+
+#[cfg(not(unix))]
+fn read_private_file(path: &Path) -> io::Result<String> {
+    std::fs::read_to_string(path)
+}
+
+#[cfg(not(unix))]
+fn atomic_write_private_file(path: &Path, value: &[u8]) -> io::Result<()> {
+    std::fs::write(path, value)
+}
+
+fn recognized_command(args: &[OsString]) -> bool {
+    matches!(args,
+        [first, second] if (first == "threads" && second == "list")
+            || (first == "run" && second == "start")
+            || (first == "workspace" && second == "init")
+    ) || matches!(args, [first, second, _] if first == "threads" && second == "open")
+}
+
+fn workspace_argument(args: &mut Vec<OsString>) -> Result<Option<PathBuf>, CliError> {
+    let positions = args
+        .iter()
+        .enumerate()
+        .filter_map(|(index, value)| (value == "--workspace").then_some(index))
+        .collect::<Vec<_>>();
+    if positions.len() > 1 {
+        return Err(CliError::Usage);
+    }
+    let Some(index) = positions.first().copied() else {
+        return Ok(None);
+    };
+    if index + 1 >= args.len() || args[index + 1] == "--workspace" {
+        return Err(CliError::Usage);
+    }
+    let path = PathBuf::from(args.remove(index + 1));
+    args.remove(index);
+    if !path.is_absolute() {
+        return Err(CliError::Usage);
+    }
+    Ok(Some(path))
 }
 
 fn run_with(
     args: &[OsString],
+    workspace: &str,
     stdin_is_terminal: bool,
     stdout_is_terminal: bool,
     input: &mut impl BufRead,
@@ -101,7 +357,7 @@ fn run_with(
     })?;
     if let Some(prompt) = prompt {
         let accepted = client
-            .start_run(&prompt, None)
+            .start_run_in_workspace(&prompt, None, Some(workspace))
             .map_err(CliError::RunClient)?;
         writeln!(output, "Run committed: {}", one_line(&accepted.run_id))
             .map_err(|_| CliError::RunClient(ClientError::ConnectionClosed))?;
@@ -192,6 +448,7 @@ fn guidance(error: &CliError) -> &'static str {
             "answer the pending permission with allow or deny, then try again"
         }
         CliError::RunFailed => "the run failed; check the Muniment desktop, then try again",
+        CliError::Workspace => "the workspace memory directory could not be initialized",
         CliError::RunClient(ClientError::RequestRejected) => {
             "the desktop rejected the run request; retry, then check the desktop"
         }
@@ -407,6 +664,73 @@ mod tests {
     use std::os::unix::net::UnixStream;
     use std::time::Duration;
 
+    #[cfg(unix)]
+    fn private_test_directory(name: &str) -> PathBuf {
+        let directory = std::env::temp_dir().join(format!(
+            "muniment-cli-{name}-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir(&directory).unwrap();
+        directory
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn private_client_files_reject_symlinks_non_regular_and_unsafe_metadata() {
+        use std::os::unix::fs::{symlink, MetadataExt, PermissionsExt};
+
+        let directory = private_test_directory("unsafe-files");
+        let target = directory.join("target");
+        std::fs::write(&target, "secret").unwrap();
+        std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let link = directory.join("link");
+        symlink(&target, &link).unwrap();
+        assert!(read_private_file(&link).is_err());
+        assert!(read_private_file(Path::new("/dev/null")).is_err());
+
+        std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o640)).unwrap();
+        assert!(read_private_file(&target).is_err());
+        let metadata = std::fs::metadata(&target).unwrap();
+        assert!(!private_file_metadata_is_valid(
+            &metadata,
+            metadata.uid().wrapping_add(1)
+        ));
+        std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let wrong_uid = metadata.uid().wrapping_add(1);
+        let target_bytes = std::ffi::CString::new(target.as_os_str().as_encoded_bytes()).unwrap();
+        if unsafe { unix_abi::change_owner(target_bytes.as_ptr(), wrong_uid, metadata.gid()) } == 0
+        {
+            assert!(read_private_file(&target).is_err());
+        }
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn private_client_file_persistence_is_owner_only_and_does_not_follow_destination() {
+        use std::os::unix::fs::{symlink, MetadataExt, PermissionsExt};
+
+        let directory = private_test_directory("atomic-persistence");
+        let target = directory.join("unrelated");
+        std::fs::write(&target, "preserve me").unwrap();
+        let credential = directory.join("cli-client-credential");
+        symlink(&target, &credential).unwrap();
+
+        atomic_write_private_file(&credential, b"new credential").unwrap();
+
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), "preserve me");
+        assert_eq!(read_private_file(&credential).unwrap(), "new credential");
+        let metadata = std::fs::metadata(&credential).unwrap();
+        assert!(metadata.is_file());
+        assert_eq!(metadata.uid(), unix_abi::effective_uid());
+        assert_eq!(metadata.permissions().mode() & 0o777, 0o600);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
     #[test]
     fn user_guidance_covers_expected_failures_without_details() {
         assert!(guidance(&CliError::Client(ClientError::DesktopUnavailable)).contains("open"));
@@ -609,6 +933,7 @@ mod tests {
         let mut input = io::Cursor::new(Vec::<u8>::new());
         run_with(
             &["threads".into(), "list".into()],
+            "/workspace",
             true,
             true,
             &mut input,
@@ -682,7 +1007,10 @@ mod tests {
                 .unwrap();
             let request = read_frame(&mut server);
             assert_eq!(request["operation"], "run.start");
-            assert_eq!(request["body"], serde_json::json!({"text": "ship it"}));
+            assert_eq!(
+                request["body"],
+                serde_json::json!({"text": "ship it", "workspace": "/workspace"})
+            );
             assert!(request["idempotency_key"].is_string());
             let response = Response {
                 protocol: Protocol,
@@ -822,6 +1150,7 @@ mod tests {
         let mut output = Vec::new();
         run_with(
             &["run".into(), "start".into()],
+            "/workspace",
             true,
             true,
             &mut input,
@@ -873,6 +1202,7 @@ mod tests {
             let mut output = Vec::new();
             let error = run_with(
                 &["run".into(), "start".into()],
+                "/workspace",
                 true,
                 true,
                 &mut input,
@@ -927,6 +1257,7 @@ mod tests {
         let mut output = Vec::new();
         let error = run_with(
             &["run".into(), "start".into()],
+            "/workspace",
             true,
             true,
             &mut input,
@@ -1027,6 +1358,7 @@ mod tests {
         let mut output = Vec::new();
         run_with(
             &["threads".into(), "list".into()],
+            "/workspace",
             true,
             true,
             &mut input,
@@ -1121,6 +1453,7 @@ mod tests {
         let mut output = Vec::new();
         run_with(
             &["threads".into(), "open".into(), "thread-1".into()],
+            "/workspace",
             true,
             true,
             &mut input,
@@ -1198,6 +1531,7 @@ mod tests {
             let mut input = io::Cursor::new(Vec::<u8>::new());
             let result = run_with(
                 &args,
+                "/workspace",
                 stdin_terminal,
                 stdout_terminal,
                 &mut input,
@@ -1206,6 +1540,32 @@ mod tests {
             );
             assert!(guidance(&result.unwrap_err()).contains(expected));
             assert!(output.is_empty());
+        }
+    }
+
+    #[test]
+    fn workspace_override_is_absolute_unique_and_position_independent() {
+        let absolute = std::env::temp_dir().join("muniment-override");
+        let mut args = vec![
+            "threads".into(),
+            "list".into(),
+            "--workspace".into(),
+            absolute.clone().into_os_string(),
+        ];
+        assert_eq!(workspace_argument(&mut args).unwrap(), Some(absolute));
+        assert_eq!(args, [OsString::from("threads"), OsString::from("list")]);
+
+        for mut invalid in [
+            vec![OsString::from("--workspace")],
+            vec![OsString::from("--workspace"), OsString::from("relative")],
+            vec![
+                OsString::from("--workspace"),
+                std::env::temp_dir().into_os_string(),
+                OsString::from("--workspace"),
+                std::env::temp_dir().into_os_string(),
+            ],
+        ] {
+            assert!(workspace_argument(&mut invalid).is_err());
         }
     }
 }

@@ -1,7 +1,7 @@
 <script>
   import { onMount, tick } from 'svelte'
   import { getCurrentWebview } from '@tauri-apps/api/webview'
-  import { open } from '@tauri-apps/plugin-dialog'
+  import { confirm, open } from '@tauri-apps/plugin-dialog'
 
   import AccessPanel from './lib/AccessPanel.svelte'
   import { bootState, errorState, statusState, waitingState } from './lib/auth-state.js'
@@ -313,6 +313,17 @@
   }
 
   onMount(() => {
+    let pairingUnlisten
+    window.__TAURI__?.event?.listen('attach-pairing-requested', async ({ payload: challenge }) => {
+      const approve = await confirm(
+        'Allow the CLI or VS Code to connect to this Muniment desktop session?',
+        { title: 'Approve Muniment connection', kind: 'info' },
+      )
+      await tauri.invoke('attach_pairing_decide', { challenge, approve })
+    }).then((stop) => {
+      if (destroyed) stop()
+      else pairingUnlisten = stop
+    })
     if (tauri) {
       loadOnboarding()
       run('status')
@@ -361,6 +372,7 @@
       destroyed = true
       unlisten?.()
       dictationUnlisten?.()
+      pairingUnlisten?.()
       stopDictationPolling()
       clearTimeout(voiceClickTimer)
       stopDragDrop?.()

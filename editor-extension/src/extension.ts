@@ -1,18 +1,47 @@
 import * as vscode from "vscode";
+import { randomUUID } from "node:crypto";
 import { ThreadDocumentLoader } from "./thread-document";
 import { openAcceptedRun, permissionDecision, RunDocumentStore } from "./run-documents";
 import { NEW_RUN_COMMAND, NEW_RUN_WITH_CURRENT_FILE_COMMAND, OPEN_THREAD_COMMAND, ThreadsModel, threadOpenCommand, type ThreadItem } from "./threads";
 import { connectAttach } from "./transport";
 import { editorFileContext, editorSelectionContext, type ActiveFile, type ActiveSelection } from "./editor-context";
+import { WorkspaceOnboarding, type WorkspaceFolderLike } from "./workspace-onboarding";
 
 const THREADS_VIEW_ID = "muniment.threads";
 const REFRESH_COMMAND = "muniment.refreshThreads";
+const CROSS_PROJECT_COMMAND = "muniment.refreshCrossProjectThreads";
 const THREAD_SCHEME = "muniment-thread";
 const RUN_SCHEME = "muniment-run";
 
-export function activate(context: vscode.ExtensionContext): void {
+export async function activate(context: vscode.ExtensionContext): Promise<void> {
+  let authorizedClientId = context.globalState.get<string>("authorizedClientId");
+  if (authorizedClientId === undefined) {
+    authorizedClientId = randomUUID();
+    await context.globalState.update("authorizedClientId", authorizedClientId);
+  }
+  let authorizedClientCredential = context.globalState.get<string>("authorizedClientCredential");
+  const attachOptions = () => ({
+    authorizedClientId,
+    authorizedClientCredential,
+    onAuthorizedClientCredential: (credential: string) => {
+      authorizedClientCredential = credential;
+      void context.globalState.update("authorizedClientCredential", credential);
+    },
+  });
+  const onboarding = new WorkspaceOnboarding(
+    (folder) => vscode.workspace.getConfiguration("muniment", vscode.Uri.parse(folder.key))
+      .get<string>("workspaceMemoryLocation", ""),
+    () => connectAttach({
+      clientVersion: context.extension.packageJSON.version as string,
+      ...attachOptions(),
+      approvalTimeoutMs: 10_000,
+    }),
+    (message) => { void vscode.window.showErrorMessage(message); },
+  );
+  const folders = () => (vscode.workspace.workspaceFolders ?? []).map(workspaceFolderLike);
   const model = new ThreadsModel((onPairingPending) => connectAttach({
     clientVersion: context.extension.packageJSON.version as string,
+    ...attachOptions(),
     onPairingPending,
   }));
   const provider = new ThreadsTreeDataProvider(model);
@@ -31,6 +60,10 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.workspace.registerTextDocumentContentProvider(RUN_SCHEME, runDocuments),
     vscode.commands.registerCommand(REFRESH_COMMAND, () => {
       runDocuments.clear();
+      return model.refresh();
+    }),
+    vscode.commands.registerCommand(CROSS_PROJECT_COMMAND, async () => {
+      await model.ensureCrossProjectHome();
       return model.refresh();
     }),
     vscode.commands.registerCommand(NEW_RUN_COMMAND, () => submitRun(activeEditorSelectionContext())),
@@ -58,8 +91,16 @@ export function activate(context: vscode.ExtensionContext): void {
       const document = await vscode.workspace.openTextDocument(uri);
       await vscode.window.showTextDocument(document, { preview: true });
     }),
+    vscode.workspace.onDidChangeWorkspaceFolders((event) => {
+      void onboarding.initialize(event.added.map(workspaceFolderLike));
+    }),
+    vscode.workspace.onDidChangeConfiguration((event) => {
+      if (event.affectsConfiguration("muniment.workspaceMemoryLocation")) {
+        void onboarding.initialize(folders());
+      }
+    }),
   );
-  void model.refresh();
+  void onboarding.initialize(folders()).finally(() => model.refresh());
 
   async function submitRun(runContext?: ReturnType<typeof editorSelectionContext>): Promise<void> {
     const text = await vscode.window.showInputBox({
@@ -70,7 +111,7 @@ export function activate(context: vscode.ExtensionContext): void {
     const result = await vscode.window.withProgress({
       location: vscode.ProgressLocation.Notification,
       title: "Starting Muniment run…",
-    }, () => model.submitRun(text, runContext));
+    }, () => model.submitRun(text, runContext, activeWorkspacePath()));
     if (result.kind === "accepted") {
       await openAcceptedRun(result, runDocuments.store, {
         streamRun: (runId, afterRunSeq) => model.streamRun(runId, afterRunSeq),
@@ -98,6 +139,18 @@ export function activate(context: vscode.ExtensionContext): void {
       void vscode.window.showErrorMessage(result.message);
     }
   }
+}
+
+function activeWorkspacePath(): string | undefined {
+  const document = vscode.window.activeTextEditor?.document;
+  if (document?.uri.scheme === "file") {
+    return vscode.workspace.getWorkspaceFolder(document.uri)?.uri.fsPath;
+  }
+  return vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+}
+
+function workspaceFolderLike(folder: vscode.WorkspaceFolder): WorkspaceFolderLike {
+  return { key: folder.uri.toString(), scheme: folder.uri.scheme, fsPath: folder.uri.fsPath };
 }
 
 function activeEditorFileContext() {

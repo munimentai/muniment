@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -6,13 +6,14 @@ use std::time::Duration;
 use chrono::{SecondsFormat, Utc};
 #[cfg(target_os = "linux")]
 use muniment_core::attach::linux::{
+    run_authenticated_session_with_service_and_approvals, AttachFilesystem, AttachTransport,
     CompanionProvenance, RunStartAccepted, RunStartRequest as AttachRunStartRequest,
     ThreadListPage, ThreadListRequest, ThreadListService,
 };
 #[cfg(target_os = "linux")]
 use muniment_core::attach::{
-    CommittedResult, Id, IdempotencyOutcome, IdempotencyStore, Operation, Protocol, ProtocolError,
-    Request as AttachRequest,
+    Approval, CommittedResult, ErrorCode, Id, IdempotencyOutcome, IdempotencyStore, Operation,
+    Protocol, ProtocolError, Request as AttachRequest, WorkspaceOnboardRequest, WorkspaceOnboarded,
 };
 use muniment_core::attachment::{ingest_attachment, AttachmentMetadata};
 use muniment_core::auth::TokenSet;
@@ -32,6 +33,8 @@ use muniment_core::sidecar::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+#[cfg(target_os = "linux")]
+use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::path::PathBuf;
 use tauri::{Emitter, Manager};
 use uuid::Uuid;
@@ -498,28 +501,241 @@ impl RunStartIdempotency for IdempotencyStore {
 pub struct DesktopAttachService<B, I = IdempotencyStore> {
     boundaries: B,
     idempotency: I,
+    home: PathBuf,
+    workspace_contexts: Arc<Mutex<HashMap<String, HashMap<PathBuf, Option<String>>>>>,
+    client_credentials: Arc<Mutex<HashMap<String, String>>>,
+    credential_path: Option<PathBuf>,
+    client_identity: Option<String>,
+}
+
+#[cfg(target_os = "linux")]
+struct AttachListenerState {
+    workspace_contexts: Arc<Mutex<HashMap<String, HashMap<PathBuf, Option<String>>>>>,
+    client_credentials: Arc<Mutex<HashMap<String, String>>>,
+}
+
+#[cfg(target_os = "linux")]
+impl AttachListenerState {
+    fn load(credential_path: &std::path::Path) -> Result<Self, ProtocolError> {
+        Ok(Self {
+            workspace_contexts: Arc::new(Mutex::new(HashMap::new())),
+            client_credentials: Arc::new(Mutex::new(load_client_credentials(credential_path)?)),
+        })
+    }
+}
+
+#[derive(Default)]
+pub struct AttachApprovalState {
+    pending: Mutex<HashMap<String, std::sync::mpsc::SyncSender<bool>>>,
+}
+
+#[tauri::command]
+pub fn attach_pairing_decide(
+    state: tauri::State<'_, AttachApprovalState>,
+    challenge: String,
+    approve: bool,
+) {
+    if let Ok(mut pending) = state.pending.lock() {
+        if let Some(sender) = pending.remove(&challenge) {
+            let _ = sender.try_send(approve);
+        }
+    }
 }
 
 #[cfg(target_os = "linux")]
 impl<R: tauri::Runtime> DesktopAttachService<TauriRunStartBoundaries<R>> {
-    pub fn new(app: tauri::AppHandle<R>) -> Result<Self, ProtocolError> {
+    pub fn new(
+        app: tauri::AppHandle<R>,
+        workspace_contexts: Arc<Mutex<HashMap<String, HashMap<PathBuf, Option<String>>>>>,
+        client_credentials: Arc<Mutex<HashMap<String, String>>>,
+    ) -> Result<Self, ProtocolError> {
+        let home = app
+            .path()
+            .document_dir()
+            .map_err(|_| ProtocolError::persistence_failed())?
+            .join("Muniment");
         let idempotency = IdempotencyStore::open(
             app.path()
                 .app_data_dir()
                 .map_err(|_| ProtocolError::persistence_failed())?
                 .join("attach-idempotency.sqlite3"),
         )?;
+        let credential_path = app
+            .path()
+            .app_data_dir()
+            .map_err(|_| ProtocolError::persistence_failed())?
+            .join("attach-client-credentials.json");
         Ok(Self {
             boundaries: TauriRunStartBoundaries { app },
             idempotency,
+            home,
+            workspace_contexts,
+            client_credentials,
+            credential_path: Some(credential_path),
+            client_identity: None,
         })
     }
+}
+
+#[cfg(target_os = "linux")]
+pub fn start_attach_listener<R: tauri::Runtime>(app: tauri::AppHandle<R>) {
+    std::thread::spawn(move || {
+        let Ok(filesystem) = AttachFilesystem::from_environment() else {
+            return;
+        };
+        let Ok(listener) = AttachTransport::bind(&filesystem) else {
+            return;
+        };
+        let credential_path = match app.path().app_data_dir() {
+            Ok(path) => path.join("attach-client-credentials.json"),
+            Err(_) => return,
+        };
+        let Ok(state) = AttachListenerState::load(&credential_path) else {
+            return;
+        };
+        while let Ok((stream, credentials)) = listener.accept() {
+            let app = app.clone();
+            let workspace_contexts = state.workspace_contexts.clone();
+            let client_credentials = state.client_credentials.clone();
+            std::thread::spawn(move || {
+                let Ok(mut service) =
+                    DesktopAttachService::new(app, workspace_contexts, client_credentials)
+                else {
+                    return;
+                };
+                let approval_app = service.boundaries.app.clone();
+                let _ = run_authenticated_session_with_service_and_approvals(
+                    stream,
+                    credentials,
+                    env!("CARGO_PKG_VERSION"),
+                    &mut service,
+                    move |challenge: &muniment_core::attach::PairingChallenge,
+                          remaining: Duration| {
+                        let challenge = challenge.as_str().to_owned();
+                        let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+                        let state = approval_app.state::<AttachApprovalState>();
+                        state.pending.lock().ok()?.insert(challenge.clone(), sender);
+                        if approval_app
+                            .emit("attach-pairing-requested", &challenge)
+                            .is_err()
+                        {
+                            state.pending.lock().ok()?.remove(&challenge);
+                            return Some(muniment_core::attach::linux::ApprovalDecision::Deny);
+                        }
+                        let approved = receiver.recv_timeout(remaining).unwrap_or(false);
+                        state.pending.lock().ok()?.remove(&challenge);
+                        if !approved {
+                            return Some(muniment_core::attach::linux::ApprovalDecision::Deny);
+                        }
+                        Some(muniment_core::attach::linux::ApprovalDecision::Approve(
+                            Approval {
+                                profile: "desktop-owner".into(),
+                                workspace: std::env::current_dir()
+                                    .ok()?
+                                    .to_string_lossy()
+                                    .into_owned(),
+                                scopes: BTreeSet::from(["thread.read".into(), "run.write".into()]),
+                                lifetime: Duration::from_secs(60 * 60),
+                            },
+                        ))
+                    },
+                );
+            });
+        }
+    });
 }
 
 #[cfg(target_os = "linux")]
 impl<B: RunStartBoundaries, I: RunStartIdempotency> ThreadListService
     for DesktopAttachService<B, I>
 {
+    fn bind_authorized_client(&mut self, client_identity: &str) {
+        self.client_identity = Some(client_identity.to_owned());
+    }
+
+    fn authorize_client(
+        &mut self,
+        client_identity: &str,
+        presented_credential: Option<&str>,
+        issued_credential: &str,
+    ) -> Result<String, ProtocolError> {
+        let mut credentials = self
+            .client_credentials
+            .lock()
+            .map_err(|_| ProtocolError::unauthorized())?;
+        let credential = match credentials.get(client_identity) {
+            Some(expected) if presented_credential == Some(expected.as_str()) => expected.clone(),
+            Some(_) => return Err(ProtocolError::unauthorized()),
+            None if presented_credential.is_none() => {
+                credentials.insert(client_identity.to_owned(), issued_credential.to_owned());
+                if let Some(path) = &self.credential_path {
+                    if persist_client_credentials(path, &credentials).is_err() {
+                        credentials.remove(client_identity);
+                        return Err(ProtocolError::persistence_failed());
+                    }
+                }
+                issued_credential.to_owned()
+            }
+            None => return Err(ProtocolError::unauthorized()),
+        };
+        self.client_identity = Some(client_identity.to_owned());
+        Ok(credential)
+    }
+
+    fn onboard_workspace(
+        &mut self,
+        request: WorkspaceOnboardRequest,
+    ) -> Result<WorkspaceOnboarded, ProtocolError> {
+        let opened = PathBuf::from(&request.opened_directory);
+        let memory = PathBuf::from(&request.memory_location);
+        if !opened.is_absolute() || !memory.is_absolute() {
+            return Err(ProtocolError::invalid_request());
+        }
+        let instructions = muniment_core::onboard_companion_workspace(&opened, &memory)
+            .map_err(|_| ProtocolError::persistence_failed())?;
+        let opened_canonical = opened
+            .canonicalize()
+            .map_err(|_| ProtocolError::persistence_failed())?;
+        let memory_canonical = memory
+            .canonicalize()
+            .map_err(|_| ProtocolError::persistence_failed())?;
+        let mut contexts = self
+            .workspace_contexts
+            .lock()
+            .map_err(|_| ProtocolError::persistence_failed())?;
+        let identity = self
+            .client_identity
+            .as_ref()
+            .ok_or_else(ProtocolError::unauthorized)?;
+        let contexts = contexts.entry(identity.clone()).or_default();
+        contexts.insert(opened_canonical, instructions.clone());
+        contexts.insert(memory_canonical, instructions.clone());
+        Ok(WorkspaceOnboarded {
+            opened_directory: opened.to_string_lossy().into_owned(),
+            memory_location: memory.to_string_lossy().into_owned(),
+            instructions,
+        })
+    }
+
+    fn ensure_home(&mut self) -> Result<(), ProtocolError> {
+        muniment_core::ensure_cross_project_home(&self.home)
+            .map_err(|_| ProtocolError::persistence_failed())
+    }
+
+    fn authorized_workspace(&self, workspace: &str) -> Option<String> {
+        let Some(identity) = &self.client_identity else {
+            return None;
+        };
+        let canonical = PathBuf::from(workspace).canonicalize().ok()?;
+        self.workspace_contexts.lock().ok().and_then(|contexts| {
+            contexts.get(identity).and_then(|workspaces| {
+                workspaces
+                    .contains_key(&canonical)
+                    .then(|| canonical.to_string_lossy().into_owned())
+            })
+        })
+    }
+
     fn list_threads(
         &mut self,
         _workspace: &str,
@@ -563,6 +779,21 @@ impl<B: RunStartBoundaries, I: RunStartIdempotency> ThreadListService
         extra.insert("peer_uid".into(), json!(companion.peer_uid));
         extra.insert("peer_pid".into(), json!(companion.peer_pid));
         extra.insert("idempotency_key".into(), json!(idempotency_key.as_str()));
+        let instructions = self
+            .workspace_contexts
+            .lock()
+            .map_err(|_| ProtocolError::persistence_failed())?
+            .get(
+                self.client_identity
+                    .as_ref()
+                    .ok_or_else(ProtocolError::unauthorized)?,
+            )
+            .and_then(|contexts| contexts.get(&PathBuf::from(workspace)))
+            .cloned()
+            .flatten();
+        if let Some(instructions) = instructions {
+            extra.insert("repository_instructions".into(), json!(instructions));
+        }
         let provenance = Provenance {
             source: "muniment-attach".into(),
             source_version: env!("CARGO_PKG_VERSION").into(),
@@ -620,6 +851,68 @@ impl<B: RunStartBoundaries, I: RunStartIdempotency> ThreadListService
         };
         serde_json::from_value(committed.body).map_err(|_| ProtocolError::persistence_failed())
     }
+}
+
+#[cfg(target_os = "linux")]
+fn load_client_credentials(
+    path: &std::path::Path,
+) -> Result<HashMap<String, String>, ProtocolError> {
+    let mut options = std::fs::OpenOptions::new();
+    options.read(true).custom_flags(libc::O_NOFOLLOW);
+    let file = match options.open(path) {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(HashMap::new()),
+        Err(_) => return Err(ProtocolError::persistence_failed()),
+    };
+    let metadata = file
+        .metadata()
+        .map_err(|_| ProtocolError::persistence_failed())?;
+    if metadata.uid() != unsafe { libc::geteuid() } || metadata.mode() & 0o077 != 0 {
+        return Err(ProtocolError::persistence_failed());
+    }
+    let credentials: HashMap<String, String> =
+        serde_json::from_reader(file).map_err(|_| ProtocolError::persistence_failed())?;
+    if credentials.iter().any(|(identity, credential)| {
+        Id::new(identity).is_err()
+            || credential.len() != 64
+            || !credential.bytes().all(|byte| byte.is_ascii_hexdigit())
+    }) {
+        return Err(ProtocolError::persistence_failed());
+    }
+    Ok(credentials)
+}
+
+#[cfg(target_os = "linux")]
+fn persist_client_credentials(
+    path: &std::path::Path,
+    credentials: &HashMap<String, String>,
+) -> Result<(), ProtocolError> {
+    let parent = path
+        .parent()
+        .ok_or_else(ProtocolError::persistence_failed)?;
+    std::fs::create_dir_all(parent).map_err(|_| ProtocolError::persistence_failed())?;
+    let temporary = parent.join(format!(".attach-client-credentials-{}.tmp", Uuid::now_v7()));
+    let result = (|| {
+        let mut options = std::fs::OpenOptions::new();
+        options
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .custom_flags(libc::O_NOFOLLOW);
+        let file = options
+            .open(&temporary)
+            .map_err(|_| ProtocolError::persistence_failed())?;
+        serde_json::to_writer(&file, credentials)
+            .map_err(|_| ProtocolError::persistence_failed())?;
+        file.sync_all()
+            .map_err(|_| ProtocolError::persistence_failed())?;
+        std::fs::rename(&temporary, path).map_err(|_| ProtocolError::persistence_failed())?;
+        Ok(())
+    })();
+    if result.is_err() {
+        let _ = std::fs::remove_file(&temporary);
+    }
+    result
 }
 
 impl ChatState {
@@ -2311,6 +2604,11 @@ mod tests {
         let mut service = DesktopAttachService {
             boundaries,
             idempotency: IdempotencyStore::open(":memory:").unwrap(),
+            home: PathBuf::new(),
+            workspace_contexts: Arc::new(Mutex::new(HashMap::new())),
+            client_credentials: Arc::new(Mutex::new(HashMap::new())),
+            credential_path: None,
+            client_identity: Some("default".into()),
         };
         let result = service.start_run(
             "workspace-a",
@@ -2389,10 +2687,532 @@ mod tests {
 
     #[cfg(target_os = "linux")]
     #[test]
+    fn attach_onboarding_context_survives_connections_and_keys_distinct_external_roots() {
+        let root = std::env::temp_dir().join(format!("muniment-attach-context-{}", Uuid::now_v7()));
+        let first = root.join("repo-one");
+        let second = root.join("repo-two");
+        let first_memory = root.join("memory-one");
+        let second_memory = root.join("memory-two");
+        std::fs::create_dir_all(&first).unwrap();
+        std::fs::create_dir_all(&second).unwrap();
+        std::fs::write(first.join("AGENTS.md"), "first instructions").unwrap();
+        std::fs::write(second.join("AGENTS.md"), "second instructions").unwrap();
+        let contexts = Arc::new(Mutex::new(HashMap::new()));
+        let mut first_connection = DesktopAttachService {
+            boundaries: FakeRunStartBoundaries::accepting(),
+            idempotency: IdempotencyStore::open(":memory:").unwrap(),
+            home: root.join("home"),
+            workspace_contexts: contexts.clone(),
+            client_credentials: Arc::new(Mutex::new(HashMap::new())),
+            credential_path: None,
+            client_identity: Some("default".into()),
+        };
+        first_connection
+            .onboard_workspace(WorkspaceOnboardRequest {
+                opened_directory: first.to_string_lossy().into_owned(),
+                memory_location: first_memory.to_string_lossy().into_owned(),
+            })
+            .unwrap();
+        drop(first_connection);
+
+        let mut second_connection = DesktopAttachService {
+            boundaries: FakeRunStartBoundaries::accepting(),
+            idempotency: IdempotencyStore::open(":memory:").unwrap(),
+            home: root.join("home"),
+            workspace_contexts: contexts.clone(),
+            client_credentials: Arc::new(Mutex::new(HashMap::new())),
+            credential_path: None,
+            client_identity: Some("default".into()),
+        };
+        second_connection
+            .onboard_workspace(WorkspaceOnboardRequest {
+                opened_directory: second.to_string_lossy().into_owned(),
+                memory_location: second_memory.to_string_lossy().into_owned(),
+            })
+            .unwrap();
+
+        let stored = contexts.lock().unwrap();
+        let stored = stored.get("default").unwrap();
+        assert_eq!(
+            stored
+                .get(&first.canonicalize().unwrap())
+                .unwrap()
+                .as_deref(),
+            Some("first instructions")
+        );
+        assert_eq!(
+            stored
+                .get(&second.canonicalize().unwrap())
+                .unwrap()
+                .as_deref(),
+            Some("second instructions")
+        );
+        assert_eq!(
+            stored
+                .get(&first_memory.canonicalize().unwrap())
+                .unwrap()
+                .as_deref(),
+            Some("first instructions")
+        );
+        drop(stored);
+        let client_b_boundaries = FakeRunStartBoundaries::accepting();
+        let mut client_b = DesktopAttachService {
+            boundaries: client_b_boundaries,
+            idempotency: IdempotencyStore::open(":memory:").unwrap(),
+            home: root.join("home"),
+            workspace_contexts: contexts.clone(),
+            client_credentials: Arc::new(Mutex::new(HashMap::new())),
+            credential_path: None,
+            client_identity: Some("client-b".into()),
+        };
+        for (offset, workspace) in [&first, &first_memory].into_iter().enumerate() {
+            let rejected = client_b.start_run(
+                &workspace.to_string_lossy(),
+                AttachRunStartRequest {
+                    text: "borrow context".into(),
+                    context: None,
+                },
+                &Id::new(format!("018f0000-0000-7000-8000-00000000003{offset}")).unwrap(),
+                &Id::new(format!("018f0000-0000-7000-8000-00000000004{offset}")).unwrap(),
+                CompanionProvenance {
+                    profile: "desktop-owner".into(),
+                    companion_kind: "cli".into(),
+                    companion_version: "1.2.3".into(),
+                    peer_uid: 1000,
+                    peer_pid: 99,
+                },
+            );
+            assert_eq!(rejected.unwrap_err().code(), ErrorCode::Unauthorized);
+        }
+        assert!(client_b
+            .boundaries
+            .prepared_provenance
+            .lock()
+            .unwrap()
+            .is_none());
+        let run = second_connection
+            .start_run(
+                &first.to_string_lossy(),
+                AttachRunStartRequest {
+                    text: "use repository context".into(),
+                    context: None,
+                },
+                &Id::new("018f0000-0000-7000-8000-000000000011").unwrap(),
+                &Id::new("018f0000-0000-7000-8000-000000000012").unwrap(),
+                CompanionProvenance {
+                    profile: "default".into(),
+                    companion_kind: "editor-extension".into(),
+                    companion_version: "1.2.3".into(),
+                    peer_uid: 1000,
+                    peer_pid: 42,
+                },
+            )
+            .unwrap();
+        assert!(!run.run_id.is_empty());
+        let provenance = second_connection
+            .boundaries
+            .prepared_provenance
+            .lock()
+            .unwrap();
+        assert_eq!(
+            provenance.as_ref().unwrap().extra["repository_instructions"],
+            "first instructions"
+        );
+        drop(provenance);
+        let mut third_connection = DesktopAttachService {
+            boundaries: FakeRunStartBoundaries::accepting(),
+            idempotency: IdempotencyStore::open(":memory:").unwrap(),
+            home: root.join("home"),
+            workspace_contexts: contexts.clone(),
+            client_credentials: Arc::new(Mutex::new(HashMap::new())),
+            credential_path: None,
+            client_identity: Some("default".into()),
+        };
+        third_connection
+            .start_run(
+                &second_memory.to_string_lossy(),
+                AttachRunStartRequest {
+                    text: "second context".into(),
+                    context: None,
+                },
+                &Id::new("018f0000-0000-7000-8000-000000000021").unwrap(),
+                &Id::new("018f0000-0000-7000-8000-000000000022").unwrap(),
+                CompanionProvenance {
+                    profile: "default".into(),
+                    companion_kind: "editor-extension".into(),
+                    companion_version: "1.2.3".into(),
+                    peer_uid: 1000,
+                    peer_pid: 42,
+                },
+            )
+            .unwrap();
+        assert_eq!(
+            third_connection
+                .boundaries
+                .prepared_provenance
+                .lock()
+                .unwrap()
+                .as_ref()
+                .unwrap()
+                .extra["repository_instructions"],
+            "second instructions"
+        );
+        assert!(!root.join("home").exists());
+        second_connection.ensure_home().unwrap();
+        for child in ["memory", "agents", "projects", "sessions"] {
+            assert!(root.join("home").join(child).join("README.md").is_file());
+        }
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn attach_credentials_reject_impersonation_and_canonical_grants_reject_retargeting() {
+        use std::os::unix::fs::symlink;
+
+        let root = std::env::temp_dir().join(format!("muniment-attach-grants-{}", Uuid::now_v7()));
+        let first = root.join("first");
+        let second = root.join("second");
+        let memory = root.join("memory");
+        let alias = root.join("alias");
+        std::fs::create_dir_all(&first).unwrap();
+        std::fs::create_dir_all(&second).unwrap();
+        symlink(&first, &alias).unwrap();
+        let state = AttachListenerState::load(&root.join("credentials.json")).unwrap();
+        let contexts = state.workspace_contexts;
+        let credentials = state.client_credentials;
+        let make_service = || DesktopAttachService {
+            boundaries: FakeRunStartBoundaries::accepting(),
+            idempotency: IdempotencyStore::open(":memory:").unwrap(),
+            home: root.join("home"),
+            workspace_contexts: contexts.clone(),
+            client_credentials: credentials.clone(),
+            credential_path: None,
+            client_identity: None,
+        };
+
+        let mut client_a = make_service();
+        assert_eq!(
+            client_a
+                .authorize_client("client-a", None, &"aa".repeat(32))
+                .unwrap(),
+            "aa".repeat(32)
+        );
+        client_a
+            .onboard_workspace(WorkspaceOnboardRequest {
+                opened_directory: alias.to_string_lossy().into_owned(),
+                memory_location: memory.to_string_lossy().into_owned(),
+            })
+            .unwrap();
+        assert_eq!(
+            client_a.authorized_workspace(&alias.to_string_lossy()),
+            Some(first.to_string_lossy().into_owned())
+        );
+        assert!(client_a
+            .authorized_workspace(&root.join("missing").to_string_lossy())
+            .is_none());
+        std::fs::remove_file(&alias).unwrap();
+        symlink(&second, &alias).unwrap();
+        assert!(client_a
+            .authorized_workspace(&alias.to_string_lossy())
+            .is_none());
+
+        let mut impersonator = make_service();
+        for credential in [None, Some("cc".repeat(32))] {
+            assert_eq!(
+                impersonator
+                    .authorize_client("client-a", credential.as_deref(), &"bb".repeat(32))
+                    .unwrap_err()
+                    .code(),
+                ErrorCode::Unauthorized
+            );
+        }
+        assert!(impersonator.client_identity.is_none());
+        assert!(impersonator
+            .boundaries
+            .prepared_provenance
+            .lock()
+            .unwrap()
+            .is_none());
+
+        let mut reconnect = make_service();
+        assert_eq!(
+            reconnect
+                .authorize_client("client-a", Some(&"aa".repeat(32)), &"dd".repeat(32))
+                .unwrap(),
+            "aa".repeat(32)
+        );
+        assert_eq!(
+            reconnect.authorized_workspace(&first.to_string_lossy()),
+            Some(first.to_string_lossy().into_owned())
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn attach_client_credentials_survive_restart_and_unsafe_state_fails_closed() {
+        use std::os::unix::fs::{symlink, PermissionsExt};
+
+        let root =
+            std::env::temp_dir().join(format!("muniment-attach-credentials-{}", Uuid::now_v7()));
+        let path = root.join("credentials.json");
+        let identity = "018f0000-0000-7000-8000-000000000099";
+        let credential = "ab".repeat(32);
+        let make_service = |credentials| DesktopAttachService {
+            boundaries: FakeRunStartBoundaries::accepting(),
+            idempotency: IdempotencyStore::open(":memory:").unwrap(),
+            home: root.join("home"),
+            workspace_contexts: Arc::new(Mutex::new(HashMap::new())),
+            client_credentials: Arc::new(Mutex::new(credentials)),
+            credential_path: Some(path.clone()),
+            client_identity: None,
+        };
+
+        let mut initial = make_service(HashMap::new());
+        assert_eq!(
+            initial
+                .authorize_client(identity, None, &credential)
+                .unwrap(),
+            credential
+        );
+        let metadata = std::fs::symlink_metadata(&path).unwrap();
+        assert_eq!(metadata.permissions().mode() & 0o777, 0o600);
+        drop(initial);
+
+        let loaded = load_client_credentials(&path).unwrap();
+        let mut restarted = make_service(loaded);
+        assert_eq!(
+            restarted
+                .authorize_client(identity, Some(&credential), &"cd".repeat(32))
+                .unwrap(),
+            credential
+        );
+        for presented in [None, Some("00".repeat(32))] {
+            let mut rejected = make_service(load_client_credentials(&path).unwrap());
+            assert_eq!(
+                rejected
+                    .authorize_client(identity, presented.as_deref(), &"ef".repeat(32))
+                    .unwrap_err()
+                    .code(),
+                ErrorCode::Unauthorized
+            );
+            assert!(rejected.client_identity.is_none());
+        }
+        let mut unknown = make_service(load_client_credentials(&path).unwrap());
+        assert_eq!(
+            unknown
+                .authorize_client(
+                    "018f0000-0000-7000-8000-000000000100",
+                    Some(&credential),
+                    &"ef".repeat(32)
+                )
+                .unwrap_err()
+                .code(),
+            ErrorCode::Unauthorized
+        );
+
+        std::fs::write(&path, b"not-json").unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        assert!(load_client_credentials(&path).is_err());
+        std::fs::remove_file(&path).unwrap();
+        let target = root.join("target");
+        std::fs::write(&target, b"{}").unwrap();
+        symlink(&target, &path).unwrap();
+        assert!(load_client_credentials(&path).is_err());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn production_listener_state_isolates_workspace_grants_across_transport_connections() {
+        use muniment_attach::{handshake_stream_with_credential, ClientError};
+        use muniment_core::attach::linux::ApprovalDecision;
+        use std::os::unix::fs::symlink;
+
+        let root =
+            std::env::temp_dir().join(format!("muniment-listener-isolation-{}", Uuid::now_v7()));
+        let opened = root.join("opened");
+        let memory = root.join("memory");
+        let other = root.join("other");
+        let alias = root.join("alias");
+        std::fs::create_dir_all(&opened).unwrap();
+        std::fs::create_dir_all(&other).unwrap();
+        std::fs::write(opened.join("AGENTS.md"), "private client A context").unwrap();
+        symlink(&opened, &alias).unwrap();
+        let contexts = Arc::new(Mutex::new(HashMap::new()));
+        let credentials = Arc::new(Mutex::new(HashMap::new()));
+        let identity_a = "018f0000-0000-7000-8000-0000000000a1";
+        let identity_b = "018f0000-0000-7000-8000-0000000000b1";
+        let connect = |identity: &'static str,
+                       credential: Option<String>,
+                       boundaries: FakeRunStartBoundaries| {
+            let runtime = root.join(format!("runtime-{}", Uuid::now_v7()));
+            std::fs::create_dir(&runtime).unwrap();
+            let filesystem = AttachFilesystem::from_runtime_directory(&runtime).unwrap();
+            let transport = AttachTransport::bind(&filesystem).unwrap();
+            let client_stream =
+                std::os::unix::net::UnixStream::connect(transport.local_path()).unwrap();
+            let (server_stream, peer) = transport.accept().unwrap();
+            let contexts = contexts.clone();
+            let credentials = credentials.clone();
+            let service_root = root.clone();
+            let approval_workspace = opened.clone();
+            let worker = std::thread::spawn(move || {
+                let mut service = DesktopAttachService {
+                    boundaries,
+                    idempotency: IdempotencyStore::open(":memory:").unwrap(),
+                    home: service_root.join("home"),
+                    workspace_contexts: contexts,
+                    client_credentials: credentials,
+                    credential_path: None,
+                    client_identity: None,
+                };
+                let result = run_authenticated_session_with_service_and_approvals(
+                    server_stream,
+                    peer,
+                    "0.0.1",
+                    &mut service,
+                    |_: &muniment_core::attach::PairingChallenge, _: Duration| {
+                        Some(ApprovalDecision::Approve(Approval {
+                            profile: "desktop-owner".into(),
+                            workspace: approval_workspace.to_string_lossy().into_owned(),
+                            scopes: BTreeSet::from(["thread.read".into(), "run.write".into()]),
+                            lifetime: Duration::from_secs(3600),
+                        }))
+                    },
+                );
+                (result, service)
+            });
+            let client = handshake_stream_with_credential(
+                client_stream,
+                "0.0.1",
+                identity,
+                credential.as_deref(),
+                Duration::from_secs(1),
+                Duration::from_secs(1),
+                || {},
+            );
+            (client, worker)
+        };
+
+        let (client_a, worker) = connect(identity_a, None, FakeRunStartBoundaries::accepting());
+        let mut client_a = client_a.unwrap();
+        let credential_a = client_a.authorized_client_credential().to_owned();
+        client_a
+            .onboard_workspace(&alias.to_string_lossy(), &memory.to_string_lossy())
+            .unwrap();
+        drop(client_a);
+        assert!(worker.join().unwrap().0.is_ok());
+
+        let a_dispatch = FakeRunStartBoundaries::accepting();
+        let (client_a, worker) = connect(identity_a, Some(credential_a.clone()), a_dispatch);
+        let mut client_a = client_a.unwrap();
+        client_a
+            .start_run_in_workspace("opened", None, Some(&opened.to_string_lossy()))
+            .unwrap();
+        client_a
+            .start_run_in_workspace("override", None, Some(&memory.to_string_lossy()))
+            .unwrap();
+        drop(client_a);
+        let (_, service) = worker.join().unwrap();
+        assert_eq!(
+            service
+                .boundaries
+                .prepared_provenance
+                .lock()
+                .unwrap()
+                .as_ref()
+                .unwrap()
+                .extra["repository_instructions"],
+            "private client A context"
+        );
+
+        let (client_b, worker) = connect(identity_b, None, FakeRunStartBoundaries::accepting());
+        let mut client_b = client_b.unwrap();
+        let credential_b = client_b.authorized_client_credential().to_owned();
+        client_b
+            .onboard_workspace(&other.to_string_lossy(), &other.to_string_lossy())
+            .unwrap();
+        drop(client_b);
+        assert!(worker.join().unwrap().0.is_ok());
+        for workspace in [&opened, &memory] {
+            let b_dispatch = FakeRunStartBoundaries::accepting();
+            let (client_b, worker) = connect(identity_b, Some(credential_b.clone()), b_dispatch);
+            let mut client_b = client_b.unwrap();
+            assert_eq!(
+                client_b.start_run_in_workspace("borrow", None, Some(&workspace.to_string_lossy())),
+                Err(ClientError::RequestRejected)
+            );
+            drop(client_b);
+            let (_, service) = worker.join().unwrap();
+            assert!(service
+                .boundaries
+                .prepared_provenance
+                .lock()
+                .unwrap()
+                .is_none());
+            assert!(service.boundaries.launched_run.lock().unwrap().is_none());
+        }
+
+        for (identity, credential) in [
+            (identity_a, None),
+            (identity_a, Some("malformed".into())),
+            (identity_a, Some("00".repeat(32))),
+            (
+                "018f0000-0000-7000-8000-0000000000ff",
+                Some(credential_a.clone()),
+            ),
+        ] {
+            let denied = FakeRunStartBoundaries::accepting();
+            let (client, worker) = connect(identity, credential, denied);
+            assert!(client.is_err());
+            let (_, service) = worker.join().unwrap();
+            assert!(service
+                .boundaries
+                .prepared_provenance
+                .lock()
+                .unwrap()
+                .is_none());
+            assert!(service.client_identity.is_none());
+        }
+
+        for workspace in [root.join("missing"), alias.clone()] {
+            if workspace == alias {
+                std::fs::remove_file(&alias).unwrap();
+                symlink(&other, &alias).unwrap();
+            }
+            let denied = FakeRunStartBoundaries::accepting();
+            let (client, worker) = connect(identity_a, Some(credential_a.clone()), denied);
+            let mut client = client.unwrap();
+            assert_eq!(
+                client.start_run_in_workspace("invalid", None, Some(&workspace.to_string_lossy())),
+                Err(ClientError::RequestRejected)
+            );
+            drop(client);
+            let (_, service) = worker.join().unwrap();
+            assert!(service
+                .boundaries
+                .prepared_provenance
+                .lock()
+                .unwrap()
+                .is_none());
+            assert!(service.boundaries.launched_run.lock().unwrap().is_none());
+        }
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
     fn attach_adapter_replays_exact_retry_without_second_coordinator_run() {
         let mut service = DesktopAttachService {
             boundaries: FakeRunStartBoundaries::accepting(),
             idempotency: IdempotencyStore::open(":memory:").unwrap(),
+            home: PathBuf::new(),
+            workspace_contexts: Arc::new(Mutex::new(HashMap::new())),
+            client_credentials: Arc::new(Mutex::new(HashMap::new())),
+            credential_path: None,
+            client_identity: Some("default".into()),
         };
         let key = "018f0000-0000-7000-8000-000000000002";
         let first = attach_start_on(
@@ -2428,6 +3248,11 @@ mod tests {
         let mut service = DesktopAttachService {
             boundaries: FakeRunStartBoundaries::accepting(),
             idempotency: IdempotencyStore::open(":memory:").unwrap(),
+            home: PathBuf::new(),
+            workspace_contexts: Arc::new(Mutex::new(HashMap::new())),
+            client_credentials: Arc::new(Mutex::new(HashMap::new())),
+            credential_path: None,
+            client_identity: Some("default".into()),
         };
         let key = "018f0000-0000-7000-8000-000000000002";
         attach_start_on(
@@ -2490,6 +3315,11 @@ mod tests {
         let mut service = DesktopAttachService {
             boundaries: FakeRunStartBoundaries::accepting(),
             idempotency: IdempotencyStore::open(":memory:").unwrap(),
+            home: PathBuf::new(),
+            workspace_contexts: Arc::new(Mutex::new(HashMap::new())),
+            client_credentials: Arc::new(Mutex::new(HashMap::new())),
+            credential_path: None,
+            client_identity: Some("default".into()),
         };
         let result = service.start_run(
             "workspace-b",
@@ -2554,6 +3384,11 @@ mod tests {
         let mut service = DesktopAttachService {
             boundaries: FakeRunStartBoundaries::accepting(),
             idempotency: FailingFinalization,
+            home: PathBuf::new(),
+            workspace_contexts: Arc::new(Mutex::new(HashMap::new())),
+            client_credentials: Arc::new(Mutex::new(HashMap::new())),
+            credential_path: None,
+            client_identity: Some("default".into()),
         };
         let result = service.start_run(
             "workspace-a",

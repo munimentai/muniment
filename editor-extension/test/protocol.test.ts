@@ -80,6 +80,7 @@ test("rejects conflicting envelope shapes", () => {
   assert.throws(
     () => decodeAttachEnvelope({
       capability: "capability", expires_at: 3600, idle_timeout_seconds: 900,
+      authorized_client_credential: "credential",
       workspace_scopes: {}, operation: "thread.list", request_id: "id", body: {},
     }),
     /conflicting/,

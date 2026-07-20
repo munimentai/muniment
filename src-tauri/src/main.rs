@@ -15,8 +15,11 @@ fn main() {
         .plugin(tauri_plugin_dialog::init())
         .manage(auth::AuthState::new())
         .manage(Arc::new(voice_capture::VoiceCaptureState::new()))
+        .manage(chat::AttachApprovalState::default())
         .setup(|app| {
             app.manage(chat::ChatState::new(app.handle())?);
+            #[cfg(target_os = "linux")]
+            chat::start_attach_listener(app.handle().clone());
             let model_root = app.path().app_data_dir()?.join("models").join("qwen3.5-4b");
             let required_model = model_install::GemmaInstallState::new(model_root)?;
             // Required acquisition is deliberately detached from onboarding: folder and
@@ -43,6 +46,7 @@ fn main() {
             chat::chat_cancel,
             chat::chat_queue,
             chat::chat_history,
+            chat::attach_pairing_decide,
             model_install::gemma_install_start,
             model_install::gemma_install_status,
             model_install::gemma_install_cancel,
