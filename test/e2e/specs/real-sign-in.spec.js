@@ -113,6 +113,12 @@ describe('installed nightly', () => {
     await authenticatedMarker.waitForDisplayed({ timeout: 120000 })
     await authenticatedMarker.saveScreenshot(path.join(rawDir, '02-authenticated.png'))
 
+    const prompt = `Muniment E2E ${Date.now()}`
+    await authenticatedMarker.setValue(prompt)
+    expect(await authenticatedMarker.getValue()).toBe(prompt)
+    expect(await $('button=Send').isEnabled()).toBe(true)
+    await browser.saveScreenshot(path.join(rawDir, '03-composer-ready.png'))
+
     let frontendLogs
     try {
       frontendLogs = await browser.getLogs('browser')
