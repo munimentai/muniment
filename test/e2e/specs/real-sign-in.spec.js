@@ -113,6 +113,41 @@ describe('installed nightly', () => {
     await authenticatedMarker.waitForDisplayed({ timeout: 120000 })
     await authenticatedMarker.saveScreenshot(path.join(rawDir, '02-authenticated.png'))
 
+    if (process.platform === 'linux') {
+      const prompt = 'Reply with one short sentence.'
+      await authenticatedMarker.setValue(prompt)
+      await (await $('.composer').$('button=Send')).click()
+
+      const userMessages = await $$('.user-message p')
+      const userMessage = userMessages.at(-1)
+      if (!userMessage) throw new Error('submitted user message did not render')
+      await userMessage.waitForDisplayed()
+      expect(await userMessage.getText()).toBe(prompt)
+      await browser.saveScreenshot(path.join(rawDir, '03-chat-submitted.png'))
+
+      const responses = await $$('.response')
+      const response = responses.at(-1)
+      if (!response) throw new Error('assistant run did not render')
+      await browser.waitUntil(async () => {
+        const receipt = await response.$('.provenance')
+        const error = await response.$('.run-error')
+        return await receipt.isDisplayed() || await error.isDisplayed()
+      }, {
+        timeout: 120000,
+        interval: 1000,
+        timeoutMsg: 'chat reply did not reach a terminal state within 120 seconds',
+      })
+      await browser.saveScreenshot(path.join(rawDir, '04-chat-terminal.png'))
+
+      const runError = await response.$('.run-error')
+      expect(await runError.isExisting()).toBe(false)
+      const receipt = await response.$('.provenance')
+      await receipt.waitForDisplayed()
+      const reply = await response.$('p')
+      await reply.waitForDisplayed()
+      expect((await reply.getText()).trim()).not.toBe('')
+    }
+
     let frontendLogs
     try {
       frontendLogs = await browser.getLogs('browser')

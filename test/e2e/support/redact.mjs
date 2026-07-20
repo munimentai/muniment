@@ -14,7 +14,7 @@ const tokenPatterns = [
   /\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b/g,
 ]
 
-const safeScreenshots = new Set(['01-signed-out.png', '02-authenticated.png'])
+const safeScreenshots = new Set(['01-signed-out.png', '02-authenticated.png', '03-chat-submitted.png', '04-chat-terminal.png'])
 function inspectScreenshot(input) {
   const data = fs.readFileSync(input)
   if (data.length < 33 || !data.subarray(0, 8).equals(Buffer.from([137,80,78,71,13,10,26,10]))) throw new Error('unsafe screenshot format')
