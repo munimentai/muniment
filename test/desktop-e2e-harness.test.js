@@ -334,6 +334,11 @@ describe('artifact redaction boundary', () => {
     const { result, destination } = redact({ '01-signed-out.png': Buffer.concat([png, Buffer.from('private-user')]) }, { MUNIMENT_E2E_USERNAME: 'private-user' })
     expect(result.status).not.toBe(0); expect(fs.existsSync(destination)).toBe(false)
   })
+  it('emits the approved prompt-submitted screenshot', () => {
+    const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=', 'base64')
+    const { result, destination } = redact({ '03-prompt-submitted.png': png })
+    expect(result.status).toBe(0); expect(fs.readFileSync(path.join(destination, '03-prompt-submitted.png'))).toEqual(png)
+  })
 })
 
 describe('desktop-ci payload extraction', () => {

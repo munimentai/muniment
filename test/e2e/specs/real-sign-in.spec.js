@@ -119,7 +119,7 @@ describe('installed nightly', () => {
     const userMessage = await $(`.user-message=${prompt}`)
     await userMessage.waitForDisplayed({ timeout: 30000 })
     expect(await userMessage.getText()).toBe(prompt)
-    await browser.saveScreenshot(path.join(rawDir, '03-prompt-submitted.png'))
+    await userMessage.saveScreenshot(path.join(rawDir, '03-prompt-submitted.png'))
 
     let frontendLogs
     try {
