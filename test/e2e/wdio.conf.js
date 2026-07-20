@@ -2,14 +2,14 @@ import path from 'node:path'
 
 const appBinary = process.env.MUNIMENT_E2E_APP_BINARY
 const artifactDir = process.env.MUNIMENT_E2E_RAW_DIR
-const reportName = process.env.MUNIMENT_E2E_CLEANUP_ONLY === '1' ? 'cleanup' : 'sign-in'
+const reportName = process.env.MUNIMENT_E2E_CLEANUP_ONLY === '1' ? 'cleanup' : process.env.MUNIMENT_E2E_ONBOARDING_ONLY === '1' ? 'onboarding' : 'sign-in'
 
 if (!appBinary || !path.isAbsolute(appBinary)) throw new Error('MUNIMENT_E2E_APP_BINARY must be an absolute path')
 if (!artifactDir || !path.isAbsolute(artifactDir)) throw new Error('MUNIMENT_E2E_RAW_DIR must be an absolute path')
 
 export const config = {
   runner: 'local',
-  specs: [process.env.MUNIMENT_E2E_CLEANUP_ONLY === '1' ? './specs/cleanup.spec.js' : './specs/real-sign-in.spec.js'],
+  specs: [process.env.MUNIMENT_E2E_CLEANUP_ONLY === '1' ? './specs/cleanup.spec.js' : process.env.MUNIMENT_E2E_ONBOARDING_ONLY === '1' ? './specs/onboarding.spec.js' : './specs/real-sign-in.spec.js'],
   maxInstances: 1,
   capabilities: [{ browserName: 'wry' }],
   logLevel: 'info',

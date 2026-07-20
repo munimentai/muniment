@@ -22,6 +22,9 @@ ureq = { version = "2", default-features = false, features = ["json", "tls", "na
 uuid = { version = "1", features = ["v7"] }
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Storage_FileSystem"] }
+
 # Platform keychains: macOS Keychain / Windows Credential Manager / Linux
 # Secret Service. `vendored` builds libdbus from source so the Linux build
 # VM needs no system packages beyond the C toolchain it already has; the
