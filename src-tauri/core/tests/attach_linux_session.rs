@@ -12,15 +12,16 @@ use muniment_core::attach::linux::{
 use muniment_core::attach::{
     decode_frame, encode_frame, Approval, AuthorizationClock, AuthorizationTokenGenerator,
     Authorized, Envelope, ErrorAction, ErrorCode, ErrorEnvelope, Event, EventName, Hello, Id,
-    Operation, Protocol, Request, Response, VersionRange, Welcome, CHALLENGE_LIFETIME,
-    MAX_FRAME_LENGTH, MAX_JSON_DEPTH, MAX_RUN_STREAM_WINDOW_BYTES, MAX_RUN_STREAM_WINDOW_EVENTS,
+    Operation, Protocol, Request, Response, VersionRange, Welcome, WorkspaceOnboardRequest,
+    WorkspaceOnboarded, CHALLENGE_LIFETIME, MAX_FRAME_LENGTH, MAX_JSON_DEPTH,
+    MAX_RUN_STREAM_WINDOW_BYTES, MAX_RUN_STREAM_WINDOW_EVENTS,
 };
 use muniment_core::journal::{
     EventEnvelope, EventPayload, JournalCommitHint, Provenance, RunEventProjection, RunJournal,
 };
 use serde_json::json;
 use std::cell::Cell;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::io::{Read, Write};
 use std::net::Shutdown;
 use std::os::unix::net::UnixStream;
@@ -118,6 +119,65 @@ fn unavailable_service(
 struct StartService {
     calls: Vec<(String, RunStartRequest, Id, Id, CompanionProvenance)>,
     output: Option<RunStartAccepted>,
+}
+
+#[derive(Clone, Default)]
+struct OnboardingStartService {
+    instructions: Arc<std::sync::Mutex<HashMap<String, String>>>,
+    runs: Arc<std::sync::Mutex<Vec<(String, String)>>>,
+}
+
+impl ThreadListService for OnboardingStartService {
+    fn onboard_workspace(
+        &mut self,
+        request: WorkspaceOnboardRequest,
+    ) -> Result<WorkspaceOnboarded, muniment_core::attach::ProtocolError> {
+        let instructions = format!("instructions for {}", request.opened_directory);
+        let mut instructions_by_workspace = self.instructions.lock().unwrap();
+        instructions_by_workspace.insert(request.opened_directory.clone(), instructions.clone());
+        instructions_by_workspace.insert(request.memory_location.clone(), instructions.clone());
+        Ok(WorkspaceOnboarded {
+            opened_directory: request.opened_directory,
+            memory_location: request.memory_location,
+            instructions: Some(instructions),
+        })
+    }
+
+    fn workspace_is_authorized(&self, workspace: &str) -> bool {
+        self.instructions.lock().unwrap().contains_key(workspace)
+    }
+
+    fn list_threads(
+        &mut self,
+        _: &str,
+        _: ThreadListRequest,
+    ) -> Result<ThreadListPage, muniment_core::attach::ProtocolError> {
+        panic!("thread reads must not dispatch")
+    }
+
+    fn start_run(
+        &mut self,
+        workspace: &str,
+        _: RunStartRequest,
+        _: &Id,
+        _: &Id,
+        _: CompanionProvenance,
+    ) -> Result<RunStartAccepted, muniment_core::attach::ProtocolError> {
+        self.runs.lock().unwrap().push((
+            workspace.to_owned(),
+            self.instructions
+                .lock()
+                .unwrap()
+                .get(workspace)
+                .cloned()
+                .unwrap(),
+        ));
+        Ok(RunStartAccepted {
+            run_id: "0190a100-0000-7000-8000-000000000001".into(),
+            committed_seq: 2,
+            accepted_at: "2026-07-17T00:00:00Z".into(),
+        })
+    }
 }
 
 #[derive(Default)]
@@ -3048,6 +3108,68 @@ fn authorized_run_start_dispatches_once_with_bounded_input_and_provenance() {
     assert_eq!(provenance.companion_kind, "cli");
     assert_eq!(provenance.companion_version, "1.0.0");
     assert_eq!(provenance.peer_uid, unsafe { libc::geteuid() });
+}
+
+#[test]
+fn onboarding_authorizes_only_opened_and_memory_workspaces_for_run_start() {
+    let (mut client, server) = UnixStream::pair().unwrap();
+    client.write_all(&hello(1, 1)).unwrap();
+    let workspaces = [
+        ("/cli/default", "/cli/default"),
+        ("/cli/override-repo", "/cli/external-memory"),
+        ("/extension/root-one", "/extension/root-one"),
+        ("/extension/root-two", "/extension/external-memory"),
+    ];
+    for (index, (opened, memory)) in workspaces.iter().enumerate() {
+        client
+            .write_all(&request(
+                200 + index as u128,
+                Operation::WorkspaceOnboard,
+                json!({"opened_directory": opened, "memory_location": memory}),
+            ))
+            .unwrap();
+        client
+            .write_all(&request_with_idempotency(
+                210 + index as u128,
+                Operation::RunStart,
+                json!({"text": "use instructions", "workspace": memory}),
+            ))
+            .unwrap();
+    }
+    client
+        .write_all(&request_with_idempotency(
+            220,
+            Operation::RunStart,
+            json!({"text": "escape grant", "workspace": "/arbitrary/not-onboarded"}),
+        ))
+        .unwrap();
+    client.shutdown(Shutdown::Write).unwrap();
+
+    let mut approved = approval();
+    approved.scopes.insert("run.write".into());
+    let mut service = OnboardingStartService::default();
+    assert_eq!(
+        dispatch_session_with_approval(
+            &mut client,
+            server,
+            TestClock(Rc::new(Cell::new(Duration::ZERO))),
+            approved,
+            &mut service,
+        ),
+        Ok(())
+    );
+    for _ in workspaces {
+        let _: Response = read_frame(&mut client);
+        let _: Response = read_frame(&mut client);
+    }
+    let error: ErrorEnvelope = read_frame(&mut client);
+    assert_eq!(error.error.code(), ErrorCode::Unauthorized);
+    let runs = service.runs.lock().unwrap();
+    assert_eq!(runs.len(), workspaces.len());
+    for ((selected, instructions), (opened, memory)) in runs.iter().zip(workspaces.iter()) {
+        assert_eq!(selected, memory);
+        assert_eq!(instructions, &format!("instructions for {opened}"));
+    }
 }
 
 #[test]

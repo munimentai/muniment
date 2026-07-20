@@ -58,6 +58,7 @@ fn run() -> Result<(), CliError> {
     let mut stdout = io::stdout();
     run_with(
         &args,
+        &workspace.to_string_lossy(),
         io::stdin().is_terminal(),
         io::stdout().is_terminal(),
         &mut input,
@@ -106,6 +107,7 @@ fn workspace_argument(args: &mut Vec<OsString>) -> Result<Option<PathBuf>, CliEr
 
 fn run_with(
     args: &[OsString],
+    workspace: &str,
     stdin_is_terminal: bool,
     stdout_is_terminal: bool,
     input: &mut impl BufRead,
@@ -153,7 +155,7 @@ fn run_with(
     })?;
     if let Some(prompt) = prompt {
         let accepted = client
-            .start_run(&prompt, None)
+            .start_run_in_workspace(&prompt, None, Some(workspace))
             .map_err(CliError::RunClient)?;
         writeln!(output, "Run committed: {}", one_line(&accepted.run_id))
             .map_err(|_| CliError::RunClient(ClientError::ConnectionClosed))?;
@@ -662,6 +664,7 @@ mod tests {
         let mut input = io::Cursor::new(Vec::<u8>::new());
         run_with(
             &["threads".into(), "list".into()],
+            "/workspace",
             true,
             true,
             &mut input,
@@ -735,7 +738,10 @@ mod tests {
                 .unwrap();
             let request = read_frame(&mut server);
             assert_eq!(request["operation"], "run.start");
-            assert_eq!(request["body"], serde_json::json!({"text": "ship it"}));
+            assert_eq!(
+                request["body"],
+                serde_json::json!({"text": "ship it", "workspace": "/workspace"})
+            );
             assert!(request["idempotency_key"].is_string());
             let response = Response {
                 protocol: Protocol,
@@ -875,6 +881,7 @@ mod tests {
         let mut output = Vec::new();
         run_with(
             &["run".into(), "start".into()],
+            "/workspace",
             true,
             true,
             &mut input,
@@ -926,6 +933,7 @@ mod tests {
             let mut output = Vec::new();
             let error = run_with(
                 &["run".into(), "start".into()],
+                "/workspace",
                 true,
                 true,
                 &mut input,
@@ -980,6 +988,7 @@ mod tests {
         let mut output = Vec::new();
         let error = run_with(
             &["run".into(), "start".into()],
+            "/workspace",
             true,
             true,
             &mut input,
@@ -1080,6 +1089,7 @@ mod tests {
         let mut output = Vec::new();
         run_with(
             &["threads".into(), "list".into()],
+            "/workspace",
             true,
             true,
             &mut input,
@@ -1174,6 +1184,7 @@ mod tests {
         let mut output = Vec::new();
         run_with(
             &["threads".into(), "open".into(), "thread-1".into()],
+            "/workspace",
             true,
             true,
             &mut input,
@@ -1251,6 +1262,7 @@ mod tests {
             let mut input = io::Cursor::new(Vec::<u8>::new());
             let result = run_with(
                 &args,
+                "/workspace",
                 stdin_terminal,
                 stdout_terminal,
                 &mut input,

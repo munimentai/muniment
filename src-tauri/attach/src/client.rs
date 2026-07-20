@@ -510,6 +510,15 @@ mod linux {
             text: &str,
             context: Option<Value>,
         ) -> Result<RunStartAccepted, ClientError> {
+            self.start_run_in_workspace(text, context, None)
+        }
+
+        pub fn start_run_in_workspace(
+            &mut self,
+            text: &str,
+            context: Option<Value>,
+            workspace: Option<&str>,
+        ) -> Result<RunStartAccepted, ClientError> {
             let context_length = context
                 .as_ref()
                 .map(|context| serde_json::to_vec(context).map(|bytes| bytes.len()))
@@ -518,6 +527,7 @@ mod linux {
                 .unwrap_or(0);
             if text.trim().is_empty()
                 || text.len() > MAX_RUN_START_TEXT_LENGTH
+                || workspace.is_some_and(|value| value.is_empty() || value.len() > MAX_TEXT_LENGTH)
                 || context_length > MAX_RUN_START_CONTEXT_LENGTH
             {
                 return Err(ClientError::UnexpectedMessage);
@@ -528,6 +538,9 @@ mod linux {
             let mut body = serde_json::json!({ "text": text });
             if let Some(context) = context {
                 body["context"] = context;
+            }
+            if let Some(workspace) = workspace {
+                body["workspace"] = Value::String(workspace.to_owned());
             }
             let request = Request {
                 protocol: Protocol,
@@ -1260,6 +1273,14 @@ impl AuthorizedClient {
         &mut self,
         _text: &str,
         _context: Option<serde_json::Value>,
+    ) -> Result<RunStartAccepted, ClientError> {
+        Err(ClientError::UnsupportedPlatform)
+    }
+    pub fn start_run_in_workspace(
+        &mut self,
+        _text: &str,
+        _context: Option<serde_json::Value>,
+        _workspace: Option<&str>,
     ) -> Result<RunStartAccepted, ClientError> {
         Err(ClientError::UnsupportedPlatform)
     }

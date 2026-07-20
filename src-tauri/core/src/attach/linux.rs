@@ -470,6 +470,10 @@ pub trait ThreadListService {
         Err(ProtocolError::unsupported_operation())
     }
 
+    fn workspace_is_authorized(&self, _workspace: &str) -> bool {
+        false
+    }
+
     fn list_threads(
         &mut self,
         workspace: &str,
@@ -1546,6 +1550,9 @@ fn dispatch_request<S: ThreadListService>(
             .as_ref()
             .ok_or_else(ProtocolError::idempotency_key_required)?;
         let selected_workspace = body.workspace.as_deref().unwrap_or(workspace);
+        if selected_workspace != workspace && !service.workspace_is_authorized(selected_workspace) {
+            return Err(ProtocolError::unauthorized().into());
+        }
         let accepted = service.start_run(
             selected_workspace,
             RunStartRequest {

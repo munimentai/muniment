@@ -647,6 +647,12 @@ impl<B: RunStartBoundaries, I: RunStartIdempotency> ThreadListService
             .map_err(|_| ProtocolError::persistence_failed())
     }
 
+    fn workspace_is_authorized(&self, workspace: &str) -> bool {
+        self.workspace_contexts
+            .lock()
+            .is_ok_and(|contexts| contexts.contains_key(&PathBuf::from(workspace)))
+    }
+
     fn list_threads(
         &mut self,
         _workspace: &str,
