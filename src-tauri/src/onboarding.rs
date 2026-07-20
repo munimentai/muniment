@@ -340,16 +340,8 @@ fn validate_home(value: &str) -> Result<PathBuf, String> {
 }
 
 fn ensure_directory(path: &Path) -> Result<(), String> {
-    match fs::symlink_metadata(path) {
-        Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_dir() => {
-            Err("A Home scaffold path is not a directory.".into())
-        }
-        Ok(_) => Ok(()),
-        Err(error) if error.kind() == io::ErrorKind::NotFound => {
-            fs::create_dir(path).map_err(|_| "Muniment Home could not be scaffolded.".into())
-        }
-        Err(_) => Err("Muniment Home could not be scaffolded.".into()),
-    }
+    muniment_core::ensure_scaffold_directory(path)
+        .map_err(|_| "Muniment Home could not be scaffolded.".into())
 }
 
 fn title(value: &str) -> String {
@@ -361,15 +353,8 @@ fn title(value: &str) -> String {
 }
 
 fn write_if_missing(path: &Path, contents: &[u8]) -> Result<(), String> {
-    match fs::symlink_metadata(path) {
-        Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_file() => {
-            return Err("A Home seed path is not a regular file.".into());
-        }
-        Ok(_) => return Ok(()),
-        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
-        Err(_) => return Err("Muniment Home could not be scaffolded.".into()),
-    }
-    fs::write(path, contents).map_err(|_| "Muniment Home could not be scaffolded.".into())
+    muniment_core::write_scaffold_file_if_missing(path, contents)
+        .map_err(|_| "Muniment Home could not be scaffolded.".into())
 }
 
 fn atomic_write(path: &Path, contents: &[u8]) -> io::Result<()> {

@@ -17,3 +17,5 @@ pub mod model_acquisition_transport;
 pub mod model_install;
 pub mod model_install_native;
 pub mod sidecar;
+
+pub use muniment_attach::{ensure_scaffold_directory, write_scaffold_file_if_missing};

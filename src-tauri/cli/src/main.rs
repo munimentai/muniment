@@ -4,9 +4,10 @@ use muniment_attach::{
 };
 use std::ffi::OsString;
 use std::io::{self, BufRead, IsTerminal, Write};
+use std::path::PathBuf;
 
 const USAGE: &str =
-    "usage: muniment threads list | muniment threads open <thread-id> | muniment run start";
+    "usage: muniment [--workspace <directory>] threads list | muniment [--workspace <directory>] threads open <thread-id> | muniment [--workspace <directory>] run start | muniment [--workspace <directory>] workspace init";
 
 enum Command {
     List,
@@ -25,6 +26,7 @@ enum CliError {
     Client(ClientError),
     RunClient(ClientError),
     PermissionClient(ClientError),
+    Workspace,
 }
 
 fn main() {
@@ -38,7 +40,16 @@ fn main() {
 }
 
 fn run() -> Result<(), CliError> {
-    let args: Vec<_> = std::env::args_os().skip(1).collect();
+    let mut args: Vec<_> = std::env::args_os().skip(1).collect();
+    let workspace = workspace_argument(&mut args)?
+        .unwrap_or(std::env::current_dir().map_err(|_| CliError::Workspace)?);
+    if !recognized_command(&args) {
+        return Err(CliError::Usage);
+    }
+    muniment_attach::onboard_workspace(&workspace).map_err(|_| CliError::Workspace)?;
+    if args == [OsString::from("workspace"), OsString::from("init")] {
+        return Ok(());
+    }
     let stdin = io::stdin();
     let mut input = stdin.lock();
     let mut stdout = io::stdout();
@@ -50,6 +61,37 @@ fn run() -> Result<(), CliError> {
         &mut stdout,
         |pairing_pending| handshake(env!("CARGO_PKG_VERSION"), pairing_pending),
     )
+}
+
+fn recognized_command(args: &[OsString]) -> bool {
+    matches!(args,
+        [first, second] if (first == "threads" && second == "list")
+            || (first == "run" && second == "start")
+            || (first == "workspace" && second == "init")
+    ) || matches!(args, [first, second, _] if first == "threads" && second == "open")
+}
+
+fn workspace_argument(args: &mut Vec<OsString>) -> Result<Option<PathBuf>, CliError> {
+    let positions = args
+        .iter()
+        .enumerate()
+        .filter_map(|(index, value)| (value == "--workspace").then_some(index))
+        .collect::<Vec<_>>();
+    if positions.len() > 1 {
+        return Err(CliError::Usage);
+    }
+    let Some(index) = positions.first().copied() else {
+        return Ok(None);
+    };
+    if index + 1 >= args.len() || args[index + 1] == "--workspace" {
+        return Err(CliError::Usage);
+    }
+    let path = PathBuf::from(args.remove(index + 1));
+    args.remove(index);
+    if !path.is_absolute() {
+        return Err(CliError::Usage);
+    }
+    Ok(Some(path))
 }
 
 fn run_with(
@@ -192,6 +234,7 @@ fn guidance(error: &CliError) -> &'static str {
             "answer the pending permission with allow or deny, then try again"
         }
         CliError::RunFailed => "the run failed; check the Muniment desktop, then try again",
+        CliError::Workspace => "the workspace memory directory could not be initialized",
         CliError::RunClient(ClientError::RequestRejected) => {
             "the desktop rejected the run request; retry, then check the desktop"
         }
@@ -1206,6 +1249,32 @@ mod tests {
             );
             assert!(guidance(&result.unwrap_err()).contains(expected));
             assert!(output.is_empty());
+        }
+    }
+
+    #[test]
+    fn workspace_override_is_absolute_unique_and_position_independent() {
+        let absolute = std::env::temp_dir().join("muniment-override");
+        let mut args = vec![
+            "threads".into(),
+            "list".into(),
+            "--workspace".into(),
+            absolute.clone().into_os_string(),
+        ];
+        assert_eq!(workspace_argument(&mut args).unwrap(), Some(absolute));
+        assert_eq!(args, [OsString::from("threads"), OsString::from("list")]);
+
+        for mut invalid in [
+            vec![OsString::from("--workspace")],
+            vec![OsString::from("--workspace"), OsString::from("relative")],
+            vec![
+                OsString::from("--workspace"),
+                std::env::temp_dir().into_os_string(),
+                OsString::from("--workspace"),
+                std::env::temp_dir().into_os_string(),
+            ],
+        ] {
+            assert!(workspace_argument(&mut invalid).is_err());
         }
     }
 }

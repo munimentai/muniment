@@ -1,4 +1,6 @@
 import * as vscode from "vscode";
+import { execFile } from "node:child_process";
+import { isAbsolute } from "node:path";
 import { ThreadDocumentLoader } from "./thread-document";
 import { openAcceptedRun, permissionDecision, RunDocumentStore } from "./run-documents";
 import { NEW_RUN_COMMAND, NEW_RUN_WITH_CURRENT_FILE_COMMAND, OPEN_THREAD_COMMAND, ThreadsModel, threadOpenCommand, type ThreadItem } from "./threads";
@@ -10,7 +12,8 @@ const REFRESH_COMMAND = "muniment.refreshThreads";
 const THREAD_SCHEME = "muniment-thread";
 const RUN_SCHEME = "muniment-run";
 
-export function activate(context: vscode.ExtensionContext): void {
+export async function activate(context: vscode.ExtensionContext): Promise<void> {
+  await initializeWorkspaceMemory();
   const model = new ThreadsModel((onPairingPending) => connectAttach({
     clientVersion: context.extension.packageJSON.version as string,
     onPairingPending,
@@ -98,6 +101,23 @@ export function activate(context: vscode.ExtensionContext): void {
       void vscode.window.showErrorMessage(result.message);
     }
   }
+}
+
+async function initializeWorkspaceMemory(): Promise<void> {
+  const opened = vscode.workspace.workspaceFolders?.[0]?.uri;
+  if (!opened || opened.scheme !== "file") return;
+  const configured = vscode.workspace.getConfiguration("muniment", opened)
+    .get<string>("workspaceMemoryLocation", "").trim();
+  const directory = configured || opened.fsPath;
+  if (!isAbsolute(directory)) {
+    void vscode.window.showErrorMessage("Muniment workspace memory must be an absolute directory.");
+    return;
+  }
+  await new Promise<void>((resolve) => execFile("muniment", ["--workspace", directory, "workspace", "init"],
+    { windowsHide: true }, (error) => {
+      if (error) void vscode.window.showErrorMessage("Muniment couldn’t initialize workspace memory. Check the Muniment CLI installation and workspace setting.");
+      resolve();
+    }));
 }
 
 function activeEditorFileContext() {
