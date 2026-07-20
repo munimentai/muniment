@@ -177,10 +177,10 @@ fn read_private_file(path: &Path) -> io::Result<String> {
     let mut options = std::fs::OpenOptions::new();
     options
         .read(true)
-        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
+        .custom_flags(unix_abi::O_NOFOLLOW | unix_abi::O_NONBLOCK);
     let mut file = options.open(path)?;
     let metadata = file.metadata()?;
-    if !private_file_metadata_is_valid(&metadata, unsafe { libc::geteuid() }) {
+    if !private_file_metadata_is_valid(&metadata, unix_abi::effective_uid()) {
         return Err(io::Error::new(
             io::ErrorKind::PermissionDenied,
             "client authorization file is not private",
@@ -215,7 +215,7 @@ fn atomic_write_private_file(path: &Path, value: &[u8]) -> io::Result<()> {
         .write(true)
         .create_new(true)
         .mode(0o600)
-        .custom_flags(libc::O_NOFOLLOW);
+        .custom_flags(unix_abi::O_NOFOLLOW);
     let result = (|| {
         let mut file = options.open(&temporary)?;
         file.write_all(value)?;
@@ -226,6 +226,43 @@ fn atomic_write_private_file(path: &Path, value: &[u8]) -> io::Result<()> {
         let _ = std::fs::remove_file(&temporary);
     }
     result
+}
+
+#[cfg(unix)]
+mod unix_abi {
+    #[cfg(any(
+        target_os = "linux",
+        target_os = "android",
+        target_os = "solaris",
+        target_os = "illumos"
+    ))]
+    pub const O_NOFOLLOW: i32 = 0x20000;
+    #[cfg(any(
+        target_os = "macos",
+        target_os = "ios",
+        target_os = "freebsd",
+        target_os = "dragonfly",
+        target_os = "netbsd",
+        target_os = "openbsd"
+    ))]
+    pub const O_NOFOLLOW: i32 = 0x100;
+    pub const O_NONBLOCK: i32 = 0x4;
+
+    unsafe extern "C" {
+        fn geteuid() -> u32;
+        fn chown(path: *const std::ffi::c_char, owner: u32, group: u32) -> i32;
+    }
+
+    pub fn effective_uid() -> u32 {
+        // SAFETY: geteuid takes no arguments and has no preconditions.
+        unsafe { geteuid() }
+    }
+
+    #[cfg(test)]
+    pub unsafe fn change_owner(path: *const std::ffi::c_char, owner: u32, group: u32) -> i32 {
+        // SAFETY: the caller supplies the NUL-terminated path required by chown.
+        unsafe { chown(path, owner, group) }
+    }
 }
 
 #[cfg(not(unix))]
@@ -664,7 +701,8 @@ mod tests {
         std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o600)).unwrap();
         let wrong_uid = metadata.uid().wrapping_add(1);
         let target_bytes = std::ffi::CString::new(target.as_os_str().as_encoded_bytes()).unwrap();
-        if unsafe { libc::chown(target_bytes.as_ptr(), wrong_uid, metadata.gid()) } == 0 {
+        if unsafe { unix_abi::change_owner(target_bytes.as_ptr(), wrong_uid, metadata.gid()) } == 0
+        {
             assert!(read_private_file(&target).is_err());
         }
         std::fs::remove_dir_all(directory).unwrap();
@@ -687,7 +725,7 @@ mod tests {
         assert_eq!(read_private_file(&credential).unwrap(), "new credential");
         let metadata = std::fs::metadata(&credential).unwrap();
         assert!(metadata.is_file());
-        assert_eq!(metadata.uid(), unsafe { libc::geteuid() });
+        assert_eq!(metadata.uid(), unix_abi::effective_uid());
         assert_eq!(metadata.permissions().mode() & 0o777, 0o600);
         std::fs::remove_dir_all(directory).unwrap();
     }

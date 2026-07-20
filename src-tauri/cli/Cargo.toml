@@ -6,8 +6,5 @@ edition = "2021"
 [dependencies]
 muniment-attach = { path = "../attach", default-features = false, features = ["client"] }
 
-[target.'cfg(unix)'.dependencies]
-libc = "0.2"
-
 [dev-dependencies]
 serde_json = "1"
