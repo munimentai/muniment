@@ -1,4 +1,4 @@
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::{
     fs, io,
     path::{Path, PathBuf},
@@ -8,6 +8,7 @@ use tauri::{AppHandle, Manager, State};
 use crate::model_install::GemmaInstallState;
 
 const REPORT_FILE: &str = "pending-onboarding.md";
+const CHOICES_FILE: &str = "pending-onboarding-choices.json";
 const HOME_FILE: &str = "muniment-home";
 const TRIAGE_PENDING_FILE: &str = "onboarding-triage-pending";
 
@@ -26,6 +27,13 @@ pub struct OnboardingProposal {
     report: String,
     used_model: bool,
     warning: Option<String>,
+}
+
+#[derive(Deserialize, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct OnboardingChoices {
+    layout: Vec<String>,
+    starter_agents: Vec<String>,
 }
 
 fn state_dir(app: &AppHandle) -> Result<PathBuf, String> {
@@ -57,8 +65,34 @@ fn warning(path: &Path) -> Option<String> {
         || text.starts_with("\\\\")
         || ["/Volumes/", "/media/", "/mnt/", "/run/media/"]
             .iter()
-            .any(|prefix| text.starts_with(prefix));
+            .any(|prefix| text.starts_with(prefix))
+        || windows_drive_is_unusual(path);
     unusual.then(|| "This looks like removable or network storage. Muniment can use it, but Home may be unavailable when the device or connection is offline.".into())
+}
+
+#[cfg(windows)]
+fn windows_drive_is_unusual(path: &Path) -> bool {
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::Storage::FileSystem::GetDriveTypeW;
+
+    let Some(prefix) = path.components().next() else {
+        return false;
+    };
+    let mut root: Vec<u16> = prefix.as_os_str().encode_wide().collect();
+    if root.len() != 2 || root[1] != b':' as u16 {
+        return false;
+    }
+    root.extend([b'\\' as u16, 0]);
+    drive_type_is_unusual(unsafe { GetDriveTypeW(root.as_ptr()) })
+}
+
+#[cfg(not(windows))]
+fn windows_drive_is_unusual(_: &Path) -> bool {
+    false
+}
+
+fn drive_type_is_unusual(kind: u32) -> bool {
+    matches!(kind, 2 | 4)
 }
 
 #[tauri::command]
@@ -78,20 +112,58 @@ pub async fn onboarding_propose(
     app: AppHandle,
     model: State<'_, GemmaInstallState>,
     home_path: String,
+    choices: OnboardingChoices,
+    require_model: bool,
 ) -> Result<OnboardingProposal, String> {
     let home = validate_home(&home_path)?;
-    let triage = if model.acquisition_status().await.ai_features_available {
+    validate_choices(&choices)?;
+    let triage = if std::env::var_os("MUNIMENT_E2E_FORCE_MANUAL").is_some() {
+        None
+    } else if std::env::var_os("MUNIMENT_E2E_MODEL_READY").is_some() {
+        Some("## User type\n\nE2E knowledge worker\n\n## Proposed Home layout\n\n(test override)\n\n## Starter agents\n\n(test override)".into())
+    } else if model.acquisition_status().await.ai_features_available {
         model.onboarding_triage(&home)
     } else {
         None
     };
+    if require_model && triage.is_none() {
+        return Err(
+            "On-device triage is not ready yet. You can retry without leaving your workspace."
+                .into(),
+        );
+    }
     let used_model = triage.is_some();
     let mode = if used_model {
         "On-device triage"
     } else {
         "Manual setup (triage will run when the on-device model is ready)"
     };
-    let proposal = triage.unwrap_or_else(|| "## User type\n\nGeneral knowledge worker\n\n## Proposed Home layout\n\n- `memory/` — durable personal context\n- `agents/` — reusable agent instructions\n- `projects/` — project context\n- `sessions/` — readable session transcripts\n\n## Starter agents\n\n- Researcher — gathers and checks sources\n- Writer — turns context into clear drafts".into());
+    let classification = triage
+        .as_deref()
+        .and_then(|value| value.split("## Proposed Home layout").next())
+        .unwrap_or("## User type\n\nGeneral knowledge worker\n\n");
+    let layout = choices
+        .layout
+        .iter()
+        .map(|name| format!("- `{name}/`"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let agents = choices
+        .starter_agents
+        .iter()
+        .map(|name| match name.as_str() {
+            "researcher" => "- Researcher — gathers and checks sources",
+            "writer" => "- Writer — turns context into clear drafts",
+            _ => unreachable!(),
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    let proposal = format!(
+        "{}\n\n## Proposed Home layout\n\n{}\n\n## Starter agents\n\n{}",
+        classification.trim_end(),
+        layout,
+        if agents.is_empty() { "- None" } else { &agents }
+    );
     let report = format!(
         "# Muniment onboarding report\n\n{proposal}\n\n## Setup mode\n\n{mode}\n\n## Home location\n\n`{}`\n",
         home.to_string_lossy().replace('`', "'")
@@ -100,6 +172,11 @@ pub async fn onboarding_propose(
     fs::create_dir_all(&directory).map_err(|_| "The onboarding report could not be saved.")?;
     atomic_write(&directory.join(REPORT_FILE), report.as_bytes())
         .map_err(|_| "The onboarding report could not be saved.")?;
+    atomic_write(
+        &directory.join(CHOICES_FILE),
+        &serde_json::to_vec(&choices).map_err(|_| "The onboarding report could not be saved.")?,
+    )
+    .map_err(|_| "The onboarding report could not be saved.")?;
     Ok(OnboardingProposal {
         report,
         used_model,
@@ -108,14 +185,48 @@ pub async fn onboarding_propose(
 }
 
 #[tauri::command]
-pub fn onboarding_confirm(app: AppHandle, home_path: String) -> Result<OnboardingStatus, String> {
+pub fn onboarding_confirm(
+    app: AppHandle,
+    home_path: String,
+    choices: OnboardingChoices,
+    late_triage: bool,
+) -> Result<OnboardingStatus, String> {
     let home = validate_home(&home_path)?;
+    validate_choices(&choices)?;
     let directory = state_dir(&app)?;
     let report = fs::read_to_string(directory.join(REPORT_FILE))
         .map_err(|_| "Create and review an onboarding report before setting up Home.")?;
+    let proposed_choices: OnboardingChoices = serde_json::from_slice(
+        &fs::read(directory.join(CHOICES_FILE))
+            .map_err(|_| "Create and review an onboarding report before setting up Home.")?,
+    )
+    .map_err(|_| "Create and review an onboarding report before setting up Home.")?;
+    if choices != proposed_choices {
+        return Err("The Home choices changed. Review a new report before continuing.".into());
+    }
     let expected = format!("## Home location\n\n`{}`\n", home.to_string_lossy());
     if !report.ends_with(&expected) {
         return Err("The Home location changed. Review a new report before continuing.".into());
+    }
+
+    if late_triage {
+        if !report.contains("## Setup mode\n\nOn-device triage")
+            || selected_home(&app)?.as_deref() != Some(home.as_path())
+            || !directory.join(TRIAGE_PENDING_FILE).exists()
+        {
+            return Err("Late triage no longer applies to this Home.".into());
+        }
+        write_if_missing(&home.join("ONBOARDING-TRIAGE.md"), report.as_bytes())?;
+        fs::remove_file(directory.join(TRIAGE_PENDING_FILE))
+            .map_err(|_| "The setup state could not be saved.")?;
+        let _ = fs::remove_file(directory.join(REPORT_FILE));
+        let _ = fs::remove_file(directory.join(CHOICES_FILE));
+        return Ok(OnboardingStatus {
+            complete: true,
+            home_path: home.to_string_lossy().into_owned(),
+            warning: warning(&home),
+            triage_pending: false,
+        });
     }
 
     fs::create_dir_all(&home).map_err(|_| "The selected Home folder could not be created.")?;
@@ -124,7 +235,10 @@ pub fn onboarding_confirm(app: AppHandle, home_path: String) -> Result<Onboardin
         ("agents", "Reusable agent instructions."),
         ("projects", "Context grouped by project."),
         ("sessions", "Readable session transcripts."),
-    ] {
+    ]
+    .into_iter()
+    .filter(|(name, _)| choices.layout.iter().any(|selected| selected == name))
+    {
         let child = home.join(name);
         ensure_directory(&child)?;
         write_if_missing(
@@ -138,11 +252,21 @@ pub fn onboarding_confirm(app: AppHandle, home_path: String) -> Result<Onboardin
         "ONBOARDING.md"
     };
     write_if_missing(&home.join(report_name), report.as_bytes())?;
-    write_if_missing(
-        &home.join("agents/researcher.md"),
-        b"# Researcher\n\nGather relevant sources, check claims, and preserve citations.\n",
-    )?;
-    write_if_missing(&home.join("agents/writer.md"), b"# Writer\n\nTurn available context into a clear draft while preserving the user's voice.\n")?;
+    if choices.layout.iter().any(|name| name == "agents") {
+        if choices
+            .starter_agents
+            .iter()
+            .any(|name| name == "researcher")
+        {
+            write_if_missing(
+                &home.join("agents/researcher.md"),
+                b"# Researcher\n\nGather relevant sources, check claims, and preserve citations.\n",
+            )?;
+        }
+        if choices.starter_agents.iter().any(|name| name == "writer") {
+            write_if_missing(&home.join("agents/writer.md"), b"# Writer\n\nTurn available context into a clear draft while preserving the user's voice.\n")?;
+        }
+    }
     fs::create_dir_all(&directory).map_err(|_| "The Home selection could not be saved.")?;
     atomic_write(
         &directory.join(HOME_FILE),
@@ -158,12 +282,48 @@ pub fn onboarding_confirm(app: AppHandle, home_path: String) -> Result<Onboardin
         fs::remove_file(pending).map_err(|_| "The setup state could not be saved.")?;
     }
     let _ = fs::remove_file(directory.join(REPORT_FILE));
+    let _ = fs::remove_file(directory.join(CHOICES_FILE));
     Ok(OnboardingStatus {
         complete: true,
         home_path: home.to_string_lossy().into_owned(),
         warning: warning(&home),
         triage_pending,
     })
+}
+
+fn validate_choices(choices: &OnboardingChoices) -> Result<(), String> {
+    const LAYOUT: [&str; 4] = ["memory", "agents", "projects", "sessions"];
+    const AGENTS: [&str; 2] = ["researcher", "writer"];
+    if choices.layout.is_empty()
+        || choices.layout.len() > LAYOUT.len()
+        || choices
+            .layout
+            .iter()
+            .any(|value| !LAYOUT.contains(&value.as_str()))
+        || choices.starter_agents.len() > AGENTS.len()
+        || choices
+            .starter_agents
+            .iter()
+            .any(|value| !AGENTS.contains(&value.as_str()))
+    {
+        return Err("The proposed Home choices are invalid.".into());
+    }
+    if choices
+        .layout
+        .iter()
+        .collect::<std::collections::HashSet<_>>()
+        .len()
+        != choices.layout.len()
+        || choices
+            .starter_agents
+            .iter()
+            .collect::<std::collections::HashSet<_>>()
+            .len()
+            != choices.starter_agents.len()
+    {
+        return Err("The proposed Home choices are invalid.".into());
+    }
+    Ok(())
 }
 
 fn validate_home(value: &str) -> Result<PathBuf, String> {
@@ -224,7 +384,7 @@ fn atomic_write(path: &Path, contents: &[u8]) -> io::Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{validate_home, warning};
+    use super::{drive_type_is_unusual, validate_home, warning};
     use std::path::Path;
 
     #[test]
@@ -243,5 +403,14 @@ mod tests {
         assert!(warning(path).is_some());
         assert!(validate_home(path.to_str().unwrap()).is_ok());
         assert!(warning(Path::new("/home/user/Documents/Muniment")).is_none());
+    }
+
+    #[test]
+    fn windows_drive_kinds_distinguish_fixed_from_removable_and_network() {
+        // GetDriveTypeW values: removable=2, fixed=3, remote/mapped=4.
+        assert!(drive_type_is_unusual(2));
+        assert!(!drive_type_is_unusual(3));
+        assert!(drive_type_is_unusual(4));
+        assert!(warning(Path::new(r"\\server\share\Muniment")).is_some());
     }
 }

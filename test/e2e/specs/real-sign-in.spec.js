@@ -1,5 +1,5 @@
 import path from 'node:path'
-import { appendFile, readFile } from 'node:fs/promises'
+import { access, appendFile, readFile } from 'node:fs/promises'
 import { spawn } from 'node:child_process'
 import { remote } from 'webdriverio'
 
@@ -16,6 +16,36 @@ describe('installed nightly', () => {
   })
 
   it('signs in through the production UI', async () => {
+    const home = process.env.MUNIMENT_E2E_HOME_PATH
+    const location = await $('[data-testid="onboarding-home-path"]')
+    await location.waitForDisplayed()
+    const displayedDefault = await location.getValue()
+    expect(displayedDefault).toMatch(/[\\/]Documents[\\/]Muniment$/)
+    expect(await $('[data-testid="onboarding-review"]').isEnabled()).toBe(false)
+    await (await $('[data-testid="onboarding-accept-location"]')).click()
+    await (await $('[data-testid="onboarding-review"]')).click()
+    const firstReport = await $('[data-testid="onboarding-report"]')
+    await firstReport.waitForDisplayed()
+    expect(await firstReport.getText()).toContain(displayedDefault)
+    expect(await firstReport.getText()).toContain('Manual setup')
+    await (await $('[data-testid="onboarding-reject"]')).click()
+    await (await $('[data-testid="onboarding-layout"] input')).click()
+    await (await $('[data-testid="onboarding-layout"] input')).click()
+    await (await $('button=Change location')).click()
+    await location.setValue(home)
+    await (await $('[data-testid="onboarding-accept-location"]')).click()
+    await (await $('[data-testid="onboarding-review"]')).click()
+    const revisedReport = await $('[data-testid="onboarding-report"]')
+    await revisedReport.waitForDisplayed()
+    expect(await revisedReport.getText()).toContain(home)
+    let homeExists = true
+    try { await access(home) } catch { homeExists = false }
+    expect(homeExists).toBe(false)
+    await (await $('[data-testid="onboarding-confirm"]')).click()
+    for (const directory of ['memory', 'agents', 'projects', 'sessions']) {
+      expect(await readFile(path.join(home, directory, 'README.md'), 'utf8')).toContain(`# ${directory[0].toUpperCase()}${directory.slice(1)}`)
+    }
+
     const signedOut = await $('button=Sign in')
     await signedOut.waitForDisplayed()
     await browser.saveScreenshot(path.join(rawDir, '01-signed-out.png'))
