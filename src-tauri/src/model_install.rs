@@ -11,7 +11,7 @@ use muniment_core::asr::{
 };
 use muniment_core::llama::acquisition::ModelDownloadProgress;
 use muniment_core::llama::acquisition::{
-    GemmaAcquisitionError, GemmaAcquisitionLimits, GemmaAcquisitionRuntime, GemmaCancellation,
+    GemmaAcquisitionError, GemmaAcquisitionLimits, GemmaAcquisitionRuntime,
 };
 use muniment_core::llama::install::install_gemma_revision_with_progress;
 use muniment_core::llama::lifecycle::{
@@ -19,7 +19,7 @@ use muniment_core::llama::lifecycle::{
     GemmaRevisionLifecycle, RESIDENT_GEMMA_REVISION, RESIDENT_GEMMA_REVISIONS,
 };
 use muniment_core::llama::runtime::{acquire_runtime, resolve_runtime};
-use muniment_core::llama::{LlamaServer, LlamaServerConfig};
+use muniment_core::llama::{LlamaServer, LlamaServerConfig, ResidentModelDescriptor};
 use muniment_core::model_acquisition_transport::NativeModelAcquisitionTransport;
 use muniment_core::model_install::ModelInstallError;
 use muniment_core::model_install_native::{
@@ -87,12 +87,13 @@ enum ServingServer {
 impl ServingServer {
     fn is_ready(&self) -> bool {
         match self {
-            Self::Native(server) => !server.base_url().is_empty(),
+            Self::Native(server) => server.supervisor().status() == SidecarStatus::Healthy,
             Self::Test => true,
         }
     }
 }
 type Activator = dyn Fn(&Path) -> Result<ServingServer, InstallFailure> + Send + Sync;
+type Inspector = dyn Fn(&Path) -> GemmaInstallStatus + Send + Sync;
 
 struct ActiveInstall {
     generation: u64,
@@ -116,6 +117,7 @@ pub struct GemmaInstallState {
     runner: Arc<Runner>,
     background_retry: bool,
     activator: Arc<Activator>,
+    inspector: Arc<Inspector>,
 }
 
 impl GemmaInstallState {
@@ -147,6 +149,7 @@ impl GemmaInstallState {
             runner,
             background_retry: false,
             activator: Arc::new(|_| Ok(ServingServer::Test)),
+            inspector: Arc::new(inspect),
         }
     }
 
@@ -169,7 +172,8 @@ impl GemmaInstallState {
         };
 
         let root = self.root.clone();
-        let inspected = tauri::async_runtime::spawn_blocking(move || inspect(&root))
+        let inspector = Arc::clone(&self.inspector);
+        let inspected = tauri::async_runtime::spawn_blocking(move || inspector(&root))
             .await
             .unwrap_or(GemmaInstallStatus::Failed {
                 category: "inspectionFailed",
@@ -230,7 +234,10 @@ impl GemmaInstallState {
                     {
                         return;
                     }
-                    let error = result.as_ref().unwrap_err();
+                    let error = match &result {
+                        Err(error) => error,
+                        Ok(_) => unreachable!("the retry loop only runs after an error"),
+                    };
                     state.status = GemmaInstallStatus::Failed {
                         category: error.category,
                         message: error.message,
@@ -395,28 +402,50 @@ fn run_native_install(
     .map_err(redact_failure)
 }
 
-struct NativeActivation;
+type RuntimeResolver = dyn Fn() -> Result<PathBuf, GemmaActivationFailure> + Send + Sync;
+
+struct NativeActivation {
+    resolve_runtime: Arc<RuntimeResolver>,
+    model_descriptor: &'static ResidentModelDescriptor,
+    port: u16,
+    tolerate_startup_transport_errors: bool,
+    health_interval: Option<std::time::Duration>,
+}
+
+impl NativeActivation {
+    fn production(models_root: &Path) -> Self {
+        let runtime_root = models_root.join("llama-server");
+        Self {
+            resolve_runtime: Arc::new(move || {
+                let mut transport = NativeModelAcquisitionTransport::new();
+                acquire_runtime(&runtime_root, &mut transport)
+                    .map_err(|_| GemmaActivationFailure::Start)?;
+                // Resolve again at the spawn boundary so post-install modification of
+                // either retained evidence or extracted files fails closed.
+                resolve_runtime(&runtime_root).map_err(|_| GemmaActivationFailure::Start)
+            }),
+            model_descriptor: &RESIDENT_GEMMA_REVISION.model,
+            port: 32_391,
+            tolerate_startup_transport_errors: false,
+            health_interval: None,
+        }
+    }
+}
 
 impl GemmaActivationBoundary for NativeActivation {
     type Server = LlamaServer;
 
     fn launch(&self, model: &Path) -> Result<Self::Server, GemmaActivationFailure> {
-        let models_root = model
-            .parent()
-            .and_then(Path::parent)
-            .and_then(Path::parent)
-            .and_then(Path::parent)
-            .ok_or(GemmaActivationFailure::Start)?;
-        let runtime_root = models_root.join("llama-server");
-        let mut transport = NativeModelAcquisitionTransport::new();
-        acquire_runtime(&runtime_root, &mut transport)
-            .map_err(|_| GemmaActivationFailure::Start)?;
-        // Resolve again at the spawn boundary so post-install modification of
-        // either retained evidence or extracted files fails closed.
-        let executable =
-            resolve_runtime(&runtime_root).map_err(|_| GemmaActivationFailure::Start)?;
-        LlamaServer::spawn(LlamaServerConfig::new(executable, model, 32_391))
-            .map_err(|_| GemmaActivationFailure::Start)
+        let executable = (self.resolve_runtime)()?;
+        let mut config = LlamaServerConfig::new(executable, model, self.port)
+            .with_model_descriptor(self.model_descriptor);
+        if self.tolerate_startup_transport_errors {
+            config = config.with_startup_transport_tolerance();
+        }
+        if let Some(interval) = self.health_interval {
+            config = config.with_health_interval(interval);
+        }
+        LlamaServer::spawn(config).map_err(|_| GemmaActivationFailure::Start)
     }
 
     fn await_ready(&self, server: &mut Self::Server) -> Result<(), GemmaActivationFailure> {
@@ -435,18 +464,24 @@ impl GemmaActivationBoundary for NativeActivation {
 }
 
 fn activate_native_server(revision: &Path) -> Result<LlamaServer, InstallFailure> {
-    match lifecycle(
-        revision
-            .parent()
-            .and_then(Path::parent)
-            .ok_or(InstallFailure {
-                category: "activationFailed",
-                message: "The local AI service could not be started.",
-                cancelled: false,
-            })?,
-    )
-    .activate(&NativeGemmaLifecycleBoundary, &NativeActivation)
-    {
+    let models_root = revision
+        .parent()
+        .and_then(Path::parent)
+        .ok_or(InstallFailure {
+            category: "activationFailed",
+            message: "The local AI service could not be started.",
+            cancelled: false,
+        })?;
+    let lifecycle = lifecycle(models_root);
+    let activation = NativeActivation::production(models_root);
+    activate_with(&lifecycle, &activation)
+}
+
+fn activate_with(
+    lifecycle: &GemmaRevisionLifecycle,
+    activation: &NativeActivation,
+) -> Result<LlamaServer, InstallFailure> {
+    match lifecycle.activate(&NativeGemmaLifecycleBoundary, activation) {
         Ok(GemmaActivation::Active { server, .. } | GemmaActivation::RolledBack { server, .. }) => {
             Ok(server)
         }
@@ -765,8 +800,8 @@ pub fn gemma_install_cancel(state: State<'_, GemmaInstallState>) -> GemmaInstall
 #[tauri::command]
 pub async fn required_model_acquisition_status(
     state: State<'_, GemmaInstallState>,
-) -> RequiredModelAcquisitionStatus {
-    state.acquisition_status().await
+) -> Result<RequiredModelAcquisitionStatus, String> {
+    Ok(state.acquisition_status().await)
 }
 
 #[tauri::command]
@@ -790,8 +825,21 @@ pub fn parakeet_install_cancel(state: State<'_, ParakeetInstallState>) -> Parake
 mod tests {
     use super::*;
     use muniment_core::asr::{AsrArtifactDescriptor, AsrArtifactManifest};
+    #[cfg(unix)]
+    use muniment_core::llama::acquisition::{
+        GemmaDownloadRequest, GemmaDownloadResponse, GemmaDownloadTransport, GemmaTransportError,
+    };
     use muniment_core::llama::lifecycle::{GemmaNoticeDescriptor, GemmaRevisionDescriptor};
+    #[cfg(unix)]
+    use muniment_core::llama::runtime::{
+        acquire_runtime_for, resolve_runtime_for, LlamaRuntimeDescriptor, RuntimeArchiveError,
+        RuntimeDownloadRequest, RuntimeDownloadResponse, RuntimeDownloadTransport,
+    };
     use muniment_core::llama::ResidentModelDescriptor;
+    #[cfg(unix)]
+    use sha2::{Digest, Sha256};
+    #[cfg(unix)]
+    use std::io::Cursor;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::{Duration, Instant};
     use tauri::Manager;
@@ -1036,6 +1084,7 @@ mod tests {
         };
         let mut state = state(GemmaInstallStatus::NotInstalled, runner);
         state.inner.lock().unwrap().progress.total_bytes = 10;
+        state.inspector = Arc::new(|_| GemmaInstallStatus::Installed);
         state.start();
         published.wait();
 
@@ -1050,6 +1099,204 @@ mod tests {
             std::thread::sleep(Duration::from_millis(5));
         }
         assert!(tauri::async_runtime::block_on(state.acquisition_status()).ai_features_available);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn production_composition_acquires_model_and_runtime_and_tracks_live_readiness() {
+        struct ModelTransport;
+        impl GemmaDownloadTransport for ModelTransport {
+            type Body = Cursor<Vec<u8>>;
+
+            fn download(
+                &mut self,
+                request: &GemmaDownloadRequest,
+            ) -> Result<GemmaDownloadResponse<Self::Body>, GemmaTransportError> {
+                assert_eq!(request.offset, 1, "the staged model download must resume");
+                Ok(GemmaDownloadResponse {
+                    status: 206,
+                    content_range: Some((1, 2, 3)),
+                    body: Cursor::new(b"bc".to_vec()),
+                })
+            }
+        }
+
+        struct RuntimeTransport(Vec<u8>);
+        impl RuntimeDownloadTransport for RuntimeTransport {
+            type Body = Cursor<Vec<u8>>;
+
+            fn download(
+                &mut self,
+                request: &RuntimeDownloadRequest,
+            ) -> Result<RuntimeDownloadResponse<Self::Body>, RuntimeArchiveError> {
+                assert_eq!(request.offset, 0);
+                Ok(RuntimeDownloadResponse {
+                    status: 200,
+                    content_range: None,
+                    body: Cursor::new(self.0.clone()),
+                })
+            }
+        }
+
+        let root = TestRoot::new();
+        let stage = root.0.join("staging").join(TEST_REVISION.identity);
+        fs::create_dir_all(&stage).unwrap();
+        fs::write(stage.join(format!("{}.part", TEST_MODEL.filename)), b"a").unwrap();
+
+        let runner_root = root.0.clone();
+        let runner = Arc::new(
+            move |_: &Path, cancellation: &NativeInstallCancellation, progress: &ProgressSink| {
+                let mut transport = ModelTransport;
+                let mut retry = NativeRetryWait;
+                let clock = NativeAcquisitionClock::new();
+                let mut lock = NativeInstallLock::new(runner_root.join("install.lock"));
+                let mut space = NativeAvailableSpace::new(&runner_root);
+                install_gemma_revision_with_progress(
+                    &runner_root.join("staging"),
+                    TEST_REVISION.identity,
+                    &TEST_REVISION,
+                    GemmaAcquisitionLimits::default(),
+                    &mut transport,
+                    GemmaAcquisitionRuntime {
+                        clock: &clock,
+                        retry_wait: &mut retry,
+                    },
+                    cancellation,
+                    &mut lock,
+                    &mut space,
+                    &GemmaRevisionLifecycle::new(
+                        runner_root.clone(),
+                        &TEST_REVISIONS,
+                        &TEST_REVISION,
+                    )
+                    .unwrap(),
+                    &NativeGemmaLifecycleBoundary,
+                    &mut |update| progress(update),
+                )
+                .map_err(redact_failure)
+            },
+        );
+
+        let runtime_root = root.0.join("llama-server");
+        let archive_path = root.0.join("runtime.tar.gz");
+        let encoder = flate2::write::GzEncoder::new(
+            fs::File::create(&archive_path).unwrap(),
+            flate2::Compression::default(),
+        );
+        let mut archive = tar::Builder::new(encoder);
+        let script = br#"#!/usr/bin/env python3
+import http.server, os, pathlib, sys, threading
+args = sys.argv[1:]
+port = args[args.index('--port') + 1]
+pathlib.Path('/tmp/muniment-llama-args-' + port).write_text('\n'.join(args))
+class Handler(http.server.BaseHTTPRequestHandler):
+    def do_GET(self):
+        body = b'{"status":"ok"}'
+        self.send_response(200); self.send_header('Content-Length', str(len(body)))
+        self.end_headers(); self.wfile.write(body)
+    def log_message(self, *_): pass
+server = http.server.HTTPServer(('127.0.0.1', int(port)), Handler)
+threading.Timer(1, lambda: os._exit(23)).start()
+server.serve_forever()
+"#;
+        let mut header = tar::Header::new_gnu();
+        header.set_size(script.len() as u64);
+        header.set_mode(0o755);
+        header.set_cksum();
+        archive
+            .append_data(&mut header, "llama-fixture/llama-server", &script[..])
+            .unwrap();
+        archive.into_inner().unwrap().finish().unwrap();
+        let runtime_bytes = fs::read(&archive_path).unwrap();
+        let runtime_hash =
+            Box::leak(format!("{:x}", Sha256::digest(&runtime_bytes)).into_boxed_str());
+        let runtime_descriptor: &'static LlamaRuntimeDescriptor =
+            Box::leak(Box::new(LlamaRuntimeDescriptor {
+                revision: "fixture",
+                archive: "runtime.tar.gz",
+                byte_size: runtime_bytes.len() as u64,
+                sha256: runtime_hash,
+                top_level: "llama-fixture",
+                executable: "llama-fixture/llama-server",
+            }));
+        let port = std::net::TcpListener::bind(("127.0.0.1", 0))
+            .unwrap()
+            .local_addr()
+            .unwrap()
+            .port();
+        let activation = NativeActivation {
+            resolve_runtime: Arc::new(move || {
+                acquire_runtime_for(
+                    &runtime_root,
+                    "https://example.invalid/runtime",
+                    runtime_descriptor,
+                    &mut RuntimeTransport(runtime_bytes.clone()),
+                )
+                .map_err(|_| GemmaActivationFailure::Start)
+            }),
+            model_descriptor: &TEST_MODEL,
+            port,
+            tolerate_startup_transport_errors: true,
+            health_interval: Some(Duration::from_millis(10)),
+        };
+        let activation = Arc::new(activation);
+        let activation_lifecycle = root.lifecycle();
+        let mut state = GemmaInstallState::with_runner(
+            root.0.clone(),
+            GemmaInstallStatus::NotInstalled,
+            runner,
+        );
+        state.activator = Arc::new(move |_| {
+            activate_with(&activation_lifecycle, &activation).map(ServingServer::Native)
+        });
+        state.inspector = Arc::new(|root| {
+            inspect_lifecycle(
+                &GemmaRevisionLifecycle::new(root.to_owned(), &TEST_REVISIONS, &TEST_REVISION)
+                    .unwrap(),
+            )
+        });
+        state.start();
+
+        let ready_deadline = Instant::now() + Duration::from_secs(8);
+        while Instant::now() < ready_deadline
+            && !tauri::async_runtime::block_on(state.acquisition_status()).ai_features_available
+        {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let ready_status = tauri::async_runtime::block_on(state.acquisition_status());
+        assert!(
+            ready_status.ai_features_available,
+            "native activation did not become available: {ready_status:?}"
+        );
+        let executable = resolve_runtime_for(&root.0.join("llama-server"), runtime_descriptor)
+            .expect("the owned runtime must resolve after verified publication");
+        assert!(executable.ends_with("llama-fixture/llama-server"));
+        let arguments_path = PathBuf::from(format!("/tmp/muniment-llama-args-{port}"));
+        let arguments_deadline = Instant::now() + Duration::from_secs(2);
+        while !arguments_path.exists() && Instant::now() < arguments_deadline {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        let arguments = fs::read_to_string(&arguments_path).unwrap();
+        assert!(arguments.contains("--model"));
+        assert!(arguments.contains(
+            root.0
+                .join("revisions/test-revision/model.gguf")
+                .to_string_lossy()
+                .as_ref()
+        ));
+        assert!(arguments.contains("--alias\nfixture"));
+
+        let exit_deadline = Instant::now() + Duration::from_secs(3);
+        while Instant::now() < exit_deadline
+            && tauri::async_runtime::block_on(state.acquisition_status()).ai_features_available
+        {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(
+            !tauri::async_runtime::block_on(state.acquisition_status()).ai_features_available,
+            "availability must turn false when the supervised native server exits"
+        );
+        fs::remove_file(arguments_path).unwrap();
     }
 
     #[test]
