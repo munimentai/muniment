@@ -65,6 +65,9 @@ fn run() -> Result<(), CliError> {
         |pairing_pending| {
             let mut client = handshake(env!("CARGO_PKG_VERSION"), pairing_pending)?;
             client.onboard_workspace(&opened.to_string_lossy(), &workspace.to_string_lossy())?;
+            if args.first().is_some_and(|command| command == "threads") {
+                client.ensure_home()?;
+            }
             Ok(client)
         },
     )

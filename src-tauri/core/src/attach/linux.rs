@@ -707,6 +707,29 @@ pub fn run_authenticated_session(
     )
 }
 
+/// Runs the default authenticated session with the desktop's concrete request service.
+pub fn run_authenticated_session_with_service<S: ThreadListService>(
+    stream: UnixStream,
+    credentials: PeerCredentials,
+    desktop_version: &str,
+    service: &mut S,
+) -> Result<(), AttachSessionError> {
+    let mut random = |bytes: &mut [u8]| getrandom::fill(bytes).map_err(|_| ());
+    run_authenticated_session_with_authorization(
+        stream,
+        credentials,
+        desktop_version,
+        HELLO_TIMEOUT,
+        AuthorizationSessionDependencies {
+            fill_random: &mut random,
+            clock: SessionClock(Instant::now()),
+            tokens: SessionTokens,
+            approvals: |_: &super::PairingChallenge, _: Duration| Some(ApprovalDecision::Deny),
+        },
+        service,
+    )
+}
+
 /// Testable form of [`run_authenticated_session`] with bounded timing and randomness seams.
 #[doc(hidden)]
 pub fn run_authenticated_session_with<R>(

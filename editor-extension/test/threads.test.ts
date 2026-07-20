@@ -15,6 +15,7 @@ class FakeConnection implements AttachConnection {
   readonly expiresInSeconds = 3600;
   readonly idleTimeoutSeconds = 900;
   listCalls: Array<string | undefined> = [];
+  ensureHomeCalls = 0;
   disposed = false;
   startCalls: Array<{ text: string; context: JsonValue | undefined }> = [];
   streamCalls: Array<{ runId: string; afterRunSeq: number }> = [];
@@ -30,6 +31,7 @@ class FakeConnection implements AttachConnection {
   async onboardWorkspace(openedDirectory: string, memoryLocation: string) {
     return { openedDirectory, memoryLocation };
   }
+  async ensureHome() { this.ensureHomeCalls++; }
 
   async listThreads(cursor?: string): Promise<ThreadListPage> {
     this.listCalls.push(cursor);
@@ -89,6 +91,7 @@ test("projects the first thread page into native view data without paging", asyn
     ],
   });
   assert.deepEqual(connection.listCalls, [undefined]);
+  assert.equal(connection.ensureHomeCalls, 1);
   model.dispose();
 });
 

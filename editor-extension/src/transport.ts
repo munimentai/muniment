@@ -114,6 +114,7 @@ export interface AttachConnection {
   readonly expiresInSeconds: number;
   readonly idleTimeoutSeconds: number;
   onboardWorkspace(openedDirectory: string, memoryLocation: string): Promise<WorkspaceOnboarded>;
+  ensureHome(): Promise<void>;
   listThreads(cursor?: string): Promise<ThreadListPage>;
   openThread(threadId: string, cursor?: string): Promise<ThreadOpenPage>;
   startRun(text: string, context?: JsonValue): Promise<RunStartAccepted>;
@@ -550,6 +551,10 @@ export function connectAttach(options: ConnectOptions): Promise<AttachConnection
               }
               return { openedDirectory, memoryLocation,
                 ...(typeof body.instructions === "string" ? { instructions: body.instructions } : {}) };
+            },
+            async ensureHome(): Promise<void> {
+              const body = exactObject((await request("home.ensure", {})).body, []);
+              if (Object.keys(body).length !== 0) throw new AttachTransportError("unexpected_message");
             },
             async listThreads(cursor?: string): Promise<ThreadListPage> {
               validateCursor(cursor, MAX_TEXT_LENGTH);

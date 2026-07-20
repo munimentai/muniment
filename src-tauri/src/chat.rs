@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -6,8 +6,9 @@ use std::time::Duration;
 use chrono::{SecondsFormat, Utc};
 #[cfg(target_os = "linux")]
 use muniment_core::attach::linux::{
-    CompanionProvenance, RunStartAccepted, RunStartRequest as AttachRunStartRequest,
-    ThreadListPage, ThreadListRequest, ThreadListService,
+    run_authenticated_session_with_service, AttachFilesystem, AttachTransport, CompanionProvenance,
+    RunStartAccepted, RunStartRequest as AttachRunStartRequest, ThreadListPage, ThreadListRequest,
+    ThreadListService,
 };
 #[cfg(target_os = "linux")]
 use muniment_core::attach::{
@@ -499,12 +500,15 @@ pub struct DesktopAttachService<B, I = IdempotencyStore> {
     boundaries: B,
     idempotency: I,
     home: PathBuf,
-    workspace_instructions: Option<String>,
+    workspace_contexts: Arc<Mutex<HashMap<PathBuf, Option<String>>>>,
 }
 
 #[cfg(target_os = "linux")]
 impl<R: tauri::Runtime> DesktopAttachService<TauriRunStartBoundaries<R>> {
-    pub fn new(app: tauri::AppHandle<R>) -> Result<Self, ProtocolError> {
+    pub fn new(
+        app: tauri::AppHandle<R>,
+        workspace_contexts: Arc<Mutex<HashMap<PathBuf, Option<String>>>>,
+    ) -> Result<Self, ProtocolError> {
         let home = app
             .path()
             .document_dir()
@@ -520,9 +524,37 @@ impl<R: tauri::Runtime> DesktopAttachService<TauriRunStartBoundaries<R>> {
             boundaries: TauriRunStartBoundaries { app },
             idempotency,
             home,
-            workspace_instructions: None,
+            workspace_contexts,
         })
     }
+}
+
+#[cfg(target_os = "linux")]
+pub fn start_attach_listener<R: tauri::Runtime>(app: tauri::AppHandle<R>) {
+    std::thread::spawn(move || {
+        let Ok(filesystem) = AttachFilesystem::from_environment() else {
+            return;
+        };
+        let Ok(listener) = AttachTransport::bind(&filesystem) else {
+            return;
+        };
+        let workspace_contexts = Arc::new(Mutex::new(HashMap::new()));
+        while let Ok((stream, credentials)) = listener.accept() {
+            let app = app.clone();
+            let workspace_contexts = workspace_contexts.clone();
+            std::thread::spawn(move || {
+                let Ok(mut service) = DesktopAttachService::new(app, workspace_contexts) else {
+                    return;
+                };
+                let _ = run_authenticated_session_with_service(
+                    stream,
+                    credentials,
+                    env!("CARGO_PKG_VERSION"),
+                    &mut service,
+                );
+            });
+        }
+    });
 }
 
 #[cfg(target_os = "linux")]
@@ -540,7 +572,20 @@ impl<B: RunStartBoundaries, I: RunStartIdempotency> ThreadListService
         }
         let instructions = crate::onboarding::onboard_companion_workspace(&opened, &memory)
             .map_err(|_| ProtocolError::persistence_failed())?;
-        self.workspace_instructions = instructions.clone();
+        let opened_canonical = opened
+            .canonicalize()
+            .map_err(|_| ProtocolError::persistence_failed())?;
+        let memory_canonical = memory
+            .canonicalize()
+            .map_err(|_| ProtocolError::persistence_failed())?;
+        let mut contexts = self
+            .workspace_contexts
+            .lock()
+            .map_err(|_| ProtocolError::persistence_failed())?;
+        contexts.insert(opened.clone(), instructions.clone());
+        contexts.insert(opened_canonical, instructions.clone());
+        contexts.insert(memory.clone(), instructions.clone());
+        contexts.insert(memory_canonical, instructions.clone());
         Ok(WorkspaceOnboarded {
             opened_directory: opened.to_string_lossy().into_owned(),
             memory_location: memory.to_string_lossy().into_owned(),
@@ -596,7 +641,14 @@ impl<B: RunStartBoundaries, I: RunStartIdempotency> ThreadListService
         extra.insert("peer_uid".into(), json!(companion.peer_uid));
         extra.insert("peer_pid".into(), json!(companion.peer_pid));
         extra.insert("idempotency_key".into(), json!(idempotency_key.as_str()));
-        if let Some(instructions) = &self.workspace_instructions {
+        let instructions = self
+            .workspace_contexts
+            .lock()
+            .map_err(|_| ProtocolError::persistence_failed())?
+            .get(&PathBuf::from(workspace))
+            .cloned()
+            .flatten();
+        if let Some(instructions) = instructions {
             extra.insert("repository_instructions".into(), json!(instructions));
         }
         let provenance = Provenance {
@@ -2348,7 +2400,7 @@ mod tests {
             boundaries,
             idempotency: IdempotencyStore::open(":memory:").unwrap(),
             home: PathBuf::new(),
-            workspace_instructions: None,
+            workspace_contexts: Arc::new(Mutex::new(HashMap::new())),
         };
         let result = service.start_run(
             "workspace-a",
@@ -2427,12 +2479,116 @@ mod tests {
 
     #[cfg(target_os = "linux")]
     #[test]
+    fn attach_onboarding_context_survives_connections_and_keys_distinct_external_roots() {
+        let root = std::env::temp_dir().join(format!("muniment-attach-context-{}", Uuid::now_v7()));
+        let first = root.join("repo-one");
+        let second = root.join("repo-two");
+        let first_memory = root.join("memory-one");
+        let second_memory = root.join("memory-two");
+        std::fs::create_dir_all(&first).unwrap();
+        std::fs::create_dir_all(&second).unwrap();
+        std::fs::write(first.join("AGENTS.md"), "first instructions").unwrap();
+        std::fs::write(second.join("AGENTS.md"), "second instructions").unwrap();
+        let contexts = Arc::new(Mutex::new(HashMap::new()));
+        let mut first_connection = DesktopAttachService {
+            boundaries: FakeRunStartBoundaries::accepting(),
+            idempotency: IdempotencyStore::open(":memory:").unwrap(),
+            home: root.join("home"),
+            workspace_contexts: contexts.clone(),
+        };
+        first_connection
+            .onboard_workspace(WorkspaceOnboardRequest {
+                opened_directory: first.to_string_lossy().into_owned(),
+                memory_location: first_memory.to_string_lossy().into_owned(),
+            })
+            .unwrap();
+        drop(first_connection);
+
+        let mut second_connection = DesktopAttachService {
+            boundaries: FakeRunStartBoundaries::accepting(),
+            idempotency: IdempotencyStore::open(":memory:").unwrap(),
+            home: root.join("home"),
+            workspace_contexts: contexts.clone(),
+        };
+        second_connection
+            .onboard_workspace(WorkspaceOnboardRequest {
+                opened_directory: second.to_string_lossy().into_owned(),
+                memory_location: second_memory.to_string_lossy().into_owned(),
+            })
+            .unwrap();
+
+        let stored = contexts.lock().unwrap();
+        assert_eq!(
+            stored
+                .get(&first.canonicalize().unwrap())
+                .unwrap()
+                .as_deref(),
+            Some("first instructions")
+        );
+        assert_eq!(
+            stored
+                .get(&second.canonicalize().unwrap())
+                .unwrap()
+                .as_deref(),
+            Some("second instructions")
+        );
+        assert_eq!(
+            stored
+                .get(&first_memory.canonicalize().unwrap())
+                .unwrap()
+                .as_deref(),
+            Some("first instructions")
+        );
+        drop(stored);
+        contexts.lock().unwrap().insert(
+            PathBuf::from("workspace-a"),
+            Some("first instructions".into()),
+        );
+        let run = second_connection
+            .start_run(
+                "workspace-a",
+                AttachRunStartRequest {
+                    text: "use repository context".into(),
+                    context: None,
+                },
+                &Id::new("018f0000-0000-7000-8000-000000000011").unwrap(),
+                &Id::new("018f0000-0000-7000-8000-000000000012").unwrap(),
+                CompanionProvenance {
+                    profile: "default".into(),
+                    companion_kind: "editor-extension".into(),
+                    companion_version: "1.2.3".into(),
+                    peer_uid: 1000,
+                    peer_pid: 42,
+                },
+            )
+            .unwrap();
+        assert!(!run.run_id.is_empty());
+        let provenance = second_connection
+            .boundaries
+            .prepared_provenance
+            .lock()
+            .unwrap();
+        assert_eq!(
+            provenance.as_ref().unwrap().extra["repository_instructions"],
+            "first instructions"
+        );
+        drop(provenance);
+        assert!(!root.join("home").exists());
+        second_connection.ensure_home().unwrap();
+        for child in ["memory", "agents", "projects", "sessions"] {
+            assert!(root.join("home").join(child).join("README.md").is_file());
+        }
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
     fn attach_adapter_replays_exact_retry_without_second_coordinator_run() {
         let mut service = DesktopAttachService {
             boundaries: FakeRunStartBoundaries::accepting(),
             idempotency: IdempotencyStore::open(":memory:").unwrap(),
             home: PathBuf::new(),
-            workspace_instructions: None,
+            workspace_contexts: Arc::new(Mutex::new(HashMap::new())),
         };
         let key = "018f0000-0000-7000-8000-000000000002";
         let first = attach_start_on(
@@ -2469,7 +2625,7 @@ mod tests {
             boundaries: FakeRunStartBoundaries::accepting(),
             idempotency: IdempotencyStore::open(":memory:").unwrap(),
             home: PathBuf::new(),
-            workspace_instructions: None,
+            workspace_contexts: Arc::new(Mutex::new(HashMap::new())),
         };
         let key = "018f0000-0000-7000-8000-000000000002";
         attach_start_on(
@@ -2533,7 +2689,7 @@ mod tests {
             boundaries: FakeRunStartBoundaries::accepting(),
             idempotency: IdempotencyStore::open(":memory:").unwrap(),
             home: PathBuf::new(),
-            workspace_instructions: None,
+            workspace_contexts: Arc::new(Mutex::new(HashMap::new())),
         };
         let result = service.start_run(
             "workspace-b",
@@ -2599,7 +2755,7 @@ mod tests {
             boundaries: FakeRunStartBoundaries::accepting(),
             idempotency: FailingFinalization,
             home: PathBuf::new(),
-            workspace_instructions: None,
+            workspace_contexts: Arc::new(Mutex::new(HashMap::new())),
         };
         let result = service.start_run(
             "workspace-a",

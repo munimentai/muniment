@@ -125,6 +125,7 @@ export class ThreadsModel {
         return;
       }
       this.connection = connection;
+      await connection.ensureHome();
       const page = await connection.listThreads();
       if (generation !== this.generation || this.disposed) return;
       this.update(page.threads.length === 0

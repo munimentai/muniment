@@ -25,6 +25,7 @@ pub fn onboard_companion_workspace(
     let opened = opened_directory
         .canonicalize()
         .map_err(|_| "The opened directory is unavailable.")?;
+    ensure_requested_directory(memory_location)?;
     let memory_root = memory_location
         .canonicalize()
         .map_err(|_| "The workspace memory location is unavailable.")?;
@@ -44,6 +45,41 @@ pub fn onboard_companion_workspace(
                 .map_err(|_| "Repository instructions could not be read.".into())
         })
         .transpose()
+}
+
+fn ensure_requested_directory(path: &Path) -> Result<(), String> {
+    let mut missing = Vec::new();
+    let mut current = path;
+    loop {
+        match fs::symlink_metadata(current) {
+            Ok(metadata) => {
+                if metadata.file_type().is_symlink() || !metadata.is_dir() {
+                    return Err("Workspace locations must be directories.".into());
+                }
+                break;
+            }
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                missing.push(current.to_path_buf());
+                current = current
+                    .parent()
+                    .ok_or("The workspace memory location is unavailable.")?;
+            }
+            Err(_) => return Err("The workspace memory location is unavailable.".into()),
+        }
+    }
+    for directory in missing.into_iter().rev() {
+        match fs::create_dir(&directory) {
+            Ok(()) => {}
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
+            Err(_) => return Err("The workspace memory location could not be created.".into()),
+        }
+        let metadata = fs::symlink_metadata(&directory)
+            .map_err(|_| "The workspace memory location is unavailable.")?;
+        if metadata.file_type().is_symlink() || !metadata.is_dir() {
+            return Err("Workspace locations must be directories.".into());
+        }
+    }
+    Ok(())
 }
 
 fn nearest_agents_file(path: &Path) -> Option<PathBuf> {
@@ -462,6 +498,38 @@ mod tests {
         let instructions = onboard_companion_workspace(&opened, &memory).unwrap();
         assert_eq!(instructions.as_deref(), Some("nearest instructions"));
         assert!(memory.join("memory/ONBOARDING.md").is_file());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn workspace_onboarding_creates_a_new_external_memory_root() {
+        let root = temporary("workspace-new-override");
+        let opened = root.join("repo");
+        let memory = root.join("new/override");
+        fs::create_dir(&opened).unwrap();
+
+        onboard_companion_workspace(&opened, &memory).unwrap();
+
+        assert!(memory.join("memory/README.md").is_file());
+        assert!(memory.join("memory/ONBOARDING.md").is_file());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn workspace_onboarding_rejects_a_symlink_in_new_override_path() {
+        use std::os::unix::fs::symlink;
+
+        let root = temporary("workspace-symlink-override");
+        let opened = root.join("repo");
+        let target = root.join("target");
+        let memory = root.join("linked/override");
+        fs::create_dir(&opened).unwrap();
+        fs::create_dir(&target).unwrap();
+        symlink(&target, root.join("linked")).unwrap();
+
+        assert!(onboard_companion_workspace(&opened, &memory).is_err());
+        assert!(!target.join("override").exists());
         fs::remove_dir_all(root).unwrap();
     }
 
