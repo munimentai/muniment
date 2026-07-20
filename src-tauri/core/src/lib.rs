@@ -12,6 +12,7 @@ pub mod auth;
 pub mod browser_control;
 pub mod cas;
 pub mod journal;
+pub mod home;
 pub mod llama;
 pub mod model_acquisition_transport;
 pub mod model_install;
