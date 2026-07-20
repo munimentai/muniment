@@ -588,6 +588,10 @@ fn fixture_bytes() -> io::Result<BTreeMap<String, Vec<u8>>> {
 // fail to compile until their canonical fixture is defined.
 fn request_body(operation: Operation) -> serde_json::Value {
     match operation {
+        Operation::WorkspaceOnboard => {
+            json!({"opened_directory": "/work/repo", "memory_location": "/work/repo"})
+        }
+        Operation::HomeEnsure => json!({}),
         Operation::ThreadList => json!({"cursor": "thread-cursor-1", "limit": 50}),
         Operation::ThreadOpen => {
             json!({"thread_id": "thread-1", "cursor": "message-cursor-1", "limit": 100})

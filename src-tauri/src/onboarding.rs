@@ -11,6 +11,73 @@ const REPORT_FILE: &str = "pending-onboarding.md";
 const CHOICES_FILE: &str = "pending-onboarding-choices.json";
 const HOME_FILE: &str = "muniment-home";
 const TRIAGE_PENDING_FILE: &str = "onboarding-triage-pending";
+const WORKSPACE_REPORT: &[u8] = b"# Muniment workspace onboarding report\n\nThis opened directory is the workspace memory location. User-level Home remains lazy until cross-project context is needed. Repository instructions are loaded from the nearest `AGENTS.md`.\n";
+
+static SCAFFOLD_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+pub fn onboard_companion_workspace(
+    opened_directory: &Path,
+    memory_location: &Path,
+) -> Result<Option<String>, String> {
+    let _guard = SCAFFOLD_LOCK
+        .lock()
+        .map_err(|_| "Workspace setup is unavailable.")?;
+    let opened = opened_directory
+        .canonicalize()
+        .map_err(|_| "The opened directory is unavailable.")?;
+    let memory_root = memory_location
+        .canonicalize()
+        .map_err(|_| "The workspace memory location is unavailable.")?;
+    if !opened.is_dir() || !memory_root.is_dir() {
+        return Err("Workspace locations must be directories.".into());
+    }
+    let memory = memory_root.join("memory");
+    ensure_directory(&memory)?;
+    write_if_missing(
+        &memory.join("README.md"),
+        b"# Memory\n\nDurable context for this workspace.\n",
+    )?;
+    write_if_missing(&memory.join("ONBOARDING.md"), WORKSPACE_REPORT)?;
+    nearest_agents_file(&opened)
+        .map(|path| {
+            fs::read_to_string(path)
+                .map_err(|_| "Repository instructions could not be read.".into())
+        })
+        .transpose()
+}
+
+fn nearest_agents_file(path: &Path) -> Option<PathBuf> {
+    let mut current = path;
+    loop {
+        let candidate = current.join("AGENTS.md");
+        if candidate.is_file() {
+            return Some(candidate);
+        }
+        if current.join(".git").exists() {
+            return None;
+        }
+        current = current.parent()?;
+    }
+}
+
+pub fn ensure_cross_project_home(home: &Path) -> Result<(), String> {
+    let _guard = SCAFFOLD_LOCK
+        .lock()
+        .map_err(|_| "Home setup is unavailable.")?;
+    fs::create_dir_all(home).map_err(|_| "Muniment Home could not be scaffolded.")?;
+    scaffold_home(
+        home,
+        &OnboardingChoices {
+            layout: vec![
+                "memory".into(),
+                "agents".into(),
+                "projects".into(),
+                "sessions".into(),
+            ],
+            starter_agents: Vec::new(),
+        },
+    )
+}
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -369,10 +436,49 @@ fn atomic_write(path: &Path, contents: &[u8]) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::{
-        drive_type_is_unusual, scaffold_home, validate_choices, validate_home, warning,
-        OnboardingChoices,
+        drive_type_is_unusual, ensure_cross_project_home, onboard_companion_workspace,
+        scaffold_home, validate_choices, validate_home, warning, OnboardingChoices,
     };
-    use std::path::Path;
+    use std::{fs, path::Path};
+    use uuid::Uuid;
+
+    fn temporary(name: &str) -> std::path::PathBuf {
+        let path = std::env::temp_dir().join(format!("muniment-{name}-{}", Uuid::now_v7()));
+        fs::create_dir_all(&path).unwrap();
+        path
+    }
+
+    #[test]
+    fn workspace_onboarding_uses_opened_repo_instructions_with_external_memory() {
+        let root = temporary("workspace-runtime");
+        let repo = root.join("repo");
+        let opened = repo.join("packages/app");
+        let memory = root.join("external-memory");
+        fs::create_dir_all(repo.join(".git")).unwrap();
+        fs::create_dir_all(&opened).unwrap();
+        fs::create_dir_all(&memory).unwrap();
+        fs::write(repo.join("AGENTS.md"), "root instructions").unwrap();
+        fs::write(repo.join("packages/AGENTS.md"), "nearest instructions").unwrap();
+        let instructions = onboard_companion_workspace(&opened, &memory).unwrap();
+        assert_eq!(instructions.as_deref(), Some("nearest instructions"));
+        assert!(memory.join("memory/ONBOARDING.md").is_file());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn home_is_absent_until_cross_project_operation_then_fully_scaffolded() {
+        let root = temporary("lazy-home");
+        let repo = root.join("repo");
+        let home = root.join("isolated-home");
+        fs::create_dir(&repo).unwrap();
+        onboard_companion_workspace(&repo, &repo).unwrap();
+        assert!(!home.exists());
+        ensure_cross_project_home(&home).unwrap();
+        for child in ["memory", "agents", "projects", "sessions"] {
+            assert!(home.join(child).join("README.md").is_file());
+        }
+        fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn home_must_be_an_absolute_non_root_path() {

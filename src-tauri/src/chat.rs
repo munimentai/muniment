@@ -12,7 +12,7 @@ use muniment_core::attach::linux::{
 #[cfg(target_os = "linux")]
 use muniment_core::attach::{
     CommittedResult, Id, IdempotencyOutcome, IdempotencyStore, Operation, Protocol, ProtocolError,
-    Request as AttachRequest,
+    Request as AttachRequest, WorkspaceOnboardRequest, WorkspaceOnboarded,
 };
 use muniment_core::attachment::{ingest_attachment, AttachmentMetadata};
 use muniment_core::auth::TokenSet;
@@ -498,11 +498,18 @@ impl RunStartIdempotency for IdempotencyStore {
 pub struct DesktopAttachService<B, I = IdempotencyStore> {
     boundaries: B,
     idempotency: I,
+    home: PathBuf,
+    workspace_instructions: Option<String>,
 }
 
 #[cfg(target_os = "linux")]
 impl<R: tauri::Runtime> DesktopAttachService<TauriRunStartBoundaries<R>> {
     pub fn new(app: tauri::AppHandle<R>) -> Result<Self, ProtocolError> {
+        let home = app
+            .path()
+            .document_dir()
+            .map_err(|_| ProtocolError::persistence_failed())?
+            .join("Muniment");
         let idempotency = IdempotencyStore::open(
             app.path()
                 .app_data_dir()
@@ -512,6 +519,8 @@ impl<R: tauri::Runtime> DesktopAttachService<TauriRunStartBoundaries<R>> {
         Ok(Self {
             boundaries: TauriRunStartBoundaries { app },
             idempotency,
+            home,
+            workspace_instructions: None,
         })
     }
 }
@@ -520,6 +529,30 @@ impl<R: tauri::Runtime> DesktopAttachService<TauriRunStartBoundaries<R>> {
 impl<B: RunStartBoundaries, I: RunStartIdempotency> ThreadListService
     for DesktopAttachService<B, I>
 {
+    fn onboard_workspace(
+        &mut self,
+        request: WorkspaceOnboardRequest,
+    ) -> Result<WorkspaceOnboarded, ProtocolError> {
+        let opened = PathBuf::from(&request.opened_directory);
+        let memory = PathBuf::from(&request.memory_location);
+        if !opened.is_absolute() || !memory.is_absolute() {
+            return Err(ProtocolError::invalid_request());
+        }
+        let instructions = crate::onboarding::onboard_companion_workspace(&opened, &memory)
+            .map_err(|_| ProtocolError::persistence_failed())?;
+        self.workspace_instructions = instructions.clone();
+        Ok(WorkspaceOnboarded {
+            opened_directory: opened.to_string_lossy().into_owned(),
+            memory_location: memory.to_string_lossy().into_owned(),
+            instructions,
+        })
+    }
+
+    fn ensure_home(&mut self) -> Result<(), ProtocolError> {
+        crate::onboarding::ensure_cross_project_home(&self.home)
+            .map_err(|_| ProtocolError::persistence_failed())
+    }
+
     fn list_threads(
         &mut self,
         _workspace: &str,
@@ -563,6 +596,9 @@ impl<B: RunStartBoundaries, I: RunStartIdempotency> ThreadListService
         extra.insert("peer_uid".into(), json!(companion.peer_uid));
         extra.insert("peer_pid".into(), json!(companion.peer_pid));
         extra.insert("idempotency_key".into(), json!(idempotency_key.as_str()));
+        if let Some(instructions) = &self.workspace_instructions {
+            extra.insert("repository_instructions".into(), json!(instructions));
+        }
         let provenance = Provenance {
             source: "muniment-attach".into(),
             source_version: env!("CARGO_PKG_VERSION").into(),
@@ -2311,6 +2347,8 @@ mod tests {
         let mut service = DesktopAttachService {
             boundaries,
             idempotency: IdempotencyStore::open(":memory:").unwrap(),
+            home: PathBuf::new(),
+            workspace_instructions: None,
         };
         let result = service.start_run(
             "workspace-a",
@@ -2393,6 +2431,8 @@ mod tests {
         let mut service = DesktopAttachService {
             boundaries: FakeRunStartBoundaries::accepting(),
             idempotency: IdempotencyStore::open(":memory:").unwrap(),
+            home: PathBuf::new(),
+            workspace_instructions: None,
         };
         let key = "018f0000-0000-7000-8000-000000000002";
         let first = attach_start_on(
@@ -2428,6 +2468,8 @@ mod tests {
         let mut service = DesktopAttachService {
             boundaries: FakeRunStartBoundaries::accepting(),
             idempotency: IdempotencyStore::open(":memory:").unwrap(),
+            home: PathBuf::new(),
+            workspace_instructions: None,
         };
         let key = "018f0000-0000-7000-8000-000000000002";
         attach_start_on(
@@ -2490,6 +2532,8 @@ mod tests {
         let mut service = DesktopAttachService {
             boundaries: FakeRunStartBoundaries::accepting(),
             idempotency: IdempotencyStore::open(":memory:").unwrap(),
+            home: PathBuf::new(),
+            workspace_instructions: None,
         };
         let result = service.start_run(
             "workspace-b",
@@ -2554,6 +2598,8 @@ mod tests {
         let mut service = DesktopAttachService {
             boundaries: FakeRunStartBoundaries::accepting(),
             idempotency: FailingFinalization,
+            home: PathBuf::new(),
+            workspace_instructions: None,
         };
         let result = service.start_run(
             "workspace-a",

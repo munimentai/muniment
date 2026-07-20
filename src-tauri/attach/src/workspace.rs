@@ -1,39 +1,17 @@
-use std::{
-    fs, io,
-    path::{Path, PathBuf},
-};
+use std::{fs, io, path::Path};
 
-/// Runtime-owned, idempotent workspace onboarding used by companion surfaces.
-pub fn onboard_workspace(workspace: &Path) -> io::Result<Option<PathBuf>> {
-    let workspace = workspace.canonicalize()?;
-    if !workspace.is_dir() {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "workspace is not a directory",
-        ));
-    }
-    let memory = workspace.join("memory");
-    ensure_scaffold_directory(&memory)?;
-    write_scaffold_file_if_missing(
-        &memory.join("README.md"),
-        b"# Memory\n\nDurable context for this workspace.\n",
-    )?;
-    write_scaffold_file_if_missing(&memory.join("ONBOARDING.md"), b"# Muniment workspace onboarding report\n\nThis opened directory is the workspace memory location. User-level Home remains lazy until cross-project context is needed. Repository instructions are resolved from the nearest `AGENTS.md`.\n")?;
-    Ok(nearest_agents_file(&workspace))
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct WorkspaceOnboardRequest {
+    pub opened_directory: String,
+    pub memory_location: String,
 }
 
-pub fn nearest_agents_file(path: &Path) -> Option<PathBuf> {
-    let mut current = path;
-    loop {
-        let candidate = current.join("AGENTS.md");
-        if candidate.is_file() {
-            return Some(candidate);
-        }
-        if current.join(".git").exists() {
-            return None;
-        }
-        current = current.parent()?;
-    }
+#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WorkspaceOnboarded {
+    pub opened_directory: String,
+    pub memory_location: String,
+    pub instructions: Option<String>,
 }
 
 pub fn ensure_scaffold_directory(path: &Path) -> io::Result<()> {
@@ -51,23 +29,48 @@ pub fn ensure_scaffold_directory(path: &Path) -> io::Result<()> {
 }
 
 pub fn write_scaffold_file_if_missing(path: &Path, contents: &[u8]) -> io::Result<()> {
-    match fs::symlink_metadata(path) {
-        Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_file() => {
-            return Err(io::Error::new(
-                io::ErrorKind::AlreadyExists,
-                "memory seed is not a regular file",
-            ))
-        }
-        Ok(_) => return Ok(()),
-        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
-        Err(error) => return Err(error),
+    use std::io::Write;
+    static NEXT_TEMPORARY: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    if path.exists() {
+        return validate_scaffold_file(path);
     }
-    fs::write(path, contents)
+    let sequence = NEXT_TEMPORARY.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let temporary = path.with_extension(format!("muniment-{}-{sequence}.tmp", std::process::id()));
+    let result = (|| {
+        let mut file = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temporary)?;
+        file.write_all(contents)?;
+        file.sync_all()?;
+        match fs::hard_link(&temporary, path) {
+            Ok(()) => Ok(()),
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
+                validate_scaffold_file(path)
+            }
+            Err(error) => Err(error),
+        }
+    })();
+    let _ = fs::remove_file(temporary);
+    result
+}
+
+fn validate_scaffold_file(path: &Path) -> io::Result<()> {
+    let metadata = fs::symlink_metadata(path)?;
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        Err(io::Error::new(
+            io::ErrorKind::AlreadyExists,
+            "memory seed is not a regular file",
+        ))
+    } else {
+        Ok(())
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
     fn temp(name: &str) -> PathBuf {
         let p = std::env::temp_dir().join(format!("muniment-{name}-{}", std::process::id()));
         let _ = fs::remove_dir_all(&p);
@@ -75,31 +78,34 @@ mod tests {
         p
     }
     #[test]
-    fn onboard_is_idempotent_and_does_not_create_home() {
-        let p = temp("workspace");
-        onboard_workspace(&p).unwrap();
-        fs::write(p.join("memory/README.md"), "mine").unwrap();
-        onboard_workspace(&p).unwrap();
-        assert_eq!(
-            fs::read_to_string(p.join("memory/README.md")).unwrap(),
-            "mine"
-        );
-        for child in ["agents", "projects", "sessions"] {
-            assert!(!p.join(child).exists());
-        }
+    fn existing_scaffold_file_is_not_overwritten() {
+        let p = temp("atomic-scaffold");
+        let file = p.join("README.md");
+        fs::write(&file, "mine").unwrap();
+        write_scaffold_file_if_missing(&file, b"seed").unwrap();
+        assert_eq!(fs::read_to_string(file).unwrap(), "mine");
         fs::remove_dir_all(p).unwrap();
     }
+
     #[test]
-    fn nearest_agents_wins_in_a_monorepo() {
-        let p = temp("agents");
-        fs::create_dir(p.join(".git")).unwrap();
-        fs::create_dir_all(p.join("one/two")).unwrap();
-        fs::write(p.join("AGENTS.md"), "root").unwrap();
-        fs::write(p.join("one/AGENTS.md"), "near").unwrap();
-        assert_eq!(
-            nearest_agents_file(&p.join("one/two")),
-            Some(p.join("one/AGENTS.md"))
-        );
+    fn racing_scaffold_writers_publish_one_complete_file() {
+        let p = temp("racing-scaffold");
+        let file = p.join("ONBOARDING.md");
+        let writers = [
+            b"first complete report".as_slice(),
+            b"second complete report".as_slice(),
+        ]
+        .into_iter()
+        .map(|contents| {
+            let file = file.clone();
+            std::thread::spawn(move || write_scaffold_file_if_missing(&file, contents).unwrap())
+        })
+        .collect::<Vec<_>>();
+        for writer in writers {
+            writer.join().unwrap();
+        }
+        let contents = fs::read(file).unwrap();
+        assert!(contents == b"first complete report" || contents == b"second complete report");
         fs::remove_dir_all(p).unwrap();
     }
 }

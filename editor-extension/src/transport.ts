@@ -113,6 +113,7 @@ export interface AttachConnection {
   readonly capability: string;
   readonly expiresInSeconds: number;
   readonly idleTimeoutSeconds: number;
+  onboardWorkspace(openedDirectory: string, memoryLocation: string): Promise<WorkspaceOnboarded>;
   listThreads(cursor?: string): Promise<ThreadListPage>;
   openThread(threadId: string, cursor?: string): Promise<ThreadOpenPage>;
   startRun(text: string, context?: JsonValue): Promise<RunStartAccepted>;
@@ -120,6 +121,12 @@ export interface AttachConnection {
     decision: PermissionDecision): Promise<PermissionAnswerAccepted>;
   streamRun(runId: string, afterRunSeq: number): Promise<RunStreamSubscription>;
   dispose(): void;
+}
+
+export interface WorkspaceOnboarded {
+  openedDirectory: string;
+  memoryLocation: string;
+  instructions?: string;
 }
 
 export interface Disposable { dispose(): void; }
@@ -491,7 +498,7 @@ export function connectAttach(options: ConnectOptions): Promise<AttachConnection
               closeUnexpected(transportError(error));
             }
           };
-          const request = (operation: "thread.list" | "thread.open" | "run.start" | "run.stream" |
+          const request = (operation: "workspace.onboard" | "home.ensure" | "thread.list" | "thread.open" | "run.start" | "run.stream" |
             "run.cursor_ack" | "permission.answer", body: JsonBody,
             idempotent = false, owner?: Set<string>,
             onResponse?: (envelope: AttachEnvelope) => void): Promise<AttachEnvelope> => {
@@ -531,6 +538,19 @@ export function connectAttach(options: ConnectOptions): Promise<AttachConnection
             get capability() { return capability; },
             expiresInSeconds: envelope.expires_at as number,
             idleTimeoutSeconds: envelope.idle_timeout_seconds as number,
+            async onboardWorkspace(openedDirectory: string, memoryLocation: string): Promise<WorkspaceOnboarded> {
+              validateBoundedString(openedDirectory, MAX_TEXT_LENGTH, false);
+              validateBoundedString(memoryLocation, MAX_TEXT_LENGTH, false);
+              const body = exactObject((await request("workspace.onboard", {
+                opened_directory: openedDirectory, memory_location: memoryLocation,
+              })).body, ["opened_directory", "memory_location", "instructions"]);
+              if (body.opened_directory !== openedDirectory || body.memory_location !== memoryLocation ||
+                  (body.instructions !== null && typeof body.instructions !== "string")) {
+                throw new AttachTransportError("unexpected_message");
+              }
+              return { openedDirectory, memoryLocation,
+                ...(typeof body.instructions === "string" ? { instructions: body.instructions } : {}) };
+            },
             async listThreads(cursor?: string): Promise<ThreadListPage> {
               validateCursor(cursor, MAX_TEXT_LENGTH);
               const body: JsonBody = { limit: THREAD_PAGE_LIMIT };

@@ -27,6 +27,10 @@ class FakeConnection implements AttachConnection {
 
   constructor(private readonly page: ThreadListPage) {}
 
+  async onboardWorkspace(openedDirectory: string, memoryLocation: string) {
+    return { openedDirectory, memoryLocation };
+  }
+
   async listThreads(cursor?: string): Promise<ThreadListPage> {
     this.listCalls.push(cursor);
     return this.page;

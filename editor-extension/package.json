@@ -16,6 +16,7 @@
     "Other"
   ],
   "activationEvents": [
+    "onStartupFinished",
     "onView:muniment.threads",
     "onCommand:muniment.refreshThreads",
     "onCommand:muniment.newRun",

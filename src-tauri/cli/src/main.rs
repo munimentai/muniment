@@ -41,13 +41,16 @@ fn main() {
 
 fn run() -> Result<(), CliError> {
     let mut args: Vec<_> = std::env::args_os().skip(1).collect();
-    let workspace = workspace_argument(&mut args)?
-        .unwrap_or(std::env::current_dir().map_err(|_| CliError::Workspace)?);
+    let opened = std::env::current_dir().map_err(|_| CliError::Workspace)?;
+    let workspace = workspace_argument(&mut args)?.unwrap_or_else(|| opened.clone());
     if !recognized_command(&args) {
         return Err(CliError::Usage);
     }
-    muniment_attach::onboard_workspace(&workspace).map_err(|_| CliError::Workspace)?;
     if args == [OsString::from("workspace"), OsString::from("init")] {
+        let mut client = handshake(env!("CARGO_PKG_VERSION"), || {}).map_err(CliError::Client)?;
+        client
+            .onboard_workspace(&opened.to_string_lossy(), &workspace.to_string_lossy())
+            .map_err(CliError::Client)?;
         return Ok(());
     }
     let stdin = io::stdin();
@@ -59,7 +62,11 @@ fn run() -> Result<(), CliError> {
         io::stdout().is_terminal(),
         &mut input,
         &mut stdout,
-        |pairing_pending| handshake(env!("CARGO_PKG_VERSION"), pairing_pending),
+        |pairing_pending| {
+            let mut client = handshake(env!("CARGO_PKG_VERSION"), pairing_pending)?;
+            client.onboard_workspace(&opened.to_string_lossy(), &workspace.to_string_lossy())?;
+            Ok(client)
+        },
     )
 }
 

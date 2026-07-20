@@ -254,8 +254,8 @@ mod linux {
     };
     use crate::{
         decode_frame, encode_frame, Authorized, Client, Envelope, ErrorCode, ErrorEnvelope,
-        EventName, FrameError, Hello, Id, Operation, Protocol, Request, VersionRange, Welcome,
-        MAX_FRAME_LENGTH, MAX_TEXT_LENGTH, PROTOCOL,
+        EventName, FrameError, Hello, Id, Operation, Protocol, Request, Response, VersionRange,
+        Welcome, WorkspaceOnboarded, MAX_FRAME_LENGTH, MAX_TEXT_LENGTH, PROTOCOL,
     };
     use serde::de::DeserializeOwned;
     use serde_json::Value;
@@ -311,6 +311,69 @@ mod linux {
     impl AuthorizedClient {
         pub fn authorization_summary(&self) -> AuthorizationSummary {
             self.summary.clone()
+        }
+
+        pub fn onboard_workspace(
+            &mut self,
+            opened_directory: &str,
+            memory_location: &str,
+        ) -> Result<WorkspaceOnboarded, ClientError> {
+            if opened_directory.is_empty()
+                || memory_location.is_empty()
+                || opened_directory.len() > MAX_TEXT_LENGTH
+                || memory_location.len() > MAX_TEXT_LENGTH
+            {
+                return Err(ClientError::UnexpectedMessage);
+            }
+            let request_id = fresh_request_id()?;
+            let request = Request {
+                protocol: Protocol,
+                request_id: request_id.clone(),
+                operation: Operation::WorkspaceOnboard,
+                capability: self.capability.clone(),
+                idempotency_key: None,
+                body: serde_json::json!({
+                    "opened_directory": opened_directory, "memory_location": memory_location
+                }),
+            };
+            let response = self.send_request(request, &request_id)?;
+            serde_json::from_value(response.body).map_err(|_| ClientError::UnexpectedMessage)
+        }
+
+        pub fn ensure_home(&mut self) -> Result<(), ClientError> {
+            let request_id = fresh_request_id()?;
+            let request = Request {
+                protocol: Protocol,
+                request_id: request_id.clone(),
+                operation: Operation::HomeEnsure,
+                capability: self.capability.clone(),
+                idempotency_key: None,
+                body: serde_json::json!({}),
+            };
+            let response = self.send_request(request, &request_id)?;
+            if response.body != serde_json::json!({}) {
+                return Err(ClientError::UnexpectedMessage);
+            }
+            Ok(())
+        }
+
+        fn send_request(
+            &mut self,
+            request: Request,
+            request_id: &Id,
+        ) -> Result<Response, ClientError> {
+            let deadline = deadline(self.io_timeout);
+            let bytes = encode_frame(&request).map_err(map_frame_error)?;
+            write_all_before(&mut self.stream, &bytes, deadline)?;
+            match serde_json::from_value(read_value(&mut self.stream, deadline)?)
+                .map_err(|_| ClientError::UnexpectedMessage)?
+            {
+                Envelope::Response(response) if &response.request_id == request_id => Ok(response),
+                Envelope::Error(error) if error.request_id.as_ref() == Some(request_id) => {
+                    Err(map_protocol_error(error.error.code()))
+                }
+                _ => Err(ClientError::UnexpectedMessage),
+            }
         }
 
         pub fn list_threads(
@@ -1171,6 +1234,16 @@ pub struct AuthorizedClient;
 
 #[cfg(not(target_os = "linux"))]
 impl AuthorizedClient {
+    pub fn onboard_workspace(
+        &mut self,
+        _opened_directory: &str,
+        _memory_location: &str,
+    ) -> Result<WorkspaceOnboarded, ClientError> {
+        Err(ClientError::UnsupportedPlatform)
+    }
+    pub fn ensure_home(&mut self) -> Result<(), ClientError> {
+        Err(ClientError::UnsupportedPlatform)
+    }
     pub fn list_threads(&mut self, _cursor: Option<&str>) -> Result<ThreadListPage, ClientError> {
         Err(ClientError::UnsupportedPlatform)
     }

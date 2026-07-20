@@ -1,11 +1,10 @@
 import * as vscode from "vscode";
-import { execFile } from "node:child_process";
-import { isAbsolute } from "node:path";
 import { ThreadDocumentLoader } from "./thread-document";
 import { openAcceptedRun, permissionDecision, RunDocumentStore } from "./run-documents";
 import { NEW_RUN_COMMAND, NEW_RUN_WITH_CURRENT_FILE_COMMAND, OPEN_THREAD_COMMAND, ThreadsModel, threadOpenCommand, type ThreadItem } from "./threads";
 import { connectAttach } from "./transport";
 import { editorFileContext, editorSelectionContext, type ActiveFile, type ActiveSelection } from "./editor-context";
+import { WorkspaceOnboarding, type WorkspaceFolderLike } from "./workspace-onboarding";
 
 const THREADS_VIEW_ID = "muniment.threads";
 const REFRESH_COMMAND = "muniment.refreshThreads";
@@ -13,7 +12,16 @@ const THREAD_SCHEME = "muniment-thread";
 const RUN_SCHEME = "muniment-run";
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
-  await initializeWorkspaceMemory();
+  const onboarding = new WorkspaceOnboarding(
+    (folder) => vscode.workspace.getConfiguration("muniment", vscode.Uri.parse(folder.key))
+      .get<string>("workspaceMemoryLocation", ""),
+    () => connectAttach({
+      clientVersion: context.extension.packageJSON.version as string,
+      approvalTimeoutMs: 10_000,
+    }),
+    (message) => { void vscode.window.showErrorMessage(message); },
+  );
+  const folders = () => (vscode.workspace.workspaceFolders ?? []).map(workspaceFolderLike);
   const model = new ThreadsModel((onPairingPending) => connectAttach({
     clientVersion: context.extension.packageJSON.version as string,
     onPairingPending,
@@ -61,8 +69,16 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       const document = await vscode.workspace.openTextDocument(uri);
       await vscode.window.showTextDocument(document, { preview: true });
     }),
+    vscode.workspace.onDidChangeWorkspaceFolders((event) => {
+      void onboarding.initialize(event.added.map(workspaceFolderLike));
+    }),
+    vscode.workspace.onDidChangeConfiguration((event) => {
+      if (event.affectsConfiguration("muniment.workspaceMemoryLocation")) {
+        void onboarding.initialize(folders());
+      }
+    }),
   );
-  void model.refresh();
+  void onboarding.initialize(folders()).finally(() => model.refresh());
 
   async function submitRun(runContext?: ReturnType<typeof editorSelectionContext>): Promise<void> {
     const text = await vscode.window.showInputBox({
@@ -103,21 +119,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   }
 }
 
-async function initializeWorkspaceMemory(): Promise<void> {
-  const opened = vscode.workspace.workspaceFolders?.[0]?.uri;
-  if (!opened || opened.scheme !== "file") return;
-  const configured = vscode.workspace.getConfiguration("muniment", opened)
-    .get<string>("workspaceMemoryLocation", "").trim();
-  const directory = configured || opened.fsPath;
-  if (!isAbsolute(directory)) {
-    void vscode.window.showErrorMessage("Muniment workspace memory must be an absolute directory.");
-    return;
-  }
-  await new Promise<void>((resolve) => execFile("muniment", ["--workspace", directory, "workspace", "init"],
-    { windowsHide: true }, (error) => {
-      if (error) void vscode.window.showErrorMessage("Muniment couldn’t initialize workspace memory. Check the Muniment CLI installation and workspace setting.");
-      resolve();
-    }));
+function workspaceFolderLike(folder: vscode.WorkspaceFolder): WorkspaceFolderLike {
+  return { key: folder.uri.toString(), scheme: folder.uri.scheme, fsPath: folder.uri.fsPath };
 }
 
 function activeEditorFileContext() {

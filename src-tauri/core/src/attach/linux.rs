@@ -18,8 +18,8 @@ use super::{
     authorized, encode_frame, welcome, Approval, AuthorizationClock, AuthorizationError,
     AuthorizationState, AuthorizationTokenGenerator, ConnectionBinding, Envelope, ErrorEnvelope,
     Event, EventName, Failure, FirstMessage, NegotiationError, Operation, Protocol, ProtocolError,
-    Request, Response, Success, VersionRange, CHALLENGE_LIFETIME, MAX_FRAME_LENGTH,
-    MAX_TEXT_LENGTH,
+    Request, Response, Success, VersionRange, WorkspaceOnboardRequest, WorkspaceOnboarded,
+    CHALLENGE_LIFETIME, MAX_FRAME_LENGTH, MAX_TEXT_LENGTH,
 };
 use super::{
     RunEventAdmission, RunStreamCursor, MAX_RUN_STREAM_WINDOW_BYTES, MAX_RUN_STREAM_WINDOW_EVENTS,
@@ -459,6 +459,17 @@ pub struct RunStreamPage {
 
 /// Deterministic desktop service seam for authorized attach requests.
 pub trait ThreadListService {
+    fn onboard_workspace(
+        &mut self,
+        _request: WorkspaceOnboardRequest,
+    ) -> Result<WorkspaceOnboarded, ProtocolError> {
+        Err(ProtocolError::unsupported_operation())
+    }
+
+    fn ensure_home(&mut self) -> Result<(), ProtocolError> {
+        Err(ProtocolError::unsupported_operation())
+    }
+
     fn list_threads(
         &mut self,
         workspace: &str,
@@ -1046,6 +1057,7 @@ where
             return Err(AttachSessionError::Authorization);
         }
         let required_scope = match request.operation {
+            Operation::WorkspaceOnboard | Operation::HomeEnsure => None,
             Operation::ThreadList
             | Operation::ThreadOpen
             | Operation::RunStream
@@ -1357,6 +1369,48 @@ fn dispatch_request<S: ThreadListService>(
     subscriptions: &mut Vec<ActiveRunStream>,
 ) -> Result<DispatchResult, DispatchFailure> {
     request.validate_idempotency_key()?;
+    if request.operation == Operation::WorkspaceOnboard {
+        #[derive(serde::Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Body {
+            opened_directory: String,
+            memory_location: String,
+        }
+        let body: Body =
+            serde_json::from_value(request.body).map_err(|_| ProtocolError::invalid_request())?;
+        if body.opened_directory.is_empty()
+            || body.memory_location.is_empty()
+            || body.opened_directory.len() > MAX_TEXT_LENGTH
+            || body.memory_location.len() > MAX_TEXT_LENGTH
+        {
+            return Err(ProtocolError::invalid_request().into());
+        }
+        let result = service.onboard_workspace(WorkspaceOnboardRequest {
+            opened_directory: body.opened_directory,
+            memory_location: body.memory_location,
+        })?;
+        if result.opened_directory.len() > MAX_TEXT_LENGTH
+            || result.memory_location.len() > MAX_TEXT_LENGTH
+            || result
+                .instructions
+                .as_ref()
+                .is_some_and(|value| value.len() > MAX_TEXT_LENGTH)
+        {
+            return Err(ProtocolError::persistence_failed().into());
+        }
+        return Ok(response_only(serde_json::json!({
+            "opened_directory": result.opened_directory,
+            "memory_location": result.memory_location,
+            "instructions": result.instructions,
+        })));
+    }
+    if request.operation == Operation::HomeEnsure {
+        if request.body != serde_json::json!({}) {
+            return Err(ProtocolError::invalid_request().into());
+        }
+        service.ensure_home()?;
+        return Ok(response_only(serde_json::json!({})));
+    }
     if request.operation == Operation::RunCursorAck {
         #[derive(serde::Deserialize)]
         #[serde(deny_unknown_fields)]
