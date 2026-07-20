@@ -18,8 +18,8 @@ use super::{
     authorized, encode_frame, welcome, Approval, AuthorizationClock, AuthorizationError,
     AuthorizationState, AuthorizationTokenGenerator, ConnectionBinding, Envelope, ErrorEnvelope,
     Event, EventName, Failure, FirstMessage, NegotiationError, Operation, Protocol, ProtocolError,
-    Request, Response, Success, VersionRange, CHALLENGE_LIFETIME, MAX_FRAME_LENGTH,
-    MAX_TEXT_LENGTH,
+    Request, Response, Success, VersionRange, WorkspaceOnboardRequest, WorkspaceOnboarded,
+    CHALLENGE_LIFETIME, MAX_FRAME_LENGTH, MAX_TEXT_LENGTH,
 };
 use super::{
     RunEventAdmission, RunStreamCursor, MAX_RUN_STREAM_WINDOW_BYTES, MAX_RUN_STREAM_WINDOW_EVENTS,
@@ -459,6 +459,23 @@ pub struct RunStreamPage {
 
 /// Deterministic desktop service seam for authorized attach requests.
 pub trait ThreadListService {
+    fn bind_authorized_client(&mut self, _client_identity: &str) {}
+
+    fn onboard_workspace(
+        &mut self,
+        _request: WorkspaceOnboardRequest,
+    ) -> Result<WorkspaceOnboarded, ProtocolError> {
+        Err(ProtocolError::unsupported_operation())
+    }
+
+    fn ensure_home(&mut self) -> Result<(), ProtocolError> {
+        Err(ProtocolError::unsupported_operation())
+    }
+
+    fn workspace_is_authorized(&self, _workspace: &str) -> bool {
+        false
+    }
+
     fn list_threads(
         &mut self,
         workspace: &str,
@@ -696,6 +713,55 @@ pub fn run_authenticated_session(
     )
 }
 
+/// Runs the default authenticated session with the desktop's concrete request service.
+pub fn run_authenticated_session_with_service<S: ThreadListService>(
+    stream: UnixStream,
+    credentials: PeerCredentials,
+    desktop_version: &str,
+    service: &mut S,
+) -> Result<(), AttachSessionError> {
+    let mut random = |bytes: &mut [u8]| getrandom::fill(bytes).map_err(|_| ());
+    run_authenticated_session_with_authorization(
+        stream,
+        credentials,
+        desktop_version,
+        HELLO_TIMEOUT,
+        AuthorizationSessionDependencies {
+            fill_random: &mut random,
+            clock: SessionClock(Instant::now()),
+            tokens: SessionTokens,
+            approvals: |_: &super::PairingChallenge, _: Duration| Some(ApprovalDecision::Deny),
+        },
+        service,
+    )
+}
+
+pub fn run_authenticated_session_with_service_and_approvals<
+    S: ThreadListService,
+    W: ApprovalWaiter,
+>(
+    stream: UnixStream,
+    credentials: PeerCredentials,
+    desktop_version: &str,
+    service: &mut S,
+    approvals: W,
+) -> Result<(), AttachSessionError> {
+    let mut random = |bytes: &mut [u8]| getrandom::fill(bytes).map_err(|_| ());
+    run_authenticated_session_with_authorization(
+        stream,
+        credentials,
+        desktop_version,
+        HELLO_TIMEOUT,
+        AuthorizationSessionDependencies {
+            fill_random: &mut random,
+            clock: SessionClock(Instant::now()),
+            tokens: SessionTokens,
+            approvals,
+        },
+        service,
+    )
+}
+
 /// Testable form of [`run_authenticated_session`] with bounded timing and randomness seams.
 #[doc(hidden)]
 pub fn run_authenticated_session_with<R>(
@@ -810,9 +876,11 @@ where
                 return Err(AttachSessionError::MalformedFrame);
             }
         };
-        let (client_nonce, companion_kind, companion_version) = match &message {
+        let (client_nonce, authorized_client_id, companion_kind, companion_version) = match &message
+        {
             FirstMessage::Hello(hello) => (
                 hello.client_nonce.clone(),
+                hello.authorized_client_id.as_str().to_owned(),
                 hello.client.kind.clone(),
                 hello.client.version.clone(),
             ),
@@ -904,6 +972,7 @@ where
             peer_uid: credentials.uid,
             peer_pid: credentials.pid as u32,
         };
+        service.bind_authorized_client(&authorized_client_id);
         serve_requests(
             &mut stream,
             timeout,
@@ -1046,6 +1115,7 @@ where
             return Err(AttachSessionError::Authorization);
         }
         let required_scope = match request.operation {
+            Operation::WorkspaceOnboard | Operation::HomeEnsure => None,
             Operation::ThreadList
             | Operation::ThreadOpen
             | Operation::RunStream
@@ -1357,6 +1427,48 @@ fn dispatch_request<S: ThreadListService>(
     subscriptions: &mut Vec<ActiveRunStream>,
 ) -> Result<DispatchResult, DispatchFailure> {
     request.validate_idempotency_key()?;
+    if request.operation == Operation::WorkspaceOnboard {
+        #[derive(serde::Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Body {
+            opened_directory: String,
+            memory_location: String,
+        }
+        let body: Body =
+            serde_json::from_value(request.body).map_err(|_| ProtocolError::invalid_request())?;
+        if body.opened_directory.is_empty()
+            || body.memory_location.is_empty()
+            || body.opened_directory.len() > MAX_TEXT_LENGTH
+            || body.memory_location.len() > MAX_TEXT_LENGTH
+        {
+            return Err(ProtocolError::invalid_request().into());
+        }
+        let result = service.onboard_workspace(WorkspaceOnboardRequest {
+            opened_directory: body.opened_directory,
+            memory_location: body.memory_location,
+        })?;
+        if result.opened_directory.len() > MAX_TEXT_LENGTH
+            || result.memory_location.len() > MAX_TEXT_LENGTH
+            || result
+                .instructions
+                .as_ref()
+                .is_some_and(|value| value.len() > MAX_TEXT_LENGTH)
+        {
+            return Err(ProtocolError::persistence_failed().into());
+        }
+        return Ok(response_only(serde_json::json!({
+            "opened_directory": result.opened_directory,
+            "memory_location": result.memory_location,
+            "instructions": result.instructions,
+        })));
+    }
+    if request.operation == Operation::HomeEnsure {
+        if request.body != serde_json::json!({}) {
+            return Err(ProtocolError::invalid_request().into());
+        }
+        service.ensure_home()?;
+        return Ok(response_only(serde_json::json!({})));
+    }
     if request.operation == Operation::RunCursorAck {
         #[derive(serde::Deserialize)]
         #[serde(deny_unknown_fields)]
@@ -1415,6 +1527,8 @@ fn dispatch_request<S: ThreadListService>(
         struct Body {
             text: String,
             #[serde(default)]
+            workspace: Option<String>,
+            #[serde(default)]
             context: Option<serde_json::Value>,
         }
         let body: Body =
@@ -1428,6 +1542,10 @@ fn dispatch_request<S: ThreadListService>(
             .unwrap_or(0);
         if body.text.trim().is_empty()
             || body.text.len() > MAX_RUN_START_TEXT_LENGTH
+            || body
+                .workspace
+                .as_ref()
+                .is_some_and(|value| value.is_empty() || value.len() > MAX_TEXT_LENGTH)
             || context_length > MAX_RUN_START_CONTEXT_LENGTH
         {
             return Err(ProtocolError::invalid_request().into());
@@ -1436,8 +1554,12 @@ fn dispatch_request<S: ThreadListService>(
             .idempotency_key
             .as_ref()
             .ok_or_else(ProtocolError::idempotency_key_required)?;
+        let selected_workspace = body.workspace.as_deref().unwrap_or(workspace);
+        if body.workspace.is_some() && !service.workspace_is_authorized(selected_workspace) {
+            return Err(ProtocolError::unauthorized().into());
+        }
         let accepted = service.start_run(
-            workspace,
+            selected_workspace,
             RunStartRequest {
                 text: body.text,
                 context: body.context,

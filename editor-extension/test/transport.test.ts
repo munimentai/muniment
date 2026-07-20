@@ -129,16 +129,47 @@ test("lists and opens bounded thread pages over the authorized connection", asyn
   connection.dispose();
 });
 
+test("onboards workspace context and lazily ensures Home over the authorized connection", async () => {
+  const socket = new FakeSocket();
+  const connection = await authorizedConnection(socket);
+
+  const onboarding = connection.onboardWorkspace("/work/repo", "/external/memory");
+  const onboardRequest = lastRequest(socket);
+  assert.equal(onboardRequest.operation, "workspace.onboard");
+  assert.deepEqual(onboardRequest.body, {
+    opened_directory: "/work/repo", memory_location: "/external/memory",
+  });
+  socket.emit("data", encodeAttachFrame({
+    protocol: "muniment.attach/1", request_id: onboardRequest.request_id, ok: true,
+    body: { opened_directory: "/work/repo", memory_location: "/external/memory",
+      instructions: "nearest instructions" },
+  }));
+  assert.deepEqual(await onboarding, { openedDirectory: "/work/repo",
+    memoryLocation: "/external/memory", instructions: "nearest instructions" });
+
+  const ensuring = connection.ensureHome();
+  const ensureRequest = lastRequest(socket);
+  assert.equal(ensureRequest.operation, "home.ensure");
+  assert.deepEqual(ensureRequest.body, {});
+  socket.emit("data", encodeAttachFrame({
+    protocol: "muniment.attach/1", request_id: ensureRequest.request_id, ok: true, body: {},
+  }));
+  await ensuring;
+  connection.dispose();
+});
+
 test("starts runs with the canonical request shape and decodes the receipt", async () => {
   const socket = new FakeSocket();
   const connection = await authorizedConnection(socket);
 
-  const started = connection.startRun("Summarize the selected file.", { selected_file: "src/main.rs" });
+  const started = connection.startRun("Summarize the selected file.", { selected_file: "src/main.rs" }, "/repo/root");
   const request = lastRequest(socket);
   assert.equal(request.operation, "run.start");
+  assert.equal((request.body as Record<string, unknown>).workspace, "/repo/root");
   assert.equal(request.capability, "c".repeat(64));
   assert.deepEqual(request.body, {
     context: { selected_file: "src/main.rs" }, text: "Summarize the selected file.",
+    workspace: "/repo/root",
   });
   assert.match(request.request_id as string, /^[0-9a-f-]{36}$/);
   assert.match(request.idempotency_key as string, /^[0-9a-f-]{36}$/);

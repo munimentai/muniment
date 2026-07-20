@@ -75,7 +75,7 @@ export class ThreadsModel {
     return this.connection.openThread(threadId);
   }
 
-  async submitRun(text: string | undefined, context?: JsonValue): Promise<RunSubmissionResult> {
+  async submitRun(text: string | undefined, context?: JsonValue, workspace?: string): Promise<RunSubmissionResult> {
     if (text === undefined || text.trim().length === 0) return { kind: "no-op" };
     if (context !== undefined && Buffer.byteLength(JSON.stringify(context), "utf8") > MAX_RUN_START_CONTEXT_LENGTH) {
       return { kind: "failed", message: "The selected editor text is too large to attach (64 KiB maximum)." };
@@ -85,7 +85,7 @@ export class ThreadsModel {
 
     this.submittingRun = true;
     try {
-      const accepted = await this.connection.startRun(text, context);
+      const accepted = await this.connection.startRun(text, context, workspace);
       return { kind: "accepted", ...accepted };
     } catch (error) {
       return { kind: "failed", message: runStartFailureMessage(error) };
@@ -138,6 +138,11 @@ export class ThreadsModel {
         ? { kind: "runtime-unavailable" }
         : { kind: "connection-failed" });
     }
+  }
+
+  async ensureCrossProjectHome(): Promise<void> {
+    if (this.disposed || !this.connection) throw new AttachTransportError("authorization_expired");
+    await this.connection.ensureHome();
   }
 
   dispose(): void {

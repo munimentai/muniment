@@ -5,7 +5,7 @@ use std::{
 
 use serde::{de, Deserialize, Deserializer, Serialize};
 
-use crate::{ErrorAction, Protocol, ProtocolError, VersionRange};
+use crate::{ErrorAction, Id, Protocol, ProtocolError, VersionRange};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Client {
@@ -19,6 +19,7 @@ pub struct Hello {
     pub client: Client,
     pub supported: VersionRange,
     pub client_nonce: String,
+    pub authorized_client_id: Id,
 }
 
 impl fmt::Debug for Hello {
@@ -40,6 +41,7 @@ impl<'de> Deserialize<'de> for Hello {
             client: Client,
             supported: VersionRange,
             client_nonce: String,
+            authorized_client_id: Id,
             #[serde(flatten)]
             extra: BTreeMap<String, serde_json::Value>,
         }
@@ -74,6 +76,7 @@ impl<'de> Deserialize<'de> for Hello {
             client: fields.client,
             supported: fields.supported,
             client_nonce: fields.client_nonce,
+            authorized_client_id: fields.authorized_client_id,
         })
     }
 }

@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -6,13 +6,14 @@ use std::time::Duration;
 use chrono::{SecondsFormat, Utc};
 #[cfg(target_os = "linux")]
 use muniment_core::attach::linux::{
+    run_authenticated_session_with_service_and_approvals, AttachFilesystem, AttachTransport,
     CompanionProvenance, RunStartAccepted, RunStartRequest as AttachRunStartRequest,
     ThreadListPage, ThreadListRequest, ThreadListService,
 };
 #[cfg(target_os = "linux")]
 use muniment_core::attach::{
-    CommittedResult, Id, IdempotencyOutcome, IdempotencyStore, Operation, Protocol, ProtocolError,
-    Request as AttachRequest,
+    Approval, CommittedResult, Id, IdempotencyOutcome, IdempotencyStore, Operation, Protocol,
+    ProtocolError, Request as AttachRequest, WorkspaceOnboardRequest, WorkspaceOnboarded,
 };
 use muniment_core::attachment::{ingest_attachment, AttachmentMetadata};
 use muniment_core::auth::TokenSet;
@@ -498,11 +499,40 @@ impl RunStartIdempotency for IdempotencyStore {
 pub struct DesktopAttachService<B, I = IdempotencyStore> {
     boundaries: B,
     idempotency: I,
+    home: PathBuf,
+    workspace_contexts: Arc<Mutex<HashMap<String, HashMap<PathBuf, Option<String>>>>>,
+    client_identity: Option<String>,
+}
+
+#[derive(Default)]
+pub struct AttachApprovalState {
+    pending: Mutex<HashMap<String, std::sync::mpsc::SyncSender<bool>>>,
+}
+
+#[tauri::command]
+pub fn attach_pairing_decide(
+    state: tauri::State<'_, AttachApprovalState>,
+    challenge: String,
+    approve: bool,
+) {
+    if let Ok(mut pending) = state.pending.lock() {
+        if let Some(sender) = pending.remove(&challenge) {
+            let _ = sender.try_send(approve);
+        }
+    }
 }
 
 #[cfg(target_os = "linux")]
 impl<R: tauri::Runtime> DesktopAttachService<TauriRunStartBoundaries<R>> {
-    pub fn new(app: tauri::AppHandle<R>) -> Result<Self, ProtocolError> {
+    pub fn new(
+        app: tauri::AppHandle<R>,
+        workspace_contexts: Arc<Mutex<HashMap<String, HashMap<PathBuf, Option<String>>>>>,
+    ) -> Result<Self, ProtocolError> {
+        let home = app
+            .path()
+            .document_dir()
+            .map_err(|_| ProtocolError::persistence_failed())?
+            .join("Muniment");
         let idempotency = IdempotencyStore::open(
             app.path()
                 .app_data_dir()
@@ -512,14 +542,133 @@ impl<R: tauri::Runtime> DesktopAttachService<TauriRunStartBoundaries<R>> {
         Ok(Self {
             boundaries: TauriRunStartBoundaries { app },
             idempotency,
+            home,
+            workspace_contexts,
+            client_identity: None,
         })
     }
+}
+
+#[cfg(target_os = "linux")]
+pub fn start_attach_listener<R: tauri::Runtime>(app: tauri::AppHandle<R>) {
+    std::thread::spawn(move || {
+        let Ok(filesystem) = AttachFilesystem::from_environment() else {
+            return;
+        };
+        let Ok(listener) = AttachTransport::bind(&filesystem) else {
+            return;
+        };
+        let workspace_contexts = Arc::new(Mutex::new(HashMap::new()));
+        while let Ok((stream, credentials)) = listener.accept() {
+            let app = app.clone();
+            let workspace_contexts = workspace_contexts.clone();
+            std::thread::spawn(move || {
+                let Ok(mut service) = DesktopAttachService::new(app, workspace_contexts) else {
+                    return;
+                };
+                let approval_app = service.boundaries.app.clone();
+                let _ = run_authenticated_session_with_service_and_approvals(
+                    stream,
+                    credentials,
+                    env!("CARGO_PKG_VERSION"),
+                    &mut service,
+                    move |challenge: &muniment_core::attach::PairingChallenge,
+                          remaining: Duration| {
+                        let challenge = challenge.as_str().to_owned();
+                        let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+                        let state = approval_app.state::<AttachApprovalState>();
+                        state.pending.lock().ok()?.insert(challenge.clone(), sender);
+                        if approval_app
+                            .emit("attach-pairing-requested", &challenge)
+                            .is_err()
+                        {
+                            state.pending.lock().ok()?.remove(&challenge);
+                            return Some(muniment_core::attach::linux::ApprovalDecision::Deny);
+                        }
+                        let approved = receiver.recv_timeout(remaining).unwrap_or(false);
+                        state.pending.lock().ok()?.remove(&challenge);
+                        if !approved {
+                            return Some(muniment_core::attach::linux::ApprovalDecision::Deny);
+                        }
+                        Some(muniment_core::attach::linux::ApprovalDecision::Approve(
+                            Approval {
+                                profile: "desktop-owner".into(),
+                                workspace: std::env::current_dir()
+                                    .ok()?
+                                    .to_string_lossy()
+                                    .into_owned(),
+                                scopes: BTreeSet::from(["thread.read".into(), "run.write".into()]),
+                                lifetime: Duration::from_secs(60 * 60),
+                            },
+                        ))
+                    },
+                );
+            });
+        }
+    });
 }
 
 #[cfg(target_os = "linux")]
 impl<B: RunStartBoundaries, I: RunStartIdempotency> ThreadListService
     for DesktopAttachService<B, I>
 {
+    fn bind_authorized_client(&mut self, client_identity: &str) {
+        self.client_identity = Some(client_identity.to_owned());
+    }
+
+    fn onboard_workspace(
+        &mut self,
+        request: WorkspaceOnboardRequest,
+    ) -> Result<WorkspaceOnboarded, ProtocolError> {
+        let opened = PathBuf::from(&request.opened_directory);
+        let memory = PathBuf::from(&request.memory_location);
+        if !opened.is_absolute() || !memory.is_absolute() {
+            return Err(ProtocolError::invalid_request());
+        }
+        let instructions = muniment_core::onboard_companion_workspace(&opened, &memory)
+            .map_err(|_| ProtocolError::persistence_failed())?;
+        let opened_canonical = opened
+            .canonicalize()
+            .map_err(|_| ProtocolError::persistence_failed())?;
+        let memory_canonical = memory
+            .canonicalize()
+            .map_err(|_| ProtocolError::persistence_failed())?;
+        let mut contexts = self
+            .workspace_contexts
+            .lock()
+            .map_err(|_| ProtocolError::persistence_failed())?;
+        let identity = self
+            .client_identity
+            .as_ref()
+            .ok_or_else(ProtocolError::unauthorized)?;
+        let contexts = contexts.entry(identity.clone()).or_default();
+        contexts.insert(opened.clone(), instructions.clone());
+        contexts.insert(opened_canonical, instructions.clone());
+        contexts.insert(memory.clone(), instructions.clone());
+        contexts.insert(memory_canonical, instructions.clone());
+        Ok(WorkspaceOnboarded {
+            opened_directory: opened.to_string_lossy().into_owned(),
+            memory_location: memory.to_string_lossy().into_owned(),
+            instructions,
+        })
+    }
+
+    fn ensure_home(&mut self) -> Result<(), ProtocolError> {
+        muniment_core::ensure_cross_project_home(&self.home)
+            .map_err(|_| ProtocolError::persistence_failed())
+    }
+
+    fn workspace_is_authorized(&self, workspace: &str) -> bool {
+        let Some(identity) = &self.client_identity else {
+            return false;
+        };
+        self.workspace_contexts.lock().is_ok_and(|contexts| {
+            contexts
+                .get(identity)
+                .is_some_and(|workspaces| workspaces.contains_key(&PathBuf::from(workspace)))
+        })
+    }
+
     fn list_threads(
         &mut self,
         _workspace: &str,
@@ -563,6 +712,21 @@ impl<B: RunStartBoundaries, I: RunStartIdempotency> ThreadListService
         extra.insert("peer_uid".into(), json!(companion.peer_uid));
         extra.insert("peer_pid".into(), json!(companion.peer_pid));
         extra.insert("idempotency_key".into(), json!(idempotency_key.as_str()));
+        let instructions = self
+            .workspace_contexts
+            .lock()
+            .map_err(|_| ProtocolError::persistence_failed())?
+            .get(
+                self.client_identity
+                    .as_ref()
+                    .ok_or_else(ProtocolError::unauthorized)?,
+            )
+            .and_then(|contexts| contexts.get(&PathBuf::from(workspace)))
+            .cloned()
+            .flatten();
+        if let Some(instructions) = instructions {
+            extra.insert("repository_instructions".into(), json!(instructions));
+        }
         let provenance = Provenance {
             source: "muniment-attach".into(),
             source_version: env!("CARGO_PKG_VERSION").into(),
@@ -2311,6 +2475,9 @@ mod tests {
         let mut service = DesktopAttachService {
             boundaries,
             idempotency: IdempotencyStore::open(":memory:").unwrap(),
+            home: PathBuf::new(),
+            workspace_contexts: Arc::new(Mutex::new(HashMap::new())),
+            client_identity: Some("default".into()),
         };
         let result = service.start_run(
             "workspace-a",
@@ -2389,10 +2556,181 @@ mod tests {
 
     #[cfg(target_os = "linux")]
     #[test]
+    fn attach_onboarding_context_survives_connections_and_keys_distinct_external_roots() {
+        let root = std::env::temp_dir().join(format!("muniment-attach-context-{}", Uuid::now_v7()));
+        let first = root.join("repo-one");
+        let second = root.join("repo-two");
+        let first_memory = root.join("memory-one");
+        let second_memory = root.join("memory-two");
+        std::fs::create_dir_all(&first).unwrap();
+        std::fs::create_dir_all(&second).unwrap();
+        std::fs::write(first.join("AGENTS.md"), "first instructions").unwrap();
+        std::fs::write(second.join("AGENTS.md"), "second instructions").unwrap();
+        let contexts = Arc::new(Mutex::new(HashMap::new()));
+        let mut first_connection = DesktopAttachService {
+            boundaries: FakeRunStartBoundaries::accepting(),
+            idempotency: IdempotencyStore::open(":memory:").unwrap(),
+            home: root.join("home"),
+            workspace_contexts: contexts.clone(),
+            client_identity: Some("default".into()),
+        };
+        first_connection
+            .onboard_workspace(WorkspaceOnboardRequest {
+                opened_directory: first.to_string_lossy().into_owned(),
+                memory_location: first_memory.to_string_lossy().into_owned(),
+            })
+            .unwrap();
+        drop(first_connection);
+
+        let mut second_connection = DesktopAttachService {
+            boundaries: FakeRunStartBoundaries::accepting(),
+            idempotency: IdempotencyStore::open(":memory:").unwrap(),
+            home: root.join("home"),
+            workspace_contexts: contexts.clone(),
+            client_identity: Some("default".into()),
+        };
+        second_connection
+            .onboard_workspace(WorkspaceOnboardRequest {
+                opened_directory: second.to_string_lossy().into_owned(),
+                memory_location: second_memory.to_string_lossy().into_owned(),
+            })
+            .unwrap();
+
+        let stored = contexts.lock().unwrap();
+        let stored = stored.get("default").unwrap();
+        assert_eq!(
+            stored
+                .get(&first.canonicalize().unwrap())
+                .unwrap()
+                .as_deref(),
+            Some("first instructions")
+        );
+        assert_eq!(
+            stored
+                .get(&second.canonicalize().unwrap())
+                .unwrap()
+                .as_deref(),
+            Some("second instructions")
+        );
+        assert_eq!(
+            stored
+                .get(&first_memory.canonicalize().unwrap())
+                .unwrap()
+                .as_deref(),
+            Some("first instructions")
+        );
+        drop(stored);
+        let client_b_boundaries = FakeRunStartBoundaries::accepting();
+        let client_b_dispatch = client_b_boundaries.prepared_provenance.clone();
+        let mut client_b = DesktopAttachService {
+            boundaries: client_b_boundaries,
+            idempotency: IdempotencyStore::open(":memory:").unwrap(),
+            home: root.join("home"),
+            workspace_contexts: contexts.clone(),
+            client_identity: Some("client-b".into()),
+        };
+        for (offset, workspace) in [&first, &first_memory].into_iter().enumerate() {
+            let rejected = client_b.start_run(
+                &workspace.to_string_lossy(),
+                AttachRunStartRequest {
+                    text: "borrow context".into(),
+                    context: None,
+                },
+                &Id::new(format!("018f0000-0000-7000-8000-00000000003{offset}")).unwrap(),
+                &Id::new(format!("018f0000-0000-7000-8000-00000000004{offset}")).unwrap(),
+                CompanionProvenance {
+                    profile: "desktop-owner".into(),
+                    companion_kind: "cli".into(),
+                    companion_version: "1.2.3".into(),
+                    peer_uid: 1000,
+                    peer_pid: 99,
+                },
+            );
+            assert_eq!(rejected.unwrap_err().code(), ErrorCode::Unauthorized);
+        }
+        assert!(client_b_dispatch.lock().unwrap().is_none());
+        let run = second_connection
+            .start_run(
+                &first.to_string_lossy(),
+                AttachRunStartRequest {
+                    text: "use repository context".into(),
+                    context: None,
+                },
+                &Id::new("018f0000-0000-7000-8000-000000000011").unwrap(),
+                &Id::new("018f0000-0000-7000-8000-000000000012").unwrap(),
+                CompanionProvenance {
+                    profile: "default".into(),
+                    companion_kind: "editor-extension".into(),
+                    companion_version: "1.2.3".into(),
+                    peer_uid: 1000,
+                    peer_pid: 42,
+                },
+            )
+            .unwrap();
+        assert!(!run.run_id.is_empty());
+        let provenance = second_connection
+            .boundaries
+            .prepared_provenance
+            .lock()
+            .unwrap();
+        assert_eq!(
+            provenance.as_ref().unwrap().extra["repository_instructions"],
+            "first instructions"
+        );
+        drop(provenance);
+        let mut third_connection = DesktopAttachService {
+            boundaries: FakeRunStartBoundaries::accepting(),
+            idempotency: IdempotencyStore::open(":memory:").unwrap(),
+            home: root.join("home"),
+            workspace_contexts: contexts,
+            client_identity: Some("default".into()),
+        };
+        third_connection
+            .start_run(
+                &second_memory.to_string_lossy(),
+                AttachRunStartRequest {
+                    text: "second context".into(),
+                    context: None,
+                },
+                &Id::new("018f0000-0000-7000-8000-000000000021").unwrap(),
+                &Id::new("018f0000-0000-7000-8000-000000000022").unwrap(),
+                CompanionProvenance {
+                    profile: "default".into(),
+                    companion_kind: "editor-extension".into(),
+                    companion_version: "1.2.3".into(),
+                    peer_uid: 1000,
+                    peer_pid: 42,
+                },
+            )
+            .unwrap();
+        assert_eq!(
+            third_connection
+                .boundaries
+                .prepared_provenance
+                .lock()
+                .unwrap()
+                .as_ref()
+                .unwrap()
+                .extra["repository_instructions"],
+            "second instructions"
+        );
+        assert!(!root.join("home").exists());
+        second_connection.ensure_home().unwrap();
+        for child in ["memory", "agents", "projects", "sessions"] {
+            assert!(root.join("home").join(child).join("README.md").is_file());
+        }
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
     fn attach_adapter_replays_exact_retry_without_second_coordinator_run() {
         let mut service = DesktopAttachService {
             boundaries: FakeRunStartBoundaries::accepting(),
             idempotency: IdempotencyStore::open(":memory:").unwrap(),
+            home: PathBuf::new(),
+            workspace_contexts: Arc::new(Mutex::new(HashMap::new())),
+            client_identity: Some("default".into()),
         };
         let key = "018f0000-0000-7000-8000-000000000002";
         let first = attach_start_on(
@@ -2428,6 +2766,9 @@ mod tests {
         let mut service = DesktopAttachService {
             boundaries: FakeRunStartBoundaries::accepting(),
             idempotency: IdempotencyStore::open(":memory:").unwrap(),
+            home: PathBuf::new(),
+            workspace_contexts: Arc::new(Mutex::new(HashMap::new())),
+            client_identity: Some("default".into()),
         };
         let key = "018f0000-0000-7000-8000-000000000002";
         attach_start_on(
@@ -2490,6 +2831,9 @@ mod tests {
         let mut service = DesktopAttachService {
             boundaries: FakeRunStartBoundaries::accepting(),
             idempotency: IdempotencyStore::open(":memory:").unwrap(),
+            home: PathBuf::new(),
+            workspace_contexts: Arc::new(Mutex::new(HashMap::new())),
+            client_identity: Some("default".into()),
         };
         let result = service.start_run(
             "workspace-b",
@@ -2554,6 +2898,9 @@ mod tests {
         let mut service = DesktopAttachService {
             boundaries: FakeRunStartBoundaries::accepting(),
             idempotency: FailingFinalization,
+            home: PathBuf::new(),
+            workspace_contexts: Arc::new(Mutex::new(HashMap::new())),
+            client_identity: Some("default".into()),
         };
         let result = service.start_run(
             "workspace-a",
