@@ -5,8 +5,8 @@ use muniment_attach::{
 use std::ffi::OsString;
 use std::io::{self, BufRead, IsTerminal, Read, Write};
 #[cfg(unix)]
-use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
-use std::path::PathBuf;
+use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
+use std::path::{Path, PathBuf};
 
 const USAGE: &str =
     "usage: muniment [--workspace <directory>] threads list | muniment [--workspace <directory>] threads open <thread-id> | muniment [--workspace <directory>] run start | muniment [--workspace <directory>] workspace init";
@@ -100,15 +100,8 @@ fn authorized_client_identity() -> Result<String, CliError> {
         .ok_or(CliError::Workspace)?;
     let directory = base.join("muniment");
     let path = directory.join("cli-client-id");
-    match std::fs::symlink_metadata(&path) {
-        Ok(metadata) => {
-            if metadata.file_type().is_symlink() || !metadata.is_file() {
-                return Err(CliError::Workspace);
-            }
-            let value = std::fs::read_to_string(&path).map_err(|_| CliError::Workspace)?;
-            #[cfg(unix)]
-            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))
-                .map_err(|_| CliError::Workspace)?;
+    match read_private_file(&path) {
+        Ok(value) => {
             let value = value.trim();
             Id::new(value).map_err(|_| CliError::Workspace)?;
             return Ok(value.to_owned());
@@ -136,7 +129,7 @@ fn authorized_client_identity() -> Result<String, CliError> {
     {
         Ok(()) => Ok(value),
         Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
-            let existing = std::fs::read_to_string(path).map_err(|_| CliError::Workspace)?;
+            let existing = read_private_file(&path).map_err(|_| CliError::Workspace)?;
             let existing = existing.trim();
             Id::new(existing).map_err(|_| CliError::Workspace)?;
             Ok(existing.to_owned())
@@ -154,7 +147,7 @@ fn authorized_client_credential() -> Result<Option<String>, CliError> {
         return Err(CliError::Workspace);
     };
     let path = base.join("muniment").join("cli-client-credential");
-    match std::fs::read_to_string(path) {
+    match read_private_file(&path) {
         Ok(value)
             if value.trim().len() == 64
                 && value.trim().bytes().all(|byte| byte.is_ascii_hexdigit()) =>
@@ -176,14 +169,73 @@ fn persist_authorized_client_credential(credential: &str) -> Result<(), CliError
     let directory = base.join("muniment");
     std::fs::create_dir_all(&directory).map_err(|_| CliError::Workspace)?;
     let path = directory.join("cli-client-credential");
+    atomic_write_private_file(&path, credential.as_bytes()).map_err(|_| CliError::Workspace)
+}
+
+#[cfg(unix)]
+fn read_private_file(path: &Path) -> io::Result<String> {
     let mut options = std::fs::OpenOptions::new();
-    options.write(true).create(true).truncate(true);
-    #[cfg(unix)]
-    options.mode(0o600);
     options
-        .open(path)
-        .and_then(|mut file| file.write_all(credential.as_bytes()))
-        .map_err(|_| CliError::Workspace)
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
+    let mut file = options.open(path)?;
+    let metadata = file.metadata()?;
+    if !private_file_metadata_is_valid(&metadata, unsafe { libc::geteuid() }) {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "client authorization file is not private",
+        ));
+    }
+    let mut value = String::new();
+    file.read_to_string(&mut value)?;
+    Ok(value)
+}
+
+#[cfg(unix)]
+fn private_file_metadata_is_valid(metadata: &std::fs::Metadata, effective_uid: u32) -> bool {
+    metadata.is_file() && metadata.uid() == effective_uid && metadata.mode() & 0o077 == 0
+}
+
+#[cfg(unix)]
+fn atomic_write_private_file(path: &Path, value: &[u8]) -> io::Result<()> {
+    let directory = path
+        .parent()
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "missing parent directory"))?;
+    let mut random = [0u8; 16];
+    std::fs::File::open("/dev/urandom")?.read_exact(&mut random)?;
+    let temporary = directory.join(format!(
+        ".cli-client-credential.{}.tmp",
+        random
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>()
+    ));
+    let mut options = std::fs::OpenOptions::new();
+    options
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .custom_flags(libc::O_NOFOLLOW);
+    let result = (|| {
+        let mut file = options.open(&temporary)?;
+        file.write_all(value)?;
+        file.sync_all()?;
+        std::fs::rename(&temporary, path)
+    })();
+    if result.is_err() {
+        let _ = std::fs::remove_file(&temporary);
+    }
+    result
+}
+
+#[cfg(not(unix))]
+fn read_private_file(path: &Path) -> io::Result<String> {
+    std::fs::read_to_string(path)
+}
+
+#[cfg(not(unix))]
+fn atomic_write_private_file(path: &Path, value: &[u8]) -> io::Result<()> {
+    std::fs::write(path, value)
 }
 
 fn recognized_command(args: &[OsString]) -> bool {
@@ -573,6 +625,72 @@ mod tests {
     use std::io::{Read, Write};
     use std::os::unix::net::UnixStream;
     use std::time::Duration;
+
+    #[cfg(unix)]
+    fn private_test_directory(name: &str) -> PathBuf {
+        let directory = std::env::temp_dir().join(format!(
+            "muniment-cli-{name}-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir(&directory).unwrap();
+        directory
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn private_client_files_reject_symlinks_non_regular_and_unsafe_metadata() {
+        use std::os::unix::fs::{symlink, MetadataExt, PermissionsExt};
+
+        let directory = private_test_directory("unsafe-files");
+        let target = directory.join("target");
+        std::fs::write(&target, "secret").unwrap();
+        std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let link = directory.join("link");
+        symlink(&target, &link).unwrap();
+        assert!(read_private_file(&link).is_err());
+        assert!(read_private_file(Path::new("/dev/null")).is_err());
+
+        std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o640)).unwrap();
+        assert!(read_private_file(&target).is_err());
+        let metadata = std::fs::metadata(&target).unwrap();
+        assert!(!private_file_metadata_is_valid(
+            &metadata,
+            metadata.uid().wrapping_add(1)
+        ));
+        std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let wrong_uid = metadata.uid().wrapping_add(1);
+        let target_bytes = std::ffi::CString::new(target.as_os_str().as_encoded_bytes()).unwrap();
+        if unsafe { libc::chown(target_bytes.as_ptr(), wrong_uid, metadata.gid()) } == 0 {
+            assert!(read_private_file(&target).is_err());
+        }
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn private_client_file_persistence_is_owner_only_and_does_not_follow_destination() {
+        use std::os::unix::fs::{symlink, MetadataExt, PermissionsExt};
+
+        let directory = private_test_directory("atomic-persistence");
+        let target = directory.join("unrelated");
+        std::fs::write(&target, "preserve me").unwrap();
+        let credential = directory.join("cli-client-credential");
+        symlink(&target, &credential).unwrap();
+
+        atomic_write_private_file(&credential, b"new credential").unwrap();
+
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), "preserve me");
+        assert_eq!(read_private_file(&credential).unwrap(), "new credential");
+        let metadata = std::fs::metadata(&credential).unwrap();
+        assert!(metadata.is_file());
+        assert_eq!(metadata.uid(), unsafe { libc::geteuid() });
+        assert_eq!(metadata.permissions().mode() & 0o777, 0o600);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
 
     #[test]
     fn user_guidance_covers_expected_failures_without_details() {
