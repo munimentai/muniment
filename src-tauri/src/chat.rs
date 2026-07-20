@@ -500,7 +500,8 @@ pub struct DesktopAttachService<B, I = IdempotencyStore> {
     boundaries: B,
     idempotency: I,
     home: PathBuf,
-    workspace_contexts: Arc<Mutex<HashMap<PathBuf, Option<String>>>>,
+    workspace_contexts: Arc<Mutex<HashMap<String, HashMap<PathBuf, Option<String>>>>>,
+    client_identity: Option<String>,
 }
 
 #[derive(Default)]
@@ -525,7 +526,7 @@ pub fn attach_pairing_decide(
 impl<R: tauri::Runtime> DesktopAttachService<TauriRunStartBoundaries<R>> {
     pub fn new(
         app: tauri::AppHandle<R>,
-        workspace_contexts: Arc<Mutex<HashMap<PathBuf, Option<String>>>>,
+        workspace_contexts: Arc<Mutex<HashMap<String, HashMap<PathBuf, Option<String>>>>>,
     ) -> Result<Self, ProtocolError> {
         let home = app
             .path()
@@ -543,6 +544,7 @@ impl<R: tauri::Runtime> DesktopAttachService<TauriRunStartBoundaries<R>> {
             idempotency,
             home,
             workspace_contexts,
+            client_identity: None,
         })
     }
 }
@@ -590,7 +592,10 @@ pub fn start_attach_listener<R: tauri::Runtime>(app: tauri::AppHandle<R>) {
                         }
                         Some(muniment_core::attach::linux::ApprovalDecision::Approve(
                             Approval {
-                                profile: "desktop-owner".into(),
+                                profile: format!(
+                                    "local-client:{}:{}",
+                                    credentials.uid, credentials.pid
+                                ),
                                 workspace: std::env::current_dir()
                                     .ok()?
                                     .to_string_lossy()
@@ -610,6 +615,10 @@ pub fn start_attach_listener<R: tauri::Runtime>(app: tauri::AppHandle<R>) {
 impl<B: RunStartBoundaries, I: RunStartIdempotency> ThreadListService
     for DesktopAttachService<B, I>
 {
+    fn bind_authorized_client(&mut self, client_identity: &str) {
+        self.client_identity = Some(client_identity.to_owned());
+    }
+
     fn onboard_workspace(
         &mut self,
         request: WorkspaceOnboardRequest,
@@ -631,6 +640,11 @@ impl<B: RunStartBoundaries, I: RunStartIdempotency> ThreadListService
             .workspace_contexts
             .lock()
             .map_err(|_| ProtocolError::persistence_failed())?;
+        let identity = self
+            .client_identity
+            .as_ref()
+            .ok_or_else(ProtocolError::unauthorized)?;
+        let contexts = contexts.entry(identity.clone()).or_default();
         contexts.insert(opened.clone(), instructions.clone());
         contexts.insert(opened_canonical, instructions.clone());
         contexts.insert(memory.clone(), instructions.clone());
@@ -648,9 +662,14 @@ impl<B: RunStartBoundaries, I: RunStartIdempotency> ThreadListService
     }
 
     fn workspace_is_authorized(&self, workspace: &str) -> bool {
-        self.workspace_contexts
-            .lock()
-            .is_ok_and(|contexts| contexts.contains_key(&PathBuf::from(workspace)))
+        let Some(identity) = &self.client_identity else {
+            return false;
+        };
+        self.workspace_contexts.lock().is_ok_and(|contexts| {
+            contexts
+                .get(identity)
+                .is_some_and(|workspaces| workspaces.contains_key(&PathBuf::from(workspace)))
+        })
     }
 
     fn list_threads(
@@ -700,7 +719,12 @@ impl<B: RunStartBoundaries, I: RunStartIdempotency> ThreadListService
             .workspace_contexts
             .lock()
             .map_err(|_| ProtocolError::persistence_failed())?
-            .get(&PathBuf::from(workspace))
+            .get(
+                self.client_identity
+                    .as_ref()
+                    .ok_or_else(ProtocolError::unauthorized)?,
+            )
+            .and_then(|contexts| contexts.get(&PathBuf::from(workspace)))
             .cloned()
             .flatten();
         if let Some(instructions) = instructions {
@@ -2456,6 +2480,7 @@ mod tests {
             idempotency: IdempotencyStore::open(":memory:").unwrap(),
             home: PathBuf::new(),
             workspace_contexts: Arc::new(Mutex::new(HashMap::new())),
+            client_identity: Some("default".into()),
         };
         let result = service.start_run(
             "workspace-a",
@@ -2550,6 +2575,7 @@ mod tests {
             idempotency: IdempotencyStore::open(":memory:").unwrap(),
             home: root.join("home"),
             workspace_contexts: contexts.clone(),
+            client_identity: Some("default".into()),
         };
         first_connection
             .onboard_workspace(WorkspaceOnboardRequest {
@@ -2564,6 +2590,7 @@ mod tests {
             idempotency: IdempotencyStore::open(":memory:").unwrap(),
             home: root.join("home"),
             workspace_contexts: contexts.clone(),
+            client_identity: Some("default".into()),
         };
         second_connection
             .onboard_workspace(WorkspaceOnboardRequest {
@@ -2573,6 +2600,7 @@ mod tests {
             .unwrap();
 
         let stored = contexts.lock().unwrap();
+        let stored = stored.get("default").unwrap();
         assert_eq!(
             stored
                 .get(&first.canonicalize().unwrap())
@@ -2629,6 +2657,7 @@ mod tests {
             idempotency: IdempotencyStore::open(":memory:").unwrap(),
             home: root.join("home"),
             workspace_contexts: contexts,
+            client_identity: Some("default".into()),
         };
         third_connection
             .start_run(
@@ -2675,6 +2704,7 @@ mod tests {
             idempotency: IdempotencyStore::open(":memory:").unwrap(),
             home: PathBuf::new(),
             workspace_contexts: Arc::new(Mutex::new(HashMap::new())),
+            client_identity: Some("default".into()),
         };
         let key = "018f0000-0000-7000-8000-000000000002";
         let first = attach_start_on(
@@ -2712,6 +2742,7 @@ mod tests {
             idempotency: IdempotencyStore::open(":memory:").unwrap(),
             home: PathBuf::new(),
             workspace_contexts: Arc::new(Mutex::new(HashMap::new())),
+            client_identity: Some("default".into()),
         };
         let key = "018f0000-0000-7000-8000-000000000002";
         attach_start_on(
@@ -2776,6 +2807,7 @@ mod tests {
             idempotency: IdempotencyStore::open(":memory:").unwrap(),
             home: PathBuf::new(),
             workspace_contexts: Arc::new(Mutex::new(HashMap::new())),
+            client_identity: Some("default".into()),
         };
         let result = service.start_run(
             "workspace-b",
@@ -2842,6 +2874,7 @@ mod tests {
             idempotency: FailingFinalization,
             home: PathBuf::new(),
             workspace_contexts: Arc::new(Mutex::new(HashMap::new())),
+            client_identity: Some("default".into()),
         };
         let result = service.start_run(
             "workspace-a",

@@ -459,6 +459,8 @@ pub struct RunStreamPage {
 
 /// Deterministic desktop service seam for authorized attach requests.
 pub trait ThreadListService {
+    fn bind_authorized_client(&mut self, _client_identity: &str) {}
+
     fn onboard_workspace(
         &mut self,
         _request: WorkspaceOnboardRequest,
@@ -968,6 +970,7 @@ where
             peer_uid: credentials.uid,
             peer_pid: credentials.pid as u32,
         };
+        service.bind_authorized_client(&grant.profile);
         serve_requests(
             &mut stream,
             timeout,
