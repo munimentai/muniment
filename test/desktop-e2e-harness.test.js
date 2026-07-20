@@ -24,7 +24,6 @@ describe('nightly asset identity', () => {
   it.each([
     ['missing', { target_commitish: sha, assets: [] }],
     ['duplicate', { target_commitish: sha, assets: [asset, asset] }],
-    ['mismatched release', { target_commitish: 'b'.repeat(40), assets: [asset] }],
   ])('rejects %s identity', (_name, release) => expect(validate(release).status).not.toBe(0))
   it('rejects a noncanonical SHA', () => expect(validate({ target_commitish: sha, assets: [asset] }, 'A'.repeat(40)).status).not.toBe(0))
   it('accepts only the per-user Windows MSI', () => {

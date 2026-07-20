@@ -131,6 +131,8 @@ jobs:
     # Skip on a single-platform targeted run — the release asset-set check needs all platforms.
     if: github.event.inputs.platform == '' || github.event.inputs.platform == 'all'
     runs-on: self-hosted
+    permissions:
+      contents: write
     env:
       WINDOWS_SIGNING_ENABLED: ${{ secrets.AZURE_CLIENT_SECRET != '' }}
     steps:
@@ -175,19 +177,21 @@ jobs:
             const signing = process.env.WINDOWS_SIGNING_ENABLED === "true"
               ? `\n\nWindows installers for \`${sha}\` were signed by the nightly workflow.`
               : "\n\nWindows installers are unsigned; stable promotion is blocked.";
-            await github.rest.repos.updateRelease({
-              ...context.repo,
-              release_id: release.id,
-              target_commitish: sha,
-              name: "Nightly desktop build",
-              body: `Automated desktop build from \`${sha}\`.\n\nBuilt ${buildDate}.${signing}\n\nModel weights are not included.`,
-              prerelease: true,
-            });
             await github.rest.git.updateRef({
               ...context.repo,
               ref: "tags/nightly",
               sha,
               force: true,
+            });
+            // A published release follows its tag. Sending target_commitish in
+            // this PATCH makes GitHub treat workflow-changing SHAs as workflow
+            // updates, which GITHUB_TOKEN cannot authorize (workflows:write).
+            await github.rest.repos.updateRelease({
+              ...context.repo,
+              release_id: release.id,
+              name: "Nightly desktop build",
+              body: `Automated desktop build from \`${sha}\`.\n\nBuilt ${buildDate}.${signing}\n\nModel weights are not included.`,
+              prerelease: true,
             });
 
   linux-e2e:
@@ -226,11 +230,6 @@ jobs:
               core.setFailed(`expected one ${assetName} asset before Linux E2E`);
               return;
             }
-            await github.rest.repos.updateRelease({
-              ...context.repo,
-              release_id: release.id,
-              target_commitish: sha,
-            });
             await github.rest.git.updateRef({
               ...context.repo,
               ref: "tags/nightly",
@@ -268,6 +267,13 @@ jobs:
           # and a regular-file/directory-only archive before extracting.
           extract_status=0
           bash test/e2e/support/extract-artifacts.sh "$output" "$RUNNER_TEMP/muniment-e2e-artifacts" || extract_status=$?
+          if (( extract_status != 0 )); then
+            mkdir -p "$RUNNER_TEMP/muniment-e2e-artifacts"
+            printf '%s\n' \
+              '<?xml version="1.0" encoding="UTF-8"?>' \
+              '<testsuites tests="1" failures="1"><testsuite name="installed-linux" tests="1" failures="1"><testcase name="desktop-ci artifact collection"><failure message="desktop-ci did not return a valid artifact envelope"/></testcase></testsuite></testsuites>' \
+              >"$RUNNER_TEMP/muniment-e2e-artifacts/junit-infrastructure.xml"
+          fi
           if (( run_status != 0 || extract_status != 0 )); then final_status=1; else final_status=0; fi
           printf 'status=%s\n' "$final_status" >>"$GITHUB_OUTPUT"
 
