@@ -113,13 +113,21 @@ export interface AttachConnection {
   readonly capability: string;
   readonly expiresInSeconds: number;
   readonly idleTimeoutSeconds: number;
+  onboardWorkspace(openedDirectory: string, memoryLocation: string): Promise<WorkspaceOnboarded>;
+  ensureHome(): Promise<void>;
   listThreads(cursor?: string): Promise<ThreadListPage>;
   openThread(threadId: string, cursor?: string): Promise<ThreadOpenPage>;
-  startRun(text: string, context?: JsonValue): Promise<RunStartAccepted>;
+  startRun(text: string, context?: JsonValue, workspace?: string): Promise<RunStartAccepted>;
   answerPermission(runId: string, gateId: string,
     decision: PermissionDecision): Promise<PermissionAnswerAccepted>;
   streamRun(runId: string, afterRunSeq: number): Promise<RunStreamSubscription>;
   dispose(): void;
+}
+
+export interface WorkspaceOnboarded {
+  openedDirectory: string;
+  memoryLocation: string;
+  instructions?: string;
 }
 
 export interface Disposable { dispose(): void; }
@@ -214,6 +222,9 @@ export interface ThreadOpenPage {
 
 export interface ConnectOptions {
   clientVersion: string;
+  authorizedClientId?: string;
+  authorizedClientCredential?: string;
+  onAuthorizedClientCredential?: (credential: string) => void;
   onPairingPending?: () => void;
   platform?: NodeJS.Platform;
   environment?: NodeJS.ProcessEnv;
@@ -321,6 +332,11 @@ export function connectAttach(options: ConnectOptions): Promise<AttachConnection
   if (!isHex(nonce, 32)) {
     return Promise.reject(new AttachTransportError("randomness_unavailable"));
   }
+  const authorizedClientId = options.authorizedClientId ??
+    `${nonce.slice(0, 8)}-${nonce.slice(8, 12)}-4${nonce.slice(13, 16)}-a${nonce.slice(17, 20)}-${nonce.slice(20)}`;
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(authorizedClientId)) {
+    return Promise.reject(new AttachTransportError("unexpected_message"));
+  }
   let socket: AttachSocket;
   try {
     socket = (options.createSocket ?? ((path) => createConnection({ path })))(endpoint);
@@ -365,6 +381,10 @@ export function connectAttach(options: ConnectOptions): Promise<AttachConnection
           client: { kind: "editor-extension", version: options.clientVersion },
           supported: { min: 1, max: 1 },
           client_nonce: nonce,
+          authorized_client_id: authorizedClientId,
+          ...(options.authorizedClientCredential === undefined ? {} : {
+            authorized_client_credential: options.authorizedClientCredential,
+          }),
         }));
         armTimer(ioTimeout);
       } catch (error) {
@@ -393,11 +413,14 @@ export function connectAttach(options: ConnectOptions): Promise<AttachConnection
             continue;
           }
           if (phase !== "authorization" || envelope.kind !== "authorization" ||
-              !isHex(envelope.capability, 64) || !validAuthorization(envelope)) {
+              !isHex(envelope.capability, 64) ||
+              !isHex(envelope.authorized_client_credential, 64) ||
+              !validAuthorization(envelope)) {
             fail(new AttachTransportError("unexpected_message"));
             return;
           }
           settled = true;
+          options.onAuthorizedClientCredential?.(envelope.authorized_client_credential as string);
           phase = "done";
           clearTimer();
           removeHandshakeListeners();
@@ -491,7 +514,7 @@ export function connectAttach(options: ConnectOptions): Promise<AttachConnection
               closeUnexpected(transportError(error));
             }
           };
-          const request = (operation: "thread.list" | "thread.open" | "run.start" | "run.stream" |
+          const request = (operation: "workspace.onboard" | "home.ensure" | "thread.list" | "thread.open" | "run.start" | "run.stream" |
             "run.cursor_ack" | "permission.answer", body: JsonBody,
             idempotent = false, owner?: Set<string>,
             onResponse?: (envelope: AttachEnvelope) => void): Promise<AttachEnvelope> => {
@@ -531,6 +554,23 @@ export function connectAttach(options: ConnectOptions): Promise<AttachConnection
             get capability() { return capability; },
             expiresInSeconds: envelope.expires_at as number,
             idleTimeoutSeconds: envelope.idle_timeout_seconds as number,
+            async onboardWorkspace(openedDirectory: string, memoryLocation: string): Promise<WorkspaceOnboarded> {
+              validateBoundedString(openedDirectory, MAX_TEXT_LENGTH, false);
+              validateBoundedString(memoryLocation, MAX_TEXT_LENGTH, false);
+              const body = exactObject((await request("workspace.onboard", {
+                opened_directory: openedDirectory, memory_location: memoryLocation,
+              })).body, ["opened_directory", "memory_location", "instructions"]);
+              if (body.opened_directory !== openedDirectory || body.memory_location !== memoryLocation ||
+                  (body.instructions !== null && typeof body.instructions !== "string")) {
+                throw new AttachTransportError("unexpected_message");
+              }
+              return { openedDirectory, memoryLocation,
+                ...(typeof body.instructions === "string" ? { instructions: body.instructions } : {}) };
+            },
+            async ensureHome(): Promise<void> {
+              const body = exactObject((await request("home.ensure", {})).body, []);
+              if (Object.keys(body).length !== 0) throw new AttachTransportError("unexpected_message");
+            },
             async listThreads(cursor?: string): Promise<ThreadListPage> {
               validateCursor(cursor, MAX_TEXT_LENGTH);
               const body: JsonBody = { limit: THREAD_PAGE_LIMIT };
@@ -544,10 +584,14 @@ export function connectAttach(options: ConnectOptions): Promise<AttachConnection
               if (cursor !== undefined) body.cursor = cursor;
               return decodeThreadOpenPage((await request("thread.open", body)).body, threadId);
             },
-            async startRun(text: string, context?: JsonValue): Promise<RunStartAccepted> {
+            async startRun(text: string, context?: JsonValue, workspace?: string): Promise<RunStartAccepted> {
               const validatedContext = validateRunStartInput(text, context);
               const body: JsonBody = { text };
               if (validatedContext !== undefined) body.context = validatedContext;
+              if (workspace !== undefined) {
+                validateBoundedString(workspace, MAX_TEXT_LENGTH, false);
+                body.workspace = workspace;
+              }
               return decodeRunStartAccepted((await request("run.start", body, true)).body);
             },
             async answerPermission(runId: string, gateId: string,
