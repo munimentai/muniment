@@ -86,6 +86,7 @@ fn main() {
     ] {
         require(&format!("{ROOT}/{notice}"));
     }
+    require("../THIRD_PARTY_NOTICES.md");
 
     // The packaged libraries live in Tauri's resource directory. Keep loader
     // lookup relative to the executable so no machine-global install is used.
