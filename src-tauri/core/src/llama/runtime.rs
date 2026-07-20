@@ -82,6 +82,7 @@ pub type RuntimeManifest = BTreeMap<PathBuf, ManifestEntry>;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RuntimeArchiveError {
     InvalidDescriptor,
+    ArchiveNameMismatch,
     Io,
     WrongSize,
     DigestMismatch,
@@ -115,6 +116,9 @@ pub fn verify_archive(
     descriptor: &LlamaRuntimeDescriptor,
 ) -> Result<(), RuntimeArchiveError> {
     validate_descriptor(descriptor)?;
+    if path.components().next_back() != Some(Component::Normal(descriptor.archive.as_ref())) {
+        return Err(RuntimeArchiveError::ArchiveNameMismatch);
+    }
     let metadata = fs::symlink_metadata(path).map_err(|_| RuntimeArchiveError::Io)?;
     if !metadata.file_type().is_file() || metadata.len() != descriptor.byte_size {
         return Err(RuntimeArchiveError::WrongSize);
@@ -129,6 +133,27 @@ pub fn verify_archive(
         return Err(RuntimeArchiveError::DigestMismatch);
     }
     Ok(())
+}
+
+/// Verifies the retained archive's complete compiled identity and derives its
+/// authenticated entry manifest without creating an extracted tree.
+pub fn manifest_from_verified_archive(
+    archive: &Path,
+    descriptor: &LlamaRuntimeDescriptor,
+) -> Result<RuntimeManifest, RuntimeArchiveError> {
+    verify_archive(archive, descriptor)?;
+    manifest_for(&read_archive(archive, descriptor)?, descriptor)
+}
+
+/// Re-derives the manifest from the retained verified archive and compares an
+/// existing extracted tree against it without extracting another copy.
+pub fn verify_archive_and_tree(
+    archive: &Path,
+    tree: &Path,
+    descriptor: &LlamaRuntimeDescriptor,
+) -> Result<(), RuntimeArchiveError> {
+    let manifest = manifest_from_verified_archive(archive, descriptor)?;
+    verify_extracted_tree(tree, &manifest, descriptor)
 }
 
 /// Verifies archive identity before parsing it, derives the only admitted
@@ -308,6 +333,38 @@ fn safe_path(path: &Path, top: &str) -> bool {
         && path.components().next() == Some(Component::Normal(top.as_ref()))
 }
 
+fn portable_component(component: &std::ffi::OsStr) -> Option<String> {
+    let value = component.to_str()?;
+    if value.is_empty()
+        || value.ends_with(['.', ' '])
+        || !value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-' | b'+'))
+    {
+        return None;
+    }
+    let folded = value.to_ascii_lowercase();
+    let stem = folded.split('.').next().unwrap_or_default();
+    let reserved = matches!(stem, "con" | "prn" | "aux" | "nul")
+        || stem
+            .strip_prefix("com")
+            .or_else(|| stem.strip_prefix("lpt"))
+            .is_some_and(|number| {
+                matches!(number, "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9")
+            });
+    (!reserved).then_some(folded)
+}
+
+fn collision_key(path: &Path) -> Option<String> {
+    path.components()
+        .map(|component| match component {
+            Component::Normal(value) => portable_component(value),
+            _ => None,
+        })
+        .collect::<Option<Vec<_>>>()
+        .map(|components| components.join("/"))
+}
+
 fn manifest_for(
     entries: &[Entry],
     descriptor: &LlamaRuntimeDescriptor,
@@ -316,7 +373,7 @@ fn manifest_for(
     let mut folded = BTreeSet::new();
     for entry in entries {
         if !safe_path(&entry.path, descriptor.top_level)
-            || !folded.insert(entry.path.to_string_lossy().to_lowercase())
+            || !folded.insert(collision_key(&entry.path).ok_or(RuntimeArchiveError::UnsafeArchive)?)
         {
             return Err(RuntimeArchiveError::UnsafeArchive);
         }
@@ -742,16 +799,144 @@ mod tests {
     }
 
     #[test]
+    fn archive_identity_requires_the_compiled_native_filename() {
+        let temp = Temp::new("archive-name");
+        let (valid, descriptor) = archive(
+            &temp.0,
+            &[Fixture::File("llama-b10068/llama-server", b"server", 0o755)],
+        );
+        let renamed = temp.0.join("renamed.tar.gz");
+        fs::copy(&valid, &renamed).unwrap();
+        assert_eq!(
+            verify_archive(&renamed, &descriptor),
+            Err(RuntimeArchiveError::ArchiveNameMismatch)
+        );
+        assert_eq!(
+            verify_archive(Path::new(""), &descriptor),
+            Err(RuntimeArchiveError::ArchiveNameMismatch)
+        );
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::ffi::OsStringExt;
+            let non_utf8 = temp.0.join(std::ffi::OsString::from_vec(vec![0xff]));
+            fs::copy(&valid, &non_utf8).unwrap();
+            assert_eq!(
+                verify_archive(&non_utf8, &descriptor),
+                Err(RuntimeArchiveError::ArchiveNameMismatch)
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_cross_platform_path_aliases() {
+        let descriptor = LlamaRuntimeDescriptor {
+            revision: "fixture",
+            archive: "fixture.tar.gz",
+            byte_size: 1,
+            sha256: "0000000000000000000000000000000000000000000000000000000000000000",
+            top_level: "llama-b10068",
+            executable: "llama-b10068/llama-server",
+        };
+        for alias in [
+            "llama-b10068/llama-server.",
+            "llama-b10068/llama-server ",
+            "llama-b10068/CON",
+            "llama-b10068/aux.txt",
+            "llama-b10068/COM1.dll",
+            "llama-b10068/name:stream",
+            "llama-b10068/caf\u{e9}",
+            "llama-b10068/cafe\u{301}",
+        ] {
+            let entries = vec![
+                Entry {
+                    path: PathBuf::from("llama-b10068/llama-server"),
+                    kind: Kind::File(b"server".to_vec()),
+                    mode: Some(0o755),
+                },
+                Entry {
+                    path: PathBuf::from(alias),
+                    kind: Kind::File(b"alias".to_vec()),
+                    mode: Some(0o644),
+                },
+            ];
+            assert_eq!(
+                manifest_for(&entries, &descriptor),
+                Err(RuntimeArchiveError::UnsafeArchive),
+                "{alias}"
+            );
+        }
+
+        let case_alias = vec![
+            Entry {
+                path: PathBuf::from("llama-b10068/llama-server"),
+                kind: Kind::File(b"server".to_vec()),
+                mode: Some(0o755),
+            },
+            Entry {
+                path: PathBuf::from("llama-b10068/LLAMA-SERVER"),
+                kind: Kind::File(b"alias".to_vec()),
+                mode: Some(0o755),
+            },
+        ];
+        assert_eq!(
+            manifest_for(&case_alias, &descriptor),
+            Err(RuntimeArchiveError::UnsafeArchive)
+        );
+    }
+
+    #[test]
+    fn authenticated_archive_can_reverify_an_existing_tree() {
+        let first = Temp::new("reverify-first");
+        let (retained_archive, descriptor) = archive(
+            &first.0,
+            &[Fixture::File("llama-b10068/llama-server", b"server", 0o755)],
+        );
+        let tree = first.0.join("tree");
+        extract_verified_archive(&retained_archive, &tree, &descriptor).unwrap();
+        verify_archive_and_tree(&retained_archive, &tree, &descriptor).unwrap();
+
+        fs::write(tree.join("llama-b10068/llama-server"), b"tampered").unwrap();
+        assert_eq!(
+            verify_archive_and_tree(&retained_archive, &tree, &descriptor),
+            Err(RuntimeArchiveError::ManifestMismatch)
+        );
+        fs::write(tree.join("llama-b10068/llama-server"), b"server").unwrap();
+
+        let mut archive_bytes = fs::read(&retained_archive).unwrap();
+        archive_bytes[0] ^= 1;
+        fs::write(&retained_archive, archive_bytes).unwrap();
+        assert_eq!(
+            verify_archive_and_tree(&retained_archive, &tree, &descriptor),
+            Err(RuntimeArchiveError::DigestMismatch)
+        );
+
+        let second = Temp::new("reverify-second");
+        let (other_archive, other_descriptor) = archive(
+            &second.0,
+            &[Fixture::File("llama-b10068/llama-server", b"other!", 0o755)],
+        );
+        assert_eq!(
+            verify_archive_and_tree(&other_archive, &tree, &other_descriptor),
+            Err(RuntimeArchiveError::ManifestMismatch)
+        );
+    }
+
+    #[test]
     fn rejects_non_executable_server_and_extra_tree_entries() {
         let temp = Temp::new("executable");
         let (path, descriptor) = archive(
             &temp.0,
             &[Fixture::File("llama-b10068/llama-server", b"server", 0o644)],
         );
+        #[cfg(unix)]
         assert_eq!(
             extract_verified_archive(&path, &temp.0.join("tree"), &descriptor),
             Err(RuntimeArchiveError::InvalidExecutable)
         );
+
+        #[cfg(not(unix))]
+        extract_verified_archive(&path, &temp.0.join("tree"), &descriptor).unwrap();
 
         let (path, descriptor) = archive(
             &temp.0,
@@ -764,5 +949,13 @@ mod tests {
             verify_extracted_tree(&tree, &manifest, &descriptor),
             Err(RuntimeArchiveError::ManifestMismatch)
         );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_accepts_a_regular_exe_as_the_executable() {
+        let temp = Temp::new("windows-executable");
+        let (archive, descriptor) = zip_archive(&temp.0);
+        extract_verified_archive(&archive, &temp.0.join("tree"), &descriptor).unwrap();
     }
 }
