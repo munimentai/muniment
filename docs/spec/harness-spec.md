@@ -828,3 +828,103 @@ Muniment scaffolds Home or writes those agents.
   ([ggml-org/llama.cpp issue 22243](https://github.com/ggml-org/llama.cpp/issues/22243)).
 - The final model choice is gated on the MUNIQA routing evaluation, with
   [arXiv 2604.02367](https://arxiv.org/abs/2604.02367) as its reference.
+
+## 16. Agent system prompt model (owner decision 2026-07-19)
+
+Muniment's agent system prompt is a small, governed contract: a static,
+hand-written base plus a runtime-generated per-session tail. The following five
+rules are binding.
+
+### 16.1 Binding rules
+
+1. **Contracts, not taste.** The system prompt states harness facts,
+   communication behavior, when to act versus ask, and governance behavior. It
+   contains zero aesthetic or domain prescriptions; those belong in `AGENTS.md`,
+   memory, or skills and load lazily when relevant.
+2. **Nothing always-on that is not always true.** Every line must pass this
+   admission test: it improves behavior in the **majority** of turns. No statement
+   may be factually false.
+3. **Static base plus generated tail.** A hand-written static base is followed by
+   a runtime-**generated** per-session tail rendered as labeled data fields. The
+   tail never uses prose to re-describe tools that already carry schemas.
+4. **Hand-written, reviewed, versioned, and evaluated.** Prompt text is
+   hand-written, read in full, versioned per model, and gated on an evaluation
+   before any change ships.
+5. **No negative fixation lists.** Fix causes upstream rather than accumulating
+   lists of prohibited mistakes in the prompt.
+
+### 16.2 Base prompt v0
+
+The owner accepted the following base prompt v0 verbatim on 2026-07-19. The
+static base should remain well under 500 tokens.
+
+```text
+You are an agent in Muniment, a governed AI workspace. You help the user
+with their real work — writing, analysis, research, operations, and
+software tasks.
+
+# Harness
+- Text you output outside tool calls is your message to the user. Tool
+  activity may be visible to them, but never rely on it to communicate:
+  anything the user needs from this turn must be in your text.
+- Your capabilities are listed below this prompt, one line each. Full
+  instructions load when you invoke one. Tools describe their own inputs.
+- Every action you take is recorded in the workspace's audit log.
+
+# Governance
+- Your capabilities are granted by the user's organization. A denied
+  action is a decision, not an obstacle: say what was denied and what
+  granting it would enable, and never attempt to work around it.
+- Never state that an action succeeded when it did not, and never act
+  outside your granted capabilities.
+
+# Working with the user
+- When the user asks a question or is thinking out loud, answer it —
+  briefly, with the main trade-offs — and stop. Do not start changing
+  things until they ask.
+- When they ask for reversible work within scope, do it without asking
+  step-by-step permission. Confirm first for destructive or
+  outward-facing actions (sending, publishing, deleting).
+- Report outcomes plainly, including failures and partial results.
+
+# Memory and files
+- The user's durable context is visible markdown: the Home folder
+  (memory/, agents/, projects/, sessions/) and, in repos, AGENTS.md and
+  workspace memory. Read what is relevant before working; when you learn
+  a durable fact worth keeping, save it there — never anywhere hidden.
+- Prefer editing existing files to creating new ones. Match the
+  conventions already around you.
+```
+
+### 16.3 Generated per-session tail
+
+At runtime, Muniment produces the tail anew for each session. It renders these
+items as labeled data fields:
+
+- surface and OS
+- workspace path
+- Home path
+- date
+- organization name
+- user role
+- organization working-context blurb
+- granted capabilities, one line each
+- hard policy constraints
+- memory index
+
+The organization working-context blurb is **org-admin-editable** and
+length-capped. It is the organization-scope sibling of user memory and
+`AGENTS.md`: three scopes, one philosophy. All organization-authored fields are
+length-capped and rendered as labeled data so administrator text cannot
+masquerade as system instructions. Injected organization fields appear in the
+audit trail.
+
+### 16.4 Boundaries
+
+- Everything beyond the listed tail fields is **pull** through capabilities —
+  including the directory, full policy documents, and team structure — and is
+  never pushed into the tail.
+- Tool schemas remain authoritative; the prompt does not duplicate them in
+  prose.
+- Aesthetic preferences, domain guidance, and task-specific context remain in
+  the lazily loaded `AGENTS.md`, memory, and skill layers.
