@@ -10,7 +10,7 @@ use muniment_core::asr::{
     AsrRecovery, AsrRevisionLifecycle, PARAKEET_MODEL_MANIFEST, PARAKEET_MODEL_MANIFESTS,
 };
 use muniment_core::llama::acquisition::{
-    GemmaAcquisitionError, GemmaAcquisitionLimits, GemmaAcquisitionRuntime,
+    GemmaAcquisitionError, GemmaAcquisitionLimits, GemmaAcquisitionRuntime, GemmaCancellation,
 };
 use muniment_core::llama::install::install_gemma_revision;
 use muniment_core::llama::lifecycle::{
@@ -36,6 +36,18 @@ pub enum GemmaInstallStatus {
         category: &'static str,
         message: &'static str,
     },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RequiredModelAcquisitionStatus {
+    pub status: GemmaInstallStatus,
+    pub downloaded_bytes: u64,
+    pub total_bytes: u64,
+    /// Directory selection and consent are intentionally never gated on AI.
+    pub folder_setup_available: bool,
+    pub ai_features_available: bool,
+    pub retrying_in_background: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -78,17 +90,14 @@ pub struct GemmaInstallState {
     root: PathBuf,
     inner: Arc<Mutex<Inner>>,
     runner: Arc<Runner>,
+    background_retry: bool,
 }
 
 impl GemmaInstallState {
     pub fn new(root: PathBuf) -> std::io::Result<Self> {
         fs::create_dir_all(root.join("staging"))?;
         let status = inspect(&root);
-        Ok(Self::with_runner(
-            root,
-            status,
-            Arc::new(run_native_install),
-        ))
+        Ok(Self::with_runner(root, status, Arc::new(run_native_install)).with_background_retry())
     }
 
     fn with_runner(root: PathBuf, status: GemmaInstallStatus, runner: Arc<Runner>) -> Self {
@@ -103,7 +112,13 @@ impl GemmaInstallState {
                 active: None,
             })),
             runner,
+            background_retry: false,
         }
+    }
+
+    fn with_background_retry(mut self) -> Self {
+        self.background_retry = true;
+        self
     }
 
     async fn status(&self) -> GemmaInstallStatus {
@@ -157,8 +172,50 @@ impl GemmaInstallState {
         let root = self.root.clone();
         let inner = Arc::clone(&self.inner);
         let runner = Arc::clone(&self.runner);
+        let background_retry = self.background_retry;
         tauri::async_runtime::spawn_blocking(move || {
-            let result = runner(&root, &cancellation);
+            let mut result = runner(&root, &cancellation);
+            let mut retry_delay = std::time::Duration::from_secs(5);
+            while result.is_err() && background_retry && !cancellation.is_cancelled() {
+                {
+                    let mut state = inner.lock().unwrap_or_else(|e| e.into_inner());
+                    if !matches!(state.active, Some(ref active) if active.generation == generation)
+                    {
+                        return;
+                    }
+                    let error = result.as_ref().unwrap_err();
+                    state.status = GemmaInstallStatus::Failed {
+                        category: error.category,
+                        message: error.message,
+                    };
+                    state.state_version = state.state_version.wrapping_add(1);
+                }
+                for _ in 0..(retry_delay.as_millis() / 100) {
+                    if cancellation.is_cancelled() {
+                        break;
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(100));
+                }
+                if cancellation.is_cancelled() {
+                    break;
+                }
+                {
+                    let mut state = inner.lock().unwrap_or_else(|e| e.into_inner());
+                    state.status = GemmaInstallStatus::Installing;
+                    state.state_version = state.state_version.wrapping_add(1);
+                }
+                result = runner(&root, &cancellation);
+                retry_delay = retry_delay
+                    .saturating_mul(2)
+                    .min(std::time::Duration::from_secs(60));
+            }
+            if cancellation.is_cancelled() && result.is_err() {
+                result = Err(InstallFailure {
+                    category: "cancelled",
+                    message: "Model installation was cancelled.",
+                    cancelled: true,
+                });
+            }
             let mut state = inner.lock().unwrap_or_else(|e| e.into_inner());
             if !matches!(state.active, Some(ref active) if active.generation == generation) {
                 return;
@@ -190,6 +247,34 @@ impl GemmaInstallState {
             active.cancellation.cancel();
         }
         inner.status.clone()
+    }
+
+    async fn acquisition_status(&self) -> RequiredModelAcquisitionStatus {
+        let status = self.status().await;
+        let total_bytes = RESIDENT_GEMMA_REVISION.model.byte_size;
+        let ai_features_available = status == GemmaInstallStatus::Installed;
+        let remaining = if ai_features_available {
+            0
+        } else {
+            muniment_core::llama::acquisition::remaining_stage_bytes(
+                &self.root.join("staging"),
+                RESIDENT_GEMMA_REVISION.identity,
+                &RESIDENT_GEMMA_REVISION,
+            )
+            .unwrap_or(total_bytes)
+        };
+        RequiredModelAcquisitionStatus {
+            downloaded_bytes: total_bytes.saturating_sub(remaining),
+            total_bytes,
+            folder_setup_available: true,
+            ai_features_available,
+            retrying_in_background: self.background_retry
+                && matches!(
+                    status,
+                    GemmaInstallStatus::Installing | GemmaInstallStatus::Failed { .. }
+                ),
+            status,
+        }
     }
 }
 
@@ -558,6 +643,13 @@ pub fn gemma_install_cancel(state: State<'_, GemmaInstallState>) -> GemmaInstall
 }
 
 #[tauri::command]
+pub async fn required_model_acquisition_status(
+    state: State<'_, GemmaInstallState>,
+) -> RequiredModelAcquisitionStatus {
+    state.acquisition_status().await
+}
+
+#[tauri::command]
 pub fn parakeet_install_start(state: State<'_, ParakeetInstallState>) -> ParakeetInstallStatus {
     state.start()
 }
@@ -646,6 +738,8 @@ mod tests {
     }
 
     static TEST_MODEL: ResidentModelDescriptor = ResidentModelDescriptor {
+        source_url: "https://example.invalid/model.gguf",
+        license: "fixture",
         filename: "model.gguf",
         byte_size: 3,
         sha256: "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
@@ -719,6 +813,30 @@ mod tests {
         assert_eq!(
             inspect_lifecycle(&root.lifecycle()),
             GemmaInstallStatus::NotInstalled
+        );
+    }
+
+    #[test]
+    fn failed_required_model_is_fail_open_for_onboarding_and_closed_for_ai() {
+        let root = TestRoot::new();
+        let state = GemmaInstallState::with_runner(
+            root.0.clone(),
+            GemmaInstallStatus::Failed {
+                category: "downloadFailed",
+                message: "The model download failed.",
+            },
+            Arc::new(|_, _| Ok(())),
+        )
+        .with_background_retry();
+
+        let snapshot = tauri::async_runtime::block_on(state.acquisition_status());
+        assert!(snapshot.folder_setup_available);
+        assert!(!snapshot.ai_features_available);
+        assert!(snapshot.retrying_in_background);
+        assert_eq!(snapshot.downloaded_bytes, 0);
+        assert_eq!(
+            snapshot.total_bytes,
+            RESIDENT_GEMMA_REVISION.model.byte_size
         );
     }
 

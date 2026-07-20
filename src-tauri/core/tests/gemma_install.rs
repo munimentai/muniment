@@ -21,6 +21,8 @@ use muniment_core::model_install::{
 
 const MARGIN: u64 = 256 * 1024 * 1024;
 static MODEL: ResidentModelDescriptor = ResidentModelDescriptor {
+    source_url: "https://example.invalid/model.gguf",
+    license: "fixture",
     filename: "model.gguf",
     byte_size: 3,
     sha256: "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",

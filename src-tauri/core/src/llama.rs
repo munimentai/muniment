@@ -25,6 +25,10 @@ const ROUTING_CLASSIFIER_SYSTEM_PROMPT: &str = "You classify requests without ch
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ResidentModelDescriptor {
+    /// Immutable artifact URL. Kept in the descriptor so a future release can
+    /// swap the origin without weakening client-side verification.
+    pub source_url: &'static str,
+    pub license: &'static str,
     pub filename: &'static str,
     pub byte_size: u64,
     pub sha256: &'static str,
@@ -33,15 +37,17 @@ pub struct ResidentModelDescriptor {
 }
 
 pub const RESIDENT_MODEL: ResidentModelDescriptor = ResidentModelDescriptor {
-    filename: "gemma-3-4b-it-q4_0.gguf",
-    byte_size: 3_155_051_328,
-    sha256: "76aed0a8285b83102f18b5d60e53c70d09eb4e9917a20ce8956bd546452b56e2",
-    alias: "muniment-resident-gemma",
-    context_tokens: 131_072,
+    source_url: "https://huggingface.co/unsloth/Qwen3.5-4B-GGUF/resolve/e87f176479d0855a907a41277aca2f8ee7a09523/Qwen3.5-4B-Q4_K_M.gguf",
+    license: "Apache-2.0",
+    filename: "Qwen3.5-4B-Q4_K_M.gguf",
+    byte_size: 2_740_937_888,
+    sha256: "00fe7986ff5f6b463e62455821146049db6f9313603938a70800d1fb69ef11a4",
+    alias: "muniment-required-qwen3.5-4b",
+    context_tokens: 262_144,
 };
 
 /// Immutable upstream revision carrying [`RESIDENT_MODEL`].
-pub const RESIDENT_MODEL_REVISION: &str = "15f73f5eee9c28f53afefef5723e29680c2fc78a";
+pub const RESIDENT_MODEL_REVISION: &str = "e87f176479d0855a907a41277aca2f8ee7a09523";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ModelVerificationError {
@@ -528,7 +534,7 @@ mod tests {
                 "--alias",
                 RESIDENT_MODEL.alias,
                 "--ctx-size",
-                "131072",
+                "262144",
                 "--host",
                 "127.0.0.1",
                 "--port",
