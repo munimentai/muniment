@@ -50,7 +50,9 @@ const device = (device_id, overrides = {}) => ({
 beforeAll(async () => {
   HTMLElement.prototype.scrollTo = vi.fn()
   window.__TAURI__ = {
-    core: { invoke: (...args) => invoke(...args) },
+    core: { invoke: (command, ...args) => command === 'onboarding_status'
+      ? Promise.resolve({ complete: true, homePath: '/Documents/Muniment', warning: null })
+      : invoke(command, ...args) },
     event: { listen: vi.fn((event, listener) => {
       if (event === 'chat-event') chatListener = listener
       if (event === 'dictation-event') dictationListener = listener

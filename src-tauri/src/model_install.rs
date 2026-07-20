@@ -19,7 +19,10 @@ use muniment_core::llama::lifecycle::{
     GemmaRevisionLifecycle, RESIDENT_GEMMA_REVISION, RESIDENT_GEMMA_REVISIONS,
 };
 use muniment_core::llama::runtime::{acquire_runtime, resolve_runtime};
-use muniment_core::llama::{LlamaServer, LlamaServerConfig, ResidentModelDescriptor};
+use muniment_core::llama::{
+    ChatCompletionRequest, ChatMessage, LlamaChatClient, LlamaServer, LlamaServerConfig,
+    ResidentModelDescriptor,
+};
 use muniment_core::model_acquisition_transport::NativeModelAcquisitionTransport;
 use muniment_core::model_install::ModelInstallError;
 use muniment_core::model_install_native::{
@@ -121,6 +124,34 @@ pub struct GemmaInstallState {
 }
 
 impl GemmaInstallState {
+    pub(crate) fn onboarding_triage(&self, home: &Path) -> Option<String> {
+        let base_url = {
+            let inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+            match inner.server.as_ref()? {
+                ServingServer::Native(server)
+                    if server.supervisor().status() == SidecarStatus::Healthy =>
+                {
+                    server.base_url().to_owned()
+                }
+                _ => return None,
+            }
+        };
+        let client = LlamaChatClient::new(base_url, std::time::Duration::from_secs(45)).ok()?;
+        let request = ChatCompletionRequest::new(vec![
+            ChatMessage::system("Produce a concise Markdown onboarding proposal. It must contain exactly these level-two sections: User type, Proposed Home layout, and Starter agents. The starter agents must be Researcher (gathers and checks sources) and Writer (turns context into clear drafts), because those are the files this scaffold can create. Do not use code fences or claim to have inspected files."),
+            ChatMessage::user(format!("Propose a general first-run Muniment Home at {}. Its required folders are memory/, agents/, projects/, and sessions/.", home.to_string_lossy())),
+        ], 700, 0.2);
+        let text = client.complete(&request).ok()?.text;
+        [
+            "## User type",
+            "## Proposed Home layout",
+            "## Starter agents",
+        ]
+        .iter()
+        .all(|heading| text.contains(heading))
+        .then_some(text)
+    }
+
     pub fn new(root: PathBuf) -> std::io::Result<Self> {
         fs::create_dir_all(root.join("staging"))?;
         let status = inspect(&root);
@@ -308,7 +339,7 @@ impl GemmaInstallState {
         inner.status.clone()
     }
 
-    async fn acquisition_status(&self) -> RequiredModelAcquisitionStatus {
+    pub(crate) async fn acquisition_status(&self) -> RequiredModelAcquisitionStatus {
         let status = self.status().await;
         let total_bytes = RESIDENT_GEMMA_REVISION.model.byte_size;
         let (progress, serving) = {

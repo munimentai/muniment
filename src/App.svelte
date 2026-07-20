@@ -47,7 +47,67 @@
   let voicePointerId
   let voiceKey
   let composer = $state()
+  let onboarding = $state({ state: 'loading', homePath: '', warning: null })
+  let onboardingError = $state('')
+  let acquisition = $state(null)
+  let acquisitionTimer
   let destroyed = false
+
+  async function loadOnboarding() {
+    try {
+      const status = await tauri.invoke('onboarding_status')
+      onboarding = status.complete ? { state: 'complete', ...status } : { state: 'location', ...status }
+      if (!status.complete || status.triagePending) pollAcquisition()
+    } catch (error) {
+      onboardingError = typeof error === 'string' ? error : 'Onboarding could not be loaded.'
+      onboarding = { state: 'error', homePath: '', warning: null }
+    }
+  }
+
+  async function pollAcquisition() {
+    clearTimeout(acquisitionTimer)
+    if (destroyed || (onboarding.state === 'complete' && !onboarding.triagePending)) return
+    try { acquisition = await tauri.invoke('required_model_acquisition_status') } catch (_) { acquisition = null }
+    if (onboarding.state === 'complete' && onboarding.triagePending && acquisition?.aiFeaturesAvailable) {
+      await proposeOnboarding()
+      return
+    }
+    if (!destroyed && (onboarding.state !== 'complete' || onboarding.triagePending)) acquisitionTimer = setTimeout(pollAcquisition, 1000)
+  }
+
+  async function chooseHome() {
+    onboardingError = ''
+    try {
+      const picked = await open({ directory: true, multiple: false, defaultPath: onboarding.homePath })
+      if (picked) onboarding = { ...onboarding, homePath: picked, warning: null }
+    } catch (_) { onboardingError = 'The folder picker could not be opened. Try again.' }
+  }
+
+  async function proposeOnboarding() {
+    onboardingError = ''
+    onboarding = { ...onboarding, state: 'proposing' }
+    try {
+      const proposal = await tauri.invoke('onboarding_propose', { homePath: onboarding.homePath })
+      onboarding = { ...onboarding, ...proposal, state: 'report' }
+    } catch (error) {
+      onboarding = { ...onboarding, state: 'location' }
+      onboardingError = typeof error === 'string' ? error : 'The onboarding report could not be created.'
+    }
+  }
+
+  async function confirmOnboarding() {
+    onboardingError = ''
+    onboarding = { ...onboarding, state: 'scaffolding' }
+    try {
+      const status = await tauri.invoke('onboarding_confirm', { homePath: onboarding.homePath })
+      onboarding = { state: 'complete', ...status }
+      clearTimeout(acquisitionTimer)
+      if (status.triagePending) pollAcquisition()
+    } catch (error) {
+      onboarding = { ...onboarding, state: 'report' }
+      onboardingError = typeof error === 'string' ? error : 'Muniment Home could not be created.'
+    }
+  }
 
   function stopDictationPolling() {
     clearTimeout(dictationTimer)
@@ -284,7 +344,10 @@
   }
 
   onMount(() => {
-    if (tauri) run('status')
+    if (tauri) {
+      loadOnboarding()
+      run('status')
+    }
     window.__TAURI__?.event?.listen('chat-event', ({ payload }) => {
       if (!messages.some((message) => message.run?.id === payload.runId)) {
         buffered.set(payload.runId, [...(buffered.get(payload.runId) ?? []), payload])
@@ -330,6 +393,7 @@
       unlisten?.()
       dictationUnlisten?.()
       stopDictationPolling()
+      clearTimeout(acquisitionTimer)
       clearTimeout(voiceClickTimer)
       stopDragDrop?.()
       document.removeEventListener('keydown', escape)
@@ -466,7 +530,32 @@
   <p class="meta">shell v{version}</p>
 
   {#if tauri}
-    {#if auth.name === 'signed-out'}
+    {#if onboarding.state !== 'complete'}
+      <section class="onboarding" aria-labelledby="onboarding-title">
+        <p class="eyebrow">First-run setup</p>
+        <h1 id="onboarding-title">Choose your Muniment Home</h1>
+        {#if onboarding.state === 'loading'}
+          <p class="support" role="status">Finding your Documents folder…</p>
+        {:else if onboarding.state === 'location' || onboarding.state === 'proposing'}
+          <p class="support">Your memory stays in plain Markdown files in a folder you control. Confirm a location to continue.</p>
+          <div class="path-card"><span>Home location</span><strong>{onboarding.homePath}</strong><button onclick={chooseHome} disabled={onboarding.state === 'proposing'}>Choose folder…</button></div>
+          {#if onboarding.warning}<p class="location-warning" role="status">{onboarding.warning}</p>{/if}
+          <div class="onboarding-footer">
+            <span class="model-progress">{acquisition?.aiFeaturesAvailable ? 'On-device model ready' : acquisition?.status?.state === 'installing' ? `Model downloading in background · ${acquisition.totalBytes ? Math.round((acquisition.downloadedBytes / acquisition.totalBytes) * 100) : 0}%` : 'Manual setup available · model triage will run later'}</span>
+            <button class="primary" onclick={proposeOnboarding} disabled={onboarding.state === 'proposing'}>{onboarding.state === 'proposing' ? 'Preparing…' : 'Review setup'}</button>
+          </div>
+        {:else if onboarding.state === 'report' || onboarding.state === 'scaffolding'}
+          <p class="support">Review this report before Muniment creates any folders or starter agents.</p>
+          <div class="report-mode">{onboarding.usedModel ? 'Prepared by the on-device model' : 'Manual fallback · model triage will be offered when ready'}</div>
+          {#if onboarding.warning}<p class="location-warning" role="status">{onboarding.warning}</p>{/if}
+          <pre class="onboarding-report">{onboarding.report}</pre>
+          <div class="onboarding-footer"><button class="quiet" onclick={() => { onboarding = { ...onboarding, state: 'location' } }} disabled={onboarding.state === 'scaffolding'}>Reject and revise</button><button class="primary" onclick={confirmOnboarding} disabled={onboarding.state === 'scaffolding'}>{onboarding.state === 'scaffolding' ? 'Creating Home…' : 'Confirm and create Home'}</button></div>
+        {:else if onboarding.state === 'error'}
+          <p class="support">Onboarding could not start.</p><button onclick={loadOnboarding}>Try again</button>
+        {/if}
+        {#if onboardingError}<p class="onboarding-error" role="alert">{onboardingError}</p>{/if}
+      </section>
+    {:else if auth.name === 'signed-out'}
       <section class="auth-state">
         <p class="support">Sign in to continue to your workspace.</p>
         <button onclick={() => run('sign-in')}>Sign in</button>
@@ -486,6 +575,7 @@
           <button class="side-action">⌕ <span>Search</span><kbd>⌘F</kbd></button>
           <p class="side-label">Threads</p>
           <button class="thread-row active-thread"><span></span>New thread</button>
+          <button class="side-action home-settings" onclick={() => { onboarding = { state: 'location', homePath: onboarding.homePath, warning: onboarding.warning }; pollAcquisition() }}>⌂ <span>Home settings</span></button>
           <AccessPanel {tauri} subject={auth.subject} onSignOut={() => run('sign-out')} escapeBlocked={() => dictationRequested || isDictationActive(dictation)} />
         </aside>
         <div class="thread-shell">
@@ -641,6 +731,19 @@
     max-width: 420px;
     text-align: center;
   }
+
+  .onboarding { width: min(680px, calc(100vw - 48px)); margin-top: 28px; }
+  .onboarding h1 { margin: 4px 0 10px; font-size: 28px; letter-spacing: -.02em; }
+  .eyebrow, .path-card span, .model-progress, .report-mode { color: var(--muted); font: var(--text-12) var(--font-mono); }
+  .path-card { display: grid; grid-template-columns: 1fr auto; gap: 7px 16px; align-items: center; margin-top: 24px; padding: 15px 16px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); }
+  .path-card span { grid-column: 1 / -1; }
+  .path-card strong { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 13px var(--font-mono); }
+  .location-warning, .onboarding-error { margin: 10px 0 0; color: var(--muted); font: var(--text-12) var(--font-mono); line-height: 1.5; }
+  .location-warning { padding-left: 10px; border-left: 2px solid var(--signal); }
+  .onboarding-footer { display: flex; justify-content: space-between; align-items: center; gap: 16px; margin-top: 22px; }
+  .primary { background: var(--ink); border-color: var(--ink); color: var(--paper); }
+  .report-mode { margin: 20px 0 8px; }
+  .onboarding-report { max-height: 330px; margin: 0; padding: 18px; overflow: auto; white-space: pre-wrap; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); color: var(--ink); font: 12px/1.55 var(--font-mono); }
 
   button {
     font: inherit;
