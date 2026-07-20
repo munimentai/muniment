@@ -123,7 +123,7 @@ describe('installed nightly', () => {
       if (!userMessage) throw new Error('submitted user message did not render')
       await userMessage.waitForDisplayed()
       expect(await userMessage.getText()).toBe(prompt)
-      await browser.saveScreenshot(path.join(rawDir, '03-chat-submitted.png'))
+      await userMessage.saveScreenshot(path.join(rawDir, '03-chat-submitted.png'))
 
       const responses = await $$('.response')
       const response = responses.at(-1)
@@ -137,7 +137,7 @@ describe('installed nightly', () => {
         interval: 1000,
         timeoutMsg: 'chat reply did not reach a terminal state within 120 seconds',
       })
-      await browser.saveScreenshot(path.join(rawDir, '04-chat-terminal.png'))
+      await response.saveScreenshot(path.join(rawDir, '04-chat-terminal.png'))
 
       const runError = await response.$('.run-error')
       expect(await runError.isExisting()).toBe(false)

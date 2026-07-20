@@ -22,7 +22,7 @@ export const config = {
       outputFileFormat: ({ cid }) => `junit-${reportName}-${cid}.xml`,
     }],
   ],
-  mochaOpts: { timeout: 180000 },
+  mochaOpts: { timeout: 480000 },
   waitforTimeout: 30000,
   services: [['@wdio/tauri-service', {
     appBinaryPath: appBinary,

@@ -16,6 +16,18 @@ describe('WDIO Tauri service dependency contract', () => {
   }, 15_000)
 })
 
+describe('installed chat timeout contract', () => {
+  const spec = fs.readFileSync(path.join(root, 'test/e2e/specs/real-sign-in.spec.js'), 'utf8')
+  const configuration = fs.readFileSync(path.join(root, 'test/e2e/wdio.conf.js'), 'utf8')
+
+  it('keeps the suite timeout outside the bounded sign-in and chat waits', () => {
+    const suiteTimeout = Number(configuration.match(/mochaOpts:\s*\{\s*timeout:\s*(\d+)/)?.[1])
+    const chatTimeout = Number(spec.match(/timeout:\s*(\d+),\n\s*interval:\s*1000,\n\s*timeoutMsg: 'chat reply/)?.[1])
+    expect(chatTimeout).toBe(120000)
+    expect(suiteTimeout).toBeGreaterThanOrEqual(60000 + 120000 + 120000 + chatTimeout)
+  })
+})
+
 describe('nightly asset identity', () => {
   const sha = 'a'.repeat(40)
   const asset = { name: `nightly-${sha}-linux-muniment.deb`, id: 42 }
@@ -312,6 +324,7 @@ describe('Windows nightly workflow gate', () => {
 })
 
 describe('artifact redaction boundary', () => {
+  const signInSpec = fs.readFileSync(path.join(root, 'test/e2e/specs/real-sign-in.spec.js'), 'utf8')
   const redact = (files, env = {}) => {
     const source = temp(); const destination = path.join(temp(), 'safe')
     for (const [name, data] of Object.entries(files)) fs.writeFileSync(path.join(source, name), data)
@@ -338,6 +351,11 @@ describe('artifact redaction boundary', () => {
     const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=', 'base64')
     const { result, destination } = redact({ [name]: png })
     expect(result.status).toBe(0); expect(fs.readFileSync(path.join(destination, name))).toEqual(png)
+  })
+  it('captures chat evidence as message element crops', () => {
+    expect(signInSpec).toContain("userMessage.saveScreenshot(path.join(rawDir, '03-chat-submitted.png'))")
+    expect(signInSpec).toContain("response.saveScreenshot(path.join(rawDir, '04-chat-terminal.png'))")
+    expect(signInSpec).not.toMatch(/browser\.saveScreenshot\(path\.join\(rawDir, '0[34]-chat-/)
   })
 })
 
