@@ -566,8 +566,8 @@
           </div>
         {:else if onboarding.state === 'revise'}
           <p class="support">Choose what the revised report and Home should contain, or request another model proposal.</p>
-          <fieldset data-testid="onboarding-layout"><legend>Home layout</legend>{#each ['memory', 'agents', 'projects', 'sessions'] as item}<label><input type="checkbox" checked={onboarding.choices.layout.includes(item)} onchange={() => toggleChoice('layout', item)} /> {item}/</label>{/each}</fieldset>
-          <fieldset data-testid="onboarding-agents"><legend>Starter agents</legend>{#each ['researcher', 'writer'] as item}<label><input type="checkbox" checked={onboarding.choices.starterAgents.includes(item)} onchange={() => toggleChoice('starterAgents', item)} /> {item}</label>{/each}</fieldset>
+          <fieldset data-testid="onboarding-layout"><legend>Home layout · required</legend>{#each ['memory', 'agents', 'projects', 'sessions'] as item}<label><input type="checkbox" checked disabled /> {item}/</label>{/each}</fieldset>
+          <fieldset data-testid="onboarding-agents"><legend>Starter agents</legend>{#each ['researcher', 'writer'] as item}<label><input data-testid={`onboarding-agent-${item}`} type="checkbox" checked={onboarding.choices.starterAgents.includes(item)} onchange={() => toggleChoice('starterAgents', item)} /> {item}</label>{/each}</fieldset>
           <div class="onboarding-footer"><button class="quiet" onclick={() => { onboarding = { ...onboarding, state: 'location' } }}>Change location</button><button data-testid="onboarding-repropose" class="primary" onclick={() => proposeOnboarding(false)} disabled={onboarding.choices.layout.length === 0}>Generate revised report</button></div>
         {:else if onboarding.state === 'report' || onboarding.state === 'scaffolding'}
           <p class="support">Review this report before Muniment creates any folders or starter agents.</p>

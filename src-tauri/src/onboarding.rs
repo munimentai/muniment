@@ -230,43 +230,13 @@ pub fn onboarding_confirm(
     }
 
     fs::create_dir_all(&home).map_err(|_| "The selected Home folder could not be created.")?;
-    for (name, description) in [
-        ("memory", "Durable personal context and preferences."),
-        ("agents", "Reusable agent instructions."),
-        ("projects", "Context grouped by project."),
-        ("sessions", "Readable session transcripts."),
-    ]
-    .into_iter()
-    .filter(|(name, _)| choices.layout.iter().any(|selected| selected == name))
-    {
-        let child = home.join(name);
-        ensure_directory(&child)?;
-        write_if_missing(
-            &child.join("README.md"),
-            format!("# {}\n\n{}\n", title(name), description).as_bytes(),
-        )?;
-    }
+    scaffold_home(&home, &choices)?;
     let report_name = if report.contains("## Setup mode\n\nOn-device triage") {
         "ONBOARDING-TRIAGE.md"
     } else {
         "ONBOARDING.md"
     };
     write_if_missing(&home.join(report_name), report.as_bytes())?;
-    if choices.layout.iter().any(|name| name == "agents") {
-        if choices
-            .starter_agents
-            .iter()
-            .any(|name| name == "researcher")
-        {
-            write_if_missing(
-                &home.join("agents/researcher.md"),
-                b"# Researcher\n\nGather relevant sources, check claims, and preserve citations.\n",
-            )?;
-        }
-        if choices.starter_agents.iter().any(|name| name == "writer") {
-            write_if_missing(&home.join("agents/writer.md"), b"# Writer\n\nTurn available context into a clear draft while preserving the user's voice.\n")?;
-        }
-    }
     fs::create_dir_all(&directory).map_err(|_| "The Home selection could not be saved.")?;
     atomic_write(
         &directory.join(HOME_FILE),
@@ -291,11 +261,40 @@ pub fn onboarding_confirm(
     })
 }
 
+fn scaffold_home(home: &Path, choices: &OnboardingChoices) -> Result<(), String> {
+    for (name, description) in [
+        ("memory", "Durable personal context and preferences."),
+        ("agents", "Reusable agent instructions."),
+        ("projects", "Context grouped by project."),
+        ("sessions", "Readable session transcripts."),
+    ] {
+        let child = home.join(name);
+        ensure_directory(&child)?;
+        write_if_missing(
+            &child.join("README.md"),
+            format!("# {}\n\n{}\n", title(name), description).as_bytes(),
+        )?;
+    }
+    if choices
+        .starter_agents
+        .iter()
+        .any(|name| name == "researcher")
+    {
+        write_if_missing(
+            &home.join("agents/researcher.md"),
+            b"# Researcher\n\nGather relevant sources, check claims, and preserve citations.\n",
+        )?;
+    }
+    if choices.starter_agents.iter().any(|name| name == "writer") {
+        write_if_missing(&home.join("agents/writer.md"), b"# Writer\n\nTurn available context into a clear draft while preserving the user's voice.\n")?;
+    }
+    Ok(())
+}
+
 fn validate_choices(choices: &OnboardingChoices) -> Result<(), String> {
     const LAYOUT: [&str; 4] = ["memory", "agents", "projects", "sessions"];
     const AGENTS: [&str; 2] = ["researcher", "writer"];
-    if choices.layout.is_empty()
-        || choices.layout.len() > LAYOUT.len()
+    if choices.layout.len() != LAYOUT.len()
         || choices
             .layout
             .iter()
@@ -384,7 +383,10 @@ fn atomic_write(path: &Path, contents: &[u8]) -> io::Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{drive_type_is_unusual, validate_home, warning};
+    use super::{
+        drive_type_is_unusual, scaffold_home, validate_choices, validate_home, warning,
+        OnboardingChoices,
+    };
     use std::path::Path;
 
     #[test]
@@ -412,5 +414,39 @@ mod tests {
         assert!(!drive_type_is_unusual(3));
         assert!(drive_type_is_unusual(4));
         assert!(warning(Path::new(r"\\server\share\Muniment")).is_some());
+    }
+
+    #[test]
+    fn core_layout_is_mandatory() {
+        let missing_core = OnboardingChoices {
+            layout: vec!["memory".into(), "agents".into(), "projects".into()],
+            starter_agents: vec!["researcher".into()],
+        };
+        assert!(validate_choices(&missing_core).is_err());
+    }
+
+    #[test]
+    fn revised_agent_choices_match_the_mandatory_scaffold() {
+        let temporary =
+            std::env::temp_dir().join(format!("muniment-onboarding-test-{}", uuid::Uuid::now_v7()));
+        std::fs::create_dir(&temporary).unwrap();
+        let choices = OnboardingChoices {
+            layout: vec![
+                "memory".into(),
+                "agents".into(),
+                "projects".into(),
+                "sessions".into(),
+            ],
+            starter_agents: vec!["researcher".into()],
+        };
+        validate_choices(&choices).unwrap();
+        scaffold_home(&temporary, &choices).unwrap();
+
+        for directory in ["memory", "agents", "projects", "sessions"] {
+            assert!(temporary.join(directory).join("README.md").is_file());
+        }
+        assert!(temporary.join("agents/researcher.md").is_file());
+        assert!(!temporary.join("agents/writer.md").exists());
+        std::fs::remove_dir_all(temporary).unwrap();
     }
 }

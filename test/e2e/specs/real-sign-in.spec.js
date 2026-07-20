@@ -29,8 +29,7 @@ describe('installed nightly', () => {
     expect(await firstReport.getText()).toContain(displayedDefault)
     expect(await firstReport.getText()).toContain('Manual setup')
     await (await $('[data-testid="onboarding-reject"]')).click()
-    await (await $('[data-testid="onboarding-layout"] input')).click()
-    await (await $('[data-testid="onboarding-layout"] input')).click()
+    await (await $('[data-testid="onboarding-agent-writer"]')).click()
     await (await $('button=Change location')).click()
     await location.setValue(home)
     await (await $('[data-testid="onboarding-accept-location"]')).click()
@@ -38,6 +37,8 @@ describe('installed nightly', () => {
     const revisedReport = await $('[data-testid="onboarding-report"]')
     await revisedReport.waitForDisplayed()
     expect(await revisedReport.getText()).toContain(home)
+    expect(await revisedReport.getText()).toContain('Researcher')
+    expect(await revisedReport.getText()).not.toContain('Writer')
     let homeExists = true
     try { await access(home) } catch { homeExists = false }
     expect(homeExists).toBe(false)
@@ -45,6 +46,10 @@ describe('installed nightly', () => {
     for (const directory of ['memory', 'agents', 'projects', 'sessions']) {
       expect(await readFile(path.join(home, directory, 'README.md'), 'utf8')).toContain(`# ${directory[0].toUpperCase()}${directory.slice(1)}`)
     }
+    expect(await readFile(path.join(home, 'agents', 'researcher.md'), 'utf8')).toContain('# Researcher')
+    let writerExists = true
+    try { await access(path.join(home, 'agents', 'writer.md')) } catch { writerExists = false }
+    expect(writerExists).toBe(false)
 
     const signedOut = await $('button=Sign in')
     await signedOut.waitForDisplayed()
