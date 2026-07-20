@@ -18,6 +18,7 @@ use muniment_core::llama::lifecycle::{
     GemmaActivation, GemmaActivationBoundary, GemmaActivationFailure, GemmaRecovery,
     GemmaRevisionLifecycle, RESIDENT_GEMMA_REVISION, RESIDENT_GEMMA_REVISIONS,
 };
+use muniment_core::llama::runtime::{acquire_runtime, resolve_runtime};
 use muniment_core::llama::{LlamaServer, LlamaServerConfig};
 use muniment_core::model_acquisition_transport::NativeModelAcquisitionTransport;
 use muniment_core::model_install::ModelInstallError;
@@ -400,7 +401,21 @@ impl GemmaActivationBoundary for NativeActivation {
     type Server = LlamaServer;
 
     fn launch(&self, model: &Path) -> Result<Self::Server, GemmaActivationFailure> {
-        LlamaServer::spawn(LlamaServerConfig::new("llama-server", model, 32_391))
+        let models_root = model
+            .parent()
+            .and_then(Path::parent)
+            .and_then(Path::parent)
+            .and_then(Path::parent)
+            .ok_or(GemmaActivationFailure::Start)?;
+        let runtime_root = models_root.join("llama-server");
+        let mut transport = NativeModelAcquisitionTransport::new();
+        acquire_runtime(&runtime_root, &mut transport)
+            .map_err(|_| GemmaActivationFailure::Start)?;
+        // Resolve again at the spawn boundary so post-install modification of
+        // either retained evidence or extracted files fails closed.
+        let executable =
+            resolve_runtime(&runtime_root).map_err(|_| GemmaActivationFailure::Start)?;
+        LlamaServer::spawn(LlamaServerConfig::new(executable, model, 32_391))
             .map_err(|_| GemmaActivationFailure::Start)
     }
 
@@ -408,7 +423,7 @@ impl GemmaActivationBoundary for NativeActivation {
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(120);
         while std::time::Instant::now() < deadline {
             match server.supervisor().status() {
-                SidecarStatus::Ready => return Ok(()),
+                SidecarStatus::Healthy => return Ok(()),
                 SidecarStatus::Stopped | SidecarStatus::Failed => {
                     return Err(GemmaActivationFailure::ExitedBeforeReady)
                 }
