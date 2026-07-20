@@ -267,13 +267,8 @@ jobs:
           # and a regular-file/directory-only archive before extracting.
           extract_status=0
           bash test/e2e/support/extract-artifacts.sh "$output" "$RUNNER_TEMP/muniment-e2e-artifacts" || extract_status=$?
-          if (( extract_status != 0 )); then
-            mkdir -p "$RUNNER_TEMP/muniment-e2e-artifacts"
-            printf '%s\n' \
-              '<?xml version="1.0" encoding="UTF-8"?>' \
-              '<testsuites tests="1" failures="1"><testsuite name="installed-linux" tests="1" failures="1"><testcase name="desktop-ci artifact collection"><failure message="desktop-ci did not return a valid artifact envelope"/></testcase></testsuite></testsuites>' \
-              >"$RUNNER_TEMP/muniment-e2e-artifacts/junit-infrastructure.xml"
-          fi
+          bash test/e2e/support/ensure-junit-report.sh \
+            "$RUNNER_TEMP/muniment-e2e-artifacts" installed-linux "$run_status" "$extract_status"
           if (( run_status != 0 || extract_status != 0 )); then final_status=1; else final_status=0; fi
           printf 'status=%s\n' "$final_status" >>"$GITHUB_OUTPUT"
 
@@ -358,6 +353,8 @@ jobs:
 
           extract_status=0
           bash test/e2e/support/extract-artifacts.sh "$output" "$RUNNER_TEMP/muniment-windows-e2e-artifacts" || extract_status=$?
+          bash test/e2e/support/ensure-junit-report.sh \
+            "$RUNNER_TEMP/muniment-windows-e2e-artifacts" installed-windows "$run_status" "$extract_status"
           if (( run_status != 0 || extract_status != 0 )); then final_status=1; else final_status=0; fi
           printf 'status=%s\n' "$final_status" >>"$GITHUB_OUTPUT"
 
@@ -438,6 +435,8 @@ jobs:
 
           extract_status=0
           bash test/e2e/support/extract-artifacts.sh "$output" "$RUNNER_TEMP/muniment-macos-e2e-artifacts" || extract_status=$?
+          bash test/e2e/support/ensure-junit-report.sh \
+            "$RUNNER_TEMP/muniment-macos-e2e-artifacts" installed-macos "$run_status" "$extract_status" 1
           if (( run_status != 0 || extract_status != 0 )); then final_status=1; else final_status=0; fi
           printf 'status=%s\n' "$final_status" >>"$GITHUB_OUTPUT"
 
@@ -456,6 +455,15 @@ jobs:
         with:
           name: macos-e2e-${{ needs.prepare.outputs.source_sha }}-failure
           path: ${{ runner.temp }}/muniment-macos-e2e-artifacts
+          retention-days: 30
+          if-no-files-found: error
+
+      - name: Upload stable JUnit report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-e2e-report
+          path: ${{ runner.temp }}/muniment-macos-e2e-artifacts/junit-*.xml
           retention-days: 30
           if-no-files-found: error
 

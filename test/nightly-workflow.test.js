@@ -1,7 +1,16 @@
 import { describe, expect, it } from 'vitest'
 import fs from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
+import { spawnSync } from 'node:child_process'
 
 const workflow = fs.readFileSync('.github/workflows/nightly.yml', 'utf8')
+const ensureJunitReport = 'test/e2e/support/ensure-junit-report.sh'
+
+const runReportFallback = (directory, suite, runStatus, extractStatus, createSuccessReport = false) => {
+  const result = spawnSync('bash', [ensureJunitReport, directory, suite, String(runStatus), String(extractStatus), createSuccessReport ? '1' : '0'], { encoding: 'utf8' })
+  expect(result.status, result.stderr).toBe(0)
+}
 const publish = workflow.slice(workflow.indexOf('  publish:'), workflow.indexOf('  linux-e2e:'))
 const linuxE2e = workflow.slice(workflow.indexOf('  linux-e2e:'))
 const jobCondition = linuxE2e.match(/    if: >-\n((?:      .+\n)+)/)[1].trim().replace(/\n\s*/g, ' ')
@@ -40,7 +49,7 @@ describe('nightly Linux E2E workflow', () => {
 
   it('uploads only generated JUnit XML under the stable report name', () => {
     const reportStep = linuxE2e.slice(linuxE2e.indexOf('      - name: Upload stable JUnit report'), linuxE2e.indexOf('      - name: Preserve E2E result'))
-    expect(linuxE2e).toContain('junit-infrastructure.xml')
+    expect(linuxE2e).toContain('ensure-junit-report.sh')
     expect(reportStep).toContain('if: always()')
     expect(reportStep).toContain('name: linux-e2e-report')
     expect(reportStep).toContain('path: ${{ runner.temp }}/muniment-e2e-artifacts/junit-*.xml')
@@ -63,6 +72,25 @@ describe('nightly Windows E2E workflow', () => {
     expect(reportStep).toContain('name: windows-e2e-report')
     expect(reportStep).toContain('path: ${{ runner.temp }}/muniment-windows-e2e-artifacts/junit-*.xml')
     expect(reportStep).not.toContain('path: ${{ runner.temp }}/muniment-windows-e2e-artifacts\n')
+  })
+
+  it('publishes a parseable infrastructure failure when an extracted failure has no JUnit', () => {
+    const artifacts = fs.mkdtempSync(path.join(os.tmpdir(), 'muniment-junit-'))
+    fs.writeFileSync(path.join(artifacts, 'desktop-ci.log'), 'setup failed')
+
+    runReportFallback(artifacts, 'installed-windows', 1, 0)
+
+    const report = fs.readFileSync(path.join(artifacts, 'junit-infrastructure.xml'), 'utf8')
+    const xml = new DOMParser().parseFromString(report, 'application/xml')
+    expect(report).toMatch(/^<\?xml version="1\.0" encoding="UTF-8"\?>/)
+    expect(xml.querySelector('parsererror')).toBeNull()
+    expect(xml.querySelectorAll('testcase')).toHaveLength(1)
+    expect(xml.querySelectorAll('failure')).toHaveLength(1)
+    expect(report).toContain('<testsuites tests="1" failures="1">')
+    expect(report).toContain('<testsuite name="installed-windows" tests="1" failures="1">')
+    expect(report).toContain('<testcase name="desktop-ci infrastructure">')
+    expect(report).toContain('<failure message="desktop-ci failed before producing a JUnit report"/>')
+    expect(fs.readFileSync(path.join(artifacts, 'desktop-ci.log'), 'utf8')).toBe('setup failed')
   })
 })
 
@@ -87,9 +115,49 @@ describe('nightly macOS E2E workflow', () => {
     expect(macosE2e).not.toContain('MUNIMENT_E2E_PASSWORD')
   })
 
-  it('publishes success and failure diagnostics with the required retention', () => {
+  it('publishes diagnostics and a stable JUnit report with the required retention', () => {
     expect(macosE2e).toContain('name: macos-e2e-${{ needs.prepare.outputs.source_sha }}-success')
     expect(macosE2e).toMatch(/name: macos-e2e-\$\{\{ needs\.prepare\.outputs\.source_sha \}\}-success[\s\S]*?retention-days: 7/)
     expect(macosE2e).toMatch(/name: macos-e2e-\$\{\{ needs\.prepare\.outputs\.source_sha \}\}-failure[\s\S]*?retention-days: 30/)
+    expect(macosE2e).toContain('ensure-junit-report.sh')
+    expect(macosE2e).toContain('name: macos-e2e-report')
+    expect(macosE2e).toContain('path: ${{ runner.temp }}/muniment-macos-e2e-artifacts/junit-*.xml')
+  })
+})
+
+describe('nightly E2E JUnit fallback', () => {
+  it('covers Linux and macOS setup failures with valid artifact envelopes', () => {
+    for (const suite of ['installed-linux', 'installed-macos']) {
+      const artifacts = fs.mkdtempSync(path.join(os.tmpdir(), 'muniment-junit-'))
+      fs.writeFileSync(path.join(artifacts, 'diagnostics.log'), 'retained')
+      runReportFallback(artifacts, suite, 1, 0)
+      const report = fs.readFileSync(path.join(artifacts, 'junit-infrastructure.xml'), 'utf8')
+      const xml = new DOMParser().parseFromString(report, 'application/xml')
+      expect(xml.querySelector('parsererror')).toBeNull()
+      expect(xml.querySelector('failure')).not.toBeNull()
+      expect(report).toContain(`<testsuite name="${suite}" tests="1" failures="1">`)
+      expect(report).toContain('<failure message="desktop-ci failed before producing a JUnit report"/>')
+      expect(fs.existsSync(path.join(artifacts, 'diagnostics.log'))).toBe(true)
+    }
+  })
+
+  it('retains an existing JUnit report instead of replacing it', () => {
+    const artifacts = fs.mkdtempSync(path.join(os.tmpdir(), 'muniment-junit-'))
+    const existing = path.join(artifacts, 'junit-results.xml')
+    fs.writeFileSync(existing, '<testsuites/>')
+    runReportFallback(artifacts, 'installed-linux', 1, 0)
+    expect(fs.readFileSync(existing, 'utf8')).toBe('<testsuites/>')
+    expect(fs.existsSync(path.join(artifacts, 'junit-infrastructure.xml'))).toBe(false)
+  })
+
+  it('creates the macOS smoke report required on a successful run', () => {
+    const artifacts = fs.mkdtempSync(path.join(os.tmpdir(), 'muniment-junit-'))
+    runReportFallback(artifacts, 'installed-macos', 0, 0, true)
+    const report = fs.readFileSync(path.join(artifacts, 'junit-smoke.xml'), 'utf8')
+    const xml = new DOMParser().parseFromString(report, 'application/xml')
+    expect(xml.querySelector('parsererror')).toBeNull()
+    expect(xml.querySelector('testsuites').getAttribute('failures')).toBe('0')
+    expect(xml.querySelector('testcase').getAttribute('name')).toBe('installed application smoke')
+    expect(xml.querySelector('failure')).toBeNull()
   })
 })
