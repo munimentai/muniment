@@ -21,6 +21,8 @@ export function modelAcquisitionState(response) {
 
   return {
     modelName: MODEL_NAME,
+    state,
+    installing: state === 'installing',
     active: active && !ready,
     ready,
     failed: state === 'failed',

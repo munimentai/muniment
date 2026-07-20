@@ -85,6 +85,7 @@ beforeEach(() => {
     if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
     if (command === 'chat_history') return []
     if (command === 'chat_file_metadata') return { displayName: payload.path.split(/[\\/]/).pop(), byteLength: 1536 }
+    if (command === 'gemma_install_start') return { state: 'installing' }
     if (command === 'auth_entitlement_snapshot') return snapshot()
     if (command === 'auth_devices') return []
     throw new Error(`unexpected command: ${command}`)
@@ -151,7 +152,7 @@ describe('required local model acquisition', () => {
 
     expect(await screen.findByTestId('onboarding-confirm')).toBeEnabled()
     const record = await screen.findByLabelText('Required local model status')
-    expect(record).toHaveTextContent('Qwen3.5-4Bdownloading')
+    expect(record).toHaveTextContent(/Qwen3\.5-4B\s+downloading/)
     expect(record).toHaveTextContent('1.0 GB / 4.0 GB · 25%')
     expect(within(record).getByRole('progressbar', { name: 'Qwen3.5-4B download progress' })).toHaveAttribute('value', String(1024 ** 3))
   })
@@ -167,6 +168,64 @@ describe('required local model acquisition', () => {
     expect(screen.getByLabelText('Required local model status')).toHaveTextContent('AI-dependent features are unavailable while the download retries in the background. Folder setup and the rest of Muniment remain usable.')
   })
 
+  it('places active acquisition status in workspace flow above usable composer controls', async () => {
+    modelStatus = {
+      status: { state: 'installing' }, downloadedBytes: 1, totalBytes: 10,
+      folderSetupAvailable: true, aiFeaturesAvailable: false, retryingInBackground: false,
+    }
+    render(App)
+
+    const composer = await screen.findByPlaceholderText('Ask anything')
+    const record = screen.getByLabelText('Required local model status')
+    expect(record.parentElement).toHaveClass('model-acquisition-row')
+    expect(record.parentElement.nextElementSibling).toContainElement(composer)
+    expect(screen.getByRole('button', { name: 'Add files' })).toBeEnabled()
+    expect(screen.getByRole('button', { name: 'Send' })).toBeDisabled()
+  })
+
+  it('shows not-installed copy and restarts acquisition polling with the existing command', async () => {
+    let statusCalls = 0
+    modelStatus = () => Promise.resolve(++statusCalls === 1
+      ? { status: { state: 'notInstalled' }, downloadedBytes: 0, totalBytes: 10, folderSetupAvailable: true, aiFeaturesAvailable: false, retryingInBackground: false }
+      : { status: { state: 'installing' }, downloadedBytes: 1, totalBytes: 10, folderSetupAvailable: true, aiFeaturesAvailable: false, retryingInBackground: false })
+    render(App)
+
+    const record = await screen.findByLabelText('Required local model status')
+    expect(record).toHaveTextContent(/Qwen3\.5-4B\s+not installed/)
+    expect(record).toHaveTextContent('AI-dependent features are unavailable because the local model is not installed. Folder setup and the rest of Muniment remain usable.')
+    await fireEvent.click(within(record).getByRole('button', { name: 'Retry download' }))
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('gemma_install_start'))
+    await waitFor(() => expect(record).toHaveTextContent('downloading'))
+    expect(within(record).getByRole('progressbar')).toBeInTheDocument()
+  })
+
+  it('shows honest cancelled copy without calling it a download', async () => {
+    modelStatus = {
+      status: { state: 'cancelled' }, downloadedBytes: 2, totalBytes: 10,
+      folderSetupAvailable: true, aiFeaturesAvailable: false, retryingInBackground: false,
+    }
+    render(App)
+
+    const record = await screen.findByLabelText('Required local model status')
+    expect(record).toHaveTextContent(/Qwen3\.5-4B\s+cancelled/)
+    expect(record).toHaveTextContent('AI-dependent features are unavailable because the local model download was cancelled. Folder setup and the rest of Muniment remain usable.')
+    expect(record).not.toHaveTextContent('downloading')
+    expect(within(record).getByRole('button', { name: 'Retry download' })).toBeEnabled()
+  })
+
+  it('shows a terminal failed acquisition as unavailable with a retry action', async () => {
+    modelStatus = {
+      status: { state: 'failed', category: 'network', message: 'redacted' }, downloadedBytes: 2, totalBytes: 10,
+      folderSetupAvailable: true, aiFeaturesAvailable: false, retryingInBackground: false,
+    }
+    render(App)
+
+    const record = await screen.findByLabelText('Required local model status')
+    expect(record).toHaveTextContent(/Qwen3\.5-4B\s+unavailable/)
+    expect(record).toHaveTextContent('AI-dependent features are unavailable because the local model download has stopped. Folder setup and the rest of Muniment remain usable.')
+    expect(within(record).getByRole('button', { name: 'Retry download' })).toBeEnabled()
+  })
+
   it('settles to ready and stops polling', async () => {
     vi.useFakeTimers()
     let calls = 0
@@ -177,7 +236,7 @@ describe('required local model acquisition', () => {
     await vi.advanceTimersByTimeAsync(0)
     expect(screen.getByLabelText('Required local model status')).toHaveTextContent('downloading')
     await vi.advanceTimersByTimeAsync(1000)
-    expect(screen.getByLabelText('Required local model status')).toHaveTextContent('Qwen3.5-4Bready')
+    expect(screen.getByLabelText('Required local model status')).toHaveTextContent(/Qwen3\.5-4B\s+ready/)
     expect(screen.queryByRole('progressbar', { name: 'Qwen3.5-4B download progress' })).not.toBeInTheDocument()
     await vi.advanceTimersByTimeAsync(5000)
     expect(calls).toBe(2)

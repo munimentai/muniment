@@ -22,4 +22,13 @@ describe('model acquisition state', () => {
     expect(modelAcquisitionState({ status: { state: 'failed' }, downloadedBytes: -1, totalBytes: 'unknown' })).toMatchObject({ active: false, percent: 0, downloadedBytes: 0, totalBytes: 0 })
     expect(formatModelBytes(Number.NaN)).toBe('0 B')
   })
+
+  it.each(['notInstalled', 'cancelled'])('keeps terminal %s states inactive and explicit', (state) => {
+    expect(modelAcquisitionState({ status: { state }, aiFeaturesAvailable: false })).toMatchObject({
+      state,
+      installing: false,
+      active: false,
+      ready: false,
+    })
+  })
 })

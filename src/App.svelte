@@ -53,6 +53,8 @@
   let destroyed = false
   let modelAcquisition = $state(null)
   let modelAcquisitionTimer
+  let modelAcquisitionRetrying = $state(false)
+  let modelAcquisitionRetryError = $state('')
 
   function stopModelAcquisitionPolling() {
     clearTimeout(modelAcquisitionTimer)
@@ -68,6 +70,28 @@
       if (next.active) modelAcquisitionTimer = setTimeout(loadModelAcquisition, 1000)
     } catch (_) {
       if (!destroyed && modelAcquisition?.active) modelAcquisitionTimer = setTimeout(loadModelAcquisition, 1000)
+    }
+  }
+
+  async function retryModelAcquisition() {
+    modelAcquisitionRetrying = true
+    modelAcquisitionRetryError = ''
+    try {
+      const status = await tauri.invoke('gemma_install_start')
+      if (destroyed) return
+      modelAcquisition = modelAcquisitionState({
+        status,
+        downloadedBytes: modelAcquisition?.downloadedBytes,
+        totalBytes: modelAcquisition?.totalBytes,
+        folderSetupAvailable: modelAcquisition?.folderSetupAvailable,
+        aiFeaturesAvailable: false,
+        retryingInBackground: false,
+      })
+      await loadModelAcquisition()
+    } catch (_) {
+      modelAcquisitionRetryError = 'The download could not be restarted. Try again.'
+    } finally {
+      modelAcquisitionRetrying = false
     }
   }
 
@@ -522,6 +546,32 @@
   }
 </script>
 
+{#snippet modelAcquisitionRecord()}
+  {#if modelAcquisition}
+    <aside class:acquisition-active={modelAcquisition.active} class="model-acquisition" aria-label="Required local model status">
+      <div class="model-acquisition-heading">
+        <strong>{modelAcquisition.modelName}</strong>
+        <span>{modelAcquisition.ready ? 'ready' : modelAcquisition.retrying ? 'retrying' : modelAcquisition.installing ? 'downloading' : modelAcquisition.state === 'cancelled' ? 'cancelled' : modelAcquisition.state === 'notInstalled' ? 'not installed' : modelAcquisition.state === 'installed' ? 'not ready' : 'unavailable'}</span>
+      </div>
+      {#if modelAcquisition.installing && modelAcquisition.totalBytes > 0}
+        <progress aria-label={`${modelAcquisition.modelName} download progress`} value={modelAcquisition.downloadedBytes} max={modelAcquisition.totalBytes}>{modelAcquisition.percent}%</progress>
+        <p>{formatModelBytes(modelAcquisition.downloadedBytes)} / {formatModelBytes(modelAcquisition.totalBytes)} · {modelAcquisition.percent}%</p>
+      {/if}
+      {#if !modelAcquisition.ready && modelAcquisition.retrying}
+        <p>AI-dependent features are unavailable while the download retries in the background. {modelAcquisition.folderSetupAvailable ? 'Folder setup and the rest of Muniment remain usable.' : 'The rest of Muniment remains usable.'}</p>
+      {:else if !modelAcquisition.ready && modelAcquisition.installing}
+        <p>AI-dependent features will be available after this background download. {modelAcquisition.folderSetupAvailable ? 'Folder setup and the rest of Muniment remain usable.' : 'The rest of Muniment remains usable.'}</p>
+      {:else if !modelAcquisition.ready && modelAcquisition.state === 'installed'}
+        <p>The local model is installed, but AI-dependent features are not ready. {modelAcquisition.folderSetupAvailable ? 'Folder setup and the rest of Muniment remain usable.' : 'The rest of Muniment remains usable.'} Restart Muniment to try loading the model again.</p>
+      {:else if !modelAcquisition.ready}
+        <p>AI-dependent features are unavailable because the local model {modelAcquisition.state === 'cancelled' ? 'download was cancelled' : modelAcquisition.state === 'notInstalled' ? 'is not installed' : 'download has stopped'}. {modelAcquisition.folderSetupAvailable ? 'Folder setup and the rest of Muniment remain usable.' : 'The rest of Muniment remains usable.'}</p>
+        <button class="model-retry" type="button" onclick={retryModelAcquisition} disabled={modelAcquisitionRetrying}>{modelAcquisitionRetrying ? 'Restarting…' : 'Retry download'}</button>
+        {#if modelAcquisitionRetryError}<span class="model-retry-error" role="alert">{modelAcquisitionRetryError}</span>{/if}
+      {/if}
+    </aside>
+  {/if}
+{/snippet}
+
 <main class:signed-frame={auth.name === 'signed-in'}>
   <div class="lockup">
     <svg width="34" height="34" viewBox="0 0 48 48" role="img" aria-label="muniment">
@@ -555,6 +605,7 @@
           <p class="support">Onboarding could not start.</p><button onclick={loadOnboarding}>Try again</button>
           <p class="onboarding-error" role="alert">{onboarding.error}</p>
         {/if}
+        {@render modelAcquisitionRecord()}
       </section>
     {:else if auth.name === 'signed-out'}
       <section class="auth-state">
@@ -643,6 +694,7 @@
         </div>
         {#if !pinned && hasContentBelow}<button class="latest" onclick={scrollToLatest}>↓ latest</button>{/if}
         </div>
+        <div class="model-acquisition-row">{@render modelAcquisitionRecord()}</div>
         <div class="composer">
           {#if selectedFiles.length}
             <ul class="attachments" aria-label="Selected files">
@@ -685,22 +737,6 @@
         <button onclick={() => run(auth.retry)}>Try again</button>
       </section>
     {/if}
-  {/if}
-  {#if tauri && modelAcquisition}
-    <aside class:acquisition-active={modelAcquisition.active} class="model-acquisition" aria-label="Required local model status">
-      <div class="model-acquisition-heading"><strong>{modelAcquisition.modelName}</strong><span>{modelAcquisition.ready ? 'ready' : modelAcquisition.retrying ? 'retrying' : modelAcquisition.failed ? 'unavailable' : 'downloading'}</span></div>
-      {#if modelAcquisition.active && modelAcquisition.totalBytes > 0}
-        <progress aria-label={`${modelAcquisition.modelName} download progress`} value={modelAcquisition.downloadedBytes} max={modelAcquisition.totalBytes}>{modelAcquisition.percent}%</progress>
-        <p>{formatModelBytes(modelAcquisition.downloadedBytes)} / {formatModelBytes(modelAcquisition.totalBytes)} · {modelAcquisition.percent}%</p>
-      {/if}
-      {#if !modelAcquisition.ready && modelAcquisition.retrying}
-        <p>AI-dependent features are unavailable while the download retries in the background. {modelAcquisition.folderSetupAvailable ? 'Folder setup and the rest of Muniment remain usable.' : 'The rest of Muniment remains usable.'}</p>
-      {:else if !modelAcquisition.ready && modelAcquisition.failed}
-        <p>AI-dependent features are unavailable. {modelAcquisition.folderSetupAvailable ? 'Folder setup and the rest of Muniment remain usable.' : 'The rest of Muniment remains usable.'}</p>
-      {:else if !modelAcquisition.ready && modelAcquisition.active}
-        <p>AI-dependent features will be available after this background download. {modelAcquisition.folderSetupAvailable ? 'Folder setup and the rest of Muniment remain usable.' : 'The rest of Muniment remains usable.'}</p>
-      {/if}
-    </aside>
   {/if}
 </main>
 
@@ -800,7 +836,7 @@
     line-height: var(--leading-body);
   }
 
-  .model-acquisition { position: fixed; z-index: 5; right: 18px; bottom: 18px; width: min(390px, calc(100vw - 36px)); padding: 9px 11px; border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--surface); color: var(--muted); font: var(--text-12) var(--font-mono); box-shadow: 0 1px 3px color-mix(in srgb, var(--ink) 8%, transparent); }
+  .model-acquisition { padding: 9px 11px; border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--surface); color: var(--muted); font: var(--text-12) var(--font-mono); }
   .model-acquisition-heading { display: flex; justify-content: space-between; gap: 12px; color: var(--muted); }
   .model-acquisition-heading strong { color: var(--ink); font-weight: 400; }
   .model-acquisition p { margin: 5px 0 0; line-height: 1.45; }
@@ -809,9 +845,12 @@
   .model-acquisition progress::-webkit-progress-value { background: var(--signal); }
   .model-acquisition progress::-moz-progress-bar { background: var(--signal); }
   .acquisition-active .model-acquisition-heading span { color: var(--signal); }
+  .model-retry { margin-top: 7px; padding: 3px 7px; font: inherit; }
+  .model-retry-error { display: inline-block; margin-left: 8px; }
+  .onboarding .model-acquisition { margin-top: 18px; text-align: left; }
 
-  .workspace { position: fixed; inset: 0; display: grid; grid-template-rows: 52px 1fr auto; }
-  .workspace { grid-template-columns: 260px 1fr; grid-template-areas: "title title" "side thread" "side composer"; }
+  .workspace { position: fixed; inset: 0; display: grid; grid-template-rows: 52px 1fr auto auto; }
+  .workspace { grid-template-columns: 260px 1fr; grid-template-areas: "title title" "side thread" "side acquisition" "side composer"; }
   .drop-affordance { position: fixed; z-index: 4; inset: 52px 0 0 260px; display: grid; place-content: center; gap: 5px; background: color-mix(in srgb, var(--paper) 92%, transparent); border: 1px dashed var(--muted); color: var(--ink); text-align: center; pointer-events: none; }
   .drop-affordance span { color: var(--muted); font: var(--text-12) var(--font-mono); }
   .titlebar { grid-area: title; display: flex; align-items: center; padding: 0 18px 0 278px; border-bottom: 1px solid var(--border); background: var(--surface); }
@@ -828,6 +867,7 @@
   .active-thread > span { width: 5px; height: 5px; border-radius: 50%; background: var(--signal); }
   .quiet { background: transparent; border-color: transparent; }
   .thread-shell { grid-area: thread; position: relative; min-height: 0; }
+  .model-acquisition-row { grid-area: acquisition; width: min(760px, calc(100% - 48px)); margin: 0 auto 8px; }
   .thread { width: min(760px, calc(100% - 48px)); height: 100%; margin: 0 auto; padding: 42px 0; overflow-y: auto; }
   .latest { position: absolute; left: 50%; bottom: 14px; transform: translateX(-50%); border-radius: 6px; background: var(--surface); color: var(--muted); font: var(--text-12) var(--font-mono); box-shadow: 0 1px 3px color-mix(in srgb, var(--ink) 10%, transparent); }
   .empty { color: var(--muted); text-align: center; margin-top: 18vh; }
