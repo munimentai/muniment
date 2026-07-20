@@ -16,6 +16,7 @@ let dialogResult
 let dragDropListener
 let dragDropUnlisten
 let homeStatus
+let modelStatus
 
 vi.mock('@tauri-apps/api/webview', () => ({
   getCurrentWebview: () => ({
@@ -52,9 +53,11 @@ const device = (device_id, overrides = {}) => ({
 beforeAll(async () => {
   HTMLElement.prototype.scrollTo = vi.fn()
   window.__TAURI__ = {
-    core: { invoke: (command, ...args) => command === 'home_status'
-      ? Promise.resolve(homeStatus)
-      : invoke(command, ...args) },
+    core: { invoke: (command, ...args) => {
+      if (command === 'home_status') return Promise.resolve(homeStatus)
+      if (command === 'required_model_acquisition_status') return typeof modelStatus === 'function' ? modelStatus() : Promise.resolve(modelStatus)
+      return invoke(command, ...args)
+    } },
     event: { listen: vi.fn((event, listener) => {
       if (event === 'chat-event') chatListener = listener
       if (event === 'dictation-event') dictationListener = listener
@@ -70,6 +73,7 @@ beforeAll(async () => {
 
 beforeEach(() => {
   homeStatus = { configured: true, homePath: '/Documents/Muniment' }
+  modelStatus = { status: { state: 'installed' }, downloadedBytes: 4, totalBytes: 4, folderSetupAvailable: true, aiFeaturesAvailable: true, retryingInBackground: false }
   chatListener = undefined
   dictationListener = undefined
   eventUnlisten = vi.fn()
@@ -87,7 +91,10 @@ beforeEach(() => {
   })
 })
 
-afterEach(() => cleanup())
+afterEach(() => {
+  cleanup()
+  vi.useRealTimers()
+})
 
 describe('Home onboarding', () => {
   it('blocks the shell and confirms the displayed Documents default', async () => {
@@ -130,6 +137,70 @@ describe('Home onboarding', () => {
     await fireEvent.click(screen.getByTestId('onboarding-cancel'))
     expect(await screen.findByPlaceholderText('Ask anything')).toBeInTheDocument()
     expect(invoke).not.toHaveBeenCalledWith('home_confirm', expect.anything())
+  })
+})
+
+describe('required local model acquisition', () => {
+  it('shows determinate download progress without blocking Home setup', async () => {
+    homeStatus = { configured: false, homePath: '/Documents/Muniment' }
+    modelStatus = {
+      status: { state: 'installing' }, downloadedBytes: 1024 ** 3, totalBytes: 4 * 1024 ** 3,
+      folderSetupAvailable: true, aiFeaturesAvailable: false, retryingInBackground: false,
+    }
+    render(App)
+
+    expect(await screen.findByTestId('onboarding-confirm')).toBeEnabled()
+    const record = await screen.findByLabelText('Required local model status')
+    expect(record).toHaveTextContent('Qwen3.5-4Bdownloading')
+    expect(record).toHaveTextContent('1.0 GB / 4.0 GB · 25%')
+    expect(within(record).getByRole('progressbar', { name: 'Qwen3.5-4B download progress' })).toHaveAttribute('value', String(1024 ** 3))
+  })
+
+  it('keeps the shell usable while a failed acquisition retries', async () => {
+    modelStatus = {
+      status: { state: 'failed', category: 'network', message: 'redacted' }, downloadedBytes: 2 * 1024 ** 3, totalBytes: 4 * 1024 ** 3,
+      folderSetupAvailable: true, aiFeaturesAvailable: false, retryingInBackground: true,
+    }
+    render(App)
+
+    expect(await screen.findByPlaceholderText('Ask anything')).toBeEnabled()
+    expect(screen.getByLabelText('Required local model status')).toHaveTextContent('AI-dependent features are unavailable while the download retries in the background. Folder setup and the rest of Muniment remain usable.')
+  })
+
+  it('settles to ready and stops polling', async () => {
+    vi.useFakeTimers()
+    let calls = 0
+    modelStatus = () => Promise.resolve(++calls === 1
+      ? { status: { state: 'installing' }, downloadedBytes: 1, totalBytes: 2, folderSetupAvailable: true, aiFeaturesAvailable: false, retryingInBackground: false }
+      : { status: { state: 'installed' }, downloadedBytes: 2, totalBytes: 2, folderSetupAvailable: true, aiFeaturesAvailable: true, retryingInBackground: false })
+    render(App)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(screen.getByLabelText('Required local model status')).toHaveTextContent('downloading')
+    await vi.advanceTimersByTimeAsync(1000)
+    expect(screen.getByLabelText('Required local model status')).toHaveTextContent('Qwen3.5-4Bready')
+    expect(screen.queryByRole('progressbar', { name: 'Qwen3.5-4B download progress' })).not.toBeInTheDocument()
+    await vi.advanceTimersByTimeAsync(5000)
+    expect(calls).toBe(2)
+    vi.useRealTimers()
+  })
+
+  it('continues after a transient poll failure and cleans up on teardown', async () => {
+    vi.useFakeTimers()
+    let calls = 0
+    modelStatus = () => {
+      calls += 1
+      if (calls === 2) return Promise.reject(new Error('temporary IPC failure'))
+      return Promise.resolve({ status: { state: 'installing' }, downloadedBytes: calls, totalBytes: 10, folderSetupAvailable: true, aiFeaturesAvailable: false, retryingInBackground: false })
+    }
+    const view = render(App)
+    await vi.advanceTimersByTimeAsync(0)
+    await vi.advanceTimersByTimeAsync(2000)
+    expect(calls).toBe(3)
+    expect(screen.getByPlaceholderText('Ask anything')).toBeEnabled()
+    view.unmount()
+    await vi.advanceTimersByTimeAsync(5000)
+    expect(calls).toBe(3)
+    vi.useRealTimers()
   })
 })
 

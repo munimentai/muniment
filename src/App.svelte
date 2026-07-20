@@ -9,6 +9,7 @@
   import { applyBufferedChatEvents, applyChatEvent, composerAction, formatByteSize, historyMessages, receiptParts, receiptRows, toolName, toolStatus } from './lib/chat-state.js'
   import { appendTranscript, isDictationActive } from './lib/dictation-state.js'
   import { onboardingCancelSettingsState, onboardingConfirmingState, onboardingErrorState, onboardingLoadingState, onboardingPathState, onboardingSettingsState, onboardingStatusState } from './lib/onboarding-state.js'
+  import { formatModelBytes, modelAcquisitionState } from './lib/model-acquisition-state.js'
   import { scrollFollowState } from './lib/scroll-follow.js'
 
   const markD = ringPath()
@@ -50,6 +51,25 @@
   let composer = $state()
   let onboarding = $state(onboardingLoadingState)
   let destroyed = false
+  let modelAcquisition = $state(null)
+  let modelAcquisitionTimer
+
+  function stopModelAcquisitionPolling() {
+    clearTimeout(modelAcquisitionTimer)
+    modelAcquisitionTimer = undefined
+  }
+
+  async function loadModelAcquisition() {
+    try {
+      const next = modelAcquisitionState(await tauri.invoke('required_model_acquisition_status'))
+      if (destroyed) return
+      modelAcquisition = next
+      stopModelAcquisitionPolling()
+      if (next.active) modelAcquisitionTimer = setTimeout(loadModelAcquisition, 1000)
+    } catch (_) {
+      if (!destroyed && modelAcquisition?.active) modelAcquisitionTimer = setTimeout(loadModelAcquisition, 1000)
+    }
+  }
 
   async function loadOnboarding() {
     try {
@@ -327,6 +347,7 @@
     if (tauri) {
       loadOnboarding()
       run('status')
+      loadModelAcquisition()
     }
     window.__TAURI__?.event?.listen('chat-event', ({ payload }) => {
       if (!messages.some((message) => message.run?.id === payload.runId)) {
@@ -374,6 +395,7 @@
       dictationUnlisten?.()
       pairingUnlisten?.()
       stopDictationPolling()
+      stopModelAcquisitionPolling()
       clearTimeout(voiceClickTimer)
       stopDragDrop?.()
       document.removeEventListener('keydown', escape)
@@ -664,6 +686,22 @@
       </section>
     {/if}
   {/if}
+  {#if tauri && modelAcquisition}
+    <aside class:acquisition-active={modelAcquisition.active} class="model-acquisition" aria-label="Required local model status">
+      <div class="model-acquisition-heading"><strong>{modelAcquisition.modelName}</strong><span>{modelAcquisition.ready ? 'ready' : modelAcquisition.retrying ? 'retrying' : modelAcquisition.failed ? 'unavailable' : 'downloading'}</span></div>
+      {#if modelAcquisition.active && modelAcquisition.totalBytes > 0}
+        <progress aria-label={`${modelAcquisition.modelName} download progress`} value={modelAcquisition.downloadedBytes} max={modelAcquisition.totalBytes}>{modelAcquisition.percent}%</progress>
+        <p>{formatModelBytes(modelAcquisition.downloadedBytes)} / {formatModelBytes(modelAcquisition.totalBytes)} · {modelAcquisition.percent}%</p>
+      {/if}
+      {#if !modelAcquisition.ready && modelAcquisition.retrying}
+        <p>AI-dependent features are unavailable while the download retries in the background. {modelAcquisition.folderSetupAvailable ? 'Folder setup and the rest of Muniment remain usable.' : 'The rest of Muniment remains usable.'}</p>
+      {:else if !modelAcquisition.ready && modelAcquisition.failed}
+        <p>AI-dependent features are unavailable. {modelAcquisition.folderSetupAvailable ? 'Folder setup and the rest of Muniment remain usable.' : 'The rest of Muniment remains usable.'}</p>
+      {:else if !modelAcquisition.ready && modelAcquisition.active}
+        <p>AI-dependent features will be available after this background download. {modelAcquisition.folderSetupAvailable ? 'Folder setup and the rest of Muniment remain usable.' : 'The rest of Muniment remains usable.'}</p>
+      {/if}
+    </aside>
+  {/if}
 </main>
 
 <style>
@@ -761,6 +799,16 @@
   .error-record {
     line-height: var(--leading-body);
   }
+
+  .model-acquisition { position: fixed; z-index: 5; right: 18px; bottom: 18px; width: min(390px, calc(100vw - 36px)); padding: 9px 11px; border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--surface); color: var(--muted); font: var(--text-12) var(--font-mono); box-shadow: 0 1px 3px color-mix(in srgb, var(--ink) 8%, transparent); }
+  .model-acquisition-heading { display: flex; justify-content: space-between; gap: 12px; color: var(--muted); }
+  .model-acquisition-heading strong { color: var(--ink); font-weight: 400; }
+  .model-acquisition p { margin: 5px 0 0; line-height: 1.45; }
+  .model-acquisition progress { display: block; width: 100%; height: 3px; margin-top: 8px; border: 0; background: var(--faint); accent-color: var(--signal); }
+  .model-acquisition progress::-webkit-progress-bar { background: var(--faint); }
+  .model-acquisition progress::-webkit-progress-value { background: var(--signal); }
+  .model-acquisition progress::-moz-progress-bar { background: var(--signal); }
+  .acquisition-active .model-acquisition-heading span { color: var(--signal); }
 
   .workspace { position: fixed; inset: 0; display: grid; grid-template-rows: 52px 1fr auto; }
   .workspace { grid-template-columns: 260px 1fr; grid-template-areas: "title title" "side thread" "side composer"; }
