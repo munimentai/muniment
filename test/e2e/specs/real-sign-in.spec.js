@@ -113,6 +113,14 @@ describe('installed nightly', () => {
     await authenticatedMarker.waitForDisplayed({ timeout: 120000 })
     await authenticatedMarker.saveScreenshot(path.join(rawDir, '02-authenticated.png'))
 
+    const prompt = 'MUNIMENT-E2E-405: reply OK'
+    await authenticatedMarker.setValue(prompt)
+    await (await $('button=Send')).click()
+    const userMessage = await $(`.user-message=${prompt}`)
+    await userMessage.waitForDisplayed({ timeout: 30000 })
+    expect(await userMessage.getText()).toBe(prompt)
+    await browser.saveScreenshot(path.join(rawDir, '03-prompt-submitted.png'))
+
     let frontendLogs
     try {
       frontendLogs = await browser.getLogs('browser')
