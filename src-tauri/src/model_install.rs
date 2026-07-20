@@ -20,8 +20,8 @@ use muniment_core::llama::lifecycle::{
 };
 use muniment_core::llama::runtime::{acquire_runtime, resolve_runtime};
 use muniment_core::llama::{
-    ChatCompletionRequest, ChatMessage, LlamaChatClient, LlamaServer, LlamaServerConfig,
-    ResidentModelDescriptor,
+    ChatCompletionRequest, ChatMessage, DictationPolishRequest, LlamaChatClient, LlamaChatError,
+    LlamaServer, LlamaServerConfig, ResidentModelDescriptor,
 };
 use muniment_core::model_acquisition_transport::NativeModelAcquisitionTransport;
 use muniment_core::model_install::ModelInstallError;
@@ -84,14 +84,21 @@ type Runner = dyn Fn(&Path, &NativeInstallCancellation, &ProgressSink) -> Result
     + Sync;
 enum ServingServer {
     Native(LlamaServer),
-    Test,
+    Test(String),
 }
 
 impl ServingServer {
     fn is_ready(&self) -> bool {
         match self {
             Self::Native(server) => server.supervisor().status() == SidecarStatus::Healthy,
-            Self::Test => true,
+            Self::Test(_) => true,
+        }
+    }
+
+    fn base_url(&self) -> &str {
+        match self {
+            Self::Native(server) => server.base_url(),
+            Self::Test(base_url) => base_url,
         }
     }
 }
@@ -179,7 +186,7 @@ impl GemmaInstallState {
             })),
             runner,
             background_retry: false,
-            activator: Arc::new(|_| Ok(ServingServer::Test)),
+            activator: Arc::new(|_| Ok(ServingServer::Test(String::new()))),
             inspector: Arc::new(inspect),
         }
     }
@@ -361,6 +368,72 @@ impl GemmaInstallState {
                     GemmaInstallStatus::Installing | GemmaInstallStatus::Failed { .. }
                 ),
             status,
+        }
+    }
+
+    fn polish_dictation(&self, transcript: String) -> Result<String, DictationPolishFailure> {
+        Self::polish_dictation_with_inner(Arc::clone(&self.inner), transcript)
+    }
+
+    fn polish_dictation_with_inner(
+        inner: Arc<Mutex<Inner>>,
+        transcript: String,
+    ) -> Result<String, DictationPolishFailure> {
+        if transcript.trim().is_empty() {
+            return Err(DictationPolishFailure::invalid_transcript());
+        }
+        let base_url = {
+            let guard = inner.lock().unwrap_or_else(|e| e.into_inner());
+            let server = guard
+                .server
+                .as_ref()
+                .filter(|server| server.is_ready())
+                .ok_or_else(DictationPolishFailure::unavailable)?;
+            server.base_url().to_owned()
+        };
+        let result = LlamaChatClient::new(base_url, std::time::Duration::from_secs(45))
+            .and_then(|client| client.polish_dictation(&DictationPolishRequest::new(transcript)));
+        match result {
+            Ok(response) => Ok(response.polished_text),
+            Err(LlamaChatError::Transport(_)) => Err(DictationPolishFailure::unavailable()),
+            Err(_) => {
+                let guard = inner.lock().unwrap_or_else(|e| e.into_inner());
+                if !guard.server.as_ref().is_some_and(ServingServer::is_ready) {
+                    Err(DictationPolishFailure::unavailable())
+                } else {
+                    Err(DictationPolishFailure::request_failed())
+                }
+            }
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DictationPolishFailure {
+    category: &'static str,
+    message: &'static str,
+}
+
+impl DictationPolishFailure {
+    fn invalid_transcript() -> Self {
+        Self {
+            category: "invalidTranscript",
+            message: "The dictation transcript cannot be empty.",
+        }
+    }
+
+    fn unavailable() -> Self {
+        Self {
+            category: "localAiUnavailable",
+            message: "Local AI is unavailable.",
+        }
+    }
+
+    fn request_failed() -> Self {
+        Self {
+            category: "polishRequestFailed",
+            message: "The dictation transcript could not be polished.",
         }
     }
 }
@@ -836,6 +909,19 @@ pub async fn required_model_acquisition_status(
 }
 
 #[tauri::command]
+pub async fn dictation_polish(
+    transcript: String,
+    state: State<'_, GemmaInstallState>,
+) -> Result<String, DictationPolishFailure> {
+    let inner = Arc::clone(&state.inner);
+    tauri::async_runtime::spawn_blocking(move || {
+        GemmaInstallState::polish_dictation_with_inner(inner, transcript)
+    })
+    .await
+    .unwrap_or_else(|_| Err(DictationPolishFailure::request_failed()))
+}
+
+#[tauri::command]
 pub fn parakeet_install_start(state: State<'_, ParakeetInstallState>) -> ParakeetInstallStatus {
     state.start()
 }
@@ -871,6 +957,8 @@ mod tests {
     use sha2::{Digest, Sha256};
     #[cfg(unix)]
     use std::io::Cursor;
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::{Duration, Instant};
     use tauri::Manager;
@@ -883,6 +971,43 @@ mod tests {
         let app = tauri::test::mock_app();
         assert!(app.manage(state));
         app
+    }
+
+    fn polish_fixture(body: &'static str) -> (String, std::thread::JoinHandle<String>) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let worker = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut request = Vec::new();
+            let mut buffer = [0; 1024];
+            loop {
+                let count = stream.read(&mut buffer).unwrap();
+                request.extend_from_slice(&buffer[..count]);
+                let Some(headers_end) = request.windows(4).position(|part| part == b"\r\n\r\n")
+                else {
+                    continue;
+                };
+                let headers = String::from_utf8_lossy(&request[..headers_end]);
+                let content_length = headers
+                    .lines()
+                    .find_map(|line| {
+                        line.to_ascii_lowercase()
+                            .strip_prefix("content-length: ")
+                            .and_then(|value| value.parse::<usize>().ok())
+                    })
+                    .unwrap();
+                if request.len() >= headers_end + 4 + content_length {
+                    break;
+                }
+            }
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            stream.write_all(response.as_bytes()).unwrap();
+            String::from_utf8(request).unwrap()
+        });
+        (url, worker)
     }
 
     fn app_with_parakeet_state(
@@ -945,6 +1070,97 @@ mod tests {
         alias: "fixture",
         context_tokens: 1,
     };
+
+    #[test]
+    fn dictation_polish_uses_the_retained_ready_server() {
+        let body = r#"{"choices":[{"message":{"role":"assistant","content":"Meet me at noon."}}]}"#;
+        let (url, worker) = polish_fixture(body);
+        let state = state(
+            GemmaInstallStatus::Installed,
+            Arc::new(|root, _, _| Ok(root.into())),
+        );
+        state.inner.lock().unwrap().server = Some(ServingServer::Test(url));
+        let app = app_with_state(state);
+
+        assert_eq!(
+            tauri::async_runtime::block_on(dictation_polish(
+                "um meet me at noon".into(),
+                app.state(),
+            ))
+            .unwrap(),
+            "Meet me at noon."
+        );
+        let request = worker.join().unwrap();
+        assert!(request.starts_with("POST /v1/chat/completions "));
+        assert!(request.contains("um meet me at noon"));
+    }
+
+    #[test]
+    fn dictation_polish_treats_transport_failure_as_unavailable_with_stale_health() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        drop(listener);
+        let state = state(
+            GemmaInstallStatus::Installed,
+            Arc::new(|root, _, _| Ok(root.into())),
+        );
+        state.inner.lock().unwrap().server = Some(ServingServer::Test(url));
+        let app = app_with_state(state);
+
+        assert_eq!(
+            tauri::async_runtime::block_on(dictation_polish("hello".into(), app.state()))
+                .unwrap_err(),
+            DictationPolishFailure::unavailable()
+        );
+    }
+
+    #[test]
+    fn dictation_polish_rejects_unavailable_and_empty_inputs_with_typed_errors() {
+        let runner_calls = Arc::new(AtomicUsize::new(0));
+        for status in [
+            GemmaInstallStatus::NotInstalled,
+            GemmaInstallStatus::Installing,
+            GemmaInstallStatus::Failed {
+                category: "activationFailed",
+                message: "The model server could not be started.",
+            },
+            GemmaInstallStatus::Installed,
+        ] {
+            let calls = Arc::clone(&runner_calls);
+            let state = state(
+                status,
+                Arc::new(move |root, _, _| {
+                    calls.fetch_add(1, Ordering::SeqCst);
+                    Ok(root.into())
+                }),
+            );
+            assert_eq!(
+                state.polish_dictation("hello".into()).unwrap_err(),
+                DictationPolishFailure::unavailable()
+            );
+        }
+        assert_eq!(runner_calls.load(Ordering::SeqCst), 0);
+
+        let state = state(
+            GemmaInstallStatus::Installed,
+            Arc::new(|root, _, _| Ok(root.into())),
+        );
+        state.inner.lock().unwrap().server =
+            Some(ServingServer::Test("http://127.0.0.1:1".to_owned()));
+        assert_eq!(
+            state.polish_dictation(" \n\t ".into()).unwrap_err(),
+            DictationPolishFailure::invalid_transcript()
+        );
+
+        let malformed_body = r#"{"choices":[]}"#;
+        let (url, worker) = polish_fixture(malformed_body);
+        state.inner.lock().unwrap().server = Some(ServingServer::Test(url));
+        assert_eq!(
+            state.polish_dictation("hello".into()).unwrap_err(),
+            DictationPolishFailure::request_failed()
+        );
+        worker.join().unwrap();
+    }
     static TEST_REVISION: GemmaRevisionDescriptor = GemmaRevisionDescriptor {
         identity: "gemma-fixture-v1",
         revision: "test-revision",
@@ -1326,6 +1542,11 @@ server.serve_forever()
         assert!(
             !tauri::async_runtime::block_on(state.acquisition_status()).ai_features_available,
             "availability must turn false when the supervised native server exits"
+        );
+        assert_eq!(
+            state.polish_dictation("hello".into()).unwrap_err(),
+            DictationPolishFailure::unavailable(),
+            "polish must fail as unavailable after the supervised process exits"
         );
         fs::remove_file(arguments_path).unwrap();
     }
