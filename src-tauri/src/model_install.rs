@@ -956,7 +956,8 @@ mod tests {
     #[cfg(unix)]
     use sha2::{Digest, Sha256};
     #[cfg(unix)]
-    use std::io::{Cursor, Read, Write};
+    use std::io::Cursor;
+    use std::io::{Read, Write};
     use std::net::TcpListener;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::{Duration, Instant};
