@@ -46,6 +46,19 @@ describe('nightly Linux E2E workflow', () => {
   })
 })
 
+describe('nightly Windows E2E workflow', () => {
+  const start = workflow.indexOf('  windows-e2e:')
+  const windowsE2e = workflow.slice(start, workflow.indexOf('  macos-e2e:', start))
+
+  it('uploads only generated JUnit XML under the stable report name', () => {
+    const reportStep = windowsE2e.slice(windowsE2e.indexOf('      - name: Upload stable JUnit report'), windowsE2e.indexOf('      - name: Preserve E2E result'))
+    expect(reportStep).toContain('if: always()')
+    expect(reportStep).toContain('name: windows-e2e-report')
+    expect(reportStep).toContain('path: ${{ runner.temp }}/muniment-windows-e2e-artifacts/junit-*.xml')
+    expect(reportStep).not.toContain('path: ${{ runner.temp }}/muniment-windows-e2e-artifacts\n')
+  })
+})
+
 describe('nightly macOS E2E workflow', () => {
   const start = workflow.indexOf('  macos-e2e:')
   const macosE2e = workflow.slice(start)
