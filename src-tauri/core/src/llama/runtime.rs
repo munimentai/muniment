@@ -4,7 +4,7 @@
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, File, OpenOptions};
-use std::io::{Read, Write};
+use std::io::{Cursor, Read, Seek, Write};
 use std::path::{Component, Path, PathBuf};
 
 pub const LLAMA_SERVER_RELEASE: &str = "b10068";
@@ -115,6 +115,13 @@ pub fn verify_archive(
     path: &Path,
     descriptor: &LlamaRuntimeDescriptor,
 ) -> Result<(), RuntimeArchiveError> {
+    authenticated_archive_bytes(path, descriptor).map(|_| ())
+}
+
+fn authenticated_archive_bytes(
+    path: &Path,
+    descriptor: &LlamaRuntimeDescriptor,
+) -> Result<Vec<u8>, RuntimeArchiveError> {
     validate_descriptor(descriptor)?;
     if path.components().next_back() != Some(Component::Normal(descriptor.archive.as_ref())) {
         return Err(RuntimeArchiveError::ArchiveNameMismatch);
@@ -123,16 +130,30 @@ pub fn verify_archive(
     if !metadata.file_type().is_file() || metadata.len() != descriptor.byte_size {
         return Err(RuntimeArchiveError::WrongSize);
     }
-    let mut digest = Sha256::new();
-    std::io::copy(
-        &mut File::open(path).map_err(|_| RuntimeArchiveError::Io)?,
-        &mut digest,
-    )
-    .map_err(|_| RuntimeArchiveError::Io)?;
-    if format!("{:x}", digest.finalize()) != descriptor.sha256 {
+    let capacity = descriptor
+        .byte_size
+        .try_into()
+        .map_err(|_| RuntimeArchiveError::WrongSize)?;
+    let read_limit = descriptor
+        .byte_size
+        .checked_add(1)
+        .ok_or(RuntimeArchiveError::WrongSize)?;
+    let mut bytes = Vec::new();
+    bytes
+        .try_reserve_exact(capacity)
+        .map_err(|_| RuntimeArchiveError::WrongSize)?;
+    File::open(path)
+        .map_err(|_| RuntimeArchiveError::Io)?
+        .take(read_limit)
+        .read_to_end(&mut bytes)
+        .map_err(|_| RuntimeArchiveError::Io)?;
+    if bytes.len() as u64 != descriptor.byte_size {
+        return Err(RuntimeArchiveError::WrongSize);
+    }
+    if format!("{:x}", Sha256::digest(&bytes)) != descriptor.sha256 {
         return Err(RuntimeArchiveError::DigestMismatch);
     }
-    Ok(())
+    Ok(bytes)
 }
 
 /// Verifies the retained archive's complete compiled identity and derives its
@@ -141,8 +162,17 @@ pub fn manifest_from_verified_archive(
     archive: &Path,
     descriptor: &LlamaRuntimeDescriptor,
 ) -> Result<RuntimeManifest, RuntimeArchiveError> {
-    verify_archive(archive, descriptor)?;
-    manifest_for(&read_archive(archive, descriptor)?, descriptor)
+    manifest_from_verified_archive_with(archive, descriptor, || {})
+}
+
+fn manifest_from_verified_archive_with(
+    archive: &Path,
+    descriptor: &LlamaRuntimeDescriptor,
+    after_authentication: impl FnOnce(),
+) -> Result<RuntimeManifest, RuntimeArchiveError> {
+    let bytes = authenticated_archive_bytes(archive, descriptor)?;
+    after_authentication();
+    manifest_for(&read_archive(&bytes, descriptor)?, descriptor)
 }
 
 /// Re-derives the manifest from the retained verified archive and compares an
@@ -163,11 +193,11 @@ pub fn extract_verified_archive(
     destination: &Path,
     descriptor: &LlamaRuntimeDescriptor,
 ) -> Result<RuntimeManifest, RuntimeArchiveError> {
-    verify_archive(archive, descriptor)?;
+    let bytes = authenticated_archive_bytes(archive, descriptor)?;
     if fs::symlink_metadata(destination).is_ok() {
         return Err(RuntimeArchiveError::UnsafeArchive);
     }
-    let entries = read_archive(archive, descriptor)?;
+    let entries = read_archive(&bytes, descriptor)?;
     let manifest = manifest_for(&entries, descriptor)?;
     fs::create_dir(destination).map_err(|_| RuntimeArchiveError::Io)?;
     if let Err(error) = materialize(destination, &entries, &manifest)
@@ -240,21 +270,20 @@ fn validate_descriptor(descriptor: &LlamaRuntimeDescriptor) -> Result<(), Runtim
 }
 
 fn read_archive(
-    path: &Path,
+    bytes: &[u8],
     descriptor: &LlamaRuntimeDescriptor,
 ) -> Result<Vec<Entry>, RuntimeArchiveError> {
     if descriptor.archive.ends_with(".tar.gz") {
-        read_tar(path)
+        read_tar(Cursor::new(bytes))
     } else if descriptor.archive.ends_with(".zip") {
-        read_zip(path)
+        read_zip(Cursor::new(bytes))
     } else {
         Err(RuntimeArchiveError::UnsupportedArchive)
     }
 }
 
-fn read_tar(path: &Path) -> Result<Vec<Entry>, RuntimeArchiveError> {
-    let decoder =
-        flate2::read::GzDecoder::new(File::open(path).map_err(|_| RuntimeArchiveError::Io)?);
+fn read_tar(reader: impl Read) -> Result<Vec<Entry>, RuntimeArchiveError> {
+    let decoder = flate2::read::GzDecoder::new(reader);
     let mut archive = tar::Archive::new(decoder);
     let mut entries = Vec::new();
     for item in archive
@@ -289,9 +318,9 @@ fn read_tar(path: &Path) -> Result<Vec<Entry>, RuntimeArchiveError> {
     Ok(entries)
 }
 
-fn read_zip(path: &Path) -> Result<Vec<Entry>, RuntimeArchiveError> {
-    let mut archive = zip::ZipArchive::new(File::open(path).map_err(|_| RuntimeArchiveError::Io)?)
-        .map_err(|_| RuntimeArchiveError::UnsafeArchive)?;
+fn read_zip(reader: impl Read + Seek) -> Result<Vec<Entry>, RuntimeArchiveError> {
+    let mut archive =
+        zip::ZipArchive::new(reader).map_err(|_| RuntimeArchiveError::UnsafeArchive)?;
     let mut entries = Vec::new();
     for index in 0..archive.len() {
         let mut item = archive
@@ -370,12 +399,28 @@ fn manifest_for(
     descriptor: &LlamaRuntimeDescriptor,
 ) -> Result<RuntimeManifest, RuntimeArchiveError> {
     let mut result = RuntimeManifest::new();
-    let mut folded = BTreeSet::new();
+    let mut folded: BTreeMap<String, (PathBuf, bool)> = BTreeMap::new();
     for entry in entries {
-        if !safe_path(&entry.path, descriptor.top_level)
-            || !folded.insert(collision_key(&entry.path).ok_or(RuntimeArchiveError::UnsafeArchive)?)
-        {
+        if !safe_path(&entry.path, descriptor.top_level) {
             return Err(RuntimeArchiveError::UnsafeArchive);
+        }
+        let component_count = entry.path.components().count();
+        let mut prefix = PathBuf::new();
+        for (index, component) in entry.path.components().enumerate() {
+            prefix.push(component.as_os_str());
+            let is_directory = index + 1 < component_count || matches!(entry.kind, Kind::Directory);
+            let key = collision_key(&prefix).ok_or(RuntimeArchiveError::UnsafeArchive)?;
+            match folded.entry(key) {
+                std::collections::btree_map::Entry::Vacant(slot) => {
+                    slot.insert((prefix.clone(), is_directory));
+                }
+                std::collections::btree_map::Entry::Occupied(slot)
+                    if slot.get() != &(prefix.clone(), is_directory) =>
+                {
+                    return Err(RuntimeArchiveError::UnsafeArchive)
+                }
+                _ => {}
+            }
         }
         for parent in entry
             .path
@@ -883,6 +928,86 @@ mod tests {
             manifest_for(&case_alias, &descriptor),
             Err(RuntimeArchiveError::UnsafeArchive)
         );
+
+        for entries in [
+            vec![
+                Entry {
+                    path: PathBuf::from("llama-b10068/llama-server"),
+                    kind: Kind::File(b"server".to_vec()),
+                    mode: Some(0o755),
+                },
+                Entry {
+                    path: PathBuf::from("llama-b10068/Foo/a.dll"),
+                    kind: Kind::File(b"a".to_vec()),
+                    mode: Some(0o644),
+                },
+                Entry {
+                    path: PathBuf::from("llama-b10068/foo/b.dll"),
+                    kind: Kind::File(b"b".to_vec()),
+                    mode: Some(0o644),
+                },
+            ],
+            vec![
+                Entry {
+                    path: PathBuf::from("llama-b10068/llama-server"),
+                    kind: Kind::File(b"server".to_vec()),
+                    mode: Some(0o755),
+                },
+                Entry {
+                    path: PathBuf::from("llama-b10068/Foo"),
+                    kind: Kind::Directory,
+                    mode: Some(0o755),
+                },
+                Entry {
+                    path: PathBuf::from("llama-b10068/foo/a.dll"),
+                    kind: Kind::File(b"a".to_vec()),
+                    mode: Some(0o644),
+                },
+            ],
+        ] {
+            assert_eq!(
+                manifest_for(&entries, &descriptor),
+                Err(RuntimeArchiveError::UnsafeArchive)
+            );
+        }
+    }
+
+    #[test]
+    fn manifest_is_parsed_from_the_authenticated_snapshot() {
+        let first = Temp::new("snapshot-first");
+        let (retained, descriptor) = archive(
+            &first.0,
+            &[Fixture::File(
+                "llama-b10068/llama-server",
+                b"authenticated",
+                0o755,
+            )],
+        );
+        let second = Temp::new("snapshot-second");
+        let (replacement, _) = archive(
+            &second.0,
+            &[Fixture::File(
+                "llama-b10068/llama-server",
+                b"replacement!",
+                0o755,
+            )],
+        );
+
+        let manifest = manifest_from_verified_archive_with(&retained, &descriptor, || {
+            fs::copy(&replacement, &retained).unwrap();
+        })
+        .unwrap();
+        assert_eq!(
+            manifest.get(Path::new("llama-b10068/llama-server")),
+            Some(&ManifestEntry::File {
+                byte_size: 13,
+                sha256: format!("{:x}", Sha256::digest(b"authenticated")),
+            })
+        );
+        assert!(matches!(
+            manifest_from_verified_archive(&retained, &descriptor),
+            Err(RuntimeArchiveError::WrongSize | RuntimeArchiveError::DigestMismatch)
+        ));
     }
 
     #[test]
