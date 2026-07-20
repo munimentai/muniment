@@ -15,6 +15,7 @@ fn main() {
         .plugin(tauri_plugin_dialog::init())
         .manage(auth::AuthState::new())
         .manage(Arc::new(voice_capture::VoiceCaptureState::new()))
+        .manage(chat::AttachApprovalState::default())
         .setup(|app| {
             app.manage(chat::ChatState::new(app.handle())?);
             #[cfg(target_os = "linux")]
@@ -45,6 +46,7 @@ fn main() {
             chat::chat_cancel,
             chat::chat_queue,
             chat::chat_history,
+            chat::attach_pairing_decide,
             model_install::gemma_install_start,
             model_install::gemma_install_status,
             model_install::gemma_install_cancel,

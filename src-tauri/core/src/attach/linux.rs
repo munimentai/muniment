@@ -730,6 +730,32 @@ pub fn run_authenticated_session_with_service<S: ThreadListService>(
     )
 }
 
+pub fn run_authenticated_session_with_service_and_approvals<
+    S: ThreadListService,
+    W: ApprovalWaiter,
+>(
+    stream: UnixStream,
+    credentials: PeerCredentials,
+    desktop_version: &str,
+    service: &mut S,
+    approvals: W,
+) -> Result<(), AttachSessionError> {
+    let mut random = |bytes: &mut [u8]| getrandom::fill(bytes).map_err(|_| ());
+    run_authenticated_session_with_authorization(
+        stream,
+        credentials,
+        desktop_version,
+        HELLO_TIMEOUT,
+        AuthorizationSessionDependencies {
+            fill_random: &mut random,
+            clock: SessionClock(Instant::now()),
+            tokens: SessionTokens,
+            approvals,
+        },
+        service,
+    )
+}
+
 /// Testable form of [`run_authenticated_session`] with bounded timing and randomness seams.
 #[doc(hidden)]
 pub fn run_authenticated_session_with<R>(
@@ -1492,6 +1518,8 @@ fn dispatch_request<S: ThreadListService>(
         struct Body {
             text: String,
             #[serde(default)]
+            workspace: Option<String>,
+            #[serde(default)]
             context: Option<serde_json::Value>,
         }
         let body: Body =
@@ -1505,6 +1533,10 @@ fn dispatch_request<S: ThreadListService>(
             .unwrap_or(0);
         if body.text.trim().is_empty()
             || body.text.len() > MAX_RUN_START_TEXT_LENGTH
+            || body
+                .workspace
+                .as_ref()
+                .is_some_and(|value| value.is_empty() || value.len() > MAX_TEXT_LENGTH)
             || context_length > MAX_RUN_START_CONTEXT_LENGTH
         {
             return Err(ProtocolError::invalid_request().into());
@@ -1513,8 +1545,9 @@ fn dispatch_request<S: ThreadListService>(
             .idempotency_key
             .as_ref()
             .ok_or_else(ProtocolError::idempotency_key_required)?;
+        let selected_workspace = body.workspace.as_deref().unwrap_or(workspace);
         let accepted = service.start_run(
-            workspace,
+            selected_workspace,
             RunStartRequest {
                 text: body.text,
                 context: body.context,

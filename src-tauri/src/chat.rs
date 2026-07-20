@@ -6,14 +6,14 @@ use std::time::Duration;
 use chrono::{SecondsFormat, Utc};
 #[cfg(target_os = "linux")]
 use muniment_core::attach::linux::{
-    run_authenticated_session_with_service, AttachFilesystem, AttachTransport, CompanionProvenance,
-    RunStartAccepted, RunStartRequest as AttachRunStartRequest, ThreadListPage, ThreadListRequest,
-    ThreadListService,
+    run_authenticated_session_with_service_and_approvals, AttachFilesystem, AttachTransport,
+    CompanionProvenance, RunStartAccepted, RunStartRequest as AttachRunStartRequest,
+    ThreadListPage, ThreadListRequest, ThreadListService,
 };
 #[cfg(target_os = "linux")]
 use muniment_core::attach::{
-    CommittedResult, Id, IdempotencyOutcome, IdempotencyStore, Operation, Protocol, ProtocolError,
-    Request as AttachRequest, WorkspaceOnboardRequest, WorkspaceOnboarded,
+    Approval, CommittedResult, Id, IdempotencyOutcome, IdempotencyStore, Operation, Protocol,
+    ProtocolError, Request as AttachRequest, WorkspaceOnboardRequest, WorkspaceOnboarded,
 };
 use muniment_core::attachment::{ingest_attachment, AttachmentMetadata};
 use muniment_core::auth::TokenSet;
@@ -503,6 +503,24 @@ pub struct DesktopAttachService<B, I = IdempotencyStore> {
     workspace_contexts: Arc<Mutex<HashMap<PathBuf, Option<String>>>>,
 }
 
+#[derive(Default)]
+pub struct AttachApprovalState {
+    pending: Mutex<HashMap<String, std::sync::mpsc::SyncSender<bool>>>,
+}
+
+#[tauri::command]
+pub fn attach_pairing_decide(
+    state: tauri::State<'_, AttachApprovalState>,
+    challenge: String,
+    approve: bool,
+) {
+    if let Ok(mut pending) = state.pending.lock() {
+        if let Some(sender) = pending.remove(&challenge) {
+            let _ = sender.try_send(approve);
+        }
+    }
+}
+
 #[cfg(target_os = "linux")]
 impl<R: tauri::Runtime> DesktopAttachService<TauriRunStartBoundaries<R>> {
     pub fn new(
@@ -546,11 +564,42 @@ pub fn start_attach_listener<R: tauri::Runtime>(app: tauri::AppHandle<R>) {
                 let Ok(mut service) = DesktopAttachService::new(app, workspace_contexts) else {
                     return;
                 };
-                let _ = run_authenticated_session_with_service(
+                let approval_app = service.boundaries.app.clone();
+                let _ = run_authenticated_session_with_service_and_approvals(
                     stream,
                     credentials,
                     env!("CARGO_PKG_VERSION"),
                     &mut service,
+                    move |challenge: &muniment_core::attach::PairingChallenge,
+                          remaining: Duration| {
+                        let challenge = challenge.as_str().to_owned();
+                        let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+                        let state = approval_app.state::<AttachApprovalState>();
+                        state.pending.lock().ok()?.insert(challenge.clone(), sender);
+                        if approval_app
+                            .emit("attach-pairing-requested", &challenge)
+                            .is_err()
+                        {
+                            state.pending.lock().ok()?.remove(&challenge);
+                            return Some(muniment_core::attach::linux::ApprovalDecision::Deny);
+                        }
+                        let approved = receiver.recv_timeout(remaining).unwrap_or(false);
+                        state.pending.lock().ok()?.remove(&challenge);
+                        if !approved {
+                            return Some(muniment_core::attach::linux::ApprovalDecision::Deny);
+                        }
+                        Some(muniment_core::attach::linux::ApprovalDecision::Approve(
+                            Approval {
+                                profile: "desktop-owner".into(),
+                                workspace: std::env::current_dir()
+                                    .ok()?
+                                    .to_string_lossy()
+                                    .into_owned(),
+                                scopes: BTreeSet::from(["thread.read".into(), "run.write".into()]),
+                                lifetime: Duration::from_secs(60 * 60),
+                            },
+                        ))
+                    },
                 );
             });
         }
@@ -2540,13 +2589,9 @@ mod tests {
             Some("first instructions")
         );
         drop(stored);
-        contexts.lock().unwrap().insert(
-            PathBuf::from("workspace-a"),
-            Some("first instructions".into()),
-        );
         let run = second_connection
             .start_run(
-                "workspace-a",
+                &first.to_string_lossy(),
                 AttachRunStartRequest {
                     text: "use repository context".into(),
                     context: None,
@@ -2573,6 +2618,41 @@ mod tests {
             "first instructions"
         );
         drop(provenance);
+        let mut third_connection = DesktopAttachService {
+            boundaries: FakeRunStartBoundaries::accepting(),
+            idempotency: IdempotencyStore::open(":memory:").unwrap(),
+            home: root.join("home"),
+            workspace_contexts: contexts,
+        };
+        third_connection
+            .start_run(
+                &second_memory.to_string_lossy(),
+                AttachRunStartRequest {
+                    text: "second context".into(),
+                    context: None,
+                },
+                &Id::new("018f0000-0000-7000-8000-000000000021").unwrap(),
+                &Id::new("018f0000-0000-7000-8000-000000000022").unwrap(),
+                CompanionProvenance {
+                    profile: "default".into(),
+                    companion_kind: "editor-extension".into(),
+                    companion_version: "1.2.3".into(),
+                    peer_uid: 1000,
+                    peer_pid: 42,
+                },
+            )
+            .unwrap();
+        assert_eq!(
+            third_connection
+                .boundaries
+                .prepared_provenance
+                .lock()
+                .unwrap()
+                .as_ref()
+                .unwrap()
+                .extra["repository_instructions"],
+            "second instructions"
+        );
         assert!(!root.join("home").exists());
         second_connection.ensure_home().unwrap();
         for child in ["memory", "agents", "projects", "sessions"] {

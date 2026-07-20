@@ -8,6 +8,7 @@ import { WorkspaceOnboarding, type WorkspaceFolderLike } from "./workspace-onboa
 
 const THREADS_VIEW_ID = "muniment.threads";
 const REFRESH_COMMAND = "muniment.refreshThreads";
+const CROSS_PROJECT_COMMAND = "muniment.refreshCrossProjectThreads";
 const THREAD_SCHEME = "muniment-thread";
 const RUN_SCHEME = "muniment-run";
 
@@ -42,6 +43,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vscode.workspace.registerTextDocumentContentProvider(RUN_SCHEME, runDocuments),
     vscode.commands.registerCommand(REFRESH_COMMAND, () => {
       runDocuments.clear();
+      return model.refresh();
+    }),
+    vscode.commands.registerCommand(CROSS_PROJECT_COMMAND, async () => {
+      await model.ensureCrossProjectHome();
       return model.refresh();
     }),
     vscode.commands.registerCommand(NEW_RUN_COMMAND, () => submitRun(activeEditorSelectionContext())),
@@ -89,7 +94,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     const result = await vscode.window.withProgress({
       location: vscode.ProgressLocation.Notification,
       title: "Starting Muniment run…",
-    }, () => model.submitRun(text, runContext));
+    }, () => model.submitRun(text, runContext, activeWorkspacePath()));
     if (result.kind === "accepted") {
       await openAcceptedRun(result, runDocuments.store, {
         streamRun: (runId, afterRunSeq) => model.streamRun(runId, afterRunSeq),
@@ -117,6 +122,14 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       void vscode.window.showErrorMessage(result.message);
     }
   }
+}
+
+function activeWorkspacePath(): string | undefined {
+  const document = vscode.window.activeTextEditor?.document;
+  if (document?.uri.scheme === "file") {
+    return vscode.workspace.getWorkspaceFolder(document.uri)?.uri.fsPath;
+  }
+  return vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
 }
 
 function workspaceFolderLike(folder: vscode.WorkspaceFolder): WorkspaceFolderLike {

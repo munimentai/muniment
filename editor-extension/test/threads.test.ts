@@ -17,7 +17,7 @@ class FakeConnection implements AttachConnection {
   listCalls: Array<string | undefined> = [];
   ensureHomeCalls = 0;
   disposed = false;
-  startCalls: Array<{ text: string; context: JsonValue | undefined }> = [];
+  startCalls: Array<{ text: string; context: JsonValue | undefined; workspace?: string }> = [];
   streamCalls: Array<{ runId: string; afterRunSeq: number }> = [];
   streamResult: Promise<RunStreamSubscription> | undefined;
   startResult: Promise<RunStartAccepted> = Promise.resolve({
@@ -46,8 +46,8 @@ class FakeConnection implements AttachConnection {
     throw new Error("not implemented by this fake");
   }
 
-  async startRun(text: string, context?: JsonValue): Promise<RunStartAccepted> {
-    this.startCalls.push({ text, context });
+  async startRun(text: string, context?: JsonValue, workspace?: string): Promise<RunStartAccepted> {
+    this.startCalls.push({ text, context, ...(workspace === undefined ? {} : { workspace }) });
     return this.startResult;
   }
 
@@ -91,7 +91,7 @@ test("projects the first thread page into native view data without paging", asyn
     ],
   });
   assert.deepEqual(connection.listCalls, [undefined]);
-  assert.equal(connection.ensureHomeCalls, 1);
+  assert.equal(connection.ensureHomeCalls, 0);
   model.dispose();
 });
 
@@ -198,6 +198,23 @@ test("propagates editor context through run submission", async () => {
 
   assert.equal((await model.submitRun("Explain this.", context)).kind, "accepted");
   assert.deepEqual(connection.startCalls, [{ text: "Explain this.", context }]);
+  model.dispose();
+});
+
+test("selects workspace context per run and creates Home only on explicit cross-project use", async () => {
+  const connection = new FakeConnection({ threads: [] });
+  const model = new ThreadsModel(connectorFor(connection));
+  await model.refresh();
+
+  await model.submitRun("First", undefined, "/repo/a");
+  await model.submitRun("Second", undefined, "/repo/b-memory");
+  assert.deepEqual(connection.startCalls, [
+    { text: "First", context: undefined, workspace: "/repo/a" },
+    { text: "Second", context: undefined, workspace: "/repo/b-memory" },
+  ]);
+  assert.equal(connection.ensureHomeCalls, 0);
+  await model.ensureCrossProjectHome();
+  assert.equal(connection.ensureHomeCalls, 1);
   model.dispose();
 });
 

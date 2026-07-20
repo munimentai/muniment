@@ -19,6 +19,7 @@
     "onStartupFinished",
     "onView:muniment.threads",
     "onCommand:muniment.refreshThreads",
+    "onCommand:muniment.refreshCrossProjectThreads",
     "onCommand:muniment.newRun",
     "onCommand:muniment.newRunWithCurrentFile",
     "onCommand:muniment.openThread"
@@ -41,6 +42,11 @@
         "command": "muniment.refreshThreads",
         "title": "Refresh Threads",
         "icon": "$(refresh)"
+      },
+      {
+        "command": "muniment.refreshCrossProjectThreads",
+        "title": "Refresh Cross-Project Threads",
+        "category": "Muniment"
       },
       {
         "command": "muniment.openThread",

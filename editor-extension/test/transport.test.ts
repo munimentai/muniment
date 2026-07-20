@@ -162,12 +162,14 @@ test("starts runs with the canonical request shape and decodes the receipt", asy
   const socket = new FakeSocket();
   const connection = await authorizedConnection(socket);
 
-  const started = connection.startRun("Summarize the selected file.", { selected_file: "src/main.rs" });
+  const started = connection.startRun("Summarize the selected file.", { selected_file: "src/main.rs" }, "/repo/root");
   const request = lastRequest(socket);
   assert.equal(request.operation, "run.start");
+  assert.equal((request.body as Record<string, unknown>).workspace, "/repo/root");
   assert.equal(request.capability, "c".repeat(64));
   assert.deepEqual(request.body, {
     context: { selected_file: "src/main.rs" }, text: "Summarize the selected file.",
+    workspace: "/repo/root",
   });
   assert.match(request.request_id as string, /^[0-9a-f-]{36}$/);
   assert.match(request.idempotency_key as string, /^[0-9a-f-]{36}$/);

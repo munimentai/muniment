@@ -117,7 +117,7 @@ export interface AttachConnection {
   ensureHome(): Promise<void>;
   listThreads(cursor?: string): Promise<ThreadListPage>;
   openThread(threadId: string, cursor?: string): Promise<ThreadOpenPage>;
-  startRun(text: string, context?: JsonValue): Promise<RunStartAccepted>;
+  startRun(text: string, context?: JsonValue, workspace?: string): Promise<RunStartAccepted>;
   answerPermission(runId: string, gateId: string,
     decision: PermissionDecision): Promise<PermissionAnswerAccepted>;
   streamRun(runId: string, afterRunSeq: number): Promise<RunStreamSubscription>;
@@ -569,10 +569,14 @@ export function connectAttach(options: ConnectOptions): Promise<AttachConnection
               if (cursor !== undefined) body.cursor = cursor;
               return decodeThreadOpenPage((await request("thread.open", body)).body, threadId);
             },
-            async startRun(text: string, context?: JsonValue): Promise<RunStartAccepted> {
+            async startRun(text: string, context?: JsonValue, workspace?: string): Promise<RunStartAccepted> {
               const validatedContext = validateRunStartInput(text, context);
               const body: JsonBody = { text };
               if (validatedContext !== undefined) body.context = validatedContext;
+              if (workspace !== undefined) {
+                validateBoundedString(workspace, MAX_TEXT_LENGTH, false);
+                body.workspace = workspace;
+              }
               return decodeRunStartAccepted((await request("run.start", body, true)).body);
             },
             async answerPermission(runId: string, gateId: string,

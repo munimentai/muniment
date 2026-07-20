@@ -1,8 +1,9 @@
 #![cfg(target_os = "linux")]
 
 use muniment_core::attach::linux::{
-    run_authenticated_session_with, run_authenticated_session_with_authorization, ApprovalDecision,
-    AttachSessionError, AuthorizationSessionDependencies, CompanionProvenance, PeerCredentials,
+    run_authenticated_session_with, run_authenticated_session_with_authorization,
+    run_authenticated_session_with_service_and_approvals, ApprovalDecision, AttachSessionError,
+    AuthorizationSessionDependencies, CompanionProvenance, PeerCredentials,
     PermissionAnswerAccepted, PermissionAnswerRequest, RedactedThreadSummary, RunStartAccepted,
     RunStartRequest, RunStreamPage, ThreadListPage, ThreadListRequest, ThreadListService,
     ThreadOpenRequest, MAX_PERMISSION_GATE_ID_LENGTH, MAX_RUN_START_CONTEXT_LENGTH,
@@ -436,6 +437,49 @@ fn approval_continues_into_dispatch() {
     let response: Response = read_frame(&mut client);
     assert_eq!(response.request_id, Id::new(format!("{:032x}", 1)).unwrap());
     assert_eq!(client.read(&mut [0]).unwrap(), 0);
+}
+
+#[test]
+fn production_service_composition_uses_approved_pairing_and_dispatches() {
+    let (mut client, server) = UnixStream::pair().unwrap();
+    let worker = std::thread::spawn(move || {
+        let mut service = |_: &str, _: ThreadListRequest| {
+            Ok(ThreadListPage {
+                threads: vec![],
+                next_cursor: None,
+            })
+        };
+        run_authenticated_session_with_service_and_approvals(
+            server,
+            credentials(),
+            "0.1.0",
+            &mut service,
+            |_: &muniment_core::attach::PairingChallenge, _: Duration| {
+                Some(ApprovalDecision::Approve(approval()))
+            },
+        )
+    });
+    client.write_all(&hello(1, 1)).unwrap();
+    let _: Welcome = read_frame(&mut client);
+    let authorized: Authorized = read_frame(&mut client);
+    let request = Request {
+        protocol: Protocol,
+        request_id: Id::new(format!("{:032x}", 91)).unwrap(),
+        operation: Operation::ThreadList,
+        capability: authorized.capability,
+        idempotency_key: None,
+        body: json!({"limit": 1}),
+    };
+    client
+        .write_all(&encode_frame(&Envelope::Request(request)).unwrap())
+        .unwrap();
+    let response: Response = read_frame(&mut client);
+    assert_eq!(
+        response.request_id,
+        Id::new(format!("{:032x}", 91)).unwrap()
+    );
+    client.shutdown(Shutdown::Both).unwrap();
+    assert_eq!(worker.join().unwrap(), Ok(()));
 }
 
 #[test]
