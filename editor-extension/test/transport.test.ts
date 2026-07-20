@@ -23,6 +23,7 @@ const authorized = {
   expires_at: 3600,
   idle_timeout_seconds: 900,
   workspace_scopes: {},
+  authorized_client_credential: "d".repeat(64),
 };
 
 class FakeSocket extends EventEmitter {

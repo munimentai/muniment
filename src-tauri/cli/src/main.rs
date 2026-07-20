@@ -1,6 +1,6 @@
 use muniment_attach::{
-    handshake_as, ClientError, Id, PendingPermission, PermissionDecision, RedactedRunEvent,
-    RunStreamMessage, ThreadListPage, ThreadOpenPage,
+    handshake_as_with_credential, ClientError, Id, PendingPermission, PermissionDecision,
+    RedactedRunEvent, RunStreamMessage, ThreadListPage, ThreadOpenPage,
 };
 use std::ffi::OsString;
 use std::io::{self, BufRead, IsTerminal, Read, Write};
@@ -49,9 +49,16 @@ fn run() -> Result<(), CliError> {
         return Err(CliError::Usage);
     }
     let client_identity = authorized_client_identity()?;
+    let client_credential = authorized_client_credential()?;
     if args == [OsString::from("workspace"), OsString::from("init")] {
-        let mut client = handshake_as(env!("CARGO_PKG_VERSION"), &client_identity, || {})
-            .map_err(CliError::Client)?;
+        let mut client = handshake_as_with_credential(
+            env!("CARGO_PKG_VERSION"),
+            &client_identity,
+            client_credential.as_deref(),
+            || {},
+        )
+        .map_err(CliError::Client)?;
+        persist_authorized_client_credential(client.authorized_client_credential())?;
         client
             .onboard_workspace(&opened.to_string_lossy(), &workspace.to_string_lossy())
             .map_err(CliError::Client)?;
@@ -68,8 +75,14 @@ fn run() -> Result<(), CliError> {
         &mut input,
         &mut stdout,
         |pairing_pending| {
-            let mut client =
-                handshake_as(env!("CARGO_PKG_VERSION"), &client_identity, pairing_pending)?;
+            let mut client = handshake_as_with_credential(
+                env!("CARGO_PKG_VERSION"),
+                &client_identity,
+                client_credential.as_deref(),
+                pairing_pending,
+            )?;
+            persist_authorized_client_credential(client.authorized_client_credential())
+                .map_err(|_| ClientError::UnexpectedMessage)?;
             client.onboard_workspace(&opened.to_string_lossy(), &workspace.to_string_lossy())?;
             if args.first().is_some_and(|command| command == "threads") {
                 client.ensure_home()?;
@@ -130,6 +143,47 @@ fn authorized_client_identity() -> Result<String, CliError> {
         }
         Err(_) => Err(CliError::Workspace),
     }
+}
+
+fn authorized_client_credential() -> Result<Option<String>, CliError> {
+    let Some(base) = std::env::var_os("XDG_CONFIG_HOME")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".config")))
+        .filter(|path| path.is_absolute())
+    else {
+        return Err(CliError::Workspace);
+    };
+    let path = base.join("muniment").join("cli-client-credential");
+    match std::fs::read_to_string(path) {
+        Ok(value)
+            if value.trim().len() == 64
+                && value.trim().bytes().all(|byte| byte.is_ascii_hexdigit()) =>
+        {
+            Ok(Some(value.trim().to_owned()))
+        }
+        Ok(_) => Err(CliError::Workspace),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(_) => Err(CliError::Workspace),
+    }
+}
+
+fn persist_authorized_client_credential(credential: &str) -> Result<(), CliError> {
+    let base = std::env::var_os("XDG_CONFIG_HOME")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".config")))
+        .filter(|path| path.is_absolute())
+        .ok_or(CliError::Workspace)?;
+    let directory = base.join("muniment");
+    std::fs::create_dir_all(&directory).map_err(|_| CliError::Workspace)?;
+    let path = directory.join("cli-client-credential");
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    options.mode(0o600);
+    options
+        .open(path)
+        .and_then(|mut file| file.write_all(credential.as_bytes()))
+        .map_err(|_| CliError::Workspace)
 }
 
 fn recognized_command(args: &[OsString]) -> bool {

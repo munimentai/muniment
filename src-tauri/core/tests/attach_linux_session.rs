@@ -56,6 +56,7 @@ fn hello_for_client(min: u32, max: u32, client_id: &str) -> Vec<u8> {
         supported: VersionRange { min, max },
         client_nonce: "client-nonce".into(),
         authorized_client_id: Id::new(client_id).unwrap(),
+        authorized_client_credential: None,
     })
     .unwrap()
 }
@@ -156,13 +157,17 @@ impl ThreadListService for OnboardingStartService {
         })
     }
 
-    fn workspace_is_authorized(&self, workspace: &str) -> bool {
-        self.client_identity.as_ref().is_some_and(|identity| {
+    fn authorized_workspace(&self, workspace: &str) -> Option<String> {
+        self.client_identity.as_ref().and_then(|identity| {
             self.instructions
                 .lock()
                 .unwrap()
                 .get(identity)
-                .is_some_and(|workspaces| workspaces.contains_key(workspace))
+                .and_then(|workspaces| {
+                    workspaces
+                        .contains_key(workspace)
+                        .then(|| workspace.to_owned())
+                })
         })
     }
 

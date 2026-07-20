@@ -300,6 +300,7 @@ mod linux {
         authorized_at: Instant,
         io_timeout: Duration,
         active_run_stream: Option<ActiveRunStream>,
+        authorized_client_credential: String,
     }
 
     impl std::fmt::Debug for AuthorizedClient {
@@ -311,6 +312,10 @@ mod linux {
     impl AuthorizedClient {
         pub fn authorization_summary(&self) -> AuthorizationSummary {
             self.summary.clone()
+        }
+
+        pub fn authorized_client_credential(&self) -> &str {
+            &self.authorized_client_credential
         }
 
         pub fn onboard_workspace(
@@ -1013,12 +1018,22 @@ mod linux {
         authorized_client_id: &str,
         pairing_pending: impl FnOnce(),
     ) -> Result<AuthorizedClient, ClientError> {
+        handshake_as_with_credential(client_version, authorized_client_id, None, pairing_pending)
+    }
+
+    pub fn handshake_as_with_credential(
+        client_version: &str,
+        authorized_client_id: &str,
+        authorized_client_credential: Option<&str>,
+        pairing_pending: impl FnOnce(),
+    ) -> Result<AuthorizedClient, ClientError> {
         let endpoint = endpoint_from_environment()?;
         let stream = UnixStream::connect(endpoint).map_err(|_| ClientError::DesktopUnavailable)?;
-        handshake_stream_as(
+        handshake_stream_with_credential(
             stream,
             client_version,
             authorized_client_id,
+            authorized_client_credential,
             IO_TIMEOUT,
             APPROVAL_TIMEOUT,
             pairing_pending,
@@ -1056,9 +1071,30 @@ mod linux {
 
     #[doc(hidden)]
     pub fn handshake_stream_as(
+        stream: UnixStream,
+        client_version: &str,
+        authorized_client_id: &str,
+        io_timeout: Duration,
+        approval_timeout: Duration,
+        pairing_pending: impl FnOnce(),
+    ) -> Result<AuthorizedClient, ClientError> {
+        handshake_stream_with_credential(
+            stream,
+            client_version,
+            authorized_client_id,
+            None,
+            io_timeout,
+            approval_timeout,
+            pairing_pending,
+        )
+    }
+
+    #[doc(hidden)]
+    pub fn handshake_stream_with_credential(
         mut stream: UnixStream,
         client_version: &str,
         authorized_client_id: &str,
+        authorized_client_credential: Option<&str>,
         io_timeout: Duration,
         approval_timeout: Duration,
         pairing_pending: impl FnOnce(),
@@ -1074,6 +1110,7 @@ mod linux {
             supported: VersionRange { min: 1, max: 1 },
             client_nonce: fresh_nonce()?,
             authorized_client_id,
+            authorized_client_credential: authorized_client_credential.map(str::to_owned),
         };
         let bytes = encode_frame(&hello).map_err(map_frame_error)?;
         write_all_before(&mut stream, &bytes, deadline(io_timeout))?;
@@ -1095,6 +1132,7 @@ mod linux {
         reject_protocol_error(&authorized_value)?;
         let authorized: Authorized = parse_message(authorized_value)?;
         if !is_hex_secret(&authorized.capability, 64)
+            || !is_hex_secret(&authorized.authorized_client_credential, 64)
             || authorized.expires_at == 0
             || authorized.expires_at > 8 * 60 * 60
             || authorized.idle_timeout_seconds == 0
@@ -1112,6 +1150,7 @@ mod linux {
             authorized_at: Instant::now(),
             io_timeout,
             active_run_stream: None,
+            authorized_client_credential: authorized.authorized_client_credential,
         })
     }
 
@@ -1359,6 +1398,21 @@ pub fn handshake_as(
     pairing_pending: impl FnOnce(),
 ) -> Result<AuthorizedClient, ClientError> {
     linux::handshake_as(client_version, authorized_client_id, pairing_pending)
+}
+
+#[cfg(target_os = "linux")]
+pub fn handshake_as_with_credential(
+    client_version: &str,
+    authorized_client_id: &str,
+    authorized_client_credential: Option<&str>,
+    pairing_pending: impl FnOnce(),
+) -> Result<AuthorizedClient, ClientError> {
+    linux::handshake_as_with_credential(
+        client_version,
+        authorized_client_id,
+        authorized_client_credential,
+        pairing_pending,
+    )
 }
 
 #[cfg(not(target_os = "linux"))]

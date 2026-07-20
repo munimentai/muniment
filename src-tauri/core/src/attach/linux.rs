@@ -15,11 +15,11 @@ use std::sync::mpsc::{Receiver, TryRecvError};
 use std::time::{Duration, Instant};
 
 use super::{
-    authorized, encode_frame, welcome, Approval, AuthorizationClock, AuthorizationError,
-    AuthorizationState, AuthorizationTokenGenerator, ConnectionBinding, Envelope, ErrorEnvelope,
-    Event, EventName, Failure, FirstMessage, NegotiationError, Operation, Protocol, ProtocolError,
-    Request, Response, Success, VersionRange, WorkspaceOnboardRequest, WorkspaceOnboarded,
-    CHALLENGE_LIFETIME, MAX_FRAME_LENGTH, MAX_TEXT_LENGTH,
+    encode_frame, welcome, Approval, AuthorizationClock, AuthorizationError, AuthorizationState,
+    AuthorizationTokenGenerator, ConnectionBinding, Envelope, ErrorEnvelope, Event, EventName,
+    Failure, FirstMessage, NegotiationError, Operation, Protocol, ProtocolError, Request, Response,
+    Success, VersionRange, WorkspaceOnboardRequest, WorkspaceOnboarded, CHALLENGE_LIFETIME,
+    MAX_FRAME_LENGTH, MAX_TEXT_LENGTH,
 };
 use super::{
     RunEventAdmission, RunStreamCursor, MAX_RUN_STREAM_WINDOW_BYTES, MAX_RUN_STREAM_WINDOW_EVENTS,
@@ -461,6 +461,16 @@ pub struct RunStreamPage {
 pub trait ThreadListService {
     fn bind_authorized_client(&mut self, _client_identity: &str) {}
 
+    fn authorize_client(
+        &mut self,
+        client_identity: &str,
+        _presented_credential: Option<&str>,
+        issued_credential: &str,
+    ) -> Result<String, ProtocolError> {
+        self.bind_authorized_client(client_identity);
+        Ok(issued_credential.to_owned())
+    }
+
     fn onboard_workspace(
         &mut self,
         _request: WorkspaceOnboardRequest,
@@ -472,8 +482,8 @@ pub trait ThreadListService {
         Err(ProtocolError::unsupported_operation())
     }
 
-    fn workspace_is_authorized(&self, _workspace: &str) -> bool {
-        false
+    fn authorized_workspace(&self, _workspace: &str) -> Option<String> {
+        None
     }
 
     fn list_threads(
@@ -876,11 +886,17 @@ where
                 return Err(AttachSessionError::MalformedFrame);
             }
         };
-        let (client_nonce, authorized_client_id, companion_kind, companion_version) = match &message
-        {
+        let (
+            client_nonce,
+            authorized_client_id,
+            authorized_client_credential,
+            companion_kind,
+            companion_version,
+        ) = match &message {
             FirstMessage::Hello(hello) => (
                 hello.client_nonce.clone(),
                 hello.authorized_client_id.as_str().to_owned(),
+                hello.authorized_client_credential.clone(),
                 hello.client.kind.clone(),
                 hello.client.version.clone(),
             ),
@@ -954,11 +970,26 @@ where
         let remaining = grant.expires_at.saturating_sub(clock.now()).as_secs();
         let mut workspace_scopes = std::collections::BTreeMap::new();
         workspace_scopes.insert(grant.workspace.clone(), grant.scopes.clone());
-        let response = authorized(
+        let mut credential_bytes = [0u8; 32];
+        fill_random(&mut credential_bytes).map_err(|_| AttachSessionError::Randomness)?;
+        let issued_credential = hex(&credential_bytes);
+        let client_credential = match service.authorize_client(
+            &authorized_client_id,
+            authorized_client_credential.as_deref(),
+            &issued_credential,
+        ) {
+            Ok(credential) => credential,
+            Err(error) => {
+                write_protocol_error(&mut stream, error, authorization_deadline);
+                return Err(AttachSessionError::Authorization);
+            }
+        };
+        let response = super::authorized_with_client_credential(
             capability.as_str(),
             remaining,
             grant.idle_timeout.as_secs(),
             workspace_scopes,
+            client_credential,
         );
         write_before(
             &mut stream,
@@ -972,7 +1003,6 @@ where
             peer_uid: credentials.uid,
             peer_pid: credentials.pid as u32,
         };
-        service.bind_authorized_client(&authorized_client_id);
         serve_requests(
             &mut stream,
             timeout,
@@ -1554,12 +1584,14 @@ fn dispatch_request<S: ThreadListService>(
             .idempotency_key
             .as_ref()
             .ok_or_else(ProtocolError::idempotency_key_required)?;
-        let selected_workspace = body.workspace.as_deref().unwrap_or(workspace);
-        if body.workspace.is_some() && !service.workspace_is_authorized(selected_workspace) {
-            return Err(ProtocolError::unauthorized().into());
-        }
+        let selected_workspace = match body.workspace.as_deref() {
+            Some(workspace) => service
+                .authorized_workspace(workspace)
+                .ok_or_else(ProtocolError::unauthorized)?,
+            None => workspace.to_owned(),
+        };
         let accepted = service.start_run(
-            selected_workspace,
+            &selected_workspace,
             RunStartRequest {
                 text: body.text,
                 context: body.context,

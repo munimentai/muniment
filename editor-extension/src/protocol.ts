@@ -99,6 +99,7 @@ export function decodeAttachEnvelope(input: unknown): AttachEnvelope {
     if (!hasString(input, "capability") || !hasFiniteNumber(input, "expires_at") ||
         (input.expires_at as number) < 0 || !hasFiniteNumber(input, "idle_timeout_seconds") ||
         (input.idle_timeout_seconds as number) <= 0 || !isObject(input.workspace_scopes) ||
+        !hasString(input, "authorized_client_credential") ||
         !Object.values(input.workspace_scopes).every(
           (scopes) => Array.isArray(scopes) && scopes.every((scope) => typeof scope === "string"),
         )) {

@@ -19,12 +19,21 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     authorizedClientId = randomUUID();
     await context.globalState.update("authorizedClientId", authorizedClientId);
   }
+  let authorizedClientCredential = context.globalState.get<string>("authorizedClientCredential");
+  const attachOptions = () => ({
+    authorizedClientId,
+    authorizedClientCredential,
+    onAuthorizedClientCredential: (credential: string) => {
+      authorizedClientCredential = credential;
+      void context.globalState.update("authorizedClientCredential", credential);
+    },
+  });
   const onboarding = new WorkspaceOnboarding(
     (folder) => vscode.workspace.getConfiguration("muniment", vscode.Uri.parse(folder.key))
       .get<string>("workspaceMemoryLocation", ""),
     () => connectAttach({
       clientVersion: context.extension.packageJSON.version as string,
-      authorizedClientId,
+      ...attachOptions(),
       approvalTimeoutMs: 10_000,
     }),
     (message) => { void vscode.window.showErrorMessage(message); },
@@ -32,7 +41,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   const folders = () => (vscode.workspace.workspaceFolders ?? []).map(workspaceFolderLike);
   const model = new ThreadsModel((onPairingPending) => connectAttach({
     clientVersion: context.extension.packageJSON.version as string,
-    authorizedClientId,
+    ...attachOptions(),
     onPairingPending,
   }));
   const provider = new ThreadsTreeDataProvider(model);

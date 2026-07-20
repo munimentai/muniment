@@ -11,6 +11,7 @@ let invoke
 let chatListener
 let dictationListener
 let eventUnlisten
+let pairingUnlisten
 let dialogResult
 let dragDropListener
 let dragDropUnlisten
@@ -57,7 +58,7 @@ beforeAll(async () => {
     event: { listen: vi.fn((event, listener) => {
       if (event === 'chat-event') chatListener = listener
       if (event === 'dictation-event') dictationListener = listener
-      return Promise.resolve(eventUnlisten)
+      return Promise.resolve(event === 'attach-pairing-requested' ? pairingUnlisten : eventUnlisten)
     }) },
   }
   window.__TAURI_INTERNALS__ = {
@@ -72,6 +73,7 @@ beforeEach(() => {
   chatListener = undefined
   dictationListener = undefined
   eventUnlisten = vi.fn()
+  pairingUnlisten = vi.fn()
   dragDropListener = undefined
   dragDropUnlisten = vi.fn()
   dialogResult = null
@@ -472,6 +474,7 @@ describe('voice dictation', () => {
     await fireEvent.click(voice)
     view.unmount()
     expect(eventUnlisten).toHaveBeenCalledTimes(2)
+    expect(pairingUnlisten).toHaveBeenCalledTimes(1)
     await new Promise((resolve) => setTimeout(resolve, 130))
     expect(invoke).not.toHaveBeenCalledWith('dictation_status')
 

@@ -223,6 +223,8 @@ export interface ThreadOpenPage {
 export interface ConnectOptions {
   clientVersion: string;
   authorizedClientId?: string;
+  authorizedClientCredential?: string;
+  onAuthorizedClientCredential?: (credential: string) => void;
   onPairingPending?: () => void;
   platform?: NodeJS.Platform;
   environment?: NodeJS.ProcessEnv;
@@ -380,6 +382,9 @@ export function connectAttach(options: ConnectOptions): Promise<AttachConnection
           supported: { min: 1, max: 1 },
           client_nonce: nonce,
           authorized_client_id: authorizedClientId,
+          ...(options.authorizedClientCredential === undefined ? {} : {
+            authorized_client_credential: options.authorizedClientCredential,
+          }),
         }));
         armTimer(ioTimeout);
       } catch (error) {
@@ -408,11 +413,14 @@ export function connectAttach(options: ConnectOptions): Promise<AttachConnection
             continue;
           }
           if (phase !== "authorization" || envelope.kind !== "authorization" ||
-              !isHex(envelope.capability, 64) || !validAuthorization(envelope)) {
+              !isHex(envelope.capability, 64) ||
+              !isHex(envelope.authorized_client_credential, 64) ||
+              !validAuthorization(envelope)) {
             fail(new AttachTransportError("unexpected_message"));
             return;
           }
           settled = true;
+          options.onAuthorizedClientCredential?.(envelope.authorized_client_credential as string);
           phase = "done";
           clearTimer();
           removeHandshakeListeners();

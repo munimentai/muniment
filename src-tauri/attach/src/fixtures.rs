@@ -448,6 +448,7 @@ fn fixture_bytes() -> io::Result<BTreeMap<String, Vec<u8>>> {
             supported: VersionRange { min: 1, max: 1 },
             client_nonce: "fixture-client-nonce".into(),
             authorized_client_id: Id::new("018f0000-0000-7000-8000-000000000099").unwrap(),
+            authorized_client_credential: None,
         },
     )?;
     insert(
