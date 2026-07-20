@@ -12,8 +12,8 @@ use muniment_core::attach::linux::{
 };
 #[cfg(target_os = "linux")]
 use muniment_core::attach::{
-    Approval, CommittedResult, Id, IdempotencyOutcome, IdempotencyStore, Operation, Protocol,
-    ProtocolError, Request as AttachRequest, WorkspaceOnboardRequest, WorkspaceOnboarded,
+    Approval, CommittedResult, ErrorCode, Id, IdempotencyOutcome, IdempotencyStore, Operation,
+    Protocol, ProtocolError, Request as AttachRequest, WorkspaceOnboardRequest, WorkspaceOnboarded,
 };
 use muniment_core::attachment::{ingest_attachment, AttachmentMetadata};
 use muniment_core::auth::TokenSet;
@@ -33,6 +33,8 @@ use muniment_core::sidecar::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+#[cfg(target_os = "linux")]
+use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::path::PathBuf;
 use tauri::{Emitter, Manager};
 use uuid::Uuid;
@@ -502,7 +504,24 @@ pub struct DesktopAttachService<B, I = IdempotencyStore> {
     home: PathBuf,
     workspace_contexts: Arc<Mutex<HashMap<String, HashMap<PathBuf, Option<String>>>>>,
     client_credentials: Arc<Mutex<HashMap<String, String>>>,
+    credential_path: Option<PathBuf>,
     client_identity: Option<String>,
+}
+
+#[cfg(target_os = "linux")]
+struct AttachListenerState {
+    workspace_contexts: Arc<Mutex<HashMap<String, HashMap<PathBuf, Option<String>>>>>,
+    client_credentials: Arc<Mutex<HashMap<String, String>>>,
+}
+
+#[cfg(target_os = "linux")]
+impl AttachListenerState {
+    fn load(credential_path: &std::path::Path) -> Result<Self, ProtocolError> {
+        Ok(Self {
+            workspace_contexts: Arc::new(Mutex::new(HashMap::new())),
+            client_credentials: Arc::new(Mutex::new(load_client_credentials(credential_path)?)),
+        })
+    }
 }
 
 #[derive(Default)]
@@ -541,12 +560,18 @@ impl<R: tauri::Runtime> DesktopAttachService<TauriRunStartBoundaries<R>> {
                 .map_err(|_| ProtocolError::persistence_failed())?
                 .join("attach-idempotency.sqlite3"),
         )?;
+        let credential_path = app
+            .path()
+            .app_data_dir()
+            .map_err(|_| ProtocolError::persistence_failed())?
+            .join("attach-client-credentials.json");
         Ok(Self {
             boundaries: TauriRunStartBoundaries { app },
             idempotency,
             home,
             workspace_contexts,
             client_credentials,
+            credential_path: Some(credential_path),
             client_identity: None,
         })
     }
@@ -561,12 +586,17 @@ pub fn start_attach_listener<R: tauri::Runtime>(app: tauri::AppHandle<R>) {
         let Ok(listener) = AttachTransport::bind(&filesystem) else {
             return;
         };
-        let workspace_contexts = Arc::new(Mutex::new(HashMap::new()));
-        let client_credentials = Arc::new(Mutex::new(HashMap::new()));
+        let credential_path = match app.path().app_data_dir() {
+            Ok(path) => path.join("attach-client-credentials.json"),
+            Err(_) => return,
+        };
+        let Ok(state) = AttachListenerState::load(&credential_path) else {
+            return;
+        };
         while let Ok((stream, credentials)) = listener.accept() {
             let app = app.clone();
-            let workspace_contexts = workspace_contexts.clone();
-            let client_credentials = client_credentials.clone();
+            let workspace_contexts = state.workspace_contexts.clone();
+            let client_credentials = state.client_credentials.clone();
             std::thread::spawn(move || {
                 let Ok(mut service) =
                     DesktopAttachService::new(app, workspace_contexts, client_credentials)
@@ -638,6 +668,12 @@ impl<B: RunStartBoundaries, I: RunStartIdempotency> ThreadListService
             Some(_) => return Err(ProtocolError::unauthorized()),
             None if presented_credential.is_none() => {
                 credentials.insert(client_identity.to_owned(), issued_credential.to_owned());
+                if let Some(path) = &self.credential_path {
+                    if persist_client_credentials(path, &credentials).is_err() {
+                        credentials.remove(client_identity);
+                        return Err(ProtocolError::persistence_failed());
+                    }
+                }
                 issued_credential.to_owned()
             }
             None => return Err(ProtocolError::unauthorized()),
@@ -815,6 +851,68 @@ impl<B: RunStartBoundaries, I: RunStartIdempotency> ThreadListService
         };
         serde_json::from_value(committed.body).map_err(|_| ProtocolError::persistence_failed())
     }
+}
+
+#[cfg(target_os = "linux")]
+fn load_client_credentials(
+    path: &std::path::Path,
+) -> Result<HashMap<String, String>, ProtocolError> {
+    let mut options = std::fs::OpenOptions::new();
+    options.read(true).custom_flags(libc::O_NOFOLLOW);
+    let file = match options.open(path) {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(HashMap::new()),
+        Err(_) => return Err(ProtocolError::persistence_failed()),
+    };
+    let metadata = file
+        .metadata()
+        .map_err(|_| ProtocolError::persistence_failed())?;
+    if metadata.uid() != unsafe { libc::geteuid() } || metadata.mode() & 0o077 != 0 {
+        return Err(ProtocolError::persistence_failed());
+    }
+    let credentials: HashMap<String, String> =
+        serde_json::from_reader(file).map_err(|_| ProtocolError::persistence_failed())?;
+    if credentials.iter().any(|(identity, credential)| {
+        Id::new(identity).is_err()
+            || credential.len() != 64
+            || !credential.bytes().all(|byte| byte.is_ascii_hexdigit())
+    }) {
+        return Err(ProtocolError::persistence_failed());
+    }
+    Ok(credentials)
+}
+
+#[cfg(target_os = "linux")]
+fn persist_client_credentials(
+    path: &std::path::Path,
+    credentials: &HashMap<String, String>,
+) -> Result<(), ProtocolError> {
+    let parent = path
+        .parent()
+        .ok_or_else(ProtocolError::persistence_failed)?;
+    std::fs::create_dir_all(parent).map_err(|_| ProtocolError::persistence_failed())?;
+    let temporary = parent.join(format!(".attach-client-credentials-{}.tmp", Uuid::now_v7()));
+    let result = (|| {
+        let mut options = std::fs::OpenOptions::new();
+        options
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .custom_flags(libc::O_NOFOLLOW);
+        let file = options
+            .open(&temporary)
+            .map_err(|_| ProtocolError::persistence_failed())?;
+        serde_json::to_writer(&file, credentials)
+            .map_err(|_| ProtocolError::persistence_failed())?;
+        file.sync_all()
+            .map_err(|_| ProtocolError::persistence_failed())?;
+        std::fs::rename(&temporary, path).map_err(|_| ProtocolError::persistence_failed())?;
+        Ok(())
+    })();
+    if result.is_err() {
+        let _ = std::fs::remove_file(&temporary);
+    }
+    result
 }
 
 impl ChatState {
@@ -2509,6 +2607,7 @@ mod tests {
             home: PathBuf::new(),
             workspace_contexts: Arc::new(Mutex::new(HashMap::new())),
             client_credentials: Arc::new(Mutex::new(HashMap::new())),
+            credential_path: None,
             client_identity: Some("default".into()),
         };
         let result = service.start_run(
@@ -2605,6 +2704,7 @@ mod tests {
             home: root.join("home"),
             workspace_contexts: contexts.clone(),
             client_credentials: Arc::new(Mutex::new(HashMap::new())),
+            credential_path: None,
             client_identity: Some("default".into()),
         };
         first_connection
@@ -2621,6 +2721,7 @@ mod tests {
             home: root.join("home"),
             workspace_contexts: contexts.clone(),
             client_credentials: Arc::new(Mutex::new(HashMap::new())),
+            credential_path: None,
             client_identity: Some("default".into()),
         };
         second_connection
@@ -2655,13 +2756,13 @@ mod tests {
         );
         drop(stored);
         let client_b_boundaries = FakeRunStartBoundaries::accepting();
-        let client_b_dispatch = client_b_boundaries.prepared_provenance.clone();
         let mut client_b = DesktopAttachService {
             boundaries: client_b_boundaries,
             idempotency: IdempotencyStore::open(":memory:").unwrap(),
             home: root.join("home"),
             workspace_contexts: contexts.clone(),
             client_credentials: Arc::new(Mutex::new(HashMap::new())),
+            credential_path: None,
             client_identity: Some("client-b".into()),
         };
         for (offset, workspace) in [&first, &first_memory].into_iter().enumerate() {
@@ -2683,7 +2784,12 @@ mod tests {
             );
             assert_eq!(rejected.unwrap_err().code(), ErrorCode::Unauthorized);
         }
-        assert!(client_b_dispatch.lock().unwrap().is_none());
+        assert!(client_b
+            .boundaries
+            .prepared_provenance
+            .lock()
+            .unwrap()
+            .is_none());
         let run = second_connection
             .start_run(
                 &first.to_string_lossy(),
@@ -2717,8 +2823,9 @@ mod tests {
             boundaries: FakeRunStartBoundaries::accepting(),
             idempotency: IdempotencyStore::open(":memory:").unwrap(),
             home: root.join("home"),
-            workspace_contexts: contexts,
+            workspace_contexts: contexts.clone(),
             client_credentials: Arc::new(Mutex::new(HashMap::new())),
+            credential_path: None,
             client_identity: Some("default".into()),
         };
         third_connection
@@ -2771,14 +2878,16 @@ mod tests {
         std::fs::create_dir_all(&first).unwrap();
         std::fs::create_dir_all(&second).unwrap();
         symlink(&first, &alias).unwrap();
-        let contexts = Arc::new(Mutex::new(HashMap::new()));
-        let credentials = Arc::new(Mutex::new(HashMap::new()));
+        let state = AttachListenerState::load(&root.join("credentials.json")).unwrap();
+        let contexts = state.workspace_contexts;
+        let credentials = state.client_credentials;
         let make_service = || DesktopAttachService {
             boundaries: FakeRunStartBoundaries::accepting(),
             idempotency: IdempotencyStore::open(":memory:").unwrap(),
             home: root.join("home"),
             workspace_contexts: contexts.clone(),
             client_credentials: credentials.clone(),
+            credential_path: None,
             client_identity: None,
         };
 
@@ -2842,6 +2951,259 @@ mod tests {
 
     #[cfg(target_os = "linux")]
     #[test]
+    fn attach_client_credentials_survive_restart_and_unsafe_state_fails_closed() {
+        use std::os::unix::fs::{symlink, PermissionsExt};
+
+        let root =
+            std::env::temp_dir().join(format!("muniment-attach-credentials-{}", Uuid::now_v7()));
+        let path = root.join("credentials.json");
+        let identity = "018f0000-0000-7000-8000-000000000099";
+        let credential = "ab".repeat(32);
+        let make_service = |credentials| DesktopAttachService {
+            boundaries: FakeRunStartBoundaries::accepting(),
+            idempotency: IdempotencyStore::open(":memory:").unwrap(),
+            home: root.join("home"),
+            workspace_contexts: Arc::new(Mutex::new(HashMap::new())),
+            client_credentials: Arc::new(Mutex::new(credentials)),
+            credential_path: Some(path.clone()),
+            client_identity: None,
+        };
+
+        let mut initial = make_service(HashMap::new());
+        assert_eq!(
+            initial
+                .authorize_client(identity, None, &credential)
+                .unwrap(),
+            credential
+        );
+        let metadata = std::fs::symlink_metadata(&path).unwrap();
+        assert_eq!(metadata.permissions().mode() & 0o777, 0o600);
+        drop(initial);
+
+        let loaded = load_client_credentials(&path).unwrap();
+        let mut restarted = make_service(loaded);
+        assert_eq!(
+            restarted
+                .authorize_client(identity, Some(&credential), &"cd".repeat(32))
+                .unwrap(),
+            credential
+        );
+        for presented in [None, Some("00".repeat(32))] {
+            let mut rejected = make_service(load_client_credentials(&path).unwrap());
+            assert_eq!(
+                rejected
+                    .authorize_client(identity, presented.as_deref(), &"ef".repeat(32))
+                    .unwrap_err()
+                    .code(),
+                ErrorCode::Unauthorized
+            );
+            assert!(rejected.client_identity.is_none());
+        }
+        let mut unknown = make_service(load_client_credentials(&path).unwrap());
+        assert_eq!(
+            unknown
+                .authorize_client(
+                    "018f0000-0000-7000-8000-000000000100",
+                    Some(&credential),
+                    &"ef".repeat(32)
+                )
+                .unwrap_err()
+                .code(),
+            ErrorCode::Unauthorized
+        );
+
+        std::fs::write(&path, b"not-json").unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        assert!(load_client_credentials(&path).is_err());
+        std::fs::remove_file(&path).unwrap();
+        let target = root.join("target");
+        std::fs::write(&target, b"{}").unwrap();
+        symlink(&target, &path).unwrap();
+        assert!(load_client_credentials(&path).is_err());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn production_listener_state_isolates_workspace_grants_across_transport_connections() {
+        use muniment_attach::{handshake_stream_with_credential, ClientError};
+        use muniment_core::attach::linux::ApprovalDecision;
+        use std::os::unix::fs::symlink;
+
+        let root =
+            std::env::temp_dir().join(format!("muniment-listener-isolation-{}", Uuid::now_v7()));
+        let opened = root.join("opened");
+        let memory = root.join("memory");
+        let other = root.join("other");
+        let alias = root.join("alias");
+        std::fs::create_dir_all(&opened).unwrap();
+        std::fs::create_dir_all(&other).unwrap();
+        std::fs::write(opened.join("AGENTS.md"), "private client A context").unwrap();
+        symlink(&opened, &alias).unwrap();
+        let contexts = Arc::new(Mutex::new(HashMap::new()));
+        let credentials = Arc::new(Mutex::new(HashMap::new()));
+        let identity_a = "018f0000-0000-7000-8000-0000000000a1";
+        let identity_b = "018f0000-0000-7000-8000-0000000000b1";
+        let connect = |identity: &'static str,
+                       credential: Option<String>,
+                       boundaries: FakeRunStartBoundaries| {
+            let runtime = root.join(format!("runtime-{}", Uuid::now_v7()));
+            std::fs::create_dir(&runtime).unwrap();
+            let filesystem = AttachFilesystem::from_runtime_directory(&runtime).unwrap();
+            let transport = AttachTransport::bind(&filesystem).unwrap();
+            let client_stream =
+                std::os::unix::net::UnixStream::connect(transport.local_path()).unwrap();
+            let (server_stream, peer) = transport.accept().unwrap();
+            let contexts = contexts.clone();
+            let credentials = credentials.clone();
+            let service_root = root.clone();
+            let approval_workspace = opened.clone();
+            let worker = std::thread::spawn(move || {
+                let mut service = DesktopAttachService {
+                    boundaries,
+                    idempotency: IdempotencyStore::open(":memory:").unwrap(),
+                    home: service_root.join("home"),
+                    workspace_contexts: contexts,
+                    client_credentials: credentials,
+                    credential_path: None,
+                    client_identity: None,
+                };
+                let result = run_authenticated_session_with_service_and_approvals(
+                    server_stream,
+                    peer,
+                    "0.0.1",
+                    &mut service,
+                    |_: &muniment_core::attach::PairingChallenge, _: Duration| {
+                        Some(ApprovalDecision::Approve(Approval {
+                            profile: "desktop-owner".into(),
+                            workspace: approval_workspace.to_string_lossy().into_owned(),
+                            scopes: BTreeSet::from(["thread.read".into(), "run.write".into()]),
+                            lifetime: Duration::from_secs(3600),
+                        }))
+                    },
+                );
+                (result, service)
+            });
+            let client = handshake_stream_with_credential(
+                client_stream,
+                "0.0.1",
+                identity,
+                credential.as_deref(),
+                Duration::from_secs(1),
+                Duration::from_secs(1),
+                || {},
+            );
+            (client, worker)
+        };
+
+        let (client_a, worker) = connect(identity_a, None, FakeRunStartBoundaries::accepting());
+        let mut client_a = client_a.unwrap();
+        let credential_a = client_a.authorized_client_credential().to_owned();
+        client_a
+            .onboard_workspace(&alias.to_string_lossy(), &memory.to_string_lossy())
+            .unwrap();
+        drop(client_a);
+        assert!(worker.join().unwrap().0.is_ok());
+
+        let a_dispatch = FakeRunStartBoundaries::accepting();
+        let (client_a, worker) = connect(identity_a, Some(credential_a.clone()), a_dispatch);
+        let mut client_a = client_a.unwrap();
+        client_a
+            .start_run_in_workspace("opened", None, Some(&opened.to_string_lossy()))
+            .unwrap();
+        client_a
+            .start_run_in_workspace("override", None, Some(&memory.to_string_lossy()))
+            .unwrap();
+        drop(client_a);
+        let (_, service) = worker.join().unwrap();
+        assert_eq!(
+            service
+                .boundaries
+                .prepared_provenance
+                .lock()
+                .unwrap()
+                .as_ref()
+                .unwrap()
+                .extra["repository_instructions"],
+            "private client A context"
+        );
+
+        let (client_b, worker) = connect(identity_b, None, FakeRunStartBoundaries::accepting());
+        let mut client_b = client_b.unwrap();
+        let credential_b = client_b.authorized_client_credential().to_owned();
+        client_b
+            .onboard_workspace(&other.to_string_lossy(), &other.to_string_lossy())
+            .unwrap();
+        drop(client_b);
+        assert!(worker.join().unwrap().0.is_ok());
+        for workspace in [&opened, &memory] {
+            let b_dispatch = FakeRunStartBoundaries::accepting();
+            let (client_b, worker) = connect(identity_b, Some(credential_b.clone()), b_dispatch);
+            let mut client_b = client_b.unwrap();
+            assert_eq!(
+                client_b.start_run_in_workspace("borrow", None, Some(&workspace.to_string_lossy())),
+                Err(ClientError::RequestRejected)
+            );
+            drop(client_b);
+            let (_, service) = worker.join().unwrap();
+            assert!(service
+                .boundaries
+                .prepared_provenance
+                .lock()
+                .unwrap()
+                .is_none());
+            assert!(service.boundaries.launched_run.lock().unwrap().is_none());
+        }
+
+        for (identity, credential) in [
+            (identity_a, None),
+            (identity_a, Some("malformed".into())),
+            (identity_a, Some("00".repeat(32))),
+            (
+                "018f0000-0000-7000-8000-0000000000ff",
+                Some(credential_a.clone()),
+            ),
+        ] {
+            let denied = FakeRunStartBoundaries::accepting();
+            let (client, worker) = connect(identity, credential, denied);
+            assert!(client.is_err());
+            let (_, service) = worker.join().unwrap();
+            assert!(service
+                .boundaries
+                .prepared_provenance
+                .lock()
+                .unwrap()
+                .is_none());
+            assert!(service.client_identity.is_none());
+        }
+
+        for workspace in [root.join("missing"), alias.clone()] {
+            if workspace == alias {
+                std::fs::remove_file(&alias).unwrap();
+                symlink(&other, &alias).unwrap();
+            }
+            let denied = FakeRunStartBoundaries::accepting();
+            let (client, worker) = connect(identity_a, Some(credential_a.clone()), denied);
+            let mut client = client.unwrap();
+            assert_eq!(
+                client.start_run_in_workspace("invalid", None, Some(&workspace.to_string_lossy())),
+                Err(ClientError::RequestRejected)
+            );
+            drop(client);
+            let (_, service) = worker.join().unwrap();
+            assert!(service
+                .boundaries
+                .prepared_provenance
+                .lock()
+                .unwrap()
+                .is_none());
+            assert!(service.boundaries.launched_run.lock().unwrap().is_none());
+        }
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
     fn attach_adapter_replays_exact_retry_without_second_coordinator_run() {
         let mut service = DesktopAttachService {
             boundaries: FakeRunStartBoundaries::accepting(),
@@ -2849,6 +3211,7 @@ mod tests {
             home: PathBuf::new(),
             workspace_contexts: Arc::new(Mutex::new(HashMap::new())),
             client_credentials: Arc::new(Mutex::new(HashMap::new())),
+            credential_path: None,
             client_identity: Some("default".into()),
         };
         let key = "018f0000-0000-7000-8000-000000000002";
@@ -2888,6 +3251,7 @@ mod tests {
             home: PathBuf::new(),
             workspace_contexts: Arc::new(Mutex::new(HashMap::new())),
             client_credentials: Arc::new(Mutex::new(HashMap::new())),
+            credential_path: None,
             client_identity: Some("default".into()),
         };
         let key = "018f0000-0000-7000-8000-000000000002";
@@ -2954,6 +3318,7 @@ mod tests {
             home: PathBuf::new(),
             workspace_contexts: Arc::new(Mutex::new(HashMap::new())),
             client_credentials: Arc::new(Mutex::new(HashMap::new())),
+            credential_path: None,
             client_identity: Some("default".into()),
         };
         let result = service.start_run(
@@ -3022,6 +3387,7 @@ mod tests {
             home: PathBuf::new(),
             workspace_contexts: Arc::new(Mutex::new(HashMap::new())),
             client_credentials: Arc::new(Mutex::new(HashMap::new())),
+            credential_path: None,
             client_identity: Some("default".into()),
         };
         let result = service.start_run(

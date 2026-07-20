@@ -1311,7 +1311,7 @@ mod linux {
 }
 
 #[cfg(target_os = "linux")]
-pub use linux::{handshake_stream, AuthorizedClient};
+pub use linux::{handshake_stream, handshake_stream_with_credential, AuthorizedClient};
 
 #[cfg(not(target_os = "linux"))]
 #[derive(Debug)]

@@ -16,6 +16,29 @@ test("initializes defaults, overrides, and every local root", async () => {
   assert.deepEqual(calls.sort(), [["/repos/one", "/repos/one"], ["/repos/two", "/memory/two"]]);
 });
 
+test("fresh multi-root onboarding serializes credential issuance", async () => {
+  let credential: string | undefined;
+  let connections = 0;
+  let concurrent = 0;
+  let maximumConcurrent = 0;
+  const calls: string[] = [];
+  const onboarding = new WorkspaceOnboarding(() => "", async () => {
+    connections++;
+    concurrent++;
+    maximumConcurrent = Math.max(maximumConcurrent, concurrent);
+    assert.equal(connections === 1 ? credential : "issued-credential", credential);
+    credential ??= "issued-credential";
+    return {
+      onboardWorkspace: async (opened: string) => { calls.push(opened); await Promise.resolve(); },
+      dispose() { concurrent--; },
+    };
+  }, assert.fail);
+
+  await onboarding.initialize([folder("one"), folder("two"), folder("three")]);
+  assert.deepEqual(calls, ["/repos/one", "/repos/two", "/repos/three"]);
+  assert.equal(maximumConcurrent, 1);
+});
+
 test("folder additions and changed resource overrides can be applied", async () => {
   const calls: string[][] = [];
   let override = "";

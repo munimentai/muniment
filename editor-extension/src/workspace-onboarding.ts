@@ -8,6 +8,7 @@ export interface WorkspaceRuntime {
 
 export class WorkspaceOnboarding {
   private readonly active = new Map<string, { memory: string; promise: Promise<void> }>();
+  private authorization: Promise<void> = Promise.resolve();
 
   constructor(
     private readonly overrideFor: (folder: WorkspaceFolderLike) => string,
@@ -41,6 +42,10 @@ export class WorkspaceOnboarding {
       this.report("Muniment workspace memory must be an absolute directory.");
       return;
     }
+    const previous = this.authorization;
+    let release!: () => void;
+    this.authorization = new Promise<void>((resolve) => { release = resolve; });
+    await previous;
     let runtime: WorkspaceRuntime | undefined;
     try {
       runtime = await this.connect();
@@ -49,6 +54,7 @@ export class WorkspaceOnboarding {
       this.report("Muniment couldn’t initialize workspace memory. Open the desktop app and check the workspace setting.");
     } finally {
       runtime?.dispose();
+      release();
     }
   }
 }
