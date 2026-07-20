@@ -64,6 +64,11 @@ describe('nightly Windows E2E workflow', () => {
     expect(reportStep).toContain('path: ${{ runner.temp }}/muniment-windows-e2e-artifacts/junit-*.xml')
     expect(reportStep).not.toContain('path: ${{ runner.temp }}/muniment-windows-e2e-artifacts\n')
   })
+
+  it('publishes a parseable infrastructure failure when desktop-ci returns no artifacts', () => {
+    expect(windowsE2e).toContain('junit-infrastructure.xml')
+    expect(windowsE2e).toContain('desktop-ci did not return a valid artifact envelope')
+  })
 })
 
 describe('nightly macOS E2E workflow', () => {
@@ -91,5 +96,6 @@ describe('nightly macOS E2E workflow', () => {
     expect(macosE2e).toContain('name: macos-e2e-${{ needs.prepare.outputs.source_sha }}-success')
     expect(macosE2e).toMatch(/name: macos-e2e-\$\{\{ needs\.prepare\.outputs\.source_sha \}\}-success[\s\S]*?retention-days: 7/)
     expect(macosE2e).toMatch(/name: macos-e2e-\$\{\{ needs\.prepare\.outputs\.source_sha \}\}-failure[\s\S]*?retention-days: 30/)
+    expect(macosE2e).toContain('infrastructure-failure.txt')
   })
 })

@@ -358,6 +358,13 @@ jobs:
 
           extract_status=0
           bash test/e2e/support/extract-artifacts.sh "$output" "$RUNNER_TEMP/muniment-windows-e2e-artifacts" || extract_status=$?
+          if (( extract_status != 0 )); then
+            mkdir -p "$RUNNER_TEMP/muniment-windows-e2e-artifacts"
+            printf '%s\n' \
+              '<?xml version="1.0" encoding="UTF-8"?>' \
+              '<testsuites tests="1" failures="1"><testsuite name="installed-windows" tests="1" failures="1"><testcase name="desktop-ci artifact collection"><failure message="desktop-ci did not return a valid artifact envelope"/></testcase></testsuite></testsuites>' \
+              >"$RUNNER_TEMP/muniment-windows-e2e-artifacts/junit-infrastructure.xml"
+          fi
           if (( run_status != 0 || extract_status != 0 )); then final_status=1; else final_status=0; fi
           printf 'status=%s\n' "$final_status" >>"$GITHUB_OUTPUT"
 
@@ -438,6 +445,12 @@ jobs:
 
           extract_status=0
           bash test/e2e/support/extract-artifacts.sh "$output" "$RUNNER_TEMP/muniment-macos-e2e-artifacts" || extract_status=$?
+          if (( extract_status != 0 )); then
+            mkdir -p "$RUNNER_TEMP/muniment-macos-e2e-artifacts"
+            printf '%s\n' \
+              'desktop-ci did not return a valid artifact envelope' \
+              >"$RUNNER_TEMP/muniment-macos-e2e-artifacts/infrastructure-failure.txt"
+          fi
           if (( run_status != 0 || extract_status != 0 )); then final_status=1; else final_status=0; fi
           printf 'status=%s\n' "$final_status" >>"$GITHUB_OUTPUT"
 
