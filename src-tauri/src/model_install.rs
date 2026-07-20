@@ -9,19 +9,23 @@ use muniment_core::asr::install::install_parakeet_revision;
 use muniment_core::asr::{
     AsrRecovery, AsrRevisionLifecycle, PARAKEET_MODEL_MANIFEST, PARAKEET_MODEL_MANIFESTS,
 };
+use muniment_core::llama::acquisition::ModelDownloadProgress;
 use muniment_core::llama::acquisition::{
     GemmaAcquisitionError, GemmaAcquisitionLimits, GemmaAcquisitionRuntime, GemmaCancellation,
 };
-use muniment_core::llama::install::install_gemma_revision;
+use muniment_core::llama::install::install_gemma_revision_with_progress;
 use muniment_core::llama::lifecycle::{
-    GemmaRecovery, GemmaRevisionLifecycle, RESIDENT_GEMMA_REVISION, RESIDENT_GEMMA_REVISIONS,
+    GemmaActivation, GemmaActivationBoundary, GemmaActivationFailure, GemmaRecovery,
+    GemmaRevisionLifecycle, RESIDENT_GEMMA_REVISION, RESIDENT_GEMMA_REVISIONS,
 };
+use muniment_core::llama::{LlamaServer, LlamaServerConfig};
 use muniment_core::model_acquisition_transport::NativeModelAcquisitionTransport;
 use muniment_core::model_install::ModelInstallError;
 use muniment_core::model_install_native::{
     NativeAcquisitionClock, NativeAsrLifecycleBoundary, NativeAvailableSpace,
     NativeGemmaLifecycleBoundary, NativeInstallCancellation, NativeInstallLock, NativeRetryWait,
 };
+use muniment_core::sidecar::SidecarStatus;
 use serde::Serialize;
 use tauri::State;
 
@@ -70,7 +74,24 @@ struct InstallFailure {
     cancelled: bool,
 }
 
-type Runner = dyn Fn(&Path, &NativeInstallCancellation) -> Result<(), InstallFailure> + Send + Sync;
+type ProgressSink = dyn Fn(ModelDownloadProgress) + Send + Sync;
+type Runner = dyn Fn(&Path, &NativeInstallCancellation, &ProgressSink) -> Result<PathBuf, InstallFailure>
+    + Send
+    + Sync;
+enum ServingServer {
+    Native(LlamaServer),
+    Test,
+}
+
+impl ServingServer {
+    fn is_ready(&self) -> bool {
+        match self {
+            Self::Native(server) => !server.base_url().is_empty(),
+            Self::Test => true,
+        }
+    }
+}
+type Activator = dyn Fn(&Path) -> Result<ServingServer, InstallFailure> + Send + Sync;
 
 struct ActiveInstall {
     generation: u64,
@@ -84,6 +105,8 @@ struct Inner {
     terminal_result: bool,
     completed_success: bool,
     active: Option<ActiveInstall>,
+    progress: ModelDownloadProgress,
+    server: Option<ServingServer>,
 }
 
 pub struct GemmaInstallState {
@@ -91,13 +114,17 @@ pub struct GemmaInstallState {
     inner: Arc<Mutex<Inner>>,
     runner: Arc<Runner>,
     background_retry: bool,
+    activator: Arc<Activator>,
 }
 
 impl GemmaInstallState {
     pub fn new(root: PathBuf) -> std::io::Result<Self> {
         fs::create_dir_all(root.join("staging"))?;
         let status = inspect(&root);
-        Ok(Self::with_runner(root, status, Arc::new(run_native_install)).with_background_retry())
+        let mut state = Self::with_runner(root, status, Arc::new(run_native_install));
+        state.activator =
+            Arc::new(|revision| activate_native_server(revision).map(ServingServer::Native));
+        Ok(state.with_background_retry())
     }
 
     fn with_runner(root: PathBuf, status: GemmaInstallStatus, runner: Arc<Runner>) -> Self {
@@ -110,9 +137,15 @@ impl GemmaInstallState {
                 terminal_result: false,
                 completed_success: false,
                 active: None,
+                progress: ModelDownloadProgress {
+                    downloaded_bytes: 0,
+                    total_bytes: RESIDENT_GEMMA_REVISION.model.byte_size,
+                },
+                server: None,
             })),
             runner,
             background_retry: false,
+            activator: Arc::new(|_| Ok(ServingServer::Test)),
         }
     }
 
@@ -149,7 +182,7 @@ impl GemmaInstallState {
         inner.status.clone()
     }
 
-    fn start(&self) -> GemmaInstallStatus {
+    pub(crate) fn start(&self) -> GemmaInstallStatus {
         let (generation, cancellation) = {
             let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
             if inner.active.is_some() {
@@ -172,9 +205,22 @@ impl GemmaInstallState {
         let root = self.root.clone();
         let inner = Arc::clone(&self.inner);
         let runner = Arc::clone(&self.runner);
+        let activator = Arc::clone(&self.activator);
         let background_retry = self.background_retry;
         tauri::async_runtime::spawn_blocking(move || {
-            let mut result = runner(&root, &cancellation);
+            let progress_inner = Arc::clone(&inner);
+            let progress = move |update: ModelDownloadProgress| {
+                let mut state = progress_inner.lock().unwrap_or_else(|e| e.into_inner());
+                if matches!(state.active, Some(ref active) if active.generation == generation) {
+                    state.progress.downloaded_bytes = state
+                        .progress
+                        .downloaded_bytes
+                        .max(update.downloaded_bytes.min(update.total_bytes));
+                    state.progress.total_bytes = update.total_bytes;
+                }
+            };
+            let mut result =
+                runner(&root, &cancellation, &progress).and_then(|revision| activator(&revision));
             let mut retry_delay = std::time::Duration::from_secs(5);
             while result.is_err() && background_retry && !cancellation.is_cancelled() {
                 {
@@ -204,7 +250,8 @@ impl GemmaInstallState {
                     state.status = GemmaInstallStatus::Installing;
                     state.state_version = state.state_version.wrapping_add(1);
                 }
-                result = runner(&root, &cancellation);
+                result = runner(&root, &cancellation, &progress)
+                    .and_then(|revision| activator(&revision));
                 retry_delay = retry_delay
                     .saturating_mul(2)
                     .min(std::time::Duration::from_secs(60));
@@ -224,7 +271,11 @@ impl GemmaInstallState {
             state.state_version = state.state_version.wrapping_add(1);
             let completed_success = result.is_ok();
             let (status, terminal_result) = match result {
-                Ok(()) => (GemmaInstallStatus::Installed, false),
+                Ok(server) => {
+                    state.progress.downloaded_bytes = state.progress.total_bytes;
+                    state.server = Some(server);
+                    (GemmaInstallStatus::Installed, false)
+                }
                 Err(error) if error.cancelled => (GemmaInstallStatus::Cancelled, true),
                 Err(error) => (
                     GemmaInstallStatus::Failed {
@@ -252,19 +303,16 @@ impl GemmaInstallState {
     async fn acquisition_status(&self) -> RequiredModelAcquisitionStatus {
         let status = self.status().await;
         let total_bytes = RESIDENT_GEMMA_REVISION.model.byte_size;
-        let ai_features_available = status == GemmaInstallStatus::Installed;
-        let remaining = if ai_features_available {
-            0
-        } else {
-            muniment_core::llama::acquisition::remaining_stage_bytes(
-                &self.root.join("staging"),
-                RESIDENT_GEMMA_REVISION.identity,
-                &RESIDENT_GEMMA_REVISION,
+        let (progress, serving) = {
+            let inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+            (
+                inner.progress,
+                inner.server.as_ref().is_some_and(ServingServer::is_ready),
             )
-            .unwrap_or(total_bytes)
         };
+        let ai_features_available = status == GemmaInstallStatus::Installed && serving;
         RequiredModelAcquisitionStatus {
-            downloaded_bytes: total_bytes.saturating_sub(remaining),
+            downloaded_bytes: progress.downloaded_bytes.min(total_bytes),
             total_bytes,
             folder_setup_available: true,
             ai_features_available,
@@ -311,14 +359,22 @@ fn inspect_lifecycle(lifecycle: &GemmaRevisionLifecycle) -> GemmaInstallStatus {
 fn run_native_install(
     root: &Path,
     cancellation: &NativeInstallCancellation,
-) -> Result<(), InstallFailure> {
+    progress: &ProgressSink,
+) -> Result<PathBuf, InstallFailure> {
+    if let Ok(revision) = lifecycle(root).resolve_current() {
+        progress(ModelDownloadProgress {
+            downloaded_bytes: RESIDENT_GEMMA_REVISION.model.byte_size,
+            total_bytes: RESIDENT_GEMMA_REVISION.model.byte_size,
+        });
+        return Ok(revision);
+    }
     let staging = root.join("staging");
     let mut transport = NativeModelAcquisitionTransport::new();
     let clock = NativeAcquisitionClock::new();
     let mut retry = NativeRetryWait;
     let mut lock = NativeInstallLock::new(root.join("install.lock"));
     let mut space = NativeAvailableSpace::new(root);
-    install_gemma_revision(
+    install_gemma_revision_with_progress(
         &staging,
         RESIDENT_GEMMA_REVISION.identity,
         &RESIDENT_GEMMA_REVISION,
@@ -333,9 +389,58 @@ fn run_native_install(
         &mut space,
         &lifecycle(root),
         &NativeGemmaLifecycleBoundary,
+        &mut |update| progress(update),
     )
-    .map(|_| ())
     .map_err(redact_failure)
+}
+
+struct NativeActivation;
+
+impl GemmaActivationBoundary for NativeActivation {
+    type Server = LlamaServer;
+
+    fn launch(&self, model: &Path) -> Result<Self::Server, GemmaActivationFailure> {
+        LlamaServer::spawn(LlamaServerConfig::new("llama-server", model, 32_391))
+            .map_err(|_| GemmaActivationFailure::Start)
+    }
+
+    fn await_ready(&self, server: &mut Self::Server) -> Result<(), GemmaActivationFailure> {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(120);
+        while std::time::Instant::now() < deadline {
+            match server.supervisor().status() {
+                SidecarStatus::Ready => return Ok(()),
+                SidecarStatus::Stopped | SidecarStatus::Failed => {
+                    return Err(GemmaActivationFailure::ExitedBeforeReady)
+                }
+                _ => std::thread::sleep(std::time::Duration::from_millis(100)),
+            }
+        }
+        Err(GemmaActivationFailure::Readiness)
+    }
+}
+
+fn activate_native_server(revision: &Path) -> Result<LlamaServer, InstallFailure> {
+    match lifecycle(
+        revision
+            .parent()
+            .and_then(Path::parent)
+            .ok_or(InstallFailure {
+                category: "activationFailed",
+                message: "The local AI service could not be started.",
+                cancelled: false,
+            })?,
+    )
+    .activate(&NativeGemmaLifecycleBoundary, &NativeActivation)
+    {
+        Ok(GemmaActivation::Active { server, .. } | GemmaActivation::RolledBack { server, .. }) => {
+            Ok(server)
+        }
+        _ => Err(InstallFailure {
+            category: "activationFailed",
+            message: "The local AI service could not be started.",
+            cancelled: false,
+        }),
+    }
 }
 
 fn redact_failure(error: muniment_core::llama::install::GemmaInstallError) -> InstallFailure {
@@ -817,19 +922,39 @@ mod tests {
     }
 
     #[test]
-    fn failed_required_model_is_fail_open_for_onboarding_and_closed_for_ai() {
+    fn real_background_failure_is_fail_open_for_onboarding_and_closed_for_ai() {
         let root = TestRoot::new();
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let runner_attempts = Arc::clone(&attempts);
         let state = GemmaInstallState::with_runner(
             root.0.clone(),
-            GemmaInstallStatus::Failed {
-                category: "downloadFailed",
-                message: "The model download failed.",
-            },
-            Arc::new(|_, _| Ok(())),
+            GemmaInstallStatus::NotInstalled,
+            Arc::new(move |_, _, _| {
+                runner_attempts.fetch_add(1, Ordering::SeqCst);
+                Err(InstallFailure {
+                    category: "downloadFailed",
+                    message: "The model download failed.",
+                    cancelled: false,
+                })
+            }),
         )
         .with_background_retry();
+        state.start();
+
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while Instant::now() < deadline {
+            if matches!(
+                tauri::async_runtime::block_on(state.status()),
+                GemmaInstallStatus::Failed { .. }
+            ) {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
 
         let snapshot = tauri::async_runtime::block_on(state.acquisition_status());
+        assert!(matches!(snapshot.status, GemmaInstallStatus::Failed { .. }));
+        assert_eq!(attempts.load(Ordering::SeqCst), 1);
         assert!(snapshot.folder_setup_available);
         assert!(!snapshot.ai_features_available);
         assert!(snapshot.retrying_in_background);
@@ -838,6 +963,78 @@ mod tests {
             snapshot.total_bytes,
             RESIDENT_GEMMA_REVISION.model.byte_size
         );
+        state.cancel();
+    }
+
+    #[test]
+    fn startup_download_is_independent_of_onboarding_progress() {
+        let entered = Arc::new(std::sync::Barrier::new(2));
+        let release = Arc::new(std::sync::Barrier::new(2));
+        let runner = {
+            let entered = Arc::clone(&entered);
+            let release = Arc::clone(&release);
+            Arc::new(
+                move |root: &Path, _: &NativeInstallCancellation, _: &ProgressSink| {
+                    entered.wait();
+                    release.wait();
+                    Ok(root.to_owned())
+                },
+            )
+        };
+        let state = state(GemmaInstallStatus::NotInstalled, runner);
+
+        assert_eq!(state.start(), GemmaInstallStatus::Installing);
+        entered.wait();
+        let snapshot = tauri::async_runtime::block_on(state.acquisition_status());
+        assert_eq!(snapshot.status, GemmaInstallStatus::Installing);
+        assert!(snapshot.folder_setup_available);
+        assert!(!snapshot.ai_features_available);
+        release.wait();
+    }
+
+    #[test]
+    fn active_job_progress_is_monotonic_through_publication_and_serving() {
+        let published = Arc::new(std::sync::Barrier::new(2));
+        let release = Arc::new(std::sync::Barrier::new(2));
+        let runner = {
+            let published = Arc::clone(&published);
+            let release = Arc::clone(&release);
+            Arc::new(
+                move |root: &Path, _: &NativeInstallCancellation, progress: &ProgressSink| {
+                    progress(ModelDownloadProgress {
+                        downloaded_bytes: 7,
+                        total_bytes: 10,
+                    });
+                    progress(ModelDownloadProgress {
+                        downloaded_bytes: 3,
+                        total_bytes: 10,
+                    });
+                    progress(ModelDownloadProgress {
+                        downloaded_bytes: 10,
+                        total_bytes: 10,
+                    });
+                    published.wait();
+                    release.wait();
+                    Ok(root.to_owned())
+                },
+            )
+        };
+        let mut state = state(GemmaInstallStatus::NotInstalled, runner);
+        state.inner.lock().unwrap().progress.total_bytes = 10;
+        state.start();
+        published.wait();
+
+        let during_publication = tauri::async_runtime::block_on(state.acquisition_status());
+        assert_eq!(during_publication.downloaded_bytes, 10);
+        assert!(!during_publication.ai_features_available);
+        release.wait();
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while Instant::now() < deadline
+            && !tauri::async_runtime::block_on(state.acquisition_status()).ai_features_available
+        {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(tauri::async_runtime::block_on(state.acquisition_status()).ai_features_available);
     }
 
     #[test]
@@ -878,11 +1075,13 @@ mod tests {
         let runner = {
             let calls = calls.clone();
             let release = release.clone();
-            Arc::new(move |_: &Path, _: &NativeInstallCancellation| {
-                calls.fetch_add(1, Ordering::SeqCst);
-                release.wait();
-                Ok(())
-            })
+            Arc::new(
+                move |root: &Path, _: &NativeInstallCancellation, _: &ProgressSink| {
+                    calls.fetch_add(1, Ordering::SeqCst);
+                    release.wait();
+                    Ok(root.to_owned())
+                },
+            )
         };
         let app = app_with_state(state(GemmaInstallStatus::NotInstalled, runner));
         let state = app.state::<GemmaInstallState>();
@@ -895,13 +1094,15 @@ mod tests {
 
     #[test]
     fn public_status_command_preserves_redacted_failure() {
-        let runner = Arc::new(|_: &Path, _: &NativeInstallCancellation| {
-            Err(InstallFailure {
-                category: "downloadFailed",
-                message: "The model download failed.",
-                cancelled: false,
-            })
-        });
+        let runner = Arc::new(
+            |_: &Path, _: &NativeInstallCancellation, _: &ProgressSink| {
+                Err(InstallFailure {
+                    category: "downloadFailed",
+                    message: "The model download failed.",
+                    cancelled: false,
+                })
+            },
+        );
         let app = app_with_state(state(GemmaInstallStatus::NotInstalled, runner));
         let state = app.state::<GemmaInstallState>();
         state.start();
@@ -915,16 +1116,18 @@ mod tests {
 
     #[test]
     fn public_status_command_preserves_cancelled_completion() {
-        let runner = Arc::new(|_: &Path, cancellation: &NativeInstallCancellation| {
-            while !cancellation.is_cancelled() {
-                std::thread::sleep(Duration::from_millis(2));
-            }
-            Err(InstallFailure {
-                category: "cancelled",
-                message: "Model installation was cancelled.",
-                cancelled: true,
-            })
-        });
+        let runner = Arc::new(
+            |_: &Path, cancellation: &NativeInstallCancellation, _: &ProgressSink| {
+                while !cancellation.is_cancelled() {
+                    std::thread::sleep(Duration::from_millis(2));
+                }
+                Err(InstallFailure {
+                    category: "cancelled",
+                    message: "Model installation was cancelled.",
+                    cancelled: true,
+                })
+            },
+        );
         let app = app_with_state(state(GemmaInstallStatus::NotInstalled, runner));
         let state = app.state::<GemmaInstallState>();
         state.start();
