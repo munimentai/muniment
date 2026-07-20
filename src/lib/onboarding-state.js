@@ -7,17 +7,25 @@ export function onboardingStatusState(status) {
 }
 
 export function onboardingPathState(state, homePath) {
-  return { ...state, name: 'choosing', homePath, error: undefined }
+  return { ...state, name: state.savedHomePath ? 'settings' : 'choosing', homePath, error: undefined }
+}
+
+export function onboardingSettingsState(state) {
+  return { name: 'settings', homePath: state.homePath, savedHomePath: state.homePath }
+}
+
+export function onboardingCancelSettingsState(state) {
+  return { name: 'complete', homePath: state.savedHomePath }
 }
 
 export function onboardingConfirmingState(state) {
-  return { ...state, name: 'confirming', error: undefined }
+  return { ...state, name: state.savedHomePath ? 'confirming-settings' : 'confirming', error: undefined }
 }
 
 export function onboardingErrorState(state, error) {
   return {
     ...state,
-    name: 'choosing',
+    name: state.savedHomePath ? 'settings' : 'choosing',
     error: String(error || 'Muniment Home could not be created. Choose another folder and try again.'),
   }
 }

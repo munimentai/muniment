@@ -11,8 +11,8 @@ pub mod auth;
 #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
 pub mod browser_control;
 pub mod cas;
-pub mod journal;
 pub mod home;
+pub mod journal;
 pub mod llama;
 pub mod model_acquisition_transport;
 pub mod model_install;

@@ -119,6 +119,16 @@ describe('Home onboarding', () => {
     await waitFor(() => expect(screen.getByTestId('onboarding-home-path')).toHaveTextContent('/Documents/Muniment'))
     expect(screen.queryByRole('alert')).not.toBeInTheDocument()
   })
+
+  it('cancels Home settings back to the configured workspace', async () => {
+    render(App)
+    await fireEvent.click(await screen.findByText('Home settings'))
+    expect(screen.getByTestId('onboarding-home-path')).toHaveTextContent('/Documents/Muniment')
+    await fireEvent.click(screen.getByTestId('onboarding-picker'))
+    await fireEvent.click(screen.getByTestId('onboarding-cancel'))
+    expect(await screen.findByPlaceholderText('Ask anything')).toBeInTheDocument()
+    expect(invoke).not.toHaveBeenCalledWith('home_confirm', expect.anything())
+  })
 })
 
 describe('voice dictation', () => {

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { onboardingConfirmingState, onboardingErrorState, onboardingLoadingState, onboardingPathState, onboardingStatusState } from './onboarding-state.js'
+import { onboardingCancelSettingsState, onboardingConfirmingState, onboardingErrorState, onboardingLoadingState, onboardingPathState, onboardingSettingsState, onboardingStatusState } from './onboarding-state.js'
 
 describe('Home onboarding state', () => {
   it('blocks on the default location until it is configured', () => {
@@ -9,6 +9,13 @@ describe('Home onboarding state', () => {
       name: 'choosing',
       homePath: '/Documents/Muniment',
     })
+  })
+
+  it('opens settings and cancels back to the saved Home', () => {
+    const settings = onboardingSettingsState({ name: 'complete', homePath: '/data/Muniment' })
+    expect(settings).toEqual({ name: 'settings', homePath: '/data/Muniment', savedHomePath: '/data/Muniment' })
+    const changed = onboardingPathState(settings, '/other/Muniment')
+    expect(onboardingCancelSettingsState(changed)).toEqual({ name: 'complete', homePath: '/data/Muniment' })
   })
 
   it('completes when a persisted location is loaded', () => {

@@ -8,7 +8,7 @@
   import { ringPath } from './lib/mark.js'
   import { applyBufferedChatEvents, applyChatEvent, composerAction, formatByteSize, historyMessages, receiptParts, receiptRows, toolName, toolStatus } from './lib/chat-state.js'
   import { appendTranscript, isDictationActive } from './lib/dictation-state.js'
-  import { onboardingConfirmingState, onboardingErrorState, onboardingLoadingState, onboardingPathState, onboardingStatusState } from './lib/onboarding-state.js'
+  import { onboardingCancelSettingsState, onboardingConfirmingState, onboardingErrorState, onboardingLoadingState, onboardingPathState, onboardingSettingsState, onboardingStatusState } from './lib/onboarding-state.js'
   import { scrollFollowState } from './lib/scroll-follow.js'
 
   const markD = ringPath()
@@ -500,21 +500,21 @@
   {#if tauri}
     {#if onboarding.name !== 'complete'}
       <section class="onboarding" aria-labelledby="onboarding-title">
-        <p class="eyebrow">First-run setup</p>
+        <p class="eyebrow">{onboarding.savedHomePath ? 'Home settings' : 'First-run setup'}</p>
         <h1 id="onboarding-title">Choose your Muniment Home</h1>
         {#if onboarding.name === 'loading'}
           <p class="support" role="status">Finding your Documents folder…</p>
-        {:else if onboarding.name === 'choosing' || onboarding.name === 'confirming'}
+        {:else if ['choosing', 'confirming', 'settings', 'confirming-settings'].includes(onboarding.name)}
           <p class="support">Your memory stays in plain Markdown files in a folder you control. Muniment will create four visible folders inside it.</p>
           <div class="path-card">
             <span class="path-label">Home location</span>
             <strong data-testid="onboarding-home-path">{onboarding.homePath}</strong>
-            <button data-testid="onboarding-picker" onclick={chooseHome} disabled={onboarding.name === 'confirming'}>Choose folder…</button>
+            <button data-testid="onboarding-picker" onclick={chooseHome} disabled={onboarding.name.startsWith('confirming')}>Choose folder…</button>
           </div>
           <p class="folder-preview"><span>memory/</span><span>agents/</span><span>projects/</span><span>sessions/</span></p>
           <div class="onboarding-footer">
-            <span class="privacy-note">Plain Markdown · stored locally</span>
-            <button data-testid="onboarding-confirm" class="primary" onclick={confirmHome} disabled={onboarding.name === 'confirming' || !onboarding.homePath}>{onboarding.name === 'confirming' ? 'Creating Home…' : 'Confirm and continue'}</button>
+            {#if onboarding.savedHomePath}<button data-testid="onboarding-cancel" onclick={() => { onboarding = onboardingCancelSettingsState(onboarding) }} disabled={onboarding.name === 'confirming-settings'}>Cancel</button>{:else}<span class="privacy-note">Plain Markdown · stored locally</span>{/if}
+            <button data-testid="onboarding-confirm" class="primary" onclick={confirmHome} disabled={onboarding.name.startsWith('confirming') || !onboarding.homePath}>{onboarding.name.startsWith('confirming') ? 'Creating Home…' : 'Confirm and continue'}</button>
           </div>
           {#if onboarding.error}<p class="onboarding-error" role="alert">{onboarding.error}</p>{/if}
         {:else if onboarding.name === 'load-error'}
@@ -542,7 +542,7 @@
           <button class="side-action">⌕ <span>Search</span><kbd>⌘F</kbd></button>
           <p class="side-label">Threads</p>
           <button class="thread-row active-thread"><span></span>New thread</button>
-          <button class="side-action home-settings" onclick={() => { onboarding = onboardingPathState(onboarding, onboarding.homePath) }}>⌂ <span>Home settings</span></button>
+          <button class="side-action home-settings" onclick={() => { onboarding = onboardingSettingsState(onboarding) }}>⌂ <span>Home settings</span></button>
           <AccessPanel {tauri} subject={auth.subject} onSignOut={() => run('sign-out')} escapeBlocked={() => dictationRequested || isDictationActive(dictation)} />
         </aside>
         <div class="thread-shell">

@@ -2,16 +2,60 @@ use muniment_core::home::{configured_home, confirm_home, scaffold_home};
 use std::{
     fs,
     path::PathBuf,
+    thread,
     time::{SystemTime, UNIX_EPOCH},
 };
 
 fn temporary_directory(name: &str) -> PathBuf {
     let path = std::env::temp_dir().join(format!(
         "muniment-home-{name}-{}",
-        SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos()
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
     ));
     fs::create_dir(&path).unwrap();
     path
+}
+
+#[test]
+fn rejects_a_home_equal_to_or_ancestor_of_the_config_directory() {
+    let root = temporary_directory("config-inside-home");
+    let config = root.join("config");
+
+    assert!(confirm_home(&config, &config).is_err());
+    assert!(confirm_home(&config, &root).is_err());
+    assert!(!config.join("home.json").exists());
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn concurrent_updates_leave_one_complete_valid_configuration() {
+    let root = temporary_directory("concurrent");
+    let config = root.join("config");
+    let homes: Vec<_> = (0..8)
+        .map(|index| root.join(format!("Home-{index}")))
+        .collect();
+    let handles: Vec<_> = homes
+        .iter()
+        .cloned()
+        .map(|home| {
+            let config = config.clone();
+            thread::spawn(move || confirm_home(&config, &home))
+        })
+        .collect();
+    for handle in handles {
+        handle.join().unwrap().unwrap();
+    }
+
+    let configured = configured_home(&config).unwrap().unwrap();
+    assert!(homes.contains(&configured));
+    assert!(fs::read_dir(&config).unwrap().all(|entry| !entry
+        .unwrap()
+        .file_name()
+        .to_string_lossy()
+        .ends_with(".tmp")));
+    fs::remove_dir_all(root).unwrap();
 }
 
 #[test]
