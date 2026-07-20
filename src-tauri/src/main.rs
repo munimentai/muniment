@@ -47,6 +47,7 @@ fn main() {
             model_install::gemma_install_status,
             model_install::gemma_install_cancel,
             model_install::required_model_acquisition_status,
+            model_install::dictation_polish,
             home::home_status,
             home::home_confirm,
             model_install::parakeet_install_start,
