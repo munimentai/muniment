@@ -14,7 +14,7 @@ let eventUnlisten
 let dialogResult
 let dragDropListener
 let dragDropUnlisten
-let onboardingStatus
+let homeStatus
 
 vi.mock('@tauri-apps/api/webview', () => ({
   getCurrentWebview: () => ({
@@ -51,8 +51,8 @@ const device = (device_id, overrides = {}) => ({
 beforeAll(async () => {
   HTMLElement.prototype.scrollTo = vi.fn()
   window.__TAURI__ = {
-    core: { invoke: (command, ...args) => command === 'onboarding_status'
-      ? Promise.resolve(onboardingStatus)
+    core: { invoke: (command, ...args) => command === 'home_status'
+      ? Promise.resolve(homeStatus)
       : invoke(command, ...args) },
     event: { listen: vi.fn((event, listener) => {
       if (event === 'chat-event') chatListener = listener
@@ -68,7 +68,7 @@ beforeAll(async () => {
 })
 
 beforeEach(() => {
-  onboardingStatus = { complete: true, homePath: '/Documents/Muniment', warning: null, triagePending: false }
+  homeStatus = { configured: true, homePath: '/Documents/Muniment' }
   chatListener = undefined
   dictationListener = undefined
   eventUnlisten = vi.fn()
@@ -87,46 +87,47 @@ beforeEach(() => {
 
 afterEach(() => cleanup())
 
-describe('onboarding state transitions', () => {
-  it('requires explicit acceptance of the displayed default before proposing', async () => {
-    onboardingStatus = { complete: false, homePath: '/Documents/Muniment', warning: null, triagePending: false }
-    invoke.mockImplementation(async (command) => {
-      if (command === 'required_model_acquisition_status') return { aiFeaturesAvailable: false, status: { state: 'failed' } }
-      if (command === 'onboarding_propose') return { report: '# report', usedModel: false, warning: null }
-      throw new Error(`unexpected command: ${command}`)
-    })
-    render(App)
-    const review = await screen.findByTestId('onboarding-review')
-    expect(review).toBeDisabled()
-    await fireEvent.click(screen.getByTestId('onboarding-accept-location'))
-    expect(review).toBeEnabled()
-    await fireEvent.click(review)
-    expect(await screen.findByTestId('onboarding-report')).toHaveTextContent('# report')
-  })
-
-  it('keeps a scaffolded manual Home visible when late model completion fails', async () => {
-    onboardingStatus = { complete: true, homePath: '/Documents/Muniment', warning: null, triagePending: true }
-    let acquisitionCalls = 0
-    invoke.mockImplementation(async (command) => {
+describe('Home onboarding', () => {
+  it('blocks the shell and confirms the displayed Documents default', async () => {
+    homeStatus = { configured: false, homePath: '/Documents/Muniment' }
+    invoke.mockImplementation(async (command, payload) => {
+      if (command === 'home_confirm') return { configured: true, homePath: payload.homePath }
       if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
       if (command === 'chat_history') return []
       if (command === 'auth_entitlement_snapshot') return snapshot()
       if (command === 'auth_devices') return []
-      if (command === 'required_model_acquisition_status') {
-        acquisitionCalls += 1
-        return { aiFeaturesAvailable: acquisitionCalls > 1, status: { state: acquisitionCalls > 1 ? 'ready' : 'installing' } }
-      }
-      if (command === 'onboarding_propose') throw 'Model completion failed'
       throw new Error(`unexpected command: ${command}`)
     })
     render(App)
+    expect(await screen.findByTestId('onboarding-home-path')).toHaveTextContent('/Documents/Muniment')
+    expect(screen.queryByText('Sign in')).not.toBeInTheDocument()
+    expect(screen.queryByPlaceholderText('Ask anything')).not.toBeInTheDocument()
+    await fireEvent.click(screen.getByTestId('onboarding-confirm'))
     expect(await screen.findByPlaceholderText('Ask anything')).toBeInTheDocument()
-    const review = await screen.findByTestId('onboarding-late-triage', {}, { timeout: 2500 })
-    await fireEvent.click(review)
-    expect(await screen.findByRole('alert')).toHaveTextContent('Model completion failed')
-    expect(screen.getByPlaceholderText('Ask anything')).toBeInTheDocument()
-    expect(screen.queryByTestId('onboarding-report')).not.toBeInTheDocument()
-    expect(invoke.mock.calls.filter(([command]) => command === 'onboarding_propose')).toHaveLength(1)
+    expect(invoke).toHaveBeenCalledWith('home_confirm', { homePath: '/Documents/Muniment' })
+  })
+
+  it('surfaces a scaffold failure and lets the user choose again', async () => {
+    homeStatus = { configured: false, homePath: '/read-only/Muniment' }
+    dialogResult = '/Documents/Muniment'
+    invoke.mockRejectedValue('Muniment Home could not be created.')
+    render(App)
+    await fireEvent.click(await screen.findByTestId('onboarding-confirm'))
+    expect(await screen.findByRole('alert')).toHaveTextContent('Muniment Home could not be created.')
+    expect(screen.queryByPlaceholderText('Ask anything')).not.toBeInTheDocument()
+    await fireEvent.click(screen.getByTestId('onboarding-picker'))
+    await waitFor(() => expect(screen.getByTestId('onboarding-home-path')).toHaveTextContent('/Documents/Muniment'))
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+  })
+
+  it('cancels Home settings back to the configured workspace', async () => {
+    render(App)
+    await fireEvent.click(await screen.findByText('Home settings'))
+    expect(screen.getByTestId('onboarding-home-path')).toHaveTextContent('/Documents/Muniment')
+    await fireEvent.click(screen.getByTestId('onboarding-picker'))
+    await fireEvent.click(screen.getByTestId('onboarding-cancel'))
+    expect(await screen.findByPlaceholderText('Ask anything')).toBeInTheDocument()
+    expect(invoke).not.toHaveBeenCalledWith('home_confirm', expect.anything())
   })
 })
 
