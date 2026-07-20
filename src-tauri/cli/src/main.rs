@@ -250,6 +250,7 @@ mod unix_abi {
 
     unsafe extern "C" {
         fn geteuid() -> u32;
+        #[cfg(test)]
         fn chown(path: *const std::ffi::c_char, owner: u32, group: u32) -> i32;
     }
 
