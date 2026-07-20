@@ -749,3 +749,82 @@ through its ordinary entitlement, permission, journal, and receipt path.
 - Relay failure, mobile disconnect, or remote detach cannot silently approve a
   pending gate or interrupt the still-local session. Stop is an explicit,
   authenticated, journaled command.
+
+## 15. Onboarding, memory, and Muniment Home (owner decision 2026-07-19)
+
+Muniment gives users a visible, portable memory system and a surface-appropriate
+first run. One required on-device model supports that onboarding and remains the
+front door for routing every query after setup; folder setup itself never depends
+on successful model acquisition.
+
+### 15.1 Muniment Home and the memory model
+
+**Muniment Home** is a user-visible directory containing `memory/`, `agents/`,
+`projects/<name>/`, and `sessions/`. Its contents are plain, human-editable
+Markdown files, and those files are the source of truth. Any SQLite or embedding
+index is a disposable, rebuildable cache. The primary store is **never** a hidden
+dot-directory, and there is no proprietary memory database.
+
+Muniment does not build a sync service for Home. The directory rides the user's
+existing filesystem sync when the user chooses one. Session transcripts use
+semantic filenames containing the date and topic, not opaque identifiers, and
+the product exposes a visible retention policy for them.
+
+`AGENTS.md` remains the repository-instruction layer: honor the open standard and
+resolve the nearest file for each path in a monorepo. Instructions govern how the
+agent works in a repository; memory records user and project context. They are
+distinct layers, and neither silently replaces or absorbs the other.
+
+### 15.2 Per-surface defaults
+
+- **Desktop:** first run has an explicit, unskippable directory picker, defaulted
+  to `Documents/Muniment`. The location remains changeable later.
+- **CLI and VS Code extension:** the directory in which the surface was opened
+  **is** the workspace memory location by default, without asking again. Both
+  surfaces expose a visible option to change it.
+- The user-level Muniment Home is created lazily, on the first cross-project
+  need; opening the CLI or extension in a repository does not eagerly create it.
+
+### 15.3 Required on-device onboard and query-router model
+
+The working pick is **Qwen3.5-4B Instruct, Q4 GGUF (Apache 2.0)**. It ships as a
+pinned, checksummed descriptor through the verified runtime-acquisition path in
+[ADR 0008](../decisions/0008-pi-runtime-distribution.md) and is served by the
+`llama-server` distribution line in
+[ADR 0014](../decisions/0014-llama-server-distribution.md). A descriptor bump can
+swap the model without changing this contract. Artifact download uses a Muniment
+proxy or redirect; this requirement has a corresponding MUNICLOUD implementation
+ripple.
+
+The model has two continuing roles: onboarding/import triage and the per-query
+front-door router. For each query it selects a route class — **cloud model**,
+**proxy**, or **local** — before the selected route's own governed model policy
+and entitlements apply. Voice and audio models remain optional. The Qwen
+onboard/router model is the only required on-device model artifact.
+
+### 15.4 Consent-gated onboarding and import
+
+Onboarding may detect candidate sources including `~/.claude`, `~/.codex`,
+Cursor, Cline memory banks, and assistant data-export ZIPs. Detection leads to a
+consent checklist with a preview. Muniment reads only sources the user approves;
+it never performs a background disk walk.
+
+Every imported memory carries provenance frontmatter with its source and import
+date. The original text is **always** retained verbatim; summaries, rewrites, or
+other transformations are additive and never replace it.
+
+Triage produces a Markdown onboarding report containing a user-type
+classification, the proposed Home layout, and two or three starter agents as
+Markdown files proposed for `agents/`. The user confirms the report **before**
+Muniment scaffolds Home or writes those agents.
+
+### 15.5 Safeguards, boundaries, and open items
+
+- Folder setup fails open. If the required model cannot download, onboarding
+  degrades to manual setup and retries the download in the background; a failed
+  download never bricks first run. Only features that depend on AI fail closed.
+- The headless/server CLI stance remains open pending an owner ruling.
+- Gemma 4 E2B is a tracked alternate pending llama.cpp PLE support
+  ([ggml-org/llama.cpp issue 22243](https://github.com/ggml-org/llama.cpp/issues/22243)).
+- The final model choice is gated on the MUNIQA routing evaluation, with
+  [arXiv 2604.02367](https://arxiv.org/abs/2604.02367) as its reference.
