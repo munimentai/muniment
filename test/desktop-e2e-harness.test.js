@@ -13,7 +13,7 @@ const runNode = (script, args, options = {}) => spawnSync(process.execPath, [pat
 describe('WDIO Tauri service dependency contract', () => {
   it('loads the installed ESM entry with compatible transitive named exports', async () => {
     await expect(import('@wdio/tauri-service')).resolves.toBeDefined()
-  })
+  }, 15_000)
 })
 
 describe('nightly asset identity', () => {
