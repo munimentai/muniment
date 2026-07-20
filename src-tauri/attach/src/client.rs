@@ -1323,7 +1323,7 @@ impl AuthorizedClient {
         &mut self,
         _opened_directory: &str,
         _memory_location: &str,
-    ) -> Result<WorkspaceOnboarded, ClientError> {
+    ) -> Result<crate::WorkspaceOnboarded, ClientError> {
         Err(ClientError::UnsupportedPlatform)
     }
     pub fn ensure_home(&mut self) -> Result<(), ClientError> {
