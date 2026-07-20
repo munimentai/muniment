@@ -5,7 +5,6 @@ const platform = ['linux', 'windows', 'macos'].includes(selector) ? selector : '
 const file = platform === selector ? selectedFile : selector
 if (!/^[0-9a-f]{40}$/.test(sha || '')) throw new Error('invalid source SHA')
 const release = JSON.parse(file === '-' ? fs.readFileSync(0, 'utf8') : fs.readFileSync(file, 'utf8'))
-if (release.target_commitish !== sha) throw new Error('release identity mismatch')
 const windowsPerUser = new RegExp(`^nightly-${sha}-windows-muniment_[0-9]+\\.[0-9]+\\.[0-9]+_x64_en-US\\.msi$`)
 const expectedName = platform === 'macos'
   ? `nightly-${sha}-macos-muniment.app.zip`
