@@ -32,7 +32,9 @@ default-features = false
 features = ["apple-native", "windows-native", "sync-secret-service", "vendored"]
 
 [dev-dependencies]
+flate2 = "1"
 sha2 = "0.10"
+tar = "0.4"
 tauri = { version = "2", features = ["test"] }
 
 [[example]]

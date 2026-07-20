@@ -240,8 +240,6 @@ jobs:
 
       - name: Run installed Linux sign-in via desktop-ci
         id: e2e
-        env:
-          DESKTOP_CI_SSH_KEY: ${{ secrets.DESKTOP_CI_SSH_KEY }}
         run: |
           set -uo pipefail
           set +x
@@ -328,8 +326,6 @@ jobs:
 
       - name: Run installed Windows sign-in via desktop-ci
         id: e2e
-        env:
-          DESKTOP_CI_SSH_KEY: ${{ secrets.DESKTOP_CI_SSH_KEY }}
         run: |
           set -uo pipefail
           set +x
@@ -412,8 +408,6 @@ jobs:
 
       - name: Run installed macOS launch smoke via desktop-ci
         id: e2e
-        env:
-          DESKTOP_CI_SSH_KEY: ${{ secrets.DESKTOP_CI_SSH_KEY }}
         run: |
           set -uo pipefail
           set +x

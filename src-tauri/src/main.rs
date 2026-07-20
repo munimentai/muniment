@@ -16,8 +16,12 @@ fn main() {
         .manage(Arc::new(voice_capture::VoiceCaptureState::new()))
         .setup(|app| {
             app.manage(chat::ChatState::new(app.handle())?);
-            let model_root = app.path().app_data_dir()?.join("models").join("gemma");
-            app.manage(model_install::GemmaInstallState::new(model_root)?);
+            let model_root = app.path().app_data_dir()?.join("models").join("qwen3.5-4b");
+            let required_model = model_install::GemmaInstallState::new(model_root)?;
+            // Required acquisition is deliberately detached from onboarding: folder and
+            // consent steps remain interactive while this worker downloads and activates AI.
+            required_model.start();
+            app.manage(required_model);
             let parakeet_root = app.path().app_data_dir()?.join("models").join("parakeet");
             app.manage(model_install::ParakeetInstallState::new(
                 parakeet_root.clone(),
@@ -41,6 +45,7 @@ fn main() {
             model_install::gemma_install_start,
             model_install::gemma_install_status,
             model_install::gemma_install_cancel,
+            model_install::required_model_acquisition_status,
             model_install::parakeet_install_start,
             model_install::parakeet_install_status,
             model_install::parakeet_install_cancel,

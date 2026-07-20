@@ -39,6 +39,11 @@ describe('nightly Linux E2E workflow', () => {
     expect(reportStep).toContain('path: ${{ runner.temp }}/muniment-e2e-artifacts/junit-*.xml')
     expect(reportStep).not.toContain('path: ${{ runner.temp }}/muniment-e2e-artifacts\n')
   })
+
+  it('uses the SSH key provided by the self-hosted runner for every E2E lane', () => {
+    expect(workflow).not.toContain('DESKTOP_CI_SSH_KEY: ${{ secrets.DESKTOP_CI_SSH_KEY }}')
+    expect(workflow.match(/printf '%s' "\$DESKTOP_CI_SSH_KEY"/g)).toHaveLength(4)
+  })
 })
 
 describe('nightly Windows E2E workflow', () => {
