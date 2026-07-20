@@ -240,8 +240,6 @@ jobs:
 
       - name: Run installed Linux sign-in via desktop-ci
         id: e2e
-        env:
-          DESKTOP_CI_SSH_KEY: ${{ secrets.DESKTOP_CI_SSH_KEY }}
         run: |
           set -uo pipefail
           set +x
@@ -328,8 +326,6 @@ jobs:
 
       - name: Run installed Windows sign-in via desktop-ci
         id: e2e
-        env:
-          DESKTOP_CI_SSH_KEY: ${{ secrets.DESKTOP_CI_SSH_KEY }}
         run: |
           set -uo pipefail
           set +x
@@ -377,6 +373,15 @@ jobs:
           retention-days: 30
           if-no-files-found: error
 
+      - name: Upload stable JUnit report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-e2e-report
+          path: ${{ runner.temp }}/muniment-windows-e2e-artifacts/junit-*.xml
+          retention-days: 30
+          if-no-files-found: error
+
       - name: Preserve E2E result
         if: always()
         env:
@@ -403,8 +408,6 @@ jobs:
 
       - name: Run installed macOS launch smoke via desktop-ci
         id: e2e
-        env:
-          DESKTOP_CI_SSH_KEY: ${{ secrets.DESKTOP_CI_SSH_KEY }}
         run: |
           set -uo pipefail
           set +x

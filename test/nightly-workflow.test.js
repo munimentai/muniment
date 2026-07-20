@@ -39,6 +39,24 @@ describe('nightly Linux E2E workflow', () => {
     expect(reportStep).toContain('path: ${{ runner.temp }}/muniment-e2e-artifacts/junit-*.xml')
     expect(reportStep).not.toContain('path: ${{ runner.temp }}/muniment-e2e-artifacts\n')
   })
+
+  it('uses the SSH key provided by the self-hosted runner for every E2E lane', () => {
+    expect(workflow).not.toContain('DESKTOP_CI_SSH_KEY: ${{ secrets.DESKTOP_CI_SSH_KEY }}')
+    expect(workflow.match(/printf '%s' "\$DESKTOP_CI_SSH_KEY"/g)).toHaveLength(4)
+  })
+})
+
+describe('nightly Windows E2E workflow', () => {
+  const start = workflow.indexOf('  windows-e2e:')
+  const windowsE2e = workflow.slice(start, workflow.indexOf('  macos-e2e:', start))
+
+  it('uploads only generated JUnit XML under the stable report name', () => {
+    const reportStep = windowsE2e.slice(windowsE2e.indexOf('      - name: Upload stable JUnit report'), windowsE2e.indexOf('      - name: Preserve E2E result'))
+    expect(reportStep).toContain('if: always()')
+    expect(reportStep).toContain('name: windows-e2e-report')
+    expect(reportStep).toContain('path: ${{ runner.temp }}/muniment-windows-e2e-artifacts/junit-*.xml')
+    expect(reportStep).not.toContain('path: ${{ runner.temp }}/muniment-windows-e2e-artifacts\n')
+  })
 })
 
 describe('nightly macOS E2E workflow', () => {
