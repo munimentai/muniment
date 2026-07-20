@@ -14,6 +14,7 @@ let eventUnlisten
 let dialogResult
 let dragDropListener
 let dragDropUnlisten
+let onboardingStatus
 
 vi.mock('@tauri-apps/api/webview', () => ({
   getCurrentWebview: () => ({
@@ -50,7 +51,9 @@ const device = (device_id, overrides = {}) => ({
 beforeAll(async () => {
   HTMLElement.prototype.scrollTo = vi.fn()
   window.__TAURI__ = {
-    core: { invoke: (...args) => invoke(...args) },
+    core: { invoke: (command, ...args) => command === 'onboarding_status'
+      ? Promise.resolve(onboardingStatus)
+      : invoke(command, ...args) },
     event: { listen: vi.fn((event, listener) => {
       if (event === 'chat-event') chatListener = listener
       if (event === 'dictation-event') dictationListener = listener
@@ -65,6 +68,7 @@ beforeAll(async () => {
 })
 
 beforeEach(() => {
+  onboardingStatus = { complete: true, homePath: '/Documents/Muniment', warning: null, triagePending: false }
   chatListener = undefined
   dictationListener = undefined
   eventUnlisten = vi.fn()
@@ -82,6 +86,49 @@ beforeEach(() => {
 })
 
 afterEach(() => cleanup())
+
+describe('onboarding state transitions', () => {
+  it('requires explicit acceptance of the displayed default before proposing', async () => {
+    onboardingStatus = { complete: false, homePath: '/Documents/Muniment', warning: null, triagePending: false }
+    invoke.mockImplementation(async (command) => {
+      if (command === 'required_model_acquisition_status') return { aiFeaturesAvailable: false, status: { state: 'failed' } }
+      if (command === 'onboarding_propose') return { report: '# report', usedModel: false, warning: null }
+      throw new Error(`unexpected command: ${command}`)
+    })
+    render(App)
+    const review = await screen.findByTestId('onboarding-review')
+    expect(review).toBeDisabled()
+    await fireEvent.click(screen.getByTestId('onboarding-accept-location'))
+    expect(review).toBeEnabled()
+    await fireEvent.click(review)
+    expect(await screen.findByTestId('onboarding-report')).toHaveTextContent('# report')
+  })
+
+  it('keeps a scaffolded manual Home visible when late model completion fails', async () => {
+    onboardingStatus = { complete: true, homePath: '/Documents/Muniment', warning: null, triagePending: true }
+    let acquisitionCalls = 0
+    invoke.mockImplementation(async (command) => {
+      if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
+      if (command === 'chat_history') return []
+      if (command === 'auth_entitlement_snapshot') return snapshot()
+      if (command === 'auth_devices') return []
+      if (command === 'required_model_acquisition_status') {
+        acquisitionCalls += 1
+        return { aiFeaturesAvailable: acquisitionCalls > 1, status: { state: acquisitionCalls > 1 ? 'ready' : 'installing' } }
+      }
+      if (command === 'onboarding_propose') throw 'Model completion failed'
+      throw new Error(`unexpected command: ${command}`)
+    })
+    render(App)
+    expect(await screen.findByPlaceholderText('Ask anything')).toBeInTheDocument()
+    const review = await screen.findByTestId('onboarding-late-triage', {}, { timeout: 2500 })
+    await fireEvent.click(review)
+    expect(await screen.findByRole('alert')).toHaveTextContent('Model completion failed')
+    expect(screen.getByPlaceholderText('Ask anything')).toBeInTheDocument()
+    expect(screen.queryByTestId('onboarding-report')).not.toBeInTheDocument()
+    expect(invoke.mock.calls.filter(([command]) => command === 'onboarding_propose')).toHaveLength(1)
+  })
+})
 
 describe('voice dictation', () => {
   it('starts on primary pointer down and stops on release while preserving transcript', async () => {

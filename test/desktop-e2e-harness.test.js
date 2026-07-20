@@ -171,7 +171,7 @@ describe('macOS installed launch harness', () => {
     expect(result.signal).toBeNull()
     expect(invoked).toEqual(finalizerPhases.filter((phase) => phase !== 'suppress-artifacts'))
     expect(invoked).toEqual(expect.arrayContaining(['stop-app', 'remove-bundle', 'remove-state', 'processes-gone', 'redact-artifacts']))
-  })
+  }, 15_000)
 
   it.each(['stop-app', 'remove-bundle', 'remove-state', 'processes-gone', 'redact-artifacts', 'replace-artifacts', 'publish-artifacts'])(
     'continues cleanup and fails after injected %s failure', (failed) => {

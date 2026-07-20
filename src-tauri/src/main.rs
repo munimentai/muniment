@@ -4,6 +4,7 @@ mod auth;
 mod chat;
 mod dictation;
 mod model_install;
+mod onboarding;
 mod voice_capture;
 
 use std::sync::Arc;
@@ -46,6 +47,9 @@ fn main() {
             model_install::gemma_install_status,
             model_install::gemma_install_cancel,
             model_install::required_model_acquisition_status,
+            onboarding::onboarding_status,
+            onboarding::onboarding_propose,
+            onboarding::onboarding_confirm,
             model_install::parakeet_install_start,
             model_install::parakeet_install_status,
             model_install::parakeet_install_cancel,

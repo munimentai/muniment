@@ -101,7 +101,13 @@ app_binary=$(command -v muniment-desktop || command -v muniment) || { echo 'inst
 chromedriver --port=9515 --allowed-ips=127.0.0.1 >>"$raw/chromedriver.log" 2>&1 &
 export MUNIMENT_E2E_APP_BINARY="$app_binary" MUNIMENT_E2E_RAW_DIR="$raw"
 export MUNIMENT_E2E_AUTH_URL_FILE="$auth_url_file" BROWSER="$PWD/test/e2e/support/browser-launcher.sh"
-export XDG_DATA_HOME="$state_root/data" XDG_CONFIG_HOME="$state_root/config" XDG_CACHE_HOME="$state_root/cache"
 ready=1
+export XDG_DATA_HOME="$state_root/ready/data" XDG_CONFIG_HOME="$state_root/ready/config" XDG_CACHE_HOME="$state_root/ready/cache"
+export MUNIMENT_E2E_ONBOARDING_ONLY=1 MUNIMENT_E2E_MODEL_READY=1 MUNIMENT_E2E_HOME_PATH="$state_root/ready-home"
+xvfb-run -a npm run test:e2e >"$raw/wdio-onboarding.log" 2>"$raw/driver-onboarding.log" || status=1
+unset MUNIMENT_E2E_ONBOARDING_ONLY MUNIMENT_E2E_MODEL_READY
+export XDG_DATA_HOME="$state_root/degraded/data" XDG_CONFIG_HOME="$state_root/degraded/config" XDG_CACHE_HOME="$state_root/degraded/cache"
+export MUNIMENT_E2E_HOME_PATH="$state_root/degraded-home"
+export MUNIMENT_E2E_FORCE_MANUAL=1
 xvfb-run -a npm run test:e2e >"$raw/wdio.log" 2>"$raw/driver-app.log" || status=1
 exit
