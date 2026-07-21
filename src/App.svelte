@@ -165,7 +165,13 @@
       dictationError = status.message
     } else dictationError = ''
     if (!isDictationActive(status)) stopDictationPolling()
-    if (status.state === 'stopped' && dictationCompletionEpoch !== undefined) finishDictation(dictationCompletionEpoch)
+    if (status.state === 'stopped' && dictationCompletionEpoch !== undefined) {
+      if (dictationCancelled) completeDictation(dictationCompletionEpoch)
+      else {
+        dictationFinishing = true
+        finishDictation(dictationCompletionEpoch)
+      }
+    }
   }
 
   function pollDictation() {
@@ -209,6 +215,7 @@
       if (isDictationActive(dictation)) pollDictation()
     } catch (error) {
       if (destroyed) return
+      dictationFinishing = false
       dictationError = typeof error === 'string' ? error : 'Dictation could not be stopped.'
       pollDictation()
     } finally {
@@ -217,7 +224,7 @@
   }
 
   async function startDictation() {
-    if (active || dictationCommandPending || dictationPolishing || dictationRequested) return
+    if (active || dictationCommandPending || dictationFinishing || dictationPolishing || dictationRequested) return
     if (isDictationActive(dictation)) {
       await stopDictation()
       return
@@ -725,7 +732,7 @@
               <span>{active?.phase === 'resuming' ? 'Reopening the existing secure session…' : active && active.id !== 'pending' ? '⏎ steers this reply · queue as follow-up' : 'Routing is automatic. Every reply carries its receipt.'}</span>
             {/if}
             <div class="composer-actions">
-              <button type="button" class="quiet voice" aria-pressed={isDictationActive(dictation)} disabled={!!active || dictationPolishing} onpointerdown={voicePointerDown} onpointerup={voicePointerEnd} onpointercancel={voicePointerEnd} onkeydown={voiceKeyDown} onkeyup={voiceKeyUp} onclick={voiceClick}>Voice</button>
+              <button type="button" class="quiet voice" aria-pressed={isDictationActive(dictation)} disabled={!!active || dictationFinishing || dictationPolishing} onpointerdown={voicePointerDown} onpointerup={voicePointerEnd} onpointercancel={voicePointerEnd} onkeydown={voiceKeyDown} onkeyup={voiceKeyUp} onclick={voiceClick}>Voice</button>
               {#if !active}<button type="button" class="quiet attach" onclick={chooseFiles}>Add files</button>{/if}
               {#if active?.phase === 'resuming'}
                 <button disabled>Resuming…</button>

@@ -160,6 +160,9 @@ describe('voice dictation', () => {
     await Promise.resolve()
     await new Promise((resolve) => setTimeout(resolve, 0))
     expect(invoke).not.toHaveBeenCalledWith('dictation_polish', expect.anything())
+    expect(voice).toBeDisabled()
+    await fireEvent.click(voice)
+    expect(invoke.mock.calls.filter(([command]) => command === 'dictation_start')).toHaveLength(1)
     dictationListener({ payload: { type: 'transcript', text: 'at the boundary' } })
 
     await waitFor(() => expect(invoke).toHaveBeenCalledWith('dictation_polish', { transcript: 'after at the boundary' }))
