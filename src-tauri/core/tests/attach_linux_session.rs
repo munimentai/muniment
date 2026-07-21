@@ -602,7 +602,11 @@ fn authorized_client_reconnects_without_waiting_for_pairing() {
         ),
         Ok(())
     );
-    let _: Welcome = read_frame(&mut client);
+    let welcome: Welcome = read_frame(&mut client);
+    assert_eq!(
+        welcome.authorization,
+        muniment_attach::Authorization::Authorized
+    );
     let authorized: Authorized = read_frame(&mut client);
     assert_eq!(authorized.authorized_client_credential, credential);
     assert!(service.bound);
@@ -650,7 +654,11 @@ fn invalid_reconnect_credential_still_requires_pairing_and_is_not_replaced() {
         ),
         Err(AttachSessionError::Authorization)
     );
-    let _: Welcome = read_frame(&mut client);
+    let welcome: Welcome = read_frame(&mut client);
+    assert_eq!(
+        welcome.authorization,
+        muniment_attach::Authorization::PairingRequired
+    );
     let error: ErrorEnvelope = read_frame(&mut client);
     assert_eq!(error.error.code(), ErrorCode::Unauthorized);
     assert_eq!(waits.get(), 2);

@@ -931,6 +931,15 @@ where
             companion_identity: format!("{}:{}", credentials.uid, credentials.pid),
             companion_kind,
         };
+        let reconnect = authorized_client_credential
+            .as_deref()
+            .and_then(|credential| {
+                let approval = service.reconnect_approval()?;
+                service
+                    .authorize_client(&authorized_client_id, Some(credential), "")
+                    .ok()
+                    .map(|credential| (approval, credential))
+            });
         let mut authorization = AuthorizationState::new(clock.clone(), tokens, binding.clone());
         let challenge_expires_at = clock.now() + CHALLENGE_LIFETIME;
         let challenge = authorization
@@ -942,22 +951,22 @@ where
         let authorization_deadline = Instant::now()
             .checked_add(CHALLENGE_LIFETIME)
             .ok_or(AttachSessionError::Timeout)?;
-        let response = welcome(selected, desktop_version, server_nonce, challenge.as_str());
+        let response = if reconnect.is_some() {
+            muniment_attach::reconnect_welcome(
+                selected,
+                desktop_version,
+                server_nonce,
+                challenge.as_str(),
+            )
+        } else {
+            welcome(selected, desktop_version, server_nonce, challenge.as_str())
+        };
         write_before(
             &mut stream,
             &encode_frame(&response).map_err(|_| AttachSessionError::MalformedFrame)?,
             deadline,
         )?;
 
-        let reconnect = authorized_client_credential
-            .as_deref()
-            .and_then(|credential| {
-                let approval = service.reconnect_approval()?;
-                service
-                    .authorize_client(&authorized_client_id, Some(credential), "")
-                    .ok()
-                    .map(|credential| (approval, credential))
-            });
         let (approval, reconnect_credential) = match reconnect {
             Some((approval, credential)) => (approval, Some(credential)),
             None => {
