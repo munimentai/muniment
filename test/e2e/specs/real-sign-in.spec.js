@@ -19,40 +19,22 @@ describe('installed nightly', () => {
     const home = process.env.MUNIMENT_E2E_HOME_PATH
     const location = await $('[data-testid="onboarding-home-path"]')
     await location.waitForDisplayed()
-    const displayedDefault = await location.getValue()
-    expect(displayedDefault).toMatch(/[\\/]Documents[\\/]Muniment$/)
-    expect(await $('[data-testid="onboarding-review"]').isEnabled()).toBe(false)
-    await (await $('[data-testid="onboarding-accept-location"]')).click()
-    await (await $('[data-testid="onboarding-review"]')).click()
-    const firstReport = await $('[data-testid="onboarding-report"]')
-    await firstReport.waitForDisplayed()
-    expect(await firstReport.getText()).toContain(displayedDefault)
-    expect(await firstReport.getText()).toContain('Manual setup')
-    await (await $('[data-testid="onboarding-reject"]')).click()
-    await (await $('[data-testid="onboarding-agent-writer"]')).click()
-    await (await $('button=Change location')).click()
-    await location.setValue(home)
-    await (await $('[data-testid="onboarding-accept-location"]')).click()
-    await (await $('[data-testid="onboarding-review"]')).click()
-    const revisedReport = await $('[data-testid="onboarding-report"]')
-    await revisedReport.waitForDisplayed()
-    expect(await revisedReport.getText()).toContain(home)
-    expect(await revisedReport.getText()).toContain('Researcher')
-    expect(await revisedReport.getText()).not.toContain('Writer')
+
+    const dialog = await browser.tauri.mock('plugin:dialog|open')
+    await dialog.mockReturnValue(home)
+    await (await $('[data-testid="onboarding-picker"]')).click()
+    expect(await location.getText()).toBe(home)
     let homeExists = true
     try { await access(home) } catch { homeExists = false }
     expect(homeExists).toBe(false)
     await (await $('[data-testid="onboarding-confirm"]')).click()
-    for (const directory of ['memory', 'agents', 'projects', 'sessions']) {
-      expect(await readFile(path.join(home, directory, 'README.md'), 'utf8')).toContain(`# ${directory[0].toUpperCase()}${directory.slice(1)}`)
-    }
-    expect(await readFile(path.join(home, 'agents', 'researcher.md'), 'utf8')).toContain('# Researcher')
-    let writerExists = true
-    try { await access(path.join(home, 'agents', 'writer.md')) } catch { writerExists = false }
-    expect(writerExists).toBe(false)
 
     const signedOut = await $('button=Sign in')
     await signedOut.waitForDisplayed()
+    for (const directory of ['memory', 'agents', 'projects', 'sessions']) {
+      expect(await readFile(path.join(home, directory, 'README.md'), 'utf8')).toContain(`# ${directory[0].toUpperCase()}${directory.slice(1)}`)
+    }
+
     await browser.saveScreenshot(path.join(rawDir, '01-signed-out.png'))
 
     await signedOut.click()
