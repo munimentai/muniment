@@ -135,18 +135,15 @@ describe('Home onboarding', () => {
 
 describe('voice dictation', () => {
   it('starts on primary pointer down and stops on release while preserving transcript', async () => {
-    let stopping = false
+    let resolveStop
     invoke.mockImplementation(async (command) => {
       if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
       if (command === 'chat_history') return []
       if (command === 'auth_entitlement_snapshot') return snapshot()
       if (command === 'auth_devices') return []
       if (command === 'dictation_start') return { state: 'running' }
-      if (command === 'dictation_stop') {
-        stopping = true
-        return { state: 'running' }
-      }
-      if (command === 'dictation_status' && stopping) return { state: 'stopped' }
+      if (command === 'dictation_stop') return new Promise((resolve) => { resolveStop = resolve })
+      if (command === 'dictation_polish') return 'Polished after.'
       throw new Error(`unexpected command: ${command}`)
     })
     render(App)
@@ -159,10 +156,90 @@ describe('voice dictation', () => {
     dictationListener({ payload: { type: 'transcript', text: 'after' } })
     await fireEvent.pointerUp(voice, { button: 0, pointerId: 1 })
 
-    await waitFor(() => expect(invoke).toHaveBeenCalledWith('dictation_stop'))
-    expect(composer).toHaveValue('Before after')
+    resolveStop({ state: 'stopped' })
+    await Promise.resolve()
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(invoke).not.toHaveBeenCalledWith('dictation_polish', expect.anything())
+    expect(voice).toBeDisabled()
+    await fireEvent.click(voice)
+    expect(invoke.mock.calls.filter(([command]) => command === 'dictation_start')).toHaveLength(1)
+    dictationListener({ payload: { type: 'transcript', text: 'at the boundary' } })
+
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('dictation_polish', { transcript: 'after at the boundary' }))
+    await waitFor(() => expect(composer).toHaveValue('Before Polished after.'))
     expect(invoke.mock.calls.filter(([command]) => command === 'dictation_start')).toHaveLength(1)
     expect(invoke.mock.calls.filter(([command]) => command === 'dictation_stop')).toHaveLength(1)
+    expect(invoke.mock.calls.filter(([command]) => command === 'dictation_polish')).toHaveLength(1)
+  })
+
+  it('keeps the verbatim capture editable and explains a polish failure', async () => {
+    invoke.mockImplementation(async (command) => {
+      if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
+      if (command === 'chat_history') return []
+      if (command === 'auth_entitlement_snapshot') return snapshot()
+      if (command === 'auth_devices') return []
+      if (command === 'dictation_start') return { state: 'running' }
+      if (command === 'dictation_stop') return { state: 'stopped' }
+      if (command === 'dictation_polish') throw { category: 'localAiUnavailable', message: 'Local AI is unavailable.' }
+      throw new Error(`unexpected command: ${command}`)
+    })
+    render(App)
+    const composer = await screen.findByPlaceholderText('Ask anything')
+    const voice = screen.getByRole('button', { name: 'Voice' })
+    await fireEvent.input(composer, { target: { value: 'Keep' } })
+    await fireEvent.click(voice)
+    dictationListener({ payload: { type: 'transcript', text: 'verbatim words' } })
+    await fireEvent.click(voice)
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Polishing is unavailable. You can edit or send the captured text.')
+    expect(composer).toHaveValue('Keep verbatim words')
+    expect(composer).not.toHaveAttribute('readonly')
+    expect(screen.getByRole('button', { name: 'Send' })).toBeEnabled()
+  })
+
+  it('styles only the captured segment and rejects stale capture completions while mounted', async () => {
+    let resolvePolish
+    let starts = 0
+    invoke.mockImplementation(async (command) => {
+      if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
+      if (command === 'chat_history') return []
+      if (command === 'auth_entitlement_snapshot') return snapshot()
+      if (command === 'auth_devices') return []
+      if (command === 'dictation_start') {
+        starts += 1
+        return { state: 'running' }
+      }
+      if (command === 'dictation_stop') return { state: 'stopped' }
+      if (command === 'dictation_polish') return new Promise((resolve) => { resolvePolish = resolve })
+      throw new Error(`unexpected command: ${command}`)
+    })
+    render(App)
+    const composer = await screen.findByPlaceholderText('Ask anything')
+    const voice = screen.getByRole('button', { name: 'Voice' })
+    await fireEvent.input(composer, { target: { value: 'Existing draft' } })
+    await fireEvent.click(voice)
+    const oldCaptureListener = dictationListener
+    dictationListener({ payload: { type: 'transcript', text: 'old capture' } })
+    await fireEvent.click(voice)
+
+    expect(await screen.findByRole('status')).toHaveTextContent('Polishing on this device…')
+    expect(screen.getByTestId('polish-draft').textContent).toBe('Existing draft ')
+    expect(screen.getByTestId('polish-draft')).not.toHaveClass('polish-transcript')
+    expect(screen.getByTestId('polish-transcript')).toHaveTextContent('old capture')
+    expect(screen.getByTestId('polish-transcript')).toHaveClass('polish-transcript')
+    expect(voice).toBeDisabled()
+    expect(screen.getByRole('button', { name: 'Send' })).toBeDisabled()
+    expect(composer).toHaveAttribute('readonly')
+
+    await fireEvent.keyDown(document, { key: 'Escape' })
+    await fireEvent.input(composer, { target: { value: 'Newer draft exactly' } })
+    await fireEvent.click(voice)
+    await waitFor(() => expect(starts).toBe(2))
+    oldCaptureListener({ payload: { type: 'transcript', text: 'late old transcript' } })
+    resolvePolish('Stale replacement')
+    await Promise.resolve()
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(composer).toHaveValue('Newer draft exactly')
   })
 
   it('cancels a primary pointer capture, restores the snapshot, and focuses the composer', async () => {
@@ -192,6 +269,7 @@ describe('voice dictation', () => {
     expect(composer).toHaveValue('Exact draft  ')
     expect(composer).toHaveFocus()
     expect(invoke.mock.calls.filter(([command]) => command === 'dictation_stop')).toHaveLength(1)
+    expect(invoke.mock.calls.filter(([command]) => command === 'dictation_polish')).toHaveLength(0)
     dictationListener({ payload: { type: 'transcript', text: 'late' } })
     expect(composer).toHaveValue('Exact draft  ')
     await waitFor(() => expect(voice).toHaveAttribute('aria-pressed', 'false'))
@@ -369,7 +447,7 @@ describe('voice dictation', () => {
     await fireEvent.click(voice)
     expect(invoke).toHaveBeenCalledWith('dictation_stop')
     expect(voice).toHaveAttribute('aria-pressed', 'false')
-    expect(send).toBeEnabled()
+    await waitFor(() => expect(send).toBeEnabled())
   })
 
   it.each([
