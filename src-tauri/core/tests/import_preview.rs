@@ -321,7 +321,10 @@ fn extracts_only_selected_entries_verbatim_in_source_name_order() {
     assert_eq!(entries[0].source_name, "a.json");
     assert_eq!(entries[0].kind, EntryKind::Json);
     assert_eq!(entries[0].text, "{\n  \"exact\": true\n}\n");
-    assert_eq!(entries[0].source_provenance, "assistant-export-zip:a.json");
+    assert!(entries[0]
+        .source_provenance
+        .starts_with("assistant-export-zip:v1:"));
+    assert!(entries[0].source_provenance.ends_with(":a.json"));
     assert_eq!(entries[1].source_name, "notes/b.md");
     assert_eq!(entries[1].kind, EntryKind::Markdown);
     assert_eq!(entries[1].text, "line one\n\u{1f642}\n");
@@ -398,6 +401,26 @@ fn reopens_and_revalidates_an_archive_changed_after_preview() {
         extract_selected_zip_entries(&archive, &["chosen.txt".to_string()]),
         Err(PreviewErrorKind::PathTraversal)
     );
+}
+
+#[test]
+fn provenance_is_stable_and_distinguishes_independently_read_sources() {
+    let temp = Temp::new("extract-provenance");
+    let first_archive = temp.join("first.zip");
+    let second_archive = temp.join("second.zip");
+    let selection = ["chat.json".to_string()];
+    build_zip(&first_archive, &[Member::File("chat.json", b"first")]);
+    build_zip(&second_archive, &[Member::File("chat.json", b"second")]);
+
+    let first = extract_selected_zip_entries(&first_archive, &selection).unwrap();
+    let repeated = extract_selected_zip_entries(&first_archive, &selection).unwrap();
+    let second = extract_selected_zip_entries(&second_archive, &selection).unwrap();
+    assert_eq!(first[0].source_provenance, repeated[0].source_provenance);
+    assert_ne!(first[0].source_provenance, second[0].source_provenance);
+
+    build_zip(&first_archive, &[Member::File("chat.json", b"changed")]);
+    let changed = extract_selected_zip_entries(&first_archive, &selection).unwrap();
+    assert_ne!(first[0].source_provenance, changed[0].source_provenance);
 }
 
 #[test]
