@@ -28,12 +28,13 @@ describe('installed nightly', () => {
     try { await access(home) } catch { homeExists = false }
     expect(homeExists).toBe(false)
     await (await $('[data-testid="onboarding-confirm"]')).click()
+
+    const signedOut = await $('button=Sign in')
+    await signedOut.waitForDisplayed()
     for (const directory of ['memory', 'agents', 'projects', 'sessions']) {
       expect(await readFile(path.join(home, directory, 'README.md'), 'utf8')).toContain(`# ${directory[0].toUpperCase()}${directory.slice(1)}`)
     }
 
-    const signedOut = await $('button=Sign in')
-    await signedOut.waitForDisplayed()
     await browser.saveScreenshot(path.join(rawDir, '01-signed-out.png'))
 
     await signedOut.click()
