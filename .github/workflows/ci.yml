@@ -147,6 +147,8 @@ jobs:
 
       - name: Rust lint
         if: steps.changes.outputs.desktop == 'true' || github.event_name != 'pull_request'
+        env:
+          CARGO_INCREMENTAL: "0"
         run: cargo clippy --manifest-path src-tauri/core/Cargo.toml --all-targets --locked -- -D warnings
 
       - name: Rust unit tests
