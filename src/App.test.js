@@ -148,6 +148,77 @@ describe('Home onboarding', () => {
     expect(invoke).toHaveBeenCalledWith('home_confirm', { homePath: '/Documents/Muniment' })
   })
 
+  it('extracts exactly checked entries and advances only to transient pre-triage', async () => {
+    homeStatus = { configured: false, homePath: '/Documents/Muniment' }
+    dialogResult = '/Exports/assistant.zip'
+    const extracted = [{ sourceName: 'profile.json', kind: 'json', text: '{"name":"Alice"}', sourceProvenance: 'assistant-export-zip:v1:stable' }]
+    invoke.mockImplementation(async (command) => {
+      if (command === 'onboarding_import_preview') return { entries: [
+        { name: 'chat.md', kind: 'markdown', byteSize: 10, excerpt: 'chat', excerptTruncated: false },
+        { name: 'profile.json', kind: 'json', byteSize: 16, excerpt: '{}', excerptTruncated: false },
+      ], totalByteSize: 26 }
+      if (command === 'onboarding_import_extract') return extracted
+      if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
+      if (command === 'chat_history') return []
+      if (command === 'auth_entitlement_snapshot') return snapshot()
+      if (command === 'auth_devices') return []
+      throw new Error(`unexpected command: ${command}`)
+    })
+    render(App)
+    await fireEvent.click(await screen.findByTestId('onboarding-confirm'))
+    await fireEvent.click(screen.getByTestId('onboarding-import-picker'))
+    const checks = await screen.findAllByRole('checkbox')
+    expect(checks).toHaveLength(2)
+    expect(checks.every((checkbox) => !checkbox.checked)).toBe(true)
+    expect(screen.getByText(/0 of 2 selected/)).toBeInTheDocument()
+    expect(screen.getByTestId('onboarding-import-continue')).toBeDisabled()
+    await fireEvent.click(checks[1])
+    expect(screen.getByText(/1 of 2 selected/)).toBeInTheDocument()
+    await fireEvent.click(screen.getByTestId('onboarding-import-continue'))
+    expect(invoke).toHaveBeenCalledWith('onboarding_import_extract', {
+      archivePath: '/Exports/assistant.zip', selectedNames: ['profile.json'],
+    })
+    expect(await screen.findByText('Ready for local triage')).toBeInTheDocument()
+    expect(screen.getByText(/1 approved file is ready in temporary onboarding memory/)).toBeInTheDocument()
+    expect(invoke).not.toHaveBeenCalledWith('home_confirm', expect.anything())
+  })
+
+  it('keeps consent for extraction retry and suppresses stale extraction after skip', async () => {
+    homeStatus = { configured: false, homePath: '/Documents/Muniment' }
+    dialogResult = '/Exports/assistant.zip'
+    let extractionAttempt = 0
+    let resolveExtraction
+    invoke.mockImplementation(async (command, payload) => {
+      if (command === 'onboarding_import_preview') return { entries: [
+        { name: 'chat.md', kind: 'markdown', byteSize: 4, excerpt: 'chat', excerptTruncated: false },
+      ], totalByteSize: 4 }
+      if (command === 'onboarding_import_extract') {
+        extractionAttempt += 1
+        if (extractionAttempt === 1) throw { kind: 'invalidArchive', message: 'detail' }
+        return new Promise((resolve) => { resolveExtraction = resolve })
+      }
+      if (command === 'home_confirm') return { configured: true, homePath: payload.homePath }
+      if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
+      if (command === 'chat_history') return []
+      if (command === 'auth_entitlement_snapshot') return snapshot()
+      if (command === 'auth_devices') return []
+      throw new Error(`unexpected command: ${command}`)
+    })
+    render(App)
+    await fireEvent.click(await screen.findByTestId('onboarding-confirm'))
+    await fireEvent.click(screen.getByTestId('onboarding-import-picker'))
+    await fireEvent.click(await screen.findByRole('checkbox'))
+    await fireEvent.click(screen.getByTestId('onboarding-import-continue'))
+    expect(await screen.findByRole('alert')).toHaveTextContent('approved files could not be read')
+    expect(screen.getByRole('checkbox')).toBeChecked()
+    await fireEvent.click(screen.getByTestId('onboarding-import-continue'))
+    await fireEvent.click(screen.getByTestId('onboarding-import-skip'))
+    expect(await screen.findByPlaceholderText('Ask anything')).toBeInTheDocument()
+    resolveExtraction([{ sourceName: 'chat.md', text: 'chat', sourceProvenance: 'stable' }])
+    await Promise.resolve()
+    expect(screen.queryByText('Ready for local triage')).not.toBeInTheDocument()
+  })
+
   it('does not preview on picker cancel and can continue without importing', async () => {
     homeStatus = { configured: false, homePath: '/Documents/Muniment' }
     invoke.mockImplementation(async (command, payload) => {

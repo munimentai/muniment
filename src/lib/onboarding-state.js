@@ -27,7 +27,7 @@ export function onboardingImportChoiceState(state) {
 }
 
 export function onboardingFinalizingState(state) {
-  return { ...state, name: 'finalizing', error: undefined }
+  return { name: 'finalizing', homePath: state.homePath, error: undefined }
 }
 
 export function onboardingConfirmedState(state, status) {
@@ -37,11 +37,41 @@ export function onboardingConfirmedState(state, status) {
 }
 
 export function onboardingPreviewingState(state, archivePath) {
-  return { ...state, name: 'previewing', archivePath, manifest: undefined, error: undefined }
+  return { name: 'previewing', homePath: state.homePath, archivePath, manifest: undefined, selectedNames: [], extractedEntries: undefined, error: undefined }
 }
 
 export function onboardingPreviewState(state, manifest) {
-  return { ...state, name: 'reviewing', manifest, error: undefined }
+  return { ...state, name: 'reviewing', manifest, selectedNames: [], extractedEntries: undefined, error: undefined }
+}
+
+export function onboardingSelectionState(state, entryName, selected) {
+  const selectedNames = selected
+    ? [...state.selectedNames, entryName]
+    : state.selectedNames.filter((name) => name !== entryName)
+  return { ...state, selectedNames, error: undefined }
+}
+
+export function onboardingExtractingState(state) {
+  return { ...state, name: 'extracting', error: undefined }
+}
+
+export function onboardingExtractionState(state, extractedEntries) {
+  return { ...state, name: 'pre-triage', extractedEntries, error: undefined }
+}
+
+export function onboardingExtractionErrorState(state, error) {
+  const messages = {
+    emptySelection: 'Select at least one file to continue.',
+    invalidSelection: 'The selected files no longer match this archive. Review them and try again.',
+    duplicateSelection: 'The file selection is invalid. Review it and try again.',
+    directorySelection: 'A selected item is not a supported file. Review the selection and try again.',
+    unknownSelection: 'A selected file is no longer present in this archive. Choose the ZIP again to review it.',
+  }
+  return {
+    ...state,
+    name: 'reviewing',
+    error: messages[error?.kind] ?? 'The approved files could not be read. Your selection is unchanged; try again or choose another ZIP.',
+  }
 }
 
 export function onboardingPreviewErrorState(state, error) {

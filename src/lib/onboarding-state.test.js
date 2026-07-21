@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { onboardingCancelSettingsState, onboardingConfirmedState, onboardingConfirmingState, onboardingErrorState, onboardingFinalizingState, onboardingImportChoiceState, onboardingLoadingState, onboardingPathState, onboardingPreviewErrorState, onboardingPreviewingState, onboardingPreviewState, onboardingSettingsState, onboardingStatusState } from './onboarding-state.js'
+import { onboardingCancelSettingsState, onboardingConfirmedState, onboardingConfirmingState, onboardingErrorState, onboardingExtractingState, onboardingExtractionErrorState, onboardingExtractionState, onboardingFinalizingState, onboardingImportChoiceState, onboardingLoadingState, onboardingPathState, onboardingPreviewErrorState, onboardingPreviewingState, onboardingPreviewState, onboardingSelectionState, onboardingSettingsState, onboardingStatusState } from './onboarding-state.js'
 
 describe('Home onboarding state', () => {
   it('blocks on the default location until it is configured', () => {
@@ -66,5 +66,23 @@ describe('Home onboarding state', () => {
       archivePath: '/Exports/data.zip',
       error: 'That archive contains an encrypted file. Choose an unencrypted export ZIP.',
     })
+  })
+
+  it('tracks explicit consent and retains it across retryable extraction failures', () => {
+    const review = onboardingPreviewState(
+      onboardingPreviewingState({ homePath: '/Home' }, '/export.zip'),
+      { entries: [{ name: 'a.md' }, { name: 'b.json' }], totalByteSize: 2 },
+    )
+    expect(review.selectedNames).toEqual([])
+    const selected = onboardingSelectionState(review, 'b.json', true)
+    expect(selected.selectedNames).toEqual(['b.json'])
+    expect(onboardingSelectionState(selected, 'b.json', false).selectedNames).toEqual([])
+    const extracting = onboardingExtractingState(selected)
+    expect(onboardingExtractionErrorState(extracting, { kind: 'unknownSelection' })).toMatchObject({
+      name: 'reviewing', selectedNames: ['b.json'], manifest: review.manifest,
+    })
+    const extractedEntries = [{ sourceName: 'b.json', text: '{}', sourceProvenance: 'stable' }]
+    expect(onboardingExtractionState(extracting, extractedEntries)).toMatchObject({ name: 'pre-triage', extractedEntries })
+    expect(onboardingFinalizingState(extracting)).toEqual({ name: 'finalizing', homePath: '/Home', error: undefined })
   })
 })
