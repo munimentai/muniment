@@ -8,7 +8,7 @@
   import { ringPath } from './lib/mark.js'
   import { applyBufferedChatEvents, applyChatEvent, composerAction, formatByteSize, historyMessages, receiptParts, receiptRows, toolName, toolStatus } from './lib/chat-state.js'
   import { appendTranscript, isDictationActive } from './lib/dictation-state.js'
-  import { onboardingCancelSettingsState, onboardingConfirmedState, onboardingConfirmingState, onboardingErrorState, onboardingFinalizingState, onboardingImportChoiceState, onboardingLoadingState, onboardingPathState, onboardingPreviewErrorState, onboardingPreviewingState, onboardingPreviewState, onboardingSettingsState, onboardingStatusState } from './lib/onboarding-state.js'
+  import { onboardingCancelSettingsState, onboardingConfirmedState, onboardingConfirmingState, onboardingErrorState, onboardingExtractingState, onboardingExtractionErrorState, onboardingExtractionState, onboardingFinalizingState, onboardingImportChoiceState, onboardingLoadingState, onboardingPathState, onboardingPreviewErrorState, onboardingPreviewingState, onboardingPreviewState, onboardingSelectionState, onboardingSettingsState, onboardingStatusState } from './lib/onboarding-state.js'
   import { scrollFollowState } from './lib/scroll-follow.js'
 
   const markD = ringPath()
@@ -119,6 +119,26 @@
       onboarding = onboardingConfirmedState(pending, await tauri.invoke('home_confirm', { homePath: pending.homePath }))
     } catch (error) {
       onboarding = onboardingErrorState(pending, typeof error === 'string' ? error : undefined)
+    }
+  }
+
+  function selectImportEntry(entryName, selected) {
+    onboarding = onboardingSelectionState(onboarding, entryName, selected)
+  }
+
+  async function extractImportSelection() {
+    if (onboarding.name !== 'reviewing' || onboarding.selectedNames.length === 0) return
+    const extractionId = ++onboardingPreviewSequence
+    const pending = onboardingExtractingState(onboarding)
+    onboarding = pending
+    try {
+      const extracted = await tauri.invoke('onboarding_import_extract', {
+        archivePath: pending.archivePath,
+        selectedNames: pending.selectedNames,
+      })
+      if (extractionId === onboardingPreviewSequence) onboarding = onboardingExtractionState(pending, extracted)
+    } catch (error) {
+      if (extractionId === onboardingPreviewSequence) onboarding = onboardingExtractionErrorState(pending, error)
     }
   }
 
@@ -631,7 +651,7 @@
     {#if onboarding.name !== 'complete'}
       <section class="onboarding" aria-labelledby="onboarding-title">
         <p class="eyebrow">{onboarding.savedHomePath ? 'Home settings' : 'First-run setup'}</p>
-        <h1 id="onboarding-title">{['import-choice', 'previewing', 'reviewing', 'finalizing'].includes(onboarding.name) ? 'Review an assistant export' : 'Choose your Muniment Home'}</h1>
+        <h1 id="onboarding-title">{onboarding.name === 'pre-triage' ? 'Ready for local triage' : ['import-choice', 'previewing', 'reviewing', 'extracting', 'finalizing'].includes(onboarding.name) ? 'Review an assistant export' : 'Choose your Muniment Home'}</h1>
         {#if onboarding.name === 'loading'}
           <p class="support" role="status">Finding your Documents folder…</p>
         {:else if ['choosing', 'confirming', 'settings', 'confirming-settings'].includes(onboarding.name)}
@@ -647,18 +667,18 @@
             <button data-testid="onboarding-confirm" class="primary" onclick={confirmHome} disabled={onboarding.name.startsWith('confirming') || !onboarding.homePath}>{onboarding.name.startsWith('confirming') ? 'Creating Home…' : 'Confirm and continue'}</button>
           </div>
           {#if onboarding.error}<p class="onboarding-error" role="alert">{onboarding.error}</p>{/if}
-        {:else if ['import-choice', 'previewing', 'reviewing', 'finalizing'].includes(onboarding.name)}
+        {:else if ['import-choice', 'previewing', 'reviewing', 'extracting', 'finalizing'].includes(onboarding.name)}
           <p class="support">Optionally choose one assistant export ZIP. Preview happens locally and is read-only; nothing is imported or sent to a model.</p>
-          {#if onboarding.name === 'reviewing'}
+          {#if ['reviewing', 'extracting'].includes(onboarding.name)}
             <div class="manifest-summary">
-              <span>Supported files</span>
+              <span>Supported files · {onboarding.selectedNames.length} of {onboarding.manifest.entries.length} selected</span>
               <strong>{onboarding.manifest.entries.length} · {formatByteSize(onboarding.manifest.totalByteSize)} expanded</strong>
             </div>
             {#if onboarding.manifest.entries.length}
               <ol class="manifest" aria-label="Export manifest">
                 {#each onboarding.manifest.entries as entry}
                   <li>
-                    <div class="manifest-meta"><strong>{entry.name}</strong><span>{entry.kind} · {formatByteSize(entry.byteSize)} · {entry.excerptTruncated ? 'excerpt truncated' : 'complete excerpt'}</span></div>
+                    <label class="manifest-consent"><input type="checkbox" checked={onboarding.selectedNames.includes(entry.name)} onchange={(event) => selectImportEntry(entry.name, event.currentTarget.checked)} disabled={onboarding.name === 'extracting'} /><span class="manifest-meta"><strong>{entry.name}</strong><span>{entry.kind} · {formatByteSize(entry.byteSize)} · {entry.excerptTruncated ? 'excerpt truncated' : 'complete excerpt'}</span></span></label>
                     <pre>{entry.excerpt}</pre>
                   </li>
                 {/each}
@@ -673,9 +693,11 @@
           {/if}
           {#if onboarding.error}<p class="onboarding-error" role="alert">{onboarding.error}</p>{/if}
           <div class="onboarding-footer">
-            {#if onboarding.name === 'reviewing'}<button data-testid="onboarding-import-picker" onclick={chooseImportArchive}>Choose a different ZIP…</button>{:else}<span class="privacy-note">Local preview · no Home writes</span>{/if}
-            <button data-testid="onboarding-import-skip" class="primary" onclick={skipImport} disabled={onboarding.name === 'finalizing'}>{onboarding.name === 'finalizing' ? 'Creating Home…' : 'Continue without importing'}</button>
+            {#if ['reviewing', 'extracting'].includes(onboarding.name)}<button data-testid="onboarding-import-picker" onclick={chooseImportArchive}>Choose a different ZIP…</button>{:else}<span class="privacy-note">Local preview · no Home writes</span>{/if}
+            <div class="onboarding-actions"><button data-testid="onboarding-import-skip" onclick={skipImport} disabled={onboarding.name === 'finalizing'}>{onboarding.name === 'finalizing' ? 'Creating Home…' : 'Continue without importing'}</button>{#if ['reviewing', 'extracting'].includes(onboarding.name)}<button data-testid="onboarding-import-continue" class="primary" onclick={extractImportSelection} disabled={onboarding.name === 'extracting' || onboarding.selectedNames.length === 0}>{onboarding.name === 'extracting' ? 'Reading approved files…' : 'Continue with selected'}</button>{/if}</div>
           </div>
+        {:else if onboarding.name === 'pre-triage'}
+          <p class="support" role="status">{onboarding.extractedEntries.length} approved {onboarding.extractedEntries.length === 1 ? 'file is' : 'files are'} ready in temporary onboarding memory. Nothing has been written to Home or sent to a model.</p>
         {:else if onboarding.name === 'load-error'}
           <p class="support">Onboarding could not start.</p><button onclick={loadOnboarding}>Try again</button>
           <p class="onboarding-error" role="alert">{onboarding.error}</p>
@@ -880,11 +902,14 @@
   .manifest-summary strong { color: var(--ink); font-weight: 500; }
   .manifest { max-height: min(42vh, 360px); margin: 0; padding: 0; overflow-y: auto; list-style: none; }
   .manifest li { padding: 12px 0; border-bottom: 1px solid var(--border); }
+  .manifest-consent { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 10px; align-items: start; cursor: pointer; }
+  .manifest-consent input { margin-top: 2px; accent-color: var(--ink); }
   .manifest-meta { display: flex; justify-content: space-between; gap: 16px; font: var(--text-12) var(--font-mono); }
   .manifest-meta strong { min-width: 0; overflow-wrap: anywhere; font-weight: 500; }
   .manifest-meta span { flex: 0 0 auto; color: var(--muted); }
   .manifest pre { max-height: 96px; margin: 8px 0 0; padding: 8px 10px; overflow: auto; border-radius: var(--radius-control); background: var(--faint); color: var(--muted); font: var(--text-12) var(--font-mono); white-space: pre-wrap; overflow-wrap: anywhere; }
   .empty-manifest { margin: 0; padding: 18px 0; border-bottom: 1px solid var(--border); color: var(--muted); font: var(--text-12) var(--font-mono); }
+  .onboarding-actions { display: flex; gap: 8px; }
 
   button {
     font: inherit;

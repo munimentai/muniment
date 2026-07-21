@@ -1,6 +1,9 @@
 use std::path::PathBuf;
 
-use muniment_core::import_preview::{preview_export_zip, PreviewErrorKind, PreviewManifest};
+use muniment_core::import_preview::{
+    extract_selected_zip_entries, preview_export_zip, ExtractedEntry, PreviewErrorKind,
+    PreviewManifest,
+};
 use serde::Serialize;
 
 /// Serialized failure for the import preview: a stable typed kind plus a
@@ -22,5 +25,21 @@ pub fn onboarding_import_preview(
     preview_export_zip(&PathBuf::from(archive_path)).map_err(|kind| ImportPreviewError {
         kind,
         message: kind.message(),
+    })
+}
+
+/// Revalidates the chosen archive and reads only the exact normalized member
+/// names the user approved in the preview UI. The returned data is not written
+/// to Home or sent to a model by this command.
+#[tauri::command]
+pub fn onboarding_import_extract(
+    archive_path: String,
+    selected_names: Vec<String>,
+) -> Result<Vec<ExtractedEntry>, ImportPreviewError> {
+    extract_selected_zip_entries(&PathBuf::from(archive_path), &selected_names).map_err(|kind| {
+        ImportPreviewError {
+            kind,
+            message: kind.message(),
+        }
     })
 }
