@@ -5,6 +5,7 @@ mod chat;
 mod dictation;
 mod home;
 mod model_install;
+mod onboarding_import;
 mod voice_capture;
 
 use std::sync::Arc;
@@ -54,6 +55,7 @@ fn main() {
             model_install::dictation_polish,
             home::home_status,
             home::home_confirm,
+            onboarding_import::onboarding_import_preview,
             model_install::parakeet_install_start,
             model_install::parakeet_install_status,
             model_install::parakeet_install_cancel,
