@@ -42,7 +42,14 @@
   let dictationCommandPending = $state(false)
   let dictationRequested = false
   let dictationCancelled = true
-  let dictationDraftSnapshot = ''
+  let dictationDraftSnapshot = $state('')
+  let dictationTranscript = $state('')
+  let dictationCaptureEpoch = 0
+  let dictationCompletionEpoch
+  let dictationCompletionTimer
+  let dictationFinishing = $state(false)
+  let dictationPolishEpoch
+  let dictationPolishing = $state(false)
   let suppressVoiceClick = false
   let voiceClickTimer
   let voicePointerId
@@ -50,6 +57,7 @@
   let composer = $state()
   let onboarding = $state(onboardingLoadingState)
   let destroyed = false
+  const dictationTranscriptQuietPeriod = 25
 
   async function loadOnboarding() {
     try {
@@ -89,7 +97,66 @@
   }
 
   function dictationBusy() {
-    return dictationCommandPending || isDictationActive(dictation)
+    return dictationCommandPending || dictationFinishing || dictationPolishing || isDictationActive(dictation)
+  }
+
+  async function listenForDictation(epoch) {
+    dictationUnlisten?.()
+    dictationUnlisten = undefined
+    const stop = await window.__TAURI__?.event?.listen('dictation-event', ({ payload }) => {
+      if (epoch !== dictationCaptureEpoch || payload.type !== 'transcript' || dictationCancelled || (!isDictationActive(dictation) && !dictationFinishing)) return
+      dictationTranscript = appendTranscript(dictationTranscript, payload.text)
+      draft = appendTranscript(dictationDraftSnapshot, dictationTranscript)
+      if (dictationFinishing) waitForDictationTranscriptQuiet(epoch)
+    })
+    if (!stop) return
+    if (destroyed || epoch !== dictationCaptureEpoch) stop()
+    else dictationUnlisten = stop
+  }
+
+  function completeDictation(epoch) {
+    if (destroyed || epoch !== dictationCaptureEpoch || epoch !== dictationCompletionEpoch) return
+    dictationCompletionEpoch = undefined
+    dictationFinishing = false
+    if (!dictationCancelled) {
+      dictationPolishEpoch = epoch
+      void polishDictation(epoch)
+    }
+  }
+
+  function waitForDictationTranscriptQuiet(epoch) {
+    clearTimeout(dictationCompletionTimer)
+    dictationCompletionTimer = setTimeout(() => completeDictation(epoch), dictationTranscriptQuietPeriod)
+  }
+
+  function finishDictation(epoch) {
+    clearTimeout(dictationCompletionTimer)
+    dictationCompletionTimer = setTimeout(() => waitForDictationTranscriptQuiet(epoch))
+  }
+
+  async function polishDictation(epoch) {
+    if (dictationCancelled || epoch !== dictationCaptureEpoch || epoch !== dictationPolishEpoch) return
+    const transcript = dictationTranscript
+    if (!transcript.trim()) {
+      dictationPolishEpoch = undefined
+      return
+    }
+    dictationPolishing = true
+    dictationError = ''
+    const verbatimDraft = appendTranscript(dictationDraftSnapshot, transcript)
+    try {
+      const polished = await tauri.invoke('dictation_polish', { transcript })
+      if (destroyed || dictationCancelled || epoch !== dictationCaptureEpoch || epoch !== dictationPolishEpoch) return
+      if (draft === verbatimDraft) draft = appendTranscript(dictationDraftSnapshot, polished)
+    } catch (_) {
+      if (destroyed || dictationCancelled || epoch !== dictationCaptureEpoch || epoch !== dictationPolishEpoch) return
+      dictationError = 'Polishing is unavailable. You can edit or send the captured text.'
+    } finally {
+      if (epoch === dictationPolishEpoch) {
+        dictationPolishEpoch = undefined
+        dictationPolishing = false
+      }
+    }
   }
 
   function applyDictationStatus(status) {
@@ -98,6 +165,13 @@
       dictationError = status.message
     } else dictationError = ''
     if (!isDictationActive(status)) stopDictationPolling()
+    if (status.state === 'stopped' && dictationCompletionEpoch !== undefined) {
+      if (dictationCancelled) completeDictation(dictationCompletionEpoch)
+      else {
+        dictationFinishing = true
+        finishDictation(dictationCompletionEpoch)
+      }
+    }
   }
 
   function pollDictation() {
@@ -122,12 +196,16 @@
     invalidateDictationPolls()
     if (cancelled) {
       dictationCancelled = true
+      dictationPolishEpoch = undefined
+      dictationPolishing = false
       voicePointerId = undefined
       voiceKey = undefined
       draft = dictationDraftSnapshot
       tick().then(() => composer?.focus())
     }
     if (dictationCommandPending || !isDictationActive(dictation)) return
+    dictationCompletionEpoch = dictationCaptureEpoch
+    dictationFinishing = true
     dictationCommandPending = true
     dictationError = ''
     try {
@@ -137,6 +215,7 @@
       if (isDictationActive(dictation)) pollDictation()
     } catch (error) {
       if (destroyed) return
+      dictationFinishing = false
       dictationError = typeof error === 'string' ? error : 'Dictation could not be stopped.'
       pollDictation()
     } finally {
@@ -145,7 +224,7 @@
   }
 
   async function startDictation() {
-    if (active || dictationCommandPending || dictationRequested) return
+    if (active || dictationCommandPending || dictationFinishing || dictationPolishing || dictationRequested) return
     if (isDictationActive(dictation)) {
       await stopDictation()
       return
@@ -154,9 +233,17 @@
     dictationRequested = true
     dictationCancelled = false
     dictationDraftSnapshot = draft
+    dictationTranscript = ''
+    dictationCaptureEpoch += 1
+    dictationCompletionEpoch = undefined
+    dictationFinishing = false
+    dictationPolishEpoch = undefined
     dictationCommandPending = true
     dictationError = ''
+    dictation = { state: 'starting' }
     try {
+      await listenForDictation(dictationCaptureEpoch)
+      if (destroyed || dictationCancelled) return
       const status = await tauri.invoke('dictation_start')
       if (destroyed) return
       applyDictationStatus(status)
@@ -338,14 +425,8 @@
       if (projected) messages = messages.map((message) => message.run?.id === projected.id ? { ...message, run: projected } : message)
       if (active?.id === payload.runId) active = projected && !['complete', 'cancelled', 'failed', 'interrupted'].includes(projected.phase) ? projected : null
     }).then((stop) => { unlisten = stop })
-    window.__TAURI__?.event?.listen('dictation-event', ({ payload }) => {
-      if (payload.type === 'transcript' && !dictationCancelled) draft = appendTranscript(draft, payload.text)
-    }).then((stop) => {
-      if (destroyed) stop()
-      else dictationUnlisten = stop
-    })
     const escape = (event) => {
-      if (event.key === 'Escape' && (dictationRequested || isDictationActive(dictation))) {
+      if (event.key === 'Escape' && (dictationRequested || isDictationActive(dictation) || dictationFinishing || dictationPolishing)) {
         event.preventDefault()
         stopDictation(true)
         return
@@ -374,6 +455,7 @@
       dictationUnlisten?.()
       pairingUnlisten?.()
       stopDictationPolling()
+      clearTimeout(dictationCompletionTimer)
       clearTimeout(voiceClickTimer)
       stopDragDrop?.()
       document.removeEventListener('keydown', escape)
@@ -629,12 +711,19 @@
               {/each}
             </ul>
           {/if}
-          <textarea bind:this={composer} bind:value={draft} onkeydown={keydown} rows="2" placeholder={active?.phase === 'resuming' ? 'Resuming interrupted reply…' : 'Ask anything'} disabled={active?.phase === 'resuming'}></textarea>
+          <div class="composer-input">
+            <textarea class:polishing={dictationPolishing} bind:this={composer} bind:value={draft} onkeydown={keydown} rows="2" placeholder={active?.phase === 'resuming' ? 'Resuming interrupted reply…' : 'Ask anything'} disabled={active?.phase === 'resuming'} readonly={dictationPolishing}></textarea>
+            {#if dictationPolishing}
+              <div class="polish-preview" aria-hidden="true"><span data-testid="polish-draft">{appendTranscript(dictationDraftSnapshot, dictationTranscript).slice(0, -dictationTranscript.length)}</span><span class="polish-transcript" data-testid="polish-transcript">{dictationTranscript}</span></div>
+            {/if}
+          </div>
           {#if submitError}<p class="cancel-error" role="alert">{submitError}</p>{/if}
           {#if cancelError}<p class="cancel-error" role="alert">{cancelError}</p>{/if}
           {#if queueError}<p class="cancel-error" role="alert">{queueError}</p>{/if}
           <div class="composer-row">
-            {#if isDictationActive(dictation)}
+            {#if dictationPolishing}
+              <span class="polish-status" role="status">Polishing on this device…</span>
+            {:else if isDictationActive(dictation)}
               <span class="capture-status" role="status">
                 <span class="capture-meter" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></span>
                 {dictation.state === 'starting' ? 'Starting local dictation…' : 'Listening on this device…'}
@@ -643,7 +732,7 @@
               <span>{active?.phase === 'resuming' ? 'Reopening the existing secure session…' : active && active.id !== 'pending' ? '⏎ steers this reply · queue as follow-up' : 'Routing is automatic. Every reply carries its receipt.'}</span>
             {/if}
             <div class="composer-actions">
-              <button type="button" class="quiet voice" aria-pressed={isDictationActive(dictation)} disabled={!!active} onpointerdown={voicePointerDown} onpointerup={voicePointerEnd} onpointercancel={voicePointerEnd} onkeydown={voiceKeyDown} onkeyup={voiceKeyUp} onclick={voiceClick}>Voice</button>
+              <button type="button" class="quiet voice" aria-pressed={isDictationActive(dictation)} disabled={!!active || dictationFinishing || dictationPolishing} onpointerdown={voicePointerDown} onpointerup={voicePointerEnd} onpointercancel={voicePointerEnd} onkeydown={voiceKeyDown} onkeyup={voiceKeyUp} onclick={voiceClick}>Voice</button>
               {#if !active}<button type="button" class="quiet attach" onclick={chooseFiles}>Add files</button>{/if}
               {#if active?.phase === 'resuming'}
                 <button disabled>Resuming…</button>
@@ -821,7 +910,11 @@
   .attachments li { display: flex; align-items: center; gap: 6px; max-width: 100%; padding: 4px 6px 4px 9px; border: 1px solid var(--border); border-radius: 2px; color: var(--muted); font: var(--text-12) var(--font-mono); }
   .attachments span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .attachments button { padding: 1px 5px; border: 0; background: transparent; color: inherit; font-size: 11px; }
-  textarea { width: 100%; resize: none; border: 0; outline: 0; background: transparent; color: var(--ink); font: inherit; }
+  .composer-input { position: relative; }
+  textarea { display: block; width: 100%; resize: none; border: 0; outline: 0; background: transparent; color: var(--ink); font: inherit; }
+  textarea.polishing { color: transparent; caret-color: transparent; }
+  .polish-preview { position: absolute; inset: 0; overflow: hidden; pointer-events: none; white-space: pre-wrap; color: var(--ink); font: inherit; }
+  .polish-transcript { text-decoration-line: underline; text-decoration-color: var(--signal); text-decoration-thickness: 2px; text-underline-offset: 3px; }
   .composer-row { display: flex; justify-content: space-between; align-items: center; color: var(--muted); font-size: 11px; }
   .composer-actions { display: flex; align-items: center; gap: 6px; }
   .capture-status { display: flex; align-items: center; gap: 8px; font-family: var(--font-mono); }
@@ -829,6 +922,7 @@
   .capture-meter i { width: 2px; height: 6px; background: var(--muted); animation: capture 900ms ease-in-out infinite alternate; }
   .capture-meter i:nth-child(2), .capture-meter i:nth-child(4) { height: 10px; animation-delay: -300ms; }
   .capture-meter i:nth-child(3) { height: 14px; animation-delay: -600ms; }
+  .polish-status { color: var(--signal); font-family: var(--font-mono); text-decoration: underline 2px; text-underline-offset: 3px; }
   .dictation-error { margin-top: 7px; color: var(--muted); font: var(--text-12) var(--font-mono); }
   .follow-up { color: var(--muted); font-family: var(--font-mono); }
   @keyframes blink { 50% { opacity: 0; } }
