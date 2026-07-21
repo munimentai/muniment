@@ -10,6 +10,15 @@ const temp = () => { const value = fs.mkdtempSync(path.join(os.tmpdir(), 'munime
 afterEach(() => { for (const value of temporary.splice(0)) fs.rmSync(value, { recursive: true, force: true }) })
 const runNode = (script, args, options = {}) => spawnSync(process.execPath, [path.join(root, script), ...args], { encoding: 'utf8', ...options })
 
+describe('installed onboarding spec contract', () => {
+  it.each(['onboarding.spec.js', 'real-sign-in.spec.js'])('%s uses only shipped onboarding controls', (name) => {
+    const spec = fs.readFileSync(path.join(root, 'test/e2e/specs', name), 'utf8')
+    const selectors = [...spec.matchAll(/data-testid=(["'])(onboarding-[^"']+)\1/g)].map((match) => match[2])
+    expect(selectors.length).toBeGreaterThan(0)
+    expect(new Set(selectors)).toEqual(new Set(['onboarding-home-path', 'onboarding-picker', 'onboarding-confirm']))
+  })
+})
+
 describe('WDIO Tauri service dependency contract', () => {
   it('loads the installed ESM entry with compatible transitive named exports', async () => {
     await expect(import('@wdio/tauri-service')).resolves.toBeDefined()
