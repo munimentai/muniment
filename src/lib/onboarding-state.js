@@ -59,6 +59,36 @@ export function onboardingExtractionState(state, extractedEntries) {
   return { ...state, name: 'pre-triage', extractedEntries, error: undefined }
 }
 
+export function onboardingTriagingState(state) {
+  return { ...state, name: 'triaging', report: undefined, error: undefined }
+}
+
+export function onboardingTriageReportState(state, response) {
+  return { ...state, name: 'triage-report', report: response.report, error: undefined }
+}
+
+export function onboardingTriageConfirmedState(state) {
+  return { ...state, name: 'confirmed-report', error: undefined }
+}
+
+export function onboardingTriageErrorState(state, error) {
+  const messages = {
+    empty: 'There are no approved files to review. Continue without importing or choose another ZIP.',
+    tooManyEntries: 'There are too many approved files for local review. Continue without importing or choose a smaller selection.',
+    malformedSource: 'An approved file could not be prepared for local review. Retry or continue without importing.',
+    inputTooLarge: 'The approved files are too large for local review. Continue without importing or choose a smaller selection.',
+    localAiUnavailable: 'Local AI is unavailable right now. Retry or continue without importing.',
+    transportFailed: 'Local AI could not be reached. Retry or continue without importing.',
+    invalidModelResponse: 'Local AI could not produce a usable proposal. Retry or continue without importing.',
+    requestFailed: 'Local review could not be completed. Retry or continue without importing.',
+  }
+  return {
+    ...state,
+    name: 'triage-error',
+    error: messages[error?.kind] ?? 'Local review could not be completed. Retry or continue without importing.',
+  }
+}
+
 export function onboardingExtractionErrorState(state, error) {
   const messages = {
     emptySelection: 'Select at least one file to continue.',

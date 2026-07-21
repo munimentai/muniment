@@ -183,6 +183,101 @@ describe('Home onboarding', () => {
     expect(invoke).not.toHaveBeenCalledWith('home_confirm', expect.anything())
   })
 
+  it('runs local triage once, renders structured text, and confirms without writes', async () => {
+    homeStatus = { configured: false, homePath: '/Documents/Muniment' }
+    dialogResult = '/Exports/assistant.zip'
+    const extracted = [{ sourceName: 'profile.json', kind: 'json', text: '{}', sourceProvenance: 'stable' }]
+    const report = {
+      userType: '<strong>Researcher</strong>',
+      proposedHomeLayout: 'projects/\n  climate/',
+      starterAgents: ['Source scout', '<em>Draft editor</em>', 'Project guide'],
+    }
+    let resolveTriage
+    invoke.mockImplementation(async (command) => {
+      if (command === 'onboarding_import_preview') return { entries: [{ name: 'profile.json', kind: 'json', byteSize: 2, excerpt: '{}', excerptTruncated: false }], totalByteSize: 2 }
+      if (command === 'onboarding_import_extract') return extracted
+      if (command === 'onboarding_triage') return new Promise((resolve) => { resolveTriage = resolve })
+      if (['auth_status', 'chat_history', 'auth_entitlement_snapshot', 'auth_devices'].includes(command)) return command === 'auth_status' ? { signed_in: true, subject: 'token-subject' } : command === 'auth_entitlement_snapshot' ? snapshot() : []
+      throw new Error(`unexpected command: ${command}`)
+    })
+    render(App)
+    await fireEvent.click(await screen.findByTestId('onboarding-confirm'))
+    await fireEvent.click(screen.getByTestId('onboarding-import-picker'))
+    await fireEvent.click(await screen.findByRole('checkbox'))
+    await fireEvent.click(screen.getByTestId('onboarding-import-continue'))
+    const triage = await screen.findByTestId('onboarding-triage')
+    await fireEvent.click(triage)
+    await fireEvent.click(triage)
+    expect(triage).toBeDisabled()
+    expect(triage).toHaveTextContent('Reviewing locally…')
+    expect(invoke.mock.calls.filter(([command]) => command === 'onboarding_triage')).toEqual([['onboarding_triage', { entries: extracted }]])
+    resolveTriage({ report, usage: null })
+    expect(await screen.findByText('<strong>Researcher</strong>')).toBeInTheDocument()
+    expect(screen.getByText('<em>Draft editor</em>')).toBeInTheDocument()
+    expect(document.querySelector('.triage-report strong')).toBeNull()
+    expect(screen.getByText(/local proposal for you to review/i)).toBeInTheDocument()
+    expect(screen.getByText(/no agent files have been created/i)).toBeInTheDocument()
+    await fireEvent.click(screen.getByTestId('onboarding-triage-confirm'))
+    expect(await screen.findByText(/Proposal confirmed in temporary onboarding memory/)).toBeInTheDocument()
+    expect(invoke).not.toHaveBeenCalledWith('home_confirm', expect.anything())
+  })
+
+  it('retries a typed triage failure and can fail open to normal Home setup', async () => {
+    homeStatus = { configured: false, homePath: '/Documents/Muniment' }
+    dialogResult = '/Exports/assistant.zip'
+    let triageAttempts = 0
+    invoke.mockImplementation(async (command, payload) => {
+      if (command === 'onboarding_import_preview') return { entries: [{ name: 'chat.md', kind: 'markdown', byteSize: 4, excerpt: 'chat', excerptTruncated: false }], totalByteSize: 4 }
+      if (command === 'onboarding_import_extract') return [{ sourceName: 'chat.md', text: 'chat', sourceProvenance: 'stable' }]
+      if (command === 'onboarding_triage') { triageAttempts += 1; throw { kind: triageAttempts === 1 ? 'localAiUnavailable' : 'transportFailed' } }
+      if (command === 'home_confirm') return { configured: true, homePath: payload.homePath }
+      if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
+      if (command === 'chat_history' || command === 'auth_devices') return []
+      if (command === 'auth_entitlement_snapshot') return snapshot()
+      throw new Error(`unexpected command: ${command}`)
+    })
+    render(App)
+    await fireEvent.click(await screen.findByTestId('onboarding-confirm'))
+    await fireEvent.click(screen.getByTestId('onboarding-import-picker'))
+    await fireEvent.click(await screen.findByRole('checkbox'))
+    await fireEvent.click(screen.getByTestId('onboarding-import-continue'))
+    await fireEvent.click(await screen.findByTestId('onboarding-triage'))
+    expect(await screen.findByRole('alert')).toHaveTextContent('Local AI is unavailable right now')
+    await fireEvent.click(screen.getByRole('button', { name: 'Retry' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent('Local AI could not be reached')
+    expect(triageAttempts).toBe(2)
+    await fireEvent.click(screen.getByRole('button', { name: 'Continue without importing' }))
+    expect(invoke).toHaveBeenCalledWith('home_confirm', { homePath: '/Documents/Muniment' })
+    expect(await screen.findByPlaceholderText('Ask anything')).toBeInTheDocument()
+  })
+
+  it('suppresses a stale triage completion after fail-open continuation', async () => {
+    homeStatus = { configured: false, homePath: '/Documents/Muniment' }
+    dialogResult = '/Exports/assistant.zip'
+    let resolveTriage
+    invoke.mockImplementation(async (command, payload) => {
+      if (command === 'onboarding_import_preview') return { entries: [{ name: 'chat.md', kind: 'markdown', byteSize: 4, excerpt: 'chat', excerptTruncated: false }], totalByteSize: 4 }
+      if (command === 'onboarding_import_extract') return [{ sourceName: 'chat.md', text: 'chat', sourceProvenance: 'stable' }]
+      if (command === 'onboarding_triage') return new Promise((resolve) => { resolveTriage = resolve })
+      if (command === 'home_confirm') return { configured: true, homePath: payload.homePath }
+      if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
+      if (command === 'chat_history' || command === 'auth_devices') return []
+      if (command === 'auth_entitlement_snapshot') return snapshot()
+      throw new Error(`unexpected command: ${command}`)
+    })
+    render(App)
+    await fireEvent.click(await screen.findByTestId('onboarding-confirm'))
+    await fireEvent.click(screen.getByTestId('onboarding-import-picker'))
+    await fireEvent.click(await screen.findByRole('checkbox'))
+    await fireEvent.click(screen.getByTestId('onboarding-import-continue'))
+    await fireEvent.click(await screen.findByTestId('onboarding-triage'))
+    await fireEvent.click(screen.getByRole('button', { name: 'Continue without importing' }))
+    expect(await screen.findByPlaceholderText('Ask anything')).toBeInTheDocument()
+    resolveTriage({ report: { userType: 'Stale', proposedHomeLayout: 'Stale', starterAgents: ['One', 'Two'] }, usage: null })
+    await Promise.resolve()
+    expect(screen.queryByText('Review your Home proposal')).not.toBeInTheDocument()
+  })
+
   it('keeps consent for extraction retry and suppresses stale extraction after skip', async () => {
     homeStatus = { configured: false, homePath: '/Documents/Muniment' }
     dialogResult = '/Exports/assistant.zip'

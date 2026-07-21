@@ -8,7 +8,7 @@
   import { ringPath } from './lib/mark.js'
   import { applyBufferedChatEvents, applyChatEvent, composerAction, formatByteSize, historyMessages, receiptParts, receiptRows, toolName, toolStatus } from './lib/chat-state.js'
   import { appendTranscript, isDictationActive } from './lib/dictation-state.js'
-  import { onboardingCancelSettingsState, onboardingConfirmedState, onboardingConfirmingState, onboardingErrorState, onboardingExtractingState, onboardingExtractionErrorState, onboardingExtractionState, onboardingFinalizingState, onboardingImportChoiceState, onboardingLoadingState, onboardingPathState, onboardingPreviewErrorState, onboardingPreviewingState, onboardingPreviewState, onboardingSelectionState, onboardingSettingsState, onboardingStatusState } from './lib/onboarding-state.js'
+  import { onboardingCancelSettingsState, onboardingConfirmedState, onboardingConfirmingState, onboardingErrorState, onboardingExtractingState, onboardingExtractionErrorState, onboardingExtractionState, onboardingFinalizingState, onboardingImportChoiceState, onboardingLoadingState, onboardingPathState, onboardingPreviewErrorState, onboardingPreviewingState, onboardingPreviewState, onboardingSelectionState, onboardingSettingsState, onboardingStatusState, onboardingTriageConfirmedState, onboardingTriageErrorState, onboardingTriageReportState, onboardingTriagingState } from './lib/onboarding-state.js'
   import { scrollFollowState } from './lib/scroll-follow.js'
 
   const markD = ringPath()
@@ -139,6 +139,19 @@
       if (extractionId === onboardingPreviewSequence) onboarding = onboardingExtractionState(pending, extracted)
     } catch (error) {
       if (extractionId === onboardingPreviewSequence) onboarding = onboardingExtractionErrorState(pending, error)
+    }
+  }
+
+  async function triageImport() {
+    if (!['pre-triage', 'triage-error'].includes(onboarding.name)) return
+    const triageId = ++onboardingPreviewSequence
+    const pending = onboardingTriagingState(onboarding)
+    onboarding = pending
+    try {
+      const response = await tauri.invoke('onboarding_triage', { entries: pending.extractedEntries })
+      if (triageId === onboardingPreviewSequence) onboarding = onboardingTriageReportState(pending, response)
+    } catch (error) {
+      if (triageId === onboardingPreviewSequence) onboarding = onboardingTriageErrorState(pending, error)
     }
   }
 
@@ -651,7 +664,7 @@
     {#if onboarding.name !== 'complete'}
       <section class="onboarding" aria-labelledby="onboarding-title">
         <p class="eyebrow">{onboarding.savedHomePath ? 'Home settings' : 'First-run setup'}</p>
-        <h1 id="onboarding-title">{onboarding.name === 'pre-triage' ? 'Ready for local triage' : ['import-choice', 'previewing', 'reviewing', 'extracting', 'finalizing'].includes(onboarding.name) ? 'Review an assistant export' : 'Choose your Muniment Home'}</h1>
+        <h1 id="onboarding-title">{['pre-triage', 'triaging', 'triage-error'].includes(onboarding.name) ? 'Ready for local triage' : ['triage-report', 'confirmed-report'].includes(onboarding.name) ? 'Review your Home proposal' : ['import-choice', 'previewing', 'reviewing', 'extracting', 'finalizing'].includes(onboarding.name) ? 'Review an assistant export' : 'Choose your Muniment Home'}</h1>
         {#if onboarding.name === 'loading'}
           <p class="support" role="status">Finding your Documents folder…</p>
         {:else if ['choosing', 'confirming', 'settings', 'confirming-settings'].includes(onboarding.name)}
@@ -696,8 +709,23 @@
             {#if ['reviewing', 'extracting'].includes(onboarding.name)}<button data-testid="onboarding-import-picker" onclick={chooseImportArchive}>Choose a different ZIP…</button>{:else}<span class="privacy-note">Local preview · no Home writes</span>{/if}
             <div class="onboarding-actions"><button data-testid="onboarding-import-skip" onclick={skipImport} disabled={onboarding.name === 'finalizing'}>{onboarding.name === 'finalizing' ? 'Creating Home…' : 'Continue without importing'}</button>{#if ['reviewing', 'extracting'].includes(onboarding.name)}<button data-testid="onboarding-import-continue" class="primary" onclick={extractImportSelection} disabled={onboarding.name === 'extracting' || onboarding.selectedNames.length === 0}>{onboarding.name === 'extracting' ? 'Reading approved files…' : 'Continue with selected'}</button>{/if}</div>
           </div>
-        {:else if onboarding.name === 'pre-triage'}
-          <p class="support" role="status">{onboarding.extractedEntries.length} approved {onboarding.extractedEntries.length === 1 ? 'file is' : 'files are'} ready in temporary onboarding memory. Nothing has been written to Home or sent to a model.</p>
+        {:else if ['pre-triage', 'triaging', 'triage-error'].includes(onboarding.name)}
+          <p class="support" role="status">{onboarding.extractedEntries.length} approved {onboarding.extractedEntries.length === 1 ? 'file is' : 'files are'} ready in temporary onboarding memory. {onboarding.name === 'pre-triage' ? 'Nothing has been written to Home or sent to a model.' : onboarding.name === 'triaging' ? 'Local AI is preparing a proposal; nothing has been written to Home.' : 'Nothing has been written to Home.'}</p>
+          {#if onboarding.error}<p class="onboarding-error" role="alert">{onboarding.error}</p>{/if}
+          <div class="onboarding-footer">
+            <span class="privacy-note">Runs locally · no Home writes</span>
+            <div class="onboarding-actions"><button onclick={skipImport}>Continue without importing</button><button data-testid="onboarding-triage" class="primary" onclick={triageImport} disabled={onboarding.name === 'triaging'}>{onboarding.name === 'triaging' ? 'Reviewing locally…' : onboarding.name === 'triage-error' ? 'Retry' : 'Create local proposal'}</button></div>
+          </div>
+        {:else if ['triage-report', 'confirmed-report'].includes(onboarding.name)}
+          <p class="support">This is a local proposal for you to review. Nothing has been written to Home, and no agent files have been created.</p>
+          <dl class="triage-report">
+            <div><dt>User type</dt><dd>{onboarding.report.userType}</dd></div>
+            <div><dt>Proposed Home layout</dt><dd class="report-copy">{onboarding.report.proposedHomeLayout}</dd></div>
+            <div><dt>Starter agents</dt><dd><ol>{#each onboarding.report.starterAgents as agent}<li>{agent}</li>{/each}</ol></dd></div>
+          </dl>
+          {#if onboarding.name === 'triage-report'}
+            <div class="onboarding-footer"><span class="privacy-note">Review before any write</span><button data-testid="onboarding-triage-confirm" class="primary" onclick={() => { onboarding = onboardingTriageConfirmedState(onboarding) }}>Confirm proposal</button></div>
+          {:else}<p class="confirmed-note" role="status">Proposal confirmed in temporary onboarding memory. Nothing has been written.</p>{/if}
         {:else if onboarding.name === 'load-error'}
           <p class="support">Onboarding could not start.</p><button onclick={loadOnboarding}>Try again</button>
           <p class="onboarding-error" role="alert">{onboarding.error}</p>
@@ -910,6 +938,13 @@
   .manifest pre { max-height: 96px; margin: 8px 0 0; padding: 8px 10px; overflow: auto; border-radius: var(--radius-control); background: var(--faint); color: var(--muted); font: var(--text-12) var(--font-mono); white-space: pre-wrap; overflow-wrap: anywhere; }
   .empty-manifest { margin: 0; padding: 18px 0; border-bottom: 1px solid var(--border); color: var(--muted); font: var(--text-12) var(--font-mono); }
   .onboarding-actions { display: flex; gap: 8px; }
+  .triage-report { margin: 22px 0 0; border-top: 1px solid var(--border); }
+  .triage-report > div { display: grid; grid-template-columns: 160px minmax(0, 1fr); gap: 18px; padding: 14px 0; border-bottom: 1px solid var(--border); }
+  .triage-report dt { color: var(--muted); font: var(--text-12) var(--font-mono); }
+  .triage-report dd { margin: 0; line-height: 1.55; overflow-wrap: anywhere; white-space: pre-wrap; }
+  .triage-report ol { margin: 0; padding-left: 20px; }
+  .triage-report li + li { margin-top: 8px; }
+  .confirmed-note { margin-top: 18px; color: var(--muted); font: var(--text-12) var(--font-mono); }
 
   button {
     font: inherit;
