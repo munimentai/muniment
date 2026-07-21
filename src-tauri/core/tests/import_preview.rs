@@ -8,8 +8,8 @@ use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use muniment_core::import_preview::{
-    preview_export_zip, EntryKind, PreviewErrorKind, MAX_ENTRY_COUNT, MAX_ENTRY_EXPANDED_BYTES,
-    MAX_EXCERPT_BYTES, MAX_TOTAL_EXPANDED_BYTES,
+    preview_export_zip, preview_export_zip_with_open_hook, EntryKind, PreviewErrorKind,
+    MAX_ENTRY_COUNT, MAX_ENTRY_EXPANDED_BYTES, MAX_EXCERPT_BYTES, MAX_TOTAL_EXPANDED_BYTES,
 };
 use zip::write::SimpleFileOptions;
 use zip::{AesMode, ZipWriter};
@@ -297,5 +297,44 @@ fn rejects_invalid_and_missing_archives() {
         preview_export_zip(&temp.0),
         Err(PreviewErrorKind::NotFound),
         "a directory is not a previewable archive"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn path_replacement_after_open_cannot_redirect_preview() {
+    let temp = Temp::new("path-swap");
+    let selected = temp.join("export.zip");
+    let original = temp.join("opened.zip");
+    let alternate = temp.join("alternate.zip");
+    build_zip(&selected, &[Member::File("original.txt", b"opened file")]);
+    build_zip(
+        &alternate,
+        &[Member::File("alternate.txt", b"redirected file")],
+    );
+
+    let manifest = preview_export_zip_with_open_hook(&selected, || {
+        std::fs::rename(&selected, &original).unwrap();
+        std::os::unix::fs::symlink(&alternate, &selected).unwrap();
+    })
+    .unwrap();
+
+    assert_eq!(manifest.entries.len(), 1);
+    assert_eq!(manifest.entries[0].name, "original.txt");
+    assert_eq!(manifest.entries[0].excerpt, "opened file");
+}
+
+#[cfg(unix)]
+#[test]
+fn rejects_a_selected_archive_symlink() {
+    let temp = Temp::new("archive-symlink");
+    let target = temp.join("target.zip");
+    let selected = temp.join("export.zip");
+    build_zip(&target, &[Member::File("redirected.txt", b"nope")]);
+    std::os::unix::fs::symlink(&target, &selected).unwrap();
+
+    assert_eq!(
+        preview_export_zip(&selected),
+        Err(PreviewErrorKind::NotFound)
     );
 }

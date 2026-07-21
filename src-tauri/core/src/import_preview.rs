@@ -135,13 +135,19 @@ impl std::error::Error for PreviewErrorKind {}
 /// manifest. Fails closed with a typed kind and never extracts, writes, or
 /// scans anything outside the given file.
 pub fn preview_export_zip(archive_path: &Path) -> Result<PreviewManifest, PreviewErrorKind> {
-    let metadata = match fs::symlink_metadata(archive_path) {
-        Ok(metadata) => metadata,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            return Err(PreviewErrorKind::NotFound)
-        }
-        Err(_) => return Err(PreviewErrorKind::Io),
-    };
+    preview_export_zip_with_open_hook(archive_path, || {})
+}
+
+/// Variant with a deterministic hook after opening, used to exercise path
+/// replacement races in integration tests.
+#[doc(hidden)]
+pub fn preview_export_zip_with_open_hook(
+    archive_path: &Path,
+    after_open: impl FnOnce(),
+) -> Result<PreviewManifest, PreviewErrorKind> {
+    let file = open_archive_no_follow(archive_path)?;
+    after_open();
+    let metadata = file.metadata().map_err(|_| PreviewErrorKind::Io)?;
     // The archive itself must be a plain file, not a directory or a symlink
     // that could redirect the read to an unbounded target elsewhere.
     if !metadata.file_type().is_file() {
@@ -151,10 +157,6 @@ pub fn preview_export_zip(archive_path: &Path) -> Result<PreviewManifest, Previe
         return Err(PreviewErrorKind::ArchiveTooLarge);
     }
 
-    let file = fs::File::open(archive_path).map_err(|error| match error.kind() {
-        std::io::ErrorKind::NotFound => PreviewErrorKind::NotFound,
-        _ => PreviewErrorKind::Io,
-    })?;
     let mut archive = zip::ZipArchive::new(file).map_err(|_| PreviewErrorKind::InvalidArchive)?;
     if archive.len() > MAX_ENTRY_COUNT {
         return Err(PreviewErrorKind::TooManyEntries);
@@ -231,6 +233,52 @@ pub fn preview_export_zip(archive_path: &Path) -> Result<PreviewManifest, Previe
         entries,
         total_byte_size: total_expanded,
     })
+}
+
+fn open_archive_no_follow(archive_path: &Path) -> Result<fs::File, PreviewErrorKind> {
+    let mut options = fs::OpenOptions::new();
+    options.read(true);
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        // Nonblocking keeps a non-regular entry such as a FIFO from hanging
+        // before handle metadata can reject it.
+        options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        use windows_sys::Win32::Storage::FileSystem::{
+            FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT,
+        };
+        options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS);
+    }
+
+    options.open(archive_path).map_err(|error| {
+        if error.kind() == std::io::ErrorKind::NotFound || is_symlink_open_error(&error) {
+            PreviewErrorKind::NotFound
+        } else if fs::symlink_metadata(archive_path)
+            .is_ok_and(|metadata| !metadata.file_type().is_file())
+        {
+            // Some non-regular entries (for example Unix sockets) cannot be
+            // opened even nonblocking. This check only preserves their typed
+            // error; no bytes can be read after the open has already failed.
+            PreviewErrorKind::NotFound
+        } else {
+            PreviewErrorKind::Io
+        }
+    })
+}
+
+#[cfg(unix)]
+fn is_symlink_open_error(error: &std::io::Error) -> bool {
+    error.raw_os_error() == Some(libc::ELOOP)
+}
+
+#[cfg(not(unix))]
+fn is_symlink_open_error(_error: &std::io::Error) -> bool {
+    false
 }
 
 /// Normalizes a raw archive entry name into a `/`-joined relative path,
