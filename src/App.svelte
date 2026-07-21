@@ -8,7 +8,7 @@
   import { ringPath } from './lib/mark.js'
   import { applyBufferedChatEvents, applyChatEvent, composerAction, formatByteSize, historyMessages, receiptParts, receiptRows, toolName, toolStatus } from './lib/chat-state.js'
   import { appendTranscript, isDictationActive } from './lib/dictation-state.js'
-  import { onboardingCancelSettingsState, onboardingCompleteState, onboardingConfirmedState, onboardingConfirmingState, onboardingErrorState, onboardingLoadingState, onboardingPathState, onboardingPreviewErrorState, onboardingPreviewingState, onboardingPreviewState, onboardingSettingsState, onboardingStatusState } from './lib/onboarding-state.js'
+  import { onboardingCancelSettingsState, onboardingConfirmedState, onboardingConfirmingState, onboardingErrorState, onboardingFinalizingState, onboardingImportChoiceState, onboardingLoadingState, onboardingPathState, onboardingPreviewErrorState, onboardingPreviewingState, onboardingPreviewState, onboardingSettingsState, onboardingStatusState } from './lib/onboarding-state.js'
   import { scrollFollowState } from './lib/scroll-follow.js'
 
   const markD = ringPath()
@@ -78,6 +78,10 @@
   }
 
   async function confirmHome() {
+    if (!onboarding.savedHomePath) {
+      onboarding = onboardingImportChoiceState(onboarding)
+      return
+    }
     const pending = onboardingConfirmingState(onboarding)
     onboarding = pending
     try {
@@ -107,9 +111,15 @@
     }
   }
 
-  function skipImport() {
+  async function skipImport() {
     onboardingPreviewSequence += 1
-    onboarding = onboardingCompleteState(onboarding)
+    const pending = onboardingFinalizingState(onboarding)
+    onboarding = pending
+    try {
+      onboarding = onboardingConfirmedState(pending, await tauri.invoke('home_confirm', { homePath: pending.homePath }))
+    } catch (error) {
+      onboarding = onboardingErrorState(pending, typeof error === 'string' ? error : undefined)
+    }
   }
 
   function stopDictationPolling() {
@@ -621,7 +631,7 @@
     {#if onboarding.name !== 'complete'}
       <section class="onboarding" aria-labelledby="onboarding-title">
         <p class="eyebrow">{onboarding.savedHomePath ? 'Home settings' : 'First-run setup'}</p>
-        <h1 id="onboarding-title">{['import-choice', 'previewing', 'reviewing'].includes(onboarding.name) ? 'Review an assistant export' : 'Choose your Muniment Home'}</h1>
+        <h1 id="onboarding-title">{['import-choice', 'previewing', 'reviewing', 'finalizing'].includes(onboarding.name) ? 'Review an assistant export' : 'Choose your Muniment Home'}</h1>
         {#if onboarding.name === 'loading'}
           <p class="support" role="status">Finding your Documents folder…</p>
         {:else if ['choosing', 'confirming', 'settings', 'confirming-settings'].includes(onboarding.name)}
@@ -637,7 +647,7 @@
             <button data-testid="onboarding-confirm" class="primary" onclick={confirmHome} disabled={onboarding.name.startsWith('confirming') || !onboarding.homePath}>{onboarding.name.startsWith('confirming') ? 'Creating Home…' : 'Confirm and continue'}</button>
           </div>
           {#if onboarding.error}<p class="onboarding-error" role="alert">{onboarding.error}</p>{/if}
-        {:else if ['import-choice', 'previewing', 'reviewing'].includes(onboarding.name)}
+        {:else if ['import-choice', 'previewing', 'reviewing', 'finalizing'].includes(onboarding.name)}
           <p class="support">Optionally choose one assistant export ZIP. Preview happens locally and is read-only; nothing is imported or sent to a model.</p>
           {#if onboarding.name === 'reviewing'}
             <div class="manifest-summary">
@@ -658,13 +668,13 @@
             <div class="path-card import-card">
               <span class="path-label">Assistant export</span>
               <strong>{onboarding.archivePath ?? 'No ZIP selected'}</strong>
-              <button data-testid="onboarding-import-picker" onclick={chooseImportArchive} disabled={onboarding.name === 'previewing'}>{onboarding.name === 'previewing' ? 'Reading archive…' : 'Choose ZIP…'}</button>
+              <button data-testid="onboarding-import-picker" onclick={chooseImportArchive} disabled={['previewing', 'finalizing'].includes(onboarding.name)}>{onboarding.name === 'previewing' ? 'Reading archive…' : 'Choose ZIP…'}</button>
             </div>
           {/if}
           {#if onboarding.error}<p class="onboarding-error" role="alert">{onboarding.error}</p>{/if}
           <div class="onboarding-footer">
             {#if onboarding.name === 'reviewing'}<button data-testid="onboarding-import-picker" onclick={chooseImportArchive}>Choose a different ZIP…</button>{:else}<span class="privacy-note">Local preview · no Home writes</span>{/if}
-            <button data-testid="onboarding-import-skip" class="primary" onclick={skipImport}>Continue without importing</button>
+            <button data-testid="onboarding-import-skip" class="primary" onclick={skipImport} disabled={onboarding.name === 'finalizing'}>{onboarding.name === 'finalizing' ? 'Creating Home…' : 'Continue without importing'}</button>
           </div>
         {:else if onboarding.name === 'load-error'}
           <p class="support">Onboarding could not start.</p><button onclick={loadOnboarding}>Try again</button>

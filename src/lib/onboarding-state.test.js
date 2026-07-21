@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { onboardingCancelSettingsState, onboardingCompleteState, onboardingConfirmedState, onboardingConfirmingState, onboardingErrorState, onboardingLoadingState, onboardingPathState, onboardingPreviewErrorState, onboardingPreviewingState, onboardingPreviewState, onboardingSettingsState, onboardingStatusState } from './onboarding-state.js'
+import { onboardingCancelSettingsState, onboardingConfirmedState, onboardingConfirmingState, onboardingErrorState, onboardingFinalizingState, onboardingImportChoiceState, onboardingLoadingState, onboardingPathState, onboardingPreviewErrorState, onboardingPreviewingState, onboardingPreviewState, onboardingSettingsState, onboardingStatusState } from './onboarding-state.js'
 
 describe('Home onboarding state', () => {
   it('blocks on the default location until it is configured', () => {
@@ -36,13 +36,15 @@ describe('Home onboarding state', () => {
     })
   })
 
-  it('offers import preview only after first-run Home confirmation', () => {
+  it('offers import preview before first-run Home confirmation', () => {
+    const choice = onboardingImportChoiceState({ name: 'choosing', homePath: '/Documents/Muniment' })
+    expect(choice).toEqual({ name: 'import-choice', homePath: '/Documents/Muniment', error: undefined })
+    const finalizing = onboardingFinalizingState(choice)
     const confirmed = onboardingConfirmedState(
-      { name: 'confirming', homePath: '/Documents/Muniment' },
+      finalizing,
       { configured: true, homePath: '/Documents/Muniment' },
     )
-    expect(confirmed).toEqual({ name: 'import-choice', homePath: '/Documents/Muniment' })
-    expect(onboardingCompleteState(confirmed)).toEqual({ name: 'complete', homePath: '/Documents/Muniment' })
+    expect(confirmed).toEqual({ name: 'complete', homePath: '/Documents/Muniment' })
     expect(onboardingConfirmedState(
       { name: 'confirming-settings', homePath: '/new/Home', savedHomePath: '/old/Home' },
       { configured: true, homePath: '/new/Home' },
