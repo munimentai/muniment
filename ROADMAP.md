@@ -55,8 +55,8 @@ Phases mirror harness-spec §9. Muniment-cloud Phase 1 native auth and the cloud
 - RATIFIED — required Qwen3.5-4B instruct Q4 GGUF serves onboarding triage and front-door routing, via the verified ADR 0008/0014 path. Import is consent-gated with preview, provenance, verbatim originals, and a user-confirmed report before writes; folder setup fails open and only AI-dependent features fail closed.
 - RATIFIED — agent system prompt has five binding rules, hand-written/versioned/eval-gated base v0, and a bounded audited labeled-data tail.
 - DONE 2026-07-20 — rulings codified in harness-spec §15/§16; required Qwen descriptor and background acquisition landed.
-- DONE 2026-07-21 — first-run Home picker/scaffold; bounded ZIP preview and manifest review; bounded extraction of explicitly selected entries with verbatim text and stable provenance, no Home writes or model calls.
-- NEXT — consent checklist UI and Tauri extraction bridge, retaining approved content only in transient pre-triage state (ticket filed 2026-07-21). Local-model triage, user-confirmed report, and import/scaffolding writes follow separately. Required-download visibility/status UI remains. CLI/VS Code defaults wait for workspace memory semantics.
+- DONE 2026-07-21 — first-run Home picker/scaffold; bounded ZIP preview and manifest review; bounded extraction of explicitly selected entries with verbatim text and stable provenance; consent checklist and Tauri extraction bridge retaining approved content only in transient pre-triage state. No Home writes or model calls occur in these slices.
+- NEXT — define the typed, bounded local-model triage request/report-validation contract over approved extracted entries. Tauri invocation, user-confirmed report UI, and import/scaffolding writes follow as separate slices. Required-download visibility/status UI remains. CLI/VS Code defaults wait for workspace memory semantics.
 - Open items: headless/server CLI stance owner ruling; final model promotion waits on MUNIQA routing eval; Gemma 4 E2B remains a future owner-gated contingency pending llama.cpp PLE support. MUNICLOUD model artifact proxy/redirect is a ripple.
 
 ## Desktop QA automation
