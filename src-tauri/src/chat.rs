@@ -578,6 +578,16 @@ impl<R: tauri::Runtime> DesktopAttachService<TauriRunStartBoundaries<R>> {
 }
 
 #[cfg(target_os = "linux")]
+fn desktop_attach_approval() -> Option<Approval> {
+    Some(Approval {
+        profile: "desktop-owner".into(),
+        workspace: std::env::current_dir().ok()?.to_string_lossy().into_owned(),
+        scopes: BTreeSet::from(["thread.read".into(), "run.write".into()]),
+        lifetime: Duration::from_secs(60 * 60),
+    })
+}
+
+#[cfg(target_os = "linux")]
 pub fn start_attach_listener<R: tauri::Runtime>(app: tauri::AppHandle<R>) {
     std::thread::spawn(move || {
         let Ok(filesystem) = AttachFilesystem::from_environment() else {
@@ -628,15 +638,7 @@ pub fn start_attach_listener<R: tauri::Runtime>(app: tauri::AppHandle<R>) {
                             return Some(muniment_core::attach::linux::ApprovalDecision::Deny);
                         }
                         Some(muniment_core::attach::linux::ApprovalDecision::Approve(
-                            Approval {
-                                profile: "desktop-owner".into(),
-                                workspace: std::env::current_dir()
-                                    .ok()?
-                                    .to_string_lossy()
-                                    .into_owned(),
-                                scopes: BTreeSet::from(["thread.read".into(), "run.write".into()]),
-                                lifetime: Duration::from_secs(60 * 60),
-                            },
+                            desktop_attach_approval()?,
                         ))
                     },
                 );
@@ -651,6 +653,10 @@ impl<B: RunStartBoundaries, I: RunStartIdempotency> ThreadListService
 {
     fn bind_authorized_client(&mut self, client_identity: &str) {
         self.client_identity = Some(client_identity.to_owned());
+    }
+
+    fn reconnect_approval(&self) -> Option<Approval> {
+        desktop_attach_approval()
     }
 
     fn authorize_client(

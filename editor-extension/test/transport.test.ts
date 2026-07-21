@@ -18,6 +18,7 @@ const welcome = {
   authorization: "pairing_required",
   approval_challenge: "b".repeat(32),
 };
+const reconnectWelcome = { ...welcome, authorization: "authorized" };
 const authorized = {
   capability: "c".repeat(64),
   expires_at: 3600,
@@ -98,6 +99,35 @@ test("accepts coalesced welcome and authorization frames", async () => {
   socket.emit("connect");
   socket.emit("data", Buffer.concat([encodeAttachFrame(welcome), encodeAttachFrame(authorized)]));
   assert.equal((await result).expiresInSeconds, 3600);
+});
+
+test("reconnect authorization does not surface pairing", async () => {
+  const socket = new FakeSocket();
+  let pending = 0;
+  const result = connecting(socket, {
+    authorizedClientCredential: "d".repeat(64),
+    onPairingPending: () => pending++,
+  });
+  socket.emit("connect");
+  socket.emit("data", Buffer.concat([
+    encodeAttachFrame(reconnectWelcome), encodeAttachFrame(authorized),
+  ]));
+  assert.equal((await result).capability, "c".repeat(64));
+  assert.equal(pending, 0);
+});
+
+test("invalid reconnect surfaces pairing and cannot authorize without approval", async () => {
+  const socket = new FakeSocket();
+  let pending = 0;
+  const result = connecting(socket, {
+    authorizedClientCredential: "e".repeat(64),
+    onPairingPending: () => pending++,
+  });
+  socket.emit("connect");
+  socket.emit("data", encodeAttachFrame(welcome));
+  await assert.rejects(result, (error: unknown) =>
+    error instanceof AttachTransportError && error.code === "timeout");
+  assert.equal(pending, 1);
 });
 
 test("lists and opens bounded thread pages over the authorized connection", async () => {
