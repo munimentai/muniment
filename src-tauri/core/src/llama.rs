@@ -354,7 +354,7 @@ impl OnboardingTriageReport {
         let mut next_heading = 0;
         for raw_line in markdown.lines() {
             let line = raw_line.strip_suffix('\r').unwrap_or(raw_line);
-            if line.starts_with("## ") {
+            if is_level_two_atx_heading(line) {
                 if next_heading == HEADINGS.len() || line != HEADINGS[next_heading] {
                     return Err(OnboardingTriageReportError::InvalidSections);
                 }
@@ -393,6 +393,16 @@ impl OnboardingTriageReport {
             starter_agents,
         })
     }
+}
+
+fn is_level_two_atx_heading(line: &str) -> bool {
+    let line = line.strip_prefix("   ").unwrap_or_else(|| {
+        line.strip_prefix("  ")
+            .or_else(|| line.strip_prefix(' '))
+            .unwrap_or(line)
+    });
+    line.strip_prefix("##")
+        .is_some_and(|rest| rest.is_empty() || rest.starts_with(' ') || rest.starts_with('\t'))
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -813,6 +823,9 @@ mod tests {
             "## User type\n\n## Proposed Home layout\nLayout\n## Starter agents\n- One\n- Two\n",
             "## User type\nPerson\n## Proposed Home layout\nLayout\n## Starter agents\n- Only one\n",
             "Preface\n## User type\nPerson\n## Proposed Home layout\nLayout\n## Starter agents\n- One\n- Two\n",
+            "## User type\nPerson\n## Proposed Home layout\nLayout\n##\tUser type\nAgain\n## Starter agents\n- One\n- Two\n",
+            "## User type\nPerson\n## Proposed Home layout\nLayout\n##\tUnexpected\nAgain\n## Starter agents\n- One\n- Two\n",
+            "## User type\nPerson\n##\tStarter agents\n- One\n- Two\n## Proposed Home layout\nLayout\n",
         ];
         for report in malformed {
             assert!(OnboardingTriageReport::parse(report).is_err(), "{report}");
