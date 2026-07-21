@@ -62,11 +62,32 @@ pub struct PreviewManifest {
     pub total_byte_size: u64,
 }
 
+/// Full text retained for one explicitly selected archive member.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExtractedEntry {
+    pub source_name: String,
+    pub kind: EntryKind,
+    pub text: String,
+    /// Stable provenance identifier, independent of the archive's local path.
+    pub source_provenance: String,
+}
+
 /// Stable, typed failure modes. Serialized as camelCase strings so a later UI
 /// can branch on the kind and supply its own copy.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub enum PreviewErrorKind {
+    /// Extraction was requested without selecting any members.
+    EmptySelection,
+    /// A requested name was not already in normalized archive-name form.
+    InvalidSelection,
+    /// The same normalized member was selected more than once.
+    DuplicateSelection,
+    /// A requested member is a directory rather than a text file.
+    DirectorySelection,
+    /// A requested member does not exist in the independently read archive.
+    UnknownSelection,
     /// The path does not exist or is not a regular file.
     NotFound,
     /// The archive is larger than [`MAX_ARCHIVE_BYTES`].
@@ -101,6 +122,13 @@ impl PreviewErrorKind {
     /// A neutral fallback message; the UI is expected to key off the kind.
     pub fn message(self) -> &'static str {
         match self {
+            PreviewErrorKind::EmptySelection => "At least one archive entry must be selected.",
+            PreviewErrorKind::InvalidSelection => {
+                "A selected archive entry name is not normalized."
+            }
+            PreviewErrorKind::DuplicateSelection => "An archive entry was selected more than once.",
+            PreviewErrorKind::DirectorySelection => "A selected archive entry is a directory.",
+            PreviewErrorKind::UnknownSelection => "A selected archive entry could not be found.",
             PreviewErrorKind::NotFound => "The selected file could not be found.",
             PreviewErrorKind::ArchiveTooLarge => "The selected archive is too large to preview.",
             PreviewErrorKind::InvalidArchive => "The selected file is not a readable ZIP archive.",
@@ -231,6 +259,123 @@ pub fn preview_export_zip(archive_path: &Path) -> Result<PreviewManifest, Previe
         entries,
         total_byte_size: total_expanded,
     })
+}
+
+/// Re-opens and validates one explicitly chosen ZIP, returning full UTF-8 text
+/// only for the normalized member names in `selected_names`. The entire
+/// archive is streamed through the same bounds as preview, while selected
+/// output is sorted by source name for deterministic downstream handling.
+pub fn extract_selected_zip_entries(
+    archive_path: &Path,
+    selected_names: &[String],
+) -> Result<Vec<ExtractedEntry>, PreviewErrorKind> {
+    if selected_names.is_empty() {
+        return Err(PreviewErrorKind::EmptySelection);
+    }
+
+    let mut selected = std::collections::BTreeSet::new();
+    for requested in selected_names {
+        let normalized = normalize_entry_name(requested)?;
+        if normalized != *requested {
+            return Err(PreviewErrorKind::InvalidSelection);
+        }
+        if classify(&normalized).is_none() {
+            return Err(PreviewErrorKind::UnsupportedEntry);
+        }
+        if !selected.insert(normalized) {
+            return Err(PreviewErrorKind::DuplicateSelection);
+        }
+    }
+
+    let metadata = match fs::symlink_metadata(archive_path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Err(PreviewErrorKind::NotFound)
+        }
+        Err(_) => return Err(PreviewErrorKind::Io),
+    };
+    if !metadata.file_type().is_file() {
+        return Err(PreviewErrorKind::NotFound);
+    }
+    if metadata.len() > MAX_ARCHIVE_BYTES {
+        return Err(PreviewErrorKind::ArchiveTooLarge);
+    }
+
+    let file = fs::File::open(archive_path).map_err(|error| match error.kind() {
+        std::io::ErrorKind::NotFound => PreviewErrorKind::NotFound,
+        _ => PreviewErrorKind::Io,
+    })?;
+    let mut archive = zip::ZipArchive::new(file).map_err(|_| PreviewErrorKind::InvalidArchive)?;
+    if archive.len() > MAX_ENTRY_COUNT {
+        return Err(PreviewErrorKind::TooManyEntries);
+    }
+
+    let mut archive_names = std::collections::BTreeSet::new();
+    let mut extracted = std::collections::BTreeMap::new();
+    let mut total_expanded = 0u64;
+    for index in 0..archive.len() {
+        let mut member = match archive.by_index(index) {
+            Ok(member) => member,
+            Err(ZipError::UnsupportedArchive(message))
+                if message == ZipError::PASSWORD_REQUIRED =>
+            {
+                return Err(PreviewErrorKind::Encrypted)
+            }
+            Err(_) => return Err(PreviewErrorKind::InvalidArchive),
+        };
+        if member.encrypted() {
+            return Err(PreviewErrorKind::Encrypted);
+        }
+        let name = normalize_entry_name(member.name())?;
+        if member.is_symlink() {
+            return Err(PreviewErrorKind::Symlink);
+        }
+        if member.is_dir() {
+            if selected.contains(&name) {
+                return Err(PreviewErrorKind::DirectorySelection);
+            }
+            continue;
+        }
+        let kind = classify(&name).ok_or(PreviewErrorKind::UnsupportedEntry)?;
+        if !archive_names.insert(name.clone()) {
+            return Err(PreviewErrorKind::DuplicateEntry);
+        }
+
+        let remaining_total = MAX_TOTAL_EXPANDED_BYTES - total_expanded;
+        let cap = MAX_ENTRY_EXPANDED_BYTES.min(remaining_total);
+        let mut bytes = Vec::new();
+        member
+            .by_ref()
+            .take(cap + 1)
+            .read_to_end(&mut bytes)
+            .map_err(|_| PreviewErrorKind::InvalidArchive)?;
+        let expanded = bytes.len() as u64;
+        if expanded > MAX_ENTRY_EXPANDED_BYTES {
+            return Err(PreviewErrorKind::EntryTooLarge);
+        }
+        if expanded > remaining_total {
+            return Err(PreviewErrorKind::TotalTooLarge);
+        }
+        total_expanded += expanded;
+        let text = String::from_utf8(bytes).map_err(|_| PreviewErrorKind::InvalidText)?;
+
+        if selected.contains(&name) {
+            extracted.insert(
+                name.clone(),
+                ExtractedEntry {
+                    source_provenance: format!("assistant-export-zip:{name}"),
+                    source_name: name,
+                    kind,
+                    text,
+                },
+            );
+        }
+    }
+
+    if extracted.len() != selected.len() {
+        return Err(PreviewErrorKind::UnknownSelection);
+    }
+    Ok(extracted.into_values().collect())
 }
 
 /// Normalizes a raw archive entry name into a `/`-joined relative path,
