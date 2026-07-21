@@ -158,7 +158,8 @@ describe('voice dictation', () => {
 
     resolveStop({ state: 'stopped' })
     await Promise.resolve()
-    await Promise.resolve()
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(invoke).not.toHaveBeenCalledWith('dictation_polish', expect.anything())
     dictationListener({ payload: { type: 'transcript', text: 'at the boundary' } })
 
     await waitFor(() => expect(invoke).toHaveBeenCalledWith('dictation_polish', { transcript: 'after at the boundary' }))

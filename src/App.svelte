@@ -57,6 +57,7 @@
   let composer = $state()
   let onboarding = $state(onboardingLoadingState)
   let destroyed = false
+  const dictationTranscriptQuietPeriod = 25
 
   async function loadOnboarding() {
     try {
@@ -106,23 +107,31 @@
       if (epoch !== dictationCaptureEpoch || payload.type !== 'transcript' || dictationCancelled || (!isDictationActive(dictation) && !dictationFinishing)) return
       dictationTranscript = appendTranscript(dictationTranscript, payload.text)
       draft = appendTranscript(dictationDraftSnapshot, dictationTranscript)
+      if (dictationFinishing) waitForDictationTranscriptQuiet(epoch)
     })
     if (!stop) return
     if (destroyed || epoch !== dictationCaptureEpoch) stop()
     else dictationUnlisten = stop
   }
 
+  function completeDictation(epoch) {
+    if (destroyed || epoch !== dictationCaptureEpoch || epoch !== dictationCompletionEpoch) return
+    dictationCompletionEpoch = undefined
+    dictationFinishing = false
+    if (!dictationCancelled) {
+      dictationPolishEpoch = epoch
+      void polishDictation(epoch)
+    }
+  }
+
+  function waitForDictationTranscriptQuiet(epoch) {
+    clearTimeout(dictationCompletionTimer)
+    dictationCompletionTimer = setTimeout(() => completeDictation(epoch), dictationTranscriptQuietPeriod)
+  }
+
   function finishDictation(epoch) {
     clearTimeout(dictationCompletionTimer)
-    dictationCompletionTimer = setTimeout(() => {
-      if (destroyed || epoch !== dictationCaptureEpoch || epoch !== dictationCompletionEpoch) return
-      dictationCompletionEpoch = undefined
-      dictationFinishing = false
-      if (!dictationCancelled) {
-        dictationPolishEpoch = epoch
-        void polishDictation(epoch)
-      }
-    })
+    dictationCompletionTimer = setTimeout(() => waitForDictationTranscriptQuiet(epoch))
   }
 
   async function polishDictation(epoch) {
