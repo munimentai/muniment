@@ -402,14 +402,18 @@ export function connectAttach(options: ConnectOptions): Promise<AttachConnection
           }
           if (phase === "welcome") {
             if (envelope.kind !== "negotiation" || envelope.phase !== "welcome" ||
-                envelope.authorization !== "pairing_required" ||
+                (envelope.authorization !== "pairing_required" && envelope.authorization !== "authorized") ||
                 !isHex(envelope.server_nonce, 32) || !isHex(envelope.approval_challenge, 32)) {
               fail(new AttachTransportError("unexpected_message"));
               return;
             }
             phase = "authorization";
-            options.onPairingPending?.();
-            armTimer(approvalTimeout);
+            if (envelope.authorization === "pairing_required") {
+              options.onPairingPending?.();
+              armTimer(approvalTimeout);
+            } else {
+              armTimer(ioTimeout);
+            }
             continue;
           }
           if (phase !== "authorization" || envelope.kind !== "authorization" ||
