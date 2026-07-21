@@ -53,6 +53,7 @@ fn main() {
             model_install::gemma_install_cancel,
             model_install::required_model_acquisition_status,
             model_install::dictation_polish,
+            model_install::onboarding_triage,
             home::home_status,
             home::home_confirm,
             onboarding_import::onboarding_import_preview,
