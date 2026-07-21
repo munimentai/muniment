@@ -56,6 +56,7 @@ fn main() {
             home::home_status,
             home::home_confirm,
             onboarding_import::onboarding_import_preview,
+            onboarding_import::onboarding_import_extract,
             model_install::parakeet_install_start,
             model_install::parakeet_install_status,
             model_install::parakeet_install_cancel,
