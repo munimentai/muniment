@@ -43,6 +43,10 @@
   let dictationRequested = false
   let dictationCancelled = true
   let dictationDraftSnapshot = ''
+  let dictationTranscript = ''
+  let dictationCaptureEpoch = 0
+  let dictationPolishEpoch
+  let dictationPolishing = $state(false)
   let suppressVoiceClick = false
   let voiceClickTimer
   let voicePointerId
@@ -89,7 +93,32 @@
   }
 
   function dictationBusy() {
-    return dictationCommandPending || isDictationActive(dictation)
+    return dictationCommandPending || dictationPolishing || isDictationActive(dictation)
+  }
+
+  async function polishDictation(epoch) {
+    if (dictationCancelled || epoch !== dictationCaptureEpoch || epoch !== dictationPolishEpoch) return
+    const transcript = dictationTranscript
+    if (!transcript.trim()) {
+      dictationPolishEpoch = undefined
+      return
+    }
+    dictationPolishing = true
+    dictationError = ''
+    const verbatimDraft = appendTranscript(dictationDraftSnapshot, transcript)
+    try {
+      const polished = await tauri.invoke('dictation_polish', { transcript })
+      if (destroyed || dictationCancelled || epoch !== dictationCaptureEpoch || epoch !== dictationPolishEpoch) return
+      if (draft === verbatimDraft) draft = appendTranscript(dictationDraftSnapshot, polished)
+    } catch (_) {
+      if (destroyed || dictationCancelled || epoch !== dictationCaptureEpoch || epoch !== dictationPolishEpoch) return
+      dictationError = 'Polishing is unavailable. You can edit or send the captured text.'
+    } finally {
+      if (epoch === dictationPolishEpoch) {
+        dictationPolishEpoch = undefined
+        dictationPolishing = false
+      }
+    }
   }
 
   function applyDictationStatus(status) {
@@ -98,6 +127,7 @@
       dictationError = status.message
     } else dictationError = ''
     if (!isDictationActive(status)) stopDictationPolling()
+    if (status.state === 'stopped' && dictationPolishEpoch !== undefined) void polishDictation(dictationPolishEpoch)
   }
 
   function pollDictation() {
@@ -122,12 +152,15 @@
     invalidateDictationPolls()
     if (cancelled) {
       dictationCancelled = true
+      dictationPolishEpoch = undefined
+      dictationPolishing = false
       voicePointerId = undefined
       voiceKey = undefined
       draft = dictationDraftSnapshot
       tick().then(() => composer?.focus())
     }
     if (dictationCommandPending || !isDictationActive(dictation)) return
+    if (!cancelled) dictationPolishEpoch = dictationCaptureEpoch
     dictationCommandPending = true
     dictationError = ''
     try {
@@ -145,7 +178,7 @@
   }
 
   async function startDictation() {
-    if (active || dictationCommandPending || dictationRequested) return
+    if (active || dictationCommandPending || dictationPolishing || dictationRequested) return
     if (isDictationActive(dictation)) {
       await stopDictation()
       return
@@ -154,6 +187,9 @@
     dictationRequested = true
     dictationCancelled = false
     dictationDraftSnapshot = draft
+    dictationTranscript = ''
+    dictationCaptureEpoch += 1
+    dictationPolishEpoch = undefined
     dictationCommandPending = true
     dictationError = ''
     try {
@@ -339,7 +375,10 @@
       if (active?.id === payload.runId) active = projected && !['complete', 'cancelled', 'failed', 'interrupted'].includes(projected.phase) ? projected : null
     }).then((stop) => { unlisten = stop })
     window.__TAURI__?.event?.listen('dictation-event', ({ payload }) => {
-      if (payload.type === 'transcript' && !dictationCancelled) draft = appendTranscript(draft, payload.text)
+      if (payload.type === 'transcript' && !dictationCancelled && isDictationActive(dictation)) {
+        dictationTranscript = appendTranscript(dictationTranscript, payload.text)
+        draft = appendTranscript(dictationDraftSnapshot, dictationTranscript)
+      }
     }).then((stop) => {
       if (destroyed) stop()
       else dictationUnlisten = stop
@@ -629,12 +668,14 @@
               {/each}
             </ul>
           {/if}
-          <textarea bind:this={composer} bind:value={draft} onkeydown={keydown} rows="2" placeholder={active?.phase === 'resuming' ? 'Resuming interrupted reply…' : 'Ask anything'} disabled={active?.phase === 'resuming'}></textarea>
+          <textarea class:polishing={dictationPolishing} bind:this={composer} bind:value={draft} onkeydown={keydown} rows="2" placeholder={active?.phase === 'resuming' ? 'Resuming interrupted reply…' : 'Ask anything'} disabled={active?.phase === 'resuming'} readonly={dictationPolishing}></textarea>
           {#if submitError}<p class="cancel-error" role="alert">{submitError}</p>{/if}
           {#if cancelError}<p class="cancel-error" role="alert">{cancelError}</p>{/if}
           {#if queueError}<p class="cancel-error" role="alert">{queueError}</p>{/if}
           <div class="composer-row">
-            {#if isDictationActive(dictation)}
+            {#if dictationPolishing}
+              <span class="polish-status" role="status">Polishing on this device…</span>
+            {:else if isDictationActive(dictation)}
               <span class="capture-status" role="status">
                 <span class="capture-meter" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></span>
                 {dictation.state === 'starting' ? 'Starting local dictation…' : 'Listening on this device…'}
@@ -643,7 +684,7 @@
               <span>{active?.phase === 'resuming' ? 'Reopening the existing secure session…' : active && active.id !== 'pending' ? '⏎ steers this reply · queue as follow-up' : 'Routing is automatic. Every reply carries its receipt.'}</span>
             {/if}
             <div class="composer-actions">
-              <button type="button" class="quiet voice" aria-pressed={isDictationActive(dictation)} disabled={!!active} onpointerdown={voicePointerDown} onpointerup={voicePointerEnd} onpointercancel={voicePointerEnd} onkeydown={voiceKeyDown} onkeyup={voiceKeyUp} onclick={voiceClick}>Voice</button>
+              <button type="button" class="quiet voice" aria-pressed={isDictationActive(dictation)} disabled={!!active || dictationPolishing} onpointerdown={voicePointerDown} onpointerup={voicePointerEnd} onpointercancel={voicePointerEnd} onkeydown={voiceKeyDown} onkeyup={voiceKeyUp} onclick={voiceClick}>Voice</button>
               {#if !active}<button type="button" class="quiet attach" onclick={chooseFiles}>Add files</button>{/if}
               {#if active?.phase === 'resuming'}
                 <button disabled>Resuming…</button>
@@ -822,6 +863,7 @@
   .attachments span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .attachments button { padding: 1px 5px; border: 0; background: transparent; color: inherit; font-size: 11px; }
   textarea { width: 100%; resize: none; border: 0; outline: 0; background: transparent; color: var(--ink); font: inherit; }
+  textarea.polishing { text-decoration: underline 2px var(--signal); text-underline-offset: 3px; }
   .composer-row { display: flex; justify-content: space-between; align-items: center; color: var(--muted); font-size: 11px; }
   .composer-actions { display: flex; align-items: center; gap: 6px; }
   .capture-status { display: flex; align-items: center; gap: 8px; font-family: var(--font-mono); }
@@ -829,6 +871,7 @@
   .capture-meter i { width: 2px; height: 6px; background: var(--muted); animation: capture 900ms ease-in-out infinite alternate; }
   .capture-meter i:nth-child(2), .capture-meter i:nth-child(4) { height: 10px; animation-delay: -300ms; }
   .capture-meter i:nth-child(3) { height: 14px; animation-delay: -600ms; }
+  .polish-status { color: var(--signal); font-family: var(--font-mono); text-decoration: underline 2px; text-underline-offset: 3px; }
   .dictation-error { margin-top: 7px; color: var(--muted); font: var(--text-12) var(--font-mono); }
   .follow-up { color: var(--muted); font-family: var(--font-mono); }
   @keyframes blink { 50% { opacity: 0; } }
