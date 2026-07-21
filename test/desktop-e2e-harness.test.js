@@ -342,10 +342,15 @@ describe('desktop-ci payload extraction', () => {
     const source = temp(); setup(source)
     return execFileSync('tar', ['-czf', '-', '-C', source, '.']).toString('base64')
   }
-  const extract = (output) => {
+  const extractInto = (output) => {
     const file = path.join(temp(), 'output'); const destination = path.join(temp(), 'artifacts'); fs.writeFileSync(file, output)
-    return spawnSync('bash', [path.join(root, 'test/e2e/support/extract-artifacts.sh'), file, destination], { encoding: 'utf8' })
+    const result = spawnSync('bash', [path.join(root, 'test/e2e/support/extract-artifacts.sh'), file, destination], { encoding: 'utf8' })
+    return { result, destination }
   }
+  const extract = (output) => extractInto(output).result
+  const diagnostics = (destination) => Object.fromEntries(
+    fs.readFileSync(path.join(destination, 'envelope-diagnostics.txt'), 'utf8').trim().split('\n').map((line) => line.split(/=(.*)/s).slice(0, 2)),
+  )
   it('accepts one strict payload', () => expect(extract(markers(archive((dir) => fs.writeFileSync(path.join(dir, 'app.log'), 'safe')))).status).toBe(0))
   it.each(['', 'junk', `${markers('junk')}${markers('junk')}`, `=== DESKTOP-CI ARTIFACTS END ===\n=== DESKTOP-CI ARTIFACTS BEGIN ===\njunk\n`])('rejects malformed or ambiguous markers/base64', (value) => expect(extract(value).status).not.toBe(0))
   it('rejects link members', () => expect(extract(markers(archive((dir) => fs.symlinkSync('/tmp', path.join(dir, 'link'))))).status).not.toBe(0))
@@ -353,6 +358,43 @@ describe('desktop-ci payload extraction', () => {
     const source = temp(); fs.writeFileSync(path.join(source, 'file'), 'unsafe')
     const encoded = execFileSync('tar', ['-czf', '-', '--transform=s,^,../,', '-C', source, 'file']).toString('base64')
     expect(extract(markers(encoded)).status).not.toBe(0)
+  })
+
+  it('records a missing envelope as zero markers so the opaque nightly failure is diagnosable', () => {
+    const { result, destination } = extractInto('desktop-ci setup log with no envelope\n')
+    expect(result.status).not.toBe(0)
+    const fields = diagnostics(destination)
+    expect(fields.stage).toBe('markers')
+    expect(fields.begin_marker_count).toBe('0')
+    expect(fields.end_marker_count).toBe('0')
+    expect(Number(fields.transcript_line_count)).toBeGreaterThan(0)
+    expect(Number(fields.transcript_byte_count)).toBeGreaterThan(0)
+  })
+
+  it('records a duplicated envelope with its true marker counts', () => {
+    const { result, destination } = extractInto(`${markers('junk')}${markers('junk')}`)
+    expect(result.status).not.toBe(0)
+    const fields = diagnostics(destination)
+    expect(fields.stage).toBe('markers')
+    expect(fields.begin_marker_count).toBe('2')
+    expect(fields.end_marker_count).toBe('2')
+  })
+
+  it('distinguishes a corrupt payload from a marker fault', () => {
+    const { result, destination } = extractInto(markers('not*valid*base64'))
+    expect(result.status).not.toBe(0)
+    const fields = diagnostics(destination)
+    expect(fields.stage).toBe('base64')
+    expect(fields.begin_marker_count).toBe('1')
+    expect(fields.end_marker_count).toBe('1')
+  })
+
+  it('never leaks transcript content into the diagnostics', () => {
+    const { destination } = extractInto('=== DESKTOP-CI ARTIFACTS BEGIN ===\ncorp-secret-value AKIA0123456789 Bearer sk-live-abcdefg\n')
+    const raw = fs.readFileSync(path.join(destination, 'envelope-diagnostics.txt'), 'utf8')
+    expect(raw).not.toContain('corp-secret-value')
+    expect(raw).not.toContain('AKIA0123456789')
+    expect(raw).not.toContain('sk-live-abcdefg')
   })
 })
 
