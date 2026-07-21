@@ -9,6 +9,7 @@ use muniment_core::asr::install::install_parakeet_revision;
 use muniment_core::asr::{
     AsrRecovery, AsrRevisionLifecycle, PARAKEET_MODEL_MANIFEST, PARAKEET_MODEL_MANIFESTS,
 };
+use muniment_core::import_preview::ExtractedEntry;
 use muniment_core::llama::acquisition::ModelDownloadProgress;
 use muniment_core::llama::acquisition::{
     GemmaAcquisitionError, GemmaAcquisitionLimits, GemmaAcquisitionRuntime,
@@ -20,8 +21,9 @@ use muniment_core::llama::lifecycle::{
 };
 use muniment_core::llama::runtime::{acquire_runtime, resolve_runtime};
 use muniment_core::llama::{
-    ChatCompletionRequest, ChatMessage, DictationPolishRequest, LlamaChatClient, LlamaChatError,
-    LlamaServer, LlamaServerConfig, ResidentModelDescriptor,
+    DictationPolishRequest, LlamaChatClient, LlamaChatError, LlamaServer, LlamaServerConfig,
+    OnboardingTriageRequest, OnboardingTriageRequestError, OnboardingTriageResponse,
+    ResidentModelDescriptor,
 };
 use muniment_core::model_acquisition_transport::NativeModelAcquisitionTransport;
 use muniment_core::model_install::ModelInstallError;
@@ -131,34 +133,6 @@ pub struct GemmaInstallState {
 }
 
 impl GemmaInstallState {
-    pub(crate) fn onboarding_triage(&self, home: &Path) -> Option<String> {
-        let base_url = {
-            let inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
-            match inner.server.as_ref()? {
-                ServingServer::Native(server)
-                    if server.supervisor().status() == SidecarStatus::Healthy =>
-                {
-                    server.base_url().to_owned()
-                }
-                _ => return None,
-            }
-        };
-        let client = LlamaChatClient::new(base_url, std::time::Duration::from_secs(45)).ok()?;
-        let request = ChatCompletionRequest::new(vec![
-            ChatMessage::system("Produce a concise Markdown onboarding proposal. It must contain exactly these level-two sections: User type, Proposed Home layout, and Starter agents. The starter agents must be Researcher (gathers and checks sources) and Writer (turns context into clear drafts), because those are the files this scaffold can create. Do not use code fences or claim to have inspected files."),
-            ChatMessage::user(format!("Propose a general first-run Muniment Home at {}. Its required folders are memory/, agents/, projects/, and sessions/.", home.to_string_lossy())),
-        ], 700, 0.2);
-        let text = client.complete(&request).ok()?.text;
-        [
-            "## User type",
-            "## Proposed Home layout",
-            "## Starter agents",
-        ]
-        .iter()
-        .all(|heading| text.contains(heading))
-        .then_some(text)
-    }
-
     pub fn new(root: PathBuf) -> std::io::Result<Self> {
         fs::create_dir_all(root.join("staging"))?;
         let status = inspect(&root);
@@ -404,6 +378,91 @@ impl GemmaInstallState {
                     Err(DictationPolishFailure::request_failed())
                 }
             }
+        }
+    }
+
+    fn triage_onboarding_with_inner(
+        inner: Arc<Mutex<Inner>>,
+        entries: Vec<ExtractedEntry>,
+    ) -> Result<OnboardingTriageResponse, OnboardingTriageFailure> {
+        let request =
+            OnboardingTriageRequest::new(entries).map_err(OnboardingTriageFailure::input)?;
+        let base_url = {
+            let guard = inner.lock().unwrap_or_else(|e| e.into_inner());
+            guard
+                .server
+                .as_ref()
+                .filter(|server| server.is_ready())
+                .ok_or_else(OnboardingTriageFailure::unavailable)?
+                .base_url()
+                .to_owned()
+        };
+        let result = LlamaChatClient::new(base_url, std::time::Duration::from_secs(45))
+            .and_then(|client| client.triage_onboarding(&request));
+        match result {
+            Ok(response) => Ok(response),
+            Err(LlamaChatError::Transport(_)) => Err(OnboardingTriageFailure::transport()),
+            Err(
+                LlamaChatError::InvalidResponse(_)
+                | LlamaChatError::MalformedJson
+                | LlamaChatError::BodyTooLarge { .. },
+            ) => Err(OnboardingTriageFailure::invalid_response()),
+            Err(_) => Err(OnboardingTriageFailure::request_failed()),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OnboardingTriageFailure {
+    kind: &'static str,
+    message: &'static str,
+}
+
+impl OnboardingTriageFailure {
+    fn input(error: OnboardingTriageRequestError) -> Self {
+        match error {
+            OnboardingTriageRequestError::Empty => Self {
+                kind: "empty",
+                message: "Select at least one approved entry.",
+            },
+            OnboardingTriageRequestError::TooManyEntries => Self {
+                kind: "tooManyEntries",
+                message: "Too many approved entries were selected.",
+            },
+            OnboardingTriageRequestError::EmptySourceField => Self {
+                kind: "malformedSource",
+                message: "An approved entry has invalid source information.",
+            },
+            OnboardingTriageRequestError::TooLarge => Self {
+                kind: "inputTooLarge",
+                message: "The approved entries are too large to triage.",
+            },
+        }
+    }
+
+    fn unavailable() -> Self {
+        Self {
+            kind: "localAiUnavailable",
+            message: "Local AI is unavailable.",
+        }
+    }
+    fn transport() -> Self {
+        Self {
+            kind: "transportFailed",
+            message: "Local AI could not be reached.",
+        }
+    }
+    fn invalid_response() -> Self {
+        Self {
+            kind: "invalidModelResponse",
+            message: "Local AI returned an invalid triage report.",
+        }
+    }
+    fn request_failed() -> Self {
+        Self {
+            kind: "requestFailed",
+            message: "The onboarding triage request failed.",
         }
     }
 }
@@ -922,6 +981,19 @@ pub async fn dictation_polish(
 }
 
 #[tauri::command]
+pub async fn onboarding_triage(
+    entries: Vec<ExtractedEntry>,
+    state: State<'_, GemmaInstallState>,
+) -> Result<OnboardingTriageResponse, OnboardingTriageFailure> {
+    let inner = Arc::clone(&state.inner);
+    tauri::async_runtime::spawn_blocking(move || {
+        GemmaInstallState::triage_onboarding_with_inner(inner, entries)
+    })
+    .await
+    .unwrap_or_else(|_| Err(OnboardingTriageFailure::request_failed()))
+}
+
+#[tauri::command]
 pub fn parakeet_install_start(state: State<'_, ParakeetInstallState>) -> ParakeetInstallStatus {
     state.start()
 }
@@ -1008,6 +1080,15 @@ mod tests {
             String::from_utf8(request).unwrap()
         });
         (url, worker)
+    }
+
+    fn extracted(source_name: &str, provenance: &str, text: &str) -> ExtractedEntry {
+        ExtractedEntry {
+            source_name: source_name.to_owned(),
+            kind: muniment_core::import_preview::EntryKind::Markdown,
+            text: text.to_owned(),
+            source_provenance: provenance.to_owned(),
+        }
     }
 
     fn app_with_parakeet_state(
@@ -1158,6 +1239,85 @@ mod tests {
         assert_eq!(
             state.polish_dictation("hello".into()).unwrap_err(),
             DictationPolishFailure::request_failed()
+        );
+        worker.join().unwrap();
+    }
+
+    #[test]
+    fn onboarding_triage_uses_approved_entries_and_returns_structured_report() {
+        let body = r###"{"choices":[{"message":{"role":"assistant","content":"## User type\nDeveloper\n## Proposed Home layout\nProject folders\n## Starter agents\n- Researcher\n- Writer"}}],"usage":{"prompt_tokens":12,"completion_tokens":8,"total_tokens":20}}"###;
+        let (url, worker) = polish_fixture(body);
+        let state = state(
+            GemmaInstallStatus::Installed,
+            Arc::new(|root, _, _| Ok(root.into())),
+        );
+        state.inner.lock().unwrap().server = Some(ServingServer::Test(url));
+        let app = app_with_state(state);
+
+        let response = tauri::async_runtime::block_on(onboarding_triage(
+            vec![extracted("notes.md", "sha256:approved", "approved body")],
+            app.state(),
+        ))
+        .unwrap();
+        assert_eq!(response.report.user_type, "Developer");
+        assert_eq!(response.report.starter_agents, ["Researcher", "Writer"]);
+        assert_eq!(response.usage.unwrap().total_tokens, Some(20));
+        let request = worker.join().unwrap();
+        assert!(request.contains("approved body"));
+        assert!(request.contains("sha256:approved"));
+    }
+
+    #[test]
+    fn onboarding_triage_rejects_unavailable_model_without_request() {
+        let state = state(
+            GemmaInstallStatus::Installed,
+            Arc::new(|root, _, _| Ok(root.into())),
+        );
+        let app = app_with_state(state);
+        let error = tauri::async_runtime::block_on(onboarding_triage(
+            vec![extracted("notes.md", "sha256:x", "body")],
+            app.state(),
+        ))
+        .unwrap_err();
+        assert_eq!(error, OnboardingTriageFailure::unavailable());
+    }
+
+    #[test]
+    fn onboarding_triage_rejects_invalid_input_before_model_request() {
+        let state = state(
+            GemmaInstallStatus::Installed,
+            Arc::new(|root, _, _| Ok(root.into())),
+        );
+        state.inner.lock().unwrap().server =
+            Some(ServingServer::Test("http://127.0.0.1:1".to_owned()));
+        let app = app_with_state(state);
+        let error =
+            tauri::async_runtime::block_on(onboarding_triage(Vec::new(), app.state())).unwrap_err();
+        assert_eq!(
+            error,
+            OnboardingTriageFailure::input(OnboardingTriageRequestError::Empty)
+        );
+    }
+
+    #[test]
+    fn onboarding_triage_maps_invalid_report_to_redacted_typed_error() {
+        let body = r###"{"choices":[{"message":{"role":"assistant","content":"## User type\nDeveloper"}}]}"###;
+        let (url, worker) = polish_fixture(body);
+        let state = state(
+            GemmaInstallStatus::Installed,
+            Arc::new(|root, _, _| Ok(root.into())),
+        );
+        state.inner.lock().unwrap().server = Some(ServingServer::Test(url));
+        let app = app_with_state(state);
+        let error = tauri::async_runtime::block_on(onboarding_triage(
+            vec![extracted("notes.md", "sha256:x", "body")],
+            app.state(),
+        ))
+        .unwrap_err();
+        assert_eq!(error, OnboardingTriageFailure::invalid_response());
+        assert_eq!(
+            serde_json::to_value(error).unwrap(),
+            serde_json::json!({"kind":"invalidModelResponse","message":"Local AI returned an invalid triage report."})
         );
         worker.join().unwrap();
     }
