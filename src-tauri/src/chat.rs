@@ -2737,8 +2737,8 @@ mod tests {
             })
             .unwrap();
 
-        let stored = contexts.lock().unwrap();
-        let stored = stored.get("default").unwrap();
+        let stored_guard = contexts.lock().unwrap();
+        let stored = stored_guard.get("default").unwrap();
         assert_eq!(
             stored
                 .get(&first.canonicalize().unwrap())
@@ -2760,7 +2760,11 @@ mod tests {
                 .as_deref(),
             Some("first instructions")
         );
-        drop(stored);
+        // Release the shared workspace-contexts lock before the start_run calls
+        // below re-lock the same mutex on this thread. `stored` is a borrow of
+        // the guard, so dropping it left the guard held to end of scope and
+        // deadlocked the non-reentrant std::sync::Mutex.
+        drop(stored_guard);
         let client_b_boundaries = FakeRunStartBoundaries::accepting();
         let mut client_b = DesktopAttachService {
             boundaries: client_b_boundaries,
