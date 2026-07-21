@@ -2398,6 +2398,7 @@ mod tests {
 
     struct FakeRunStartBoundaries {
         active: bool,
+        granted_workspaces: Vec<String>,
         auth_calls: AtomicUsize,
         prompt_protection_calls: AtomicUsize,
         prepare_calls: AtomicUsize,
@@ -2417,6 +2418,7 @@ mod tests {
         fn accepting() -> Self {
             Self {
                 active: false,
+                granted_workspaces: vec!["workspace-a".into()],
                 auth_calls: AtomicUsize::new(0),
                 prompt_protection_calls: AtomicUsize::new(0),
                 prepare_calls: AtomicUsize::new(0),
@@ -2459,7 +2461,9 @@ mod tests {
             _tokens: &TokenSet,
             requested_workspace: Option<&str>,
         ) -> Result<ChatGrant, RunStartError> {
-            if requested_workspace.is_some_and(|workspace| workspace != "workspace-a") {
+            if requested_workspace
+                .is_some_and(|workspace| !self.granted_workspaces.iter().any(|g| g == workspace))
+            {
                 return Err(RunStartError::Unauthorized(
                     "sensitive workspace detail".into(),
                 ));
@@ -2468,8 +2472,15 @@ mod tests {
             if let Some(error) = &self.configure_error {
                 return Err(RunStartError::Persistence(error.clone()));
             }
+            // Model the gateway granting exactly the workspace that was
+            // requested (and authorized), so the capability check
+            // `requested == grant.workspace` holds for every granted workspace.
+            let workspace = requested_workspace
+                .map(str::to_owned)
+                .or_else(|| self.granted_workspaces.first().cloned())
+                .unwrap_or_default();
             Ok(ChatGrant {
-                workspace: "workspace-a".into(),
+                workspace,
                 gateway_url: "https://gateway.invalid".into(),
                 virtual_key: "virtual-key".into(),
                 model: None,
@@ -2721,8 +2732,16 @@ mod tests {
             .unwrap();
         drop(first_connection);
 
+        // The fake coordinator grants exactly the workspace the gateway would
+        // hand back for this client -- here the canonical repository the run
+        // targets. A run requesting any other workspace is rejected by
+        // `configure_run`, mirroring the real capability check.
+        let first_canonical = first.canonicalize().unwrap().to_string_lossy().into_owned();
         let mut second_connection = DesktopAttachService {
-            boundaries: FakeRunStartBoundaries::accepting(),
+            boundaries: FakeRunStartBoundaries {
+                granted_workspaces: vec![first_canonical.clone()],
+                ..FakeRunStartBoundaries::accepting()
+            },
             idempotency: IdempotencyStore::open(":memory:").unwrap(),
             home: root.join("home"),
             workspace_contexts: contexts.clone(),
@@ -2737,8 +2756,8 @@ mod tests {
             })
             .unwrap();
 
-        let stored_guard = contexts.lock().unwrap();
-        let stored = stored_guard.get("default").unwrap();
+        let guard = contexts.lock().unwrap();
+        let stored = guard.get("default").unwrap();
         assert_eq!(
             stored
                 .get(&first.canonicalize().unwrap())
@@ -2760,14 +2779,13 @@ mod tests {
                 .as_deref(),
             Some("first instructions")
         );
-        // Release the shared workspace-contexts lock before the start_run calls
-        // below re-lock the same mutex on this thread. `stored` is a borrow of
-        // the guard, so dropping it left the guard held to end of scope and
-        // deadlocked the non-reentrant std::sync::Mutex.
-        drop(stored_guard);
-        let client_b_boundaries = FakeRunStartBoundaries::accepting();
-        let mut client_b = DesktopAttachService {
-            boundaries: client_b_boundaries,
+        // Release the shared `contexts` lock before the client-b/second/third
+        // connections call back into the service -- those methods re-lock the
+        // same mutex, so holding the guard here would deadlock (dropping the
+        // former `stored` reference was a no-op that left the guard live).
+        drop(guard);
+        let client_b = DesktopAttachService {
+            boundaries: FakeRunStartBoundaries::accepting(),
             idempotency: IdempotencyStore::open(":memory:").unwrap(),
             home: root.join("home"),
             workspace_contexts: contexts.clone(),
@@ -2775,24 +2793,14 @@ mod tests {
             credential_path: None,
             client_identity: Some("client-b".into()),
         };
-        for (offset, workspace) in [&first, &first_memory].into_iter().enumerate() {
-            let rejected = client_b.start_run(
-                &workspace.to_string_lossy(),
-                AttachRunStartRequest {
-                    text: "borrow context".into(),
-                    context: None,
-                },
-                &Id::new(format!("018f0000-0000-7000-8000-00000000003{offset}")).unwrap(),
-                &Id::new(format!("018f0000-0000-7000-8000-00000000004{offset}")).unwrap(),
-                CompanionProvenance {
-                    profile: "desktop-owner".into(),
-                    companion_kind: "cli".into(),
-                    companion_version: "1.2.3".into(),
-                    peer_uid: 1000,
-                    peer_pid: 99,
-                },
-            );
-            assert_eq!(rejected.unwrap_err().code(), ErrorCode::Unauthorized);
+        // Grants are bound to the authorizing client: a second identity cannot
+        // borrow another client's onboarded workspaces. `authorized_workspace`
+        // is the gate the dispatcher applies before a run is ever started, so it
+        // resolves nothing for client-b even though the contexts are shared.
+        for workspace in [&first, &first_memory] {
+            assert!(client_b
+                .authorized_workspace(&workspace.to_string_lossy())
+                .is_none());
         }
         assert!(client_b
             .boundaries
@@ -2800,9 +2808,15 @@ mod tests {
             .lock()
             .unwrap()
             .is_none());
+        // The onboarding client resolves its own repository through the same
+        // gate (canonicalizing the request) before starting the run.
+        let first_authorized = second_connection
+            .authorized_workspace(&first.to_string_lossy())
+            .unwrap();
+        assert_eq!(first_authorized, first_canonical);
         let run = second_connection
             .start_run(
-                &first.to_string_lossy(),
+                &first_authorized,
                 AttachRunStartRequest {
                     text: "use repository context".into(),
                     context: None,
@@ -2829,8 +2843,16 @@ mod tests {
             "first instructions"
         );
         drop(provenance);
+        let second_memory_canonical = second_memory
+            .canonicalize()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
         let mut third_connection = DesktopAttachService {
-            boundaries: FakeRunStartBoundaries::accepting(),
+            boundaries: FakeRunStartBoundaries {
+                granted_workspaces: vec![second_memory_canonical.clone()],
+                ..FakeRunStartBoundaries::accepting()
+            },
             idempotency: IdempotencyStore::open(":memory:").unwrap(),
             home: root.join("home"),
             workspace_contexts: contexts.clone(),
@@ -2838,9 +2860,13 @@ mod tests {
             credential_path: None,
             client_identity: Some("default".into()),
         };
+        let second_memory_authorized = third_connection
+            .authorized_workspace(&second_memory.to_string_lossy())
+            .unwrap();
+        assert_eq!(second_memory_authorized, second_memory_canonical);
         third_connection
             .start_run(
-                &second_memory.to_string_lossy(),
+                &second_memory_authorized,
                 AttachRunStartRequest {
                     text: "second context".into(),
                     context: None,
@@ -3038,7 +3064,7 @@ mod tests {
     fn production_listener_state_isolates_workspace_grants_across_transport_connections() {
         use muniment_attach::{handshake_stream_with_credential, ClientError};
         use muniment_core::attach::linux::ApprovalDecision;
-        use std::os::unix::fs::symlink;
+        use std::os::unix::fs::{symlink, PermissionsExt};
 
         let root =
             std::env::temp_dir().join(format!("muniment-listener-isolation-{}", Uuid::now_v7()));
@@ -3054,11 +3080,21 @@ mod tests {
         let credentials = Arc::new(Mutex::new(HashMap::new()));
         let identity_a = "018f0000-0000-7000-8000-0000000000a1";
         let identity_b = "018f0000-0000-7000-8000-0000000000b1";
+        // The attach socket is bound at `<runtime>/muniment/attach-v1.sock`; a
+        // runtime path nested under the descriptive `root` overruns the AF_UNIX
+        // `sun_path` limit (108 bytes) when the client connects. Bind each
+        // connection under a short, dedicated temp directory -- created 0700 to
+        // satisfy the runtime-directory secrecy check the same way a real
+        // XDG_RUNTIME_DIR is -- and remove them when the test finishes.
+        let runtime_dirs = std::cell::RefCell::new(Vec::new());
         let connect = |identity: &'static str,
                        credential: Option<String>,
                        boundaries: FakeRunStartBoundaries| {
-            let runtime = root.join(format!("runtime-{}", Uuid::now_v7()));
+            let runtime =
+                std::env::temp_dir().join(format!("mt-attach-{}", Uuid::now_v7().simple()));
             std::fs::create_dir(&runtime).unwrap();
+            std::fs::set_permissions(&runtime, std::fs::Permissions::from_mode(0o700)).unwrap();
+            runtime_dirs.borrow_mut().push(runtime.clone());
             let filesystem = AttachFilesystem::from_runtime_directory(&runtime).unwrap();
             let transport = AttachTransport::bind(&filesystem).unwrap();
             let client_stream =
@@ -3115,7 +3151,23 @@ mod tests {
         drop(client_a);
         assert!(worker.join().unwrap().0.is_ok());
 
-        let a_dispatch = FakeRunStartBoundaries::accepting();
+        // Client A is authorized for both the opened repository and its memory
+        // root, so the coordinator grants either when a run requests it.
+        let a_dispatch = FakeRunStartBoundaries {
+            granted_workspaces: vec![
+                opened
+                    .canonicalize()
+                    .unwrap()
+                    .to_string_lossy()
+                    .into_owned(),
+                memory
+                    .canonicalize()
+                    .unwrap()
+                    .to_string_lossy()
+                    .into_owned(),
+            ],
+            ..FakeRunStartBoundaries::accepting()
+        };
         let (client_a, worker) = connect(identity_a, Some(credential_a.clone()), a_dispatch);
         let mut client_a = client_a.unwrap();
         client_a
@@ -3150,9 +3202,12 @@ mod tests {
             let b_dispatch = FakeRunStartBoundaries::accepting();
             let (client_b, worker) = connect(identity_b, Some(credential_b.clone()), b_dispatch);
             let mut client_b = client_b.unwrap();
+            // The workspace is not among client-b's grants, so the dispatcher
+            // resolves it to an `Unauthorized` protocol error, which the client
+            // surfaces as `AuthorizationExpired` (see `map_protocol_error`).
             assert_eq!(
                 client_b.start_run_in_workspace("borrow", None, Some(&workspace.to_string_lossy())),
-                Err(ClientError::RequestRejected)
+                Err(ClientError::AuthorizationExpired)
             );
             drop(client_b);
             let (_, service) = worker.join().unwrap();
@@ -3195,9 +3250,11 @@ mod tests {
             let denied = FakeRunStartBoundaries::accepting();
             let (client, worker) = connect(identity_a, Some(credential_a.clone()), denied);
             let mut client = client.unwrap();
+            // A missing directory or a workspace retargeted through a symlink
+            // resolves to nothing authorized, so the run is denied the same way.
             assert_eq!(
                 client.start_run_in_workspace("invalid", None, Some(&workspace.to_string_lossy())),
-                Err(ClientError::RequestRejected)
+                Err(ClientError::AuthorizationExpired)
             );
             drop(client);
             let (_, service) = worker.join().unwrap();
@@ -3210,6 +3267,9 @@ mod tests {
             assert!(service.boundaries.launched_run.lock().unwrap().is_none());
         }
         std::fs::remove_dir_all(root).unwrap();
+        for runtime in runtime_dirs.borrow().iter() {
+            let _ = std::fs::remove_dir_all(runtime);
+        }
     }
 
     #[cfg(target_os = "linux")]
