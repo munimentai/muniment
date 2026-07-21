@@ -105,8 +105,104 @@ describe('Home onboarding', () => {
     expect(screen.queryByText('Sign in')).not.toBeInTheDocument()
     expect(screen.queryByPlaceholderText('Ask anything')).not.toBeInTheDocument()
     await fireEvent.click(screen.getByTestId('onboarding-confirm'))
-    expect(await screen.findByPlaceholderText('Ask anything')).toBeInTheDocument()
     expect(invoke).toHaveBeenCalledWith('home_confirm', { homePath: '/Documents/Muniment' })
+    expect(await screen.findByText('Review an assistant export')).toBeInTheDocument()
+    expect(screen.getByText(/Preview happens locally and is read-only/)).toBeInTheDocument()
+    await fireEvent.click(screen.getByTestId('onboarding-import-skip'))
+    expect(await screen.findByPlaceholderText('Ask anything')).toBeInTheDocument()
+  })
+
+  it('previews the explicitly selected ZIP and lists its bounded manifest', async () => {
+    homeStatus = { configured: false, homePath: '/Documents/Muniment' }
+    dialogResult = '/Exports/assistant.zip'
+    invoke.mockImplementation(async (command, payload) => {
+      if (command === 'home_confirm') return { configured: true, homePath: payload.homePath }
+      if (command === 'onboarding_import_preview') return {
+        entries: [
+          { name: 'conversations/chat.md', kind: 'markdown', byteSize: 128, excerpt: '# Original\nVerbatim text', excerptTruncated: false },
+          { name: 'profile.json', kind: 'json', byteSize: 5000, excerpt: '{"name":"A…', excerptTruncated: true },
+        ],
+        totalByteSize: 5128,
+      }
+      if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
+      if (command === 'chat_history') return []
+      if (command === 'auth_entitlement_snapshot') return snapshot()
+      if (command === 'auth_devices') return []
+      throw new Error(`unexpected command: ${command}`)
+    })
+    render(App)
+    await fireEvent.click(await screen.findByTestId('onboarding-confirm'))
+    expect(invoke).not.toHaveBeenCalledWith('onboarding_import_preview', expect.anything())
+    await fireEvent.click(await screen.findByTestId('onboarding-import-picker'))
+    expect(invoke).toHaveBeenCalledWith('onboarding_import_preview', { archivePath: '/Exports/assistant.zip' })
+    const manifest = await screen.findByRole('list', { name: 'Export manifest' })
+    expect(within(manifest).getByText('conversations/chat.md')).toBeInTheDocument()
+    expect(within(manifest).getByText('markdown · 128 B · complete excerpt')).toBeInTheDocument()
+    expect(within(manifest).getAllByText((_, element) => element.tagName === 'PRE' && element.textContent === '# Original\nVerbatim text')).toHaveLength(1)
+    expect(within(manifest).getByText('json · 4.9 KB · excerpt truncated')).toBeInTheDocument()
+    expect(screen.getByText('2 · 5.0 KB expanded')).toBeInTheDocument()
+  })
+
+  it('does not preview on picker cancel and can continue without importing', async () => {
+    homeStatus = { configured: false, homePath: '/Documents/Muniment' }
+    invoke.mockImplementation(async (command, payload) => {
+      if (command === 'home_confirm') return { configured: true, homePath: payload.homePath }
+      if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
+      if (command === 'chat_history') return []
+      if (command === 'auth_entitlement_snapshot') return snapshot()
+      if (command === 'auth_devices') return []
+      throw new Error(`unexpected command: ${command}`)
+    })
+    render(App)
+    await fireEvent.click(await screen.findByTestId('onboarding-confirm'))
+    await fireEvent.click(await screen.findByTestId('onboarding-import-picker'))
+    expect(invoke).not.toHaveBeenCalledWith('onboarding_import_preview', expect.anything())
+    await fireEvent.click(screen.getByTestId('onboarding-import-skip'))
+    expect(await screen.findByPlaceholderText('Ask anything')).toBeInTheDocument()
+  })
+
+  it('does not let a pending preview reopen onboarding after skip', async () => {
+    homeStatus = { configured: false, homePath: '/Documents/Muniment' }
+    dialogResult = '/Exports/slow.zip'
+    let resolvePreview
+    invoke.mockImplementation(async (command, payload) => {
+      if (command === 'home_confirm') return { configured: true, homePath: payload.homePath }
+      if (command === 'onboarding_import_preview') return new Promise((resolve) => { resolvePreview = resolve })
+      if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
+      if (command === 'chat_history') return []
+      if (command === 'auth_entitlement_snapshot') return snapshot()
+      if (command === 'auth_devices') return []
+      throw new Error(`unexpected command: ${command}`)
+    })
+    render(App)
+    await fireEvent.click(await screen.findByTestId('onboarding-confirm'))
+    await fireEvent.click(await screen.findByTestId('onboarding-import-picker'))
+    await fireEvent.click(screen.getByTestId('onboarding-import-skip'))
+    expect(await screen.findByPlaceholderText('Ask anything')).toBeInTheDocument()
+    resolvePreview({ entries: [], totalByteSize: 0 })
+    await Promise.resolve()
+    expect(screen.queryByText('Review an assistant export')).not.toBeInTheDocument()
+  })
+
+  it('renders a typed rejection and preserves Home while choosing another archive', async () => {
+    homeStatus = { configured: false, homePath: '/Documents/Muniment' }
+    dialogResult = '/Exports/not-an-export.zip'
+    invoke.mockImplementation(async (command, payload) => {
+      if (command === 'home_confirm') return { configured: true, homePath: payload.homePath }
+      if (command === 'onboarding_import_preview') throw { kind: 'invalidArchive', message: 'backend detail' }
+      if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
+      if (command === 'chat_history') return []
+      if (command === 'auth_entitlement_snapshot') return snapshot()
+      if (command === 'auth_devices') return []
+      throw new Error(`unexpected command: ${command}`)
+    })
+    render(App)
+    await fireEvent.click(await screen.findByTestId('onboarding-confirm'))
+    await fireEvent.click(await screen.findByTestId('onboarding-import-picker'))
+    expect(await screen.findByRole('alert')).toHaveTextContent('That file is not a readable ZIP archive. Choose a different export ZIP.')
+    expect(screen.getByText('/Exports/not-an-export.zip')).toBeInTheDocument()
+    await fireEvent.click(screen.getByTestId('onboarding-import-picker'))
+    expect(invoke.mock.calls.filter(([command]) => command === 'home_confirm')).toHaveLength(1)
   })
 
   it('surfaces a scaffold failure and lets the user choose again', async () => {

@@ -8,7 +8,7 @@
   import { ringPath } from './lib/mark.js'
   import { applyBufferedChatEvents, applyChatEvent, composerAction, formatByteSize, historyMessages, receiptParts, receiptRows, toolName, toolStatus } from './lib/chat-state.js'
   import { appendTranscript, isDictationActive } from './lib/dictation-state.js'
-  import { onboardingCancelSettingsState, onboardingConfirmingState, onboardingErrorState, onboardingLoadingState, onboardingPathState, onboardingSettingsState, onboardingStatusState } from './lib/onboarding-state.js'
+  import { onboardingCancelSettingsState, onboardingCompleteState, onboardingConfirmedState, onboardingConfirmingState, onboardingErrorState, onboardingLoadingState, onboardingPathState, onboardingPreviewErrorState, onboardingPreviewingState, onboardingPreviewState, onboardingSettingsState, onboardingStatusState } from './lib/onboarding-state.js'
   import { scrollFollowState } from './lib/scroll-follow.js'
 
   const markD = ringPath()
@@ -56,6 +56,7 @@
   let voiceKey
   let composer = $state()
   let onboarding = $state(onboardingLoadingState)
+  let onboardingPreviewSequence = 0
   let destroyed = false
   const dictationTranscriptQuietPeriod = 25
 
@@ -80,10 +81,35 @@
     const pending = onboardingConfirmingState(onboarding)
     onboarding = pending
     try {
-      onboarding = onboardingStatusState(await tauri.invoke('home_confirm', { homePath: pending.homePath }))
+      onboarding = onboardingConfirmedState(pending, await tauri.invoke('home_confirm', { homePath: pending.homePath }))
     } catch (error) {
       onboarding = onboardingErrorState(pending, typeof error === 'string' ? error : undefined)
     }
+  }
+
+  async function chooseImportArchive() {
+    let picked
+    try {
+      picked = await open({ multiple: false, directory: false, filters: [{ name: 'ZIP archives', extensions: ['zip'] }] })
+    } catch (_) {
+      onboarding = { ...onboarding, error: 'The file picker could not be opened. Try again.' }
+      return
+    }
+    if (typeof picked !== 'string') return
+    const previewId = ++onboardingPreviewSequence
+    const pending = onboardingPreviewingState(onboarding, picked)
+    onboarding = pending
+    try {
+      const manifest = await tauri.invoke('onboarding_import_preview', { archivePath: picked })
+      if (previewId === onboardingPreviewSequence) onboarding = onboardingPreviewState(pending, manifest)
+    } catch (error) {
+      if (previewId === onboardingPreviewSequence) onboarding = onboardingPreviewErrorState(pending, error)
+    }
+  }
+
+  function skipImport() {
+    onboardingPreviewSequence += 1
+    onboarding = onboardingCompleteState(onboarding)
   }
 
   function stopDictationPolling() {
@@ -595,7 +621,7 @@
     {#if onboarding.name !== 'complete'}
       <section class="onboarding" aria-labelledby="onboarding-title">
         <p class="eyebrow">{onboarding.savedHomePath ? 'Home settings' : 'First-run setup'}</p>
-        <h1 id="onboarding-title">Choose your Muniment Home</h1>
+        <h1 id="onboarding-title">{['import-choice', 'previewing', 'reviewing'].includes(onboarding.name) ? 'Review an assistant export' : 'Choose your Muniment Home'}</h1>
         {#if onboarding.name === 'loading'}
           <p class="support" role="status">Finding your Documents folder…</p>
         {:else if ['choosing', 'confirming', 'settings', 'confirming-settings'].includes(onboarding.name)}
@@ -611,6 +637,35 @@
             <button data-testid="onboarding-confirm" class="primary" onclick={confirmHome} disabled={onboarding.name.startsWith('confirming') || !onboarding.homePath}>{onboarding.name.startsWith('confirming') ? 'Creating Home…' : 'Confirm and continue'}</button>
           </div>
           {#if onboarding.error}<p class="onboarding-error" role="alert">{onboarding.error}</p>{/if}
+        {:else if ['import-choice', 'previewing', 'reviewing'].includes(onboarding.name)}
+          <p class="support">Optionally choose one assistant export ZIP. Preview happens locally and is read-only; nothing is imported or sent to a model.</p>
+          {#if onboarding.name === 'reviewing'}
+            <div class="manifest-summary">
+              <span>Supported files</span>
+              <strong>{onboarding.manifest.entries.length} · {formatByteSize(onboarding.manifest.totalByteSize)} expanded</strong>
+            </div>
+            {#if onboarding.manifest.entries.length}
+              <ol class="manifest" aria-label="Export manifest">
+                {#each onboarding.manifest.entries as entry}
+                  <li>
+                    <div class="manifest-meta"><strong>{entry.name}</strong><span>{entry.kind} · {formatByteSize(entry.byteSize)} · {entry.excerptTruncated ? 'excerpt truncated' : 'complete excerpt'}</span></div>
+                    <pre>{entry.excerpt}</pre>
+                  </li>
+                {/each}
+              </ol>
+            {:else}<p class="empty-manifest">No supported files were found in this ZIP.</p>{/if}
+          {:else}
+            <div class="path-card import-card">
+              <span class="path-label">Assistant export</span>
+              <strong>{onboarding.archivePath ?? 'No ZIP selected'}</strong>
+              <button data-testid="onboarding-import-picker" onclick={chooseImportArchive} disabled={onboarding.name === 'previewing'}>{onboarding.name === 'previewing' ? 'Reading archive…' : 'Choose ZIP…'}</button>
+            </div>
+          {/if}
+          {#if onboarding.error}<p class="onboarding-error" role="alert">{onboarding.error}</p>{/if}
+          <div class="onboarding-footer">
+            {#if onboarding.name === 'reviewing'}<button data-testid="onboarding-import-picker" onclick={chooseImportArchive}>Choose a different ZIP…</button>{:else}<span class="privacy-note">Local preview · no Home writes</span>{/if}
+            <button data-testid="onboarding-import-skip" class="primary" onclick={skipImport}>Continue without importing</button>
+          </div>
         {:else if onboarding.name === 'load-error'}
           <p class="support">Onboarding could not start.</p><button onclick={loadOnboarding}>Try again</button>
           <p class="onboarding-error" role="alert">{onboarding.error}</p>
@@ -811,6 +866,15 @@
   .onboarding-error { margin: 10px 0 0; color: var(--muted); font: var(--text-12) var(--font-mono); line-height: 1.5; }
   .onboarding-footer { display: flex; justify-content: space-between; align-items: center; gap: 16px; margin-top: 22px; }
   .primary { background: var(--ink); border-color: var(--ink); color: var(--paper); }
+  .manifest-summary { display: flex; justify-content: space-between; gap: 16px; margin-top: 22px; padding-bottom: 9px; border-bottom: 1px solid var(--border); color: var(--muted); font: var(--text-12) var(--font-mono); }
+  .manifest-summary strong { color: var(--ink); font-weight: 500; }
+  .manifest { max-height: min(42vh, 360px); margin: 0; padding: 0; overflow-y: auto; list-style: none; }
+  .manifest li { padding: 12px 0; border-bottom: 1px solid var(--border); }
+  .manifest-meta { display: flex; justify-content: space-between; gap: 16px; font: var(--text-12) var(--font-mono); }
+  .manifest-meta strong { min-width: 0; overflow-wrap: anywhere; font-weight: 500; }
+  .manifest-meta span { flex: 0 0 auto; color: var(--muted); }
+  .manifest pre { max-height: 96px; margin: 8px 0 0; padding: 8px 10px; overflow: auto; border-radius: var(--radius-control); background: var(--faint); color: var(--muted); font: var(--text-12) var(--font-mono); white-space: pre-wrap; overflow-wrap: anywhere; }
+  .empty-manifest { margin: 0; padding: 18px 0; border-bottom: 1px solid var(--border); color: var(--muted); font: var(--text-12) var(--font-mono); }
 
   button {
     font: inherit;

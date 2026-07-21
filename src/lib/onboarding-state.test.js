@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { onboardingCancelSettingsState, onboardingConfirmingState, onboardingErrorState, onboardingLoadingState, onboardingPathState, onboardingSettingsState, onboardingStatusState } from './onboarding-state.js'
+import { onboardingCancelSettingsState, onboardingCompleteState, onboardingConfirmedState, onboardingConfirmingState, onboardingErrorState, onboardingLoadingState, onboardingPathState, onboardingPreviewErrorState, onboardingPreviewingState, onboardingPreviewState, onboardingSettingsState, onboardingStatusState } from './onboarding-state.js'
 
 describe('Home onboarding state', () => {
   it('blocks on the default location until it is configured', () => {
@@ -33,6 +33,36 @@ describe('Home onboarding state', () => {
       name: 'choosing',
       homePath: '/Documents/Muniment',
       error: undefined,
+    })
+  })
+
+  it('offers import preview only after first-run Home confirmation', () => {
+    const confirmed = onboardingConfirmedState(
+      { name: 'confirming', homePath: '/Documents/Muniment' },
+      { configured: true, homePath: '/Documents/Muniment' },
+    )
+    expect(confirmed).toEqual({ name: 'import-choice', homePath: '/Documents/Muniment' })
+    expect(onboardingCompleteState(confirmed)).toEqual({ name: 'complete', homePath: '/Documents/Muniment' })
+    expect(onboardingConfirmedState(
+      { name: 'confirming-settings', homePath: '/new/Home', savedHomePath: '/old/Home' },
+      { configured: true, homePath: '/new/Home' },
+    )).toEqual({ name: 'complete', homePath: '/new/Home' })
+  })
+
+  it('keeps Home and selected archive through preview success and typed failure', () => {
+    const pending = onboardingPreviewingState({ name: 'import-choice', homePath: '/Documents/Muniment' }, '/Exports/data.zip')
+    expect(pending).toMatchObject({ name: 'previewing', homePath: '/Documents/Muniment', archivePath: '/Exports/data.zip' })
+    expect(onboardingPreviewState(pending, { entries: [], totalByteSize: 0 })).toMatchObject({
+      name: 'reviewing',
+      homePath: '/Documents/Muniment',
+      archivePath: '/Exports/data.zip',
+      manifest: { entries: [], totalByteSize: 0 },
+    })
+    expect(onboardingPreviewErrorState(pending, { kind: 'encrypted' })).toMatchObject({
+      name: 'import-choice',
+      homePath: '/Documents/Muniment',
+      archivePath: '/Exports/data.zip',
+      error: 'That archive contains an encrypted file. Choose an unencrypted export ZIP.',
     })
   })
 })
