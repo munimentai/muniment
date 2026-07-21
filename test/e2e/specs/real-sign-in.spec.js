@@ -112,6 +112,9 @@ describe('installed nightly', () => {
     const authenticatedMarker = await $('textarea[placeholder="Ask anything"]')
     await authenticatedMarker.waitForDisplayed({ timeout: 120000 })
     await authenticatedMarker.saveScreenshot(path.join(rawDir, '02-authenticated.png'))
+    const prompt = `Muniment E2E composer ${Date.now()}`
+    await authenticatedMarker.setValue(prompt)
+    expect(await authenticatedMarker.getValue()).toBe(prompt)
 
     let frontendLogs
     try {
