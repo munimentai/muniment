@@ -553,12 +553,66 @@ fn failure_before_the_commit_decision_is_rolled_back_on_recovery() {
     assert!(
         persist_onboarding_home_write_plan_with_hook(&home, &two_file_plan(), &mut hook).is_err()
     );
-    persist_onboarding_home_write_plan(&home, &two_file_plan()).unwrap();
-    assert_eq!(fs::read(home.join("memory/nested/one.md")).unwrap(), b"one");
+    assert!(!home.join("memory/nested/one.md").exists());
+    assert!(!home.join("memory/nested/two.md").exists());
+    assert!(!walk(&home)
+        .iter()
+        .any(|path| path.to_string_lossy().ends_with(".txn")));
+
+    let different = OnboardingHomeWritePlan {
+        writes: vec![HomeWrite {
+            relative_path: "agents/different.md".into(),
+            contents: "different".into(),
+        }],
+    };
+    persist_onboarding_home_write_plan(&home, &different).unwrap();
+    assert_eq!(
+        fs::read(home.join("agents/different.md")).unwrap(),
+        b"different"
+    );
+    assert!(!home.join("memory/nested/one.md").exists());
     assert!(!walk(&home)
         .iter()
         .any(|path| path.to_string_lossy().ends_with(".txn")));
     fs::remove_dir_all(home).unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn recovery_rejects_a_foreign_regular_transaction_without_touching_hard_links() {
+    let home = temp_home("foreign-regular-transaction");
+    let outside = temp_home("foreign-regular-transaction-outside");
+    fs::create_dir_all(home.join("memory/nested")).unwrap();
+    fs::write(home.join("memory/existing.md"), b"existing home").unwrap();
+    fs::write(outside.join("outside.md"), b"existing outside").unwrap();
+
+    let transaction = home.join(".onboarding-import-foreign.txn");
+    fs::create_dir(&transaction).unwrap();
+    fs::hard_link(
+        home.join("memory/existing.md"),
+        transaction.join("payload-0"),
+    )
+    .unwrap();
+    fs::write(
+        transaction.join("manifest.json"),
+        br#"{"committed":false,"entries":[{"parent":"memory","destination":"existing.md","temporary":"payload-0","anchor":"payload-0"}],"created_directories":[]}"#,
+    )
+    .unwrap();
+
+    assert!(persist_onboarding_home_write_plan(&home, &two_file_plan()).is_err());
+    assert_eq!(
+        fs::read(home.join("memory/existing.md")).unwrap(),
+        b"existing home"
+    );
+    assert_eq!(
+        fs::read(outside.join("outside.md")).unwrap(),
+        b"existing outside"
+    );
+    assert!(transaction.join("manifest.json").exists());
+    assert!(transaction.join("payload-0").exists());
+
+    fs::remove_dir_all(home).unwrap();
+    fs::remove_dir_all(outside).unwrap();
 }
 
 #[test]
