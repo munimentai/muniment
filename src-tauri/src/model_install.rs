@@ -21,9 +21,9 @@ use muniment_core::llama::lifecycle::{
 };
 use muniment_core::llama::runtime::{acquire_runtime, resolve_runtime};
 use muniment_core::llama::{
-    DictationPolishRequest, LlamaChatClient, LlamaChatError, LlamaServer, LlamaServerConfig,
-    OnboardingTriageRequest, OnboardingTriageRequestError, OnboardingTriageResponse,
-    ResidentModelDescriptor,
+    DictationPolishRequest, DictationTransform, DictationTransformRequest, LlamaChatClient,
+    LlamaChatError, LlamaServer, LlamaServerConfig, OnboardingTriageRequest,
+    OnboardingTriageRequestError, OnboardingTriageResponse, ResidentModelDescriptor,
 };
 use muniment_core::model_acquisition_transport::NativeModelAcquisitionTransport;
 use muniment_core::model_install::ModelInstallError;
@@ -381,6 +381,41 @@ impl GemmaInstallState {
         }
     }
 
+    fn transform_dictation_with_inner(
+        inner: Arc<Mutex<Inner>>,
+        transcript: String,
+        transform: DictationTransform,
+    ) -> Result<String, DictationTransformFailure> {
+        if transcript.trim().is_empty() {
+            return Err(DictationTransformFailure::invalid_transcript());
+        }
+        let base_url = {
+            let guard = inner.lock().unwrap_or_else(|e| e.into_inner());
+            let server = guard
+                .server
+                .as_ref()
+                .filter(|server| server.is_ready())
+                .ok_or_else(DictationTransformFailure::unavailable)?;
+            server.base_url().to_owned()
+        };
+        let result =
+            LlamaChatClient::new(base_url, std::time::Duration::from_secs(45)).and_then(|client| {
+                client.transform_dictation(&DictationTransformRequest::new(transform, transcript))
+            });
+        match result {
+            Ok(response) => Ok(response.transformed_text),
+            Err(LlamaChatError::Transport(_)) => Err(DictationTransformFailure::unavailable()),
+            Err(_) => {
+                let guard = inner.lock().unwrap_or_else(|e| e.into_inner());
+                if !guard.server.as_ref().is_some_and(ServingServer::is_ready) {
+                    Err(DictationTransformFailure::unavailable())
+                } else {
+                    Err(DictationTransformFailure::request_failed())
+                }
+            }
+        }
+    }
+
     fn triage_onboarding_with_inner(
         inner: Arc<Mutex<Inner>>,
         entries: Vec<ExtractedEntry>,
@@ -493,6 +528,36 @@ impl DictationPolishFailure {
         Self {
             category: "polishRequestFailed",
             message: "The dictation transcript could not be polished.",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DictationTransformFailure {
+    category: &'static str,
+    message: &'static str,
+}
+
+impl DictationTransformFailure {
+    fn invalid_transcript() -> Self {
+        Self {
+            category: "invalidTranscript",
+            message: "The dictation transcript cannot be empty.",
+        }
+    }
+
+    fn unavailable() -> Self {
+        Self {
+            category: "localAiUnavailable",
+            message: "Local AI is unavailable.",
+        }
+    }
+
+    fn request_failed() -> Self {
+        Self {
+            category: "transformRequestFailed",
+            message: "The dictation transcript could not be transformed.",
         }
     }
 }
@@ -981,6 +1046,20 @@ pub async fn dictation_polish(
 }
 
 #[tauri::command]
+pub async fn dictation_transform(
+    transcript: String,
+    transform: DictationTransform,
+    state: State<'_, GemmaInstallState>,
+) -> Result<String, DictationTransformFailure> {
+    let inner = Arc::clone(&state.inner);
+    tauri::async_runtime::spawn_blocking(move || {
+        GemmaInstallState::transform_dictation_with_inner(inner, transcript, transform)
+    })
+    .await
+    .unwrap_or_else(|_| Err(DictationTransformFailure::request_failed()))
+}
+
+#[tauri::command]
 pub async fn onboarding_triage(
     entries: Vec<ExtractedEntry>,
     state: State<'_, GemmaInstallState>,
@@ -1240,6 +1319,110 @@ mod tests {
             state.polish_dictation("hello".into()).unwrap_err(),
             DictationPolishFailure::request_failed()
         );
+        worker.join().unwrap();
+    }
+
+    #[test]
+    fn dictation_transform_uses_the_retained_ready_server_and_selected_transform() {
+        let body =
+            r#"{"choices":[{"message":{"role":"assistant","content":"A formal response."}}]}"#;
+        let (url, worker) = polish_fixture(body);
+        let state = state(
+            GemmaInstallStatus::Installed,
+            Arc::new(|root, _, _| Ok(root.into())),
+        );
+        state.inner.lock().unwrap().server = Some(ServingServer::Test(url));
+        let app = app_with_state(state);
+
+        assert_eq!(
+            tauri::async_runtime::block_on(dictation_transform(
+                "this is casual".into(),
+                DictationTransform::Formal,
+                app.state(),
+            ))
+            .unwrap(),
+            "A formal response."
+        );
+        let request = worker.join().unwrap();
+        assert!(request.starts_with("POST /v1/chat/completions "));
+        assert!(request.contains("Rewrite the transcript in a formal, professional tone."));
+        assert!(request.contains("this is casual"));
+    }
+
+    #[test]
+    fn dictation_transform_maps_transport_failure_to_unavailable() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        drop(listener);
+        let state = state(
+            GemmaInstallStatus::Installed,
+            Arc::new(|root, _, _| Ok(root.into())),
+        );
+        state.inner.lock().unwrap().server = Some(ServingServer::Test(url));
+        let app = app_with_state(state);
+
+        assert_eq!(
+            tauri::async_runtime::block_on(dictation_transform(
+                "private transcript".into(),
+                DictationTransform::Short,
+                app.state(),
+            ))
+            .unwrap_err(),
+            DictationTransformFailure::unavailable()
+        );
+    }
+
+    #[test]
+    fn dictation_transform_rejects_empty_input_and_unavailable_server() {
+        let state = state(
+            GemmaInstallStatus::Installed,
+            Arc::new(|root, _, _| Ok(root.into())),
+        );
+        state.inner.lock().unwrap().server = Some(ServingServer::Test(
+            "http://127.0.0.1:1/private-model.gguf".to_owned(),
+        ));
+
+        let empty_error = GemmaInstallState::transform_dictation_with_inner(
+            Arc::clone(&state.inner),
+            " \n\t ".into(),
+            DictationTransform::KeyPoints,
+        )
+        .unwrap_err();
+        assert_eq!(empty_error, DictationTransformFailure::invalid_transcript());
+
+        state.inner.lock().unwrap().server = None;
+        let unavailable_error = GemmaInstallState::transform_dictation_with_inner(
+            Arc::clone(&state.inner),
+            "private transcript".into(),
+            DictationTransform::Long,
+        )
+        .unwrap_err();
+        assert_eq!(unavailable_error, DictationTransformFailure::unavailable());
+        let serialized = serde_json::to_string(&unavailable_error).unwrap();
+        assert!(!serialized.contains("private transcript"));
+        assert!(!serialized.contains("private-model.gguf"));
+        assert!(!serialized.contains("127.0.0.1"));
+    }
+
+    #[test]
+    fn dictation_transform_maps_malformed_model_response_to_request_failure() {
+        let (url, worker) = polish_fixture(r#"{"choices":[]}"#);
+        let state = state(
+            GemmaInstallStatus::Installed,
+            Arc::new(|root, _, _| Ok(root.into())),
+        );
+        state.inner.lock().unwrap().server = Some(ServingServer::Test(url));
+
+        let error = GemmaInstallState::transform_dictation_with_inner(
+            Arc::clone(&state.inner),
+            "private transcript".into(),
+            DictationTransform::Short,
+        )
+        .unwrap_err();
+        assert_eq!(error, DictationTransformFailure::request_failed());
+        let serialized = serde_json::to_string(&error).unwrap();
+        assert!(!serialized.contains("private transcript"));
+        assert!(!serialized.contains("choices"));
         worker.join().unwrap();
     }
 
