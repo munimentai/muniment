@@ -426,8 +426,10 @@ fn sync_directory(_path: &Path) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::{
-        plan_onboarding_home_writes, replace_file, OnboardingPlanError, MAX_ONBOARDING_FILE_BYTES,
-        MAX_ONBOARDING_PLAN_ENTRIES, MAX_ONBOARDING_SOURCE_NAME_BYTES,
+        markdown_filename, plan_onboarding_home_writes, push_planned_write, replace_file,
+        OnboardingPlanError, MAX_ONBOARDING_FILENAME_BYTES, MAX_ONBOARDING_FILE_BYTES,
+        MAX_ONBOARDING_PATH_BYTES, MAX_ONBOARDING_PLAN_BYTES, MAX_ONBOARDING_PLAN_ENTRIES,
+        MAX_ONBOARDING_SOURCE_NAME_BYTES,
     };
     use crate::{
         import_preview::{EntryKind, ExtractedEntry},
@@ -435,8 +437,9 @@ mod tests {
     };
     use chrono::NaiveDate;
     use std::{
+        collections::BTreeSet,
         fs,
-        path::{Component, Path},
+        path::{Component, Path, PathBuf},
         time::{SystemTime, UNIX_EPOCH},
     };
 
@@ -543,12 +546,49 @@ mod tests {
             ),
             Err(OnboardingPlanError::SourceNameTooLong)
         );
+
+        let source_name_at_limit = "é".repeat(MAX_ONBOARDING_SOURCE_NAME_BYTES / 2);
+        assert_eq!(source_name_at_limit.len(), MAX_ONBOARDING_SOURCE_NAME_BYTES);
+        assert!(
+            plan_onboarding_home_writes(&report(), &[entry(&source_name_at_limit, "")], date)
+                .is_ok()
+        );
+
+        assert_eq!(
+            markdown_filename(&"n".repeat(MAX_ONBOARDING_FILENAME_BYTES - 3), "fallback")
+                .unwrap()
+                .len(),
+            MAX_ONBOARDING_FILENAME_BYTES
+        );
+        assert_eq!(
+            markdown_filename(&"n".repeat(MAX_ONBOARDING_FILENAME_BYTES - 2), "fallback"),
+            Err(OnboardingPlanError::FilenameTooLong)
+        );
         assert_eq!(
             plan_onboarding_home_writes(&report(), &[entry(&"n".repeat(121), "")], date),
             Err(OnboardingPlanError::FilenameTooLong)
         );
+
+        let mut writes = Vec::new();
+        let mut destinations = BTreeSet::new();
+        assert!(push_planned_write(
+            &mut writes,
+            &mut destinations,
+            PathBuf::from("p".repeat(MAX_ONBOARDING_PATH_BYTES)),
+            Vec::new(),
+        )
+        .is_ok());
         assert_eq!(
             plan_onboarding_home_writes(&report(), &[entry(&"n".repeat(116), "")], date),
+            Err(OnboardingPlanError::PathTooLong)
+        );
+        assert_eq!(
+            push_planned_write(
+                &mut writes,
+                &mut destinations,
+                PathBuf::from("p".repeat(MAX_ONBOARDING_PATH_BYTES + 1)),
+                Vec::new(),
+            ),
             Err(OnboardingPlanError::PathTooLong)
         );
 
@@ -578,18 +618,36 @@ mod tests {
             Err(OnboardingPlanError::FileTooLarge)
         );
 
-        let nearly_maximal = "x".repeat(MAX_ONBOARDING_FILE_BYTES - header_len);
+        let mut aggregate_entries = (0..5)
+            .map(|index| entry(&format!("total-{index}"), ""))
+            .collect::<Vec<_>>();
+        let empty_plan = plan_onboarding_home_writes(&report(), &aggregate_entries, date).unwrap();
+        let mut remaining = MAX_ONBOARDING_PLAN_BYTES
+            - empty_plan
+                .writes
+                .iter()
+                .map(|write| write.bytes.len())
+                .sum::<usize>();
+        for (index, write) in empty_plan.writes[3..].iter().enumerate() {
+            let capacity = MAX_ONBOARDING_FILE_BYTES - write.bytes.len();
+            let payload_len = remaining.min(capacity);
+            aggregate_entries[index].text = "x".repeat(payload_len);
+            remaining -= payload_len;
+        }
+        assert_eq!(remaining, 0);
+        let exact_plan = plan_onboarding_home_writes(&report(), &aggregate_entries, date).unwrap();
         assert_eq!(
-            plan_onboarding_home_writes(
-                &report(),
-                &[
-                    entry("total-1", &nearly_maximal),
-                    entry("total-2", &nearly_maximal),
-                    entry("total-3", &nearly_maximal),
-                    entry("total-4", &nearly_maximal),
-                ],
-                date
-            ),
+            exact_plan
+                .writes
+                .iter()
+                .map(|write| write.bytes.len())
+                .sum::<usize>(),
+            MAX_ONBOARDING_PLAN_BYTES
+        );
+
+        aggregate_entries.last_mut().unwrap().text.push('x');
+        assert_eq!(
+            plan_onboarding_home_writes(&report(), &aggregate_entries, date),
             Err(OnboardingPlanError::PlanTooLarge)
         );
     }
