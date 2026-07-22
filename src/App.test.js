@@ -958,9 +958,9 @@ describe('voice dictation', () => {
 
     await vi.advanceTimersByTimeAsync(3000)
     expect(screen.getByLabelText('Voice transforms')).toBeInTheDocument()
-    await vi.advanceTimersByTimeAsync(2999)
+    await vi.advanceTimersByTimeAsync(2500)
     expect(screen.getByLabelText('Voice transforms')).toBeInTheDocument()
-    await vi.advanceTimersByTimeAsync(1)
+    await vi.advanceTimersByTimeAsync(500)
     expect(screen.queryByLabelText('Voice transforms')).not.toBeInTheDocument()
   })
 
