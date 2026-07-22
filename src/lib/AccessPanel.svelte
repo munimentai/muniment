@@ -75,10 +75,12 @@
 
   async function applyShortcut(shortcut) {
     shortcutStatus = ''
-    if (await onVoiceShortcutChange(shortcut)) {
+    const result = await onVoiceShortcutChange(shortcut)
+    if (result) {
       capturingShortcut = false
       pendingShortcut = ''
-    } else shortcutStatus = 'That shortcut is unavailable. Your previous shortcut still works.'
+    } else if (result === null) shortcutStatus = 'The shortcut could not be updated. Voice remains available from the button.'
+    else shortcutStatus = 'That shortcut is unavailable. Your previous shortcut still works.'
   }
 
   function toggleGroup(index) {

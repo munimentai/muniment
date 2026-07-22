@@ -74,7 +74,9 @@
   let globalVoiceRegistered = false
   let globalVoiceError = $state(false)
   let globalVoiceShortcutValue = $state(holdToTalkShortcut())
-  let globalVoiceChanging = $state(false)
+  let globalVoiceChanging = $state(true)
+  let globalVoiceTask = Promise.resolve()
+  const registeredVoiceShortcuts = new Set()
   let composer = $state()
   let onboarding = $state(onboardingLoadingState)
   let requiredModel = $state(requiredModelLoadingState)
@@ -546,56 +548,91 @@
     const preferred = validHoldToTalkShortcut(saved) ? saved : fallback
     try {
       await register(preferred, globalVoiceShortcut)
+      registeredVoiceShortcuts.add(preferred)
+      if (destroyed) return
       globalVoiceShortcutValue = preferred
       globalVoiceRegistered = true
     } catch (_) {
       if (preferred !== fallback) {
         try {
           await register(fallback, globalVoiceShortcut)
+          registeredVoiceShortcuts.add(fallback)
+          if (destroyed) return
           globalVoiceShortcutValue = fallback
           globalVoiceRegistered = true
-          if (destroyed) {
-            globalVoiceRegistered = false
-            void unregister(fallback).catch(() => {})
-          }
           return
         } catch (_) {}
       }
       if (!destroyed) globalVoiceError = true
       return
     }
-    if (destroyed) {
-      globalVoiceRegistered = false
-      void unregister(preferred).catch(() => {})
-    }
   }
 
-  async function changeVoiceShortcut(next) {
+  async function unregisterVoiceShortcut(shortcut) {
+    await unregister(shortcut)
+    registeredVoiceShortcuts.delete(shortcut)
+  }
+
+  function restoreSavedVoiceShortcut(saved) {
+    if (saved === null) localStorage.removeItem('muniment.voice-shortcut')
+    else localStorage.setItem('muniment.voice-shortcut', saved)
+  }
+
+  async function cleanupVoiceShortcuts() {
+    globalVoiceRegistered = false
+    await Promise.allSettled([...registeredVoiceShortcuts].map((shortcut) => unregisterVoiceShortcut(shortcut)))
+  }
+
+  function changeVoiceShortcut(next) {
     if (globalVoiceChanging || next === globalVoiceShortcutValue || !validHoldToTalkShortcut(next)) return next === globalVoiceShortcutValue
     globalVoiceChanging = true
+    globalVoiceTask = globalVoiceTask.then(() => applyVoiceShortcutChange(next))
+    return globalVoiceTask
+  }
+
+  async function applyVoiceShortcutChange(next) {
     globalVoiceError = false
     const previous = globalVoiceShortcutValue
     const previousRegistered = globalVoiceRegistered
+    let previousSaved
+    try { previousSaved = localStorage.getItem('muniment.voice-shortcut') } catch (_) {
+      globalVoiceError = true
+      globalVoiceChanging = false
+      return false
+    }
     let nextRegistered = false
+    let savedChanged = false
+    let rollbackFailed = false
     try {
       await register(next, globalVoiceShortcut)
+      registeredVoiceShortcuts.add(next)
       nextRegistered = true
-      if (destroyed) {
-        await unregister(next).catch(() => {})
-        return false
-      }
-      if (previousRegistered) await unregister(previous)
-      try { localStorage.setItem('muniment.voice-shortcut', next) } catch (error) { throw error }
+      if (destroyed) throw new Error('destroyed')
+      localStorage.setItem('muniment.voice-shortcut', next)
+      savedChanged = true
+      if (destroyed) throw new Error('destroyed')
+      if (previousRegistered) await unregisterVoiceShortcut(previous)
+      if (destroyed) throw new Error('destroyed')
       globalVoiceShortcutValue = next
       globalVoiceRegistered = true
       return true
     } catch (_) {
-      if (nextRegistered) await unregister(next).catch(() => {})
-      if (previousRegistered) await register(previous, globalVoiceShortcut).catch(() => {})
+      if (savedChanged) {
+        try { restoreSavedVoiceShortcut(previousSaved) } catch (_) { rollbackFailed = true }
+      }
+      if (nextRegistered) {
+        try { await unregisterVoiceShortcut(next) } catch (_) { rollbackFailed = true }
+      }
+      if (previousRegistered && !registeredVoiceShortcuts.has(previous)) {
+        try {
+          await register(previous, globalVoiceShortcut)
+          registeredVoiceShortcuts.add(previous)
+        } catch (_) { rollbackFailed = true }
+      }
       globalVoiceShortcutValue = previous
-      globalVoiceRegistered = previousRegistered
-      globalVoiceError = true
-      return false
+      globalVoiceRegistered = registeredVoiceShortcuts.has(previous)
+      if (!destroyed) globalVoiceError = true
+      return rollbackFailed ? null : false
     } finally {
       globalVoiceChanging = false
     }
@@ -735,7 +772,10 @@
     if (tauri) {
       loadOnboarding()
       run('status')
-      void registerInitialVoiceShortcut()
+      globalVoiceTask = registerInitialVoiceShortcut().finally(async () => {
+        globalVoiceChanging = false
+        if (destroyed) await cleanupVoiceShortcuts()
+      })
     }
     window.__TAURI__?.event?.listen('chat-event', ({ payload }) => {
       if (!messages.some((message) => message.run?.id === payload.runId)) {
@@ -799,7 +839,7 @@
       clearTimeout(voiceReleaseTimer)
       stopDragDrop?.()
       globalVoiceHeld = false
-      if (globalVoiceRegistered) void unregister(globalVoiceShortcutValue).catch(() => {})
+      globalVoiceTask = globalVoiceTask.finally(cleanupVoiceShortcuts)
       document.removeEventListener('keydown', shortcuts)
     }
   })

@@ -20,6 +20,7 @@ let requiredModelInvoke
 let globalShortcutHandler
 let registerGlobalShortcut
 let unregisterGlobalShortcut
+let registeredShortcuts
 
 vi.mock('@tauri-apps/plugin-global-shortcut', () => ({
   register: (...args) => registerGlobalShortcut(...args),
@@ -63,6 +64,12 @@ async function stopClickCapture(voice) {
   await fireEvent.click(voice)
 }
 
+function deferred() {
+  let resolve
+  const promise = new Promise((res) => { resolve = res })
+  return { promise, resolve }
+}
+
 beforeAll(async () => {
   HTMLElement.prototype.scrollTo = vi.fn()
   window.__TAURI__ = {
@@ -96,8 +103,12 @@ beforeEach(() => {
   dragDropUnlisten = vi.fn()
   dialogResult = null
   globalShortcutHandler = undefined
-  registerGlobalShortcut = vi.fn(async (_shortcut, handler) => { globalShortcutHandler = handler })
-  unregisterGlobalShortcut = vi.fn().mockResolvedValue(undefined)
+  registeredShortcuts = new Set()
+  registerGlobalShortcut = vi.fn(async (shortcut, handler) => {
+    registeredShortcuts.add(shortcut)
+    globalShortcutHandler = handler
+  })
+  unregisterGlobalShortcut = vi.fn(async (shortcut) => { registeredShortcuts.delete(shortcut) })
   invoke = vi.fn(async (command, payload) => {
     if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
     if (command === 'chat_history') return []
@@ -111,6 +122,7 @@ beforeEach(() => {
 afterEach(() => {
   cleanup()
   vi.useRealTimers()
+  vi.restoreAllMocks()
 })
 
 describe('Home onboarding', () => {
@@ -722,7 +734,7 @@ describe('voice dictation', () => {
     await waitFor(() => expect(registerGlobalShortcut).toHaveBeenCalledWith('Alt+Shift+K', expect.any(Function)))
     expect(await screen.findByRole('button', { name: 'Voice' })).toHaveAttribute('aria-keyshortcuts', 'Alt+Shift+K')
     saved.unmount()
-    expect(unregisterGlobalShortcut).toHaveBeenCalledWith('Alt+Shift+K')
+    await waitFor(() => expect(unregisterGlobalShortcut).toHaveBeenCalledWith('Alt+Shift+K'))
 
     localStorage.setItem('muniment.voice-shortcut', 'no modifiers or secrets')
     registerGlobalShortcut.mockClear()
@@ -763,11 +775,13 @@ describe('voice dictation', () => {
     await waitFor(() => expect(localStorage.getItem('muniment.voice-shortcut')).toBe('Control+Alt+K'))
     expect(registerGlobalShortcut).toHaveBeenCalledWith('Control+Alt+K', expect.any(Function))
     expect(unregisterGlobalShortcut).toHaveBeenCalledWith('Control+Shift+Space')
-    expect(screen.getByRole('button', { name: 'Voice' })).toHaveAttribute('aria-keyshortcuts', 'Control+Alt+K')
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Voice' })).toHaveAttribute('aria-keyshortcuts', 'Control+Alt+K'))
 
-    await fireEvent.click(within(dialog).getByRole('button', { name: 'Restore default' }))
+    const restore = within(dialog).getByRole('button', { name: 'Restore default' })
+    await waitFor(() => expect(restore).toBeEnabled())
+    await fireEvent.click(restore)
     await waitFor(() => expect(localStorage.getItem('muniment.voice-shortcut')).toBe('Control+Shift+Space'))
-    expect(within(dialog).getByRole('button', { name: /Change voice shortcut, current Control\+Shift\+Space/ })).toBeInTheDocument()
+    await waitFor(() => expect(within(dialog).getByRole('button', { name: /Change voice shortcut, current Control\+Shift\+Space/ })).toBeInTheDocument())
   })
 
   it('keeps the previous voice binding when replacement registration collides', async () => {
@@ -788,6 +802,92 @@ describe('voice dictation', () => {
     expect(localStorage.getItem('muniment.voice-shortcut')).toBeNull()
     expect(unregisterGlobalShortcut).not.toHaveBeenCalledWith('Control+Shift+Space')
     expect(screen.getByRole('button', { name: 'Voice' })).toHaveAttribute('aria-keyshortcuts', 'Control+Shift+Space')
+  })
+
+  it('keeps the registered and displayed shortcut when persistence fails', async () => {
+    const setItem = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => { throw new DOMException('private storage detail', 'QuotaExceededError') })
+    const view = render(App)
+    await fireEvent.click(await screen.findByRole('button', { name: /Alice/i }))
+    const dialog = screen.getByRole('dialog', { name: 'Your access' })
+    const capture = within(dialog).getByRole('button', { name: /Change voice shortcut/ })
+    await fireEvent.click(capture)
+    await fireEvent.keyDown(capture, { key: 'K', code: 'KeyK', ctrlKey: true, altKey: true })
+    await fireEvent.click(within(dialog).getByRole('button', { name: 'Apply' }))
+
+    expect(await within(dialog).findByRole('alert')).toHaveTextContent('Your previous shortcut still works.')
+    expect(dialog).not.toHaveTextContent('private storage detail')
+    expect(registeredShortcuts).toEqual(new Set(['Control+Shift+Space']))
+    expect(localStorage.getItem('muniment.voice-shortcut')).toBeNull()
+    expect(screen.getByRole('button', { name: 'Voice' })).toHaveAttribute('aria-keyshortcuts', 'Control+Shift+Space')
+    setItem.mockRestore()
+    view.unmount()
+  })
+
+  it('does not claim rollback succeeded when unregistering both bindings fails', async () => {
+    unregisterGlobalShortcut.mockImplementation(async (shortcut) => {
+      if (['Control+Shift+Space', 'Control+Alt+K'].includes(shortcut)) throw new Error(`private failure for ${shortcut}`)
+      registeredShortcuts.delete(shortcut)
+    })
+    render(App)
+    await fireEvent.click(await screen.findByRole('button', { name: /Alice/i }))
+    const dialog = screen.getByRole('dialog', { name: 'Your access' })
+    const capture = within(dialog).getByRole('button', { name: /Change voice shortcut/ })
+    await fireEvent.click(capture)
+    await fireEvent.keyDown(capture, { key: 'K', code: 'KeyK', ctrlKey: true, altKey: true })
+    await fireEvent.click(within(dialog).getByRole('button', { name: 'Apply' }))
+
+    expect(await within(dialog).findByRole('alert')).toHaveTextContent('Voice remains available from the button.')
+    expect(dialog).not.toHaveTextContent('private failure')
+    expect(registeredShortcuts).toEqual(new Set(['Control+Shift+Space', 'Control+Alt+K']))
+    expect(localStorage.getItem('muniment.voice-shortcut')).toBeNull()
+    expect(screen.getByRole('button', { name: 'Voice' })).toHaveAttribute('aria-keyshortcuts', 'Control+Shift+Space')
+  })
+
+  it('disables rebinding until deferred startup registration settles', async () => {
+    const startup = deferred()
+    registerGlobalShortcut.mockImplementationOnce(async (shortcut, handler) => {
+      await startup.promise
+      registeredShortcuts.add(shortcut)
+      globalShortcutHandler = handler
+    })
+    render(App)
+    await fireEvent.click(await screen.findByRole('button', { name: /Alice/i }))
+    const capture = within(screen.getByRole('dialog', { name: 'Your access' })).getByRole('button', { name: /Change voice shortcut/ })
+    expect(capture).toBeDisabled()
+    await fireEvent.click(capture)
+    expect(registerGlobalShortcut).toHaveBeenCalledTimes(1)
+    startup.resolve()
+    await waitFor(() => expect(capture).toBeEnabled())
+    expect(registeredShortcuts).toEqual(new Set(['Control+Shift+Space']))
+  })
+
+  it.each(['register', 'unregister'])('cleans every binding when unmounted during replacement %s', async (boundary) => {
+    const pending = deferred()
+    const view = render(App)
+    await waitFor(() => expect(registeredShortcuts).toEqual(new Set(['Control+Shift+Space'])))
+    if (boundary === 'register') {
+      registerGlobalShortcut.mockImplementationOnce(async (shortcut, handler) => {
+        await pending.promise
+        registeredShortcuts.add(shortcut)
+        globalShortcutHandler = handler
+      })
+    } else {
+      unregisterGlobalShortcut.mockImplementationOnce(async (shortcut) => {
+        await pending.promise
+        registeredShortcuts.delete(shortcut)
+      })
+    }
+    await fireEvent.click(await screen.findByRole('button', { name: /Alice/i }))
+    const dialog = screen.getByRole('dialog', { name: 'Your access' })
+    const capture = within(dialog).getByRole('button', { name: /Change voice shortcut/ })
+    await fireEvent.click(capture)
+    await fireEvent.keyDown(capture, { key: 'K', code: 'KeyK', ctrlKey: true, altKey: true })
+    await fireEvent.click(within(dialog).getByRole('button', { name: 'Apply' }))
+    if (boundary === 'register') await waitFor(() => expect(registerGlobalShortcut).toHaveBeenCalledWith('Control+Alt+K', expect.any(Function)))
+    else await waitFor(() => expect(unregisterGlobalShortcut).toHaveBeenCalledWith('Control+Shift+Space'))
+    view.unmount()
+    pending.resolve()
+    await waitFor(() => expect(registeredShortcuts).toEqual(new Set()))
   })
 
   it('offers all transforms after polish and replaces only the captured segment', async () => {
