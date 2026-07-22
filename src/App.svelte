@@ -7,7 +7,7 @@
   import { bootState, errorState, statusState, waitingState } from './lib/auth-state.js'
   import { ringPath } from './lib/mark.js'
   import { applyBufferedChatEvents, applyChatEvent, composerAction, formatByteSize, historyMessages, receiptParts, receiptRows, toolName, toolStatus } from './lib/chat-state.js'
-  import { appendTranscript, isDictationActive } from './lib/dictation-state.js'
+  import { appendTranscript, dictationTransforms, isDictationActive } from './lib/dictation-state.js'
   import { onboardingCancelSettingsState, onboardingConfirmedState, onboardingConfirmingState, onboardingErrorState, onboardingExtractingState, onboardingExtractionErrorState, onboardingExtractionState, onboardingFinalizingState, onboardingImportChoiceState, onboardingLoadingState, onboardingPathState, onboardingPreviewErrorState, onboardingPreviewingState, onboardingPreviewState, onboardingReturnToArchiveReviewState, onboardingSelectionState, onboardingSettingsState, onboardingStatusState, onboardingTriageConfirmedState, onboardingTriageErrorState, onboardingTriageReportState, onboardingTriagingState, requiredModelLoadingState, requiredModelPollActive, requiredModelProgress } from './lib/onboarding-state.js'
   import { scrollFollowState } from './lib/scroll-follow.js'
 
@@ -50,6 +50,12 @@
   let dictationFinishing = $state(false)
   let dictationPolishEpoch
   let dictationPolishing = $state(false)
+  let dictationTransformEpoch = 0
+  let dictationTransformPending = $state(false)
+  let dictationTransformPendingEpoch
+  let eligibleDictation = $state(null)
+  let eligibleDictationTimer
+  let eligibleDictationTimerEpoch = 0
   let suppressVoiceClick = false
   let voiceClickTimer
   let voicePointerId
@@ -201,7 +207,24 @@
   }
 
   function dictationBusy() {
-    return dictationCommandPending || dictationFinishing || dictationPolishing || isDictationActive(dictation)
+    return dictationCommandPending || dictationFinishing || dictationPolishing || dictationTransformPending || isDictationActive(dictation)
+  }
+
+  function invalidateDictationTransform() {
+    dictationTransformEpoch += 1
+    eligibleDictationTimerEpoch += 1
+    clearTimeout(eligibleDictationTimer)
+    eligibleDictationTimer = undefined
+    eligibleDictation = null
+  }
+
+  function offerDictationTransforms(eligible) {
+    const timerEpoch = ++eligibleDictationTimerEpoch
+    clearTimeout(eligibleDictationTimer)
+    eligibleDictation = eligible
+    eligibleDictationTimer = setTimeout(() => {
+      if (timerEpoch === eligibleDictationTimerEpoch) invalidateDictationTransform()
+    }, 6000)
   }
 
   async function listenForDictation(epoch) {
@@ -251,7 +274,10 @@
     try {
       const polished = await tauri.invoke('dictation_polish', { transcript })
       if (destroyed || dictationCancelled || epoch !== dictationCaptureEpoch || epoch !== dictationPolishEpoch) return
-      if (draft === verbatimDraft) draft = appendTranscript(dictationDraftSnapshot, polished)
+      if (draft === verbatimDraft && polished.trim()) {
+        draft = appendTranscript(dictationDraftSnapshot, polished)
+        offerDictationTransforms({ epoch, snapshot: dictationDraftSnapshot, segment: polished, draft })
+      }
     } catch (_) {
       if (destroyed || dictationCancelled || epoch !== dictationCaptureEpoch || epoch !== dictationPolishEpoch) return
       dictationError = 'Polishing is unavailable. You can edit or send the captured text.'
@@ -328,13 +354,14 @@
   }
 
   async function startDictation() {
-    if (active || dictationCommandPending || dictationFinishing || dictationPolishing || dictationRequested) return
+    if (active || dictationBusy() || dictationRequested) return
     if (isDictationActive(dictation)) {
       await stopDictation()
       return
     }
     invalidateDictationPolls()
     dictationRequested = true
+    invalidateDictationTransform()
     dictationCancelled = false
     dictationDraftSnapshot = draft
     dictationTranscript = ''
@@ -414,6 +441,38 @@
       return
     }
     dictationRequested || isDictationActive(dictation) ? stopDictation() : startDictation()
+  }
+
+  async function transformDictation(action) {
+    const eligible = eligibleDictation
+    if (!eligible || dictationBusy() || draft !== eligible.draft) return
+    const operation = ++dictationTransformEpoch
+    clearTimeout(eligibleDictationTimer)
+    eligibleDictationTimer = undefined
+    dictationTransformPending = true
+    dictationTransformPendingEpoch = operation
+    dictationError = ''
+    try {
+      const transformed = await tauri.invoke('dictation_transform', { transform: action.transform, transcript: eligible.segment })
+      if (destroyed || operation !== dictationTransformEpoch || draft !== eligible.draft) return
+      if (!transformed.trim()) throw new Error('empty transform')
+      draft = appendTranscript(eligible.snapshot, transformed)
+      offerDictationTransforms({ ...eligible, segment: transformed, draft })
+    } catch (_) {
+      if (destroyed || operation !== dictationTransformEpoch) return
+      dictationError = 'That voice transform is unavailable. Your text is unchanged; try again.'
+      offerDictationTransforms(eligible)
+    } finally {
+      if (!destroyed && operation === dictationTransformPendingEpoch) {
+        dictationTransformPending = false
+        dictationTransformPendingEpoch = undefined
+      }
+      if (!destroyed) tick().then(() => composer?.focus())
+    }
+  }
+
+  function composerInput(event) {
+    if (eligibleDictation && event.currentTarget.value !== eligibleDictation.draft) invalidateDictationTransform()
   }
 
   function toggleReceipt(runId) {
@@ -529,14 +588,29 @@
       if (projected) messages = messages.map((message) => message.run?.id === projected.id ? { ...message, run: projected } : message)
       if (active?.id === payload.runId) active = projected && !['complete', 'cancelled', 'failed', 'interrupted'].includes(projected.phase) ? projected : null
     }).then((stop) => { unlisten = stop })
-    const escape = (event) => {
+    const shortcuts = (event) => {
+      const action = event.altKey && !event.ctrlKey && !event.metaKey ? dictationTransforms.find(({ key }) => `Digit${key}` === event.code) : undefined
+      if (action && eligibleDictation && !dictationBusy()) {
+        event.preventDefault()
+        void transformDictation(action)
+        return
+      }
+      if (event.key === 'Escape' && dictationTransformPending) {
+        event.preventDefault()
+        invalidateDictationTransform()
+        dictationTransformPending = false
+        dictationTransformPendingEpoch = undefined
+        dictationError = ''
+        tick().then(() => composer?.focus())
+        return
+      }
       if (event.key === 'Escape' && (dictationRequested || isDictationActive(dictation) || dictationFinishing || dictationPolishing)) {
         event.preventDefault()
         stopDictation(true)
         return
       }
     }
-    document.addEventListener('keydown', escape)
+    document.addEventListener('keydown', shortcuts)
     let stopDragDrop
     if (tauri) getCurrentWebview().onDragDropEvent(({ payload }) => {
         if (auth.name !== 'signed-in' || active) {
@@ -555,6 +629,7 @@
       })
     return () => {
       destroyed = true
+      invalidateDictationTransform()
       stopRequiredModelPolling()
       unlisten?.()
       dictationUnlisten?.()
@@ -563,13 +638,14 @@
       clearTimeout(dictationCompletionTimer)
       clearTimeout(voiceClickTimer)
       stopDragDrop?.()
-      document.removeEventListener('keydown', escape)
+      document.removeEventListener('keydown', shortcuts)
     }
   })
 
   async function send() {
     const prompt = draft.trim()
     if (!prompt || active || dictationBusy()) return
+    invalidateDictationTransform()
     submitError = ''
     const submissionId = ++submissionSequence
     const userMessage = { role: 'user', text: prompt, attachments: [], submissionId }
@@ -882,7 +958,7 @@
             </ul>
           {/if}
           <div class="composer-input">
-            <textarea class:polishing={dictationPolishing} bind:this={composer} bind:value={draft} onkeydown={keydown} rows="2" placeholder={active?.phase === 'resuming' ? 'Resuming interrupted reply…' : 'Ask anything'} disabled={active?.phase === 'resuming'} readonly={dictationPolishing}></textarea>
+            <textarea class:polishing={dictationPolishing} bind:this={composer} bind:value={draft} oninput={composerInput} onkeydown={keydown} rows="2" placeholder={active?.phase === 'resuming' ? 'Resuming interrupted reply…' : 'Ask anything'} disabled={active?.phase === 'resuming'} readonly={dictationPolishing}></textarea>
             {#if dictationPolishing}
               <div class="polish-preview" aria-hidden="true"><span data-testid="polish-draft">{appendTranscript(dictationDraftSnapshot, dictationTranscript).slice(0, -dictationTranscript.length)}</span><span class="polish-transcript" data-testid="polish-transcript">{dictationTranscript}</span></div>
             {/if}
@@ -890,8 +966,17 @@
           {#if submitError}<p class="cancel-error" role="alert">{submitError}</p>{/if}
           {#if cancelError}<p class="cancel-error" role="alert">{cancelError}</p>{/if}
           {#if queueError}<p class="cancel-error" role="alert">{queueError}</p>{/if}
+          {#if eligibleDictation}
+            <div class="dictation-transforms" aria-label="Voice transforms">
+              {#each dictationTransforms as action}
+                <button type="button" aria-label={action.label} aria-keyshortcuts={action.shortcut} title={`${action.label} (Option+${action.key} / Alt+${action.key})`} disabled={dictationTransformPending} onclick={() => transformDictation(action)}><span>{action.label}</span><kbd>⌥{action.key}</kbd></button>
+              {/each}
+            </div>
+          {/if}
           <div class="composer-row">
-            {#if dictationPolishing}
+            {#if dictationTransformPending}
+              <span class="polish-status" role="status">Transforming on this device…</span>
+            {:else if dictationPolishing}
               <span class="polish-status" role="status">Polishing on this device…</span>
             {:else if isDictationActive(dictation)}
               <span class="capture-status" role="status">
@@ -902,7 +987,7 @@
               <span>{active?.phase === 'resuming' ? 'Reopening the existing secure session…' : active && active.id !== 'pending' ? '⏎ steers this reply · queue as follow-up' : 'Routing is automatic. Every reply carries its receipt.'}</span>
             {/if}
             <div class="composer-actions">
-              <button type="button" class="quiet voice" aria-pressed={isDictationActive(dictation)} disabled={!!active || dictationFinishing || dictationPolishing} onpointerdown={voicePointerDown} onpointerup={voicePointerEnd} onpointercancel={voicePointerEnd} onkeydown={voiceKeyDown} onkeyup={voiceKeyUp} onclick={voiceClick}>Voice</button>
+              <button type="button" class="quiet voice" aria-pressed={isDictationActive(dictation)} disabled={!!active || dictationFinishing || dictationPolishing || dictationTransformPending} onpointerdown={voicePointerDown} onpointerup={voicePointerEnd} onpointercancel={voicePointerEnd} onkeydown={voiceKeyDown} onkeyup={voiceKeyUp} onclick={voiceClick}>Voice</button>
               {#if !active}<button type="button" class="quiet attach" onclick={chooseFiles}>Add files</button>{/if}
               {#if active?.phase === 'resuming'}
                 <button disabled>Resuming…</button>
@@ -1116,6 +1201,12 @@
   textarea.polishing { color: transparent; caret-color: transparent; }
   .polish-preview { position: absolute; inset: 0; overflow: hidden; pointer-events: none; white-space: pre-wrap; color: var(--ink); font: inherit; }
   .polish-transcript { text-decoration-line: underline; text-decoration-color: var(--signal); text-decoration-thickness: 2px; text-underline-offset: 3px; }
+  .dictation-transforms { display: flex; flex-wrap: wrap; gap: 5px; margin: 7px 0; }
+  .dictation-transforms button { display: inline-flex; align-items: center; gap: 7px; padding: 3px 7px; border-color: var(--signal); border-radius: 2px; background: transparent; color: var(--signal); font: var(--text-12) var(--font-mono); }
+  .dictation-transforms button:hover:not(:disabled) { background: var(--signal-soft); }
+  .dictation-transforms button:focus-visible { outline-color: var(--ink); outline-offset: 2px; }
+  .dictation-transforms button:disabled { border-color: var(--border); color: var(--muted); }
+  .dictation-transforms kbd { color: var(--muted); font: inherit; }
   .composer-row { display: flex; justify-content: space-between; align-items: center; color: var(--muted); font-size: 11px; }
   .composer-actions { display: flex; align-items: center; gap: 6px; }
   .capture-status { display: flex; align-items: center; gap: 8px; font-family: var(--font-mono); }
