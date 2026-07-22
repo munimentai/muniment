@@ -633,6 +633,39 @@ pub enum OnboardingPersistHook {
     BeforeTemporaryRemoval,
     BeforeDirectorySync,
     BeforeRollback,
+    Publish,
+    RemoveTemporary,
+    SyncDirectory,
+    RollbackFile,
+    RollbackDirectory,
+    RollbackSync,
+}
+
+#[derive(Serialize, Deserialize)]
+struct OnboardingRecoveryManifest {
+    committed: bool,
+    entries: Vec<OnboardingRecoveryEntry>,
+    created_directories: Vec<OnboardingRecoveryDirectory>,
+}
+
+#[derive(Serialize, Deserialize)]
+struct OnboardingRecoveryEntry {
+    parent: PathBuf,
+    destination: std::ffi::OsString,
+    temporary: std::ffi::OsString,
+    anchor: std::ffi::OsString,
+}
+
+#[derive(Serialize, Deserialize)]
+struct OnboardingRecoveryDirectory {
+    path: PathBuf,
+    identity: FileIdentity,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+struct FileIdentity {
+    first: u64,
+    second: u64,
 }
 
 /// Test seam for simulating changes and transient failures at transaction boundaries.
@@ -675,7 +708,16 @@ pub fn persist_onboarding_home_write_plan_with_hook(
             ));
         }
     }
-    let directory = Dir::open_ambient_dir(home, ambient_authority())
+    let parent_path = home.parent().unwrap();
+    let home_name = home.file_name().unwrap();
+    let parent = Dir::open_ambient_dir(parent_path, ambient_authority()).map_err(|error| {
+        HomeError::io(
+            "The onboarding import Home parent could not be opened.",
+            error,
+        )
+    })?;
+    let directory = parent
+        .open_dir(home_name)
         .map_err(|error| HomeError::io("The onboarding import Home could not be opened.", error))?;
     if !same_home_file(
         &metadata,
@@ -695,7 +737,13 @@ pub fn persist_onboarding_home_write_plan_with_hook(
         .into_std();
     lock.lock_exclusive()
         .map_err(|error| HomeError::io("The onboarding import could not be locked.", error))?;
-    persist_onboarding_plan_locked(&directory, plan, hook)
+    recover_onboarding_transactions(&directory, hook).map_err(|error| {
+        HomeError::io(
+            "A previous onboarding import could not be recovered.",
+            error,
+        )
+    })?;
+    persist_onboarding_plan_locked(&parent, home_name, &directory, plan, hook)
 }
 
 fn validate_onboarding_destination(relative: &str) -> Result<(), HomeError> {
@@ -728,12 +776,129 @@ fn validate_onboarding_destination(relative: &str) -> Result<(), HomeError> {
     Ok(())
 }
 
+fn open_anchored_directory(home: &Dir, path: &Path) -> io::Result<Dir> {
+    let mut current = home.try_clone()?;
+    for component in path.components() {
+        let name = component.as_os_str();
+        let metadata = current.symlink_metadata(name)?;
+        if metadata.file_type().is_symlink() || !metadata.is_dir() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "unsafe import ancestor",
+            ));
+        }
+        let next = current.open_dir(name)?;
+        if !same_file(&metadata, &next.metadata(".")?) {
+            return Err(io::Error::other("import ancestor changed"));
+        }
+        current = next;
+    }
+    Ok(current)
+}
+
+fn recover_onboarding_transactions(
+    home: &Dir,
+    hook: &mut dyn FnMut(OnboardingPersistHook, usize) -> io::Result<()>,
+) -> io::Result<()> {
+    let names = home
+        .entries()?
+        .filter_map(Result::ok)
+        .map(|entry| entry.file_name())
+        .filter(|name| {
+            let name = name.to_string_lossy();
+            name.starts_with(".onboarding-import-") && name.ends_with(".txn")
+        })
+        .collect::<Vec<_>>();
+    for name in names {
+        let transaction = match home.open_dir(&name) {
+            Ok(directory) => directory,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
+            Err(error) => return Err(error),
+        };
+        let manifest: OnboardingRecoveryManifest =
+            serde_json::from_reader(transaction.open("manifest.json")?)?;
+        for (index, entry) in manifest.entries.iter().enumerate() {
+            if manifest.committed {
+                break;
+            }
+            let directory = match open_anchored_directory(home, &entry.parent) {
+                Ok(directory) => directory,
+                Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
+                Err(error) => return Err(error),
+            };
+            let anchor = match transaction.open(&entry.anchor) {
+                Ok(anchor) => anchor,
+                Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
+                Err(error) => return Err(error),
+            };
+            let identity = anchor.metadata()?;
+            for child in directory.entries()? {
+                let child = child?;
+                let child_name = child.file_name();
+                if let Ok(metadata) = directory.symlink_metadata(&child_name) {
+                    if metadata.is_file() && same_file(&metadata, &identity) {
+                        hook(OnboardingPersistHook::RollbackFile, index)?;
+                        directory.remove_file(&child_name)?;
+                    }
+                }
+            }
+            directory.open(".")?.sync_all()?;
+        }
+        for directory in manifest.created_directories.iter().rev() {
+            if manifest.committed {
+                break;
+            }
+            let Some(parent_path) = directory.path.parent() else {
+                continue;
+            };
+            let Some(directory_name) = directory.path.file_name() else {
+                continue;
+            };
+            let parent = match open_anchored_directory(home, parent_path) {
+                Ok(parent) => parent,
+                Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
+                Err(error) => return Err(error),
+            };
+            match parent.symlink_metadata(directory_name) {
+                Ok(metadata)
+                    if metadata.is_dir() && file_identity(&metadata) == directory.identity =>
+                {
+                    hook(OnboardingPersistHook::RollbackDirectory, 0)?;
+                    match parent.remove_dir(directory_name) {
+                        Ok(()) => {}
+                        Err(error) if error.kind() == io::ErrorKind::DirectoryNotEmpty => {}
+                        Err(error) => return Err(error),
+                    }
+                }
+                Ok(_) => {}
+                Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+                Err(error) => return Err(error),
+            }
+        }
+        for entry in &manifest.entries {
+            match transaction.remove_file(&entry.anchor) {
+                Ok(()) => {}
+                Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+                Err(error) => return Err(error),
+            }
+        }
+        transaction.remove_file("manifest.json")?;
+        home.remove_dir(&name)?;
+        hook(OnboardingPersistHook::RollbackSync, 0)?;
+        home.open(".")?.sync_all()?;
+    }
+    Ok(())
+}
+
 fn persist_onboarding_plan_locked(
+    home_parent: &Dir,
+    home_name: &std::ffi::OsStr,
     home: &Dir,
     plan: &OnboardingHomeWritePlan,
     hook: &mut dyn FnMut(OnboardingPersistHook, usize) -> io::Result<()>,
 ) -> Result<(), HomeError> {
     struct Staged {
+        parent_path: PathBuf,
         directory: Dir,
         destination: std::ffi::OsString,
         temporary: std::ffi::OsString,
@@ -742,6 +907,7 @@ fn persist_onboarding_plan_locked(
     }
 
     struct AnchoredDirectory {
+        path: PathBuf,
         parent: Dir,
         name: std::ffi::OsString,
         directory: Dir,
@@ -750,11 +916,27 @@ fn persist_onboarding_plan_locked(
 
     let mut directories: Vec<AnchoredDirectory> = Vec::new();
     let mut staged: Vec<Staged> = Vec::new();
+    let transaction_name =
+        std::ffi::OsString::from(format!(".onboarding-import-{}.txn", uuid::Uuid::new_v4()));
+    home.create_dir(&transaction_name).map_err(|error| {
+        HomeError::io(
+            "The onboarding import transaction could not be created.",
+            error,
+        )
+    })?;
+    let transaction = home.open_dir(&transaction_name).map_err(|error| {
+        HomeError::io(
+            "The onboarding import transaction could not be opened.",
+            error,
+        )
+    })?;
     let result = (|| -> io::Result<()> {
-        for write in &plan.writes {
+        for (write_index, write) in plan.writes.iter().enumerate() {
             let mut current = home.try_clone()?;
+            let mut parent_path = PathBuf::new();
             for component in write.relative_path().parent().unwrap().components() {
                 let name = component.as_os_str();
+                parent_path.push(name);
                 match current.symlink_metadata(name) {
                     Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_dir() => {
                         return Err(io::Error::new(
@@ -771,6 +953,7 @@ fn persist_onboarding_plan_locked(
                             ));
                         }
                         directories.push(AnchoredDirectory {
+                            path: parent_path.clone(),
                             parent: current,
                             name: name.to_os_string(),
                             directory: next.try_clone()?,
@@ -782,6 +965,7 @@ fn persist_onboarding_plan_locked(
                         current.create_dir(name)?;
                         let next = current.open_dir(name)?;
                         directories.push(AnchoredDirectory {
+                            path: parent_path.clone(),
                             parent: current,
                             name: name.to_os_string(),
                             directory: next.try_clone()?,
@@ -813,7 +997,10 @@ fn persist_onboarding_plan_locked(
             let mut file = current.open_with(&temporary, &options)?;
             io::Write::write_all(&mut file, write.bytes())?;
             file.sync_all()?;
+            let anchor = std::ffi::OsString::from(format!("payload-{write_index}"));
+            current.hard_link(&temporary, &transaction, &anchor)?;
             staged.push(Staged {
+                parent_path,
                 directory: current,
                 destination,
                 temporary,
@@ -822,9 +1009,55 @@ fn persist_onboarding_plan_locked(
             });
         }
 
+        let manifest = OnboardingRecoveryManifest {
+            committed: false,
+            entries: staged
+                .iter()
+                .enumerate()
+                .map(|(index, entry)| OnboardingRecoveryEntry {
+                    parent: entry.parent_path.clone(),
+                    destination: entry.destination.clone(),
+                    temporary: entry.temporary.clone(),
+                    anchor: std::ffi::OsString::from(format!("payload-{index}")),
+                })
+                .collect(),
+            created_directories: directories
+                .iter()
+                .filter(|entry| entry.created)
+                .map(|entry| OnboardingRecoveryDirectory {
+                    path: entry.path.clone(),
+                    identity: file_identity(&entry.directory.metadata(".").unwrap()),
+                })
+                .collect(),
+        };
+        let manifest_bytes = serde_json::to_vec(&manifest)?;
+        let mut manifest_options = cap_std::fs::OpenOptions::new();
+        manifest_options.create_new(true).write(true);
+        let mut manifest_file = transaction.open_with("manifest.json", &manifest_options)?;
+        io::Write::write_all(&mut manifest_file, &manifest_bytes)?;
+        manifest_file.sync_all()?;
+        transaction.open(".")?.sync_all()?;
+        home.open(".")?.sync_all()?;
+
         hook(OnboardingPersistHook::AfterStaging, 0)?;
 
+        // Recheck the complete destination set immediately before publication;
+        // staging can take long enough for a non-cooperating writer to appear.
+        for entry in &staged {
+            match entry.directory.symlink_metadata(&entry.destination) {
+                Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+                Ok(_) => {
+                    return Err(io::Error::new(
+                        io::ErrorKind::AlreadyExists,
+                        "import destination exists",
+                    ));
+                }
+                Err(error) => return Err(error),
+            }
+        }
+
         for (index, entry) in staged.iter_mut().enumerate() {
+            hook(OnboardingPersistHook::Publish, index)?;
             entry
                 .directory
                 .hard_link(&entry.temporary, &entry.directory, &entry.destination)?;
@@ -845,12 +1078,19 @@ fn persist_onboarding_plan_locked(
                 return Err(io::Error::other("import destination changed"));
             }
         }
+        let visible_home = home_parent.symlink_metadata(home_name)?;
+        if visible_home.file_type().is_symlink() || !same_file(&visible_home, &home.metadata(".")?)
+        {
+            return Err(io::Error::other("import Home changed"));
+        }
         hook(OnboardingPersistHook::BeforeTemporaryRemoval, 0)?;
-        for entry in &staged {
+        for (index, entry) in staged.iter().enumerate() {
+            hook(OnboardingPersistHook::RemoveTemporary, index)?;
             entry.directory.remove_file(&entry.temporary)?;
         }
         hook(OnboardingPersistHook::BeforeDirectorySync, 0)?;
-        for entry in &staged {
+        for (index, entry) in staged.iter().enumerate() {
+            hook(OnboardingPersistHook::SyncDirectory, index)?;
             entry.directory.open(".")?.sync_all()?;
         }
         home.open(".")?.sync_all()?;
@@ -870,6 +1110,11 @@ fn persist_onboarding_plan_locked(
                 return Err(io::Error::other("import destination changed"));
             }
         }
+        let visible_home = home_parent.symlink_metadata(home_name)?;
+        if visible_home.file_type().is_symlink() || !same_file(&visible_home, &home.metadata(".")?)
+        {
+            return Err(io::Error::other("import Home changed"));
+        }
         Ok(())
     })();
 
@@ -877,11 +1122,12 @@ fn persist_onboarding_plan_locked(
         let mut cleanup = || -> io::Result<()> {
             hook(OnboardingPersistHook::BeforeRollback, 0)?;
             let mut cleanup_error: Option<io::Error> = None;
-            for entry in staged.iter().rev() {
+            for (index, entry) in staged.iter().enumerate().rev() {
                 if entry.published {
                     match entry.directory.symlink_metadata(&entry.destination) {
                         Ok(metadata) => match entry.file.metadata() {
                             Ok(created_metadata) if same_file(&metadata, &created_metadata) => {
+                                hook(OnboardingPersistHook::RollbackFile, index)?;
                                 if let Err(error) = entry.directory.remove_file(&entry.destination)
                                 {
                                     cleanup_error.get_or_insert(error);
@@ -898,6 +1144,25 @@ fn persist_onboarding_plan_locked(
                         }
                     }
                 }
+                // A racer may rename our published link. Remove every link in the
+                // anchored destination directory that still has our payload identity.
+                let created_metadata = entry.file.metadata()?;
+                for child in entry.directory.entries()? {
+                    let child = child?;
+                    let name = child.file_name();
+                    if name == entry.temporary {
+                        continue;
+                    }
+                    if let Ok(metadata) = entry.directory.symlink_metadata(&name) {
+                        if metadata.is_file() && same_file(&metadata, &created_metadata) {
+                            hook(OnboardingPersistHook::RollbackFile, index)?;
+                            if let Err(error) = entry.directory.remove_file(&name) {
+                                cleanup_error.get_or_insert(error);
+                            }
+                        }
+                    }
+                }
+                hook(OnboardingPersistHook::RemoveTemporary, index)?;
                 if let Err(error) = entry.directory.remove_file(&entry.temporary) {
                     if error.kind() != io::ErrorKind::NotFound {
                         cleanup_error.get_or_insert(error);
@@ -914,6 +1179,7 @@ fn persist_onboarding_plan_locked(
                     Err(error) => return Err(error),
                 };
                 if is_exact {
+                    hook(OnboardingPersistHook::RollbackDirectory, 0)?;
                     if let Err(error) = anchored.parent.remove_dir(&anchored.name) {
                         if error.kind() != io::ErrorKind::NotFound
                             && error.kind() != io::ErrorKind::DirectoryNotEmpty
@@ -923,6 +1189,7 @@ fn persist_onboarding_plan_locked(
                     }
                 }
             }
+            hook(OnboardingPersistHook::RollbackSync, 0)?;
             home.open(".")
                 .and_then(|directory| directory.sync_all())
                 .err()
@@ -949,6 +1216,95 @@ fn persist_onboarding_plan_locked(
             ));
         }
     }
+    if result.is_ok() {
+        let committed = OnboardingRecoveryManifest {
+            committed: true,
+            entries: staged
+                .iter()
+                .enumerate()
+                .map(|(index, entry)| OnboardingRecoveryEntry {
+                    parent: entry.parent_path.clone(),
+                    destination: entry.destination.clone(),
+                    temporary: entry.temporary.clone(),
+                    anchor: std::ffi::OsString::from(format!("payload-{index}")),
+                })
+                .collect(),
+            created_directories: Vec::new(),
+        };
+        let mut options = cap_std::fs::OpenOptions::new();
+        options.create_new(true).write(true);
+        let mut manifest_file =
+            transaction
+                .open_with("committed.json", &options)
+                .map_err(|error| {
+                    HomeError::io(
+                        "The onboarding import transaction could not be completed.",
+                        error,
+                    )
+                })?;
+        io::Write::write_all(
+            &mut manifest_file,
+            &serde_json::to_vec(&committed).map_err(|error| {
+                HomeError::io(
+                    "The onboarding import transaction could not be completed.",
+                    error.into(),
+                )
+            })?,
+        )
+        .and_then(|()| manifest_file.sync_all())
+        .map_err(|error| {
+            HomeError::io(
+                "The onboarding import transaction could not be completed.",
+                error,
+            )
+        })?;
+        transaction
+            .rename("committed.json", &transaction, "manifest.json")
+            .map_err(|error| {
+                HomeError::io(
+                    "The onboarding import transaction could not be completed.",
+                    error,
+                )
+            })?;
+        transaction
+            .open(".")
+            .and_then(|dir| dir.sync_all())
+            .map_err(|error| {
+                HomeError::io(
+                    "The onboarding import transaction could not be completed.",
+                    error,
+                )
+            })?;
+        for index in 0..staged.len() {
+            transaction
+                .remove_file(format!("payload-{index}"))
+                .map_err(|error| {
+                    HomeError::io(
+                        "The onboarding import transaction could not be completed.",
+                        error,
+                    )
+                })?;
+        }
+        transaction.remove_file("manifest.json").map_err(|error| {
+            HomeError::io(
+                "The onboarding import transaction could not be completed.",
+                error,
+            )
+        })?;
+        home.remove_dir(&transaction_name).map_err(|error| {
+            HomeError::io(
+                "The onboarding import transaction could not be completed.",
+                error,
+            )
+        })?;
+    } else {
+        // Once rollback is complete, the journal itself is the only owned residue.
+        let _ = transaction.remove_file("manifest.json");
+        for index in 0..staged.len() {
+            let _ = transaction.remove_file(format!("payload-{index}"));
+        }
+        let _ = home.remove_dir(&transaction_name);
+    }
     result.map_err(|error| HomeError::io("The onboarding import could not be saved.", error))
 }
 
@@ -956,6 +1312,15 @@ fn persist_onboarding_plan_locked(
 fn same_file(left: &cap_std::fs::Metadata, right: &cap_std::fs::Metadata) -> bool {
     use cap_std::fs::MetadataExt;
     left.dev() == right.dev() && left.ino() == right.ino()
+}
+
+#[cfg(unix)]
+fn file_identity(metadata: &cap_std::fs::Metadata) -> FileIdentity {
+    use cap_std::fs::MetadataExt;
+    FileIdentity {
+        first: metadata.dev(),
+        second: metadata.ino(),
+    }
 }
 
 #[cfg(unix)]
@@ -971,6 +1336,15 @@ fn same_file(left: &cap_std::fs::Metadata, right: &cap_std::fs::Metadata) -> boo
     use cap_std::fs::MetadataExt;
     left.volume_serial_number() == right.volume_serial_number()
         && left.file_index() == right.file_index()
+}
+
+#[cfg(windows)]
+fn file_identity(metadata: &cap_std::fs::Metadata) -> FileIdentity {
+    use cap_std::fs::MetadataExt;
+    FileIdentity {
+        first: u64::from(metadata.volume_serial_number().unwrap_or_default()),
+        second: metadata.file_index().unwrap_or_default(),
+    }
 }
 
 #[cfg(windows)]
