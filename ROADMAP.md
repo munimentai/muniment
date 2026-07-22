@@ -16,7 +16,8 @@ Phases mirror harness-spec §9. Muniment-cloud Phase 1 native auth and the cloud
 
 ### 10. Local Gemma sidecar
 - DONE — supervised local runtime, pinned model lifecycle, verified/cancellable acquisition, rollback, native adapters, and Tauri install/status/cancel commands.
-- NEXT — explicit first-use install UI and release notice delivery as separate slices after the approved bundled terms surface is available.
+- DONE 2026-07-22 — first-use onboarding shows required local-model acquisition progress, readiness, and redacted background-retry status while keeping folder setup fail-open and AI proposal generation fail-closed.
+- NEXT — release notice delivery after the approved bundled terms surface is available.
 
 ### 11. Attachments and local CAS
 - DONE groundwork — pure-Rust content-addressed local store with atomic deduplication, constant-memory I/O/verification, stale-temp cleanup, journal reference accounting, retention, export, and compaction. Cloud file flow follows items 8d/9.
@@ -59,7 +60,8 @@ Phases mirror harness-spec §9. Muniment-cloud Phase 1 native auth and the cloud
 - DONE 2026-07-21 — typed, bounded local-model triage request/report-validation contract over approved extracted entries, plus its typed Tauri invocation against the resident local model.
 - DONE 2026-07-21 — structured local-triage report review, approved-source display, redacted retry handling, and explicit in-session confirmation; no Home writes occur in this slice.
 - DONE 2026-07-22 — confirmed triage reports, starter-agent proposals, and provenance-bearing verbatim originals compile into a deterministic bounded Home write plan without filesystem access.
-- NEXT — persist a confirmed bounded write plan conflict-safely into Home. Desktop/Tauri completion wiring follows as a separate slice. Required-download visibility/status UI remains. CLI/VS Code defaults wait for workspace memory semantics.
+- DONE 2026-07-22 — onboarding reports required local-model progress/readiness without blocking Home setup and gates local proposal generation until AI features are available.
+- NEXT — persist a confirmed bounded write plan conflict-safely into Home. Desktop/Tauri completion wiring follows as a separate slice. CLI/VS Code defaults wait for workspace memory semantics.
 - Open items: headless/server CLI stance owner ruling; final model promotion waits on MUNIQA routing eval; Gemma 4 E2B remains a future owner-gated contingency pending llama.cpp PLE support. MUNICLOUD model artifact proxy/redirect is a ripple.
 
 ## Desktop QA automation
