@@ -54,6 +54,8 @@
   let dictationTransformPending = $state(false)
   let dictationTransformPendingEpoch
   let eligibleDictation = $state(null)
+  let eligibleDictationTimer
+  let eligibleDictationTimerEpoch = 0
   let suppressVoiceClick = false
   let voiceClickTimer
   let voicePointerId
@@ -210,7 +212,19 @@
 
   function invalidateDictationTransform() {
     dictationTransformEpoch += 1
+    eligibleDictationTimerEpoch += 1
+    clearTimeout(eligibleDictationTimer)
+    eligibleDictationTimer = undefined
     eligibleDictation = null
+  }
+
+  function offerDictationTransforms(eligible) {
+    const timerEpoch = ++eligibleDictationTimerEpoch
+    clearTimeout(eligibleDictationTimer)
+    eligibleDictation = eligible
+    eligibleDictationTimer = setTimeout(() => {
+      if (timerEpoch === eligibleDictationTimerEpoch) invalidateDictationTransform()
+    }, 6000)
   }
 
   async function listenForDictation(epoch) {
@@ -262,7 +276,7 @@
       if (destroyed || dictationCancelled || epoch !== dictationCaptureEpoch || epoch !== dictationPolishEpoch) return
       if (draft === verbatimDraft && polished.trim()) {
         draft = appendTranscript(dictationDraftSnapshot, polished)
-        eligibleDictation = { epoch, snapshot: dictationDraftSnapshot, segment: polished, draft }
+        offerDictationTransforms({ epoch, snapshot: dictationDraftSnapshot, segment: polished, draft })
       }
     } catch (_) {
       if (destroyed || dictationCancelled || epoch !== dictationCaptureEpoch || epoch !== dictationPolishEpoch) return
@@ -433,6 +447,8 @@
     const eligible = eligibleDictation
     if (!eligible || dictationBusy() || draft !== eligible.draft) return
     const operation = ++dictationTransformEpoch
+    clearTimeout(eligibleDictationTimer)
+    eligibleDictationTimer = undefined
     dictationTransformPending = true
     dictationTransformPendingEpoch = operation
     dictationError = ''
@@ -441,10 +457,11 @@
       if (destroyed || operation !== dictationTransformEpoch || draft !== eligible.draft) return
       if (!transformed.trim()) throw new Error('empty transform')
       draft = appendTranscript(eligible.snapshot, transformed)
-      eligibleDictation = { ...eligible, segment: transformed, draft }
+      offerDictationTransforms({ ...eligible, segment: transformed, draft })
     } catch (_) {
       if (destroyed || operation !== dictationTransformEpoch) return
       dictationError = 'That voice transform is unavailable. Your text is unchanged; try again.'
+      offerDictationTransforms(eligible)
     } finally {
       if (!destroyed && operation === dictationTransformPendingEpoch) {
         dictationTransformPending = false
@@ -572,7 +589,7 @@
       if (active?.id === payload.runId) active = projected && !['complete', 'cancelled', 'failed', 'interrupted'].includes(projected.phase) ? projected : null
     }).then((stop) => { unlisten = stop })
     const shortcuts = (event) => {
-      const action = event.altKey && !event.ctrlKey && !event.metaKey ? dictationTransforms.find(({ key }) => key === event.key) : undefined
+      const action = event.altKey && !event.ctrlKey && !event.metaKey ? dictationTransforms.find(({ key }) => `Digit${key}` === event.code) : undefined
       if (action && eligibleDictation && !dictationBusy()) {
         event.preventDefault()
         void transformDictation(action)
@@ -1185,9 +1202,11 @@
   .polish-preview { position: absolute; inset: 0; overflow: hidden; pointer-events: none; white-space: pre-wrap; color: var(--ink); font: inherit; }
   .polish-transcript { text-decoration-line: underline; text-decoration-color: var(--signal); text-decoration-thickness: 2px; text-underline-offset: 3px; }
   .dictation-transforms { display: flex; flex-wrap: wrap; gap: 5px; margin: 7px 0; }
-  .dictation-transforms button { display: inline-flex; align-items: center; gap: 7px; padding: 3px 7px; border-color: var(--border); border-radius: 2px; background: transparent; color: var(--muted); font: var(--text-12) var(--font-mono); }
-  .dictation-transforms button:hover:not(:disabled) { border-color: var(--muted); color: var(--ink); }
-  .dictation-transforms kbd { color: inherit; font: inherit; opacity: .7; }
+  .dictation-transforms button { display: inline-flex; align-items: center; gap: 7px; padding: 3px 7px; border-color: var(--signal); border-radius: 2px; background: transparent; color: var(--signal); font: var(--text-12) var(--font-mono); }
+  .dictation-transforms button:hover:not(:disabled) { background: var(--signal-soft); }
+  .dictation-transforms button:focus-visible { outline-color: var(--ink); outline-offset: 2px; }
+  .dictation-transforms button:disabled { border-color: var(--border); color: var(--muted); }
+  .dictation-transforms kbd { color: var(--muted); font: inherit; }
   .composer-row { display: flex; justify-content: space-between; align-items: center; color: var(--muted); font-size: 11px; }
   .composer-actions { display: flex; align-items: center; gap: 6px; }
   .capture-status { display: flex; align-items: center; gap: 8px; font-family: var(--font-mono); }

@@ -494,10 +494,47 @@ describe('voice dictation', () => {
     await waitFor(() => expect(composer).toHaveValue('Existing draft • Captured point'))
     expect(composer).toHaveFocus()
 
-    await fireEvent.keyDown(composer, { key: '2', altKey: true })
+    await fireEvent.keyDown(composer, { key: '¡', code: 'Digit2', altKey: true })
     await waitFor(() => expect(invoke).toHaveBeenCalledWith('dictation_transform', { transform: 'formal', transcript: '• Captured point' }))
     await waitFor(() => expect(composer).toHaveValue('Existing draft Formal capture.'))
     expect(composer).toHaveFocus()
+  })
+
+  it('expires transform actions after six seconds without letting an old timer hide a newer capture', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    let polishCalls = 0
+    invoke.mockImplementation(async (command) => {
+      if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
+      if (command === 'chat_history') return []
+      if (command === 'auth_entitlement_snapshot') return snapshot()
+      if (command === 'auth_devices') return []
+      if (command === 'dictation_start') return { state: 'running' }
+      if (command === 'dictation_stop') return { state: 'stopped' }
+      if (command === 'dictation_polish') return `Polished capture ${++polishCalls}`
+      throw new Error(`unexpected command: ${command}`)
+    })
+    render(App)
+    const composer = await screen.findByPlaceholderText('Ask anything')
+    const voice = screen.getByRole('button', { name: 'Voice' })
+
+    await fireEvent.click(voice)
+    dictationListener({ payload: { type: 'transcript', text: 'first' } })
+    await fireEvent.click(voice)
+    expect(await screen.findByLabelText('Voice transforms')).toBeInTheDocument()
+
+    await vi.advanceTimersByTimeAsync(3000)
+    await fireEvent.input(composer, { target: { value: 'Edited between captures' } })
+    await fireEvent.click(voice)
+    dictationListener({ payload: { type: 'transcript', text: 'second' } })
+    await fireEvent.click(voice)
+    expect(await screen.findByLabelText('Voice transforms')).toBeInTheDocument()
+
+    await vi.advanceTimersByTimeAsync(3000)
+    expect(screen.getByLabelText('Voice transforms')).toBeInTheDocument()
+    await vi.advanceTimersByTimeAsync(2999)
+    expect(screen.getByLabelText('Voice transforms')).toBeInTheDocument()
+    await vi.advanceTimersByTimeAsync(1)
+    expect(screen.queryByLabelText('Voice transforms')).not.toBeInTheDocument()
   })
 
   it('blocks duplicate actions and rejects a transform result after editing', async () => {
