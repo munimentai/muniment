@@ -61,6 +61,10 @@
   let voiceClickTimer
   let voiceReleaseTimer
   let voiceReleasePending = false
+  let voiceActivationStartedAt
+  let voiceActivationSource
+  let pendingVoiceActivationAt
+  let pendingVoiceActivationSource
   let handsFreeDictation = false
   let ignoreVoiceRelease = false
   let ignoreGlobalVoiceRelease = false
@@ -413,26 +417,38 @@
     voiceClickTimer = setTimeout(() => { suppressVoiceClick = false })
   }
 
-  function activateVoice() {
+  function activateVoice(source) {
+    const activatedAt = Date.now()
+    voiceActivationStartedAt = activatedAt
+    voiceActivationSource = source
     if (handsFreeDictation) {
       void stopDictation()
       return true
-    } else if (voiceReleasePending) {
+    } else if (voiceReleasePending && source === pendingVoiceActivationSource && activatedAt - pendingVoiceActivationAt <= handsFreeActivationDelay) {
       clearTimeout(voiceReleaseTimer)
       voiceReleaseTimer = undefined
       voiceReleasePending = false
       handsFreeDictation = true
+    } else if (dictationRequested || isDictationActive(dictation)) {
+      void stopDictation()
+      return true
     } else void startDictation()
     return false
   }
 
-  function releaseVoice(cancelled = false) {
+  function releaseVoice(source, cancelled = false) {
     if (cancelled) {
       void stopDictation(true)
       return
     }
     if (handsFreeDictation) return
+    if (source !== voiceActivationSource || Date.now() - voiceActivationStartedAt >= handsFreeActivationDelay) {
+      void stopDictation()
+      return
+    }
     voiceReleasePending = true
+    pendingVoiceActivationAt = voiceActivationStartedAt
+    pendingVoiceActivationSource = source
     clearTimeout(voiceReleaseTimer)
     voiceReleaseTimer = setTimeout(() => {
       voiceReleaseTimer = undefined
@@ -447,7 +463,7 @@
     expectVoiceClick()
     voicePointerId = event.pointerId
     event.currentTarget.setPointerCapture?.(event.pointerId)
-    ignoreVoiceRelease = activateVoice()
+    ignoreVoiceRelease = activateVoice('pointer')
   }
 
   function voicePointerEnd(event) {
@@ -459,7 +475,7 @@
       ignoreVoiceRelease = false
       return
     }
-    releaseVoice(event.type === 'pointercancel')
+    releaseVoice('pointer', event.type === 'pointercancel')
   }
 
   function voiceKeyDown(event) {
@@ -469,7 +485,7 @@
     if (!event.repeat) {
       if (voiceKey !== undefined || voicePointerId !== undefined) return
       voiceKey = event.key
-      ignoreVoiceRelease = activateVoice()
+      ignoreVoiceRelease = activateVoice('keyboard')
     }
   }
 
@@ -482,7 +498,7 @@
       ignoreVoiceRelease = false
       return
     }
-    releaseVoice()
+    releaseVoice('keyboard')
   }
 
   function voiceClick() {
@@ -491,21 +507,22 @@
       clearTimeout(voiceClickTimer)
       return
     }
-    dictationRequested || isDictationActive(dictation) ? stopDictation() : startDictation()
+    const ignoreRelease = activateVoice('click')
+    if (!ignoreRelease) releaseVoice('click')
   }
 
   function globalVoiceShortcut({ state }) {
     if (state === 'Pressed') {
       if (globalVoiceHeld || auth.name !== 'signed-in' || active || (dictationBusy() && !voiceReleasePending && !handsFreeDictation)) return
       globalVoiceHeld = true
-      ignoreGlobalVoiceRelease = activateVoice()
+      ignoreGlobalVoiceRelease = activateVoice('global')
     } else if (state === 'Released' && globalVoiceHeld) {
       globalVoiceHeld = false
       if (ignoreGlobalVoiceRelease) {
         ignoreGlobalVoiceRelease = false
         return
       }
-      releaseVoice()
+      releaseVoice('global')
     }
   }
 
