@@ -311,11 +311,14 @@ jobs:
           # through --repo, matching the desktop build invocation below.
           attempt=1
           while true; do
-            ssh -i "$key" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
-                -o BatchMode=yes -o ServerAliveInterval=30 -o ServerAliveCountMax=8 \
-                desktopci@10.1.10.10 \
-                "sudo desktop-ci $PLATFORM --repo '$repo_url' --ref '$REF' --cmd '$cmd'"
-            status=$?
+            if ssh -i "$key" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+                 -o BatchMode=yes -o ServerAliveInterval=30 -o ServerAliveCountMax=8 \
+                 desktopci@10.1.10.10 \
+                 "sudo desktop-ci $PLATFORM --repo '$repo_url' --ref '$REF' --cmd '$cmd'"; then
+              status=0
+            else
+              status=$?
+            fi
             if [ "$PLATFORM" != "windows" ] || [ "$status" -ne 3 ] || [ "$attempt" -ge 2 ]; then
               exit "$status"
             fi
