@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { onboardingCancelSettingsState, onboardingConfirmedState, onboardingConfirmingState, onboardingErrorState, onboardingExtractingState, onboardingExtractionErrorState, onboardingExtractionState, onboardingFinalizingState, onboardingImportChoiceState, onboardingLoadingState, onboardingPathState, onboardingPreviewErrorState, onboardingPreviewingState, onboardingPreviewState, onboardingSelectionState, onboardingSettingsState, onboardingStatusState } from './onboarding-state.js'
+import { onboardingCancelSettingsState, onboardingConfirmedState, onboardingConfirmingState, onboardingErrorState, onboardingExtractingState, onboardingExtractionErrorState, onboardingExtractionState, onboardingFinalizingState, onboardingImportChoiceState, onboardingLoadingState, onboardingPathState, onboardingPreviewErrorState, onboardingPreviewingState, onboardingPreviewState, onboardingReturnToArchiveReviewState, onboardingSelectionState, onboardingSettingsState, onboardingStatusState, onboardingTriageConfirmedState, onboardingTriageErrorState, onboardingTriageReportState, onboardingTriagingState } from './onboarding-state.js'
 
 describe('Home onboarding state', () => {
   it('blocks on the default location until it is configured', () => {
@@ -84,5 +84,20 @@ describe('Home onboarding state', () => {
     const extractedEntries = [{ sourceName: 'b.json', text: '{}', sourceProvenance: 'stable' }]
     expect(onboardingExtractionState(extracting, extractedEntries)).toMatchObject({ name: 'pre-triage', extractedEntries })
     expect(onboardingFinalizingState(extracting)).toEqual({ name: 'finalizing', homePath: '/Home', error: undefined })
+  })
+
+  it('keeps approved sources through triage review, retry, confirmation, and return', () => {
+    const extractedEntries = [{ sourceName: 'profile.json', text: '{}', sourceProvenance: 'assistant-export:stable' }]
+    const ready = { name: 'pre-triage', homePath: '/Home', archivePath: '/export.zip', manifest: { entries: [{ name: 'profile.json' }] }, selectedNames: ['profile.json'], extractedEntries }
+    const pending = onboardingTriagingState(ready)
+    expect(pending).toMatchObject({ name: 'triaging', extractedEntries })
+    const failed = onboardingTriageErrorState(pending, { kind: 'localAiUnavailable', message: 'sensitive detail' })
+    expect(failed).toMatchObject({ name: 'triage-error', extractedEntries, error: 'Local AI is unavailable. Start the local model and try again.' })
+    expect(failed.error).not.toContain('sensitive')
+    const report = { userType: 'Writer', proposedHomeLayout: 'Projects by topic', starterAgents: ['Researcher', 'Editor'] }
+    const review = onboardingTriageReportState(onboardingTriagingState(failed), { report, usage: null })
+    expect(review).toMatchObject({ name: 'triage-review', report, extractedEntries })
+    expect(onboardingTriageConfirmedState(review)).toMatchObject({ name: 'triage-confirmed', report, extractedEntries })
+    expect(onboardingReturnToArchiveReviewState(review)).toMatchObject({ name: 'reviewing', selectedNames: ['profile.json'], manifest: ready.manifest, extractedEntries })
   })
 })
