@@ -332,40 +332,18 @@ fn rejects_non_normalized_destination_aliases() {
 #[test]
 fn mid_batch_publication_failure_rolls_back_files_and_temporaries() {
     let home = temp_home("mid-batch");
-    let mut writes = (0..=ONBOARDING_IMPORT_MAX_ENTRIES)
-        .map(|index| HomeWrite {
-            relative_path: format!("memory/batch/{index:03}.md"),
-            contents: "payload".repeat(128),
-        })
-        .collect::<Vec<_>>();
-    writes.push(HomeWrite {
-        relative_path: "agents/final.md".into(),
-        contents: "final".into(),
-    });
-    let watched_home = home.clone();
-    let interferer = std::thread::spawn(move || {
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-        while std::time::Instant::now() < deadline {
-            if walk(&watched_home)
-                .iter()
-                .any(|path| path.to_string_lossy().ends_with(".tmp"))
-                && fs::create_dir(watched_home.join("agents/final.md")).is_ok()
-            {
-                return true;
-            }
-            std::thread::yield_now();
+    let mut failed = false;
+    let mut hook = |point, index| {
+        if point == OnboardingPersistHook::Publish && index == 1 && !failed {
+            failed = true;
+            return Err(std::io::Error::other("injected mid-batch failure"));
         }
-        false
-    });
-
+        Ok(())
+    };
     assert!(
-        persist_onboarding_home_write_plan(&home, &OnboardingHomeWritePlan { writes }).is_err()
+        persist_onboarding_home_write_plan_with_hook(&home, &two_file_plan(), &mut hook).is_err()
     );
-    assert!(
-        interferer.join().unwrap(),
-        "did not reach staged mid-batch state"
-    );
-    assert!(home.join("agents/final.md").is_dir());
+    assert!(failed);
     assert!(!home.join("memory").exists());
     assert!(!walk(&home)
         .iter()
@@ -517,6 +495,134 @@ fn publication_and_directory_sync_operation_failures_roll_back() {
         }));
         fs::remove_dir_all(home).unwrap();
     }
+}
+
+#[test]
+fn persistent_staging_and_retirement_failures_are_recovered() {
+    for operation in [
+        OnboardingPersistHook::WriteJournal,
+        OnboardingPersistHook::SyncJournal,
+        OnboardingPersistHook::ReplaceJournal,
+        OnboardingPersistHook::WritePayload,
+        OnboardingPersistHook::SyncPayload,
+        OnboardingPersistHook::RetireAnchor,
+        OnboardingPersistHook::RetireJournal,
+        OnboardingPersistHook::RetireTransaction,
+    ] {
+        let home = temp_home("journal-recovery");
+        let mut hook = |point, _| {
+            if point == operation {
+                Err(std::io::Error::other("persistent journal failure"))
+            } else {
+                Ok(())
+            }
+        };
+        assert!(
+            persist_onboarding_home_write_plan_with_hook(&home, &two_file_plan(), &mut hook)
+                .is_err()
+        );
+        let adjacent = OnboardingHomeWritePlan {
+            writes: vec![HomeWrite {
+                relative_path: "agents/after-recovery.md".into(),
+                contents: "after".into(),
+            }],
+        };
+        persist_onboarding_home_write_plan(&home, &adjacent).unwrap();
+        assert_eq!(
+            fs::read(home.join("agents/after-recovery.md")).unwrap(),
+            b"after"
+        );
+        assert!(!walk(&home).iter().any(|path| {
+            let name = path.file_name().unwrap().to_string_lossy();
+            name.ends_with(".tmp") || name.ends_with(".txn")
+        }));
+        fs::remove_dir_all(home).unwrap();
+    }
+}
+
+#[test]
+fn failure_before_the_commit_decision_is_rolled_back_on_recovery() {
+    let home = temp_home("pre-commit-recovery");
+    let mut hook = |point, _| {
+        if point == OnboardingPersistHook::WriteCommitDecision {
+            Err(std::io::Error::other("commit decision unavailable"))
+        } else {
+            Ok(())
+        }
+    };
+    assert!(
+        persist_onboarding_home_write_plan_with_hook(&home, &two_file_plan(), &mut hook).is_err()
+    );
+    persist_onboarding_home_write_plan(&home, &two_file_plan()).unwrap();
+    assert_eq!(fs::read(home.join("memory/nested/one.md")).unwrap(), b"one");
+    assert!(!walk(&home)
+        .iter()
+        .any(|path| path.to_string_lossy().ends_with(".txn")));
+    fs::remove_dir_all(home).unwrap();
+}
+
+#[test]
+fn commit_decision_and_cleanup_failures_never_undo_a_committed_batch() {
+    for operation in [
+        OnboardingPersistHook::SyncCommitDecision,
+        OnboardingPersistHook::SyncCommitDirectory,
+        OnboardingPersistHook::RetireAnchor,
+        OnboardingPersistHook::RetireJournal,
+        OnboardingPersistHook::RetireTransaction,
+    ] {
+        let home = temp_home("commit-recovery");
+        let mut hook = |point, _| {
+            if point == operation {
+                Err(std::io::Error::other("persistent finalization failure"))
+            } else {
+                Ok(())
+            }
+        };
+        assert!(
+            persist_onboarding_home_write_plan_with_hook(&home, &two_file_plan(), &mut hook)
+                .is_err()
+        );
+        assert_eq!(fs::read(home.join("memory/nested/one.md")).unwrap(), b"one");
+        assert_eq!(fs::read(home.join("memory/nested/two.md")).unwrap(), b"two");
+        let adjacent = OnboardingHomeWritePlan {
+            writes: vec![HomeWrite {
+                relative_path: "agents/after-commit.md".into(),
+                contents: "kept".into(),
+            }],
+        };
+        persist_onboarding_home_write_plan(&home, &adjacent).unwrap();
+        assert_eq!(fs::read(home.join("memory/nested/one.md")).unwrap(), b"one");
+        assert!(!walk(&home)
+            .iter()
+            .any(|path| path.to_string_lossy().ends_with(".txn")));
+        fs::remove_dir_all(home).unwrap();
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn recovery_rejects_transaction_symlinks_without_touching_the_target() {
+    use std::os::unix::fs::symlink;
+
+    let home = temp_home("transaction-symlink");
+    let outside = temp_home("transaction-symlink-outside");
+    fs::write(outside.join("manifest.json"), b"outside journal").unwrap();
+    fs::write(outside.join("payload-0"), b"outside payload").unwrap();
+    symlink(&outside, home.join(".onboarding-import-foreign.txn")).unwrap();
+
+    assert!(persist_onboarding_home_write_plan(&home, &two_file_plan()).is_err());
+    assert_eq!(
+        fs::read(outside.join("manifest.json")).unwrap(),
+        b"outside journal"
+    );
+    assert_eq!(
+        fs::read(outside.join("payload-0")).unwrap(),
+        b"outside payload"
+    );
+
+    fs::remove_file(home.join(".onboarding-import-foreign.txn")).unwrap();
+    fs::remove_dir_all(home).unwrap();
+    fs::remove_dir_all(outside).unwrap();
 }
 
 #[cfg(unix)]

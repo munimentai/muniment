@@ -628,6 +628,17 @@ pub fn persist_onboarding_home_write_plan(
 #[doc(hidden)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OnboardingPersistHook {
+    WriteJournal,
+    SyncJournal,
+    ReplaceJournal,
+    WriteCommitDecision,
+    SyncCommitDecision,
+    SyncCommitDirectory,
+    RetireAnchor,
+    RetireJournal,
+    RetireTransaction,
+    WritePayload,
+    SyncPayload,
     AfterStaging,
     AfterPublish,
     BeforeTemporaryRemoval,
@@ -810,15 +821,84 @@ fn recover_onboarding_transactions(
         })
         .collect::<Vec<_>>();
     for name in names {
+        let metadata = home.symlink_metadata(&name)?;
+        if metadata.file_type().is_symlink() || !metadata.is_dir() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "unsafe onboarding transaction",
+            ));
+        }
         let transaction = match home.open_dir(&name) {
             Ok(directory) => directory,
             Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
             Err(error) => return Err(error),
         };
-        let manifest: OnboardingRecoveryManifest =
-            serde_json::from_reader(transaction.open("manifest.json")?)?;
+        if !same_file(&metadata, &transaction.metadata(".")?) {
+            return Err(io::Error::other("onboarding transaction changed"));
+        }
+        let committed = match transaction.symlink_metadata("committed") {
+            Ok(metadata) if metadata.is_file() && !metadata.file_type().is_symlink() => true,
+            Ok(_) => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "unsafe commit marker",
+                ))
+            }
+            Err(error) if error.kind() == io::ErrorKind::NotFound => false,
+            Err(error) => return Err(error),
+        };
+        let manifest_metadata = match transaction.symlink_metadata("manifest.json") {
+            Ok(metadata) if metadata.is_file() && !metadata.file_type().is_symlink() => {
+                Some(metadata)
+            }
+            Ok(_) => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "unsafe onboarding manifest",
+                ))
+            }
+            Err(error) if error.kind() == io::ErrorKind::NotFound => None,
+            Err(error) => return Err(error),
+        };
+        let manifest_file = match manifest_metadata {
+            Some(metadata) => {
+                let file = transaction.open("manifest.json")?;
+                if !same_file(&metadata, &file.metadata()?) {
+                    return Err(io::Error::other("onboarding manifest changed"));
+                }
+                file
+            }
+            None => {
+                // The manifest is retired only after every owned anchor.  A
+                // durable retirement marker distinguishes this replayable state
+                // from a foreign or malformed matching directory.
+                let retired = transaction.symlink_metadata("retired")?;
+                if retired.file_type().is_symlink() || !retired.is_file() {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        "unsafe retired transaction",
+                    ));
+                }
+                match transaction.remove_file("committed") {
+                    Ok(()) => {}
+                    Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+                    Err(error) => return Err(error),
+                }
+                transaction.remove_file("retired")?;
+                home.remove_dir(&name)?;
+                home.open(".")?.sync_all()?;
+                continue;
+            }
+        };
+        match transaction.remove_file("manifest.next") {
+            Ok(()) => {}
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error),
+        }
+        let manifest: OnboardingRecoveryManifest = serde_json::from_reader(manifest_file)?;
+        let committed = committed || manifest.committed;
         for (index, entry) in manifest.entries.iter().enumerate() {
-            if manifest.committed {
+            if committed {
                 break;
             }
             let directory = match open_anchored_directory(home, &entry.parent) {
@@ -826,11 +906,23 @@ fn recover_onboarding_transactions(
                 Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
                 Err(error) => return Err(error),
             };
-            let anchor = match transaction.open(&entry.anchor) {
-                Ok(anchor) => anchor,
+            let anchor_metadata = match transaction.symlink_metadata(&entry.anchor) {
+                Ok(metadata) if metadata.is_file() && !metadata.file_type().is_symlink() => {
+                    metadata
+                }
+                Ok(_) => {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        "unsafe payload anchor",
+                    ))
+                }
                 Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
                 Err(error) => return Err(error),
             };
+            let anchor = transaction.open(&entry.anchor)?;
+            if !same_file(&anchor_metadata, &anchor.metadata()?) {
+                return Err(io::Error::other("payload anchor changed"));
+            }
             let identity = anchor.metadata()?;
             for child in directory.entries()? {
                 let child = child?;
@@ -845,7 +937,7 @@ fn recover_onboarding_transactions(
             directory.open(".")?.sync_all()?;
         }
         for directory in manifest.created_directories.iter().rev() {
-            if manifest.committed {
+            if committed {
                 break;
             }
             let Some(parent_path) = directory.path.parent() else {
@@ -882,12 +974,48 @@ fn recover_onboarding_transactions(
                 Err(error) => return Err(error),
             }
         }
+        let mut retired_options = cap_std::fs::OpenOptions::new();
+        retired_options.create_new(true).write(true);
+        let retired = transaction.open_with("retired", &retired_options)?;
+        retired.sync_all()?;
+        transaction.open(".")?.sync_all()?;
         transaction.remove_file("manifest.json")?;
+        match transaction.remove_file("committed") {
+            Ok(()) => {}
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error),
+        }
+        transaction.remove_file("retired")?;
         home.remove_dir(&name)?;
         hook(OnboardingPersistHook::RollbackSync, 0)?;
         home.open(".")?.sync_all()?;
     }
     Ok(())
+}
+
+fn write_onboarding_manifest(
+    transaction: &Dir,
+    manifest: &OnboardingRecoveryManifest,
+    initial: bool,
+    hook: &mut dyn FnMut(OnboardingPersistHook, usize) -> io::Result<()>,
+) -> io::Result<()> {
+    let name = if initial {
+        "manifest.json"
+    } else {
+        "manifest.next"
+    };
+    hook(OnboardingPersistHook::WriteJournal, 0)?;
+    let mut options = cap_std::fs::OpenOptions::new();
+    options.create_new(true).write(true);
+    let mut file = transaction.open_with(name, &options)?;
+    io::Write::write_all(&mut file, &serde_json::to_vec(manifest)?)?;
+    hook(OnboardingPersistHook::SyncJournal, 0)?;
+    file.sync_all()?;
+    if !initial {
+        hook(OnboardingPersistHook::ReplaceJournal, 0)?;
+        transaction.rename(name, transaction, "manifest.json")?;
+    }
+    transaction.open(".")?.sync_all()
 }
 
 fn persist_onboarding_plan_locked(
@@ -898,7 +1026,6 @@ fn persist_onboarding_plan_locked(
     hook: &mut dyn FnMut(OnboardingPersistHook, usize) -> io::Result<()>,
 ) -> Result<(), HomeError> {
     struct Staged {
-        parent_path: PathBuf,
         directory: Dir,
         destination: std::ffi::OsString,
         temporary: std::ffi::OsString,
@@ -907,7 +1034,6 @@ fn persist_onboarding_plan_locked(
     }
 
     struct AnchoredDirectory {
-        path: PathBuf,
         parent: Dir,
         name: std::ffi::OsString,
         directory: Dir,
@@ -930,6 +1056,30 @@ fn persist_onboarding_plan_locked(
             error,
         )
     })?;
+    let mut manifest = OnboardingRecoveryManifest {
+        committed: false,
+        entries: plan
+            .writes
+            .iter()
+            .enumerate()
+            .map(|(index, write)| OnboardingRecoveryEntry {
+                parent: write.relative_path().parent().unwrap().to_path_buf(),
+                destination: write.relative_path().file_name().unwrap().to_os_string(),
+                temporary: std::ffi::OsString::from(format!("payload-{index}")),
+                anchor: std::ffi::OsString::from(format!("payload-{index}")),
+            })
+            .collect(),
+        created_directories: Vec::new(),
+    };
+    if let Err(error) = write_onboarding_manifest(&transaction, &manifest, true, hook) {
+        // No recoverable payload or Home entry exists before the initial journal.
+        let _ = transaction.remove_file("manifest.json");
+        let _ = home.remove_dir(&transaction_name);
+        return Err(HomeError::io(
+            "The onboarding import transaction could not be journaled.",
+            error,
+        ));
+    }
     let result = (|| -> io::Result<()> {
         for (write_index, write) in plan.writes.iter().enumerate() {
             let mut current = home.try_clone()?;
@@ -953,7 +1103,6 @@ fn persist_onboarding_plan_locked(
                             ));
                         }
                         directories.push(AnchoredDirectory {
-                            path: parent_path.clone(),
                             parent: current,
                             name: name.to_os_string(),
                             directory: next.try_clone()?,
@@ -964,8 +1113,24 @@ fn persist_onboarding_plan_locked(
                     Err(error) if error.kind() == io::ErrorKind::NotFound => {
                         current.create_dir(name)?;
                         let next = current.open_dir(name)?;
+                        manifest
+                            .created_directories
+                            .push(OnboardingRecoveryDirectory {
+                                path: parent_path.clone(),
+                                identity: file_identity(&next.metadata(".")?),
+                            });
+                        if let Err(error) =
+                            write_onboarding_manifest(&transaction, &manifest, false, hook)
+                        {
+                            let _ = transaction.remove_file("manifest.next");
+                            let visible = current.symlink_metadata(name)?;
+                            if same_file(&visible, &next.metadata(".")?) {
+                                current.remove_dir(name)?;
+                            }
+                            manifest.created_directories.pop();
+                            return Err(error);
+                        }
                         directories.push(AnchoredDirectory {
-                            path: parent_path.clone(),
                             parent: current,
                             name: name.to_os_string(),
                             directory: next.try_clone()?,
@@ -987,20 +1152,15 @@ fn persist_onboarding_plan_locked(
                 }
                 Err(error) => return Err(error),
             }
-            let temporary = std::ffi::OsString::from(format!(
-                ".{}.{}.tmp",
-                destination.to_string_lossy(),
-                uuid::Uuid::new_v4()
-            ));
+            let temporary = std::ffi::OsString::from(format!("payload-{write_index}"));
             let mut options = cap_std::fs::OpenOptions::new();
             options.create_new(true).write(true);
-            let mut file = current.open_with(&temporary, &options)?;
+            hook(OnboardingPersistHook::WritePayload, write_index)?;
+            let mut file = transaction.open_with(&temporary, &options)?;
             io::Write::write_all(&mut file, write.bytes())?;
+            hook(OnboardingPersistHook::SyncPayload, write_index)?;
             file.sync_all()?;
-            let anchor = std::ffi::OsString::from(format!("payload-{write_index}"));
-            current.hard_link(&temporary, &transaction, &anchor)?;
             staged.push(Staged {
-                parent_path,
                 directory: current,
                 destination,
                 temporary,
@@ -1009,34 +1169,6 @@ fn persist_onboarding_plan_locked(
             });
         }
 
-        let manifest = OnboardingRecoveryManifest {
-            committed: false,
-            entries: staged
-                .iter()
-                .enumerate()
-                .map(|(index, entry)| OnboardingRecoveryEntry {
-                    parent: entry.parent_path.clone(),
-                    destination: entry.destination.clone(),
-                    temporary: entry.temporary.clone(),
-                    anchor: std::ffi::OsString::from(format!("payload-{index}")),
-                })
-                .collect(),
-            created_directories: directories
-                .iter()
-                .filter(|entry| entry.created)
-                .map(|entry| OnboardingRecoveryDirectory {
-                    path: entry.path.clone(),
-                    identity: file_identity(&entry.directory.metadata(".").unwrap()),
-                })
-                .collect(),
-        };
-        let manifest_bytes = serde_json::to_vec(&manifest)?;
-        let mut manifest_options = cap_std::fs::OpenOptions::new();
-        manifest_options.create_new(true).write(true);
-        let mut manifest_file = transaction.open_with("manifest.json", &manifest_options)?;
-        io::Write::write_all(&mut manifest_file, &manifest_bytes)?;
-        manifest_file.sync_all()?;
-        transaction.open(".")?.sync_all()?;
         home.open(".")?.sync_all()?;
 
         hook(OnboardingPersistHook::AfterStaging, 0)?;
@@ -1058,9 +1190,7 @@ fn persist_onboarding_plan_locked(
 
         for (index, entry) in staged.iter_mut().enumerate() {
             hook(OnboardingPersistHook::Publish, index)?;
-            entry
-                .directory
-                .hard_link(&entry.temporary, &entry.directory, &entry.destination)?;
+            transaction.hard_link(&entry.temporary, &entry.directory, &entry.destination)?;
             entry.published = true;
             hook(OnboardingPersistHook::AfterPublish, index)?;
         }
@@ -1084,9 +1214,8 @@ fn persist_onboarding_plan_locked(
             return Err(io::Error::other("import Home changed"));
         }
         hook(OnboardingPersistHook::BeforeTemporaryRemoval, 0)?;
-        for (index, entry) in staged.iter().enumerate() {
+        for (index, _entry) in staged.iter().enumerate() {
             hook(OnboardingPersistHook::RemoveTemporary, index)?;
-            entry.directory.remove_file(&entry.temporary)?;
         }
         hook(OnboardingPersistHook::BeforeDirectorySync, 0)?;
         for (index, entry) in staged.iter().enumerate() {
@@ -1217,93 +1346,71 @@ fn persist_onboarding_plan_locked(
         }
     }
     if result.is_ok() {
-        let committed = OnboardingRecoveryManifest {
-            committed: true,
-            entries: staged
-                .iter()
-                .enumerate()
-                .map(|(index, entry)| OnboardingRecoveryEntry {
-                    parent: entry.parent_path.clone(),
-                    destination: entry.destination.clone(),
-                    temporary: entry.temporary.clone(),
-                    anchor: std::ffi::OsString::from(format!("payload-{index}")),
-                })
-                .collect(),
-            created_directories: Vec::new(),
-        };
+        // Creating this marker is the commit decision. Once it exists, recovery
+        // only retires the journal and anchors and never removes destinations.
+        hook(OnboardingPersistHook::WriteCommitDecision, 0).map_err(|error| {
+            HomeError::io(
+                "The onboarding import transaction could not be completed.",
+                error,
+            )
+        })?;
         let mut options = cap_std::fs::OpenOptions::new();
         options.create_new(true).write(true);
-        let mut manifest_file =
-            transaction
-                .open_with("committed.json", &options)
-                .map_err(|error| {
-                    HomeError::io(
-                        "The onboarding import transaction could not be completed.",
-                        error,
-                    )
-                })?;
-        io::Write::write_all(
-            &mut manifest_file,
-            &serde_json::to_vec(&committed).map_err(|error| {
-                HomeError::io(
-                    "The onboarding import transaction could not be completed.",
-                    error.into(),
-                )
-            })?,
-        )
-        .and_then(|()| manifest_file.sync_all())
-        .map_err(|error| {
-            HomeError::io(
-                "The onboarding import transaction could not be completed.",
-                error,
-            )
-        })?;
-        transaction
-            .rename("committed.json", &transaction, "manifest.json")
+        let marker = transaction
+            .open_with("committed", &options)
             .map_err(|error| {
                 HomeError::io(
                     "The onboarding import transaction could not be completed.",
                     error,
                 )
             })?;
-        transaction
-            .open(".")
-            .and_then(|dir| dir.sync_all())
+        hook(OnboardingPersistHook::SyncCommitDecision, 0)
+            .and_then(|()| marker.sync_all())
+            .and_then(|()| hook(OnboardingPersistHook::SyncCommitDirectory, 0))
+            .and_then(|()| transaction.open(".")?.sync_all())
             .map_err(|error| {
                 HomeError::io(
-                    "The onboarding import transaction could not be completed.",
+                    "The onboarding import was committed but its journal could not be retired.",
                     error,
                 )
             })?;
-        for index in 0..staged.len() {
-            transaction
-                .remove_file(format!("payload-{index}"))
-                .map_err(|error| {
-                    HomeError::io(
-                        "The onboarding import transaction could not be completed.",
-                        error,
-                    )
-                })?;
+    }
+
+    // Journal retirement is itself replayable. Any failure leaves manifest.json
+    // present until every payload anchor is gone, so a later locked invocation
+    // can deterministically finish the same committed or aborted decision.
+    let retirement = (|| -> io::Result<()> {
+        for (index, entry) in manifest.entries.iter().enumerate() {
+            hook(OnboardingPersistHook::RetireAnchor, index)?;
+            match transaction.remove_file(&entry.anchor) {
+                Ok(()) => {}
+                Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+                Err(error) => return Err(error),
+            }
         }
-        transaction.remove_file("manifest.json").map_err(|error| {
-            HomeError::io(
-                "The onboarding import transaction could not be completed.",
-                error,
-            )
-        })?;
-        home.remove_dir(&transaction_name).map_err(|error| {
-            HomeError::io(
-                "The onboarding import transaction could not be completed.",
-                error,
-            )
-        })?;
-    } else {
-        // Once rollback is complete, the journal itself is the only owned residue.
-        let _ = transaction.remove_file("manifest.json");
-        for index in 0..staged.len() {
-            let _ = transaction.remove_file(format!("payload-{index}"));
+        hook(OnboardingPersistHook::RetireJournal, 0)?;
+        let mut retired_options = cap_std::fs::OpenOptions::new();
+        retired_options.create_new(true).write(true);
+        let retired = transaction.open_with("retired", &retired_options)?;
+        retired.sync_all()?;
+        transaction.open(".")?.sync_all()?;
+        transaction.remove_file("manifest.json")?;
+        match transaction.remove_file("committed") {
+            Ok(()) => {}
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error),
         }
-        let _ = home.remove_dir(&transaction_name);
+        transaction.open(".")?.sync_all()?;
+        hook(OnboardingPersistHook::RetireTransaction, 0)?;
+        transaction.remove_file("retired")?;
+        home.remove_dir(&transaction_name)?;
+        home.open(".")?.sync_all()
+    })();
+    if let Err(error) = retirement {
+        return Err(HomeError::io(
+            "The onboarding import journal could not be retired.",
+            error,
+        ));
     }
     result.map_err(|error| HomeError::io("The onboarding import could not be saved.", error))
 }
