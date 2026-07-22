@@ -15,7 +15,8 @@ describe('installed nightly', () => {
     }
   })
 
-  it('signs in through the production UI', async () => {
+  it('signs in through the production UI', async function () {
+    this.timeout(360000)
     const home = process.env.MUNIMENT_E2E_HOME_PATH
     const location = await $('[data-testid="onboarding-home-path"]')
     await location.waitForDisplayed()
@@ -94,9 +95,31 @@ describe('installed nightly', () => {
     const authenticatedMarker = await $('textarea[placeholder="Ask anything"]')
     await authenticatedMarker.waitForDisplayed({ timeout: 120000 })
     await authenticatedMarker.saveScreenshot(path.join(rawDir, '02-authenticated.png'))
-    const prompt = `Muniment E2E composer ${Date.now()}`
+    const prompt = `Muniment E2E chat ${Date.now()}`
     await authenticatedMarker.setValue(prompt)
-    expect(await authenticatedMarker.getValue()).toBe(prompt)
+    const send = await $('button=Send')
+    await send.waitForDisplayed()
+    await send.click()
+
+    const userMessage = await $(`//div[contains(concat(' ', normalize-space(@class), ' '), ' user-turn ')]//p[normalize-space()="${prompt}"]`)
+    await userMessage.waitForDisplayed()
+    const response = await userMessage.$('./ancestor::div[contains(concat(" ", normalize-space(@class), " "), " user-turn ")]/following-sibling::div[contains(concat(" ", normalize-space(@class), " "), " response ")][1]')
+    let receipt
+    await browser.waitUntil(async () => {
+      receipt = await response.$('button.provenance')
+      return await receipt.isDisplayed()
+    }, {
+      timeout: 180000,
+      timeoutMsg: `chat response did not complete with a receipt for prompt: ${prompt}`,
+    })
+
+    const assistantResponse = await response.$('./p[1]')
+    expect((await assistantResponse.getText()).trim()).not.toBe('')
+    await receipt.click()
+    const route = await response.$('.route-value')
+    await route.waitForDisplayed()
+    expect((await route.getText()).trim()).not.toBe('')
+    await browser.saveScreenshot(path.join(rawDir, '03-chat-complete.png'))
 
     let frontendLogs
     try {

@@ -19,6 +19,33 @@ describe('installed onboarding spec contract', () => {
   })
 })
 
+describe('installed production chat contract', () => {
+  const spec = fs.readFileSync(path.join(root, 'test/e2e/specs/real-sign-in.spec.js'), 'utf8')
+
+  it('submits a unique prompt and verifies its rendered user and assistant turns', () => {
+    expect(spec).toMatch(/const prompt = `Muniment E2E chat \$\{Date\.now\(\)\}`/)
+    expect(spec).toContain("const send = await $('button=Send')")
+    expect(spec).toContain('await send.click()')
+    expect(spec).toContain('userMessage.waitForDisplayed()')
+    expect(spec).toContain("assistantResponse.getText()).trim()).not.toBe('')")
+  })
+
+  it('uses a bounded completion condition and verifies the server receipt route', () => {
+    expect(spec).toContain('this.timeout(360000)')
+    expect(spec).toContain('await browser.waitUntil(async () => {')
+    expect(spec).toContain('timeout: 180000')
+    expect(spec).toContain('chat response did not complete with a receipt for prompt:')
+    expect(spec).not.toMatch(/browser\.pause\s*\(/)
+    expect(spec).toContain("response.$('button.provenance')")
+    expect(spec).toContain("response.$('.route-value')")
+    expect(spec).toContain("route.getText()).trim()).not.toBe('')")
+  })
+
+  it('captures the completed round trip in the raw artifact directory', () => {
+    expect(spec).toContain("browser.saveScreenshot(path.join(rawDir, '03-chat-complete.png'))")
+  })
+})
+
 describe('WDIO Tauri service dependency contract', () => {
   it('loads the installed ESM entry with compatible transitive named exports', async () => {
     await expect(import('@wdio/tauri-service')).resolves.toBeDefined()
