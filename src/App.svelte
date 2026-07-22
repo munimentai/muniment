@@ -701,19 +701,21 @@
       <section class="onboarding" aria-labelledby="onboarding-title">
         <p class="eyebrow">{onboarding.savedHomePath ? 'Home settings' : 'First-run setup'}</p>
         <h1 id="onboarding-title">{['pre-triage', 'triaging', 'triage-error'].includes(onboarding.name) ? 'Create your local proposal' : ['triage-review', 'triage-confirmed'].includes(onboarding.name) ? 'Review your onboarding proposal' : ['import-choice', 'previewing', 'reviewing', 'extracting', 'finalizing'].includes(onboarding.name) ? 'Review an assistant export' : 'Choose your Muniment Home'}</h1>
-        <aside class="model-status" aria-labelledby="model-status-title">
-          <div class="model-status-heading">
-            <span id="model-status-title">Local AI</span>
-            <strong>{requiredModel.aiFeaturesAvailable ? 'Ready' : requiredModel.status?.state === 'failed' || requiredModel.status?.state === 'cancelled' ? requiredModel.retryingInBackground ? 'Retrying in background' : 'Setup unavailable' : requiredModel.status?.state === 'installing' ? 'Downloading' : 'Starting setup'}</strong>
-          </div>
-          <p class="model-status-copy" aria-live="polite">{requiredModel.aiFeaturesAvailable ? 'Local proposal generation is ready.' : requiredModel.status?.state === 'failed' || requiredModel.status?.state === 'cancelled' ? requiredModel.retryingInBackground ? 'The download did not finish. Muniment will keep retrying in the background.' : 'Local AI setup could not finish. You can continue setting up your Home.' : 'The required model is being prepared in the background. You can continue setting up your Home.'}</p>
-          {#if modelProgress.total > 0 && !requiredModel.aiFeaturesAvailable}
-            <div class="model-progress" role="progressbar" aria-label="Required local AI model download" aria-valuemin="0" aria-valuemax={modelProgress.total} aria-valuenow={modelProgress.downloaded}>
-              <span style={`width: ${modelProgress.downloaded / modelProgress.total * 100}%`}></span>
+        {#if !onboarding.savedHomePath}
+          <aside class="model-status" aria-labelledby="model-status-title">
+            <div class="model-status-heading">
+              <span id="model-status-title">Local AI</span>
+              <strong>{requiredModel.aiFeaturesAvailable ? 'Ready' : requiredModel.status?.state === 'failed' || requiredModel.status?.state === 'cancelled' ? requiredModel.retryingInBackground ? 'Retrying in background' : 'Setup unavailable' : requiredModel.status?.state === 'installing' ? 'Downloading' : 'Starting setup'}</strong>
             </div>
-            <p class="model-progress-copy">{formatByteSize(modelProgress.downloaded)} of {formatByteSize(modelProgress.total)}</p>
-          {/if}
-        </aside>
+            <p class="model-status-copy" aria-live="polite">{requiredModel.aiFeaturesAvailable ? 'Local proposal generation is ready.' : requiredModel.status?.state === 'failed' || requiredModel.status?.state === 'cancelled' ? requiredModel.retryingInBackground ? 'The download did not finish. Muniment will keep retrying in the background.' : 'Local AI setup could not finish. You can continue setting up your Home.' : 'The required model is being prepared in the background. You can continue setting up your Home.'}</p>
+            {#if modelProgress.total > 0}
+              <div class="model-progress" role="progressbar" aria-label="Required local AI model download" aria-valuemin="0" aria-valuemax={modelProgress.total} aria-valuenow={modelProgress.downloaded}>
+                <span style={`width: ${modelProgress.downloaded / modelProgress.total * 100}%`}></span>
+              </div>
+              <p class="model-progress-copy">{formatByteSize(modelProgress.downloaded)} of {formatByteSize(modelProgress.total)}</p>
+            {/if}
+          </aside>
+        {/if}
         {#if onboarding.name === 'loading'}
           <p class="support" role="status">Finding your Documents folder…</p>
         {:else if ['choosing', 'confirming', 'settings', 'confirming-settings'].includes(onboarding.name)}
