@@ -6,6 +6,9 @@ use std::time::{Duration, Instant};
 use crate::asr::acquisition::{
     AsrDownloadRequest, AsrDownloadResponse, AsrDownloadTransport, AsrTransportError,
 };
+use crate::kokoro::acquisition::{
+    KokoroDownloadRequest, KokoroDownloadResponse, KokoroDownloadTransport, KokoroTransportError,
+};
 use crate::llama::acquisition::{
     GemmaDownloadRequest, GemmaDownloadResponse, GemmaDownloadTransport, GemmaTransportError,
 };
@@ -145,6 +148,33 @@ impl AsrDownloadTransport for NativeModelAcquisitionTransport {
             TransportFailure::Transient => AsrTransportError::Transient,
             TransportFailure::Unavailable => AsrTransportError::Unavailable,
             TransportFailure::Rejected => AsrTransportError::Rejected,
+        })
+    }
+}
+
+impl KokoroDownloadTransport for NativeModelAcquisitionTransport {
+    type Body = ModelResponseBody;
+
+    fn download(
+        &mut self,
+        request: &KokoroDownloadRequest,
+    ) -> Result<KokoroDownloadResponse<Self::Body>, KokoroTransportError> {
+        self.request(
+            request.url(),
+            request.offset,
+            request.limits.connect_timeout,
+            request.limits.read_timeout,
+            request.limits.deadline,
+        )
+        .map(|response| KokoroDownloadResponse {
+            status: response.status,
+            content_range: response.content_range,
+            body: response.body,
+        })
+        .map_err(|error| match error {
+            TransportFailure::Transient => KokoroTransportError::Transient,
+            TransportFailure::Unavailable => KokoroTransportError::Unavailable,
+            TransportFailure::Rejected => KokoroTransportError::Rejected,
         })
     }
 }
