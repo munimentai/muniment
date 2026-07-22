@@ -1,13 +1,31 @@
 use chrono::NaiveDate;
 use muniment_core::{
     home::{
-        compile_onboarding_home_write_plan, OnboardingHomeWritePlanError,
-        ONBOARDING_IMPORT_MAX_ENTRIES, ONBOARDING_IMPORT_MAX_TOTAL_BYTES,
+        compile_onboarding_home_write_plan, persist_onboarding_home_write_plan, HomeWrite,
+        OnboardingHomeWritePlan, OnboardingHomeWritePlanError, ONBOARDING_IMPORT_MAX_ENTRIES,
+        ONBOARDING_IMPORT_MAX_TOTAL_BYTES,
     },
     import_preview::{EntryKind, ExtractedEntry},
     llama::OnboardingTriageReport,
 };
-use std::path::Component;
+use std::{
+    fs,
+    path::Component,
+    time::{SystemTime, UNIX_EPOCH},
+};
+
+fn temp_home(label: &str) -> std::path::PathBuf {
+    let path = std::env::temp_dir().join(format!(
+        "muniment-onboarding-{label}-{}-{}",
+        std::process::id(),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    fs::create_dir(&path).unwrap();
+    path
+}
 
 fn report(agents: &[&str]) -> OnboardingTriageReport {
     OnboardingTriageReport::parse(&format!(
@@ -187,4 +205,155 @@ fn enforces_entry_count_and_total_byte_bounds() {
         compile_onboarding_home_write_plan(&report, &oversized_aggregate, date),
         Err(OnboardingHomeWritePlanError::DocumentBytesExceeded)
     );
+}
+
+#[test]
+fn persists_a_multi_file_plan_byte_for_byte() {
+    let home = temp_home("success");
+    let plan = OnboardingHomeWritePlan {
+        writes: vec![
+            HomeWrite {
+                relative_path: "memory/imports/one.md".into(),
+                contents: "one\r\n\0".into(),
+            },
+            HomeWrite {
+                relative_path: "agents/two.md".into(),
+                contents: "café 🦀\n".into(),
+            },
+        ],
+    };
+
+    persist_onboarding_home_write_plan(&home, &plan).unwrap();
+    assert_eq!(
+        fs::read(home.join("memory/imports/one.md")).unwrap(),
+        b"one\r\n\0"
+    );
+    assert_eq!(
+        fs::read(home.join("agents/two.md")).unwrap(),
+        "café 🦀\n".as_bytes()
+    );
+    assert!(!walk(&home)
+        .iter()
+        .any(|path| path.to_string_lossy().ends_with(".tmp")));
+    fs::remove_dir_all(home).unwrap();
+}
+
+#[test]
+fn existing_destination_refuses_the_whole_plan_and_rolls_back_created_directories() {
+    let home = temp_home("conflict");
+    fs::create_dir(home.join("agents")).unwrap();
+    fs::write(home.join("agents/existing.md"), b"authoritative").unwrap();
+    let plan = OnboardingHomeWritePlan {
+        writes: vec![
+            HomeWrite {
+                relative_path: "memory/new/note.md".into(),
+                contents: "new".into(),
+            },
+            HomeWrite {
+                relative_path: "agents/existing.md".into(),
+                contents: "replacement".into(),
+            },
+        ],
+    };
+
+    assert!(persist_onboarding_home_write_plan(&home, &plan).is_err());
+    assert_eq!(
+        fs::read(home.join("agents/existing.md")).unwrap(),
+        b"authoritative"
+    );
+    assert!(!home.join("memory").exists());
+    assert!(!walk(&home)
+        .iter()
+        .any(|path| path.to_string_lossy().ends_with(".tmp")));
+    fs::remove_dir_all(home).unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn rejects_unsafe_destinations_and_symlink_ancestors() {
+    use std::os::unix::fs::symlink;
+    let home = temp_home("unsafe");
+    let outside = temp_home("outside");
+    symlink(&outside, home.join("memory")).unwrap();
+    let unsafe_plans = [
+        HomeWrite {
+            relative_path: "../escape.md".into(),
+            contents: "bad".into(),
+        },
+        HomeWrite {
+            relative_path: "memory/followed.md".into(),
+            contents: "bad".into(),
+        },
+    ];
+    for write in unsafe_plans {
+        assert!(persist_onboarding_home_write_plan(
+            &home,
+            &OnboardingHomeWritePlan {
+                writes: vec![write]
+            }
+        )
+        .is_err());
+    }
+    assert!(walk(&outside).is_empty());
+    fs::remove_dir_all(home).unwrap();
+    fs::remove_dir_all(outside).unwrap();
+}
+
+#[test]
+fn mid_batch_publication_failure_rolls_back_files_and_temporaries() {
+    let home = temp_home("mid-batch");
+    let mut writes = (0..=ONBOARDING_IMPORT_MAX_ENTRIES)
+        .map(|index| HomeWrite {
+            relative_path: format!("memory/batch/{index:03}.md"),
+            contents: "payload".repeat(128),
+        })
+        .collect::<Vec<_>>();
+    writes.push(HomeWrite {
+        relative_path: "agents/final.md".into(),
+        contents: "final".into(),
+    });
+    let watched_home = home.clone();
+    let interferer = std::thread::spawn(move || {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while std::time::Instant::now() < deadline {
+            if walk(&watched_home)
+                .iter()
+                .any(|path| path.to_string_lossy().ends_with(".tmp"))
+            {
+                fs::create_dir(watched_home.join("agents/final.md")).unwrap();
+                return true;
+            }
+            std::thread::yield_now();
+        }
+        false
+    });
+
+    assert!(
+        persist_onboarding_home_write_plan(&home, &OnboardingHomeWritePlan { writes }).is_err()
+    );
+    assert!(
+        interferer.join().unwrap(),
+        "did not reach staged mid-batch state"
+    );
+    assert!(home.join("agents/final.md").is_dir());
+    assert!(!home.join("memory").exists());
+    assert!(!walk(&home)
+        .iter()
+        .any(|path| path.to_string_lossy().ends_with(".tmp")));
+    fs::remove_dir_all(home).unwrap();
+}
+
+fn walk(root: &std::path::Path) -> Vec<std::path::PathBuf> {
+    let mut paths = Vec::new();
+    let mut pending = vec![root.to_path_buf()];
+    while let Some(directory) = pending.pop() {
+        for entry in fs::read_dir(directory).unwrap() {
+            let path = entry.unwrap().path();
+            if fs::symlink_metadata(&path).unwrap().is_dir() {
+                pending.push(path.clone());
+            }
+            paths.push(path);
+        }
+    }
+    paths
 }

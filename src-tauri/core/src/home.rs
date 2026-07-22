@@ -615,6 +615,209 @@ pub fn scaffold_home(home: &Path) -> Result<(), HomeError> {
     Ok(())
 }
 
+/// Persists a confirmed onboarding plan without replacing existing Home content.
+pub fn persist_onboarding_home_write_plan(
+    home: &Path,
+    plan: &OnboardingHomeWritePlan,
+) -> Result<(), HomeError> {
+    validate_home(home)?;
+    require_directory(home)?;
+    if plan.writes.is_empty() || plan.writes.len() > ONBOARDING_IMPORT_MAX_ENTRIES + 4 {
+        return Err(HomeError::invalid("The onboarding import plan is invalid."));
+    }
+
+    let mut destinations = BTreeSet::new();
+    let mut total_bytes = 0usize;
+    for write in &plan.writes {
+        validate_onboarding_destination(&write.relative_path)?;
+        if !destinations.insert(write.relative_path.clone()) {
+            return Err(HomeError::invalid(
+                "The onboarding import destinations collide.",
+            ));
+        }
+        if write.bytes().len() > ONBOARDING_IMPORT_MAX_DOCUMENT_BYTES {
+            return Err(HomeError::invalid(
+                "An onboarding import document is too large.",
+            ));
+        }
+        total_bytes = total_bytes
+            .checked_add(write.bytes().len())
+            .ok_or_else(|| HomeError::invalid("The onboarding import plan is too large."))?;
+    }
+    if total_bytes > ONBOARDING_IMPORT_MAX_TOTAL_BYTES {
+        return Err(HomeError::invalid(
+            "The onboarding import plan is too large.",
+        ));
+    }
+
+    let lock = open_home_lock(&home.join(".onboarding-import.lock"))?;
+    lock.lock_exclusive()
+        .map_err(|error| HomeError::io("The onboarding import could not be locked.", error))?;
+    persist_onboarding_plan_locked(home, plan)
+}
+
+fn validate_onboarding_destination(relative: &str) -> Result<(), HomeError> {
+    let path = Path::new(relative);
+    if relative.is_empty()
+        || relative.contains('\\')
+        || path.is_absolute()
+        || path.extension().and_then(|value| value.to_str()) != Some("md")
+        || path
+            .components()
+            .any(|component| !matches!(component, Component::Normal(_)))
+        || !HOME_DIRECTORIES
+            .iter()
+            .any(|directory| path.starts_with(directory))
+        || path.components().count() < 2
+        || path.to_string_lossy() != relative
+    {
+        return Err(HomeError::invalid(
+            "An onboarding import destination is unsafe.",
+        ));
+    }
+    Ok(())
+}
+
+fn require_directory(path: &Path) -> Result<(), HomeError> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_dir() => Err(
+            HomeError::invalid("An onboarding import path is not a directory."),
+        ),
+        Ok(_) => Ok(()),
+        Err(error) => Err(HomeError::io(
+            "An onboarding import path could not be inspected.",
+            error,
+        )),
+    }
+}
+
+fn persist_onboarding_plan_locked(
+    home: &Path,
+    plan: &OnboardingHomeWritePlan,
+) -> Result<(), HomeError> {
+    let mut created_directories = Vec::new();
+    let mut temporary_files = Vec::new();
+    let mut published_files = Vec::new();
+    let result = (|| -> io::Result<()> {
+        for write in &plan.writes {
+            let destination = home.join(&write.relative_path);
+            let mut current = home.to_path_buf();
+            for component in write.relative_path().parent().unwrap().components() {
+                current.push(component.as_os_str());
+                match fs::symlink_metadata(&current) {
+                    Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_dir() => {
+                        return Err(io::Error::new(
+                            io::ErrorKind::InvalidInput,
+                            "unsafe import ancestor",
+                        ));
+                    }
+                    Ok(_) => {}
+                    Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                        fs::create_dir(&current)?;
+                        created_directories.push(current.clone());
+                    }
+                    Err(error) => return Err(error),
+                }
+            }
+            match fs::symlink_metadata(&destination) {
+                Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+                Ok(_) => {
+                    return Err(io::Error::new(
+                        io::ErrorKind::AlreadyExists,
+                        "import destination exists",
+                    ))
+                }
+                Err(error) => return Err(error),
+            }
+        }
+
+        for write in &plan.writes {
+            let destination = home.join(&write.relative_path);
+            let temporary = destination.with_file_name(format!(
+                ".{}.{}.tmp",
+                destination.file_name().unwrap().to_string_lossy(),
+                uuid::Uuid::new_v4()
+            ));
+            let mut file = OpenOptions::new()
+                .create_new(true)
+                .write(true)
+                .open(&temporary)?;
+            temporary_files.push(temporary);
+            io::Write::write_all(&mut file, write.bytes())?;
+            file.sync_all()?;
+        }
+
+        for (write, temporary) in plan.writes.iter().zip(&temporary_files) {
+            let destination = home.join(&write.relative_path);
+            fs::hard_link(temporary, &destination)?;
+            published_files.push(destination);
+        }
+        for temporary in &temporary_files {
+            fs::remove_file(temporary)?;
+        }
+        for directory in plan
+            .writes
+            .iter()
+            .filter_map(|write| {
+                home.join(&write.relative_path)
+                    .parent()
+                    .map(Path::to_path_buf)
+            })
+            .collect::<BTreeSet<_>>()
+        {
+            sync_directory(&directory)?;
+        }
+        sync_directory(home)
+    })();
+
+    if result.is_err() {
+        for path in published_files.iter().rev() {
+            let _ = fs::remove_file(path);
+        }
+        for path in temporary_files.iter().rev() {
+            let _ = fs::remove_file(path);
+        }
+        for path in created_directories.iter().rev() {
+            let _ = fs::remove_dir(path);
+        }
+        let _ = sync_directory(home);
+    }
+    result.map_err(|error| HomeError::io("The onboarding import could not be saved.", error))
+}
+
+#[cfg(unix)]
+fn open_home_lock(path: &Path) -> Result<fs::File, HomeError> {
+    use std::os::unix::fs::OpenOptionsExt;
+    OpenOptions::new()
+        .create(true)
+        .read(true)
+        .write(true)
+        .custom_flags(libc::O_NOFOLLOW)
+        .open(path)
+        .map_err(|error| HomeError::io("The onboarding import could not be locked.", error))
+}
+
+#[cfg(windows)]
+fn open_home_lock(path: &Path) -> Result<fs::File, HomeError> {
+    use std::os::windows::fs::OpenOptionsExt;
+    let lock = OpenOptions::new()
+        .create(true)
+        .read(true)
+        .write(true)
+        .custom_flags(windows_sys::Win32::Storage::FileSystem::FILE_FLAG_OPEN_REPARSE_POINT)
+        .open(path)
+        .map_err(|error| HomeError::io("The onboarding import could not be locked.", error))?;
+    if lock
+        .metadata()
+        .map_err(|error| HomeError::io("The onboarding import could not be locked.", error))?
+        .file_type()
+        .is_symlink()
+    {
+        return Err(HomeError::invalid("The onboarding import lock is unsafe."));
+    }
+    Ok(lock)
+}
+
 fn validate_home(home: &Path) -> Result<(), HomeError> {
     if !home.is_absolute() || home.parent().is_none() {
         return Err(HomeError::invalid(
