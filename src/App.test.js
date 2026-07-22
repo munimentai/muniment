@@ -617,6 +617,35 @@ describe('voice dictation', () => {
     await waitFor(() => expect(voice).toHaveAttribute('aria-pressed', 'false'))
   })
 
+  it('retries a quick activation after the first start reaches a terminal status', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    let startCalls = 0
+    invoke.mockImplementation(async (command) => {
+      if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
+      if (command === 'chat_history') return []
+      if (command === 'auth_entitlement_snapshot') return snapshot()
+      if (command === 'auth_devices') return []
+      if (command === 'dictation_start') {
+        startCalls += 1
+        return startCalls === 1 ? { state: 'failed', message: 'Could not start' } : { state: 'running' }
+      }
+      if (command === 'dictation_stop') return { state: 'stopped' }
+      throw new Error(`unexpected command: ${command}`)
+    })
+    render(App)
+    const voice = await screen.findByRole('button', { name: 'Voice' })
+
+    await fireEvent.click(voice)
+    await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('Could not start'))
+    await vi.advanceTimersByTimeAsync(150)
+    await fireEvent.click(voice)
+
+    expect(invoke.mock.calls.filter(([command]) => command === 'dictation_start')).toHaveLength(2)
+    await vi.advanceTimersByTimeAsync(300)
+    await waitFor(() => expect(invoke.mock.calls.filter(([command]) => command === 'dictation_stop')).toHaveLength(1))
+    expect(voice).toHaveAttribute('aria-pressed', 'false')
+  })
+
   it('ignores global presses while signed out or a chat is active', async () => {
     let signedIn = false
     let resolveSubmit

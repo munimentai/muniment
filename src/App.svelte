@@ -304,11 +304,15 @@
 
   function applyDictationStatus(status) {
     dictation = status
-    if (status.state === 'modelNotInstalled' || status.state === 'failed') {
+    if (!isDictationActive(status)) {
+      clearPendingVoiceRelease()
       handsFreeDictation = false
+      dictationRequested = false
+      stopDictationPolling()
+    }
+    if (status.state === 'modelNotInstalled' || status.state === 'failed') {
       dictationError = status.message
     } else dictationError = ''
-    if (!isDictationActive(status)) stopDictationPolling()
     if (status.state === 'stopped' && dictationCompletionEpoch !== undefined) {
       if (dictationCancelled) completeDictation(dictationCompletionEpoch)
       else {
@@ -402,6 +406,7 @@
       } else if (isDictationActive(dictation)) pollDictation()
     } catch (error) {
       if (destroyed) return
+      clearPendingVoiceRelease()
       handsFreeDictation = false
       dictation = { state: 'failed' }
       dictationError = typeof error === 'string' ? error : 'Dictation could not be started.'
@@ -417,6 +422,12 @@
     voiceClickTimer = setTimeout(() => { suppressVoiceClick = false })
   }
 
+  function clearPendingVoiceRelease() {
+    clearTimeout(voiceReleaseTimer)
+    voiceReleaseTimer = undefined
+    voiceReleasePending = false
+  }
+
   function activateVoice(source) {
     const activatedAt = Date.now()
     voiceActivationStartedAt = activatedAt
@@ -424,7 +435,7 @@
     if (handsFreeDictation) {
       void stopDictation()
       return true
-    } else if (voiceReleasePending && source === pendingVoiceActivationSource && activatedAt - pendingVoiceActivationAt <= handsFreeActivationDelay) {
+    } else if (voiceReleasePending && (dictationRequested || isDictationActive(dictation)) && source === pendingVoiceActivationSource && activatedAt - pendingVoiceActivationAt <= handsFreeActivationDelay) {
       clearTimeout(voiceReleaseTimer)
       voiceReleaseTimer = undefined
       voiceReleasePending = false
