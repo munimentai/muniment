@@ -85,6 +85,7 @@ beforeAll(async () => {
 })
 
 beforeEach(() => {
+  localStorage.clear()
   homeStatus = { configured: true, homePath: '/Documents/Muniment' }
   requiredModelInvoke = vi.fn().mockResolvedValue({ status: { state: 'installed' }, downloadedBytes: 100, totalBytes: 100, folderSetupAvailable: true, aiFeaturesAvailable: true, retryingInBackground: false })
   chatListener = undefined
@@ -712,7 +713,81 @@ describe('voice dictation', () => {
     const registered = render(App)
     await waitFor(() => expect(globalShortcutHandler).toEqual(expect.any(Function)))
     registered.unmount()
+    await waitFor(() => expect(unregisterGlobalShortcut).toHaveBeenCalledWith('Control+Shift+Space'))
+  })
+
+  it('loads a valid saved voice shortcut and ignores malformed saved data', async () => {
+    localStorage.setItem('muniment.voice-shortcut', 'Alt+Shift+K')
+    const saved = render(App)
+    await waitFor(() => expect(registerGlobalShortcut).toHaveBeenCalledWith('Alt+Shift+K', expect.any(Function)))
+    expect(await screen.findByRole('button', { name: 'Voice' })).toHaveAttribute('aria-keyshortcuts', 'Alt+Shift+K')
+    saved.unmount()
+    expect(unregisterGlobalShortcut).toHaveBeenCalledWith('Alt+Shift+K')
+
+    localStorage.setItem('muniment.voice-shortcut', 'no modifiers or secrets')
+    registerGlobalShortcut.mockClear()
+    render(App)
+    await waitFor(() => expect(registerGlobalShortcut).toHaveBeenCalledWith('Control+Shift+Space', expect.any(Function)))
+  })
+
+  it('falls back to the working default when a saved shortcut is unavailable', async () => {
+    localStorage.setItem('muniment.voice-shortcut', 'Alt+Shift+K')
+    registerGlobalShortcut.mockImplementation(async (shortcut, handler) => {
+      if (shortcut === 'Alt+Shift+K') throw new Error('private collision details')
+      globalShortcutHandler = handler
+    })
+    render(App)
+    await waitFor(() => expect(registerGlobalShortcut).toHaveBeenCalledWith('Control+Shift+Space', expect.any(Function)))
+    expect(await screen.findByRole('button', { name: 'Voice' })).toHaveAttribute('aria-keyshortcuts', 'Control+Shift+Space')
+    expect(screen.queryByText(/private collision/)).not.toBeInTheDocument()
+    expect(screen.queryByText('The system-wide voice shortcut is unavailable. Voice remains available from the button.')).not.toBeInTheDocument()
+  })
+
+  it('captures, applies, and restores a modifier-plus-key voice shortcut', async () => {
+    render(App)
+    const composer = await screen.findByPlaceholderText('Ask anything')
+    await fireEvent.keyDown(composer, { key: 'K', code: 'KeyK', ctrlKey: true, altKey: true })
+    expect(registerGlobalShortcut).toHaveBeenCalledTimes(1)
+    const profile = await screen.findByRole('button', { name: /Alice/i })
+    await fireEvent.click(profile)
+    const dialog = screen.getByRole('dialog', { name: 'Your access' })
+    const capture = within(dialog).getByRole('button', { name: /Change voice shortcut, current Control\+Shift\+Space/ })
+
+    await fireEvent.click(capture)
+    await fireEvent.keyDown(capture, { key: 'k', code: 'KeyK' })
+    expect(within(dialog).getByRole('alert')).toHaveTextContent('Include at least one modifier key.')
+    await fireEvent.keyDown(capture, { key: 'K', code: 'KeyK', ctrlKey: true, altKey: true })
+    expect(capture).toHaveTextContent('Control+Alt+K')
+    await fireEvent.click(within(dialog).getByRole('button', { name: 'Apply' }))
+
+    await waitFor(() => expect(localStorage.getItem('muniment.voice-shortcut')).toBe('Control+Alt+K'))
+    expect(registerGlobalShortcut).toHaveBeenCalledWith('Control+Alt+K', expect.any(Function))
     expect(unregisterGlobalShortcut).toHaveBeenCalledWith('Control+Shift+Space')
+    expect(screen.getByRole('button', { name: 'Voice' })).toHaveAttribute('aria-keyshortcuts', 'Control+Alt+K')
+
+    await fireEvent.click(within(dialog).getByRole('button', { name: 'Restore default' }))
+    await waitFor(() => expect(localStorage.getItem('muniment.voice-shortcut')).toBe('Control+Shift+Space'))
+    expect(within(dialog).getByRole('button', { name: /Change voice shortcut, current Control\+Shift\+Space/ })).toBeInTheDocument()
+  })
+
+  it('keeps the previous voice binding when replacement registration collides', async () => {
+    registerGlobalShortcut.mockImplementation(async (shortcut, handler) => {
+      if (shortcut === 'Control+Alt+K') throw new Error('owned by SecretApp.exe')
+      globalShortcutHandler = handler
+    })
+    render(App)
+    await fireEvent.click(await screen.findByRole('button', { name: /Alice/i }))
+    const dialog = screen.getByRole('dialog', { name: 'Your access' })
+    const capture = within(dialog).getByRole('button', { name: /Change voice shortcut, current Control\+Shift\+Space/ })
+    await fireEvent.click(capture)
+    await fireEvent.keyDown(capture, { key: 'K', code: 'KeyK', ctrlKey: true, altKey: true })
+    await fireEvent.click(within(dialog).getByRole('button', { name: 'Apply' }))
+
+    expect(await within(dialog).findByRole('alert')).toHaveTextContent('That shortcut is unavailable. Your previous shortcut still works.')
+    expect(dialog).not.toHaveTextContent('SecretApp')
+    expect(localStorage.getItem('muniment.voice-shortcut')).toBeNull()
+    expect(unregisterGlobalShortcut).not.toHaveBeenCalledWith('Control+Shift+Space')
+    expect(screen.getByRole('button', { name: 'Voice' })).toHaveAttribute('aria-keyshortcuts', 'Control+Shift+Space')
   })
 
   it('offers all transforms after polish and replaces only the captured segment', async () => {

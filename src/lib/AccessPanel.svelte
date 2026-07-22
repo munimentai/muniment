@@ -2,8 +2,9 @@
   import { onMount } from 'svelte'
 
   import { accessErrorState, accessIdleState, accessLoadingState, accessReadyState, devicesErrorState, devicesIdleState, devicesLoadingState, devicesReadyState } from './auth-state.js'
+  import { shortcutFromKeyboardEvent } from './dictation-state.js'
 
-  let { tauri, subject, onSignOut, escapeBlocked = () => false } = $props()
+  let { tauri, subject, onSignOut, escapeBlocked = () => false, voiceShortcut, voiceShortcutChanging, onVoiceShortcutChange, defaultVoiceShortcut } = $props()
   let access = $state(accessIdleState)
   let devices = $state(devicesIdleState)
   let profileSnapshot = $state(null)
@@ -11,6 +12,9 @@
   let expandedGroups = $state(new Set())
   let profileButton = $state()
   let accessPopover = $state()
+  let capturingShortcut = $state(false)
+  let pendingShortcut = $state('')
+  let shortcutStatus = $state('')
 
   async function loadAccess(open = false) {
     if (open) accessOpen = true
@@ -47,7 +51,34 @@
   function closeAccess() {
     if (!accessOpen) return
     accessOpen = false
+    capturingShortcut = false
+    pendingShortcut = ''
+    shortcutStatus = ''
     profileButton?.focus()
+  }
+
+  function captureShortcut(event) {
+    if (!capturingShortcut) return
+    event.preventDefault()
+    event.stopPropagation()
+    if (event.key === 'Escape') {
+      capturingShortcut = false
+      pendingShortcut = ''
+      return
+    }
+    const shortcut = shortcutFromKeyboardEvent(event)
+    if (shortcut) {
+      pendingShortcut = shortcut
+      shortcutStatus = ''
+    } else if (!['Alt', 'Control', 'Meta', 'Shift'].includes(event.key)) shortcutStatus = 'Include at least one modifier key.'
+  }
+
+  async function applyShortcut(shortcut) {
+    shortcutStatus = ''
+    if (await onVoiceShortcutChange(shortcut)) {
+      capturingShortcut = false
+      pendingShortcut = ''
+    } else shortcutStatus = 'That shortcut is unavailable. Your previous shortcut still works.'
   }
 
   function toggleGroup(index) {
@@ -118,6 +149,18 @@
           </ul>
         {/if}
       </section>
+      <section class="voice-section" aria-labelledby="voice-heading">
+        <h3 id="voice-heading" class="access-label">Voice shortcut</h3>
+        <p class="shortcut-help">Hold this shortcut to dictate from anywhere.</p>
+        <button class="shortcut-capture" aria-label={capturingShortcut ? 'Record voice shortcut' : `Change voice shortcut, current ${voiceShortcut}`} onclick={() => { capturingShortcut = true; pendingShortcut = ''; shortcutStatus = '' }} onkeydown={captureShortcut} disabled={voiceShortcutChanging}>
+          <span>{capturingShortcut ? pendingShortcut || 'Press a shortcut…' : voiceShortcut}</span><small>{capturingShortcut ? 'Modifier + key' : 'Change'}</small>
+        </button>
+        {#if capturingShortcut}
+          <div class="shortcut-actions"><button onclick={() => { capturingShortcut = false; pendingShortcut = ''; shortcutStatus = '' }}>Cancel</button><button onclick={() => applyShortcut(pendingShortcut)} disabled={!pendingShortcut || voiceShortcutChanging}>{voiceShortcutChanging ? 'Applying…' : 'Apply'}</button></div>
+        {/if}
+        <button class="quiet restore-shortcut" onclick={() => applyShortcut(defaultVoiceShortcut)} disabled={voiceShortcut === defaultVoiceShortcut || voiceShortcutChanging}>Restore default</button>
+        {#if shortcutStatus}<p class="shortcut-error" role="alert">{shortcutStatus}</p>{/if}
+      </section>
       <footer>Access is set by your admins.</footer>
       <button class="quiet sign-out" onclick={() => { closeAccess(); onSignOut() }}>Sign out</button>
     </div>
@@ -149,6 +192,13 @@
   .empty-grant, .access-status { margin: 8px 0; color: var(--muted); font: var(--text-12) var(--font-mono); }
   .access-status p { margin: 0 0 6px; }
   .devices-section { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--border); }
+  .voice-section { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--border); }
+  .shortcut-help { margin: 0 0 8px; color: var(--muted); font-size: var(--text-12); }
+  .shortcut-capture { width: 100%; display: flex; align-items: center; justify-content: space-between; padding: 8px 9px; font-family: var(--font-mono); text-align: left; }
+  .shortcut-capture small { color: var(--muted); font: 11px var(--font-human); }
+  .shortcut-actions { display: flex; justify-content: flex-end; gap: 6px; margin-top: 7px; }
+  .restore-shortcut { margin-top: 6px; padding: 3px 0; color: var(--muted); }
+  .shortcut-error { margin: 5px 0 0; color: var(--oxide); font-size: var(--text-12); }
   .device-list { margin: 0; padding: 0; list-style: none; }
   .device-list li { padding: 9px 2px; border-top: 1px solid var(--border); }
   .device-list li:first-child { border-top: 0; }
