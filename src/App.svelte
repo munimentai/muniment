@@ -8,7 +8,7 @@
   import { bootState, errorState, statusState, waitingState } from './lib/auth-state.js'
   import { ringPath } from './lib/mark.js'
   import { applyBufferedChatEvents, applyChatEvent, composerAction, formatByteSize, historyMessages, receiptParts, receiptRows, toolName, toolStatus } from './lib/chat-state.js'
-  import { appendTranscript, dictationTransforms, handsFreeActivationDelay, holdToTalkShortcut, isDictationActive } from './lib/dictation-state.js'
+  import { appendTranscript, ariaKeyShortcut, dictationTransforms, handsFreeActivationDelay, holdToTalkShortcut, isDictationActive, validHoldToTalkShortcut } from './lib/dictation-state.js'
   import { onboardingCancelSettingsState, onboardingConfirmedState, onboardingConfirmingState, onboardingErrorState, onboardingExtractingState, onboardingExtractionErrorState, onboardingExtractionState, onboardingFinalizingState, onboardingImportChoiceState, onboardingLoadingState, onboardingPathState, onboardingPreviewErrorState, onboardingPreviewingState, onboardingPreviewState, onboardingReturnToArchiveReviewState, onboardingSelectionState, onboardingSettingsState, onboardingStatusState, onboardingTriageConfirmedState, onboardingTriageErrorState, onboardingTriageReportState, onboardingTriagingState, requiredModelLoadingState, requiredModelPollActive, requiredModelProgress } from './lib/onboarding-state.js'
   import { scrollFollowState } from './lib/scroll-follow.js'
 
@@ -73,6 +73,10 @@
   let globalVoiceHeld = false
   let globalVoiceRegistered = false
   let globalVoiceError = $state(false)
+  let globalVoiceShortcutValue = $state(holdToTalkShortcut())
+  let globalVoiceChanging = $state(true)
+  let globalVoiceTask = Promise.resolve()
+  const registeredVoiceShortcuts = new Set()
   let composer = $state()
   let onboarding = $state(onboardingLoadingState)
   let requiredModel = $state(requiredModelLoadingState)
@@ -537,6 +541,103 @@
     }
   }
 
+  async function registerInitialVoiceShortcut() {
+    const fallback = holdToTalkShortcut()
+    let saved
+    try { saved = localStorage.getItem('muniment.voice-shortcut') } catch (_) {}
+    const preferred = validHoldToTalkShortcut(saved) ? saved : fallback
+    try {
+      await register(preferred, globalVoiceShortcut)
+      registeredVoiceShortcuts.add(preferred)
+      if (destroyed) return
+      globalVoiceShortcutValue = preferred
+      globalVoiceRegistered = true
+    } catch (_) {
+      if (preferred !== fallback) {
+        try {
+          await register(fallback, globalVoiceShortcut)
+          registeredVoiceShortcuts.add(fallback)
+          if (destroyed) return
+          globalVoiceShortcutValue = fallback
+          globalVoiceRegistered = true
+          return
+        } catch (_) {}
+      }
+      if (!destroyed) globalVoiceError = true
+      return
+    }
+  }
+
+  async function unregisterVoiceShortcut(shortcut) {
+    await unregister(shortcut)
+    registeredVoiceShortcuts.delete(shortcut)
+  }
+
+  function restoreSavedVoiceShortcut(saved) {
+    if (saved === null) localStorage.removeItem('muniment.voice-shortcut')
+    else localStorage.setItem('muniment.voice-shortcut', saved)
+  }
+
+  async function cleanupVoiceShortcuts() {
+    globalVoiceRegistered = false
+    await Promise.allSettled([...registeredVoiceShortcuts].map((shortcut) => unregisterVoiceShortcut(shortcut)))
+  }
+
+  function changeVoiceShortcut(next) {
+    if (globalVoiceChanging || next === globalVoiceShortcutValue || !validHoldToTalkShortcut(next)) return next === globalVoiceShortcutValue
+    globalVoiceChanging = true
+    globalVoiceTask = globalVoiceTask.then(() => applyVoiceShortcutChange(next))
+    return globalVoiceTask
+  }
+
+  async function applyVoiceShortcutChange(next) {
+    globalVoiceError = false
+    const previous = globalVoiceShortcutValue
+    const previousRegistered = globalVoiceRegistered
+    let previousSaved
+    try { previousSaved = localStorage.getItem('muniment.voice-shortcut') } catch (_) {
+      globalVoiceError = true
+      globalVoiceChanging = false
+      return false
+    }
+    let nextRegistered = false
+    let savedChanged = false
+    let rollbackFailed = false
+    try {
+      await register(next, globalVoiceShortcut)
+      registeredVoiceShortcuts.add(next)
+      nextRegistered = true
+      if (destroyed) throw new Error('destroyed')
+      localStorage.setItem('muniment.voice-shortcut', next)
+      savedChanged = true
+      if (destroyed) throw new Error('destroyed')
+      if (previousRegistered) await unregisterVoiceShortcut(previous)
+      if (destroyed) throw new Error('destroyed')
+      globalVoiceShortcutValue = next
+      globalVoiceRegistered = true
+      return true
+    } catch (_) {
+      if (savedChanged) {
+        try { restoreSavedVoiceShortcut(previousSaved) } catch (_) { rollbackFailed = true }
+      }
+      if (nextRegistered) {
+        try { await unregisterVoiceShortcut(next) } catch (_) { rollbackFailed = true }
+      }
+      if (previousRegistered && !registeredVoiceShortcuts.has(previous)) {
+        try {
+          await register(previous, globalVoiceShortcut)
+          registeredVoiceShortcuts.add(previous)
+        } catch (_) { rollbackFailed = true }
+      }
+      globalVoiceShortcutValue = previous
+      globalVoiceRegistered = registeredVoiceShortcuts.has(previous)
+      if (!destroyed) globalVoiceError = true
+      return rollbackFailed ? null : false
+    } finally {
+      globalVoiceChanging = false
+    }
+  }
+
   async function transformDictation(action) {
     const eligible = eligibleDictation
     if (!eligible || dictationBusy() || draft !== eligible.draft) return
@@ -671,11 +772,9 @@
     if (tauri) {
       loadOnboarding()
       run('status')
-      register(holdToTalkShortcut(), globalVoiceShortcut).then(() => {
-        globalVoiceRegistered = true
-        if (destroyed) void unregister(holdToTalkShortcut()).catch(() => {})
-      }).catch(() => {
-        if (!destroyed) globalVoiceError = true
+      globalVoiceTask = registerInitialVoiceShortcut().finally(async () => {
+        globalVoiceChanging = false
+        if (destroyed) await cleanupVoiceShortcuts()
       })
     }
     window.__TAURI__?.event?.listen('chat-event', ({ payload }) => {
@@ -740,7 +839,7 @@
       clearTimeout(voiceReleaseTimer)
       stopDragDrop?.()
       globalVoiceHeld = false
-      if (globalVoiceRegistered) void unregister(holdToTalkShortcut()).catch(() => {})
+      globalVoiceTask = globalVoiceTask.finally(cleanupVoiceShortcuts)
       document.removeEventListener('keydown', shortcuts)
     }
   })
@@ -986,7 +1085,7 @@
           <p class="side-label">Threads</p>
           <button class="thread-row active-thread"><span></span>New thread</button>
           <button class="side-action home-settings" onclick={() => { onboarding = onboardingSettingsState(onboarding) }}>⌂ <span>Home settings</span></button>
-          <AccessPanel {tauri} subject={auth.subject} onSignOut={() => run('sign-out')} escapeBlocked={() => dictationRequested || isDictationActive(dictation)} />
+          <AccessPanel {tauri} subject={auth.subject} onSignOut={() => run('sign-out')} escapeBlocked={() => dictationRequested || isDictationActive(dictation)} voiceShortcut={globalVoiceShortcutValue} voiceShortcutChanging={globalVoiceChanging} onVoiceShortcutChange={changeVoiceShortcut} defaultVoiceShortcut={holdToTalkShortcut()} />
         </aside>
         <div class="thread-shell">
         <div class="thread" aria-live="polite" bind:this={thread} onscroll={handleThreadScroll}>
@@ -1090,7 +1189,7 @@
               <span>{active?.phase === 'resuming' ? 'Reopening the existing secure session…' : active && active.id !== 'pending' ? '⏎ steers this reply · queue as follow-up' : 'Routing is automatic. Every reply carries its receipt.'}</span>
             {/if}
             <div class="composer-actions">
-              <button type="button" class="quiet voice" aria-pressed={isDictationActive(dictation)} disabled={!!active || dictationFinishing || dictationPolishing || dictationTransformPending} onpointerdown={voicePointerDown} onpointerup={voicePointerEnd} onpointercancel={voicePointerEnd} onkeydown={voiceKeyDown} onkeyup={voiceKeyUp} onclick={voiceClick}>Voice</button>
+              <button type="button" class="quiet voice" aria-pressed={isDictationActive(dictation)} aria-keyshortcuts={ariaKeyShortcut(globalVoiceShortcutValue)} disabled={!!active || dictationFinishing || dictationPolishing || dictationTransformPending} onpointerdown={voicePointerDown} onpointerup={voicePointerEnd} onpointercancel={voicePointerEnd} onkeydown={voiceKeyDown} onkeyup={voiceKeyUp} onclick={voiceClick}>Voice</button>
               {#if !active}<button type="button" class="quiet attach" onclick={chooseFiles}>Add files</button>{/if}
               {#if active?.phase === 'resuming'}
                 <button disabled>Resuming…</button>
