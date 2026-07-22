@@ -8,7 +8,7 @@
   import { ringPath } from './lib/mark.js'
   import { applyBufferedChatEvents, applyChatEvent, composerAction, formatByteSize, historyMessages, receiptParts, receiptRows, toolName, toolStatus } from './lib/chat-state.js'
   import { appendTranscript, isDictationActive } from './lib/dictation-state.js'
-  import { onboardingCancelSettingsState, onboardingConfirmedState, onboardingConfirmingState, onboardingErrorState, onboardingExtractingState, onboardingExtractionErrorState, onboardingExtractionState, onboardingFinalizingState, onboardingImportChoiceState, onboardingLoadingState, onboardingPathState, onboardingPreviewErrorState, onboardingPreviewingState, onboardingPreviewState, onboardingSelectionState, onboardingSettingsState, onboardingStatusState } from './lib/onboarding-state.js'
+  import { onboardingCancelSettingsState, onboardingConfirmedState, onboardingConfirmingState, onboardingErrorState, onboardingExtractingState, onboardingExtractionErrorState, onboardingExtractionState, onboardingFinalizingState, onboardingImportChoiceState, onboardingLoadingState, onboardingPathState, onboardingPreviewErrorState, onboardingPreviewingState, onboardingPreviewState, onboardingReturnToArchiveReviewState, onboardingSelectionState, onboardingSettingsState, onboardingStatusState, onboardingTriageConfirmedState, onboardingTriageErrorState, onboardingTriageReportState, onboardingTriagingState } from './lib/onboarding-state.js'
   import { scrollFollowState } from './lib/scroll-follow.js'
 
   const markD = ringPath()
@@ -140,6 +140,24 @@
     } catch (error) {
       if (extractionId === onboardingPreviewSequence) onboarding = onboardingExtractionErrorState(pending, error)
     }
+  }
+
+  async function generateTriageReport() {
+    if (!['pre-triage', 'triage-error'].includes(onboarding.name)) return
+    const triageId = ++onboardingPreviewSequence
+    const pending = onboardingTriagingState(onboarding)
+    onboarding = pending
+    try {
+      const response = await tauri.invoke('onboarding_triage', { entries: pending.extractedEntries })
+      if (triageId === onboardingPreviewSequence) onboarding = onboardingTriageReportState(pending, response)
+    } catch (error) {
+      if (triageId === onboardingPreviewSequence) onboarding = onboardingTriageErrorState(pending, error)
+    }
+  }
+
+  function returnToArchiveReview() {
+    onboardingPreviewSequence += 1
+    onboarding = onboardingReturnToArchiveReviewState(onboarding)
   }
 
   function stopDictationPolling() {
@@ -651,7 +669,7 @@
     {#if onboarding.name !== 'complete'}
       <section class="onboarding" aria-labelledby="onboarding-title">
         <p class="eyebrow">{onboarding.savedHomePath ? 'Home settings' : 'First-run setup'}</p>
-        <h1 id="onboarding-title">{onboarding.name === 'pre-triage' ? 'Ready for local triage' : ['import-choice', 'previewing', 'reviewing', 'extracting', 'finalizing'].includes(onboarding.name) ? 'Review an assistant export' : 'Choose your Muniment Home'}</h1>
+        <h1 id="onboarding-title">{['pre-triage', 'triaging', 'triage-error'].includes(onboarding.name) ? 'Create your local proposal' : ['triage-review', 'triage-confirmed'].includes(onboarding.name) ? 'Review your onboarding proposal' : ['import-choice', 'previewing', 'reviewing', 'extracting', 'finalizing'].includes(onboarding.name) ? 'Review an assistant export' : 'Choose your Muniment Home'}</h1>
         {#if onboarding.name === 'loading'}
           <p class="support" role="status">Finding your Documents folder…</p>
         {:else if ['choosing', 'confirming', 'settings', 'confirming-settings'].includes(onboarding.name)}
@@ -696,8 +714,27 @@
             {#if ['reviewing', 'extracting'].includes(onboarding.name)}<button data-testid="onboarding-import-picker" onclick={chooseImportArchive}>Choose a different ZIP…</button>{:else}<span class="privacy-note">Local preview · no Home writes</span>{/if}
             <div class="onboarding-actions"><button data-testid="onboarding-import-skip" onclick={skipImport} disabled={onboarding.name === 'finalizing'}>{onboarding.name === 'finalizing' ? 'Creating Home…' : 'Continue without importing'}</button>{#if ['reviewing', 'extracting'].includes(onboarding.name)}<button data-testid="onboarding-import-continue" class="primary" onclick={extractImportSelection} disabled={onboarding.name === 'extracting' || onboarding.selectedNames.length === 0}>{onboarding.name === 'extracting' ? 'Reading approved files…' : 'Continue with selected'}</button>{/if}</div>
           </div>
-        {:else if onboarding.name === 'pre-triage'}
-          <p class="support" role="status">{onboarding.extractedEntries.length} approved {onboarding.extractedEntries.length === 1 ? 'file is' : 'files are'} ready in temporary onboarding memory. Nothing has been written to Home or sent to a model.</p>
+        {:else if ['pre-triage', 'triaging', 'triage-error'].includes(onboarding.name)}
+          <p class="support">Generate a local proposal from {onboarding.extractedEntries.length} approved {onboarding.extractedEntries.length === 1 ? 'file' : 'files'}. You will review it before anything can be imported.</p>
+          <ul class="triage-sources" aria-label="Approved sources">{#each onboarding.extractedEntries as entry}<li><strong>{entry.sourceName}</strong><span>{entry.sourceProvenance}</span></li>{/each}</ul>
+          {#if onboarding.name === 'triaging'}<p class="support" role="status">Generating proposal on this device…</p>{/if}
+          {#if onboarding.error}<p class="onboarding-error" role="alert">{onboarding.error}</p>{/if}
+          <div class="onboarding-footer">
+            <button data-testid="onboarding-triage-back" onclick={returnToArchiveReview}>Back to archive review</button>
+            <button data-testid="onboarding-triage-generate" class="primary" onclick={generateTriageReport} disabled={onboarding.name === 'triaging'}>{onboarding.name === 'triaging' ? 'Generating proposal…' : onboarding.name === 'triage-error' ? 'Try generating again' : 'Generate local proposal'}</button>
+          </div>
+        {:else if onboarding.name === 'triage-review'}
+          <p class="support">Review the local AI proposal and the approved sources that informed it. Confirming only records your choice for this onboarding session.</p>
+          <div class="triage-report">
+            <section aria-labelledby="triage-user-type"><h2 id="triage-user-type">User type</h2><p>{onboarding.report.userType}</p></section>
+            <section aria-labelledby="triage-home-layout"><h2 id="triage-home-layout">Proposed Home layout</h2><p>{onboarding.report.proposedHomeLayout}</p></section>
+            <section aria-labelledby="triage-starter-agents"><h2 id="triage-starter-agents">Starter agents</h2><ul>{#each onboarding.report.starterAgents as agent}<li>{agent}</li>{/each}</ul></section>
+          </div>
+          <h2 class="source-heading">Approved sources</h2>
+          <ul class="triage-sources" aria-label="Approved sources">{#each onboarding.extractedEntries as entry}<li><strong>{entry.sourceName}</strong><span>{entry.sourceProvenance}</span></li>{/each}</ul>
+          <div class="onboarding-footer"><button data-testid="onboarding-triage-back" onclick={returnToArchiveReview}>Back to archive review</button><button data-testid="onboarding-triage-confirm" class="primary" onclick={() => { onboarding = onboardingTriageConfirmedState(onboarding) }}>Confirm onboarding proposal</button></div>
+        {:else if onboarding.name === 'triage-confirmed'}
+          <p class="support" role="status">Proposal confirmed for this onboarding session. Nothing has been written to your Muniment Home.</p>
         {:else if onboarding.name === 'load-error'}
           <p class="support">Onboarding could not start.</p><button onclick={loadOnboarding}>Try again</button>
           <p class="onboarding-error" role="alert">{onboarding.error}</p>
@@ -910,6 +947,16 @@
   .manifest pre { max-height: 96px; margin: 8px 0 0; padding: 8px 10px; overflow: auto; border-radius: var(--radius-control); background: var(--faint); color: var(--muted); font: var(--text-12) var(--font-mono); white-space: pre-wrap; overflow-wrap: anywhere; }
   .empty-manifest { margin: 0; padding: 18px 0; border-bottom: 1px solid var(--border); color: var(--muted); font: var(--text-12) var(--font-mono); }
   .onboarding-actions { display: flex; gap: 8px; }
+  .triage-report { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-top: 22px; }
+  .triage-report section { min-width: 0; padding: 14px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); }
+  .triage-report h2, .source-heading { margin: 0 0 8px; font-size: var(--text-13); }
+  .triage-report p, .triage-report ul { margin: 0; padding-left: 18px; line-height: var(--leading-body); white-space: pre-wrap; overflow-wrap: anywhere; }
+  .triage-report p { padding-left: 0; }
+  .source-heading { margin-top: 20px; }
+  .triage-sources { margin: 0; padding: 0; border-top: 1px solid var(--border); list-style: none; }
+  .triage-sources li { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 12px; padding: 8px 0; border-bottom: 1px solid var(--border); font: var(--text-12) var(--font-mono); }
+  .triage-sources strong { overflow-wrap: anywhere; font-weight: 500; }
+  .triage-sources span { color: var(--muted); overflow-wrap: anywhere; }
 
   button {
     font: inherit;
