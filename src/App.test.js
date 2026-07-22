@@ -16,6 +16,7 @@ let dialogResult
 let dragDropListener
 let dragDropUnlisten
 let homeStatus
+let requiredModelInvoke
 
 vi.mock('@tauri-apps/api/webview', () => ({
   getCurrentWebview: () => ({
@@ -54,6 +55,8 @@ beforeAll(async () => {
   window.__TAURI__ = {
     core: { invoke: (command, ...args) => command === 'home_status'
       ? Promise.resolve(homeStatus)
+      : command === 'required_model_acquisition_status'
+        ? requiredModelInvoke(...args)
       : invoke(command, ...args) },
     event: { listen: vi.fn((event, listener) => {
       if (event === 'chat-event') chatListener = listener
@@ -70,6 +73,7 @@ beforeAll(async () => {
 
 beforeEach(() => {
   homeStatus = { configured: true, homePath: '/Documents/Muniment' }
+  requiredModelInvoke = vi.fn().mockResolvedValue({ status: { state: 'installed' }, downloadedBytes: 100, totalBytes: 100, folderSetupAvailable: true, aiFeaturesAvailable: true, retryingInBackground: false })
   chatListener = undefined
   dictationListener = undefined
   eventUnlisten = vi.fn()
@@ -87,9 +91,72 @@ beforeEach(() => {
   })
 })
 
-afterEach(() => cleanup())
+afterEach(() => {
+  cleanup()
+  vi.useRealTimers()
+})
 
 describe('Home onboarding', () => {
+  it('shows active model progress and stops polling when local AI becomes ready', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    homeStatus = { configured: false, homePath: '/Documents/Muniment' }
+    requiredModelInvoke
+      .mockResolvedValueOnce({ status: { state: 'installing' }, downloadedBytes: 25, totalBytes: 100, folderSetupAvailable: true, aiFeaturesAvailable: false, retryingInBackground: true })
+      .mockResolvedValueOnce({ status: { state: 'installed' }, downloadedBytes: 100, totalBytes: 100, folderSetupAvailable: true, aiFeaturesAvailable: true, retryingInBackground: false })
+    render(App)
+    const progress = await screen.findByRole('progressbar', { name: 'Required local AI model download' })
+    expect(progress).toHaveAttribute('aria-valuemin', '0')
+    expect(progress).toHaveAttribute('aria-valuemax', '100')
+    expect(progress).toHaveAttribute('aria-valuenow', '25')
+    expect(screen.getByText('25 B of 100 B')).toBeInTheDocument()
+    await vi.advanceTimersByTimeAsync(1000)
+    expect(await screen.findByText('Local proposal generation is ready.')).toBeInTheDocument()
+    await vi.advanceTimersByTimeAsync(2000)
+    expect(requiredModelInvoke).toHaveBeenCalledTimes(2)
+    vi.useRealTimers()
+  })
+
+  it('shows redacted retry status without blocking fail-open onboarding actions', async () => {
+    homeStatus = { configured: false, homePath: '/Documents/Muniment' }
+    dialogResult = '/Exports/assistant.zip'
+    requiredModelInvoke.mockResolvedValue({ status: { state: 'failed', category: 'network', message: 'redacted' }, downloadedBytes: 40, totalBytes: 100, folderSetupAvailable: true, aiFeaturesAvailable: false, retryingInBackground: true })
+    invoke.mockImplementation(async (command) => {
+      if (command === 'onboarding_import_preview') return { entries: [{ name: 'profile.json', kind: 'json', byteSize: 2, excerpt: '{}', excerptTruncated: false }], totalByteSize: 2 }
+      if (command === 'onboarding_import_extract') return [{ sourceName: 'profile.json', text: '{}', sourceProvenance: 'stable' }]
+      if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
+      if (command === 'chat_history') return []
+      if (command === 'auth_entitlement_snapshot') return snapshot()
+      if (command === 'auth_devices') return []
+      throw new Error(`unexpected command: ${command}`)
+    })
+    render(App)
+    expect(await screen.findByText('Retrying in background')).toBeInTheDocument()
+    expect(screen.queryByText('redacted')).not.toBeInTheDocument()
+    expect(screen.getByTestId('onboarding-picker')).toBeEnabled()
+    expect(screen.getByTestId('onboarding-confirm')).toBeEnabled()
+    await fireEvent.click(screen.getByTestId('onboarding-confirm'))
+    expect(screen.getByTestId('onboarding-import-picker')).toBeEnabled()
+    expect(screen.getByTestId('onboarding-import-skip')).toBeEnabled()
+    await fireEvent.click(screen.getByTestId('onboarding-import-picker'))
+    await fireEvent.click(await screen.findByRole('checkbox'))
+    await fireEvent.click(screen.getByTestId('onboarding-import-continue'))
+    expect(await screen.findByTestId('onboarding-triage-generate')).toBeDisabled()
+    expect(screen.getByText('Available when the local AI model is ready.')).toBeInTheDocument()
+    expect(invoke.mock.calls.map(([command]) => command)).not.toContain('onboarding_triage')
+  })
+
+  it('cleans up active model polling when onboarding is unmounted', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    homeStatus = { configured: false, homePath: '/Documents/Muniment' }
+    requiredModelInvoke.mockResolvedValue({ status: { state: 'installing' }, downloadedBytes: 0, totalBytes: 100, folderSetupAvailable: true, aiFeaturesAvailable: false, retryingInBackground: true })
+    const view = render(App)
+    await screen.findByText('Downloading')
+    view.unmount()
+    await vi.advanceTimersByTimeAsync(2000)
+    expect(requiredModelInvoke).toHaveBeenCalledTimes(1)
+    vi.useRealTimers()
+  })
+
   it('blocks the shell and confirms the displayed Documents default', async () => {
     homeStatus = { configured: false, homePath: '/Documents/Muniment' }
     invoke.mockImplementation(async (command, payload) => {
