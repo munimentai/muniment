@@ -41,7 +41,8 @@ Phases mirror harness-spec §9. Muniment-cloud Phase 1 native auth and the cloud
 - DONE 2026-07-22 — rapid double activation promotes the composer button or global shortcut to hands-free dictation until Escape or the next activation.
 - DONE 2026-07-22 — users can rebind the global voice shortcut with validated modifier-plus-key capture, collision-safe rollback, local persistence, and accessible shortcut exposure.
 - DONE 2026-07-22 — accepted ADR 0015 pins the CPU-only Kokoro runtime, immutable model/voice artifacts, deterministic English text-processing and segmentation boundary, packaging contract, cancellation/privacy rules, and target-hardware validation gates.
-- NEXT — acquire the pinned Kokoro model and voice bundle into a resumable, fully verified pure-core stage. Publication, native runtime/G2P packaging (subject to ADR 0015's redistribution approval gate), synthesis, playback, response controls, and physical target-hardware runs follow as separate slices.
+- DONE 2026-07-22 — the pinned Kokoro model and voice bundle have a bounded resumable acquisition path and conflict-safe publication/current-revision resolution with full re-verification.
+- NEXT — implement ADR 0015's pure-core initial source-text packing pass against an injected phoneme/token-count boundary. The sub-20-token repair pass follows as a separate slice. Native runtime/G2P packaging remains subject to ADR 0015's redistribution approval gate; synthesis, playback, response controls, and physical target-hardware runs follow separately.
 
 ## Companion execution surfaces (§13)
 - DONE E0/E0.5 — governed protocol, pairing, authorization, idempotency, bounded transport, ADR 0011 repository/lane decision, and ADR 0012 per-user runtime-service direction.
