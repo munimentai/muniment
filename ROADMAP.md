@@ -65,8 +65,9 @@ Phases mirror harness-spec §9. Muniment-cloud Phase 1 native auth and the cloud
 ## Desktop QA automation
 - RATIFIED — layered frontend browser coverage plus installed-nightly real-app validation on serialized pve01 desktop-ci VMs; Windows/Linux use WebdriverIO, macOS install/launch smoke plus screendumps/manual owner pass.
 - DONE — ADR 0013; canonical runner contract; Linux `.deb` real-sign-in smoke; Windows MSI real-sign-in smoke; macOS install/launch smoke; stable Linux/Windows JUnit artifacts.
-- DONE 2026-07-22 — the installed Linux `.deb` submits one unique prompt through authenticated production chat and verifies a non-empty assistant turn plus server receipt route under a bounded deadline.
-- NEXT — record installed Windows parity evidence, then add attachment coverage after model file delivery exists. Failure-to-ticket reporting is an independent next slice. Test one pinned finalized installer SHA; no mocked production paths. Signing/notarization and web/API suite remain out of scope.
+- DONE 2026-07-22 — installed Linux `.deb` and Windows MSI each submit one unique prompt through authenticated production chat and verify a non-empty assistant turn plus server receipt route under a bounded deadline; rendered production conversations are excluded from uploaded screenshots.
+- DONE 2026-07-22 — a failed installed-nightly platform job opens or updates one SHA-scoped triage issue containing metadata and links to the private redacted diagnostics.
+- NEXT — add attachment coverage after model file delivery exists. Test one pinned finalized installer SHA; no mocked production paths. Signing/notarization and web/API suite remain out of scope.
 
 ## Stable release and distribution
 - DONE — rolling nightly one pinned SHA across Linux, signed Windows, unsigned macOS; owner-triggered SemVer promotion copies exact green artifacts and labels unsigned macOS.
