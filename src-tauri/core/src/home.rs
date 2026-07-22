@@ -25,7 +25,7 @@ pub const MAX_ONBOARDING_PLAN_BYTES: usize = 16 * 1024 * 1024;
 /// Maximum bytes in a generated filename component.
 pub const MAX_ONBOARDING_FILENAME_BYTES: usize = 120;
 /// Maximum bytes in a generated Home-relative path.
-pub const MAX_ONBOARDING_PATH_BYTES: usize = 124;
+pub const MAX_ONBOARDING_PATH_BYTES: usize = 127;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HomeWrite {
@@ -120,7 +120,7 @@ pub fn plan_onboarding_home_writes(
         push_planned_write(
             &mut writes,
             &mut destinations,
-            Path::new("memory").join(filename),
+            Path::new("memory/imports").join(filename),
             bytes,
         )?;
     }
@@ -426,10 +426,9 @@ fn sync_directory(_path: &Path) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::{
-        markdown_filename, plan_onboarding_home_writes, push_planned_write, replace_file,
-        OnboardingPlanError, MAX_ONBOARDING_FILENAME_BYTES, MAX_ONBOARDING_FILE_BYTES,
-        MAX_ONBOARDING_PATH_BYTES, MAX_ONBOARDING_PLAN_BYTES, MAX_ONBOARDING_PLAN_ENTRIES,
-        MAX_ONBOARDING_SOURCE_NAME_BYTES,
+        plan_onboarding_home_writes, replace_file, OnboardingPlanError,
+        MAX_ONBOARDING_FILENAME_BYTES, MAX_ONBOARDING_FILE_BYTES, MAX_ONBOARDING_PATH_BYTES,
+        MAX_ONBOARDING_PLAN_BYTES, MAX_ONBOARDING_PLAN_ENTRIES, MAX_ONBOARDING_SOURCE_NAME_BYTES,
     };
     use crate::{
         import_preview::{EntryKind, ExtractedEntry},
@@ -437,9 +436,8 @@ mod tests {
     };
     use chrono::NaiveDate;
     use std::{
-        collections::BTreeSet,
         fs,
-        path::{Component, Path, PathBuf},
+        path::{Component, Path},
         time::{SystemTime, UNIX_EPOCH},
     };
 
@@ -478,7 +476,7 @@ mod tests {
         );
         assert_eq!(
             first.writes[3].relative_path,
-            Path::new("memory/notes-md.md")
+            Path::new("memory/imports/notes-md.md")
         );
         assert!(first.writes.iter().all(|write| {
             write.relative_path.is_relative()
@@ -554,40 +552,46 @@ mod tests {
                 .is_ok()
         );
 
+        let filename_limit_agent = "n".repeat(MAX_ONBOARDING_FILENAME_BYTES - 3);
+        let filename_limit_report = OnboardingTriageReport::parse(&format!(
+            "## User type\nResearcher\n\n## Proposed Home layout\nTopics.\n\n## Starter agents\n- {filename_limit_agent}\n- Writing Partner\n"
+        ))
+        .unwrap();
+        let filename_limit_plan =
+            plan_onboarding_home_writes(&filename_limit_report, &[entry("source", "")], date)
+                .unwrap();
         assert_eq!(
-            markdown_filename(&"n".repeat(MAX_ONBOARDING_FILENAME_BYTES - 3), "fallback")
+            filename_limit_plan.writes[1]
+                .relative_path
+                .file_name()
                 .unwrap()
                 .len(),
             MAX_ONBOARDING_FILENAME_BYTES
         );
         assert_eq!(
-            markdown_filename(&"n".repeat(MAX_ONBOARDING_FILENAME_BYTES - 2), "fallback"),
-            Err(OnboardingPlanError::FilenameTooLong)
-        );
-        assert_eq!(
-            plan_onboarding_home_writes(&report(), &[entry(&"n".repeat(121), "")], date),
+            plan_onboarding_home_writes(
+                &OnboardingTriageReport::parse(&format!(
+                    "## User type\nResearcher\n\n## Proposed Home layout\nTopics.\n\n## Starter agents\n- {filename_limit_agent}n\n- Writing Partner\n"
+                ))
+                .unwrap(),
+                &[entry("source", "")],
+                date
+            ),
             Err(OnboardingPlanError::FilenameTooLong)
         );
 
-        let mut writes = Vec::new();
-        let mut destinations = BTreeSet::new();
-        assert!(push_planned_write(
-            &mut writes,
-            &mut destinations,
-            PathBuf::from("p".repeat(MAX_ONBOARDING_PATH_BYTES)),
-            Vec::new(),
-        )
-        .is_ok());
+        let path_limit_source = "p".repeat(MAX_ONBOARDING_PATH_BYTES - "memory/imports/".len() - 3);
+        let path_limit_plan =
+            plan_onboarding_home_writes(&report(), &[entry(&path_limit_source, "")], date).unwrap();
         assert_eq!(
-            plan_onboarding_home_writes(&report(), &[entry(&"n".repeat(116), "")], date),
-            Err(OnboardingPlanError::PathTooLong)
+            path_limit_plan.writes[3].relative_path.as_os_str().len(),
+            MAX_ONBOARDING_PATH_BYTES
         );
         assert_eq!(
-            push_planned_write(
-                &mut writes,
-                &mut destinations,
-                PathBuf::from("p".repeat(MAX_ONBOARDING_PATH_BYTES + 1)),
-                Vec::new(),
+            plan_onboarding_home_writes(
+                &report(),
+                &[entry(&format!("{path_limit_source}p"), "")],
+                date
             ),
             Err(OnboardingPlanError::PathTooLong)
         );
