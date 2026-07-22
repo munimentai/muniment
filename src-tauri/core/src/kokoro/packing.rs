@@ -11,7 +11,7 @@ const MAX_LIMIT: usize = 400;
 /// A failure to produce initial synthesis ranges.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PackingError {
-    /// The normalized source contains no text.
+    /// The normalized source is empty or produces no phoneme tokens.
     NoContent,
     /// No non-empty source prefix can be represented within the 400-token cap.
     UnsupportedInput,
@@ -40,18 +40,29 @@ pub fn pack_initial_ranges(
     if source.is_empty() {
         return Err(PackingError::NoContent);
     }
+    if count_tokens(source) == 0 {
+        return Err(PackingError::NoContent);
+    }
 
     let protected = protected_runs(source);
     let candidates = natural_candidates(source, &protected);
     let whitespace = whitespace_runs(source);
     let mut ranges = Vec::new();
     let mut start = 0;
+    let mut waived_protected = None;
 
     while start < source.len() {
         let end = ranked_end(source, start, PRIMARY_LIMIT, &candidates, &mut count_tokens)
             .or_else(|| ranked_end(source, start, MAX_LIMIT, &candidates, &mut count_tokens))
             .or_else(|| {
-                oversized_protected_end(source, start, &protected, &whitespace, &mut count_tokens)
+                oversized_protected_end(
+                    source,
+                    start,
+                    &protected,
+                    &whitespace,
+                    &mut waived_protected,
+                    &mut count_tokens,
+                )
             })
             .or_else(|| {
                 hard_split_end(
@@ -70,6 +81,12 @@ pub fn pack_initial_ranges(
         }
         ranges.push(start..end);
         start = end;
+        if waived_protected
+            .as_ref()
+            .is_some_and(|run| start >= run.end)
+        {
+            waived_protected = None;
+        }
     }
 
     Ok(ranges)
@@ -121,8 +138,19 @@ fn oversized_protected_end(
     start: usize,
     protected: &[Range<usize>],
     whitespace: &[Range<usize>],
+    waived: &mut Option<Range<usize>>,
     count: &mut impl FnMut(&str) -> usize,
 ) -> Option<usize> {
+    if let Some(run) = waived.as_ref().filter(|run| run.contains(&start)) {
+        return source[start..run.end]
+            .char_indices()
+            .skip(1)
+            .map(|(offset, _)| start + offset)
+            .chain(std::iter::once(run.end))
+            .filter(|&end| count(&source[start..end]) <= MAX_LIMIT)
+            .max();
+    }
+
     let run_start = whitespace
         .iter()
         .find(|run| run.start == start)
@@ -131,6 +159,7 @@ fn oversized_protected_end(
     if count(&source[start..run.end]) <= MAX_LIMIT {
         return None;
     }
+    *waived = Some(run.clone());
 
     source[run.start..run.end]
         .char_indices()
@@ -378,6 +407,14 @@ mod tests {
     }
 
     #[test]
+    fn oversized_protected_url_may_split_into_three_ranges() {
+        let source = format!("https://{}", "u".repeat(892));
+        let ranges = pack_initial_ranges(&source, lengths).unwrap();
+        assert_eq!(ranges, vec![0..400, 400..800, 800..900]);
+        assert_partition(&source, &ranges, lengths);
+    }
+
+    #[test]
     fn numeric_run_cannot_split() {
         let source = "2026-07-22 update";
         let count = |slice: &str| {
@@ -396,8 +433,10 @@ mod tests {
 
     #[test]
     fn exact_token_boundaries_and_scalar_safety() {
-        let zero = pack_initial_ranges("phoneme-empty", |_| 0).unwrap();
-        assert_eq!(zero, vec![0..13]);
+        assert_eq!(
+            pack_initial_ranges("phoneme-empty", |_| 0),
+            Err(PackingError::NoContent)
+        );
         for tokens in [1, 19, 20, 200, 400, 401] {
             let source = "é".repeat(tokens);
             let ranges = pack_initial_ranges(&source, lengths).unwrap();
