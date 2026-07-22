@@ -954,6 +954,46 @@ mod tests {
     }
 
     #[test]
+    fn cancellation_during_retry_backoff_preserves_resumable_bytes() {
+        let root = root();
+        let part = root.join("install/model.part");
+        let cancelled = Rc::new(Cell::new(false));
+        let wait_cancelled = Rc::clone(&cancelled);
+        let wait_part = part.clone();
+        let mut wait = move |_: Duration, _: &dyn KokoroCancellation| {
+            assert_eq!(fs::read(&wait_part).unwrap(), b"a");
+            wait_cancelled.set(true);
+            false
+        };
+        let mut transport = Transport::new([
+            Reply::Response(200, None, b"a".to_vec()),
+            Reply::Response(206, Some((1, 1, 2)), b"b".to_vec()),
+        ]);
+
+        let result = acquire_revision_stage_with_progress(
+            &root,
+            "install",
+            &MANIFEST,
+            KokoroAcquisitionLimits::default(),
+            &mut transport,
+            KokoroAcquisitionRuntime {
+                clock: &|| Duration::ZERO,
+                retry_wait: &mut wait,
+            },
+            &|| cancelled.get(),
+            &mut |_| {},
+        );
+
+        assert_eq!(result, Err(KokoroAcquisitionError::Cancelled));
+        assert_eq!(transport.requests.len(), 1);
+        assert_eq!(fs::read(&part).unwrap(), b"a");
+        assert!(!root.join("install/model").exists());
+        assert!(!root.join("install/voices").exists());
+        assert!(verify_revision_stage(&root.join("install"), &MANIFEST).is_err());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn incomplete_and_hostile_stage_entries_fail_closed() {
         let root = root();
         fs::create_dir(root.join("install")).unwrap();
