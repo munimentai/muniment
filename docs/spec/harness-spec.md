@@ -66,7 +66,7 @@ Two components, one shared harness.
 | Auth | better-auth | MIT | OIDC; SCIM endpoint is custom |
 | ASR | Parakeet-TDT 0.6B v3 INT8 (sherpa-onnx v1.13.2) | CC-BY-4.0 model; Apache-2.0 runtime | Offline, CPU-only desktop; exact artifacts in ADR 0004 |
 | Polish/classifier | Gemma (small quant) | Gemma Terms of Use | Commercial use permitted; review terms before sale |
-| TTS | Kokoro | Apache 2.0 | 82M params, CPU real-time |
+| TTS | Kokoro v1.0 INT8 (ONNX Runtime v1.20.1) | Apache 2.0 model; MIT runtime | Offline, CPU-only English read-aloud; exact foundation and validation gates in ADR 0015 |
 | Router bootstrap | RouteLLM pretrained | Apache 2.0 | mf / sw_ranking routers |
 
 **Do not use as code base layers:** Open WebUI (custom license, branding restrictions), Cherry Studio and Paseo (AGPL). All three are fine as reference reading.
@@ -255,7 +255,7 @@ Zero voice bytes leave the machine. This is a selling point; keep it true.
 
 - **Capture (ASR):** the immutable Parakeet-TDT 0.6B v3 INT8 conversion via sherpa-onnx v1.13.2, pinned in ADR 0004. The desktop core owns 16 kHz mono PCM and in-process CPU inference; recognition is utterance-final/offline (VAD chunking would be simulated streaming), with no CUDA requirement and no ASR network boundary. Latency, memory, and quality remain gated on ADR 0004's target-hardware matrix. Eval alternative: Qwen3-ASR (verify open weights + license + CPU latency). whisper.cpp is fallback only (too slow for live dictation UX).
 - **Polish:** two-stage Eloquent pattern. Stage 1 verbatim live transcript; stage 2 on pause, the resident Gemma strips fillers, applies mid-sentence self-corrections, and offers transforms (key points / formal / short / long). Custom vocabulary per user (org jargon, names) stored locally, optionally seeded from the control plane org dictionary.
-- **Output (TTS):** Kokoro (82M, Apache 2.0), resident, CPU real-time. Read-aloud for responses and artifacts. OS voices as zero-effort fallback only. Qwen3-TTS is off the list under the on-device constraint (too heavy per laptop).
+- **Output (TTS):** Kokoro v1.0 INT8 through ONNX Runtime v1.20.1, pinned in [ADR 0015](../decisions/0015-kokoro-read-aloud-runtime.md). Offline, CPU-only English read-aloud for responses and artifacts; performance and quality remain gated on that ADR's target-hardware matrix. OS voices remain a separately labelled zero-effort fallback only. Qwen3-TTS is off the list under the on-device constraint (too heavy per laptop).
 - Hold-to-talk and toggle modes on a global hotkey; hold-to-talk is the default (clean capture boundaries).
 
 ### 6.8 Browser control (governed runtime capability — owner decision 2026-07-13)
@@ -467,7 +467,7 @@ Phases are dependency layers, not sprints. Within a phase, tracks run in paralle
 | Item | Action |
 |---|---|
 | Qwen3-ASR | Verify open weights, license, CPU latency vs Parakeet |
-| Kokoro | Ear test on target voices; confirm quality bar |
+| Kokoro validation | Run ADR 0015's CPU latency, real-time-factor, peak-memory, cancellation, and English ear-test matrix before claiming the read-aloud UX bar |
 | Gemma terms | Legal read of Gemma Terms of Use before commercial sale |
 | Parakeet validation | Run ADR 0004's CPU latency, real-time-factor, peak-memory, and multilingual quality matrix before claiming the live-dictation UX bar |
 | Classifier taxonomy | Define the label set (task types x difficulty tiers) before Phase 3 |
