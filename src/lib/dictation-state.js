@@ -1,5 +1,12 @@
 export const activeDictationStates = new Set(['starting', 'running'])
 
+export const dictationTransforms = [
+  { label: 'key points', transform: 'key-points', shortcut: 'Alt+1', key: '1' },
+  { label: 'formal', transform: 'formal', shortcut: 'Alt+2', key: '2' },
+  { label: 'short', transform: 'short', shortcut: 'Alt+3', key: '3' },
+  { label: 'long', transform: 'long', shortcut: 'Alt+4', key: '4' },
+]
+
 export function isDictationActive(status) {
   return activeDictationStates.has(status?.state)
 }

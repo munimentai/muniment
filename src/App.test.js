@@ -463,6 +463,156 @@ describe('Home onboarding', () => {
 })
 
 describe('voice dictation', () => {
+  it('offers all transforms after polish and replaces only the captured segment', async () => {
+    invoke.mockImplementation(async (command, payload) => {
+      if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
+      if (command === 'chat_history') return []
+      if (command === 'auth_entitlement_snapshot') return snapshot()
+      if (command === 'auth_devices') return []
+      if (command === 'dictation_start') return { state: 'running' }
+      if (command === 'dictation_stop') return { state: 'stopped' }
+      if (command === 'dictation_polish') return 'Polished capture.'
+      if (command === 'dictation_transform') return payload.transform === 'key-points' ? '• Captured point' : 'Formal capture.'
+      throw new Error(`unexpected command: ${command}`)
+    })
+    render(App)
+    const composer = await screen.findByPlaceholderText('Ask anything')
+    await fireEvent.input(composer, { target: { value: 'Existing draft' } })
+    const voice = screen.getByRole('button', { name: 'Voice' })
+    await fireEvent.click(voice)
+    expect(screen.queryByRole('button', { name: /key points/ })).not.toBeInTheDocument()
+    dictationListener({ payload: { type: 'transcript', text: 'captured words' } })
+    await fireEvent.click(voice)
+
+    const chips = await screen.findByLabelText('Voice transforms')
+    for (const [label, shortcut] of [['key points', 'Alt+1'], ['formal', 'Alt+2'], ['short', 'Alt+3'], ['long', 'Alt+4']]) {
+      expect(within(chips).getByRole('button', { name: new RegExp(label) })).toHaveAttribute('aria-keyshortcuts', shortcut)
+    }
+    const keyPoints = within(chips).getByRole('button', { name: /key points/ })
+    await fireEvent.click(keyPoints)
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('dictation_transform', { transform: 'key-points', transcript: 'Polished capture.' }))
+    await waitFor(() => expect(composer).toHaveValue('Existing draft • Captured point'))
+    expect(composer).toHaveFocus()
+
+    await fireEvent.keyDown(composer, { key: '¡', code: 'Digit2', altKey: true })
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('dictation_transform', { transform: 'formal', transcript: '• Captured point' }))
+    await waitFor(() => expect(composer).toHaveValue('Existing draft Formal capture.'))
+    expect(composer).toHaveFocus()
+  })
+
+  it('expires transform actions after six seconds without letting an old timer hide a newer capture', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    let polishCalls = 0
+    invoke.mockImplementation(async (command) => {
+      if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
+      if (command === 'chat_history') return []
+      if (command === 'auth_entitlement_snapshot') return snapshot()
+      if (command === 'auth_devices') return []
+      if (command === 'dictation_start') return { state: 'running' }
+      if (command === 'dictation_stop') return { state: 'stopped' }
+      if (command === 'dictation_polish') return `Polished capture ${++polishCalls}`
+      throw new Error(`unexpected command: ${command}`)
+    })
+    render(App)
+    const composer = await screen.findByPlaceholderText('Ask anything')
+    const voice = screen.getByRole('button', { name: 'Voice' })
+
+    await fireEvent.click(voice)
+    dictationListener({ payload: { type: 'transcript', text: 'first' } })
+    await fireEvent.click(voice)
+    expect(await screen.findByLabelText('Voice transforms')).toBeInTheDocument()
+
+    await vi.advanceTimersByTimeAsync(3000)
+    await fireEvent.input(composer, { target: { value: 'Edited between captures' } })
+    await fireEvent.click(voice)
+    dictationListener({ payload: { type: 'transcript', text: 'second' } })
+    await fireEvent.click(voice)
+    expect(await screen.findByLabelText('Voice transforms')).toBeInTheDocument()
+
+    await vi.advanceTimersByTimeAsync(3000)
+    expect(screen.getByLabelText('Voice transforms')).toBeInTheDocument()
+    await vi.advanceTimersByTimeAsync(2999)
+    expect(screen.getByLabelText('Voice transforms')).toBeInTheDocument()
+    await vi.advanceTimersByTimeAsync(1)
+    expect(screen.queryByLabelText('Voice transforms')).not.toBeInTheDocument()
+  })
+
+  it('blocks duplicate actions and rejects a transform result after editing', async () => {
+    let resolveTransform
+    invoke.mockImplementation(async (command) => {
+      if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
+      if (command === 'chat_history') return []
+      if (command === 'auth_entitlement_snapshot') return snapshot()
+      if (command === 'auth_devices') return []
+      if (command === 'dictation_start') return { state: 'running' }
+      if (command === 'dictation_stop') return { state: 'stopped' }
+      if (command === 'dictation_polish') return 'Editable capture'
+      if (command === 'dictation_transform') return new Promise((resolve) => { resolveTransform = resolve })
+      throw new Error(`unexpected command: ${command}`)
+    })
+    render(App)
+    const composer = await screen.findByPlaceholderText('Ask anything')
+    const voice = screen.getByRole('button', { name: 'Voice' })
+    await fireEvent.click(voice)
+    dictationListener({ payload: { type: 'transcript', text: 'capture' } })
+    await fireEvent.click(voice)
+    const formal = await screen.findByRole('button', { name: /formal/ })
+    await fireEvent.click(formal)
+
+    expect(formal).toBeDisabled()
+    expect(voice).toBeDisabled()
+    expect(screen.getByRole('button', { name: 'Send' })).toBeDisabled()
+    await fireEvent.click(formal)
+    await fireEvent.keyDown(composer, { key: '2', altKey: true })
+    expect(invoke.mock.calls.filter(([command]) => command === 'dictation_transform')).toHaveLength(1)
+    await fireEvent.input(composer, { target: { value: 'My newer edit' } })
+    expect(screen.queryByLabelText('Voice transforms')).not.toBeInTheDocument()
+    resolveTransform('Late replacement')
+    await Promise.resolve()
+    await waitFor(() => expect(screen.queryByText('Transforming on this device…')).not.toBeInTheDocument())
+    expect(composer).toHaveValue('My newer edit')
+    expect(composer).toHaveFocus()
+  })
+
+  it('keeps text and reports a redacted transform failure, then cancels late work with Escape', async () => {
+    let transformCalls = 0
+    let resolveLate
+    invoke.mockImplementation(async (command) => {
+      if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
+      if (command === 'chat_history') return []
+      if (command === 'auth_entitlement_snapshot') return snapshot()
+      if (command === 'auth_devices') return []
+      if (command === 'dictation_start') return { state: 'running' }
+      if (command === 'dictation_stop') return { state: 'stopped' }
+      if (command === 'dictation_polish') return 'Keep polished text'
+      if (command === 'dictation_transform') {
+        transformCalls += 1
+        if (transformCalls === 1) throw { category: 'requestFailed', message: 'sensitive backend detail' }
+        return new Promise((resolve) => { resolveLate = resolve })
+      }
+      throw new Error(`unexpected command: ${command}`)
+    })
+    render(App)
+    const composer = await screen.findByPlaceholderText('Ask anything')
+    const voice = screen.getByRole('button', { name: 'Voice' })
+    await fireEvent.click(voice)
+    dictationListener({ payload: { type: 'transcript', text: 'keep words' } })
+    await fireEvent.click(voice)
+    await fireEvent.click(await screen.findByRole('button', { name: /short/ }))
+    expect(await screen.findByRole('alert')).toHaveTextContent('That voice transform is unavailable. Your text is unchanged; try again.')
+    expect(screen.getByRole('alert')).not.toHaveTextContent('sensitive backend detail')
+    expect(composer).toHaveValue('Keep polished text')
+
+    await fireEvent.click(screen.getByRole('button', { name: /long/ }))
+    await fireEvent.keyDown(document, { key: 'Escape' })
+    expect(composer).toHaveValue('Keep polished text')
+    expect(screen.queryByLabelText('Voice transforms')).not.toBeInTheDocument()
+    expect(composer).toHaveFocus()
+    resolveLate('Late after Escape')
+    await Promise.resolve()
+    expect(composer).toHaveValue('Keep polished text')
+  })
+
   it('starts on primary pointer down and stops on release while preserving transcript', async () => {
     let resolveStop
     invoke.mockImplementation(async (command) => {
