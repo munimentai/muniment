@@ -39,7 +39,8 @@ Phases mirror harness-spec §9. Muniment-cloud Phase 1 native auth and the cloud
 - DONE 2026-07-22 — the desktop dictation-polish command, composer integration, and four post-dictation transforms against the activated resident server.
 - DONE 2026-07-22 — fixed system-wide hold-to-talk shortcut foundation with press/release capture, safe busy-state handling, redacted registration failure, and teardown cleanup.
 - DONE 2026-07-22 — rapid double activation promotes the composer button or global shortcut to hands-free dictation until Escape or the next activation.
-- NEXT — user-rebindable global voice shortcut. Kokoro read-aloud and physical target-hardware runs (which require the approved external corpus and representative machines) follow as separate slices.
+- DONE 2026-07-22 — users can rebind the global voice shortcut with validated modifier-plus-key capture, collision-safe rollback, local persistence, and accessible shortcut exposure.
+- NEXT — pin the Kokoro read-aloud runtime, immutable model/voice artifacts, text-processing boundary, packaging contract, and validation gates in an ADR. Acquisition, native playback, response context-menu/titlebar controls, and physical target-hardware runs follow as separate slices.
 
 ## Companion execution surfaces (§13)
 - DONE E0/E0.5 — governed protocol, pairing, authorization, idempotency, bounded transport, ADR 0011 repository/lane decision, and ADR 0012 per-user runtime-service direction.
