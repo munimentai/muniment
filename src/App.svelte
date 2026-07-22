@@ -8,7 +8,7 @@
   import { bootState, errorState, statusState, waitingState } from './lib/auth-state.js'
   import { ringPath } from './lib/mark.js'
   import { applyBufferedChatEvents, applyChatEvent, composerAction, formatByteSize, historyMessages, receiptParts, receiptRows, toolName, toolStatus } from './lib/chat-state.js'
-  import { appendTranscript, dictationTransforms, holdToTalkShortcut, isDictationActive } from './lib/dictation-state.js'
+  import { appendTranscript, dictationTransforms, handsFreeActivationDelay, holdToTalkShortcut, isDictationActive } from './lib/dictation-state.js'
   import { onboardingCancelSettingsState, onboardingConfirmedState, onboardingConfirmingState, onboardingErrorState, onboardingExtractingState, onboardingExtractionErrorState, onboardingExtractionState, onboardingFinalizingState, onboardingImportChoiceState, onboardingLoadingState, onboardingPathState, onboardingPreviewErrorState, onboardingPreviewingState, onboardingPreviewState, onboardingReturnToArchiveReviewState, onboardingSelectionState, onboardingSettingsState, onboardingStatusState, onboardingTriageConfirmedState, onboardingTriageErrorState, onboardingTriageReportState, onboardingTriagingState, requiredModelLoadingState, requiredModelPollActive, requiredModelProgress } from './lib/onboarding-state.js'
   import { scrollFollowState } from './lib/scroll-follow.js'
 
@@ -59,6 +59,11 @@
   let eligibleDictationTimerEpoch = 0
   let suppressVoiceClick = false
   let voiceClickTimer
+  let voiceReleaseTimer
+  let voiceReleasePending = false
+  let handsFreeDictation = false
+  let ignoreVoiceRelease = false
+  let ignoreGlobalVoiceRelease = false
   let voicePointerId
   let voiceKey
   let globalVoiceHeld = false
@@ -296,6 +301,7 @@
   function applyDictationStatus(status) {
     dictation = status
     if (status.state === 'modelNotInstalled' || status.state === 'failed') {
+      handsFreeDictation = false
       dictationError = status.message
     } else dictationError = ''
     if (!isDictationActive(status)) stopDictationPolling()
@@ -326,6 +332,10 @@
   }
 
   async function stopDictation(cancelled = false) {
+    clearTimeout(voiceReleaseTimer)
+    voiceReleaseTimer = undefined
+    voiceReleasePending = false
+    handsFreeDictation = false
     dictationRequested = false
     invalidateDictationPolls()
     if (cancelled) {
@@ -388,6 +398,7 @@
       } else if (isDictationActive(dictation)) pollDictation()
     } catch (error) {
       if (destroyed) return
+      handsFreeDictation = false
       dictation = { state: 'failed' }
       dictationError = typeof error === 'string' ? error : 'Dictation could not be started.'
       dictationRequested = false
@@ -402,13 +413,41 @@
     voiceClickTimer = setTimeout(() => { suppressVoiceClick = false })
   }
 
+  function activateVoice() {
+    if (handsFreeDictation) {
+      void stopDictation()
+      return true
+    } else if (voiceReleasePending) {
+      clearTimeout(voiceReleaseTimer)
+      voiceReleaseTimer = undefined
+      voiceReleasePending = false
+      handsFreeDictation = true
+    } else void startDictation()
+    return false
+  }
+
+  function releaseVoice(cancelled = false) {
+    if (cancelled) {
+      void stopDictation(true)
+      return
+    }
+    if (handsFreeDictation) return
+    voiceReleasePending = true
+    clearTimeout(voiceReleaseTimer)
+    voiceReleaseTimer = setTimeout(() => {
+      voiceReleaseTimer = undefined
+      voiceReleasePending = false
+      void stopDictation()
+    }, handsFreeActivationDelay)
+  }
+
   function voicePointerDown(event) {
     if (event.button !== 0 || voicePointerId !== undefined || voiceKey !== undefined) return
     event.preventDefault()
     expectVoiceClick()
     voicePointerId = event.pointerId
     event.currentTarget.setPointerCapture?.(event.pointerId)
-    startDictation()
+    ignoreVoiceRelease = activateVoice()
   }
 
   function voicePointerEnd(event) {
@@ -416,7 +455,11 @@
     event.preventDefault()
     expectVoiceClick()
     voicePointerId = undefined
-    stopDictation(event.type === 'pointercancel')
+    if (ignoreVoiceRelease) {
+      ignoreVoiceRelease = false
+      return
+    }
+    releaseVoice(event.type === 'pointercancel')
   }
 
   function voiceKeyDown(event) {
@@ -426,7 +469,7 @@
     if (!event.repeat) {
       if (voiceKey !== undefined || voicePointerId !== undefined) return
       voiceKey = event.key
-      startDictation()
+      ignoreVoiceRelease = activateVoice()
     }
   }
 
@@ -435,7 +478,11 @@
     event.preventDefault()
     expectVoiceClick()
     voiceKey = undefined
-    stopDictation()
+    if (ignoreVoiceRelease) {
+      ignoreVoiceRelease = false
+      return
+    }
+    releaseVoice()
   }
 
   function voiceClick() {
@@ -449,12 +496,16 @@
 
   function globalVoiceShortcut({ state }) {
     if (state === 'Pressed') {
-      if (globalVoiceHeld || auth.name !== 'signed-in' || active || dictationBusy()) return
+      if (globalVoiceHeld || auth.name !== 'signed-in' || active || (dictationBusy() && !voiceReleasePending && !handsFreeDictation)) return
       globalVoiceHeld = true
-      void startDictation()
+      ignoreGlobalVoiceRelease = activateVoice()
     } else if (state === 'Released' && globalVoiceHeld) {
       globalVoiceHeld = false
-      void stopDictation()
+      if (ignoreGlobalVoiceRelease) {
+        ignoreGlobalVoiceRelease = false
+        return
+      }
+      releaseVoice()
     }
   }
 
@@ -658,6 +709,7 @@
       stopDictationPolling()
       clearTimeout(dictationCompletionTimer)
       clearTimeout(voiceClickTimer)
+      clearTimeout(voiceReleaseTimer)
       stopDragDrop?.()
       globalVoiceHeld = false
       if (globalVoiceRegistered) void unregister(holdToTalkShortcut()).catch(() => {})
