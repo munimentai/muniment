@@ -1,3 +1,4 @@
+use cap_std::{ambient_authority, fs::Dir};
 use fs2::FileExt;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -621,7 +622,14 @@ pub fn persist_onboarding_home_write_plan(
     plan: &OnboardingHomeWritePlan,
 ) -> Result<(), HomeError> {
     validate_home(home)?;
-    require_directory(home)?;
+    let home_metadata = fs::symlink_metadata(home).map_err(|error| {
+        HomeError::io("The onboarding import Home could not be inspected.", error)
+    })?;
+    if home_metadata.file_type().is_symlink() || !home_metadata.is_dir() {
+        return Err(HomeError::invalid(
+            "The onboarding import Home is not a directory.",
+        ));
+    }
     if plan.writes.is_empty() || plan.writes.len() > ONBOARDING_IMPORT_MAX_ENTRIES + 4 {
         return Err(HomeError::invalid("The onboarding import plan is invalid."));
     }
@@ -650,14 +658,39 @@ pub fn persist_onboarding_home_write_plan(
         ));
     }
 
-    let lock = open_home_lock(&home.join(".onboarding-import.lock"))?;
+    let home = Dir::open_ambient_dir(home, ambient_authority())
+        .map_err(|error| HomeError::io("The onboarding import Home could not be opened.", error))?;
+    if !same_home_file(
+        &home_metadata,
+        &home.metadata(".").map_err(|error| {
+            HomeError::io("The onboarding import Home could not be inspected.", error)
+        })?,
+    ) {
+        return Err(HomeError::invalid(
+            "The onboarding import Home changed while it was opened.",
+        ));
+    }
+    let mut lock_options = cap_std::fs::OpenOptions::new();
+    lock_options.create(true).read(true).write(true);
+    let lock = home
+        .open_with(".onboarding-import.lock", &lock_options)
+        .map_err(|error| HomeError::io("The onboarding import could not be locked.", error))?;
+    let lock = lock.into_std();
     lock.lock_exclusive()
         .map_err(|error| HomeError::io("The onboarding import could not be locked.", error))?;
-    persist_onboarding_plan_locked(home, plan)
+    persist_onboarding_plan_locked(&home, plan)
 }
 
 fn validate_onboarding_destination(relative: &str) -> Result<(), HomeError> {
     let path = Path::new(relative);
+    let canonical = path
+        .components()
+        .filter_map(|component| match component {
+            Component::Normal(value) => value.to_str(),
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join("/");
     if relative.is_empty()
         || relative.contains('\\')
         || path.is_absolute()
@@ -669,7 +702,7 @@ fn validate_onboarding_destination(relative: &str) -> Result<(), HomeError> {
             .iter()
             .any(|directory| path.starts_with(directory))
         || path.components().count() < 2
-        || path.to_string_lossy() != relative
+        || canonical != relative
     {
         return Err(HomeError::invalid(
             "An onboarding import destination is unsafe.",
@@ -678,48 +711,52 @@ fn validate_onboarding_destination(relative: &str) -> Result<(), HomeError> {
     Ok(())
 }
 
-fn require_directory(path: &Path) -> Result<(), HomeError> {
-    match fs::symlink_metadata(path) {
-        Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_dir() => Err(
-            HomeError::invalid("An onboarding import path is not a directory."),
-        ),
-        Ok(_) => Ok(()),
-        Err(error) => Err(HomeError::io(
-            "An onboarding import path could not be inspected.",
-            error,
-        )),
-    }
-}
-
 fn persist_onboarding_plan_locked(
-    home: &Path,
+    home: &Dir,
     plan: &OnboardingHomeWritePlan,
 ) -> Result<(), HomeError> {
-    let mut created_directories = Vec::new();
-    let mut temporary_files = Vec::new();
-    let mut published_files = Vec::new();
+    struct Staged {
+        directory: Dir,
+        destination: std::ffi::OsString,
+        temporary: std::ffi::OsString,
+        file: cap_std::fs::File,
+        published: bool,
+    }
+
+    let mut created_directories: Vec<(Dir, std::ffi::OsString)> = Vec::new();
+    let mut staged: Vec<Staged> = Vec::new();
     let result = (|| -> io::Result<()> {
         for write in &plan.writes {
-            let destination = home.join(&write.relative_path);
-            let mut current = home.to_path_buf();
+            let mut current = home.try_clone()?;
             for component in write.relative_path().parent().unwrap().components() {
-                current.push(component.as_os_str());
-                match fs::symlink_metadata(&current) {
+                let name = component.as_os_str();
+                match current.symlink_metadata(name) {
                     Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_dir() => {
                         return Err(io::Error::new(
                             io::ErrorKind::InvalidInput,
                             "unsafe import ancestor",
                         ));
                     }
-                    Ok(_) => {}
+                    Ok(metadata) => {
+                        let next = current.open_dir(name)?;
+                        if !same_file(&metadata, &next.metadata(".")?) {
+                            return Err(io::Error::new(
+                                io::ErrorKind::InvalidInput,
+                                "import ancestor changed",
+                            ));
+                        }
+                        current = next;
+                    }
                     Err(error) if error.kind() == io::ErrorKind::NotFound => {
-                        fs::create_dir(&current)?;
-                        created_directories.push(current.clone());
+                        current.create_dir(name)?;
+                        created_directories.push((current.try_clone()?, name.to_os_string()));
+                        current = current.open_dir(name)?;
                     }
                     Err(error) => return Err(error),
                 }
             }
-            match fs::symlink_metadata(&destination) {
+            let destination = write.relative_path().file_name().unwrap().to_os_string();
+            match current.symlink_metadata(&destination) {
                 Err(error) if error.kind() == io::ErrorKind::NotFound => {}
                 Ok(_) => {
                     return Err(io::Error::new(
@@ -729,93 +766,118 @@ fn persist_onboarding_plan_locked(
                 }
                 Err(error) => return Err(error),
             }
-        }
-
-        for write in &plan.writes {
-            let destination = home.join(&write.relative_path);
-            let temporary = destination.with_file_name(format!(
+            let temporary = std::ffi::OsString::from(format!(
                 ".{}.{}.tmp",
-                destination.file_name().unwrap().to_string_lossy(),
+                destination.to_string_lossy(),
                 uuid::Uuid::new_v4()
             ));
-            let mut file = OpenOptions::new()
-                .create_new(true)
-                .write(true)
-                .open(&temporary)?;
-            temporary_files.push(temporary);
+            let mut options = cap_std::fs::OpenOptions::new();
+            options.create_new(true).write(true);
+            let mut file = current.open_with(&temporary, &options)?;
             io::Write::write_all(&mut file, write.bytes())?;
             file.sync_all()?;
+            staged.push(Staged {
+                directory: current,
+                destination,
+                temporary,
+                file,
+                published: false,
+            });
         }
 
-        for (write, temporary) in plan.writes.iter().zip(&temporary_files) {
-            let destination = home.join(&write.relative_path);
-            fs::hard_link(temporary, &destination)?;
-            published_files.push(destination);
+        for entry in &mut staged {
+            entry
+                .directory
+                .hard_link(&entry.temporary, &entry.directory, &entry.destination)?;
+            entry.published = true;
         }
-        for temporary in &temporary_files {
-            fs::remove_file(temporary)?;
+        for entry in &staged {
+            entry.directory.remove_file(&entry.temporary)?;
         }
-        for directory in plan
-            .writes
-            .iter()
-            .filter_map(|write| {
-                home.join(&write.relative_path)
-                    .parent()
-                    .map(Path::to_path_buf)
-            })
-            .collect::<BTreeSet<_>>()
-        {
-            sync_directory(&directory)?;
+        for entry in &staged {
+            entry.directory.open(".")?.sync_all()?;
         }
-        sync_directory(home)
+        home.open(".")?.sync_all()
     })();
 
     if result.is_err() {
-        for path in published_files.iter().rev() {
-            let _ = fs::remove_file(path);
+        let mut cleanup_error = None;
+        for entry in staged.iter().rev() {
+            if entry.published {
+                match entry.directory.symlink_metadata(&entry.destination) {
+                    Ok(metadata) => match entry.file.metadata() {
+                        Ok(created_metadata) if same_file(&metadata, &created_metadata) => {
+                            if let Err(error) = entry.directory.remove_file(&entry.destination) {
+                                cleanup_error.get_or_insert(error);
+                            }
+                        }
+                        Ok(_) => {}
+                        Err(error) => {
+                            cleanup_error.get_or_insert(error);
+                        }
+                    },
+                    Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+                    Err(error) => {
+                        cleanup_error.get_or_insert(error);
+                    }
+                }
+            }
+            if let Err(error) = entry.directory.remove_file(&entry.temporary) {
+                if error.kind() != io::ErrorKind::NotFound {
+                    cleanup_error.get_or_insert(error);
+                }
+            }
         }
-        for path in temporary_files.iter().rev() {
-            let _ = fs::remove_file(path);
+        for (parent, name) in created_directories.iter().rev() {
+            if let Err(error) = parent.remove_dir(name) {
+                if error.kind() != io::ErrorKind::NotFound
+                    && error.kind() != io::ErrorKind::DirectoryNotEmpty
+                {
+                    cleanup_error.get_or_insert(error);
+                }
+            }
         }
-        for path in created_directories.iter().rev() {
-            let _ = fs::remove_dir(path);
+        home.open(".")
+            .and_then(|directory| directory.sync_all())
+            .err()
+            .map(|error| cleanup_error.get_or_insert(error));
+        if let Some(error) = cleanup_error {
+            return Err(HomeError::io(
+                "The onboarding import rollback failed.",
+                error,
+            ));
         }
-        let _ = sync_directory(home);
     }
     result.map_err(|error| HomeError::io("The onboarding import could not be saved.", error))
 }
 
 #[cfg(unix)]
-fn open_home_lock(path: &Path) -> Result<fs::File, HomeError> {
-    use std::os::unix::fs::OpenOptionsExt;
-    OpenOptions::new()
-        .create(true)
-        .read(true)
-        .write(true)
-        .custom_flags(libc::O_NOFOLLOW)
-        .open(path)
-        .map_err(|error| HomeError::io("The onboarding import could not be locked.", error))
+fn same_file(left: &cap_std::fs::Metadata, right: &cap_std::fs::Metadata) -> bool {
+    use cap_std::fs::MetadataExt;
+    left.dev() == right.dev() && left.ino() == right.ino()
+}
+
+#[cfg(unix)]
+fn same_home_file(left: &fs::Metadata, right: &cap_std::fs::Metadata) -> bool {
+    use cap_std::fs::MetadataExt as CapMetadataExt;
+    use std::os::unix::fs::MetadataExt as StdMetadataExt;
+    StdMetadataExt::dev(left) == CapMetadataExt::dev(right)
+        && StdMetadataExt::ino(left) == CapMetadataExt::ino(right)
 }
 
 #[cfg(windows)]
-fn open_home_lock(path: &Path) -> Result<fs::File, HomeError> {
-    use std::os::windows::fs::OpenOptionsExt;
-    let lock = OpenOptions::new()
-        .create(true)
-        .read(true)
-        .write(true)
-        .custom_flags(windows_sys::Win32::Storage::FileSystem::FILE_FLAG_OPEN_REPARSE_POINT)
-        .open(path)
-        .map_err(|error| HomeError::io("The onboarding import could not be locked.", error))?;
-    if lock
-        .metadata()
-        .map_err(|error| HomeError::io("The onboarding import could not be locked.", error))?
-        .file_type()
-        .is_symlink()
-    {
-        return Err(HomeError::invalid("The onboarding import lock is unsafe."));
-    }
-    Ok(lock)
+fn same_file(left: &cap_std::fs::Metadata, right: &cap_std::fs::Metadata) -> bool {
+    use cap_std::fs::MetadataExt;
+    left.volume_serial_number() == right.volume_serial_number()
+        && left.file_index() == right.file_index()
+}
+
+#[cfg(windows)]
+fn same_home_file(left: &fs::Metadata, right: &cap_std::fs::Metadata) -> bool {
+    use cap_std::fs::MetadataExt as CapMetadataExt;
+    use std::os::windows::fs::MetadataExt as StdMetadataExt;
+    StdMetadataExt::volume_serial_number(left) == CapMetadataExt::volume_serial_number(right)
+        && StdMetadataExt::file_index(left) == CapMetadataExt::file_index(right)
 }
 
 fn validate_home(home: &Path) -> Result<(), HomeError> {

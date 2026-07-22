@@ -17,6 +17,7 @@ tls = ["ureq/tls", "ureq/native-certs", "ureq/proxy-from-env"]
 
 [dependencies]
 base64 = "0.22"
+cap-std = "4"
 ed25519-dalek = "2"
 getrandom = "0.3"
 hmac = "0.12"

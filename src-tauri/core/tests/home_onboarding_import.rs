@@ -300,6 +300,35 @@ fn rejects_unsafe_destinations_and_symlink_ancestors() {
 }
 
 #[test]
+fn rejects_non_normalized_destination_aliases() {
+    let home = temp_home("aliases");
+    for relative_path in ["memory//x.md", "memory/./x.md"] {
+        let plan = OnboardingHomeWritePlan {
+            writes: vec![HomeWrite {
+                relative_path: relative_path.into(),
+                contents: "bad".into(),
+            }],
+        };
+        assert!(persist_onboarding_home_write_plan(&home, &plan).is_err());
+    }
+    let plan = OnboardingHomeWritePlan {
+        writes: vec![
+            HomeWrite {
+                relative_path: "memory/x.md".into(),
+                contents: "one".into(),
+            },
+            HomeWrite {
+                relative_path: "memory/./x.md".into(),
+                contents: "two".into(),
+            },
+        ],
+    };
+    assert!(persist_onboarding_home_write_plan(&home, &plan).is_err());
+    assert!(!home.join("memory").exists());
+    fs::remove_dir_all(home).unwrap();
+}
+
+#[test]
 fn mid_batch_publication_failure_rolls_back_files_and_temporaries() {
     let home = temp_home("mid-batch");
     let mut writes = (0..=ONBOARDING_IMPORT_MAX_ENTRIES)
@@ -319,8 +348,8 @@ fn mid_batch_publication_failure_rolls_back_files_and_temporaries() {
             if walk(&watched_home)
                 .iter()
                 .any(|path| path.to_string_lossy().ends_with(".tmp"))
+                && fs::create_dir(watched_home.join("agents/final.md")).is_ok()
             {
-                fs::create_dir(watched_home.join("agents/final.md")).unwrap();
                 return true;
             }
             std::thread::yield_now();
@@ -347,9 +376,15 @@ fn walk(root: &std::path::Path) -> Vec<std::path::PathBuf> {
     let mut paths = Vec::new();
     let mut pending = vec![root.to_path_buf()];
     while let Some(directory) = pending.pop() {
-        for entry in fs::read_dir(directory).unwrap() {
-            let path = entry.unwrap().path();
-            if fs::symlink_metadata(&path).unwrap().is_dir() {
+        let Ok(entries) = fs::read_dir(directory) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if fs::symlink_metadata(&path)
+                .map(|metadata| metadata.is_dir())
+                .unwrap_or(false)
+            {
                 pending.push(path.clone());
             }
             paths.push(path);
