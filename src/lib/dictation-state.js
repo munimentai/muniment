@@ -1,4 +1,5 @@
 export const activeDictationStates = new Set(['starting', 'running'])
+export const handsFreeActivationDelay = 300
 
 export const dictationTransforms = [
   { label: 'key points', transform: 'key-points', shortcut: 'Alt+1', key: '1' },

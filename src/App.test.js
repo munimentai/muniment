@@ -58,6 +58,11 @@ const device = (device_id, overrides = {}) => ({
   ...overrides,
 })
 
+async function stopClickCapture(voice) {
+  await fireEvent.click(voice)
+  await fireEvent.click(voice)
+}
+
 beforeAll(async () => {
   HTMLElement.prototype.scrollTo = vi.fn()
   window.__TAURI__ = {
@@ -475,6 +480,7 @@ describe('Home onboarding', () => {
 
 describe('voice dictation', () => {
   it('routes one global press and matching release through the existing dictation lifecycle', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
     invoke.mockImplementation(async (command) => {
       if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
       if (command === 'chat_history') return []
@@ -494,8 +500,150 @@ describe('voice dictation', () => {
     await waitFor(() => expect(invoke.mock.calls.filter(([command]) => command === 'dictation_start')).toHaveLength(1))
     globalShortcutHandler({ state: 'Released' })
     globalShortcutHandler({ state: 'Released' })
+    await vi.advanceTimersByTimeAsync(300)
 
     await waitFor(() => expect(invoke.mock.calls.filter(([command]) => command === 'dictation_stop')).toHaveLength(1))
+  })
+
+  it('stops a long global hold immediately on release', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    invoke.mockImplementation(async (command) => {
+      if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
+      if (command === 'chat_history') return []
+      if (command === 'auth_entitlement_snapshot') return snapshot()
+      if (command === 'auth_devices') return []
+      if (command === 'dictation_start') return { state: 'running' }
+      if (command === 'dictation_stop') return { state: 'stopped' }
+      throw new Error(`unexpected command: ${command}`)
+    })
+    render(App)
+    await screen.findByPlaceholderText('Ask anything')
+    await waitFor(() => expect(globalShortcutHandler).toBeTypeOf('function'))
+
+    globalShortcutHandler({ state: 'Pressed' })
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('dictation_start'))
+    await vi.advanceTimersByTimeAsync(1_000)
+    globalShortcutHandler({ state: 'Released' })
+
+    await waitFor(() => expect(invoke.mock.calls.filter(([command]) => command === 'dictation_stop')).toHaveLength(1))
+  })
+
+  it('does not treat a tap after a long hold as a rapid double activation', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    invoke.mockImplementation(async (command) => {
+      if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
+      if (command === 'chat_history') return []
+      if (command === 'auth_entitlement_snapshot') return snapshot()
+      if (command === 'auth_devices') return []
+      if (command === 'dictation_start') return { state: 'running' }
+      if (command === 'dictation_stop') return { state: 'stopped' }
+      throw new Error(`unexpected command: ${command}`)
+    })
+    render(App)
+    const voice = await screen.findByRole('button', { name: 'Voice' })
+
+    globalShortcutHandler({ state: 'Pressed' })
+    await vi.advanceTimersByTimeAsync(1_000)
+    globalShortcutHandler({ state: 'Released' })
+    await waitFor(() => expect(invoke.mock.calls.filter(([command]) => command === 'dictation_stop')).toHaveLength(1))
+    await vi.advanceTimersByTimeAsync(100)
+
+    globalShortcutHandler({ state: 'Pressed' })
+    globalShortcutHandler({ state: 'Released' })
+    await vi.advanceTimersByTimeAsync(300)
+
+    expect(invoke.mock.calls.filter(([command]) => command === 'dictation_start')).toHaveLength(2)
+    expect(invoke.mock.calls.filter(([command]) => command === 'dictation_stop')).toHaveLength(2)
+    expect(voice).toHaveAttribute('aria-pressed', 'false')
+  })
+
+  it('keeps one global capture running after a rapid double activation and stops on the next activation', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    invoke.mockImplementation(async (command) => {
+      if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
+      if (command === 'chat_history') return []
+      if (command === 'auth_entitlement_snapshot') return snapshot()
+      if (command === 'auth_devices') return []
+      if (command === 'dictation_start') return { state: 'running' }
+      if (command === 'dictation_stop') return { state: 'stopped' }
+      throw new Error(`unexpected command: ${command}`)
+    })
+    render(App)
+    const voice = await screen.findByRole('button', { name: 'Voice' })
+
+    globalShortcutHandler({ state: 'Pressed' })
+    globalShortcutHandler({ state: 'Released' })
+    await vi.advanceTimersByTimeAsync(150)
+    expect(invoke.mock.calls.filter(([command]) => command === 'dictation_stop')).toHaveLength(0)
+    globalShortcutHandler({ state: 'Pressed' })
+    globalShortcutHandler({ state: 'Released' })
+    await vi.advanceTimersByTimeAsync(300)
+
+    expect(invoke.mock.calls.filter(([command]) => command === 'dictation_start')).toHaveLength(1)
+    expect(invoke.mock.calls.filter(([command]) => command === 'dictation_stop')).toHaveLength(0)
+    expect(voice).toHaveAttribute('aria-pressed', 'true')
+
+    globalShortcutHandler({ state: 'Pressed' })
+    globalShortcutHandler({ state: 'Released' })
+    await waitFor(() => expect(invoke.mock.calls.filter(([command]) => command === 'dictation_stop')).toHaveLength(1))
+    await waitFor(() => expect(voice).toHaveAttribute('aria-pressed', 'false'))
+  })
+
+  it('routes rapid click-only activations to hands-free and stops on the next click', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    invoke.mockImplementation(async (command) => {
+      if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
+      if (command === 'chat_history') return []
+      if (command === 'auth_entitlement_snapshot') return snapshot()
+      if (command === 'auth_devices') return []
+      if (command === 'dictation_start') return { state: 'running' }
+      if (command === 'dictation_stop') return { state: 'stopped' }
+      throw new Error(`unexpected command: ${command}`)
+    })
+    render(App)
+    const voice = await screen.findByRole('button', { name: 'Voice' })
+
+    await fireEvent.click(voice)
+    await vi.advanceTimersByTimeAsync(150)
+    await fireEvent.click(voice)
+    await vi.advanceTimersByTimeAsync(300)
+
+    expect(invoke.mock.calls.filter(([command]) => command === 'dictation_start')).toHaveLength(1)
+    expect(invoke.mock.calls.filter(([command]) => command === 'dictation_stop')).toHaveLength(0)
+    expect(voice).toHaveAttribute('aria-pressed', 'true')
+
+    await fireEvent.click(voice)
+    await waitFor(() => expect(invoke.mock.calls.filter(([command]) => command === 'dictation_stop')).toHaveLength(1))
+    await waitFor(() => expect(voice).toHaveAttribute('aria-pressed', 'false'))
+  })
+
+  it('retries a quick activation after the first start reaches a terminal status', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    let startCalls = 0
+    invoke.mockImplementation(async (command) => {
+      if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
+      if (command === 'chat_history') return []
+      if (command === 'auth_entitlement_snapshot') return snapshot()
+      if (command === 'auth_devices') return []
+      if (command === 'dictation_start') {
+        startCalls += 1
+        return startCalls === 1 ? { state: 'failed', message: 'Could not start' } : { state: 'running' }
+      }
+      if (command === 'dictation_stop') return { state: 'stopped' }
+      throw new Error(`unexpected command: ${command}`)
+    })
+    render(App)
+    const voice = await screen.findByRole('button', { name: 'Voice' })
+
+    await fireEvent.click(voice)
+    await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('Could not start'))
+    await vi.advanceTimersByTimeAsync(150)
+    await fireEvent.click(voice)
+
+    expect(invoke.mock.calls.filter(([command]) => command === 'dictation_start')).toHaveLength(2)
+    await vi.advanceTimersByTimeAsync(300)
+    await waitFor(() => expect(invoke.mock.calls.filter(([command]) => command === 'dictation_stop')).toHaveLength(1))
+    expect(voice).toHaveAttribute('aria-pressed', 'false')
   })
 
   it('ignores global presses while signed out or a chat is active', async () => {
@@ -586,7 +734,7 @@ describe('voice dictation', () => {
     await fireEvent.click(voice)
     expect(screen.queryByRole('button', { name: /key points/ })).not.toBeInTheDocument()
     dictationListener({ payload: { type: 'transcript', text: 'captured words' } })
-    await fireEvent.click(voice)
+    await stopClickCapture(voice)
 
     const chips = await screen.findByLabelText('Voice transforms')
     for (const [label, shortcut] of [['key points', 'Alt+1'], ['formal', 'Alt+2'], ['short', 'Alt+3'], ['long', 'Alt+4']]) {
@@ -623,14 +771,14 @@ describe('voice dictation', () => {
 
     await fireEvent.click(voice)
     dictationListener({ payload: { type: 'transcript', text: 'first' } })
-    await fireEvent.click(voice)
+    await stopClickCapture(voice)
     expect(await screen.findByLabelText('Voice transforms')).toBeInTheDocument()
 
     await vi.advanceTimersByTimeAsync(3000)
     await fireEvent.input(composer, { target: { value: 'Edited between captures' } })
     await fireEvent.click(voice)
     dictationListener({ payload: { type: 'transcript', text: 'second' } })
-    await fireEvent.click(voice)
+    await stopClickCapture(voice)
     expect(await screen.findByLabelText('Voice transforms')).toBeInTheDocument()
 
     await vi.advanceTimersByTimeAsync(3000)
@@ -659,7 +807,7 @@ describe('voice dictation', () => {
     const voice = screen.getByRole('button', { name: 'Voice' })
     await fireEvent.click(voice)
     dictationListener({ payload: { type: 'transcript', text: 'capture' } })
-    await fireEvent.click(voice)
+    await stopClickCapture(voice)
     const formal = await screen.findByRole('button', { name: /formal/ })
     await fireEvent.click(formal)
 
@@ -698,7 +846,7 @@ describe('voice dictation', () => {
     await fireEvent.click(voice)
     await waitFor(() => expect(voice).toHaveAttribute('aria-pressed', 'true'))
     dictationListener({ payload: { type: 'transcript', text: 'captured words' } })
-    await fireEvent.click(voice)
+    await stopClickCapture(voice)
     await fireEvent.click(await screen.findByRole('button', { name: /formal/ }))
     await waitFor(() => expect(invoke).toHaveBeenCalledWith('dictation_transform', { transform: 'formal', transcript: 'Polished capture' }))
 
@@ -706,7 +854,7 @@ describe('voice dictation', () => {
     globalShortcutHandler({ state: 'Pressed' })
     globalShortcutHandler({ state: 'Released' })
     expect(invoke).not.toHaveBeenCalledWith('dictation_start')
-    expect(invoke).not.toHaveBeenCalledWith('dictation_stop')
+    expect(invoke.mock.calls.filter(([command]) => command === 'dictation_stop')).toHaveLength(0)
     expect(composer).toHaveValue('Existing draft Polished capture')
 
     resolveTransform('Formal capture')
@@ -736,7 +884,7 @@ describe('voice dictation', () => {
     const voice = screen.getByRole('button', { name: 'Voice' })
     await fireEvent.click(voice)
     dictationListener({ payload: { type: 'transcript', text: 'keep words' } })
-    await fireEvent.click(voice)
+    await stopClickCapture(voice)
     await fireEvent.click(await screen.findByRole('button', { name: /short/ }))
     expect(await screen.findByRole('alert')).toHaveTextContent('That voice transform is unavailable. Your text is unchanged; try again.')
     expect(screen.getByRole('alert')).not.toHaveTextContent('sensitive backend detail')
@@ -753,6 +901,7 @@ describe('voice dictation', () => {
   })
 
   it('starts on primary pointer down and stops on release while preserving transcript', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
     let resolveStop
     invoke.mockImplementation(async (command) => {
       if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
@@ -773,6 +922,7 @@ describe('voice dictation', () => {
     expect(invoke).toHaveBeenCalledWith('dictation_start')
     dictationListener({ payload: { type: 'transcript', text: 'after' } })
     await fireEvent.pointerUp(voice, { button: 0, pointerId: 1 })
+    await vi.advanceTimersByTimeAsync(300)
 
     resolveStop({ state: 'stopped' })
     await Promise.resolve()
@@ -788,6 +938,43 @@ describe('voice dictation', () => {
     expect(invoke.mock.calls.filter(([command]) => command === 'dictation_start')).toHaveLength(1)
     expect(invoke.mock.calls.filter(([command]) => command === 'dictation_stop')).toHaveLength(1)
     expect(invoke.mock.calls.filter(([command]) => command === 'dictation_polish')).toHaveLength(1)
+  })
+
+  it('promotes a rapid button double activation to hands-free and Escape restores the draft during a late start', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    let resolveStart
+    invoke.mockImplementation(async (command) => {
+      if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
+      if (command === 'chat_history') return []
+      if (command === 'auth_entitlement_snapshot') return snapshot()
+      if (command === 'auth_devices') return []
+      if (command === 'dictation_start') return new Promise((resolve) => { resolveStart = resolve })
+      if (command === 'dictation_stop') return { state: 'stopped' }
+      throw new Error(`unexpected command: ${command}`)
+    })
+    render(App)
+    const composer = await screen.findByPlaceholderText('Ask anything')
+    await fireEvent.input(composer, { target: { value: 'Original draft' } })
+    const voice = screen.getByRole('button', { name: 'Voice' })
+
+    await fireEvent.pointerDown(voice, { button: 0, pointerId: 1 })
+    await fireEvent.pointerUp(voice, { pointerId: 1 })
+    await vi.advanceTimersByTimeAsync(150)
+    await fireEvent.pointerDown(voice, { button: 0, pointerId: 2 })
+    await fireEvent.pointerUp(voice, { pointerId: 2 })
+    dictationListener({ payload: { type: 'transcript', text: 'temporary words' } })
+    await vi.advanceTimersByTimeAsync(300)
+
+    expect(invoke.mock.calls.filter(([command]) => command === 'dictation_start')).toHaveLength(1)
+    expect(invoke.mock.calls.filter(([command]) => command === 'dictation_stop')).toHaveLength(0)
+    expect(voice).toHaveAttribute('aria-pressed', 'true')
+    expect(composer).toHaveValue('Original draft temporary words')
+
+    await fireEvent.keyDown(document, { key: 'Escape' })
+    expect(composer).toHaveValue('Original draft')
+    resolveStart({ state: 'running' })
+    await waitFor(() => expect(invoke.mock.calls.filter(([command]) => command === 'dictation_stop')).toHaveLength(1))
+    await waitFor(() => expect(voice).toHaveAttribute('aria-pressed', 'false'))
   })
 
   it('keeps the verbatim capture editable and explains a polish failure', async () => {
@@ -807,7 +994,7 @@ describe('voice dictation', () => {
     await fireEvent.input(composer, { target: { value: 'Keep' } })
     await fireEvent.click(voice)
     dictationListener({ payload: { type: 'transcript', text: 'verbatim words' } })
-    await fireEvent.click(voice)
+    await stopClickCapture(voice)
 
     expect(await screen.findByRole('alert')).toHaveTextContent('Polishing is unavailable. You can edit or send the captured text.')
     expect(composer).toHaveValue('Keep verbatim words')
@@ -838,7 +1025,7 @@ describe('voice dictation', () => {
     await fireEvent.click(voice)
     const oldCaptureListener = dictationListener
     dictationListener({ payload: { type: 'transcript', text: 'old capture' } })
-    await fireEvent.click(voice)
+    await stopClickCapture(voice)
 
     expect(await screen.findByRole('status')).toHaveTextContent('Polishing on this device…')
     expect(screen.getByTestId('polish-draft').textContent).toBe('Existing draft ')
@@ -1032,7 +1219,7 @@ describe('voice dictation', () => {
     dictationListener({ payload: { type: 'transcript', text: 'spoken words' } })
     await waitFor(() => expect(composer).toHaveValue('Existing draft spoken words'))
     await fireEvent.input(composer, { target: { value: 'Edited transcript' } })
-    await fireEvent.click(voice)
+    await stopClickCapture(voice)
 
     expect(invoke).toHaveBeenCalledWith('dictation_start')
     expect(invoke).toHaveBeenCalledWith('dictation_stop')
@@ -1062,7 +1249,7 @@ describe('voice dictation', () => {
     await fireEvent.click(send)
     expect(invoke).not.toHaveBeenCalledWith('chat_submit', expect.anything())
 
-    await fireEvent.click(voice)
+    await stopClickCapture(voice)
     expect(invoke).toHaveBeenCalledWith('dictation_stop')
     expect(voice).toHaveAttribute('aria-pressed', 'false')
     await waitFor(() => expect(send).toBeEnabled())
@@ -1117,7 +1304,7 @@ describe('voice dictation', () => {
     expect(voice).toHaveAttribute('aria-pressed', 'true')
     expect(voice).toBeEnabled()
 
-    await fireEvent.click(voice)
+    await stopClickCapture(voice)
     expect(invoke).toHaveBeenCalledWith('dictation_stop')
     expect(voice).toHaveAttribute('aria-pressed', 'false')
   })
@@ -1141,7 +1328,7 @@ describe('voice dictation', () => {
     render(App)
     const voice = await screen.findByRole('button', { name: 'Voice' })
     await fireEvent.click(voice)
-    await fireEvent.click(voice)
+    await stopClickCapture(voice)
 
     expect(await screen.findByRole('alert')).toHaveTextContent('Dictation could not be stopped.')
     expect(voice).toHaveAttribute('aria-pressed', 'true')

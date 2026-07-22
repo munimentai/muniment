@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { appendTranscript, dictationTransforms, holdToTalkShortcut, isDictationActive } from './dictation-state.js'
+import { appendTranscript, dictationTransforms, handsFreeActivationDelay, holdToTalkShortcut, isDictationActive } from './dictation-state.js'
 
 describe('dictation state', () => {
   it('recognizes only starting and running as active', () => {
@@ -29,5 +29,9 @@ describe('dictation state', () => {
     expect(holdToTalkShortcut('MacIntel')).toBe('Command+Shift+Space')
     expect(holdToTalkShortcut('Win32')).toBe('Control+Shift+Space')
     expect(holdToTalkShortcut('Linux x86_64')).toBe('Control+Shift+Space')
+  })
+
+  it('uses a short, explicit double-activation window', () => {
+    expect(handsFreeActivationDelay).toBe(300)
   })
 })
