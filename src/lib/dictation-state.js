@@ -7,6 +7,12 @@ export const dictationTransforms = [
   { label: 'long', transform: 'long', shortcut: 'Alt+4', key: '4' },
 ]
 
+// Avoid macOS Spotlight (Command+Space), Windows-key combinations, and other
+// documented system bindings. A collision can still occur with another app.
+export function holdToTalkShortcut(platform = navigator.platform) {
+  return platform.startsWith('Mac') ? 'Command+Shift+Space' : 'Control+Shift+Space'
+}
+
 export function isDictationActive(status) {
   return activeDictationStates.has(status?.state)
 }

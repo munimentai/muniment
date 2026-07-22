@@ -3,5 +3,10 @@
   "identifier": "default",
   "description": "Baseline capability for the main window: core APIs. App-defined commands (auth_*) are not ACL-gated and need no entry here.",
   "windows": ["main"],
-  "permissions": ["core:default", "dialog:allow-open"]
+  "permissions": [
+    "core:default",
+    "dialog:allow-open",
+    "global-shortcut:allow-register",
+    "global-shortcut:allow-unregister"
+  ]
 }
