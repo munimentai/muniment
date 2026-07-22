@@ -95,23 +95,43 @@ only by the pinned normalizer. Before choosing boundaries, scan left-to-right
 and mark URL-like non-whitespace runs beginning `http://`, `https://`, or
 `www.`, numeric runs matching `[+\-]?[0-9][0-9,.:/\-]*%?`, and dotted initialism
 or title runs matching `(?:[A-Za-z]\.){2,}|(?:Dr|Mr|Ms|Mrs)\.` as protected.
-Matches use leftmost-longest order as listed and cannot overlap. Candidate
-ends are Unicode-scalar boundaries excluding those inside protected runs,
-immediately before `.?!,;:` or a closing quote/bracket, or inside or immediately
-after a whitespace run. Thus punctuation/closers cannot be detached from
-preceding text, and a whitespace run can only begin the right slice. A
-candidate's token count is obtained by phonemizing that exact source slice
-with the selected accent and counting the
+Matches use leftmost-longest order as listed and cannot overlap. Offsets below
+are UTF-8 byte offsets at Unicode-scalar boundaries. A whitespace run is never
+split: its entire byte range belongs to the slice on its right, so a boundary
+adjacent to whitespace is at the run's start (after any punctuation or closing
+quotes/brackets on its left), never inside or after the run.
+
+For each current start offset, natural candidate ends have this strict rank:
+
+1. after `.?!` and any immediately following closing quotes or brackets, but
+   before a following whitespace run;
+2. after `,;:` and any immediately following closing quotes or brackets, but
+   before a following whitespace run;
+3. at the start of a whitespace run (a word boundary), provided the preceding
+   scalar is not punctuation or a closer already covered by rank 1 or 2.
+
+Candidates inside a protected run are forbidden. Within the first non-empty
+rank, choose the farthest candidate whose exact source slice is at most the
+applicable token limit; lower ranks are considered only when the higher rank
+has no candidate within that limit. A candidate's token count is obtained by
+phonemizing that exact source slice with the selected accent and counting the
 result after Kokoro vocabulary filtering; source character count is never used
 as a proxy.
 
-Starting at offset zero, choose the farthest candidate end whose resulting
-slice is at most **200 tokens**. If none advances, choose the farthest end at
-most **400**. If none advances because the current protected run alone exceeds
-400, waive
-protection for that run only and choose the farthest Unicode-scalar end at most
-400. If even one scalar produces more than 400 tokens, return a typed
-`unsupported-input` error rather than truncate it. Repeat to end of input.
+Starting at offset zero, apply that ranked search with a **200-token** limit.
+If no natural candidate advances, repeat it with a **400-token** limit. If no
+natural candidate advances at 400, use the farthest otherwise-allowed
+Unicode-scalar end at or below 200 as an explicit hard-split fallback. This is
+the only rule that may split an ordinary word. Boundaries inside whitespace
+runs remain forbidden. If the slice starts at a protected run (ignoring
+right-owned leading whitespace) whose complete end is over 400, instead waive
+protection for that run only and choose its farthest scalar end at or below
+400. Thus a protected run is split only when the run itself cannot fit within
+400. If neither fallback advances, or even one scalar produces more than 400
+tokens, return a typed
+`unsupported-input` error rather than truncate it. An end-of-input offset is a
+rank-1 natural candidate, ensuring the final remainder is consumed. Repeat to
+end of input.
 Then make one left-to-right repair pass: for each segment below **20 tokens**,
 merge it with its right neighbor if re-phonemizing the combined source is at
 most 400; for the final segment (or when the right merge exceeds 400), merge
@@ -123,18 +143,33 @@ input. No slice may be empty or exceed 400 tokens; short replies are retained,
 and no source byte is duplicated or omitted.
 
 Normative boundary examples use `K(s)` for the pinned phonemize-and-filter
-token count (the fixture records the actual phonemes and ids):
+token count. Repeated letters below denote fixture strings having the stated
+UTF-8 byte length and token count; fixtures also record exact phonemes and ids.
+The ranges shown are the required initial packing ranges, before the separately
+specified short-segment repair:
 
-- Given source `S + " B."`, where fixture text `S` ends in a period and
-  `K(S)=195`, `K(" B.")=9`, and `K(S + " B.")=204`, initial packing yields
-  `[S, " B."]`; repair merges the final short slice left into one segment.
-- Given `"Visit " + U`, where fixture URL `U` is protected and `K(U)=401`, only
-  `U` may lose protection; it splits at the farthest scalar boundary with
-  `K≤400`, and neither source bytes nor the remainder are discarded.
-- For `2026-07-22 update`, the numeric run is protected even when normalization
-  expands it and `K("2026-07-22")` differs from its 10 source scalars. Packing
-  uses `K`, not character count; it keeps the run whole unless the run itself
-  exceeds 400.
+- For `A + ".  \n" + B + "!"`, let `A` be 100 ASCII bytes with `K(A+".")=190`,
+  `B` be 100 ASCII bytes with `K("  \n"+B+"!")=190`, and the combined count be
+  over 200. The source is 205 bytes. Required ranges are `[0,101)` and
+  `[101,205)`: the rank-1 end follows the period, and bytes 101--103 (two
+  spaces and newline) stay together at the start of the right slice.
+- For the 250-byte ordinary word `W` with `K(W)=250` and one token per scalar,
+  there is no natural candidate before end-of-input and the end is over 200
+  but within 400. The 400 search therefore selects `[0,250)`; it must not split
+  at byte 200.
+- For `W + " " + X`, where `W` is a 450-byte ordinary word with one token per
+  scalar, `X` is 151 ASCII bytes, `K(" "+X)=152`, and
+  `K(W[200:]+" "+X)=402`, no natural candidate fits the first 400 tokens. The
+  explicit 200 hard fallback requires initial ranges `[0,200)`, `[200,450)`,
+  and `[450,602)`; the second range ends at the word boundary and the single
+  space at byte 450 belongs to the rightmost range.
+- For protected URL `U`, 450 ASCII bytes with one token per scalar, the
+  protected run has no complete end at or below 400, so only it loses
+  protection. The 400 fallback requires ranges `[0,400)` and `[400,450)`; no
+  byte is discarded or duplicated.
+- For `2026-07-22 update`, byte range `[0,10)` is protected even when
+  normalization changes its token count. If `K("2026-07-22")<=400`, no boundary
+  may occur at bytes 1--9; packing uses `K`, not source character count.
 
 Tests must assert the exact source ranges, phonemes, and token ids, with no
 empty, duplicate, omitted, or over-400 segment at 0, 1, 19, 20, 200, 400, and
