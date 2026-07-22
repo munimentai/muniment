@@ -8,7 +8,7 @@
   import { ringPath } from './lib/mark.js'
   import { applyBufferedChatEvents, applyChatEvent, composerAction, formatByteSize, historyMessages, receiptParts, receiptRows, toolName, toolStatus } from './lib/chat-state.js'
   import { appendTranscript, isDictationActive } from './lib/dictation-state.js'
-  import { onboardingCancelSettingsState, onboardingConfirmedState, onboardingConfirmingState, onboardingErrorState, onboardingExtractingState, onboardingExtractionErrorState, onboardingExtractionState, onboardingFinalizingState, onboardingImportChoiceState, onboardingLoadingState, onboardingPathState, onboardingPreviewErrorState, onboardingPreviewingState, onboardingPreviewState, onboardingReturnToArchiveReviewState, onboardingSelectionState, onboardingSettingsState, onboardingStatusState, onboardingTriageConfirmedState, onboardingTriageErrorState, onboardingTriageReportState, onboardingTriagingState } from './lib/onboarding-state.js'
+  import { onboardingCancelSettingsState, onboardingConfirmedState, onboardingConfirmingState, onboardingErrorState, onboardingExtractingState, onboardingExtractionErrorState, onboardingExtractionState, onboardingFinalizingState, onboardingImportChoiceState, onboardingLoadingState, onboardingPathState, onboardingPreviewErrorState, onboardingPreviewingState, onboardingPreviewState, onboardingReturnToArchiveReviewState, onboardingSelectionState, onboardingSettingsState, onboardingStatusState, onboardingTriageConfirmedState, onboardingTriageErrorState, onboardingTriageReportState, onboardingTriagingState, requiredModelLoadingState, requiredModelPollActive, requiredModelProgress } from './lib/onboarding-state.js'
   import { scrollFollowState } from './lib/scroll-follow.js'
 
   const markD = ringPath()
@@ -56,6 +56,10 @@
   let voiceKey
   let composer = $state()
   let onboarding = $state(onboardingLoadingState)
+  let requiredModel = $state(requiredModelLoadingState)
+  let modelProgress = $derived(requiredModelProgress(requiredModel))
+  let requiredModelTimer
+  let requiredModelPollEpoch = 0
   let onboardingPreviewSequence = 0
   let destroyed = false
   const dictationTranscriptQuietPeriod = 25
@@ -63,9 +67,33 @@
   async function loadOnboarding() {
     try {
       onboarding = onboardingStatusState(await tauri.invoke('home_status'))
+      if (onboarding.name !== 'complete') pollRequiredModel()
     } catch (error) {
       onboarding = { name: 'load-error', homePath: '', error: typeof error === 'string' ? error : 'Onboarding could not be loaded.' }
     }
+  }
+
+  async function pollRequiredModel() {
+    if (destroyed || onboarding.name === 'complete') return
+    const epoch = ++requiredModelPollEpoch
+    clearTimeout(requiredModelTimer)
+    try {
+      const status = await tauri.invoke('required_model_acquisition_status')
+      if (destroyed || epoch !== requiredModelPollEpoch || onboarding.name === 'complete') return
+      requiredModel = status
+      if (requiredModelPollActive(status)) {
+        requiredModelTimer = setTimeout(pollRequiredModel, 1000)
+      }
+    } catch (_) {
+      if (destroyed || epoch !== requiredModelPollEpoch || onboarding.name === 'complete') return
+      requiredModel = { ...requiredModelLoadingState, status: { state: 'failed' } }
+    }
+  }
+
+  function stopRequiredModelPolling() {
+    requiredModelPollEpoch += 1
+    clearTimeout(requiredModelTimer)
+    requiredModelTimer = undefined
   }
 
   async function chooseHome() {
@@ -86,6 +114,7 @@
     onboarding = pending
     try {
       onboarding = onboardingConfirmedState(pending, await tauri.invoke('home_confirm', { homePath: pending.homePath }))
+      if (onboarding.name === 'complete') stopRequiredModelPolling()
     } catch (error) {
       onboarding = onboardingErrorState(pending, typeof error === 'string' ? error : undefined)
     }
@@ -117,6 +146,7 @@
     onboarding = pending
     try {
       onboarding = onboardingConfirmedState(pending, await tauri.invoke('home_confirm', { homePath: pending.homePath }))
+      if (onboarding.name === 'complete') stopRequiredModelPolling()
     } catch (error) {
       onboarding = onboardingErrorState(pending, typeof error === 'string' ? error : undefined)
     }
@@ -143,7 +173,7 @@
   }
 
   async function generateTriageReport() {
-    if (!['pre-triage', 'triage-error'].includes(onboarding.name)) return
+    if (!requiredModel.aiFeaturesAvailable || !['pre-triage', 'triage-error'].includes(onboarding.name)) return
     const triageId = ++onboardingPreviewSequence
     const pending = onboardingTriagingState(onboarding)
     onboarding = pending
@@ -525,6 +555,7 @@
       })
     return () => {
       destroyed = true
+      stopRequiredModelPolling()
       unlisten?.()
       dictationUnlisten?.()
       pairingUnlisten?.()
@@ -670,6 +701,21 @@
       <section class="onboarding" aria-labelledby="onboarding-title">
         <p class="eyebrow">{onboarding.savedHomePath ? 'Home settings' : 'First-run setup'}</p>
         <h1 id="onboarding-title">{['pre-triage', 'triaging', 'triage-error'].includes(onboarding.name) ? 'Create your local proposal' : ['triage-review', 'triage-confirmed'].includes(onboarding.name) ? 'Review your onboarding proposal' : ['import-choice', 'previewing', 'reviewing', 'extracting', 'finalizing'].includes(onboarding.name) ? 'Review an assistant export' : 'Choose your Muniment Home'}</h1>
+        {#if !onboarding.savedHomePath}
+          <aside class="model-status" aria-labelledby="model-status-title">
+            <div class="model-status-heading">
+              <span id="model-status-title">Local AI</span>
+              <strong>{requiredModel.aiFeaturesAvailable ? 'Ready' : requiredModel.status?.state === 'failed' || requiredModel.status?.state === 'cancelled' ? requiredModel.retryingInBackground ? 'Retrying in background' : 'Setup unavailable' : requiredModel.status?.state === 'installing' ? 'Downloading' : 'Starting setup'}</strong>
+            </div>
+            <p class="model-status-copy" aria-live="polite">{requiredModel.aiFeaturesAvailable ? 'Local proposal generation is ready.' : requiredModel.status?.state === 'failed' || requiredModel.status?.state === 'cancelled' ? requiredModel.retryingInBackground ? 'The download did not finish. Muniment will keep retrying in the background.' : 'Local AI setup could not finish. You can continue setting up your Home.' : 'The required model is being prepared in the background. You can continue setting up your Home.'}</p>
+            {#if modelProgress.total > 0}
+              <div class="model-progress" role="progressbar" aria-label="Required local AI model download" aria-valuemin="0" aria-valuemax={modelProgress.total} aria-valuenow={modelProgress.downloaded}>
+                <span style={`width: ${modelProgress.downloaded / modelProgress.total * 100}%`}></span>
+              </div>
+              <p class="model-progress-copy">{formatByteSize(modelProgress.downloaded)} of {formatByteSize(modelProgress.total)}</p>
+            {/if}
+          </aside>
+        {/if}
         {#if onboarding.name === 'loading'}
           <p class="support" role="status">Finding your Documents folder…</p>
         {:else if ['choosing', 'confirming', 'settings', 'confirming-settings'].includes(onboarding.name)}
@@ -721,7 +767,7 @@
           {#if onboarding.error}<p class="onboarding-error" role="alert">{onboarding.error}</p>{/if}
           <div class="onboarding-footer">
             <button data-testid="onboarding-triage-back" onclick={returnToArchiveReview}>Back to archive review</button>
-            <button data-testid="onboarding-triage-generate" class="primary" onclick={generateTriageReport} disabled={onboarding.name === 'triaging'}>{onboarding.name === 'triaging' ? 'Generating proposal…' : onboarding.name === 'triage-error' ? 'Try generating again' : 'Generate local proposal'}</button>
+            <div class="triage-generate"><button data-testid="onboarding-triage-generate" class="primary" onclick={generateTriageReport} disabled={onboarding.name === 'triaging' || !requiredModel.aiFeaturesAvailable}>{onboarding.name === 'triaging' ? 'Generating proposal…' : onboarding.name === 'triage-error' ? 'Try generating again' : 'Generate local proposal'}</button>{#if !requiredModel.aiFeaturesAvailable}<span>Available when the local AI model is ready.</span>{/if}</div>
           </div>
         {:else if onboarding.name === 'triage-review'}
           <p class="support">Review the local AI proposal and the approved sources that informed it. Confirming only records your choice for this onboarding session.</p>
@@ -926,6 +972,15 @@
 
   .onboarding { width: min(680px, calc(100vw - 48px)); margin-top: 28px; }
   .onboarding h1 { margin: 4px 0 10px; font-size: 28px; letter-spacing: -.02em; }
+  .model-status { margin: 18px 0 22px; padding: 13px 15px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); }
+  .model-status-heading { display: flex; justify-content: space-between; gap: 16px; font: var(--text-12) var(--font-mono); }
+  .model-status-heading span, .model-status-copy, .model-progress-copy, .triage-generate span { color: var(--muted); }
+  .model-status-copy { margin: 7px 0 0; font-size: 13px; line-height: 1.45; }
+  .model-progress { height: 4px; margin-top: 11px; overflow: hidden; border-radius: 2px; background: var(--border); }
+  .model-progress span { display: block; height: 100%; background: var(--signal); }
+  .model-progress-copy { margin: 6px 0 0; font: var(--text-12) var(--font-mono); }
+  .triage-generate { display: flex; flex-direction: column; align-items: flex-end; gap: 6px; }
+  .triage-generate span { max-width: 250px; font: var(--text-12) var(--font-mono); text-align: right; }
   .eyebrow, .path-label, .privacy-note { color: var(--muted); font: var(--text-12) var(--font-mono); }
   .path-card { display: grid; grid-template-columns: 1fr auto; gap: 7px 16px; align-items: center; margin-top: 24px; padding: 15px 16px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); }
   .path-label { grid-column: 1 / -1; }
