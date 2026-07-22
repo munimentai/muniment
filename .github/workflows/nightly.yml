@@ -472,3 +472,60 @@ jobs:
         env:
           E2E_STATUS: ${{ steps.e2e.outputs.status }}
         run: test "$E2E_STATUS" = 0
+
+  report-e2e-failure:
+    needs: [prepare, linux-e2e, windows-e2e, macos-e2e]
+    if: >-
+      always() && (needs.linux-e2e.result == 'failure' ||
+      needs.windows-e2e.result == 'failure' || needs.macos-e2e.result == 'failure')
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    steps:
+      - name: Create or update installed-E2E triage issue
+        uses: actions/github-script@v8
+        env:
+          SOURCE_SHA: ${{ needs.prepare.outputs.source_sha }}
+          LINUX_RESULT: ${{ needs.linux-e2e.result }}
+          WINDOWS_RESULT: ${{ needs.windows-e2e.result }}
+          MACOS_RESULT: ${{ needs.macos-e2e.result }}
+        with:
+          script: |
+            const sha = process.env.SOURCE_SHA;
+            if (!/^[0-9a-f]{40}$/.test(sha)) {
+              core.setFailed("cannot report installed-E2E failure without a valid pinned source SHA");
+              return;
+            }
+
+            const platforms = [
+              ["Linux", process.env.LINUX_RESULT],
+              ["Windows", process.env.WINDOWS_RESULT],
+              ["macOS", process.env.MACOS_RESULT],
+            ].filter(([, result]) => result === "failure").map(([name]) => name);
+            const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            const title = `[nightly-e2e] Installed test failure for ${sha}`;
+            const body = [
+              "The installed nightly desktop test failed and needs triage.",
+              "",
+              `- Pinned source SHA: \`${sha}\``,
+              `- Failing platforms: ${platforms.join(", ")}`,
+              `- Workflow run and artifacts: ${runUrl}`,
+              "",
+              "This report contains workflow metadata only. Review the redacted artifacts from the linked run for diagnostics.",
+            ].join("\n");
+
+            const issues = await github.paginate(github.rest.issues.listForRepo, {
+              ...context.repo,
+              state: "open",
+              per_page: 100,
+            });
+            const existing = issues.find((issue) => !issue.pull_request && issue.title === title);
+            if (existing) {
+              await github.rest.issues.createComment({
+                ...context.repo,
+                issue_number: existing.number,
+                body: `Failure repeated.\n\n${body}`,
+              });
+            } else {
+              await github.rest.issues.create({ ...context.repo, title, body });
+            }
