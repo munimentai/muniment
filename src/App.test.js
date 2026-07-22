@@ -678,6 +678,40 @@ describe('voice dictation', () => {
     expect(composer).toHaveFocus()
   })
 
+  it('ignores the global shortcut while a transform is pending', async () => {
+    let resolveTransform
+    invoke.mockImplementation(async (command) => {
+      if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
+      if (command === 'chat_history') return []
+      if (command === 'auth_entitlement_snapshot') return snapshot()
+      if (command === 'auth_devices') return []
+      if (command === 'dictation_start') return { state: 'running' }
+      if (command === 'dictation_stop') return { state: 'stopped' }
+      if (command === 'dictation_polish') return 'Polished capture'
+      if (command === 'dictation_transform') return new Promise((resolve) => { resolveTransform = resolve })
+      throw new Error(`unexpected command: ${command}`)
+    })
+    render(App)
+    const composer = await screen.findByPlaceholderText('Ask anything')
+    await fireEvent.input(composer, { target: { value: 'Existing draft' } })
+    const voice = screen.getByRole('button', { name: 'Voice' })
+    await fireEvent.click(voice)
+    dictationListener({ payload: { type: 'transcript', text: 'captured words' } })
+    await fireEvent.click(voice)
+    await fireEvent.click(await screen.findByRole('button', { name: /formal/ }))
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('dictation_transform', { transform: 'formal', transcript: 'Polished capture' }))
+
+    invoke.mockClear()
+    globalShortcutHandler({ state: 'Pressed' })
+    globalShortcutHandler({ state: 'Released' })
+    expect(invoke).not.toHaveBeenCalledWith('dictation_start')
+    expect(invoke).not.toHaveBeenCalledWith('dictation_stop')
+    expect(composer).toHaveValue('Existing draft Polished capture')
+
+    resolveTransform('Formal capture')
+    await waitFor(() => expect(composer).toHaveValue('Existing draft Formal capture'))
+  })
+
   it('keeps text and reports a redacted transform failure, then cancels late work with Escape', async () => {
     let transformCalls = 0
     let resolveLate
