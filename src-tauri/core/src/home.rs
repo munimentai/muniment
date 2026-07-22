@@ -621,21 +621,42 @@ pub fn persist_onboarding_home_write_plan(
     home: &Path,
     plan: &OnboardingHomeWritePlan,
 ) -> Result<(), HomeError> {
+    persist_onboarding_home_write_plan_with_hook(home, plan, &mut |_, _| Ok(()))
+}
+
+/// Stable boundaries exposed for deterministic filesystem transaction tests.
+#[doc(hidden)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OnboardingPersistHook {
+    AfterStaging,
+    AfterPublish,
+    BeforeTemporaryRemoval,
+    BeforeDirectorySync,
+    BeforeRollback,
+}
+
+/// Test seam for simulating changes and transient failures at transaction boundaries.
+#[doc(hidden)]
+pub fn persist_onboarding_home_write_plan_with_hook(
+    home: &Path,
+    plan: &OnboardingHomeWritePlan,
+    hook: &mut dyn FnMut(OnboardingPersistHook, usize) -> io::Result<()>,
+) -> Result<(), HomeError> {
     validate_home(home)?;
-    let home_metadata = fs::symlink_metadata(home).map_err(|error| {
+    let metadata = fs::symlink_metadata(home).map_err(|error| {
         HomeError::io("The onboarding import Home could not be inspected.", error)
     })?;
-    if home_metadata.file_type().is_symlink() || !home_metadata.is_dir() {
+    if metadata.file_type().is_symlink() || !metadata.is_dir() {
         return Err(HomeError::invalid(
             "The onboarding import Home is not a directory.",
         ));
     }
+    // Keep validation and locking behavior identical to the public entry point.
+    let mut destinations = BTreeSet::new();
     if plan.writes.is_empty() || plan.writes.len() > ONBOARDING_IMPORT_MAX_ENTRIES + 4 {
         return Err(HomeError::invalid("The onboarding import plan is invalid."));
     }
-
-    let mut destinations = BTreeSet::new();
-    let mut total_bytes = 0usize;
+    let mut total = 0usize;
     for write in &plan.writes {
         validate_onboarding_destination(&write.relative_path)?;
         if !destinations.insert(write.relative_path.clone()) {
@@ -643,26 +664,22 @@ pub fn persist_onboarding_home_write_plan(
                 "The onboarding import destinations collide.",
             ));
         }
-        if write.bytes().len() > ONBOARDING_IMPORT_MAX_DOCUMENT_BYTES {
-            return Err(HomeError::invalid(
-                "An onboarding import document is too large.",
-            ));
-        }
-        total_bytes = total_bytes
+        total = total
             .checked_add(write.bytes().len())
             .ok_or_else(|| HomeError::invalid("The onboarding import plan is too large."))?;
+        if write.bytes().len() > ONBOARDING_IMPORT_MAX_DOCUMENT_BYTES
+            || total > ONBOARDING_IMPORT_MAX_TOTAL_BYTES
+        {
+            return Err(HomeError::invalid(
+                "The onboarding import plan is too large.",
+            ));
+        }
     }
-    if total_bytes > ONBOARDING_IMPORT_MAX_TOTAL_BYTES {
-        return Err(HomeError::invalid(
-            "The onboarding import plan is too large.",
-        ));
-    }
-
-    let home = Dir::open_ambient_dir(home, ambient_authority())
+    let directory = Dir::open_ambient_dir(home, ambient_authority())
         .map_err(|error| HomeError::io("The onboarding import Home could not be opened.", error))?;
     if !same_home_file(
-        &home_metadata,
-        &home.metadata(".").map_err(|error| {
+        &metadata,
+        &directory.metadata(".").map_err(|error| {
             HomeError::io("The onboarding import Home could not be inspected.", error)
         })?,
     ) {
@@ -670,15 +687,15 @@ pub fn persist_onboarding_home_write_plan(
             "The onboarding import Home changed while it was opened.",
         ));
     }
-    let mut lock_options = cap_std::fs::OpenOptions::new();
-    lock_options.create(true).read(true).write(true);
-    let lock = home
-        .open_with(".onboarding-import.lock", &lock_options)
-        .map_err(|error| HomeError::io("The onboarding import could not be locked.", error))?;
-    let lock = lock.into_std();
+    let mut options = cap_std::fs::OpenOptions::new();
+    options.create(true).read(true).write(true);
+    let lock = directory
+        .open_with(".onboarding-import.lock", &options)
+        .map_err(|error| HomeError::io("The onboarding import could not be locked.", error))?
+        .into_std();
     lock.lock_exclusive()
         .map_err(|error| HomeError::io("The onboarding import could not be locked.", error))?;
-    persist_onboarding_plan_locked(&home, plan)
+    persist_onboarding_plan_locked(&directory, plan, hook)
 }
 
 fn validate_onboarding_destination(relative: &str) -> Result<(), HomeError> {
@@ -714,6 +731,7 @@ fn validate_onboarding_destination(relative: &str) -> Result<(), HomeError> {
 fn persist_onboarding_plan_locked(
     home: &Dir,
     plan: &OnboardingHomeWritePlan,
+    hook: &mut dyn FnMut(OnboardingPersistHook, usize) -> io::Result<()>,
 ) -> Result<(), HomeError> {
     struct Staged {
         directory: Dir,
@@ -723,7 +741,14 @@ fn persist_onboarding_plan_locked(
         published: bool,
     }
 
-    let mut created_directories: Vec<(Dir, std::ffi::OsString)> = Vec::new();
+    struct AnchoredDirectory {
+        parent: Dir,
+        name: std::ffi::OsString,
+        directory: Dir,
+        created: bool,
+    }
+
+    let mut directories: Vec<AnchoredDirectory> = Vec::new();
     let mut staged: Vec<Staged> = Vec::new();
     let result = (|| -> io::Result<()> {
         for write in &plan.writes {
@@ -745,12 +770,24 @@ fn persist_onboarding_plan_locked(
                                 "import ancestor changed",
                             ));
                         }
+                        directories.push(AnchoredDirectory {
+                            parent: current,
+                            name: name.to_os_string(),
+                            directory: next.try_clone()?,
+                            created: false,
+                        });
                         current = next;
                     }
                     Err(error) if error.kind() == io::ErrorKind::NotFound => {
                         current.create_dir(name)?;
-                        created_directories.push((current.try_clone()?, name.to_os_string()));
-                        current = current.open_dir(name)?;
+                        let next = current.open_dir(name)?;
+                        directories.push(AnchoredDirectory {
+                            parent: current,
+                            name: name.to_os_string(),
+                            directory: next.try_clone()?,
+                            created: true,
+                        });
+                        current = next;
                     }
                     Err(error) => return Err(error),
                 }
@@ -785,62 +822,126 @@ fn persist_onboarding_plan_locked(
             });
         }
 
-        for entry in &mut staged {
+        hook(OnboardingPersistHook::AfterStaging, 0)?;
+
+        for (index, entry) in staged.iter_mut().enumerate() {
             entry
                 .directory
                 .hard_link(&entry.temporary, &entry.directory, &entry.destination)?;
             entry.published = true;
+            hook(OnboardingPersistHook::AfterPublish, index)?;
         }
+        for anchored in &directories {
+            let visible = anchored.parent.symlink_metadata(&anchored.name)?;
+            if visible.file_type().is_symlink()
+                || !same_file(&visible, &anchored.directory.metadata(".")?)
+            {
+                return Err(io::Error::other("import ancestor changed"));
+            }
+        }
+        for entry in &staged {
+            let visible = entry.directory.symlink_metadata(&entry.destination)?;
+            if !same_file(&visible, &entry.file.metadata()?) {
+                return Err(io::Error::other("import destination changed"));
+            }
+        }
+        hook(OnboardingPersistHook::BeforeTemporaryRemoval, 0)?;
         for entry in &staged {
             entry.directory.remove_file(&entry.temporary)?;
         }
+        hook(OnboardingPersistHook::BeforeDirectorySync, 0)?;
         for entry in &staged {
             entry.directory.open(".")?.sync_all()?;
         }
-        home.open(".")?.sync_all()
+        home.open(".")?.sync_all()?;
+        // This is the transaction's success linearization point. Recheck the
+        // visible namespace after all publication and durability work.
+        for anchored in &directories {
+            let visible = anchored.parent.symlink_metadata(&anchored.name)?;
+            if visible.file_type().is_symlink()
+                || !same_file(&visible, &anchored.directory.metadata(".")?)
+            {
+                return Err(io::Error::other("import ancestor changed"));
+            }
+        }
+        for entry in &staged {
+            let visible = entry.directory.symlink_metadata(&entry.destination)?;
+            if !same_file(&visible, &entry.file.metadata()?) {
+                return Err(io::Error::other("import destination changed"));
+            }
+        }
+        Ok(())
     })();
 
     if result.is_err() {
-        let mut cleanup_error = None;
-        for entry in staged.iter().rev() {
-            if entry.published {
-                match entry.directory.symlink_metadata(&entry.destination) {
-                    Ok(metadata) => match entry.file.metadata() {
-                        Ok(created_metadata) if same_file(&metadata, &created_metadata) => {
-                            if let Err(error) = entry.directory.remove_file(&entry.destination) {
+        let mut cleanup = || -> io::Result<()> {
+            hook(OnboardingPersistHook::BeforeRollback, 0)?;
+            let mut cleanup_error: Option<io::Error> = None;
+            for entry in staged.iter().rev() {
+                if entry.published {
+                    match entry.directory.symlink_metadata(&entry.destination) {
+                        Ok(metadata) => match entry.file.metadata() {
+                            Ok(created_metadata) if same_file(&metadata, &created_metadata) => {
+                                if let Err(error) = entry.directory.remove_file(&entry.destination)
+                                {
+                                    cleanup_error.get_or_insert(error);
+                                }
+                            }
+                            Ok(_) => {}
+                            Err(error) => {
                                 cleanup_error.get_or_insert(error);
                             }
-                        }
-                        Ok(_) => {}
+                        },
+                        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
                         Err(error) => {
                             cleanup_error.get_or_insert(error);
                         }
-                    },
-                    Err(error) if error.kind() == io::ErrorKind::NotFound => {}
-                    Err(error) => {
+                    }
+                }
+                if let Err(error) = entry.directory.remove_file(&entry.temporary) {
+                    if error.kind() != io::ErrorKind::NotFound {
                         cleanup_error.get_or_insert(error);
                     }
                 }
             }
-            if let Err(error) = entry.directory.remove_file(&entry.temporary) {
-                if error.kind() != io::ErrorKind::NotFound {
-                    cleanup_error.get_or_insert(error);
+            for anchored in directories.iter().rev().filter(|entry| entry.created) {
+                let is_exact = match anchored.parent.symlink_metadata(&anchored.name) {
+                    Ok(metadata) => {
+                        !metadata.file_type().is_symlink()
+                            && same_file(&metadata, &anchored.directory.metadata(".")?)
+                    }
+                    Err(error) if error.kind() == io::ErrorKind::NotFound => false,
+                    Err(error) => return Err(error),
+                };
+                if is_exact {
+                    if let Err(error) = anchored.parent.remove_dir(&anchored.name) {
+                        if error.kind() != io::ErrorKind::NotFound
+                            && error.kind() != io::ErrorKind::DirectoryNotEmpty
+                        {
+                            cleanup_error.get_or_insert(error);
+                        }
+                    }
                 }
             }
-        }
-        for (parent, name) in created_directories.iter().rev() {
-            if let Err(error) = parent.remove_dir(name) {
-                if error.kind() != io::ErrorKind::NotFound
-                    && error.kind() != io::ErrorKind::DirectoryNotEmpty
-                {
-                    cleanup_error.get_or_insert(error);
+            home.open(".")
+                .and_then(|directory| directory.sync_all())
+                .err()
+                .map(|error| cleanup_error.get_or_insert(error));
+            cleanup_error.map_or(Ok(()), Err)
+        };
+        // Cleanup operations are idempotent and identity checked. Retry transient
+        // failures before returning so an injected or short-lived error cannot
+        // expose a partial transaction.
+        let mut cleanup_error = None;
+        for _ in 0..8 {
+            match cleanup() {
+                Ok(()) => {
+                    cleanup_error = None;
+                    break;
                 }
+                Err(error) => cleanup_error = Some(error),
             }
         }
-        home.open(".")
-            .and_then(|directory| directory.sync_all())
-            .err()
-            .map(|error| cleanup_error.get_or_insert(error));
         if let Some(error) = cleanup_error {
             return Err(HomeError::io(
                 "The onboarding import rollback failed.",

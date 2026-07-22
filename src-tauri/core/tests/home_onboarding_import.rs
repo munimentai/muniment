@@ -1,8 +1,9 @@
 use chrono::NaiveDate;
 use muniment_core::{
     home::{
-        compile_onboarding_home_write_plan, persist_onboarding_home_write_plan, HomeWrite,
-        OnboardingHomeWritePlan, OnboardingHomeWritePlanError, ONBOARDING_IMPORT_MAX_ENTRIES,
+        compile_onboarding_home_write_plan, persist_onboarding_home_write_plan,
+        persist_onboarding_home_write_plan_with_hook, HomeWrite, OnboardingHomeWritePlan,
+        OnboardingHomeWritePlanError, OnboardingPersistHook, ONBOARDING_IMPORT_MAX_ENTRIES,
         ONBOARDING_IMPORT_MAX_TOTAL_BYTES,
     },
     import_preview::{EntryKind, ExtractedEntry},
@@ -366,6 +367,133 @@ fn mid_batch_publication_failure_rolls_back_files_and_temporaries() {
     );
     assert!(home.join("agents/final.md").is_dir());
     assert!(!home.join("memory").exists());
+    assert!(!walk(&home)
+        .iter()
+        .any(|path| path.to_string_lossy().ends_with(".tmp")));
+    fs::remove_dir_all(home).unwrap();
+}
+
+fn two_file_plan() -> OnboardingHomeWritePlan {
+    OnboardingHomeWritePlan {
+        writes: vec![
+            HomeWrite {
+                relative_path: "memory/nested/one.md".into(),
+                contents: "one".into(),
+            },
+            HomeWrite {
+                relative_path: "memory/nested/two.md".into(),
+                contents: "two".into(),
+            },
+        ],
+    }
+}
+
+#[test]
+fn transient_failures_at_each_transaction_phase_are_fully_rolled_back() {
+    for phase in [
+        OnboardingPersistHook::AfterPublish,
+        OnboardingPersistHook::BeforeTemporaryRemoval,
+        OnboardingPersistHook::BeforeDirectorySync,
+    ] {
+        let home = temp_home("phase-failure");
+        let mut failed = false;
+        let mut hook = |point, index| {
+            if !failed
+                && point == phase
+                && (phase != OnboardingPersistHook::AfterPublish || index == 0)
+            {
+                failed = true;
+                return Err(std::io::Error::other("injected phase failure"));
+            }
+            Ok(())
+        };
+        assert!(
+            persist_onboarding_home_write_plan_with_hook(&home, &two_file_plan(), &mut hook)
+                .is_err()
+        );
+        assert!(failed);
+        assert!(!home.join("memory").exists());
+        assert!(!walk(&home)
+            .iter()
+            .any(|path| path.to_string_lossy().ends_with(".tmp")));
+        fs::remove_dir_all(home).unwrap();
+    }
+}
+
+#[test]
+fn transient_rollback_failure_is_retried_before_returning() {
+    let home = temp_home("rollback-retry");
+    let mut publication_failed = false;
+    let mut rollback_failed = false;
+    let mut hook = |point, index| match point {
+        OnboardingPersistHook::AfterPublish if index == 0 && !publication_failed => {
+            publication_failed = true;
+            Err(std::io::Error::other("stop publication"))
+        }
+        OnboardingPersistHook::BeforeRollback if !rollback_failed => {
+            rollback_failed = true;
+            Err(std::io::Error::other("transient rollback failure"))
+        }
+        _ => Ok(()),
+    };
+    assert!(
+        persist_onboarding_home_write_plan_with_hook(&home, &two_file_plan(), &mut hook).is_err()
+    );
+    assert!(publication_failed && rollback_failed);
+    assert!(!home.join("memory").exists());
+    assert!(!walk(&home)
+        .iter()
+        .any(|path| path.to_string_lossy().ends_with(".tmp")));
+    fs::remove_dir_all(home).unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn replaced_visible_ancestor_prevents_success_and_is_not_removed() {
+    let home = temp_home("ancestor-race");
+    let moved = home.join("moved-by-racer");
+    let mut replaced = false;
+    let mut hook = |point, _| {
+        if point == OnboardingPersistHook::AfterStaging && !replaced {
+            fs::rename(home.join("memory"), &moved)?;
+            fs::create_dir(home.join("memory"))?;
+            fs::write(home.join("memory/racer.md"), b"racer")?;
+            replaced = true;
+        }
+        Ok(())
+    };
+    assert!(
+        persist_onboarding_home_write_plan_with_hook(&home, &two_file_plan(), &mut hook).is_err()
+    );
+    assert_eq!(fs::read(home.join("memory/racer.md")).unwrap(), b"racer");
+    assert!(!walk(&home)
+        .iter()
+        .any(|path| path.to_string_lossy().ends_with(".tmp")));
+    fs::remove_dir_all(home).unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn replaced_published_destination_prevents_success_and_is_not_removed() {
+    let home = temp_home("destination-race");
+    let mut replaced = false;
+    let mut hook = |point, index| {
+        if point == OnboardingPersistHook::AfterPublish && index == 0 && !replaced {
+            let destination = home.join("memory/nested/one.md");
+            fs::rename(&destination, home.join("memory/nested/moved-by-racer.md"))?;
+            fs::write(&destination, b"racer")?;
+            replaced = true;
+        }
+        Ok(())
+    };
+    assert!(
+        persist_onboarding_home_write_plan_with_hook(&home, &two_file_plan(), &mut hook).is_err()
+    );
+    assert_eq!(
+        fs::read(home.join("memory/nested/one.md")).unwrap(),
+        b"racer"
+    );
+    assert!(!home.join("memory/nested/two.md").exists());
     assert!(!walk(&home)
         .iter()
         .any(|path| path.to_string_lossy().ends_with(".tmp")));
