@@ -17,6 +17,14 @@ let dragDropListener
 let dragDropUnlisten
 let homeStatus
 let requiredModelInvoke
+let globalShortcutHandler
+let registerGlobalShortcut
+let unregisterGlobalShortcut
+
+vi.mock('@tauri-apps/plugin-global-shortcut', () => ({
+  register: (...args) => registerGlobalShortcut(...args),
+  unregister: (...args) => unregisterGlobalShortcut(...args),
+}))
 
 vi.mock('@tauri-apps/api/webview', () => ({
   getCurrentWebview: () => ({
@@ -81,6 +89,9 @@ beforeEach(() => {
   dragDropListener = undefined
   dragDropUnlisten = vi.fn()
   dialogResult = null
+  globalShortcutHandler = undefined
+  registerGlobalShortcut = vi.fn(async (_shortcut, handler) => { globalShortcutHandler = handler })
+  unregisterGlobalShortcut = vi.fn().mockResolvedValue(undefined)
   invoke = vi.fn(async (command, payload) => {
     if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
     if (command === 'chat_history') return []
@@ -463,6 +474,99 @@ describe('Home onboarding', () => {
 })
 
 describe('voice dictation', () => {
+  it('routes one global press and matching release through the existing dictation lifecycle', async () => {
+    invoke.mockImplementation(async (command) => {
+      if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
+      if (command === 'chat_history') return []
+      if (command === 'auth_entitlement_snapshot') return snapshot()
+      if (command === 'auth_devices') return []
+      if (command === 'dictation_start') return { state: 'running' }
+      if (command === 'dictation_stop') return { state: 'stopped' }
+      throw new Error(`unexpected command: ${command}`)
+    })
+    render(App)
+    await screen.findByPlaceholderText('Ask anything')
+    await waitFor(() => expect(registerGlobalShortcut).toHaveBeenCalledWith('Control+Shift+Space', expect.any(Function)))
+
+    globalShortcutHandler({ state: 'Released' })
+    globalShortcutHandler({ state: 'Pressed' })
+    globalShortcutHandler({ state: 'Pressed' })
+    await waitFor(() => expect(invoke.mock.calls.filter(([command]) => command === 'dictation_start')).toHaveLength(1))
+    globalShortcutHandler({ state: 'Released' })
+    globalShortcutHandler({ state: 'Released' })
+
+    await waitFor(() => expect(invoke.mock.calls.filter(([command]) => command === 'dictation_stop')).toHaveLength(1))
+  })
+
+  it('ignores global presses while signed out or a chat is active', async () => {
+    let signedIn = false
+    let resolveSubmit
+    invoke.mockImplementation(async (command) => {
+      if (command === 'auth_status') return { signed_in: signedIn, subject: signedIn ? 'token-subject' : undefined }
+      if (command === 'chat_history') return []
+      if (command === 'auth_entitlement_snapshot') return snapshot()
+      if (command === 'auth_devices') return []
+      if (command === 'chat_submit') return new Promise((resolve) => { resolveSubmit = resolve })
+      if (command === 'dictation_start') return { state: 'running' }
+      throw new Error(`unexpected command: ${command}`)
+    })
+    const signedOut = render(App)
+    await screen.findByRole('button', { name: 'Sign in' })
+    globalShortcutHandler({ state: 'Pressed' })
+    expect(invoke).not.toHaveBeenCalledWith('dictation_start')
+    signedOut.unmount()
+
+    signedIn = true
+    render(App)
+    const composer = await screen.findByPlaceholderText('Ask anything')
+    await fireEvent.input(composer, { target: { value: 'question' } })
+    await fireEvent.click(screen.getByRole('button', { name: 'Send' }))
+    globalShortcutHandler({ state: 'Pressed' })
+    expect(invoke).not.toHaveBeenCalledWith('dictation_start')
+    resolveSubmit({ runId: 'run-1', attachments: [] })
+  })
+
+  it('preserves the polished draft and ignores global presses while polish is busy', async () => {
+    let resolvePolish
+    invoke.mockImplementation(async (command) => {
+      if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
+      if (command === 'chat_history') return []
+      if (command === 'auth_entitlement_snapshot') return snapshot()
+      if (command === 'auth_devices') return []
+      if (command === 'dictation_start') return { state: 'running' }
+      if (command === 'dictation_stop') return { state: 'stopped' }
+      if (command === 'dictation_polish') return new Promise((resolve) => { resolvePolish = resolve })
+      throw new Error(`unexpected command: ${command}`)
+    })
+    render(App)
+    const composer = await screen.findByPlaceholderText('Ask anything')
+    await fireEvent.input(composer, { target: { value: 'Keep this' } })
+    globalShortcutHandler({ state: 'Pressed' })
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('dictation_start'))
+    dictationListener({ payload: { type: 'transcript', text: 'captured words' } })
+    globalShortcutHandler({ state: 'Released' })
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('dictation_polish', { transcript: 'captured words' }))
+    globalShortcutHandler({ state: 'Pressed' })
+    expect(invoke.mock.calls.filter(([command]) => command === 'dictation_start')).toHaveLength(1)
+    expect(composer).toHaveValue('Keep this captured words')
+    resolvePolish('Polished words')
+    await waitFor(() => expect(composer).toHaveValue('Keep this Polished words'))
+  })
+
+  it('redacts registration failures and unregisters a successful binding on teardown', async () => {
+    registerGlobalShortcut.mockRejectedValueOnce(new Error('Control+Shift+Space owned by SecretApp.exe'))
+    const failed = render(App)
+    expect(await screen.findByText('The system-wide voice shortcut is unavailable. Voice remains available from the button.')).toBeInTheDocument()
+    expect(screen.queryByText(/SecretApp/)).not.toBeInTheDocument()
+    failed.unmount()
+    expect(unregisterGlobalShortcut).not.toHaveBeenCalled()
+
+    const registered = render(App)
+    await waitFor(() => expect(globalShortcutHandler).toEqual(expect.any(Function)))
+    registered.unmount()
+    expect(unregisterGlobalShortcut).toHaveBeenCalledWith('Control+Shift+Space')
+  })
+
   it('offers all transforms after polish and replaces only the captured segment', async () => {
     invoke.mockImplementation(async (command, payload) => {
       if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }

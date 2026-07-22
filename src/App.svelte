@@ -2,12 +2,13 @@
   import { onMount, tick } from 'svelte'
   import { getCurrentWebview } from '@tauri-apps/api/webview'
   import { confirm, open } from '@tauri-apps/plugin-dialog'
+  import { register, unregister } from '@tauri-apps/plugin-global-shortcut'
 
   import AccessPanel from './lib/AccessPanel.svelte'
   import { bootState, errorState, statusState, waitingState } from './lib/auth-state.js'
   import { ringPath } from './lib/mark.js'
   import { applyBufferedChatEvents, applyChatEvent, composerAction, formatByteSize, historyMessages, receiptParts, receiptRows, toolName, toolStatus } from './lib/chat-state.js'
-  import { appendTranscript, dictationTransforms, isDictationActive } from './lib/dictation-state.js'
+  import { appendTranscript, dictationTransforms, holdToTalkShortcut, isDictationActive } from './lib/dictation-state.js'
   import { onboardingCancelSettingsState, onboardingConfirmedState, onboardingConfirmingState, onboardingErrorState, onboardingExtractingState, onboardingExtractionErrorState, onboardingExtractionState, onboardingFinalizingState, onboardingImportChoiceState, onboardingLoadingState, onboardingPathState, onboardingPreviewErrorState, onboardingPreviewingState, onboardingPreviewState, onboardingReturnToArchiveReviewState, onboardingSelectionState, onboardingSettingsState, onboardingStatusState, onboardingTriageConfirmedState, onboardingTriageErrorState, onboardingTriageReportState, onboardingTriagingState, requiredModelLoadingState, requiredModelPollActive, requiredModelProgress } from './lib/onboarding-state.js'
   import { scrollFollowState } from './lib/scroll-follow.js'
 
@@ -60,6 +61,9 @@
   let voiceClickTimer
   let voicePointerId
   let voiceKey
+  let globalVoiceHeld = false
+  let globalVoiceRegistered = false
+  let globalVoiceError = $state(false)
   let composer = $state()
   let onboarding = $state(onboardingLoadingState)
   let requiredModel = $state(requiredModelLoadingState)
@@ -443,6 +447,17 @@
     dictationRequested || isDictationActive(dictation) ? stopDictation() : startDictation()
   }
 
+  function globalVoiceShortcut({ state }) {
+    if (state === 'Pressed') {
+      if (globalVoiceHeld || auth.name !== 'signed-in' || active || dictationBusy()) return
+      globalVoiceHeld = true
+      void startDictation()
+    } else if (state === 'Released' && globalVoiceHeld) {
+      globalVoiceHeld = false
+      void stopDictation()
+    }
+  }
+
   async function transformDictation(action) {
     const eligible = eligibleDictation
     if (!eligible || dictationBusy() || draft !== eligible.draft) return
@@ -577,6 +592,12 @@
     if (tauri) {
       loadOnboarding()
       run('status')
+      register(holdToTalkShortcut(), globalVoiceShortcut).then(() => {
+        globalVoiceRegistered = true
+        if (destroyed) void unregister(holdToTalkShortcut()).catch(() => {})
+      }).catch(() => {
+        if (!destroyed) globalVoiceError = true
+      })
     }
     window.__TAURI__?.event?.listen('chat-event', ({ payload }) => {
       if (!messages.some((message) => message.run?.id === payload.runId)) {
@@ -638,6 +659,8 @@
       clearTimeout(dictationCompletionTimer)
       clearTimeout(voiceClickTimer)
       stopDragDrop?.()
+      globalVoiceHeld = false
+      if (globalVoiceRegistered) void unregister(holdToTalkShortcut()).catch(() => {})
       document.removeEventListener('keydown', shortcuts)
     }
   })
@@ -999,6 +1022,7 @@
             </div>
           </div>
           {#if dictationError}<div class="dictation-error" role="alert">{dictationError}</div>{/if}
+          {#if globalVoiceError}<div class="dictation-error" role="alert">The system-wide voice shortcut is unavailable. Voice remains available from the button.</div>{/if}
         </div>
       </section>
     {:else if auth.name === 'error'}

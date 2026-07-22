@@ -22,6 +22,7 @@ tauri-plugin-dialog = "2"
 ureq = { version = "2", default-features = false, features = ["json", "tls", "native-certs", "proxy-from-env"] }
 uuid = { version = "1", features = ["v7"] }
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+tauri-plugin-global-shortcut = "2"
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = ["Win32_Storage_FileSystem"] }
