@@ -696,6 +696,7 @@ describe('voice dictation', () => {
     await fireEvent.input(composer, { target: { value: 'Existing draft' } })
     const voice = screen.getByRole('button', { name: 'Voice' })
     await fireEvent.click(voice)
+    await waitFor(() => expect(voice).toHaveAttribute('aria-pressed', 'true'))
     dictationListener({ payload: { type: 'transcript', text: 'captured words' } })
     await fireEvent.click(voice)
     await fireEvent.click(await screen.findByRole('button', { name: /formal/ }))
