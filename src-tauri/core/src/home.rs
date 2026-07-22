@@ -1,14 +1,185 @@
 use fs2::FileExt;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::{
+    collections::BTreeSet,
     fmt, fs,
     fs::OpenOptions,
     io,
     path::{Component, Path, PathBuf},
 };
 
+use crate::{import_preview::ExtractedEntry, llama::OnboardingTriageReport};
+
 const CONFIG_FILE: &str = "home.json";
 const HOME_DIRECTORIES: [&str; 4] = ["memory", "agents", "projects", "sessions"];
+const ONBOARDING_IMPORT_MAX_SLUG_BYTES: usize = 48;
+
+/// Maximum number of approved originals in one onboarding write plan.
+pub const ONBOARDING_IMPORT_MAX_ENTRIES: usize = 128;
+/// Maximum combined size of all Markdown payloads in one onboarding write plan.
+pub const ONBOARDING_IMPORT_MAX_TOTAL_BYTES: usize = 256 * 1024;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HomeWrite {
+    relative_path: PathBuf,
+    bytes: Vec<u8>,
+}
+
+impl HomeWrite {
+    pub fn relative_path(&self) -> &Path {
+        &self.relative_path
+    }
+
+    pub fn bytes(&self) -> &[u8] {
+        &self.bytes
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OnboardingHomeWritePlan {
+    writes: Vec<HomeWrite>,
+}
+
+impl OnboardingHomeWritePlan {
+    pub fn writes(&self) -> &[HomeWrite] {
+        &self.writes
+    }
+}
+
+/// Stable failure modes for compiling a confirmed onboarding proposal.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OnboardingHomeWritePlanError {
+    EmptyInput,
+    TooManyEntries,
+    DestinationCollision,
+    TotalBytesExceeded,
+}
+
+impl fmt::Display for OnboardingHomeWritePlanError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let message = match self {
+            Self::EmptyInput => "The onboarding import input is empty.",
+            Self::TooManyEntries => "The onboarding import contains too many entries.",
+            Self::DestinationCollision => "The onboarding import destinations collide.",
+            Self::TotalBytesExceeded => "The onboarding import plan is too large.",
+        };
+        formatter.write_str(message)
+    }
+}
+
+impl std::error::Error for OnboardingHomeWritePlanError {}
+
+/// Compiles complete, bounded Markdown writes without accessing the filesystem.
+pub fn compile_onboarding_home_write_plan(
+    report: &OnboardingTriageReport,
+    approved_entries: &[ExtractedEntry],
+    import_date: chrono::NaiveDate,
+) -> Result<OnboardingHomeWritePlan, OnboardingHomeWritePlanError> {
+    if approved_entries.is_empty()
+        || approved_entries.iter().any(|entry| {
+            entry.source_name.trim().is_empty()
+                || entry.source_provenance.trim().is_empty()
+                || entry.text.is_empty()
+        })
+    {
+        return Err(OnboardingHomeWritePlanError::EmptyInput);
+    }
+    if approved_entries.len() > ONBOARDING_IMPORT_MAX_ENTRIES {
+        return Err(OnboardingHomeWritePlanError::TooManyEntries);
+    }
+
+    let date = import_date.format("%Y-%m-%d").to_string();
+    let mut writes = Vec::with_capacity(1 + report.starter_agents.len() + approved_entries.len());
+    let report_markdown = format!(
+        "## User type\n\n{}\n\n## Proposed Home layout\n\n{}\n\n## Starter agents\n\n{}\n",
+        report.user_type,
+        report.proposed_home_layout,
+        report
+            .starter_agents
+            .iter()
+            .map(|agent| format!("- {agent}"))
+            .collect::<Vec<_>>()
+            .join("\n")
+    );
+    writes.push(HomeWrite {
+        relative_path: PathBuf::from(format!("memory/onboarding-report-{date}.md")),
+        bytes: report_markdown.into_bytes(),
+    });
+
+    for agent in &report.starter_agents {
+        writes.push(HomeWrite {
+            relative_path: PathBuf::from("agents").join(format!("agent-{}.md", safe_slug(agent))),
+            bytes: format!("# {agent}\n").into_bytes(),
+        });
+    }
+
+    for entry in approved_entries {
+        let identity = format!("{}\0{}", entry.source_provenance, entry.source_name);
+        let digest = format!("{:x}", Sha256::digest(identity.as_bytes()));
+        let filename = format!(
+            "{}-{}-{}.md",
+            date,
+            safe_slug(&entry.source_name),
+            &digest[..12]
+        );
+        let mut bytes = format!(
+            "---\nsource: {}\nimport_date: {}\n---\n",
+            yaml_string(&entry.source_provenance),
+            date
+        )
+        .into_bytes();
+        bytes.extend_from_slice(entry.text.as_bytes());
+        writes.push(HomeWrite {
+            relative_path: PathBuf::from("memory/imports").join(filename),
+            bytes,
+        });
+    }
+
+    let mut destinations = BTreeSet::new();
+    let mut total_bytes = 0usize;
+    for write in &writes {
+        if !destinations.insert(write.relative_path.clone()) {
+            return Err(OnboardingHomeWritePlanError::DestinationCollision);
+        }
+        total_bytes = total_bytes
+            .checked_add(write.bytes.len())
+            .ok_or(OnboardingHomeWritePlanError::TotalBytesExceeded)?;
+        if total_bytes > ONBOARDING_IMPORT_MAX_TOTAL_BYTES {
+            return Err(OnboardingHomeWritePlanError::TotalBytesExceeded);
+        }
+    }
+    Ok(OnboardingHomeWritePlan { writes })
+}
+
+fn safe_slug(input: &str) -> String {
+    let mut slug = String::new();
+    let mut separator = false;
+    for character in input.chars() {
+        if character.is_ascii_alphanumeric() {
+            if slug.len() == ONBOARDING_IMPORT_MAX_SLUG_BYTES {
+                break;
+            }
+            slug.push(character.to_ascii_lowercase());
+            separator = false;
+        } else if !slug.is_empty() && !separator && slug.len() < ONBOARDING_IMPORT_MAX_SLUG_BYTES {
+            slug.push('-');
+            separator = true;
+        }
+    }
+    while slug.ends_with('-') {
+        slug.pop();
+    }
+    if slug.is_empty() {
+        "item".to_owned()
+    } else {
+        slug
+    }
+}
+
+fn yaml_string(value: &str) -> String {
+    serde_json::to_string(value).expect("serializing a string cannot fail")
+}
 
 #[derive(Debug)]
 pub struct HomeError {
