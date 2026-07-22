@@ -19,8 +19,9 @@ rushing above 400 tokens.
 
 Muniment will run the Kokoro v1.0 INT8 graph in-process through the **ONNX
 Runtime v1.20.1 C API**, CPU execution provider only, pinned to tag commit
-`5c1b7ccbff7e5141c1da7a9d963d660e5741c319`. The Python `kokoro-onnx` package
-is not shipped. Its MIT-licensed implementation at model-release commit
+`5c1b7ccbff7e5141c1da7a9d963d660e5741c319`. The full Python `kokoro-onnx`
+package and its inference path are not shipped; its tokenizer module is vendored
+unchanged for the G2P worker. Its MIT-licensed implementation at model-release commit
 `6843c53fc280ab130b7a8d206ebd3407e094efdc` is the reference for graph inputs,
 vocabulary, normalization, and output handling; the native implementation must
 match versioned conformance fixtures derived from that revision.
@@ -58,16 +59,25 @@ Portuguese, Japanese, and Mandarin, but upstream warns that non-English G2P
 can be weak or thin. Their presence is not a product support claim; adding a
 language requires a pinned G2P pipeline and target-language ear tests.
 
-English G2P uses an unmodified **eSpeak NG 1.52.0** executable, tag commit
-`4870adfa25b1a32b4361592f1be8a40337c58d6c`, invoked as a bounded local child
-process with `en-us` or `en-gb`, IPA, punctuation, and stress enabled. It is
-not dynamically or statically linked into Muniment. The executable and its
-data are app-owned; PATH, a system eSpeak installation, environment overrides,
-and downloads at run time are forbidden. The native normalizer and
-post-phonemization substitutions reproduce `kokoro-onnx` commit
-`6843c53fc280ab130b7a8d206ebd3407e094efdc`, including whitespace/quote,
-number, time, currency, abbreviation, punctuation, and Kokoro-vocabulary
-filtering behavior. Conformance fixtures cover both accents and malformed,
+English G2P uses the reference stack itself: **CPython 3.12.8** (tag commit
+`2dc476bcb9142cd25d7e1d52392b73a3dcdf1756`),
+**phonemizer-fork 3.3.1**, and **espeakng-loader 0.2.4**, including its bundled
+**eSpeak NG 1.52.0 shared library and data**. Package versions, transitive
+versions, source/wheel filenames, byte sizes, and SHA-256 hashes are fixed by
+`uv.lock` at `kokoro-onnx` commit
+`6843c53fc280ab130b7a8d206ebd3407e094efdc`; installation must use that lock
+with hash verification and no dependency re-resolution. The app invokes the
+pinned `Tokenizer.normalize_text` and `Tokenizer.phonemize` implementation in
+an app-owned, isolated Python worker process. Whole-input normalization occurs
+exactly once; each source slice is then phonemized with `norm=False`. That call
+fixes `preserve_punctuation=True`
+and `with_stress=True`, uses the bundled shared library/data paths, and applies
+the revision's ordered normalization, `kokoro` pronunciation corrections,
+`ʲ→j`, `r→ɹ`, `x→k`, `ɬ→l`, hundred/z/ninety regex corrections, vocabulary
+filter, and outer trim. PATH, `PHONEMIZER_ESPEAK_LIBRARY`, locale/environment
+overrides, system eSpeak, package-manager fallback, and run-time downloads are
+forbidden. Conformance means exact UTF-8 phoneme strings and token-id vectors
+from that function and revision for both accents; fixtures cover malformed,
 empty, numeric, currency, URL, code, emoji, and mixed-script input.
 
 Input is valid Unicode text. Normalize to NFC, replace invalid scalar/control
@@ -77,29 +87,70 @@ does not start inference. Read-aloud does not interpret Markdown: the later
 integration slice must first derive visible response text without hidden
 markup, URLs, or code metadata and pass only that text to this boundary.
 
-Segmentation is deterministic and occurs after normalization and English G2P.
-Sentence punctuation is preferred, then clauses, then whitespace. Adjacent
-units are greedily packed toward **100–200 Kokoro vocabulary tokens**. A
-segment may contain at most **400 tokens**. A segment below **20 tokens** is
-merged with an adjacent segment when the combined result remains at most 400;
-otherwise it is synthesized as-is so short replies are never dropped or
-padded with invented speech. An individual overlong unit is split at the last
-whitespace before 400 tokens, or at the token boundary only when no whitespace
-exists. Boundaries preserve every normalized character exactly once and never
-split a Unicode scalar, number, URL, or abbreviation when a preceding safe
-boundary exists. Tests must assert no empty, duplicate, omitted, or over-400
-segment at 0, 1, 19, 20, 200, 400, and 401-token boundaries.
+Segmentation partitions normalized **source text before G2P**. Source slices
+are contiguous half-open UTF-8 ranges whose concatenation is exactly the
+normalized text; punctuation belongs to the slice on its left and intervening
+whitespace belongs to the slice on its right. Empty edge whitespace is removed
+only by the pinned normalizer. Before choosing boundaries, scan left-to-right
+and mark URL-like non-whitespace runs beginning `http://`, `https://`, or
+`www.`, numeric runs matching `[+\-]?[0-9][0-9,.:/\-]*%?`, and dotted initialism
+or title runs matching `(?:[A-Za-z]\.){2,}|(?:Dr|Mr|Ms|Mrs)\.` as protected.
+Matches use leftmost-longest order as listed and cannot overlap. Candidate
+ends are Unicode-scalar boundaries excluding those inside protected runs,
+immediately before `.?!,;:` or a closing quote/bracket, or inside or immediately
+after a whitespace run. Thus punctuation/closers cannot be detached from
+preceding text, and a whitespace run can only begin the right slice. A
+candidate's token count is obtained by phonemizing that exact source slice
+with the selected accent and counting the
+result after Kokoro vocabulary filtering; source character count is never used
+as a proxy.
+
+Starting at offset zero, choose the farthest candidate end whose resulting
+slice is at most **200 tokens**. If none advances, choose the farthest end at
+most **400**. If none advances because the current protected run alone exceeds
+400, waive
+protection for that run only and choose the farthest Unicode-scalar end at most
+400. If even one scalar produces more than 400 tokens, return a typed
+`unsupported-input` error rather than truncate it. Repeat to end of input.
+Then make one left-to-right repair pass: for each segment below **20 tokens**,
+merge it with its right neighbor if re-phonemizing the combined source is at
+most 400; for the final segment (or when the right merge exceeds 400), merge
+left if that recomputed result is at most 400; otherwise retain it. After a
+right merge, replace the pair and continue with the next segment; after a left
+merge, replace the pair and continue after it. Never make a second pass.
+Finally phonemize each resulting source slice once for model
+input. No slice may be empty or exceed 400 tokens; short replies are retained,
+and no source byte is duplicated or omitted.
+
+Normative boundary examples use `K(s)` for the pinned phonemize-and-filter
+token count (the fixture records the actual phonemes and ids):
+
+- Given source `S + " B."`, where fixture text `S` ends in a period and
+  `K(S)=195`, `K(" B.")=9`, and `K(S + " B.")=204`, initial packing yields
+  `[S, " B."]`; repair merges the final short slice left into one segment.
+- Given `"Visit " + U`, where fixture URL `U` is protected and `K(U)=401`, only
+  `U` may lose protection; it splits at the farthest scalar boundary with
+  `K≤400`, and neither source bytes nor the remainder are discarded.
+- For `2026-07-22 update`, the numeric run is protected even when normalization
+  expands it and `K("2026-07-22")` differs from its 10 source scalars. Packing
+  uses `K`, not character count; it keeps the run whole unless the run itself
+  exceeds 400.
+
+Tests must assert the exact source ranges, phonemes, and token ids, with no
+empty, duplicate, omitted, or over-400 segment at 0, 1, 19, 20, 200, 400, and
+401-token boundaries and for each example above.
 
 ### Cancellation and privacy boundary
 
 Each request has a monotonically increasing generation id and cancellation
 token. Cancellation sets ONNX Runtime's terminate flag for an active run,
-kills a still-running G2P child, stops scheduling segments, clears unplayed PCM,
+interrupts and joins the G2P worker, stops scheduling segments, clears
+unplayed PCM,
 and returns `cancelled` rather than partial success. Already handed-off audio
 is stopped and drained by the later playback slice. Results from an older
 generation are discarded even if they race with cancellation or a replacement
 request. Shutdown uses the same path and waits for the worker; no detached
-inference or G2P process may remain.
+inference or G2P worker may remain.
 
 No input text, phonemes, voice vectors, generated PCM, or derived voice data
 may leave the device or enter telemetry, crash reports, the control plane, Pi,
@@ -113,11 +164,12 @@ to the selected local audio device crosses the native synthesis boundary.
 The supported targets match the desktop release baseline: macOS universal2
 (`arm64` and `x86_64`), Windows `x86_64`, and Linux `x86_64`. CI must fail
 closed for any other target. The installed runtime set contains target-native
-ONNX Runtime v1.20.1 CPU libraries, the separately executable eSpeak NG 1.52.0
-and its data, and the two model assets. No CUDA, CoreML, DirectML, system
-library, Python, or package-manager fallback is allowed. Acquisition and the
-choice to bundle or download these payloads remain a follow-up; either path
-must use the same descriptors.
+ONNX Runtime v1.20.1 CPU libraries, CPython 3.12.8 and the fully locked G2P
+environment (including phonemizer-fork and the eSpeak NG shared library/data),
+and the two model assets. No CUDA, CoreML, DirectML, system library, or
+package-manager fallback is allowed. Acquisition and the choice to bundle or
+download these payloads remain a follow-up; either path must use the same
+descriptors.
 
 Before first use, and again after app update or any failed load, an app-owned
 manifest verifies every expected filename, regular-file type, byte count, and
@@ -135,16 +187,15 @@ pinned converted assets, and mark Muniment modifications without implying
 endorsement. The voices are model data under that same declared model license,
 not MIT wrapper code.
 
-eSpeak NG 1.52.0 is GPL-3.0-or-later. It remains a separate unmodified program
-rather than a linked library. A distribution carrying it must provide the
-complete corresponding source by a GPL-compliant method for the required
-period, include GPLv3 and upstream notices, permit replacement/modification of
-the executable, and provide installation information if legally required.
-Release legal review must confirm this process boundary and source-delivery
-plan before shipping; failure reopens the G2P choice rather than silently
-using a system binary. `THIRD_PARTY_NOTICES.md` records the notices knowable at
-decision time, and the packaged license inventory must be reconciled against
-the actual native payload before release.
+phonemizer-fork 3.3.1 is GPL-3.0 and eSpeak NG 1.52.0 is GPL-3.0-or-later;
+CPython 3.12.8 is PSF-2.0. Distributions must include their licenses and notices,
+provide complete corresponding source for the GPL components by a compliant
+method for the required period, and satisfy replacement/installation-information
+requirements where applicable. espeakng-loader 0.2.4 does not declare a
+license in its wheel metadata, so legal approval of its redistribution and a
+reconciled notice inventory for every locked transitive package are release
+gates. Failure reopens the G2P choice. `THIRD_PARTY_NOTICES.md` records the
+notices knowable at decision time.
 
 ### Target-hardware validation matrix
 
@@ -168,8 +219,8 @@ PCM, total synthesis wall time, audio duration, real-time factor (`wall time /
 audio duration`), and process peak RSS. The gate on every target is warm RTF
 **≤ 1.0**, p95 time to first playable PCM **≤ 1.0 s**, cold load **≤ 5.0 s**,
 and peak RSS **≤ 1.0 GiB**, with no crash, leak, or unbounded growth over 100
-requests. Cancellation must silence and drain within **200 ms**, leave no child
-process, and permit the next request to speak correctly; no post-cancel buffer
+requests. Cancellation must silence and drain within **200 ms**, leave no G2P
+worker, and permit the next request to speak correctly; no post-cancel buffer
 from a stale generation may play.
 
 Two listeners ear-test `af_heart`/`en-us` and at least one British voice with
@@ -189,16 +240,15 @@ titlebar stop control, and settings UI to later slices.
 
 ## Considered alternatives
 
-- Ship the Python `kokoro-onnx` package. Rejected: Python and its broad package
-  graph are not needed for a two-file native inference boundary.
+- Ship the Python `kokoro-onnx` inference package. Rejected: inference remains
+  native ONNX Runtime. Its locked Python G2P stack is retained because it is
+  the selected reference behavior and avoids inventing an incompatible CLI.
 - Use FP32 or FP16 graphs. Rejected for the baseline package size and CPU/memory
   target; quality remains protected by ear tests.
 - Advertise every language represented in the voice bundle. Rejected until
   each has a reproducibly pinned G2P path and target-language validation.
-- Use system eSpeak NG. Rejected because its version, data, availability, and
-  phonemes vary by machine. Linking bundled eSpeak into the closed process is
-  also rejected; the separate executable boundary keeps its GPL obligations
-  explicit.
+- Use system or CLI eSpeak NG. Rejected because version, data, invocation, and
+  wrapper postprocessing can vary and do not reproduce the pinned reference.
 - Use an OS voice fallback. It may remain a separately labelled product option,
   but it cannot satisfy or mask the reproducible Kokoro contract.
 
@@ -207,7 +257,7 @@ titlebar stop control, and settings UI to later slices.
 The native slice has one small CPU graph, one complete voice bundle, a stable
 PCM contract, deterministic bounded work, race-safe cancellation, and an
 honest English-only claim. The payload is about 120.6 MB before native runtime
-and G2P files. INT8 quality and the eSpeak distribution plan remain explicit
+and G2P files. INT8 quality and the G2P distribution plan remain explicit
 release gates rather than assumptions.
 
 ## Sources

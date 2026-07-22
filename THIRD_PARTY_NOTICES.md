@@ -69,8 +69,14 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
-English grapheme-to-phoneme conversion uses the unmodified eSpeak NG 1.52.0
-program as a separate executable. eSpeak NG is licensed under GPL-3.0-or-later.
-A distribution containing it must include the GPLv3 license, upstream notices,
-and a GPL-compliant complete-corresponding-source offer or delivery. See
+English grapheme-to-phoneme conversion uses CPython 3.12.8 (PSF-2.0),
+phonemizer-fork 3.3.1 (GPL-3.0), and espeakng-loader 0.2.4 with its bundled
+eSpeak NG 1.52.0 shared library and data (eSpeak NG is GPL-3.0-or-later).
+Distribution must include the applicable licenses and upstream notices and a
+GPL-compliant complete-corresponding-source offer or delivery. The
+espeakng-loader 0.2.4 wheel metadata declares no license; redistribution is a
+release legal-review gate. Exact package artifacts and transitive dependencies
+are fixed in the `kokoro-onnx` commit's `uv.lock`. See
+<https://pypi.org/project/phonemizer-fork/3.3.1/>,
+<https://pypi.org/project/espeakng-loader/0.2.4/>, and
 <https://github.com/espeak-ng/espeak-ng/tree/1.52.0>.
