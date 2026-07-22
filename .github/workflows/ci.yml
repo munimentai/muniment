@@ -309,10 +309,19 @@ jobs:
 
           # Keep the check command inside --cmd and pass clone credentials only
           # through --repo, matching the desktop build invocation below.
-          ssh -i "$key" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
-              -o BatchMode=yes -o ServerAliveInterval=30 -o ServerAliveCountMax=8 \
-              desktopci@10.1.10.10 \
-              "sudo desktop-ci $PLATFORM --repo '$repo_url' --ref '$REF' --cmd '$cmd'"
+          attempt=1
+          while true; do
+            ssh -i "$key" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+                -o BatchMode=yes -o ServerAliveInterval=30 -o ServerAliveCountMax=8 \
+                desktopci@10.1.10.10 \
+                "sudo desktop-ci $PLATFORM --repo '$repo_url' --ref '$REF' --cmd '$cmd'"
+            status=$?
+            if [ "$PLATFORM" != "windows" ] || [ "$status" -ne 3 ] || [ "$attempt" -ge 2 ]; then
+              exit "$status"
+            fi
+            echo "desktop-ci infrastructure setup failed; retrying once"
+            attempt=$((attempt + 1))
+          done
 
   desktop-build:
     if: github.event_name == 'pull_request' && needs.smoke.outputs.desktop == 'true'
