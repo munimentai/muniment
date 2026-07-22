@@ -41,8 +41,8 @@ describe('installed production chat contract', () => {
     expect(spec).toContain("route.getText()).trim()).not.toBe('')")
   })
 
-  it('captures the completed round trip in the raw artifact directory', () => {
-    expect(spec).toContain("browser.saveScreenshot(path.join(rawDir, '03-chat-complete.png'))")
+  it('does not capture the rendered production conversation', () => {
+    expect(spec.slice(spec.indexOf('const prompt ='))).not.toContain('saveScreenshot')
   })
 })
 
@@ -361,6 +361,7 @@ describe('artifact redaction boundary', () => {
     ['injected text', { 'app.log': 'private-user' }, { MUNIMENT_E2E_USERNAME: 'private-user' }],
     ['header token', { 'driver.log': 'Authorization: Bearer abcdefghijklmnopqrstuvwxyz' }, {}],
     ['unapproved screenshot', { 'failure-current-window.png': Buffer.from('not safe') }, {}],
+    ['rendered production conversation', { '03-chat-complete.png': Buffer.from('not safe') }, {}],
   ])('blocks %s before destination creation', (_name, files, env) => {
     const { result, destination } = redact(files, env)
     expect(result.status).not.toBe(0); expect(fs.existsSync(destination)).toBe(false)

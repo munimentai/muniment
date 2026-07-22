@@ -119,7 +119,6 @@ describe('installed nightly', () => {
     const route = await response.$('.route-value')
     await route.waitForDisplayed()
     expect((await route.getText()).trim()).not.toBe('')
-    await browser.saveScreenshot(path.join(rawDir, '03-chat-complete.png'))
 
     let frontendLogs
     try {
