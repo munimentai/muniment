@@ -489,6 +489,7 @@ mod tests {
         for fail in [
             Fail::SyncFile(0),
             Fail::SyncFile(1),
+            Fail::SyncFile(2),
             Fail::SyncStage,
             Fail::ReplacePointer,
             Fail::SyncRoot,
@@ -506,6 +507,13 @@ mod tests {
                 lifecycle.resolve_current().unwrap(),
                 KokoroCurrentRevision::Current(_)
             ));
+            assert!(fs::read_dir(&root).unwrap().all(|entry| {
+                !entry
+                    .unwrap()
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with(".current.")
+            }));
             fs::remove_dir_all(root).unwrap();
         }
 
