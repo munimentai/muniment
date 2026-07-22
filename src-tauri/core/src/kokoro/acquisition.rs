@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use super::{
     verify_kokoro_artifact, verify_revision_stage, KokoroArtifactDescriptor,
-    KokoroRevisionDescriptor, KokoroVerificationError,
+    KokoroRevisionDescriptor, KokoroVerificationError, KOKORO_V1,
 };
 
 const READ_BUFFER_BYTES: usize = 64 * 1024;
@@ -159,6 +159,13 @@ impl std::error::Error for KokoroAcquisitionError {}
 pub fn remaining_stage_bytes(
     staging_root: &Path,
     install_id: &str,
+) -> Result<u64, KokoroAcquisitionError> {
+    remaining_revision_stage_bytes(staging_root, install_id, &KOKORO_V1)
+}
+
+fn remaining_revision_stage_bytes(
+    staging_root: &Path,
+    install_id: &str,
     manifest: &KokoroRevisionDescriptor,
 ) -> Result<u64, KokoroAcquisitionError> {
     if !safe_component(install_id) {
@@ -218,7 +225,6 @@ pub fn remaining_stage_bytes(
 pub fn acquire_kokoro_stage<T, C, K, W>(
     staging_root: &Path,
     install_id: &str,
-    manifest: &'static KokoroRevisionDescriptor,
     limits: KokoroAcquisitionLimits,
     transport: &mut T,
     runtime: KokoroAcquisitionRuntime<'_, K, W>,
@@ -233,7 +239,6 @@ where
     acquire_kokoro_stage_with_progress(
         staging_root,
         install_id,
-        manifest,
         limits,
         transport,
         runtime,
@@ -244,6 +249,34 @@ where
 
 #[allow(clippy::too_many_arguments)]
 pub fn acquire_kokoro_stage_with_progress<T, C, K, W>(
+    staging_root: &Path,
+    install_id: &str,
+    limits: KokoroAcquisitionLimits,
+    transport: &mut T,
+    runtime: KokoroAcquisitionRuntime<'_, K, W>,
+    cancellation: &C,
+    progress: &mut dyn FnMut(KokoroDownloadProgress),
+) -> Result<PathBuf, KokoroAcquisitionError>
+where
+    T: KokoroDownloadTransport,
+    C: KokoroCancellation,
+    K: KokoroAcquisitionClock,
+    W: KokoroRetryWait,
+{
+    acquire_revision_stage_with_progress(
+        staging_root,
+        install_id,
+        &KOKORO_V1,
+        limits,
+        transport,
+        runtime,
+        cancellation,
+        progress,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn acquire_revision_stage_with_progress<T, C, K, W>(
     staging_root: &Path,
     install_id: &str,
     manifest: &'static KokoroRevisionDescriptor,
@@ -345,6 +378,9 @@ where
                 && verify_kokoro_artifact(&completed, artifact).is_ok() =>
         {
             return Ok(())
+        }
+        Ok(metadata) if !metadata.file_type().is_file() => {
+            return Err(KokoroAcquisitionError::InvalidStage)
         }
         Ok(_) => remove_file(&completed)?,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
@@ -632,4 +668,376 @@ fn safe_component(value: &str) -> bool {
         && value != ".."
         && !value.contains(['/', '\\'])
         && !Path::new(value).is_absolute()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use sha2::{Digest, Sha256};
+    use std::cell::Cell;
+    use std::collections::VecDeque;
+    use std::io::{self, Cursor};
+    use std::rc::Rc;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static ARTIFACTS: [KokoroArtifactDescriptor; 2] = [
+        KokoroArtifactDescriptor {
+            filename: "model",
+            source_url: "https://github.com/example/model",
+            byte_size: 2,
+            sha256: "fb8e20fc2e4c3f248c60c39bd652f3c1347298bb977b8b4d5903b85055620603",
+        },
+        KokoroArtifactDescriptor {
+            filename: "voices",
+            source_url: "https://github.com/example/voices",
+            byte_size: 2,
+            sha256: "21e721c35a5823fdb452fa2f9f0a612c74fb952e06927489c6b27a43b817bed4",
+        },
+    ];
+    static MANIFEST: KokoroRevisionDescriptor = KokoroRevisionDescriptor {
+        identity: "fixture",
+        artifacts: &ARTIFACTS,
+    };
+
+    enum Reply {
+        Response(u16, Option<(u64, u64, u64)>, Vec<u8>),
+        Error(KokoroTransportError),
+    }
+    struct Transport {
+        replies: VecDeque<Reply>,
+        requests: Vec<(usize, u64, Duration, String)>,
+    }
+    impl Transport {
+        fn new(replies: impl IntoIterator<Item = Reply>) -> Self {
+            Self {
+                replies: replies.into_iter().collect(),
+                requests: Vec::new(),
+            }
+        }
+    }
+    impl KokoroDownloadTransport for Transport {
+        type Body = Cursor<Vec<u8>>;
+        fn download(
+            &mut self,
+            request: &KokoroDownloadRequest,
+        ) -> Result<KokoroDownloadResponse<Self::Body>, KokoroTransportError> {
+            self.requests.push((
+                request.artifact_index,
+                request.offset,
+                request.limits.deadline,
+                request.url().to_owned(),
+            ));
+            match self.replies.pop_front().expect("missing fixture reply") {
+                Reply::Response(status, content_range, bytes) => Ok(KokoroDownloadResponse {
+                    status,
+                    content_range,
+                    body: Cursor::new(bytes),
+                }),
+                Reply::Error(error) => Err(error),
+            }
+        }
+    }
+
+    fn root() -> PathBuf {
+        static NEXT: AtomicU64 = AtomicU64::new(0);
+        let path = std::env::temp_dir().join(format!(
+            "muniment-kokoro-acquisition-{}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::Relaxed)
+        ));
+        fs::create_dir(&path).unwrap();
+        path
+    }
+    fn no_wait(_: Duration, _: &dyn KokoroCancellation) -> bool {
+        true
+    }
+    fn acquire(root: &Path, transport: &mut Transport) -> Result<PathBuf, KokoroAcquisitionError> {
+        acquire_revision_stage_with_progress(
+            root,
+            "install",
+            &MANIFEST,
+            KokoroAcquisitionLimits {
+                max_attempts: 1,
+                ..Default::default()
+            },
+            transport,
+            KokoroAcquisitionRuntime {
+                clock: &|| Duration::ZERO,
+                retry_wait: &mut no_wait,
+            },
+            &|| false,
+            &mut |_| {},
+        )
+    }
+
+    #[test]
+    fn fresh_download_returns_only_the_verified_two_file_stage() {
+        let root = root();
+        let mut transport = Transport::new([
+            Reply::Response(200, None, b"ab".to_vec()),
+            Reply::Response(200, None, b"cd".to_vec()),
+        ]);
+        let stage = acquire(&root, &mut transport).unwrap();
+        assert_eq!(fs::read(stage.join("model")).unwrap(), b"ab");
+        assert_eq!(fs::read(stage.join("voices")).unwrap(), b"cd");
+        assert_eq!(fs::read_dir(&stage).unwrap().count(), 2);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn resumes_ranges_restarts_on_200_and_reports_aggregate_progress() {
+        let root = root();
+        fs::create_dir(root.join("install")).unwrap();
+        fs::write(root.join("install/model.part"), b"a").unwrap();
+        fs::write(root.join("install/voices.part"), b"c").unwrap();
+        let mut transport = Transport::new([
+            Reply::Response(206, Some((1, 1, 2)), b"b".to_vec()),
+            Reply::Response(200, None, b"cd".to_vec()),
+        ]);
+        let mut progress = Vec::new();
+        acquire_revision_stage_with_progress(
+            &root,
+            "install",
+            &MANIFEST,
+            KokoroAcquisitionLimits::default(),
+            &mut transport,
+            KokoroAcquisitionRuntime {
+                clock: &|| Duration::ZERO,
+                retry_wait: &mut no_wait,
+            },
+            &|| false,
+            &mut |value| progress.push(value),
+        )
+        .unwrap();
+        assert_eq!(
+            transport.requests.iter().map(|r| r.1).collect::<Vec<_>>(),
+            [1, 1]
+        );
+        assert!(progress.contains(&KokoroDownloadProgress {
+            downloaded_bytes: 2,
+            total_bytes: 4
+        }));
+        assert!(progress.contains(&KokoroDownloadProgress {
+            downloaded_bytes: 4,
+            total_bytes: 4
+        }));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn retries_transient_and_server_failures_under_one_deadline() {
+        let root = root();
+        let now = Rc::new(Cell::new(Duration::ZERO));
+        let clock_now = Rc::clone(&now);
+        let wait_now = Rc::clone(&now);
+        let mut wait = move |_: Duration, _: &dyn KokoroCancellation| {
+            wait_now.set(wait_now.get() + Duration::from_secs(2));
+            true
+        };
+        let mut transport = Transport::new([
+            Reply::Error(KokoroTransportError::Transient),
+            Reply::Response(503, None, vec![]),
+            Reply::Response(200, None, b"ab".to_vec()),
+            Reply::Response(200, None, b"cd".to_vec()),
+        ]);
+        acquire_revision_stage_with_progress(
+            &root,
+            "install",
+            &MANIFEST,
+            KokoroAcquisitionLimits {
+                deadline: Duration::from_secs(10),
+                ..Default::default()
+            },
+            &mut transport,
+            KokoroAcquisitionRuntime {
+                clock: &move || clock_now.get(),
+                retry_wait: &mut wait,
+            },
+            &|| false,
+            &mut |_| {},
+        )
+        .unwrap();
+        assert_eq!(
+            transport.requests.iter().map(|r| r.2).collect::<Vec<_>>(),
+            [
+                Duration::from_secs(10),
+                Duration::from_secs(8),
+                Duration::from_secs(6),
+                Duration::from_secs(6)
+            ]
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn short_stream_retries_from_the_preserved_offset() {
+        let root = root();
+        let mut transport = Transport::new([
+            Reply::Response(200, None, b"a".to_vec()),
+            Reply::Response(206, Some((1, 1, 2)), b"b".to_vec()),
+            Reply::Response(200, None, b"cd".to_vec()),
+        ]);
+        acquire_revision_stage_with_progress(
+            &root,
+            "install",
+            &MANIFEST,
+            KokoroAcquisitionLimits::default(),
+            &mut transport,
+            KokoroAcquisitionRuntime {
+                clock: &|| Duration::ZERO,
+                retry_wait: &mut no_wait,
+            },
+            &|| false,
+            &mut |_| {},
+        )
+        .unwrap();
+        assert_eq!(
+            transport.requests.iter().map(|r| r.1).collect::<Vec<_>>(),
+            [0, 1, 0]
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn malformed_ranges_and_bad_bodies_never_expose_complete_files() {
+        for reply in [
+            Reply::Response(206, Some((1, 1, 2)), b"ab".to_vec()),
+            Reply::Response(206, None, b"ab".to_vec()),
+            Reply::Response(206, Some((0, 0, 2)), b"ab".to_vec()),
+            Reply::Response(206, Some((0, 1, 3)), b"ab".to_vec()),
+            Reply::Response(200, Some((0, 1, 2)), b"ab".to_vec()),
+            Reply::Response(200, None, b"a".to_vec()),
+            Reply::Response(200, None, b"abc".to_vec()),
+            Reply::Response(200, None, b"zz".to_vec()),
+        ] {
+            let root = root();
+            let mut transport = Transport::new([reply]);
+            let result = acquire(&root, &mut transport);
+            assert!(result.is_err());
+            assert!(!root.join("install/model").exists());
+            fs::remove_dir_all(root).unwrap();
+        }
+    }
+
+    #[test]
+    fn cancellation_during_streaming_preserves_resumable_bytes() {
+        struct Chunks {
+            reads: Rc<Cell<u8>>,
+        }
+        impl Read for Chunks {
+            fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+                self.reads.set(self.reads.get() + 1);
+                buffer[0] = b'a';
+                Ok(1)
+            }
+        }
+        let root = root();
+        fs::create_dir(root.join("install")).unwrap();
+        let reads = Rc::new(Cell::new(0));
+        let result = stream_response(
+            Chunks {
+                reads: Rc::clone(&reads),
+            },
+            &root.join("install/model.part"),
+            2,
+            &|| Duration::ZERO,
+            Duration::ZERO,
+            Duration::from_secs(1),
+            &|| reads.get() == 1,
+            0,
+            4,
+            &mut |_| {},
+        );
+        assert_eq!(result, Err(KokoroAcquisitionError::Cancelled));
+        assert_eq!(fs::read(root.join("install/model.part")).unwrap(), b"a");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn incomplete_and_hostile_stage_entries_fail_closed() {
+        let root = root();
+        fs::create_dir(root.join("install")).unwrap();
+        fs::write(root.join("install/model"), b"ab").unwrap();
+        assert!(verify_revision_stage(&root.join("install"), &MANIFEST).is_err());
+        fs::write(root.join("install/voices"), b"cd").unwrap();
+        fs::write(root.join("install/unexpected"), b"x").unwrap();
+        assert!(verify_revision_stage(&root.join("install"), &MANIFEST).is_err());
+        fs::remove_file(root.join("install/unexpected")).unwrap();
+        fs::create_dir(root.join("install/unexpected")).unwrap();
+        assert!(verify_revision_stage(&root.join("install"), &MANIFEST).is_err());
+        fs::remove_dir(root.join("install/unexpected")).unwrap();
+        fs::remove_file(root.join("install/model")).unwrap();
+        fs::create_dir(root.join("install/model")).unwrap();
+        assert!(verify_revision_stage(&root.join("install"), &MANIFEST).is_err());
+        fs::remove_dir(root.join("install/model")).unwrap();
+        fs::create_dir(root.join("install/model.part")).unwrap();
+        assert_eq!(
+            remaining_revision_stage_bytes(&root, "install", &MANIFEST),
+            Err(KokoroAcquisitionError::InvalidStage)
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symlinks_are_rejected_for_complete_and_part_paths() {
+        use std::os::unix::fs::symlink;
+        for name in ["model", "model.part"] {
+            let root = root();
+            fs::create_dir(root.join("install")).unwrap();
+            fs::write(root.join("target"), b"ab").unwrap();
+            symlink(root.join("target"), root.join("install").join(name)).unwrap();
+            assert_eq!(
+                remaining_revision_stage_bytes(&root, "install", &MANIFEST),
+                Err(KokoroAcquisitionError::InvalidStage)
+            );
+            fs::remove_dir_all(root).unwrap();
+        }
+    }
+
+    #[test]
+    fn public_accounting_is_pinned_and_cannot_select_fixture_artifacts() {
+        let root = root();
+        assert_eq!(
+            remaining_revision_stage_bytes(&root, "install", &MANIFEST),
+            Ok(4)
+        );
+        assert_eq!(remaining_stage_bytes(&root, "install"), Ok(120_575_669));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn public_acquisition_can_request_only_the_pinned_revision() {
+        let root = root();
+        let mut transport = Transport::new([Reply::Error(KokoroTransportError::Rejected)]);
+        assert_eq!(
+            acquire_kokoro_stage(
+                &root,
+                "install",
+                KokoroAcquisitionLimits {
+                    max_attempts: 1,
+                    ..Default::default()
+                },
+                &mut transport,
+                KokoroAcquisitionRuntime {
+                    clock: &|| Duration::ZERO,
+                    retry_wait: &mut no_wait,
+                },
+                &|| false,
+            ),
+            Err(KokoroAcquisitionError::Rejected)
+        );
+        assert_eq!(transport.requests.len(), 1);
+        assert_eq!(
+            transport.requests[0].3,
+            crate::kokoro::KOKORO_ARTIFACTS[0].source_url
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn fixture_hashes_are_intentional() {
+        assert_eq!(format!("{:x}", Sha256::digest(b"ab")), ARTIFACTS[0].sha256);
+        assert_eq!(format!("{:x}", Sha256::digest(b"cd")), ARTIFACTS[1].sha256);
+    }
 }

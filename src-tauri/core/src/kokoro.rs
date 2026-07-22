@@ -10,16 +10,16 @@ use sha2::{Digest, Sha256};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct KokoroArtifactDescriptor {
-    pub filename: &'static str,
-    pub source_url: &'static str,
-    pub byte_size: u64,
-    pub sha256: &'static str,
+    pub(crate) filename: &'static str,
+    pub(crate) source_url: &'static str,
+    pub(crate) byte_size: u64,
+    pub(crate) sha256: &'static str,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct KokoroRevisionDescriptor {
-    pub identity: &'static str,
-    pub artifacts: &'static [KokoroArtifactDescriptor; 2],
+    pub(crate) identity: &'static str,
+    pub(crate) artifacts: &'static [KokoroArtifactDescriptor; 2],
 }
 
 pub const KOKORO_ARTIFACTS: [KokoroArtifactDescriptor; 2] = [
