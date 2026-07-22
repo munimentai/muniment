@@ -59,6 +59,40 @@ export function onboardingExtractionState(state, extractedEntries) {
   return { ...state, name: 'pre-triage', extractedEntries, error: undefined }
 }
 
+export function onboardingTriagingState(state) {
+  return { ...state, name: 'triaging', report: undefined, error: undefined }
+}
+
+export function onboardingTriageReportState(state, response) {
+  return { ...state, name: 'triage-review', report: response.report, error: undefined }
+}
+
+export function onboardingTriageErrorState(state, error) {
+  const messages = {
+    empty: 'No approved files are available. Return to archive review and select at least one file.',
+    tooManyEntries: 'Too many approved files were selected. Return to archive review and choose fewer files.',
+    malformedSource: 'An approved file has invalid source information. Return to archive review and choose the ZIP again.',
+    inputTooLarge: 'The approved files are too large to review together. Return to archive review and choose fewer files.',
+    localAiUnavailable: 'Local AI is unavailable. Start the local model and try again.',
+    transportFailed: 'Local AI could not be reached. Check that the local model is running and try again.',
+    invalidModelResponse: 'Local AI returned an incomplete proposal. Try generating it again.',
+    requestFailed: 'The proposal could not be generated. Try again.',
+  }
+  return {
+    ...state,
+    name: 'triage-error',
+    error: messages[error?.kind] ?? 'The proposal could not be generated. Try again.',
+  }
+}
+
+export function onboardingTriageConfirmedState(state) {
+  return { ...state, name: 'triage-confirmed', error: undefined }
+}
+
+export function onboardingReturnToArchiveReviewState(state) {
+  return { ...state, name: 'reviewing', report: undefined, error: undefined }
+}
+
 export function onboardingExtractionErrorState(state, error) {
   const messages = {
     emptySelection: 'Select at least one file to continue.',
