@@ -107,6 +107,48 @@ fn rejects_empty_and_colliding_inputs_with_stable_kinds() {
 }
 
 #[test]
+fn revalidates_publicly_constructed_reports() {
+    let date = NaiveDate::from_ymd_opt(2026, 1, 2).unwrap();
+    let entries = [entry("x", "p", "body")];
+    let mut invalid = report(&["One", "Two"]);
+    invalid.user_type.clear();
+    assert_eq!(
+        compile_onboarding_home_write_plan(&invalid, &entries, date),
+        Err(OnboardingHomeWritePlanError::EmptyInput)
+    );
+
+    for (agents, expected) in [
+        (vec![], OnboardingHomeWritePlanError::EmptyInput),
+        (
+            vec!["One".into()],
+            OnboardingHomeWritePlanError::InvalidReport,
+        ),
+        (vec!["".into()], OnboardingHomeWritePlanError::EmptyInput),
+        (
+            vec!["One".into(); 4],
+            OnboardingHomeWritePlanError::InvalidReport,
+        ),
+    ] {
+        let invalid = OnboardingTriageReport {
+            user_type: "Builder".into(),
+            proposed_home_layout: "Layout".into(),
+            starter_agents: agents,
+        };
+        assert_eq!(
+            compile_onboarding_home_write_plan(&invalid, &entries, date),
+            Err(expected)
+        );
+    }
+
+    let mut invalid = report(&["One", "Two"]);
+    invalid.proposed_home_layout = "x".repeat(32 * 1024);
+    assert_eq!(
+        compile_onboarding_home_write_plan(&invalid, &entries, date),
+        Err(OnboardingHomeWritePlanError::InvalidReport)
+    );
+}
+
+#[test]
 fn enforces_entry_count_and_total_byte_bounds() {
     let report = report(&["One", "Two"]);
     let date = NaiveDate::from_ymd_opt(2026, 1, 2).unwrap();
@@ -125,6 +167,15 @@ fn enforces_entry_count_and_total_byte_bounds() {
     );
     assert_eq!(
         compile_onboarding_home_write_plan(&report, &[too_large], date),
+        Err(OnboardingHomeWritePlanError::TotalBytesExceeded)
+    );
+
+    let oversized_aggregate = [
+        entry("one.md", "source-one", &"x".repeat(200 * 1024)),
+        entry("two.md", "source-two", &"y".repeat(200 * 1024)),
+    ];
+    assert_eq!(
+        compile_onboarding_home_write_plan(&report, &oversized_aggregate, date),
         Err(OnboardingHomeWritePlanError::TotalBytesExceeded)
     );
 }

@@ -9,7 +9,12 @@ use std::{
     path::{Component, Path, PathBuf},
 };
 
-use crate::{import_preview::ExtractedEntry, llama::OnboardingTriageReport};
+use crate::{
+    import_preview::ExtractedEntry,
+    llama::{
+        OnboardingTriageReport, OnboardingTriageReportError, ONBOARDING_TRIAGE_MAX_OUTPUT_BYTES,
+    },
+};
 
 const CONFIG_FILE: &str = "home.json";
 const HOME_DIRECTORIES: [&str; 4] = ["memory", "agents", "projects", "sessions"];
@@ -51,6 +56,7 @@ impl OnboardingHomeWritePlan {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OnboardingHomeWritePlanError {
     EmptyInput,
+    InvalidReport,
     TooManyEntries,
     DestinationCollision,
     TotalBytesExceeded,
@@ -60,6 +66,7 @@ impl fmt::Display for OnboardingHomeWritePlanError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         let message = match self {
             Self::EmptyInput => "The onboarding import input is empty.",
+            Self::InvalidReport => "The onboarding report is invalid.",
             Self::TooManyEntries => "The onboarding import contains too many entries.",
             Self::DestinationCollision => "The onboarding import destinations collide.",
             Self::TotalBytesExceeded => "The onboarding import plan is too large.",
@@ -76,6 +83,54 @@ pub fn compile_onboarding_home_write_plan(
     approved_entries: &[ExtractedEntry],
     import_date: chrono::NaiveDate,
 ) -> Result<OnboardingHomeWritePlan, OnboardingHomeWritePlanError> {
+    if report.user_type.trim().is_empty()
+        || report.proposed_home_layout.trim().is_empty()
+        || report.starter_agents.is_empty()
+        || report
+            .starter_agents
+            .iter()
+            .any(|agent| agent.trim().is_empty())
+    {
+        return Err(OnboardingHomeWritePlanError::EmptyInput);
+    }
+    if !(2..=3).contains(&report.starter_agents.len()) {
+        return Err(OnboardingHomeWritePlanError::InvalidReport);
+    }
+    let report_len = "## User type\n\n\n\n## Proposed Home layout\n\n\n\n## Starter agents\n\n\n"
+        .len()
+        .checked_add(report.user_type.len())
+        .and_then(|length| length.checked_add(report.proposed_home_layout.len()))
+        .and_then(|length| {
+            report
+                .starter_agents
+                .iter()
+                .try_fold(length, |length, agent| {
+                    length.checked_add(2)?.checked_add(agent.len())
+                })
+        })
+        .and_then(|length| length.checked_add(report.starter_agents.len() - 1))
+        .ok_or(OnboardingHomeWritePlanError::InvalidReport)?;
+    if report_len > ONBOARDING_TRIAGE_MAX_OUTPUT_BYTES {
+        return Err(OnboardingHomeWritePlanError::InvalidReport);
+    }
+    let report_markdown = format!(
+        "## User type\n\n{}\n\n## Proposed Home layout\n\n{}\n\n## Starter agents\n\n{}\n",
+        report.user_type,
+        report.proposed_home_layout,
+        report
+            .starter_agents
+            .iter()
+            .map(|agent| format!("- {agent}"))
+            .collect::<Vec<_>>()
+            .join("\n")
+    );
+    match OnboardingTriageReport::parse(&report_markdown) {
+        Ok(parsed) if parsed == *report => {}
+        Err(OnboardingTriageReportError::EmptySection) => {
+            return Err(OnboardingHomeWritePlanError::EmptyInput);
+        }
+        _ => return Err(OnboardingHomeWritePlanError::InvalidReport),
+    }
     if approved_entries.is_empty()
         || approved_entries.iter().any(|entry| {
             entry.source_name.trim().is_empty()
@@ -90,39 +145,61 @@ pub fn compile_onboarding_home_write_plan(
     }
 
     let date = import_date.format("%Y-%m-%d").to_string();
-    let mut writes = Vec::with_capacity(1 + report.starter_agents.len() + approved_entries.len());
-    let report_markdown = format!(
-        "## User type\n\n{}\n\n## Proposed Home layout\n\n{}\n\n## Starter agents\n\n{}\n",
-        report.user_type,
-        report.proposed_home_layout,
-        report
-            .starter_agents
-            .iter()
-            .map(|agent| format!("- {agent}"))
-            .collect::<Vec<_>>()
-            .join("\n")
-    );
-    writes.push(HomeWrite {
-        relative_path: PathBuf::from(format!("memory/onboarding-report-{date}.md")),
-        bytes: report_markdown.into_bytes(),
-    });
+    let mut destinations =
+        Vec::with_capacity(1 + report.starter_agents.len() + approved_entries.len());
+    destinations.push(PathBuf::from(format!("memory/onboarding-report-{date}.md")));
+    let mut total_bytes = report_markdown.len();
 
     for agent in &report.starter_agents {
-        writes.push(HomeWrite {
-            relative_path: PathBuf::from("agents").join(format!("agent-{}.md", safe_slug(agent))),
-            bytes: format!("# {agent}\n").into_bytes(),
-        });
+        destinations.push(PathBuf::from("agents").join(format!("agent-{}.md", safe_slug(agent))));
+        add_payload_len(&mut total_bytes, 3usize.checked_add(agent.len()))?;
     }
 
     for entry in approved_entries {
-        let identity = format!("{}\0{}", entry.source_provenance, entry.source_name);
-        let digest = format!("{:x}", Sha256::digest(identity.as_bytes()));
-        let filename = format!(
+        let mut hasher = Sha256::new();
+        hasher.update(entry.source_provenance.as_bytes());
+        hasher.update(b"\0");
+        hasher.update(entry.source_name.as_bytes());
+        let digest = format!("{:x}", hasher.finalize());
+        destinations.push(PathBuf::from("memory/imports").join(format!(
             "{}-{}-{}.md",
             date,
             safe_slug(&entry.source_name),
             &digest[..12]
-        );
+        )));
+        let provenance_len = json_string_len(&entry.source_provenance)?;
+        let frontmatter_len = "---\nsource: \nimport_date: \n---\n"
+            .len()
+            .checked_add(provenance_len)
+            .and_then(|length| length.checked_add(date.len()))
+            .ok_or(OnboardingHomeWritePlanError::TotalBytesExceeded)?;
+        add_payload_len(
+            &mut total_bytes,
+            frontmatter_len.checked_add(entry.text.len()),
+        )?;
+    }
+
+    let mut unique_destinations = BTreeSet::new();
+    if destinations
+        .iter()
+        .any(|path| !unique_destinations.insert(path.clone()))
+    {
+        return Err(OnboardingHomeWritePlanError::DestinationCollision);
+    }
+
+    let mut writes = Vec::with_capacity(destinations.len());
+    let mut destinations = destinations.into_iter();
+    writes.push(HomeWrite {
+        relative_path: destinations.next().expect("report destination exists"),
+        bytes: report_markdown.into_bytes(),
+    });
+    for agent in &report.starter_agents {
+        writes.push(HomeWrite {
+            relative_path: destinations.next().expect("agent destination exists"),
+            bytes: format!("# {agent}\n").into_bytes(),
+        });
+    }
+    for entry in approved_entries {
         let mut bytes = format!(
             "---\nsource: {}\nimport_date: {}\n---\n",
             yaml_string(&entry.source_provenance),
@@ -131,25 +208,47 @@ pub fn compile_onboarding_home_write_plan(
         .into_bytes();
         bytes.extend_from_slice(entry.text.as_bytes());
         writes.push(HomeWrite {
-            relative_path: PathBuf::from("memory/imports").join(filename),
+            relative_path: destinations.next().expect("entry destination exists"),
             bytes,
         });
     }
+    Ok(OnboardingHomeWritePlan { writes })
+}
 
-    let mut destinations = BTreeSet::new();
-    let mut total_bytes = 0usize;
-    for write in &writes {
-        if !destinations.insert(write.relative_path.clone()) {
-            return Err(OnboardingHomeWritePlanError::DestinationCollision);
+fn add_payload_len(
+    total: &mut usize,
+    payload_len: Option<usize>,
+) -> Result<(), OnboardingHomeWritePlanError> {
+    *total = total
+        .checked_add(payload_len.ok_or(OnboardingHomeWritePlanError::TotalBytesExceeded)?)
+        .ok_or(OnboardingHomeWritePlanError::TotalBytesExceeded)?;
+    if *total > ONBOARDING_IMPORT_MAX_TOTAL_BYTES {
+        return Err(OnboardingHomeWritePlanError::TotalBytesExceeded);
+    }
+    Ok(())
+}
+
+fn json_string_len(value: &str) -> Result<usize, OnboardingHomeWritePlanError> {
+    struct ByteCounter(usize);
+
+    impl io::Write for ByteCounter {
+        fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+            self.0 = self
+                .0
+                .checked_add(bytes.len())
+                .ok_or_else(|| io::Error::other("serialized string length overflow"))?;
+            Ok(bytes.len())
         }
-        total_bytes = total_bytes
-            .checked_add(write.bytes.len())
-            .ok_or(OnboardingHomeWritePlanError::TotalBytesExceeded)?;
-        if total_bytes > ONBOARDING_IMPORT_MAX_TOTAL_BYTES {
-            return Err(OnboardingHomeWritePlanError::TotalBytesExceeded);
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
         }
     }
-    Ok(OnboardingHomeWritePlan { writes })
+
+    let mut counter = ByteCounter(0);
+    serde_json::to_writer(&mut counter, value)
+        .map_err(|_| OnboardingHomeWritePlanError::TotalBytesExceeded)?;
+    Ok(counter.0)
 }
 
 fn safe_slug(input: &str) -> String {
