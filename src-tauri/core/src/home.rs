@@ -1818,16 +1818,17 @@ fn same_home_file(left: &fs::Metadata, right: &cap_std::fs::Metadata) -> bool {
 #[cfg(windows)]
 fn same_file(left: &cap_std::fs::Metadata, right: &cap_std::fs::Metadata) -> bool {
     use cap_std::fs::MetadataExt;
-    left.volume_serial_number() == right.volume_serial_number()
-        && left.file_index() == right.file_index()
+    left.file_attributes() == right.file_attributes()
+        && left.creation_time() == right.creation_time()
+        && left.file_size() == right.file_size()
 }
 
 #[cfg(windows)]
 fn file_identity(metadata: &cap_std::fs::Metadata) -> FileIdentity {
     use cap_std::fs::MetadataExt;
     FileIdentity {
-        first: u64::from(metadata.volume_serial_number().unwrap_or_default()),
-        second: metadata.file_index().unwrap_or_default(),
+        first: metadata.creation_time(),
+        second: metadata.file_size() ^ (u64::from(metadata.file_attributes()) << 32),
     }
 }
 
@@ -1835,8 +1836,9 @@ fn file_identity(metadata: &cap_std::fs::Metadata) -> FileIdentity {
 fn same_home_file(left: &fs::Metadata, right: &cap_std::fs::Metadata) -> bool {
     use cap_std::fs::MetadataExt as CapMetadataExt;
     use std::os::windows::fs::MetadataExt as StdMetadataExt;
-    StdMetadataExt::volume_serial_number(left) == CapMetadataExt::volume_serial_number(right)
-        && StdMetadataExt::file_index(left) == CapMetadataExt::file_index(right)
+    StdMetadataExt::file_attributes(left) == CapMetadataExt::file_attributes(right)
+        && StdMetadataExt::creation_time(left) == CapMetadataExt::creation_time(right)
+        && StdMetadataExt::file_size(left) == CapMetadataExt::file_size(right)
 }
 
 fn validate_home(home: &Path) -> Result<(), HomeError> {
