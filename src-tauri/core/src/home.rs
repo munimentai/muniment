@@ -6,7 +6,7 @@ use sha2::{Digest, Sha256};
 use std::{
     collections::BTreeSet,
     fmt, fs,
-    fs::OpenOptions,
+    fs::{File, OpenOptions},
     io::{self, Write},
     path::{Component, Path, PathBuf},
 };
@@ -169,12 +169,18 @@ pub fn persist_onboarding_home_write_plan(
     home: &Path,
     plan: &OnboardingHomeWritePlan,
 ) -> Result<(), OnboardingHomePersistenceError> {
-    persist_onboarding_home_write_plan_with_hook(home, plan, |_, _| Ok(()))
+    persist_onboarding_home_write_plan_with_hook(
+        home,
+        plan,
+        |_, file| file.sync_all(),
+        |_, _| Ok(()),
+    )
 }
 
 fn persist_onboarding_home_write_plan_with_hook(
     home: &Path,
     plan: &OnboardingHomeWritePlan,
+    mut stage_sync: impl FnMut(usize, &File) -> io::Result<()>,
     mut before_publish: impl FnMut(usize, &Dir) -> io::Result<()>,
 ) -> Result<(), OnboardingHomePersistenceError> {
     let relative_destinations = validate_persistence_plan(plan)?;
@@ -209,13 +215,14 @@ fn persist_onboarding_home_write_plan_with_hook(
         parent: Dir,
         destination_name: std::ffi::OsString,
         temporary_name: String,
-        identity: same_file::Handle,
+        identity: Option<same_file::Handle>,
     }
 
     let mut staged = Vec::with_capacity(plan.writes.len());
     let mut published = Vec::with_capacity(plan.writes.len());
     let result = (|| {
-        for ((relative_path, destination), write) in relative_destinations.iter().zip(&plan.writes)
+        for (index, ((relative_path, destination), write)) in
+            relative_destinations.iter().zip(&plan.writes).enumerate()
         {
             let parent_path = destination
                 .parent()
@@ -238,18 +245,19 @@ fn persist_onboarding_home_write_plan_with_hook(
                 .write(true)
                 .follow(FollowSymlinks::No);
             let mut file = parent.open_with(&temporary_name, &options)?.into_std();
-            file.write_all(write.bytes())?;
-            file.flush()?;
-            file.sync_all()?;
-            let identity = same_file::Handle::from_file(file.try_clone()?)?;
             staged.push(StagedWrite {
                 relative_path: relative_path.clone(),
                 parent_path: parent_path.to_owned(),
                 parent,
                 destination_name,
                 temporary_name,
-                identity,
+                identity: None,
             });
+            file.write_all(write.bytes())?;
+            file.flush()?;
+            stage_sync(index, &file)?;
+            let identity = same_file::Handle::from_file(file.try_clone()?)?;
+            staged[index].identity = Some(identity);
         }
 
         for (index, write) in staged.iter().enumerate() {
@@ -299,8 +307,15 @@ fn persist_onboarding_home_write_plan_with_hook(
     if result.is_err() {
         for &index in published.iter().rev() {
             let write = &staged[index];
-            if is_published_file(&write.parent, &write.destination_name, &write.identity)
-                .unwrap_or(false)
+            if is_published_file(
+                &write.parent,
+                &write.destination_name,
+                write
+                    .identity
+                    .as_ref()
+                    .expect("published writes have a recorded identity"),
+            )
+            .unwrap_or(false)
             {
                 let _ = write.parent.remove_file(&write.destination_name);
             }
@@ -869,12 +884,17 @@ mod onboarding_write_plan_tests {
             ],
         };
 
-        let result = persist_onboarding_home_write_plan_with_hook(&home, &plan, |index, parent| {
-            if index == 1 {
-                parent.write("second.md", b"user collision")?;
-            }
-            Ok(())
-        });
+        let result = persist_onboarding_home_write_plan_with_hook(
+            &home,
+            &plan,
+            |_, file| file.sync_all(),
+            |index, parent| {
+                if index == 1 {
+                    parent.write("second.md", b"user collision")?;
+                }
+                Ok(())
+            },
+        );
         assert!(matches!(
             result,
             Err(OnboardingHomePersistenceError::DestinationConflict { relative_path })
@@ -917,14 +937,19 @@ mod onboarding_write_plan_tests {
                 contents: "planned".into(),
             }],
         };
-        let result = persist_onboarding_home_write_plan_with_hook(&home, &plan, |_, _| {
-            fs::rename(
-                home.join("memory/imports"),
-                home.join("memory/pinned-imports"),
-            )?;
-            symlink(&outside, home.join("memory/imports"))?;
-            Ok(())
-        });
+        let result = persist_onboarding_home_write_plan_with_hook(
+            &home,
+            &plan,
+            |_, file| file.sync_all(),
+            |_, _| {
+                fs::rename(
+                    home.join("memory/imports"),
+                    home.join("memory/pinned-imports"),
+                )?;
+                symlink(&outside, home.join("memory/imports"))?;
+                Ok(())
+            },
+        );
 
         assert!(matches!(
             result,
@@ -941,6 +966,39 @@ mod onboarding_write_plan_tests {
                 .ends_with(".tmp")));
         fs::remove_dir_all(home).unwrap();
         fs::remove_dir_all(outside).unwrap();
+    }
+
+    #[test]
+    fn staging_failure_removes_temporary_file_without_publishing() {
+        let home = persistence_test_home("staging-failure");
+        let plan = OnboardingHomeWritePlan {
+            writes: vec![HomeWrite {
+                relative_path: "memory/new.md".into(),
+                contents: "planned".into(),
+            }],
+        };
+
+        let result = persist_onboarding_home_write_plan_with_hook(
+            &home,
+            &plan,
+            |_, _| Err(io::Error::other("injected staging sync failure")),
+            |_, _| Ok(()),
+        );
+
+        assert!(matches!(
+            result,
+            Err(OnboardingHomePersistenceError::Io(error))
+                if error.to_string() == "injected staging sync failure"
+        ));
+        assert!(!home.join("memory/new.md").exists());
+        assert!(!fs::read_dir(home.join("memory")).unwrap().any(|entry| {
+            entry
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .ends_with(".tmp")
+        }));
+        fs::remove_dir_all(home).unwrap();
     }
 }
 
