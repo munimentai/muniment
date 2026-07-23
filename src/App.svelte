@@ -1076,7 +1076,7 @@
       </section>
     {:else if auth.name === 'signed-in'}
       <section class="workspace">
-        {#if draggingFiles}<div class="drop-affordance" role="status"><strong>Drop files to add them</strong><span>Selected locally · not sent to the model</span></div>{/if}
+        {#if draggingFiles}<div class="drop-affordance" role="status"><strong>Drop files to add them</strong><span>Saved locally · supported images sent with first prompt</span></div>{/if}
         <header class="titlebar"><span class="thread-title">New thread</span><span class="thread-id">local · durable</span><span class="title-spacer"></span><button class="quiet" aria-label="Open artifact rail">⌘J</button></header>
         <aside class="sidebar">
           <div class="side-brand"><svg width="24" height="24" viewBox="0 0 48 48" aria-hidden="true"><path d={markD} stroke-width="5" /></svg><strong>muniment</strong></div>
@@ -1099,7 +1099,7 @@
                   {#if message.attachments?.length}
                     <ul class="message-attachments" aria-label="Saved attachments">
                       {#each message.attachments as attachment}
-                        <li><span>{attachment.displayName}</span><span>{formatByteSize(attachment.byteLength)}</span><strong>Saved locally · not sent to model</strong></li>
+                        <li><span>{attachment.displayName}</span><span>{formatByteSize(attachment.byteLength)}</span><strong>Saved locally · supported images sent with first prompt</strong></li>
                       {/each}
                     </ul>
                   {/if}
