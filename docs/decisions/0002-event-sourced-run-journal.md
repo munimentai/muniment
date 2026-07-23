@@ -9,10 +9,9 @@
 Each desktop run has an **append-only SQLite event journal**. It is the
 authoritative record of live and resumed run state. UI state, receipts, the
 mobile relay, and snapshots are disposable projections that can be rebuilt.
-This ADR specifies the contract; it includes no production implementation.
-It adopts event sourcing, not Temporal. Follow-up slice 1 (schema, envelope,
-validated open, and atomic append contract) is implemented. A server thread store may own synced
-conversation records, but cannot amend the history of a locally executed run.
+The local journal contract and its Pi integration are implemented. It adopts
+event sourcing, not Temporal. A server thread store may own synced conversation
+records, but cannot amend the history of a locally executed run.
 
 ## Identity, ordering, and appends
 
@@ -191,7 +190,8 @@ local Pi run.
   projection compatibility are release obligations.
 - Full delta retention costs disk; retention and CAS bound it without weakening
   audit history during the retained period.
-- Production behavior is unchanged until follow-up slices land.
+- Journal-backed rebuild and effect handling are production behavior; relay
+  publication remains a deferred projection.
 
 ## Follow-up implementation slices
 
@@ -199,9 +199,11 @@ local Pi run.
 upcasters, integrity checks, and contract tests, without Pi wiring.
 2. **Implemented:** Deterministic UI/run reducer and crash fixtures. Disposable
    snapshots remain deferred until the reducer contract has production usage.
-3. Pi domain/effect translation and receipt projection.
-4. Retention, export/deletion, CAS collection, and crash-safe compaction.
-5. A journal-backed relay projection/cursor when the existing full-fidelity
-   relay backlog ticket is implemented; this ADR does not duplicate it.
+3. **Implemented:** Pi domain/effect translation and receipt projection.
+4. **Implemented:** Retention, export/deletion, CAS collection, and crash-safe
+   compaction.
+5. **Deferred:** A journal-backed relay projection/cursor when the existing
+   full-fidelity relay backlog ticket is implemented; this ADR does not
+   duplicate it.
 
 Relay publication remains explicitly deferred to slice 5.
