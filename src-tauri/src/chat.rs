@@ -4073,14 +4073,11 @@ mod tests {
         std::fs::create_dir_all(&directory).unwrap();
         let png = directory.join("renamed.bin");
         let unsupported = directory.join("notes.png");
-        let jpeg = directory.join("second.dat");
-        std::fs::write(
-            &png,
-            b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0IEND\xaeB`\x82",
-        )
-        .unwrap();
+        let gif = directory.join("second.dat");
+        std::fs::write(&png, valid_test_png()).unwrap();
         std::fs::write(&unsupported, b"durable but not an image").unwrap();
-        std::fs::write(&jpeg, b"\xff\xd8payload\xff\xd9").unwrap();
+        let gif_data = "R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==";
+        std::fs::write(&gif, STANDARD.decode(gif_data).unwrap()).unwrap();
         let storage = Arc::new(Mutex::new(ChatStorage {
             journal: RunJournal::open(directory.join("runs.sqlite3")).unwrap(),
             cas: LocalCas::open(&directory.join("cas")).unwrap(),
@@ -4094,7 +4091,7 @@ mod tests {
             vec![
                 SelectedFile { path: png },
                 SelectedFile { path: unsupported },
-                SelectedFile { path: jpeg },
+                SelectedFile { path: gif },
             ],
             None,
         )
@@ -4104,10 +4101,10 @@ mod tests {
             prepared_pi_images(&storage, &run_id).unwrap(),
             vec![
                 PiImageContent::new(
-                    "iVBORw0KGgoAAAANSUhEUgAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAElFTkSuQmCC",
+                    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
                     "image/png"
                 ),
-                PiImageContent::new("/9hwYXlsb2Fk/9k=", "image/jpeg"),
+                PiImageContent::new(gif_data, "image/gif"),
             ]
         );
         assert_eq!(
@@ -4128,7 +4125,139 @@ mod tests {
     }
 
     #[test]
+    fn coordinator_sends_exact_ordered_images_and_preserves_text_only_prompt_shape() {
+        let _environment = lock_pi_environment();
+        for with_images in [true, false] {
+            let app = tauri::test::mock_app();
+            let directory =
+                std::env::temp_dir().join(format!("muniment-prompt-capture-{}", Uuid::now_v7()));
+            std::fs::create_dir_all(&directory).unwrap();
+            let request_log = directory.join("requests.jsonl");
+            let mut files = Vec::new();
+            if with_images {
+                let png = directory.join("first.bin");
+                let unsupported = directory.join("local-only.png");
+                let gif = directory.join("second.dat");
+                std::fs::write(&png, valid_test_png()).unwrap();
+                std::fs::write(&unsupported, b"not an image").unwrap();
+                std::fs::write(
+                    &gif,
+                    STANDARD
+                        .decode("R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==")
+                        .unwrap(),
+                )
+                .unwrap();
+                files = vec![
+                    SelectedFile { path: png },
+                    SelectedFile { path: unsupported },
+                    SelectedFile { path: gif },
+                ];
+            }
+            let storage = Arc::new(Mutex::new(ChatStorage {
+                journal: RunJournal::open(directory.join("runs.sqlite3")).unwrap(),
+                cas: LocalCas::open(&directory.join("cas")).unwrap(),
+            }));
+            let run_id = Uuid::now_v7().to_string();
+            let prepared =
+                prepare_new_run(&storage, &run_id, "workspace-a", Some("owner"), files, None)
+                    .unwrap();
+
+            let executable_name = if cfg!(windows) {
+                "sidecar-test-stub.exe"
+            } else {
+                "sidecar-test-stub"
+            };
+            let test_executable = std::env::current_exe().unwrap();
+            let stub = test_executable
+                .parent()
+                .unwrap()
+                .parent()
+                .unwrap()
+                .join("examples")
+                .join(executable_name);
+            assert!(stub.is_file(), "sidecar test stub was not built");
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            let receipt_url = format!("http://{}/receipt", listener.local_addr().unwrap());
+            let receipt_server = std::thread::spawn(move || {
+                use std::io::{Read, Write};
+                let mut stream = accept_receipt_request(listener);
+                let mut request = [0; 4096];
+                let _ = stream.read(&mut request).unwrap();
+                let body = r#"{"route":"capture-stub","model":"test"}"#;
+                write!(
+                    stream,
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    body.len(),
+                    body
+                )
+                .unwrap();
+            });
+            std::env::set_var("MUNIMENT_PI_ROOT", &directory);
+            std::env::set_var("MUNIMENT_PI_TEST_EXECUTABLE", &stub);
+            std::env::set_var("PI_RESUME_STUB_REQUESTS", &request_log);
+            coordinate(
+                app.handle().clone(),
+                Arc::clone(&storage),
+                Arc::new(Mutex::new(None)),
+                run_id,
+                "original text prompt".into(),
+                "token".into(),
+                Some("owner".into()),
+                ChatGrant {
+                    workspace: "workspace-a".into(),
+                    gateway_url: "https://gateway.invalid".into(),
+                    virtual_key: "virtual-key".into(),
+                    model: None,
+                    receipt_url,
+                },
+                Arc::new(AtomicBool::new(false)),
+                Arc::new(Mutex::new(None)),
+                Arc::new(Mutex::new(None)),
+                None,
+                None,
+                Some(prepared),
+            );
+            receipt_server.join().unwrap();
+            for key in [
+                "MUNIMENT_PI_ROOT",
+                "MUNIMENT_PI_TEST_EXECUTABLE",
+                "PI_RESUME_STUB_REQUESTS",
+            ] {
+                std::env::remove_var(key);
+            }
+
+            let requests = std::fs::read_to_string(&request_log).unwrap();
+            let prompt: serde_json::Value =
+                serde_json::from_str(requests.lines().next().unwrap()).unwrap();
+            assert_eq!(prompt["type"], "prompt");
+            assert_eq!(prompt["message"], "original text prompt");
+            if with_images {
+                assert_eq!(
+                    prompt["images"],
+                    json!([
+                        {
+                            "type": "image",
+                            "data": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+                            "mimeType": "image/png"
+                        },
+                        {
+                            "type": "image",
+                            "data": "R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==",
+                            "mimeType": "image/gif"
+                        }
+                    ])
+                );
+            } else {
+                assert!(prompt.get("images").is_none());
+            }
+            drop(storage);
+            std::fs::remove_dir_all(directory).unwrap();
+        }
+    }
+
+    #[test]
     fn missing_cas_image_and_oversized_image_fail_with_non_leaking_copy() {
+        let _environment = lock_pi_environment();
         for (name, bytes, remove_object) in [
             ("private-missing.png", valid_test_png(), true),
             (
@@ -4140,7 +4269,7 @@ mod tests {
                             usize::try_from(muniment_core::attachment::MAX_PI_IMAGE_BYTES + 1)
                                 .unwrap()
                         ];
-                    bytes[..2].copy_from_slice(b"\xff\xd8");
+                    bytes[..3].copy_from_slice(b"\xff\xd8\xff");
                     let length = bytes.len();
                     bytes[length - 2..].copy_from_slice(b"\xff\xd9");
                     bytes
@@ -4158,7 +4287,7 @@ mod tests {
                 cas: LocalCas::open(&directory.join("cas")).unwrap(),
             }));
             let run_id = Uuid::now_v7().to_string();
-            prepare_new_run(
+            let prepared = prepare_new_run(
                 &storage,
                 &run_id,
                 "workspace-a",
@@ -4184,14 +4313,44 @@ mod tests {
                     .unwrap();
             }
 
-            let error = prepared_pi_images(&storage, &run_id).unwrap_err();
-            assert_eq!(error, attachment_error());
+            let request_log = directory.join("requests.jsonl");
+            std::env::set_var("MUNIMENT_PI_ROOT", &directory);
+            std::env::set_var("PI_RESUME_STUB_REQUESTS", &request_log);
+            coordinate(
+                tauri::test::mock_app().handle().clone(),
+                Arc::clone(&storage),
+                Arc::new(Mutex::new(None)),
+                run_id.clone(),
+                "private prompt bytes".into(),
+                "token".into(),
+                Some("owner".into()),
+                ChatGrant {
+                    workspace: "workspace-a".into(),
+                    gateway_url: "https://gateway.invalid".into(),
+                    virtual_key: "virtual-key".into(),
+                    model: None,
+                    receipt_url: "https://receipt.invalid".into(),
+                },
+                Arc::new(AtomicBool::new(false)),
+                Arc::new(Mutex::new(None)),
+                Arc::new(Mutex::new(None)),
+                None,
+                None,
+                Some(prepared),
+            );
+            std::env::remove_var("MUNIMENT_PI_ROOT");
+            std::env::remove_var("PI_RESUME_STUB_REQUESTS");
+            assert!(!request_log.exists(), "Pi must receive zero prompts");
+            let events = storage.lock().unwrap().journal.events(&run_id).unwrap();
+            assert_eq!(events.last().unwrap().event_type, "run.failed");
+            let public_error = serde_json::to_string(events.last().unwrap()).unwrap();
+            assert!(public_error.contains(&attachment_error()));
             for secret in [
                 path.to_string_lossy().as_ref(),
                 attachment_hash.as_str(),
-                "payload",
+                "private prompt bytes",
             ] {
-                assert!(!error.contains(secret));
+                assert!(!public_error.contains(secret));
             }
 
             drop(storage);
@@ -4200,8 +4359,9 @@ mod tests {
     }
 
     fn valid_test_png() -> Vec<u8> {
-        b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0IEND\xaeB`\x82"
-            .to_vec()
+        STANDARD
+            .decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=")
+            .unwrap()
     }
 
     #[test]
@@ -4455,6 +4615,7 @@ mod tests {
         std::fs::create_dir_all(&directory).unwrap();
         let args_log = directory.join("args.txt");
         let prompt_log = directory.join("prompt.txt");
+        let request_log = directory.join("requests.jsonl");
         let session_name = format!("{}.jsonl", Uuid::now_v7());
         let sessions = app.path().app_data_dir().unwrap().join("pi-sessions");
         std::fs::create_dir_all(&sessions).unwrap();
@@ -4527,6 +4688,7 @@ mod tests {
         std::env::set_var("MUNIMENT_PI_TEST_EXECUTABLE", &stub);
         std::env::set_var("PI_RESUME_STUB_ARGS", &args_log);
         std::env::set_var("PI_RESUME_STUB_PROMPTS", &prompt_log);
+        std::env::set_var("PI_RESUME_STUB_REQUESTS", &request_log);
         let (sender, receiver) = std::sync::mpsc::channel();
         coordinate(
             app.handle().clone(),
@@ -4560,6 +4722,7 @@ mod tests {
             "MUNIMENT_PI_TEST_EXECUTABLE",
             "PI_RESUME_STUB_ARGS",
             "PI_RESUME_STUB_PROMPTS",
+            "PI_RESUME_STUB_REQUESTS",
         ] {
             std::env::remove_var(key);
         }
@@ -4590,6 +4753,9 @@ mod tests {
         let sent_prompt = std::fs::read_to_string(prompt_log).unwrap();
         assert_eq!(sent_prompt, format!("{RESUME_PROMPT}\n"));
         assert!(!sent_prompt.contains("ORIGINAL PROTECTED PROMPT"));
+        let request: serde_json::Value =
+            serde_json::from_str(std::fs::read_to_string(request_log).unwrap().trim()).unwrap();
+        assert!(request.get("images").is_none());
 
         std::fs::remove_file(sessions.join(session_name)).unwrap();
         drop(shared);
