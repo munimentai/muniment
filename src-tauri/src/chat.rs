@@ -15,7 +15,7 @@ use muniment_core::attach::{
     Approval, CommittedResult, ErrorCode, Id, IdempotencyOutcome, IdempotencyStore, Operation,
     Protocol, ProtocolError, Request as AttachRequest, WorkspaceOnboardRequest, WorkspaceOnboarded,
 };
-use muniment_core::attachment::{ingest_attachment, AttachmentMetadata};
+use muniment_core::attachment::{ingest_attachment, prepare_pi_images, AttachmentMetadata};
 use muniment_core::auth::TokenSet;
 use muniment_core::cas::LocalCas;
 use muniment_core::journal::reducer::{
@@ -24,7 +24,8 @@ use muniment_core::journal::reducer::{
 };
 use muniment_core::journal::{EventEnvelope, EventPayload, Provenance, RunJournal};
 use muniment_core::sidecar::pi_chat::{
-    cancel_command, ExtensionUiDialog, ExtensionUiRequest, PiChatEvent, PiRunAdapter, Receipt,
+    cancel_command, ExtensionUiDialog, ExtensionUiRequest, PiChatEvent, PiImageContent,
+    PiRunAdapter, Receipt,
 };
 use muniment_core::sidecar::pi_install::resolve_current;
 use muniment_core::sidecar::{
@@ -1288,6 +1289,25 @@ fn attachment_error() -> String {
     "One or more selected files could not be added. Check the files and try again.".into()
 }
 
+fn prepared_pi_images(
+    storage: &SharedStorage,
+    run_id: &str,
+) -> Result<Vec<PiImageContent>, String> {
+    let mut storage = storage.lock().map_err(|_| attachment_error())?;
+    let events = storage
+        .journal
+        .events(run_id)
+        .map_err(|_| attachment_error())?;
+    prepare_pi_images(&storage.cas, &events)
+        .map_err(|_| attachment_error())
+        .map(|images| {
+            images
+                .into_iter()
+                .map(|image| PiImageContent::new(image.data, image.mime_type))
+                .collect()
+        })
+}
+
 struct OpenSelectedFile {
     file: std::fs::File,
     display_name: String,
@@ -1623,6 +1643,27 @@ fn coordinate<R: tauri::Runtime>(
         }
         return;
     }
+    let images = if resume.is_some() {
+        Vec::new()
+    } else {
+        let images = match prepared_pi_images(&journal, &run_id) {
+            Ok(images) => images,
+            Err(message) => {
+                fail_start(
+                    &app,
+                    &journal,
+                    &mut projector,
+                    &run_id,
+                    &mut seq,
+                    &message,
+                    subject.as_deref(),
+                    false,
+                );
+                return;
+            }
+        };
+        images
+    };
     let mut runtime = runtime
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -1867,9 +1908,14 @@ fn coordinate<R: tauri::Runtime>(
             &mut seq,
             subject.as_deref(),
             || {
-                let (adapter, _) =
-                    PiRunAdapter::start(run_id.clone(), &transport, &prompt, RPC_TIMEOUT)
-                        .map_err(|_| PreparedPromptError::Start)?;
+                let (adapter, _) = PiRunAdapter::start_with_images(
+                    run_id.clone(),
+                    &transport,
+                    &prompt,
+                    images,
+                    RPC_TIMEOUT,
+                )
+                .map_err(|_| PreparedPromptError::Start)?;
                 let adapter = Arc::new(adapter);
                 *active_adapter
                     .lock()
@@ -4019,6 +4065,143 @@ mod tests {
         assert_eq!(events[4].event_type, "model.prompt.accepted");
         drop(storage);
         std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn coordinator_prepares_supported_images_in_journal_order_and_omits_unsupported_files() {
+        let directory = std::env::temp_dir().join(format!("muniment-images-{}", Uuid::now_v7()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let png = directory.join("renamed.bin");
+        let unsupported = directory.join("notes.png");
+        let jpeg = directory.join("second.dat");
+        std::fs::write(
+            &png,
+            b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0IEND\xaeB`\x82",
+        )
+        .unwrap();
+        std::fs::write(&unsupported, b"durable but not an image").unwrap();
+        std::fs::write(&jpeg, b"\xff\xd8payload\xff\xd9").unwrap();
+        let storage = Arc::new(Mutex::new(ChatStorage {
+            journal: RunJournal::open(directory.join("runs.sqlite3")).unwrap(),
+            cas: LocalCas::open(&directory.join("cas")).unwrap(),
+        }));
+        let run_id = Uuid::now_v7().to_string();
+        prepare_new_run(
+            &storage,
+            &run_id,
+            "workspace-a",
+            Some("owner"),
+            vec![
+                SelectedFile { path: png },
+                SelectedFile { path: unsupported },
+                SelectedFile { path: jpeg },
+            ],
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(
+            prepared_pi_images(&storage, &run_id).unwrap(),
+            vec![
+                PiImageContent::new(
+                    "iVBORw0KGgoAAAANSUhEUgAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAElFTkSuQmCC",
+                    "image/png"
+                ),
+                PiImageContent::new("/9hwYXlsb2Fk/9k=", "image/jpeg"),
+            ]
+        );
+        assert_eq!(
+            storage
+                .lock()
+                .unwrap()
+                .journal
+                .events(&run_id)
+                .unwrap()
+                .iter()
+                .filter(|event| matches!(event.payload, EventPayload::Attachment { .. }))
+                .count(),
+            3
+        );
+
+        drop(storage);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn missing_cas_image_and_oversized_image_fail_with_non_leaking_copy() {
+        for (name, bytes, remove_object) in [
+            ("private-missing.png", valid_test_png(), true),
+            (
+                "private-large.jpg",
+                {
+                    let mut bytes =
+                        vec![
+                            0_u8;
+                            usize::try_from(muniment_core::attachment::MAX_PI_IMAGE_BYTES + 1)
+                                .unwrap()
+                        ];
+                    bytes[..2].copy_from_slice(b"\xff\xd8");
+                    let length = bytes.len();
+                    bytes[length - 2..].copy_from_slice(b"\xff\xd9");
+                    bytes
+                },
+                false,
+            ),
+        ] {
+            let directory =
+                std::env::temp_dir().join(format!("muniment-image-fail-{}", Uuid::now_v7()));
+            std::fs::create_dir_all(&directory).unwrap();
+            let path = directory.join(name);
+            std::fs::write(&path, &bytes).unwrap();
+            let storage = Arc::new(Mutex::new(ChatStorage {
+                journal: RunJournal::open(directory.join("runs.sqlite3")).unwrap(),
+                cas: LocalCas::open(&directory.join("cas")).unwrap(),
+            }));
+            let run_id = Uuid::now_v7().to_string();
+            prepare_new_run(
+                &storage,
+                &run_id,
+                "workspace-a",
+                Some("owner"),
+                vec![SelectedFile { path: path.clone() }],
+                None,
+            )
+            .unwrap();
+            let attachment_hash = {
+                let mut storage = storage.lock().unwrap();
+                let events = storage.journal.events(&run_id).unwrap();
+                let EventPayload::Attachment { attachment } = &events[1].payload else {
+                    panic!("attachment event")
+                };
+                attachment.sha256().clone()
+            };
+            if remove_object {
+                storage
+                    .lock()
+                    .unwrap()
+                    .cas
+                    .remove(&attachment_hash)
+                    .unwrap();
+            }
+
+            let error = prepared_pi_images(&storage, &run_id).unwrap_err();
+            assert_eq!(error, attachment_error());
+            for secret in [
+                path.to_string_lossy().as_ref(),
+                attachment_hash.as_str(),
+                "payload",
+            ] {
+                assert!(!error.contains(secret));
+            }
+
+            drop(storage);
+            std::fs::remove_dir_all(directory).unwrap();
+        }
+    }
+
+    fn valid_test_png() -> Vec<u8> {
+        b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0IEND\xaeB`\x82"
+            .to_vec()
     }
 
     #[test]

@@ -2,12 +2,128 @@
 
 use crate::cas::{CasError, ContentHash, LocalCas};
 use crate::journal::{EventEnvelope, EventPayload, JournalError, RunJournal};
+use base64::{engine::general_purpose::STANDARD, Engine as _};
 use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::io::Read;
 
 pub const ATTACHMENT_EVENT_TYPE: &str = "chat.attachment.ingested";
 pub const ATTACHMENT_EVENT_VERSION: u32 = 1;
+pub const MAX_PI_IMAGE_BYTES: u64 = 10 * 1024 * 1024;
+pub const MAX_PI_IMAGE_COUNT: usize = 10;
+pub const MAX_PI_IMAGE_TOTAL_BYTES: u64 = 20 * 1024 * 1024;
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PiAttachmentImage {
+    pub data: String,
+    pub mime_type: &'static str,
+}
+
+#[derive(Debug)]
+pub enum AttachmentDeliveryError {
+    Storage(CasError),
+    InvalidStoredLength,
+    ImageLimit,
+    AmbiguousFormat,
+}
+
+/// Resolves durable attachment events in journal order without exposing their
+/// storage addresses. Unsupported byte formats remain local-only.
+pub fn prepare_pi_images(
+    cas: &LocalCas,
+    events: &[EventEnvelope],
+) -> Result<Vec<PiAttachmentImage>, AttachmentDeliveryError> {
+    let mut decoded = Vec::new();
+    let mut total = 0_u64;
+    for event in events {
+        let EventPayload::Attachment { attachment } = &event.payload else {
+            continue;
+        };
+        let bytes = cas
+            .get_verified(attachment.sha256())
+            .map_err(AttachmentDeliveryError::Storage)?;
+        let byte_length =
+            u64::try_from(bytes.len()).map_err(|_| AttachmentDeliveryError::ImageLimit)?;
+        if byte_length != attachment.byte_length() {
+            return Err(AttachmentDeliveryError::InvalidStoredLength);
+        }
+        let Some(mime_type) = validated_image_type(&bytes)? else {
+            continue;
+        };
+        if byte_length > MAX_PI_IMAGE_BYTES || decoded.len() == MAX_PI_IMAGE_COUNT {
+            return Err(AttachmentDeliveryError::ImageLimit);
+        }
+        total = total
+            .checked_add(byte_length)
+            .ok_or(AttachmentDeliveryError::ImageLimit)?;
+        if total > MAX_PI_IMAGE_TOTAL_BYTES {
+            return Err(AttachmentDeliveryError::ImageLimit);
+        }
+        decoded.push((bytes, mime_type));
+    }
+
+    Ok(decoded
+        .into_iter()
+        .map(|(bytes, mime_type)| PiAttachmentImage {
+            data: STANDARD.encode(bytes),
+            mime_type,
+        })
+        .collect())
+}
+
+fn validated_image_type(bytes: &[u8]) -> Result<Option<&'static str>, AttachmentDeliveryError> {
+    let matches = [
+        (valid_png(bytes), "image/png"),
+        (valid_jpeg(bytes), "image/jpeg"),
+        (valid_gif(bytes), "image/gif"),
+        (valid_webp(bytes), "image/webp"),
+    ];
+    let mut supported = matches
+        .into_iter()
+        .filter_map(|(valid, mime)| valid.then_some(mime));
+    let result = supported.next();
+    if supported.next().is_some() {
+        return Err(AttachmentDeliveryError::AmbiguousFormat);
+    }
+    Ok(result)
+}
+
+fn valid_png(bytes: &[u8]) -> bool {
+    bytes.len() >= 45
+        && bytes.starts_with(b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR")
+        && bytes.ends_with(b"\0\0\0\0IEND\xaeB`\x82")
+}
+
+fn valid_jpeg(bytes: &[u8]) -> bool {
+    bytes.len() >= 4 && bytes.starts_with(b"\xff\xd8") && bytes.ends_with(b"\xff\xd9")
+}
+
+fn valid_gif(bytes: &[u8]) -> bool {
+    bytes.len() >= 14
+        && (bytes.starts_with(b"GIF87a") || bytes.starts_with(b"GIF89a"))
+        && bytes.last() == Some(&0x3b)
+}
+
+fn valid_webp(bytes: &[u8]) -> bool {
+    if bytes.len() < 20
+        || !bytes.starts_with(b"RIFF")
+        || bytes.get(8..12) != Some(&b"WEBP"[..])
+        || !matches!(
+            bytes.get(12..16),
+            Some(b"VP8 ") | Some(b"VP8L") | Some(b"VP8X")
+        )
+    {
+        return false;
+    }
+    let Some(size) = bytes
+        .get(4..8)
+        .and_then(|value| <[u8; 4]>::try_from(value).ok())
+        .map(u32::from_le_bytes)
+    else {
+        return false;
+    };
+    u64::from(size) + 8 == bytes.len() as u64
+}
 
 /// Safe, durable attachment fields. The source path is deliberately absent.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
