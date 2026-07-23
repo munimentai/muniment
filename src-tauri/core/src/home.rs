@@ -712,6 +712,8 @@ pub fn persist_onboarding_home_write_plan_with_hook(
     hook: &mut dyn FnMut(OnboardingPersistHook, usize) -> io::Result<()>,
 ) -> Result<(), HomeError> {
     validate_home(home)?;
+    #[cfg(windows)]
+    let authentication_identity = windows_path_identity(authentication_root);
     let authentication_metadata = fs::symlink_metadata(authentication_root).map_err(|error| {
         HomeError::io(
             "The onboarding import authentication storage could not be inspected.",
@@ -723,15 +725,6 @@ pub fn persist_onboarding_home_write_plan_with_hook(
             "The onboarding import authentication storage is unsafe.",
         ));
     }
-    #[cfg(windows)]
-    let authentication_metadata = Dir::open_ambient_dir(authentication_root, ambient_authority())
-        .and_then(|directory| directory.metadata("."))
-        .map_err(|error| {
-            HomeError::io(
-                "The onboarding import authentication storage could not be inspected.",
-                error,
-            )
-        })?;
     let authentication_root = normalized_absolute(authentication_root)?;
     let home_parent = normalized_absolute(
         home.parent()
@@ -742,6 +735,8 @@ pub fn persist_onboarding_home_write_plan_with_hook(
             "The onboarding import authentication storage is unsafe.",
         ));
     }
+    #[cfg(windows)]
+    let home_identity = windows_path_identity(home);
     let metadata = fs::symlink_metadata(home).map_err(|error| {
         HomeError::io("The onboarding import Home could not be inspected.", error)
     })?;
@@ -750,12 +745,6 @@ pub fn persist_onboarding_home_write_plan_with_hook(
             "The onboarding import Home is not a directory.",
         ));
     }
-    #[cfg(windows)]
-    let metadata = Dir::open_ambient_dir(home, ambient_authority())
-        .and_then(|directory| directory.metadata("."))
-        .map_err(|error| {
-            HomeError::io("The onboarding import Home could not be inspected.", error)
-        })?;
     // Keep validation and locking behavior identical to the public entry point.
     let mut destinations = BTreeSet::new();
     if plan.writes.is_empty() || plan.writes.len() > ONBOARDING_IMPORT_MAX_ENTRIES + 4 {
@@ -797,6 +786,8 @@ pub fn persist_onboarding_home_write_plan_with_hook(
         })?;
     if !same_home_file(
         &authentication_metadata,
+        #[cfg(windows)]
+        authentication_identity,
         &authentication.metadata(".").map_err(|error| {
             HomeError::io(
                 "The onboarding import authentication storage could not be inspected.",
@@ -813,6 +804,8 @@ pub fn persist_onboarding_home_write_plan_with_hook(
         .map_err(|error| HomeError::io("The onboarding import Home could not be opened.", error))?;
     if !same_home_file(
         &metadata,
+        #[cfg(windows)]
+        home_identity,
         &directory.metadata(".").map_err(|error| {
             HomeError::io("The onboarding import Home could not be inspected.", error)
         })?,
@@ -1831,22 +1824,55 @@ fn same_home_file(left: &fs::Metadata, right: &cap_std::fs::Metadata) -> bool {
 
 #[cfg(windows)]
 fn same_file(left: &cap_std::fs::Metadata, right: &cap_std::fs::Metadata) -> bool {
-    use cap_fs_ext::MetadataExt;
-    left.dev() == right.dev() && left.ino() == right.ino()
+    matches!(
+        (file_identity(left), file_identity(right)),
+        (Some(left), Some(right)) if left == right
+    )
 }
 
 #[cfg(windows)]
 fn file_identity(metadata: &cap_std::fs::Metadata) -> Option<FileIdentity> {
-    use cap_fs_ext::MetadataExt;
+    use cap_primitives::fs::_WindowsByHandle;
     Some(FileIdentity {
-        first: metadata.dev(),
-        second: metadata.ino(),
+        first: u64::from(metadata.volume_serial_number()?),
+        second: metadata.file_index()?,
     })
 }
 
 #[cfg(windows)]
-fn same_home_file(left: &cap_std::fs::Metadata, right: &cap_std::fs::Metadata) -> bool {
-    same_file(left, right)
+fn same_home_file(
+    _left: &fs::Metadata,
+    left_identity: Option<FileIdentity>,
+    right: &cap_std::fs::Metadata,
+) -> bool {
+    matches!(file_identity(right), Some(right_identity) if Some(right_identity) == left_identity)
+}
+
+#[cfg(windows)]
+fn windows_path_identity(path: &Path) -> Option<FileIdentity> {
+    use std::os::windows::{fs::OpenOptionsExt, io::AsRawHandle};
+    use windows_sys::Win32::Storage::FileSystem::{
+        GetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION, FILE_FLAG_BACKUP_SEMANTICS,
+        FILE_FLAG_OPEN_REPARSE_POINT,
+    };
+
+    let file = fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT)
+        .open(path)
+        .ok()?;
+    let mut information = BY_HANDLE_FILE_INFORMATION::default();
+    let result = unsafe {
+        GetFileInformationByHandle(file.as_raw_handle(), std::ptr::addr_of_mut!(information))
+    };
+    if result == 0 {
+        return None;
+    }
+    Some(FileIdentity {
+        first: u64::from(information.dwVolumeSerialNumber),
+        second: (u64::from(information.nFileIndexHigh) << 32)
+            | u64::from(information.nFileIndexLow),
+    })
 }
 
 fn validate_home(home: &Path) -> Result<(), HomeError> {
