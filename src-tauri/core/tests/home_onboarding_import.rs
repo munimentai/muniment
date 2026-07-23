@@ -636,35 +636,81 @@ fn failed_retired_directory_removal_keeps_its_owner_until_recovery() {
 
 #[test]
 fn failure_before_the_commit_decision_is_rolled_back_on_recovery() {
-    let home = temp_home("pre-commit-recovery");
+    for operation in [
+        OnboardingPersistHook::WriteCommitDecision,
+        OnboardingPersistHook::SyncCommitDecision,
+        OnboardingPersistHook::SyncCommitDirectory,
+    ] {
+        let home = temp_home("pre-commit-recovery");
+        let mut hook = |point, _| {
+            if point == operation {
+                Err(std::io::Error::other("commit decision unavailable"))
+            } else {
+                Ok(())
+            }
+        };
+        assert!(
+            persist_onboarding_home_write_plan_with_hook(&home, &two_file_plan(), &mut hook)
+                .is_err()
+        );
+        assert!(!home.join("memory/nested/one.md").exists());
+        assert!(!home.join("memory/nested/two.md").exists());
+        assert!(!walk(&home)
+            .iter()
+            .any(|path| path.to_string_lossy().ends_with(".txn")));
+
+        let different = OnboardingHomeWritePlan {
+            writes: vec![HomeWrite {
+                relative_path: "agents/different.md".into(),
+                contents: "different".into(),
+            }],
+        };
+        persist_onboarding_home_write_plan(&home, &different).unwrap();
+        assert_eq!(
+            fs::read(home.join("agents/different.md")).unwrap(),
+            b"different"
+        );
+        assert!(!home.join("memory/nested/one.md").exists());
+        assert!(!walk(&home)
+            .iter()
+            .any(|path| path.to_string_lossy().ends_with(".txn")));
+        fs::remove_dir_all(home).unwrap();
+    }
+}
+
+#[test]
+fn an_existing_commit_marker_does_not_turn_a_failed_create_into_a_commit() {
+    let home = temp_home("existing-commit-marker");
+    let mut marker_created = false;
     let mut hook = |point, _| {
-        if point == OnboardingPersistHook::WriteCommitDecision {
-            Err(std::io::Error::other("commit decision unavailable"))
-        } else {
-            Ok(())
+        if point == OnboardingPersistHook::AfterPublish && !marker_created {
+            let transaction = fs::read_dir(&home)?
+                .filter_map(Result::ok)
+                .find(|entry| entry.file_name().to_string_lossy().ends_with(".txn"))
+                .unwrap()
+                .path();
+            fs::write(transaction.join("committed"), b"forged marker")?;
+            marker_created = true;
         }
+        Ok(())
     };
     assert!(
         persist_onboarding_home_write_plan_with_hook(&home, &two_file_plan(), &mut hook).is_err()
     );
     assert!(!home.join("memory/nested/one.md").exists());
     assert!(!home.join("memory/nested/two.md").exists());
-    assert!(!walk(&home)
-        .iter()
-        .any(|path| path.to_string_lossy().ends_with(".txn")));
 
     let different = OnboardingHomeWritePlan {
         writes: vec![HomeWrite {
-            relative_path: "agents/different.md".into(),
+            relative_path: "agents/different-after-create-failure.md".into(),
             contents: "different".into(),
         }],
     };
     persist_onboarding_home_write_plan(&home, &different).unwrap();
     assert_eq!(
-        fs::read(home.join("agents/different.md")).unwrap(),
+        fs::read(home.join("agents/different-after-create-failure.md")).unwrap(),
         b"different"
     );
-    assert!(!home.join("memory/nested/one.md").exists());
     assert!(!walk(&home)
         .iter()
         .any(|path| path.to_string_lossy().ends_with(".txn")));
@@ -681,15 +727,24 @@ fn recovery_rejects_a_foreign_regular_transaction_without_touching_hard_links() 
     fs::write(outside.join("outside.md"), b"existing outside").unwrap();
 
     let transaction = home.join(".onboarding-import-foreign.txn");
+    let owner = home.join(".onboarding-import-foreign.owner");
+    let parent_owner = home
+        .parent()
+        .unwrap()
+        .join(".onboarding-import-foreign.owner");
+    fs::write(home.join(".onboarding-import.lock"), b"public lock").unwrap();
+    fs::hard_link(home.join(".onboarding-import.lock"), &owner).unwrap();
+    fs::write(&parent_owner, b"best-effort forged secret").unwrap();
     fs::create_dir(&transaction).unwrap();
     fs::hard_link(
         home.join("memory/existing.md"),
         transaction.join("payload-0"),
     )
     .unwrap();
+    fs::hard_link(outside.join("outside.md"), transaction.join("payload-1")).unwrap();
     fs::write(
         transaction.join("manifest.json"),
-        br#"{"committed":false,"entries":[{"parent":"memory","destination":"existing.md","temporary":"payload-0","anchor":"payload-0"}],"created_directories":[]}"#,
+        br#"{"manifest":{"committed":false,"entries":[{"parent":"memory","destination":"existing.md","temporary":"payload-0","anchor":"payload-0","digest":[]},{"parent":"memory","destination":"outside.md","temporary":"payload-1","anchor":"payload-1","digest":[]}],"created_directories":[]},"authentication":[]}"#,
     )
     .unwrap();
 
@@ -704,16 +759,16 @@ fn recovery_rejects_a_foreign_regular_transaction_without_touching_hard_links() 
     );
     assert!(transaction.join("manifest.json").exists());
     assert!(transaction.join("payload-0").exists());
+    assert!(transaction.join("payload-1").exists());
 
     fs::remove_dir_all(home).unwrap();
     fs::remove_dir_all(outside).unwrap();
+    fs::remove_file(parent_owner).unwrap();
 }
 
 #[test]
 fn commit_decision_and_cleanup_failures_never_undo_a_committed_batch() {
     for operation in [
-        OnboardingPersistHook::SyncCommitDecision,
-        OnboardingPersistHook::SyncCommitDirectory,
         OnboardingPersistHook::RetireAnchor,
         OnboardingPersistHook::RetireJournal,
         OnboardingPersistHook::RetireTransaction,
