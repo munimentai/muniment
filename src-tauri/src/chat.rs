@@ -2478,6 +2478,7 @@ fn fetch_receipt(url: &str, access_token: &str, run_id: &str) -> Result<Receipt,
 #[cfg(test)]
 mod tests {
     use super::*;
+    use base64::{engine::general_purpose::STANDARD, Engine as _};
     use std::sync::atomic::AtomicUsize;
 
     static PI_ENV_LOCK: Mutex<()> = Mutex::new(());
