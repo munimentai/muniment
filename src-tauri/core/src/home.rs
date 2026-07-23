@@ -723,6 +723,15 @@ pub fn persist_onboarding_home_write_plan_with_hook(
             "The onboarding import authentication storage is unsafe.",
         ));
     }
+    #[cfg(windows)]
+    let authentication_metadata = Dir::open_ambient_dir(authentication_root, ambient_authority())
+        .and_then(|directory| directory.metadata("."))
+        .map_err(|error| {
+            HomeError::io(
+                "The onboarding import authentication storage could not be inspected.",
+                error,
+            )
+        })?;
     let authentication_root = normalized_absolute(authentication_root)?;
     let home_parent = normalized_absolute(
         home.parent()
@@ -741,6 +750,12 @@ pub fn persist_onboarding_home_write_plan_with_hook(
             "The onboarding import Home is not a directory.",
         ));
     }
+    #[cfg(windows)]
+    let metadata = Dir::open_ambient_dir(home, ambient_authority())
+        .and_then(|directory| directory.metadata("."))
+        .map_err(|error| {
+            HomeError::io("The onboarding import Home could not be inspected.", error)
+        })?;
     // Keep validation and locking behavior identical to the public entry point.
     let mut destinations = BTreeSet::new();
     if plan.writes.is_empty() || plan.writes.len() > ONBOARDING_IMPORT_MAX_ENTRIES + 4 {
@@ -1816,42 +1831,22 @@ fn same_home_file(left: &fs::Metadata, right: &cap_std::fs::Metadata) -> bool {
 
 #[cfg(windows)]
 fn same_file(left: &cap_std::fs::Metadata, right: &cap_std::fs::Metadata) -> bool {
-    use cap_std::fs::MetadataExt;
-    matches!(
-        (
-            left.volume_serial_number(),
-            left.file_index(),
-            right.volume_serial_number(),
-            right.file_index(),
-        ),
-        (Some(left_volume), Some(left_file), Some(right_volume), Some(right_file))
-            if left_volume == right_volume && left_file == right_file
-    )
+    use cap_fs_ext::MetadataExt;
+    left.dev() == right.dev() && left.ino() == right.ino()
 }
 
 #[cfg(windows)]
 fn file_identity(metadata: &cap_std::fs::Metadata) -> Option<FileIdentity> {
-    use cap_std::fs::MetadataExt;
+    use cap_fs_ext::MetadataExt;
     Some(FileIdentity {
-        first: u64::from(metadata.volume_serial_number()?),
-        second: metadata.file_index()?,
+        first: metadata.dev(),
+        second: metadata.ino(),
     })
 }
 
 #[cfg(windows)]
-fn same_home_file(left: &fs::Metadata, right: &cap_std::fs::Metadata) -> bool {
-    use cap_std::fs::MetadataExt as CapMetadataExt;
-    use std::os::windows::fs::MetadataExt as StdMetadataExt;
-    matches!(
-        (
-            StdMetadataExt::volume_serial_number(left),
-            StdMetadataExt::file_index(left),
-            CapMetadataExt::volume_serial_number(right),
-            CapMetadataExt::file_index(right),
-        ),
-        (Some(left_volume), Some(left_file), Some(right_volume), Some(right_file))
-            if left_volume == right_volume && left_file == right_file
-    )
+fn same_home_file(left: &cap_std::fs::Metadata, right: &cap_std::fs::Metadata) -> bool {
+    same_file(left, right)
 }
 
 fn validate_home(home: &Path) -> Result<(), HomeError> {
