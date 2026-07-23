@@ -628,15 +628,21 @@ pub fn persist_onboarding_home_write_plan(
 #[doc(hidden)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OnboardingPersistHook {
+    CreateTransactionOwner,
+    SyncTransactionOwner,
+    CreateTransaction,
     WriteJournal,
     SyncJournal,
     ReplaceJournal,
+    CreateDirectory,
     WriteCommitDecision,
     SyncCommitDecision,
     SyncCommitDirectory,
     RetireAnchor,
+    RetireDirectory,
     RetireJournal,
     RetireTransaction,
+    RetireTransactionOwner,
     WritePayload,
     SyncPayload,
     AfterStaging,
@@ -812,17 +818,26 @@ fn recover_onboarding_transactions(
     home: &Dir,
     hook: &mut dyn FnMut(OnboardingPersistHook, usize) -> io::Result<()>,
 ) -> io::Result<()> {
-    let names = home
+    let all_names = home
         .entries()?
         .filter_map(Result::ok)
         .map(|entry| entry.file_name())
+        .collect::<Vec<_>>();
+    let names = all_names
+        .iter()
         .filter(|name| {
             let name = name.to_string_lossy();
             name.starts_with(".onboarding-import-")
                 && (name.ends_with(".txn") || name.ends_with(".retired"))
         })
+        .cloned()
         .collect::<Vec<_>>();
+    for name in &names {
+        let owner_name = onboarding_transaction_owner_name(name);
+        authenticate_onboarding_transaction(home, &owner_name)?;
+    }
     for name in names {
+        let owner_name = onboarding_transaction_owner_name(&name);
         let metadata = home.symlink_metadata(&name)?;
         if metadata.file_type().is_symlink() || !metadata.is_dir() {
             return Err(io::Error::new(
@@ -839,25 +854,12 @@ fn recover_onboarding_transactions(
             return Err(io::Error::other("onboarding transaction changed"));
         }
         if name.to_string_lossy().ends_with(".retired") {
-            match transaction.remove_file("owner") {
-                Ok(()) => {}
-                Err(error) if error.kind() == io::ErrorKind::NotFound => {}
-                Err(error) => return Err(error),
-            }
+            hook(OnboardingPersistHook::RetireTransaction, 0)?;
             home.remove_dir(&name)?;
+            hook(OnboardingPersistHook::RetireTransactionOwner, 0)?;
+            home.remove_file(&owner_name)?;
             home.open(".")?.sync_all()?;
             continue;
-        }
-        let owner_metadata = transaction.symlink_metadata("owner")?;
-        let lock_metadata = home.symlink_metadata(".onboarding-import.lock")?;
-        if owner_metadata.file_type().is_symlink()
-            || !owner_metadata.is_file()
-            || !same_file(&owner_metadata, &lock_metadata)
-        {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "foreign onboarding transaction",
-            ));
         }
         let committed = match transaction.symlink_metadata("committed") {
             Ok(metadata) if metadata.is_file() && !metadata.file_type().is_symlink() => true,
@@ -892,30 +894,29 @@ fn recover_onboarding_transactions(
                 file
             }
             None => {
-                // An authenticated transaction without a manifest failed while
-                // creating its initial journal and owns no other artifacts.
+                // The durable sibling owner predates the directory, so every
+                // partially-created initial journal is recognizable here.
                 match transaction.remove_file("manifest.next") {
                     Ok(()) => {}
                     Err(error) if error.kind() == io::ErrorKind::NotFound => {}
                     Err(error) => return Err(error),
                 }
-                match transaction.remove_file("owner") {
-                    Ok(()) => {}
-                    Err(error) if error.kind() == io::ErrorKind::NotFound => {}
-                    Err(error) => return Err(error),
-                }
+                hook(OnboardingPersistHook::RetireTransaction, 0)?;
                 home.remove_dir(&name)?;
+                hook(OnboardingPersistHook::RetireTransactionOwner, 0)?;
+                home.remove_file(&owner_name)?;
                 home.open(".")?.sync_all()?;
                 continue;
             }
         };
-        let manifest: OnboardingRecoveryManifest = match transaction.open("manifest.next") {
-            Ok(file) => serde_json::from_reader(file)?,
-            Err(error) if error.kind() == io::ErrorKind::NotFound => {
-                serde_json::from_reader(manifest_file)?
-            }
+        // Only the atomically installed manifest is authoritative. A failed
+        // replacement may leave manifest.next empty or partially written.
+        match transaction.remove_file("manifest.next") {
+            Ok(()) => {}
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
             Err(error) => return Err(error),
-        };
+        }
+        let manifest: OnboardingRecoveryManifest = serde_json::from_reader(manifest_file)?;
         for (index, entry) in manifest.entries.iter().enumerate() {
             let destination = entry.parent.join(&entry.destination);
             if destination.to_str().is_none()
@@ -1048,11 +1049,65 @@ fn recover_onboarding_transactions(
         let retired_name =
             std::ffi::OsString::from(name.to_string_lossy().replace(".txn", ".retired"));
         home.rename(&name, home, &retired_name)?;
-        let retired_transaction = home.open_dir(&retired_name)?;
-        retired_transaction.remove_file("owner")?;
+        hook(OnboardingPersistHook::RetireTransaction, 0)?;
         home.remove_dir(&retired_name)?;
+        hook(OnboardingPersistHook::RetireTransactionOwner, 0)?;
+        home.remove_file(&owner_name)?;
         hook(OnboardingPersistHook::RollbackSync, 0)?;
         home.open(".")?.sync_all()?;
+    }
+    for name in all_names {
+        let value = name.to_string_lossy();
+        if !value.starts_with(".onboarding-import-") || !value.ends_with(".owner") {
+            continue;
+        }
+        match authenticate_onboarding_transaction(home, &name) {
+            Ok(()) => {}
+            Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
+            Err(error) => return Err(error),
+        }
+        let stem = value.trim_end_matches(".owner");
+        let transaction = std::ffi::OsString::from(format!("{stem}.txn"));
+        let retired = std::ffi::OsString::from(format!("{stem}.retired"));
+        let transaction_exists = match home.symlink_metadata(&transaction) {
+            Ok(_) => true,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => false,
+            Err(error) => return Err(error),
+        };
+        let retired_exists = match home.symlink_metadata(&retired) {
+            Ok(_) => true,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => false,
+            Err(error) => return Err(error),
+        };
+        if !transaction_exists && !retired_exists {
+            hook(OnboardingPersistHook::RetireTransactionOwner, 0)?;
+            home.remove_file(&name)?;
+            home.open(".")?.sync_all()?;
+        }
+    }
+    Ok(())
+}
+
+fn onboarding_transaction_owner_name(name: &std::ffi::OsStr) -> std::ffi::OsString {
+    let name = name.to_string_lossy();
+    let stem = name
+        .strip_suffix(".txn")
+        .or_else(|| name.strip_suffix(".retired"))
+        .unwrap_or(&name);
+    std::ffi::OsString::from(format!("{stem}.owner"))
+}
+
+fn authenticate_onboarding_transaction(home: &Dir, owner_name: &std::ffi::OsStr) -> io::Result<()> {
+    let owner_metadata = home.symlink_metadata(owner_name)?;
+    let lock_metadata = home.symlink_metadata(".onboarding-import.lock")?;
+    if owner_metadata.file_type().is_symlink()
+        || !owner_metadata.is_file()
+        || !same_file(&owner_metadata, &lock_metadata)
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "foreign onboarding transaction",
+        ));
     }
     Ok(())
 }
@@ -1067,12 +1122,12 @@ fn write_onboarding_manifest(
     let mut options = cap_std::fs::OpenOptions::new();
     options.create_new(true).write(true);
     let mut file = transaction.open_with(name, &options)?;
-    io::Write::write_all(&mut file, &serde_json::to_vec(manifest)?)?;
     hook(OnboardingPersistHook::WriteJournal, 0)?;
-    file.sync_all()?;
+    io::Write::write_all(&mut file, &serde_json::to_vec(manifest)?)?;
     hook(OnboardingPersistHook::SyncJournal, 0)?;
-    transaction.rename(name, transaction, "manifest.json")?;
+    file.sync_all()?;
     hook(OnboardingPersistHook::ReplaceJournal, 0)?;
+    transaction.rename(name, transaction, "manifest.json")?;
     transaction.open(".")?.sync_all()
 }
 
@@ -1102,6 +1157,40 @@ fn persist_onboarding_plan_locked(
     let mut staged: Vec<Staged> = Vec::new();
     let transaction_name =
         std::ffi::OsString::from(format!(".onboarding-import-{}.txn", uuid::Uuid::new_v4()));
+    let owner_name = onboarding_transaction_owner_name(&transaction_name);
+    hook(OnboardingPersistHook::CreateTransactionOwner, 0).map_err(|error| {
+        HomeError::io(
+            "The onboarding import transaction could not be authenticated.",
+            error,
+        )
+    })?;
+    home.hard_link(".onboarding-import.lock", home, &owner_name)
+        .map_err(|error| {
+            HomeError::io(
+                "The onboarding import transaction could not be authenticated.",
+                error,
+            )
+        })?;
+    hook(OnboardingPersistHook::SyncTransactionOwner, 0).map_err(|error| {
+        HomeError::io(
+            "The onboarding import transaction could not be authenticated.",
+            error,
+        )
+    })?;
+    home.open(".")
+        .and_then(|directory| directory.sync_all())
+        .map_err(|error| {
+            HomeError::io(
+                "The onboarding import transaction could not be authenticated.",
+                error,
+            )
+        })?;
+    hook(OnboardingPersistHook::CreateTransaction, 0).map_err(|error| {
+        HomeError::io(
+            "The onboarding import transaction could not be created.",
+            error,
+        )
+    })?;
     home.create_dir(&transaction_name).map_err(|error| {
         HomeError::io(
             "The onboarding import transaction could not be created.",
@@ -1114,13 +1203,6 @@ fn persist_onboarding_plan_locked(
             error,
         )
     })?;
-    home.hard_link(".onboarding-import.lock", &transaction, "owner")
-        .map_err(|error| {
-            HomeError::io(
-                "The onboarding import transaction could not be authenticated.",
-                error,
-            )
-        })?;
     transaction
         .open(".")
         .and_then(|directory| directory.sync_all())
@@ -1196,6 +1278,7 @@ fn persist_onboarding_plan_locked(
                                 staged: staged_name.clone(),
                             });
                         write_onboarding_manifest(&transaction, &manifest, false, hook)?;
+                        hook(OnboardingPersistHook::CreateDirectory, 0)?;
                         transaction.create_dir(&staged_name)?;
                         let next = transaction.open_dir(&staged_name)?;
                         manifest.created_directories.last_mut().unwrap().identity =
@@ -1228,10 +1311,10 @@ fn persist_onboarding_plan_locked(
             let mut options = cap_std::fs::OpenOptions::new();
             options.create_new(true).write(true);
             let mut file = transaction.open_with(&temporary, &options)?;
-            io::Write::write_all(&mut file, write.bytes())?;
             hook(OnboardingPersistHook::WritePayload, write_index)?;
-            file.sync_all()?;
+            io::Write::write_all(&mut file, write.bytes())?;
             hook(OnboardingPersistHook::SyncPayload, write_index)?;
+            file.sync_all()?;
             staged.push(Staged {
                 directory: current,
                 destination,
@@ -1461,13 +1544,23 @@ fn persist_onboarding_plan_locked(
     // present until every payload anchor is gone, so a later locked invocation
     // can deterministically finish the same committed or aborted decision.
     let retirement = (|| -> io::Result<()> {
+        if result.is_err() {
+            for directory in manifest.created_directories.iter().rev() {
+                hook(OnboardingPersistHook::RetireDirectory, 0)?;
+                match transaction.remove_dir(&directory.staged) {
+                    Ok(()) => {}
+                    Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+                    Err(error) => return Err(error),
+                }
+            }
+        }
         for (index, entry) in manifest.entries.iter().enumerate() {
+            hook(OnboardingPersistHook::RetireAnchor, index)?;
             match transaction.remove_file(&entry.anchor) {
                 Ok(()) => {}
                 Err(error) if error.kind() == io::ErrorKind::NotFound => {}
                 Err(error) => return Err(error),
             }
-            hook(OnboardingPersistHook::RetireAnchor, index)?;
         }
         match transaction.remove_file("manifest.next") {
             Ok(()) => {}
@@ -1479,8 +1572,8 @@ fn persist_onboarding_plan_locked(
             Err(error) if error.kind() == io::ErrorKind::NotFound => {}
             Err(error) => return Err(error),
         }
-        transaction.remove_file("manifest.json")?;
         hook(OnboardingPersistHook::RetireJournal, 0)?;
+        transaction.remove_file("manifest.json")?;
         let retired_name = std::ffi::OsString::from(
             transaction_name
                 .to_string_lossy()
@@ -1488,9 +1581,9 @@ fn persist_onboarding_plan_locked(
         );
         home.rename(&transaction_name, home, &retired_name)?;
         hook(OnboardingPersistHook::RetireTransaction, 0)?;
-        let retired_transaction = home.open_dir(&retired_name)?;
-        retired_transaction.remove_file("owner")?;
         home.remove_dir(&retired_name)?;
+        hook(OnboardingPersistHook::RetireTransactionOwner, 0)?;
+        home.remove_file(&owner_name)?;
         home.open(".")?.sync_all()
     })();
     if let Err(error) = retirement {

@@ -500,14 +500,19 @@ fn publication_and_directory_sync_operation_failures_roll_back() {
 #[test]
 fn persistent_staging_and_retirement_failures_are_recovered() {
     for operation in [
+        OnboardingPersistHook::CreateTransactionOwner,
+        OnboardingPersistHook::SyncTransactionOwner,
+        OnboardingPersistHook::CreateTransaction,
         OnboardingPersistHook::WriteJournal,
         OnboardingPersistHook::SyncJournal,
         OnboardingPersistHook::ReplaceJournal,
+        OnboardingPersistHook::CreateDirectory,
         OnboardingPersistHook::WritePayload,
         OnboardingPersistHook::SyncPayload,
         OnboardingPersistHook::RetireAnchor,
         OnboardingPersistHook::RetireJournal,
         OnboardingPersistHook::RetireTransaction,
+        OnboardingPersistHook::RetireTransactionOwner,
     ] {
         let home = temp_home("journal-recovery");
         let mut hook = |point, _| {
@@ -534,10 +539,99 @@ fn persistent_staging_and_retirement_failures_are_recovered() {
         );
         assert!(!walk(&home).iter().any(|path| {
             let name = path.file_name().unwrap().to_string_lossy();
-            name.ends_with(".tmp") || name.ends_with(".txn")
+            name.ends_with(".tmp")
+                || name.ends_with(".txn")
+                || name.ends_with(".retired")
+                || name.ends_with(".owner")
         }));
         fs::remove_dir_all(home).unwrap();
     }
+}
+
+#[test]
+fn directory_created_before_identity_update_remains_owned_and_is_recovered() {
+    let home = temp_home("directory-identity-recovery");
+    let mut journal_writes = 0;
+    let mut hook = |point, _| {
+        if point == OnboardingPersistHook::WriteJournal {
+            journal_writes += 1;
+            if journal_writes == 3 {
+                return Err(std::io::Error::other("identity update unavailable"));
+            }
+        }
+        if point == OnboardingPersistHook::RetireDirectory {
+            return Err(std::io::Error::other("staged directory removal failed"));
+        }
+        Ok(())
+    };
+    assert!(
+        persist_onboarding_home_write_plan_with_hook(&home, &two_file_plan(), &mut hook).is_err()
+    );
+    assert_eq!(journal_writes, 3);
+    assert!(walk(&home).iter().any(|path| {
+        path.file_name()
+            .is_some_and(|name| name == std::ffi::OsStr::new("directory-0"))
+    }));
+
+    let different = OnboardingHomeWritePlan {
+        writes: vec![HomeWrite {
+            relative_path: "agents/after-directory-recovery.md".into(),
+            contents: "after".into(),
+        }],
+    };
+    persist_onboarding_home_write_plan(&home, &different).unwrap();
+    assert_eq!(
+        fs::read(home.join("agents/after-directory-recovery.md")).unwrap(),
+        b"after"
+    );
+    assert!(!home.join("memory").exists());
+    assert!(!walk(&home).iter().any(|path| {
+        let name = path.file_name().unwrap().to_string_lossy();
+        name.ends_with(".txn")
+            || name.ends_with(".retired")
+            || name.ends_with(".owner")
+            || name.starts_with("directory-")
+    }));
+    fs::remove_dir_all(home).unwrap();
+}
+
+#[test]
+fn failed_retired_directory_removal_keeps_its_owner_until_recovery() {
+    let home = temp_home("retired-directory-recovery");
+    let mut hook = |point, _| {
+        if point == OnboardingPersistHook::RetireTransaction {
+            Err(std::io::Error::other("retired directory removal failed"))
+        } else {
+            Ok(())
+        }
+    };
+    assert!(
+        persist_onboarding_home_write_plan_with_hook(&home, &two_file_plan(), &mut hook).is_err()
+    );
+    assert!(walk(&home)
+        .iter()
+        .any(|path| path.to_string_lossy().ends_with(".retired")));
+    assert!(walk(&home)
+        .iter()
+        .any(|path| path.to_string_lossy().ends_with(".owner")));
+
+    let different = OnboardingHomeWritePlan {
+        writes: vec![HomeWrite {
+            relative_path: "agents/after-retirement.md".into(),
+            contents: "after".into(),
+        }],
+    };
+    persist_onboarding_home_write_plan(&home, &different).unwrap();
+    assert_eq!(fs::read(home.join("memory/nested/one.md")).unwrap(), b"one");
+    assert_eq!(
+        fs::read(home.join("agents/after-retirement.md")).unwrap(),
+        b"after"
+    );
+    assert!(!walk(&home).iter().any(|path| {
+        let name = path.file_name().unwrap().to_string_lossy();
+        name.ends_with(".txn") || name.ends_with(".retired") || name.ends_with(".owner")
+    }));
+    fs::remove_dir_all(home).unwrap();
 }
 
 #[test]
