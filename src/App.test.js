@@ -16,6 +16,16 @@ let dialogResult
 let dragDropListener
 let dragDropUnlisten
 let homeStatus
+let requiredModelInvoke
+let globalShortcutHandler
+let registerGlobalShortcut
+let unregisterGlobalShortcut
+let registeredShortcuts
+
+vi.mock('@tauri-apps/plugin-global-shortcut', () => ({
+  register: (...args) => registerGlobalShortcut(...args),
+  unregister: (...args) => unregisterGlobalShortcut(...args),
+}))
 
 vi.mock('@tauri-apps/api/webview', () => ({
   getCurrentWebview: () => ({
@@ -49,11 +59,24 @@ const device = (device_id, overrides = {}) => ({
   ...overrides,
 })
 
+async function stopClickCapture(voice) {
+  await fireEvent.click(voice)
+  await fireEvent.click(voice)
+}
+
+function deferred() {
+  let resolve
+  const promise = new Promise((res) => { resolve = res })
+  return { promise, resolve }
+}
+
 beforeAll(async () => {
   HTMLElement.prototype.scrollTo = vi.fn()
   window.__TAURI__ = {
     core: { invoke: (command, ...args) => command === 'home_status'
       ? Promise.resolve(homeStatus)
+      : command === 'required_model_acquisition_status'
+        ? requiredModelInvoke(...args)
       : invoke(command, ...args) },
     event: { listen: vi.fn((event, listener) => {
       if (event === 'chat-event') chatListener = listener
@@ -69,7 +92,9 @@ beforeAll(async () => {
 })
 
 beforeEach(() => {
+  localStorage.clear()
   homeStatus = { configured: true, homePath: '/Documents/Muniment' }
+  requiredModelInvoke = vi.fn().mockResolvedValue({ status: { state: 'installed' }, downloadedBytes: 100, totalBytes: 100, folderSetupAvailable: true, aiFeaturesAvailable: true, retryingInBackground: false })
   chatListener = undefined
   dictationListener = undefined
   eventUnlisten = vi.fn()
@@ -77,6 +102,13 @@ beforeEach(() => {
   dragDropListener = undefined
   dragDropUnlisten = vi.fn()
   dialogResult = null
+  globalShortcutHandler = undefined
+  registeredShortcuts = new Set()
+  registerGlobalShortcut = vi.fn(async (shortcut, handler) => {
+    registeredShortcuts.add(shortcut)
+    globalShortcutHandler = handler
+  })
+  unregisterGlobalShortcut = vi.fn(async (shortcut) => { registeredShortcuts.delete(shortcut) })
   invoke = vi.fn(async (command, payload) => {
     if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
     if (command === 'chat_history') return []
@@ -87,9 +119,75 @@ beforeEach(() => {
   })
 })
 
-afterEach(() => cleanup())
+afterEach(() => {
+  cleanup()
+  vi.useRealTimers()
+  vi.restoreAllMocks()
+})
 
 describe('Home onboarding', () => {
+  it('shows active model progress and stops polling when local AI becomes ready', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    homeStatus = { configured: false, homePath: '/Documents/Muniment' }
+    requiredModelInvoke
+      .mockResolvedValueOnce({ status: { state: 'installing' }, downloadedBytes: 25, totalBytes: 100, folderSetupAvailable: true, aiFeaturesAvailable: false, retryingInBackground: true })
+      .mockResolvedValueOnce({ status: { state: 'installed' }, downloadedBytes: 100, totalBytes: 100, folderSetupAvailable: true, aiFeaturesAvailable: true, retryingInBackground: false })
+    render(App)
+    const progress = await screen.findByRole('progressbar', { name: 'Required local AI model download' })
+    expect(progress).toHaveAttribute('aria-valuemin', '0')
+    expect(progress).toHaveAttribute('aria-valuemax', '100')
+    expect(progress).toHaveAttribute('aria-valuenow', '25')
+    expect(screen.getByText('25 B of 100 B')).toBeInTheDocument()
+    await vi.advanceTimersByTimeAsync(1000)
+    expect(await screen.findByText('Local proposal generation is ready.')).toBeInTheDocument()
+    expect(screen.getByText('100 B of 100 B')).toBeInTheDocument()
+    expect(screen.getByRole('progressbar', { name: 'Required local AI model download' })).toHaveAttribute('aria-valuenow', '100')
+    await vi.advanceTimersByTimeAsync(2000)
+    expect(requiredModelInvoke).toHaveBeenCalledTimes(2)
+    vi.useRealTimers()
+  })
+
+  it('shows redacted retry status without blocking fail-open onboarding actions', async () => {
+    homeStatus = { configured: false, homePath: '/Documents/Muniment' }
+    dialogResult = '/Exports/assistant.zip'
+    requiredModelInvoke.mockResolvedValue({ status: { state: 'failed', category: 'network', message: 'redacted' }, downloadedBytes: 40, totalBytes: 100, folderSetupAvailable: true, aiFeaturesAvailable: false, retryingInBackground: true })
+    invoke.mockImplementation(async (command) => {
+      if (command === 'onboarding_import_preview') return { entries: [{ name: 'profile.json', kind: 'json', byteSize: 2, excerpt: '{}', excerptTruncated: false }], totalByteSize: 2 }
+      if (command === 'onboarding_import_extract') return [{ sourceName: 'profile.json', text: '{}', sourceProvenance: 'stable' }]
+      if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
+      if (command === 'chat_history') return []
+      if (command === 'auth_entitlement_snapshot') return snapshot()
+      if (command === 'auth_devices') return []
+      throw new Error(`unexpected command: ${command}`)
+    })
+    render(App)
+    expect(await screen.findByText('Retrying in background')).toBeInTheDocument()
+    expect(screen.queryByText('redacted')).not.toBeInTheDocument()
+    expect(screen.getByTestId('onboarding-picker')).toBeEnabled()
+    expect(screen.getByTestId('onboarding-confirm')).toBeEnabled()
+    await fireEvent.click(screen.getByTestId('onboarding-confirm'))
+    expect(screen.getByTestId('onboarding-import-picker')).toBeEnabled()
+    expect(screen.getByTestId('onboarding-import-skip')).toBeEnabled()
+    await fireEvent.click(screen.getByTestId('onboarding-import-picker'))
+    await fireEvent.click(await screen.findByRole('checkbox'))
+    await fireEvent.click(screen.getByTestId('onboarding-import-continue'))
+    expect(await screen.findByTestId('onboarding-triage-generate')).toBeDisabled()
+    expect(screen.getByText('Available when the local AI model is ready.')).toBeInTheDocument()
+    expect(invoke.mock.calls.map(([command]) => command)).not.toContain('onboarding_triage')
+  })
+
+  it('cleans up active model polling when onboarding is unmounted', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    homeStatus = { configured: false, homePath: '/Documents/Muniment' }
+    requiredModelInvoke.mockResolvedValue({ status: { state: 'installing' }, downloadedBytes: 0, totalBytes: 100, folderSetupAvailable: true, aiFeaturesAvailable: false, retryingInBackground: true })
+    const view = render(App)
+    await screen.findByText('Downloading')
+    view.unmount()
+    await vi.advanceTimersByTimeAsync(2000)
+    expect(requiredModelInvoke).toHaveBeenCalledTimes(1)
+    vi.useRealTimers()
+  })
+
   it('blocks the shell and confirms the displayed Documents default', async () => {
     homeStatus = { configured: false, homePath: '/Documents/Muniment' }
     invoke.mockImplementation(async (command, payload) => {
@@ -383,6 +481,9 @@ describe('Home onboarding', () => {
     render(App)
     await fireEvent.click(await screen.findByText('Home settings'))
     expect(screen.getByTestId('onboarding-home-path')).toHaveTextContent('/Documents/Muniment')
+    expect(screen.queryByText('Local AI')).not.toBeInTheDocument()
+    expect(screen.queryByText('Starting setup')).not.toBeInTheDocument()
+    expect(requiredModelInvoke).not.toHaveBeenCalled()
     await fireEvent.click(screen.getByTestId('onboarding-picker'))
     await fireEvent.click(screen.getByTestId('onboarding-cancel'))
     expect(await screen.findByPlaceholderText('Ask anything')).toBeInTheDocument()
@@ -391,7 +492,591 @@ describe('Home onboarding', () => {
 })
 
 describe('voice dictation', () => {
+  it('routes one global press and matching release through the existing dictation lifecycle', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    invoke.mockImplementation(async (command) => {
+      if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
+      if (command === 'chat_history') return []
+      if (command === 'auth_entitlement_snapshot') return snapshot()
+      if (command === 'auth_devices') return []
+      if (command === 'dictation_start') return { state: 'running' }
+      if (command === 'dictation_stop') return { state: 'stopped' }
+      throw new Error(`unexpected command: ${command}`)
+    })
+    render(App)
+    await screen.findByPlaceholderText('Ask anything')
+    await waitFor(() => expect(registerGlobalShortcut).toHaveBeenCalledWith('Control+Shift+Space', expect.any(Function)))
+
+    globalShortcutHandler({ state: 'Released' })
+    globalShortcutHandler({ state: 'Pressed' })
+    globalShortcutHandler({ state: 'Pressed' })
+    await waitFor(() => expect(invoke.mock.calls.filter(([command]) => command === 'dictation_start')).toHaveLength(1))
+    globalShortcutHandler({ state: 'Released' })
+    globalShortcutHandler({ state: 'Released' })
+    await vi.advanceTimersByTimeAsync(300)
+
+    await waitFor(() => expect(invoke.mock.calls.filter(([command]) => command === 'dictation_stop')).toHaveLength(1))
+  })
+
+  it('stops a long global hold immediately on release', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    invoke.mockImplementation(async (command) => {
+      if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
+      if (command === 'chat_history') return []
+      if (command === 'auth_entitlement_snapshot') return snapshot()
+      if (command === 'auth_devices') return []
+      if (command === 'dictation_start') return { state: 'running' }
+      if (command === 'dictation_stop') return { state: 'stopped' }
+      throw new Error(`unexpected command: ${command}`)
+    })
+    render(App)
+    await screen.findByPlaceholderText('Ask anything')
+    await waitFor(() => expect(globalShortcutHandler).toBeTypeOf('function'))
+
+    globalShortcutHandler({ state: 'Pressed' })
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('dictation_start'))
+    await vi.advanceTimersByTimeAsync(1_000)
+    globalShortcutHandler({ state: 'Released' })
+
+    await waitFor(() => expect(invoke.mock.calls.filter(([command]) => command === 'dictation_stop')).toHaveLength(1))
+  })
+
+  it('does not treat a tap after a long hold as a rapid double activation', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    invoke.mockImplementation(async (command) => {
+      if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
+      if (command === 'chat_history') return []
+      if (command === 'auth_entitlement_snapshot') return snapshot()
+      if (command === 'auth_devices') return []
+      if (command === 'dictation_start') return { state: 'running' }
+      if (command === 'dictation_stop') return { state: 'stopped' }
+      throw new Error(`unexpected command: ${command}`)
+    })
+    render(App)
+    const voice = await screen.findByRole('button', { name: 'Voice' })
+
+    globalShortcutHandler({ state: 'Pressed' })
+    await vi.advanceTimersByTimeAsync(1_000)
+    globalShortcutHandler({ state: 'Released' })
+    await waitFor(() => expect(invoke.mock.calls.filter(([command]) => command === 'dictation_stop')).toHaveLength(1))
+    await vi.advanceTimersByTimeAsync(100)
+
+    globalShortcutHandler({ state: 'Pressed' })
+    globalShortcutHandler({ state: 'Released' })
+    await vi.advanceTimersByTimeAsync(300)
+
+    expect(invoke.mock.calls.filter(([command]) => command === 'dictation_start')).toHaveLength(2)
+    expect(invoke.mock.calls.filter(([command]) => command === 'dictation_stop')).toHaveLength(2)
+    expect(voice).toHaveAttribute('aria-pressed', 'false')
+  })
+
+  it('keeps one global capture running after a rapid double activation and stops on the next activation', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    invoke.mockImplementation(async (command) => {
+      if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
+      if (command === 'chat_history') return []
+      if (command === 'auth_entitlement_snapshot') return snapshot()
+      if (command === 'auth_devices') return []
+      if (command === 'dictation_start') return { state: 'running' }
+      if (command === 'dictation_stop') return { state: 'stopped' }
+      throw new Error(`unexpected command: ${command}`)
+    })
+    render(App)
+    const voice = await screen.findByRole('button', { name: 'Voice' })
+
+    globalShortcutHandler({ state: 'Pressed' })
+    globalShortcutHandler({ state: 'Released' })
+    await vi.advanceTimersByTimeAsync(150)
+    expect(invoke.mock.calls.filter(([command]) => command === 'dictation_stop')).toHaveLength(0)
+    globalShortcutHandler({ state: 'Pressed' })
+    globalShortcutHandler({ state: 'Released' })
+    await vi.advanceTimersByTimeAsync(300)
+
+    expect(invoke.mock.calls.filter(([command]) => command === 'dictation_start')).toHaveLength(1)
+    expect(invoke.mock.calls.filter(([command]) => command === 'dictation_stop')).toHaveLength(0)
+    expect(voice).toHaveAttribute('aria-pressed', 'true')
+
+    globalShortcutHandler({ state: 'Pressed' })
+    globalShortcutHandler({ state: 'Released' })
+    await waitFor(() => expect(invoke.mock.calls.filter(([command]) => command === 'dictation_stop')).toHaveLength(1))
+    await waitFor(() => expect(voice).toHaveAttribute('aria-pressed', 'false'))
+  })
+
+  it('routes rapid click-only activations to hands-free and stops on the next click', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    invoke.mockImplementation(async (command) => {
+      if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
+      if (command === 'chat_history') return []
+      if (command === 'auth_entitlement_snapshot') return snapshot()
+      if (command === 'auth_devices') return []
+      if (command === 'dictation_start') return { state: 'running' }
+      if (command === 'dictation_stop') return { state: 'stopped' }
+      throw new Error(`unexpected command: ${command}`)
+    })
+    render(App)
+    const voice = await screen.findByRole('button', { name: 'Voice' })
+
+    await fireEvent.click(voice)
+    await vi.advanceTimersByTimeAsync(150)
+    await fireEvent.click(voice)
+    await vi.advanceTimersByTimeAsync(300)
+
+    expect(invoke.mock.calls.filter(([command]) => command === 'dictation_start')).toHaveLength(1)
+    expect(invoke.mock.calls.filter(([command]) => command === 'dictation_stop')).toHaveLength(0)
+    expect(voice).toHaveAttribute('aria-pressed', 'true')
+
+    await fireEvent.click(voice)
+    await waitFor(() => expect(invoke.mock.calls.filter(([command]) => command === 'dictation_stop')).toHaveLength(1))
+    await waitFor(() => expect(voice).toHaveAttribute('aria-pressed', 'false'))
+  })
+
+  it('retries a quick activation after the first start reaches a terminal status', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    let startCalls = 0
+    invoke.mockImplementation(async (command) => {
+      if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
+      if (command === 'chat_history') return []
+      if (command === 'auth_entitlement_snapshot') return snapshot()
+      if (command === 'auth_devices') return []
+      if (command === 'dictation_start') {
+        startCalls += 1
+        return startCalls === 1 ? { state: 'failed', message: 'Could not start' } : { state: 'running' }
+      }
+      if (command === 'dictation_stop') return { state: 'stopped' }
+      throw new Error(`unexpected command: ${command}`)
+    })
+    render(App)
+    const voice = await screen.findByRole('button', { name: 'Voice' })
+
+    await fireEvent.click(voice)
+    await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('Could not start'))
+    await vi.advanceTimersByTimeAsync(150)
+    await fireEvent.click(voice)
+
+    expect(invoke.mock.calls.filter(([command]) => command === 'dictation_start')).toHaveLength(2)
+    await vi.advanceTimersByTimeAsync(300)
+    await waitFor(() => expect(invoke.mock.calls.filter(([command]) => command === 'dictation_stop')).toHaveLength(1))
+    expect(voice).toHaveAttribute('aria-pressed', 'false')
+  })
+
+  it('ignores global presses while signed out or a chat is active', async () => {
+    let signedIn = false
+    let resolveSubmit
+    invoke.mockImplementation(async (command) => {
+      if (command === 'auth_status') return { signed_in: signedIn, subject: signedIn ? 'token-subject' : undefined }
+      if (command === 'chat_history') return []
+      if (command === 'auth_entitlement_snapshot') return snapshot()
+      if (command === 'auth_devices') return []
+      if (command === 'chat_submit') return new Promise((resolve) => { resolveSubmit = resolve })
+      if (command === 'dictation_start') return { state: 'running' }
+      throw new Error(`unexpected command: ${command}`)
+    })
+    const signedOut = render(App)
+    await screen.findByRole('button', { name: 'Sign in' })
+    globalShortcutHandler({ state: 'Pressed' })
+    expect(invoke).not.toHaveBeenCalledWith('dictation_start')
+    signedOut.unmount()
+
+    signedIn = true
+    render(App)
+    const composer = await screen.findByPlaceholderText('Ask anything')
+    await fireEvent.input(composer, { target: { value: 'question' } })
+    await fireEvent.click(screen.getByRole('button', { name: 'Send' }))
+    globalShortcutHandler({ state: 'Pressed' })
+    expect(invoke).not.toHaveBeenCalledWith('dictation_start')
+    resolveSubmit({ runId: 'run-1', attachments: [] })
+  })
+
+  it('preserves the polished draft and ignores global presses while polish is busy', async () => {
+    let resolvePolish
+    invoke.mockImplementation(async (command) => {
+      if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
+      if (command === 'chat_history') return []
+      if (command === 'auth_entitlement_snapshot') return snapshot()
+      if (command === 'auth_devices') return []
+      if (command === 'dictation_start') return { state: 'running' }
+      if (command === 'dictation_stop') return { state: 'stopped' }
+      if (command === 'dictation_polish') return new Promise((resolve) => { resolvePolish = resolve })
+      throw new Error(`unexpected command: ${command}`)
+    })
+    render(App)
+    const composer = await screen.findByPlaceholderText('Ask anything')
+    await fireEvent.input(composer, { target: { value: 'Keep this' } })
+    globalShortcutHandler({ state: 'Pressed' })
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('dictation_start'))
+    dictationListener({ payload: { type: 'transcript', text: 'captured words' } })
+    globalShortcutHandler({ state: 'Released' })
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('dictation_polish', { transcript: 'captured words' }))
+    globalShortcutHandler({ state: 'Pressed' })
+    expect(invoke.mock.calls.filter(([command]) => command === 'dictation_start')).toHaveLength(1)
+    expect(composer).toHaveValue('Keep this captured words')
+    resolvePolish('Polished words')
+    await waitFor(() => expect(composer).toHaveValue('Keep this Polished words'))
+  })
+
+  it('redacts registration failures and unregisters a successful binding on teardown', async () => {
+    registerGlobalShortcut.mockRejectedValueOnce(new Error('Control+Shift+Space owned by SecretApp.exe'))
+    const failed = render(App)
+    expect(await screen.findByText('The system-wide voice shortcut is unavailable. Voice remains available from the button.')).toBeInTheDocument()
+    expect(screen.queryByText(/SecretApp/)).not.toBeInTheDocument()
+    failed.unmount()
+    expect(unregisterGlobalShortcut).not.toHaveBeenCalled()
+
+    const registered = render(App)
+    await waitFor(() => expect(globalShortcutHandler).toEqual(expect.any(Function)))
+    registered.unmount()
+    await waitFor(() => expect(unregisterGlobalShortcut).toHaveBeenCalledWith('Control+Shift+Space'))
+  })
+
+  it('loads a valid saved voice shortcut and ignores malformed saved data', async () => {
+    localStorage.setItem('muniment.voice-shortcut', 'Alt+Shift+K')
+    const saved = render(App)
+    await waitFor(() => expect(registerGlobalShortcut).toHaveBeenCalledWith('Alt+Shift+K', expect.any(Function)))
+    expect(await screen.findByRole('button', { name: 'Voice' })).toHaveAttribute('aria-keyshortcuts', 'Alt+Shift+K')
+    saved.unmount()
+    await waitFor(() => expect(unregisterGlobalShortcut).toHaveBeenCalledWith('Alt+Shift+K'))
+
+    localStorage.setItem('muniment.voice-shortcut', 'no modifiers or secrets')
+    registerGlobalShortcut.mockClear()
+    render(App)
+    await waitFor(() => expect(registerGlobalShortcut).toHaveBeenCalledWith('Control+Shift+Space', expect.any(Function)))
+  })
+
+  it('falls back to the working default when a saved shortcut is unavailable', async () => {
+    localStorage.setItem('muniment.voice-shortcut', 'Alt+Shift+K')
+    registerGlobalShortcut.mockImplementation(async (shortcut, handler) => {
+      if (shortcut === 'Alt+Shift+K') throw new Error('private collision details')
+      globalShortcutHandler = handler
+    })
+    render(App)
+    await waitFor(() => expect(registerGlobalShortcut).toHaveBeenCalledWith('Control+Shift+Space', expect.any(Function)))
+    expect(await screen.findByRole('button', { name: 'Voice' })).toHaveAttribute('aria-keyshortcuts', 'Control+Shift+Space')
+    expect(screen.queryByText(/private collision/)).not.toBeInTheDocument()
+    expect(screen.queryByText('The system-wide voice shortcut is unavailable. Voice remains available from the button.')).not.toBeInTheDocument()
+  })
+
+  it('captures, applies, and restores a modifier-plus-key voice shortcut', async () => {
+    render(App)
+    const composer = await screen.findByPlaceholderText('Ask anything')
+    await fireEvent.keyDown(composer, { key: 'K', code: 'KeyK', ctrlKey: true, altKey: true })
+    expect(registerGlobalShortcut).toHaveBeenCalledTimes(1)
+    const profile = await screen.findByRole('button', { name: /Alice/i })
+    await fireEvent.click(profile)
+    const dialog = screen.getByRole('dialog', { name: 'Your access' })
+    const capture = within(dialog).getByRole('button', { name: /Change voice shortcut, current Control\+Shift\+Space/ })
+
+    await fireEvent.click(capture)
+    await fireEvent.keyDown(capture, { key: 'k', code: 'KeyK' })
+    expect(within(dialog).getByRole('alert')).toHaveTextContent('Include at least one modifier key.')
+    await fireEvent.keyDown(capture, { key: 'K', code: 'KeyK', ctrlKey: true, altKey: true })
+    expect(capture).toHaveTextContent('Control+Alt+K')
+    await fireEvent.click(within(dialog).getByRole('button', { name: 'Apply' }))
+
+    await waitFor(() => expect(localStorage.getItem('muniment.voice-shortcut')).toBe('Control+Alt+K'))
+    expect(registerGlobalShortcut).toHaveBeenCalledWith('Control+Alt+K', expect.any(Function))
+    expect(unregisterGlobalShortcut).toHaveBeenCalledWith('Control+Shift+Space')
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Voice' })).toHaveAttribute('aria-keyshortcuts', 'Control+Alt+K'))
+
+    const restore = within(dialog).getByRole('button', { name: 'Restore default' })
+    await waitFor(() => expect(restore).toBeEnabled())
+    await fireEvent.click(restore)
+    await waitFor(() => expect(localStorage.getItem('muniment.voice-shortcut')).toBe('Control+Shift+Space'))
+    await waitFor(() => expect(within(dialog).getByRole('button', { name: /Change voice shortcut, current Control\+Shift\+Space/ })).toBeInTheDocument())
+  })
+
+  it('keeps the previous voice binding when replacement registration collides', async () => {
+    registerGlobalShortcut.mockImplementation(async (shortcut, handler) => {
+      if (shortcut === 'Control+Alt+K') throw new Error('owned by SecretApp.exe')
+      globalShortcutHandler = handler
+    })
+    render(App)
+    await fireEvent.click(await screen.findByRole('button', { name: /Alice/i }))
+    const dialog = screen.getByRole('dialog', { name: 'Your access' })
+    const capture = within(dialog).getByRole('button', { name: /Change voice shortcut, current Control\+Shift\+Space/ })
+    await fireEvent.click(capture)
+    await fireEvent.keyDown(capture, { key: 'K', code: 'KeyK', ctrlKey: true, altKey: true })
+    await fireEvent.click(within(dialog).getByRole('button', { name: 'Apply' }))
+
+    expect(await within(dialog).findByRole('alert')).toHaveTextContent('That shortcut is unavailable. Your previous shortcut still works.')
+    expect(dialog).not.toHaveTextContent('SecretApp')
+    expect(localStorage.getItem('muniment.voice-shortcut')).toBeNull()
+    expect(unregisterGlobalShortcut).not.toHaveBeenCalledWith('Control+Shift+Space')
+    expect(screen.getByRole('button', { name: 'Voice' })).toHaveAttribute('aria-keyshortcuts', 'Control+Shift+Space')
+  })
+
+  it('keeps the registered and displayed shortcut when persistence fails', async () => {
+    const setItem = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => { throw new DOMException('private storage detail', 'QuotaExceededError') })
+    const view = render(App)
+    await fireEvent.click(await screen.findByRole('button', { name: /Alice/i }))
+    const dialog = screen.getByRole('dialog', { name: 'Your access' })
+    const capture = within(dialog).getByRole('button', { name: /Change voice shortcut/ })
+    await fireEvent.click(capture)
+    await fireEvent.keyDown(capture, { key: 'K', code: 'KeyK', ctrlKey: true, altKey: true })
+    await fireEvent.click(within(dialog).getByRole('button', { name: 'Apply' }))
+
+    expect(await within(dialog).findByRole('alert')).toHaveTextContent('Your previous shortcut still works.')
+    expect(dialog).not.toHaveTextContent('private storage detail')
+    expect(registeredShortcuts).toEqual(new Set(['Control+Shift+Space']))
+    expect(localStorage.getItem('muniment.voice-shortcut')).toBeNull()
+    expect(screen.getByRole('button', { name: 'Voice' })).toHaveAttribute('aria-keyshortcuts', 'Control+Shift+Space')
+    setItem.mockRestore()
+    view.unmount()
+  })
+
+  it('does not claim rollback succeeded when unregistering both bindings fails', async () => {
+    unregisterGlobalShortcut.mockImplementation(async (shortcut) => {
+      if (['Control+Shift+Space', 'Control+Alt+K'].includes(shortcut)) throw new Error(`private failure for ${shortcut}`)
+      registeredShortcuts.delete(shortcut)
+    })
+    render(App)
+    await fireEvent.click(await screen.findByRole('button', { name: /Alice/i }))
+    const dialog = screen.getByRole('dialog', { name: 'Your access' })
+    const capture = within(dialog).getByRole('button', { name: /Change voice shortcut/ })
+    await fireEvent.click(capture)
+    await fireEvent.keyDown(capture, { key: 'K', code: 'KeyK', ctrlKey: true, altKey: true })
+    await fireEvent.click(within(dialog).getByRole('button', { name: 'Apply' }))
+
+    expect(await within(dialog).findByRole('alert')).toHaveTextContent('Voice remains available from the button.')
+    expect(dialog).not.toHaveTextContent('private failure')
+    expect(registeredShortcuts).toEqual(new Set(['Control+Shift+Space', 'Control+Alt+K']))
+    expect(localStorage.getItem('muniment.voice-shortcut')).toBeNull()
+    expect(screen.getByRole('button', { name: 'Voice' })).toHaveAttribute('aria-keyshortcuts', 'Control+Shift+Space')
+  })
+
+  it('disables rebinding until deferred startup registration settles', async () => {
+    const startup = deferred()
+    registerGlobalShortcut.mockImplementationOnce(async (shortcut, handler) => {
+      await startup.promise
+      registeredShortcuts.add(shortcut)
+      globalShortcutHandler = handler
+    })
+    render(App)
+    await fireEvent.click(await screen.findByRole('button', { name: /Alice/i }))
+    const capture = within(screen.getByRole('dialog', { name: 'Your access' })).getByRole('button', { name: /Change voice shortcut/ })
+    expect(capture).toBeDisabled()
+    await fireEvent.click(capture)
+    expect(registerGlobalShortcut).toHaveBeenCalledTimes(1)
+    startup.resolve()
+    await waitFor(() => expect(capture).toBeEnabled())
+    expect(registeredShortcuts).toEqual(new Set(['Control+Shift+Space']))
+  })
+
+  it.each(['register', 'unregister'])('cleans every binding when unmounted during replacement %s', async (boundary) => {
+    const pending = deferred()
+    const view = render(App)
+    await waitFor(() => expect(registeredShortcuts).toEqual(new Set(['Control+Shift+Space'])))
+    if (boundary === 'register') {
+      registerGlobalShortcut.mockImplementationOnce(async (shortcut, handler) => {
+        await pending.promise
+        registeredShortcuts.add(shortcut)
+        globalShortcutHandler = handler
+      })
+    } else {
+      unregisterGlobalShortcut.mockImplementationOnce(async (shortcut) => {
+        await pending.promise
+        registeredShortcuts.delete(shortcut)
+      })
+    }
+    await fireEvent.click(await screen.findByRole('button', { name: /Alice/i }))
+    const dialog = screen.getByRole('dialog', { name: 'Your access' })
+    const capture = within(dialog).getByRole('button', { name: /Change voice shortcut/ })
+    await fireEvent.click(capture)
+    await fireEvent.keyDown(capture, { key: 'K', code: 'KeyK', ctrlKey: true, altKey: true })
+    await fireEvent.click(within(dialog).getByRole('button', { name: 'Apply' }))
+    if (boundary === 'register') await waitFor(() => expect(registerGlobalShortcut).toHaveBeenCalledWith('Control+Alt+K', expect.any(Function)))
+    else await waitFor(() => expect(unregisterGlobalShortcut).toHaveBeenCalledWith('Control+Shift+Space'))
+    view.unmount()
+    pending.resolve()
+    await waitFor(() => expect(registeredShortcuts).toEqual(new Set()))
+  })
+
+  it('offers all transforms after polish and replaces only the captured segment', async () => {
+    invoke.mockImplementation(async (command, payload) => {
+      if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
+      if (command === 'chat_history') return []
+      if (command === 'auth_entitlement_snapshot') return snapshot()
+      if (command === 'auth_devices') return []
+      if (command === 'dictation_start') return { state: 'running' }
+      if (command === 'dictation_stop') return { state: 'stopped' }
+      if (command === 'dictation_polish') return 'Polished capture.'
+      if (command === 'dictation_transform') return payload.transform === 'key-points' ? '• Captured point' : 'Formal capture.'
+      throw new Error(`unexpected command: ${command}`)
+    })
+    render(App)
+    const composer = await screen.findByPlaceholderText('Ask anything')
+    await fireEvent.input(composer, { target: { value: 'Existing draft' } })
+    const voice = screen.getByRole('button', { name: 'Voice' })
+    await fireEvent.click(voice)
+    expect(screen.queryByRole('button', { name: /key points/ })).not.toBeInTheDocument()
+    dictationListener({ payload: { type: 'transcript', text: 'captured words' } })
+    await stopClickCapture(voice)
+
+    const chips = await screen.findByLabelText('Voice transforms')
+    for (const [label, shortcut] of [['key points', 'Alt+1'], ['formal', 'Alt+2'], ['short', 'Alt+3'], ['long', 'Alt+4']]) {
+      expect(within(chips).getByRole('button', { name: new RegExp(label) })).toHaveAttribute('aria-keyshortcuts', shortcut)
+    }
+    const keyPoints = within(chips).getByRole('button', { name: /key points/ })
+    await fireEvent.click(keyPoints)
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('dictation_transform', { transform: 'key-points', transcript: 'Polished capture.' }))
+    await waitFor(() => expect(composer).toHaveValue('Existing draft • Captured point'))
+    expect(composer).toHaveFocus()
+
+    await fireEvent.keyDown(composer, { key: '¡', code: 'Digit2', altKey: true })
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('dictation_transform', { transform: 'formal', transcript: '• Captured point' }))
+    await waitFor(() => expect(composer).toHaveValue('Existing draft Formal capture.'))
+    expect(composer).toHaveFocus()
+  })
+
+  it('expires transform actions after six seconds without letting an old timer hide a newer capture', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    let polishCalls = 0
+    invoke.mockImplementation(async (command) => {
+      if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
+      if (command === 'chat_history') return []
+      if (command === 'auth_entitlement_snapshot') return snapshot()
+      if (command === 'auth_devices') return []
+      if (command === 'dictation_start') return { state: 'running' }
+      if (command === 'dictation_stop') return { state: 'stopped' }
+      if (command === 'dictation_polish') return `Polished capture ${++polishCalls}`
+      throw new Error(`unexpected command: ${command}`)
+    })
+    render(App)
+    const composer = await screen.findByPlaceholderText('Ask anything')
+    const voice = screen.getByRole('button', { name: 'Voice' })
+
+    await fireEvent.click(voice)
+    dictationListener({ payload: { type: 'transcript', text: 'first' } })
+    await stopClickCapture(voice)
+    expect(await screen.findByLabelText('Voice transforms')).toBeInTheDocument()
+
+    await vi.advanceTimersByTimeAsync(3000)
+    await fireEvent.input(composer, { target: { value: 'Edited between captures' } })
+    await fireEvent.click(voice)
+    dictationListener({ payload: { type: 'transcript', text: 'second' } })
+    await stopClickCapture(voice)
+    expect(await screen.findByLabelText('Voice transforms')).toBeInTheDocument()
+
+    await vi.advanceTimersByTimeAsync(3000)
+    expect(screen.getByLabelText('Voice transforms')).toBeInTheDocument()
+    await vi.advanceTimersByTimeAsync(2500)
+    expect(screen.getByLabelText('Voice transforms')).toBeInTheDocument()
+    await vi.advanceTimersByTimeAsync(500)
+    expect(screen.queryByLabelText('Voice transforms')).not.toBeInTheDocument()
+  })
+
+  it('blocks duplicate actions and rejects a transform result after editing', async () => {
+    let resolveTransform
+    invoke.mockImplementation(async (command) => {
+      if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
+      if (command === 'chat_history') return []
+      if (command === 'auth_entitlement_snapshot') return snapshot()
+      if (command === 'auth_devices') return []
+      if (command === 'dictation_start') return { state: 'running' }
+      if (command === 'dictation_stop') return { state: 'stopped' }
+      if (command === 'dictation_polish') return 'Editable capture'
+      if (command === 'dictation_transform') return new Promise((resolve) => { resolveTransform = resolve })
+      throw new Error(`unexpected command: ${command}`)
+    })
+    render(App)
+    const composer = await screen.findByPlaceholderText('Ask anything')
+    const voice = screen.getByRole('button', { name: 'Voice' })
+    await fireEvent.click(voice)
+    dictationListener({ payload: { type: 'transcript', text: 'capture' } })
+    await stopClickCapture(voice)
+    const formal = await screen.findByRole('button', { name: /formal/ })
+    await fireEvent.click(formal)
+
+    expect(formal).toBeDisabled()
+    expect(voice).toBeDisabled()
+    expect(screen.getByRole('button', { name: 'Send' })).toBeDisabled()
+    await fireEvent.click(formal)
+    await fireEvent.keyDown(composer, { key: '2', altKey: true })
+    expect(invoke.mock.calls.filter(([command]) => command === 'dictation_transform')).toHaveLength(1)
+    await fireEvent.input(composer, { target: { value: 'My newer edit' } })
+    expect(screen.queryByLabelText('Voice transforms')).not.toBeInTheDocument()
+    resolveTransform('Late replacement')
+    await Promise.resolve()
+    await waitFor(() => expect(screen.queryByText('Transforming on this device…')).not.toBeInTheDocument())
+    expect(composer).toHaveValue('My newer edit')
+    expect(composer).toHaveFocus()
+  })
+
+  it('ignores the global shortcut while a transform is pending', async () => {
+    let resolveTransform
+    invoke.mockImplementation(async (command) => {
+      if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
+      if (command === 'chat_history') return []
+      if (command === 'auth_entitlement_snapshot') return snapshot()
+      if (command === 'auth_devices') return []
+      if (command === 'dictation_start') return { state: 'running' }
+      if (command === 'dictation_stop') return { state: 'stopped' }
+      if (command === 'dictation_polish') return 'Polished capture'
+      if (command === 'dictation_transform') return new Promise((resolve) => { resolveTransform = resolve })
+      throw new Error(`unexpected command: ${command}`)
+    })
+    render(App)
+    const composer = await screen.findByPlaceholderText('Ask anything')
+    await fireEvent.input(composer, { target: { value: 'Existing draft' } })
+    const voice = screen.getByRole('button', { name: 'Voice' })
+    await fireEvent.click(voice)
+    await waitFor(() => expect(voice).toHaveAttribute('aria-pressed', 'true'))
+    dictationListener({ payload: { type: 'transcript', text: 'captured words' } })
+    await stopClickCapture(voice)
+    await fireEvent.click(await screen.findByRole('button', { name: /formal/ }))
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('dictation_transform', { transform: 'formal', transcript: 'Polished capture' }))
+
+    invoke.mockClear()
+    globalShortcutHandler({ state: 'Pressed' })
+    globalShortcutHandler({ state: 'Released' })
+    expect(invoke).not.toHaveBeenCalledWith('dictation_start')
+    expect(invoke.mock.calls.filter(([command]) => command === 'dictation_stop')).toHaveLength(0)
+    expect(composer).toHaveValue('Existing draft Polished capture')
+
+    resolveTransform('Formal capture')
+    await waitFor(() => expect(composer).toHaveValue('Existing draft Formal capture'))
+  })
+
+  it('keeps text and reports a redacted transform failure, then cancels late work with Escape', async () => {
+    let transformCalls = 0
+    let resolveLate
+    invoke.mockImplementation(async (command) => {
+      if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
+      if (command === 'chat_history') return []
+      if (command === 'auth_entitlement_snapshot') return snapshot()
+      if (command === 'auth_devices') return []
+      if (command === 'dictation_start') return { state: 'running' }
+      if (command === 'dictation_stop') return { state: 'stopped' }
+      if (command === 'dictation_polish') return 'Keep polished text'
+      if (command === 'dictation_transform') {
+        transformCalls += 1
+        if (transformCalls === 1) throw { category: 'requestFailed', message: 'sensitive backend detail' }
+        return new Promise((resolve) => { resolveLate = resolve })
+      }
+      throw new Error(`unexpected command: ${command}`)
+    })
+    render(App)
+    const composer = await screen.findByPlaceholderText('Ask anything')
+    const voice = screen.getByRole('button', { name: 'Voice' })
+    await fireEvent.click(voice)
+    dictationListener({ payload: { type: 'transcript', text: 'keep words' } })
+    await stopClickCapture(voice)
+    await fireEvent.click(await screen.findByRole('button', { name: /short/ }))
+    expect(await screen.findByRole('alert')).toHaveTextContent('That voice transform is unavailable. Your text is unchanged; try again.')
+    expect(screen.getByRole('alert')).not.toHaveTextContent('sensitive backend detail')
+    expect(composer).toHaveValue('Keep polished text')
+
+    await fireEvent.click(screen.getByRole('button', { name: /long/ }))
+    await fireEvent.keyDown(document, { key: 'Escape' })
+    expect(composer).toHaveValue('Keep polished text')
+    expect(screen.queryByLabelText('Voice transforms')).not.toBeInTheDocument()
+    expect(composer).toHaveFocus()
+    resolveLate('Late after Escape')
+    await Promise.resolve()
+    expect(composer).toHaveValue('Keep polished text')
+  })
+
   it('starts on primary pointer down and stops on release while preserving transcript', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
     let resolveStop
     invoke.mockImplementation(async (command) => {
       if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
@@ -412,6 +1097,7 @@ describe('voice dictation', () => {
     expect(invoke).toHaveBeenCalledWith('dictation_start')
     dictationListener({ payload: { type: 'transcript', text: 'after' } })
     await fireEvent.pointerUp(voice, { button: 0, pointerId: 1 })
+    await vi.advanceTimersByTimeAsync(300)
 
     resolveStop({ state: 'stopped' })
     await Promise.resolve()
@@ -427,6 +1113,43 @@ describe('voice dictation', () => {
     expect(invoke.mock.calls.filter(([command]) => command === 'dictation_start')).toHaveLength(1)
     expect(invoke.mock.calls.filter(([command]) => command === 'dictation_stop')).toHaveLength(1)
     expect(invoke.mock.calls.filter(([command]) => command === 'dictation_polish')).toHaveLength(1)
+  })
+
+  it('promotes a rapid button double activation to hands-free and Escape restores the draft during a late start', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    let resolveStart
+    invoke.mockImplementation(async (command) => {
+      if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
+      if (command === 'chat_history') return []
+      if (command === 'auth_entitlement_snapshot') return snapshot()
+      if (command === 'auth_devices') return []
+      if (command === 'dictation_start') return new Promise((resolve) => { resolveStart = resolve })
+      if (command === 'dictation_stop') return { state: 'stopped' }
+      throw new Error(`unexpected command: ${command}`)
+    })
+    render(App)
+    const composer = await screen.findByPlaceholderText('Ask anything')
+    await fireEvent.input(composer, { target: { value: 'Original draft' } })
+    const voice = screen.getByRole('button', { name: 'Voice' })
+
+    await fireEvent.pointerDown(voice, { button: 0, pointerId: 1 })
+    await fireEvent.pointerUp(voice, { pointerId: 1 })
+    await vi.advanceTimersByTimeAsync(150)
+    await fireEvent.pointerDown(voice, { button: 0, pointerId: 2 })
+    await fireEvent.pointerUp(voice, { pointerId: 2 })
+    dictationListener({ payload: { type: 'transcript', text: 'temporary words' } })
+    await vi.advanceTimersByTimeAsync(300)
+
+    expect(invoke.mock.calls.filter(([command]) => command === 'dictation_start')).toHaveLength(1)
+    expect(invoke.mock.calls.filter(([command]) => command === 'dictation_stop')).toHaveLength(0)
+    expect(voice).toHaveAttribute('aria-pressed', 'true')
+    expect(composer).toHaveValue('Original draft temporary words')
+
+    await fireEvent.keyDown(document, { key: 'Escape' })
+    expect(composer).toHaveValue('Original draft')
+    resolveStart({ state: 'running' })
+    await waitFor(() => expect(invoke.mock.calls.filter(([command]) => command === 'dictation_stop')).toHaveLength(1))
+    await waitFor(() => expect(voice).toHaveAttribute('aria-pressed', 'false'))
   })
 
   it('keeps the verbatim capture editable and explains a polish failure', async () => {
@@ -446,7 +1169,7 @@ describe('voice dictation', () => {
     await fireEvent.input(composer, { target: { value: 'Keep' } })
     await fireEvent.click(voice)
     dictationListener({ payload: { type: 'transcript', text: 'verbatim words' } })
-    await fireEvent.click(voice)
+    await stopClickCapture(voice)
 
     expect(await screen.findByRole('alert')).toHaveTextContent('Polishing is unavailable. You can edit or send the captured text.')
     expect(composer).toHaveValue('Keep verbatim words')
@@ -477,7 +1200,7 @@ describe('voice dictation', () => {
     await fireEvent.click(voice)
     const oldCaptureListener = dictationListener
     dictationListener({ payload: { type: 'transcript', text: 'old capture' } })
-    await fireEvent.click(voice)
+    await stopClickCapture(voice)
 
     expect(await screen.findByRole('status')).toHaveTextContent('Polishing on this device…')
     expect(screen.getByTestId('polish-draft').textContent).toBe('Existing draft ')
@@ -671,7 +1394,7 @@ describe('voice dictation', () => {
     dictationListener({ payload: { type: 'transcript', text: 'spoken words' } })
     await waitFor(() => expect(composer).toHaveValue('Existing draft spoken words'))
     await fireEvent.input(composer, { target: { value: 'Edited transcript' } })
-    await fireEvent.click(voice)
+    await stopClickCapture(voice)
 
     expect(invoke).toHaveBeenCalledWith('dictation_start')
     expect(invoke).toHaveBeenCalledWith('dictation_stop')
@@ -701,7 +1424,7 @@ describe('voice dictation', () => {
     await fireEvent.click(send)
     expect(invoke).not.toHaveBeenCalledWith('chat_submit', expect.anything())
 
-    await fireEvent.click(voice)
+    await stopClickCapture(voice)
     expect(invoke).toHaveBeenCalledWith('dictation_stop')
     expect(voice).toHaveAttribute('aria-pressed', 'false')
     await waitFor(() => expect(send).toBeEnabled())
@@ -756,7 +1479,7 @@ describe('voice dictation', () => {
     expect(voice).toHaveAttribute('aria-pressed', 'true')
     expect(voice).toBeEnabled()
 
-    await fireEvent.click(voice)
+    await stopClickCapture(voice)
     expect(invoke).toHaveBeenCalledWith('dictation_stop')
     expect(voice).toHaveAttribute('aria-pressed', 'false')
   })
@@ -780,7 +1503,7 @@ describe('voice dictation', () => {
     render(App)
     const voice = await screen.findByRole('button', { name: 'Voice' })
     await fireEvent.click(voice)
-    await fireEvent.click(voice)
+    await stopClickCapture(voice)
 
     expect(await screen.findByRole('alert')).toHaveTextContent('Dictation could not be stopped.')
     expect(voice).toHaveAttribute('aria-pressed', 'true')
@@ -830,7 +1553,9 @@ describe('local file selection', () => {
     await waitFor(() => expect(dragDropListener).toBeDefined())
 
     dragDropListener({ payload: { type: 'over', position: { x: 10, y: 10 } } })
-    expect(await screen.findByRole('status')).toHaveTextContent('Drop files to add themSelected locally · not sent to the model')
+    const dropStatus = await screen.findByRole('status')
+    expect(dropStatus).toHaveTextContent('Drop files to add themSaved locally · supported images sent with first prompt')
+    expect(dropStatus).not.toHaveTextContent(/not sent to (?:the )?model/i)
     dragDropListener({ payload: { type: 'leave' } })
     await waitFor(() => expect(screen.queryByRole('status')).not.toBeInTheDocument())
 
@@ -944,7 +1669,8 @@ describe('local file selection', () => {
     await waitFor(() => expect(composer).toHaveValue(''))
     expect(screen.queryByRole('list', { name: 'Selected files' })).not.toBeInTheDocument()
     const saved = screen.getByRole('list', { name: 'Saved attachments' })
-    expect(saved).toHaveTextContent('lease.pdf1.0 KBSaved locally · not sent to model')
+    expect(saved).toHaveTextContent('lease.pdf1.0 KBSaved locally · supported images sent with first prompt')
+    expect(saved).not.toHaveTextContent(/not sent to (?:the )?model/i)
     expect(document.body).not.toHaveTextContent('/private/contracts')
   })
 })
@@ -963,7 +1689,8 @@ it('hydrates safe durable attachment chips without paths or hashes', async () =>
   })
   render(App)
   const saved = await screen.findByRole('list', { name: 'Saved attachments' })
-  expect(saved).toHaveTextContent('contract.pdf214 KBSaved locally · not sent to model')
+  expect(saved).toHaveTextContent('contract.pdf214 KBSaved locally · supported images sent with first prompt')
+  expect(saved).not.toHaveTextContent(/not sent to (?:the )?model/i)
   expect(document.body).not.toHaveTextContent('/private/contract.pdf')
   expect(document.body).not.toHaveTextContent('sha256')
 })
@@ -983,7 +1710,8 @@ it('hydrates durable attachment chips when the prompt is unavailable', async () 
   render(App)
 
   const saved = await screen.findByRole('list', { name: 'Saved attachments' })
-  expect(saved).toHaveTextContent('evidence.txt1.5 KBSaved locally · not sent to model')
+  expect(saved).toHaveTextContent('evidence.txt1.5 KBSaved locally · supported images sent with first prompt')
+  expect(saved).not.toHaveTextContent(/not sent to (?:the )?model/i)
   expect(screen.getByText('Prompt unavailable')).toBeInTheDocument()
   expect(saved.closest('.user-message')).not.toBeNull()
   expect(document.body).not.toHaveTextContent('/private/evidence.txt')

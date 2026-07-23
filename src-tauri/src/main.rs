@@ -14,6 +14,7 @@ use tauri::Manager;
 fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .manage(auth::AuthState::new())
         .manage(Arc::new(voice_capture::VoiceCaptureState::new()))
         .manage(chat::AttachApprovalState::default())
@@ -53,6 +54,7 @@ fn main() {
             model_install::gemma_install_cancel,
             model_install::required_model_acquisition_status,
             model_install::dictation_polish,
+            model_install::dictation_transform,
             model_install::onboarding_triage,
             home::home_status,
             home::home_confirm,

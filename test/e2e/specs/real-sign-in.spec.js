@@ -15,7 +15,8 @@ describe('installed nightly', () => {
     }
   })
 
-  it('signs in through the production UI', async () => {
+  it('signs in through the production UI', async function () {
+    this.timeout(360000)
     const home = process.env.MUNIMENT_E2E_HOME_PATH
     const location = await $('[data-testid="onboarding-home-path"]')
     await location.waitForDisplayed()
@@ -94,9 +95,46 @@ describe('installed nightly', () => {
     const authenticatedMarker = await $('textarea[placeholder="Ask anything"]')
     await authenticatedMarker.waitForDisplayed({ timeout: 120000 })
     await authenticatedMarker.saveScreenshot(path.join(rawDir, '02-authenticated.png'))
-    const prompt = `Muniment E2E composer ${Date.now()}`
+    const attachmentPath = process.env.MUNIMENT_E2E_IMAGE_PATH
+    if (!attachmentPath || !path.isAbsolute(attachmentPath)) throw new Error('image fixture path is unavailable')
+    await access(attachmentPath)
+    await dialog.mockReturnValue(attachmentPath)
+    await (await $('button=Add files')).click()
+    const selectedAttachment = await $('[aria-label="Selected files"] li')
+    await selectedAttachment.waitForDisplayed()
+    expect(await selectedAttachment.getText()).toContain(path.basename(attachmentPath))
+
+    const expectedToken = 'MUNIMENT-PLUM-4827'
+    const prompt = `Muniment E2E image check ${Date.now()}: return only the exact token visible in the attached image.`
     await authenticatedMarker.setValue(prompt)
-    expect(await authenticatedMarker.getValue()).toBe(prompt)
+    const send = await $('button=Send')
+    await send.waitForDisplayed()
+    await send.click()
+
+    const userMessage = await $(`//div[contains(concat(' ', normalize-space(@class), ' '), ' user-turn ')]//p[normalize-space()="${prompt}"]`)
+    await userMessage.waitForDisplayed()
+    const userTurn = await userMessage.$('./ancestor::div[contains(concat(" ", normalize-space(@class), " "), " user-turn ")]')
+    const submittedAttachment = await userTurn.$('[aria-label="Saved attachments"] li')
+    await submittedAttachment.waitForDisplayed()
+    expect(await submittedAttachment.getText()).toContain(path.basename(attachmentPath))
+    const response = await userTurn.$('./following-sibling::div[contains(concat(" ", normalize-space(@class), " "), " response ")][1]')
+    let receipt
+    await browser.waitUntil(async () => {
+      receipt = await response.$('button.provenance')
+      return await receipt.isDisplayed()
+    }, {
+      timeout: 180000,
+      timeoutMsg: `chat response did not complete with a receipt for prompt: ${prompt}`,
+    })
+
+    const assistantResponse = await response.$('./p[1]')
+    const assistantText = (await assistantResponse.getText()).trim()
+    expect(assistantText).not.toBe('')
+    expect(assistantText).toContain(expectedToken)
+    await receipt.click()
+    const route = await response.$('.route-value')
+    await route.waitForDisplayed()
+    expect((await route.getText()).trim()).not.toBe('')
 
     let frontendLogs
     try {

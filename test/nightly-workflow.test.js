@@ -161,3 +161,55 @@ describe('nightly E2E JUnit fallback', () => {
     expect(xml.querySelector('failure')).toBeNull()
   })
 })
+
+describe('nightly installed-E2E failure reporting', () => {
+  const start = workflow.indexOf('  report-e2e-failure:')
+  const report = workflow.slice(start)
+  const reportCondition = report.match(/    if: >-\n((?:      .+\n)+)/)[1].trim().replace(/\n\s*/g, ' ')
+  const shouldReport = ({ linux, windows, macos }) => Function(
+    `"use strict"; return (${reportCondition
+      .replace('always()', 'true')
+      .replaceAll('needs.linux-e2e.result', JSON.stringify(linux))
+      .replaceAll('needs.windows-e2e.result', JSON.stringify(windows))
+      .replaceAll('needs.macos-e2e.result', JSON.stringify(macos))})`,
+  )()
+
+  it('waits for every installed-E2E lane and runs only when one failed', () => {
+    expect(report).toContain('needs: [prepare, linux-e2e, windows-e2e, macos-e2e]')
+    expect(reportCondition).toContain('always()')
+    expect(shouldReport({ linux: 'success', windows: 'success', macos: 'success' })).toBe(false)
+    expect(shouldReport({ linux: 'skipped', windows: 'skipped', macos: 'skipped' })).toBe(false)
+    expect(shouldReport({ linux: 'success', windows: 'skipped', macos: 'success' })).toBe(false)
+    expect(shouldReport({ linux: 'failure', windows: 'skipped', macos: 'skipped' })).toBe(true)
+    expect(shouldReport({ linux: 'success', windows: 'failure', macos: 'success' })).toBe(true)
+    expect(shouldReport({ linux: 'success', windows: 'success', macos: 'failure' })).toBe(true)
+  })
+
+  it('uses only safe workflow metadata in the issue body', () => {
+    expect(report).toContain('Pinned source SHA:')
+    expect(report).toContain('Failing platforms:')
+    expect(report).toContain('/actions/runs/${context.runId}')
+    expect(report).not.toContain('FIXTURE_')
+    expect(report).not.toContain('MUNIMENT_E2E_USERNAME')
+    expect(report).not.toContain('MUNIMENT_E2E_PASSWORD')
+    expect(report).not.toContain('secrets.')
+    expect(report).not.toContain('readFile')
+  })
+
+  it('deduplicates open automation issues by the full pinned SHA', () => {
+    expect(report).toContain('const title = `[nightly-e2e] Installed test failure for ${sha}`')
+    expect(report).toContain('state: "open"')
+    expect(report).toContain('issue.title === title')
+    expect(report).toContain('github.rest.issues.createComment')
+    expect(report).toContain('github.rest.issues.create({ ...context.repo, title, body })')
+    expect(report).toContain('/^[0-9a-f]{40}$/')
+  })
+
+  it('grants only job-scoped issue access and does not hide API failures', () => {
+    expect(report).toContain('permissions:\n      issues: write')
+    expect(report).not.toContain('contents:')
+    expect(report).not.toContain('continue-on-error')
+    expect(report).not.toContain('try {')
+    expect(report).not.toContain('catch (')
+  })
+})

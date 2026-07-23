@@ -19,6 +19,52 @@ describe('installed onboarding spec contract', () => {
   })
 })
 
+describe('installed production chat contract', () => {
+  const spec = fs.readFileSync(path.join(root, 'test/e2e/specs/real-sign-in.spec.js'), 'utf8')
+
+  it('submits a unique image prompt and verifies its rendered attachment and assistant token', () => {
+    expect(spec).toMatch(/const prompt = `Muniment E2E image check \$\{Date\.now\(\)\}/)
+    expect(spec).toContain("const expectedToken = 'MUNIMENT-PLUM-4827'")
+    expect(spec.match(/const prompt = ([^\n]+)/)?.[1]).not.toContain('expectedToken')
+    expect(spec).toContain("await dialog.mockReturnValue(attachmentPath)")
+    expect(spec).toContain("$('button=Add files')")
+    expect(spec).toContain('submittedAttachment.waitForDisplayed()')
+    expect(spec).toContain("const send = await $('button=Send')")
+    expect(spec).toContain('await send.click()')
+    expect(spec).toContain('userMessage.waitForDisplayed()')
+    expect(spec).toContain("expect(assistantText).not.toBe('')")
+    expect(spec).toContain('expect(assistantText).toContain(expectedToken)')
+  })
+
+  it('keeps the image fixture in isolated runner state rather than diagnostics', () => {
+    const linux = fs.readFileSync(path.join(root, 'test/e2e/runner/linux.sh'), 'utf8')
+    const windows = fs.readFileSync(path.join(root, 'test/e2e/runner/windows.ps1'), 'utf8')
+    const fixture = Buffer.from(fs.readFileSync(path.join(root, 'test/e2e/fixtures/image-token.png.base64'), 'utf8'), 'base64')
+    expect(fixture.subarray(0, 8).toString('hex')).toBe('89504e470d0a1a0a')
+    expect(linux).toContain('image_fixture="$state_root/image-token.png"')
+    expect(linux).toContain('MUNIMENT_E2E_IMAGE_PATH="$image_fixture"')
+    expect(windows).toContain('$imageFixture = Join-Path $stateRoot "image-token.png"')
+    expect(windows).toContain('$env:MUNIMENT_E2E_IMAGE_PATH = $imageFixture')
+    expect(linux).not.toContain('$raw/image-token.png')
+    expect(windows).not.toContain('Join-Path $raw "image-token.png"')
+  })
+
+  it('uses a bounded completion condition and verifies the server receipt route', () => {
+    expect(spec).toContain('this.timeout(360000)')
+    expect(spec).toContain('await browser.waitUntil(async () => {')
+    expect(spec).toContain('timeout: 180000')
+    expect(spec).toContain('chat response did not complete with a receipt for prompt:')
+    expect(spec).not.toMatch(/browser\.pause\s*\(/)
+    expect(spec).toContain("response.$('button.provenance')")
+    expect(spec).toContain("response.$('.route-value')")
+    expect(spec).toContain("route.getText()).trim()).not.toBe('')")
+  })
+
+  it('does not capture the rendered production conversation', () => {
+    expect(spec.slice(spec.indexOf('const prompt ='))).not.toContain('saveScreenshot')
+  })
+})
+
 describe('WDIO Tauri service dependency contract', () => {
   it('loads the installed ESM entry with compatible transitive named exports', async () => {
     await expect(import('@wdio/tauri-service')).resolves.toBeDefined()
@@ -334,6 +380,7 @@ describe('artifact redaction boundary', () => {
     ['injected text', { 'app.log': 'private-user' }, { MUNIMENT_E2E_USERNAME: 'private-user' }],
     ['header token', { 'driver.log': 'Authorization: Bearer abcdefghijklmnopqrstuvwxyz' }, {}],
     ['unapproved screenshot', { 'failure-current-window.png': Buffer.from('not safe') }, {}],
+    ['rendered production conversation', { '03-chat-complete.png': Buffer.from('not safe') }, {}],
   ])('blocks %s before destination creation', (_name, files, env) => {
     const { result, destination } = redact(files, env)
     expect(result.status).not.toBe(0); expect(fs.existsSync(destination)).toBe(false)
@@ -411,10 +458,15 @@ describe('cleanup failure accounting', () => {
   const runner = fs.readFileSync(path.join(root, 'test/e2e/runner/linux.sh'), 'utf8')
   const phases = ['stop-wdio', 'stop-driver', 'revoke-session', 'stop-browser-driver', 'stop-app', 'remove-package', 'remove-state', 'package-gone', 'processes-gone', 'state-gone', 'stage-cleanup-log', 'redact-artifacts', 'remove-raw', 'remove-package-file', 'remove-auth-url', 'replace-artifacts', 'publish-artifacts', 'suppress-artifacts', 'remove-safe', 'raw-gone', 'package-file-gone', 'auth-url-gone', 'safe-gone', 'remove-cleanup-log']
   const runFinalizer = (failed = '', extraEnv = {}) => {
-    const dir = temp(); const ledger = path.join(dir, 'ledger'); const statusLedger = path.join(dir, 'status-ledger')
+    const dir = temp(); const ledger = path.join(dir, 'ledger'); const statusLedger = path.join(dir, 'status-ledger'); const artifacts = path.join(dir, 'artifacts')
+    fs.mkdirSync(artifacts)
+    const junit = extraEnv.MUNIMENT_E2E_FINALIZER_TEST_STATUS === '1'
+      ? '<testsuite name="installed-linux" failures="1"><testcase><failure message="safe diagnostic"/></testcase></testsuite>'
+      : '<testsuite name="installed-linux" failures="0"/>'
+    fs.writeFileSync(path.join(artifacts, 'junit.xml'), junit)
     const result = spawnSync('bash', [path.join(root, 'test/e2e/runner/linux.sh')], {
       encoding: 'utf8',
-      env: { ...process.env, MUNIMENT_E2E_FINALIZER_TEST_MODE: '1', MUNIMENT_E2E_FINALIZER_TEST_LEDGER: ledger, MUNIMENT_E2E_FINALIZER_TEST_STATUS_LEDGER: statusLedger, MUNIMENT_E2E_FINALIZER_TEST_FAIL: failed, ...extraEnv },
+      env: { ...process.env, DCI_ARTIFACTS_DIR: artifacts, MUNIMENT_E2E_FINALIZER_TEST_MODE: '1', MUNIMENT_E2E_FINALIZER_TEST_LEDGER: ledger, MUNIMENT_E2E_FINALIZER_TEST_STATUS_LEDGER: statusLedger, MUNIMENT_E2E_FINALIZER_TEST_FAIL: failed, ...extraEnv },
     })
     const entries = fs.readFileSync(ledger, 'utf8').trim().split('\n')
     const statuses = Object.fromEntries(fs.readFileSync(statusLedger, 'utf8').trim().split('\n').map((entry) => entry.split('\t')))
@@ -424,6 +476,29 @@ describe('cleanup failure accounting', () => {
   it('prefers the packaged binary name and retains the legacy fallback', () => {
     expect(runner).toContain('app_binary=$(command -v muniment-desktop || command -v muniment)')
   })
+  it.each([
+    ['successful run', {}, 0],
+    ['product-test failure', { MUNIMENT_E2E_FINALIZER_TEST_STATUS: '1' }, 1],
+  ])('emits one extractable safe envelope after a %s', (_name, env, expectedStatus) => {
+    const { result } = runFinalizer('', env)
+    expect(result.status).toBe(expectedStatus)
+    expect(result.stdout.match(/^=== DESKTOP-CI ARTIFACTS BEGIN ===$/gm)).toHaveLength(1)
+    expect(result.stdout.match(/^=== DESKTOP-CI ARTIFACTS END ===$/gm)).toHaveLength(1)
+    const output = path.join(temp(), 'output'); const extracted = path.join(temp(), 'extracted')
+    fs.writeFileSync(output, result.stdout)
+    const extraction = spawnSync('bash', [path.join(root, 'test/e2e/support/extract-artifacts.sh'), output, extracted], { encoding: 'utf8' })
+    expect(extraction.status).toBe(0)
+    const junit = fs.readFileSync(path.join(extracted, 'junit.xml'), 'utf8')
+    expect(junit).toContain('installed-linux')
+    if (expectedStatus) expect(junit).toContain('<failure message="safe diagnostic"/>')
+  })
+  it.each(['redact-artifacts', 'remove-raw', 'publish-artifacts', 'publish-envelope'])(
+    'suppresses the envelope after injected %s failure', (failed) => {
+      const { result } = runFinalizer(failed)
+      expect(result.status).not.toBe(0)
+      expect(result.stdout).not.toContain('=== DESKTOP-CI ARTIFACTS')
+    },
+  )
   it('clears stale automation before reaching recovery, then tears down the app', () => {
     const { result, entries, invoked } = runFinalizer()
     const command = commands(entries)
@@ -456,8 +531,8 @@ describe('cleanup failure accounting', () => {
     expect(command['redact-artifacts']).toBe(`node test/e2e/support/redact.mjs ${raw} ${safe} `)
     expect(command['stage-cleanup-log']).toMatch(new RegExp(`^cp /tmp/muniment-e2e-cleanup\\.[^ ]+\\.log ${raw}/cleanup\\.log $`))
     const cleanupLog = command['stage-cleanup-log'].split(' ')[1]
-    expect(command['replace-artifacts']).toBe('rm -rf -- /tmp/dci-artifacts ')
-    expect(command['publish-artifacts']).toBe(`mv -- ${safe} /tmp/dci-artifacts `)
+    expect(command['replace-artifacts']).toMatch(/^rm -rf -- \/tmp\/muniment-e2e-test-[^/]+\/artifacts $/)
+    expect(command['publish-artifacts']).toBe(`mv -- ${safe} ${command['replace-artifacts'].slice('rm -rf -- '.length)}`)
     expect(command['remove-cleanup-log']).toBe(`rm -f -- ${cleanupLog}`)
   })
   it.each([

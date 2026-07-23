@@ -15,7 +15,7 @@ use muniment_core::attach::{
     Approval, CommittedResult, ErrorCode, Id, IdempotencyOutcome, IdempotencyStore, Operation,
     Protocol, ProtocolError, Request as AttachRequest, WorkspaceOnboardRequest, WorkspaceOnboarded,
 };
-use muniment_core::attachment::{ingest_attachment, AttachmentMetadata};
+use muniment_core::attachment::{ingest_attachment, prepare_pi_images, AttachmentMetadata};
 use muniment_core::auth::TokenSet;
 use muniment_core::cas::LocalCas;
 use muniment_core::journal::reducer::{
@@ -24,7 +24,8 @@ use muniment_core::journal::reducer::{
 };
 use muniment_core::journal::{EventEnvelope, EventPayload, Provenance, RunJournal};
 use muniment_core::sidecar::pi_chat::{
-    cancel_command, ExtensionUiDialog, ExtensionUiRequest, PiChatEvent, PiRunAdapter, Receipt,
+    cancel_command, ExtensionUiDialog, ExtensionUiRequest, PiChatEvent, PiImageContent,
+    PiRunAdapter, Receipt,
 };
 use muniment_core::sidecar::pi_install::resolve_current;
 use muniment_core::sidecar::{
@@ -1288,6 +1289,25 @@ fn attachment_error() -> String {
     "One or more selected files could not be added. Check the files and try again.".into()
 }
 
+fn prepared_pi_images(
+    storage: &SharedStorage,
+    run_id: &str,
+) -> Result<Vec<PiImageContent>, String> {
+    let mut storage = storage.lock().map_err(|_| attachment_error())?;
+    let events = storage
+        .journal
+        .events(run_id)
+        .map_err(|_| attachment_error())?;
+    prepare_pi_images(&storage.cas, &events)
+        .map_err(|_| attachment_error())
+        .map(|images| {
+            images
+                .into_iter()
+                .map(|image| PiImageContent::new(image.data, image.mime_type))
+                .collect()
+        })
+}
+
 struct OpenSelectedFile {
     file: std::fs::File,
     display_name: String,
@@ -1493,6 +1513,49 @@ fn queue_message(
     })
 }
 
+#[derive(Debug)]
+enum PreparedPromptError {
+    Start,
+    SessionRoot,
+    Binding,
+    Journal,
+}
+
+fn coordinate_prepared_prompt<R: tauri::Runtime, T>(
+    app: &tauri::AppHandle<R>,
+    journal: &SharedStorage,
+    projector: &mut ChatProjector,
+    run_id: &str,
+    seq: &mut u64,
+    subject: Option<&str>,
+    submit: impl FnOnce() -> Result<(T, PiSessionLocator, Vec<PiChatEvent>), PreparedPromptError>,
+) -> Result<(T, Vec<PiChatEvent>), PreparedPromptError> {
+    let (handle, locator, buffered_events) = submit()?;
+    append_emit(
+        app,
+        journal,
+        projector,
+        run_id,
+        seq,
+        "runtime.pi_session.bound",
+        json!({"run_id": run_id, "locator": locator.as_str()}),
+        subject,
+    )
+    .map_err(|_| PreparedPromptError::Journal)?;
+    append_emit(
+        app,
+        journal,
+        projector,
+        run_id,
+        seq,
+        "model.prompt.accepted",
+        json!({}),
+        subject,
+    )
+    .map_err(|_| PreparedPromptError::Journal)?;
+    Ok((handle, buffered_events))
+}
+
 #[tauri::command]
 pub async fn chat_cancel(state: tauri::State<'_, ChatState>, run_id: String) -> Result<(), String> {
     let active = state
@@ -1580,6 +1643,27 @@ fn coordinate<R: tauri::Runtime>(
         }
         return;
     }
+    let images = if resume.is_some() {
+        Vec::new()
+    } else {
+        let images = match prepared_pi_images(&journal, &run_id) {
+            Ok(images) => images,
+            Err(message) => {
+                fail_start(
+                    &app,
+                    &journal,
+                    &mut projector,
+                    &run_id,
+                    &mut seq,
+                    &message,
+                    subject.as_deref(),
+                    false,
+                );
+                return;
+            }
+        };
+        images
+    };
     let mut runtime = runtime
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -1747,27 +1831,28 @@ fn coordinate<R: tauri::Runtime>(
         }
         return;
     }
-    let (adapter, _) = match PiRunAdapter::start(run_id.clone(), &transport, &prompt, RPC_TIMEOUT) {
-        Ok(value) => value,
-        Err(_) => {
-            fail_start(
-                &app,
-                &journal,
-                &mut projector,
-                &run_id,
-                &mut seq,
-                "The reply could not be started.",
-                subject.as_deref(),
-                resume.is_some(),
-            );
-            return;
-        }
-    };
-    let adapter = Arc::new(adapter);
-    *active_adapter
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(Arc::clone(&adapter));
-    if resume.is_some() {
+    let (adapter, buffered_events) = if resume.is_some() {
+        let (adapter, _) =
+            match PiRunAdapter::start(run_id.clone(), &transport, &prompt, RPC_TIMEOUT) {
+                Ok(value) => value,
+                Err(_) => {
+                    fail_start(
+                        &app,
+                        &journal,
+                        &mut projector,
+                        &run_id,
+                        &mut seq,
+                        "The reply could not be started.",
+                        subject.as_deref(),
+                        true,
+                    );
+                    return;
+                }
+            };
+        let adapter = Arc::new(adapter);
+        *active_adapter
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(Arc::clone(&adapter));
         if append_emit(
             &app,
             &journal,
@@ -1793,34 +1878,88 @@ fn coordinate<R: tauri::Runtime>(
         // observe an active continuation that the journal still calls
         // interrupted.
         resume_attempt.accepted();
-    }
-    let session_root = match app.path().app_data_dir() {
-        Ok(path) => path.join("pi-sessions"),
-        Err(_) => {
+        if append_emit(
+            &app,
+            &journal,
+            &mut projector,
+            &run_id,
+            &mut seq,
+            "model.prompt.accepted",
+            json!({}),
+            subject.as_deref(),
+        )
+        .is_err()
+        {
             if adapter
                 .cancel_and_drain(&transport, Duration::from_secs(2))
                 .is_err()
             {
                 let _ = runtime.supervisor.shutdown();
             }
-            fail(
-                &app,
-                &journal,
-                &mut projector,
-                &run_id,
-                &mut seq,
-                "The reply could not be started.",
-                subject.as_deref(),
-            );
             return;
         }
-    };
-    let (locator, buffered_events) = if resume.is_some() {
-        (None, Vec::new())
+        (adapter, Vec::new())
     } else {
-        match adapter.await_session_binding(&transport, &session_root, RPC_TIMEOUT) {
-            Ok((locator, events)) => (Some(locator), events),
-            Err(_) => {
+        let result = coordinate_prepared_prompt(
+            &app,
+            &journal,
+            &mut projector,
+            &run_id,
+            &mut seq,
+            subject.as_deref(),
+            || {
+                let (adapter, _) = PiRunAdapter::start_with_images(
+                    run_id.clone(),
+                    &transport,
+                    &prompt,
+                    images,
+                    RPC_TIMEOUT,
+                )
+                .map_err(|_| PreparedPromptError::Start)?;
+                let adapter = Arc::new(adapter);
+                *active_adapter
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner) =
+                    Some(Arc::clone(&adapter));
+                let session_root = app
+                    .path()
+                    .app_data_dir()
+                    .map(|path| path.join("pi-sessions"))
+                    .map_err(|_| PreparedPromptError::SessionRoot)?;
+                let (locator, events) = adapter
+                    .await_session_binding(&transport, &session_root, RPC_TIMEOUT)
+                    .map_err(|_| PreparedPromptError::Binding)?;
+                Ok((adapter, locator, events))
+            },
+        );
+        match result {
+            Ok(value) => value,
+            Err(error @ (PreparedPromptError::Journal | PreparedPromptError::SessionRoot)) => {
+                let adapter = active_adapter
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .clone();
+                if adapter.is_some_and(|adapter| {
+                    adapter
+                        .cancel_and_drain(&transport, Duration::from_secs(2))
+                        .is_err()
+                }) {
+                    let _ = runtime.supervisor.shutdown();
+                }
+                if matches!(error, PreparedPromptError::SessionRoot) {
+                    fail(
+                        &app,
+                        &journal,
+                        &mut projector,
+                        &run_id,
+                        &mut seq,
+                        "The reply could not be started.",
+                        subject.as_deref(),
+                    );
+                }
+                return;
+            }
+            Err(PreparedPromptError::Binding) => {
                 // `await_session_binding` aborts and drains first. Reaping the
                 // supervised child is the final containment boundary if Pi did
                 // not acknowledge cancellation.
@@ -1836,50 +1975,20 @@ fn coordinate<R: tauri::Runtime>(
                 );
                 return;
             }
+            Err(PreparedPromptError::Start) => {
+                fail(
+                    &app,
+                    &journal,
+                    &mut projector,
+                    &run_id,
+                    &mut seq,
+                    "The reply could not be started.",
+                    subject.as_deref(),
+                );
+                return;
+            }
         }
     };
-    if let Some(locator) = locator {
-        if append_emit(
-            &app,
-            &journal,
-            &mut projector,
-            &run_id,
-            &mut seq,
-            "runtime.pi_session.bound",
-            json!({"run_id": run_id, "locator": locator.as_str()}),
-            subject.as_deref(),
-        )
-        .is_err()
-        {
-            if adapter
-                .cancel_and_drain(&transport, Duration::from_secs(2))
-                .is_err()
-            {
-                let _ = runtime.supervisor.shutdown();
-            }
-            return;
-        }
-    }
-    if append_emit(
-        &app,
-        &journal,
-        &mut projector,
-        &run_id,
-        &mut seq,
-        "model.prompt.accepted",
-        json!({}),
-        subject.as_deref(),
-    )
-    .is_err()
-    {
-        if adapter
-            .cancel_and_drain(&transport, Duration::from_secs(2))
-            .is_err()
-        {
-            let _ = runtime.supervisor.shutdown();
-        }
-        return;
-    }
     let mut buffered_events = buffered_events.into_iter();
     let mut aborting = false;
     let mut open_effects = BTreeSet::new();
@@ -3879,24 +3988,17 @@ mod tests {
         std::fs::remove_dir_all(directory).unwrap();
     }
 
-    // QUARANTINED (MUNIDESK-217): unreliable on the desktop-ci linux VM — the
-    // spawned sidecar-test-stub does not open its receipt connection within the
-    // deadline (fails at 10s AND 60s, even with --test-threads=1), blocking the
-    // desktop-build (linux) gate on every MUNIDESK PR. Ignored so the gate can
-    // pass; MUNIDESK-217 tracks making it hermetic and removing this ignore.
     #[test]
-    #[ignore = "flaky on desktop-ci linux (stub receipt handshake); tracked in MUNIDESK-217"]
     fn prepared_attachments_reach_pi_before_coordinator_events_continue() {
-        let _environment = lock_pi_environment();
         let app = tauri::test::mock_app();
         let directory =
             std::env::temp_dir().join(format!("muniment-coordinate-{}", Uuid::now_v7()));
         std::fs::create_dir_all(&directory).unwrap();
         let first = directory.join("first.txt");
         let second = directory.join("second.txt");
-        let prompt_log = directory.join("prompt.txt");
         std::fs::write(&first, b"first attachment").unwrap();
         std::fs::write(&second, b"second attachment").unwrap();
+        std::fs::write(directory.join("session.jsonl"), "{}\n").unwrap();
         let storage = Arc::new(Mutex::new(ChatStorage {
             journal: RunJournal::open(directory.join("runs.sqlite3")).unwrap(),
             cas: LocalCas::open(&directory.join("cas")).unwrap(),
@@ -3911,106 +4013,410 @@ mod tests {
             None,
         )
         .unwrap();
+        let (locator, _) = validate_pi_session(&directory, "session.jsonl").unwrap();
 
-        let before_pi = storage.lock().unwrap().journal.events(&run_id).unwrap();
         assert_eq!(prepared.0, 3);
-        assert_eq!(
-            before_pi
-                .iter()
-                .map(|event| event.event_type.as_str())
-                .collect::<Vec<_>>(),
-            [
-                "run.started",
-                "chat.attachment.ingested",
-                "chat.attachment.ingested",
-            ]
-        );
-        assert!(!prompt_log.exists());
-
-        let executable_name = if cfg!(windows) {
-            "sidecar-test-stub.exe"
-        } else {
-            "sidecar-test-stub"
-        };
-        let test_executable = std::env::current_exe().unwrap();
-        let stub = test_executable
-            .parent()
-            .unwrap()
-            .parent()
-            .unwrap()
-            .join("examples")
-            .join(executable_name);
-        assert!(stub.is_file(), "sidecar test stub was not built");
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        let receipt_url = format!("http://{}/receipt", listener.local_addr().unwrap());
-        let receipt_server = std::thread::spawn(move || {
-            use std::io::{Read, Write};
-            let mut stream = accept_receipt_request(listener);
-            stream
-                .set_read_timeout(Some(Duration::from_secs(2)))
-                .unwrap();
-            let mut request = [0; 4096];
-            let _ = stream.read(&mut request).unwrap();
-            let body = r#"{"route":"attachment-stub","model":"test"}"#;
-            write!(
-                stream,
-                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-                body.len(),
-                body
-            )
-            .unwrap();
-        });
-        std::env::set_var("MUNIMENT_PI_ROOT", &directory);
-        std::env::set_var("MUNIMENT_PI_TEST_EXECUTABLE", &stub);
-        std::env::set_var("PI_RESUME_STUB_PROMPTS", &prompt_log);
-
-        coordinate(
-            app.handle().clone(),
-            Arc::clone(&storage),
-            Arc::new(Mutex::new(None)),
-            run_id.clone(),
-            "Review both files".into(),
-            "token".into(),
-            Some("owner".into()),
-            ChatGrant {
-                workspace: "workspace-a".into(),
-                gateway_url: "https://gateway.invalid".into(),
-                virtual_key: "virtual-key".into(),
-                model: None,
-                receipt_url,
+        let (mut seq, mut projector) = prepared;
+        let prompt_submissions = AtomicUsize::new(0);
+        coordinate_prepared_prompt(
+            app.handle(),
+            &storage,
+            &mut projector,
+            &run_id,
+            &mut seq,
+            Some("owner"),
+            || {
+                prompt_submissions.fetch_add(1, Ordering::SeqCst);
+                let mut storage = storage.lock().unwrap();
+                let events = storage.journal.events(&run_id).unwrap();
+                assert_eq!(
+                    events
+                        .iter()
+                        .map(|event| event.event_type.as_str())
+                        .collect::<Vec<_>>(),
+                    [
+                        "run.started",
+                        "chat.attachment.ingested",
+                        "chat.attachment.ingested",
+                    ]
+                );
+                for event in &events[1..] {
+                    let EventPayload::Attachment { attachment } = &event.payload else {
+                        panic!("attachment payload")
+                    };
+                    storage.cas.verify(attachment.sha256()).unwrap();
+                }
+                Ok(((), locator, Vec::new()))
             },
-            Arc::new(AtomicBool::new(false)),
-            Arc::new(Mutex::new(None)),
-            Arc::new(Mutex::new(None)),
-            None,
-            None,
-            Some(prepared),
-        );
-        receipt_server.join().unwrap();
-        for key in [
-            "MUNIMENT_PI_ROOT",
-            "MUNIMENT_PI_TEST_EXECUTABLE",
-            "PI_RESUME_STUB_PROMPTS",
-        ] {
-            std::env::remove_var(key);
-        }
+        )
+        .unwrap();
 
-        assert_eq!(
-            std::fs::read_to_string(&prompt_log).unwrap(),
-            "Review both files\n"
-        );
+        assert_eq!(prompt_submissions.load(Ordering::SeqCst), 1);
         let events = storage.lock().unwrap().journal.events(&run_id).unwrap();
         assert_eq!(
             events.iter().map(|event| event.run_seq).collect::<Vec<_>>(),
             (1..=events.len() as u64).collect::<Vec<_>>()
         );
+        assert_eq!(events.len(), 5);
+        assert_eq!(events[1].event_type, "chat.attachment.ingested");
+        assert_eq!(events[2].event_type, "chat.attachment.ingested");
         assert_eq!(events[3].run_seq, 4);
         assert_eq!(events[3].event_type, "runtime.pi_session.bound");
         assert_eq!(events[4].event_type, "model.prompt.accepted");
-        assert_eq!(events[5].event_type, "model.stream.delta");
-        assert_eq!(events.last().unwrap().event_type, "run.completed");
         drop(storage);
         std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn coordinator_prepares_supported_images_in_journal_order_and_omits_unsupported_files() {
+        let directory = std::env::temp_dir().join(format!("muniment-images-{}", Uuid::now_v7()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let png = directory.join("renamed.bin");
+        let unsupported = directory.join("notes.png");
+        let gif = directory.join("second.dat");
+        std::fs::write(&png, valid_test_png()).unwrap();
+        std::fs::write(&unsupported, b"durable but not an image").unwrap();
+        let gif_data = "R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==";
+        std::fs::write(&gif, STANDARD.decode(gif_data).unwrap()).unwrap();
+        let storage = Arc::new(Mutex::new(ChatStorage {
+            journal: RunJournal::open(directory.join("runs.sqlite3")).unwrap(),
+            cas: LocalCas::open(&directory.join("cas")).unwrap(),
+        }));
+        let run_id = Uuid::now_v7().to_string();
+        prepare_new_run(
+            &storage,
+            &run_id,
+            "workspace-a",
+            Some("owner"),
+            vec![
+                SelectedFile { path: png },
+                SelectedFile { path: unsupported },
+                SelectedFile { path: gif },
+            ],
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(
+            prepared_pi_images(&storage, &run_id).unwrap(),
+            vec![
+                PiImageContent::new(
+                    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+                    "image/png"
+                ),
+                PiImageContent::new(gif_data, "image/gif"),
+            ]
+        );
+        assert_eq!(
+            storage
+                .lock()
+                .unwrap()
+                .journal
+                .events(&run_id)
+                .unwrap()
+                .iter()
+                .filter(|event| matches!(event.payload, EventPayload::Attachment { .. }))
+                .count(),
+            3
+        );
+
+        drop(storage);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn coordinator_sends_exact_ordered_images_and_preserves_text_only_prompt_shape() {
+        let _environment = lock_pi_environment();
+        for with_images in [true, false] {
+            let app = tauri::test::mock_app();
+            let directory =
+                std::env::temp_dir().join(format!("muniment-prompt-capture-{}", Uuid::now_v7()));
+            std::fs::create_dir_all(&directory).unwrap();
+            let request_log = directory.join("requests.jsonl");
+            let mut files = Vec::new();
+            if with_images {
+                let png = directory.join("first.bin");
+                let unsupported = directory.join("local-only.png");
+                let gif = directory.join("second.dat");
+                std::fs::write(&png, valid_test_png()).unwrap();
+                std::fs::write(&unsupported, b"not an image").unwrap();
+                std::fs::write(
+                    &gif,
+                    STANDARD
+                        .decode("R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==")
+                        .unwrap(),
+                )
+                .unwrap();
+                files = vec![
+                    SelectedFile { path: png },
+                    SelectedFile { path: unsupported },
+                    SelectedFile { path: gif },
+                ];
+            }
+            let storage = Arc::new(Mutex::new(ChatStorage {
+                journal: RunJournal::open(directory.join("runs.sqlite3")).unwrap(),
+                cas: LocalCas::open(&directory.join("cas")).unwrap(),
+            }));
+            let run_id = Uuid::now_v7().to_string();
+            let prepared =
+                prepare_new_run(&storage, &run_id, "workspace-a", Some("owner"), files, None)
+                    .unwrap();
+
+            let executable_name = if cfg!(windows) {
+                "sidecar-test-stub.exe"
+            } else {
+                "sidecar-test-stub"
+            };
+            let test_executable = std::env::current_exe().unwrap();
+            let stub = test_executable
+                .parent()
+                .unwrap()
+                .parent()
+                .unwrap()
+                .join("examples")
+                .join(executable_name);
+            assert!(stub.is_file(), "sidecar test stub was not built");
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            let receipt_url = format!("http://{}/receipt", listener.local_addr().unwrap());
+            let receipt_server = std::thread::spawn(move || {
+                use std::io::{Read, Write};
+                let mut stream = accept_receipt_request(listener);
+                let mut request = [0; 4096];
+                let _ = stream.read(&mut request).unwrap();
+                let body = r#"{"route":"capture-stub","model":"test"}"#;
+                write!(
+                    stream,
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    body.len(),
+                    body
+                )
+                .unwrap();
+            });
+            std::env::set_var("MUNIMENT_PI_ROOT", &directory);
+            std::env::set_var("MUNIMENT_PI_TEST_EXECUTABLE", &stub);
+            std::env::set_var("PI_RESUME_STUB_REQUESTS", &request_log);
+            coordinate(
+                app.handle().clone(),
+                Arc::clone(&storage),
+                Arc::new(Mutex::new(None)),
+                run_id,
+                "original text prompt".into(),
+                "token".into(),
+                Some("owner".into()),
+                ChatGrant {
+                    workspace: "workspace-a".into(),
+                    gateway_url: "https://gateway.invalid".into(),
+                    virtual_key: "virtual-key".into(),
+                    model: None,
+                    receipt_url,
+                },
+                Arc::new(AtomicBool::new(false)),
+                Arc::new(Mutex::new(None)),
+                Arc::new(Mutex::new(None)),
+                None,
+                None,
+                Some(prepared),
+            );
+            receipt_server.join().unwrap();
+            for key in [
+                "MUNIMENT_PI_ROOT",
+                "MUNIMENT_PI_TEST_EXECUTABLE",
+                "PI_RESUME_STUB_REQUESTS",
+            ] {
+                std::env::remove_var(key);
+            }
+
+            let requests = std::fs::read_to_string(&request_log).unwrap();
+            let prompt: serde_json::Value =
+                serde_json::from_str(requests.lines().next().unwrap()).unwrap();
+            assert_eq!(prompt["type"], "prompt");
+            assert_eq!(prompt["message"], "original text prompt");
+            if with_images {
+                assert_eq!(
+                    prompt["images"],
+                    json!([
+                        {
+                            "type": "image",
+                            "data": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+                            "mimeType": "image/png"
+                        },
+                        {
+                            "type": "image",
+                            "data": "R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==",
+                            "mimeType": "image/gif"
+                        }
+                    ])
+                );
+            } else {
+                assert!(prompt.get("images").is_none());
+            }
+            drop(storage);
+            std::fs::remove_dir_all(directory).unwrap();
+        }
+    }
+
+    #[test]
+    fn missing_oversized_and_ambiguous_images_fail_before_prompt_with_non_leaking_copy() {
+        let _environment = lock_pi_environment();
+        for (name, bytes, remove_object) in [
+            ("private-missing.png", valid_test_png(), true),
+            (
+                "private-large.jpg",
+                {
+                    let mut bytes =
+                        vec![
+                            0_u8;
+                            usize::try_from(muniment_core::attachment::MAX_PI_IMAGE_BYTES + 1)
+                                .unwrap()
+                        ];
+                    bytes[..3].copy_from_slice(b"\xff\xd8\xff");
+                    let length = bytes.len();
+                    bytes[length - 2..].copy_from_slice(b"\xff\xd9");
+                    bytes
+                },
+                false,
+            ),
+            (
+                "private-malformed.jpg",
+                b"\xff\xd8\xffprivate-attachment-marker\xff\xd9".to_vec(),
+                false,
+            ),
+        ] {
+            let directory =
+                std::env::temp_dir().join(format!("muniment-image-fail-{}", Uuid::now_v7()));
+            std::fs::create_dir_all(&directory).unwrap();
+            let path = directory.join(name);
+            std::fs::write(&path, &bytes).unwrap();
+            let storage = Arc::new(Mutex::new(ChatStorage {
+                journal: RunJournal::open(directory.join("runs.sqlite3")).unwrap(),
+                cas: LocalCas::open(&directory.join("cas")).unwrap(),
+            }));
+            let run_id = Uuid::now_v7().to_string();
+            let prepared = prepare_new_run(
+                &storage,
+                &run_id,
+                "workspace-a",
+                Some("owner"),
+                vec![SelectedFile { path: path.clone() }],
+                None,
+            )
+            .unwrap();
+            let attachment_hash = {
+                let mut storage = storage.lock().unwrap();
+                let events = storage.journal.events(&run_id).unwrap();
+                let EventPayload::Attachment { attachment } = &events[1].payload else {
+                    panic!("attachment event")
+                };
+                attachment.sha256().clone()
+            };
+            if remove_object {
+                storage
+                    .lock()
+                    .unwrap()
+                    .cas
+                    .remove(&attachment_hash)
+                    .unwrap();
+            }
+
+            let request_log = directory.join("requests.jsonl");
+            let executable_name = if cfg!(windows) {
+                "sidecar-test-stub.exe"
+            } else {
+                "sidecar-test-stub"
+            };
+            let test_executable = std::env::current_exe().unwrap();
+            let stub = test_executable
+                .parent()
+                .unwrap()
+                .parent()
+                .unwrap()
+                .join("examples")
+                .join(executable_name);
+            assert!(stub.is_file(), "sidecar test stub was not built");
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            let receipt_url = format!("http://{}/receipt", listener.local_addr().unwrap());
+            listener.set_nonblocking(true).unwrap();
+            let (stop_receipt_server, receipt_server_stop) = std::sync::mpsc::channel();
+            let receipt_server = std::thread::spawn(move || {
+                use std::io::{Read, Write};
+                loop {
+                    match listener.accept() {
+                        Ok((mut stream, _)) => {
+                            let mut request = [0; 4096];
+                            let _ = stream.read(&mut request).unwrap();
+                            let body = r#"{"route":"capture-stub","model":"test"}"#;
+                            write!(
+                                stream,
+                                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                                body.len(),
+                                body
+                            )
+                            .unwrap();
+                            break;
+                        }
+                        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                            if receipt_server_stop.try_recv().is_ok() {
+                                break;
+                            }
+                            std::thread::sleep(Duration::from_millis(10));
+                        }
+                        Err(error) => panic!("receipt listener failed: {error}"),
+                    }
+                }
+            });
+            std::env::set_var("MUNIMENT_PI_ROOT", &directory);
+            std::env::set_var("MUNIMENT_PI_TEST_EXECUTABLE", &stub);
+            std::env::set_var("PI_RESUME_STUB_REQUESTS", &request_log);
+            coordinate(
+                tauri::test::mock_app().handle().clone(),
+                Arc::clone(&storage),
+                Arc::new(Mutex::new(None)),
+                run_id.clone(),
+                "private prompt bytes".into(),
+                "token".into(),
+                Some("owner".into()),
+                ChatGrant {
+                    workspace: "workspace-a".into(),
+                    gateway_url: "https://gateway.invalid".into(),
+                    virtual_key: "virtual-key".into(),
+                    model: None,
+                    receipt_url,
+                },
+                Arc::new(AtomicBool::new(false)),
+                Arc::new(Mutex::new(None)),
+                Arc::new(Mutex::new(None)),
+                None,
+                None,
+                Some(prepared),
+            );
+            stop_receipt_server.send(()).unwrap();
+            receipt_server.join().unwrap();
+            std::env::remove_var("MUNIMENT_PI_ROOT");
+            std::env::remove_var("MUNIMENT_PI_TEST_EXECUTABLE");
+            std::env::remove_var("PI_RESUME_STUB_REQUESTS");
+            assert!(!request_log.exists(), "Pi must receive zero prompts");
+            let events = storage.lock().unwrap().journal.events(&run_id).unwrap();
+            assert_eq!(events.last().unwrap().event_type, "run.failed");
+            let public_error = serde_json::to_string(events.last().unwrap()).unwrap();
+            assert!(public_error.contains(&attachment_error()));
+            for secret in [
+                path.to_string_lossy().as_ref(),
+                attachment_hash.as_str(),
+                &STANDARD.encode(&bytes),
+                "private-attachment-marker",
+            ] {
+                assert!(!public_error.contains(secret));
+            }
+
+            drop(storage);
+            std::fs::remove_dir_all(directory).unwrap();
+        }
+    }
+
+    fn valid_test_png() -> Vec<u8> {
+        STANDARD
+            .decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=")
+            .unwrap()
     }
 
     #[test]
@@ -4264,6 +4670,7 @@ mod tests {
         std::fs::create_dir_all(&directory).unwrap();
         let args_log = directory.join("args.txt");
         let prompt_log = directory.join("prompt.txt");
+        let request_log = directory.join("requests.jsonl");
         let session_name = format!("{}.jsonl", Uuid::now_v7());
         let sessions = app.path().app_data_dir().unwrap().join("pi-sessions");
         std::fs::create_dir_all(&sessions).unwrap();
@@ -4336,6 +4743,7 @@ mod tests {
         std::env::set_var("MUNIMENT_PI_TEST_EXECUTABLE", &stub);
         std::env::set_var("PI_RESUME_STUB_ARGS", &args_log);
         std::env::set_var("PI_RESUME_STUB_PROMPTS", &prompt_log);
+        std::env::set_var("PI_RESUME_STUB_REQUESTS", &request_log);
         let (sender, receiver) = std::sync::mpsc::channel();
         coordinate(
             app.handle().clone(),
@@ -4369,6 +4777,7 @@ mod tests {
             "MUNIMENT_PI_TEST_EXECUTABLE",
             "PI_RESUME_STUB_ARGS",
             "PI_RESUME_STUB_PROMPTS",
+            "PI_RESUME_STUB_REQUESTS",
         ] {
             std::env::remove_var(key);
         }
@@ -4399,6 +4808,9 @@ mod tests {
         let sent_prompt = std::fs::read_to_string(prompt_log).unwrap();
         assert_eq!(sent_prompt, format!("{RESUME_PROMPT}\n"));
         assert!(!sent_prompt.contains("ORIGINAL PROTECTED PROMPT"));
+        let request: serde_json::Value =
+            serde_json::from_str(std::fs::read_to_string(request_log).unwrap().trim()).unwrap();
+        assert!(request.get("images").is_none());
 
         std::fs::remove_file(sessions.join(session_name)).unwrap();
         drop(shared);

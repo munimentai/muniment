@@ -3,15 +3,16 @@ set -uo pipefail
 set +x
 umask 077
 
-artifacts=/tmp/dci-artifacts
+artifacts=${DCI_ARTIFACTS_DIR:-/tmp/dci-artifacts}
 raw=$(mktemp -d /tmp/muniment-e2e-raw.XXXXXX)
 safe=$(mktemp -d /tmp/muniment-e2e-safe.XXXXXX)
 deb=$(mktemp /tmp/muniment-nightly.XXXXXX.deb)
 auth_url_file=$(mktemp /tmp/muniment-e2e-auth-url.XXXXXX)
 state_root=$(mktemp -d /tmp/muniment-e2e-state.XXXXXX)
+image_fixture="$state_root/image-token.png"
 cleanup_log=$(mktemp /tmp/muniment-e2e-cleanup.XXXXXX.log)
 installer_log="$raw/installer.log"
-status=0
+status=${MUNIMENT_E2E_FINALIZER_TEST_STATUS:-0}
 cleanup_status=0
 installed=0
 ready=0
@@ -25,6 +26,28 @@ package_absent() { ! dpkg-query -W -f='${db:Status-Status}' muniment 2>/dev/null
 stop_matching() {
   pkill -f "$1" 2>/dev/null || true
   ! pgrep -f "$1" >/dev/null
+}
+
+emit_artifacts() {
+  local archive envelope
+  archive=$(mktemp /tmp/muniment-e2e-artifacts.XXXXXX.tar.gz) || return 1
+  envelope=$(mktemp /tmp/muniment-e2e-envelope.XXXXXX) || { rm -f -- "$archive"; return 1; }
+  if [[ ${MUNIMENT_E2E_FINALIZER_TEST_FAIL:-} == publish-envelope ]] ||
+    ! tar -czf "$archive" -C "$artifacts" . ||
+    ! tar -tzf "$archive" >/dev/null ||
+    ! {
+      printf '%s\n' '=== DESKTOP-CI ARTIFACTS BEGIN ==='
+      base64 -w 0 "$archive"
+      printf '\n%s\n' '=== DESKTOP-CI ARTIFACTS END ==='
+    } >"$envelope"; then
+    rm -f -- "$archive" "$envelope"
+    return 1
+  fi
+  rm -f -- "$archive"
+  cat "$envelope"
+  local emit_status=$?
+  rm -f -- "$envelope"
+  return "$emit_status"
 }
 
 finalize() {
@@ -71,6 +94,9 @@ finalize() {
   cleanup_step auth-url-gone cleanup_absent "$auth_url_file"
   cleanup_step safe-gone cleanup_absent "$safe"
   cleanup_step remove-cleanup-log rm -f -- "$cleanup_log"
+  if (( cleanup_status == 0 && redaction_status == 0 )); then
+    emit_artifacts || cleanup_status=1
+  fi
   if (( status != 0 || cleanup_status != 0 || redaction_status != 0 )); then exit 1; fi
 }
 
@@ -85,6 +111,7 @@ trap finalize EXIT INT TERM
 sha=${MUNIMENT_E2E_SOURCE_SHA:-}
 [[ $sha =~ ^[0-9a-f]{40}$ ]] || { echo 'invalid source SHA' >&2; status=1; exit; }
 [[ -n ${GH_TOKEN:-} && -n ${MUNIMENT_E2E_USERNAME:-} && -n ${MUNIMENT_E2E_PASSWORD:-} ]] || { echo 'required injected environment is unavailable' >&2; status=1; exit; }
+base64 --decode test/e2e/fixtures/image-token.png.base64 >"$image_fixture" || { status=1; exit; }
 # Resolve and validate identity before package installation. Missing/duplicate
 # assets and a release pointing elsewhere fail shut.
 release=$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/nightly") || { status=1; exit; }
@@ -101,6 +128,7 @@ app_binary=$(command -v muniment-desktop || command -v muniment) || { echo 'inst
 chromedriver --port=9515 --allowed-ips=127.0.0.1 >>"$raw/chromedriver.log" 2>&1 &
 export MUNIMENT_E2E_APP_BINARY="$app_binary" MUNIMENT_E2E_RAW_DIR="$raw"
 export MUNIMENT_E2E_AUTH_URL_FILE="$auth_url_file" BROWSER="$PWD/test/e2e/support/browser-launcher.sh"
+export MUNIMENT_E2E_IMAGE_PATH="$image_fixture"
 ready=1
 export XDG_DATA_HOME="$state_root/ready/data" XDG_CONFIG_HOME="$state_root/ready/config" XDG_CACHE_HOME="$state_root/ready/cache"
 export MUNIMENT_E2E_ONBOARDING_ONLY=1 MUNIMENT_E2E_MODEL_READY=1 MUNIMENT_E2E_HOME_PATH="$state_root/ready-home"

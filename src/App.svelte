@@ -2,13 +2,14 @@
   import { onMount, tick } from 'svelte'
   import { getCurrentWebview } from '@tauri-apps/api/webview'
   import { confirm, open } from '@tauri-apps/plugin-dialog'
+  import { register, unregister } from '@tauri-apps/plugin-global-shortcut'
 
   import AccessPanel from './lib/AccessPanel.svelte'
   import { bootState, errorState, statusState, waitingState } from './lib/auth-state.js'
   import { ringPath } from './lib/mark.js'
   import { applyBufferedChatEvents, applyChatEvent, composerAction, formatByteSize, historyMessages, receiptParts, receiptRows, toolName, toolStatus } from './lib/chat-state.js'
-  import { appendTranscript, isDictationActive } from './lib/dictation-state.js'
-  import { onboardingCancelSettingsState, onboardingConfirmedState, onboardingConfirmingState, onboardingErrorState, onboardingExtractingState, onboardingExtractionErrorState, onboardingExtractionState, onboardingFinalizingState, onboardingImportChoiceState, onboardingLoadingState, onboardingPathState, onboardingPreviewErrorState, onboardingPreviewingState, onboardingPreviewState, onboardingReturnToArchiveReviewState, onboardingSelectionState, onboardingSettingsState, onboardingStatusState, onboardingTriageConfirmedState, onboardingTriageErrorState, onboardingTriageReportState, onboardingTriagingState } from './lib/onboarding-state.js'
+  import { appendTranscript, ariaKeyShortcut, dictationTransforms, handsFreeActivationDelay, holdToTalkShortcut, isDictationActive, validHoldToTalkShortcut } from './lib/dictation-state.js'
+  import { onboardingCancelSettingsState, onboardingConfirmedState, onboardingConfirmingState, onboardingErrorState, onboardingExtractingState, onboardingExtractionErrorState, onboardingExtractionState, onboardingFinalizingState, onboardingImportChoiceState, onboardingLoadingState, onboardingPathState, onboardingPreviewErrorState, onboardingPreviewingState, onboardingPreviewState, onboardingReturnToArchiveReviewState, onboardingSelectionState, onboardingSettingsState, onboardingStatusState, onboardingTriageConfirmedState, onboardingTriageErrorState, onboardingTriageReportState, onboardingTriagingState, requiredModelLoadingState, requiredModelPollActive, requiredModelProgress } from './lib/onboarding-state.js'
   import { scrollFollowState } from './lib/scroll-follow.js'
 
   const markD = ringPath()
@@ -50,12 +51,38 @@
   let dictationFinishing = $state(false)
   let dictationPolishEpoch
   let dictationPolishing = $state(false)
+  let dictationTransformEpoch = 0
+  let dictationTransformPending = $state(false)
+  let dictationTransformPendingEpoch
+  let eligibleDictation = $state(null)
+  let eligibleDictationTimer
+  let eligibleDictationTimerEpoch = 0
   let suppressVoiceClick = false
   let voiceClickTimer
+  let voiceReleaseTimer
+  let voiceReleasePending = false
+  let voiceActivationStartedAt
+  let voiceActivationSource
+  let pendingVoiceActivationAt
+  let pendingVoiceActivationSource
+  let handsFreeDictation = false
+  let ignoreVoiceRelease = false
+  let ignoreGlobalVoiceRelease = false
   let voicePointerId
   let voiceKey
+  let globalVoiceHeld = false
+  let globalVoiceRegistered = false
+  let globalVoiceError = $state(false)
+  let globalVoiceShortcutValue = $state(holdToTalkShortcut())
+  let globalVoiceChanging = $state(true)
+  let globalVoiceTask = Promise.resolve()
+  const registeredVoiceShortcuts = new Set()
   let composer = $state()
   let onboarding = $state(onboardingLoadingState)
+  let requiredModel = $state(requiredModelLoadingState)
+  let modelProgress = $derived(requiredModelProgress(requiredModel))
+  let requiredModelTimer
+  let requiredModelPollEpoch = 0
   let onboardingPreviewSequence = 0
   let destroyed = false
   const dictationTranscriptQuietPeriod = 25
@@ -63,9 +90,33 @@
   async function loadOnboarding() {
     try {
       onboarding = onboardingStatusState(await tauri.invoke('home_status'))
+      if (onboarding.name !== 'complete') pollRequiredModel()
     } catch (error) {
       onboarding = { name: 'load-error', homePath: '', error: typeof error === 'string' ? error : 'Onboarding could not be loaded.' }
     }
+  }
+
+  async function pollRequiredModel() {
+    if (destroyed || onboarding.name === 'complete') return
+    const epoch = ++requiredModelPollEpoch
+    clearTimeout(requiredModelTimer)
+    try {
+      const status = await tauri.invoke('required_model_acquisition_status')
+      if (destroyed || epoch !== requiredModelPollEpoch || onboarding.name === 'complete') return
+      requiredModel = status
+      if (requiredModelPollActive(status)) {
+        requiredModelTimer = setTimeout(pollRequiredModel, 1000)
+      }
+    } catch (_) {
+      if (destroyed || epoch !== requiredModelPollEpoch || onboarding.name === 'complete') return
+      requiredModel = { ...requiredModelLoadingState, status: { state: 'failed' } }
+    }
+  }
+
+  function stopRequiredModelPolling() {
+    requiredModelPollEpoch += 1
+    clearTimeout(requiredModelTimer)
+    requiredModelTimer = undefined
   }
 
   async function chooseHome() {
@@ -86,6 +137,7 @@
     onboarding = pending
     try {
       onboarding = onboardingConfirmedState(pending, await tauri.invoke('home_confirm', { homePath: pending.homePath }))
+      if (onboarding.name === 'complete') stopRequiredModelPolling()
     } catch (error) {
       onboarding = onboardingErrorState(pending, typeof error === 'string' ? error : undefined)
     }
@@ -117,6 +169,7 @@
     onboarding = pending
     try {
       onboarding = onboardingConfirmedState(pending, await tauri.invoke('home_confirm', { homePath: pending.homePath }))
+      if (onboarding.name === 'complete') stopRequiredModelPolling()
     } catch (error) {
       onboarding = onboardingErrorState(pending, typeof error === 'string' ? error : undefined)
     }
@@ -143,7 +196,7 @@
   }
 
   async function generateTriageReport() {
-    if (!['pre-triage', 'triage-error'].includes(onboarding.name)) return
+    if (!requiredModel.aiFeaturesAvailable || !['pre-triage', 'triage-error'].includes(onboarding.name)) return
     const triageId = ++onboardingPreviewSequence
     const pending = onboardingTriagingState(onboarding)
     onboarding = pending
@@ -171,7 +224,24 @@
   }
 
   function dictationBusy() {
-    return dictationCommandPending || dictationFinishing || dictationPolishing || isDictationActive(dictation)
+    return dictationCommandPending || dictationFinishing || dictationPolishing || dictationTransformPending || isDictationActive(dictation)
+  }
+
+  function invalidateDictationTransform() {
+    dictationTransformEpoch += 1
+    eligibleDictationTimerEpoch += 1
+    clearTimeout(eligibleDictationTimer)
+    eligibleDictationTimer = undefined
+    eligibleDictation = null
+  }
+
+  function offerDictationTransforms(eligible) {
+    const timerEpoch = ++eligibleDictationTimerEpoch
+    clearTimeout(eligibleDictationTimer)
+    eligibleDictation = eligible
+    eligibleDictationTimer = setTimeout(() => {
+      if (timerEpoch === eligibleDictationTimerEpoch) invalidateDictationTransform()
+    }, 6000)
   }
 
   async function listenForDictation(epoch) {
@@ -221,7 +291,10 @@
     try {
       const polished = await tauri.invoke('dictation_polish', { transcript })
       if (destroyed || dictationCancelled || epoch !== dictationCaptureEpoch || epoch !== dictationPolishEpoch) return
-      if (draft === verbatimDraft) draft = appendTranscript(dictationDraftSnapshot, polished)
+      if (draft === verbatimDraft && polished.trim()) {
+        draft = appendTranscript(dictationDraftSnapshot, polished)
+        offerDictationTransforms({ epoch, snapshot: dictationDraftSnapshot, segment: polished, draft })
+      }
     } catch (_) {
       if (destroyed || dictationCancelled || epoch !== dictationCaptureEpoch || epoch !== dictationPolishEpoch) return
       dictationError = 'Polishing is unavailable. You can edit or send the captured text.'
@@ -235,10 +308,15 @@
 
   function applyDictationStatus(status) {
     dictation = status
+    if (!isDictationActive(status)) {
+      clearPendingVoiceRelease()
+      handsFreeDictation = false
+      dictationRequested = false
+      stopDictationPolling()
+    }
     if (status.state === 'modelNotInstalled' || status.state === 'failed') {
       dictationError = status.message
     } else dictationError = ''
-    if (!isDictationActive(status)) stopDictationPolling()
     if (status.state === 'stopped' && dictationCompletionEpoch !== undefined) {
       if (dictationCancelled) completeDictation(dictationCompletionEpoch)
       else {
@@ -266,6 +344,10 @@
   }
 
   async function stopDictation(cancelled = false) {
+    clearTimeout(voiceReleaseTimer)
+    voiceReleaseTimer = undefined
+    voiceReleasePending = false
+    handsFreeDictation = false
     dictationRequested = false
     invalidateDictationPolls()
     if (cancelled) {
@@ -298,13 +380,14 @@
   }
 
   async function startDictation() {
-    if (active || dictationCommandPending || dictationFinishing || dictationPolishing || dictationRequested) return
+    if (active || dictationBusy() || dictationRequested) return
     if (isDictationActive(dictation)) {
       await stopDictation()
       return
     }
     invalidateDictationPolls()
     dictationRequested = true
+    invalidateDictationTransform()
     dictationCancelled = false
     dictationDraftSnapshot = draft
     dictationTranscript = ''
@@ -327,6 +410,8 @@
       } else if (isDictationActive(dictation)) pollDictation()
     } catch (error) {
       if (destroyed) return
+      clearPendingVoiceRelease()
+      handsFreeDictation = false
       dictation = { state: 'failed' }
       dictationError = typeof error === 'string' ? error : 'Dictation could not be started.'
       dictationRequested = false
@@ -341,13 +426,59 @@
     voiceClickTimer = setTimeout(() => { suppressVoiceClick = false })
   }
 
+  function clearPendingVoiceRelease() {
+    clearTimeout(voiceReleaseTimer)
+    voiceReleaseTimer = undefined
+    voiceReleasePending = false
+  }
+
+  function activateVoice(source) {
+    const activatedAt = Date.now()
+    voiceActivationStartedAt = activatedAt
+    voiceActivationSource = source
+    if (handsFreeDictation) {
+      void stopDictation()
+      return true
+    } else if (voiceReleasePending && (dictationRequested || isDictationActive(dictation)) && source === pendingVoiceActivationSource && activatedAt - pendingVoiceActivationAt <= handsFreeActivationDelay) {
+      clearTimeout(voiceReleaseTimer)
+      voiceReleaseTimer = undefined
+      voiceReleasePending = false
+      handsFreeDictation = true
+    } else if (dictationRequested || isDictationActive(dictation)) {
+      void stopDictation()
+      return true
+    } else void startDictation()
+    return false
+  }
+
+  function releaseVoice(source, cancelled = false) {
+    if (cancelled) {
+      void stopDictation(true)
+      return
+    }
+    if (handsFreeDictation) return
+    if (source !== voiceActivationSource || Date.now() - voiceActivationStartedAt >= handsFreeActivationDelay) {
+      void stopDictation()
+      return
+    }
+    voiceReleasePending = true
+    pendingVoiceActivationAt = voiceActivationStartedAt
+    pendingVoiceActivationSource = source
+    clearTimeout(voiceReleaseTimer)
+    voiceReleaseTimer = setTimeout(() => {
+      voiceReleaseTimer = undefined
+      voiceReleasePending = false
+      void stopDictation()
+    }, handsFreeActivationDelay)
+  }
+
   function voicePointerDown(event) {
     if (event.button !== 0 || voicePointerId !== undefined || voiceKey !== undefined) return
     event.preventDefault()
     expectVoiceClick()
     voicePointerId = event.pointerId
     event.currentTarget.setPointerCapture?.(event.pointerId)
-    startDictation()
+    ignoreVoiceRelease = activateVoice('pointer')
   }
 
   function voicePointerEnd(event) {
@@ -355,7 +486,11 @@
     event.preventDefault()
     expectVoiceClick()
     voicePointerId = undefined
-    stopDictation(event.type === 'pointercancel')
+    if (ignoreVoiceRelease) {
+      ignoreVoiceRelease = false
+      return
+    }
+    releaseVoice('pointer', event.type === 'pointercancel')
   }
 
   function voiceKeyDown(event) {
@@ -365,7 +500,7 @@
     if (!event.repeat) {
       if (voiceKey !== undefined || voicePointerId !== undefined) return
       voiceKey = event.key
-      startDictation()
+      ignoreVoiceRelease = activateVoice('keyboard')
     }
   }
 
@@ -374,7 +509,11 @@
     event.preventDefault()
     expectVoiceClick()
     voiceKey = undefined
-    stopDictation()
+    if (ignoreVoiceRelease) {
+      ignoreVoiceRelease = false
+      return
+    }
+    releaseVoice('keyboard')
   }
 
   function voiceClick() {
@@ -383,7 +522,152 @@
       clearTimeout(voiceClickTimer)
       return
     }
-    dictationRequested || isDictationActive(dictation) ? stopDictation() : startDictation()
+    const ignoreRelease = activateVoice('click')
+    if (!ignoreRelease) releaseVoice('click')
+  }
+
+  function globalVoiceShortcut({ state }) {
+    if (state === 'Pressed') {
+      if (globalVoiceHeld || auth.name !== 'signed-in' || active || (dictationBusy() && !voiceReleasePending && !handsFreeDictation)) return
+      globalVoiceHeld = true
+      ignoreGlobalVoiceRelease = activateVoice('global')
+    } else if (state === 'Released' && globalVoiceHeld) {
+      globalVoiceHeld = false
+      if (ignoreGlobalVoiceRelease) {
+        ignoreGlobalVoiceRelease = false
+        return
+      }
+      releaseVoice('global')
+    }
+  }
+
+  async function registerInitialVoiceShortcut() {
+    const fallback = holdToTalkShortcut()
+    let saved
+    try { saved = localStorage.getItem('muniment.voice-shortcut') } catch (_) {}
+    const preferred = validHoldToTalkShortcut(saved) ? saved : fallback
+    try {
+      await register(preferred, globalVoiceShortcut)
+      registeredVoiceShortcuts.add(preferred)
+      if (destroyed) return
+      globalVoiceShortcutValue = preferred
+      globalVoiceRegistered = true
+    } catch (_) {
+      if (preferred !== fallback) {
+        try {
+          await register(fallback, globalVoiceShortcut)
+          registeredVoiceShortcuts.add(fallback)
+          if (destroyed) return
+          globalVoiceShortcutValue = fallback
+          globalVoiceRegistered = true
+          return
+        } catch (_) {}
+      }
+      if (!destroyed) globalVoiceError = true
+      return
+    }
+  }
+
+  async function unregisterVoiceShortcut(shortcut) {
+    await unregister(shortcut)
+    registeredVoiceShortcuts.delete(shortcut)
+  }
+
+  function restoreSavedVoiceShortcut(saved) {
+    if (saved === null) localStorage.removeItem('muniment.voice-shortcut')
+    else localStorage.setItem('muniment.voice-shortcut', saved)
+  }
+
+  async function cleanupVoiceShortcuts() {
+    globalVoiceRegistered = false
+    await Promise.allSettled([...registeredVoiceShortcuts].map((shortcut) => unregisterVoiceShortcut(shortcut)))
+  }
+
+  function changeVoiceShortcut(next) {
+    if (globalVoiceChanging || next === globalVoiceShortcutValue || !validHoldToTalkShortcut(next)) return next === globalVoiceShortcutValue
+    globalVoiceChanging = true
+    globalVoiceTask = globalVoiceTask.then(() => applyVoiceShortcutChange(next))
+    return globalVoiceTask
+  }
+
+  async function applyVoiceShortcutChange(next) {
+    globalVoiceError = false
+    const previous = globalVoiceShortcutValue
+    const previousRegistered = globalVoiceRegistered
+    let previousSaved
+    try { previousSaved = localStorage.getItem('muniment.voice-shortcut') } catch (_) {
+      globalVoiceError = true
+      globalVoiceChanging = false
+      return false
+    }
+    let nextRegistered = false
+    let savedChanged = false
+    let rollbackFailed = false
+    try {
+      await register(next, globalVoiceShortcut)
+      registeredVoiceShortcuts.add(next)
+      nextRegistered = true
+      if (destroyed) throw new Error('destroyed')
+      localStorage.setItem('muniment.voice-shortcut', next)
+      savedChanged = true
+      if (destroyed) throw new Error('destroyed')
+      if (previousRegistered) await unregisterVoiceShortcut(previous)
+      if (destroyed) throw new Error('destroyed')
+      globalVoiceShortcutValue = next
+      globalVoiceRegistered = true
+      return true
+    } catch (_) {
+      if (savedChanged) {
+        try { restoreSavedVoiceShortcut(previousSaved) } catch (_) { rollbackFailed = true }
+      }
+      if (nextRegistered) {
+        try { await unregisterVoiceShortcut(next) } catch (_) { rollbackFailed = true }
+      }
+      if (previousRegistered && !registeredVoiceShortcuts.has(previous)) {
+        try {
+          await register(previous, globalVoiceShortcut)
+          registeredVoiceShortcuts.add(previous)
+        } catch (_) { rollbackFailed = true }
+      }
+      globalVoiceShortcutValue = previous
+      globalVoiceRegistered = registeredVoiceShortcuts.has(previous)
+      if (!destroyed) globalVoiceError = true
+      return rollbackFailed ? null : false
+    } finally {
+      globalVoiceChanging = false
+    }
+  }
+
+  async function transformDictation(action) {
+    const eligible = eligibleDictation
+    if (!eligible || dictationBusy() || draft !== eligible.draft) return
+    const operation = ++dictationTransformEpoch
+    clearTimeout(eligibleDictationTimer)
+    eligibleDictationTimer = undefined
+    dictationTransformPending = true
+    dictationTransformPendingEpoch = operation
+    dictationError = ''
+    try {
+      const transformed = await tauri.invoke('dictation_transform', { transform: action.transform, transcript: eligible.segment })
+      if (destroyed || operation !== dictationTransformEpoch || draft !== eligible.draft) return
+      if (!transformed.trim()) throw new Error('empty transform')
+      draft = appendTranscript(eligible.snapshot, transformed)
+      offerDictationTransforms({ ...eligible, segment: transformed, draft })
+    } catch (_) {
+      if (destroyed || operation !== dictationTransformEpoch) return
+      dictationError = 'That voice transform is unavailable. Your text is unchanged; try again.'
+      offerDictationTransforms(eligible)
+    } finally {
+      if (!destroyed && operation === dictationTransformPendingEpoch) {
+        dictationTransformPending = false
+        dictationTransformPendingEpoch = undefined
+      }
+      if (!destroyed) tick().then(() => composer?.focus())
+    }
+  }
+
+  function composerInput(event) {
+    if (eligibleDictation && event.currentTarget.value !== eligibleDictation.draft) invalidateDictationTransform()
   }
 
   function toggleReceipt(runId) {
@@ -488,6 +772,10 @@
     if (tauri) {
       loadOnboarding()
       run('status')
+      globalVoiceTask = registerInitialVoiceShortcut().finally(async () => {
+        globalVoiceChanging = false
+        if (destroyed) await cleanupVoiceShortcuts()
+      })
     }
     window.__TAURI__?.event?.listen('chat-event', ({ payload }) => {
       if (!messages.some((message) => message.run?.id === payload.runId)) {
@@ -499,14 +787,29 @@
       if (projected) messages = messages.map((message) => message.run?.id === projected.id ? { ...message, run: projected } : message)
       if (active?.id === payload.runId) active = projected && !['complete', 'cancelled', 'failed', 'interrupted'].includes(projected.phase) ? projected : null
     }).then((stop) => { unlisten = stop })
-    const escape = (event) => {
+    const shortcuts = (event) => {
+      const action = event.altKey && !event.ctrlKey && !event.metaKey ? dictationTransforms.find(({ key }) => `Digit${key}` === event.code) : undefined
+      if (action && eligibleDictation && !dictationBusy()) {
+        event.preventDefault()
+        void transformDictation(action)
+        return
+      }
+      if (event.key === 'Escape' && dictationTransformPending) {
+        event.preventDefault()
+        invalidateDictationTransform()
+        dictationTransformPending = false
+        dictationTransformPendingEpoch = undefined
+        dictationError = ''
+        tick().then(() => composer?.focus())
+        return
+      }
       if (event.key === 'Escape' && (dictationRequested || isDictationActive(dictation) || dictationFinishing || dictationPolishing)) {
         event.preventDefault()
         stopDictation(true)
         return
       }
     }
-    document.addEventListener('keydown', escape)
+    document.addEventListener('keydown', shortcuts)
     let stopDragDrop
     if (tauri) getCurrentWebview().onDragDropEvent(({ payload }) => {
         if (auth.name !== 'signed-in' || active) {
@@ -525,20 +828,26 @@
       })
     return () => {
       destroyed = true
+      invalidateDictationTransform()
+      stopRequiredModelPolling()
       unlisten?.()
       dictationUnlisten?.()
       pairingUnlisten?.()
       stopDictationPolling()
       clearTimeout(dictationCompletionTimer)
       clearTimeout(voiceClickTimer)
+      clearTimeout(voiceReleaseTimer)
       stopDragDrop?.()
-      document.removeEventListener('keydown', escape)
+      globalVoiceHeld = false
+      globalVoiceTask = globalVoiceTask.finally(cleanupVoiceShortcuts)
+      document.removeEventListener('keydown', shortcuts)
     }
   })
 
   async function send() {
     const prompt = draft.trim()
     if (!prompt || active || dictationBusy()) return
+    invalidateDictationTransform()
     submitError = ''
     const submissionId = ++submissionSequence
     const userMessage = { role: 'user', text: prompt, attachments: [], submissionId }
@@ -670,6 +979,21 @@
       <section class="onboarding" aria-labelledby="onboarding-title">
         <p class="eyebrow">{onboarding.savedHomePath ? 'Home settings' : 'First-run setup'}</p>
         <h1 id="onboarding-title">{['pre-triage', 'triaging', 'triage-error'].includes(onboarding.name) ? 'Create your local proposal' : ['triage-review', 'triage-confirmed'].includes(onboarding.name) ? 'Review your onboarding proposal' : ['import-choice', 'previewing', 'reviewing', 'extracting', 'finalizing'].includes(onboarding.name) ? 'Review an assistant export' : 'Choose your Muniment Home'}</h1>
+        {#if !onboarding.savedHomePath}
+          <aside class="model-status" aria-labelledby="model-status-title">
+            <div class="model-status-heading">
+              <span id="model-status-title">Local AI</span>
+              <strong>{requiredModel.aiFeaturesAvailable ? 'Ready' : requiredModel.status?.state === 'failed' || requiredModel.status?.state === 'cancelled' ? requiredModel.retryingInBackground ? 'Retrying in background' : 'Setup unavailable' : requiredModel.status?.state === 'installing' ? 'Downloading' : 'Starting setup'}</strong>
+            </div>
+            <p class="model-status-copy" aria-live="polite">{requiredModel.aiFeaturesAvailable ? 'Local proposal generation is ready.' : requiredModel.status?.state === 'failed' || requiredModel.status?.state === 'cancelled' ? requiredModel.retryingInBackground ? 'The download did not finish. Muniment will keep retrying in the background.' : 'Local AI setup could not finish. You can continue setting up your Home.' : 'The required model is being prepared in the background. You can continue setting up your Home.'}</p>
+            {#if modelProgress.total > 0}
+              <div class="model-progress" role="progressbar" aria-label="Required local AI model download" aria-valuemin="0" aria-valuemax={modelProgress.total} aria-valuenow={modelProgress.downloaded}>
+                <span style={`width: ${modelProgress.downloaded / modelProgress.total * 100}%`}></span>
+              </div>
+              <p class="model-progress-copy">{formatByteSize(modelProgress.downloaded)} of {formatByteSize(modelProgress.total)}</p>
+            {/if}
+          </aside>
+        {/if}
         {#if onboarding.name === 'loading'}
           <p class="support" role="status">Finding your Documents folder…</p>
         {:else if ['choosing', 'confirming', 'settings', 'confirming-settings'].includes(onboarding.name)}
@@ -721,7 +1045,7 @@
           {#if onboarding.error}<p class="onboarding-error" role="alert">{onboarding.error}</p>{/if}
           <div class="onboarding-footer">
             <button data-testid="onboarding-triage-back" onclick={returnToArchiveReview}>Back to archive review</button>
-            <button data-testid="onboarding-triage-generate" class="primary" onclick={generateTriageReport} disabled={onboarding.name === 'triaging'}>{onboarding.name === 'triaging' ? 'Generating proposal…' : onboarding.name === 'triage-error' ? 'Try generating again' : 'Generate local proposal'}</button>
+            <div class="triage-generate"><button data-testid="onboarding-triage-generate" class="primary" onclick={generateTriageReport} disabled={onboarding.name === 'triaging' || !requiredModel.aiFeaturesAvailable}>{onboarding.name === 'triaging' ? 'Generating proposal…' : onboarding.name === 'triage-error' ? 'Try generating again' : 'Generate local proposal'}</button>{#if !requiredModel.aiFeaturesAvailable}<span>Available when the local AI model is ready.</span>{/if}</div>
           </div>
         {:else if onboarding.name === 'triage-review'}
           <p class="support">Review the local AI proposal and the approved sources that informed it. Confirming only records your choice for this onboarding session.</p>
@@ -752,7 +1076,7 @@
       </section>
     {:else if auth.name === 'signed-in'}
       <section class="workspace">
-        {#if draggingFiles}<div class="drop-affordance" role="status"><strong>Drop files to add them</strong><span>Selected locally · not sent to the model</span></div>{/if}
+        {#if draggingFiles}<div class="drop-affordance" role="status"><strong>Drop files to add them</strong><span>Saved locally · supported images sent with first prompt</span></div>{/if}
         <header class="titlebar"><span class="thread-title">New thread</span><span class="thread-id">local · durable</span><span class="title-spacer"></span><button class="quiet" aria-label="Open artifact rail">⌘J</button></header>
         <aside class="sidebar">
           <div class="side-brand"><svg width="24" height="24" viewBox="0 0 48 48" aria-hidden="true"><path d={markD} stroke-width="5" /></svg><strong>muniment</strong></div>
@@ -761,7 +1085,7 @@
           <p class="side-label">Threads</p>
           <button class="thread-row active-thread"><span></span>New thread</button>
           <button class="side-action home-settings" onclick={() => { onboarding = onboardingSettingsState(onboarding) }}>⌂ <span>Home settings</span></button>
-          <AccessPanel {tauri} subject={auth.subject} onSignOut={() => run('sign-out')} escapeBlocked={() => dictationRequested || isDictationActive(dictation)} />
+          <AccessPanel {tauri} subject={auth.subject} onSignOut={() => run('sign-out')} escapeBlocked={() => dictationRequested || isDictationActive(dictation)} voiceShortcut={globalVoiceShortcutValue} voiceShortcutChanging={globalVoiceChanging} onVoiceShortcutChange={changeVoiceShortcut} defaultVoiceShortcut={holdToTalkShortcut()} />
         </aside>
         <div class="thread-shell">
         <div class="thread" aria-live="polite" bind:this={thread} onscroll={handleThreadScroll}>
@@ -775,7 +1099,7 @@
                   {#if message.attachments?.length}
                     <ul class="message-attachments" aria-label="Saved attachments">
                       {#each message.attachments as attachment}
-                        <li><span>{attachment.displayName}</span><span>{formatByteSize(attachment.byteLength)}</span><strong>Saved locally · not sent to model</strong></li>
+                        <li><span>{attachment.displayName}</span><span>{formatByteSize(attachment.byteLength)}</span><strong>Saved locally · supported images sent with first prompt</strong></li>
                       {/each}
                     </ul>
                   {/if}
@@ -836,7 +1160,7 @@
             </ul>
           {/if}
           <div class="composer-input">
-            <textarea class:polishing={dictationPolishing} bind:this={composer} bind:value={draft} onkeydown={keydown} rows="2" placeholder={active?.phase === 'resuming' ? 'Resuming interrupted reply…' : 'Ask anything'} disabled={active?.phase === 'resuming'} readonly={dictationPolishing}></textarea>
+            <textarea class:polishing={dictationPolishing} bind:this={composer} bind:value={draft} oninput={composerInput} onkeydown={keydown} rows="2" placeholder={active?.phase === 'resuming' ? 'Resuming interrupted reply…' : 'Ask anything'} disabled={active?.phase === 'resuming'} readonly={dictationPolishing}></textarea>
             {#if dictationPolishing}
               <div class="polish-preview" aria-hidden="true"><span data-testid="polish-draft">{appendTranscript(dictationDraftSnapshot, dictationTranscript).slice(0, -dictationTranscript.length)}</span><span class="polish-transcript" data-testid="polish-transcript">{dictationTranscript}</span></div>
             {/if}
@@ -844,8 +1168,17 @@
           {#if submitError}<p class="cancel-error" role="alert">{submitError}</p>{/if}
           {#if cancelError}<p class="cancel-error" role="alert">{cancelError}</p>{/if}
           {#if queueError}<p class="cancel-error" role="alert">{queueError}</p>{/if}
+          {#if eligibleDictation}
+            <div class="dictation-transforms" aria-label="Voice transforms">
+              {#each dictationTransforms as action}
+                <button type="button" aria-label={action.label} aria-keyshortcuts={action.shortcut} title={`${action.label} (Option+${action.key} / Alt+${action.key})`} disabled={dictationTransformPending} onclick={() => transformDictation(action)}><span>{action.label}</span><kbd>⌥{action.key}</kbd></button>
+              {/each}
+            </div>
+          {/if}
           <div class="composer-row">
-            {#if dictationPolishing}
+            {#if dictationTransformPending}
+              <span class="polish-status" role="status">Transforming on this device…</span>
+            {:else if dictationPolishing}
               <span class="polish-status" role="status">Polishing on this device…</span>
             {:else if isDictationActive(dictation)}
               <span class="capture-status" role="status">
@@ -856,7 +1189,7 @@
               <span>{active?.phase === 'resuming' ? 'Reopening the existing secure session…' : active && active.id !== 'pending' ? '⏎ steers this reply · queue as follow-up' : 'Routing is automatic. Every reply carries its receipt.'}</span>
             {/if}
             <div class="composer-actions">
-              <button type="button" class="quiet voice" aria-pressed={isDictationActive(dictation)} disabled={!!active || dictationFinishing || dictationPolishing} onpointerdown={voicePointerDown} onpointerup={voicePointerEnd} onpointercancel={voicePointerEnd} onkeydown={voiceKeyDown} onkeyup={voiceKeyUp} onclick={voiceClick}>Voice</button>
+              <button type="button" class="quiet voice" aria-pressed={isDictationActive(dictation)} aria-keyshortcuts={ariaKeyShortcut(globalVoiceShortcutValue)} disabled={!!active || dictationFinishing || dictationPolishing || dictationTransformPending} onpointerdown={voicePointerDown} onpointerup={voicePointerEnd} onpointercancel={voicePointerEnd} onkeydown={voiceKeyDown} onkeyup={voiceKeyUp} onclick={voiceClick}>Voice</button>
               {#if !active}<button type="button" class="quiet attach" onclick={chooseFiles}>Add files</button>{/if}
               {#if active?.phase === 'resuming'}
                 <button disabled>Resuming…</button>
@@ -868,6 +1201,7 @@
             </div>
           </div>
           {#if dictationError}<div class="dictation-error" role="alert">{dictationError}</div>{/if}
+          {#if globalVoiceError}<div class="dictation-error" role="alert">The system-wide voice shortcut is unavailable. Voice remains available from the button.</div>{/if}
         </div>
       </section>
     {:else if auth.name === 'error'}
@@ -926,6 +1260,15 @@
 
   .onboarding { width: min(680px, calc(100vw - 48px)); margin-top: 28px; }
   .onboarding h1 { margin: 4px 0 10px; font-size: 28px; letter-spacing: -.02em; }
+  .model-status { margin: 18px 0 22px; padding: 13px 15px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); }
+  .model-status-heading { display: flex; justify-content: space-between; gap: 16px; font: var(--text-12) var(--font-mono); }
+  .model-status-heading span, .model-status-copy, .model-progress-copy, .triage-generate span { color: var(--muted); }
+  .model-status-copy { margin: 7px 0 0; font-size: 13px; line-height: 1.45; }
+  .model-progress { height: 4px; margin-top: 11px; overflow: hidden; border-radius: 2px; background: var(--border); }
+  .model-progress span { display: block; height: 100%; background: var(--signal); }
+  .model-progress-copy { margin: 6px 0 0; font: var(--text-12) var(--font-mono); }
+  .triage-generate { display: flex; flex-direction: column; align-items: flex-end; gap: 6px; }
+  .triage-generate span { max-width: 250px; font: var(--text-12) var(--font-mono); text-align: right; }
   .eyebrow, .path-label, .privacy-note { color: var(--muted); font: var(--text-12) var(--font-mono); }
   .path-card { display: grid; grid-template-columns: 1fr auto; gap: 7px 16px; align-items: center; margin-top: 24px; padding: 15px 16px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); }
   .path-label { grid-column: 1 / -1; }
@@ -1061,6 +1404,12 @@
   textarea.polishing { color: transparent; caret-color: transparent; }
   .polish-preview { position: absolute; inset: 0; overflow: hidden; pointer-events: none; white-space: pre-wrap; color: var(--ink); font: inherit; }
   .polish-transcript { text-decoration-line: underline; text-decoration-color: var(--signal); text-decoration-thickness: 2px; text-underline-offset: 3px; }
+  .dictation-transforms { display: flex; flex-wrap: wrap; gap: 5px; margin: 7px 0; }
+  .dictation-transforms button { display: inline-flex; align-items: center; gap: 7px; padding: 3px 7px; border-color: var(--signal); border-radius: 2px; background: transparent; color: var(--signal); font: var(--text-12) var(--font-mono); }
+  .dictation-transforms button:hover:not(:disabled) { background: var(--signal-soft); }
+  .dictation-transforms button:focus-visible { outline-color: var(--ink); outline-offset: 2px; }
+  .dictation-transforms button:disabled { border-color: var(--border); color: var(--muted); }
+  .dictation-transforms kbd { color: var(--muted); font: inherit; }
   .composer-row { display: flex; justify-content: space-between; align-items: center; color: var(--muted); font-size: 11px; }
   .composer-actions { display: flex; align-items: center; gap: 6px; }
   .capture-status { display: flex; align-items: center; gap: 8px; font-family: var(--font-mono); }
