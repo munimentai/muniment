@@ -22,12 +22,31 @@ describe('installed onboarding spec contract', () => {
 describe('installed production chat contract', () => {
   const spec = fs.readFileSync(path.join(root, 'test/e2e/specs/real-sign-in.spec.js'), 'utf8')
 
-  it('submits a unique prompt and verifies its rendered user and assistant turns', () => {
-    expect(spec).toMatch(/const prompt = `Muniment E2E chat \$\{Date\.now\(\)\}`/)
+  it('submits a unique image prompt and verifies its rendered attachment and assistant token', () => {
+    expect(spec).toMatch(/const prompt = `Muniment E2E image check \$\{Date\.now\(\)\}/)
+    expect(spec).toContain("const expectedToken = 'MUNIMENT-PLUM-4827'")
+    expect(spec.match(/const prompt = ([^\n]+)/)?.[1]).not.toContain('expectedToken')
+    expect(spec).toContain("await dialog.mockReturnValue(attachmentPath)")
+    expect(spec).toContain("$('button=Add files')")
+    expect(spec).toContain('submittedAttachment.waitForDisplayed()')
     expect(spec).toContain("const send = await $('button=Send')")
     expect(spec).toContain('await send.click()')
     expect(spec).toContain('userMessage.waitForDisplayed()')
-    expect(spec).toContain("assistantResponse.getText()).trim()).not.toBe('')")
+    expect(spec).toContain("expect(assistantText).not.toBe('')")
+    expect(spec).toContain('expect(assistantText).toContain(expectedToken)')
+  })
+
+  it('keeps the image fixture in isolated runner state rather than diagnostics', () => {
+    const linux = fs.readFileSync(path.join(root, 'test/e2e/runner/linux.sh'), 'utf8')
+    const windows = fs.readFileSync(path.join(root, 'test/e2e/runner/windows.ps1'), 'utf8')
+    const fixture = Buffer.from(fs.readFileSync(path.join(root, 'test/e2e/fixtures/image-token.png.base64'), 'utf8'), 'base64')
+    expect(fixture.subarray(0, 8).toString('hex')).toBe('89504e470d0a1a0a')
+    expect(linux).toContain('image_fixture="$state_root/image-token.png"')
+    expect(linux).toContain('MUNIMENT_E2E_IMAGE_PATH="$image_fixture"')
+    expect(windows).toContain('$imageFixture = Join-Path $stateRoot "image-token.png"')
+    expect(windows).toContain('$env:MUNIMENT_E2E_IMAGE_PATH = $imageFixture')
+    expect(linux).not.toContain('$raw/image-token.png')
+    expect(windows).not.toContain('Join-Path $raw "image-token.png"')
   })
 
   it('uses a bounded completion condition and verifies the server receipt route', () => {
