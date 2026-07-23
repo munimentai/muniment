@@ -3705,11 +3705,11 @@ mod tests {
 
     fn accept_receipt_request(listener: std::net::TcpListener) -> std::net::TcpStream {
         listener.set_nonblocking(true).unwrap();
-        // 120s (not 10s): on the contended single linux CI VM the coordinator can
-        // take over 60s to open its receipt connection. A healthy run still
+        // 60s (not 10s): on the contended single linux CI VM the coordinator can
+        // take well over 10s to open its receipt connection. A healthy run still
         // connects in milliseconds; this is only a generous ceiling before we
         // declare the handshake genuinely broken.
-        let deadline = std::time::Instant::now() + Duration::from_secs(120);
+        let deadline = std::time::Instant::now() + Duration::from_secs(60);
         loop {
             match listener.accept() {
                 Ok((stream, _)) => return stream,
