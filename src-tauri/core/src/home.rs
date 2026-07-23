@@ -1085,8 +1085,7 @@ fn recover_onboarding_transactions(
             };
             match parent.symlink_metadata(directory_name) {
                 Ok(metadata)
-                    if metadata.is_dir()
-                        && directory.identity == Some(file_identity(&metadata)) =>
+                    if metadata.is_dir() && directory.identity == file_identity(&metadata) =>
                 {
                     hook(OnboardingPersistHook::RollbackDirectory, 0)?;
                     match parent.remove_dir(directory_name) {
@@ -1286,7 +1285,7 @@ fn persist_onboarding_plan_locked(
     getrandom::fill(&mut authentication_key).map_err(|error| {
         HomeError::io(
             "The onboarding import transaction could not be authenticated.",
-            io::Error::other(error),
+            io::Error::other(error.to_string()),
         )
     })?;
     hook(OnboardingPersistHook::CreateTransactionOwner, 0).map_err(|error| {
@@ -1464,7 +1463,7 @@ fn persist_onboarding_plan_locked(
                         transaction.create_dir(&staged_name)?;
                         let next = transaction.open_dir(&staged_name)?;
                         manifest.created_directories.last_mut().unwrap().identity =
-                            Some(file_identity(&next.metadata(".")?));
+                            file_identity(&next.metadata(".")?);
                         write_onboarding_manifest(
                             &transaction,
                             &manifest,
@@ -1799,12 +1798,12 @@ fn same_file(left: &cap_std::fs::Metadata, right: &cap_std::fs::Metadata) -> boo
 }
 
 #[cfg(unix)]
-fn file_identity(metadata: &cap_std::fs::Metadata) -> FileIdentity {
+fn file_identity(metadata: &cap_std::fs::Metadata) -> Option<FileIdentity> {
     use cap_std::fs::MetadataExt;
-    FileIdentity {
+    Some(FileIdentity {
         first: metadata.dev(),
         second: metadata.ino(),
-    }
+    })
 }
 
 #[cfg(unix)]
@@ -1818,27 +1817,41 @@ fn same_home_file(left: &fs::Metadata, right: &cap_std::fs::Metadata) -> bool {
 #[cfg(windows)]
 fn same_file(left: &cap_std::fs::Metadata, right: &cap_std::fs::Metadata) -> bool {
     use cap_std::fs::MetadataExt;
-    left.file_attributes() == right.file_attributes()
-        && left.creation_time() == right.creation_time()
-        && left.file_size() == right.file_size()
+    matches!(
+        (
+            left.volume_serial_number(),
+            left.file_index(),
+            right.volume_serial_number(),
+            right.file_index(),
+        ),
+        (Some(left_volume), Some(left_file), Some(right_volume), Some(right_file))
+            if left_volume == right_volume && left_file == right_file
+    )
 }
 
 #[cfg(windows)]
-fn file_identity(metadata: &cap_std::fs::Metadata) -> FileIdentity {
+fn file_identity(metadata: &cap_std::fs::Metadata) -> Option<FileIdentity> {
     use cap_std::fs::MetadataExt;
-    FileIdentity {
-        first: metadata.creation_time(),
-        second: metadata.file_size() ^ (u64::from(metadata.file_attributes()) << 32),
-    }
+    Some(FileIdentity {
+        first: u64::from(metadata.volume_serial_number()?),
+        second: metadata.file_index()?,
+    })
 }
 
 #[cfg(windows)]
 fn same_home_file(left: &fs::Metadata, right: &cap_std::fs::Metadata) -> bool {
     use cap_std::fs::MetadataExt as CapMetadataExt;
     use std::os::windows::fs::MetadataExt as StdMetadataExt;
-    StdMetadataExt::file_attributes(left) == CapMetadataExt::file_attributes(right)
-        && StdMetadataExt::creation_time(left) == CapMetadataExt::creation_time(right)
-        && StdMetadataExt::file_size(left) == CapMetadataExt::file_size(right)
+    matches!(
+        (
+            StdMetadataExt::volume_serial_number(left),
+            StdMetadataExt::file_index(left),
+            CapMetadataExt::volume_serial_number(right),
+            CapMetadataExt::file_index(right),
+        ),
+        (Some(left_volume), Some(left_file), Some(right_volume), Some(right_file))
+            if left_volume == right_volume && left_file == right_file
+    )
 }
 
 fn validate_home(home: &Path) -> Result<(), HomeError> {
@@ -1978,6 +1991,102 @@ mod tests {
 
         assert!(replace_file(&root.join("missing.tmp"), &destination).is_err());
         assert_eq!(fs::read(&destination).unwrap(), b"previous configuration");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_rollback_identity_does_not_match_distinct_objects() {
+        use super::{file_identity, same_file};
+        use cap_std::{ambient_authority, fs::Dir};
+        use std::os::windows::io::{AsRawHandle, RawHandle};
+        use windows_sys::Win32::{Foundation::FILETIME, Storage::FileSystem::SetFileTime};
+
+        fn set_creation_time(handle: RawHandle, value: u64) {
+            let time = FILETIME {
+                dwLowDateTime: value as u32,
+                dwHighDateTime: (value >> 32) as u32,
+            };
+            let result = unsafe { SetFileTime(handle, &time, std::ptr::null(), std::ptr::null()) };
+            assert_ne!(result, 0, "setting matching Windows creation times failed");
+        }
+
+        let root = std::env::temp_dir().join(format!(
+            "muniment-home-windows-identity-{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir(&root).unwrap();
+        fs::write(root.join("anchor"), b"same").unwrap();
+        fs::write(root.join("replacement"), b"same").unwrap();
+        fs::create_dir(root.join("created")).unwrap();
+        fs::create_dir(root.join("replacement-directory")).unwrap();
+
+        let directory = Dir::open_ambient_dir(&root, ambient_authority()).unwrap();
+        let anchor = directory.open("anchor").unwrap();
+        let replacement = directory.open("replacement").unwrap();
+        let created = directory.open_dir("created").unwrap();
+        let replacement_directory = directory.open_dir("replacement-directory").unwrap();
+        let matching_time = 132_000_000_000_000_000;
+        set_creation_time(anchor.as_raw_handle(), matching_time);
+        set_creation_time(replacement.as_raw_handle(), matching_time);
+        set_creation_time(created.as_raw_handle(), matching_time);
+        set_creation_time(replacement_directory.as_raw_handle(), matching_time);
+
+        let anchor_metadata = anchor.metadata().unwrap();
+        let replacement_metadata = replacement.metadata().unwrap();
+        let created_metadata = created.metadata(".").unwrap();
+        let replacement_directory_metadata = replacement_directory.metadata(".").unwrap();
+        use cap_std::fs::MetadataExt;
+        assert_eq!(
+            (
+                anchor_metadata.file_attributes(),
+                anchor_metadata.creation_time(),
+                anchor_metadata.file_size()
+            ),
+            (
+                replacement_metadata.file_attributes(),
+                replacement_metadata.creation_time(),
+                replacement_metadata.file_size()
+            )
+        );
+        assert_eq!(
+            (
+                created_metadata.file_attributes(),
+                created_metadata.creation_time(),
+                created_metadata.file_size()
+            ),
+            (
+                replacement_directory_metadata.file_attributes(),
+                replacement_directory_metadata.creation_time(),
+                replacement_directory_metadata.file_size()
+            )
+        );
+
+        // These are the exact predicates used before recovery removes a payload
+        // link or a transaction-created directory. Distinct replacements must
+        // fail both predicates even when every field used by the old tuple matches.
+        assert!(!same_file(&anchor_metadata, &replacement_metadata));
+        assert_ne!(
+            file_identity(&created_metadata),
+            file_identity(&replacement_directory_metadata)
+        );
+        if same_file(&anchor_metadata, &replacement_metadata) {
+            directory.remove_file("replacement").unwrap();
+        }
+        if file_identity(&created_metadata) == file_identity(&replacement_directory_metadata) {
+            directory.remove_dir("replacement-directory").unwrap();
+        }
+        assert!(root.join("replacement").exists());
+        assert!(root.join("replacement-directory").exists());
+
+        drop(replacement_directory);
+        drop(created);
+        drop(replacement);
+        drop(anchor);
+        drop(directory);
         fs::remove_dir_all(root).unwrap();
     }
 }
