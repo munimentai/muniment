@@ -1,14 +1,18 @@
 use chrono::NaiveDate;
+use hmac::{Hmac, Mac};
 use muniment_core::{
     home::{
-        compile_onboarding_home_write_plan, persist_onboarding_home_write_plan,
-        persist_onboarding_home_write_plan_with_hook, HomeWrite, OnboardingHomeWritePlan,
-        OnboardingHomeWritePlanError, OnboardingPersistHook, ONBOARDING_IMPORT_MAX_ENTRIES,
-        ONBOARDING_IMPORT_MAX_TOTAL_BYTES,
+        compile_onboarding_home_write_plan,
+        persist_onboarding_home_write_plan as persist_onboarding_home_write_plan_in,
+        persist_onboarding_home_write_plan_with_hook as persist_onboarding_home_write_plan_with_hook_in,
+        HomeWrite, OnboardingHomeWritePlan, OnboardingHomeWritePlanError, OnboardingPersistHook,
+        ONBOARDING_IMPORT_MAX_ENTRIES, ONBOARDING_IMPORT_MAX_TOTAL_BYTES,
     },
     import_preview::{EntryKind, ExtractedEntry},
     llama::OnboardingTriageReport,
 };
+use serde::Serialize;
+use sha2::{Digest, Sha256};
 use std::{
     fs,
     path::Component,
@@ -16,7 +20,7 @@ use std::{
 };
 
 fn temp_home(label: &str) -> std::path::PathBuf {
-    let path = std::env::temp_dir().join(format!(
+    let root = std::env::temp_dir().join(format!(
         "muniment-onboarding-{label}-{}-{}",
         std::process::id(),
         SystemTime::now()
@@ -24,8 +28,36 @@ fn temp_home(label: &str) -> std::path::PathBuf {
             .unwrap()
             .as_nanos()
     ));
-    fs::create_dir(&path).unwrap();
+    let path = root.join("home");
+    fs::create_dir_all(&path).unwrap();
     path
+}
+
+fn authentication_root(home: &std::path::Path) -> std::path::PathBuf {
+    let root = home.parent().unwrap();
+    root.parent().unwrap().join(format!(
+        "{}-authentication",
+        root.file_name().unwrap().to_string_lossy()
+    ))
+}
+
+fn persist_onboarding_home_write_plan(
+    home: &std::path::Path,
+    plan: &OnboardingHomeWritePlan,
+) -> Result<(), muniment_core::home::HomeError> {
+    let authentication = authentication_root(home);
+    fs::create_dir_all(&authentication).unwrap();
+    persist_onboarding_home_write_plan_in(&authentication, home, plan)
+}
+
+fn persist_onboarding_home_write_plan_with_hook(
+    home: &std::path::Path,
+    plan: &OnboardingHomeWritePlan,
+    hook: &mut dyn FnMut(OnboardingPersistHook, usize) -> std::io::Result<()>,
+) -> Result<(), muniment_core::home::HomeError> {
+    let authentication = authentication_root(home);
+    fs::create_dir_all(&authentication).unwrap();
+    persist_onboarding_home_write_plan_with_hook_in(&authentication, home, plan, hook)
 }
 
 fn report(agents: &[&str]) -> OnboardingTriageReport {
@@ -720,6 +752,28 @@ fn an_existing_commit_marker_does_not_turn_a_failed_create_into_a_commit() {
 #[cfg(unix)]
 #[test]
 fn recovery_rejects_a_foreign_regular_transaction_without_touching_hard_links() {
+    #[derive(Serialize)]
+    struct ForgedEntry<'a> {
+        parent: &'a str,
+        destination: &'a str,
+        temporary: &'a str,
+        anchor: &'a str,
+        digest: Vec<u8>,
+    }
+
+    #[derive(Serialize)]
+    struct ForgedManifest<'a> {
+        committed: bool,
+        entries: Vec<ForgedEntry<'a>>,
+        created_directories: Vec<()>,
+    }
+
+    #[derive(Serialize)]
+    struct ForgedAuthenticatedManifest<'a> {
+        manifest: &'a ForgedManifest<'a>,
+        authentication: Vec<u8>,
+    }
+
     let home = temp_home("foreign-regular-transaction");
     let outside = temp_home("foreign-regular-transaction-outside");
     fs::create_dir_all(home.join("memory/nested")).unwrap();
@@ -734,7 +788,11 @@ fn recovery_rejects_a_foreign_regular_transaction_without_touching_hard_links() 
         .join(".onboarding-import-foreign.owner");
     fs::write(home.join(".onboarding-import.lock"), b"public lock").unwrap();
     fs::hard_link(home.join(".onboarding-import.lock"), &owner).unwrap();
-    fs::write(&parent_owner, b"best-effort forged secret").unwrap();
+    let forged_key = b"attacker-chosen authentication key";
+    fs::write(&parent_owner, forged_key).unwrap();
+    let mut owner_authentication = Hmac::<Sha256>::new_from_slice(forged_key).unwrap();
+    owner_authentication.update(b".onboarding-import-foreign.owner");
+    fs::write(&owner, owner_authentication.finalize().into_bytes()).unwrap();
     fs::create_dir(&transaction).unwrap();
     fs::hard_link(
         home.join("memory/existing.md"),
@@ -742,9 +800,35 @@ fn recovery_rejects_a_foreign_regular_transaction_without_touching_hard_links() 
     )
     .unwrap();
     fs::hard_link(outside.join("outside.md"), transaction.join("payload-1")).unwrap();
+    let manifest = ForgedManifest {
+        committed: false,
+        entries: vec![
+            ForgedEntry {
+                parent: "memory",
+                destination: "existing.md",
+                temporary: "payload-0",
+                anchor: "payload-0",
+                digest: Sha256::digest(b"existing home").to_vec(),
+            },
+            ForgedEntry {
+                parent: "memory",
+                destination: "outside.md",
+                temporary: "payload-1",
+                anchor: "payload-1",
+                digest: Sha256::digest(b"existing outside").to_vec(),
+            },
+        ],
+        created_directories: Vec::new(),
+    };
+    let mut manifest_authentication = Hmac::<Sha256>::new_from_slice(forged_key).unwrap();
+    manifest_authentication.update(&serde_json::to_vec(&manifest).unwrap());
+    let authenticated = ForgedAuthenticatedManifest {
+        manifest: &manifest,
+        authentication: manifest_authentication.finalize().into_bytes().to_vec(),
+    };
     fs::write(
         transaction.join("manifest.json"),
-        br#"{"manifest":{"committed":false,"entries":[{"parent":"memory","destination":"existing.md","temporary":"payload-0","anchor":"payload-0","digest":[]},{"parent":"memory","destination":"outside.md","temporary":"payload-1","anchor":"payload-1","digest":[]}],"created_directories":[]},"authentication":[]}"#,
+        serde_json::to_vec(&authenticated).unwrap(),
     )
     .unwrap();
 

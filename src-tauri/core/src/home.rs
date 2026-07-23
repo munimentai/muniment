@@ -618,11 +618,20 @@ pub fn scaffold_home(home: &Path) -> Result<(), HomeError> {
 }
 
 /// Persists a confirmed onboarding plan without replacing existing Home content.
+///
+/// `authentication_root` must be app-controlled storage outside `home` and its
+/// parent so a writer to Home cannot forge a recovery journal.
 pub fn persist_onboarding_home_write_plan(
+    authentication_root: &Path,
     home: &Path,
     plan: &OnboardingHomeWritePlan,
 ) -> Result<(), HomeError> {
-    persist_onboarding_home_write_plan_with_hook(home, plan, &mut |_, _| Ok(()))
+    persist_onboarding_home_write_plan_with_hook(
+        authentication_root,
+        home,
+        plan,
+        &mut |_, _| Ok(()),
+    )
 }
 
 /// Stable boundaries exposed for deterministic filesystem transaction tests.
@@ -697,11 +706,33 @@ struct FileIdentity {
 /// Test seam for simulating changes and transient failures at transaction boundaries.
 #[doc(hidden)]
 pub fn persist_onboarding_home_write_plan_with_hook(
+    authentication_root: &Path,
     home: &Path,
     plan: &OnboardingHomeWritePlan,
     hook: &mut dyn FnMut(OnboardingPersistHook, usize) -> io::Result<()>,
 ) -> Result<(), HomeError> {
     validate_home(home)?;
+    let authentication_metadata = fs::symlink_metadata(authentication_root).map_err(|error| {
+        HomeError::io(
+            "The onboarding import authentication storage could not be inspected.",
+            error,
+        )
+    })?;
+    if authentication_metadata.file_type().is_symlink() || !authentication_metadata.is_dir() {
+        return Err(HomeError::invalid(
+            "The onboarding import authentication storage is unsafe.",
+        ));
+    }
+    let authentication_root = normalized_absolute(authentication_root)?;
+    let home_parent = normalized_absolute(
+        home.parent()
+            .ok_or_else(|| HomeError::invalid("The onboarding import Home is invalid."))?,
+    )?;
+    if authentication_root.starts_with(&home_parent) {
+        return Err(HomeError::invalid(
+            "The onboarding import authentication storage is unsafe.",
+        ));
+    }
     let metadata = fs::symlink_metadata(home).map_err(|error| {
         HomeError::io("The onboarding import Home could not be inspected.", error)
     })?;
@@ -742,6 +773,26 @@ pub fn persist_onboarding_home_write_plan_with_hook(
             error,
         )
     })?;
+    let authentication =
+        Dir::open_ambient_dir(&authentication_root, ambient_authority()).map_err(|error| {
+            HomeError::io(
+                "The onboarding import authentication storage could not be opened.",
+                error,
+            )
+        })?;
+    if !same_home_file(
+        &authentication_metadata,
+        &authentication.metadata(".").map_err(|error| {
+            HomeError::io(
+                "The onboarding import authentication storage could not be inspected.",
+                error,
+            )
+        })?,
+    ) {
+        return Err(HomeError::invalid(
+            "The onboarding import authentication storage changed while it was opened.",
+        ));
+    }
     let directory = parent
         .open_dir(home_name)
         .map_err(|error| HomeError::io("The onboarding import Home could not be opened.", error))?;
@@ -763,13 +814,13 @@ pub fn persist_onboarding_home_write_plan_with_hook(
         .into_std();
     lock.lock_exclusive()
         .map_err(|error| HomeError::io("The onboarding import could not be locked.", error))?;
-    recover_onboarding_transactions(&parent, &directory, hook).map_err(|error| {
+    recover_onboarding_transactions(&authentication, &directory, hook).map_err(|error| {
         HomeError::io(
             "A previous onboarding import could not be recovered.",
             error,
         )
     })?;
-    persist_onboarding_plan_locked(&parent, home_name, &directory, plan, hook)
+    persist_onboarding_plan_locked(&authentication, &parent, home_name, &directory, plan, hook)
 }
 
 fn validate_onboarding_destination(relative: &str) -> Result<(), HomeError> {
@@ -823,7 +874,7 @@ fn open_anchored_directory(home: &Dir, path: &Path) -> io::Result<Dir> {
 }
 
 fn recover_onboarding_transactions(
-    home_parent: &Dir,
+    authentication_root: &Dir,
     home: &Dir,
     hook: &mut dyn FnMut(OnboardingPersistHook, usize) -> io::Result<()>,
 ) -> io::Result<()> {
@@ -843,7 +894,7 @@ fn recover_onboarding_transactions(
         .collect::<Vec<_>>();
     for name in &names {
         let owner_name = onboarding_transaction_owner_name(name);
-        authenticate_onboarding_transaction(home_parent, home, &owner_name)?;
+        authenticate_onboarding_transaction(authentication_root, home, &owner_name)?;
     }
     for name in names {
         let owner_name = onboarding_transaction_owner_name(&name);
@@ -867,9 +918,9 @@ fn recover_onboarding_transactions(
             home.remove_dir(&name)?;
             hook(OnboardingPersistHook::RetireTransactionOwner, 0)?;
             home.remove_file(&owner_name)?;
-            home_parent.remove_file(&owner_name)?;
+            authentication_root.remove_file(&owner_name)?;
             home.open(".")?.sync_all()?;
-            home_parent.open(".")?.sync_all()?;
+            authentication_root.open(".")?.sync_all()?;
             continue;
         }
         let committed = match transaction.symlink_metadata("committed") {
@@ -916,9 +967,9 @@ fn recover_onboarding_transactions(
                 home.remove_dir(&name)?;
                 hook(OnboardingPersistHook::RetireTransactionOwner, 0)?;
                 home.remove_file(&owner_name)?;
-                home_parent.remove_file(&owner_name)?;
+                authentication_root.remove_file(&owner_name)?;
                 home.open(".")?.sync_all()?;
-                home_parent.open(".")?.sync_all()?;
+                authentication_root.open(".")?.sync_all()?;
                 continue;
             }
         };
@@ -932,7 +983,7 @@ fn recover_onboarding_transactions(
         let authenticated: AuthenticatedOnboardingRecoveryManifest =
             serde_json::from_reader(manifest_file)?;
         let authentication_key =
-            authenticate_onboarding_transaction(home_parent, home, &owner_name)?;
+            authenticate_onboarding_transaction(authentication_root, home, &owner_name)?;
         authenticate_onboarding_manifest(&authenticated, &authentication_key)?;
         let manifest = authenticated.manifest;
         for (index, entry) in manifest.entries.iter().enumerate() {
@@ -1080,17 +1131,17 @@ fn recover_onboarding_transactions(
         home.remove_dir(&retired_name)?;
         hook(OnboardingPersistHook::RetireTransactionOwner, 0)?;
         home.remove_file(&owner_name)?;
-        home_parent.remove_file(&owner_name)?;
+        authentication_root.remove_file(&owner_name)?;
         hook(OnboardingPersistHook::RollbackSync, 0)?;
         home.open(".")?.sync_all()?;
-        home_parent.open(".")?.sync_all()?;
+        authentication_root.open(".")?.sync_all()?;
     }
     for name in all_names {
         let value = name.to_string_lossy();
         if !value.starts_with(".onboarding-import-") || !value.ends_with(".owner") {
             continue;
         }
-        match authenticate_onboarding_transaction(home_parent, home, &name) {
+        match authenticate_onboarding_transaction(authentication_root, home, &name) {
             Ok(_) => {}
             Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
             Err(error) => return Err(error),
@@ -1111,9 +1162,9 @@ fn recover_onboarding_transactions(
         if !transaction_exists && !retired_exists {
             hook(OnboardingPersistHook::RetireTransactionOwner, 0)?;
             home.remove_file(&name)?;
-            home_parent.remove_file(&name)?;
+            authentication_root.remove_file(&name)?;
             home.open(".")?.sync_all()?;
-            home_parent.open(".")?.sync_all()?;
+            authentication_root.open(".")?.sync_all()?;
         }
     }
     Ok(())
@@ -1129,12 +1180,12 @@ fn onboarding_transaction_owner_name(name: &std::ffi::OsStr) -> std::ffi::OsStri
 }
 
 fn authenticate_onboarding_transaction(
-    home_parent: &Dir,
+    authentication_root: &Dir,
     home: &Dir,
     owner_name: &std::ffi::OsStr,
 ) -> io::Result<Vec<u8>> {
     let owner_metadata = home.symlink_metadata(owner_name)?;
-    let key_metadata = home_parent.symlink_metadata(owner_name)?;
+    let key_metadata = authentication_root.symlink_metadata(owner_name)?;
     if owner_metadata.file_type().is_symlink()
         || !owner_metadata.is_file()
         || key_metadata.file_type().is_symlink()
@@ -1146,7 +1197,9 @@ fn authenticate_onboarding_transaction(
         ));
     }
     let mut key = Vec::new();
-    home_parent.open(owner_name)?.read_to_end(&mut key)?;
+    authentication_root
+        .open(owner_name)?
+        .read_to_end(&mut key)?;
     let mut proof = Vec::new();
     home.open(owner_name)?.read_to_end(&mut proof)?;
     let mut authentication = Hmac::<Sha256>::new_from_slice(&key)
@@ -1202,6 +1255,7 @@ fn authenticate_onboarding_manifest(
 }
 
 fn persist_onboarding_plan_locked(
+    authentication_root: &Dir,
     home_parent: &Dir,
     home_name: &std::ffi::OsStr,
     home: &Dir,
@@ -1243,7 +1297,7 @@ fn persist_onboarding_plan_locked(
     })?;
     let mut owner_options = cap_std::fs::OpenOptions::new();
     owner_options.create_new(true).write(true);
-    let mut key_file = home_parent
+    let mut key_file = authentication_root
         .open_with(&owner_name, &owner_options)
         .map_err(|error| {
             HomeError::io(
@@ -1297,7 +1351,7 @@ fn persist_onboarding_plan_locked(
     })?;
     home.open(".")
         .and_then(|directory| directory.sync_all())
-        .and_then(|()| home_parent.open(".")?.sync_all())
+        .and_then(|()| authentication_root.open(".")?.sync_all())
         .map_err(|error| {
             HomeError::io(
                 "The onboarding import transaction could not be authenticated.",
@@ -1669,11 +1723,10 @@ fn persist_onboarding_plan_locked(
                     }
                 }
                 let mut recovery_hook = |_, _| Ok(());
-                recover_onboarding_transactions(home_parent, home, &mut recovery_hook).map_err(
-                    |recovery_error| {
+                recover_onboarding_transactions(authentication_root, home, &mut recovery_hook)
+                    .map_err(|recovery_error| {
                         HomeError::io("The onboarding import rollback failed.", recovery_error)
-                    },
-                )?;
+                    })?;
                 return Err(HomeError::io(
                     "The onboarding import transaction could not be completed.",
                     error,
@@ -1726,9 +1779,9 @@ fn persist_onboarding_plan_locked(
         home.remove_dir(&retired_name)?;
         hook(OnboardingPersistHook::RetireTransactionOwner, 0)?;
         home.remove_file(&owner_name)?;
-        home_parent.remove_file(&owner_name)?;
+        authentication_root.remove_file(&owner_name)?;
         home.open(".")?.sync_all()?;
-        home_parent.open(".")?.sync_all()
+        authentication_root.open(".")?.sync_all()
     })();
     if let Err(error) = retirement {
         return Err(HomeError::io(
