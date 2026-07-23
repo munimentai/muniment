@@ -20,7 +20,7 @@ status-dot pulse while running; provenance line under every response (mono,
 signal. Radius 2/6/10. Both themes first-class; `prefers-reduced-motion`
 respected everywhere.
 
-When persistence lands, conversation, tool, permission, and receipt UI reduces
-from the append-only local run journal (ADR 0002). Reopen rebuilds from it;
-snapshots are disposable, and uncertain external effects render explicit
-needs-attention instead of repeating. This state contract is not implemented.
+Conversation, tool, permission, and receipt state is rebuilt from the
+append-only local run journal (ADR 0002). Reopen reduces committed events;
+snapshots are disposable, and uncertain external effects require explicit
+attention rather than silent replay.
