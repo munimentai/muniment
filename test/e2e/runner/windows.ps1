@@ -169,6 +169,10 @@ try {
     return
   }
 
+  $imageFixture = Join-Path $stateRoot "image-token.png"
+  $imageBase64 = (Get-Content -LiteralPath "test/e2e/fixtures/image-token.png.base64" -Raw) -replace '\s', ''
+  [IO.File]::WriteAllBytes($imageFixture, [Convert]::FromBase64String($imageBase64))
+
   & npm.cmd ci --no-audit --no-fund *>> $installerLog
   if ($LASTEXITCODE -ne 0) { throw "npm dependency installation failed" }
   & npm.cmd test *>> $installerLog
@@ -241,6 +245,7 @@ try {
   $env:MUNIMENT_E2E_RAW_DIR = $raw
   $env:MUNIMENT_E2E_AUTH_URL_FILE = $authUrlFile
   $env:MUNIMENT_E2E_HOME_PATH = Join-Path $stateRoot 'home-override'
+  $env:MUNIMENT_E2E_IMAGE_PATH = $imageFixture
   $env:MUNIMENT_E2E_FORCE_MANUAL = '1'
   $ready = $true
   $wdioLog = Join-Path $raw "wdio.log"
