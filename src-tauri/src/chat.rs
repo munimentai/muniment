@@ -4256,7 +4256,7 @@ mod tests {
     }
 
     #[test]
-    fn missing_cas_image_and_oversized_image_fail_with_non_leaking_copy() {
+    fn missing_oversized_and_ambiguous_images_fail_before_prompt_with_non_leaking_copy() {
         let _environment = lock_pi_environment();
         for (name, bytes, remove_object) in [
             ("private-missing.png", valid_test_png(), true),
@@ -4274,6 +4274,11 @@ mod tests {
                     bytes[length - 2..].copy_from_slice(b"\xff\xd9");
                     bytes
                 },
+                false,
+            ),
+            (
+                "private-malformed.jpg",
+                b"\xff\xd8\xffprivate-attachment-marker\xff\xd9".to_vec(),
                 false,
             ),
         ] {
@@ -4314,7 +4319,53 @@ mod tests {
             }
 
             let request_log = directory.join("requests.jsonl");
+            let executable_name = if cfg!(windows) {
+                "sidecar-test-stub.exe"
+            } else {
+                "sidecar-test-stub"
+            };
+            let test_executable = std::env::current_exe().unwrap();
+            let stub = test_executable
+                .parent()
+                .unwrap()
+                .parent()
+                .unwrap()
+                .join("examples")
+                .join(executable_name);
+            assert!(stub.is_file(), "sidecar test stub was not built");
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            let receipt_url = format!("http://{}/receipt", listener.local_addr().unwrap());
+            listener.set_nonblocking(true).unwrap();
+            let (stop_receipt_server, receipt_server_stop) = std::sync::mpsc::channel();
+            let receipt_server = std::thread::spawn(move || {
+                use std::io::{Read, Write};
+                loop {
+                    match listener.accept() {
+                        Ok((mut stream, _)) => {
+                            let mut request = [0; 4096];
+                            let _ = stream.read(&mut request).unwrap();
+                            let body = r#"{"route":"capture-stub","model":"test"}"#;
+                            write!(
+                                stream,
+                                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                                body.len(),
+                                body
+                            )
+                            .unwrap();
+                            break;
+                        }
+                        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                            if receipt_server_stop.try_recv().is_ok() {
+                                break;
+                            }
+                            std::thread::sleep(Duration::from_millis(10));
+                        }
+                        Err(error) => panic!("receipt listener failed: {error}"),
+                    }
+                }
+            });
             std::env::set_var("MUNIMENT_PI_ROOT", &directory);
+            std::env::set_var("MUNIMENT_PI_TEST_EXECUTABLE", &stub);
             std::env::set_var("PI_RESUME_STUB_REQUESTS", &request_log);
             coordinate(
                 tauri::test::mock_app().handle().clone(),
@@ -4329,7 +4380,7 @@ mod tests {
                     gateway_url: "https://gateway.invalid".into(),
                     virtual_key: "virtual-key".into(),
                     model: None,
-                    receipt_url: "https://receipt.invalid".into(),
+                    receipt_url,
                 },
                 Arc::new(AtomicBool::new(false)),
                 Arc::new(Mutex::new(None)),
@@ -4338,7 +4389,10 @@ mod tests {
                 None,
                 Some(prepared),
             );
+            stop_receipt_server.send(()).unwrap();
+            receipt_server.join().unwrap();
             std::env::remove_var("MUNIMENT_PI_ROOT");
+            std::env::remove_var("MUNIMENT_PI_TEST_EXECUTABLE");
             std::env::remove_var("PI_RESUME_STUB_REQUESTS");
             assert!(!request_log.exists(), "Pi must receive zero prompts");
             let events = storage.lock().unwrap().journal.events(&run_id).unwrap();
@@ -4348,7 +4402,8 @@ mod tests {
             for secret in [
                 path.to_string_lossy().as_ref(),
                 attachment_hash.as_str(),
-                "private prompt bytes",
+                &STANDARD.encode(&bytes),
+                "private-attachment-marker",
             ] {
                 assert!(!public_error.contains(secret));
             }

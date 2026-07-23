@@ -54,9 +54,8 @@ pub fn prepare_pi_images(
         if byte_length > MAX_PI_IMAGE_BYTES || decoded.len() == MAX_PI_IMAGE_COUNT {
             return Err(AttachmentDeliveryError::ImageLimit);
         }
-        let Some(mime_type) = validated_image_type(&bytes, format) else {
-            continue;
-        };
+        let mime_type =
+            validated_image_type(&bytes, format).ok_or(AttachmentDeliveryError::AmbiguousFormat)?;
         total = total
             .checked_add(byte_length)
             .ok_or(AttachmentDeliveryError::ImageLimit)?;
