@@ -198,7 +198,8 @@ local Pi run.
 1. **Implemented:** SQLite schema, envelope types, atomic append API, migrations/
 upcasters, integrity checks, and contract tests, without Pi wiring.
 2. **Implemented:** Deterministic UI/run reducer and crash fixtures. Disposable
-   snapshots remain deferred until the reducer contract has production usage.
+   snapshots remain optional and unimplemented; no implementation slice is
+   selected.
 3. **Implemented:** Pi domain/effect translation and receipt projection.
 4. **Implemented:** Retention, export/deletion, CAS collection, and crash-safe
    compaction.
