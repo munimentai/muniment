@@ -72,7 +72,8 @@ Phases mirror harness-spec §9. Muniment-cloud Phase 1 native auth and the cloud
 - DONE 2026-07-24 — a confirmed bounded Home write plan persists conflict-safely without overwriting user files, with rollback, concurrency serialization, and symlink defenses.
 - DONE 2026-07-24 — compilation and persistence are exposed through one typed Tauri completion command with structured invalid-input, destination-conflict, and save-failure results.
 - DONE 2026-07-24 — the confirmed-proposal frontend invokes the native completion command once, handles success/invalid input/save failure, and recovers destination conflicts by choosing another Home without repeating preview or triage.
-- NEXT — make the existing artifact-rail control a real frontend-only shell: toggle the complementary right rail by button/keyboard, close it with Escape, and show an honest empty state. Artifact data, rendering, persistence, sharing, and cloud contracts remain deferred to Phase 4 item 19. CLI/VS Code defaults wait for workspace memory semantics.
+- DONE 2026-07-24 — the artifact-rail control is a real signed-in frontend shell with button/platform shortcut toggle, Escape close, lifecycle reset, and an honest empty state.
+- NEXT — make the open artifact rail adjustable from 380–560px with an accessible pointer/keyboard splitter. Keep this frontend-only: artifact data, rendering, persistence, sharing, and cloud contracts remain deferred to Phase 4 item 19. CLI/VS Code defaults wait for workspace memory semantics.
 - Open items: headless/server CLI stance owner ruling; final model promotion waits on MUNIQA routing eval; Gemma 4 E2B remains a future owner-gated contingency pending llama.cpp PLE support. MUNICLOUD model artifact proxy/redirect is a ripple.
 
 ## Desktop QA automation
