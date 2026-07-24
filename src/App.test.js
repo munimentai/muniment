@@ -2083,6 +2083,66 @@ describe('interrupted reply resume', () => {
   })
 })
 
+describe('chat submission settlement', () => {
+  const existingRun = {
+    runId: 'existing-run', phase: 'complete', text: 'Existing answer',
+    prompt: 'Existing question', receipt: {}, toolActivity: [],
+  }
+
+  function expectNoProxyEqualityWarning(warn) {
+    expect(warn.mock.calls.flat().join(' ')).not.toContain('state_proxy_equality_mismatch')
+  }
+
+  it('replaces only the matching pending run after a successful submission', async () => {
+    let resolveSubmit
+    invoke.mockImplementation(async (command) => {
+      if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
+      if (command === 'chat_history') return [existingRun]
+      if (command === 'auth_entitlement_snapshot') return snapshot()
+      if (command === 'auth_devices') return []
+      if (command === 'chat_submit') return new Promise((resolve) => { resolveSubmit = resolve })
+      throw new Error(`unexpected command: ${command}`)
+    })
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    render(App)
+    const composer = await screen.findByPlaceholderText('Ask anything')
+    await fireEvent.input(composer, { target: { value: 'New question' } })
+    await fireEvent.click(screen.getByRole('button', { name: 'Send' }))
+
+    resolveSubmit({ runId: 'new-run', attachments: [] })
+    await waitFor(() => expect(composer).toHaveValue(''))
+    chatListener({ payload: {
+      runId: 'new-run', phase: 'complete', text: 'New answer',
+      receipt: {}, toolActivity: [], pendingPermission: null,
+    } })
+
+    expect(await screen.findByText('New answer')).toBeInTheDocument()
+    expect(screen.getByText('Existing answer')).toBeInTheDocument()
+    expectNoProxyEqualityWarning(warn)
+  })
+
+  it('replaces only the matching pending run after a failed submission', async () => {
+    invoke.mockImplementation(async (command) => {
+      if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
+      if (command === 'chat_history') return [existingRun]
+      if (command === 'auth_entitlement_snapshot') return snapshot()
+      if (command === 'auth_devices') return []
+      if (command === 'chat_submit') throw 'The submission was rejected.'
+      throw new Error(`unexpected command: ${command}`)
+    })
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    render(App)
+    const composer = await screen.findByPlaceholderText('Ask anything')
+    await fireEvent.input(composer, { target: { value: 'New question' } })
+    await fireEvent.click(screen.getByRole('button', { name: 'Send' }))
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('The submission was rejected.')
+    expect(screen.getByText('Reply failed.')).toBeInTheDocument()
+    expect(screen.getByText('Existing answer')).toBeInTheDocument()
+    expectNoProxyEqualityWarning(warn)
+  })
+})
+
 describe('tool activity cards', () => {
   const historyWith = (toolActivity, phase = 'complete') => [{
     runId: 'run-tools', phase, text: 'I used tools.', prompt: 'Do work', receipt: {}, toolActivity,
