@@ -5,6 +5,7 @@
   import { register, unregister } from '@tauri-apps/plugin-global-shortcut'
 
   import AccessPanel from './lib/AccessPanel.svelte'
+  import { artifactRailShortcut, isArtifactRailShortcut } from './lib/artifact-rail-state.js'
   import { bootState, errorState, statusState, waitingState } from './lib/auth-state.js'
   import { ringPath } from './lib/mark.js'
   import { applyBufferedChatEvents, applyChatEvent, composerAction, formatByteSize, historyMessages, receiptParts, receiptRows, toolName, toolStatus } from './lib/chat-state.js'
@@ -83,6 +84,8 @@
   let modelProgress = $derived(requiredModelProgress(requiredModel))
   let requiredModelTimer
   let requiredModelPollEpoch = 0
+  let artifactRailOpen = $state(false)
+  const artifactShortcut = artifactRailShortcut()
   let onboardingPreviewSequence = 0
   let destroyed = false
   const dictationTranscriptQuietPeriod = 25
@@ -814,6 +817,11 @@
       if (active?.id === payload.runId) active = projected && !['complete', 'cancelled', 'failed', 'interrupted'].includes(projected.phase) ? projected : null
     }).then((stop) => { unlisten = stop })
     const shortcuts = (event) => {
+      if (isArtifactRailShortcut(event)) {
+        event.preventDefault()
+        artifactRailOpen = !artifactRailOpen
+        return
+      }
       const action = event.altKey && !event.ctrlKey && !event.metaKey ? dictationTransforms.find(({ key }) => `Digit${key}` === event.code) : undefined
       if (action && eligibleDictation && !dictationBusy()) {
         event.preventDefault()
@@ -833,6 +841,10 @@
         event.preventDefault()
         stopDictation(true)
         return
+      }
+      if (event.key === 'Escape' && artifactRailOpen) {
+        event.preventDefault()
+        artifactRailOpen = false
       }
     }
     document.addEventListener('keydown', shortcuts)
@@ -1121,9 +1133,9 @@
         <p class="record">Waiting for the browser sign-in…</p>
       </section>
     {:else if auth.name === 'signed-in'}
-      <section class="workspace">
+      <section class="workspace" class:artifact-open={artifactRailOpen}>
         {#if draggingFiles}<div class="drop-affordance" role="status"><strong>Drop files to add them</strong><span>Saved locally · supported images sent with first prompt</span></div>{/if}
-        <header class="titlebar"><span class="thread-title">New thread</span><span class="thread-id">local · durable</span><span class="title-spacer"></span><button class="quiet" aria-label="Open artifact rail">⌘J</button></header>
+        <header class="titlebar"><span class="thread-title">New thread</span><span class="thread-id">local · durable</span><span class="title-spacer"></span><button type="button" class="quiet" aria-controls="artifact-rail" aria-expanded={artifactRailOpen} aria-keyshortcuts={artifactShortcut} aria-label={`${artifactRailOpen ? 'Close' : 'Open'} artifact rail`} onclick={() => { artifactRailOpen = !artifactRailOpen }}>{artifactShortcut === 'Meta+J' ? '⌘J' : 'Ctrl J'}</button></header>
         <aside class="sidebar">
           <div class="side-brand"><svg width="24" height="24" viewBox="0 0 48 48" aria-hidden="true"><path d={markD} stroke-width="5" /></svg><strong>muniment</strong></div>
           <button class="side-action">＋ <span>New thread</span><kbd>⌘N</kbd></button>
@@ -1249,6 +1261,18 @@
           {#if dictationError}<div class="dictation-error" role="alert">{dictationError}</div>{/if}
           {#if globalVoiceError}<div class="dictation-error" role="alert">The system-wide voice shortcut is unavailable. Voice remains available from the button.</div>{/if}
         </div>
+        {#if artifactRailOpen}
+          <aside id="artifact-rail" class="artifact-rail" aria-labelledby="artifact-rail-title">
+            <header>
+              <p class="eyebrow">Thread artifacts</p>
+              <h2 id="artifact-rail-title">Artifacts</h2>
+            </header>
+            <div class="artifact-empty">
+              <strong>No artifacts yet</strong>
+              <p>Artifacts created in this thread will appear here.</p>
+            </div>
+          </aside>
+        {/if}
       </section>
     {:else if auth.name === 'error'}
       <section class="auth-state" aria-live="polite">
@@ -1387,7 +1411,8 @@
   }
 
   .workspace { position: fixed; inset: 0; display: grid; grid-template-rows: 52px 1fr auto; }
-  .workspace { grid-template-columns: 260px 1fr; grid-template-areas: "title title" "side thread" "side composer"; }
+  .workspace { grid-template-columns: 260px minmax(0, 1fr); grid-template-areas: "title title" "side thread" "side composer"; transition: grid-template-columns 180ms ease; }
+  .workspace.artifact-open { grid-template-columns: 260px minmax(0, 1fr) clamp(380px, 34vw, 560px); grid-template-areas: "title title title" "side thread rail" "side composer rail"; }
   .drop-affordance { position: fixed; z-index: 4; inset: 52px 0 0 260px; display: grid; place-content: center; gap: 5px; background: color-mix(in srgb, var(--paper) 92%, transparent); border: 1px dashed var(--muted); color: var(--ink); text-align: center; pointer-events: none; }
   .drop-affordance span { color: var(--muted); font: var(--text-12) var(--font-mono); }
   .titlebar { grid-area: title; display: flex; align-items: center; padding: 0 18px 0 278px; border-bottom: 1px solid var(--border); background: var(--surface); }
@@ -1403,6 +1428,12 @@
   .active-thread { background: var(--faint); }
   .active-thread > span { width: 5px; height: 5px; border-radius: 50%; background: var(--signal); }
   .quiet { background: transparent; border-color: transparent; }
+  .artifact-rail { grid-area: rail; min-width: 0; padding: 22px 24px; overflow-y: auto; border-left: 1px solid var(--border); background: var(--surface); }
+  .artifact-rail header { padding-bottom: 15px; border-bottom: 1px solid var(--border); }
+  .artifact-rail h2 { margin: 3px 0 0; font-size: 18px; }
+  .artifact-empty { display: grid; place-items: center; align-content: center; min-height: 45%; text-align: center; }
+  .artifact-empty strong { font-weight: 600; }
+  .artifact-empty p { max-width: 250px; margin: 7px 0 0; color: var(--muted); font: var(--text-12) var(--font-mono); line-height: 1.5; }
   .thread-shell { grid-area: thread; position: relative; min-height: 0; }
   .thread { width: min(760px, calc(100% - 48px)); height: 100%; margin: 0 auto; padding: 42px 0; overflow-y: auto; }
   .latest { position: absolute; left: 50%; bottom: 14px; transform: translateX(-50%); border-radius: 6px; background: var(--surface); color: var(--muted); font: var(--text-12) var(--font-mono); box-shadow: 0 1px 3px color-mix(in srgb, var(--ink) 10%, transparent); }
@@ -1470,5 +1501,5 @@
   @keyframes breathe { 50% { opacity: .45; } }
   @keyframes tool-pulse { 50% { opacity: .3; transform: scale(.75); } }
   @keyframes capture { to { transform: scaleY(.55); } }
-  @media (prefers-reduced-motion: reduce) { .caret, .thinking path, .tool-running .tool-dot, .capture-meter i { animation: none; } }
+  @media (prefers-reduced-motion: reduce) { .workspace { transition: none; } .caret, .thinking path, .tool-running .tool-dot, .capture-meter i { animation: none; } }
 </style>

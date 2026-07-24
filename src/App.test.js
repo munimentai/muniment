@@ -125,6 +125,51 @@ afterEach(() => {
   vi.restoreAllMocks()
 })
 
+describe('artifact rail', () => {
+  it('toggles from the titlebar button with accessible state and an honest empty landmark', async () => {
+    render(App)
+    const toggle = await screen.findByRole('button', { name: 'Open artifact rail' })
+    expect(toggle).toHaveAttribute('aria-expanded', 'false')
+    expect(screen.queryByRole('complementary', { name: 'Artifacts' })).not.toBeInTheDocument()
+
+    await fireEvent.click(toggle)
+
+    expect(toggle).toHaveAttribute('aria-expanded', 'true')
+    expect(toggle).toHaveAccessibleName('Close artifact rail')
+    const rail = screen.getByRole('complementary', { name: 'Artifacts' })
+    expect(within(rail).getByText('No artifacts yet')).toBeInTheDocument()
+    expect(within(rail).getByText('Artifacts created in this thread will appear here.')).toBeInTheDocument()
+
+    await fireEvent.click(toggle)
+    expect(screen.queryByRole('complementary', { name: 'Artifacts' })).not.toBeInTheDocument()
+  })
+
+  it('toggles with the platform keyboard shortcut and closes with Escape', async () => {
+    render(App)
+    const toggle = await screen.findByRole('button', { name: 'Open artifact rail' })
+    const mac = navigator.platform.startsWith('Mac')
+    await fireEvent.keyDown(document, { key: 'j', metaKey: mac, ctrlKey: !mac })
+    expect(toggle).toHaveAttribute('aria-expanded', 'true')
+
+    await fireEvent.keyDown(document, { key: 'Escape' })
+    expect(toggle).toHaveAttribute('aria-expanded', 'false')
+  })
+
+  it('does not toggle from an input or textarea', async () => {
+    render(App)
+    const toggle = await screen.findByRole('button', { name: 'Open artifact rail' })
+    const composer = screen.getByPlaceholderText('Ask anything')
+    const mac = navigator.platform.startsWith('Mac')
+    await fireEvent.keyDown(composer, { key: 'j', metaKey: mac, ctrlKey: !mac })
+    expect(toggle).toHaveAttribute('aria-expanded', 'false')
+
+    const input = document.createElement('input')
+    document.body.append(input)
+    await fireEvent.keyDown(input, { key: 'j', metaKey: mac, ctrlKey: !mac })
+    expect(toggle).toHaveAttribute('aria-expanded', 'false')
+  })
+})
+
 describe('Home onboarding', () => {
   it('shows active model progress and stops polling when local AI becomes ready', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true })
