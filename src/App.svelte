@@ -5,7 +5,7 @@
   import { register, unregister } from '@tauri-apps/plugin-global-shortcut'
 
   import AccessPanel from './lib/AccessPanel.svelte'
-  import { artifactRailShortcut, isArtifactRailShortcut } from './lib/artifact-rail-state.js'
+  import { ARTIFACT_RAIL_MAX_WIDTH, ARTIFACT_RAIL_MIN_WIDTH, artifactRailShortcut, artifactRailWidthFromKey, artifactRailWidthFromPointer, clampArtifactRailWidth, defaultArtifactRailWidth, isArtifactRailShortcut } from './lib/artifact-rail-state.js'
   import { bootState, errorState, statusState, waitingState } from './lib/auth-state.js'
   import { ringPath } from './lib/mark.js'
   import { applyBufferedChatEvents, applyChatEvent, composerAction, formatByteSize, historyMessages, receiptParts, receiptRows, toolName, toolStatus } from './lib/chat-state.js'
@@ -85,10 +85,57 @@
   let requiredModelTimer
   let requiredModelPollEpoch = 0
   let artifactRailOpen = $state(false)
+  let artifactRailWidth = $state(defaultArtifactRailWidth(window.innerWidth))
+  let artifactRailMaximum = $state(ARTIFACT_RAIL_MAX_WIDTH)
+  let artifactRailPointer = $state()
+  let workspace = $state()
   const artifactShortcut = artifactRailShortcut()
   let onboardingPreviewSequence = 0
   let destroyed = false
   const dictationTranscriptQuietPeriod = 25
+  const sidebarWidth = 260
+  const minimumThreadWidth = 320
+
+  function availableArtifactRailWidth() {
+    return Math.max(ARTIFACT_RAIL_MIN_WIDTH, Math.min(ARTIFACT_RAIL_MAX_WIDTH, (workspace?.clientWidth || window.innerWidth) - sidebarWidth - minimumThreadWidth))
+  }
+
+  function resetArtifactRailWidth() {
+    artifactRailMaximum = availableArtifactRailWidth()
+    artifactRailWidth = clampArtifactRailWidth(defaultArtifactRailWidth(workspace?.clientWidth || window.innerWidth), artifactRailMaximum)
+  }
+
+  function toggleArtifactRail() {
+    artifactRailOpen = !artifactRailOpen
+    artifactRailPointer = undefined
+    if (artifactRailOpen) resetArtifactRailWidth()
+  }
+
+  function artifactRailPointerDown(event) {
+    if (event.button !== 0 || artifactRailPointer !== undefined) return
+    event.preventDefault()
+    event.currentTarget.focus()
+    artifactRailPointer = event.pointerId
+    event.currentTarget.setPointerCapture?.(event.pointerId)
+  }
+
+  function artifactRailPointerMove(event) {
+    if (event.pointerId !== artifactRailPointer) return
+    artifactRailWidth = artifactRailWidthFromPointer(event.clientX, workspace.getBoundingClientRect().right, artifactRailMaximum)
+  }
+
+  function artifactRailPointerEnd(event) {
+    if (event.pointerId !== artifactRailPointer) return
+    artifactRailPointer = undefined
+    if (event.currentTarget.hasPointerCapture?.(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId)
+  }
+
+  function artifactRailKeydown(event) {
+    const width = artifactRailWidthFromKey(artifactRailWidth, event.key, artifactRailMaximum)
+    if (width === artifactRailWidth && !['Home', 'End', 'ArrowLeft', 'ArrowRight'].includes(event.key)) return
+    event.preventDefault()
+    artifactRailWidth = width
+  }
 
   async function loadOnboarding() {
     try {
@@ -823,12 +870,13 @@
     const shortcuts = (event) => {
       if (auth.name === 'signed-in' && onboarding.name === 'complete' && isArtifactRailShortcut(event)) {
         event.preventDefault()
-        artifactRailOpen = !artifactRailOpen
+        toggleArtifactRail()
         return
       }
       if (event.key === 'Escape' && artifactRailOpen) {
         event.preventDefault()
         artifactRailOpen = false
+        artifactRailPointer = undefined
       }
       const action = event.altKey && !event.ctrlKey && !event.metaKey ? dictationTransforms.find(({ key }) => `Digit${key}` === event.code) : undefined
       if (action && eligibleDictation && !dictationBusy()) {
@@ -852,6 +900,12 @@
       }
     }
     document.addEventListener('keydown', shortcuts)
+    const resizeArtifactRail = () => {
+      if (!artifactRailOpen) return
+      artifactRailMaximum = availableArtifactRailWidth()
+      artifactRailWidth = clampArtifactRailWidth(artifactRailWidth, artifactRailMaximum)
+    }
+    window.addEventListener('resize', resizeArtifactRail)
     let stopDragDrop
     if (tauri) getCurrentWebview().onDragDropEvent(({ payload }) => {
         if (auth.name !== 'signed-in' || active) {
@@ -883,6 +937,7 @@
       globalVoiceHeld = false
       globalVoiceTask = globalVoiceTask.finally(cleanupVoiceShortcuts)
       document.removeEventListener('keydown', shortcuts)
+      window.removeEventListener('resize', resizeArtifactRail)
     }
   })
 
@@ -1137,9 +1192,9 @@
         <p class="record">Waiting for the browser sign-in…</p>
       </section>
     {:else if auth.name === 'signed-in'}
-      <section class="workspace" class:artifact-open={artifactRailOpen}>
+      <section class="workspace" class:artifact-open={artifactRailOpen} class:artifact-resizing={artifactRailPointer !== undefined} style:--artifact-rail-width={`${artifactRailWidth}px`} bind:this={workspace}>
         {#if draggingFiles}<div class="drop-affordance" role="status"><strong>Drop files to add them</strong><span>Saved locally · supported images sent with first prompt</span></div>{/if}
-        <header class="titlebar"><span class="thread-title">New thread</span><span class="thread-id">local · durable</span><span class="title-spacer"></span><button type="button" class="quiet" aria-controls="artifact-rail" aria-expanded={artifactRailOpen} aria-keyshortcuts={artifactShortcut} aria-label={`${artifactRailOpen ? 'Close' : 'Open'} artifact rail`} onclick={() => { artifactRailOpen = !artifactRailOpen }}>{artifactShortcut === 'Meta+J' ? '⌘J' : 'Ctrl J'}</button></header>
+        <header class="titlebar"><span class="thread-title">New thread</span><span class="thread-id">local · durable</span><span class="title-spacer"></span><button type="button" class="quiet" aria-controls="artifact-rail" aria-expanded={artifactRailOpen} aria-keyshortcuts={artifactShortcut} aria-label={`${artifactRailOpen ? 'Close' : 'Open'} artifact rail`} onclick={toggleArtifactRail}>{artifactShortcut === 'Meta+J' ? '⌘J' : 'Ctrl J'}</button></header>
         <aside class="sidebar">
           <div class="side-brand"><svg width="24" height="24" viewBox="0 0 48 48" aria-hidden="true"><path d={markD} stroke-width="5" /></svg><strong>muniment</strong></div>
           <button class="side-action">＋ <span>New thread</span><kbd>⌘N</kbd></button>
@@ -1266,6 +1321,24 @@
           {#if globalVoiceError}<div class="dictation-error" role="alert">The system-wide voice shortcut is unavailable. Voice remains available from the button.</div>{/if}
         </div>
         {#if artifactRailOpen}
+          <!-- svelte-ignore a11y_no_noninteractive_tabindex, a11y_no_noninteractive_element_interactions -->
+          <div
+            class="artifact-divider"
+            class:dragging={artifactRailPointer !== undefined}
+            role="separator"
+            aria-labelledby="artifact-rail-title"
+            aria-controls="artifact-rail"
+            aria-orientation="vertical"
+            aria-valuemin={ARTIFACT_RAIL_MIN_WIDTH}
+            aria-valuemax={artifactRailMaximum}
+            aria-valuenow={artifactRailWidth}
+            tabindex="0"
+            onpointerdown={artifactRailPointerDown}
+            onpointermove={artifactRailPointerMove}
+            onpointerup={artifactRailPointerEnd}
+            onpointercancel={artifactRailPointerEnd}
+            onkeydown={artifactRailKeydown}
+          ></div>
           <aside id="artifact-rail" class="artifact-rail" aria-labelledby="artifact-rail-title">
             <header>
               <p class="eyebrow">Thread artifacts</p>
@@ -1416,7 +1489,8 @@
 
   .workspace { position: fixed; inset: 0; display: grid; grid-template-rows: 52px 1fr auto; }
   .workspace { grid-template-columns: 260px minmax(0, 1fr); grid-template-areas: "title title" "side thread" "side composer"; transition: grid-template-columns 180ms ease; }
-  .workspace.artifact-open { grid-template-columns: 260px minmax(0, 1fr) clamp(380px, 34vw, 560px); grid-template-areas: "title title title" "side thread rail" "side composer rail"; }
+  .workspace.artifact-resizing { transition: none; }
+  .workspace.artifact-open { grid-template-columns: 260px minmax(320px, 1fr) var(--artifact-rail-width); grid-template-areas: "title title title" "side thread rail" "side composer rail"; }
   .drop-affordance { position: fixed; z-index: 4; inset: 52px 0 0 260px; display: grid; place-content: center; gap: 5px; background: color-mix(in srgb, var(--paper) 92%, transparent); border: 1px dashed var(--muted); color: var(--ink); text-align: center; pointer-events: none; }
   .drop-affordance span { color: var(--muted); font: var(--text-12) var(--font-mono); }
   .titlebar { grid-area: title; display: flex; align-items: center; padding: 0 18px 0 278px; border-bottom: 1px solid var(--border); background: var(--surface); }
@@ -1432,7 +1506,11 @@
   .active-thread { background: var(--faint); }
   .active-thread > span { width: 5px; height: 5px; border-radius: 50%; background: var(--signal); }
   .quiet { background: transparent; border-color: transparent; }
-  .artifact-rail { grid-area: rail; min-width: 0; padding: 22px 24px; overflow-y: auto; border-left: 1px solid var(--border); background: var(--surface); }
+  .artifact-divider { grid-area: rail; z-index: 2; align-self: stretch; width: 9px; margin-left: -4px; padding: 0; border: 0; border-radius: 0; background: transparent; cursor: col-resize; touch-action: none; }
+  .artifact-divider::after { content: ''; display: block; width: 1px; height: 100%; margin-left: 4px; background: var(--border); }
+  .artifact-divider:hover::after, .artifact-divider:focus-visible::after, .artifact-divider.dragging::after { width: 2px; margin-left: 3px; background: var(--muted); }
+  .artifact-divider:focus-visible { outline: 2px solid var(--ink); outline-offset: -2px; }
+  .artifact-rail { grid-area: rail; min-width: 0; padding: 22px 24px; overflow-y: auto; background: var(--surface); }
   .artifact-rail header { padding-bottom: 15px; border-bottom: 1px solid var(--border); }
   .artifact-rail h2 { margin: 3px 0 0; font-size: 18px; }
   .artifact-empty { display: grid; place-items: center; align-content: center; min-height: 45%; text-align: center; }
