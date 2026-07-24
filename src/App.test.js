@@ -155,6 +155,54 @@ describe('artifact rail', () => {
     expect(toggle).toHaveAttribute('aria-expanded', 'false')
   })
 
+  it('exposes an operable window splitter and resets its width after closing', async () => {
+    render(App)
+    const toggle = await screen.findByRole('button', { name: 'Open artifact rail' })
+    await fireEvent.click(toggle)
+    const separator = screen.getByRole('separator', { name: 'Artifacts' })
+    expect(separator).toHaveAttribute('tabindex', '0')
+    expect(separator).toHaveAttribute('aria-orientation', 'vertical')
+    expect(separator).toHaveAttribute('aria-valuemin', '380')
+    expect(separator).toHaveAttribute('aria-valuemax', '444')
+    expect(separator).toHaveAttribute('aria-valuenow', '380')
+
+    await fireEvent.keyDown(separator, { key: 'ArrowLeft' })
+    expect(separator).toHaveAttribute('aria-valuenow', '400')
+    await fireEvent.keyDown(separator, { key: 'ArrowRight' })
+    expect(separator).toHaveAttribute('aria-valuenow', '380')
+    await fireEvent.keyDown(separator, { key: 'End' })
+    expect(separator).toHaveAttribute('aria-valuenow', separator.getAttribute('aria-valuemax'))
+    await fireEvent.keyDown(separator, { key: 'Home' })
+    expect(separator).toHaveAttribute('aria-valuenow', '380')
+
+    await fireEvent.keyDown(separator, { key: 'ArrowLeft' })
+    await fireEvent.click(toggle)
+    await fireEvent.click(toggle)
+    expect(screen.getByRole('separator', { name: 'Artifacts' })).toHaveAttribute('aria-valuenow', '380')
+  })
+
+  it('finishes pointer resizing on release and cancellation', async () => {
+    render(App)
+    await fireEvent.click(await screen.findByRole('button', { name: 'Open artifact rail' }))
+    const separator = screen.getByRole('separator', { name: 'Artifacts' })
+    const workspace = separator.closest('.workspace')
+    vi.spyOn(workspace, 'getBoundingClientRect').mockReturnValue({ right: 1024 })
+
+    await fireEvent.pointerDown(separator, { button: 0, pointerId: 7, clientX: 624 })
+    await fireEvent.pointerMove(separator, { pointerId: 7, clientX: 604 })
+    expect(separator).toHaveAttribute('aria-valuenow', '420')
+    await fireEvent.pointerUp(separator, { pointerId: 7 })
+    await fireEvent.pointerMove(separator, { pointerId: 7, clientX: 584 })
+    expect(separator).toHaveAttribute('aria-valuenow', '420')
+
+    await fireEvent.pointerDown(separator, { button: 0, pointerId: 8, clientX: 604 })
+    await fireEvent.pointerMove(separator, { pointerId: 8, clientX: 594 })
+    expect(separator).toHaveAttribute('aria-valuenow', '430')
+    await fireEvent.pointerCancel(separator, { pointerId: 8 })
+    await fireEvent.pointerMove(separator, { pointerId: 8, clientX: 584 })
+    expect(separator).toHaveAttribute('aria-valuenow', '430')
+  })
+
   it('does not toggle from an input or textarea', async () => {
     render(App)
     const toggle = await screen.findByRole('button', { name: 'Open artifact rail' })
