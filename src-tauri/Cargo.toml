@@ -37,6 +37,7 @@ default-features = false
 features = ["apple-native", "windows-native", "sync-secret-service", "vendored"]
 
 [dev-dependencies]
+base64 = "0.22"
 flate2 = "1"
 muniment-attach = { path = "attach", features = ["client"] }
 sha2 = "0.10"
