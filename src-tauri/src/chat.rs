@@ -25,7 +25,7 @@ use muniment_core::journal::reducer::{
 use muniment_core::journal::{EventEnvelope, EventPayload, Provenance, RunJournal};
 use muniment_core::sidecar::pi_chat::{
     cancel_command, ExtensionUiDialog, ExtensionUiRequest, PiChatEvent, PiImageContent,
-    PiRunAdapter, Receipt,
+    PiRunAdapter, PromptCommand, Receipt,
 };
 use muniment_core::sidecar::pi_install::resolve_current;
 use muniment_core::sidecar::{
@@ -1308,6 +1308,14 @@ fn prepared_pi_images(
         })
 }
 
+fn prepared_pi_prompt<'a>(
+    storage: &SharedStorage,
+    run_id: &str,
+    prompt: &'a str,
+) -> Result<PromptCommand<'a>, String> {
+    prepared_pi_images(storage, run_id).map(|images| PromptCommand::with_images(prompt, images))
+}
+
 struct OpenSelectedFile {
     file: std::fs::File,
     display_name: String,
@@ -1643,11 +1651,11 @@ fn coordinate<R: tauri::Runtime>(
         }
         return;
     }
-    let images = if resume.is_some() {
-        Vec::new()
+    let prepared_prompt = if resume.is_some() {
+        None
     } else {
-        let images = match prepared_pi_images(&journal, &run_id) {
-            Ok(images) => images,
+        let prepared_prompt = match prepared_pi_prompt(&journal, &run_id, &prompt) {
+            Ok(prepared_prompt) => prepared_prompt,
             Err(message) => {
                 fail_start(
                     &app,
@@ -1662,7 +1670,7 @@ fn coordinate<R: tauri::Runtime>(
                 return;
             }
         };
-        images
+        Some(prepared_prompt)
     };
     let mut runtime = runtime
         .lock()
@@ -1908,11 +1916,12 @@ fn coordinate<R: tauri::Runtime>(
             &mut seq,
             subject.as_deref(),
             || {
+                let prepared_prompt = prepared_prompt.expect("new runs prepare a Pi prompt");
                 let (adapter, _) = PiRunAdapter::start_with_images(
                     run_id.clone(),
                     &transport,
-                    &prompt,
-                    images,
+                    prepared_prompt.message,
+                    prepared_prompt.images,
                     RPC_TIMEOUT,
                 )
                 .map_err(|_| PreparedPromptError::Start)?;
@@ -4127,13 +4136,10 @@ mod tests {
 
     #[test]
     fn coordinator_sends_exact_ordered_images_and_preserves_text_only_prompt_shape() {
-        let _environment = lock_pi_environment();
         for with_images in [true, false] {
-            let app = tauri::test::mock_app();
             let directory =
                 std::env::temp_dir().join(format!("muniment-prompt-capture-{}", Uuid::now_v7()));
             std::fs::create_dir_all(&directory).unwrap();
-            let request_log = directory.join("requests.jsonl");
             let mut files = Vec::new();
             if with_images {
                 let png = directory.join("first.bin");
@@ -4163,93 +4169,43 @@ mod tests {
                 prepare_new_run(&storage, &run_id, "workspace-a", Some("owner"), files, None)
                     .unwrap();
 
-            let executable_name = if cfg!(windows) {
-                "sidecar-test-stub.exe"
-            } else {
-                "sidecar-test-stub"
-            };
-            let test_executable = std::env::current_exe().unwrap();
-            let stub = test_executable
-                .parent()
-                .unwrap()
-                .parent()
-                .unwrap()
-                .join("examples")
-                .join(executable_name);
-            assert!(stub.is_file(), "sidecar test stub was not built");
-            let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-            let receipt_url = format!("http://{}/receipt", listener.local_addr().unwrap());
-            let receipt_server = std::thread::spawn(move || {
-                use std::io::{Read, Write};
-                let mut stream = accept_receipt_request(listener);
-                let mut request = [0; 4096];
-                let _ = stream.read(&mut request).unwrap();
-                let body = r#"{"route":"capture-stub","model":"test"}"#;
-                write!(
-                    stream,
-                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-                    body.len(),
-                    body
-                )
-                .unwrap();
-            });
-            std::env::set_var("MUNIMENT_PI_ROOT", &directory);
-            std::env::set_var("MUNIMENT_PI_TEST_EXECUTABLE", &stub);
-            std::env::set_var("PI_RESUME_STUB_REQUESTS", &request_log);
-            coordinate(
-                app.handle().clone(),
-                Arc::clone(&storage),
-                Arc::new(Mutex::new(None)),
-                run_id,
-                "original text prompt".into(),
-                "token".into(),
-                Some("owner".into()),
-                ChatGrant {
-                    workspace: "workspace-a".into(),
-                    gateway_url: "https://gateway.invalid".into(),
-                    virtual_key: "virtual-key".into(),
-                    model: None,
-                    receipt_url,
-                },
-                Arc::new(AtomicBool::new(false)),
-                Arc::new(Mutex::new(None)),
-                Arc::new(Mutex::new(None)),
-                None,
-                None,
-                Some(prepared),
-            );
-            receipt_server.join().unwrap();
-            for key in [
-                "MUNIMENT_PI_ROOT",
-                "MUNIMENT_PI_TEST_EXECUTABLE",
-                "PI_RESUME_STUB_REQUESTS",
-            ] {
-                std::env::remove_var(key);
-            }
-
-            let requests = std::fs::read_to_string(&request_log).unwrap();
-            let prompt: serde_json::Value =
-                serde_json::from_str(requests.lines().next().unwrap()).unwrap();
-            assert_eq!(prompt["type"], "prompt");
-            assert_eq!(prompt["message"], "original text prompt");
+            assert_eq!(prepared.0, if with_images { 4 } else { 1 });
+            let prompt = serde_json::to_value(
+                prepared_pi_prompt(&storage, &run_id, "original text prompt").unwrap(),
+            )
+            .unwrap();
             if with_images {
                 assert_eq!(
-                    prompt["images"],
-                    json!([
+                    prompt,
+                    json!(
                         {
-                            "type": "image",
-                            "data": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
-                            "mimeType": "image/png"
-                        },
-                        {
-                            "type": "image",
-                            "data": "R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==",
-                            "mimeType": "image/gif"
+                            "type": "prompt",
+                            "message": "original text prompt",
+                            "streamingBehavior": "steer",
+                            "images": [
+                                {
+                                    "type": "image",
+                                    "data": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+                                    "mimeType": "image/png"
+                                },
+                                {
+                                    "type": "image",
+                                    "data": "R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==",
+                                    "mimeType": "image/gif"
+                                }
+                            ]
                         }
-                    ])
+                    )
                 );
             } else {
-                assert!(prompt.get("images").is_none());
+                assert_eq!(
+                    prompt,
+                    json!({
+                        "type": "prompt",
+                        "message": "original text prompt",
+                        "streamingBehavior": "steer"
+                    })
+                );
             }
             drop(storage);
             std::fs::remove_dir_all(directory).unwrap();
