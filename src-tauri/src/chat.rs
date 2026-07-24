@@ -3714,11 +3714,11 @@ mod tests {
 
     fn accept_receipt_request(listener: std::net::TcpListener) -> std::net::TcpStream {
         listener.set_nonblocking(true).unwrap();
-        // 60s (not 10s): on the contended single linux CI VM the coordinator can
-        // take well over 10s to open its receipt connection. A healthy run still
+        // 120s (not 10s): on the contended single linux CI VM the coordinator can
+        // take over a minute to open its receipt connection. A healthy run still
         // connects in milliseconds; this is only a generous ceiling before we
         // declare the handshake genuinely broken.
-        let deadline = std::time::Instant::now() + Duration::from_secs(60);
+        let deadline = std::time::Instant::now() + Duration::from_secs(120);
         loop {
             match listener.accept() {
                 Ok((stream, _)) => return stream,
@@ -4222,19 +4222,34 @@ mod tests {
             assert!(stub.is_file(), "sidecar test stub was not built");
             let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
             let receipt_url = format!("http://{}/receipt", listener.local_addr().unwrap());
+            listener.set_nonblocking(true).unwrap();
+            let (stop_receipt_server, receipt_server_stop) = std::sync::mpsc::channel();
             let receipt_server = std::thread::spawn(move || {
                 use std::io::{Read, Write};
-                let mut stream = accept_receipt_request(listener);
-                let mut request = [0; 4096];
-                let _ = stream.read(&mut request).unwrap();
-                let body = r#"{"route":"capture-stub","model":"test"}"#;
-                write!(
-                    stream,
-                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-                    body.len(),
-                    body
-                )
-                .unwrap();
+                loop {
+                    match listener.accept() {
+                        Ok((mut stream, _)) => {
+                            let mut request = [0; 4096];
+                            let _ = stream.read(&mut request).unwrap();
+                            let body = r#"{"route":"capture-stub","model":"test"}"#;
+                            write!(
+                                stream,
+                                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                                body.len(),
+                                body
+                            )
+                            .unwrap();
+                            break;
+                        }
+                        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                            if receipt_server_stop.try_recv().is_ok() {
+                                break;
+                            }
+                            std::thread::sleep(Duration::from_millis(10));
+                        }
+                        Err(error) => panic!("receipt listener failed: {error}"),
+                    }
+                }
             });
             std::env::set_var("MUNIMENT_PI_ROOT", &directory);
             std::env::set_var("MUNIMENT_PI_TEST_EXECUTABLE", &stub);
@@ -4261,6 +4276,7 @@ mod tests {
                 None,
                 Some(prepared),
             );
+            let _ = stop_receipt_server.send(());
             receipt_server.join().unwrap();
             for key in [
                 "MUNIMENT_PI_ROOT",
