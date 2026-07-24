@@ -12,6 +12,7 @@
   import { appendTranscript, ariaKeyShortcut, dictationTransforms, handsFreeActivationDelay, holdToTalkShortcut, isDictationActive, validHoldToTalkShortcut } from './lib/dictation-state.js'
   import { onboardingCancelSettingsState, onboardingConfirmedHomePathState, onboardingConfirmedState, onboardingConfirmingState, onboardingErrorState, onboardingExtractingState, onboardingExtractionErrorState, onboardingExtractionState, onboardingFinalizingState, onboardingImportChoiceState, onboardingImportErrorState, onboardingImportSavedState, onboardingImportSavingState, onboardingLoadingState, onboardingPathState, onboardingPreviewErrorState, onboardingPreviewingState, onboardingPreviewState, onboardingReturnToArchiveReviewState, onboardingSelectionState, onboardingSettingsState, onboardingStatusState, onboardingTriageConfirmedState, onboardingTriageErrorState, onboardingTriageReportState, onboardingTriagingState, requiredModelLoadingState, requiredModelPollActive, requiredModelProgress } from './lib/onboarding-state.js'
   import { scrollFollowState } from './lib/scroll-follow.js'
+  import { SIDEBAR_STORAGE_KEY, isSidebarShortcut, parseSidebarCollapsed, serializeSidebarCollapsed, sidebarShortcut } from './lib/sidebar-state.js'
 
   const markD = ringPath()
   const version = __APP_VERSION__
@@ -94,10 +95,36 @@
   let destroyed = false
   const dictationTranscriptQuietPeriod = 25
   const sidebarWidth = 260
+  const sidebarRailWidth = 52
   const minimumThreadWidth = 320
+  let sidebarCollapsed = $state(storedSidebarCollapsed())
+  const sidebarKeyShortcut = sidebarShortcut()
+  const sidebarHint = sidebarKeyShortcut === 'Meta+\\' ? '⌘\\' : 'Ctrl \\'
+
+  // A read from a blocked or corrupt store must not keep the shell from
+  // rendering; §2.1's documented default is expanded.
+  function storedSidebarCollapsed() {
+    try {
+      return parseSidebarCollapsed(localStorage.getItem(SIDEBAR_STORAGE_KEY))
+    } catch (_) {
+      return false
+    }
+  }
+
+  function toggleSidebar() {
+    sidebarCollapsed = !sidebarCollapsed
+    try { localStorage.setItem(SIDEBAR_STORAGE_KEY, serializeSidebarCollapsed(sidebarCollapsed)) } catch (_) {}
+    fitArtifactRail()
+  }
 
   function availableArtifactRailWidth() {
-    return Math.max(ARTIFACT_RAIL_MIN_WIDTH, Math.min(ARTIFACT_RAIL_MAX_WIDTH, (workspace?.clientWidth || window.innerWidth) - sidebarWidth - minimumThreadWidth))
+    return Math.max(ARTIFACT_RAIL_MIN_WIDTH, Math.min(ARTIFACT_RAIL_MAX_WIDTH, (workspace?.clientWidth || window.innerWidth) - (sidebarCollapsed ? sidebarRailWidth : sidebarWidth) - minimumThreadWidth))
+  }
+
+  function fitArtifactRail() {
+    if (!artifactRailOpen) return
+    artifactRailMaximum = availableArtifactRailWidth()
+    artifactRailWidth = clampArtifactRailWidth(artifactRailWidth, artifactRailMaximum)
   }
 
   function resetArtifactRailWidth() {
@@ -873,6 +900,11 @@
         toggleArtifactRail()
         return
       }
+      if (auth.name === 'signed-in' && onboarding.name === 'complete' && isSidebarShortcut(event)) {
+        event.preventDefault()
+        toggleSidebar()
+        return
+      }
       if (event.key === 'Escape' && artifactRailOpen) {
         event.preventDefault()
         artifactRailOpen = false
@@ -900,12 +932,7 @@
       }
     }
     document.addEventListener('keydown', shortcuts)
-    const resizeArtifactRail = () => {
-      if (!artifactRailOpen) return
-      artifactRailMaximum = availableArtifactRailWidth()
-      artifactRailWidth = clampArtifactRailWidth(artifactRailWidth, artifactRailMaximum)
-    }
-    window.addEventListener('resize', resizeArtifactRail)
+    window.addEventListener('resize', fitArtifactRail)
     let stopDragDrop
     if (tauri) getCurrentWebview().onDragDropEvent(({ payload }) => {
         if (auth.name !== 'signed-in' || active) {
@@ -937,7 +964,7 @@
       globalVoiceHeld = false
       globalVoiceTask = globalVoiceTask.finally(cleanupVoiceShortcuts)
       document.removeEventListener('keydown', shortcuts)
-      window.removeEventListener('resize', resizeArtifactRail)
+      window.removeEventListener('resize', fitArtifactRail)
     }
   })
 
@@ -1192,17 +1219,33 @@
         <p class="record">Waiting for the browser sign-in…</p>
       </section>
     {:else if auth.name === 'signed-in'}
-      <section class="workspace" class:artifact-open={artifactRailOpen} class:artifact-resizing={artifactRailPointer !== undefined} style:--artifact-rail-width={`${artifactRailWidth}px`} bind:this={workspace}>
+      <section class="workspace" class:sidebar-collapsed={sidebarCollapsed} class:artifact-open={artifactRailOpen} class:artifact-resizing={artifactRailPointer !== undefined} style:--artifact-rail-width={`${artifactRailWidth}px`} bind:this={workspace}>
         {#if draggingFiles}<div class="drop-affordance" role="status"><strong>Drop files to add them</strong><span>Saved locally · supported images sent with first prompt</span></div>{/if}
         <header class="titlebar"><span class="thread-title">New thread</span><span class="thread-id">local · durable</span><span class="title-spacer"></span><button type="button" class="quiet" aria-controls="artifact-rail" aria-expanded={artifactRailOpen} aria-keyshortcuts={artifactShortcut} aria-label={`${artifactRailOpen ? 'Close' : 'Open'} artifact rail`} onclick={toggleArtifactRail}>{artifactShortcut === 'Meta+J' ? '⌘J' : 'Ctrl J'}</button></header>
-        <aside class="sidebar">
-          <div class="side-brand"><svg width="24" height="24" viewBox="0 0 48 48" aria-hidden="true"><path d={markD} stroke-width="5" /></svg><strong>muniment</strong></div>
-          <button class="side-action">＋ <span>New thread</span><kbd>⌘N</kbd></button>
-          <button class="side-action">⌕ <span>Search</span><kbd>⌘F</kbd></button>
-          <p class="side-label">Threads</p>
-          <button class="thread-row active-thread"><span></span>New thread</button>
-          <button class="side-action home-settings" onclick={() => { onboarding = onboardingSettingsState(onboarding) }}>⌂ <span>Home settings</span></button>
-          <AccessPanel {tauri} subject={auth.subject} onSignOut={() => run('sign-out')} escapeBlocked={() => dictationRequested || isDictationActive(dictation)} voiceShortcut={globalVoiceShortcutValue} voiceShortcutChanging={globalVoiceChanging} onVoiceShortcutChange={changeVoiceShortcut} defaultVoiceShortcut={holdToTalkShortcut()} />
+        <aside id="sidebar" class="sidebar">
+          <div class="side-brand">
+            {#if sidebarCollapsed}
+              <button type="button" class="quiet side-toggle side-toggle-mark" aria-controls="sidebar" aria-expanded="false" aria-keyshortcuts={sidebarKeyShortcut} aria-label="Expand sidebar" title={`Expand sidebar (${sidebarHint})`} onclick={toggleSidebar}>
+                <svg width="22" height="22" viewBox="0 0 48 48" aria-hidden="true"><path d={markD} stroke-width="5" /></svg>
+              </button>
+            {:else}
+              <svg width="24" height="24" viewBox="0 0 48 48" aria-hidden="true"><path d={markD} stroke-width="5" /></svg>
+              <strong>muniment</strong>
+              <button type="button" class="quiet side-toggle" aria-controls="sidebar" aria-expanded="true" aria-keyshortcuts={sidebarKeyShortcut} aria-label="Collapse sidebar" title={`Collapse sidebar (${sidebarHint})`} onclick={toggleSidebar}>
+                <svg width="16" height="16" viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="4" width="17" height="16" rx="2.5" /><path d="M9.5 4v16" /><path d="m15.5 15-3-3 3-3" /></svg>
+              </button>
+            {/if}
+          </div>
+          <button class="side-action" aria-label={sidebarCollapsed ? 'New thread' : null} title={sidebarCollapsed ? 'New thread (⌘N)' : null}>＋{#if !sidebarCollapsed} <span>New thread</span><kbd>⌘N</kbd>{/if}</button>
+          <button class="side-action" aria-label={sidebarCollapsed ? 'Search' : null} title={sidebarCollapsed ? 'Search (⌘F)' : null}>⌕{#if !sidebarCollapsed} <span>Search</span><kbd>⌘F</kbd>{/if}</button>
+          {#if !sidebarCollapsed}
+            <p class="side-label">Threads</p>
+            <button class="thread-row active-thread"><span></span>New thread</button>
+          {/if}
+          <button class="side-action home-settings" aria-label={sidebarCollapsed ? 'Home settings' : null} title={sidebarCollapsed ? 'Home settings' : null} onclick={() => { onboarding = onboardingSettingsState(onboarding) }}>⌂{#if !sidebarCollapsed} <span>Home settings</span>{/if}</button>
+          {#if !sidebarCollapsed}
+            <AccessPanel {tauri} subject={auth.subject} onSignOut={() => run('sign-out')} escapeBlocked={() => dictationRequested || isDictationActive(dictation)} voiceShortcut={globalVoiceShortcutValue} voiceShortcutChanging={globalVoiceChanging} onVoiceShortcutChange={changeVoiceShortcut} defaultVoiceShortcut={holdToTalkShortcut()} />
+          {/if}
         </aside>
         <div class="thread-shell">
         <div class="thread" aria-live="polite" bind:this={thread} onscroll={handleThreadScroll}>
@@ -1491,17 +1534,32 @@
   .workspace { grid-template-columns: 260px minmax(0, 1fr); grid-template-areas: "title title" "side thread" "side composer"; transition: grid-template-columns 180ms ease; }
   .workspace.artifact-resizing { transition: none; }
   .workspace.artifact-open { grid-template-columns: 260px minmax(320px, 1fr) var(--artifact-rail-width); grid-template-areas: "title title title" "side thread rail" "side composer rail"; }
+  /* §2.1: the same 180ms grid transition carries the sidebar down to a 52px icon rail. */
+  .workspace.sidebar-collapsed { grid-template-columns: 52px minmax(0, 1fr); }
+  .workspace.sidebar-collapsed.artifact-open { grid-template-columns: 52px minmax(320px, 1fr) var(--artifact-rail-width); }
+  .workspace.sidebar-collapsed .titlebar { padding-left: 70px; }
+  .workspace.sidebar-collapsed .drop-affordance { left: 52px; }
   .drop-affordance { position: fixed; z-index: 4; inset: 52px 0 0 260px; display: grid; place-content: center; gap: 5px; background: color-mix(in srgb, var(--paper) 92%, transparent); border: 1px dashed var(--muted); color: var(--ink); text-align: center; pointer-events: none; }
   .drop-affordance span { color: var(--muted); font: var(--text-12) var(--font-mono); }
-  .titlebar { grid-area: title; display: flex; align-items: center; padding: 0 18px 0 278px; border-bottom: 1px solid var(--border); background: var(--surface); }
+  .titlebar { grid-area: title; display: flex; align-items: center; padding: 0 18px 0 278px; border-bottom: 1px solid var(--border); background: var(--surface); transition: padding-left 180ms ease; }
   .thread-title { font-weight: 600; }
   .thread-id, kbd { margin-left: 10px; color: var(--muted); font: var(--text-12) var(--font-mono); }
   .title-spacer { flex: 1; }
   .sidebar { grid-area: side; min-width: 0; display: flex; flex-direction: column; padding: 14px 10px 10px; background: var(--surface); border-right: 1px solid var(--border); }
   .side-brand { display: flex; align-items: center; gap: 10px; padding: 2px 8px 16px; }
   .side-brand path { fill: none; stroke: var(--ink); stroke-linecap: round; }
+  .side-toggle { margin-left: auto; padding: 4px; color: var(--muted); line-height: 0; }
+  .side-toggle:hover:not(:disabled) { color: var(--ink); }
+  .side-toggle svg { display: block; }
+  .side-toggle rect, .side-toggle path { fill: none; stroke: currentColor; stroke-linecap: round; stroke-linejoin: round; }
+  .side-toggle-mark { margin: 0; padding: 5px; color: var(--ink); }
   .side-action, .thread-row { width: 100%; display: flex; align-items: center; gap: 9px; padding: 7px 8px; border-color: transparent; background: transparent; text-align: left; }
   .side-action span { flex: 1; }
+  /* Collapsed rail: icon-only controls, names carried by aria-label + tooltip. */
+  .workspace.sidebar-collapsed .sidebar { padding: 14px 6px 10px; }
+  .workspace.sidebar-collapsed .side-brand { justify-content: center; padding: 0 0 14px; }
+  .workspace.sidebar-collapsed .side-action { justify-content: center; gap: 0; padding: 9px 0; font-size: var(--text-22); }
+  .workspace.sidebar-collapsed .home-settings { margin-top: auto; }
   .side-label { margin: 20px 8px 5px; color: var(--muted); font: var(--text-12) var(--font-mono); }
   .active-thread { background: var(--faint); }
   .active-thread > span { width: 5px; height: 5px; border-radius: 50%; background: var(--signal); }
@@ -1588,5 +1646,5 @@
   @keyframes breathe { 50% { opacity: .45; } }
   @keyframes tool-pulse { 50% { opacity: .3; transform: scale(.75); } }
   @keyframes capture { to { transform: scaleY(.55); } }
-  @media (prefers-reduced-motion: reduce) { .workspace { transition: none; } .caret, .thinking path, .tool-running .tool-dot, .capture-meter i { animation: none; } }
+  @media (prefers-reduced-motion: reduce) { .workspace, .titlebar { transition: none; } .caret, .thinking path, .tool-running .tool-dot, .capture-meter i { animation: none; } }
 </style>
