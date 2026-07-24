@@ -949,7 +949,7 @@
     const submissionId = ++submissionSequence
     const userMessage = { role: 'user', text: prompt, attachments: [], submissionId }
     messages.push(userMessage)
-    const pending = { id: 'pending', phase: 'thinking', text: '', receipt: null, prompt }
+    const pending = { id: 'pending', phase: 'thinking', text: '', receipt: null, prompt, submissionId }
     active = pending
     messages.push({ role: 'assistant', run: pending })
     followNewContent()
@@ -965,11 +965,11 @@
       const early = buffered.get(run.runId) ?? []
       const projected = applyBufferedChatEvents(active, early)
       buffered.delete(run.runId)
-      messages = messages.map((message) => message.run === pending ? { ...message, run: projected } : message)
+      messages = messages.map((message) => message.run?.submissionId === submissionId ? { ...message, run: projected } : message)
       active = ['complete', 'cancelled', 'failed', 'interrupted'].includes(projected.phase) ? null : projected
     } catch (error) {
       const failed = { ...pending, id: `rejected-${messages.length}`, phase: 'failed' }
-      messages = messages.map((message) => message.run === pending ? { ...message, run: failed } : message)
+      messages = messages.map((message) => message.run?.submissionId === submissionId ? { ...message, run: failed } : message)
       submitError = typeof error === 'string' ? error : 'The message could not be sent. Try again.'
       active = null
     }
