@@ -249,7 +249,7 @@ jobs:
           trap 'rm -f "$key" "$output"' EXIT
 
           cmd='bash test/e2e/runner/linux.sh'
-          remote="sudo desktop-ci linux --repo 'https://github.com/${REPOSITORY}.git' --ref '$SOURCE_SHA' --cmd '$cmd' --env-stdin --memory 8192 --build-timeout 2400"
+          remote="sudo desktop-ci linux --repo 'https://github.com/${REPOSITORY}.git' --ref '$SOURCE_SHA' --cmd '$cmd' --env-stdin --memory 8192 --build-timeout 2400 --collect-artifacts"
           set +e
           printf '%s\n' \
             "GH_TOKEN=$RELEASE_TOKEN" \
