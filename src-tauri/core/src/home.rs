@@ -1067,6 +1067,12 @@ pub fn confirm_home(config_dir: &Path, home: &Path) -> Result<(), HomeError> {
     persist_home(config_dir, home)
 }
 
+/// Validates a Home selection without creating it or recording configuration.
+pub fn validate_home_selection(config_dir: &Path, home: &Path) -> Result<(), HomeError> {
+    validate_home(home)?;
+    validate_config_location(config_dir, home)
+}
+
 fn validate_config_location(config_dir: &Path, home: &Path) -> Result<(), HomeError> {
     let config_dir = normalized_absolute(config_dir)?;
     let home = normalized_absolute(home)?;
