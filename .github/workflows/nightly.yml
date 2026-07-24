@@ -82,6 +82,17 @@ jobs:
           AZURE_SIGNING_ENDPOINT: ${{ secrets.AZURE_SIGNING_ENDPOINT }}
           AZURE_SIGNING_ACCOUNT: ${{ secrets.AZURE_SIGNING_ACCOUNT }}
           AZURE_SIGNING_PROFILE: ${{ secrets.AZURE_SIGNING_PROFILE }}
+          # Apple Developer ID signing + notarization (macOS). Empty until the
+          # six repo secrets exist => unsigned build. CERTIFICATE/PASSWORD import
+          # the Developer ID Application cert; API_KEY/API_KEY_ID/API_ISSUER
+          # authenticate notarytool; TEAM_ID identifies the account. Enrollment
+          # Y5DUNHQA74 is in review; fill the vault keys the day it clears.
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
         run: |
           set -u
           umask 077
@@ -94,7 +105,7 @@ jobs:
             build='npm ci --no-audit --no-fund && node .github/build-windows-installers.mjs && powershell.exe -NoProfile -ExecutionPolicy Bypass -File test/windows-installers.ps1'
           fi
           if [ "$PLATFORM" = "macos" ]; then
-            build='npm ci --no-audit --no-fund && rustup target add aarch64-apple-darwin && npm run tauri build -- --target universal-apple-darwin --bundles app && ditto -c -k --sequesterRsrc --keepParent src-tauri/target/universal-apple-darwin/release/bundle/macos/muniment.app src-tauri/target/universal-apple-darwin/release/bundle/macos/muniment.app.zip'
+            build='npm ci --no-audit --no-fund && rustup target add aarch64-apple-darwin && node .github/build-macos-app.mjs'
           fi
 
           # The VM is destroyed when desktop-ci exits, so completed bundles are
@@ -121,6 +132,18 @@ jobs:
               "AZURE_SIGNING_ACCOUNT=$AZURE_SIGNING_ACCOUNT" \
               "AZURE_SIGNING_PROFILE=$AZURE_SIGNING_PROFILE")
           fi
+          # macOS Developer ID signing: same seam. The .p12 and .p8 arrive
+          # base64-encoded (single-line, so they survive the KEY=VALUE contract);
+          # build-macos-app.mjs decodes them. Absent cert => unchanged unsigned build.
+          if [ "$PLATFORM" = "macos" ] && [ -n "${APPLE_CERTIFICATE:-}" ]; then
+            signing_env=$(printf '%s\n' \
+              "APPLE_CERTIFICATE=$APPLE_CERTIFICATE" \
+              "APPLE_CERTIFICATE_PASSWORD=$APPLE_CERTIFICATE_PASSWORD" \
+              "APPLE_TEAM_ID=$APPLE_TEAM_ID" \
+              "APPLE_API_KEY=$APPLE_API_KEY" \
+              "APPLE_API_KEY_ID=$APPLE_API_KEY_ID" \
+              "APPLE_API_ISSUER=$APPLE_API_ISSUER")
+          fi
           { printf '%s\n' "GH_TOKEN=$REPO_TOKEN"; if [ -n "${signing_env:-}" ]; then printf '%s\n' "$signing_env"; fi; } \
           | ssh -i "$key" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
                 -o BatchMode=yes -o ServerAliveInterval=30 -o ServerAliveCountMax=8 \
@@ -135,6 +158,7 @@ jobs:
       contents: write
     env:
       WINDOWS_SIGNING_ENABLED: ${{ secrets.AZURE_CLIENT_SECRET != '' }}
+      MACOS_SIGNING_ENABLED: ${{ secrets.APPLE_CERTIFICATE != '' }}
     steps:
       - name: Finalize rolling pre-release
         uses: actions/github-script@v8
@@ -177,6 +201,9 @@ jobs:
             const signing = process.env.WINDOWS_SIGNING_ENABLED === "true"
               ? `\n\nWindows installers for \`${sha}\` were signed by the nightly workflow.`
               : "\n\nWindows installers are unsigned; stable promotion is blocked.";
+            const macSigning = process.env.MACOS_SIGNING_ENABLED === "true"
+              ? `\n\nmacOS app for \`${sha}\` was signed and notarized by the nightly workflow.`
+              : "\n\nmacOS app is unsigned pending Apple credentials.";
             await github.rest.git.updateRef({
               ...context.repo,
               ref: "tags/nightly",
@@ -190,7 +217,7 @@ jobs:
               ...context.repo,
               release_id: release.id,
               name: "Nightly desktop build",
-              body: `Automated desktop build from \`${sha}\`.\n\nBuilt ${buildDate}.${signing}\n\nModel weights are not included.`,
+              body: `Automated desktop build from \`${sha}\`.\n\nBuilt ${buildDate}.${signing}${macSigning}\n\nModel weights are not included.`,
               prerelease: true,
             });
 
