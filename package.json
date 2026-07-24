@@ -35,6 +35,7 @@
     "@tauri-apps/plugin-global-shortcut": "^2.3.2"
   },
   "overrides": {
-    "@wdio/native-utils": "2.5.0"
+    "@wdio/native-utils": "2.5.0",
+    "serialize-javascript": "7.0.5"
   }
 }
