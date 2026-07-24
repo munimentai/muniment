@@ -292,6 +292,124 @@ describe('artifact rail', () => {
   })
 })
 
+describe('sidebar collapse', () => {
+  const sidebarShortcut = () => navigator.platform.startsWith('Mac')
+    ? { key: '\\', metaKey: true }
+    : { key: '\\', ctrlKey: true }
+
+  it('collapses to an icon rail from the in-sidebar control and expands again', async () => {
+    render(App)
+    const collapse = await screen.findByRole('button', { name: 'Collapse sidebar' })
+    expect(collapse).toHaveAttribute('aria-expanded', 'true')
+    expect(collapse).toHaveAttribute('aria-controls', 'sidebar')
+    expect(collapse).toHaveAttribute('aria-keyshortcuts', navigator.platform.startsWith('Mac') ? 'Meta+\\' : 'Control+\\')
+    expect(screen.getByText('Threads')).toBeInTheDocument()
+
+    collapse.focus()
+    await fireEvent.click(collapse)
+
+    const expand = screen.getByRole('button', { name: 'Expand sidebar' })
+    // The toggle is one persistent element, so keyboard focus survives the toggle.
+    expect(expand).toBe(collapse)
+    expect(document.activeElement).toBe(expand)
+    expect(expand).toHaveAttribute('aria-expanded', 'false')
+    expect(expand).toHaveAttribute('title', expect.stringContaining('Expand sidebar'))
+    for (const name of ['New thread', 'Search', 'Home settings']) {
+      const control = screen.getByRole('button', { name })
+      expect(control).toHaveAccessibleName(name)
+      expect(control).toHaveAttribute('title', expect.stringContaining(name))
+    }
+    const modifier = navigator.platform.startsWith('Mac') ? '⌘' : 'Ctrl '
+    expect(screen.getByRole('button', { name: 'New thread' })).toHaveAttribute('title', `New thread (${modifier}N)`)
+    expect(screen.getByRole('button', { name: 'Search' })).toHaveAttribute('title', `Search (${modifier}F)`)
+    expect(screen.queryByText('Threads')).not.toBeInTheDocument()
+    expect(screen.queryByText('⌘N')).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /Alice/i })).not.toBeInTheDocument()
+
+    await fireEvent.click(expand)
+
+    expect(screen.getByRole('button', { name: 'Collapse sidebar' })).toHaveAttribute('aria-expanded', 'true')
+    expect(screen.getByText('Threads')).toBeInTheDocument()
+    expect(await screen.findByRole('button', { name: /Alice/i })).toBeInTheDocument()
+  })
+
+  it('toggles with the platform keyboard shortcut but not from a text input', async () => {
+    render(App)
+    const collapse = await screen.findByRole('button', { name: 'Collapse sidebar' })
+
+    await fireEvent.keyDown(document, sidebarShortcut())
+    expect(screen.getByRole('button', { name: 'Expand sidebar' })).toBeInTheDocument()
+    await fireEvent.keyDown(document, sidebarShortcut())
+    expect(screen.getByRole('button', { name: 'Collapse sidebar' })).toBeInTheDocument()
+
+    await fireEvent.keyDown(screen.getByPlaceholderText('Ask anything'), sidebarShortcut())
+    expect(collapse).toHaveAttribute('aria-expanded', 'true')
+
+    const input = document.createElement('input')
+    document.body.append(input)
+    await fireEvent.keyDown(input, sidebarShortcut())
+    expect(screen.getByRole('button', { name: 'Collapse sidebar' })).toBeInTheDocument()
+    input.remove()
+  })
+
+  it('ignores the sidebar shortcut outside the signed-in workspace', async () => {
+    homeStatus = { configured: false, homePath: '/Documents/Muniment' }
+    render(App)
+    await screen.findByRole('heading', { name: 'Choose your Muniment Home' })
+    const event = new KeyboardEvent('keydown', { ...sidebarShortcut(), cancelable: true })
+
+    document.dispatchEvent(event)
+
+    expect(event.defaultPrevented).toBe(false)
+    expect(localStorage.getItem('muniment.sidebar-collapsed')).toBeNull()
+  })
+
+  it('remembers the collapsed choice across a reload and defaults to expanded', async () => {
+    const first = render(App)
+    await fireEvent.click(await screen.findByRole('button', { name: 'Collapse sidebar' }))
+    expect(localStorage.getItem('muniment.sidebar-collapsed')).toBe('collapsed')
+    first.unmount()
+
+    const reloaded = render(App)
+    await fireEvent.click(await screen.findByRole('button', { name: 'Expand sidebar' }))
+    expect(localStorage.getItem('muniment.sidebar-collapsed')).toBe('expanded')
+    reloaded.unmount()
+
+    localStorage.setItem('muniment.sidebar-collapsed', 'not a state we ever wrote')
+    render(App)
+    expect(await screen.findByRole('button', { name: 'Collapse sidebar' })).toBeInTheDocument()
+  })
+
+  it('keeps working when reading and writing the remembered state throws', async () => {
+    const getItem = vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => { throw new DOMException('private storage detail', 'SecurityError') })
+    const setItem = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => { throw new DOMException('private storage detail', 'QuotaExceededError') })
+
+    render(App)
+    const collapse = await screen.findByRole('button', { name: 'Collapse sidebar' })
+    await fireEvent.click(collapse)
+
+    expect(screen.getByRole('button', { name: 'Expand sidebar' })).toBeInTheDocument()
+    expect(screen.queryByText(/private storage detail/)).not.toBeInTheDocument()
+    getItem.mockRestore()
+    setItem.mockRestore()
+  })
+
+  it('widens the artifact rail bounds while the sidebar is a rail', async () => {
+    render(App)
+    await fireEvent.click(await screen.findByRole('button', { name: 'Open artifact rail' }))
+    expect(screen.getByRole('separator', { name: 'Artifacts' })).toHaveAttribute('aria-valuemax', '444')
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Collapse sidebar' }))
+    const separator = screen.getByRole('separator', { name: 'Artifacts' })
+    expect(separator).toHaveAttribute('aria-valuemax', '560')
+
+    await fireEvent.keyDown(separator, { key: 'End' })
+    expect(separator).toHaveAttribute('aria-valuenow', '560')
+    await fireEvent.click(screen.getByRole('button', { name: 'Expand sidebar' }))
+    expect(screen.getByRole('separator', { name: 'Artifacts' })).toHaveAttribute('aria-valuenow', '444')
+  })
+})
+
 describe('Home onboarding', () => {
   it('shows active model progress and stops polling when local AI becomes ready', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true })
