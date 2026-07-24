@@ -99,7 +99,8 @@
   const minimumThreadWidth = 320
   let sidebarCollapsed = $state(storedSidebarCollapsed())
   const sidebarKeyShortcut = sidebarShortcut()
-  const sidebarHint = sidebarKeyShortcut === 'Meta+\\' ? '⌘\\' : 'Ctrl \\'
+  const modifierLabel = sidebarKeyShortcut === 'Meta+\\' ? '⌘' : 'Ctrl '
+  const sidebarHint = `${modifierLabel}\\`
 
   // A read from a blocked or corrupt store must not keep the shell from
   // rendering; §2.1's documented default is expanded.
@@ -1224,25 +1225,22 @@
         <header class="titlebar"><span class="thread-title">New thread</span><span class="thread-id">local · durable</span><span class="title-spacer"></span><button type="button" class="quiet" aria-controls="artifact-rail" aria-expanded={artifactRailOpen} aria-keyshortcuts={artifactShortcut} aria-label={`${artifactRailOpen ? 'Close' : 'Open'} artifact rail`} onclick={toggleArtifactRail}>{artifactShortcut === 'Meta+J' ? '⌘J' : 'Ctrl J'}</button></header>
         <aside id="sidebar" class="sidebar">
           <div class="side-brand">
-            {#if sidebarCollapsed}
-              <button type="button" class="quiet side-toggle side-toggle-mark" aria-controls="sidebar" aria-expanded="false" aria-keyshortcuts={sidebarKeyShortcut} aria-label="Expand sidebar" title={`Expand sidebar (${sidebarHint})`} onclick={toggleSidebar}>
-                <svg width="22" height="22" viewBox="0 0 48 48" aria-hidden="true"><path d={markD} stroke-width="5" /></svg>
-              </button>
-            {:else}
+            {#if !sidebarCollapsed}
               <svg width="24" height="24" viewBox="0 0 48 48" aria-hidden="true"><path d={markD} stroke-width="5" /></svg>
               <strong>muniment</strong>
-              <button type="button" class="quiet side-toggle" aria-controls="sidebar" aria-expanded="true" aria-keyshortcuts={sidebarKeyShortcut} aria-label="Collapse sidebar" title={`Collapse sidebar (${sidebarHint})`} onclick={toggleSidebar}>
-                <svg width="16" height="16" viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="4" width="17" height="16" rx="2.5" /><path d="M9.5 4v16" /><path d="m15.5 15-3-3 3-3" /></svg>
-              </button>
             {/if}
+            <!-- One persistent element across both states so activating it never drops keyboard focus. -->
+            <button type="button" class="quiet side-toggle" aria-controls="sidebar" aria-expanded={!sidebarCollapsed} aria-keyshortcuts={sidebarKeyShortcut} aria-label={`${sidebarCollapsed ? 'Expand' : 'Collapse'} sidebar`} title={`${sidebarCollapsed ? 'Expand' : 'Collapse'} sidebar (${sidebarHint})`} onclick={toggleSidebar}>
+              <svg class="side-icon" width={sidebarCollapsed ? 18 : 16} height={sidebarCollapsed ? 18 : 16} viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="4" width="17" height="16" rx="2.5" /><path d="M9.5 4v16" /><path d={sidebarCollapsed ? 'm14 9 3 3-3 3' : 'm15.5 15-3-3 3-3'} /></svg>
+            </button>
           </div>
-          <button class="side-action" aria-label={sidebarCollapsed ? 'New thread' : null} title={sidebarCollapsed ? 'New thread (⌘N)' : null}>＋{#if !sidebarCollapsed} <span>New thread</span><kbd>⌘N</kbd>{/if}</button>
-          <button class="side-action" aria-label={sidebarCollapsed ? 'Search' : null} title={sidebarCollapsed ? 'Search (⌘F)' : null}>⌕{#if !sidebarCollapsed} <span>Search</span><kbd>⌘F</kbd>{/if}</button>
+          <button class="side-action" aria-label={sidebarCollapsed ? 'New thread' : null} title={sidebarCollapsed ? `New thread (${modifierLabel}N)` : null}><svg class="side-icon" width="18" height="18" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5.5v13" /><path d="M5.5 12h13" /></svg>{#if !sidebarCollapsed}<span>New thread</span><kbd>⌘N</kbd>{/if}</button>
+          <button class="side-action" aria-label={sidebarCollapsed ? 'Search' : null} title={sidebarCollapsed ? `Search (${modifierLabel}F)` : null}><svg class="side-icon" width="18" height="18" viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5" /><path d="m15.8 15.8 3.7 3.7" /></svg>{#if !sidebarCollapsed}<span>Search</span><kbd>⌘F</kbd>{/if}</button>
           {#if !sidebarCollapsed}
             <p class="side-label">Threads</p>
             <button class="thread-row active-thread"><span></span>New thread</button>
           {/if}
-          <button class="side-action home-settings" aria-label={sidebarCollapsed ? 'Home settings' : null} title={sidebarCollapsed ? 'Home settings' : null} onclick={() => { onboarding = onboardingSettingsState(onboarding) }}>⌂{#if !sidebarCollapsed} <span>Home settings</span>{/if}</button>
+          <button class="side-action home-settings" aria-label={sidebarCollapsed ? 'Home settings' : null} title={sidebarCollapsed ? 'Home settings' : null} onclick={() => { onboarding = onboardingSettingsState(onboarding) }}><svg class="side-icon" width="18" height="18" viewBox="0 0 24 24" aria-hidden="true"><path d="M4.5 10.5 12 4.75l7.5 5.75V19a1.5 1.5 0 0 1-1.5 1.5H6A1.5 1.5 0 0 1 4.5 19z" /><path d="M9.75 20.5v-5.75h4.5v5.75" /></svg>{#if !sidebarCollapsed}<span>Home settings</span>{/if}</button>
           {#if !sidebarCollapsed}
             <AccessPanel {tauri} subject={auth.subject} onSignOut={() => run('sign-out')} escapeBlocked={() => dictationRequested || isDictationActive(dictation)} voiceShortcut={globalVoiceShortcutValue} voiceShortcutChanging={globalVoiceChanging} onVoiceShortcutChange={changeVoiceShortcut} defaultVoiceShortcut={holdToTalkShortcut()} />
           {/if}
@@ -1548,18 +1546,22 @@
   .sidebar { grid-area: side; min-width: 0; display: flex; flex-direction: column; padding: 14px 10px 10px; background: var(--surface); border-right: 1px solid var(--border); }
   .side-brand { display: flex; align-items: center; gap: 10px; padding: 2px 8px 16px; }
   .side-brand path { fill: none; stroke: var(--ink); stroke-linecap: round; }
-  .side-toggle { margin-left: auto; padding: 4px; color: var(--muted); line-height: 0; }
-  .side-toggle:hover:not(:disabled) { color: var(--ink); }
-  .side-toggle svg { display: block; }
-  .side-toggle rect, .side-toggle path { fill: none; stroke: currentColor; stroke-linecap: round; stroke-linejoin: round; }
-  .side-toggle-mark { margin: 0; padding: 5px; color: var(--ink); }
+  .side-toggle { display: flex; align-items: center; justify-content: center; margin-left: auto; padding: 4px; line-height: 0; }
+  .side-toggle:hover:not(:disabled), .side-toggle:focus-visible { border-color: transparent; background: var(--faint); }
+  .side-toggle:hover:not(:disabled) .side-icon, .side-toggle:focus-visible .side-icon { color: var(--ink); }
+  /* §1.7: one geometric 1.6px-stroke icon set, sized to the mockup's rail. */
+  .side-icon { flex: none; display: block; color: var(--muted); }
+  .side-icon circle, .side-icon rect, .side-icon path { fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
   .side-action, .thread-row { width: 100%; display: flex; align-items: center; gap: 9px; padding: 7px 8px; border-color: transparent; background: transparent; text-align: left; }
   .side-action span { flex: 1; }
   /* Collapsed rail: icon-only controls, names carried by aria-label + tooltip. */
   .workspace.sidebar-collapsed .sidebar { padding: 14px 6px 10px; }
-  .workspace.sidebar-collapsed .side-brand { justify-content: center; padding: 0 0 14px; }
-  .workspace.sidebar-collapsed .side-action { justify-content: center; gap: 0; padding: 9px 0; font-size: var(--text-22); }
-  .workspace.sidebar-collapsed .home-settings { margin-top: auto; }
+  .workspace.sidebar-collapsed .side-brand { padding: 0 0 14px; }
+  .workspace.sidebar-collapsed .side-toggle { width: 100%; margin: 0; padding: 9px 0; }
+  .workspace.sidebar-collapsed .side-action { justify-content: center; gap: 0; padding: 9px 0; }
+  /* The pinned control is its own group once the threads list is gone. */
+  .workspace.sidebar-collapsed .home-settings { position: relative; margin-top: auto; }
+  .workspace.sidebar-collapsed .home-settings::before { content: ''; position: absolute; inset: -9px -6px auto; height: 1px; background: var(--border); }
   .side-label { margin: 20px 8px 5px; color: var(--muted); font: var(--text-12) var(--font-mono); }
   .active-thread { background: var(--faint); }
   .active-thread > span { width: 5px; height: 5px; border-radius: 50%; background: var(--signal); }

@@ -305,9 +305,13 @@ describe('sidebar collapse', () => {
     expect(collapse).toHaveAttribute('aria-keyshortcuts', navigator.platform.startsWith('Mac') ? 'Meta+\\' : 'Control+\\')
     expect(screen.getByText('Threads')).toBeInTheDocument()
 
+    collapse.focus()
     await fireEvent.click(collapse)
 
     const expand = screen.getByRole('button', { name: 'Expand sidebar' })
+    // The toggle is one persistent element, so keyboard focus survives the toggle.
+    expect(expand).toBe(collapse)
+    expect(document.activeElement).toBe(expand)
     expect(expand).toHaveAttribute('aria-expanded', 'false')
     expect(expand).toHaveAttribute('title', expect.stringContaining('Expand sidebar'))
     for (const name of ['New thread', 'Search', 'Home settings']) {
@@ -315,6 +319,9 @@ describe('sidebar collapse', () => {
       expect(control).toHaveAccessibleName(name)
       expect(control).toHaveAttribute('title', expect.stringContaining(name))
     }
+    const modifier = navigator.platform.startsWith('Mac') ? '⌘' : 'Ctrl '
+    expect(screen.getByRole('button', { name: 'New thread' })).toHaveAttribute('title', `New thread (${modifier}N)`)
+    expect(screen.getByRole('button', { name: 'Search' })).toHaveAttribute('title', `Search (${modifier}F)`)
     expect(screen.queryByText('Threads')).not.toBeInTheDocument()
     expect(screen.queryByText('⌘N')).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /Alice/i })).not.toBeInTheDocument()
