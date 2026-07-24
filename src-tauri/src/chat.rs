@@ -3734,6 +3734,35 @@ mod tests {
         }
     }
 
+    fn read_sidecar_request_log(path: &std::path::Path) -> String {
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        loop {
+            match std::fs::read_to_string(path) {
+                Ok(requests) if !requests.is_empty() => return requests,
+                Ok(_) => {
+                    assert!(
+                        std::time::Instant::now() < deadline,
+                        "sidecar recorded an empty coordinator request at {}",
+                        path.display()
+                    );
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                    assert!(
+                        std::time::Instant::now() < deadline,
+                        "sidecar did not record a coordinator request at {}",
+                        path.display()
+                    );
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                Err(error) => panic!(
+                    "failed to read sidecar coordinator requests at {}: {error}",
+                    path.display()
+                ),
+            }
+        }
+    }
+
     fn append_test_event(
         journal: &mut RunJournal,
         run_id: &str,
@@ -4236,7 +4265,7 @@ mod tests {
                 std::env::remove_var(key);
             }
 
-            let requests = std::fs::read_to_string(&request_log).unwrap();
+            let requests = read_sidecar_request_log(&request_log);
             let prompt: serde_json::Value =
                 serde_json::from_str(requests.lines().next().unwrap()).unwrap();
             assert_eq!(prompt["type"], "prompt");
