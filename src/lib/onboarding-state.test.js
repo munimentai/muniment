@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { onboardingCancelSettingsState, onboardingConfirmedState, onboardingConfirmingState, onboardingErrorState, onboardingExtractingState, onboardingExtractionErrorState, onboardingExtractionState, onboardingFinalizingState, onboardingImportChoiceState, onboardingLoadingState, onboardingPathState, onboardingPreviewErrorState, onboardingPreviewingState, onboardingPreviewState, onboardingReturnToArchiveReviewState, onboardingSelectionState, onboardingSettingsState, onboardingStatusState, onboardingTriageConfirmedState, onboardingTriageErrorState, onboardingTriageReportState, onboardingTriagingState, requiredModelPollActive, requiredModelProgress } from './onboarding-state.js'
+import { onboardingCancelSettingsState, onboardingConfirmedHomePathState, onboardingConfirmedState, onboardingConfirmingState, onboardingErrorState, onboardingExtractingState, onboardingExtractionErrorState, onboardingExtractionState, onboardingFinalizingState, onboardingImportChoiceState, onboardingImportErrorState, onboardingImportSavedState, onboardingImportSavingState, onboardingLoadingState, onboardingPathState, onboardingPreviewErrorState, onboardingPreviewingState, onboardingPreviewState, onboardingReturnToArchiveReviewState, onboardingSelectionState, onboardingSettingsState, onboardingStatusState, onboardingTriageConfirmedState, onboardingTriageErrorState, onboardingTriageReportState, onboardingTriagingState, requiredModelPollActive, requiredModelProgress } from './onboarding-state.js'
 
 describe('required model acquisition state', () => {
   it('polls only during installation or background retry', () => {
@@ -113,5 +113,30 @@ describe('Home onboarding state', () => {
     expect(review).toMatchObject({ name: 'triage-review', report, extractedEntries })
     expect(onboardingTriageConfirmedState(review)).toMatchObject({ name: 'triage-confirmed', report, extractedEntries })
     expect(onboardingReturnToArchiveReviewState(review)).toMatchObject({ name: 'reviewing', selectedNames: ['profile.json'], manifest: ready.manifest, extractedEntries })
+  })
+
+  it('retains confirmed import inputs through saving and typed recovery states', () => {
+    const confirmed = {
+      name: 'triage-confirmed', homePath: '/Home', report: { userType: 'Writer' },
+      extractedEntries: [{ sourceName: 'profile.json', text: '{}' }],
+      manifest: { entries: [{ name: 'profile.json' }] }, selectedNames: ['profile.json'],
+    }
+    const saving = onboardingImportSavingState(confirmed)
+    expect(saving).toMatchObject({ name: 'triage-saving', homePath: '/Home', report: confirmed.report, extractedEntries: confirmed.extractedEntries })
+    expect(onboardingImportSavedState(saving)).toEqual({ name: 'complete', homePath: '/Home' })
+
+    const conflict = onboardingImportErrorState(saving, { kind: 'destinationConflict', relativePath: 'memory/profile.md', message: 'private detail' })
+    expect(conflict).toMatchObject({ name: 'triage-confirmed', errorKind: 'destinationConflict', conflictPath: 'memory/profile.md', report: confirmed.report, extractedEntries: confirmed.extractedEntries })
+    expect(conflict.error).not.toContain('private')
+    expect(onboardingConfirmedHomePathState(conflict, '/Other')).toMatchObject({
+      name: 'triage-confirmed', homePath: '/Other', report: confirmed.report, extractedEntries: confirmed.extractedEntries, error: undefined,
+    })
+
+    const saveFailed = onboardingImportErrorState(saving, { kind: 'saveFailed', message: 'disk secret' })
+    expect(saveFailed).toMatchObject({ name: 'triage-confirmed', errorKind: 'saveFailed', report: confirmed.report, extractedEntries: confirmed.extractedEntries })
+    expect(saveFailed.error).not.toContain('secret')
+    const invalid = onboardingImportErrorState(saving, { kind: 'invalidInput', message: 'parser secret' })
+    expect(invalid).toMatchObject({ name: 'triage-invalid', errorKind: 'invalidInput', report: confirmed.report, extractedEntries: confirmed.extractedEntries })
+    expect(invalid.error).not.toContain('secret')
   })
 })
