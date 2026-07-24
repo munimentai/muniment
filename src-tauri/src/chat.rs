@@ -25,7 +25,7 @@ use muniment_core::journal::reducer::{
 use muniment_core::journal::{EventEnvelope, EventPayload, Provenance, RunJournal};
 use muniment_core::sidecar::pi_chat::{
     cancel_command, ExtensionUiDialog, ExtensionUiRequest, PiChatEvent, PiImageContent,
-    PiRunAdapter, Receipt,
+    PiRunAdapter, PromptCommand, Receipt,
 };
 use muniment_core::sidecar::pi_install::resolve_current;
 use muniment_core::sidecar::{
@@ -1308,6 +1308,14 @@ fn prepared_pi_images(
         })
 }
 
+fn prepared_pi_prompt<'a>(
+    storage: &SharedStorage,
+    run_id: &str,
+    prompt: &'a str,
+) -> Result<PromptCommand<'a>, String> {
+    prepared_pi_images(storage, run_id).map(|images| PromptCommand::with_images(prompt, images))
+}
+
 struct OpenSelectedFile {
     file: std::fs::File,
     display_name: String,
@@ -1643,11 +1651,11 @@ fn coordinate<R: tauri::Runtime>(
         }
         return;
     }
-    let images = if resume.is_some() {
-        Vec::new()
+    let prepared_prompt = if resume.is_some() {
+        None
     } else {
-        let images = match prepared_pi_images(&journal, &run_id) {
-            Ok(images) => images,
+        let prepared_prompt = match prepared_pi_prompt(&journal, &run_id, &prompt) {
+            Ok(prepared_prompt) => prepared_prompt,
             Err(message) => {
                 fail_start(
                     &app,
@@ -1662,7 +1670,7 @@ fn coordinate<R: tauri::Runtime>(
                 return;
             }
         };
-        images
+        Some(prepared_prompt)
     };
     let mut runtime = runtime
         .lock()
@@ -1908,11 +1916,12 @@ fn coordinate<R: tauri::Runtime>(
             &mut seq,
             subject.as_deref(),
             || {
+                let prepared_prompt = prepared_prompt.expect("new runs prepare a Pi prompt");
                 let (adapter, _) = PiRunAdapter::start_with_images(
                     run_id.clone(),
                     &transport,
-                    &prompt,
-                    images,
+                    prepared_prompt.message,
+                    prepared_prompt.images,
                     RPC_TIMEOUT,
                 )
                 .map_err(|_| PreparedPromptError::Start)?;
@@ -3725,6 +3734,35 @@ mod tests {
         }
     }
 
+    fn read_sidecar_request_log(path: &std::path::Path) -> String {
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        loop {
+            match std::fs::read_to_string(path) {
+                Ok(requests) if !requests.is_empty() => return requests,
+                Ok(_) => {
+                    assert!(
+                        std::time::Instant::now() < deadline,
+                        "sidecar recorded an empty coordinator request at {}",
+                        path.display()
+                    );
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                    assert!(
+                        std::time::Instant::now() < deadline,
+                        "sidecar did not record a coordinator request at {}",
+                        path.display()
+                    );
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                Err(error) => panic!(
+                    "failed to read sidecar coordinator requests at {}: {error}",
+                    path.display()
+                ),
+            }
+        }
+    }
+
     fn append_test_event(
         journal: &mut RunJournal,
         run_id: &str,
@@ -4130,6 +4168,11 @@ mod tests {
         let _environment = lock_pi_environment();
         for with_images in [true, false] {
             let app = tauri::test::mock_app();
+            // The coordinator refuses to create the session root itself
+            // (ownership must be established by the install flow), so a fresh
+            // machine needs it created here, exactly like the resume test.
+            let sessions = app.path().app_data_dir().unwrap().join("pi-sessions");
+            std::fs::create_dir_all(&sessions).unwrap();
             let directory =
                 std::env::temp_dir().join(format!("muniment-prompt-capture-{}", Uuid::now_v7()));
             std::fs::create_dir_all(&directory).unwrap();
@@ -4243,7 +4286,7 @@ mod tests {
                 std::env::remove_var(key);
             }
 
-            let requests = std::fs::read_to_string(&request_log).unwrap();
+            let requests = read_sidecar_request_log(&request_log);
             let prompt: serde_json::Value =
                 serde_json::from_str(requests.lines().next().unwrap()).unwrap();
             assert_eq!(prompt["type"], "prompt");
