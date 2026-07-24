@@ -132,6 +132,24 @@ fn confirm_import(
     approved_entries: &[ExtractedEntry],
     import_date: NaiveDate,
 ) -> Result<HomeImportSuccess, HomeImportError> {
+    confirm_import_with_hook(
+        config,
+        home,
+        triage_report,
+        approved_entries,
+        import_date,
+        || {},
+    )
+}
+
+fn confirm_import_with_hook(
+    config: &Path,
+    home: &Path,
+    triage_report: &OnboardingTriageReport,
+    approved_entries: &[ExtractedEntry],
+    import_date: NaiveDate,
+    before_confirm: impl FnOnce(),
+) -> Result<HomeImportSuccess, HomeImportError> {
     let plan = compile_onboarding_home_write_plan(triage_report, approved_entries, import_date)
         .map_err(|_| HomeImportError::invalid_input())?;
     let imported_file_count = plan.writes().len();
@@ -147,7 +165,8 @@ fn confirm_import(
         OnboardingHomePersistenceError::InvalidHome => HomeImportError::invalid_input(),
         _ => HomeImportError::save_failed(),
     })?;
-    confirm_home(config, home).map_err(|_| HomeImportError::save_failed())?;
+    before_confirm();
+    confirm_home(config, home).map_err(map_home_error)?;
 
     Ok(HomeImportSuccess {
         configured: true,
@@ -299,5 +318,51 @@ mod tests {
         );
         assert!(!home.exists());
         assert_eq!(fs::read(non_directory).unwrap(), b"user content");
+    }
+
+    #[test]
+    fn final_structural_home_error_serializes_as_invalid_input() {
+        let root = TempRoot::new("final-invalid-home");
+        let config = root.0.join("config");
+        let home = root.0.join("home");
+        let date = NaiveDate::from_ymd_opt(2026, 7, 24).unwrap();
+
+        let error = confirm_import_with_hook(&config, &home, &report(), &[entry()], date, || {
+            fs::remove_dir(home.join("projects")).unwrap();
+            fs::write(home.join("projects"), b"not a directory").unwrap();
+        })
+        .unwrap_err();
+
+        assert_eq!(
+            serde_json::to_value(error).unwrap(),
+            serde_json::json!({
+                "kind": "invalidInput",
+                "message": "The confirmed Home import input is invalid."
+            })
+        );
+        assert_eq!(configured_home(&config).unwrap(), None);
+        assert_eq!(fs::read(home.join("projects")).unwrap(), b"not a directory");
+    }
+
+    #[test]
+    fn final_configuration_io_error_serializes_as_save_failed() {
+        let root = TempRoot::new("final-config-io");
+        let config = root.0.join("config");
+        let home = root.0.join("home");
+        let date = NaiveDate::from_ymd_opt(2026, 7, 24).unwrap();
+
+        let error = confirm_import_with_hook(&config, &home, &report(), &[entry()], date, || {
+            fs::write(&config, b"not a directory").unwrap()
+        })
+        .unwrap_err();
+
+        assert_eq!(
+            serde_json::to_value(error).unwrap(),
+            serde_json::json!({
+                "kind": "saveFailed",
+                "message": "The confirmed Home import could not be saved."
+            })
+        );
+        assert_eq!(fs::read(config).unwrap(), b"not a directory");
     }
 }
