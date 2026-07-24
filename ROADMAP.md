@@ -74,6 +74,7 @@ Phases mirror harness-spec §9. Muniment-cloud Phase 1 native auth and the cloud
 - DONE 2026-07-24 — the confirmed-proposal frontend invokes the native completion command once, handles success/invalid input/save failure, and recovers destination conflicts by choosing another Home without repeating preview or triage.
 - DONE 2026-07-24 — the artifact-rail control is a real signed-in frontend shell with button/platform shortcut toggle, Escape close, lifecycle reset, and an honest empty state.
 - DONE 2026-07-24 — the open artifact rail is adjustable from 380–560px with an accessible pointer/keyboard splitter and viewport-aware bounds.
+- NEXT — frontend-only shell slices, in order: design-spec §2.1's collapsible sidebar (`⌘\` / `Ctrl \`, 180ms collapse to a 52px icon rail with tooltips, locally remembered state), then correcting thread announcements so streamed replies are not re-read to screen readers on every chunk.
 - No further artifact-rail content slice is selected. Artifact data, rendering, persistence, sharing, and cloud contracts remain deferred to Phase 4 item 19; select the first real-contract slice only when its authoritative event/data boundary is specified. CLI/VS Code defaults wait for workspace memory semantics.
 - Open items: headless/server CLI stance owner ruling; final model promotion waits on MUNIQA routing eval; Gemma 4 E2B remains a future owner-gated contingency pending llama.cpp PLE support. MUNICLOUD model artifact proxy/redirect is a ripple.
 
@@ -87,6 +88,7 @@ Phases mirror harness-spec §9. Muniment-cloud Phase 1 native auth and the cloud
 ## Stable release and distribution
 - DONE — rolling nightly one pinned SHA across Linux, signed Windows, unsigned macOS; owner-triggered SemVer promotion copies exact green artifacts and labels unsigned macOS.
 - DONE groundwork — promotion hashes MSI, generates `Muniment.Muniment` WinGet manifest, and opens a draft fork PR. Fork/token setup, publication, Homebrew, and Apple signing remain owner-gated. No monetization or promotional surface is implied.
+- DONE 2026-07-24 — macOS Developer ID signing, notarization, and stapling are pre-staged in the nightly release path behind the same desktop-ci env-injection seam Windows signing uses (`.github/build-macos-app.mjs`, `.github/lib/macos-signing.mjs`): with no Apple credentials the build stays a clean unsigned no-op, a partial credential set fails fast naming only the missing variables, and `docs/macos-signing.md` records the six vault keys plus the codesign/notarize/staple/Gatekeeper verification checklist. Apple enrollment Y5DUNHQA74 is still in review; switching signing on is secrets-only, and public download/install docs and promotion stay owner-gated.
 
 ## Phase 4+ — Org surface (§9 items 16–19)
 - Remote MCP consumption, local stdio allowlist, capability install flow, artifact side panel, and projects with redaction (`output withheld · connection not granted`).
