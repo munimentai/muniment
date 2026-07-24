@@ -4168,6 +4168,11 @@ mod tests {
         let _environment = lock_pi_environment();
         for with_images in [true, false] {
             let app = tauri::test::mock_app();
+            // The coordinator refuses to create the session root itself
+            // (ownership must be established by the install flow), so a fresh
+            // machine needs it created here, exactly like the resume test.
+            let sessions = app.path().app_data_dir().unwrap().join("pi-sessions");
+            std::fs::create_dir_all(&sessions).unwrap();
             let directory =
                 std::env::temp_dir().join(format!("muniment-prompt-capture-{}", Uuid::now_v7()));
             std::fs::create_dir_all(&directory).unwrap();
