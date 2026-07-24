@@ -56,6 +56,13 @@ describe('nightly Linux E2E workflow', () => {
     expect(reportStep).not.toContain('path: ${{ runner.temp }}/muniment-e2e-artifacts\n')
   })
 
+  it('requests the desktop-ci artifact collector for the guest-published report', () => {
+    const runStep = linuxE2e.slice(linuxE2e.indexOf('      - name: Run installed Linux sign-in via desktop-ci'), linuxE2e.indexOf('      - name: Upload successful diagnostics'))
+    expect(runStep).toContain('sudo desktop-ci linux')
+    expect(runStep).toContain('--collect-artifacts')
+    expect(runStep).toContain('extract-artifacts.sh')
+  })
+
   it('uses the SSH key provided by the self-hosted runner for every E2E lane', () => {
     expect(workflow).not.toContain('DESKTOP_CI_SSH_KEY: ${{ secrets.DESKTOP_CI_SSH_KEY }}')
     expect(workflow.match(/printf '%s' "\$DESKTOP_CI_SSH_KEY"/g)).toHaveLength(4)
