@@ -9,7 +9,7 @@
   import { ringPath } from './lib/mark.js'
   import { applyBufferedChatEvents, applyChatEvent, composerAction, formatByteSize, historyMessages, receiptParts, receiptRows, toolName, toolStatus } from './lib/chat-state.js'
   import { appendTranscript, ariaKeyShortcut, dictationTransforms, handsFreeActivationDelay, holdToTalkShortcut, isDictationActive, validHoldToTalkShortcut } from './lib/dictation-state.js'
-  import { onboardingCancelSettingsState, onboardingConfirmedState, onboardingConfirmingState, onboardingErrorState, onboardingExtractingState, onboardingExtractionErrorState, onboardingExtractionState, onboardingFinalizingState, onboardingImportChoiceState, onboardingLoadingState, onboardingPathState, onboardingPreviewErrorState, onboardingPreviewingState, onboardingPreviewState, onboardingReturnToArchiveReviewState, onboardingSelectionState, onboardingSettingsState, onboardingStatusState, onboardingTriageConfirmedState, onboardingTriageErrorState, onboardingTriageReportState, onboardingTriagingState, requiredModelLoadingState, requiredModelPollActive, requiredModelProgress } from './lib/onboarding-state.js'
+  import { onboardingCancelSettingsState, onboardingConfirmedHomePathState, onboardingConfirmedState, onboardingConfirmingState, onboardingErrorState, onboardingExtractingState, onboardingExtractionErrorState, onboardingExtractionState, onboardingFinalizingState, onboardingImportChoiceState, onboardingImportErrorState, onboardingImportSavedState, onboardingImportSavingState, onboardingLoadingState, onboardingPathState, onboardingPreviewErrorState, onboardingPreviewingState, onboardingPreviewState, onboardingReturnToArchiveReviewState, onboardingSelectionState, onboardingSettingsState, onboardingStatusState, onboardingTriageConfirmedState, onboardingTriageErrorState, onboardingTriageReportState, onboardingTriagingState, requiredModelLoadingState, requiredModelPollActive, requiredModelProgress } from './lib/onboarding-state.js'
   import { scrollFollowState } from './lib/scroll-follow.js'
 
   const markD = ringPath()
@@ -211,6 +211,32 @@
   function returnToArchiveReview() {
     onboardingPreviewSequence += 1
     onboarding = onboardingReturnToArchiveReviewState(onboarding)
+  }
+
+  async function chooseConfirmedHome() {
+    try {
+      const picked = await open({ directory: true, multiple: false, defaultPath: onboarding.homePath })
+      if (typeof picked === 'string') onboarding = onboardingConfirmedHomePathState(onboarding, picked)
+    } catch (_) {
+      onboarding = { ...onboarding, error: 'The folder picker could not be opened. Try again.' }
+    }
+  }
+
+  async function saveConfirmedImport() {
+    if (onboarding.name !== 'triage-confirmed') return
+    const pending = onboardingImportSavingState(onboarding)
+    onboarding = pending
+    try {
+      await tauri.invoke('home_confirm_import', {
+        homePath: pending.homePath,
+        triageReport: pending.report,
+        approvedEntries: pending.extractedEntries,
+      })
+      onboarding = onboardingImportSavedState(pending)
+      stopRequiredModelPolling()
+    } catch (error) {
+      onboarding = onboardingImportErrorState(pending, error)
+    }
   }
 
   function stopDictationPolling() {
@@ -978,7 +1004,7 @@
     {#if onboarding.name !== 'complete'}
       <section class="onboarding" aria-labelledby="onboarding-title">
         <p class="eyebrow">{onboarding.savedHomePath ? 'Home settings' : 'First-run setup'}</p>
-        <h1 id="onboarding-title">{['pre-triage', 'triaging', 'triage-error'].includes(onboarding.name) ? 'Create your local proposal' : ['triage-review', 'triage-confirmed'].includes(onboarding.name) ? 'Review your onboarding proposal' : ['import-choice', 'previewing', 'reviewing', 'extracting', 'finalizing'].includes(onboarding.name) ? 'Review an assistant export' : 'Choose your Muniment Home'}</h1>
+        <h1 id="onboarding-title">{['pre-triage', 'triaging', 'triage-error'].includes(onboarding.name) ? 'Create your local proposal' : ['triage-review', 'triage-confirmed', 'triage-saving', 'triage-invalid'].includes(onboarding.name) ? 'Review your onboarding proposal' : ['import-choice', 'previewing', 'reviewing', 'extracting', 'finalizing'].includes(onboarding.name) ? 'Review an assistant export' : 'Choose your Muniment Home'}</h1>
         {#if !onboarding.savedHomePath}
           <aside class="model-status" aria-labelledby="model-status-title">
             <div class="model-status-heading">
@@ -1057,8 +1083,28 @@
           <h2 class="source-heading">Approved sources</h2>
           <ul class="triage-sources" aria-label="Approved sources">{#each onboarding.extractedEntries as entry}<li><strong>{entry.sourceName}</strong><span>{entry.sourceProvenance}</span></li>{/each}</ul>
           <div class="onboarding-footer"><button data-testid="onboarding-triage-back" onclick={returnToArchiveReview}>Back to archive review</button><button data-testid="onboarding-triage-confirm" class="primary" onclick={() => { onboarding = onboardingTriageConfirmedState(onboarding) }}>Confirm onboarding proposal</button></div>
-        {:else if onboarding.name === 'triage-confirmed'}
-          <p class="support" role="status">Proposal confirmed for this onboarding session. Nothing has been written to your Muniment Home.</p>
+        {:else if ['triage-confirmed', 'triage-saving', 'triage-invalid'].includes(onboarding.name)}
+          <p class="support">Your reviewed proposal and approved files are ready to save to this Muniment Home.</p>
+          <div class="path-card">
+            <span class="path-label">Muniment Home</span>
+            <strong data-testid="onboarding-home-path">{onboarding.homePath}</strong>
+            <button data-testid="onboarding-confirmed-picker" onclick={chooseConfirmedHome} disabled={onboarding.name !== 'triage-confirmed'}>Choose folder…</button>
+          </div>
+          {#if onboarding.name === 'triage-saving'}<p class="support" role="status">Saving your Home and approved files…</p>{/if}
+          {#if onboarding.error}
+            <div class="onboarding-error" role="alert">
+              <p>{onboarding.error}</p>
+              {#if onboarding.errorKind === 'destinationConflict' && onboarding.conflictPath}<p>Conflicting destination: <strong>{onboarding.conflictPath}</strong></p>{/if}
+            </div>
+          {/if}
+          <div class="onboarding-footer">
+            {#if onboarding.name === 'triage-invalid'}
+              <button data-testid="onboarding-import-recover" onclick={returnToArchiveReview}>Back to archive review</button>
+            {:else}
+              <span class="privacy-note">Local import · reviewed files only</span>
+              <button data-testid="onboarding-import-save" class="primary" onclick={saveConfirmedImport} disabled={onboarding.name === 'triage-saving'}>{onboarding.name === 'triage-saving' ? 'Saving Home…' : 'Save Home and finish'}</button>
+            {/if}
+          </div>
         {:else if onboarding.name === 'load-error'}
           <p class="support">Onboarding could not start.</p><button onclick={loadOnboarding}>Try again</button>
           <p class="onboarding-error" role="alert">{onboarding.error}</p>

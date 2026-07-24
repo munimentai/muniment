@@ -281,15 +281,18 @@ describe('Home onboarding', () => {
     expect(invoke).not.toHaveBeenCalledWith('home_confirm', expect.anything())
   })
 
-  it('generates one local triage report, shows its sources, and confirms without writes', async () => {
+  it('saves a confirmed local triage report exactly once and completes onboarding', async () => {
     homeStatus = { configured: false, homePath: '/Documents/Muniment' }
     dialogResult = '/Exports/assistant.zip'
     const extracted = [{ sourceName: 'profile.json', kind: 'json', text: '{"role":"writer"}', sourceProvenance: 'assistant-export-zip:v1:stable' }]
     let resolveTriage
-    invoke.mockImplementation(async (command) => {
+    const save = deferred()
+    const report = { userType: 'Writer', proposedHomeLayout: 'Projects organized by topic.', starterAgents: ['Researcher', 'Editor'] }
+    invoke.mockImplementation(async (command, payload) => {
       if (command === 'onboarding_import_preview') return { entries: [{ name: 'profile.json', kind: 'json', byteSize: 17, excerpt: '{}', excerptTruncated: false }], totalByteSize: 17 }
       if (command === 'onboarding_import_extract') return extracted
       if (command === 'onboarding_triage') return new Promise((resolve) => { resolveTriage = resolve })
+      if (command === 'home_confirm_import') return save.promise
       if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
       if (command === 'chat_history') return []
       if (command === 'auth_entitlement_snapshot') return snapshot()
@@ -307,7 +310,7 @@ describe('Home onboarding', () => {
     expect(invoke.mock.calls.filter(([command]) => command === 'onboarding_triage')).toEqual([['onboarding_triage', { entries: extracted }]])
     expect(generate).toBeDisabled()
     expect(screen.getByRole('status')).toHaveTextContent('Generating proposal on this device')
-    resolveTriage({ report: { userType: 'Writer', proposedHomeLayout: 'Projects organized by topic.', starterAgents: ['Researcher', 'Editor'] }, usage: null })
+    resolveTriage({ report, usage: null })
     expect(await screen.findByRole('heading', { name: 'User type' })).toBeInTheDocument()
     expect(screen.getByText('Writer')).toBeInTheDocument()
     expect(screen.getByRole('heading', { name: 'Proposed Home layout' })).toBeInTheDocument()
@@ -317,9 +320,92 @@ describe('Home onboarding', () => {
     expect(screen.getByText('profile.json')).toBeInTheDocument()
     expect(screen.getByText('assistant-export-zip:v1:stable')).toBeInTheDocument()
     await fireEvent.click(screen.getByTestId('onboarding-triage-confirm'))
-    expect(await screen.findByText(/Proposal confirmed for this onboarding session/)).toBeInTheDocument()
-    expect(invoke).not.toHaveBeenCalledWith('home_confirm', expect.anything())
-    expect(invoke.mock.calls.map(([command]) => command)).not.toContain('home_scaffold')
+    const saveButton = await screen.findByTestId('onboarding-import-save')
+    await fireEvent.click(saveButton)
+    await fireEvent.click(saveButton)
+    expect(saveButton).toBeDisabled()
+    expect(screen.getByRole('status')).toHaveTextContent('Saving your Home and approved files')
+    expect(invoke.mock.calls.filter(([command]) => command === 'home_confirm_import')).toEqual([[
+      'home_confirm_import',
+      { homePath: '/Documents/Muniment', triageReport: report, approvedEntries: extracted },
+    ]])
+    expect(invoke.mock.calls.map(([command]) => command)).not.toContain('home_confirm')
+    save.resolve({ configured: true, importedFileCount: 1 })
+    await waitFor(() => expect(screen.queryByTestId('onboarding-import-save')).not.toBeInTheDocument())
+  })
+
+  it.each([
+    ['saveFailed', 'The import could not be saved', true],
+    ['invalidInput', 'The confirmed proposal is no longer valid', false],
+  ])('shows a redacted, accessible %s recovery path', async (kind, expected, retryable) => {
+    homeStatus = { configured: false, homePath: '/Documents/Muniment' }
+    dialogResult = '/Exports/assistant.zip'
+    const extracted = [{ sourceName: 'profile.json', kind: 'json', text: '{}', sourceProvenance: 'stable' }]
+    const report = { userType: 'Writer', proposedHomeLayout: 'Projects', starterAgents: ['Researcher'] }
+    invoke.mockImplementation(async (command) => {
+      if (command === 'onboarding_import_preview') return { entries: [{ name: 'profile.json', kind: 'json', byteSize: 2, excerpt: '{}', excerptTruncated: false }], totalByteSize: 2 }
+      if (command === 'onboarding_import_extract') return extracted
+      if (command === 'onboarding_triage') return { report }
+      if (command === 'home_confirm_import') throw { kind, message: 'sensitive backend detail' }
+      if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
+      if (command === 'chat_history') return []
+      if (command === 'auth_entitlement_snapshot') return snapshot()
+      if (command === 'auth_devices') return []
+      throw new Error(`unexpected command: ${command}`)
+    })
+    render(App)
+    await fireEvent.click(await screen.findByTestId('onboarding-confirm'))
+    await fireEvent.click(screen.getByTestId('onboarding-import-picker'))
+    await fireEvent.click(await screen.findByRole('checkbox'))
+    await fireEvent.click(screen.getByTestId('onboarding-import-continue'))
+    await fireEvent.click(await screen.findByTestId('onboarding-triage-generate'))
+    await fireEvent.click(await screen.findByTestId('onboarding-triage-confirm'))
+    await fireEvent.click(await screen.findByTestId('onboarding-import-save'))
+    const alert = await screen.findByRole('alert')
+    expect(alert).toHaveTextContent(expected)
+    expect(alert).not.toHaveTextContent('sensitive backend detail')
+    if (retryable) expect(screen.getByTestId('onboarding-import-save')).toBeEnabled()
+    else expect(screen.getByTestId('onboarding-import-recover')).toBeEnabled()
+  })
+
+  it('identifies a destination conflict and retries retained inputs with a different Home', async () => {
+    homeStatus = { configured: false, homePath: '/Documents/Muniment' }
+    dialogResult = '/Exports/assistant.zip'
+    const extracted = [{ sourceName: 'profile.json', kind: 'json', text: '{}', sourceProvenance: 'stable' }]
+    const report = { userType: 'Writer', proposedHomeLayout: 'Projects', starterAgents: ['Researcher'] }
+    let saveAttempts = 0
+    invoke.mockImplementation(async (command) => {
+      if (command === 'onboarding_import_preview') return { entries: [{ name: 'profile.json', kind: 'json', byteSize: 2, excerpt: '{}', excerptTruncated: false }], totalByteSize: 2 }
+      if (command === 'onboarding_import_extract') return extracted
+      if (command === 'onboarding_triage') return { report }
+      if (command === 'home_confirm_import' && saveAttempts++ === 0) throw { kind: 'destinationConflict', relativePath: 'memory/profile.md', message: '/private/absolute/path' }
+      if (command === 'home_confirm_import') return { configured: true, importedFileCount: 1 }
+      if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
+      if (command === 'chat_history') return []
+      if (command === 'auth_entitlement_snapshot') return snapshot()
+      if (command === 'auth_devices') return []
+      throw new Error(`unexpected command: ${command}`)
+    })
+    render(App)
+    await fireEvent.click(await screen.findByTestId('onboarding-confirm'))
+    await fireEvent.click(screen.getByTestId('onboarding-import-picker'))
+    await fireEvent.click(await screen.findByRole('checkbox'))
+    await fireEvent.click(screen.getByTestId('onboarding-import-continue'))
+    await fireEvent.click(await screen.findByTestId('onboarding-triage-generate'))
+    await fireEvent.click(await screen.findByTestId('onboarding-triage-confirm'))
+    await fireEvent.click(await screen.findByTestId('onboarding-import-save'))
+    const alert = await screen.findByRole('alert')
+    expect(alert).toHaveTextContent('memory/profile.md')
+    expect(alert).not.toHaveTextContent('/private/absolute/path')
+    dialogResult = '/Other/Muniment'
+    await fireEvent.click(screen.getByTestId('onboarding-confirmed-picker'))
+    expect(await screen.findByTestId('onboarding-home-path')).toHaveTextContent('/Other/Muniment')
+    await fireEvent.click(screen.getByTestId('onboarding-import-save'))
+    expect(invoke.mock.calls.filter(([command]) => command === 'home_confirm_import')).toEqual([
+      ['home_confirm_import', { homePath: '/Documents/Muniment', triageReport: report, approvedEntries: extracted }],
+      ['home_confirm_import', { homePath: '/Other/Muniment', triageReport: report, approvedEntries: extracted }],
+    ])
+    expect(invoke.mock.calls.filter(([command]) => ['onboarding_import_preview', 'onboarding_import_extract', 'onboarding_triage'].includes(command))).toHaveLength(3)
   })
 
   it('retries a redacted triage failure and suppresses its stale result after returning', async () => {

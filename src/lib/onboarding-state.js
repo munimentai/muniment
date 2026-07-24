@@ -107,6 +107,45 @@ export function onboardingTriageConfirmedState(state) {
   return { ...state, name: 'triage-confirmed', error: undefined }
 }
 
+export function onboardingImportSavingState(state) {
+  return { ...state, name: 'triage-saving', error: undefined, errorKind: undefined, conflictPath: undefined }
+}
+
+export function onboardingImportSavedState(state) {
+  return { name: 'complete', homePath: state.homePath }
+}
+
+export function onboardingImportErrorState(state, error) {
+  if (error?.kind === 'invalidInput') {
+    return {
+      ...state,
+      name: 'triage-invalid',
+      errorKind: 'invalidInput',
+      error: 'The confirmed proposal is no longer valid. Return to archive review and review the approved files again.',
+    }
+  }
+  if (error?.kind === 'destinationConflict') {
+    return {
+      ...state,
+      name: 'triage-confirmed',
+      errorKind: 'destinationConflict',
+      conflictPath: typeof error.relativePath === 'string' && error.relativePath ? error.relativePath : undefined,
+      error: 'That Home already contains an item at the proposed destination. Choose a different Home folder and try again.',
+    }
+  }
+  return {
+    ...state,
+    name: 'triage-confirmed',
+    errorKind: 'saveFailed',
+    conflictPath: undefined,
+    error: 'The import could not be saved. Check that the Home folder is available and try again.',
+  }
+}
+
+export function onboardingConfirmedHomePathState(state, homePath) {
+  return { ...state, name: 'triage-confirmed', homePath, error: undefined, errorKind: undefined, conflictPath: undefined }
+}
+
 export function onboardingReturnToArchiveReviewState(state) {
   return { ...state, name: 'reviewing', report: undefined, error: undefined }
 }
