@@ -743,6 +743,10 @@
   })
 
   $effect(() => {
+    if (auth.name !== 'signed-in' || onboarding.name !== 'complete') artifactRailOpen = false
+  })
+
+  $effect(() => {
     const next = new Map(parallelTools)
     for (const message of messages) {
       if (message.role !== 'assistant') continue
@@ -817,10 +821,14 @@
       if (active?.id === payload.runId) active = projected && !['complete', 'cancelled', 'failed', 'interrupted'].includes(projected.phase) ? projected : null
     }).then((stop) => { unlisten = stop })
     const shortcuts = (event) => {
-      if (isArtifactRailShortcut(event)) {
+      if (auth.name === 'signed-in' && onboarding.name === 'complete' && isArtifactRailShortcut(event)) {
         event.preventDefault()
         artifactRailOpen = !artifactRailOpen
         return
+      }
+      if (event.key === 'Escape' && artifactRailOpen) {
+        event.preventDefault()
+        artifactRailOpen = false
       }
       const action = event.altKey && !event.ctrlKey && !event.metaKey ? dictationTransforms.find(({ key }) => `Digit${key}` === event.code) : undefined
       if (action && eligibleDictation && !dictationBusy()) {
@@ -841,10 +849,6 @@
         event.preventDefault()
         stopDictation(true)
         return
-      }
-      if (event.key === 'Escape' && artifactRailOpen) {
-        event.preventDefault()
-        artifactRailOpen = false
       }
     }
     document.addEventListener('keydown', shortcuts)
@@ -1497,6 +1501,11 @@
   .polish-status { color: var(--signal); font-family: var(--font-mono); text-decoration: underline 2px; text-underline-offset: 3px; }
   .dictation-error { margin-top: 7px; color: var(--muted); font: var(--text-12) var(--font-mono); }
   .follow-up { color: var(--muted); font-family: var(--font-mono); }
+  @media (max-width: 1100px) {
+    .workspace.artifact-open .composer-row { flex-wrap: wrap; gap: 8px; }
+    .workspace.artifact-open .composer-row > span { flex-basis: 100%; }
+    .workspace.artifact-open .composer-actions { width: 100%; flex-wrap: wrap; justify-content: flex-end; }
+  }
   @keyframes blink { 50% { opacity: 0; } }
   @keyframes breathe { 50% { opacity: .45; } }
   @keyframes tool-pulse { 50% { opacity: .3; transform: scale(.75); } }

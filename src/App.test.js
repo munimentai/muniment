@@ -168,6 +168,80 @@ describe('artifact rail', () => {
     await fireEvent.keyDown(input, { key: 'j', metaKey: mac, ctrlKey: !mac })
     expect(toggle).toHaveAttribute('aria-expanded', 'false')
   })
+
+  it('closes with Escape while active dictation is also cancelled', async () => {
+    invoke.mockImplementation(async (command) => {
+      if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
+      if (command === 'chat_history') return []
+      if (command === 'auth_entitlement_snapshot') return snapshot()
+      if (command === 'auth_devices') return []
+      if (command === 'dictation_start') return { state: 'running' }
+      if (command === 'dictation_stop') return { state: 'stopped' }
+      throw new Error(`unexpected command: ${command}`)
+    })
+    render(App)
+    const composer = await screen.findByPlaceholderText('Ask anything')
+    await fireEvent.input(composer, { target: { value: 'Original draft' } })
+    await fireEvent.click(screen.getByRole('button', { name: 'Voice' }))
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Voice' })).toHaveAttribute('aria-pressed', 'true'))
+    await fireEvent.click(screen.getByRole('button', { name: 'Open artifact rail' }))
+
+    await fireEvent.keyDown(document, { key: 'Escape' })
+
+    expect(screen.getByRole('button', { name: 'Open artifact rail' })).toHaveAttribute('aria-expanded', 'false')
+    expect(composer).toHaveValue('Original draft')
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('dictation_stop'))
+    expect(composer).toHaveFocus()
+  })
+
+  it('cannot prime or retain an open rail outside the signed-in workspace', async () => {
+    let signedIn = false
+    invoke.mockImplementation(async (command) => {
+      if (command === 'auth_status') return { signed_in: signedIn, subject: signedIn ? 'user-a' : null }
+      if (command === 'auth_sign_in') {
+        signedIn = true
+        return { signed_in: true, subject: 'user-a' }
+      }
+      if (command === 'auth_sign_out') {
+        signedIn = false
+        return { signed_in: false, subject: null }
+      }
+      if (command === 'chat_history') return []
+      if (command === 'auth_entitlement_snapshot') return snapshot()
+      if (command === 'auth_devices') return []
+      throw new Error(`unexpected command: ${command}`)
+    })
+    render(App)
+    const mac = navigator.platform.startsWith('Mac')
+    const shortcut = { key: 'j', metaKey: mac, ctrlKey: !mac }
+    const signIn = await screen.findByRole('button', { name: 'Sign in' })
+    await fireEvent.keyDown(document, shortcut)
+    await fireEvent.click(signIn)
+
+    const toggle = await screen.findByRole('button', { name: 'Open artifact rail' })
+    expect(toggle).toHaveAttribute('aria-expanded', 'false')
+    await fireEvent.click(toggle)
+    await fireEvent.click(screen.getByRole('button', { name: /Alice/i }))
+    await fireEvent.click(screen.getByRole('button', { name: 'Sign out' }))
+    await screen.findByRole('button', { name: 'Sign in' })
+    await fireEvent.keyDown(document, shortcut)
+    await fireEvent.click(screen.getByRole('button', { name: 'Sign in' }))
+
+    expect(await screen.findByRole('button', { name: 'Open artifact rail' })).toHaveAttribute('aria-expanded', 'false')
+  })
+
+  it('ignores the rail shortcut during signed-in onboarding', async () => {
+    homeStatus = { configured: false, homePath: '/Documents/Muniment' }
+    render(App)
+    await screen.findByRole('heading', { name: 'Choose your Muniment Home' })
+    const mac = navigator.platform.startsWith('Mac')
+    const shortcut = new KeyboardEvent('keydown', { key: 'j', metaKey: mac, ctrlKey: !mac, cancelable: true })
+
+    document.dispatchEvent(shortcut)
+
+    expect(shortcut.defaultPrevented).toBe(false)
+    expect(screen.queryByRole('complementary', { name: 'Artifacts' })).not.toBeInTheDocument()
+  })
 })
 
 describe('Home onboarding', () => {
@@ -1197,7 +1271,9 @@ describe('voice dictation', () => {
     expect(composer).toHaveValue('Keep polished text')
 
     await fireEvent.click(screen.getByRole('button', { name: /long/ }))
+    await fireEvent.click(screen.getByRole('button', { name: 'Open artifact rail' }))
     await fireEvent.keyDown(document, { key: 'Escape' })
+    expect(screen.getByRole('button', { name: 'Open artifact rail' })).toHaveAttribute('aria-expanded', 'false')
     expect(composer).toHaveValue('Keep polished text')
     expect(screen.queryByLabelText('Voice transforms')).not.toBeInTheDocument()
     expect(composer).toHaveFocus()
