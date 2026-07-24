@@ -2,9 +2,43 @@
 
 import { describe, expect, it } from 'vitest'
 
-import { artifactRailShortcut, isArtifactRailShortcut, isEditableTarget } from './artifact-rail-state.js'
+import {
+  ARTIFACT_RAIL_MAX_WIDTH,
+  ARTIFACT_RAIL_MIN_WIDTH,
+  artifactRailShortcut,
+  artifactRailWidthFromKey,
+  artifactRailWidthFromPointer,
+  clampArtifactRailWidth,
+  defaultArtifactRailWidth,
+  isArtifactRailShortcut,
+  isEditableTarget,
+} from './artifact-rail-state.js'
 
 describe('artifact rail state', () => {
+  it('clamps rail widths to the design bounds and the available layout', () => {
+    expect(clampArtifactRailWidth(200)).toBe(ARTIFACT_RAIL_MIN_WIDTH)
+    expect(clampArtifactRailWidth(700)).toBe(ARTIFACT_RAIL_MAX_WIDTH)
+    expect(clampArtifactRailWidth(540, 480)).toBe(480)
+    expect(clampArtifactRailWidth(Number.NaN)).toBe(ARTIFACT_RAIL_MIN_WIDTH)
+    expect(defaultArtifactRailWidth(1400)).toBe(476)
+  })
+
+  it('derives a clamped rail width from the divider position', () => {
+    expect(artifactRailWidthFromPointer(900, 1400)).toBe(500)
+    expect(artifactRailWidthFromPointer(1200, 1400)).toBe(ARTIFACT_RAIL_MIN_WIDTH)
+    expect(artifactRailWidthFromPointer(700, 1400)).toBe(ARTIFACT_RAIL_MAX_WIDTH)
+    expect(artifactRailWidthFromPointer(850, 1400, 480)).toBe(480)
+  })
+
+  it('supports window-splitter keys in consistent increments', () => {
+    expect(artifactRailWidthFromKey(440, 'ArrowLeft')).toBe(460)
+    expect(artifactRailWidthFromKey(440, 'ArrowRight')).toBe(420)
+    expect(artifactRailWidthFromKey(440, 'Home')).toBe(ARTIFACT_RAIL_MIN_WIDTH)
+    expect(artifactRailWidthFromKey(440, 'End')).toBe(ARTIFACT_RAIL_MAX_WIDTH)
+    expect(artifactRailWidthFromKey(440, 'End', 500)).toBe(500)
+    expect(artifactRailWidthFromKey(440, 'Enter')).toBe(440)
+  })
+
   it('uses the platform primary modifier', () => {
     expect(artifactRailShortcut('MacIntel')).toBe('Meta+J')
     expect(artifactRailShortcut('Win32')).toBe('Control+J')
