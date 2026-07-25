@@ -3,6 +3,7 @@
 
   import { accessErrorState, accessIdleState, accessLoadingState, accessReadyState, devicesErrorState, devicesIdleState, devicesLoadingState, devicesReadyState } from './auth-state.js'
   import { shortcutFromKeyboardEvent } from './dictation-state.js'
+  import { THEME_STORAGE_KEY, parseTheme, serializeTheme } from './theme-state.js'
 
   let { tauri, subject, onSignOut, escapeBlocked = () => false, voiceShortcut, voiceShortcutChanging, onVoiceShortcutChange, defaultVoiceShortcut } = $props()
   let access = $state(accessIdleState)
@@ -15,6 +16,24 @@
   let capturingShortcut = $state(false)
   let pendingShortcut = $state('')
   let shortcutStatus = $state('')
+  let theme = $state(readTheme())
+
+  const themeOptions = [['System', 'system'], ['Light', 'light'], ['Dark', 'dark']]
+
+  function readTheme() {
+    try {
+      return parseTheme(localStorage.getItem(THEME_STORAGE_KEY))
+    } catch (_) {
+      return parseTheme(null)
+    }
+  }
+
+  function chooseTheme(choice) {
+    theme = parseTheme(choice)
+    if (theme === 'system') delete document.documentElement.dataset.theme
+    else document.documentElement.dataset.theme = theme
+    try { localStorage.setItem(THEME_STORAGE_KEY, serializeTheme(theme)) } catch (_) {}
+  }
 
   async function loadAccess(open = false) {
     if (open) accessOpen = true
@@ -163,6 +182,14 @@
         <button class="quiet restore-shortcut" onclick={() => applyShortcut(defaultVoiceShortcut)} disabled={voiceShortcut === defaultVoiceShortcut || voiceShortcutChanging}>Restore default</button>
         {#if shortcutStatus}<p class="shortcut-error" role="alert">{shortcutStatus}</p>{/if}
       </section>
+      <section class="appearance-section" aria-labelledby="appearance-heading">
+        <h3 id="appearance-heading" class="access-label">Appearance</h3>
+        <div class="theme-options" role="group" aria-labelledby="appearance-heading">
+          {#each themeOptions as option}
+            <button aria-pressed={theme === option[1]} onclick={() => chooseTheme(option[1])}>{option[0]}</button>
+          {/each}
+        </div>
+      </section>
       <footer>Access is set by your admins.</footer>
       <button class="quiet sign-out" onclick={() => { closeAccess(); onSignOut() }}>Sign out</button>
     </div>
@@ -194,6 +221,11 @@
   .access-status p { margin: 0 0 6px; }
   .devices-section { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--border); }
   .voice-section { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--border); }
+  .appearance-section { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--border); }
+  .theme-options { display: inline-flex; overflow: hidden; border: 1px solid var(--border); border-radius: var(--radius-control); }
+  .theme-options button { border: 0; border-radius: 0; background: transparent; color: var(--muted); padding: 5px 12px; }
+  .theme-options button[aria-pressed="true"] { background: var(--faint); color: var(--ink); }
+  .theme-options button:focus-visible { outline: 2px solid var(--muted); outline-offset: -2px; }
   .shortcut-help { margin: 0 0 8px; color: var(--muted); font-size: var(--text-12); }
   .shortcut-capture { width: 100%; display: flex; align-items: center; justify-content: space-between; padding: 8px 9px; font-family: var(--font-mono); text-align: left; }
   .shortcut-capture small { color: var(--muted); font: 11px var(--font-human); }

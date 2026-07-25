@@ -4,8 +4,8 @@
  * properties, never raw values. `--signal` may only be referenced by
  * components on the §1.2 allowed list (color means computation).
  *
- * Themes follow the OS (§1.3). The per-device user override arrives with the
- * settings surface in a later slice.
+ * Themes follow the OS by default (§1.3); an explicit per-device preference
+ * overrides the media query through the data-theme selectors below.
  */
 
 @font-face {
@@ -84,4 +84,33 @@
     --oxide: #C96A61;
     --ochre: #CBA14E;
   }
+}
+
+/* Explicit user overrides have higher specificity than the OS media block. */
+:root[data-theme="light"] {
+  --paper: #F6F7F6;
+  --surface: #FFFFFF;
+  --faint: #EDEFEE;
+  --ink: #1A1D1C;
+  --muted: #5C6461;
+  --border: #E2E5E3;
+  --signal: #2F7E6D;
+  --signal-soft: rgba(47, 126, 109, .10);
+  --oxide: #B4483E;
+  --ochre: #B98A2F;
+  color-scheme: light;
+}
+
+:root[data-theme="dark"] {
+  --paper: #141716;
+  --surface: #1C201E;
+  --faint: #222624;
+  --ink: #E8EBE9;
+  --muted: #8A928E;
+  --border: #2A2F2C;
+  --signal: #58B39F;
+  --signal-soft: rgba(88, 179, 159, .12);
+  --oxide: #C96A61;
+  --ochre: #CBA14E;
+  color-scheme: dark;
 }
