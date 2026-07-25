@@ -2475,6 +2475,73 @@ describe('tool activity cards', () => {
   })
 })
 
+describe('provenance line', () => {
+  function restore(receipt) {
+    invoke.mockImplementation(async (command) => {
+      if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
+      if (command === 'chat_history') return [{ runId: 'run-receipt', phase: 'complete', text: 'A routed answer', prompt: 'A question', receipt, toolActivity: [] }]
+      if (command === 'auth_entitlement_snapshot') return snapshot()
+      if (command === 'auth_devices') return []
+      throw new Error(`unexpected command: ${command}`)
+    })
+    return render(App)
+  }
+
+  it('renders route → model · cost · time with signal on the route segment', async () => {
+    restore({ route: 'analysis/high', model: 'glm-5.2', cost: '$0.0089', time: '6.2s' })
+
+    const line = await screen.findByRole('button', { name: 'Expand receipt: Routed via analysis/high to model glm-5.2, $0.0089, 6.2s' })
+    expect(line.textContent).toBe('analysis/high → glm-5.2 · $0.0089 · 6.2s')
+    expect(within(line).getByText('analysis/high')).toHaveClass('route-segment')
+    expect(line.querySelectorAll('.route-segment')).toHaveLength(1)
+  })
+
+  it('paints nothing green when the receipt records no route', async () => {
+    restore({ model: 'glm-5.2', cost: '$0.0089', time: '6.2s' })
+
+    const line = await screen.findByRole('button', { name: 'Expand receipt: Model glm-5.2, $0.0089, 6.2s' })
+    expect(line.textContent).toBe('glm-5.2 · $0.0089 · 6.2s')
+    expect(line.querySelector('.route-segment')).toBeNull()
+  })
+
+  it('renders a route-only receipt without a dangling arrow', async () => {
+    restore({ route: 'analysis/high' })
+
+    const line = await screen.findByRole('button', { name: 'Expand receipt: Routed via analysis/high' })
+    expect(line.textContent).toBe('analysis/high')
+  })
+
+  it('expands to the receipt record and back', async () => {
+    restore({ route: 'analysis/high', model: 'glm-5.2', cost: '$0.0089', time: '6.2s', capabilities: [{ name: 'search', version: '2' }] })
+
+    const line = await screen.findByRole('button', { name: /^Expand receipt:/ })
+    expect(line.textContent).toBe('analysis/high → glm-5.2 · $0.0089 · 6.2s · search@2')
+    await fireEvent.click(line)
+
+    const record = document.querySelector('.receipt-record')
+    expect(record.textContent).toBe('Routeanalysis/highModelglm-5.2Cost$0.0089Time6.2sCapabilitysearch@2')
+    expect(record.querySelectorAll('.route-value')).toHaveLength(1)
+    expect(await screen.findByRole('button', { name: 'Collapse receipt: Routed via analysis/high to model glm-5.2, $0.0089, 6.2s, search@2' })).toBe(line)
+
+    await fireEvent.click(line)
+    await waitFor(() => expect(document.querySelector('.receipt-record')).toBeNull())
+  })
+
+  it('renders no provenance line for a receipt with nothing to record', async () => {
+    restore({})
+
+    expect(await screen.findByText('A routed answer')).toBeInTheDocument()
+    expect(document.querySelector('.provenance')).toBeNull()
+  })
+
+  it('keeps the reply readable when the run carries no receipt at all', async () => {
+    restore(null)
+
+    expect(await screen.findByText('A routed answer')).toBeInTheDocument()
+    expect(document.querySelector('.provenance')).toBeNull()
+  })
+})
+
 describe('active run composer queue', () => {
   beforeEach(() => {
     invoke.mockImplementation(async (command) => {
