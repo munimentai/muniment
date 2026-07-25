@@ -8,7 +8,7 @@
   import { ARTIFACT_RAIL_MAX_WIDTH, ARTIFACT_RAIL_MIN_WIDTH, artifactRailShortcut, artifactRailWidthFromKey, artifactRailWidthFromPointer, clampArtifactRailWidth, defaultArtifactRailWidth, isArtifactRailShortcut } from './lib/artifact-rail-state.js'
   import { bootState, errorState, statusState, waitingState } from './lib/auth-state.js'
   import { ringPath } from './lib/mark.js'
-  import { applyBufferedChatEvents, applyChatEvent, composerAction, formatByteSize, historyMessages, receiptParts, receiptRows, toolName, toolStatus } from './lib/chat-state.js'
+  import { applyBufferedChatEvents, applyChatEvent, composerAction, formatByteSize, historyMessages, receiptParts, receiptRows, runAnnouncement, toolName, toolStatus } from './lib/chat-state.js'
   import { appendTranscript, ariaKeyShortcut, dictationTransforms, handsFreeActivationDelay, holdToTalkShortcut, isDictationActive, validHoldToTalkShortcut } from './lib/dictation-state.js'
   import { onboardingCancelSettingsState, onboardingConfirmedHomePathState, onboardingConfirmedState, onboardingConfirmingState, onboardingErrorState, onboardingExtractingState, onboardingExtractionErrorState, onboardingExtractionState, onboardingFinalizingState, onboardingImportChoiceState, onboardingImportErrorState, onboardingImportSavedState, onboardingImportSavingState, onboardingLoadingState, onboardingPathState, onboardingPreviewErrorState, onboardingPreviewingState, onboardingPreviewState, onboardingReturnToArchiveReviewState, onboardingSelectionState, onboardingSettingsState, onboardingStatusState, onboardingTriageConfirmedState, onboardingTriageErrorState, onboardingTriageReportState, onboardingTriagingState, requiredModelLoadingState, requiredModelPollActive, requiredModelProgress } from './lib/onboarding-state.js'
   import { scrollFollowState } from './lib/scroll-follow.js'
@@ -24,6 +24,10 @@
   let submitError = $state('')
   let messages = $state([])
   let active = $state(null)
+  // The transcript is not a live region; only the run the user is waiting on is
+  // announced, and only when its phase changes. Restored history announces nothing.
+  let announcedRun = $state(null)
+  let announcement = $derived(runAnnouncement(announcedRun))
   let cancelError = $state('')
   let queueError = $state('')
   let historyError = $state('')
@@ -855,6 +859,7 @@
   async function loadHistory() {
     historyError = ''
     expandedReceipts = new Set()
+    announcedRun = null
     try {
       const history = await tauri.invoke('chat_history')
       messages = historyMessages(history)
@@ -893,6 +898,10 @@
       const current = messages.find((message) => message.run?.id === payload.runId)?.run
       const projected = applyChatEvent(current, payload)
       if (projected) messages = messages.map((message) => message.run?.id === projected.id ? { ...message, run: projected } : message)
+      // Announce runs that were still in flight — including one restored mid-reply — plus
+      // the run already being announced. A settled transcript stays silent.
+      const settled = ['complete', 'cancelled', 'failed', 'interrupted'].includes(current?.phase)
+      if (projected && (!settled || announcedRun?.id === payload.runId)) announcedRun = projected
       if (active?.id === payload.runId) active = projected && !['complete', 'cancelled', 'failed', 'interrupted'].includes(projected.phase) ? projected : null
     }).then((stop) => { unlisten = stop })
     const shortcuts = (event) => {
@@ -979,6 +988,7 @@
     messages.push(userMessage)
     const pending = { id: 'pending', phase: 'thinking', text: '', receipt: null, prompt, submissionId }
     active = pending
+    announcedRun = pending
     messages.push({ role: 'assistant', run: pending })
     followNewContent()
     try {
@@ -994,10 +1004,12 @@
       const projected = applyBufferedChatEvents(active, early)
       buffered.delete(run.runId)
       messages = messages.map((message) => message.run?.submissionId === submissionId ? { ...message, run: projected } : message)
+      announcedRun = projected
       active = ['complete', 'cancelled', 'failed', 'interrupted'].includes(projected.phase) ? null : projected
     } catch (error) {
       const failed = { ...pending, id: `rejected-${messages.length}`, phase: 'failed' }
       messages = messages.map((message) => message.run?.submissionId === submissionId ? { ...message, run: failed } : message)
+      announcedRun = failed
       submitError = typeof error === 'string' ? error : 'The message could not be sent. Try again.'
       active = null
     }
@@ -1047,6 +1059,7 @@
     if (active || dictationBusy() || !run.resumable || run.phase !== 'interrupted') return
     const resuming = { ...run, phase: 'resuming', resumeError: '' }
     active = resuming
+    announcedRun = resuming
     messages = messages.map((message) => message.run?.id === run.id ? { ...message, run: resuming } : message)
     try {
       await tauri.invoke('chat_resume', { runId: run.id })
@@ -1058,10 +1071,12 @@
       const projected = applyBufferedChatEvents(current, early)
       buffered.delete(run.id)
       messages = messages.map((message) => message.run?.id === run.id ? { ...message, run: projected } : message)
+      announcedRun = projected
       active = ['complete', 'cancelled', 'failed', 'interrupted'].includes(projected.phase) ? null : projected
     } catch (error) {
       const interrupted = { ...run, phase: 'interrupted', resumeError: typeof error === 'string' ? error : 'This reply could not be resumed. Try again.' }
       messages = messages.map((message) => message.run?.id === run.id ? { ...message, run: interrupted } : message)
+      announcedRun = interrupted
       active = null
     }
   }
@@ -1246,7 +1261,7 @@
           {/if}
         </aside>
         <div class="thread-shell">
-        <div class="thread" aria-live="polite" bind:this={thread} onscroll={handleThreadScroll}>
+        <div class="thread" bind:this={thread} onscroll={handleThreadScroll}>
           {#if historyError}<p class="history-error" role="alert">{historyError} <button onclick={loadHistory}>Try again</button></p>{/if}
           {#if messages.length === 0}<p class="empty">Ask anything. Your org's routing decides which model answers.</p>{/if}
           {#each messages as message}
@@ -1308,6 +1323,9 @@
           {/each}
         </div>
         {#if !pinned && hasContentBelow}<button class="latest" onclick={scrollToLatest}>↓ latest</button>{/if}
+        <!-- Always mounted so the region is live before text lands in it; atomic so each
+             run phase is read as one sentence, and never re-read per streamed chunk. -->
+        <p class="visually-hidden" aria-live="polite" aria-atomic="true" data-testid="run-announcement">{announcement}</p>
         </div>
         <div class="composer">
           {#if selectedFiles.length}

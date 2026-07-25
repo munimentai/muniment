@@ -33,6 +33,29 @@ export function toolStatus(activity = {}) {
   return ['running', 'completed', 'failed'].includes(activity.status) ? activity.status : 'status unknown'
 }
 
+const generating = 'Generating a reply.'
+
+const runPhaseAnnouncements = {
+  thinking: generating,
+  streaming: generating,
+  // A run paused on a permission decision has no affordance to announce yet, so it
+  // stays inside the same coarse in-progress state rather than inventing copy.
+  'pending-permission': generating,
+  resuming: 'Resuming the interrupted reply.',
+  cancelled: 'Reply stopped.',
+  failed: 'Reply failed.',
+  interrupted: 'Reply interrupted.',
+}
+
+// What a screen reader hears about a run. Streamed text never reaches the live
+// region: every in-progress phase maps to the same coarse string, so the
+// announcement changes once when a run starts and once when it settles.
+export function runAnnouncement(run) {
+  if (!run) return ''
+  if (run.phase === 'complete') return `Reply complete. ${run.text ?? ''}`.trim()
+  return runPhaseAnnouncements[run.phase] ?? ''
+}
+
 export function formatByteSize(bytes) {
   if (!Number.isFinite(bytes) || bytes < 0) return 'Unknown size'
   if (bytes < 1024) return `${bytes} B`
