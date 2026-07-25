@@ -8,7 +8,7 @@
   import { ARTIFACT_RAIL_MAX_WIDTH, ARTIFACT_RAIL_MIN_WIDTH, artifactRailShortcut, artifactRailWidthFromKey, artifactRailWidthFromPointer, clampArtifactRailWidth, defaultArtifactRailWidth, isArtifactRailShortcut } from './lib/artifact-rail-state.js'
   import { bootState, errorState, statusState, waitingState } from './lib/auth-state.js'
   import { ringPath } from './lib/mark.js'
-  import { applyBufferedChatEvents, applyChatEvent, composerAction, formatByteSize, historyMessages, receiptParts, receiptRows, runAnnouncement, toolName, toolStatus } from './lib/chat-state.js'
+  import { applyBufferedChatEvents, applyChatEvent, composerAction, formatByteSize, historyMessages, receiptLabel, receiptRows, receiptSummary, runAnnouncement, toolName, toolStatus } from './lib/chat-state.js'
   import { composerHeight } from './lib/composer-size.js'
   import { appendTranscript, ariaKeyShortcut, dictationTransforms, handsFreeActivationDelay, holdToTalkShortcut, isDictationActive, validHoldToTalkShortcut } from './lib/dictation-state.js'
   import { onboardingCancelSettingsState, onboardingConfirmedHomePathState, onboardingConfirmedState, onboardingConfirmingState, onboardingErrorState, onboardingExtractingState, onboardingExtractionErrorState, onboardingExtractionState, onboardingFinalizingState, onboardingImportChoiceState, onboardingImportErrorState, onboardingImportSavedState, onboardingImportSavingState, onboardingLoadingState, onboardingPathState, onboardingPreviewErrorState, onboardingPreviewingState, onboardingPreviewState, onboardingReturnToArchiveReviewState, onboardingSelectionState, onboardingSettingsState, onboardingStatusState, onboardingTriageConfirmedState, onboardingTriageErrorState, onboardingTriageReportState, onboardingTriagingState, requiredModelLoadingState, requiredModelPollActive, requiredModelProgress } from './lib/onboarding-state.js'
@@ -87,6 +87,7 @@
   let composer = $state()
   let polishPreview = $state()
   let composerRow = $state()
+  let wasInWorkspace = false
   let onboarding = $state(onboardingLoadingState)
   let requiredModel = $state(requiredModelLoadingState)
   let modelProgress = $derived(requiredModelProgress(requiredModel))
@@ -902,6 +903,16 @@
   })
 
   $effect(() => {
+    const inWorkspace = auth.name === 'signed-in' && onboarding.name === 'complete'
+    if (inWorkspace && !wasInWorkspace && active?.phase !== 'resuming' && !dictationPolishing && composer) {
+      wasInWorkspace = true
+      composer.focus()
+    } else if (!inWorkspace) {
+      wasInWorkspace = false
+    }
+  })
+
+  $effect(() => {
     const next = new Map(parallelTools)
     for (const message of messages) {
       if (message.role !== 'assistant') continue
@@ -1381,11 +1392,11 @@
                 </div>
               {/each}
               {#if message.run.phase === 'complete'}
-                {@const parts = receiptParts(message.run.receipt)}
-                {@const rows = receiptRows(message.run.receipt)}
-                {#if parts.length}
+                {@const summary = receiptSummary(message.run.receipt)}
+                {#if summary.route !== null || summary.detail}
                   {@const expanded = expandedReceipts.has(message.run.id)}
-                  <button class="provenance" aria-expanded={expanded} aria-label={`${expanded ? 'Collapse' : 'Expand'} receipt: ${parts.join(', ')}`} onclick={() => toggleReceipt(message.run.id)}><span>{parts[0]}</span>{#if parts.length > 1} · {parts.slice(1).join(' · ')}{/if}</button>
+                  {@const rows = receiptRows(message.run.receipt)}
+                  <button class="provenance" aria-expanded={expanded} aria-label={`${expanded ? 'Collapse' : 'Expand'} receipt: ${receiptLabel(message.run.receipt)}`} onclick={() => toggleReceipt(message.run.id)}>{#if summary.route !== null}<span class="route-segment">{summary.route}</span>{/if}{summary.separator}{summary.detail}</button>
                   {#if expanded}
                     <dl class="receipt-record">
                       {#each rows as row}
@@ -1448,8 +1459,8 @@
               {:else if active && active.id !== 'pending'}
                 <button class="quiet follow-up" disabled={!draft.trim()} onclick={() => queue('followUp')}>Queue follow-up</button>
                 <button onclick={cancel}>Stop</button>
-                <button disabled={!draft.trim()} onclick={() => queue('steer')}>Send</button>
-              {:else if !active}<button disabled={!draft.trim() || dictationBusy()} onclick={send}>Send</button>{/if}
+                <button class="primary" disabled={!draft.trim()} onclick={() => queue('steer')}>Send</button>
+              {:else if !active}<button class="primary" disabled={!draft.trim() || dictationBusy()} onclick={send}>Send</button>{/if}
             </div>
           </div>
           {#if dictationError}<div class="dictation-error" role="alert">{dictationError}</div>{/if}
@@ -1547,7 +1558,8 @@
   .model-status-heading span, .model-status-copy, .model-progress-copy, .triage-generate span { color: var(--muted); }
   .model-status-copy { margin: 7px 0 0; font-size: 13px; line-height: 1.45; }
   .model-progress { height: 4px; margin-top: 11px; overflow: hidden; border-radius: 2px; background: var(--border); }
-  .model-progress span { display: block; height: 100%; background: var(--signal); }
+  /* §1.2: downloading a model is not a model working, so the fill stays ink. */
+  .model-progress span { display: block; height: 100%; background: var(--ink); }
   .model-progress-copy { margin: 6px 0 0; font: var(--text-12) var(--font-mono); }
   .triage-generate { display: flex; flex-direction: column; align-items: flex-end; gap: 6px; }
   .triage-generate span { max-width: 250px; font: var(--text-12) var(--font-mono); text-align: right; }
@@ -1560,6 +1572,7 @@
   .onboarding-error { margin: 10px 0 0; color: var(--muted); font: var(--text-12) var(--font-mono); line-height: 1.5; }
   .onboarding-footer { display: flex; justify-content: space-between; align-items: center; gap: 16px; margin-top: 22px; }
   .primary { background: var(--ink); border-color: var(--ink); color: var(--paper); }
+  .composer-actions .primary:disabled { background: var(--faint); border-color: var(--border); color: var(--muted); }
   .manifest-summary { display: flex; justify-content: space-between; gap: 16px; margin-top: 22px; padding-bottom: 9px; border-bottom: 1px solid var(--border); color: var(--muted); font: var(--text-12) var(--font-mono); }
   .manifest-summary strong { color: var(--ink); font-weight: 500; }
   .manifest { max-height: min(42vh, 360px); margin: 0; padding: 0; overflow-y: auto; list-style: none; }
@@ -1596,11 +1609,6 @@
 
   button:hover:not(:disabled) {
     border-color: var(--muted);
-  }
-
-  button:focus-visible {
-    outline: 2px solid var(--signal);
-    outline-offset: 1px;
   }
 
   button:disabled {
@@ -1658,7 +1666,8 @@
   .workspace.sidebar-collapsed .home-settings::before { content: ''; position: absolute; inset: -9px -6px auto; height: 1px; background: var(--border); }
   .side-label { margin: 20px 8px 5px; color: var(--muted); font: var(--text-12) var(--font-mono); }
   .active-thread { background: var(--faint); }
-  .active-thread > span { width: 5px; height: 5px; border-radius: 50%; background: var(--signal); }
+  /* §1.2 forbids signal on selection states; the mockup's current-thread dot is ink. */
+  .active-thread > span { width: 5px; height: 5px; border-radius: 50%; background: var(--ink); }
   .quiet { background: transparent; border-color: transparent; }
   .artifact-divider { grid-area: rail; z-index: 2; align-self: stretch; width: 9px; margin-left: -4px; padding: 0; border: 0; border-radius: 0; background: transparent; cursor: col-resize; touch-action: none; }
   .artifact-divider::after { content: ''; display: block; width: 1px; height: 100%; margin-left: 4px; background: var(--border); }
@@ -1697,8 +1706,12 @@
   .tool-running { color: var(--signal); }
   .tool-running .tool-dot { animation: tool-pulse 1.4s ease-in-out infinite; }
   .tool-failed .tool-status::before { content: 'error · '; }
-  .provenance { display: block; margin-top: 10px; padding: 0; border: 0; background: transparent; color: var(--muted); font: var(--text-12) var(--font-mono); text-align: left; }
-  .provenance span { color: var(--signal); }
+  /* §2.2 mono 11.5px; §1.4 records line up their figures. The shorthand resets
+     font-variant-numeric, so tabular-nums follows it. */
+  .provenance { display: block; margin-top: 10px; padding: 0; border: 0; background: transparent; color: var(--muted); font: 11.5px/1.45 var(--font-mono); font-variant-numeric: tabular-nums; text-align: left; }
+  .provenance:hover:not(:disabled) { color: var(--ink); }
+  /* §1.2 permits --signal on the route segment only. */
+  .provenance .route-segment { color: var(--signal); }
   .receipt-record { width: fit-content; min-width: 240px; margin: 8px 0 0; padding: 8px 12px; border: 1px solid var(--border); border-radius: 6px; color: var(--muted); font-size: var(--text-12); }
   .receipt-record div { display: grid; grid-template-columns: 88px minmax(0, 1fr); gap: 12px; }
   .receipt-record dd { margin: 0; font-family: var(--font-mono); font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
@@ -1722,10 +1735,11 @@
   .polish-preview { position: absolute; inset: 0; overflow: hidden; pointer-events: none; white-space: pre-wrap; overflow-wrap: break-word; color: var(--ink); font: inherit; }
   .polish-transcript { text-decoration-line: underline; text-decoration-color: var(--signal); text-decoration-thickness: 2px; text-underline-offset: 3px; }
   .dictation-transforms { display: flex; flex-wrap: wrap; gap: 5px; margin: 7px 0; }
-  .dictation-transforms button { display: inline-flex; align-items: center; gap: 7px; padding: 3px 7px; border-color: var(--signal); border-radius: 2px; background: transparent; color: var(--signal); font: var(--text-12) var(--font-mono); }
-  .dictation-transforms button:hover:not(:disabled) { background: var(--signal-soft); }
-  .dictation-transforms button:focus-visible { outline-color: var(--ink); outline-offset: 2px; }
-  .dictation-transforms button:disabled { border-color: var(--border); color: var(--muted); }
+  /* These chips appear after the polish flash has settled to ink, and §2.4 lets
+     signal touch the composer only for the flash itself — so the group keeps the
+     base button's ink-on-hairline treatment at chip radius. */
+  .dictation-transforms button { display: inline-flex; align-items: center; gap: 7px; padding: 3px 7px; border-radius: 2px; background: transparent; font: var(--text-12) var(--font-mono); }
+  .dictation-transforms button:hover:not(:disabled) { background: var(--faint); }
   .dictation-transforms kbd { color: var(--muted); font: inherit; }
   /* The input no longer keeps a spare empty row once it grows, so the action
      row carries the gap itself — the owner mockup's 8px .comprow rhythm. */
