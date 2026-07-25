@@ -828,9 +828,9 @@
 
   $effect(() => {
     const inWorkspace = auth.name === 'signed-in' && onboarding.name === 'complete'
-    if (inWorkspace && !wasInWorkspace) {
+    if (inWorkspace && !wasInWorkspace && active?.phase !== 'resuming' && !dictationPolishing && composer) {
       wasInWorkspace = true
-      if (active?.phase !== 'resuming' && !dictationPolishing) composer?.focus()
+      composer.focus()
     } else if (!inWorkspace) {
       wasInWorkspace = false
     }
