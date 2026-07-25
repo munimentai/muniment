@@ -1,5 +1,5 @@
 <script>
-  import { onMount, tick } from 'svelte'
+  import { onMount, tick, untrack } from 'svelte'
   import { getCurrentWebview } from '@tauri-apps/api/webview'
   import { confirm, open } from '@tauri-apps/plugin-dialog'
   import { register, unregister } from '@tauri-apps/plugin-global-shortcut'
@@ -8,7 +8,8 @@
   import { ARTIFACT_RAIL_MAX_WIDTH, ARTIFACT_RAIL_MIN_WIDTH, artifactRailShortcut, artifactRailWidthFromKey, artifactRailWidthFromPointer, clampArtifactRailWidth, defaultArtifactRailWidth, isArtifactRailShortcut } from './lib/artifact-rail-state.js'
   import { bootState, errorState, statusState, waitingState } from './lib/auth-state.js'
   import { ringPath } from './lib/mark.js'
-  import { applyBufferedChatEvents, applyChatEvent, composerAction, formatByteSize, historyMessages, receiptParts, receiptRows, runAnnouncement, toolName, toolStatus } from './lib/chat-state.js'
+  import { applyBufferedChatEvents, applyChatEvent, composerAction, formatByteSize, historyMessages, receiptLabel, receiptRows, receiptSummary, runAnnouncement, toolName, toolStatus } from './lib/chat-state.js'
+  import { composerHeight } from './lib/composer-size.js'
   import { appendTranscript, ariaKeyShortcut, dictationTransforms, handsFreeActivationDelay, holdToTalkShortcut, isDictationActive, validHoldToTalkShortcut } from './lib/dictation-state.js'
   import { COPY_CONFIRMATION_MS, copyAnnouncement, copyConfirmed, copyFailure, copyLabel, copyResult } from './lib/message-actions.js'
   import { onboardingCancelSettingsState, onboardingConfirmedHomePathState, onboardingConfirmedState, onboardingConfirmingState, onboardingErrorState, onboardingExtractingState, onboardingExtractionErrorState, onboardingExtractionState, onboardingFinalizingState, onboardingImportChoiceState, onboardingImportErrorState, onboardingImportSavedState, onboardingImportSavingState, onboardingLoadingState, onboardingPathState, onboardingPreviewErrorState, onboardingPreviewingState, onboardingPreviewState, onboardingReturnToArchiveReviewState, onboardingSelectionState, onboardingSettingsState, onboardingStatusState, onboardingTriageConfirmedState, onboardingTriageErrorState, onboardingTriageReportState, onboardingTriagingState, requiredModelLoadingState, requiredModelPollActive, requiredModelProgress } from './lib/onboarding-state.js'
@@ -85,6 +86,9 @@
   let globalVoiceTask = Promise.resolve()
   const registeredVoiceShortcuts = new Set()
   let composer = $state()
+  let polishPreview = $state()
+  let composerRow = $state()
+  let wasInWorkspace = false
   let onboarding = $state(onboardingLoadingState)
   let requiredModel = $state(requiredModelLoadingState)
   let modelProgress = $derived(requiredModelProgress(requiredModel))
@@ -783,6 +787,79 @@
     if (eligibleDictation && event.currentTarget.value !== eligibleDictation.draft) invalidateDictationTransform()
   }
 
+  // The polish overlay covers a textarea that scrolls once the draft passes the
+  // ten-line cap; keep the two scrolled together so the underlined transcript
+  // stays on the line it belongs to.
+  function syncPolishPreviewScroll() {
+    if (composer && polishPreview) polishPreview.scrollTop = composer.scrollTop
+  }
+
+  // §4: the input grows with the draft to a ten-line cap, then scrolls.
+  // Measuring needs the textarea collapsed first, and every step of that
+  // resizes the thread, which lets the browser clamp its scrollTop. Put the
+  // transcript back where it was — at the bottom while it is pinned, otherwise
+  // exactly where the reader left it — so growing the composer never scrolls it.
+  // `reveal` is set by the draft path only: new text should be brought into
+  // view, but a mere relayout must leave the reader wherever they were.
+  function syncComposerHeight(reveal = false) {
+    if (!composer) return
+    const styles = getComputedStyle(composer)
+    const threadScrollTop = thread?.scrollTop
+    composer.style.height = 'auto'
+    const { height, capped } = composerHeight({
+      contentHeight: composer.scrollHeight,
+      lineHeight: parseFloat(styles.lineHeight),
+      padding: parseFloat(styles.paddingTop) + parseFloat(styles.paddingBottom),
+    })
+    if (height === null) {
+      composer.style.removeProperty('height')
+      composer.style.removeProperty('overflow-y')
+    } else {
+      composer.style.height = `${height}px`
+      composer.style.overflowY = capped ? 'auto' : 'hidden'
+      // Past the cap a programmatic write — a streamed transcript, a transform
+      // result — lands below the fold and the user watches their words vanish.
+      // Typed input needs no help: the browser keeps the caret in view.
+      if (reveal && capped && document.activeElement !== composer) composer.scrollTop = composer.scrollHeight
+    }
+    if (thread) {
+      const restored = pinned ? thread.scrollHeight - thread.clientHeight : threadScrollTop
+      if (thread.scrollTop !== restored) thread.scrollTop = restored
+      // The restore fires a scroll event; leave the follow state matching it so
+      // handleThreadScroll does not read the correction as an upward scroll.
+      lastScrollTop = thread.scrollTop
+    }
+    syncPolishPreviewScroll()
+  }
+
+  // Keyed off `draft` rather than the input event so every programmatic write
+  // resizes too: streamed dictation transcripts, the polish and transform
+  // results, the Esc restore in stopDictation(true), the Try again retry, and
+  // send()/queue() clearing the draft back to the resting height. Untracked so
+  // the follow state it reads cannot re-enter — resizing must answer to the
+  // draft alone, never to a scroll already in flight.
+  $effect(() => {
+    draft
+    polishPreview
+    if (composer) untrack(() => syncComposerHeight(true))
+  })
+
+  // The composer also rewraps when only its width changes, and most of those
+  // never touch the window: ⌘J opening the artifact rail, the rail separator
+  // being dragged or arrow-keyed, the sidebar collapsing. A height measured at
+  // the old width would clip the draft with no scrollbar to reach it, so watch
+  // the layout rather than the window. The action row is the box to observe:
+  // it spans the same width as the input but is the one part of the composer
+  // whose size we never set ourselves, so the callback cannot resize its own
+  // target — observing the textarea makes Chromium report "ResizeObserver loop
+  // completed with undelivered notifications" all through a rail drag.
+  $effect(() => {
+    if (!composerRow || typeof ResizeObserver === 'undefined') return
+    const observer = new ResizeObserver(() => untrack(syncComposerHeight))
+    observer.observe(composerRow)
+    return () => observer.disconnect()
+  })
+
   function toggleReceipt(runId) {
     const next = new Set(expandedReceipts)
     next.has(runId) ? next.delete(runId) : next.add(runId)
@@ -852,6 +929,16 @@
 
   $effect(() => {
     if (auth.name !== 'signed-in' || onboarding.name !== 'complete') artifactRailOpen = false
+  })
+
+  $effect(() => {
+    const inWorkspace = auth.name === 'signed-in' && onboarding.name === 'complete'
+    if (inWorkspace && !wasInWorkspace && active?.phase !== 'resuming' && !dictationPolishing && composer) {
+      wasInWorkspace = true
+      composer.focus()
+    } else if (!inWorkspace) {
+      wasInWorkspace = false
+    }
   })
 
   $effect(() => {
@@ -1335,11 +1422,11 @@
                 </div>
               {/each}
               {#if message.run.phase === 'complete'}
-                {@const parts = receiptParts(message.run.receipt)}
-                {@const rows = receiptRows(message.run.receipt)}
-                {#if parts.length}
+                {@const summary = receiptSummary(message.run.receipt)}
+                {#if summary.route !== null || summary.detail}
                   {@const expanded = expandedReceipts.has(message.run.id)}
-                  <button class="provenance" aria-expanded={expanded} aria-label={`${expanded ? 'Collapse' : 'Expand'} receipt: ${parts.join(', ')}`} onclick={() => toggleReceipt(message.run.id)}><span>{parts[0]}</span>{#if parts.length > 1} · {parts.slice(1).join(' · ')}{/if}</button>
+                  {@const rows = receiptRows(message.run.receipt)}
+                  <button class="provenance" aria-expanded={expanded} aria-label={`${expanded ? 'Collapse' : 'Expand'} receipt: ${receiptLabel(message.run.receipt)}`} onclick={() => toggleReceipt(message.run.id)}>{#if summary.route !== null}<span class="route-segment">{summary.route}</span>{/if}{summary.separator}{summary.detail}</button>
                   {#if expanded}
                     <dl class="receipt-record">
                       {#each rows as row}
@@ -1349,11 +1436,9 @@
                   {/if}
                 {/if}
                 {@const failure = copyFailure(copy, message.run.id, modifierLabel)}
-                <!-- §3.2's action row, copy only in this slice. Disabled when the run
-                     settled without text: there would be nothing to write, and a
-                     confirmation over an empty clipboard would be a false record. -->
+                <!-- §3.2's action row, copy only in this slice. -->
                 <div class="message-actions">
-                  <button type="button" disabled={!message.run.text?.trim()} onclick={() => copyResponse(message.run)}>{#if copyConfirmed(copy, message.run.id)}<svg class="action-icon" width="14" height="14" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 6 9 17l-5-5" /></svg>{:else}<svg class="action-icon" width="14" height="14" viewBox="0 0 24 24" aria-hidden="true"><rect x="8" y="8" width="14" height="14" rx="2" /><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2" /></svg>{/if}{copyLabel(copy, message.run.id)}</button>
+                  <button type="button" onclick={() => copyResponse(message.run)}>{#if copyConfirmed(copy, message.run.id)}<svg class="action-icon" width="14" height="14" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 6 9 17l-5-5" /></svg>{:else}<svg class="action-icon" width="14" height="14" viewBox="0 0 24 24" aria-hidden="true"><rect x="8" y="8" width="14" height="14" rx="2" /><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2" /></svg>{/if}{copyLabel(copy, message.run.id)}</button>
                 </div>
                 {#if failure}<div class="run-error copy-failure">{failure}</div>{/if}
               {/if}
@@ -1374,9 +1459,9 @@
             </ul>
           {/if}
           <div class="composer-input">
-            <textarea class:polishing={dictationPolishing} bind:this={composer} bind:value={draft} oninput={composerInput} onkeydown={keydown} rows="2" placeholder={active?.phase === 'resuming' ? 'Resuming interrupted reply…' : 'Ask anything'} disabled={active?.phase === 'resuming'} readonly={dictationPolishing}></textarea>
+            <textarea class:polishing={dictationPolishing} bind:this={composer} bind:value={draft} oninput={composerInput} onkeydown={keydown} onscroll={syncPolishPreviewScroll} rows="2" placeholder={active?.phase === 'resuming' ? 'Resuming interrupted reply…' : 'Ask anything'} disabled={active?.phase === 'resuming'} readonly={dictationPolishing}></textarea>
             {#if dictationPolishing}
-              <div class="polish-preview" aria-hidden="true"><span data-testid="polish-draft">{appendTranscript(dictationDraftSnapshot, dictationTranscript).slice(0, -dictationTranscript.length)}</span><span class="polish-transcript" data-testid="polish-transcript">{dictationTranscript}</span></div>
+              <div class="polish-preview" bind:this={polishPreview} aria-hidden="true"><span data-testid="polish-draft">{appendTranscript(dictationDraftSnapshot, dictationTranscript).slice(0, -dictationTranscript.length)}</span><span class="polish-transcript" data-testid="polish-transcript">{dictationTranscript}</span></div>
             {/if}
           </div>
           {#if submitError}<p class="cancel-error" role="alert">{submitError}</p>{/if}
@@ -1389,7 +1474,7 @@
               {/each}
             </div>
           {/if}
-          <div class="composer-row">
+          <div class="composer-row" bind:this={composerRow}>
             {#if dictationTransformPending}
               <span class="polish-status" role="status">Transforming on this device…</span>
             {:else if dictationPolishing}
@@ -1410,8 +1495,8 @@
               {:else if active && active.id !== 'pending'}
                 <button class="quiet follow-up" disabled={!draft.trim()} onclick={() => queue('followUp')}>Queue follow-up</button>
                 <button onclick={cancel}>Stop</button>
-                <button disabled={!draft.trim()} onclick={() => queue('steer')}>Send</button>
-              {:else if !active}<button disabled={!draft.trim() || dictationBusy()} onclick={send}>Send</button>{/if}
+                <button class="primary" disabled={!draft.trim()} onclick={() => queue('steer')}>Send</button>
+              {:else if !active}<button class="primary" disabled={!draft.trim() || dictationBusy()} onclick={send}>Send</button>{/if}
             </div>
           </div>
           {#if dictationError}<div class="dictation-error" role="alert">{dictationError}</div>{/if}
@@ -1513,7 +1598,8 @@
   .model-status-heading span, .model-status-copy, .model-progress-copy, .triage-generate span { color: var(--muted); }
   .model-status-copy { margin: 7px 0 0; font-size: 13px; line-height: 1.45; }
   .model-progress { height: 4px; margin-top: 11px; overflow: hidden; border-radius: 2px; background: var(--border); }
-  .model-progress span { display: block; height: 100%; background: var(--signal); }
+  /* §1.2: downloading a model is not a model working, so the fill stays ink. */
+  .model-progress span { display: block; height: 100%; background: var(--ink); }
   .model-progress-copy { margin: 6px 0 0; font: var(--text-12) var(--font-mono); }
   .triage-generate { display: flex; flex-direction: column; align-items: flex-end; gap: 6px; }
   .triage-generate span { max-width: 250px; font: var(--text-12) var(--font-mono); text-align: right; }
@@ -1526,6 +1612,7 @@
   .onboarding-error { margin: 10px 0 0; color: var(--muted); font: var(--text-12) var(--font-mono); line-height: 1.5; }
   .onboarding-footer { display: flex; justify-content: space-between; align-items: center; gap: 16px; margin-top: 22px; }
   .primary { background: var(--ink); border-color: var(--ink); color: var(--paper); }
+  .composer-actions .primary:disabled { background: var(--faint); border-color: var(--border); color: var(--muted); }
   .manifest-summary { display: flex; justify-content: space-between; gap: 16px; margin-top: 22px; padding-bottom: 9px; border-bottom: 1px solid var(--border); color: var(--muted); font: var(--text-12) var(--font-mono); }
   .manifest-summary strong { color: var(--ink); font-weight: 500; }
   .manifest { max-height: min(42vh, 360px); margin: 0; padding: 0; overflow-y: auto; list-style: none; }
@@ -1562,11 +1649,6 @@
 
   button:hover:not(:disabled) {
     border-color: var(--muted);
-  }
-
-  button:focus-visible {
-    outline: 2px solid var(--signal);
-    outline-offset: 1px;
   }
 
   button:disabled {
@@ -1624,7 +1706,8 @@
   .workspace.sidebar-collapsed .home-settings::before { content: ''; position: absolute; inset: -9px -6px auto; height: 1px; background: var(--border); }
   .side-label { margin: 20px 8px 5px; color: var(--muted); font: var(--text-12) var(--font-mono); }
   .active-thread { background: var(--faint); }
-  .active-thread > span { width: 5px; height: 5px; border-radius: 50%; background: var(--signal); }
+  /* §1.2 forbids signal on selection states; the mockup's current-thread dot is ink. */
+  .active-thread > span { width: 5px; height: 5px; border-radius: 50%; background: var(--ink); }
   .quiet { background: transparent; border-color: transparent; }
   .artifact-divider { grid-area: rail; z-index: 2; align-self: stretch; width: 9px; margin-left: -4px; padding: 0; border: 0; border-radius: 0; background: transparent; cursor: col-resize; touch-action: none; }
   .artifact-divider::after { content: ''; display: block; width: 1px; height: 100%; margin-left: 4px; background: var(--border); }
@@ -1663,8 +1746,12 @@
   .tool-running { color: var(--signal); }
   .tool-running .tool-dot { animation: tool-pulse 1.4s ease-in-out infinite; }
   .tool-failed .tool-status::before { content: 'error · '; }
-  .provenance { display: block; margin-top: 10px; padding: 0; border: 0; background: transparent; color: var(--muted); font: var(--text-12) var(--font-mono); text-align: left; }
-  .provenance span { color: var(--signal); }
+  /* §2.2 mono 11.5px; §1.4 records line up their figures. The shorthand resets
+     font-variant-numeric, so tabular-nums follows it. */
+  .provenance { display: block; margin-top: 10px; padding: 0; border: 0; background: transparent; color: var(--muted); font: 11.5px/1.45 var(--font-mono); font-variant-numeric: tabular-nums; text-align: left; }
+  .provenance:hover:not(:disabled) { color: var(--ink); }
+  /* §1.2 permits --signal on the route segment only. */
+  .provenance .route-segment { color: var(--signal); }
   .receipt-record { width: fit-content; min-width: 240px; margin: 8px 0 0; padding: 8px 12px; border: 1px solid var(--border); border-radius: 6px; color: var(--muted); font-size: var(--text-12); }
   .receipt-record div { display: grid; grid-template-columns: 88px minmax(0, 1fr); gap: 12px; }
   .receipt-record dd { margin: 0; font-family: var(--font-mono); font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
@@ -1695,17 +1782,24 @@
   .attachments span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .attachments button { padding: 1px 5px; border: 0; background: transparent; color: inherit; font-size: 11px; }
   .composer-input { position: relative; }
-  textarea { display: block; width: 100%; resize: none; border: 0; outline: 0; background: transparent; color: var(--ink); font: inherit; }
+  /* No padding and no border: the composer supplies both, so the measured
+     scrollHeight is pure text and the overlay lands on the same grid. */
+  textarea { display: block; width: 100%; resize: none; padding: 0; border: 0; outline: 0; background: transparent; color: var(--ink); font: inherit; }
   textarea.polishing { color: transparent; caret-color: transparent; }
-  .polish-preview { position: absolute; inset: 0; overflow: hidden; pointer-events: none; white-space: pre-wrap; color: var(--ink); font: inherit; }
+  /* overflow-wrap matches the textarea's UA style so a single long token breaks
+     on the same character in both layers. */
+  .polish-preview { position: absolute; inset: 0; overflow: hidden; pointer-events: none; white-space: pre-wrap; overflow-wrap: break-word; color: var(--ink); font: inherit; }
   .polish-transcript { text-decoration-line: underline; text-decoration-color: var(--signal); text-decoration-thickness: 2px; text-underline-offset: 3px; }
   .dictation-transforms { display: flex; flex-wrap: wrap; gap: 5px; margin: 7px 0; }
-  .dictation-transforms button { display: inline-flex; align-items: center; gap: 7px; padding: 3px 7px; border-color: var(--signal); border-radius: 2px; background: transparent; color: var(--signal); font: var(--text-12) var(--font-mono); }
-  .dictation-transforms button:hover:not(:disabled) { background: var(--signal-soft); }
-  .dictation-transforms button:focus-visible { outline-color: var(--ink); outline-offset: 2px; }
-  .dictation-transforms button:disabled { border-color: var(--border); color: var(--muted); }
+  /* These chips appear after the polish flash has settled to ink, and §2.4 lets
+     signal touch the composer only for the flash itself — so the group keeps the
+     base button's ink-on-hairline treatment at chip radius. */
+  .dictation-transforms button { display: inline-flex; align-items: center; gap: 7px; padding: 3px 7px; border-radius: 2px; background: transparent; font: var(--text-12) var(--font-mono); }
+  .dictation-transforms button:hover:not(:disabled) { background: var(--faint); }
   .dictation-transforms kbd { color: var(--muted); font: inherit; }
-  .composer-row { display: flex; justify-content: space-between; align-items: center; color: var(--muted); font-size: 11px; }
+  /* The input no longer keeps a spare empty row once it grows, so the action
+     row carries the gap itself — the owner mockup's 8px .comprow rhythm. */
+  .composer-row { display: flex; justify-content: space-between; align-items: center; margin-top: 8px; color: var(--muted); font-size: 11px; }
   .composer-actions { display: flex; align-items: center; gap: 6px; }
   .capture-status { display: flex; align-items: center; gap: 8px; font-family: var(--font-mono); }
   .capture-meter { height: 14px; display: flex; align-items: center; gap: 2px; }

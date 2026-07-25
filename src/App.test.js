@@ -125,6 +125,133 @@ afterEach(() => {
   vi.restoreAllMocks()
 })
 
+describe('workspace composer entry', () => {
+  it('focuses the primary composer action once when the workspace appears', async () => {
+    render(App)
+    const composer = await screen.findByPlaceholderText('Ask anything')
+    const send = screen.getByRole('button', { name: 'Send' })
+
+    expect(composer).toHaveFocus()
+    expect(send).toHaveClass('primary')
+    expect(send).toBeDisabled()
+
+    const railToggle = screen.getByRole('button', { name: 'Open artifact rail' })
+    railToggle.focus()
+    await fireEvent.click(railToggle)
+    expect(railToggle).toHaveFocus()
+  })
+
+  it('does not focus a composer outside the signed-in workspace', async () => {
+    invoke.mockImplementation(async (command) => {
+      if (command === 'auth_status') return { signed_in: false, subject: null }
+      throw new Error(`unexpected command: ${command}`)
+    })
+    render(App)
+
+    expect(await screen.findByRole('button', { name: 'Sign in' })).not.toHaveFocus()
+    expect(screen.queryByPlaceholderText('Ask anything')).not.toBeInTheDocument()
+  })
+
+  it('does not focus a composer in the auth-error state', async () => {
+    invoke.mockRejectedValue('Authentication is unavailable.')
+    render(App)
+
+    expect(await screen.findByRole('button', { name: 'Try again' })).not.toHaveFocus()
+    expect(screen.queryByPlaceholderText('Ask anything')).not.toBeInTheDocument()
+  })
+
+  it('does not focus a composer during onboarding', async () => {
+    homeStatus = { configured: false, homePath: '/Documents/Muniment' }
+    render(App)
+
+    expect(await screen.findByRole('heading', { name: 'Choose your Muniment Home' })).toBeInTheDocument()
+    expect(screen.queryByPlaceholderText('Ask anything')).not.toBeInTheDocument()
+  })
+
+  it('releases composer focus in Home settings and restores it on workspace re-entry', async () => {
+    render(App)
+    const composer = await screen.findByPlaceholderText('Ask anything')
+    expect(composer).toHaveFocus()
+
+    await fireEvent.click(screen.getByText('Home settings'))
+    expect(screen.queryByPlaceholderText('Ask anything')).not.toBeInTheDocument()
+    await fireEvent.click(screen.getByTestId('onboarding-cancel'))
+
+    expect(await screen.findByPlaceholderText('Ask anything')).toHaveFocus()
+  })
+
+  it('waits to focus on workspace re-entry until a resuming composer becomes enabled', async () => {
+    let resolveResume
+    invoke.mockImplementation(async (command) => {
+      if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
+      if (command === 'chat_history') return [{
+        runId: 'run-interrupted', phase: 'interrupted', text: 'Partial answer',
+        prompt: 'Original prompt', receipt: null, toolActivity: [], resumable: true,
+      }]
+      if (command === 'auth_entitlement_snapshot') return snapshot()
+      if (command === 'auth_devices') return []
+      if (command === 'chat_resume') return new Promise((resolve) => { resolveResume = resolve })
+      throw new Error(`unexpected command: ${command}`)
+    })
+    render(App)
+    await fireEvent.click(await screen.findByRole('button', { name: 'Resume' }))
+    await fireEvent.click(screen.getByText('Home settings'))
+    await fireEvent.click(screen.getByTestId('onboarding-cancel'))
+
+    const composer = await screen.findByPlaceholderText('Resuming interrupted reply…')
+    expect(composer).toBeDisabled()
+    expect(composer).not.toHaveFocus()
+
+    chatListener({ payload: {
+      runId: 'run-interrupted', phase: 'complete', text: 'Finished answer',
+      receipt: { id: 'receipt-1' }, toolActivity: [], pendingPermission: null,
+    } })
+    await waitFor(() => expect(composer).toBeEnabled())
+    expect(composer).toHaveFocus()
+
+    const railToggle = screen.getByRole('button', { name: 'Open artifact rail' })
+    railToggle.focus()
+    resolveResume({ runId: 'run-interrupted' })
+    await waitFor(() => expect(screen.queryByText('Resuming…')).not.toBeInTheDocument())
+    expect(railToggle).toHaveFocus()
+  })
+
+  it('waits to focus on workspace re-entry until dictation polishing finishes', async () => {
+    let resolvePolish
+    invoke.mockImplementation(async (command) => {
+      if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
+      if (command === 'chat_history') return []
+      if (command === 'auth_entitlement_snapshot') return snapshot()
+      if (command === 'auth_devices') return []
+      if (command === 'dictation_start') return { state: 'running' }
+      if (command === 'dictation_stop') return { state: 'stopped' }
+      if (command === 'dictation_polish') return new Promise((resolve) => { resolvePolish = resolve })
+      throw new Error(`unexpected command: ${command}`)
+    })
+    render(App)
+    const voice = await screen.findByRole('button', { name: 'Voice' })
+    await fireEvent.click(voice)
+    dictationListener({ payload: { type: 'transcript', text: 'captured words' } })
+    await stopClickCapture(voice)
+    await screen.findByText('Polishing on this device…')
+    await fireEvent.click(screen.getByText('Home settings'))
+    await fireEvent.click(screen.getByTestId('onboarding-cancel'))
+
+    const composer = await screen.findByPlaceholderText('Ask anything')
+    expect(composer).toHaveAttribute('readonly')
+    expect(composer).not.toHaveFocus()
+
+    resolvePolish('Polished words')
+    await waitFor(() => expect(composer).not.toHaveAttribute('readonly'))
+    expect(composer).toHaveFocus()
+
+    const railToggle = screen.getByRole('button', { name: 'Open artifact rail' })
+    railToggle.focus()
+    await fireEvent.input(composer, { target: { value: 'Edited after polishing' } })
+    expect(railToggle).toHaveFocus()
+  })
+})
+
 describe('artifact rail', () => {
   it('toggles from the titlebar button with accessible state and an honest empty landmark', async () => {
     render(App)
@@ -2624,10 +2751,79 @@ describe('message action row', () => {
     expect(screen.queryByRole('button', { name: 'Copy' })).not.toBeInTheDocument()
   })
 
-  it('disables Copy on a reply that settled without text', async () => {
+  it('copies the exact plain text when a reply settles without content', async () => {
+    const writeText = clipboard(vi.fn().mockResolvedValue(undefined))
     restore([reply({ text: '' })])
 
-    expect(await screen.findByRole('button', { name: 'Copy' })).toBeDisabled()
+    await fireEvent.click(await screen.findByRole('button', { name: 'Copy' }))
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith(''))
+  })
+})
+
+describe('provenance line', () => {
+  function restore(receipt) {
+    invoke.mockImplementation(async (command) => {
+      if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
+      if (command === 'chat_history') return [{ runId: 'run-receipt', phase: 'complete', text: 'A routed answer', prompt: 'A question', receipt, toolActivity: [] }]
+      if (command === 'auth_entitlement_snapshot') return snapshot()
+      if (command === 'auth_devices') return []
+      throw new Error(`unexpected command: ${command}`)
+    })
+    return render(App)
+  }
+
+  it('renders route → model · cost · time with signal on the route segment', async () => {
+    restore({ route: 'analysis/high', model: 'glm-5.2', cost: '$0.0089', time: '6.2s' })
+
+    const line = await screen.findByRole('button', { name: 'Expand receipt: Routed via analysis/high to model glm-5.2, $0.0089, 6.2s' })
+    expect(line.textContent).toBe('analysis/high → glm-5.2 · $0.0089 · 6.2s')
+    expect(within(line).getByText('analysis/high')).toHaveClass('route-segment')
+    expect(line.querySelectorAll('.route-segment')).toHaveLength(1)
+  })
+
+  it('paints nothing green when the receipt records no route', async () => {
+    restore({ model: 'glm-5.2', cost: '$0.0089', time: '6.2s' })
+
+    const line = await screen.findByRole('button', { name: 'Expand receipt: Model glm-5.2, $0.0089, 6.2s' })
+    expect(line.textContent).toBe('glm-5.2 · $0.0089 · 6.2s')
+    expect(line.querySelector('.route-segment')).toBeNull()
+  })
+
+  it('renders a route-only receipt without a dangling arrow', async () => {
+    restore({ route: 'analysis/high' })
+
+    const line = await screen.findByRole('button', { name: 'Expand receipt: Routed via analysis/high' })
+    expect(line.textContent).toBe('analysis/high')
+  })
+
+  it('expands to the receipt record and back', async () => {
+    restore({ route: 'analysis/high', model: 'glm-5.2', cost: '$0.0089', time: '6.2s', capabilities: [{ name: 'search', version: '2' }] })
+
+    const line = await screen.findByRole('button', { name: /^Expand receipt:/ })
+    expect(line.textContent).toBe('analysis/high → glm-5.2 · $0.0089 · 6.2s · search@2')
+    await fireEvent.click(line)
+
+    const record = document.querySelector('.receipt-record')
+    expect(record.textContent).toBe('Routeanalysis/highModelglm-5.2Cost$0.0089Time6.2sCapabilitysearch@2')
+    expect(record.querySelectorAll('.route-value')).toHaveLength(1)
+    expect(await screen.findByRole('button', { name: 'Collapse receipt: Routed via analysis/high to model glm-5.2, $0.0089, 6.2s, search@2' })).toBe(line)
+
+    await fireEvent.click(line)
+    await waitFor(() => expect(document.querySelector('.receipt-record')).toBeNull())
+  })
+
+  it('renders no provenance line for a receipt with nothing to record', async () => {
+    restore({})
+
+    expect(await screen.findByText('A routed answer')).toBeInTheDocument()
+    expect(document.querySelector('.provenance')).toBeNull()
+  })
+
+  it('keeps the reply readable when the run carries no receipt at all', async () => {
+    restore(null)
+
+    expect(await screen.findByText('A routed answer')).toBeInTheDocument()
+    expect(document.querySelector('.provenance')).toBeNull()
   })
 })
 
@@ -2671,7 +2867,9 @@ describe('active run composer queue', () => {
   it('steers the active reply with the exact Rust command payload', async () => {
     const composer = await startRun()
     await fireEvent.input(composer, { target: { value: 'Focus on the risks' } })
-    await fireEvent.click(screen.getByRole('button', { name: 'Send' }))
+    const send = screen.getByRole('button', { name: 'Send' })
+    expect(send).toHaveClass('primary')
+    await fireEvent.click(send)
 
     expectQueuePayload({ runId: 'run-7', delivery: 'steer', message: 'Focus on the risks' })
   })
@@ -2692,6 +2890,154 @@ describe('active run composer queue', () => {
 
     expect(await screen.findByRole('alert')).toHaveTextContent('Could not queue this message')
     expect(composer).toHaveValue('Keep this draft')
+  })
+})
+
+describe('composer auto-grow', () => {
+  // jsdom lays nothing out, so the §4 clamp has nothing to measure. Give the
+  // textarea a real row height and a content height that tracks its value.
+  const row = 20
+  const resting = `${2 * row}px`
+  const cap = `${10 * row}px`
+  const lines = (count) => Array.from({ length: count }, (_, index) => `line ${index + 1}`).join('\n')
+  // Rendered line count for a draft — a narrower composer soft-wraps the same
+  // text onto more lines, which the resize test models by replacing this.
+  let rendered
+
+  beforeEach(() => {
+    rendered = (value) => value.split('\n').length
+    Object.defineProperty(HTMLTextAreaElement.prototype, 'scrollHeight', {
+      configurable: true,
+      get() { return rendered(this.value) * row },
+    })
+    const computed = window.getComputedStyle.bind(window)
+    vi.spyOn(window, 'getComputedStyle').mockImplementation((element, pseudo) => element instanceof HTMLTextAreaElement
+      ? { lineHeight: `${row}px`, paddingTop: '0px', paddingBottom: '0px' }
+      : computed(element, pseudo))
+  })
+
+  afterEach(() => {
+    delete HTMLTextAreaElement.prototype.scrollHeight
+    delete globalThis.ResizeObserver
+  })
+
+  it('grows to the ten-line cap, then scrolls instead of growing further', async () => {
+    render(App)
+    const composer = await screen.findByPlaceholderText('Ask anything')
+    expect(composer.style.height).toBe(resting)
+
+    await fireEvent.input(composer, { target: { value: lines(5) } })
+    expect(composer.style.height).toBe(`${5 * row}px`)
+    expect(composer.style.overflowY).toBe('hidden')
+
+    await fireEvent.input(composer, { target: { value: lines(10) } })
+    expect(composer.style.height).toBe(cap)
+
+    await fireEvent.input(composer, { target: { value: lines(40) } })
+    expect(composer.style.height).toBe(cap)
+    expect(composer.style.overflowY).toBe('auto')
+  })
+
+  it('shrinks as text is deleted and rests at two rows once the draft clears', async () => {
+    invoke.mockImplementation(async (command) => {
+      if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
+      if (command === 'chat_history') return []
+      if (command === 'auth_entitlement_snapshot') return snapshot()
+      if (command === 'auth_devices') return []
+      if (command === 'chat_submit') return { runId: 'run-9', attachments: [] }
+      throw new Error(`unexpected command: ${command}`)
+    })
+    render(App)
+    const composer = await screen.findByPlaceholderText('Ask anything')
+    await fireEvent.input(composer, { target: { value: lines(8) } })
+    expect(composer.style.height).toBe(`${8 * row}px`)
+
+    await fireEvent.input(composer, { target: { value: lines(3) } })
+    expect(composer.style.height).toBe(`${3 * row}px`)
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Send' }))
+    await waitFor(() => expect(composer).toHaveValue(''))
+    expect(composer.style.height).toBe(resting)
+  })
+
+  it('resizes for programmatic draft changes, not only typed input', async () => {
+    invoke.mockImplementation(async (command) => {
+      if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
+      if (command === 'chat_history') return []
+      if (command === 'auth_entitlement_snapshot') return snapshot()
+      if (command === 'auth_devices') return []
+      if (command === 'dictation_start') return { state: 'running' }
+      if (command === 'dictation_stop') return { state: 'stopped' }
+      throw new Error(`unexpected command: ${command}`)
+    })
+    render(App)
+    const composer = await screen.findByPlaceholderText('Ask anything')
+    await fireEvent.input(composer, { target: { value: lines(3) } })
+    expect(composer.style.height).toBe(`${3 * row}px`)
+
+    globalShortcutHandler({ state: 'Pressed' })
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('dictation_start'))
+    dictationListener({ payload: { type: 'transcript', text: `\n${lines(4)}` } })
+    await waitFor(() => expect(composer.style.height).toBe(`${7 * row}px`))
+
+    // Esc cancels the capture and restores the snapshot; the box follows it back.
+    await fireEvent.keyDown(document, { key: 'Escape' })
+    await waitFor(() => expect(composer.style.height).toBe(`${3 * row}px`))
+  })
+
+  it('returns to the resting height through the Try again retry', async () => {
+    const submitted = deferred()
+    invoke.mockImplementation(async (command) => {
+      if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
+      if (command === 'chat_history') return [{
+        runId: 'run-interrupted', phase: 'interrupted', text: 'Partial answer',
+        prompt: lines(4), receipt: null, toolActivity: [], resumable: false,
+      }]
+      if (command === 'auth_entitlement_snapshot') return snapshot()
+      if (command === 'auth_devices') return []
+      if (command === 'chat_submit') return submitted.promise
+      throw new Error(`unexpected command: ${command}`)
+    })
+    render(App)
+    const composer = await screen.findByPlaceholderText('Ask anything')
+    expect(composer.style.height).toBe(resting)
+
+    // Retry writes the four-line prompt into the draft with no input event,
+    // then send() clears it once the submission lands.
+    await fireEvent.click(await screen.findByRole('button', { name: 'Try again' }))
+    await waitFor(() => expect(composer.style.height).toBe(`${4 * row}px`))
+
+    submitted.resolve({ runId: 'run-11', attachments: [] })
+    await waitFor(() => expect(composer.style.height).toBe(resting))
+  })
+
+  it('re-measures when the composer itself resizes, not only the window', async () => {
+    const observers = []
+    globalThis.ResizeObserver = class {
+      constructor(callback) { this.callback = callback; this.disconnected = false; observers.push(this) }
+      observe(target) { this.target = target }
+      disconnect() { this.disconnected = true }
+    }
+    render(App)
+    const composer = await screen.findByPlaceholderText('Ask anything')
+    await fireEvent.input(composer, { target: { value: lines(6) } })
+    expect(composer.style.height).toBe(`${6 * row}px`)
+
+    // Opening the artifact rail narrows the composer without touching the
+    // window: the same draft rewraps onto eight lines. Left unmeasured the box
+    // stays six rows tall with overflow hidden, so two lines of the user's own
+    // draft would be invisible and unreachable.
+    rendered = (value) => value.split('\n').length + 2
+    expect(observers).toHaveLength(1)
+    // The action row, never the input: observing a box this callback resizes
+    // makes the browser report an undelivered ResizeObserver loop on every drag.
+    expect(observers[0].target).toHaveClass('composer-row')
+    observers[0].callback()
+    expect(composer.style.height).toBe(`${8 * row}px`)
+    expect(composer.style.overflowY).toBe('hidden')
+
+    cleanup()
+    expect(observers[0].disconnected).toBe(true)
   })
 })
 
