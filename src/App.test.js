@@ -2546,11 +2546,15 @@ describe('composer auto-grow', () => {
   const resting = `${2 * row}px`
   const cap = `${10 * row}px`
   const lines = (count) => Array.from({ length: count }, (_, index) => `line ${index + 1}`).join('\n')
+  // Rendered line count for a draft — a narrower composer soft-wraps the same
+  // text onto more lines, which the resize test models by replacing this.
+  let rendered
 
   beforeEach(() => {
+    rendered = (value) => value.split('\n').length
     Object.defineProperty(HTMLTextAreaElement.prototype, 'scrollHeight', {
       configurable: true,
-      get() { return this.value.split('\n').length * row },
+      get() { return rendered(this.value) * row },
     })
     const computed = window.getComputedStyle.bind(window)
     vi.spyOn(window, 'getComputedStyle').mockImplementation((element, pseudo) => element instanceof HTMLTextAreaElement
@@ -2560,6 +2564,7 @@ describe('composer auto-grow', () => {
 
   afterEach(() => {
     delete HTMLTextAreaElement.prototype.scrollHeight
+    delete globalThis.ResizeObserver
   })
 
   it('grows to the ten-line cap, then scrolls instead of growing further', async () => {
@@ -2624,6 +2629,61 @@ describe('composer auto-grow', () => {
     // Esc cancels the capture and restores the snapshot; the box follows it back.
     await fireEvent.keyDown(document, { key: 'Escape' })
     await waitFor(() => expect(composer.style.height).toBe(`${3 * row}px`))
+  })
+
+  it('returns to the resting height through the Try again retry', async () => {
+    const submitted = deferred()
+    invoke.mockImplementation(async (command) => {
+      if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
+      if (command === 'chat_history') return [{
+        runId: 'run-interrupted', phase: 'interrupted', text: 'Partial answer',
+        prompt: lines(4), receipt: null, toolActivity: [], resumable: false,
+      }]
+      if (command === 'auth_entitlement_snapshot') return snapshot()
+      if (command === 'auth_devices') return []
+      if (command === 'chat_submit') return submitted.promise
+      throw new Error(`unexpected command: ${command}`)
+    })
+    render(App)
+    const composer = await screen.findByPlaceholderText('Ask anything')
+    expect(composer.style.height).toBe(resting)
+
+    // Retry writes the four-line prompt into the draft with no input event,
+    // then send() clears it once the submission lands.
+    await fireEvent.click(await screen.findByRole('button', { name: 'Try again' }))
+    await waitFor(() => expect(composer.style.height).toBe(`${4 * row}px`))
+
+    submitted.resolve({ runId: 'run-11', attachments: [] })
+    await waitFor(() => expect(composer.style.height).toBe(resting))
+  })
+
+  it('re-measures when the composer itself resizes, not only the window', async () => {
+    const observers = []
+    globalThis.ResizeObserver = class {
+      constructor(callback) { this.callback = callback; this.disconnected = false; observers.push(this) }
+      observe(target) { this.target = target }
+      disconnect() { this.disconnected = true }
+    }
+    render(App)
+    const composer = await screen.findByPlaceholderText('Ask anything')
+    await fireEvent.input(composer, { target: { value: lines(6) } })
+    expect(composer.style.height).toBe(`${6 * row}px`)
+
+    // Opening the artifact rail narrows the composer without touching the
+    // window: the same draft rewraps onto eight lines. Left unmeasured the box
+    // stays six rows tall with overflow hidden, so two lines of the user's own
+    // draft would be invisible and unreachable.
+    rendered = (value) => value.split('\n').length + 2
+    expect(observers).toHaveLength(1)
+    // The action row, never the input: observing a box this callback resizes
+    // makes the browser report an undelivered ResizeObserver loop on every drag.
+    expect(observers[0].target).toHaveClass('composer-row')
+    observers[0].callback()
+    expect(composer.style.height).toBe(`${8 * row}px`)
+    expect(composer.style.overflowY).toBe('hidden')
+
+    cleanup()
+    expect(observers[0].disconnected).toBe(true)
   })
 })
 

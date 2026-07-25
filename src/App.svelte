@@ -86,6 +86,7 @@
   const registeredVoiceShortcuts = new Set()
   let composer = $state()
   let polishPreview = $state()
+  let composerRow = $state()
   let onboarding = $state(onboardingLoadingState)
   let requiredModel = $state(requiredModelLoadingState)
   let modelProgress = $derived(requiredModelProgress(requiredModel))
@@ -792,7 +793,9 @@
   // resizes the thread, which lets the browser clamp its scrollTop. Put the
   // transcript back where it was — at the bottom while it is pinned, otherwise
   // exactly where the reader left it — so growing the composer never scrolls it.
-  function syncComposerHeight() {
+  // `reveal` is set by the draft path only: new text should be brought into
+  // view, but a mere relayout must leave the reader wherever they were.
+  function syncComposerHeight(reveal = false) {
     if (!composer) return
     const styles = getComputedStyle(composer)
     const threadScrollTop = thread?.scrollTop
@@ -808,6 +811,10 @@
     } else {
       composer.style.height = `${height}px`
       composer.style.overflowY = capped ? 'auto' : 'hidden'
+      // Past the cap a programmatic write — a streamed transcript, a transform
+      // result — lands below the fold and the user watches their words vanish.
+      // Typed input needs no help: the browser keeps the caret in view.
+      if (reveal && capped && document.activeElement !== composer) composer.scrollTop = composer.scrollHeight
     }
     if (thread) {
       const restored = pinned ? thread.scrollHeight - thread.clientHeight : threadScrollTop
@@ -828,7 +835,23 @@
   $effect(() => {
     draft
     polishPreview
-    if (composer) untrack(syncComposerHeight)
+    if (composer) untrack(() => syncComposerHeight(true))
+  })
+
+  // The composer also rewraps when only its width changes, and most of those
+  // never touch the window: ⌘J opening the artifact rail, the rail separator
+  // being dragged or arrow-keyed, the sidebar collapsing. A height measured at
+  // the old width would clip the draft with no scrollbar to reach it, so watch
+  // the layout rather than the window. The action row is the box to observe:
+  // it spans the same width as the input but is the one part of the composer
+  // whose size we never set ourselves, so the callback cannot resize its own
+  // target — observing the textarea makes Chromium report "ResizeObserver loop
+  // completed with undelivered notifications" all through a rail drag.
+  $effect(() => {
+    if (!composerRow || typeof ResizeObserver === 'undefined') return
+    const observer = new ResizeObserver(() => untrack(syncComposerHeight))
+    observer.observe(composerRow)
+    return () => observer.disconnect()
   })
 
   function toggleReceipt(runId) {
@@ -996,8 +1019,6 @@
     }
     document.addEventListener('keydown', shortcuts)
     window.addEventListener('resize', fitArtifactRail)
-    // A narrower composer rewraps the draft, so the clamp has to be remeasured.
-    window.addEventListener('resize', syncComposerHeight)
     let stopDragDrop
     if (tauri) getCurrentWebview().onDragDropEvent(({ payload }) => {
         if (auth.name !== 'signed-in' || active) {
@@ -1030,7 +1051,6 @@
       globalVoiceTask = globalVoiceTask.finally(cleanupVoiceShortcuts)
       document.removeEventListener('keydown', shortcuts)
       window.removeEventListener('resize', fitArtifactRail)
-      window.removeEventListener('resize', syncComposerHeight)
     }
   })
 
@@ -1407,7 +1427,7 @@
               {/each}
             </div>
           {/if}
-          <div class="composer-row">
+          <div class="composer-row" bind:this={composerRow}>
             {#if dictationTransformPending}
               <span class="polish-status" role="status">Transforming on this device…</span>
             {:else if dictationPolishing}
@@ -1697,7 +1717,9 @@
      scrollHeight is pure text and the overlay lands on the same grid. */
   textarea { display: block; width: 100%; resize: none; padding: 0; border: 0; outline: 0; background: transparent; color: var(--ink); font: inherit; }
   textarea.polishing { color: transparent; caret-color: transparent; }
-  .polish-preview { position: absolute; inset: 0; overflow: hidden; pointer-events: none; white-space: pre-wrap; color: var(--ink); font: inherit; }
+  /* overflow-wrap matches the textarea's UA style so a single long token breaks
+     on the same character in both layers. */
+  .polish-preview { position: absolute; inset: 0; overflow: hidden; pointer-events: none; white-space: pre-wrap; overflow-wrap: break-word; color: var(--ink); font: inherit; }
   .polish-transcript { text-decoration-line: underline; text-decoration-color: var(--signal); text-decoration-thickness: 2px; text-underline-offset: 3px; }
   .dictation-transforms { display: flex; flex-wrap: wrap; gap: 5px; margin: 7px 0; }
   .dictation-transforms button { display: inline-flex; align-items: center; gap: 7px; padding: 3px 7px; border-color: var(--signal); border-radius: 2px; background: transparent; color: var(--signal); font: var(--text-12) var(--font-mono); }
