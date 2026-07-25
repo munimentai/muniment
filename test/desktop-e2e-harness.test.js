@@ -259,6 +259,11 @@ describe('Windows finalizer contract', () => {
     expect(finalizer).toMatch(/publicationStatus = \$cleanupStatus[\s\S]+cleanupStatus -ne \$publicationStatus[\s\S]+suppress-artifacts/)
   })
 
+  it('defaults the artifact directory to the path desktop-ci actually collects', () => {
+    expect(runner).toContain('$artifacts = if ($env:DCI_ARTIFACTS_DIR) { $env:DCI_ARTIFACTS_DIR } else { Join-Path $env:TEMP "dci-artifacts" }')
+    expect(runner).not.toContain('C:\\dci-artifacts')
+  })
+
   it('establishes try/finally before directory and cleanup-log creation', () => {
     const boundary = runner.indexOf('\ntry {')
     expect(runner.indexOf('New-Item -ItemType Directory -Force $raw, $stateRoot')).toBeGreaterThan(boundary)
@@ -394,10 +399,14 @@ describe('artifact redaction boundary', () => {
 
 describe('desktop-ci payload extraction', () => {
   const markers = (body) => `=== DESKTOP-CI ARTIFACTS BEGIN ===\n${body}\n=== DESKTOP-CI ARTIFACTS END ===\n`
+  // The driver's own --collect-artifacts fence, used when the guest never
+  // published an envelope of its own (runner contract).
+  const driverMarkers = (body) => `-----DESKTOP-CI-ARTIFACTS-BEGIN-----\n${body}\n-----DESKTOP-CI-ARTIFACTS-END-----\n`
   const archive = (setup) => {
     const source = temp(); setup(source)
     return execFileSync('tar', ['-czf', '-', '-C', source, '.']).toString('base64')
   }
+  const logArchive = (name, body = 'safe') => archive((dir) => fs.writeFileSync(path.join(dir, name), body))
   const extractInto = (output, runStatus) => {
     const file = path.join(temp(), 'output'); const destination = path.join(temp(), 'artifacts'); fs.writeFileSync(file, output)
     const args = [path.join(root, 'test/e2e/support/extract-artifacts.sh'), file, destination]
@@ -416,6 +425,58 @@ describe('desktop-ci payload extraction', () => {
     const source = temp(); fs.writeFileSync(path.join(source, 'file'), 'unsafe')
     const encoded = execFileSync('tar', ['-czf', '-', '--transform=s,^,../,', '-C', source, 'file']).toString('base64')
     expect(extract(markers(encoded)).status).not.toBe(0)
+  })
+
+  it('falls back to the driver envelope when the guest published none', () => {
+    const { result, destination } = extractInto(`[desktop-ci 01:02:03] collecting artifacts from VM\n${driverMarkers(logArchive('junit-results.xml', '<testsuites/>'))}`)
+    expect(result.status, result.stderr).toBe(0)
+    expect(fs.readFileSync(path.join(destination, 'junit-results.xml'), 'utf8')).toBe('<testsuites/>')
+  })
+
+  it('accepts the wrapped payload and surviving certutil fences the driver really emits', () => {
+    const wrapped = logArchive('wdio.log').match(/.{1,76}/g).join('\n')
+    const { result, destination } = extractInto(driverMarkers(`-----BEGIN CERTIFICATE-----\n${wrapped}\n-----END CERTIFICATE-----`))
+    expect(result.status, result.stderr).toBe(0)
+    expect(fs.readFileSync(path.join(destination, 'wdio.log'), 'utf8')).toBe('safe')
+  })
+
+  it('prefers the redacted guest envelope when both forms are present', () => {
+    const { result, destination } = extractInto(`${markers(logArchive('guest.log'))}${driverMarkers(logArchive('driver.log'))}`)
+    expect(result.status, result.stderr).toBe(0)
+    expect(fs.existsSync(path.join(destination, 'guest.log'))).toBe(true)
+    expect(fs.existsSync(path.join(destination, 'driver.log'))).toBe(false)
+  })
+
+  it('reports a malformed guest envelope rather than falling through to the driver form', () => {
+    const { result, destination } = extractInto(`${markers('junk')}${markers('junk')}${driverMarkers(logArchive('driver.log'))}`)
+    expect(result.status).not.toBe(0)
+    expect(diagnostics(destination).stage).toBe('markers')
+    expect(fs.existsSync(path.join(destination, 'driver.log'))).toBe(false)
+  })
+
+  it.each([
+    ['duplicated', (body) => `${driverMarkers(body)}${driverMarkers(body)}`],
+    ['interleaved', (body) => `-----DESKTOP-CI-ARTIFACTS-BEGIN-----\n-----DESKTOP-CI-ARTIFACTS-BEGIN-----\n${body}\n-----DESKTOP-CI-ARTIFACTS-END-----\n`],
+    ['unterminated', (body) => `-----DESKTOP-CI-ARTIFACTS-BEGIN-----\n${body}\n`],
+    ['reversed', (body) => `-----DESKTOP-CI-ARTIFACTS-END-----\n${body}\n-----DESKTOP-CI-ARTIFACTS-BEGIN-----\n`],
+  ])('rejects %s driver markers', (_name, wrap) => {
+    expect(extract(wrap(logArchive('driver.log'))).status).not.toBe(0)
+  })
+
+  it('rejects a driver-form archive with a link member', () => {
+    expect(extract(driverMarkers(archive((dir) => fs.symlinkSync('/tmp', path.join(dir, 'link'))))).status).not.toBe(0)
+  })
+
+  it('rejects a driver-form archive with a traversal member', () => {
+    const source = temp(); fs.writeFileSync(path.join(source, 'file'), 'unsafe')
+    const encoded = execFileSync('tar', ['-czf', '-', '--transform=s,^,../,', '-C', source, 'file']).toString('base64')
+    expect(extract(driverMarkers(encoded)).status).not.toBe(0)
+  })
+
+  it('rejects a corrupt driver-form payload', () => {
+    const { result, destination } = extractInto(driverMarkers('not*valid*base64'))
+    expect(result.status).not.toBe(0)
+    expect(diagnostics(destination).stage).toBe('base64')
   })
 
   it('records a missing envelope as zero markers so the opaque nightly failure is diagnosable', () => {
@@ -457,8 +518,47 @@ describe('desktop-ci payload extraction', () => {
     expect(diagnostics(extractInto('no envelope\n', '1 corp-secret').destination).desktop_ci_exit_status).toBe('unrecorded')
   })
 
+  it('names the failing desktop-ci stage from the driver\'s own fixed constants', () => {
+    const transcript = [
+      '[desktop-ci 01:02:03] waiting for desktop-CI slot (lock)...',
+      '[desktop-ci 01:02:04] slot acquired',
+      '[desktop-ci 01:07:04] FATAL: SSH not reachable after 300s',
+      '[desktop-ci 01:07:05] BUILD FAILED (linux) rc=3',
+      '[desktop-ci 01:07:06] WARN: no artifacts collected (VM had no artifact dir or SSH failed)',
+    ].join('\n')
+    const { result, destination } = extractInto(`${transcript}\n`, 3)
+    expect(result.status).not.toBe(0)
+    const fields = diagnostics(destination)
+    expect(fields.desktop_ci_exit_status).toBe('3')
+    expect(fields.driver_log_line_count).toBe('5')
+    expect(fields.driver_fatal_ssh_unreachable).toBe('1')
+    expect(fields.driver_build_failed).toBe('1')
+    expect(fields.driver_no_artifacts_warning).toBe('1')
+    expect(fields.driver_fatal_no_slot).toBe('0')
+    expect(fields.driver_fatal_clone_failed).toBe('0')
+    expect(fields.driver_build_green).toBe('0')
+    expect(fields.driver_artifact_marker_count).toBe('0')
+    expect(fields.driver_screendump_marker_count).toBe('0')
+  })
+
+  it('counts the driver artifact and screendump markers it could not parse', () => {
+    const { destination } = extractInto([
+      '-----DESKTOP-CI-ARTIFACTS-BEGIN-----',
+      '-----DESKTOP-CI-ARTIFACTS-BEGIN-----',
+      'not*valid*base64',
+      '-----DESKTOP-CI-ARTIFACTS-END-----',
+      '-----DESKTOP-CI-SCREENDUMP-BEGIN-----',
+      'cGF5bG9hZA==',
+      '-----DESKTOP-CI-SCREENDUMP-END-----',
+    ].join('\n') + '\n')
+    const fields = diagnostics(destination)
+    expect(fields.stage).toBe('markers')
+    expect(fields.driver_artifact_marker_count).toBe('2')
+    expect(fields.driver_screendump_marker_count).toBe('1')
+  })
+
   it('never leaks transcript content into the diagnostics', () => {
-    const { destination } = extractInto('=== DESKTOP-CI ARTIFACTS BEGIN ===\ncorp-secret-value AKIA0123456789 Bearer sk-live-abcdefg\n')
+    const { destination } = extractInto('=== DESKTOP-CI ARTIFACTS BEGIN ===\ncorp-secret-value AKIA0123456789 Bearer sk-live-abcdefg\n[desktop-ci 01:02:03] BUILD FAILED corp-secret-value\n')
     const raw = fs.readFileSync(path.join(destination, 'envelope-diagnostics.txt'), 'utf8')
     expect(raw).not.toContain('corp-secret-value')
     expect(raw).not.toContain('AKIA0123456789')
@@ -475,7 +575,7 @@ describe('cleanup failure accounting', () => {
     const junit = extraEnv.MUNIMENT_E2E_FINALIZER_TEST_STATUS === '1'
       ? '<testsuite name="installed-linux" failures="1"><testcase><failure message="safe diagnostic"/></testcase></testsuite>'
       : '<testsuite name="installed-linux" failures="0"/>'
-    fs.writeFileSync(path.join(artifacts, 'junit.xml'), junit)
+    fs.writeFileSync(path.join(artifacts, 'junit-results.xml'), junit)
     const result = spawnSync('bash', [path.join(root, 'test/e2e/runner/linux.sh')], {
       encoding: 'utf8',
       env: { ...process.env, DCI_ARTIFACTS_DIR: artifacts, MUNIMENT_E2E_FINALIZER_TEST_MODE: '1', MUNIMENT_E2E_FINALIZER_TEST_LEDGER: ledger, MUNIMENT_E2E_FINALIZER_TEST_STATUS_LEDGER: statusLedger, MUNIMENT_E2E_FINALIZER_TEST_FAIL: failed, ...extraEnv },
@@ -485,6 +585,16 @@ describe('cleanup failure accounting', () => {
     return { result, entries, statuses, invoked: entries.map((entry) => entry.split('\t')[0]) }
   }
   const commands = (entries) => Object.fromEntries(entries.map((entry) => entry.split('\t', 2)))
+  const envelopeMarkers = (stdout) => [
+    stdout.match(/^=== DESKTOP-CI ARTIFACTS BEGIN ===$/gm)?.length ?? 0,
+    stdout.match(/^=== DESKTOP-CI ARTIFACTS END ===$/gm)?.length ?? 0,
+  ]
+  const extractEnvelope = (stdout) => {
+    const output = path.join(temp(), 'output'); const extracted = path.join(temp(), 'extracted')
+    fs.writeFileSync(output, stdout)
+    const result = spawnSync('bash', [path.join(root, 'test/e2e/support/extract-artifacts.sh'), output, extracted], { encoding: 'utf8' })
+    return { result, extracted }
+  }
   it('prefers the packaged binary name and retains the legacy fallback', () => {
     expect(runner).toContain('app_binary=$(command -v muniment-desktop || command -v muniment)')
   })
@@ -494,23 +604,50 @@ describe('cleanup failure accounting', () => {
   ])('emits one extractable safe envelope after a %s', (_name, env, expectedStatus) => {
     const { result } = runFinalizer('', env)
     expect(result.status).toBe(expectedStatus)
-    expect(result.stdout.match(/^=== DESKTOP-CI ARTIFACTS BEGIN ===$/gm)).toHaveLength(1)
-    expect(result.stdout.match(/^=== DESKTOP-CI ARTIFACTS END ===$/gm)).toHaveLength(1)
-    const output = path.join(temp(), 'output'); const extracted = path.join(temp(), 'extracted')
-    fs.writeFileSync(output, result.stdout)
-    const extraction = spawnSync('bash', [path.join(root, 'test/e2e/support/extract-artifacts.sh'), output, extracted], { encoding: 'utf8' })
-    expect(extraction.status).toBe(0)
-    const junit = fs.readFileSync(path.join(extracted, 'junit.xml'), 'utf8')
+    expect(envelopeMarkers(result.stdout)).toEqual([1, 1])
+    const { result: extraction, extracted } = extractEnvelope(result.stdout)
+    expect(extraction.status, extraction.stderr).toBe(0)
+    const junit = fs.readFileSync(path.join(extracted, 'junit-results.xml'), 'utf8')
     expect(junit).toContain('installed-linux')
     if (expectedStatus) expect(junit).toContain('<failure message="safe diagnostic"/>')
   })
-  it.each(['redact-artifacts', 'remove-raw', 'publish-artifacts', 'publish-envelope'])(
-    'suppresses the envelope after injected %s failure', (failed) => {
-      const { result } = runFinalizer(failed)
+  // A failed cleanup step used to swallow the whole bundle, so the failures most
+  // in need of evidence -- an early guest abort -- reported nothing but an
+  // opaque "desktop-ci infrastructure" result. Redaction stays the only gate.
+  it.each(['stop-app', 'remove-raw', 'remove-cleanup-log'])(
+    'still publishes the redacted bundle after injected %s cleanup failure', (failed) => {
+      const { result } = runFinalizer(failed, { MUNIMENT_E2E_FINALIZER_TEST_STATUS: '1' })
       expect(result.status).not.toBe(0)
-      expect(result.stdout).not.toContain('=== DESKTOP-CI ARTIFACTS')
+      expect(envelopeMarkers(result.stdout)).toEqual([1, 1])
+      const { result: extraction, extracted } = extractEnvelope(result.stdout)
+      expect(extraction.status, extraction.stderr).toBe(0)
+      expect(fs.readFileSync(path.join(extracted, 'junit-results.xml'), 'utf8')).toContain('<failure message="safe diagnostic"/>')
+      const fallback = spawnSync('bash', [path.join(root, 'test/e2e/support/ensure-junit-report.sh'), extracted, 'installed-linux', '1', '0'], { encoding: 'utf8' })
+      expect(fallback.status, fallback.stderr).toBe(0)
+      expect(fs.existsSync(path.join(extracted, 'junit-infrastructure.xml'))).toBe(false)
     },
   )
+  it.each([
+    ['redact-artifacts', 'redaction-failed'],
+    ['replace-artifacts', 'publication-failed'],
+    ['publish-artifacts', 'publication-failed'],
+  ])('publishes only fixed cleanup labels after injected %s failure', (failed, reason) => {
+    const { result } = runFinalizer(failed, { MUNIMENT_E2E_FINALIZER_TEST_STATUS: '1' })
+    expect(result.status).not.toBe(0)
+    expect(envelopeMarkers(result.stdout)).toEqual([1, 1])
+    const { result: extraction, extracted } = extractEnvelope(result.stdout)
+    expect(extraction.status, extraction.stderr).toBe(0)
+    expect(fs.readdirSync(extracted).sort()).toEqual(['cleanup-status.log', 'envelope-reason.txt'])
+    expect(fs.readFileSync(path.join(extracted, 'envelope-reason.txt'), 'utf8')).toContain(`reason: ${reason}`)
+    const ledger = fs.readFileSync(path.join(extracted, 'cleanup-status.log'), 'utf8').trim().split('\n')
+    expect(ledger).toContain(`${failed}: failed`)
+    for (const line of ledger) expect(line).toMatch(/^[a-z-]+: (?:ok|failed)$/)
+  })
+  it('suppresses the envelope when the publication channel itself fails', () => {
+    const { result } = runFinalizer('publish-envelope')
+    expect(result.status).not.toBe(0)
+    expect(result.stdout).not.toContain('=== DESKTOP-CI ARTIFACTS')
+  })
   it('clears stale automation before reaching recovery, then tears down the app', () => {
     const { result, entries, invoked } = runFinalizer()
     const command = commands(entries)

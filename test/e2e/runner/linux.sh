@@ -11,9 +11,11 @@ auth_url_file=$(mktemp /tmp/muniment-e2e-auth-url.XXXXXX)
 state_root=$(mktemp -d /tmp/muniment-e2e-state.XXXXXX)
 image_fixture="$state_root/image-token.png"
 cleanup_log=$(mktemp /tmp/muniment-e2e-cleanup.XXXXXX.log)
+cleanup_status_ledger=$(mktemp /tmp/muniment-e2e-cleanup-status.XXXXXX.log)
 installer_log="$raw/installer.log"
 status=${MUNIMENT_E2E_FINALIZER_TEST_STATUS:-0}
 cleanup_status=0
+collection_status=0
 installed=0
 ready=0
 
@@ -29,11 +31,11 @@ stop_matching() {
 }
 
 emit_artifacts() {
-  local archive envelope
+  local source=$1 archive envelope
   archive=$(mktemp /tmp/muniment-e2e-artifacts.XXXXXX.tar.gz) || return 1
   envelope=$(mktemp /tmp/muniment-e2e-envelope.XXXXXX) || { rm -f -- "$archive"; return 1; }
   if [[ ${MUNIMENT_E2E_FINALIZER_TEST_FAIL:-} == publish-envelope ]] ||
-    ! tar -czf "$archive" -C "$artifacts" . ||
+    ! tar -czf "$archive" -C "$source" . ||
     ! tar -tzf "$archive" >/dev/null ||
     ! {
       printf '%s\n' '=== DESKTOP-CI ARTIFACTS BEGIN ==='
@@ -47,6 +49,23 @@ emit_artifacts() {
   cat "$envelope"
   local emit_status=$?
   rm -f -- "$envelope"
+  return "$emit_status"
+}
+
+# Redaction or publication failed, so nothing the guest wrote may leave the VM.
+# Publish instead the one bundle that is safe by construction -- the fixed
+# cleanup labels with their ok/failed words -- so the lane still names the step
+# that aborted rather than reporting an evidence-free infrastructure failure.
+emit_minimal_artifacts() {
+  local reason=$1 minimal emit_status
+  minimal=$(mktemp -d /tmp/muniment-e2e-minimal.XXXXXX) || return 1
+  printf 'envelope: minimal\nwithheld: guest artifacts\nreason: %s\n' "$reason" >"$minimal/envelope-reason.txt" || {
+    rm -rf -- "$minimal"; return 1
+  }
+  cp -- "$cleanup_status_ledger" "$minimal/cleanup-status.log" 2>/dev/null || : >"$minimal/cleanup-status.log"
+  emit_artifacts "$minimal"
+  emit_status=$?
+  rm -rf -- "$minimal"
   return "$emit_status"
 }
 
@@ -86,6 +105,7 @@ finalize() {
     if [[ ${MUNIMENT_E2E_FINALIZER_TEST_FAIL:-} == suppress-artifacts ]]; then collection_status=1; fi
     if (( collection_status != 0 )); then cleanup_step suppress-artifacts rm -rf -- "$artifacts"; fi
   else
+    collection_status=1
     cleanup_step suppress-artifacts rm -rf -- "$artifacts"
   fi
   cleanup_step remove-safe rm -rf -- "$safe"
@@ -94,9 +114,17 @@ finalize() {
   cleanup_step auth-url-gone cleanup_absent "$auth_url_file"
   cleanup_step safe-gone cleanup_absent "$safe"
   cleanup_step remove-cleanup-log rm -f -- "$cleanup_log"
-  if (( cleanup_status == 0 && redaction_status == 0 )); then
-    emit_artifacts || cleanup_status=1
+  # Redaction is the gate, not cleanup. Requiring a clean cleanup here meant any
+  # early guest abort -- the failure most in need of evidence -- published
+  # nothing at all, and the lane could only report "desktop-ci infrastructure".
+  if (( redaction_status == 0 && collection_status == 0 )); then
+    emit_artifacts "$artifacts" || cleanup_status=1
+  elif (( redaction_status != 0 )); then
+    emit_minimal_artifacts redaction-failed || cleanup_status=1
+  else
+    emit_minimal_artifacts publication-failed || cleanup_status=1
   fi
+  rm -f -- "$cleanup_status_ledger"
   if (( status != 0 || cleanup_status != 0 || redaction_status != 0 )); then exit 1; fi
 }
 

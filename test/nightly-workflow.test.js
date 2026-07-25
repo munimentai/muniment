@@ -56,20 +56,21 @@ describe('nightly Linux E2E workflow', () => {
     expect(reportStep).not.toContain('path: ${{ runner.temp }}/muniment-e2e-artifacts\n')
   })
 
-  // desktop-ci clones with `git clone --branch <ref>`, so a 40-hex commit is
-  // not a resolvable ref: passing one cloned nothing, the guest command never
-  // ran, and the lane could only report a missing artifact envelope.
-  it('clones a branch and pins the guest checkout to the source SHA', () => {
-    expect(workflow).not.toContain("--ref '$SOURCE_SHA'")
-    expect(linuxE2e).toContain("--ref 'main' --cmd '$cmd'")
-    expect(linuxE2e).toContain('cmd="git fetch --depth 1 origin $SOURCE_SHA && git checkout --detach $SOURCE_SHA && bash test/e2e/runner/linux.sh"')
-  })
-
   it('requests the desktop-ci artifact collector for the guest-published report', () => {
     const runStep = linuxE2e.slice(linuxE2e.indexOf('      - name: Run installed Linux sign-in via desktop-ci'), linuxE2e.indexOf('      - name: Upload successful diagnostics'))
     expect(runStep).toContain('sudo desktop-ci linux')
     expect(runStep).toContain('--collect-artifacts')
     expect(runStep).toContain('extract-artifacts.sh')
+  })
+
+  // desktop-ci resolves --ref with init+fetch-by-ref, so it takes a branch or a
+  // commit; ADR 0013 requires the installed lanes to pin the exact SHA their
+  // artifacts were built from rather than whatever main points at by then.
+  it('pins every installed-E2E lane to the source SHA at --ref', () => {
+    expect(workflow.match(/--ref '\$SOURCE_SHA'/g)).toHaveLength(3)
+    for (const lane of ['linux', 'windows', 'macos']) {
+      expect(workflow).toContain(`sudo desktop-ci ${lane} --repo 'https://github.com/\${REPOSITORY}.git' --ref '$SOURCE_SHA'`)
+    }
   })
 
   it('uses the SSH key provided by the self-hosted runner for every E2E lane', () => {
@@ -88,11 +89,6 @@ describe('nightly Windows E2E workflow', () => {
     expect(reportStep).toContain('name: windows-e2e-report')
     expect(reportStep).toContain('path: ${{ runner.temp }}/muniment-windows-e2e-artifacts/junit-*.xml')
     expect(reportStep).not.toContain('path: ${{ runner.temp }}/muniment-windows-e2e-artifacts\n')
-  })
-
-  it('clones a branch and pins the guest checkout to the source SHA', () => {
-    expect(windowsE2e).toContain("--ref 'main' --cmd '$cmd'")
-    expect(windowsE2e).toContain('cmd="git fetch --depth 1 origin $SOURCE_SHA && git checkout --detach $SOURCE_SHA && powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File test/e2e/runner/windows.ps1"')
   })
 
   it('publishes a parseable infrastructure failure when an extracted failure has no JUnit', () => {
@@ -126,11 +122,6 @@ describe('nightly macOS E2E workflow', () => {
     expect(macosE2e).toContain('sudo desktop-ci macos')
     expect(macosE2e).toContain('--env-stdin')
     expect(macosE2e).toContain('--collect-artifacts --screendump')
-  })
-
-  it('clones a branch and pins the guest checkout to the source SHA', () => {
-    expect(macosE2e).toContain("--ref 'main' --cmd '$cmd'")
-    expect(macosE2e).toContain('cmd="git fetch --depth 1 origin $SOURCE_SHA && git checkout --detach $SOURCE_SHA && bash test/e2e/runner/macos.sh"')
   })
 
   it('validates the pinned SHA and sends no sign-in fixture credentials', () => {

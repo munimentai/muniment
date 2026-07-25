@@ -275,13 +275,8 @@ jobs:
           printf '%s' "$DESKTOP_CI_SSH_KEY" >"$key"
           trap 'rm -f "$key" "$output"' EXIT
 
-          # desktop-ci clones with `git clone --branch <ref>`, which cannot
-          # resolve a commit hash, so a pinned-SHA --ref never produced a
-          # checkout and the guest command never ran: every lane returned an
-          # envelope-less transcript. Clone main and pin the guest checkout by
-          # hash inside --cmd, exactly as the build job above does.
-          cmd="git fetch --depth 1 origin $SOURCE_SHA && git checkout --detach $SOURCE_SHA && bash test/e2e/runner/linux.sh"
-          remote="sudo desktop-ci linux --repo 'https://github.com/${REPOSITORY}.git' --ref 'main' --cmd '$cmd' --env-stdin --memory 8192 --build-timeout 2400 --collect-artifacts"
+          cmd='bash test/e2e/runner/linux.sh'
+          remote="sudo desktop-ci linux --repo 'https://github.com/${REPOSITORY}.git' --ref '$SOURCE_SHA' --cmd '$cmd' --env-stdin --memory 8192 --build-timeout 2400 --collect-artifacts"
           set +e
           printf '%s\n' \
             "GH_TOKEN=$RELEASE_TOKEN" \
@@ -368,10 +363,8 @@ jobs:
           printf '%s' "$DESKTOP_CI_SSH_KEY" >"$key"
           trap 'rm -f "$key" "$output"' EXIT
 
-          # See the Linux lane: --ref carries a branch, the pinned commit is
-          # checked out inside the guest.
-          cmd="git fetch --depth 1 origin $SOURCE_SHA && git checkout --detach $SOURCE_SHA && powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File test/e2e/runner/windows.ps1"
-          remote="sudo desktop-ci windows --repo 'https://github.com/${REPOSITORY}.git' --ref 'main' --cmd '$cmd' --env-stdin --memory 8192 --build-timeout 2400 --collect-artifacts"
+          cmd='powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File test/e2e/runner/windows.ps1'
+          remote="sudo desktop-ci windows --repo 'https://github.com/${REPOSITORY}.git' --ref '$SOURCE_SHA' --cmd '$cmd' --env-stdin --memory 8192 --build-timeout 2400 --collect-artifacts"
           set +e
           printf '%s\n' \
             "GH_TOKEN=$RELEASE_TOKEN" \
@@ -454,10 +447,8 @@ jobs:
           printf '%s' "$DESKTOP_CI_SSH_KEY" >"$key"
           trap 'rm -f "$key" "$output"' EXIT
 
-          # See the Linux lane: --ref carries a branch, the pinned commit is
-          # checked out inside the guest.
-          cmd="git fetch --depth 1 origin $SOURCE_SHA && git checkout --detach $SOURCE_SHA && bash test/e2e/runner/macos.sh"
-          remote="sudo desktop-ci macos --repo 'https://github.com/${REPOSITORY}.git' --ref 'main' --cmd '$cmd' --env-stdin --memory 8192 --build-timeout 2400 --collect-artifacts --screendump"
+          cmd='bash test/e2e/runner/macos.sh'
+          remote="sudo desktop-ci macos --repo 'https://github.com/${REPOSITORY}.git' --ref '$SOURCE_SHA' --cmd '$cmd' --env-stdin --memory 8192 --build-timeout 2400 --collect-artifacts --screendump"
           set +e
           printf '%s\n' \
             "GH_TOKEN=$RELEASE_TOKEN" \
