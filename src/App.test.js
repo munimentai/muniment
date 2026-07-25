@@ -2475,6 +2475,162 @@ describe('tool activity cards', () => {
   })
 })
 
+describe('message action row', () => {
+  const reply = (overrides = {}) => ({
+    runId: 'run-copy', phase: 'complete', text: 'A routed answer', prompt: 'A question',
+    receipt: {}, toolActivity: [], ...overrides,
+  })
+
+  function restore(history = [reply()]) {
+    invoke.mockImplementation(async (command) => {
+      if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
+      if (command === 'chat_history') return history
+      if (command === 'auth_entitlement_snapshot') return snapshot()
+      if (command === 'auth_devices') return []
+      if (command === 'chat_submit') return { runId: 'run-live', attachments: [] }
+      throw new Error(`unexpected command: ${command}`)
+    })
+    return render(App)
+  }
+
+  function clipboard(writeText) {
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true })
+    return writeText
+  }
+
+  const failureRecord = `Clipboard unavailable. Select the reply and press ${navigator.platform.startsWith('Mac') ? '⌘' : 'Ctrl '}C to copy it.`
+
+  afterEach(() => { delete navigator.clipboard })
+
+  // The row is revealed by CSS alone, so a keyboard user never depends on a pointer:
+  // this test dispatches focus and the click that Enter on a focused button produces,
+  // and no hover event at all.
+  it('reaches and activates Copy without any pointer hover', async () => {
+    const writeText = clipboard(vi.fn().mockResolvedValue(undefined))
+    restore()
+
+    const copy = await screen.findByRole('button', { name: 'Copy' })
+    expect(copy.closest('.message-actions')).toBeInTheDocument()
+    expect(copy).not.toHaveAttribute('tabindex')
+    expect(copy).not.toHaveAttribute('hidden')
+    copy.focus()
+    expect(copy).toHaveFocus()
+    await fireEvent.click(copy)
+
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Copied' })).toBeInTheDocument())
+    expect(writeText).toHaveBeenCalledWith('A routed answer')
+    expect(screen.getByTestId('message-action-announcement')).toHaveTextContent('Reply copied to the clipboard.')
+  })
+
+  it('reverts the confirmation after about two seconds', async () => {
+    clipboard(vi.fn().mockResolvedValue(undefined))
+    restore()
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+
+    await fireEvent.click(await screen.findByRole('button', { name: 'Copy' }))
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Copied' })).toBeInTheDocument())
+
+    await vi.advanceTimersByTimeAsync(1500)
+    expect(screen.getByRole('button', { name: 'Copied' })).toBeInTheDocument()
+
+    await vi.advanceTimersByTimeAsync(600)
+    expect(screen.getByRole('button', { name: 'Copy' })).toBeInTheDocument()
+    expect(screen.getByTestId('message-action-announcement').textContent).toBe('')
+  })
+
+  it('announces a repeated copy of the same reply again', async () => {
+    clipboard(vi.fn().mockResolvedValue(undefined))
+    restore()
+    const region = await screen.findByTestId('message-action-announcement')
+    const changes = []
+    new MutationObserver((records) => changes.push(...records)).observe(region, { childList: true, characterData: true, subtree: true })
+
+    await fireEvent.click(await screen.findByRole('button', { name: 'Copy' }))
+    await waitFor(() => expect(region).toHaveTextContent('Reply copied to the clipboard.'))
+    await fireEvent.click(screen.getByRole('button', { name: 'Copied' }))
+
+    await waitFor(() => expect(changes.length).toBeGreaterThanOrEqual(3))
+    expect(region).toHaveTextContent('Reply copied to the clipboard.')
+  })
+
+  it('leaves an inline mono record when the clipboard refuses and returns the button to Copy', async () => {
+    clipboard(vi.fn().mockRejectedValue(new Error('denied')))
+    restore()
+
+    await fireEvent.click(await screen.findByRole('button', { name: 'Copy' }))
+
+    const record = await waitFor(() => within(document.querySelector('.response')).getByText(failureRecord))
+    expect(record).toHaveClass('run-error')
+    expect(screen.getByRole('button', { name: 'Copy' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Copied' })).not.toBeInTheDocument()
+    expect(screen.getByTestId('message-action-announcement')).toHaveTextContent(failureRecord)
+  })
+
+  it('records a failure when the webview exposes no clipboard at all', async () => {
+    restore()
+
+    await fireEvent.click(await screen.findByRole('button', { name: 'Copy' }))
+
+    await waitFor(() => expect(within(document.querySelector('.response')).getByText(failureRecord)).toBeInTheDocument())
+  })
+
+  it('copies the reply the button belongs to and confirms on that one only', async () => {
+    const writeText = clipboard(vi.fn().mockResolvedValue(undefined))
+    restore([reply(), reply({ runId: 'run-copy-2', text: 'A second answer' })])
+
+    const responses = await waitFor(() => {
+      const found = document.querySelectorAll('.response')
+      expect(found).toHaveLength(2)
+      return found
+    })
+    await fireEvent.click(within(responses[1]).getByRole('button', { name: 'Copy' }))
+
+    await waitFor(() => expect(within(responses[1]).getByRole('button', { name: 'Copied' })).toBeInTheDocument())
+    expect(writeText).toHaveBeenCalledWith('A second answer')
+    expect(within(responses[0]).getByRole('button', { name: 'Copy' })).toBeInTheDocument()
+  })
+
+  it('never overwrites the run-phase announcement with a copy confirmation', async () => {
+    clipboard(vi.fn().mockResolvedValue(undefined))
+    restore([])
+    const composer = await screen.findByPlaceholderText('Ask anything')
+    await fireEvent.input(composer, { target: { value: 'A question' } })
+    await fireEvent.click(screen.getByRole('button', { name: 'Send' }))
+    chatListener({ payload: { runId: 'run-live', phase: 'complete', text: 'A routed answer', receipt: {}, toolActivity: [] } })
+    const runRegion = screen.getByTestId('run-announcement')
+    await waitFor(() => expect(runRegion).toHaveTextContent('Reply complete. A routed answer'))
+
+    await fireEvent.click(await screen.findByRole('button', { name: 'Copy' }))
+
+    await waitFor(() => expect(screen.getByTestId('message-action-announcement')).toHaveTextContent('Reply copied to the clipboard.'))
+    expect(runRegion).toHaveTextContent('Reply complete. A routed answer')
+    expect(document.querySelectorAll('.thread-shell [aria-live]')).toHaveLength(1)
+  })
+
+  it('offers copy alone: no fork, share, or retry on a settled reply', async () => {
+    restore()
+
+    await screen.findByRole('button', { name: 'Copy' })
+    expect(document.querySelectorAll('.message-actions button')).toHaveLength(1)
+    for (const name of [/fork/i, /share/i, /retry/i, /try again/i]) {
+      expect(screen.queryByRole('button', { name })).not.toBeInTheDocument()
+    }
+  })
+
+  it('withholds the row until the run settles', async () => {
+    restore([reply({ phase: 'streaming', receipt: null })])
+
+    expect(await screen.findByText('A routed answer')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Copy' })).not.toBeInTheDocument()
+  })
+
+  it('disables Copy on a reply that settled without text', async () => {
+    restore([reply({ text: '' })])
+
+    expect(await screen.findByRole('button', { name: 'Copy' })).toBeDisabled()
+  })
+})
+
 describe('active run composer queue', () => {
   beforeEach(() => {
     invoke.mockImplementation(async (command) => {
