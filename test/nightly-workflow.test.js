@@ -12,7 +12,7 @@ const runReportFallback = (directory, suite, runStatus, extractStatus, createSuc
   expect(result.status, result.stderr).toBe(0)
 }
 const publish = workflow.slice(workflow.indexOf('  publish:'), workflow.indexOf('  linux-e2e:'))
-const linuxE2e = workflow.slice(workflow.indexOf('  linux-e2e:'))
+const linuxE2e = workflow.slice(workflow.indexOf('  linux-e2e:'), workflow.indexOf('  windows-e2e:'))
 const jobCondition = linuxE2e.match(/    if: >-\n((?:      .+\n)+)/)[1].trim().replace(/\n\s*/g, ' ')
 const conditionResult = ({ eventName, platform, build, publish }) => {
   const expression = jobCondition
@@ -61,6 +61,16 @@ describe('nightly Linux E2E workflow', () => {
     expect(runStep).toContain('sudo desktop-ci linux')
     expect(runStep).toContain('--collect-artifacts')
     expect(runStep).toContain('extract-artifacts.sh')
+  })
+
+  // desktop-ci resolves --ref with init+fetch-by-ref, so it takes a branch or a
+  // commit; ADR 0013 requires the installed lanes to pin the exact SHA their
+  // artifacts were built from rather than whatever main points at by then.
+  it('pins every installed-E2E lane to the source SHA at --ref', () => {
+    expect(workflow.match(/--ref '\$SOURCE_SHA'/g)).toHaveLength(3)
+    for (const lane of ['linux', 'windows', 'macos']) {
+      expect(workflow).toContain(`sudo desktop-ci ${lane} --repo 'https://github.com/\${REPOSITORY}.git' --ref '$SOURCE_SHA'`)
+    }
   })
 
   it('uses the SSH key provided by the self-hosted runner for every E2E lane', () => {
@@ -133,6 +143,10 @@ describe('nightly macOS E2E workflow', () => {
 })
 
 describe('nightly E2E JUnit fallback', () => {
+  it('records the desktop-ci exit status with every lane envelope diagnostic', () => {
+    expect(workflow.match(/extract-artifacts\.sh "\$output" "\$RUNNER_TEMP\/[a-z0-9-]+" "\$run_status"/g)).toHaveLength(3)
+  })
+
   it('covers Linux and macOS setup failures with valid artifact envelopes', () => {
     for (const suite of ['installed-linux', 'installed-macos']) {
       const artifacts = fs.mkdtempSync(path.join(os.tmpdir(), 'muniment-junit-'))
