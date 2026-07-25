@@ -19,6 +19,14 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
+/* §1.2 forbids signal on focus rings; §6 fixes the geometry at 2px ink, offset
+   2. Declared once here because Svelte <style> blocks are component-scoped —
+   components override only where a ring needs different geometry. */
+:focus-visible {
+  outline: 2px solid var(--ink);
+  outline-offset: 2px;
+}
+
 /* Read by assistive tech only: no visual footprint, no effect on layout. */
 .visually-hidden {
   position: absolute;
