@@ -84,6 +84,7 @@
   let globalVoiceTask = Promise.resolve()
   const registeredVoiceShortcuts = new Set()
   let composer = $state()
+  let wasInWorkspace = false
   let onboarding = $state(onboardingLoadingState)
   let requiredModel = $state(requiredModelLoadingState)
   let modelProgress = $derived(requiredModelProgress(requiredModel))
@@ -826,6 +827,16 @@
   })
 
   $effect(() => {
+    const inWorkspace = auth.name === 'signed-in' && onboarding.name === 'complete'
+    if (inWorkspace && !wasInWorkspace && active?.phase !== 'resuming' && !dictationPolishing && composer) {
+      wasInWorkspace = true
+      composer.focus()
+    } else if (!inWorkspace) {
+      wasInWorkspace = false
+    }
+  })
+
+  $effect(() => {
     const next = new Map(parallelTools)
     for (const message of messages) {
       if (message.role !== 'assistant') continue
@@ -1372,8 +1383,8 @@
               {:else if active && active.id !== 'pending'}
                 <button class="quiet follow-up" disabled={!draft.trim()} onclick={() => queue('followUp')}>Queue follow-up</button>
                 <button onclick={cancel}>Stop</button>
-                <button disabled={!draft.trim()} onclick={() => queue('steer')}>Send</button>
-              {:else if !active}<button disabled={!draft.trim() || dictationBusy()} onclick={send}>Send</button>{/if}
+                <button class="primary" disabled={!draft.trim()} onclick={() => queue('steer')}>Send</button>
+              {:else if !active}<button class="primary" disabled={!draft.trim() || dictationBusy()} onclick={send}>Send</button>{/if}
             </div>
           </div>
           {#if dictationError}<div class="dictation-error" role="alert">{dictationError}</div>{/if}
@@ -1485,6 +1496,7 @@
   .onboarding-error { margin: 10px 0 0; color: var(--muted); font: var(--text-12) var(--font-mono); line-height: 1.5; }
   .onboarding-footer { display: flex; justify-content: space-between; align-items: center; gap: 16px; margin-top: 22px; }
   .primary { background: var(--ink); border-color: var(--ink); color: var(--paper); }
+  .composer-actions .primary:disabled { background: var(--faint); border-color: var(--border); color: var(--muted); }
   .manifest-summary { display: flex; justify-content: space-between; gap: 16px; margin-top: 22px; padding-bottom: 9px; border-bottom: 1px solid var(--border); color: var(--muted); font: var(--text-12) var(--font-mono); }
   .manifest-summary strong { color: var(--ink); font-weight: 500; }
   .manifest { max-height: min(42vh, 360px); margin: 0; padding: 0; overflow-y: auto; list-style: none; }
