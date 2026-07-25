@@ -3176,6 +3176,27 @@ describe('signed-in access popover', () => {
     expect(await screen.findByText('No devices found')).toBeInTheDocument()
   })
 
+  it('applies and persists an accessible per-device appearance choice', async () => {
+    render(App)
+    await fireEvent.click(await screen.findByRole('button', { name: /Alice/i }))
+    const appearance = within(screen.getByRole('group', { name: 'Appearance' }))
+    const system = appearance.getByRole('button', { name: 'System' })
+    const dark = appearance.getByRole('button', { name: 'Dark' })
+
+    expect(system).toHaveAttribute('aria-pressed', 'true')
+    expect(dark).toHaveAttribute('aria-pressed', 'false')
+
+    await fireEvent.click(dark)
+    expect(document.documentElement.dataset.theme).toBe('dark')
+    expect(localStorage.getItem('muniment.theme')).toBe('dark')
+    expect(dark).toHaveAttribute('aria-pressed', 'true')
+
+    await fireEvent.click(system)
+    expect(document.documentElement).not.toHaveAttribute('data-theme')
+    expect(localStorage.getItem('muniment.theme')).toBe('system')
+    expect(system).toHaveAttribute('aria-pressed', 'true')
+  })
+
   it('retries only a failed device request and keeps entitlement groups rendered', async () => {
     let deviceCalls = 0
     invoke.mockImplementation(async (command) => {
