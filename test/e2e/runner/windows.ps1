@@ -144,7 +144,10 @@ function Finalize-Run {
 }
 
 try {
-  $artifacts = if ($env:DCI_ARTIFACTS_DIR) { $env:DCI_ARTIFACTS_DIR } else { "C:\dci-artifacts" }
+  # desktop-ci collects %TEMP%\dci-artifacts on Windows and DCI_ARTIFACTS_DIR is
+  # not injected by the nightly, so any other default silently sends the lane
+  # down the driver's DCI-NO-ARTIFACTS path with no report at all.
+  $artifacts = if ($env:DCI_ARTIFACTS_DIR) { $env:DCI_ARTIFACTS_DIR } else { Join-Path $env:TEMP "dci-artifacts" }
   $runRoot = Join-Path $env:TEMP ("muniment-e2e-" + [guid]::NewGuid().ToString("N"))
   $raw = Join-Path $runRoot "raw"
   $safe = Join-Path $runRoot "safe"

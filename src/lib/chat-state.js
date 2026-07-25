@@ -4,12 +4,43 @@ export function composerAction(event, text, active) {
   return active.id === 'pending' ? null : 'steer'
 }
 
-export function receiptParts(receipt = {}) {
-  const parts = [receipt.route, receipt.model, receipt.cost, receipt.time].filter(Boolean)
-  for (const capability of receipt.capabilities ?? []) {
-    if (capability?.name && capability?.version) parts.push(`${capability.name}@${capability.version}`)
+// A receipt field is recorded when the server sent something to show. Zero is a
+// record (a route can genuinely cost nothing); a blank is a gap and would only
+// render as a stray separator.
+const recorded = (value) => value !== undefined && value !== null && value !== ''
+
+function receiptTrailing(receipt) {
+  const trailing = [receipt?.cost, receipt?.time].filter(recorded)
+  for (const capability of receipt?.capabilities ?? []) {
+    if (recorded(capability?.name) && recorded(capability?.version)) trailing.push(`${capability.name}@${capability.version}`)
   }
-  return parts
+  return trailing
+}
+
+// The provenance summary — `route → model · cost · time` (design-spec §2.2).
+// Route stays a named field rather than the head of a flat array: §1.2 permits
+// --signal on the route segment only, so a receipt without a route must never
+// paint whatever follows green.
+export function receiptSummary(receipt = {}) {
+  const route = recorded(receipt?.route) ? receipt.route : null
+  const model = recorded(receipt?.model) ? receipt.model : null
+  const detail = [model, ...receiptTrailing(receipt)].filter(recorded)
+  // The arrow states the route→model relation and nothing else; any other
+  // neighbour of the route takes the plain separator.
+  const separator = route === null || detail.length === 0 ? '' : model === null ? ' · ' : ' → '
+  return { route, separator, detail: detail.join(' · ') }
+}
+
+// What a screen reader hears instead of the summary: engines pronounce →
+// inconsistently, so the accessible name states the relation in words.
+export function receiptLabel(receipt = {}) {
+  const route = recorded(receipt?.route) ? receipt.route : null
+  const model = recorded(receipt?.model) ? receipt.model : null
+  const relation = route !== null && model !== null ? `Routed via ${route} to model ${model}`
+    : route !== null ? `Routed via ${route}`
+    : model !== null ? `Model ${model}`
+    : null
+  return [relation, ...receiptTrailing(receipt)].filter(recorded).join(', ')
 }
 
 export function receiptRows(receipt = {}) {

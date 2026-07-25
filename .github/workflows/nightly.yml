@@ -293,7 +293,7 @@ jobs:
           # Require the contract's one exact, ordered marker pair, strict base64,
           # and a regular-file/directory-only archive before extracting.
           extract_status=0
-          bash test/e2e/support/extract-artifacts.sh "$output" "$RUNNER_TEMP/muniment-e2e-artifacts" || extract_status=$?
+          bash test/e2e/support/extract-artifacts.sh "$output" "$RUNNER_TEMP/muniment-e2e-artifacts" "$run_status" || extract_status=$?
           bash test/e2e/support/ensure-junit-report.sh \
             "$RUNNER_TEMP/muniment-e2e-artifacts" installed-linux "$run_status" "$extract_status"
           if (( run_status != 0 || extract_status != 0 )); then final_status=1; else final_status=0; fi
@@ -379,7 +379,7 @@ jobs:
           set -e
 
           extract_status=0
-          bash test/e2e/support/extract-artifacts.sh "$output" "$RUNNER_TEMP/muniment-windows-e2e-artifacts" || extract_status=$?
+          bash test/e2e/support/extract-artifacts.sh "$output" "$RUNNER_TEMP/muniment-windows-e2e-artifacts" "$run_status" || extract_status=$?
           bash test/e2e/support/ensure-junit-report.sh \
             "$RUNNER_TEMP/muniment-windows-e2e-artifacts" installed-windows "$run_status" "$extract_status"
           if (( run_status != 0 || extract_status != 0 )); then final_status=1; else final_status=0; fi
@@ -461,7 +461,7 @@ jobs:
           set -e
 
           extract_status=0
-          bash test/e2e/support/extract-artifacts.sh "$output" "$RUNNER_TEMP/muniment-macos-e2e-artifacts" || extract_status=$?
+          bash test/e2e/support/extract-artifacts.sh "$output" "$RUNNER_TEMP/muniment-macos-e2e-artifacts" "$run_status" || extract_status=$?
           bash test/e2e/support/ensure-junit-report.sh \
             "$RUNNER_TEMP/muniment-macos-e2e-artifacts" installed-macos "$run_status" "$extract_status" 1
           if (( run_status != 0 || extract_status != 0 )); then final_status=1; else final_status=0; fi
