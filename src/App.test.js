@@ -2539,6 +2539,94 @@ describe('active run composer queue', () => {
   })
 })
 
+describe('composer auto-grow', () => {
+  // jsdom lays nothing out, so the §4 clamp has nothing to measure. Give the
+  // textarea a real row height and a content height that tracks its value.
+  const row = 20
+  const resting = `${2 * row}px`
+  const cap = `${10 * row}px`
+  const lines = (count) => Array.from({ length: count }, (_, index) => `line ${index + 1}`).join('\n')
+
+  beforeEach(() => {
+    Object.defineProperty(HTMLTextAreaElement.prototype, 'scrollHeight', {
+      configurable: true,
+      get() { return this.value.split('\n').length * row },
+    })
+    const computed = window.getComputedStyle.bind(window)
+    vi.spyOn(window, 'getComputedStyle').mockImplementation((element, pseudo) => element instanceof HTMLTextAreaElement
+      ? { lineHeight: `${row}px`, paddingTop: '0px', paddingBottom: '0px' }
+      : computed(element, pseudo))
+  })
+
+  afterEach(() => {
+    delete HTMLTextAreaElement.prototype.scrollHeight
+  })
+
+  it('grows to the ten-line cap, then scrolls instead of growing further', async () => {
+    render(App)
+    const composer = await screen.findByPlaceholderText('Ask anything')
+    expect(composer.style.height).toBe(resting)
+
+    await fireEvent.input(composer, { target: { value: lines(5) } })
+    expect(composer.style.height).toBe(`${5 * row}px`)
+    expect(composer.style.overflowY).toBe('hidden')
+
+    await fireEvent.input(composer, { target: { value: lines(10) } })
+    expect(composer.style.height).toBe(cap)
+
+    await fireEvent.input(composer, { target: { value: lines(40) } })
+    expect(composer.style.height).toBe(cap)
+    expect(composer.style.overflowY).toBe('auto')
+  })
+
+  it('shrinks as text is deleted and rests at two rows once the draft clears', async () => {
+    invoke.mockImplementation(async (command) => {
+      if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
+      if (command === 'chat_history') return []
+      if (command === 'auth_entitlement_snapshot') return snapshot()
+      if (command === 'auth_devices') return []
+      if (command === 'chat_submit') return { runId: 'run-9', attachments: [] }
+      throw new Error(`unexpected command: ${command}`)
+    })
+    render(App)
+    const composer = await screen.findByPlaceholderText('Ask anything')
+    await fireEvent.input(composer, { target: { value: lines(8) } })
+    expect(composer.style.height).toBe(`${8 * row}px`)
+
+    await fireEvent.input(composer, { target: { value: lines(3) } })
+    expect(composer.style.height).toBe(`${3 * row}px`)
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Send' }))
+    await waitFor(() => expect(composer).toHaveValue(''))
+    expect(composer.style.height).toBe(resting)
+  })
+
+  it('resizes for programmatic draft changes, not only typed input', async () => {
+    invoke.mockImplementation(async (command) => {
+      if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
+      if (command === 'chat_history') return []
+      if (command === 'auth_entitlement_snapshot') return snapshot()
+      if (command === 'auth_devices') return []
+      if (command === 'dictation_start') return { state: 'running' }
+      if (command === 'dictation_stop') return { state: 'stopped' }
+      throw new Error(`unexpected command: ${command}`)
+    })
+    render(App)
+    const composer = await screen.findByPlaceholderText('Ask anything')
+    await fireEvent.input(composer, { target: { value: lines(3) } })
+    expect(composer.style.height).toBe(`${3 * row}px`)
+
+    globalShortcutHandler({ state: 'Pressed' })
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('dictation_start'))
+    dictationListener({ payload: { type: 'transcript', text: `\n${lines(4)}` } })
+    await waitFor(() => expect(composer.style.height).toBe(`${7 * row}px`))
+
+    // Esc cancels the capture and restores the snapshot; the box follows it back.
+    await fireEvent.keyDown(document, { key: 'Escape' })
+    await waitFor(() => expect(composer.style.height).toBe(`${3 * row}px`))
+  })
+})
+
 describe('signed-in access popover', () => {
   it('loads server-issued profile fields while entering the workspace', async () => {
     render(App)

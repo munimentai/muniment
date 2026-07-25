@@ -1,5 +1,5 @@
 <script>
-  import { onMount, tick } from 'svelte'
+  import { onMount, tick, untrack } from 'svelte'
   import { getCurrentWebview } from '@tauri-apps/api/webview'
   import { confirm, open } from '@tauri-apps/plugin-dialog'
   import { register, unregister } from '@tauri-apps/plugin-global-shortcut'
@@ -9,6 +9,7 @@
   import { bootState, errorState, statusState, waitingState } from './lib/auth-state.js'
   import { ringPath } from './lib/mark.js'
   import { applyBufferedChatEvents, applyChatEvent, composerAction, formatByteSize, historyMessages, receiptParts, receiptRows, runAnnouncement, toolName, toolStatus } from './lib/chat-state.js'
+  import { composerHeight } from './lib/composer-size.js'
   import { appendTranscript, ariaKeyShortcut, dictationTransforms, handsFreeActivationDelay, holdToTalkShortcut, isDictationActive, validHoldToTalkShortcut } from './lib/dictation-state.js'
   import { onboardingCancelSettingsState, onboardingConfirmedHomePathState, onboardingConfirmedState, onboardingConfirmingState, onboardingErrorState, onboardingExtractingState, onboardingExtractionErrorState, onboardingExtractionState, onboardingFinalizingState, onboardingImportChoiceState, onboardingImportErrorState, onboardingImportSavedState, onboardingImportSavingState, onboardingLoadingState, onboardingPathState, onboardingPreviewErrorState, onboardingPreviewingState, onboardingPreviewState, onboardingReturnToArchiveReviewState, onboardingSelectionState, onboardingSettingsState, onboardingStatusState, onboardingTriageConfirmedState, onboardingTriageErrorState, onboardingTriageReportState, onboardingTriagingState, requiredModelLoadingState, requiredModelPollActive, requiredModelProgress } from './lib/onboarding-state.js'
   import { scrollFollowState } from './lib/scroll-follow.js'
@@ -84,6 +85,7 @@
   let globalVoiceTask = Promise.resolve()
   const registeredVoiceShortcuts = new Set()
   let composer = $state()
+  let polishPreview = $state()
   let onboarding = $state(onboardingLoadingState)
   let requiredModel = $state(requiredModelLoadingState)
   let modelProgress = $derived(requiredModelProgress(requiredModel))
@@ -778,6 +780,57 @@
     if (eligibleDictation && event.currentTarget.value !== eligibleDictation.draft) invalidateDictationTransform()
   }
 
+  // The polish overlay covers a textarea that scrolls once the draft passes the
+  // ten-line cap; keep the two scrolled together so the underlined transcript
+  // stays on the line it belongs to.
+  function syncPolishPreviewScroll() {
+    if (composer && polishPreview) polishPreview.scrollTop = composer.scrollTop
+  }
+
+  // §4: the input grows with the draft to a ten-line cap, then scrolls.
+  // Measuring needs the textarea collapsed first, and every step of that
+  // resizes the thread, which lets the browser clamp its scrollTop. Put the
+  // transcript back where it was — at the bottom while it is pinned, otherwise
+  // exactly where the reader left it — so growing the composer never scrolls it.
+  function syncComposerHeight() {
+    if (!composer) return
+    const styles = getComputedStyle(composer)
+    const threadScrollTop = thread?.scrollTop
+    composer.style.height = 'auto'
+    const { height, capped } = composerHeight({
+      contentHeight: composer.scrollHeight,
+      lineHeight: parseFloat(styles.lineHeight),
+      padding: parseFloat(styles.paddingTop) + parseFloat(styles.paddingBottom),
+    })
+    if (height === null) {
+      composer.style.removeProperty('height')
+      composer.style.removeProperty('overflow-y')
+    } else {
+      composer.style.height = `${height}px`
+      composer.style.overflowY = capped ? 'auto' : 'hidden'
+    }
+    if (thread) {
+      const restored = pinned ? thread.scrollHeight - thread.clientHeight : threadScrollTop
+      if (thread.scrollTop !== restored) thread.scrollTop = restored
+      // The restore fires a scroll event; leave the follow state matching it so
+      // handleThreadScroll does not read the correction as an upward scroll.
+      lastScrollTop = thread.scrollTop
+    }
+    syncPolishPreviewScroll()
+  }
+
+  // Keyed off `draft` rather than the input event so every programmatic write
+  // resizes too: streamed dictation transcripts, the polish and transform
+  // results, the Esc restore in stopDictation(true), the Try again retry, and
+  // send()/queue() clearing the draft back to the resting height. Untracked so
+  // the follow state it reads cannot re-enter — resizing must answer to the
+  // draft alone, never to a scroll already in flight.
+  $effect(() => {
+    draft
+    polishPreview
+    if (composer) untrack(syncComposerHeight)
+  })
+
   function toggleReceipt(runId) {
     const next = new Set(expandedReceipts)
     next.has(runId) ? next.delete(runId) : next.add(runId)
@@ -943,6 +996,8 @@
     }
     document.addEventListener('keydown', shortcuts)
     window.addEventListener('resize', fitArtifactRail)
+    // A narrower composer rewraps the draft, so the clamp has to be remeasured.
+    window.addEventListener('resize', syncComposerHeight)
     let stopDragDrop
     if (tauri) getCurrentWebview().onDragDropEvent(({ payload }) => {
         if (auth.name !== 'signed-in' || active) {
@@ -975,6 +1030,7 @@
       globalVoiceTask = globalVoiceTask.finally(cleanupVoiceShortcuts)
       document.removeEventListener('keydown', shortcuts)
       window.removeEventListener('resize', fitArtifactRail)
+      window.removeEventListener('resize', syncComposerHeight)
     }
   })
 
@@ -1336,9 +1392,9 @@
             </ul>
           {/if}
           <div class="composer-input">
-            <textarea class:polishing={dictationPolishing} bind:this={composer} bind:value={draft} oninput={composerInput} onkeydown={keydown} rows="2" placeholder={active?.phase === 'resuming' ? 'Resuming interrupted reply…' : 'Ask anything'} disabled={active?.phase === 'resuming'} readonly={dictationPolishing}></textarea>
+            <textarea class:polishing={dictationPolishing} bind:this={composer} bind:value={draft} oninput={composerInput} onkeydown={keydown} onscroll={syncPolishPreviewScroll} rows="2" placeholder={active?.phase === 'resuming' ? 'Resuming interrupted reply…' : 'Ask anything'} disabled={active?.phase === 'resuming'} readonly={dictationPolishing}></textarea>
             {#if dictationPolishing}
-              <div class="polish-preview" aria-hidden="true"><span data-testid="polish-draft">{appendTranscript(dictationDraftSnapshot, dictationTranscript).slice(0, -dictationTranscript.length)}</span><span class="polish-transcript" data-testid="polish-transcript">{dictationTranscript}</span></div>
+              <div class="polish-preview" bind:this={polishPreview} aria-hidden="true"><span data-testid="polish-draft">{appendTranscript(dictationDraftSnapshot, dictationTranscript).slice(0, -dictationTranscript.length)}</span><span class="polish-transcript" data-testid="polish-transcript">{dictationTranscript}</span></div>
             {/if}
           </div>
           {#if submitError}<p class="cancel-error" role="alert">{submitError}</p>{/if}
@@ -1637,7 +1693,9 @@
   .attachments span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .attachments button { padding: 1px 5px; border: 0; background: transparent; color: inherit; font-size: 11px; }
   .composer-input { position: relative; }
-  textarea { display: block; width: 100%; resize: none; border: 0; outline: 0; background: transparent; color: var(--ink); font: inherit; }
+  /* No padding and no border: the composer supplies both, so the measured
+     scrollHeight is pure text and the overlay lands on the same grid. */
+  textarea { display: block; width: 100%; resize: none; padding: 0; border: 0; outline: 0; background: transparent; color: var(--ink); font: inherit; }
   textarea.polishing { color: transparent; caret-color: transparent; }
   .polish-preview { position: absolute; inset: 0; overflow: hidden; pointer-events: none; white-space: pre-wrap; color: var(--ink); font: inherit; }
   .polish-transcript { text-decoration-line: underline; text-decoration-color: var(--signal); text-decoration-thickness: 2px; text-underline-offset: 3px; }
@@ -1647,7 +1705,9 @@
   .dictation-transforms button:focus-visible { outline-color: var(--ink); outline-offset: 2px; }
   .dictation-transforms button:disabled { border-color: var(--border); color: var(--muted); }
   .dictation-transforms kbd { color: var(--muted); font: inherit; }
-  .composer-row { display: flex; justify-content: space-between; align-items: center; color: var(--muted); font-size: 11px; }
+  /* The input no longer keeps a spare empty row once it grows, so the action
+     row carries the gap itself — the owner mockup's 8px .comprow rhythm. */
+  .composer-row { display: flex; justify-content: space-between; align-items: center; margin-top: 8px; color: var(--muted); font-size: 11px; }
   .composer-actions { display: flex; align-items: center; gap: 6px; }
   .capture-status { display: flex; align-items: center; gap: 8px; font-family: var(--font-mono); }
   .capture-meter { height: 14px; display: flex; align-items: center; gap: 2px; }
