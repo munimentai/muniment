@@ -53,6 +53,8 @@
   /* §1.4 type — two families, two registers */
   --font-human: 'Schibsted Grotesk', system-ui, sans-serif;
   --font-mono: 'Commit Mono', ui-monospace, monospace;
+  --weight-regular: 400;
+  --weight-semibold: 600;
 
   /* §1.4 desktop type scale; mono runs one step smaller than adjacent body */
   --text-12: 12px;
@@ -63,6 +65,12 @@
   --text-28: 28px;
   --leading-body: 1.55;
   --leading-heading: 1.3;
+  --tracking-body: 0;
+  --tracking-heading: -0.01em;
+
+  /* §1.6 motion */
+  --motion-popover: 120ms;
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
 
   /* §1.5 radius scale — nothing pill-shaped */
   --radius-chip: 2px;    /* chips, kbd */
