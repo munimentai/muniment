@@ -8,7 +8,7 @@
   import { ARTIFACT_RAIL_MAX_WIDTH, ARTIFACT_RAIL_MIN_WIDTH, artifactRailShortcut, artifactRailWidthFromKey, artifactRailWidthFromPointer, clampArtifactRailWidth, defaultArtifactRailWidth, isArtifactRailShortcut } from './lib/artifact-rail-state.js'
   import { bootState, errorState, statusState, waitingState } from './lib/auth-state.js'
   import { ringPath } from './lib/mark.js'
-  import { applyBufferedChatEvents, applyChatEvent, composerAction, formatByteSize, historyMessages, receiptParts, receiptRows, runAnnouncement, toolName, toolStatus } from './lib/chat-state.js'
+  import { applyBufferedChatEvents, applyChatEvent, composerAction, formatByteSize, historyMessages, receiptLabel, receiptRows, receiptSummary, runAnnouncement, toolName, toolStatus } from './lib/chat-state.js'
   import { appendTranscript, ariaKeyShortcut, dictationTransforms, handsFreeActivationDelay, holdToTalkShortcut, isDictationActive, validHoldToTalkShortcut } from './lib/dictation-state.js'
   import { onboardingCancelSettingsState, onboardingConfirmedHomePathState, onboardingConfirmedState, onboardingConfirmingState, onboardingErrorState, onboardingExtractingState, onboardingExtractionErrorState, onboardingExtractionState, onboardingFinalizingState, onboardingImportChoiceState, onboardingImportErrorState, onboardingImportSavedState, onboardingImportSavingState, onboardingLoadingState, onboardingPathState, onboardingPreviewErrorState, onboardingPreviewingState, onboardingPreviewState, onboardingReturnToArchiveReviewState, onboardingSelectionState, onboardingSettingsState, onboardingStatusState, onboardingTriageConfirmedState, onboardingTriageErrorState, onboardingTriageReportState, onboardingTriagingState, requiredModelLoadingState, requiredModelPollActive, requiredModelProgress } from './lib/onboarding-state.js'
   import { scrollFollowState } from './lib/scroll-follow.js'
@@ -1305,11 +1305,11 @@
                 </div>
               {/each}
               {#if message.run.phase === 'complete'}
-                {@const parts = receiptParts(message.run.receipt)}
-                {@const rows = receiptRows(message.run.receipt)}
-                {#if parts.length}
+                {@const summary = receiptSummary(message.run.receipt)}
+                {#if summary.route !== null || summary.detail}
                   {@const expanded = expandedReceipts.has(message.run.id)}
-                  <button class="provenance" aria-expanded={expanded} aria-label={`${expanded ? 'Collapse' : 'Expand'} receipt: ${parts.join(', ')}`} onclick={() => toggleReceipt(message.run.id)}><span>{parts[0]}</span>{#if parts.length > 1} · {parts.slice(1).join(' · ')}{/if}</button>
+                  {@const rows = receiptRows(message.run.receipt)}
+                  <button class="provenance" aria-expanded={expanded} aria-label={`${expanded ? 'Collapse' : 'Expand'} receipt: ${receiptLabel(message.run.receipt)}`} onclick={() => toggleReceipt(message.run.id)}>{#if summary.route !== null}<span class="route-segment">{summary.route}</span>{/if}{summary.separator}{summary.detail}</button>
                   {#if expanded}
                     <dl class="receipt-record">
                       {#each rows as row}
@@ -1621,8 +1621,12 @@
   .tool-running { color: var(--signal); }
   .tool-running .tool-dot { animation: tool-pulse 1.4s ease-in-out infinite; }
   .tool-failed .tool-status::before { content: 'error · '; }
-  .provenance { display: block; margin-top: 10px; padding: 0; border: 0; background: transparent; color: var(--muted); font: var(--text-12) var(--font-mono); text-align: left; }
-  .provenance span { color: var(--signal); }
+  /* §2.2 mono 11.5px; §1.4 records line up their figures. The shorthand resets
+     font-variant-numeric, so tabular-nums follows it. */
+  .provenance { display: block; margin-top: 10px; padding: 0; border: 0; background: transparent; color: var(--muted); font: 11.5px/1.45 var(--font-mono); font-variant-numeric: tabular-nums; text-align: left; }
+  .provenance:hover:not(:disabled) { color: var(--ink); }
+  /* §1.2 permits --signal on the route segment only. */
+  .provenance .route-segment { color: var(--signal); }
   .receipt-record { width: fit-content; min-width: 240px; margin: 8px 0 0; padding: 8px 12px; border: 1px solid var(--border); border-radius: 6px; color: var(--muted); font-size: var(--text-12); }
   .receipt-record div { display: grid; grid-template-columns: 88px minmax(0, 1fr); gap: 12px; }
   .receipt-record dd { margin: 0; font-family: var(--font-mono); font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }

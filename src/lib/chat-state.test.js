@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { applyBufferedChatEvents, applyChatEvent, composerAction, receiptParts, receiptRows, runAnnouncement, toolName, toolStatus } from './chat-state.js'
+import { applyBufferedChatEvents, applyChatEvent, composerAction, receiptLabel, receiptRows, receiptSummary, runAnnouncement, toolName, toolStatus } from './chat-state.js'
 
 describe('chat composer and projection', () => {
   it('chooses submit or steer from the active run', () => {
@@ -40,9 +40,58 @@ describe('chat composer and projection', () => {
     expect(toolStatus({ status: 'failed' })).toBe('failed')
   })
 
+  it('summarizes a full receipt as route → model · cost · time', () => {
+    expect(receiptSummary({
+      route: 'analysis/high', model: 'glm-5.2', cost: '$0.0041', time: '3.8s',
+      capabilities: [{ name: 'search', version: '2' }],
+    })).toEqual({ route: 'analysis/high', separator: ' → ', detail: 'glm-5.2 · $0.0041 · 3.8s · search@2' })
+  })
+
+  it('keeps the arrow for the route→model relation alone', () => {
+    // No model to point at: the route joins the rest with the plain separator.
+    expect(receiptSummary({ route: 'analysis/high', cost: '$0.0041' }))
+      .toEqual({ route: 'analysis/high', separator: ' · ', detail: '$0.0041' })
+    expect(receiptSummary({ route: 'analysis/high', model: 'glm-5.2' }))
+      .toEqual({ route: 'analysis/high', separator: ' → ', detail: 'glm-5.2' })
+  })
+
+  it('names the route field so signal never lands on another segment', () => {
+    // design-spec §1.2: --signal is the route segment's alone.
+    expect(receiptSummary({ model: 'glm-5.2', cost: '$0.0041' }))
+      .toEqual({ route: null, separator: '', detail: 'glm-5.2 · $0.0041' })
+    expect(receiptSummary({ capabilities: [{ name: 'search', version: '2' }] }))
+      .toEqual({ route: null, separator: '', detail: 'search@2' })
+  })
+
+  it('summarizes partial receipts without a stray separator or dangling arrow', () => {
+    expect(receiptSummary({ route: 'analysis/high' }))
+      .toEqual({ route: 'analysis/high', separator: '', detail: '' })
+    expect(receiptSummary({})).toEqual({ route: null, separator: '', detail: '' })
+    expect(receiptSummary(null)).toEqual({ route: null, separator: '', detail: '' })
+    expect(receiptSummary({ route: '', model: 'glm-5.2', cost: '', time: '3.8s' }))
+      .toEqual({ route: null, separator: '', detail: 'glm-5.2 · 3.8s' })
+    expect(receiptSummary({ route: 'free', model: 'glm-5.2', cost: 0 }))
+      .toEqual({ route: 'free', separator: ' → ', detail: 'glm-5.2 · 0' })
+  })
+
   it('does not invent missing receipt values', () => {
-    expect(receiptParts({ route: 'fast', capabilities: [{ name: 'search', version: '2' }] }))
-      .toEqual(['fast', 'search@2'])
+    expect(receiptSummary({ route: 'fast', capabilities: [{ name: 'search' }, { version: '2' }, null] }))
+      .toEqual({ route: 'fast', separator: '', detail: '' })
+  })
+
+  it('states the route-to-model relation in words for screen readers', () => {
+    expect(receiptLabel({
+      route: 'analysis/high', model: 'glm-5.2', cost: '$0.0041', time: '3.8s',
+      capabilities: [{ name: 'search', version: '2' }],
+    })).toBe('Routed via analysis/high to model glm-5.2, $0.0041, 3.8s, search@2')
+  })
+
+  it('labels partial receipts without naming a field the receipt lacks', () => {
+    expect(receiptLabel({ route: 'analysis/high', time: '3.8s' })).toBe('Routed via analysis/high, 3.8s')
+    expect(receiptLabel({ model: 'glm-5.2' })).toBe('Model glm-5.2')
+    expect(receiptLabel({ cost: '$0.0041' })).toBe('$0.0041')
+    expect(receiptLabel({})).toBe('')
+    expect(receiptLabel(null)).toBe('')
   })
 
   it('projects every present receipt field in record order', () => {
