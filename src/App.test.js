@@ -125,6 +125,62 @@ afterEach(() => {
   vi.restoreAllMocks()
 })
 
+describe('workspace composer entry', () => {
+  it('focuses the primary composer action once when the workspace appears', async () => {
+    render(App)
+    const composer = await screen.findByPlaceholderText('Ask anything')
+    const send = screen.getByRole('button', { name: 'Send' })
+
+    expect(composer).toHaveFocus()
+    expect(send).toHaveClass('primary')
+    expect(send).toBeDisabled()
+
+    const railToggle = screen.getByRole('button', { name: 'Open artifact rail' })
+    railToggle.focus()
+    await fireEvent.click(railToggle)
+    expect(railToggle).toHaveFocus()
+  })
+
+  it('does not focus a composer outside the signed-in workspace', async () => {
+    invoke.mockImplementation(async (command) => {
+      if (command === 'auth_status') return { signed_in: false, subject: null }
+      throw new Error(`unexpected command: ${command}`)
+    })
+    render(App)
+
+    expect(await screen.findByRole('button', { name: 'Sign in' })).not.toHaveFocus()
+    expect(screen.queryByPlaceholderText('Ask anything')).not.toBeInTheDocument()
+  })
+
+  it('does not focus a composer in the auth-error state', async () => {
+    invoke.mockRejectedValue('Authentication is unavailable.')
+    render(App)
+
+    expect(await screen.findByRole('button', { name: 'Try again' })).not.toHaveFocus()
+    expect(screen.queryByPlaceholderText('Ask anything')).not.toBeInTheDocument()
+  })
+
+  it('does not focus a composer during onboarding', async () => {
+    homeStatus = { configured: false, homePath: '/Documents/Muniment' }
+    render(App)
+
+    expect(await screen.findByRole('heading', { name: 'Choose your Muniment Home' })).toBeInTheDocument()
+    expect(screen.queryByPlaceholderText('Ask anything')).not.toBeInTheDocument()
+  })
+
+  it('releases composer focus in Home settings and restores it on workspace re-entry', async () => {
+    render(App)
+    const composer = await screen.findByPlaceholderText('Ask anything')
+    expect(composer).toHaveFocus()
+
+    await fireEvent.click(screen.getByText('Home settings'))
+    expect(screen.queryByPlaceholderText('Ask anything')).not.toBeInTheDocument()
+    await fireEvent.click(screen.getByTestId('onboarding-cancel'))
+
+    expect(await screen.findByPlaceholderText('Ask anything')).toHaveFocus()
+  })
+})
+
 describe('artifact rail', () => {
   it('toggles from the titlebar button with accessible state and an honest empty landmark', async () => {
     render(App)
@@ -2582,7 +2638,9 @@ describe('active run composer queue', () => {
   it('steers the active reply with the exact Rust command payload', async () => {
     const composer = await startRun()
     await fireEvent.input(composer, { target: { value: 'Focus on the risks' } })
-    await fireEvent.click(screen.getByRole('button', { name: 'Send' }))
+    const send = screen.getByRole('button', { name: 'Send' })
+    expect(send).toHaveClass('primary')
+    await fireEvent.click(send)
 
     expectQueuePayload({ runId: 'run-7', delivery: 'steer', message: 'Focus on the risks' })
   })
