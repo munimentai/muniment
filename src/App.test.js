@@ -125,6 +125,133 @@ afterEach(() => {
   vi.restoreAllMocks()
 })
 
+describe('workspace composer entry', () => {
+  it('focuses the primary composer action once when the workspace appears', async () => {
+    render(App)
+    const composer = await screen.findByPlaceholderText('Ask anything')
+    const send = screen.getByRole('button', { name: 'Send' })
+
+    expect(composer).toHaveFocus()
+    expect(send).toHaveClass('primary')
+    expect(send).toBeDisabled()
+
+    const railToggle = screen.getByRole('button', { name: 'Open artifact rail' })
+    railToggle.focus()
+    await fireEvent.click(railToggle)
+    expect(railToggle).toHaveFocus()
+  })
+
+  it('does not focus a composer outside the signed-in workspace', async () => {
+    invoke.mockImplementation(async (command) => {
+      if (command === 'auth_status') return { signed_in: false, subject: null }
+      throw new Error(`unexpected command: ${command}`)
+    })
+    render(App)
+
+    expect(await screen.findByRole('button', { name: 'Sign in' })).not.toHaveFocus()
+    expect(screen.queryByPlaceholderText('Ask anything')).not.toBeInTheDocument()
+  })
+
+  it('does not focus a composer in the auth-error state', async () => {
+    invoke.mockRejectedValue('Authentication is unavailable.')
+    render(App)
+
+    expect(await screen.findByRole('button', { name: 'Try again' })).not.toHaveFocus()
+    expect(screen.queryByPlaceholderText('Ask anything')).not.toBeInTheDocument()
+  })
+
+  it('does not focus a composer during onboarding', async () => {
+    homeStatus = { configured: false, homePath: '/Documents/Muniment' }
+    render(App)
+
+    expect(await screen.findByRole('heading', { name: 'Choose your Muniment Home' })).toBeInTheDocument()
+    expect(screen.queryByPlaceholderText('Ask anything')).not.toBeInTheDocument()
+  })
+
+  it('releases composer focus in Home settings and restores it on workspace re-entry', async () => {
+    render(App)
+    const composer = await screen.findByPlaceholderText('Ask anything')
+    expect(composer).toHaveFocus()
+
+    await fireEvent.click(screen.getByText('Home settings'))
+    expect(screen.queryByPlaceholderText('Ask anything')).not.toBeInTheDocument()
+    await fireEvent.click(screen.getByTestId('onboarding-cancel'))
+
+    expect(await screen.findByPlaceholderText('Ask anything')).toHaveFocus()
+  })
+
+  it('waits to focus on workspace re-entry until a resuming composer becomes enabled', async () => {
+    let resolveResume
+    invoke.mockImplementation(async (command) => {
+      if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
+      if (command === 'chat_history') return [{
+        runId: 'run-interrupted', phase: 'interrupted', text: 'Partial answer',
+        prompt: 'Original prompt', receipt: null, toolActivity: [], resumable: true,
+      }]
+      if (command === 'auth_entitlement_snapshot') return snapshot()
+      if (command === 'auth_devices') return []
+      if (command === 'chat_resume') return new Promise((resolve) => { resolveResume = resolve })
+      throw new Error(`unexpected command: ${command}`)
+    })
+    render(App)
+    await fireEvent.click(await screen.findByRole('button', { name: 'Resume' }))
+    await fireEvent.click(screen.getByText('Home settings'))
+    await fireEvent.click(screen.getByTestId('onboarding-cancel'))
+
+    const composer = await screen.findByPlaceholderText('Resuming interrupted reply…')
+    expect(composer).toBeDisabled()
+    expect(composer).not.toHaveFocus()
+
+    chatListener({ payload: {
+      runId: 'run-interrupted', phase: 'complete', text: 'Finished answer',
+      receipt: { id: 'receipt-1' }, toolActivity: [], pendingPermission: null,
+    } })
+    await waitFor(() => expect(composer).toBeEnabled())
+    expect(composer).toHaveFocus()
+
+    const railToggle = screen.getByRole('button', { name: 'Open artifact rail' })
+    railToggle.focus()
+    resolveResume({ runId: 'run-interrupted' })
+    await waitFor(() => expect(screen.queryByText('Resuming…')).not.toBeInTheDocument())
+    expect(railToggle).toHaveFocus()
+  })
+
+  it('waits to focus on workspace re-entry until dictation polishing finishes', async () => {
+    let resolvePolish
+    invoke.mockImplementation(async (command) => {
+      if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
+      if (command === 'chat_history') return []
+      if (command === 'auth_entitlement_snapshot') return snapshot()
+      if (command === 'auth_devices') return []
+      if (command === 'dictation_start') return { state: 'running' }
+      if (command === 'dictation_stop') return { state: 'stopped' }
+      if (command === 'dictation_polish') return new Promise((resolve) => { resolvePolish = resolve })
+      throw new Error(`unexpected command: ${command}`)
+    })
+    render(App)
+    const voice = await screen.findByRole('button', { name: 'Voice' })
+    await fireEvent.click(voice)
+    dictationListener({ payload: { type: 'transcript', text: 'captured words' } })
+    await stopClickCapture(voice)
+    await screen.findByText('Polishing on this device…')
+    await fireEvent.click(screen.getByText('Home settings'))
+    await fireEvent.click(screen.getByTestId('onboarding-cancel'))
+
+    const composer = await screen.findByPlaceholderText('Ask anything')
+    expect(composer).toHaveAttribute('readonly')
+    expect(composer).not.toHaveFocus()
+
+    resolvePolish('Polished words')
+    await waitFor(() => expect(composer).not.toHaveAttribute('readonly'))
+    expect(composer).toHaveFocus()
+
+    const railToggle = screen.getByRole('button', { name: 'Open artifact rail' })
+    railToggle.focus()
+    await fireEvent.input(composer, { target: { value: 'Edited after polishing' } })
+    expect(railToggle).toHaveFocus()
+  })
+})
+
 describe('artifact rail', () => {
   it('toggles from the titlebar button with accessible state and an honest empty landmark', async () => {
     render(App)
@@ -2582,7 +2709,9 @@ describe('active run composer queue', () => {
   it('steers the active reply with the exact Rust command payload', async () => {
     const composer = await startRun()
     await fireEvent.input(composer, { target: { value: 'Focus on the risks' } })
-    await fireEvent.click(screen.getByRole('button', { name: 'Send' }))
+    const send = screen.getByRole('button', { name: 'Send' })
+    expect(send).toHaveClass('primary')
+    await fireEvent.click(send)
 
     expectQueuePayload({ runId: 'run-7', delivery: 'steer', message: 'Focus on the risks' })
   })
