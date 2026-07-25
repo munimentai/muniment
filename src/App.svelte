@@ -88,6 +88,7 @@
   let composer = $state()
   let polishPreview = $state()
   let composerRow = $state()
+  let composerInputDraft
   let wasInWorkspace = false
   let onboarding = $state(onboardingLoadingState)
   let requiredModel = $state(requiredModelLoadingState)
@@ -784,6 +785,7 @@
   }
 
   function composerInput(event) {
+    composerInputDraft = event.currentTarget.value
     if (eligibleDictation && event.currentTarget.value !== eligibleDictation.draft) invalidateDictationTransform()
   }
 
@@ -820,7 +822,7 @@
       // Past the cap a programmatic write — a streamed transcript, a transform
       // result — lands below the fold and the user watches their words vanish.
       // Typed input needs no help: the browser keeps the caret in view.
-      if (reveal && capped && document.activeElement !== composer) composer.scrollTop = composer.scrollHeight
+      if (reveal && capped) composer.scrollTop = composer.scrollHeight
     }
     if (thread) {
       const restored = pinned ? thread.scrollHeight - thread.clientHeight : threadScrollTop
@@ -841,7 +843,11 @@
   $effect(() => {
     draft
     polishPreview
-    if (composer) untrack(() => syncComposerHeight(true))
+    if (composer) untrack(() => {
+      const typed = draft === composerInputDraft
+      composerInputDraft = undefined
+      syncComposerHeight(!typed)
+    })
   })
 
   // The composer also rewraps when only its width changes, and most of those

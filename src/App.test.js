@@ -2985,6 +2985,36 @@ describe('composer auto-grow', () => {
     await waitFor(() => expect(composer.style.height).toBe(`${3 * row}px`))
   })
 
+  it('reveals streamed transcript chunks past the cap while the composer is focused', async () => {
+    invoke.mockImplementation(async (command) => {
+      if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
+      if (command === 'chat_history') return []
+      if (command === 'auth_entitlement_snapshot') return snapshot()
+      if (command === 'auth_devices') return []
+      if (command === 'dictation_start') return { state: 'running' }
+      if (command === 'dictation_stop') return { state: 'stopped' }
+      throw new Error(`unexpected command: ${command}`)
+    })
+    render(App)
+    const composer = await screen.findByPlaceholderText('Ask anything')
+    composer.focus()
+
+    composer.scrollTop = 37
+    await fireEvent.input(composer, { target: { value: lines(12) } })
+    expect(composer).toHaveFocus()
+    expect(composer.scrollTop).toBe(37)
+
+    globalShortcutHandler({ state: 'Pressed' })
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('dictation_start'))
+    dictationListener({ payload: { type: 'transcript', text: `\n${lines(4)}` } })
+    await waitFor(() => expect(composer.scrollTop).toBe(composer.scrollHeight))
+
+    composer.scrollTop = 41
+    dictationListener({ payload: { type: 'transcript', text: `\n${lines(3)}` } })
+    await waitFor(() => expect(composer.scrollTop).toBe(composer.scrollHeight))
+    expect(composer).toHaveFocus()
+  })
+
   it('returns to the resting height through the Try again retry', async () => {
     const submitted = deferred()
     invoke.mockImplementation(async (command) => {
