@@ -1471,7 +1471,8 @@
   .model-status-heading span, .model-status-copy, .model-progress-copy, .triage-generate span { color: var(--muted); }
   .model-status-copy { margin: 7px 0 0; font-size: 13px; line-height: 1.45; }
   .model-progress { height: 4px; margin-top: 11px; overflow: hidden; border-radius: 2px; background: var(--border); }
-  .model-progress span { display: block; height: 100%; background: var(--signal); }
+  /* §1.2: downloading a model is not a model working, so the fill stays ink. */
+  .model-progress span { display: block; height: 100%; background: var(--ink); }
   .model-progress-copy { margin: 6px 0 0; font: var(--text-12) var(--font-mono); }
   .triage-generate { display: flex; flex-direction: column; align-items: flex-end; gap: 6px; }
   .triage-generate span { max-width: 250px; font: var(--text-12) var(--font-mono); text-align: right; }
@@ -1520,11 +1521,6 @@
 
   button:hover:not(:disabled) {
     border-color: var(--muted);
-  }
-
-  button:focus-visible {
-    outline: 2px solid var(--signal);
-    outline-offset: 1px;
   }
 
   button:disabled {
@@ -1582,7 +1578,8 @@
   .workspace.sidebar-collapsed .home-settings::before { content: ''; position: absolute; inset: -9px -6px auto; height: 1px; background: var(--border); }
   .side-label { margin: 20px 8px 5px; color: var(--muted); font: var(--text-12) var(--font-mono); }
   .active-thread { background: var(--faint); }
-  .active-thread > span { width: 5px; height: 5px; border-radius: 50%; background: var(--signal); }
+  /* §1.2 forbids signal on selection states; the mockup's current-thread dot is ink. */
+  .active-thread > span { width: 5px; height: 5px; border-radius: 50%; background: var(--ink); }
   .quiet { background: transparent; border-color: transparent; }
   .artifact-divider { grid-area: rail; z-index: 2; align-self: stretch; width: 9px; margin-left: -4px; padding: 0; border: 0; border-radius: 0; background: transparent; cursor: col-resize; touch-action: none; }
   .artifact-divider::after { content: ''; display: block; width: 1px; height: 100%; margin-left: 4px; background: var(--border); }
@@ -1646,10 +1643,11 @@
   .polish-preview { position: absolute; inset: 0; overflow: hidden; pointer-events: none; white-space: pre-wrap; color: var(--ink); font: inherit; }
   .polish-transcript { text-decoration-line: underline; text-decoration-color: var(--signal); text-decoration-thickness: 2px; text-underline-offset: 3px; }
   .dictation-transforms { display: flex; flex-wrap: wrap; gap: 5px; margin: 7px 0; }
-  .dictation-transforms button { display: inline-flex; align-items: center; gap: 7px; padding: 3px 7px; border-color: var(--signal); border-radius: 2px; background: transparent; color: var(--signal); font: var(--text-12) var(--font-mono); }
-  .dictation-transforms button:hover:not(:disabled) { background: var(--signal-soft); }
-  .dictation-transforms button:focus-visible { outline-color: var(--ink); outline-offset: 2px; }
-  .dictation-transforms button:disabled { border-color: var(--border); color: var(--muted); }
+  /* These chips appear after the polish flash has settled to ink, and §2.4 lets
+     signal touch the composer only for the flash itself — so the group keeps the
+     base button's ink-on-hairline treatment at chip radius. */
+  .dictation-transforms button { display: inline-flex; align-items: center; gap: 7px; padding: 3px 7px; border-radius: 2px; background: transparent; font: var(--text-12) var(--font-mono); }
+  .dictation-transforms button:hover:not(:disabled) { background: var(--faint); }
   .dictation-transforms kbd { color: var(--muted); font: inherit; }
   .composer-row { display: flex; justify-content: space-between; align-items: center; color: var(--muted); font-size: 11px; }
   .composer-actions { display: flex; align-items: center; gap: 6px; }

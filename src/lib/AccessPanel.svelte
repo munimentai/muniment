@@ -172,7 +172,6 @@
 <style>
   button { font: inherit; font-size: var(--text-13); color: var(--ink); background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-control); padding: 5px 12px; cursor: pointer; }
   button:hover:not(:disabled) { border-color: var(--muted); }
-  button:focus-visible { outline: 2px solid var(--signal); outline-offset: 1px; }
   .profile-block { position: relative; margin-top: auto; padding-top: 10px; border-top: 1px solid var(--border); }
   .profile-button { width: 100%; display: flex; align-items: center; gap: 9px; padding: 9px 8px; border-color: transparent; background: transparent; text-align: left; }
   .profile-button > span:last-child { min-width: 0; display: grid; }
@@ -206,9 +205,10 @@
   .device-list li:first-child { border-top: 0; }
   .device-heading { display: flex; align-items: center; gap: 7px; font-size: var(--text-12); text-transform: capitalize; }
   .device-heading strong { font-weight: 600; }
-  .current-device { padding: 1px 5px; border: 1px solid var(--signal); border-radius: 6px; color: var(--signal); font: 10px var(--font-mono); text-transform: none; }
-  .device-state { margin-left: auto; color: var(--signal); font: var(--text-12) var(--font-mono); text-transform: none; }
-  .device-list .revoked .device-state { color: var(--muted); }
+  /* §1.2 forbids signal on badges at rest; §1.5 puts chips on radius 2. */
+  .current-device { padding: 1px 5px; border: 1px solid var(--border); border-radius: var(--radius-chip); background: var(--faint); color: var(--muted); font: 10px var(--font-mono); text-transform: none; }
+  /* §6: the word, not the color, carries Active vs Revoked. */
+  .device-state { margin-left: auto; color: var(--muted); font: var(--text-12) var(--font-mono); text-transform: none; }
   .device-list time { display: block; margin-top: 3px; color: var(--muted); font: 11px var(--font-mono); }
   .access-popover footer { margin: 12px -14px 0; padding: 11px 14px 0; border-top: 1px solid var(--border); color: var(--muted); font-size: 11px; }
   .sign-out { margin-top: 8px; padding: 2px 0; color: var(--muted); }
