@@ -398,9 +398,11 @@ describe('desktop-ci payload extraction', () => {
     const source = temp(); setup(source)
     return execFileSync('tar', ['-czf', '-', '-C', source, '.']).toString('base64')
   }
-  const extractInto = (output) => {
+  const extractInto = (output, runStatus) => {
     const file = path.join(temp(), 'output'); const destination = path.join(temp(), 'artifacts'); fs.writeFileSync(file, output)
-    const result = spawnSync('bash', [path.join(root, 'test/e2e/support/extract-artifacts.sh'), file, destination], { encoding: 'utf8' })
+    const args = [path.join(root, 'test/e2e/support/extract-artifacts.sh'), file, destination]
+    if (runStatus !== undefined) args.push(String(runStatus))
+    const result = spawnSync('bash', args, { encoding: 'utf8' })
     return { result, destination }
   }
   const extract = (output) => extractInto(output).result
@@ -443,6 +445,16 @@ describe('desktop-ci payload extraction', () => {
     expect(fields.stage).toBe('base64')
     expect(fields.begin_marker_count).toBe('1')
     expect(fields.end_marker_count).toBe('1')
+  })
+
+  it('records the desktop-ci exit status so a driver fault is not read as a bad envelope', () => {
+    expect(diagnostics(extractInto('no envelope\n', 3).destination).desktop_ci_exit_status).toBe('3')
+    expect(diagnostics(extractInto('no envelope\n', 0).destination).desktop_ci_exit_status).toBe('0')
+  })
+
+  it('records an absent or non-numeric exit status as unrecorded', () => {
+    expect(diagnostics(extractInto('no envelope\n').destination).desktop_ci_exit_status).toBe('unrecorded')
+    expect(diagnostics(extractInto('no envelope\n', '1 corp-secret').destination).desktop_ci_exit_status).toBe('unrecorded')
   })
 
   it('never leaks transcript content into the diagnostics', () => {

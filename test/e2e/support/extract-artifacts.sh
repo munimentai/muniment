@@ -1,6 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 input=$1 destination=$2
+# desktop-ci's exit status separates the two faults that both surface here as a
+# missing envelope: a driver that never ran the guest command at all, and a
+# guest that ran but published a malformed one. Only a plain integer is
+# recorded, so nothing transcript-derived can reach the uploaded diagnostics.
+run_status=${3:-unrecorded}
+[[ $run_status =~ ^[0-9]+$ ]] || run_status=unrecorded
 begin='=== DESKTOP-CI ARTIFACTS BEGIN ==='
 end='=== DESKTOP-CI ARTIFACTS END ==='
 
@@ -23,6 +29,7 @@ fail() {
   printf '%s\n' \
     "stage=$stage" \
     "reason=$message" \
+    "desktop_ci_exit_status=$run_status" \
     "begin_marker_count=${begin_count:-0}" \
     "end_marker_count=${end_count:-0}" \
     "transcript_line_count=${line_count// /}" \
