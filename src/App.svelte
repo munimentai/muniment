@@ -11,6 +11,7 @@
   import { applyBufferedChatEvents, applyChatEvent, composerAction, formatByteSize, historyMessages, receiptLabel, receiptRows, receiptSummary, runAnnouncement, toolName, toolStatus } from './lib/chat-state.js'
   import { composerHeight } from './lib/composer-size.js'
   import { appendTranscript, ariaKeyShortcut, dictationTransforms, handsFreeActivationDelay, holdToTalkShortcut, isDictationActive, validHoldToTalkShortcut } from './lib/dictation-state.js'
+  import { COPY_CONFIRMATION_MS, copyAnnouncement, copyConfirmed, copyFailure, copyLabel, copyResult } from './lib/message-actions.js'
   import { onboardingCancelSettingsState, onboardingConfirmedHomePathState, onboardingConfirmedState, onboardingConfirmingState, onboardingErrorState, onboardingExtractingState, onboardingExtractionErrorState, onboardingExtractionState, onboardingFinalizingState, onboardingImportChoiceState, onboardingImportErrorState, onboardingImportSavedState, onboardingImportSavingState, onboardingLoadingState, onboardingPathState, onboardingPreviewErrorState, onboardingPreviewingState, onboardingPreviewState, onboardingReturnToArchiveReviewState, onboardingSelectionState, onboardingSettingsState, onboardingStatusState, onboardingTriageConfirmedState, onboardingTriageErrorState, onboardingTriageReportState, onboardingTriagingState, requiredModelLoadingState, requiredModelPollActive, requiredModelProgress } from './lib/onboarding-state.js'
   import { scrollFollowState } from './lib/scroll-follow.js'
   import { SIDEBAR_STORAGE_KEY, isSidebarShortcut, parseSidebarCollapsed, serializeSidebarCollapsed, sidebarShortcut } from './lib/sidebar-state.js'
@@ -109,6 +110,10 @@
   const sidebarKeyShortcut = sidebarShortcut()
   const modifierLabel = sidebarKeyShortcut === 'Meta+\\' ? '⌘' : 'Ctrl '
   const sidebarHint = `${modifierLabel}\\`
+  // The newest copy attempt in the thread, or null once its confirmation lapses.
+  let copy = $state(null)
+  let copyEpoch = 0
+  let copyTimer
 
   // A read from a blocked or corrupt store must not keep the shell from
   // rendering; §2.1's documented default is expanded.
@@ -861,6 +866,30 @@
     expandedReceipts = next
   }
 
+  // The clipboard write runs first so it keeps the click's user activation. The
+  // result is then published in two steps — clear, then set — so copying the same
+  // reply twice still changes the live region's text and is announced again.
+  async function copyResponse(run) {
+    clearTimeout(copyTimer)
+    const epoch = ++copyEpoch
+    let result
+    try {
+      await navigator.clipboard.writeText(run.text ?? '')
+      result = copyResult(run.id, true)
+    } catch (_) {
+      result = copyResult(run.id, false)
+    }
+    if (destroyed || epoch !== copyEpoch) return
+    copy = null
+    await tick()
+    if (destroyed || epoch !== copyEpoch) return
+    copy = result
+    if (result.status !== 'copied') return
+    copyTimer = setTimeout(() => {
+      if (!destroyed && epoch === copyEpoch) copy = null
+    }, COPY_CONFIRMATION_MS)
+  }
+
   function scrollToLatest() {
     if (!thread) return
     pinned = true
@@ -1057,6 +1086,7 @@
       clearTimeout(dictationCompletionTimer)
       clearTimeout(voiceClickTimer)
       clearTimeout(voiceReleaseTimer)
+      clearTimeout(copyTimer)
       stopDragDrop?.()
       globalVoiceHeld = false
       globalVoiceTask = globalVoiceTask.finally(cleanupVoiceShortcuts)
@@ -1405,6 +1435,12 @@
                     </dl>
                   {/if}
                 {/if}
+                {@const failure = copyFailure(copy, message.run.id, modifierLabel)}
+                <!-- §3.2's action row, copy only in this slice. -->
+                <div class="message-actions">
+                  <button type="button" onclick={() => copyResponse(message.run)}>{#if copyConfirmed(copy, message.run.id)}<svg class="action-icon" width="14" height="14" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 6 9 17l-5-5" /></svg>{:else}<svg class="action-icon" width="14" height="14" viewBox="0 0 24 24" aria-hidden="true"><rect x="8" y="8" width="14" height="14" rx="2" /><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2" /></svg>{/if}{copyLabel(copy, message.run.id)}</button>
+                </div>
+                {#if failure}<div class="run-error copy-failure">{failure}</div>{/if}
               {/if}
             </div>{/if}
           {/each}
@@ -1496,6 +1532,10 @@
             </div>
           </aside>
         {/if}
+        <!-- Message actions get their own region, outside the thread shell: writing a
+             copy confirmation into the run-phase region above would overwrite whatever
+             a run is currently saying there, and be overwritten by the next phase. -->
+        <p class="visually-hidden" aria-live="polite" aria-atomic="true" data-testid="message-action-announcement">{copyAnnouncement(copy, modifierLabel)}</p>
       </section>
     {:else if auth.name === 'error'}
       <section class="auth-state" aria-live="polite">
@@ -1716,6 +1756,22 @@
   .receipt-record div { display: grid; grid-template-columns: 88px minmax(0, 1fr); gap: 12px; }
   .receipt-record dd { margin: 0; font-family: var(--font-mono); font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
   .receipt-record .route-value { color: var(--signal); }
+  /* §3.2: hover or focus reveals the row. Only opacity carries the reveal — the row
+     always holds its space, so nothing reflows and nothing is ever obscured, and the
+     button keeps its place in the tab order. `visibility: hidden` would strip it from
+     that order exactly as `display: none` does, which would make focus unreachable
+     and the :focus-within reveal below unreachable with it. */
+  .message-actions { display: flex; gap: 2px; margin-top: 8px; opacity: 0; transition: opacity 120ms ease; }
+  .response:hover .message-actions, .response:focus-within .message-actions { opacity: 1; }
+  .message-actions button { display: inline-flex; align-items: center; gap: 5px; padding: 4px 8px; border-color: transparent; background: transparent; color: var(--muted); font-size: var(--text-12); }
+  .message-actions button:hover:not(:disabled) { border-color: transparent; background: var(--faint); color: var(--ink); }
+  /* §1.2: focus rings are ink, never signal. */
+  .message-actions button:focus-visible { outline-color: var(--ink); }
+  .message-actions button:disabled { opacity: .45; }
+  /* Same §1.7 icon geometry as the rail, tracking whatever ink its button carries. */
+  .action-icon { flex: none; display: block; color: inherit; }
+  .action-icon rect, .action-icon path { fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+  .copy-failure { margin-top: 4px; }
   .run-error { color: var(--muted); font: var(--text-12) var(--font-mono); }
   .cancel-error, .history-error { margin: 0 0 8px; color: var(--muted); font: var(--text-12) var(--font-mono); }
   .run-error button { padding: 2px 6px; }
@@ -1762,5 +1818,5 @@
   @keyframes breathe { 50% { opacity: .45; } }
   @keyframes tool-pulse { 50% { opacity: .3; transform: scale(.75); } }
   @keyframes capture { to { transform: scaleY(.55); } }
-  @media (prefers-reduced-motion: reduce) { .workspace, .titlebar { transition: none; } .caret, .thinking path, .tool-running .tool-dot, .capture-meter i { animation: none; } }
+  @media (prefers-reduced-motion: reduce) { .workspace, .titlebar, .message-actions { transition: none; } .caret, .thinking path, .tool-running .tool-dot, .capture-meter i { animation: none; } }
 </style>
