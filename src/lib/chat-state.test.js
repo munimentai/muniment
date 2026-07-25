@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { applyBufferedChatEvents, applyChatEvent, composerAction, receiptParts, receiptRows, toolName, toolStatus } from './chat-state.js'
+import { applyBufferedChatEvents, applyChatEvent, composerAction, receiptParts, receiptRows, runAnnouncement, toolName, toolStatus } from './chat-state.js'
 
 describe('chat composer and projection', () => {
   it('chooses submit or steer from the active run', () => {
@@ -73,6 +73,41 @@ describe('chat composer and projection', () => {
 
   it('projects no rows from an empty receipt', () => {
     expect(receiptRows({})).toEqual([])
+  })
+
+  it('announces one coarse in-progress state for a whole generation', () => {
+    expect(runAnnouncement({ phase: 'thinking', text: '' })).toBe('Generating a reply.')
+    expect(runAnnouncement({ phase: 'streaming', text: 'Half an ans' })).toBe('Generating a reply.')
+    expect(runAnnouncement({ phase: 'resuming', text: 'Partial answer' })).toBe('Resuming the interrupted reply.')
+  })
+
+  it('keeps the announcement identical across every streamed chunk and pause of a run', () => {
+    // src-tauri/src/chat.rs projection_phase also emits pending-permission mid-run.
+    const phases = [
+      { phase: 'thinking', text: '' },
+      { phase: 'streaming', text: 'A' },
+      { phase: 'pending-permission', text: 'A rout' },
+      { phase: 'streaming', text: 'A routed answer' },
+    ].map(runAnnouncement)
+    expect(new Set(phases)).toEqual(new Set(['Generating a reply.']))
+  })
+
+  it('announces the finished reply once with its text', () => {
+    expect(runAnnouncement({ phase: 'complete', text: 'A routed answer' })).toBe('Reply complete. A routed answer')
+    expect(runAnnouncement({ phase: 'complete', text: '' })).toBe('Reply complete.')
+    expect(runAnnouncement({ phase: 'complete' })).toBe('Reply complete.')
+  })
+
+  it('announces every terminal outcome the run can reach', () => {
+    expect(runAnnouncement({ phase: 'failed', text: '' })).toBe('Reply failed.')
+    expect(runAnnouncement({ phase: 'interrupted', text: 'Partial answer' })).toBe('Reply interrupted.')
+    expect(runAnnouncement({ phase: 'cancelled', text: 'Partial answer' })).toBe('Reply stopped.')
+  })
+
+  it('says nothing without a run or for an unrecognized phase', () => {
+    expect(runAnnouncement(null)).toBe('')
+    expect(runAnnouncement(undefined)).toBe('')
+    expect(runAnnouncement({ phase: 'a-phase-that-does-not-exist', text: 'Partial answer' })).toBe('')
   })
 
   it('preserves all projections that arrive before submit resolves', () => {

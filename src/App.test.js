@@ -2255,9 +2255,154 @@ describe('chat submission settlement', () => {
     await fireEvent.click(screen.getByRole('button', { name: 'Send' }))
 
     expect(await screen.findByRole('alert')).toHaveTextContent('The submission was rejected.')
-    expect(screen.getByText('Reply failed.')).toBeInTheDocument()
-    expect(screen.getByText('Existing answer')).toBeInTheDocument()
+    // Scoped to the transcript: the run announcement carries the same sentence.
+    const thread = within(document.querySelector('.thread'))
+    expect(thread.getByText('Reply failed.')).toBeInTheDocument()
+    expect(thread.getByText('Existing answer')).toBeInTheDocument()
     expectNoProxyEqualityWarning(warn)
+  })
+})
+
+describe('thread announcements', () => {
+  const restored = [{
+    runId: 'run-old', phase: 'complete', text: 'Restored answer',
+    prompt: 'Old question', receipt: {}, toolActivity: [],
+  }]
+
+  function signedIn(history, submit) {
+    invoke.mockImplementation(async (command) => {
+      if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
+      if (command === 'chat_history') return history
+      if (command === 'auth_entitlement_snapshot') return snapshot()
+      if (command === 'auth_devices') return []
+      if (command === 'chat_submit' && submit) return submit
+      throw new Error(`unexpected command: ${command}`)
+    })
+    return render(App)
+  }
+
+  // Screen readers speak on content change, so the honest assertion is that the
+  // region's DOM does not change at all while chunks land.
+  function watch(region) {
+    const seen = []
+    const observer = new MutationObserver((records) => seen.push(...records))
+    observer.observe(region, { childList: true, characterData: true, subtree: true })
+    return () => {
+      seen.push(...observer.takeRecords())
+      return seen.splice(0)
+    }
+  }
+
+  it('keeps the transcript out of the live region and stays silent when history is restored', async () => {
+    signedIn(restored)
+
+    expect(await screen.findByText('Restored answer')).toBeInTheDocument()
+    const thread = document.querySelector('.thread')
+    expect(thread).not.toHaveAttribute('aria-live')
+    expect(thread).not.toHaveAttribute('role')
+    const region = screen.getByTestId('run-announcement')
+    expect(thread).not.toContainElement(region)
+    expect(document.querySelectorAll('.thread-shell [aria-live]')).toHaveLength(1)
+    expect(region).toHaveAttribute('aria-live', 'polite')
+    expect(region).toHaveAttribute('aria-atomic', 'true')
+    expect(region).toHaveClass('visually-hidden')
+    expect(region.textContent).toBe('')
+  })
+
+  it('announces one generation and one completion across a streamed run', async () => {
+    signedIn([], { runId: 'run-9', attachments: [] })
+    const composer = await screen.findByPlaceholderText('Ask anything')
+    await fireEvent.input(composer, { target: { value: 'A question' } })
+    await fireEvent.click(screen.getByRole('button', { name: 'Send' }))
+
+    const region = screen.getByTestId('run-announcement')
+    await waitFor(() => expect(region).toHaveTextContent('Generating a reply.'))
+    const drain = watch(region)
+
+    for (const [phase, text] of [['streaming', 'A'], ['pending-permission', 'A routed'], ['streaming', 'A routed answer']]) {
+      chatListener({ payload: { runId: 'run-9', phase, text, receipt: null, toolActivity: [] } })
+      await waitFor(() => expect(document.querySelector('.response p')).toHaveTextContent(text))
+    }
+    expect(drain()).toEqual([])
+    expect(region).toHaveTextContent('Generating a reply.')
+
+    chatListener({ payload: { runId: 'run-9', phase: 'complete', text: 'A routed answer', receipt: {}, toolActivity: [] } })
+
+    await waitFor(() => expect(region).toHaveTextContent('Reply complete. A routed answer'))
+    expect(drain()).toHaveLength(1)
+    expect(screen.getByText('A routed answer')).toBeInTheDocument()
+    expect(document.querySelector('.thread').textContent).not.toContain('Reply complete.')
+  })
+
+  it('drops a settled announcement before a restored thread is mounted', async () => {
+    let authed = true
+    invoke.mockImplementation(async (command) => {
+      if (command === 'auth_status') return { signed_in: authed, subject: authed ? 'user-a' : null }
+      if (command === 'auth_sign_in') { authed = true; return { signed_in: true, subject: 'user-a' } }
+      if (command === 'auth_sign_out') { authed = false; return { signed_in: false, subject: null } }
+      if (command === 'chat_history') return restored
+      if (command === 'auth_entitlement_snapshot') return snapshot()
+      if (command === 'auth_devices') return []
+      if (command === 'chat_submit') return { runId: 'run-11', attachments: [] }
+      throw new Error(`unexpected command: ${command}`)
+    })
+    render(App)
+    const composer = await screen.findByPlaceholderText('Ask anything')
+    await fireEvent.input(composer, { target: { value: 'A question' } })
+    await fireEvent.click(screen.getByRole('button', { name: 'Send' }))
+    chatListener({ payload: { runId: 'run-11', phase: 'complete', text: 'A routed answer', receipt: {}, toolActivity: [] } })
+    await waitFor(() => expect(screen.getByTestId('run-announcement')).toHaveTextContent('Reply complete.'))
+
+    await fireEvent.click(screen.getByRole('button', { name: /Alice/i }))
+    await fireEvent.click(screen.getByRole('button', { name: 'Sign out' }))
+    await fireEvent.click(await screen.findByRole('button', { name: 'Sign in' }))
+
+    expect(await screen.findByText('Restored answer')).toBeInTheDocument()
+    expect(screen.getByTestId('run-announcement').textContent).toBe('')
+  })
+
+  it('announces the completion of a reply that was restored mid-stream', async () => {
+    signedIn([{ runId: 'run-live', phase: 'streaming', text: 'Half an', prompt: 'A question', receipt: null, toolActivity: [] }])
+    expect(await screen.findByText('Half an')).toBeInTheDocument()
+    const region = screen.getByTestId('run-announcement')
+    expect(region.textContent).toBe('')
+    await waitFor(() => expect(chatListener).toBeTypeOf('function'))
+    const drain = watch(region)
+
+    chatListener({ payload: { runId: 'run-live', phase: 'complete', text: 'Half an answer', receipt: {}, toolActivity: [] } })
+
+    await waitFor(() => expect(region).toHaveTextContent('Reply complete. Half an answer'))
+    expect(drain()).toHaveLength(1)
+  })
+
+  it('stays silent when a stray event lands on an already settled restored run', async () => {
+    signedIn(restored)
+    expect(await screen.findByText('Restored answer')).toBeInTheDocument()
+    const region = screen.getByTestId('run-announcement')
+    await waitFor(() => expect(chatListener).toBeTypeOf('function'))
+    const drain = watch(region)
+
+    chatListener({ payload: { runId: 'run-old', phase: 'complete', text: 'Restored answer', receipt: {}, toolActivity: [{ effectId: 'tool-1', displayName: 'Read file', status: 'completed' }] } })
+
+    expect(await screen.findByRole('status', { name: 'Read file: completed' })).toBeInTheDocument()
+    expect(drain()).toEqual([])
+    expect(region.textContent).toBe('')
+  })
+
+  it('announces a terminal outcome once for a run that never streamed', async () => {
+    signedIn([], { runId: 'run-10', attachments: [] })
+    const composer = await screen.findByPlaceholderText('Ask anything')
+    await fireEvent.input(composer, { target: { value: 'A question' } })
+    await fireEvent.click(screen.getByRole('button', { name: 'Send' }))
+
+    const region = screen.getByTestId('run-announcement')
+    await waitFor(() => expect(region).toHaveTextContent('Generating a reply.'))
+    const drain = watch(region)
+
+    chatListener({ payload: { runId: 'run-10', type: 'failed' } })
+
+    await waitFor(() => expect(region).toHaveTextContent('Reply failed.'))
+    expect(drain()).toHaveLength(1)
   })
 })
 
