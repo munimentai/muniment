@@ -24,4 +24,11 @@ describe('access popover layout', () => {
     expect(rules.get('.access-footer')).toMatch(/flex:\s*none/)
     expect(rules.get('.access-footer')).toMatch(/border-top:\s*1px solid var\(--border\)/)
   })
+
+  it('keeps profile metadata on one readable line', () => {
+    expect(rules.get('.profile-button small')).toMatch(/overflow:\s*hidden/)
+    expect(rules.get('.profile-button small')).toMatch(/text-overflow:\s*ellipsis/)
+    expect(rules.get('.profile-button small')).toMatch(/white-space:\s*nowrap/)
+    expect(source).toMatch(/class="profile-button" title=\{profileDetails\}/)
+  })
 })
