@@ -1,5 +1,6 @@
 <script>
   import { onMount, tick, untrack } from 'svelte'
+  import { cubicOut } from 'svelte/easing'
   import { getCurrentWebview } from '@tauri-apps/api/webview'
   import { confirm, open } from '@tauri-apps/plugin-dialog'
   import { register, unregister } from '@tauri-apps/plugin-global-shortcut'
@@ -8,18 +9,29 @@
   import Onboarding from './lib/Onboarding.svelte'
   import { ARTIFACT_RAIL_MAX_WIDTH, ARTIFACT_RAIL_MIN_WIDTH, artifactRailShortcut, artifactRailWidthFromKey, artifactRailWidthFromPointer, clampArtifactRailWidth, defaultArtifactRailWidth, isArtifactRailShortcut, shortcutDisplayLabel } from './lib/artifact-rail-state.js'
   import { bootState, errorState, statusState, waitingState } from './lib/auth-state.js'
-  import { ringPath } from './lib/mark.js'
+  import { ringPath, solidMilledRingPath } from './lib/mark.js'
   import { applyBufferedChatEvents, applyChatEvent, composerAction, formatByteSize, historyMessages, receiptLabel, receiptRows, receiptSummary, runAnnouncement, toolName, toolStatus } from './lib/chat-state.js'
   import { composerHeight } from './lib/composer-size.js'
-  import { appendTranscript, ariaKeyShortcut, dictationTransforms, handsFreeActivationDelay, holdToTalkShortcut, isDictationActive, validHoldToTalkShortcut } from './lib/dictation-state.js'
+  import { appendTranscript, ariaKeyShortcut, dictationTransforms, handsFreeActivationDelay, holdToTalkShortcut, isDictationActive } from './lib/dictation-state.js'
   import { COPY_CONFIRMATION_MS, copyAnnouncement, copyConfirmed, copyFailure, copyLabel, copyResult } from './lib/message-actions.js'
   import { onboardingLoadingState, onboardingSettingsState } from './lib/onboarding-state.js'
   import { scrollFollowState } from './lib/scroll-follow.js'
   import { SIDEBAR_STORAGE_KEY, isSidebarShortcut, parseSidebarCollapsed, serializeSidebarCollapsed, sidebarShortcut } from './lib/sidebar-state.js'
   import { streamingUnderlineGeometry } from './lib/streaming-underline.js'
+  import { createVoiceShortcutManager } from './lib/voice-shortcut.js'
 
   const markD = ringPath()
+  const thinkingMarkD = solidMilledRingPath()
   const version = __APP_VERSION__
+
+  function thinkingSettle() {
+    const reducedMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches ?? false
+    return {
+      duration: reducedMotion ? 0 : 180,
+      easing: cubicOut,
+      css: (t) => `opacity: ${t}; transform: translateY(${(1 - t) * -2}px) scale(${0.96 + t * 0.04})`,
+    }
+  }
 
   const tauri = window.__TAURI__?.core
   let auth = $state(bootState)
@@ -85,8 +97,6 @@
   let globalVoiceError = $state(false)
   let globalVoiceShortcutValue = $state(holdToTalkShortcut())
   let globalVoiceChanging = $state(true)
-  let globalVoiceTask = Promise.resolve()
-  const registeredVoiceShortcuts = new Set()
   let composer = $state()
   let polishPreview = $state()
   let composerRow = $state()
@@ -504,101 +514,21 @@
     }
   }
 
-  async function registerInitialVoiceShortcut() {
-    const fallback = holdToTalkShortcut()
-    let saved
-    try { saved = localStorage.getItem('muniment.voice-shortcut') } catch (_) {}
-    const preferred = validHoldToTalkShortcut(saved) ? saved : fallback
-    try {
-      await register(preferred, globalVoiceShortcut)
-      registeredVoiceShortcuts.add(preferred)
-      if (destroyed) return
-      globalVoiceShortcutValue = preferred
-      globalVoiceRegistered = true
-    } catch (_) {
-      if (preferred !== fallback) {
-        try {
-          await register(fallback, globalVoiceShortcut)
-          registeredVoiceShortcuts.add(fallback)
-          if (destroyed) return
-          globalVoiceShortcutValue = fallback
-          globalVoiceRegistered = true
-          return
-        } catch (_) {}
-      }
-      if (!destroyed) globalVoiceError = true
-      return
-    }
-  }
-
-  async function unregisterVoiceShortcut(shortcut) {
-    await unregister(shortcut)
-    registeredVoiceShortcuts.delete(shortcut)
-  }
-
-  function restoreSavedVoiceShortcut(saved) {
-    if (saved === null) localStorage.removeItem('muniment.voice-shortcut')
-    else localStorage.setItem('muniment.voice-shortcut', saved)
-  }
-
-  async function cleanupVoiceShortcuts() {
-    globalVoiceRegistered = false
-    await Promise.allSettled([...registeredVoiceShortcuts].map((shortcut) => unregisterVoiceShortcut(shortcut)))
-  }
+  const voiceShortcutManager = createVoiceShortcutManager({
+    register,
+    unregister,
+    storage: localStorage,
+    onShortcut: globalVoiceShortcut,
+    onState: (state) => {
+      globalVoiceShortcutValue = state.shortcut
+      globalVoiceChanging = state.changing
+      globalVoiceRegistered = state.registered
+      globalVoiceError = state.error
+    },
+  })
 
   function changeVoiceShortcut(next) {
-    if (globalVoiceChanging || next === globalVoiceShortcutValue || !validHoldToTalkShortcut(next)) return next === globalVoiceShortcutValue
-    globalVoiceChanging = true
-    globalVoiceTask = globalVoiceTask.then(() => applyVoiceShortcutChange(next))
-    return globalVoiceTask
-  }
-
-  async function applyVoiceShortcutChange(next) {
-    globalVoiceError = false
-    const previous = globalVoiceShortcutValue
-    const previousRegistered = globalVoiceRegistered
-    let previousSaved
-    try { previousSaved = localStorage.getItem('muniment.voice-shortcut') } catch (_) {
-      globalVoiceError = true
-      globalVoiceChanging = false
-      return false
-    }
-    let nextRegistered = false
-    let savedChanged = false
-    let rollbackFailed = false
-    try {
-      await register(next, globalVoiceShortcut)
-      registeredVoiceShortcuts.add(next)
-      nextRegistered = true
-      if (destroyed) throw new Error('destroyed')
-      localStorage.setItem('muniment.voice-shortcut', next)
-      savedChanged = true
-      if (destroyed) throw new Error('destroyed')
-      if (previousRegistered) await unregisterVoiceShortcut(previous)
-      if (destroyed) throw new Error('destroyed')
-      globalVoiceShortcutValue = next
-      globalVoiceRegistered = true
-      return true
-    } catch (_) {
-      if (savedChanged) {
-        try { restoreSavedVoiceShortcut(previousSaved) } catch (_) { rollbackFailed = true }
-      }
-      if (nextRegistered) {
-        try { await unregisterVoiceShortcut(next) } catch (_) { rollbackFailed = true }
-      }
-      if (previousRegistered && !registeredVoiceShortcuts.has(previous)) {
-        try {
-          await register(previous, globalVoiceShortcut)
-          registeredVoiceShortcuts.add(previous)
-        } catch (_) { rollbackFailed = true }
-      }
-      globalVoiceShortcutValue = previous
-      globalVoiceRegistered = registeredVoiceShortcuts.has(previous)
-      if (!destroyed) globalVoiceError = true
-      return rollbackFailed ? null : false
-    } finally {
-      globalVoiceChanging = false
-    }
+    return voiceShortcutManager.change(next)
   }
 
   async function transformDictation(action) {
@@ -889,10 +819,7 @@
     })
     if (tauri) {
       run('status')
-      globalVoiceTask = registerInitialVoiceShortcut().finally(async () => {
-        globalVoiceChanging = false
-        if (destroyed) await cleanupVoiceShortcuts()
-      })
+      voiceShortcutManager.start()
     }
     window.__TAURI__?.event?.listen('chat-event', ({ payload }) => {
       if (!messages.some((message) => message.run?.id === payload.runId)) {
@@ -976,7 +903,7 @@
       clearTimeout(copyTimer)
       stopDragDrop?.()
       globalVoiceHeld = false
-      globalVoiceTask = globalVoiceTask.finally(cleanupVoiceShortcuts)
+      voiceShortcutManager.cleanup()
       document.removeEventListener('keydown', shortcuts)
       window.removeEventListener('resize', fitArtifactRail)
     }
@@ -1148,8 +1075,6 @@
               <svg class="side-icon" width={sidebarCollapsed ? 18 : 16} height={sidebarCollapsed ? 18 : 16} viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="4" width="17" height="16" rx="2.5" /><path d="M9.5 4v16" /><path d={sidebarCollapsed ? 'm14 9 3 3-3 3' : 'm15.5 15-3-3 3-3'} /></svg>
             </button>
           </div>
-          <button class="side-action" aria-label={sidebarCollapsed ? 'New thread' : null} title={sidebarCollapsed ? `New thread (${modifierLabel}N)` : null}><svg class="side-icon" width="18" height="18" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5.5v13" /><path d="M5.5 12h13" /></svg>{#if !sidebarCollapsed}<span>New thread</span><kbd>{modifierLabel}N</kbd>{/if}</button>
-          <button class="side-action" aria-label={sidebarCollapsed ? 'Search' : null} title={sidebarCollapsed ? `Search (${modifierLabel}F)` : null}><svg class="side-icon" width="18" height="18" viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5" /><path d="m15.8 15.8 3.7 3.7" /></svg>{#if !sidebarCollapsed}<span>Search</span><kbd>{modifierLabel}F</kbd>{/if}</button>
           {#if !sidebarCollapsed}
             <p class="side-label">Threads</p>
             <button class="thread-row active-thread"><span></span>New thread</button>
@@ -1184,7 +1109,7 @@
             {@const singleTools = activity.filter((tool) => !groupedIds.includes(tool.effectId))}
             <div class="response">
               {#if message.run.phase === 'thinking'}
-                <span class="thinking"><svg width="17" height="17" viewBox="0 0 48 48" aria-label="Thinking"><path d={markD} stroke-width="5" /></svg><span>Routing</span></span>
+                <span class="thinking" out:thinkingSettle><svg width="17" height="17" viewBox="0 0 48 48" aria-label="Thinking"><path d={thinkingMarkD} fill-rule="evenodd" /></svg><span>Routing</span></span>
               {:else if message.run.phase === 'streaming'}<p class="response-prose streaming" use:streamingUnderline={message.run.text}>{message.run.text}<span class="caret" aria-hidden="true"></span><span class="streaming-rule" aria-hidden="true"></span></p>
               {:else}<p class="response-prose">{message.run.text}</p>{/if}
               {#if message.run.phase === 'failed'}<div class="run-error">Reply failed. <button disabled={dictationBusy()} onclick={() => { draft = message.run.prompt; send() }}>Try again</button></div>{/if}
@@ -1436,7 +1361,7 @@
   .side-toggle:hover:not(:disabled) .side-icon, .side-toggle:focus-visible .side-icon { color: var(--ink); }
   /* §1.7: one geometric 1.6px-stroke icon set, sized to the mockup's rail. */
   .side-icon { flex: none; display: block; color: var(--muted); }
-  .side-icon circle, .side-icon rect, .side-icon path { fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+  .side-icon rect, .side-icon path { fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
   .side-action, .thread-row { width: 100%; display: flex; align-items: center; gap: 9px; padding: 7px 8px; border-color: transparent; background: transparent; text-align: left; }
   .side-action span { flex: 1; }
   /* Collapsed rail: icon-only controls, names carried by aria-label + tooltip. */
@@ -1479,7 +1404,7 @@
   .streaming-rule { position: absolute; height: 2px; background: var(--signal); pointer-events: none; }
   .caret { display: inline-block; height: 1em; border-right: 2px solid var(--signal); margin-left: 2px; vertical-align: -2px; animation: blink 800ms step-end infinite; }
   .thinking { display: flex; align-items: center; gap: 9px; color: var(--muted); font: var(--text-12) var(--font-mono); }
-  .thinking path { fill: none; stroke: var(--signal); stroke-linecap: round; animation: breathe 1.8s ease-in-out infinite; }
+  .thinking path { fill: var(--signal); animation: breathe 1.8s ease-in-out infinite; }
   .tool-card { margin-top: 8px; padding: 8px 12px; border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--surface); color: var(--muted); font: var(--text-13) var(--font-mono); }
   .tool-row { display: flex; align-items: center; gap: 8px; min-height: 20px; }
   .tool-group-title { margin-bottom: 4px; color: var(--muted); }
@@ -1566,5 +1491,6 @@
     /* Unlike the blanket duration rule, removing this animation keeps the meter
        at its full-height resting state instead of the keyframe's 55% endpoint. */
     .capture-meter i { animation: none; }
+    .thinking path { animation: none; }
   }
 </style>
