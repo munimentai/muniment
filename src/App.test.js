@@ -3337,12 +3337,12 @@ describe('signed-in access popover', () => {
     expect(rows.map((row) => row.textContent)).toEqual(expect.arrayContaining([
       expect.stringContaining('This device'), expect.stringContaining('Active'), expect.stringContaining('Revoked'),
     ]))
-    expect(rows[0]).toHaveTextContent('desktopThis deviceActive')
-    expect(rows[1]).toHaveTextContent('androidActive')
-    expect(rows[2]).toHaveTextContent('iosRevoked')
+    expect(rows[0]).toHaveTextContent('DesktopThis deviceActive')
+    expect(rows[1]).toHaveTextContent('AndroidActive')
+    expect(rows[2]).toHaveTextContent('iOSRevoked')
     expect(rows[2]).toHaveClass('revoked')
-    const activeIdentifier = within(rows[1]).getByText('android')
-    const revokedIdentifier = within(rows[2]).getByText('ios')
+    const activeIdentifier = within(rows[1]).getByText('Android')
+    const revokedIdentifier = within(rows[2]).getByText('iOS')
     const revokedRule = accessPanelSource.match(/\.revoked \.device-heading strong\s*\{([^}]*)\}/)?.[1]
     expect(revokedIdentifier.tagName).toBe('STRONG')
     expect(activeIdentifier.tagName).toBe('STRONG')
