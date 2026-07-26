@@ -9,6 +9,12 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vite
 
 import { historyMessages } from './lib/chat-state.js'
 
+const appSource = fs.readFileSync(path.join(process.cwd(), 'src/App.svelte'), 'utf8')
+const appStyles = appSource.match(/<style>([\s\S]*)<\/style>/)?.[1] ?? ''
+const appRules = new Map([...appStyles
+  .replace(/\/\*[\s\S]*?\*\//g, '')
+  .matchAll(/([^{}]+)\{([^{}]*)\}/g)]
+  .map(([, selector, declarations]) => [selector.trim().replace(/\s+/g, ' '), declarations]))
 const accessPanelSource = fs.readFileSync(path.join(process.cwd(), 'src/lib/AccessPanel.svelte'), 'utf8')
 
 let App
@@ -290,6 +296,14 @@ describe('workspace composer entry', () => {
 })
 
 describe('artifact rail', () => {
+  it('uses one accessible heading for the rail', () => {
+    const railMarkup = appSource.match(/<aside id="artifact-rail"[\s\S]*?<\/aside>/)?.[0] ?? ''
+
+    expect(railMarkup).toMatch(/aria-labelledby="artifact-rail-title"/)
+    expect(railMarkup.match(/<h2 id="artifact-rail-title">Artifacts<\/h2>/g)).toHaveLength(1)
+    expect(railMarkup).not.toMatch(/Thread artifacts/)
+  })
+
   it('toggles from the titlebar button with accessible state and an honest empty landmark', async () => {
     render(App)
     const toggle = await screen.findByRole('button', { name: 'Open artifact rail' })
@@ -457,6 +471,15 @@ describe('artifact rail', () => {
 
     expect(shortcut.defaultPrevented).toBe(false)
     expect(screen.queryByRole('complementary', { name: 'Artifacts' })).not.toBeInTheDocument()
+  })
+})
+
+describe('message grammar', () => {
+  it('caps user bubbles while preserving compact right alignment and long-token wrapping', () => {
+    expect(appRules.get('.user-message')).toMatch(/width:\s*fit-content/)
+    expect(appRules.get('.user-message')).toMatch(/max-width:\s*78%/)
+    expect(appRules.get('.user-message')).toMatch(/margin-left:\s*auto/)
+    expect(appRules.get('.user-message')).toMatch(/overflow-wrap:\s*anywhere/)
   })
 })
 

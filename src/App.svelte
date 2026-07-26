@@ -12,6 +12,7 @@
   import { ringPath, solidMilledRingPath } from './lib/mark.js'
   import { applyBufferedChatEvents, applyChatEvent, composerAction, formatByteSize, historyMessages, receiptLabel, receiptRows, receiptSummary, runAnnouncement, toolName, toolStatus } from './lib/chat-state.js'
   import { composerHeight } from './lib/composer-size.js'
+  import { createDictationController } from './lib/dictation-controller.js'
   import { appendTranscript, ariaKeyShortcut, dictationTransforms, handsFreeActivationDelay, holdToTalkShortcut, isDictationActive } from './lib/dictation-state.js'
   import { COPY_CONFIRMATION_MS, copyAnnouncement, copyConfirmed, copyFailure, copyLabel, copyResult } from './lib/message-actions.js'
   import { onboardingLoadingState, onboardingSettingsState } from './lib/onboarding-state.js'
@@ -59,26 +60,14 @@
   let draggingFiles = $state(false)
   let dictation = $state({ state: 'idle' })
   let dictationError = $state('')
-  let dictationTimer
-  let dictationPollEpoch = 0
-  let dictationUnlisten
   let dictationCommandPending = $state(false)
   let dictationRequested = false
-  let dictationCancelled = true
   let dictationDraftSnapshot = $state('')
   let dictationTranscript = $state('')
-  let dictationCaptureEpoch = 0
-  let dictationCompletionEpoch
-  let dictationCompletionTimer
   let dictationFinishing = $state(false)
-  let dictationPolishEpoch
   let dictationPolishing = $state(false)
-  let dictationTransformEpoch = 0
   let dictationTransformPending = $state(false)
-  let dictationTransformPendingEpoch
   let eligibleDictation = $state(null)
-  let eligibleDictationTimer
-  let eligibleDictationTimerEpoch = 0
   let suppressVoiceClick = false
   let voiceClickTimer
   let voiceReleaseTimer
@@ -110,7 +99,6 @@
   let workspace = $state()
   const artifactShortcut = artifactRailShortcut()
   let destroyed = false
-  const dictationTranscriptQuietPeriod = 25
   const sidebarWidth = 260
   const sidebarRailWidth = 52
   const minimumThreadWidth = 320
@@ -186,211 +174,55 @@
     artifactRailWidth = width
   }
 
-  function stopDictationPolling() {
-    clearTimeout(dictationTimer)
-    dictationTimer = undefined
-  }
-
-  function invalidateDictationPolls() {
-    dictationPollEpoch += 1
-    stopDictationPolling()
-  }
+  const dictationController = createDictationController({
+    invoke: (...args) => tauri.invoke(...args),
+    listen: (...args) => window.__TAURI__?.event?.listen(...args),
+    readDraft: () => draft,
+    updateDraft: (next) => { draft = next },
+    blocked: () => !!active,
+    onState: (state) => {
+      dictation = state.status
+      dictationCommandPending = state.commandPending
+      dictationRequested = state.requested
+      dictationFinishing = state.finishing
+      dictationPolishing = state.polishing
+      dictationTransformPending = state.transformPending
+      eligibleDictation = state.eligible
+      dictationDraftSnapshot = state.draftSnapshot
+      dictationTranscript = state.transcript
+    },
+    onError: (message) => { dictationError = message },
+    onInactive: () => {
+      clearPendingVoiceRelease()
+      handsFreeDictation = false
+    },
+    onCancel: () => {
+      voicePointerId = undefined
+      voiceKey = undefined
+    },
+    onFocus: () => tick().then(() => composer?.focus()),
+  })
 
   function dictationBusy() {
-    return dictationCommandPending || dictationFinishing || dictationPolishing || dictationTransformPending || isDictationActive(dictation)
+    // Establish Svelte dependencies for the controller state read below.
+    dictationCommandPending
+    dictationFinishing
+    dictationPolishing
+    dictationTransformPending
+    dictation
+    return dictationController.busy()
   }
 
   function invalidateDictationTransform() {
-    dictationTransformEpoch += 1
-    eligibleDictationTimerEpoch += 1
-    clearTimeout(eligibleDictationTimer)
-    eligibleDictationTimer = undefined
-    eligibleDictation = null
+    dictationController.invalidateTransform()
   }
 
-  function offerDictationTransforms(eligible) {
-    const timerEpoch = ++eligibleDictationTimerEpoch
-    clearTimeout(eligibleDictationTimer)
-    eligibleDictation = eligible
-    eligibleDictationTimer = setTimeout(() => {
-      if (timerEpoch === eligibleDictationTimerEpoch) invalidateDictationTransform()
-    }, 6000)
+  function stopDictation(cancelled = false) {
+    return dictationController.stop(cancelled)
   }
 
-  async function listenForDictation(epoch) {
-    dictationUnlisten?.()
-    dictationUnlisten = undefined
-    const stop = await window.__TAURI__?.event?.listen('dictation-event', ({ payload }) => {
-      if (epoch !== dictationCaptureEpoch || payload.type !== 'transcript' || dictationCancelled || (!isDictationActive(dictation) && !dictationFinishing)) return
-      dictationTranscript = appendTranscript(dictationTranscript, payload.text)
-      draft = appendTranscript(dictationDraftSnapshot, dictationTranscript)
-      if (dictationFinishing) waitForDictationTranscriptQuiet(epoch)
-    })
-    if (!stop) return
-    if (destroyed || epoch !== dictationCaptureEpoch) stop()
-    else dictationUnlisten = stop
-  }
-
-  function completeDictation(epoch) {
-    if (destroyed || epoch !== dictationCaptureEpoch || epoch !== dictationCompletionEpoch) return
-    dictationCompletionEpoch = undefined
-    dictationFinishing = false
-    if (!dictationCancelled) {
-      dictationPolishEpoch = epoch
-      void polishDictation(epoch)
-    }
-  }
-
-  function waitForDictationTranscriptQuiet(epoch) {
-    clearTimeout(dictationCompletionTimer)
-    dictationCompletionTimer = setTimeout(() => completeDictation(epoch), dictationTranscriptQuietPeriod)
-  }
-
-  function finishDictation(epoch) {
-    clearTimeout(dictationCompletionTimer)
-    dictationCompletionTimer = setTimeout(() => waitForDictationTranscriptQuiet(epoch))
-  }
-
-  async function polishDictation(epoch) {
-    if (dictationCancelled || epoch !== dictationCaptureEpoch || epoch !== dictationPolishEpoch) return
-    const transcript = dictationTranscript
-    if (!transcript.trim()) {
-      dictationPolishEpoch = undefined
-      return
-    }
-    dictationPolishing = true
-    dictationError = ''
-    const verbatimDraft = appendTranscript(dictationDraftSnapshot, transcript)
-    try {
-      const polished = await tauri.invoke('dictation_polish', { transcript })
-      if (destroyed || dictationCancelled || epoch !== dictationCaptureEpoch || epoch !== dictationPolishEpoch) return
-      if (draft === verbatimDraft && polished.trim()) {
-        draft = appendTranscript(dictationDraftSnapshot, polished)
-        offerDictationTransforms({ epoch, snapshot: dictationDraftSnapshot, segment: polished, draft })
-      }
-    } catch (_) {
-      if (destroyed || dictationCancelled || epoch !== dictationCaptureEpoch || epoch !== dictationPolishEpoch) return
-      dictationError = 'Polishing is unavailable. You can edit or send the captured text.'
-    } finally {
-      if (epoch === dictationPolishEpoch) {
-        dictationPolishEpoch = undefined
-        dictationPolishing = false
-      }
-    }
-  }
-
-  function applyDictationStatus(status) {
-    dictation = status
-    if (!isDictationActive(status)) {
-      clearPendingVoiceRelease()
-      handsFreeDictation = false
-      dictationRequested = false
-      stopDictationPolling()
-    }
-    if (status.state === 'modelNotInstalled' || status.state === 'failed') {
-      dictationError = status.message
-    } else dictationError = ''
-    if (status.state === 'stopped' && dictationCompletionEpoch !== undefined) {
-      if (dictationCancelled) completeDictation(dictationCompletionEpoch)
-      else {
-        dictationFinishing = true
-        finishDictation(dictationCompletionEpoch)
-      }
-    }
-  }
-
-  function pollDictation() {
-    stopDictationPolling()
-    const epoch = dictationPollEpoch
-    dictationTimer = setTimeout(async () => {
-      if (destroyed || epoch !== dictationPollEpoch || !isDictationActive(dictation)) return
-      try {
-        const status = await tauri.invoke('dictation_status')
-        if (destroyed || epoch !== dictationPollEpoch) return
-        applyDictationStatus(status)
-      } catch (error) {
-        if (destroyed || epoch !== dictationPollEpoch) return
-        dictationError = typeof error === 'string' ? error : 'Dictation status could not be checked.'
-      }
-      if (!destroyed && epoch === dictationPollEpoch && isDictationActive(dictation)) pollDictation()
-    }, 100)
-  }
-
-  async function stopDictation(cancelled = false) {
-    clearTimeout(voiceReleaseTimer)
-    voiceReleaseTimer = undefined
-    voiceReleasePending = false
-    handsFreeDictation = false
-    dictationRequested = false
-    invalidateDictationPolls()
-    if (cancelled) {
-      dictationCancelled = true
-      dictationPolishEpoch = undefined
-      dictationPolishing = false
-      voicePointerId = undefined
-      voiceKey = undefined
-      draft = dictationDraftSnapshot
-      tick().then(() => composer?.focus())
-    }
-    if (dictationCommandPending || !isDictationActive(dictation)) return
-    dictationCompletionEpoch = dictationCaptureEpoch
-    dictationFinishing = true
-    dictationCommandPending = true
-    dictationError = ''
-    try {
-      const status = await tauri.invoke('dictation_stop')
-      if (destroyed) return
-      applyDictationStatus(status)
-      if (isDictationActive(dictation)) pollDictation()
-    } catch (error) {
-      if (destroyed) return
-      dictationFinishing = false
-      dictationError = typeof error === 'string' ? error : 'Dictation could not be stopped.'
-      pollDictation()
-    } finally {
-      dictationCommandPending = false
-    }
-  }
-
-  async function startDictation() {
-    if (active || dictationBusy() || dictationRequested) return
-    if (isDictationActive(dictation)) {
-      await stopDictation()
-      return
-    }
-    invalidateDictationPolls()
-    dictationRequested = true
-    invalidateDictationTransform()
-    dictationCancelled = false
-    dictationDraftSnapshot = draft
-    dictationTranscript = ''
-    dictationCaptureEpoch += 1
-    dictationCompletionEpoch = undefined
-    dictationFinishing = false
-    dictationPolishEpoch = undefined
-    dictationCommandPending = true
-    dictationError = ''
-    dictation = { state: 'starting' }
-    try {
-      await listenForDictation(dictationCaptureEpoch)
-      if (destroyed || dictationCancelled) return
-      const status = await tauri.invoke('dictation_start')
-      if (destroyed) return
-      applyDictationStatus(status)
-      if (!dictationRequested && isDictationActive(dictation)) {
-        dictationCommandPending = false
-        await stopDictation()
-      } else if (isDictationActive(dictation)) pollDictation()
-    } catch (error) {
-      if (destroyed) return
-      clearPendingVoiceRelease()
-      handsFreeDictation = false
-      dictation = { state: 'failed' }
-      dictationError = typeof error === 'string' ? error : 'Dictation could not be started.'
-      dictationRequested = false
-    } finally {
-      dictationCommandPending = false
-    }
+  function startDictation() {
+    return dictationController.start()
   }
 
   function expectVoiceClick() {
@@ -531,32 +363,8 @@
     return voiceShortcutManager.change(next)
   }
 
-  async function transformDictation(action) {
-    const eligible = eligibleDictation
-    if (!eligible || dictationBusy() || draft !== eligible.draft) return
-    const operation = ++dictationTransformEpoch
-    clearTimeout(eligibleDictationTimer)
-    eligibleDictationTimer = undefined
-    dictationTransformPending = true
-    dictationTransformPendingEpoch = operation
-    dictationError = ''
-    try {
-      const transformed = await tauri.invoke('dictation_transform', { transform: action.transform, transcript: eligible.segment })
-      if (destroyed || operation !== dictationTransformEpoch || draft !== eligible.draft) return
-      if (!transformed.trim()) throw new Error('empty transform')
-      draft = appendTranscript(eligible.snapshot, transformed)
-      offerDictationTransforms({ ...eligible, segment: transformed, draft })
-    } catch (_) {
-      if (destroyed || operation !== dictationTransformEpoch) return
-      dictationError = 'That voice transform is unavailable. Your text is unchanged; try again.'
-      offerDictationTransforms(eligible)
-    } finally {
-      if (!destroyed && operation === dictationTransformPendingEpoch) {
-        dictationTransformPending = false
-        dictationTransformPendingEpoch = undefined
-      }
-      if (!destroyed) tick().then(() => composer?.focus())
-    }
+  function transformDictation(action) {
+    return dictationController.transform(action)
   }
 
   function composerInput(event) {
@@ -859,11 +667,7 @@
       }
       if (event.key === 'Escape' && dictationTransformPending) {
         event.preventDefault()
-        invalidateDictationTransform()
-        dictationTransformPending = false
-        dictationTransformPendingEpoch = undefined
-        dictationError = ''
-        tick().then(() => composer?.focus())
+        dictationController.cancelTransform()
         return
       }
       if (event.key === 'Escape' && (dictationRequested || isDictationActive(dictation) || dictationFinishing || dictationPolishing)) {
@@ -892,12 +696,9 @@
       })
     return () => {
       destroyed = true
-      invalidateDictationTransform()
+      dictationController.cleanup()
       unlisten?.()
-      dictationUnlisten?.()
       pairingUnlisten?.()
-      stopDictationPolling()
-      clearTimeout(dictationCompletionTimer)
       clearTimeout(voiceClickTimer)
       clearTimeout(voiceReleaseTimer)
       clearTimeout(copyTimer)
@@ -1231,7 +1032,6 @@
           ></div>
           <aside id="artifact-rail" class="artifact-rail" aria-labelledby="artifact-rail-title">
             <header>
-              <p class="eyebrow">Thread artifacts</p>
               <h2 id="artifact-rail-title">Artifacts</h2>
             </header>
             <div class="artifact-empty">
@@ -1300,7 +1100,6 @@
     text-align: center;
   }
 
-  .eyebrow { color: var(--muted); font: var(--text-12) var(--font-mono); }
   .primary { background: var(--ink); border-color: var(--ink); color: var(--paper); }
   .composer-actions .primary:disabled { background: var(--faint); border-color: var(--border); color: var(--muted); }
 
@@ -1391,8 +1190,8 @@
   .thread { width: min(760px, calc(100% - 48px)); height: 100%; margin: 0 auto; padding: 42px 0; overflow-y: auto; }
   .latest { position: absolute; left: 50%; bottom: 14px; transform: translateX(-50%); border-radius: var(--radius-control); background: var(--surface); color: var(--muted); font: var(--text-12) var(--font-mono); box-shadow: var(--shadow-overlay); }
   .empty { color: var(--muted); text-align: center; margin-top: 18vh; }
-  .user-turn { max-width: 78%; margin: 0 0 28px auto; }
-  .user-message { width: fit-content; margin-left: auto; padding: 9px 13px; background: var(--faint); border-radius: var(--radius-panel); }
+  .user-turn { margin: 0 0 28px auto; }
+  .user-message { width: fit-content; max-width: 78%; margin-left: auto; padding: 9px 13px; overflow-wrap: anywhere; background: var(--faint); border-radius: var(--radius-panel); }
   .user-message > p { margin: 0; white-space: pre-wrap; }
   .missing-prompt { color: var(--muted); font: var(--text-12) var(--font-mono); }
   .message-attachments { display: grid; justify-items: end; gap: 4px; margin: 8px 0 0; padding: 0; list-style: none; }
