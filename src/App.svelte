@@ -134,7 +134,7 @@
     onCancelError: (next) => { cancelError = next },
     onQueueError: (next) => { queueError = next },
     onHistoryError: (next) => { historyError = next },
-    onHistoryStart: () => { expandedReceipts = new Set() },
+    onHistoryStart: () => { expandedReceipts = new Set(); parallelTools = new Map() },
     onHistoryLoaded: () => { pinned = true },
     onFollow: followNewContent,
     onSend: invalidateDictationTransform,
@@ -329,7 +329,8 @@
   })
 
   $effect(() => {
-    transcriptController.trackParallelTools(messages)
+    const transcript = messages
+    untrack(() => transcriptController.trackParallelTools(transcript))
   })
 
   async function run(action) {
