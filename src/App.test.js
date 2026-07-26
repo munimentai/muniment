@@ -2750,6 +2750,45 @@ describe('tool activity cards', () => {
     expect(within(settled).getByLabelText('Search files: completed')).toBeInTheDocument()
     expect(within(settled).getByLabelText('Read file: failed')).toBeInTheDocument()
   })
+
+  it('clears stale parallel grouping when history is reloaded', async () => {
+    let signedIn = true
+    let historyLoads = 0
+    invoke.mockImplementation(async (command) => {
+      if (command === 'auth_status') return { signed_in: signedIn, subject: signedIn ? 'user-a' : null }
+      if (command === 'auth_sign_out') {
+        signedIn = false
+        return { signed_in: false, subject: null }
+      }
+      if (command === 'auth_sign_in') {
+        signedIn = true
+        return { signed_in: true, subject: 'user-a' }
+      }
+      if (command === 'chat_history') {
+        historyLoads += 1
+        return historyLoads === 1
+          ? historyWith([
+              { effectId: 'tool-1', displayName: 'Search files', status: 'running' },
+              { effectId: 'tool-2', displayName: 'Read file', status: 'running' },
+            ], 'streaming')
+          : historyWith([
+              { effectId: 'tool-1', displayName: 'Search files', status: 'completed' },
+            ])
+      }
+      if (command === 'auth_entitlement_snapshot') return snapshot()
+      if (command === 'auth_devices') return []
+      throw new Error(`unexpected command: ${command}`)
+    })
+    render(App)
+    expect(await screen.findByRole('group', { name: /Parallel tool activity/ })).toBeInTheDocument()
+
+    await fireEvent.click(screen.getByRole('button', { name: /Access unavailable/ }))
+    await fireEvent.click(await screen.findByRole('button', { name: 'Sign out' }))
+    await fireEvent.click(await screen.findByRole('button', { name: 'Sign in' }))
+
+    expect(await screen.findByRole('status', { name: 'Search files: completed' })).toBeInTheDocument()
+    expect(screen.queryByRole('group', { name: /Parallel tool activity/ })).not.toBeInTheDocument()
+  })
 })
 
 describe('message action row', () => {
