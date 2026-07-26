@@ -12,12 +12,13 @@
   import { ringPath, solidMilledRingPath } from './lib/mark.js'
   import { applyBufferedChatEvents, applyChatEvent, composerAction, formatByteSize, historyMessages, receiptLabel, receiptRows, receiptSummary, runAnnouncement, toolName, toolStatus } from './lib/chat-state.js'
   import { composerHeight } from './lib/composer-size.js'
-  import { appendTranscript, ariaKeyShortcut, dictationTransforms, handsFreeActivationDelay, holdToTalkShortcut, isDictationActive, validHoldToTalkShortcut } from './lib/dictation-state.js'
+  import { appendTranscript, ariaKeyShortcut, dictationTransforms, handsFreeActivationDelay, holdToTalkShortcut, isDictationActive } from './lib/dictation-state.js'
   import { COPY_CONFIRMATION_MS, copyAnnouncement, copyConfirmed, copyFailure, copyLabel, copyResult } from './lib/message-actions.js'
   import { onboardingLoadingState, onboardingSettingsState } from './lib/onboarding-state.js'
   import { scrollFollowState } from './lib/scroll-follow.js'
   import { SIDEBAR_STORAGE_KEY, isSidebarShortcut, parseSidebarCollapsed, serializeSidebarCollapsed, sidebarShortcut } from './lib/sidebar-state.js'
   import { streamingUnderlineGeometry } from './lib/streaming-underline.js'
+  import { createVoiceShortcutManager } from './lib/voice-shortcut.js'
 
   const markD = ringPath()
   const thinkingMarkD = solidMilledRingPath()
@@ -96,8 +97,6 @@
   let globalVoiceError = $state(false)
   let globalVoiceShortcutValue = $state(holdToTalkShortcut())
   let globalVoiceChanging = $state(true)
-  let globalVoiceTask = Promise.resolve()
-  const registeredVoiceShortcuts = new Set()
   let composer = $state()
   let polishPreview = $state()
   let composerRow = $state()
@@ -515,101 +514,21 @@
     }
   }
 
-  async function registerInitialVoiceShortcut() {
-    const fallback = holdToTalkShortcut()
-    let saved
-    try { saved = localStorage.getItem('muniment.voice-shortcut') } catch (_) {}
-    const preferred = validHoldToTalkShortcut(saved) ? saved : fallback
-    try {
-      await register(preferred, globalVoiceShortcut)
-      registeredVoiceShortcuts.add(preferred)
-      if (destroyed) return
-      globalVoiceShortcutValue = preferred
-      globalVoiceRegistered = true
-    } catch (_) {
-      if (preferred !== fallback) {
-        try {
-          await register(fallback, globalVoiceShortcut)
-          registeredVoiceShortcuts.add(fallback)
-          if (destroyed) return
-          globalVoiceShortcutValue = fallback
-          globalVoiceRegistered = true
-          return
-        } catch (_) {}
-      }
-      if (!destroyed) globalVoiceError = true
-      return
-    }
-  }
-
-  async function unregisterVoiceShortcut(shortcut) {
-    await unregister(shortcut)
-    registeredVoiceShortcuts.delete(shortcut)
-  }
-
-  function restoreSavedVoiceShortcut(saved) {
-    if (saved === null) localStorage.removeItem('muniment.voice-shortcut')
-    else localStorage.setItem('muniment.voice-shortcut', saved)
-  }
-
-  async function cleanupVoiceShortcuts() {
-    globalVoiceRegistered = false
-    await Promise.allSettled([...registeredVoiceShortcuts].map((shortcut) => unregisterVoiceShortcut(shortcut)))
-  }
+  const voiceShortcutManager = createVoiceShortcutManager({
+    register,
+    unregister,
+    storage: localStorage,
+    onShortcut: globalVoiceShortcut,
+    onState: (state) => {
+      globalVoiceShortcutValue = state.shortcut
+      globalVoiceChanging = state.changing
+      globalVoiceRegistered = state.registered
+      globalVoiceError = state.error
+    },
+  })
 
   function changeVoiceShortcut(next) {
-    if (globalVoiceChanging || next === globalVoiceShortcutValue || !validHoldToTalkShortcut(next)) return next === globalVoiceShortcutValue
-    globalVoiceChanging = true
-    globalVoiceTask = globalVoiceTask.then(() => applyVoiceShortcutChange(next))
-    return globalVoiceTask
-  }
-
-  async function applyVoiceShortcutChange(next) {
-    globalVoiceError = false
-    const previous = globalVoiceShortcutValue
-    const previousRegistered = globalVoiceRegistered
-    let previousSaved
-    try { previousSaved = localStorage.getItem('muniment.voice-shortcut') } catch (_) {
-      globalVoiceError = true
-      globalVoiceChanging = false
-      return false
-    }
-    let nextRegistered = false
-    let savedChanged = false
-    let rollbackFailed = false
-    try {
-      await register(next, globalVoiceShortcut)
-      registeredVoiceShortcuts.add(next)
-      nextRegistered = true
-      if (destroyed) throw new Error('destroyed')
-      localStorage.setItem('muniment.voice-shortcut', next)
-      savedChanged = true
-      if (destroyed) throw new Error('destroyed')
-      if (previousRegistered) await unregisterVoiceShortcut(previous)
-      if (destroyed) throw new Error('destroyed')
-      globalVoiceShortcutValue = next
-      globalVoiceRegistered = true
-      return true
-    } catch (_) {
-      if (savedChanged) {
-        try { restoreSavedVoiceShortcut(previousSaved) } catch (_) { rollbackFailed = true }
-      }
-      if (nextRegistered) {
-        try { await unregisterVoiceShortcut(next) } catch (_) { rollbackFailed = true }
-      }
-      if (previousRegistered && !registeredVoiceShortcuts.has(previous)) {
-        try {
-          await register(previous, globalVoiceShortcut)
-          registeredVoiceShortcuts.add(previous)
-        } catch (_) { rollbackFailed = true }
-      }
-      globalVoiceShortcutValue = previous
-      globalVoiceRegistered = registeredVoiceShortcuts.has(previous)
-      if (!destroyed) globalVoiceError = true
-      return rollbackFailed ? null : false
-    } finally {
-      globalVoiceChanging = false
-    }
+    return voiceShortcutManager.change(next)
   }
 
   async function transformDictation(action) {
@@ -900,10 +819,7 @@
     })
     if (tauri) {
       run('status')
-      globalVoiceTask = registerInitialVoiceShortcut().finally(async () => {
-        globalVoiceChanging = false
-        if (destroyed) await cleanupVoiceShortcuts()
-      })
+      voiceShortcutManager.start()
     }
     window.__TAURI__?.event?.listen('chat-event', ({ payload }) => {
       if (!messages.some((message) => message.run?.id === payload.runId)) {
@@ -987,7 +903,7 @@
       clearTimeout(copyTimer)
       stopDragDrop?.()
       globalVoiceHeld = false
-      globalVoiceTask = globalVoiceTask.finally(cleanupVoiceShortcuts)
+      voiceShortcutManager.cleanup()
       document.removeEventListener('keydown', shortcuts)
       window.removeEventListener('resize', fitArtifactRail)
     }
