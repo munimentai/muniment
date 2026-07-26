@@ -24,16 +24,19 @@ const declarations = (source) => [
 }))))
 
 const SIZE = /(?:\d*\.?\d+(?:px|rem|em|%|pt|pc|in|cm|mm|q|vw|vh|vmin|vmax|ch|ex|cap|ic|lh|rlh)\b|\b0\b)/i
-const TEXT_TOKEN = /var\((--text-[a-z0-9-]+)\)/i
+const TEXT_TOKEN = /var\(\s*(--text-[a-z0-9-]+)/gi
 const TYPE_TOKENS = new Set([
   ...read('src/styles/tokens.css').matchAll(/(--text-[a-z0-9-]+)\s*:/gi),
 ].map(([, token]) => token.toLowerCase()))
 
 const invalidTypeSizes = (source, exceptions = {}) => declarations(source)
   .filter(({ selector, property, value }) => {
-    const declaresSize = property === 'font-size' || SIZE.test(value)
-    const token = value.match(TEXT_TOKEN)?.[1].toLowerCase()
-    return declaresSize && (!token || !TYPE_TOKENS.has(token)) && exceptions[selector]?.[0] !== value
+    const hasRawSize = SIZE.test(value)
+    const tokens = [...value.matchAll(TEXT_TOKEN)].map(([, token]) => token.toLowerCase())
+    const hasUnknownToken = tokens.some((token) => !TYPE_TOKENS.has(token))
+    const lacksRequiredToken = property === 'font-size' && tokens.length === 0
+    return (hasRawSize || hasUnknownToken || lacksRequiredToken)
+      && exceptions[selector]?.[0] !== value
   })
 
 const components = (dir = 'src') => fs.readdirSync(path.join(root, dir), { withFileTypes: true })
@@ -62,9 +65,22 @@ describe('§1.4 type scale', () => {
       .calculated { font: calc(1rem + 1px) var(--font-human); }
       .zero { font: 0 var(--font-mono); }
       .unknown { font-size: var(--text-unknown); }
+      .fallback { font-size: var(--text-15, 16px); }
+      .mixed-shorthand { font: var(--text-12) 15px var(--font-mono); }
+      .mixed-calc { font-size: calc(var(--text-15) + 1px); }
     </style>`
     expect(invalidTypeSizes(drift).map(({ selector }) => selector))
-      .toEqual(['.pixels', '.relative', '.shorthand', '.calculated', '.zero', '.unknown'])
+      .toEqual([
+        '.pixels',
+        '.relative',
+        '.shorthand',
+        '.calculated',
+        '.zero',
+        '.unknown',
+        '.fallback',
+        '.mixed-shorthand',
+        '.mixed-calc',
+      ])
   })
 
   it('accepts token sizes in both declaration forms and size-free shorthands', () => {
