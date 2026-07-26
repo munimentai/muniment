@@ -52,10 +52,10 @@ const focusOutlineRules = (source) => [
     .matchAll(/([^{}]+)\{([^{}]*)\}/g),
 ].flatMap(([, selectors, body]) => selectors.split(',').map((selector) => ({
   selector: selector.trim().replace(/\s+/g, ' '),
-  declarations: [...body.matchAll(/(?:^|;)\s*(outline(?:-(?:color|style|width|offset))?)\s*:\s*([^;]+)/g)]
-    .map(([, property, value]) => [property, value.trim().replace(/\s+/g, ' ')]),
+  declarations: [...body.matchAll(/(?:^|;)\s*(outline(?:-(?:color|style|width|offset))?)\s*:\s*([^;]+)/gi)]
+    .map(([, property, value]) => [property.toLowerCase(), value.trim().replace(/\s+/g, ' ')]),
 })))
-  .filter(({ selector, declarations }) => selector.includes(':focus-visible') && declarations.length)
+  .filter(({ selector, declarations }) => selector.toLowerCase().includes(':focus-visible') && declarations.length)
 
 const validFocusDeclaration = ([property, value]) => ({
   outline: value === '2px solid var(--ink)',
@@ -149,6 +149,14 @@ describe('§1.2/§6 focus ring', () => {
   it('rejects a component focus ring that drifts from the global ring', () => {
     const drift = '<style>.theme-options button:focus-visible { outline: 2px solid var(--muted); outline-offset: -2px; }</style>'
     expect(invalidFocusRules(drift)).toEqual(['.theme-options button:focus-visible'])
+
+    const mixedCaseDrift = '<style>.theme-options button:FOCUS-VISIBLE { Outline: 2px solid var(--muted); Outline-Offset: -2px; }</style>'
+    expect(invalidFocusRules(mixedCaseDrift)).toEqual(['.theme-options button:FOCUS-VISIBLE'])
+  })
+
+  it('accepts mixed-case property and pseudo-class names on the global ring', () => {
+    const valid = '<style>.theme-options button:FOCUS-VISIBLE { Outline: 2px solid var(--ink); Outline-Offset: 2px; }</style>'
+    expect(invalidFocusRules(valid)).toEqual([])
   })
 })
 
