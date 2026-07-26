@@ -15,6 +15,7 @@ fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
+        .plugin(tauri_plugin_window_state::Builder::default().build())
         .manage(auth::AuthState::new())
         .manage(Arc::new(voice_capture::VoiceCaptureState::new()))
         .manage(chat::AttachApprovalState::default())
