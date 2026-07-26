@@ -355,7 +355,7 @@ impl<R: tauri::Runtime> RunStartBoundaries for TauriRunStartBoundaries<R> {
     }
 
     fn fresh_tokens(&self) -> Result<TokenSet, RunStartError> {
-        auth::fresh_tokens(&self.app.state::<auth::AuthState>())
+        auth::fresh_tokens(&self.app.state::<auth::AuthState>(), &self.app)
             .map_err(RunStartError::Unauthorized)
     }
 
@@ -1079,7 +1079,7 @@ pub async fn chat_history(
     state: tauri::State<'_, ChatState>,
 ) -> Result<Vec<HistoryEntry>, String> {
     // History is conversation data and follows the same signed-in gate as send.
-    let tokens = auth::fresh_tokens(&auth_state)?;
+    let tokens = auth::fresh_tokens(&auth_state, &app_handle)?;
     let mut storage = state
         .storage
         .lock()
@@ -1164,7 +1164,7 @@ pub async fn chat_resume(
     state: tauri::State<'_, ChatState>,
     run_id: String,
 ) -> Result<SubmitResult, String> {
-    let tokens = auth::fresh_tokens_async(&auth_state).await?;
+    let tokens = auth::fresh_tokens_async(&auth_state, &app).await?;
     let session_root = state_session_root(&app)?;
     let resume = {
         let mut storage = state
