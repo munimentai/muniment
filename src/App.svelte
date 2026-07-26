@@ -1,13 +1,12 @@
 <script>
   import { onMount, tick, untrack } from 'svelte'
-  import { cubicOut } from 'svelte/easing'
   import { getCurrentWebview } from '@tauri-apps/api/webview'
   import { confirm, open } from '@tauri-apps/plugin-dialog'
   import { register, unregister } from '@tauri-apps/plugin-global-shortcut'
 
   import AccessPanel from './lib/AccessPanel.svelte'
   import Onboarding from './lib/Onboarding.svelte'
-  import { ARTIFACT_RAIL_MAX_WIDTH, ARTIFACT_RAIL_MIN_WIDTH, artifactRailShortcut, artifactRailWidthFromKey, artifactRailWidthFromPointer, clampArtifactRailWidth, defaultArtifactRailWidth, isArtifactRailShortcut, shortcutDisplayLabel } from './lib/artifact-rail-state.js'
+  import { ARTIFACT_RAIL_MAX_WIDTH, ARTIFACT_RAIL_MIN_WIDTH, artifactRailShortcut, createArtifactRailController, defaultArtifactRailWidth, isArtifactRailShortcut, shortcutDisplayLabel } from './lib/artifact-rail-state.js'
   import { bootState, errorState, statusState, waitingState } from './lib/auth-state.js'
   import { ringPath, solidMilledRingPath } from './lib/mark.js'
   import { composerAction, formatByteSize, receiptLabel, receiptRows, receiptSummary, runAnnouncement, toolName, toolStatus } from './lib/chat-state.js'
@@ -15,25 +14,17 @@
   import { composerHeight } from './lib/composer-size.js'
   import { createDictationController } from './lib/dictation-controller.js'
   import { appendTranscript, ariaKeyShortcut, dictationTransforms, handsFreeActivationDelay, holdToTalkShortcut, isDictationActive } from './lib/dictation-state.js'
-  import { COPY_CONFIRMATION_MS, copyAnnouncement, copyConfirmed, copyFailure, copyLabel, copyResult } from './lib/message-actions.js'
+  import { createChatTranscriptController } from './lib/chat-transcript-controller.js'
+  import { copyAnnouncement, copyConfirmed, copyFailure, copyLabel } from './lib/message-actions.js'
   import { onboardingLoadingState, onboardingSettingsState } from './lib/onboarding-state.js'
-  import { scrollFollowState } from './lib/scroll-follow.js'
-  import { SIDEBAR_STORAGE_KEY, isSidebarShortcut, parseSidebarCollapsed, serializeSidebarCollapsed, sidebarShortcut } from './lib/sidebar-state.js'
-  import { streamingUnderlineGeometry } from './lib/streaming-underline.js'
+  import { SIDEBAR_STORAGE_KEY, isSidebarShortcut, serializeSidebarCollapsed, sidebarShortcut, storedSidebarCollapsed } from './lib/sidebar-state.js'
+  import { createStreamingUnderlineAction } from './lib/streaming-underline.js'
+  import { thinkingSettle } from './lib/thinking-transition.js'
   import { createVoiceShortcutManager } from './lib/voice-shortcut.js'
 
   const markD = ringPath()
   const thinkingMarkD = solidMilledRingPath()
   const version = __APP_VERSION__
-
-  function thinkingSettle() {
-    const reducedMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches ?? false
-    return {
-      duration: reducedMotion ? 0 : 180,
-      easing: cubicOut,
-      css: (t) => `opacity: ${t}; transform: translateY(${(1 - t) * -2}px) scale(${0.96 + t * 0.04})`,
-    }
-  }
 
   const tauri = window.__TAURI__?.core
   let auth = $state(bootState)
@@ -52,7 +43,6 @@
   let thread = $state()
   let pinned = $state(true)
   let hasContentBelow = $state(false)
-  let lastScrollTop = 0
   let expandedReceipts = $state(new Set())
   let parallelTools = $state(new Map())
   let draggingFiles = $state(false)
@@ -106,8 +96,38 @@
   const sidebarHint = `${modifierLabel}\\`
   // The newest copy attempt in the thread, or null once its confirmation lapses.
   let copy = $state(null)
-  let copyEpoch = 0
-  let copyTimer
+  const streamingUnderline = createStreamingUnderlineAction(tick)
+
+  const transcriptController = createChatTranscriptController({
+    tick,
+    clipboard: navigator.clipboard,
+    readThread: () => thread,
+    readPinned: () => pinned,
+    readDestroyed: () => destroyed,
+    onPinned: (next) => { pinned = next },
+    onContentBelow: (next) => { hasContentBelow = next },
+    onCopy: (next) => { copy = next },
+    readExpandedReceipts: () => expandedReceipts,
+    onExpandedReceipts: (next) => { expandedReceipts = next },
+    readParallelTools: () => parallelTools,
+    onParallelTools: (next) => { parallelTools = next },
+  })
+  const { scrollToLatest, followNewContent, handleScroll: handleThreadScroll, copyResponse, toggleReceipt } = transcriptController
+
+  const artifactRailController = createArtifactRailController({
+    readOpen: () => artifactRailOpen,
+    readWidth: () => artifactRailWidth,
+    readMaximum: () => artifactRailMaximum,
+    readPointer: () => artifactRailPointer,
+    readAvailableWidth: availableArtifactRailWidth,
+    readRightEdge: () => workspace?.getBoundingClientRect().right || window.innerWidth,
+    readViewportWidth: () => workspace?.clientWidth || window.innerWidth,
+    onOpen: (next) => { artifactRailOpen = next },
+    onWidth: (next) => { artifactRailWidth = next },
+    onMaximum: (next) => { artifactRailMaximum = next },
+    onPointer: (next) => { artifactRailPointer = next },
+  })
+  const { fit: fitArtifactRail, toggle: toggleArtifactRail, pointerDown: artifactRailPointerDown, pointerMove: artifactRailPointerMove, pointerEnd: artifactRailPointerEnd, keydown: artifactRailKeydown } = artifactRailController
 
   const chatController = createChatController({
     invoke: (...args) => tauri.invoke(...args),
@@ -133,16 +153,6 @@
     onSend: invalidateDictationTransform,
   })
 
-  // A read from a blocked or corrupt store must not keep the shell from
-  // rendering; §2.1's documented default is expanded.
-  function storedSidebarCollapsed() {
-    try {
-      return parseSidebarCollapsed(localStorage.getItem(SIDEBAR_STORAGE_KEY))
-    } catch (_) {
-      return false
-    }
-  }
-
   function toggleSidebar() {
     sidebarCollapsed = !sidebarCollapsed
     try { localStorage.setItem(SIDEBAR_STORAGE_KEY, serializeSidebarCollapsed(sidebarCollapsed)) } catch (_) {}
@@ -151,49 +161,6 @@
 
   function availableArtifactRailWidth() {
     return Math.max(ARTIFACT_RAIL_MIN_WIDTH, Math.min(ARTIFACT_RAIL_MAX_WIDTH, (workspace?.clientWidth || window.innerWidth) - (sidebarCollapsed ? sidebarRailWidth : sidebarWidth) - minimumThreadWidth))
-  }
-
-  function fitArtifactRail() {
-    if (!artifactRailOpen) return
-    artifactRailMaximum = availableArtifactRailWidth()
-    artifactRailWidth = clampArtifactRailWidth(artifactRailWidth, artifactRailMaximum)
-  }
-
-  function resetArtifactRailWidth() {
-    artifactRailMaximum = availableArtifactRailWidth()
-    artifactRailWidth = clampArtifactRailWidth(defaultArtifactRailWidth(workspace?.clientWidth || window.innerWidth), artifactRailMaximum)
-  }
-
-  function toggleArtifactRail() {
-    artifactRailOpen = !artifactRailOpen
-    artifactRailPointer = undefined
-    if (artifactRailOpen) resetArtifactRailWidth()
-  }
-
-  function artifactRailPointerDown(event) {
-    if (event.button !== 0 || artifactRailPointer !== undefined) return
-    event.preventDefault()
-    event.currentTarget.focus()
-    artifactRailPointer = event.pointerId
-    event.currentTarget.setPointerCapture?.(event.pointerId)
-  }
-
-  function artifactRailPointerMove(event) {
-    if (event.pointerId !== artifactRailPointer) return
-    artifactRailWidth = artifactRailWidthFromPointer(event.clientX, workspace.getBoundingClientRect().right, artifactRailMaximum)
-  }
-
-  function artifactRailPointerEnd(event) {
-    if (event.pointerId !== artifactRailPointer) return
-    artifactRailPointer = undefined
-    if (event.currentTarget.hasPointerCapture?.(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId)
-  }
-
-  function artifactRailKeydown(event) {
-    const width = artifactRailWidthFromKey(artifactRailWidth, event.key, artifactRailMaximum)
-    if (width === artifactRailWidth && !['Home', 'End', 'ArrowLeft', 'ArrowRight'].includes(event.key)) return
-    event.preventDefault()
-    artifactRailWidth = width
   }
 
   const dictationController = createDictationController({
@@ -434,7 +401,7 @@
       if (thread.scrollTop !== restored) thread.scrollTop = restored
       // The restore fires a scroll event; leave the follow state matching it so
       // handleThreadScroll does not read the correction as an upward scroll.
-      lastScrollTop = thread.scrollTop
+      transcriptController.syncScrollTop(thread.scrollTop)
     }
     syncPolishPreviewScroll()
   }
@@ -471,106 +438,6 @@
     return () => observer.disconnect()
   })
 
-  function streamingUnderline(node) {
-    let mounted = true
-    function measure() {
-      const caret = node.querySelector('.caret')
-      const rule = node.querySelector('.streaming-rule')
-      if (!caret || !rule) return
-      const geometry = streamingUnderlineGeometry({
-        caretLeft: caret.offsetLeft,
-        caretTop: caret.offsetTop,
-        caretHeight: caret.offsetHeight,
-      })
-      if (!geometry) return
-      rule.style.left = `${geometry.left}px`
-      rule.style.top = `${geometry.top}px`
-      rule.style.width = `${geometry.width}px`
-    }
-
-    function measureAfterRender() {
-      tick().then(() => {
-        if (mounted) measure()
-      })
-    }
-
-    measureAfterRender()
-    document.fonts?.ready?.then(() => {
-      if (mounted) measure()
-    })
-    const observer = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(measure)
-    observer?.observe(node)
-    return {
-      update: measureAfterRender,
-      destroy: () => {
-        mounted = false
-        observer?.disconnect()
-      },
-    }
-  }
-
-  function toggleReceipt(runId) {
-    const next = new Set(expandedReceipts)
-    next.has(runId) ? next.delete(runId) : next.add(runId)
-    expandedReceipts = next
-  }
-
-  // The clipboard write runs first so it keeps the click's user activation. The
-  // result is then published in two steps — clear, then set — so copying the same
-  // reply twice still changes the live region's text and is announced again.
-  async function copyResponse(run) {
-    clearTimeout(copyTimer)
-    const epoch = ++copyEpoch
-    let result
-    try {
-      await navigator.clipboard.writeText(run.text ?? '')
-      result = copyResult(run.id, true)
-    } catch (_) {
-      result = copyResult(run.id, false)
-    }
-    if (destroyed || epoch !== copyEpoch) return
-    copy = null
-    await tick()
-    if (destroyed || epoch !== copyEpoch) return
-    copy = result
-    if (result.status !== 'copied') return
-    copyTimer = setTimeout(() => {
-      if (!destroyed && epoch === copyEpoch) copy = null
-    }, COPY_CONFIRMATION_MS)
-  }
-
-  function scrollToLatest() {
-    if (!thread) return
-    pinned = true
-    const behavior = window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth'
-    thread.scrollTo({ top: thread.scrollHeight, behavior })
-    lastScrollTop = thread.scrollHeight - thread.clientHeight
-    hasContentBelow = false
-  }
-
-  function followNewContent() {
-    if (!pinned) return
-    tick().then(() => {
-      if (!pinned || !thread) return
-      thread.scrollTo({ top: thread.scrollHeight, behavior: 'auto' })
-      lastScrollTop = thread.scrollHeight - thread.clientHeight
-      hasContentBelow = false
-    })
-  }
-
-  function handleThreadScroll() {
-    const next = scrollFollowState({
-      pinned,
-      scrollTop: thread.scrollTop,
-      scrollHeight: thread.scrollHeight,
-      clientHeight: thread.clientHeight,
-      lastScrollTop,
-    })
-    pinned = next.pinned
-    lastScrollTop = next.lastScrollTop
-    hasContentBelow = !pinned && thread.scrollHeight - thread.clientHeight - thread.scrollTop > 0
-  }
-
   $effect(() => {
     messages
     followNewContent()
@@ -591,17 +458,7 @@
   })
 
   $effect(() => {
-    const next = new Map(parallelTools)
-    for (const message of messages) {
-      if (message.role !== 'assistant') continue
-      const running = (message.run.toolActivity ?? []).filter((tool) => tool.status === 'running')
-      if (running.length > 1) {
-        const grouped = new Set(next.get(message.run.id) ?? [])
-        running.forEach((tool) => grouped.add(tool.effectId))
-        next.set(message.run.id, [...grouped])
-      }
-    }
-    if ([...next].some(([id, tools]) => tools.length !== (parallelTools.get(id)?.length ?? 0))) parallelTools = next
+    transcriptController.trackParallelTools(messages)
   })
 
   async function run(action) {
@@ -696,7 +553,7 @@
       pairingUnlisten?.()
       clearTimeout(voiceClickTimer)
       clearTimeout(voiceReleaseTimer)
-      clearTimeout(copyTimer)
+      transcriptController.cleanup()
       stopDragDrop?.()
       globalVoiceHeld = false
       voiceShortcutManager.cleanup()
