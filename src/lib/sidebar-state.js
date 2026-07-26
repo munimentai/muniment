@@ -1,5 +1,3 @@
-import { isEditableTarget } from './artifact-rail-state.js'
-
 // design-spec §2.1: expanded by default (260px), state remembered, collapse
 // (⌘\) animates to a 52px icon rail.
 export const SIDEBAR_STORAGE_KEY = 'muniment.sidebar-collapsed'
@@ -16,7 +14,6 @@ export function isSidebarShortcut(event, platform = navigator.platform) {
     && (mac ? event.metaKey && !event.ctrlKey : event.ctrlKey && !event.metaKey)
     && !event.altKey
     && !event.shiftKey
-    && !isEditableTarget(event.target)
 }
 
 // Anything but an explicit collapsed marker — missing, malformed, or written

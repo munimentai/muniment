@@ -27,14 +27,13 @@ describe('sidebar state', () => {
     expect(isSidebarShortcut(new KeyboardEvent('keydown', { key: '|', ctrlKey: true }), 'Win32')).toBe(false)
   })
 
-  it('suppresses the shortcut from editable controls', () => {
+  it('recognizes the shortcut from editable controls', () => {
     for (const target of [document.createElement('input'), document.createElement('textarea')]) {
-      expect(isSidebarShortcut({ key: '\\', ctrlKey: true, metaKey: false, altKey: false, shiftKey: false, target }, 'Win32')).toBe(false)
+      expect(isSidebarShortcut({ key: '\\', ctrlKey: true, metaKey: false, altKey: false, shiftKey: false, target }, 'Win32')).toBe(true)
     }
     const editable = document.createElement('div')
     editable.setAttribute('contenteditable', 'true')
-    document.body.append(editable)
-    expect(isSidebarShortcut({ key: '\\', ctrlKey: true, metaKey: false, altKey: false, shiftKey: false, target: editable }, 'Win32')).toBe(false)
+    expect(isSidebarShortcut({ key: '\\', ctrlKey: true, metaKey: false, altKey: false, shiftKey: false, target: editable }, 'Win32')).toBe(true)
   })
 
   it('round-trips the remembered choice and defaults missing or malformed data to expanded', () => {
