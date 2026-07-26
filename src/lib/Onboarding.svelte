@@ -288,18 +288,18 @@
 <style>
   .onboarding { width: min(680px, calc(100vw - 48px)); margin-top: 28px; }
   .onboarding h1 { margin: 4px 0 10px; font-size: 28px; letter-spacing: -.02em; }
-  .model-status { margin: 18px 0 22px; padding: 13px 15px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); }
+  .model-status { margin: 18px 0 22px; padding: 13px 15px; border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--surface); }
   .model-status-heading { display: flex; justify-content: space-between; gap: 16px; font: var(--text-12) var(--font-mono); }
   .model-status-heading span, .model-status-copy, .model-progress-copy, .triage-generate span { color: var(--muted); }
   .model-status-copy { margin: 7px 0 0; font-size: 13px; line-height: 1.45; }
-  .model-progress { height: 4px; margin-top: 11px; overflow: hidden; border-radius: 2px; background: var(--border); }
+  .model-progress { height: 4px; margin-top: 11px; overflow: hidden; border-radius: var(--radius-chip); background: var(--border); }
   /* §1.2: downloading a model is not a model working, so the fill stays ink. */
   .model-progress span { display: block; height: 100%; background: var(--ink); }
   .model-progress-copy { margin: 6px 0 0; font: var(--text-12) var(--font-mono); }
   .triage-generate { display: flex; flex-direction: column; align-items: flex-end; gap: 6px; }
   .triage-generate span { max-width: 250px; font: var(--text-12) var(--font-mono); text-align: right; }
   .eyebrow, .path-label, .privacy-note { color: var(--muted); font: var(--text-12) var(--font-mono); }
-  .path-card { display: grid; grid-template-columns: 1fr auto; gap: 7px 16px; align-items: center; margin-top: 24px; padding: 15px 16px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); }
+  .path-card { display: grid; grid-template-columns: 1fr auto; gap: 7px 16px; align-items: center; margin-top: 24px; padding: 15px 16px; border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--surface); }
   .path-label { grid-column: 1 / -1; }
   .path-card strong { min-width: 0; overflow: hidden; text-overflow: ellipsis; font: 13px var(--font-mono); white-space: nowrap; }
   .folder-preview { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0 0; }
@@ -320,7 +320,7 @@
   .empty-manifest { margin: 0; padding: 18px 0; border-bottom: 1px solid var(--border); color: var(--muted); font: var(--text-12) var(--font-mono); }
   .onboarding-actions { display: flex; gap: 8px; }
   .triage-report { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-top: 22px; }
-  .triage-report section { min-width: 0; padding: 14px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); }
+  .triage-report section { min-width: 0; padding: 14px; border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--surface); }
   .triage-report h2, .source-heading { margin: 0 0 8px; font-size: var(--text-13); }
   .triage-report p, .triage-report ul { margin: 0; padding-left: 18px; line-height: var(--leading-body); white-space: pre-wrap; overflow-wrap: anywhere; }
   .triage-report p { padding-left: 0; }
