@@ -105,3 +105,12 @@ describe('§1.2/§6 focus ring', () => {
     expect(rules[0][1]).toMatch(/outline-offset:\s*2px\s*;/)
   })
 })
+
+describe('§1.7 reduced motion', () => {
+  it('blanket-collapses every animation and transition', () => {
+    const source = read('src/styles/base.css').replace(/\/\*[\s\S]*?\*\//g, '')
+    const media = [...source.matchAll(/@media\s*\(prefers-reduced-motion:\s*reduce\)\s*\{([\s\S]*?)\n\}/g)]
+    expect(media).toHaveLength(1)
+    expect(media[0][1]).toMatch(/\*,\s*\*::before,\s*\*::after\s*\{[^}]*animation-duration:\s*0\.001ms !important\s*;[^}]*animation-iteration-count:\s*1 !important\s*;[^}]*transition-duration:\s*0\.001ms !important\s*;/)
+  })
+})
