@@ -222,10 +222,13 @@
   .devices-section { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--border); }
   .voice-section { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--border); }
   .appearance-section { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--border); }
-  .theme-options { display: inline-flex; overflow: hidden; border: 1px solid var(--border); border-radius: var(--radius-control); }
-  .theme-options button { border: 0; border-radius: 0; background: transparent; color: var(--muted); padding: 5px 12px; }
+  .theme-options { display: inline-flex; border: 1px solid var(--border); border-radius: var(--radius-control); }
+  .theme-options button { position: relative; border: 0; border-radius: 0; background: transparent; color: var(--muted); padding: 5px 12px; }
+  .theme-options button + button { border-left: 1px solid var(--border); }
+  .theme-options button:first-child { border-radius: var(--radius-control) 0 0 var(--radius-control); }
+  .theme-options button:last-child { border-radius: 0 var(--radius-control) var(--radius-control) 0; }
   .theme-options button[aria-pressed="true"] { background: var(--faint); color: var(--ink); }
-  .theme-options button:focus-visible { outline: 2px solid var(--muted); outline-offset: -2px; }
+  .theme-options button:focus-visible { z-index: 1; }
   .shortcut-help { margin: 0 0 8px; color: var(--muted); font-size: var(--text-12); }
   .shortcut-capture { width: 100%; display: flex; align-items: center; justify-content: space-between; padding: 8px 9px; font-family: var(--font-mono); text-align: left; }
   .shortcut-capture small { color: var(--muted); font: 11px var(--font-human); }
