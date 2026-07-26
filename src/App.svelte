@@ -1824,5 +1824,9 @@
   @keyframes breathe { 50% { opacity: .45; } }
   @keyframes tool-pulse { 50% { opacity: .3; transform: scale(.75); } }
   @keyframes capture { to { transform: scaleY(.55); } }
-  @media (prefers-reduced-motion: reduce) { .workspace, .titlebar, .message-actions { transition: none; } .caret, .thinking path, .tool-running .tool-dot, .capture-meter i { animation: none; } }
+  @media (prefers-reduced-motion: reduce) {
+    /* Unlike the blanket duration rule, removing this animation keeps the meter
+       at its full-height resting state instead of the keyframe's 55% endpoint. */
+    .capture-meter i { animation: none; }
+  }
 </style>

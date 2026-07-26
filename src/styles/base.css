@@ -1,22 +1,51 @@
 /* App-level base. Everything visual comes from tokens.css. */
 
-* {
+*,
+*::before,
+*::after {
   margin: 0;
   box-sizing: border-box;
 }
 
-html,
-body {
+html {
   height: 100%;
+  -webkit-text-size-adjust: 100%;
 }
 
 body {
+  height: 100%;
+  margin: 0;
   background: var(--paper);
   color: var(--ink);
   font-family: var(--font-human);
   font-size: var(--text-15);
+  font-weight: var(--weight-regular);
   line-height: var(--leading-body);
+  letter-spacing: var(--tracking-body);
   -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+h1,
+h2,
+h3,
+h4 {
+  margin: 0;
+  font-weight: var(--weight-semibold);
+  line-height: var(--leading-heading);
+  letter-spacing: var(--tracking-heading);
+}
+
+/* Links are ink, never signal (color law). */
+a {
+  color: var(--ink);
+  text-decoration: none;
+  border-bottom: 1px solid var(--border);
+  transition: border-color var(--motion-popover) var(--ease-out);
+}
+
+a:hover {
+  border-color: var(--muted);
 }
 
 /* §1.2 forbids signal on focus rings; §6 fixes the geometry at 2px ink, offset
@@ -25,6 +54,19 @@ body {
 :focus-visible {
   outline: 2px solid var(--ink);
   outline-offset: 2px;
+}
+
+::selection {
+  background: var(--faint);
+  color: var(--ink);
+}
+
+code,
+kbd,
+samp,
+pre {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums lining-nums;
 }
 
 /* Read by assistive tech only: no visual footprint, no effect on layout. */
@@ -38,4 +80,14 @@ body {
   overflow: hidden;
   clip-path: inset(50%);
   white-space: nowrap;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
 }
