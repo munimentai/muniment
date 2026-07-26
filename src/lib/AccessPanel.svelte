@@ -204,7 +204,7 @@
   .profile-button > span:last-child { min-width: 0; display: grid; }
   .profile-button strong { overflow: hidden; text-overflow: ellipsis; font-size: var(--text-13); }
   .profile-button small { color: var(--muted); font: var(--text-12) var(--font-mono); }
-  .access-popover { position: absolute; z-index: 5; left: 0; bottom: calc(100% + 8px); width: 330px; max-height: min(560px, 70vh); overflow-y: auto; padding: 14px; background: var(--paper); border: 1px solid var(--border); border-radius: 10px; box-shadow: 0 12px 36px color-mix(in srgb, var(--ink) 14%, transparent); outline: none; }
+  .access-popover { position: absolute; z-index: 5; left: 0; bottom: calc(100% + 8px); width: 330px; max-height: min(560px, 70vh); overflow-y: auto; padding: 14px; background: var(--paper); border: 1px solid var(--border); border-radius: var(--radius-control); box-shadow: var(--shadow-overlay); outline: none; }
   .access-popover:focus-visible { border-color: var(--muted); }
   .access-popover header { display: flex; align-items: start; justify-content: space-between; margin-bottom: 14px; }
   .access-popover h2 { margin: 0; font-size: var(--text-13); }
