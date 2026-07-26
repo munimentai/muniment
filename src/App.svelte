@@ -643,7 +643,7 @@
           </div>
           {#if !sidebarCollapsed}
             <p class="side-label">Threads</p>
-            <button class="thread-row active-thread"><span></span>New thread</button>
+            <div class="thread-row active-thread" aria-current="true"><span></span>New thread</div>
           {/if}
           <button class="side-action home-settings" aria-label={sidebarCollapsed ? 'Home settings' : null} title={sidebarCollapsed ? 'Home settings' : null} onclick={() => { onboarding = onboardingSettingsState(onboarding) }}><svg class="side-icon" width="18" height="18" viewBox="0 0 24 24" aria-hidden="true"><path d="M4.5 10.5 12 4.75l7.5 5.75V19a1.5 1.5 0 0 1-1.5 1.5H6A1.5 1.5 0 0 1 4.5 19z" /><path d="M9.75 20.5v-5.75h4.5v5.75" /></svg>{#if !sidebarCollapsed}<span>Home settings</span>{/if}</button>
           {#if !sidebarCollapsed}
@@ -927,6 +927,7 @@
   .side-icon { flex: none; display: block; color: var(--muted); }
   .side-icon rect, .side-icon path { fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
   .side-action, .thread-row { width: 100%; display: flex; align-items: center; gap: 9px; padding: 7px 8px; border-color: transparent; background: transparent; text-align: left; }
+  .thread-row { font: inherit; font-size: var(--text-13); color: var(--ink); border: 1px solid transparent; border-radius: var(--radius-control); }
   .side-action span { flex: 1; }
   /* Collapsed rail: icon-only controls, names carried by aria-label + tooltip. */
   .workspace.sidebar-collapsed .sidebar { padding: 14px 6px 10px; }
