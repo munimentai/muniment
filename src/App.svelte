@@ -1,5 +1,6 @@
 <script>
   import { onMount, tick, untrack } from 'svelte'
+  import { cubicOut } from 'svelte/easing'
   import { getCurrentWebview } from '@tauri-apps/api/webview'
   import { confirm, open } from '@tauri-apps/plugin-dialog'
   import { register, unregister } from '@tauri-apps/plugin-global-shortcut'
@@ -8,7 +9,7 @@
   import Onboarding from './lib/Onboarding.svelte'
   import { ARTIFACT_RAIL_MAX_WIDTH, ARTIFACT_RAIL_MIN_WIDTH, artifactRailShortcut, artifactRailWidthFromKey, artifactRailWidthFromPointer, clampArtifactRailWidth, defaultArtifactRailWidth, isArtifactRailShortcut, shortcutDisplayLabel } from './lib/artifact-rail-state.js'
   import { bootState, errorState, statusState, waitingState } from './lib/auth-state.js'
-  import { ringPath } from './lib/mark.js'
+  import { ringPath, solidMilledRingPath } from './lib/mark.js'
   import { applyBufferedChatEvents, applyChatEvent, composerAction, formatByteSize, historyMessages, receiptLabel, receiptRows, receiptSummary, runAnnouncement, toolName, toolStatus } from './lib/chat-state.js'
   import { composerHeight } from './lib/composer-size.js'
   import { appendTranscript, ariaKeyShortcut, dictationTransforms, handsFreeActivationDelay, holdToTalkShortcut, isDictationActive, validHoldToTalkShortcut } from './lib/dictation-state.js'
@@ -19,7 +20,17 @@
   import { streamingUnderlineGeometry } from './lib/streaming-underline.js'
 
   const markD = ringPath()
+  const thinkingMarkD = solidMilledRingPath()
   const version = __APP_VERSION__
+
+  function thinkingSettle() {
+    const reducedMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches ?? false
+    return {
+      duration: reducedMotion ? 0 : 180,
+      easing: cubicOut,
+      css: (t) => `opacity: ${t}; transform: translateY(${(1 - t) * -2}px) scale(${0.96 + t * 0.04})`,
+    }
+  }
 
   const tauri = window.__TAURI__?.core
   let auth = $state(bootState)
@@ -1182,7 +1193,7 @@
             {@const singleTools = activity.filter((tool) => !groupedIds.includes(tool.effectId))}
             <div class="response">
               {#if message.run.phase === 'thinking'}
-                <span class="thinking"><svg width="17" height="17" viewBox="0 0 48 48" aria-label="Thinking"><path d={markD} stroke-width="5" /></svg><span>Routing</span></span>
+                <span class="thinking" out:thinkingSettle><svg width="17" height="17" viewBox="0 0 48 48" aria-label="Thinking"><path d={thinkingMarkD} fill-rule="evenodd" /></svg><span>Routing</span></span>
               {:else if message.run.phase === 'streaming'}<p class="response-prose streaming" use:streamingUnderline={message.run.text}>{message.run.text}<span class="caret" aria-hidden="true"></span><span class="streaming-rule" aria-hidden="true"></span></p>
               {:else}<p class="response-prose">{message.run.text}</p>{/if}
               {#if message.run.phase === 'failed'}<div class="run-error">Reply failed. <button disabled={dictationBusy()} onclick={() => { draft = message.run.prompt; send() }}>Try again</button></div>{/if}
@@ -1477,7 +1488,7 @@
   .streaming-rule { position: absolute; height: 2px; background: var(--signal); pointer-events: none; }
   .caret { display: inline-block; height: 1em; border-right: 2px solid var(--signal); margin-left: 2px; vertical-align: -2px; animation: blink 800ms step-end infinite; }
   .thinking { display: flex; align-items: center; gap: 9px; color: var(--muted); font: var(--text-12) var(--font-mono); }
-  .thinking path { fill: none; stroke: var(--signal); stroke-linecap: round; animation: breathe 1.8s ease-in-out infinite; }
+  .thinking path { fill: var(--signal); animation: breathe 1.8s ease-in-out infinite; }
   .tool-card { margin-top: 8px; padding: 8px 12px; border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--surface); color: var(--muted); font: var(--text-13) var(--font-mono); }
   .tool-row { display: flex; align-items: center; gap: 8px; min-height: 20px; }
   .tool-group-title { margin-bottom: 4px; color: var(--muted); }
@@ -1564,5 +1575,6 @@
     /* Unlike the blanket duration rule, removing this animation keeps the meter
        at its full-height resting state instead of the keyframe's 55% endpoint. */
     .capture-meter i { animation: none; }
+    .thinking path { animation: none; }
   }
 </style>

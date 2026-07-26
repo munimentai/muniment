@@ -77,6 +77,27 @@ function deferred() {
 
 beforeAll(async () => {
   HTMLElement.prototype.scrollTo = vi.fn()
+  Element.prototype.animate = function animate(_keyframes, options = {}) {
+    let timer
+    const animation = {
+      currentTime: options.duration ?? 0,
+      effect: {},
+      playState: 'running',
+      cancel() {
+        clearTimeout(timer)
+        animation.playState = 'idle'
+      },
+    }
+    Object.defineProperty(animation, 'onfinish', {
+      set(finish) {
+        timer = setTimeout(() => {
+          animation.playState = 'finished'
+          finish()
+        }, options.duration ?? 0)
+      },
+    })
+    return animation
+  }
   window.__TAURI__ = {
     core: { invoke: (command, ...args) => command === 'home_status'
       ? Promise.resolve(homeStatus)
@@ -2458,6 +2479,48 @@ describe('thread announcements', () => {
     if (phase === 'thinking') await screen.findByLabelText('Thinking')
     else await screen.findByText('A response long enough to represent prose.')
     expect(container.querySelectorAll('.streaming-rule')).toHaveLength(ruleCount)
+  })
+
+  it('keeps the thinking chip mounted through its eased handoff to streaming', async () => {
+    signedIn([{
+      runId: 'run-thinking', phase: 'thinking', text: '', prompt: 'A question',
+      receipt: null, toolActivity: [], resumable: false,
+    }])
+    const chip = await screen.findByText('Routing')
+    const mark = screen.getByLabelText('Thinking').querySelector('path')
+    expect(mark).toHaveAttribute('fill-rule', 'evenodd')
+    expect(mark).not.toHaveAttribute('stroke')
+
+    chatListener({ payload: {
+      runId: 'run-thinking', phase: 'streaming', text: 'First token',
+      receipt: null, toolActivity: [], pendingPermission: null,
+    } })
+
+    expect(chip).toBeInTheDocument()
+    expect(await screen.findByText('First token')).toBeInTheDocument()
+    await waitFor(() => expect(chip).not.toBeInTheDocument(), { timeout: 500 })
+  })
+
+  it('removes the thinking chip without motion when reduced motion is preferred', async () => {
+    const originalMatchMedia = window.matchMedia
+    window.matchMedia = vi.fn(() => ({ matches: true }))
+    try {
+      signedIn([{
+        runId: 'run-reduced', phase: 'thinking', text: '', prompt: 'A question',
+        receipt: null, toolActivity: [], resumable: false,
+      }])
+      const chip = await screen.findByText('Routing')
+
+      chatListener({ payload: {
+        runId: 'run-reduced', phase: 'streaming', text: 'First token',
+        receipt: null, toolActivity: [], pendingPermission: null,
+      } })
+
+      await waitFor(() => expect(chip).not.toBeInTheDocument())
+      expect(screen.getByText('First token')).toBeInTheDocument()
+    } finally {
+      window.matchMedia = originalMatchMedia
+    }
   })
 
   it('keeps the transcript out of the live region and stays silent when history is restored', async () => {
