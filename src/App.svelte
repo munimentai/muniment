@@ -14,6 +14,7 @@
   import { composerHeight } from './lib/composer-size.js'
   import { createDictationController } from './lib/dictation-controller.js'
   import { appendTranscript, ariaKeyShortcut, dictationTransforms, holdToTalkShortcut, isDictationActive } from './lib/dictation-state.js'
+  import { createEntitlementToast } from './lib/entitlement-toast.js'
   import { createChatTranscriptController } from './lib/chat-transcript-controller.js'
   import { copyAnnouncement, copyConfirmed, copyFailure, copyLabel } from './lib/message-actions.js'
   import { onboardingLoadingState, onboardingSettingsState } from './lib/onboarding-state.js'
@@ -72,6 +73,7 @@
   let artifactRailMaximum = $state(ARTIFACT_RAIL_MAX_WIDTH)
   let artifactRailPointer = $state()
   let workspace = $state()
+  let entitlementToastVisible = $state(false)
   const artifactShortcut = artifactRailShortcut()
   let destroyed = false
   const sidebarWidth = 260
@@ -138,6 +140,11 @@
     onHistoryLoaded: () => { pinned = true },
     onFollow: followNewContent,
     onSend: invalidateDictationTransform,
+  })
+
+  const entitlementToast = createEntitlementToast({
+    listen: (...args) => window.__TAURI__?.event?.listen(...args),
+    onVisible: (visible) => { entitlementToastVisible = visible },
   })
 
   function toggleSidebar() {
@@ -319,6 +326,10 @@
   })
 
   $effect(() => {
+    if (auth.name !== 'signed-in') entitlementToast.clear()
+  })
+
+  $effect(() => {
     const inWorkspace = auth.name === 'signed-in' && onboarding.name === 'complete'
     if (inWorkspace && !wasInWorkspace && active?.phase !== 'resuming' && !dictationPolishing && composer) {
       wasInWorkspace = true
@@ -365,6 +376,7 @@
     if (tauri) {
       run('status')
       chatController.start()
+      entitlementToast.start()
       voiceShortcutManager.start()
     }
     const shortcuts = (event) => {
@@ -422,6 +434,7 @@
       destroyed = true
       dictationController.cleanup()
       chatController.cleanup()
+      entitlementToast.cleanup()
       pairingUnlisten?.()
       voiceGesture.cleanup()
       transcriptController.cleanup()
@@ -646,6 +659,9 @@
           {#if dictationError}<div class="dictation-error" role="alert">{dictationError}</div>{/if}
           {#if globalVoiceError}<div class="dictation-error" role="alert">The system-wide voice shortcut is unavailable. Voice remains available from the button.</div>{/if}
         </div>
+        {#if entitlementToastVisible}
+          <div class="entitlement-toast" role="status">Your access changed. Some models or connections may differ.</div>
+        {/if}
         {#if artifactRailOpen}
           <!-- svelte-ignore a11y_no_noninteractive_tabindex, a11y_no_noninteractive_element_interactions -->
           <div
@@ -781,6 +797,7 @@
   .workspace.sidebar-collapsed.artifact-open { grid-template-columns: 52px minmax(320px, 1fr) var(--artifact-rail-width); }
   .workspace.sidebar-collapsed .titlebar { padding-left: 70px; }
   .workspace.sidebar-collapsed .drop-affordance { left: 52px; }
+  .entitlement-toast { position: fixed; z-index: 4; left: 50%; bottom: 24px; max-width: calc(100% - 48px); padding: 10px 14px; transform: translateX(-50%); border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--surface); color: var(--ink); box-shadow: var(--shadow-overlay); animation: toast-enter var(--motion-popover) var(--ease-out); }
   .drop-affordance { position: fixed; z-index: 4; inset: 52px 0 0 260px; display: grid; place-content: center; gap: 5px; background: color-mix(in srgb, var(--paper) 92%, transparent); border: 1px dashed var(--muted); color: var(--ink); text-align: center; pointer-events: none; }
   .drop-affordance span { color: var(--muted); font: var(--text-12) var(--font-mono); }
   .titlebar { grid-area: title; display: flex; align-items: center; padding: 0 18px 0 278px; border-bottom: 1px solid var(--border); background: var(--surface); transition: padding-left 180ms ease; }
@@ -922,6 +939,7 @@
   @keyframes breathe { 50% { opacity: .45; } }
   @keyframes tool-pulse { 50% { opacity: .3; transform: scale(.75); } }
   @keyframes capture { to { transform: scaleY(.55); } }
+  @keyframes toast-enter { from { opacity: 0; transform: translate(-50%, 2px); } }
   @media (prefers-reduced-motion: reduce) {
     /* Unlike the blanket duration rule, removing this animation keeps the meter
        at its full-height resting state instead of the keyframe's 55% endpoint. */
