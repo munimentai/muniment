@@ -40,7 +40,7 @@ This rule is enforceable as a lint: the `--signal` token may only be referenced 
 | `ink` | `#1A1D1C` | `#E8EBE9` | Text, primary buttons |
 | `muted` | `#5C6461` | `#8A928E` | Secondary text, icons at rest |
 | `border` | `#E2E5E3` | `#2A2F2C` | Hairlines |
-| `signal` | `#2F7E6D` | `#58B39F` | Computation only (1.2) |
+| `signal` | `#2A7264` | `#58B39F` | Computation only (1.2) |
 | `signal-soft` | `rgba(47,126,109,.10)` | `rgba(88,179,159,.12)` | Signal backgrounds |
 | `oxide` | `#B4483E` | `#C96A61` | Deny/critical (admin) |
 | `ochre` | `#B98A2F` | `#CBA14E` | Caution/budget (admin) |
