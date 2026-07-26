@@ -1353,7 +1353,7 @@
   }
 
   .name {
-    font-size: 30px;
+    font-size: var(--text-28);
     font-weight: 600;
     letter-spacing: -0.01em;
   }
@@ -1458,7 +1458,7 @@
   .artifact-divider:focus-visible { outline: 2px solid var(--ink); outline-offset: -2px; }
   .artifact-rail { grid-area: rail; min-width: 0; padding: 22px 24px; overflow-y: auto; background: var(--surface); }
   .artifact-rail header { padding-bottom: 15px; border-bottom: 1px solid var(--border); }
-  .artifact-rail h2 { margin: 3px 0 0; font-size: 18px; }
+  .artifact-rail h2 { margin: 3px 0 0; font-size: var(--text-17); }
   .artifact-empty { display: grid; place-items: center; align-content: center; min-height: 45%; text-align: center; }
   .artifact-empty strong { font-weight: 600; }
   .artifact-empty p { max-width: 250px; margin: 7px 0 0; color: var(--muted); font: var(--text-12) var(--font-mono); line-height: 1.5; }
@@ -1472,7 +1472,7 @@
   .missing-prompt { color: var(--muted); font: var(--text-12) var(--font-mono); }
   .message-attachments { display: grid; justify-items: end; gap: 4px; margin: 8px 0 0; padding: 0; list-style: none; }
   .message-attachments li { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 5px 8px; max-width: 100%; padding: 5px 8px; border: 1px solid var(--border); border-radius: var(--radius-chip); color: var(--muted); font: var(--text-12) var(--font-mono); }
-  .message-attachments strong { flex-basis: 100%; color: var(--muted); font-weight: 400; font-size: 10px; }
+  .message-attachments strong { flex-basis: 100%; color: var(--muted); font-weight: 400; font-size: var(--text-12); }
   .response { margin: 0 0 34px; }
   .response-prose { max-width: 92%; white-space: pre-wrap; }
   .streaming { position: relative; }
@@ -1480,7 +1480,7 @@
   .caret { display: inline-block; height: 1em; border-right: 2px solid var(--signal); margin-left: 2px; vertical-align: -2px; animation: blink 800ms step-end infinite; }
   .thinking { display: flex; align-items: center; gap: 9px; color: var(--muted); font: var(--text-12) var(--font-mono); }
   .thinking path { fill: none; stroke: var(--signal); stroke-linecap: round; animation: breathe 1.8s ease-in-out infinite; }
-  .tool-card { margin-top: 8px; padding: 8px 12px; border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--surface); color: var(--muted); font: 12.5px var(--font-mono); }
+  .tool-card { margin-top: 8px; padding: 8px 12px; border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--surface); color: var(--muted); font: var(--text-13) var(--font-mono); }
   .tool-row { display: flex; align-items: center; gap: 8px; min-height: 20px; }
   .tool-group-title { margin-bottom: 4px; color: var(--muted); }
   .tool-group .tool-row + .tool-row { margin-top: 4px; }
@@ -1492,7 +1492,7 @@
   .tool-failed .tool-status::before { content: 'error · '; }
   /* §2.2 mono 11.5px; §1.4 records line up their figures. The shorthand resets
      font-variant-numeric, so tabular-nums follows it. */
-  .provenance { display: block; margin-top: 10px; padding: 0; border: 0; background: transparent; color: var(--muted); font: 11.5px/1.45 var(--font-mono); font-variant-numeric: tabular-nums; text-align: left; }
+  .provenance { display: block; margin-top: 10px; padding: 0; border: 0; background: transparent; color: var(--muted); font: var(--text-provenance)/1.45 var(--font-mono); font-variant-numeric: tabular-nums; text-align: left; }
   .provenance:hover:not(:disabled) { color: var(--ink); }
   /* §1.2 permits --signal on the route segment only. */
   .provenance .route-segment { color: var(--signal); }
@@ -1524,7 +1524,7 @@
   .attachments { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 8px; padding: 0; list-style: none; }
   .attachments li { display: flex; align-items: center; gap: 6px; max-width: 100%; padding: 4px 6px 4px 9px; border: 1px solid var(--border); border-radius: var(--radius-chip); color: var(--muted); font: var(--text-12) var(--font-mono); }
   .attachments span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .attachments button { padding: 1px 5px; border: 0; background: transparent; color: inherit; font-size: 11px; }
+  .attachments button { padding: 1px 5px; border: 0; background: transparent; color: inherit; font-size: var(--text-12); }
   .composer-input { position: relative; }
   /* No padding and no border: the composer supplies both, so the measured
      scrollHeight is pure text and the overlay lands on the same grid. */
@@ -1543,7 +1543,7 @@
   .dictation-transforms kbd { color: var(--muted); font: inherit; }
   /* The input no longer keeps a spare empty row once it grows, so the action
      row carries the gap itself — the owner mockup's 8px .comprow rhythm. */
-  .composer-row { display: flex; justify-content: space-between; align-items: center; margin-top: 8px; color: var(--muted); font-size: 11px; }
+  .composer-row { display: flex; justify-content: space-between; align-items: center; margin-top: 8px; color: var(--muted); font-size: var(--text-12); }
   .composer-actions { display: flex; align-items: center; gap: 6px; }
   .capture-status { display: flex; align-items: center; gap: 8px; font-family: var(--font-mono); }
   .capture-meter { height: 14px; display: flex; align-items: center; gap: 2px; }

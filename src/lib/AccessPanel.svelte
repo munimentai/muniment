@@ -214,7 +214,7 @@
   .access-popover header { display: flex; flex: none; align-items: start; justify-content: space-between; padding: 14px; border-bottom: 1px solid var(--border); }
   .access-popover h2 { margin: 0; font-size: var(--text-13); }
   .access-popover header p, .access-label { margin: 3px 0 0; color: var(--muted); font: var(--text-12) var(--font-mono); }
-  .close-access { padding: 0 4px; font-size: 18px; }
+  .close-access { padding: 0 4px; font-size: var(--text-17); }
   .access-content { min-height: 0; overflow-y: auto; padding: 14px; }
   .access-label { margin: 0 0 6px; text-transform: uppercase; letter-spacing: .04em; }
   .access-group { border-top: 1px solid var(--border); }
@@ -226,7 +226,7 @@
   .empty-grant, .access-status { margin: 8px 0; color: var(--muted); font: var(--text-12) var(--font-mono); }
   .access-status p { margin: 0 0 6px; }
   .entitlements-section { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--border); }
-  .access-note { margin: 10px 0 0; color: var(--muted); font-size: 11px; }
+  .access-note { margin: 10px 0 0; color: var(--muted); font-size: var(--text-12); }
   .devices-section { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--border); }
   .voice-section { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--border); }
   .theme-options { display: inline-flex; border: 1px solid var(--border); border-radius: var(--radius-control); }
@@ -238,7 +238,7 @@
   .theme-options button:focus-visible { z-index: 1; }
   .shortcut-help { margin: 0 0 8px; color: var(--muted); font-size: var(--text-12); }
   .shortcut-capture { width: 100%; display: flex; align-items: center; justify-content: space-between; padding: 8px 9px; font-family: var(--font-mono); text-align: left; }
-  .shortcut-capture small { color: var(--muted); font: 11px var(--font-human); }
+  .shortcut-capture small { color: var(--muted); font: var(--text-12) var(--font-human); }
   .shortcut-actions { display: flex; justify-content: flex-end; gap: 6px; margin-top: 7px; }
   .restore-shortcut { margin-top: 6px; padding: 3px 0; color: var(--muted); }
   .shortcut-error { margin: 5px 0 0; color: var(--oxide); font-size: var(--text-12); }
@@ -249,10 +249,10 @@
   .device-heading strong { font-weight: 600; }
   .revoked .device-heading strong { color: var(--oxide); font-weight: 400; text-decoration: line-through; }
   /* §1.2 forbids signal on badges at rest; §1.5 puts chips on radius 2. */
-  .current-device { padding: 1px 5px; border: 1px solid var(--border); border-radius: var(--radius-chip); background: var(--faint); color: var(--muted); font: 10px var(--font-mono); text-transform: none; }
+  .current-device { padding: 1px 5px; border: 1px solid var(--border); border-radius: var(--radius-chip); background: var(--faint); color: var(--muted); font: var(--text-12) var(--font-mono); text-transform: none; }
   /* §6: the word, not the color, carries Active vs Revoked. */
   .device-state { margin-left: auto; color: var(--muted); font: var(--text-12) var(--font-mono); text-transform: none; }
-  .device-list time { display: block; margin-top: 3px; color: var(--muted); font: 11px var(--font-mono); }
+  .device-list time { display: block; margin-top: 3px; color: var(--muted); font: var(--text-12) var(--font-mono); }
   .access-footer { flex: none; padding: 9px 14px; border-top: 1px solid var(--border); }
   .sign-out { padding: 2px 0; color: var(--muted); }
   .quiet { background: transparent; border-color: transparent; }
