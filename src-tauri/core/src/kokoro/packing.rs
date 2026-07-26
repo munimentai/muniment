@@ -275,12 +275,12 @@ fn ranked_end(
     count: &mut impl FnMut(&str) -> usize,
 ) -> Option<usize> {
     (1..=3).find_map(|rank| {
-        candidates
+        let ends = candidates
             .iter()
             .filter(|candidate| candidate.rank == rank && candidate.end > start)
-            .filter(|candidate| count(&source[start..candidate.end]) <= limit)
             .map(|candidate| candidate.end)
-            .max()
+            .collect::<Vec<_>>();
+        farthest_fitting_end(source, start, limit, &ends, count)
     })
 }
 
@@ -292,14 +292,14 @@ fn hard_split_end(
     whitespace: &[Range<usize>],
     count: &mut impl FnMut(&str) -> usize,
 ) -> Option<usize> {
-    source[start..]
+    let ends = source[start..]
         .char_indices()
         .skip(1)
         .map(|(offset, _)| start + offset)
         .chain(std::iter::once(source.len()))
         .filter(|&end| allowed_fallback_end(end, protected, whitespace))
-        .filter(|&end| count(&source[start..end]) <= limit)
-        .max()
+        .collect::<Vec<_>>();
+    farthest_fitting_end(source, start, limit, &ends, count)
 }
 
 fn oversized_protected_end(
@@ -311,13 +311,13 @@ fn oversized_protected_end(
     count: &mut impl FnMut(&str) -> usize,
 ) -> Option<usize> {
     if let Some(run) = waived.as_ref().filter(|run| run.contains(&start)) {
-        return source[start..run.end]
+        let ends = source[start..run.end]
             .char_indices()
             .skip(1)
             .map(|(offset, _)| start + offset)
             .chain(std::iter::once(run.end))
-            .filter(|&end| count(&source[start..end]) <= MAX_LIMIT)
-            .max();
+            .collect::<Vec<_>>();
+        return farthest_fitting_end(source, start, MAX_LIMIT, &ends, count);
     }
 
     let run_start = whitespace
@@ -330,13 +330,41 @@ fn oversized_protected_end(
     }
     *waived = Some(run.clone());
 
-    source[run.start..run.end]
+    let ends = source[run.start..run.end]
         .char_indices()
         .skip(1)
         .map(|(offset, _)| run.start + offset)
         .chain(std::iter::once(run.end))
-        .filter(|&end| count(&source[start..end]) <= MAX_LIMIT)
-        .max()
+        .collect::<Vec<_>>();
+    farthest_fitting_end(source, start, MAX_LIMIT, &ends, count)
+}
+
+fn farthest_fitting_end(
+    source: &str,
+    start: usize,
+    limit: usize,
+    ends: &[usize],
+    count: &mut impl FnMut(&str) -> usize,
+) -> Option<usize> {
+    // Phoneme counts are expected to be monotonic as source scalars are appended,
+    // so binary search keeps boundary calls logarithmic. An injected non-monotonic
+    // counter can make this choose a conservative earlier end, but every returned
+    // end was measured at or below the limit and therefore remains a safe,
+    // progress-making partition boundary.
+    let mut fitting = None;
+    let mut left = 0;
+    let mut right = ends.len();
+    while left < right {
+        let middle = left + (right - left) / 2;
+        let end = ends[middle];
+        if count(&source[start..end]) <= limit {
+            fitting = Some(end);
+            left = middle + 1;
+        } else {
+            right = middle;
+        }
+    }
+    fitting
 }
 
 fn allowed_fallback_end(
@@ -668,6 +696,23 @@ mod tests {
         .unwrap();
         assert_eq!(ranges[0], 0..sentence_end);
         assert_eq!(&source[ranges[1].clone()], "  three");
+    }
+
+    #[test]
+    fn punctuation_dense_packing_bounds_boundary_calls() {
+        let source = "a, ".repeat(2_000);
+        let mut calls = 0;
+        let ranges = pack_initial_ranges(&source, |slice| {
+            calls += 1;
+            slice.chars().count()
+        })
+        .unwrap();
+
+        assert_partition(&source, &ranges, lengths);
+        assert!(
+            calls < 1_000,
+            "2,000 clauses required {calls} boundary calls"
+        );
     }
 
     #[test]
