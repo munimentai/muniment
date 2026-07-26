@@ -134,7 +134,7 @@
     <div bind:this={accessPopover} class="access-popover" role="dialog" aria-label="Your access" tabindex="-1">
       <header><div><h2>Your access</h2>{#if access.name === 'ready'}<p>Snapshot v{access.snapshot.snapshot_version}</p>{/if}</div><button class="quiet close-access" aria-label="Close your access" onclick={closeAccess}>×</button></header>
       <div class="access-content">
-        <section class="appearance-section" aria-labelledby="appearance-heading">
+        <section aria-labelledby="appearance-heading">
           <h3 id="appearance-heading" class="access-label">Appearance</h3>
           <div class="theme-options" role="group" aria-labelledby="appearance-heading">
             {#each themeOptions as option}
@@ -247,6 +247,7 @@
   .device-list li:first-child { border-top: 0; }
   .device-heading { display: flex; align-items: center; gap: 7px; font-size: var(--text-12); text-transform: capitalize; }
   .device-heading strong { font-weight: 600; }
+  .revoked .device-heading strong { color: var(--oxide); font-weight: 400; text-decoration: line-through; }
   /* §1.2 forbids signal on badges at rest; §1.5 puts chips on radius 2. */
   .current-device { padding: 1px 5px; border: 1px solid var(--border); border-radius: var(--radius-chip); background: var(--faint); color: var(--muted); font: 10px var(--font-mono); text-transform: none; }
   /* §6: the word, not the color, carries Active vs Revoked. */
