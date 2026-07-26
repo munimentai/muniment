@@ -13,13 +13,14 @@
   import { createChatController } from './lib/chat-controller.js'
   import { composerHeight } from './lib/composer-size.js'
   import { createDictationController } from './lib/dictation-controller.js'
-  import { appendTranscript, ariaKeyShortcut, dictationTransforms, handsFreeActivationDelay, holdToTalkShortcut, isDictationActive } from './lib/dictation-state.js'
+  import { appendTranscript, ariaKeyShortcut, dictationTransforms, holdToTalkShortcut, isDictationActive } from './lib/dictation-state.js'
   import { createChatTranscriptController } from './lib/chat-transcript-controller.js'
   import { copyAnnouncement, copyConfirmed, copyFailure, copyLabel } from './lib/message-actions.js'
   import { onboardingLoadingState, onboardingSettingsState } from './lib/onboarding-state.js'
   import { SIDEBAR_STORAGE_KEY, isSidebarShortcut, serializeSidebarCollapsed, sidebarShortcut, storedSidebarCollapsed } from './lib/sidebar-state.js'
   import { createStreamingUnderlineAction } from './lib/streaming-underline.js'
   import { thinkingSettle } from './lib/thinking-transition.js'
+  import { createVoiceGesture } from './lib/voice-gesture.js'
   import { createVoiceShortcutManager } from './lib/voice-shortcut.js'
 
   const markD = ringPath()
@@ -56,20 +57,6 @@
   let dictationPolishing = $state(false)
   let dictationTransformPending = $state(false)
   let eligibleDictation = $state(null)
-  let suppressVoiceClick = false
-  let voiceClickTimer
-  let voiceReleaseTimer
-  let voiceReleasePending = false
-  let voiceActivationStartedAt
-  let voiceActivationSource
-  let pendingVoiceActivationAt
-  let pendingVoiceActivationSource
-  let handsFreeDictation = false
-  let ignoreVoiceRelease = false
-  let ignoreGlobalVoiceRelease = false
-  let voicePointerId
-  let voiceKey
-  let globalVoiceHeld = false
   let globalVoiceRegistered = false
   let globalVoiceError = $state(false)
   let globalVoiceShortcutValue = $state(holdToTalkShortcut())
@@ -181,14 +168,8 @@
       dictationTranscript = state.transcript
     },
     onError: (message) => { dictationError = message },
-    onInactive: () => {
-      clearPendingVoiceRelease()
-      handsFreeDictation = false
-    },
-    onCancel: () => {
-      voicePointerId = undefined
-      voiceKey = undefined
-    },
+    onInactive: () => voiceGesture.inactive(),
+    onCancel: () => voiceGesture.cancel(),
     onFocus: () => tick().then(() => composer?.focus()),
   })
 
@@ -214,126 +195,16 @@
     return dictationController.start()
   }
 
-  function expectVoiceClick() {
-    suppressVoiceClick = true
-    clearTimeout(voiceClickTimer)
-    voiceClickTimer = setTimeout(() => { suppressVoiceClick = false })
-  }
-
-  function clearPendingVoiceRelease() {
-    clearTimeout(voiceReleaseTimer)
-    voiceReleaseTimer = undefined
-    voiceReleasePending = false
-  }
-
-  function activateVoice(source) {
-    const activatedAt = Date.now()
-    voiceActivationStartedAt = activatedAt
-    voiceActivationSource = source
-    if (handsFreeDictation) {
-      void stopDictation()
-      return true
-    } else if (voiceReleasePending && (dictationRequested || isDictationActive(dictation)) && source === pendingVoiceActivationSource && activatedAt - pendingVoiceActivationAt <= handsFreeActivationDelay) {
-      clearTimeout(voiceReleaseTimer)
-      voiceReleaseTimer = undefined
-      voiceReleasePending = false
-      handsFreeDictation = true
-    } else if (dictationRequested || isDictationActive(dictation)) {
-      void stopDictation()
-      return true
-    } else void startDictation()
-    return false
-  }
-
-  function releaseVoice(source, cancelled = false) {
-    if (cancelled) {
-      void stopDictation(true)
-      return
-    }
-    if (handsFreeDictation) return
-    if (source !== voiceActivationSource || Date.now() - voiceActivationStartedAt >= handsFreeActivationDelay) {
-      void stopDictation()
-      return
-    }
-    voiceReleasePending = true
-    pendingVoiceActivationAt = voiceActivationStartedAt
-    pendingVoiceActivationSource = source
-    clearTimeout(voiceReleaseTimer)
-    voiceReleaseTimer = setTimeout(() => {
-      voiceReleaseTimer = undefined
-      voiceReleasePending = false
-      void stopDictation()
-    }, handsFreeActivationDelay)
-  }
-
-  function voicePointerDown(event) {
-    if (event.button !== 0 || voicePointerId !== undefined || voiceKey !== undefined) return
-    event.preventDefault()
-    expectVoiceClick()
-    voicePointerId = event.pointerId
-    event.currentTarget.setPointerCapture?.(event.pointerId)
-    ignoreVoiceRelease = activateVoice('pointer')
-  }
-
-  function voicePointerEnd(event) {
-    if (event.pointerId !== voicePointerId) return
-    event.preventDefault()
-    expectVoiceClick()
-    voicePointerId = undefined
-    if (ignoreVoiceRelease) {
-      ignoreVoiceRelease = false
-      return
-    }
-    releaseVoice('pointer', event.type === 'pointercancel')
-  }
-
-  function voiceKeyDown(event) {
-    if (event.key !== ' ' && event.key !== 'Enter') return
-    event.preventDefault()
-    expectVoiceClick()
-    if (!event.repeat) {
-      if (voiceKey !== undefined || voicePointerId !== undefined) return
-      voiceKey = event.key
-      ignoreVoiceRelease = activateVoice('keyboard')
-    }
-  }
-
-  function voiceKeyUp(event) {
-    if (event.key !== voiceKey) return
-    event.preventDefault()
-    expectVoiceClick()
-    voiceKey = undefined
-    if (ignoreVoiceRelease) {
-      ignoreVoiceRelease = false
-      return
-    }
-    releaseVoice('keyboard')
-  }
-
-  function voiceClick() {
-    if (suppressVoiceClick) {
-      suppressVoiceClick = false
-      clearTimeout(voiceClickTimer)
-      return
-    }
-    const ignoreRelease = activateVoice('click')
-    if (!ignoreRelease) releaseVoice('click')
-  }
-
-  function globalVoiceShortcut({ state }) {
-    if (state === 'Pressed') {
-      if (globalVoiceHeld || auth.name !== 'signed-in' || active || (dictationBusy() && !voiceReleasePending && !handsFreeDictation)) return
-      globalVoiceHeld = true
-      ignoreGlobalVoiceRelease = activateVoice('global')
-    } else if (state === 'Released' && globalVoiceHeld) {
-      globalVoiceHeld = false
-      if (ignoreGlobalVoiceRelease) {
-        ignoreGlobalVoiceRelease = false
-        return
-      }
-      releaseVoice('global')
-    }
-  }
+  const voiceGesture = createVoiceGesture({
+    start: startDictation,
+    stop: stopDictation,
+    readRequested: () => dictationRequested,
+    readStatus: () => dictation,
+    busy: dictationBusy,
+    signedIn: () => auth.name === 'signed-in',
+    hasActiveRun: () => !!active,
+  })
+  const { pointerDown: voicePointerDown, pointerEnd: voicePointerEnd, keyDown: voiceKeyDown, keyUp: voiceKeyUp, click: voiceClick, globalShortcut: globalVoiceShortcut } = voiceGesture
 
   const voiceShortcutManager = createVoiceShortcutManager({
     register,
@@ -551,11 +422,9 @@
       dictationController.cleanup()
       chatController.cleanup()
       pairingUnlisten?.()
-      clearTimeout(voiceClickTimer)
-      clearTimeout(voiceReleaseTimer)
+      voiceGesture.cleanup()
       transcriptController.cleanup()
       stopDragDrop?.()
-      globalVoiceHeld = false
       voiceShortcutManager.cleanup()
       document.removeEventListener('keydown', shortcuts)
       window.removeEventListener('resize', fitArtifactRail)
