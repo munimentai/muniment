@@ -12,6 +12,7 @@ import {
   defaultArtifactRailWidth,
   isArtifactRailShortcut,
   isEditableTarget,
+  shortcutDisplayLabel,
 } from './artifact-rail-state.js'
 
 describe('artifact rail state', () => {
@@ -43,6 +44,11 @@ describe('artifact rail state', () => {
     expect(artifactRailShortcut('MacIntel')).toBe('Meta+J')
     expect(artifactRailShortcut('Win32')).toBe('Control+J')
     expect(artifactRailShortcut('Linux x86_64')).toBe('Control+J')
+  })
+
+  it('formats platform shortcuts for display', () => {
+    expect(shortcutDisplayLabel('Meta+J')).toBe('⌘J')
+    expect(shortcutDisplayLabel('Control+J')).toBe('Ctrl J')
   })
 
   it('recognizes only the platform shortcut without extra modifiers', () => {

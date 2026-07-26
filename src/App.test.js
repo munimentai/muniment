@@ -273,6 +273,10 @@ describe('artifact rail', () => {
     render(App)
     const toggle = await screen.findByRole('button', { name: 'Open artifact rail' })
     expect(toggle).toHaveAttribute('aria-expanded', 'false')
+    expect(toggle).toHaveAttribute('aria-controls', 'artifact-rail')
+    expect(toggle).toHaveAttribute('aria-keyshortcuts', navigator.platform.startsWith('Mac') ? 'Meta+J' : 'Control+J')
+    expect(within(toggle).getByText('Artifacts')).toBeInTheDocument()
+    expect(within(toggle).getByText(navigator.platform.startsWith('Mac') ? '⌘J' : 'Ctrl J').tagName).toBe('KBD')
     expect(screen.queryByRole('complementary', { name: 'Artifacts' })).not.toBeInTheDocument()
 
     await fireEvent.click(toggle)
@@ -442,7 +446,10 @@ describe('sidebar collapse', () => {
 
   it('collapses to an icon rail from the in-sidebar control and expands again', async () => {
     render(App)
+    const modifier = navigator.platform.startsWith('Mac') ? '⌘' : 'Ctrl '
     const collapse = await screen.findByRole('button', { name: 'Collapse sidebar' })
+    expect(screen.getByText(`${modifier}N`).tagName).toBe('KBD')
+    expect(screen.getByText(`${modifier}F`).tagName).toBe('KBD')
     expect(collapse).toHaveAttribute('aria-expanded', 'true')
     expect(collapse).toHaveAttribute('aria-controls', 'sidebar')
     expect(collapse).toHaveAttribute('aria-keyshortcuts', navigator.platform.startsWith('Mac') ? 'Meta+\\' : 'Control+\\')
@@ -462,7 +469,6 @@ describe('sidebar collapse', () => {
       expect(control).toHaveAccessibleName(name)
       expect(control).toHaveAttribute('title', expect.stringContaining(name))
     }
-    const modifier = navigator.platform.startsWith('Mac') ? '⌘' : 'Ctrl '
     expect(screen.getByRole('button', { name: 'New thread' })).toHaveAttribute('title', `New thread (${modifier}N)`)
     expect(screen.getByRole('button', { name: 'Search' })).toHaveAttribute('title', `Search (${modifier}F)`)
     expect(screen.queryByText('Threads')).not.toBeInTheDocument()

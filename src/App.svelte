@@ -6,7 +6,7 @@
 
   import AccessPanel from './lib/AccessPanel.svelte'
   import Onboarding from './lib/Onboarding.svelte'
-  import { ARTIFACT_RAIL_MAX_WIDTH, ARTIFACT_RAIL_MIN_WIDTH, artifactRailShortcut, artifactRailWidthFromKey, artifactRailWidthFromPointer, clampArtifactRailWidth, defaultArtifactRailWidth, isArtifactRailShortcut } from './lib/artifact-rail-state.js'
+  import { ARTIFACT_RAIL_MAX_WIDTH, ARTIFACT_RAIL_MIN_WIDTH, artifactRailShortcut, artifactRailWidthFromKey, artifactRailWidthFromPointer, clampArtifactRailWidth, defaultArtifactRailWidth, isArtifactRailShortcut, shortcutDisplayLabel } from './lib/artifact-rail-state.js'
   import { bootState, errorState, statusState, waitingState } from './lib/auth-state.js'
   import { ringPath } from './lib/mark.js'
   import { applyBufferedChatEvents, applyChatEvent, composerAction, formatByteSize, historyMessages, receiptLabel, receiptRows, receiptSummary, runAnnouncement, toolName, toolStatus } from './lib/chat-state.js'
@@ -106,7 +106,7 @@
   const minimumThreadWidth = 320
   let sidebarCollapsed = $state(storedSidebarCollapsed())
   const sidebarKeyShortcut = sidebarShortcut()
-  const modifierLabel = sidebarKeyShortcut === 'Meta+\\' ? '⌘' : 'Ctrl '
+  const modifierLabel = shortcutDisplayLabel(sidebarKeyShortcut).slice(0, -1)
   const sidebarHint = `${modifierLabel}\\`
   // The newest copy attempt in the thread, or null once its confirmation lapses.
   let copy = $state(null)
@@ -1136,7 +1136,7 @@
     {:else if auth.name === 'signed-in'}
       <section class="workspace" class:sidebar-collapsed={sidebarCollapsed} class:artifact-open={artifactRailOpen} class:artifact-resizing={artifactRailPointer !== undefined} style:--artifact-rail-width={`${artifactRailWidth}px`} bind:this={workspace}>
         {#if draggingFiles}<div class="drop-affordance" role="status"><strong>Drop files to add them</strong><span>Saved locally · supported images sent with first prompt</span></div>{/if}
-        <header class="titlebar"><span class="thread-title">New thread</span><span class="thread-id">local · durable</span><span class="title-spacer"></span><button type="button" class="quiet" aria-controls="artifact-rail" aria-expanded={artifactRailOpen} aria-keyshortcuts={artifactShortcut} aria-label={`${artifactRailOpen ? 'Close' : 'Open'} artifact rail`} onclick={toggleArtifactRail}>{artifactShortcut === 'Meta+J' ? '⌘J' : 'Ctrl J'}</button></header>
+        <header class="titlebar"><span class="thread-title">New thread</span><span class="thread-id">local · durable</span><span class="title-spacer"></span><button type="button" class="quiet" aria-controls="artifact-rail" aria-expanded={artifactRailOpen} aria-keyshortcuts={artifactShortcut} aria-label={`${artifactRailOpen ? 'Close' : 'Open'} artifact rail`} onclick={toggleArtifactRail}>Artifacts <kbd>{shortcutDisplayLabel(artifactShortcut)}</kbd></button></header>
         <aside id="sidebar" class="sidebar">
           <div class="side-brand">
             {#if !sidebarCollapsed}
@@ -1148,8 +1148,8 @@
               <svg class="side-icon" width={sidebarCollapsed ? 18 : 16} height={sidebarCollapsed ? 18 : 16} viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="4" width="17" height="16" rx="2.5" /><path d="M9.5 4v16" /><path d={sidebarCollapsed ? 'm14 9 3 3-3 3' : 'm15.5 15-3-3 3-3'} /></svg>
             </button>
           </div>
-          <button class="side-action" aria-label={sidebarCollapsed ? 'New thread' : null} title={sidebarCollapsed ? `New thread (${modifierLabel}N)` : null}><svg class="side-icon" width="18" height="18" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5.5v13" /><path d="M5.5 12h13" /></svg>{#if !sidebarCollapsed}<span>New thread</span><kbd>⌘N</kbd>{/if}</button>
-          <button class="side-action" aria-label={sidebarCollapsed ? 'Search' : null} title={sidebarCollapsed ? `Search (${modifierLabel}F)` : null}><svg class="side-icon" width="18" height="18" viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5" /><path d="m15.8 15.8 3.7 3.7" /></svg>{#if !sidebarCollapsed}<span>Search</span><kbd>⌘F</kbd>{/if}</button>
+          <button class="side-action" aria-label={sidebarCollapsed ? 'New thread' : null} title={sidebarCollapsed ? `New thread (${modifierLabel}N)` : null}><svg class="side-icon" width="18" height="18" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5.5v13" /><path d="M5.5 12h13" /></svg>{#if !sidebarCollapsed}<span>New thread</span><kbd>{modifierLabel}N</kbd>{/if}</button>
+          <button class="side-action" aria-label={sidebarCollapsed ? 'Search' : null} title={sidebarCollapsed ? `Search (${modifierLabel}F)` : null}><svg class="side-icon" width="18" height="18" viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5" /><path d="m15.8 15.8 3.7 3.7" /></svg>{#if !sidebarCollapsed}<span>Search</span><kbd>{modifierLabel}F</kbd>{/if}</button>
           {#if !sidebarCollapsed}
             <p class="side-label">Threads</p>
             <button class="thread-row active-thread"><span></span>New thread</button>

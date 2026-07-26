@@ -28,6 +28,12 @@ export function artifactRailShortcut(platform = navigator.platform) {
   return platform.startsWith('Mac') ? 'Meta+J' : 'Control+J'
 }
 
+export function shortcutDisplayLabel(shortcut) {
+  if (shortcut.startsWith('Meta+')) return `⌘${shortcut.slice('Meta+'.length)}`
+  if (shortcut.startsWith('Control+')) return `Ctrl ${shortcut.slice('Control+'.length)}`
+  return shortcut
+}
+
 export function isEditableTarget(target) {
   return target instanceof Element
     && (target.matches('input, textarea') || target.closest('[contenteditable]:not([contenteditable="false"])') !== null)
