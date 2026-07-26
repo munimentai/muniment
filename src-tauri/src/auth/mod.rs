@@ -57,6 +57,24 @@ fn snapshot_transition(previous: Option<u64>, next: Option<u64>) -> Option<u64> 
     }
 }
 
+fn observe_snapshot_version(
+    snapshot_version: &Mutex<Option<u64>>,
+    next: Option<u64>,
+    emit: impl FnOnce(u64) -> Result<(), String>,
+) -> Result<(), String> {
+    let mut previous = snapshot_version
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let changed = snapshot_transition(*previous, next);
+    *previous = next;
+    drop(previous);
+
+    if let Some(snapshot_version) = changed {
+        emit(snapshot_version)?;
+    }
+    Ok(())
+}
+
 fn observe_snapshot<R: tauri::Runtime>(
     state: &AuthState,
     app: &tauri::AppHandle<R>,
@@ -66,22 +84,13 @@ fn observe_snapshot<R: tauri::Runtime>(
         .entitlement_snapshot
         .as_ref()
         .map(|snapshot| snapshot.snapshot_version);
-    let mut previous = state
-        .snapshot_version
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    let changed = snapshot_transition(*previous, next);
-    *previous = next;
-    drop(previous);
-
-    if let Some(snapshot_version) = changed {
+    observe_snapshot_version(&state.snapshot_version, next, |snapshot_version| {
         app.emit(
             "entitlement-changed",
             EntitlementChanged { snapshot_version },
         )
-        .map_err(|error| format!("entitlement event failed: {error}"))?;
-    }
-    Ok(())
+        .map_err(|error| format!("entitlement event failed: {error}"))
+    })
 }
 
 fn clear_snapshot_version(state: &AuthState) {
@@ -233,12 +242,18 @@ pub async fn auth_entitlement_snapshot(
 /// List display-only metadata for this account's native installations.
 #[tauri::command]
 pub async fn auth_devices(
+    app: tauri::AppHandle,
     state: tauri::State<'_, AuthState>,
 ) -> Result<Vec<auth::NativeDevice>, String> {
     let store = state.native_store.clone();
+    let session =
+        tauri::async_runtime::spawn_blocking(move || ensure_native_session(store.as_ref()))
+            .await
+            .map_err(|_| device_list_error())?
+            .map_err(|_| device_list_error())?;
+    observe_snapshot(&state, &app, &session).map_err(|_| device_list_error())?;
+    let credentials = session.into_credentials().ok_or_else(device_list_error)?;
     tauri::async_runtime::spawn_blocking(move || {
-        let session = ensure_native_session(store.as_ref()).map_err(|_| device_list_error())?;
-        let credentials = session.into_credentials().ok_or_else(device_list_error)?;
         list_devices(
             Some(&credentials.tokens.access_token),
             &UreqNativeDeviceListTransport::new(Duration::from_secs(30)),
@@ -363,6 +378,28 @@ mod tests {
     fn changed_snapshot_reports_the_new_version_once() {
         assert_eq!(snapshot_transition(Some(1), Some(2)), Some(2));
         assert_eq!(snapshot_transition(Some(2), Some(2)), None);
+    }
+
+    #[test]
+    fn snapshot_observation_emits_changes_once_and_reset_suppresses_next_account() {
+        let state = AuthState::new();
+        let emitted = Mutex::new(Vec::new());
+        let observe = |version| {
+            observe_snapshot_version(&state.snapshot_version, Some(version), |changed| {
+                emitted.lock().unwrap().push(changed);
+                Ok(())
+            })
+        };
+
+        observe(1).unwrap();
+        observe(1).unwrap();
+        observe(2).unwrap();
+        observe(2).unwrap();
+        assert_eq!(*emitted.lock().unwrap(), vec![2]);
+
+        clear_snapshot_version(&state);
+        observe(7).unwrap();
+        assert_eq!(*emitted.lock().unwrap(), vec![2]);
     }
 
     #[test]
