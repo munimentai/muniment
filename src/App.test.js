@@ -21,6 +21,7 @@ let App
 let invoke
 let chatListener
 let dictationListener
+let entitlementListener
 let eventUnlisten
 let pairingUnlisten
 let dialogResult
@@ -113,6 +114,7 @@ beforeAll(async () => {
     event: { listen: vi.fn((event, listener) => {
       if (event === 'chat-event') chatListener = listener
       if (event === 'dictation-event') dictationListener = listener
+      if (event === 'entitlement-changed') entitlementListener = listener
       return Promise.resolve(event === 'attach-pairing-requested' ? pairingUnlisten : eventUnlisten)
     }) },
   }
@@ -129,6 +131,7 @@ beforeEach(() => {
   requiredModelInvoke = vi.fn().mockResolvedValue({ status: { state: 'installed' }, downloadedBytes: 100, totalBytes: 100, folderSetupAvailable: true, aiFeaturesAvailable: true, retryingInBackground: false })
   chatListener = undefined
   dictationListener = undefined
+  entitlementListener = undefined
   eventUnlisten = vi.fn()
   pairingUnlisten = vi.fn()
   dragDropListener = undefined
@@ -155,6 +158,42 @@ afterEach(() => {
   cleanup()
   vi.useRealTimers()
   vi.restoreAllMocks()
+})
+
+describe('entitlement change toast', () => {
+  const copy = 'Your access changed. Some models or connections may differ.'
+
+  it('is absent until the entitlement listener emits, then appears in its own status region', async () => {
+    render(App)
+    await screen.findByPlaceholderText('Ask anything')
+
+    expect(screen.queryByText(copy)).not.toBeInTheDocument()
+    entitlementListener({ payload: { snapshot_version: 3 } })
+
+    expect(await screen.findByText(copy)).toHaveAttribute('role', 'status')
+    expect(screen.getByTestId('run-announcement')).not.toHaveTextContent(copy)
+  })
+
+  it('clears a visible toast when the user signs out', async () => {
+    invoke.mockImplementation(async (command) => {
+      if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
+      if (command === 'chat_history') return []
+      if (command === 'auth_entitlement_snapshot') return snapshot()
+      if (command === 'auth_devices') return []
+      if (command === 'auth_sign_out') return { signed_in: false, subject: null }
+      throw new Error(`unexpected command: ${command}`)
+    })
+    render(App)
+    const profile = await screen.findByRole('button', { name: /Alice/i })
+    entitlementListener({ payload: { snapshot_version: 3 } })
+    expect(await screen.findByText(copy)).toBeInTheDocument()
+
+    await fireEvent.click(profile)
+    await fireEvent.click(screen.getByRole('button', { name: 'Sign out' }))
+
+    expect(await screen.findByRole('button', { name: 'Sign in' })).toBeInTheDocument()
+    expect(screen.queryByText(copy)).not.toBeInTheDocument()
+  })
 })
 
 describe('workspace composer entry', () => {
@@ -2117,7 +2156,7 @@ describe('voice dictation', () => {
     const voice = screen.getByRole('button', { name: 'Voice' })
     await fireEvent.click(voice)
     view.unmount()
-    expect(eventUnlisten).toHaveBeenCalledTimes(2)
+    expect(eventUnlisten).toHaveBeenCalledTimes(3)
     expect(pairingUnlisten).toHaveBeenCalledTimes(1)
     await new Promise((resolve) => setTimeout(resolve, 130))
     expect(invoke).not.toHaveBeenCalledWith('dictation_status')
