@@ -134,7 +134,7 @@
     <div bind:this={accessPopover} class="access-popover" role="dialog" aria-label="Your access" tabindex="-1">
       <header><div><h2>Your access</h2>{#if access.name === 'ready'}<p>Snapshot v{access.snapshot.snapshot_version}</p>{/if}</div><button class="quiet close-access" aria-label="Close your access" onclick={closeAccess}>×</button></header>
       <div class="access-content">
-        <section class="appearance-section" aria-labelledby="appearance-heading">
+        <section aria-labelledby="appearance-heading">
           <h3 id="appearance-heading" class="access-label">Appearance</h3>
           <div class="theme-options" role="group" aria-labelledby="appearance-heading">
             {#each themeOptions as option}
