@@ -2431,6 +2431,28 @@ describe('thread announcements', () => {
     }
   }
 
+  it.each([
+    ['streaming', 1],
+    ['thinking', 0],
+    ['complete', 0],
+    ['failed', 0],
+    ['interrupted', 0],
+  ])('renders the active-line rule only in the %s phase', async (phase, ruleCount) => {
+    const { container } = signedIn([{
+      runId: `run-${phase}`,
+      phase,
+      text: 'A response long enough to represent prose.',
+      prompt: 'A question',
+      receipt: phase === 'complete' ? {} : null,
+      toolActivity: [],
+      resumable: false,
+    }])
+
+    if (phase === 'thinking') await screen.findByLabelText('Thinking')
+    else await screen.findByText('A response long enough to represent prose.')
+    expect(container.querySelectorAll('.streaming-rule')).toHaveLength(ruleCount)
+  })
+
   it('keeps the transcript out of the live region and stays silent when history is restored', async () => {
     signedIn(restored)
 
