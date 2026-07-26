@@ -25,6 +25,7 @@ const declarations = (source) => [
 
 const SIZE = /(?:\d*\.?\d+(?:px|rem|em|%|pt|pc|in|cm|mm|q|vw|vh|vmin|vmax|ch|ex|cap|ic|lh|rlh)\b|\b0\b)/i
 const TEXT_TOKEN = /var\(\s*(--text-[a-z0-9-]+)/gi
+const SIZE_FREE_FONT = /^inherit$/i
 const TYPE_TOKENS = new Set([
   ...read('src/styles/tokens.css').matchAll(/(--text-[a-z0-9-]+)\s*:/gi),
 ].map(([, token]) => token.toLowerCase()))
@@ -34,7 +35,8 @@ const invalidTypeSizes = (source, exceptions = {}) => declarations(source)
     const hasRawSize = SIZE.test(value)
     const tokens = [...value.matchAll(TEXT_TOKEN)].map(([, token]) => token.toLowerCase())
     const hasUnknownToken = tokens.some((token) => !TYPE_TOKENS.has(token))
-    const lacksRequiredToken = property === 'font-size' && tokens.length === 0
+    const lacksRequiredToken = tokens.length === 0
+      && (property === 'font-size' || !SIZE_FREE_FONT.test(value))
     return (hasRawSize || hasUnknownToken || lacksRequiredToken)
       && exceptions[selector]?.[0] !== value
   })
@@ -65,6 +67,7 @@ describe('§1.4 type scale', () => {
       .calculated { font: calc(1rem + 1px) var(--font-human); }
       .zero { font: 0 var(--font-mono); }
       .unknown { font-size: var(--text-unknown); }
+      .rogue-shorthand { font: var(--rogue-size) var(--font-mono); }
       .fallback { font-size: var(--text-15, 16px); }
       .mixed-shorthand { font: var(--text-12) 15px var(--font-mono); }
       .mixed-calc { font-size: calc(var(--text-15) + 1px); }
@@ -77,6 +80,7 @@ describe('§1.4 type scale', () => {
         '.calculated',
         '.zero',
         '.unknown',
+        '.rogue-shorthand',
         '.fallback',
         '.mixed-shorthand',
         '.mixed-calc',
