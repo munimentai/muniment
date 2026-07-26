@@ -11,7 +11,7 @@ mod keyring_store;
 
 use std::process::Command;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use muniment_core::auth::{
@@ -19,6 +19,8 @@ use muniment_core::auth::{
     UreqNativeDeviceListTransport, UreqRegistrationTransport, UreqRevocationTransport,
     UreqSessionTransport, UreqTokenTransport,
 };
+use serde::Serialize;
+use tauri::Emitter;
 
 use keyring_store::KeyringNativeCredentialStore;
 
@@ -40,23 +42,87 @@ fn api_base_url() -> String {
 pub struct AuthState {
     native_store: Arc<KeyringNativeCredentialStore>,
     sign_in_running: Arc<AtomicBool>,
+    snapshot_version: Mutex<Option<u64>>,
 }
 
-pub(crate) fn fresh_tokens(state: &AuthState) -> Result<muniment_core::auth::TokenSet, String> {
+#[derive(Clone, Copy, Serialize)]
+struct EntitlementChanged {
+    snapshot_version: u64,
+}
+
+fn snapshot_transition(previous: Option<u64>, next: Option<u64>) -> Option<u64> {
+    match (previous, next) {
+        (Some(previous), Some(next)) if previous != next => Some(next),
+        _ => None,
+    }
+}
+
+fn observe_snapshot_version(
+    snapshot_version: &Mutex<Option<u64>>,
+    next: Option<u64>,
+    emit: impl FnOnce(u64) -> Result<(), String>,
+) -> Result<(), String> {
+    let mut previous = snapshot_version
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let changed = snapshot_transition(*previous, next);
+    *previous = next;
+    drop(previous);
+
+    if let Some(snapshot_version) = changed {
+        emit(snapshot_version)?;
+    }
+    Ok(())
+}
+
+fn observe_snapshot<R: tauri::Runtime>(
+    state: &AuthState,
+    app: &tauri::AppHandle<R>,
+    session: &auth::FreshNativeSession,
+) -> Result<(), String> {
+    let next = session
+        .entitlement_snapshot
+        .as_ref()
+        .map(|snapshot| snapshot.snapshot_version);
+    observe_snapshot_version(&state.snapshot_version, next, |snapshot_version| {
+        app.emit(
+            "entitlement-changed",
+            EntitlementChanged { snapshot_version },
+        )
+        .map_err(|error| format!("entitlement event failed: {error}"))
+    })
+}
+
+fn clear_snapshot_version(state: &AuthState) {
+    *state
+        .snapshot_version
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
+}
+
+pub(crate) fn fresh_tokens<R: tauri::Runtime>(
+    state: &AuthState,
+    app: &tauri::AppHandle<R>,
+) -> Result<muniment_core::auth::TokenSet, String> {
     let result = ensure_native_session(state.native_store.as_ref())?;
+    observe_snapshot(state, app, &result)?;
     result
         .into_credentials()
         .map(|credentials| credentials.tokens)
         .ok_or_else(|| "Sign in before sending a message.".into())
 }
 
-pub(crate) async fn fresh_tokens_async(
+pub(crate) async fn fresh_tokens_async<R: tauri::Runtime>(
     state: &AuthState,
+    app: &tauri::AppHandle<R>,
 ) -> Result<muniment_core::auth::TokenSet, String> {
     let store = state.native_store.clone();
-    tauri::async_runtime::spawn_blocking(move || ensure_native_session(store.as_ref()))
-        .await
-        .map_err(|_| "Sign in before sending a message.".to_string())??
+    let result =
+        tauri::async_runtime::spawn_blocking(move || ensure_native_session(store.as_ref()))
+            .await
+            .map_err(|_| "Sign in before sending a message.".to_string())??;
+    observe_snapshot(state, app, &result)?;
+    result
         .into_credentials()
         .map(|credentials| credentials.tokens)
         .ok_or_else(|| "Sign in before sending a message.".into())
@@ -67,6 +133,7 @@ impl AuthState {
         AuthState {
             native_store: Arc::new(KeyringNativeCredentialStore::new()),
             sign_in_running: Arc::new(AtomicBool::new(false)),
+            snapshot_version: Mutex::new(None),
         }
     }
 }
@@ -84,7 +151,9 @@ pub async fn auth_sign_in(state: tauri::State<'_, AuthState>) -> Result<AuthStat
     })
     .await
     .map_err(|e| format!("sign-in task failed: {e}"))?;
-    outcome.map_err(|e| e.to_string())
+    let status = outcome.map_err(|e| e.to_string())?;
+    clear_snapshot_version(&state);
+    Ok(status)
 }
 
 struct SignInPermit(Arc<AtomicBool>);
@@ -139,24 +208,33 @@ pub async fn auth_status(state: tauri::State<'_, AuthState>) -> Result<AuthStatu
 
 /// Return session status after renewing expired or nearly-expired tokens.
 #[tauri::command]
-pub async fn auth_ensure_fresh(state: tauri::State<'_, AuthState>) -> Result<AuthStatus, String> {
+pub async fn auth_ensure_fresh(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, AuthState>,
+) -> Result<AuthStatus, String> {
     let store = state.native_store.clone();
-    tauri::async_runtime::spawn_blocking(move || ensure_native_session(store.as_ref()))
-        .await
-        .map_err(|e| format!("session refresh task failed: {e}"))?
-        .map(|result| result.status)
+    let result =
+        tauri::async_runtime::spawn_blocking(move || ensure_native_session(store.as_ref()))
+            .await
+            .map_err(|e| format!("session refresh task failed: {e}"))??;
+    observe_snapshot(&state, &app, &result)?;
+    Ok(result.status)
 }
 
 /// Fetch the authoritative native session and expose only its typed,
 /// display-only entitlement projection.
 #[tauri::command]
 pub async fn auth_entitlement_snapshot(
+    app: tauri::AppHandle,
     state: tauri::State<'_, AuthState>,
 ) -> Result<auth::EntitlementSnapshotView, String> {
     let store = state.native_store.clone();
-    tauri::async_runtime::spawn_blocking(move || ensure_native_session(store.as_ref()))
-        .await
-        .map_err(|e| format!("access task failed: {e}"))??
+    let result =
+        tauri::async_runtime::spawn_blocking(move || ensure_native_session(store.as_ref()))
+            .await
+            .map_err(|e| format!("access task failed: {e}"))??;
+    observe_snapshot(&state, &app, &result)?;
+    result
         .entitlement_snapshot
         .ok_or_else(|| "Sign in to view your access.".into())
 }
@@ -164,12 +242,18 @@ pub async fn auth_entitlement_snapshot(
 /// List display-only metadata for this account's native installations.
 #[tauri::command]
 pub async fn auth_devices(
+    app: tauri::AppHandle,
     state: tauri::State<'_, AuthState>,
 ) -> Result<Vec<auth::NativeDevice>, String> {
     let store = state.native_store.clone();
+    let session =
+        tauri::async_runtime::spawn_blocking(move || ensure_native_session(store.as_ref()))
+            .await
+            .map_err(|_| device_list_error())?
+            .map_err(|_| device_list_error())?;
+    observe_snapshot(&state, &app, &session).map_err(|_| device_list_error())?;
+    let credentials = session.into_credentials().ok_or_else(device_list_error)?;
     tauri::async_runtime::spawn_blocking(move || {
-        let session = ensure_native_session(store.as_ref()).map_err(|_| device_list_error())?;
-        let credentials = session.into_credentials().ok_or_else(device_list_error)?;
         list_devices(
             Some(&credentials.tokens.access_token),
             &UreqNativeDeviceListTransport::new(Duration::from_secs(30)),
@@ -214,7 +298,7 @@ fn ensure_native_session(
 #[tauri::command]
 pub async fn auth_sign_out(state: tauri::State<'_, AuthState>) -> Result<AuthStatus, String> {
     let store = state.native_store.clone();
-    tauri::async_runtime::spawn_blocking(move || {
+    let status = tauri::async_runtime::spawn_blocking(move || {
         auth::sign_out_native_session(
             store.as_ref(),
             &UreqRevocationTransport::new(Duration::from_secs(2)),
@@ -225,7 +309,9 @@ pub async fn auth_sign_out(state: tauri::State<'_, AuthState>) -> Result<AuthSta
     })
     .await
     .map_err(|e| format!("sign-out task failed: {e}"))?
-    .map_err(|e| e.to_string())
+    .map_err(|e| e.to_string())?;
+    clear_snapshot_version(&state);
+    Ok(status)
 }
 
 #[cfg(target_os = "macos")]
@@ -276,6 +362,53 @@ mod tests {
         assert!(SignInPermit::acquire(running.clone()).is_none());
         drop(first);
         assert!(SignInPermit::acquire(running).is_some());
+    }
+
+    #[test]
+    fn first_snapshot_is_not_a_change() {
+        assert_eq!(snapshot_transition(None, Some(1)), None);
+    }
+
+    #[test]
+    fn unchanged_snapshot_is_not_a_change() {
+        assert_eq!(snapshot_transition(Some(1), Some(1)), None);
+    }
+
+    #[test]
+    fn changed_snapshot_reports_the_new_version_once() {
+        assert_eq!(snapshot_transition(Some(1), Some(2)), Some(2));
+        assert_eq!(snapshot_transition(Some(2), Some(2)), None);
+    }
+
+    #[test]
+    fn snapshot_observation_emits_changes_once_and_reset_suppresses_next_account() {
+        let state = AuthState::new();
+        let emitted = Mutex::new(Vec::new());
+        let observe = |version| {
+            observe_snapshot_version(&state.snapshot_version, Some(version), |changed| {
+                emitted.lock().unwrap().push(changed);
+                Ok(())
+            })
+        };
+
+        observe(1).unwrap();
+        observe(1).unwrap();
+        observe(2).unwrap();
+        observe(2).unwrap();
+        assert_eq!(*emitted.lock().unwrap(), vec![2]);
+
+        clear_snapshot_version(&state);
+        observe(7).unwrap();
+        assert_eq!(*emitted.lock().unwrap(), vec![2]);
+    }
+
+    #[test]
+    fn entitlement_changed_payload_contains_only_the_version() {
+        let payload = serde_json::to_value(EntitlementChanged {
+            snapshot_version: 42,
+        })
+        .unwrap();
+        assert_eq!(payload, serde_json::json!({"snapshot_version": 42}));
     }
 
     #[test]
