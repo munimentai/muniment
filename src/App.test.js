@@ -1,10 +1,15 @@
 // @vitest-environment jsdom
 
+import fs from 'node:fs'
+import path from 'node:path'
+
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/svelte'
 import '@testing-library/jest-dom/vitest'
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { historyMessages } from './lib/chat-state.js'
+
+const accessPanelSource = fs.readFileSync(path.join(process.cwd(), 'src/lib/AccessPanel.svelte'), 'utf8')
 
 let App
 let invoke
@@ -3230,7 +3235,15 @@ describe('signed-in access popover', () => {
     expect(rows[1]).toHaveTextContent('androidActive')
     expect(rows[2]).toHaveTextContent('iosRevoked')
     expect(rows[2]).toHaveClass('revoked')
-    expect(within(rows[2]).getByText('ios').tagName).toBe('STRONG')
+    const activeIdentifier = within(rows[1]).getByText('android')
+    const revokedIdentifier = within(rows[2]).getByText('ios')
+    const revokedRule = accessPanelSource.match(/\.revoked \.device-heading strong\s*\{([^}]*)\}/)?.[1]
+    expect(revokedIdentifier.tagName).toBe('STRONG')
+    expect(activeIdentifier.tagName).toBe('STRONG')
+    expect(revokedRule).toMatch(/color:\s*var\(--oxide\)/)
+    expect(revokedRule).toMatch(/text-decoration:\s*line-through/)
+    expect(revokedRule).toMatch(/font-weight:\s*400/)
+    expect(within(rows[2]).getByText('Revoked')).toBeVisible()
     expect(within(dialog).getByRole('button', { name: 'members' })).toBeInTheDocument()
     expect(dialog).not.toHaveTextContent('revoked-newest')
   })
