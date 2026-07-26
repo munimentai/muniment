@@ -11,7 +11,6 @@ import {
   clampArtifactRailWidth,
   defaultArtifactRailWidth,
   isArtifactRailShortcut,
-  isEditableTarget,
   shortcutDisplayLabel,
 } from './artifact-rail-state.js'
 
@@ -58,14 +57,12 @@ describe('artifact rail state', () => {
     expect(isArtifactRailShortcut(new KeyboardEvent('keydown', { key: 'j', ctrlKey: true, shiftKey: true }), 'Win32')).toBe(false)
   })
 
-  it('suppresses shortcuts from editable controls', () => {
+  it('recognizes shortcuts from editable controls', () => {
     for (const target of [document.createElement('input'), document.createElement('textarea')]) {
-      expect(isEditableTarget(target)).toBe(true)
-      expect(isArtifactRailShortcut({ key: 'j', ctrlKey: true, metaKey: false, altKey: false, shiftKey: false, target }, 'Win32')).toBe(false)
+      expect(isArtifactRailShortcut({ key: 'j', ctrlKey: true, metaKey: false, altKey: false, shiftKey: false, target }, 'Win32')).toBe(true)
     }
     const editable = document.createElement('div')
     editable.setAttribute('contenteditable', 'true')
-    document.body.append(editable)
-    expect(isEditableTarget(editable)).toBe(true)
+    expect(isArtifactRailShortcut({ key: 'j', ctrlKey: true, metaKey: false, altKey: false, shiftKey: false, target: editable }, 'Win32')).toBe(true)
   })
 })
