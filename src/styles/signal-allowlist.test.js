@@ -40,6 +40,35 @@ const signalSelectors = (source) => [
 
 const unpermitted = (source, allowed) => signalSelectors(source).filter((selector) => !(selector in allowed))
 
+const FOCUS_EXCEPTIONS = {
+  'src/App.svelte': {
+    '.artifact-divider:focus-visible': '§6: the 9px divider uses an inset ring so it does not bleed into the thread and rail',
+  },
+}
+
+const focusOutlineRules = (source) => [
+  ...(source.match(styleBlock)?.[1] ?? source)
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .matchAll(/([^{}]+)\{([^{}]*)\}/g),
+].flatMap(([, selectors, body]) => selectors.split(',').map((selector) => ({
+  selector: selector.trim().replace(/\s+/g, ' '),
+  declarations: [...body.matchAll(/(?:^|;)\s*(outline(?:-(?:color|style|width|offset))?)\s*:\s*([^;]+)/g)]
+    .map(([, property, value]) => [property, value.trim().replace(/\s+/g, ' ')]),
+})))
+  .filter(({ selector, declarations }) => selector.includes(':focus-visible') && declarations.length)
+
+const validFocusDeclaration = ([property, value]) => ({
+  outline: value === '2px solid var(--ink)',
+  'outline-color': value === 'var(--ink)',
+  'outline-style': value === 'solid',
+  'outline-width': value === '2px',
+  'outline-offset': value === '2px',
+})[property]
+
+const invalidFocusRules = (source, exceptions = {}) => focusOutlineRules(source)
+  .filter(({ selector, declarations }) => !(selector in exceptions) && declarations.some((declaration) => !validFocusDeclaration(declaration)))
+  .map(({ selector }) => selector)
+
 // Everything outside the style block — where an inline style: or style="" would
 // route around the allowlist. Comments come out here too, for the same reason.
 const markup = (source) => source.replace(styleBlock, '')
@@ -103,6 +132,23 @@ describe('§1.2/§6 focus ring', () => {
     expect(rules).toHaveLength(1)
     expect(rules[0][1]).toMatch(/outline:\s*2px solid var\(--ink\)\s*;/)
     expect(rules[0][1]).toMatch(/outline-offset:\s*2px\s*;/)
+  })
+
+  it.each(COMPONENTS)('%s keeps component focus outlines on the global ring', (file) => {
+    expect(invalidFocusRules(read(file), FOCUS_EXCEPTIONS[file] ?? {})).toEqual([])
+  })
+
+  it('allowlists only focus exceptions that still exist', () => {
+    expect(Object.keys(FOCUS_EXCEPTIONS).filter((file) => !COMPONENTS.includes(file))).toEqual([])
+    for (const [file, exceptions] of Object.entries(FOCUS_EXCEPTIONS)) {
+      const used = new Set(focusOutlineRules(read(file)).map(({ selector }) => selector))
+      expect(Object.keys(exceptions).filter((selector) => !used.has(selector))).toEqual([])
+    }
+  })
+
+  it('rejects a component focus ring that drifts from the global ring', () => {
+    const drift = '<style>.theme-options button:focus-visible { outline: 2px solid var(--muted); outline-offset: -2px; }</style>'
+    expect(invalidFocusRules(drift)).toEqual(['.theme-options button:focus-visible'])
   })
 })
 
