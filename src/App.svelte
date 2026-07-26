@@ -16,6 +16,7 @@
   import { onboardingLoadingState, onboardingSettingsState } from './lib/onboarding-state.js'
   import { scrollFollowState } from './lib/scroll-follow.js'
   import { SIDEBAR_STORAGE_KEY, isSidebarShortcut, parseSidebarCollapsed, serializeSidebarCollapsed, sidebarShortcut } from './lib/sidebar-state.js'
+  import { streamingUnderlineGeometry } from './lib/streaming-underline.js'
 
   const markD = ringPath()
   const version = __APP_VERSION__
@@ -710,6 +711,44 @@
     return () => observer.disconnect()
   })
 
+  function streamingUnderline(node) {
+    let mounted = true
+    function measure() {
+      const caret = node.querySelector('.caret')
+      const rule = node.querySelector('.streaming-rule')
+      if (!caret || !rule) return
+      const geometry = streamingUnderlineGeometry({
+        caretLeft: caret.offsetLeft,
+        caretTop: caret.offsetTop,
+        caretHeight: caret.offsetHeight,
+      })
+      if (!geometry) return
+      rule.style.left = `${geometry.left}px`
+      rule.style.top = `${geometry.top}px`
+      rule.style.width = `${geometry.width}px`
+    }
+
+    function measureAfterRender() {
+      tick().then(() => {
+        if (mounted) measure()
+      })
+    }
+
+    measureAfterRender()
+    document.fonts?.ready?.then(() => {
+      if (mounted) measure()
+    })
+    const observer = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(measure)
+    observer?.observe(node)
+    return {
+      update: measureAfterRender,
+      destroy: () => {
+        mounted = false
+        observer?.disconnect()
+      },
+    }
+  }
+
   function toggleReceipt(runId) {
     const next = new Set(expandedReceipts)
     next.has(runId) ? next.delete(runId) : next.add(runId)
@@ -1146,7 +1185,8 @@
             <div class="response">
               {#if message.run.phase === 'thinking'}
                 <span class="thinking"><svg width="17" height="17" viewBox="0 0 48 48" aria-label="Thinking"><path d={markD} stroke-width="5" /></svg><span>Routing</span></span>
-              {:else}<p class:streaming={message.run.phase === 'streaming'}>{message.run.text}{#if message.run.phase === 'streaming'}<span class="caret" aria-hidden="true"></span>{/if}</p>{/if}
+              {:else if message.run.phase === 'streaming'}<p class="response-prose streaming" use:streamingUnderline={message.run.text}>{message.run.text}<span class="caret" aria-hidden="true"></span><span class="streaming-rule" aria-hidden="true"></span></p>
+              {:else}<p class="response-prose">{message.run.text}</p>{/if}
               {#if message.run.phase === 'failed'}<div class="run-error">Reply failed. <button disabled={dictationBusy()} onclick={() => { draft = message.run.prompt; send() }}>Try again</button></div>{/if}
               {#if message.run.phase === 'interrupted'}<div class="run-error" role={message.run.resumeError ? 'alert' : undefined}>{message.run.resumeError ?? 'Reply interrupted.'} {#if message.run.resumable}<button disabled={!!active || dictationBusy()} onclick={() => resume(message.run)}>Resume</button>{:else if message.run.prompt}<button disabled={dictationBusy()} onclick={() => { draft = message.run.prompt; send() }}>Try again</button>{/if}</div>{/if}
               {#if groupedTools.length}
@@ -1434,8 +1474,9 @@
   .message-attachments li { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 5px 8px; max-width: 100%; padding: 5px 8px; border: 1px solid var(--border); border-radius: 2px; color: var(--muted); font: var(--text-12) var(--font-mono); }
   .message-attachments strong { flex-basis: 100%; color: var(--muted); font-weight: 400; font-size: 10px; }
   .response { margin: 0 0 34px; }
-  .response p { white-space: pre-wrap; }
-  .streaming { display: inline; border-bottom: 2px solid var(--signal); }
+  .response-prose { max-width: 92%; white-space: pre-wrap; }
+  .streaming { position: relative; }
+  .streaming-rule { position: absolute; height: 2px; background: var(--signal); pointer-events: none; }
   .caret { display: inline-block; height: 1em; border-right: 2px solid var(--signal); margin-left: 2px; vertical-align: -2px; animation: blink 800ms step-end infinite; }
   .thinking { display: flex; align-items: center; gap: 9px; color: var(--muted); font: var(--text-12) var(--font-mono); }
   .thinking path { fill: none; stroke: var(--signal); stroke-linecap: round; animation: breathe 1.8s ease-in-out infinite; }
