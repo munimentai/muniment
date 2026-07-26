@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { accessErrorState, accessLoadingState, accessReadyState, bootState, devicesErrorState, devicesLoadingState, devicesReadyState, errorState, statusState, waitingState } from './auth-state.js'
+import { accessErrorState, accessLoadingState, accessReadyState, bootState, devicesErrorState, devicesLoadingState, devicesReadyState, errorState, platformDisplayName, statusState, waitingState } from './auth-state.js'
 
 describe('auth state transitions', () => {
   it('starts in boot and resolves status to signed out', () => {
@@ -26,6 +26,13 @@ describe('auth state transitions', () => {
 })
 
 describe('device list state', () => {
+  it('maps platform ids to display names', () => {
+    expect(platformDisplayName('macos')).toBe('macOS')
+    expect(platformDisplayName('ios')).toBe('iOS')
+    expect(platformDisplayName('freebsd')).toBe('Freebsd')
+    expect(platformDisplayName('constructor')).toBe('Constructor')
+  })
+
   it('orders active before revoked and each state by latest activity with a stable tie break', () => {
     const devices = [
       { device_id: 'd', revoked_at: '2026-01-03T00:00:00Z', last_active_at: '2026-01-04T00:00:00Z' },
