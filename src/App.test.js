@@ -3260,6 +3260,25 @@ describe('signed-in access popover', () => {
     expect(system).toHaveAttribute('aria-pressed', 'true')
   })
 
+  it('keeps the primary action fixed and orders the scrolling profile sections', async () => {
+    render(App)
+    await fireEvent.click(await screen.findByRole('button', { name: /Alice/i }))
+    const dialog = screen.getByRole('dialog', { name: 'Your access' })
+    const content = dialog.querySelector('.access-content')
+    const signOut = within(dialog).getByRole('button', { name: 'Sign out' })
+
+    expect(content).toBeInTheDocument()
+    expect(content).not.toContainElement(signOut)
+    expect(signOut.closest('.access-footer')).toBeInTheDocument()
+    expect([...content.querySelectorAll(':scope > section')].map((section) => section.getAttribute('aria-labelledby'))).toEqual([
+      'appearance-heading',
+      'entitlements-heading',
+      'devices-heading',
+      'voice-heading',
+    ])
+    expect(content.querySelector('.entitlements-section')).toHaveTextContent('Access is set by your admins.')
+  })
+
   it('retries only a failed device request and keeps entitlement groups rendered', async () => {
     let deviceCalls = 0
     invoke.mockImplementation(async (command) => {

@@ -133,65 +133,70 @@
   {#if accessOpen}
     <div bind:this={accessPopover} class="access-popover" role="dialog" aria-label="Your access" tabindex="-1">
       <header><div><h2>Your access</h2>{#if access.name === 'ready'}<p>Snapshot v{access.snapshot.snapshot_version}</p>{/if}</div><button class="quiet close-access" aria-label="Close your access" onclick={closeAccess}>×</button></header>
-      {#if access.name === 'loading'}
-        <p class="access-status" aria-live="polite">Checking your current access…</p>
-      {:else if access.name === 'error'}
-        <div class="access-status" role="alert"><p>Your access could not be loaded.</p><button onclick={openAccess}>Try again</button></div>
-      {:else if access.name === 'ready'}
-        <p class="access-label">Your groups</p>
-        {#if access.groups.length === 0}<p class="empty-grant">No groups granted</p>{/if}
-        {#each access.groups as group, index}
-          {@const open = expandedGroups.has(index)}
-          <div class="access-group">
-            <button class="group-toggle" aria-expanded={open} aria-controls={`access-group-${index}`} onclick={() => toggleGroup(index)}><span>{group.name}</span><span aria-hidden="true">{open ? '−' : '+'}</span></button>
-            {#if open}<div class="grant-grid" id={`access-group-${index}`}>
-              {#each [['Models', group.models], ['Connections', group.connections], ['Capabilities', group.capabilities]] as category}
-                <div><h3>{category[0]}</h3>{#if category[1].length}<ul>{#each category[1] as item}<li>{item}</li>{/each}</ul>{:else}<p class="empty-grant">None granted</p>{/if}</div>
-              {/each}
-            </div>{/if}
-          </div>
-        {/each}
-      {/if}
-      <section class="devices-section" aria-labelledby="devices-heading">
-        <h3 id="devices-heading" class="access-label">Devices</h3>
-        {#if devices.name === 'loading'}
-          <p class="access-status" aria-live="polite">Loading devices…</p>
-        {:else if devices.name === 'error'}
-          <div class="access-status" role="alert"><p>Devices could not be loaded.</p><button onclick={loadDevices}>Try again</button></div>
-        {:else if devices.name === 'ready'}
-          {#if devices.devices.length === 0}<p class="empty-grant">No devices found</p>{/if}
-          <ul class="device-list">
-            {#each devices.devices as device (device.device_id)}
-              <li class:revoked={device.revoked_at}>
-                <div class="device-heading"><strong>{device.platform}</strong>{#if device.current}<span class="current-device">This device</span>{/if}<span class="device-state">{device.revoked_at ? 'Revoked' : 'Active'}</span></div>
-                <time datetime={device.last_active_at}>Last active {lastActive(device.last_active_at)}</time>
-              </li>
+      <div class="access-content">
+        <section class="appearance-section" aria-labelledby="appearance-heading">
+          <h3 id="appearance-heading" class="access-label">Appearance</h3>
+          <div class="theme-options" role="group" aria-labelledby="appearance-heading">
+            {#each themeOptions as option}
+              <button aria-pressed={theme === option[1]} onclick={() => chooseTheme(option[1])}>{option[0]}</button>
             {/each}
-          </ul>
-        {/if}
-      </section>
-      <section class="voice-section" aria-labelledby="voice-heading">
-        <h3 id="voice-heading" class="access-label">Voice shortcut</h3>
-        <p class="shortcut-help">Hold this shortcut to dictate from anywhere.</p>
-        <button class="shortcut-capture" aria-label={capturingShortcut ? 'Record voice shortcut' : `Change voice shortcut, current ${voiceShortcut}`} onclick={() => { capturingShortcut = true; pendingShortcut = ''; shortcutStatus = '' }} onkeydown={captureShortcut} disabled={voiceShortcutChanging}>
-          <span>{capturingShortcut ? pendingShortcut || 'Press a shortcut…' : voiceShortcut}</span><small>{capturingShortcut ? 'Modifier + key' : 'Change'}</small>
-        </button>
-        {#if capturingShortcut}
-          <div class="shortcut-actions"><button onclick={() => { capturingShortcut = false; pendingShortcut = ''; shortcutStatus = '' }}>Cancel</button><button onclick={() => applyShortcut(pendingShortcut)} disabled={!pendingShortcut || voiceShortcutChanging}>{voiceShortcutChanging ? 'Applying…' : 'Apply'}</button></div>
-        {/if}
-        <button class="quiet restore-shortcut" onclick={() => applyShortcut(defaultVoiceShortcut)} disabled={voiceShortcut === defaultVoiceShortcut || voiceShortcutChanging}>Restore default</button>
-        {#if shortcutStatus}<p class="shortcut-error" role="alert">{shortcutStatus}</p>{/if}
-      </section>
-      <section class="appearance-section" aria-labelledby="appearance-heading">
-        <h3 id="appearance-heading" class="access-label">Appearance</h3>
-        <div class="theme-options" role="group" aria-labelledby="appearance-heading">
-          {#each themeOptions as option}
-            <button aria-pressed={theme === option[1]} onclick={() => chooseTheme(option[1])}>{option[0]}</button>
-          {/each}
-        </div>
-      </section>
-      <footer>Access is set by your admins.</footer>
-      <button class="quiet sign-out" onclick={() => { closeAccess(); onSignOut() }}>Sign out</button>
+          </div>
+        </section>
+        <section class="entitlements-section" aria-labelledby="entitlements-heading">
+          <h3 id="entitlements-heading" class="access-label">Your access</h3>
+          {#if access.name === 'loading'}
+            <p class="access-status" aria-live="polite">Checking your current access…</p>
+          {:else if access.name === 'error'}
+            <div class="access-status" role="alert"><p>Your access could not be loaded.</p><button onclick={openAccess}>Try again</button></div>
+          {:else if access.name === 'ready'}
+            <p class="access-label">Your groups</p>
+            {#if access.groups.length === 0}<p class="empty-grant">No groups granted</p>{/if}
+            {#each access.groups as group, index}
+              {@const open = expandedGroups.has(index)}
+              <div class="access-group">
+                <button class="group-toggle" aria-expanded={open} aria-controls={`access-group-${index}`} onclick={() => toggleGroup(index)}><span>{group.name}</span><span aria-hidden="true">{open ? '−' : '+'}</span></button>
+                {#if open}<div class="grant-grid" id={`access-group-${index}`}>
+                  {#each [['Models', group.models], ['Connections', group.connections], ['Capabilities', group.capabilities]] as category}
+                    <div><h3>{category[0]}</h3>{#if category[1].length}<ul>{#each category[1] as item}<li>{item}</li>{/each}</ul>{:else}<p class="empty-grant">None granted</p>{/if}</div>
+                  {/each}
+                </div>{/if}
+              </div>
+            {/each}
+          {/if}
+          <p class="access-note">Access is set by your admins.</p>
+        </section>
+        <section class="devices-section" aria-labelledby="devices-heading">
+          <h3 id="devices-heading" class="access-label">Devices</h3>
+          {#if devices.name === 'loading'}
+            <p class="access-status" aria-live="polite">Loading devices…</p>
+          {:else if devices.name === 'error'}
+            <div class="access-status" role="alert"><p>Devices could not be loaded.</p><button onclick={loadDevices}>Try again</button></div>
+          {:else if devices.name === 'ready'}
+            {#if devices.devices.length === 0}<p class="empty-grant">No devices found</p>{/if}
+            <ul class="device-list">
+              {#each devices.devices as device (device.device_id)}
+                <li class:revoked={device.revoked_at}>
+                  <div class="device-heading"><strong>{device.platform}</strong>{#if device.current}<span class="current-device">This device</span>{/if}<span class="device-state">{device.revoked_at ? 'Revoked' : 'Active'}</span></div>
+                  <time datetime={device.last_active_at}>Last active {lastActive(device.last_active_at)}</time>
+                </li>
+              {/each}
+            </ul>
+          {/if}
+        </section>
+        <section class="voice-section" aria-labelledby="voice-heading">
+          <h3 id="voice-heading" class="access-label">Voice shortcut</h3>
+          <p class="shortcut-help">Hold this shortcut to dictate from anywhere.</p>
+          <button class="shortcut-capture" aria-label={capturingShortcut ? 'Record voice shortcut' : `Change voice shortcut, current ${voiceShortcut}`} onclick={() => { capturingShortcut = true; pendingShortcut = ''; shortcutStatus = '' }} onkeydown={captureShortcut} disabled={voiceShortcutChanging}>
+            <span>{capturingShortcut ? pendingShortcut || 'Press a shortcut…' : voiceShortcut}</span><small>{capturingShortcut ? 'Modifier + key' : 'Change'}</small>
+          </button>
+          {#if capturingShortcut}
+            <div class="shortcut-actions"><button onclick={() => { capturingShortcut = false; pendingShortcut = ''; shortcutStatus = '' }}>Cancel</button><button onclick={() => applyShortcut(pendingShortcut)} disabled={!pendingShortcut || voiceShortcutChanging}>{voiceShortcutChanging ? 'Applying…' : 'Apply'}</button></div>
+          {/if}
+          <button class="quiet restore-shortcut" onclick={() => applyShortcut(defaultVoiceShortcut)} disabled={voiceShortcut === defaultVoiceShortcut || voiceShortcutChanging}>Restore default</button>
+          {#if shortcutStatus}<p class="shortcut-error" role="alert">{shortcutStatus}</p>{/if}
+        </section>
+      </div>
+      <footer class="access-footer"><button class="quiet sign-out" onclick={() => { closeAccess(); onSignOut() }}>Sign out</button></footer>
     </div>
   {/if}
 </div>
@@ -204,12 +209,13 @@
   .profile-button > span:last-child { min-width: 0; display: grid; }
   .profile-button strong { overflow: hidden; text-overflow: ellipsis; font-size: var(--text-13); }
   .profile-button small { color: var(--muted); font: var(--text-12) var(--font-mono); }
-  .access-popover { position: absolute; z-index: 5; left: 0; bottom: calc(100% + 8px); width: 330px; max-height: min(560px, 70vh); overflow-y: auto; padding: 14px; background: var(--paper); border: 1px solid var(--border); border-radius: var(--radius-control); box-shadow: var(--shadow-overlay); outline: none; }
+  .access-popover { position: absolute; z-index: 5; left: 0; bottom: calc(100% + 8px); width: 330px; max-height: min(560px, 70vh); display: flex; flex-direction: column; overflow: hidden; background: var(--paper); border: 1px solid var(--border); border-radius: var(--radius-control); box-shadow: var(--shadow-overlay); outline: none; }
   .access-popover:focus-visible { border-color: var(--muted); }
-  .access-popover header { display: flex; align-items: start; justify-content: space-between; margin-bottom: 14px; }
+  .access-popover header { display: flex; flex: none; align-items: start; justify-content: space-between; padding: 14px; border-bottom: 1px solid var(--border); }
   .access-popover h2 { margin: 0; font-size: var(--text-13); }
   .access-popover header p, .access-label { margin: 3px 0 0; color: var(--muted); font: var(--text-12) var(--font-mono); }
   .close-access { padding: 0 4px; font-size: 18px; }
+  .access-content { min-height: 0; overflow-y: auto; padding: 14px; }
   .access-label { margin: 0 0 6px; text-transform: uppercase; letter-spacing: .04em; }
   .access-group { border-top: 1px solid var(--border); }
   .group-toggle { width: 100%; display: flex; justify-content: space-between; padding: 9px 2px; border: 0; background: transparent; color: var(--ink); font: var(--text-12) var(--font-mono); text-align: left; }
@@ -219,9 +225,10 @@
   .grant-grid li + li { margin-top: 2px; }
   .empty-grant, .access-status { margin: 8px 0; color: var(--muted); font: var(--text-12) var(--font-mono); }
   .access-status p { margin: 0 0 6px; }
+  .entitlements-section { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--border); }
+  .access-note { margin: 10px 0 0; color: var(--muted); font-size: 11px; }
   .devices-section { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--border); }
   .voice-section { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--border); }
-  .appearance-section { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--border); }
   .theme-options { display: inline-flex; border: 1px solid var(--border); border-radius: var(--radius-control); }
   .theme-options button { position: relative; border: 0; border-radius: 0; background: transparent; color: var(--muted); padding: 5px 12px; }
   .theme-options button + button { border-left: 1px solid var(--border); }
@@ -245,7 +252,7 @@
   /* §6: the word, not the color, carries Active vs Revoked. */
   .device-state { margin-left: auto; color: var(--muted); font: var(--text-12) var(--font-mono); text-transform: none; }
   .device-list time { display: block; margin-top: 3px; color: var(--muted); font: 11px var(--font-mono); }
-  .access-popover footer { margin: 12px -14px 0; padding: 11px 14px 0; border-top: 1px solid var(--border); color: var(--muted); font-size: 11px; }
-  .sign-out { margin-top: 8px; padding: 2px 0; color: var(--muted); }
+  .access-footer { flex: none; padding: 9px 14px; border-top: 1px solid var(--border); }
+  .sign-out { padding: 2px 0; color: var(--muted); }
   .quiet { background: transparent; border-color: transparent; }
 </style>
