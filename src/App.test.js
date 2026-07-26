@@ -446,14 +446,15 @@ describe('sidebar collapse', () => {
 
   it('collapses to an icon rail from the in-sidebar control and expands again', async () => {
     render(App)
-    const modifier = navigator.platform.startsWith('Mac') ? '⌘' : 'Ctrl '
     const collapse = await screen.findByRole('button', { name: 'Collapse sidebar' })
-    expect(screen.getByText(`${modifier}N`).tagName).toBe('KBD')
-    expect(screen.getByText(`${modifier}F`).tagName).toBe('KBD')
     expect(collapse).toHaveAttribute('aria-expanded', 'true')
     expect(collapse).toHaveAttribute('aria-controls', 'sidebar')
     expect(collapse).toHaveAttribute('aria-keyshortcuts', navigator.platform.startsWith('Mac') ? 'Meta+\\' : 'Control+\\')
     expect(screen.getByText('Threads')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Search' })).not.toBeInTheDocument()
+    expect(document.querySelectorAll('.side-action')).toHaveLength(1)
+    expect(document.querySelector('.side-action')).toHaveTextContent('Home settings')
+    expect(document.querySelector('#sidebar kbd')).not.toBeInTheDocument()
 
     collapse.focus()
     await fireEvent.click(collapse)
@@ -464,15 +465,10 @@ describe('sidebar collapse', () => {
     expect(document.activeElement).toBe(expand)
     expect(expand).toHaveAttribute('aria-expanded', 'false')
     expect(expand).toHaveAttribute('title', expect.stringContaining('Expand sidebar'))
-    for (const name of ['New thread', 'Search', 'Home settings']) {
-      const control = screen.getByRole('button', { name })
-      expect(control).toHaveAccessibleName(name)
-      expect(control).toHaveAttribute('title', expect.stringContaining(name))
-    }
-    expect(screen.getByRole('button', { name: 'New thread' })).toHaveAttribute('title', `New thread (${modifier}N)`)
-    expect(screen.getByRole('button', { name: 'Search' })).toHaveAttribute('title', `Search (${modifier}F)`)
+    expect(screen.queryByRole('button', { name: 'New thread' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Search' })).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Home settings' })).toHaveAttribute('title', 'Home settings')
     expect(screen.queryByText('Threads')).not.toBeInTheDocument()
-    expect(screen.queryByText('⌘N')).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /Alice/i })).not.toBeInTheDocument()
 
     await fireEvent.click(expand)
