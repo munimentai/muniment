@@ -22,6 +22,14 @@ export function parseSidebarCollapsed(stored) {
   return stored === SIDEBAR_COLLAPSED
 }
 
+export function storedSidebarCollapsed(storage = localStorage) {
+  try {
+    return parseSidebarCollapsed(storage.getItem(SIDEBAR_STORAGE_KEY))
+  } catch (_) {
+    return false
+  }
+}
+
 export function serializeSidebarCollapsed(collapsed) {
   return collapsed ? SIDEBAR_COLLAPSED : SIDEBAR_EXPANDED
 }
