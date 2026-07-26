@@ -1148,8 +1148,6 @@
               <svg class="side-icon" width={sidebarCollapsed ? 18 : 16} height={sidebarCollapsed ? 18 : 16} viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="4" width="17" height="16" rx="2.5" /><path d="M9.5 4v16" /><path d={sidebarCollapsed ? 'm14 9 3 3-3 3' : 'm15.5 15-3-3 3-3'} /></svg>
             </button>
           </div>
-          <button class="side-action" aria-label={sidebarCollapsed ? 'New thread' : null} title={sidebarCollapsed ? `New thread (${modifierLabel}N)` : null}><svg class="side-icon" width="18" height="18" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5.5v13" /><path d="M5.5 12h13" /></svg>{#if !sidebarCollapsed}<span>New thread</span><kbd>{modifierLabel}N</kbd>{/if}</button>
-          <button class="side-action" aria-label={sidebarCollapsed ? 'Search' : null} title={sidebarCollapsed ? `Search (${modifierLabel}F)` : null}><svg class="side-icon" width="18" height="18" viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5" /><path d="m15.8 15.8 3.7 3.7" /></svg>{#if !sidebarCollapsed}<span>Search</span><kbd>{modifierLabel}F</kbd>{/if}</button>
           {#if !sidebarCollapsed}
             <p class="side-label">Threads</p>
             <button class="thread-row active-thread"><span></span>New thread</button>
@@ -1436,7 +1434,7 @@
   .side-toggle:hover:not(:disabled) .side-icon, .side-toggle:focus-visible .side-icon { color: var(--ink); }
   /* §1.7: one geometric 1.6px-stroke icon set, sized to the mockup's rail. */
   .side-icon { flex: none; display: block; color: var(--muted); }
-  .side-icon circle, .side-icon rect, .side-icon path { fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+  .side-icon rect, .side-icon path { fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
   .side-action, .thread-row { width: 100%; display: flex; align-items: center; gap: 9px; padding: 7px 8px; border-color: transparent; background: transparent; text-align: left; }
   .side-action span { flex: 1; }
   /* Collapsed rail: icon-only controls, names carried by aria-label + tooltip. */
