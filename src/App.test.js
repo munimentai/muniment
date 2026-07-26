@@ -3229,6 +3229,8 @@ describe('signed-in access popover', () => {
     expect(rows[0]).toHaveTextContent('desktopThis deviceActive')
     expect(rows[1]).toHaveTextContent('androidActive')
     expect(rows[2]).toHaveTextContent('iosRevoked')
+    expect(rows[2]).toHaveClass('revoked')
+    expect(within(rows[2]).getByText('ios').tagName).toBe('STRONG')
     expect(within(dialog).getByRole('button', { name: 'members' })).toBeInTheDocument()
     expect(dialog).not.toHaveTextContent('revoked-newest')
   })

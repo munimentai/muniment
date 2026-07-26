@@ -1271,8 +1271,8 @@
               <span>{active?.phase === 'resuming' ? 'Reopening the existing secure session…' : active && active.id !== 'pending' ? '⏎ steers this reply · queue as follow-up' : 'Routing is automatic. Every reply carries its receipt.'}</span>
             {/if}
             <div class="composer-actions">
-              <button type="button" class="quiet voice" aria-pressed={isDictationActive(dictation)} aria-keyshortcuts={ariaKeyShortcut(globalVoiceShortcutValue)} disabled={!!active || dictationFinishing || dictationPolishing || dictationTransformPending} onpointerdown={voicePointerDown} onpointerup={voicePointerEnd} onpointercancel={voicePointerEnd} onkeydown={voiceKeyDown} onkeyup={voiceKeyUp} onclick={voiceClick}>Voice</button>
-              {#if !active}<button type="button" class="quiet attach" onclick={chooseFiles}>Add files</button>{/if}
+              <button type="button" class="quiet" aria-pressed={isDictationActive(dictation)} aria-keyshortcuts={ariaKeyShortcut(globalVoiceShortcutValue)} disabled={!!active || dictationFinishing || dictationPolishing || dictationTransformPending} onpointerdown={voicePointerDown} onpointerup={voicePointerEnd} onpointercancel={voicePointerEnd} onkeydown={voiceKeyDown} onkeyup={voiceKeyUp} onclick={voiceClick}>Voice</button>
+              {#if !active}<button type="button" class="quiet" onclick={chooseFiles}>Add files</button>{/if}
               {#if active?.phase === 'resuming'}
                 <button disabled>Resuming…</button>
               {:else if active && active.id !== 'pending'}
