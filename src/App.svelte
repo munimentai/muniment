@@ -1228,14 +1228,16 @@
   }
 </script>
 
-<main class:signed-frame={auth.name === 'signed-in'}>
-  <div class="lockup">
-    <svg width="34" height="34" viewBox="0 0 48 48" role="img" aria-label="muniment">
-      <path d={markD} stroke-width="4.5" />
-    </svg>
-    <span class="name">muniment</span>
-  </div>
-  <p class="meta">shell v{version}</p>
+<main>
+  {#if auth.name !== 'signed-in' || onboarding.name !== 'complete'}
+    <div class="lockup">
+      <svg width="34" height="34" viewBox="0 0 48 48" role="img" aria-label="muniment">
+        <path d={markD} stroke-width="4.5" />
+      </svg>
+      <span class="name">muniment</span>
+    </div>
+    <p class="meta">shell v{version}</p>
+  {/if}
 
   {#if tauri}
     {#if onboarding.name !== 'complete'}

@@ -126,6 +126,17 @@ afterEach(() => {
 })
 
 describe('workspace composer entry', () => {
+  it('renders only the sidebar brand in the signed-in workspace', async () => {
+    const { container } = render(App)
+
+    await screen.findByPlaceholderText('Ask anything')
+
+    expect(container.querySelector('.lockup')).not.toBeInTheDocument()
+    expect(screen.queryByText(/shell v/)).not.toBeInTheDocument()
+    expect(container.querySelectorAll('.side-brand')).toHaveLength(1)
+    expect(screen.getAllByText('muniment')).toHaveLength(1)
+  })
+
   it('focuses the primary composer action once when the workspace appears', async () => {
     render(App)
     const composer = await screen.findByPlaceholderText('Ask anything')
