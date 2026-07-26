@@ -226,7 +226,7 @@
         </ol>
       {:else}<p class="empty-manifest">No supported files were found in this ZIP.</p>{/if}
     {:else}
-      <div class="path-card import-card">
+      <div class="path-card">
         <span class="path-label">Assistant export</span>
         <strong>{onboarding.archivePath ?? 'No ZIP selected'}</strong>
         <button data-testid="onboarding-import-picker" onclick={chooseImportArchive} disabled={['previewing', 'finalizing'].includes(onboarding.name)}>{onboarding.name === 'previewing' ? 'Reading archive…' : 'Choose ZIP…'}</button>
