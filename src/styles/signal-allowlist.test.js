@@ -8,7 +8,7 @@ import path from 'node:path'
 // adding one is a spec decision, not a styling one.
 const ALLOWED = {
   'src/App.svelte': {
-    '.streaming': '§1.2 the streaming underline on the active line',
+    '.streaming-rule': '§1.2 the streaming underline on the active line',
     '.caret': '§1.2 the caret on the active line',
     '.thinking path': "§1.2 the mark's thinking state (§1.8)",
     '.tool-running': '§1.2 the running-tool status pulse',
@@ -108,16 +108,16 @@ describe('§1.2 signal allowlist', () => {
   it('rejects a reference from a component that is not on the list', () => {
     const drift = `<style>
       /* Prose naming --signal is not a reference. */
-      .streaming { border-bottom: 2px solid var(--signal); }
+      .streaming-rule { border-bottom: 2px solid var(--signal); }
       .some-badge { color: var(--signal); }
       .some-chip:hover { background: var(--signal-soft); }
     </style>`
-    expect(signalSelectors(drift)).toEqual(['.streaming', '.some-badge', '.some-chip:hover'])
+    expect(signalSelectors(drift)).toEqual(['.streaming-rule', '.some-badge', '.some-chip:hover'])
     expect(unpermitted(drift, ALLOWED['src/App.svelte'])).toEqual(['.some-badge', '.some-chip:hover'])
   })
 
   it('judges each selector of a grouped rule separately', () => {
-    const drift = '<style>.streaming,\n  .some-badge { border-color: var(--signal); }</style>'
+    const drift = '<style>.streaming-rule,\n  .some-badge { border-color: var(--signal); }</style>'
     expect(unpermitted(drift, ALLOWED['src/App.svelte'])).toEqual(['.some-badge'])
   })
 })
