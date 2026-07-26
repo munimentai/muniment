@@ -347,10 +347,10 @@ fn farthest_fitting_end(
     count: &mut impl FnMut(&str) -> usize,
 ) -> Option<usize> {
     // Phoneme counts are expected to be monotonic as source scalars are appended,
-    // so binary search keeps boundary calls logarithmic. An injected non-monotonic
-    // counter can make this choose a conservative earlier end, but every returned
-    // end was measured at or below the limit and therefore remains a safe,
-    // progress-making partition boundary.
+    // so binary search keeps boundary calls logarithmic. Probing immediately after
+    // an over-limit midpoint detects a violated ordering; injected non-monotonic
+    // counters then fall back to the exhaustive search needed to preserve
+    // farthest-fitting semantics.
     let mut fitting = None;
     let mut left = 0;
     let mut right = ends.len();
@@ -361,9 +361,24 @@ fn farthest_fitting_end(
             fitting = Some(end);
             left = middle + 1;
         } else {
+            if let Some(&later) = ends.get(middle + 1) {
+                if count(&source[start..later]) <= limit {
+                    return ends
+                        .iter()
+                        .rev()
+                        .copied()
+                        .find(|&end| count(&source[start..end]) <= limit);
+                }
+            }
             right = middle;
         }
     }
+
+    let farthest = *ends.last()?;
+    if fitting != Some(farthest) && count(&source[start..farthest]) <= limit {
+        return Some(farthest);
+    }
+
     fitting
 }
 
@@ -713,6 +728,22 @@ mod tests {
             calls < 1_000,
             "2,000 clauses required {calls} boundary calls"
         );
+    }
+
+    #[test]
+    fn non_monotonic_count_after_over_limit_midpoint_still_partitions() {
+        let source = "w".repeat(500);
+        let count = |slice: &str| match slice.len() {
+            251 => 401,
+            252..=300 => 200,
+            301.. => 401,
+            length => length,
+        };
+
+        let ranges = pack_initial_ranges(&source, count).unwrap();
+
+        assert_eq!(ranges[0], 0..300);
+        assert_partition(&source, &ranges, count);
     }
 
     #[test]
