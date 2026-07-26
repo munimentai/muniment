@@ -248,13 +248,13 @@
   .device-list { margin: 0; padding: 0; list-style: none; }
   .device-list li { padding: 9px 2px; border-top: 1px solid var(--border); }
   .device-list li:first-child { border-top: 0; }
-  .device-heading { display: flex; align-items: center; gap: 7px; font-size: var(--text-12); text-transform: capitalize; }
+  .device-heading { display: flex; align-items: center; gap: 7px; font-size: var(--text-12); }
   .device-heading strong { font-weight: 600; }
   .revoked .device-heading strong { color: var(--oxide); font-weight: 400; text-decoration: line-through; }
   /* §1.2 forbids signal on badges at rest; §1.5 puts chips on radius 2. */
-  .current-device { padding: 1px 5px; border: 1px solid var(--border); border-radius: var(--radius-chip); background: var(--faint); color: var(--muted); font: var(--text-12) var(--font-mono); text-transform: none; }
+  .current-device { padding: 1px 5px; border: 1px solid var(--border); border-radius: var(--radius-chip); background: var(--faint); color: var(--muted); font: var(--text-12) var(--font-mono); }
   /* §6: the word, not the color, carries Active vs Revoked. */
-  .device-state { margin-left: auto; color: var(--muted); font: var(--text-12) var(--font-mono); text-transform: none; }
+  .device-state { margin-left: auto; color: var(--muted); font: var(--text-12) var(--font-mono); }
   .device-list time { display: block; margin-top: 3px; color: var(--muted); font: var(--text-12) var(--font-mono); }
   .access-footer { flex: none; padding: 9px 14px; border-top: 1px solid var(--border); }
   .sign-out { padding: 2px 0; color: var(--muted); }

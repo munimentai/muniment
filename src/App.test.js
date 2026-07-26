@@ -385,18 +385,20 @@ describe('artifact rail', () => {
     expect(separator).toHaveAttribute('aria-valuenow', '430')
   })
 
-  it('does not toggle from an input or textarea', async () => {
+  it('toggles the artifact rail and sidebar from the focused composer', async () => {
     render(App)
     const toggle = await screen.findByRole('button', { name: 'Open artifact rail' })
     const composer = screen.getByPlaceholderText('Ask anything')
     const mac = navigator.platform.startsWith('Mac')
-    await fireEvent.keyDown(composer, { key: 'j', metaKey: mac, ctrlKey: !mac })
-    expect(toggle).toHaveAttribute('aria-expanded', 'false')
+    expect(composer).toHaveFocus()
 
-    const input = document.createElement('input')
-    document.body.append(input)
-    await fireEvent.keyDown(input, { key: 'j', metaKey: mac, ctrlKey: !mac })
-    expect(toggle).toHaveAttribute('aria-expanded', 'false')
+    await fireEvent.keyDown(composer, { key: 'j', metaKey: mac, ctrlKey: !mac })
+    expect(toggle).toHaveAttribute('aria-expanded', 'true')
+    expect(screen.getByRole('complementary', { name: 'Artifacts' })).toBeInTheDocument()
+
+    expect(composer).toHaveFocus()
+    await fireEvent.keyDown(composer, { key: '\\', metaKey: mac, ctrlKey: !mac })
+    expect(screen.getByRole('button', { name: 'Expand sidebar' })).toBeInTheDocument()
   })
 
   it('closes with Escape while active dictation is also cancelled', async () => {
@@ -522,7 +524,7 @@ describe('sidebar collapse', () => {
     expect(await screen.findByRole('button', { name: /Alice/i })).toBeInTheDocument()
   })
 
-  it('toggles with the platform keyboard shortcut but not from a text input', async () => {
+  it('toggles with the platform keyboard shortcut from editable fields', async () => {
     render(App)
     const collapse = await screen.findByRole('button', { name: 'Collapse sidebar' })
 
@@ -532,7 +534,7 @@ describe('sidebar collapse', () => {
     expect(screen.getByRole('button', { name: 'Collapse sidebar' })).toBeInTheDocument()
 
     await fireEvent.keyDown(screen.getByPlaceholderText('Ask anything'), sidebarShortcut())
-    expect(collapse).toHaveAttribute('aria-expanded', 'true')
+    expect(collapse).toHaveAttribute('aria-expanded', 'false')
 
     const input = document.createElement('input')
     document.body.append(input)
@@ -1342,6 +1344,22 @@ describe('voice dictation', () => {
     await fireEvent.click(restore)
     await waitFor(() => expect(localStorage.getItem('muniment.voice-shortcut')).toBe('Control+Shift+Space'))
     await waitFor(() => expect(within(dialog).getByRole('button', { name: /Change voice shortcut, current Control\+Shift\+Space/ })).toBeInTheDocument())
+  })
+
+  it('captures the artifact rail chord without toggling the rail', async () => {
+    render(App)
+    const railToggle = await screen.findByRole('button', { name: 'Open artifact rail' })
+    await fireEvent.click(await screen.findByRole('button', { name: /Alice/i }))
+    const dialog = screen.getByRole('dialog', { name: 'Profile' })
+    const capture = within(dialog).getByRole('button', { name: /Change voice shortcut/ })
+    const mac = navigator.platform.startsWith('Mac')
+
+    await fireEvent.click(capture)
+    await fireEvent.keyDown(capture, { key: 'j', code: 'KeyJ', metaKey: mac, ctrlKey: !mac })
+
+    expect(capture).toHaveTextContent(mac ? 'Meta+J' : 'Control+J')
+    expect(railToggle).toHaveAttribute('aria-expanded', 'false')
+    expect(screen.queryByRole('complementary', { name: 'Artifacts' })).not.toBeInTheDocument()
   })
 
   it('keeps the previous voice binding when replacement registration collides', async () => {
@@ -3319,12 +3337,12 @@ describe('signed-in access popover', () => {
     expect(rows.map((row) => row.textContent)).toEqual(expect.arrayContaining([
       expect.stringContaining('This device'), expect.stringContaining('Active'), expect.stringContaining('Revoked'),
     ]))
-    expect(rows[0]).toHaveTextContent('desktopThis deviceActive')
-    expect(rows[1]).toHaveTextContent('androidActive')
-    expect(rows[2]).toHaveTextContent('iosRevoked')
+    expect(rows[0]).toHaveTextContent('DesktopThis deviceActive')
+    expect(rows[1]).toHaveTextContent('AndroidActive')
+    expect(rows[2]).toHaveTextContent('iOSRevoked')
     expect(rows[2]).toHaveClass('revoked')
-    const activeIdentifier = within(rows[1]).getByText('android')
-    const revokedIdentifier = within(rows[2]).getByText('ios')
+    const activeIdentifier = within(rows[1]).getByText('Android')
+    const revokedIdentifier = within(rows[2]).getByText('iOS')
     const revokedRule = accessPanelSource.match(/\.revoked \.device-heading strong\s*\{([^}]*)\}/)?.[1]
     expect(revokedIdentifier.tagName).toBe('STRONG')
     expect(activeIdentifier.tagName).toBe('STRONG')

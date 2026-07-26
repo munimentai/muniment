@@ -1,38 +1,30 @@
 <script>
   import { onMount, tick, untrack } from 'svelte'
-  import { cubicOut } from 'svelte/easing'
   import { getCurrentWebview } from '@tauri-apps/api/webview'
   import { confirm, open } from '@tauri-apps/plugin-dialog'
   import { register, unregister } from '@tauri-apps/plugin-global-shortcut'
 
   import AccessPanel from './lib/AccessPanel.svelte'
   import Onboarding from './lib/Onboarding.svelte'
-  import { ARTIFACT_RAIL_MAX_WIDTH, ARTIFACT_RAIL_MIN_WIDTH, artifactRailShortcut, artifactRailWidthFromKey, artifactRailWidthFromPointer, clampArtifactRailWidth, defaultArtifactRailWidth, isArtifactRailShortcut, shortcutDisplayLabel } from './lib/artifact-rail-state.js'
+  import { ARTIFACT_RAIL_MAX_WIDTH, ARTIFACT_RAIL_MIN_WIDTH, artifactRailShortcut, createArtifactRailController, defaultArtifactRailWidth, isArtifactRailShortcut, shortcutDisplayLabel } from './lib/artifact-rail-state.js'
   import { bootState, errorState, statusState, waitingState } from './lib/auth-state.js'
   import { ringPath, solidMilledRingPath } from './lib/mark.js'
-  import { applyBufferedChatEvents, applyChatEvent, composerAction, formatByteSize, historyMessages, receiptLabel, receiptRows, receiptSummary, runAnnouncement, toolName, toolStatus } from './lib/chat-state.js'
+  import { composerAction, formatByteSize, receiptLabel, receiptRows, receiptSummary, runAnnouncement, toolName, toolStatus } from './lib/chat-state.js'
+  import { createChatController } from './lib/chat-controller.js'
   import { composerHeight } from './lib/composer-size.js'
   import { createDictationController } from './lib/dictation-controller.js'
   import { appendTranscript, ariaKeyShortcut, dictationTransforms, handsFreeActivationDelay, holdToTalkShortcut, isDictationActive } from './lib/dictation-state.js'
-  import { COPY_CONFIRMATION_MS, copyAnnouncement, copyConfirmed, copyFailure, copyLabel, copyResult } from './lib/message-actions.js'
+  import { createChatTranscriptController } from './lib/chat-transcript-controller.js'
+  import { copyAnnouncement, copyConfirmed, copyFailure, copyLabel } from './lib/message-actions.js'
   import { onboardingLoadingState, onboardingSettingsState } from './lib/onboarding-state.js'
-  import { scrollFollowState } from './lib/scroll-follow.js'
-  import { SIDEBAR_STORAGE_KEY, isSidebarShortcut, parseSidebarCollapsed, serializeSidebarCollapsed, sidebarShortcut } from './lib/sidebar-state.js'
-  import { streamingUnderlineGeometry } from './lib/streaming-underline.js'
+  import { SIDEBAR_STORAGE_KEY, isSidebarShortcut, serializeSidebarCollapsed, sidebarShortcut, storedSidebarCollapsed } from './lib/sidebar-state.js'
+  import { createStreamingUnderlineAction } from './lib/streaming-underline.js'
+  import { thinkingSettle } from './lib/thinking-transition.js'
   import { createVoiceShortcutManager } from './lib/voice-shortcut.js'
 
   const markD = ringPath()
   const thinkingMarkD = solidMilledRingPath()
   const version = __APP_VERSION__
-
-  function thinkingSettle() {
-    const reducedMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches ?? false
-    return {
-      duration: reducedMotion ? 0 : 180,
-      easing: cubicOut,
-      css: (t) => `opacity: ${t}; transform: translateY(${(1 - t) * -2}px) scale(${0.96 + t * 0.04})`,
-    }
-  }
 
   const tauri = window.__TAURI__?.core
   let auth = $state(bootState)
@@ -48,15 +40,11 @@
   let cancelError = $state('')
   let queueError = $state('')
   let historyError = $state('')
-  let buffered = new Map()
-  let unlisten
   let thread = $state()
   let pinned = $state(true)
   let hasContentBelow = $state(false)
-  let lastScrollTop = 0
   let expandedReceipts = $state(new Set())
   let parallelTools = $state(new Map())
-  let submissionSequence = 0
   let draggingFiles = $state(false)
   let dictation = $state({ state: 'idle' })
   let dictationError = $state('')
@@ -108,18 +96,62 @@
   const sidebarHint = `${modifierLabel}\\`
   // The newest copy attempt in the thread, or null once its confirmation lapses.
   let copy = $state(null)
-  let copyEpoch = 0
-  let copyTimer
+  const streamingUnderline = createStreamingUnderlineAction(tick)
 
-  // A read from a blocked or corrupt store must not keep the shell from
-  // rendering; §2.1's documented default is expanded.
-  function storedSidebarCollapsed() {
-    try {
-      return parseSidebarCollapsed(localStorage.getItem(SIDEBAR_STORAGE_KEY))
-    } catch (_) {
-      return false
-    }
-  }
+  const transcriptController = createChatTranscriptController({
+    tick,
+    clipboard: navigator.clipboard,
+    readThread: () => thread,
+    readPinned: () => pinned,
+    readDestroyed: () => destroyed,
+    onPinned: (next) => { pinned = next },
+    onContentBelow: (next) => { hasContentBelow = next },
+    onCopy: (next) => { copy = next },
+    readExpandedReceipts: () => expandedReceipts,
+    onExpandedReceipts: (next) => { expandedReceipts = next },
+    readParallelTools: () => parallelTools,
+    onParallelTools: (next) => { parallelTools = next },
+  })
+  const { scrollToLatest, followNewContent, handleScroll: handleThreadScroll, copyResponse, toggleReceipt } = transcriptController
+
+  const artifactRailController = createArtifactRailController({
+    readOpen: () => artifactRailOpen,
+    readWidth: () => artifactRailWidth,
+    readMaximum: () => artifactRailMaximum,
+    readPointer: () => artifactRailPointer,
+    readAvailableWidth: availableArtifactRailWidth,
+    readRightEdge: () => workspace?.getBoundingClientRect().right || window.innerWidth,
+    readViewportWidth: () => workspace?.clientWidth || window.innerWidth,
+    onOpen: (next) => { artifactRailOpen = next },
+    onWidth: (next) => { artifactRailWidth = next },
+    onMaximum: (next) => { artifactRailMaximum = next },
+    onPointer: (next) => { artifactRailPointer = next },
+  })
+  const { fit: fitArtifactRail, toggle: toggleArtifactRail, pointerDown: artifactRailPointerDown, pointerMove: artifactRailPointerMove, pointerEnd: artifactRailPointerEnd, keydown: artifactRailKeydown } = artifactRailController
+
+  const chatController = createChatController({
+    invoke: (...args) => tauri.invoke(...args),
+    listen: (...args) => window.__TAURI__?.event?.listen(...args),
+    readMessages: () => messages,
+    readActive: () => active,
+    readAnnounced: () => announcedRun,
+    readDraft: () => draft,
+    readFiles: () => selectedFiles,
+    blocked: () => dictationBusy(),
+    onMessages: (next) => { messages = next },
+    onActive: (next) => { active = next },
+    onAnnounce: (next) => { announcedRun = next },
+    onDraft: (next) => { draft = next },
+    onFiles: (next) => { selectedFiles = next },
+    onSubmitError: (next) => { submitError = next },
+    onCancelError: (next) => { cancelError = next },
+    onQueueError: (next) => { queueError = next },
+    onHistoryError: (next) => { historyError = next },
+    onHistoryStart: () => { expandedReceipts = new Set() },
+    onHistoryLoaded: () => { pinned = true },
+    onFollow: followNewContent,
+    onSend: invalidateDictationTransform,
+  })
 
   function toggleSidebar() {
     sidebarCollapsed = !sidebarCollapsed
@@ -129,49 +161,6 @@
 
   function availableArtifactRailWidth() {
     return Math.max(ARTIFACT_RAIL_MIN_WIDTH, Math.min(ARTIFACT_RAIL_MAX_WIDTH, (workspace?.clientWidth || window.innerWidth) - (sidebarCollapsed ? sidebarRailWidth : sidebarWidth) - minimumThreadWidth))
-  }
-
-  function fitArtifactRail() {
-    if (!artifactRailOpen) return
-    artifactRailMaximum = availableArtifactRailWidth()
-    artifactRailWidth = clampArtifactRailWidth(artifactRailWidth, artifactRailMaximum)
-  }
-
-  function resetArtifactRailWidth() {
-    artifactRailMaximum = availableArtifactRailWidth()
-    artifactRailWidth = clampArtifactRailWidth(defaultArtifactRailWidth(workspace?.clientWidth || window.innerWidth), artifactRailMaximum)
-  }
-
-  function toggleArtifactRail() {
-    artifactRailOpen = !artifactRailOpen
-    artifactRailPointer = undefined
-    if (artifactRailOpen) resetArtifactRailWidth()
-  }
-
-  function artifactRailPointerDown(event) {
-    if (event.button !== 0 || artifactRailPointer !== undefined) return
-    event.preventDefault()
-    event.currentTarget.focus()
-    artifactRailPointer = event.pointerId
-    event.currentTarget.setPointerCapture?.(event.pointerId)
-  }
-
-  function artifactRailPointerMove(event) {
-    if (event.pointerId !== artifactRailPointer) return
-    artifactRailWidth = artifactRailWidthFromPointer(event.clientX, workspace.getBoundingClientRect().right, artifactRailMaximum)
-  }
-
-  function artifactRailPointerEnd(event) {
-    if (event.pointerId !== artifactRailPointer) return
-    artifactRailPointer = undefined
-    if (event.currentTarget.hasPointerCapture?.(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId)
-  }
-
-  function artifactRailKeydown(event) {
-    const width = artifactRailWidthFromKey(artifactRailWidth, event.key, artifactRailMaximum)
-    if (width === artifactRailWidth && !['Home', 'End', 'ArrowLeft', 'ArrowRight'].includes(event.key)) return
-    event.preventDefault()
-    artifactRailWidth = width
   }
 
   const dictationController = createDictationController({
@@ -412,7 +401,7 @@
       if (thread.scrollTop !== restored) thread.scrollTop = restored
       // The restore fires a scroll event; leave the follow state matching it so
       // handleThreadScroll does not read the correction as an upward scroll.
-      lastScrollTop = thread.scrollTop
+      transcriptController.syncScrollTop(thread.scrollTop)
     }
     syncPolishPreviewScroll()
   }
@@ -449,106 +438,6 @@
     return () => observer.disconnect()
   })
 
-  function streamingUnderline(node) {
-    let mounted = true
-    function measure() {
-      const caret = node.querySelector('.caret')
-      const rule = node.querySelector('.streaming-rule')
-      if (!caret || !rule) return
-      const geometry = streamingUnderlineGeometry({
-        caretLeft: caret.offsetLeft,
-        caretTop: caret.offsetTop,
-        caretHeight: caret.offsetHeight,
-      })
-      if (!geometry) return
-      rule.style.left = `${geometry.left}px`
-      rule.style.top = `${geometry.top}px`
-      rule.style.width = `${geometry.width}px`
-    }
-
-    function measureAfterRender() {
-      tick().then(() => {
-        if (mounted) measure()
-      })
-    }
-
-    measureAfterRender()
-    document.fonts?.ready?.then(() => {
-      if (mounted) measure()
-    })
-    const observer = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(measure)
-    observer?.observe(node)
-    return {
-      update: measureAfterRender,
-      destroy: () => {
-        mounted = false
-        observer?.disconnect()
-      },
-    }
-  }
-
-  function toggleReceipt(runId) {
-    const next = new Set(expandedReceipts)
-    next.has(runId) ? next.delete(runId) : next.add(runId)
-    expandedReceipts = next
-  }
-
-  // The clipboard write runs first so it keeps the click's user activation. The
-  // result is then published in two steps — clear, then set — so copying the same
-  // reply twice still changes the live region's text and is announced again.
-  async function copyResponse(run) {
-    clearTimeout(copyTimer)
-    const epoch = ++copyEpoch
-    let result
-    try {
-      await navigator.clipboard.writeText(run.text ?? '')
-      result = copyResult(run.id, true)
-    } catch (_) {
-      result = copyResult(run.id, false)
-    }
-    if (destroyed || epoch !== copyEpoch) return
-    copy = null
-    await tick()
-    if (destroyed || epoch !== copyEpoch) return
-    copy = result
-    if (result.status !== 'copied') return
-    copyTimer = setTimeout(() => {
-      if (!destroyed && epoch === copyEpoch) copy = null
-    }, COPY_CONFIRMATION_MS)
-  }
-
-  function scrollToLatest() {
-    if (!thread) return
-    pinned = true
-    const behavior = window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth'
-    thread.scrollTo({ top: thread.scrollHeight, behavior })
-    lastScrollTop = thread.scrollHeight - thread.clientHeight
-    hasContentBelow = false
-  }
-
-  function followNewContent() {
-    if (!pinned) return
-    tick().then(() => {
-      if (!pinned || !thread) return
-      thread.scrollTo({ top: thread.scrollHeight, behavior: 'auto' })
-      lastScrollTop = thread.scrollHeight - thread.clientHeight
-      hasContentBelow = false
-    })
-  }
-
-  function handleThreadScroll() {
-    const next = scrollFollowState({
-      pinned,
-      scrollTop: thread.scrollTop,
-      scrollHeight: thread.scrollHeight,
-      clientHeight: thread.clientHeight,
-      lastScrollTop,
-    })
-    pinned = next.pinned
-    lastScrollTop = next.lastScrollTop
-    hasContentBelow = !pinned && thread.scrollHeight - thread.clientHeight - thread.scrollTop > 0
-  }
-
   $effect(() => {
     messages
     followNewContent()
@@ -569,17 +458,7 @@
   })
 
   $effect(() => {
-    const next = new Map(parallelTools)
-    for (const message of messages) {
-      if (message.role !== 'assistant') continue
-      const running = (message.run.toolActivity ?? []).filter((tool) => tool.status === 'running')
-      if (running.length > 1) {
-        const grouped = new Set(next.get(message.run.id) ?? [])
-        running.forEach((tool) => grouped.add(tool.effectId))
-        next.set(message.run.id, [...grouped])
-      }
-    }
-    if ([...next].some(([id, tools]) => tools.length !== (parallelTools.get(id)?.length ?? 0))) parallelTools = next
+    transcriptController.trackParallelTools(messages)
   })
 
   async function run(action) {
@@ -593,23 +472,9 @@
     try {
       const status = await tauri.invoke(command)
       auth = statusState(status)
-      if (auth.name === 'signed-in') await loadHistory()
+      if (auth.name === 'signed-in') await chatController.loadHistory()
     } catch (err) {
       auth = errorState(action, err)
-    }
-  }
-
-  async function loadHistory() {
-    historyError = ''
-    expandedReceipts = new Set()
-    announcedRun = null
-    try {
-      const history = await tauri.invoke('chat_history')
-      messages = historyMessages(history)
-      pinned = true
-      followNewContent()
-    } catch (_) {
-      historyError = 'Conversation history could not be restored. Try again.'
     }
   }
 
@@ -627,22 +492,9 @@
     })
     if (tauri) {
       run('status')
+      chatController.start()
       voiceShortcutManager.start()
     }
-    window.__TAURI__?.event?.listen('chat-event', ({ payload }) => {
-      if (!messages.some((message) => message.run?.id === payload.runId)) {
-        buffered.set(payload.runId, [...(buffered.get(payload.runId) ?? []), payload])
-        return
-      }
-      const current = messages.find((message) => message.run?.id === payload.runId)?.run
-      const projected = applyChatEvent(current, payload)
-      if (projected) messages = messages.map((message) => message.run?.id === projected.id ? { ...message, run: projected } : message)
-      // Announce runs that were still in flight — including one restored mid-reply — plus
-      // the run already being announced. A settled transcript stays silent.
-      const settled = ['complete', 'cancelled', 'failed', 'interrupted'].includes(current?.phase)
-      if (projected && (!settled || announcedRun?.id === payload.runId)) announcedRun = projected
-      if (active?.id === payload.runId) active = projected && !['complete', 'cancelled', 'failed', 'interrupted'].includes(projected.phase) ? projected : null
-    }).then((stop) => { unlisten = stop })
     const shortcuts = (event) => {
       if (auth.name === 'signed-in' && onboarding.name === 'complete' && isArtifactRailShortcut(event)) {
         event.preventDefault()
@@ -697,11 +549,11 @@
     return () => {
       destroyed = true
       dictationController.cleanup()
-      unlisten?.()
+      chatController.cleanup()
       pairingUnlisten?.()
       clearTimeout(voiceClickTimer)
       clearTimeout(voiceReleaseTimer)
-      clearTimeout(copyTimer)
+      transcriptController.cleanup()
       stopDragDrop?.()
       globalVoiceHeld = false
       voiceShortcutManager.cleanup()
@@ -709,43 +561,6 @@
       window.removeEventListener('resize', fitArtifactRail)
     }
   })
-
-  async function send() {
-    const prompt = draft.trim()
-    if (!prompt || active || dictationBusy()) return
-    invalidateDictationTransform()
-    submitError = ''
-    const submissionId = ++submissionSequence
-    const userMessage = { role: 'user', text: prompt, attachments: [], submissionId }
-    messages.push(userMessage)
-    const pending = { id: 'pending', phase: 'thinking', text: '', receipt: null, prompt, submissionId }
-    active = pending
-    announcedRun = pending
-    messages.push({ role: 'assistant', run: pending })
-    followNewContent()
-    try {
-      const run = await tauri.invoke('chat_submit', {
-        prompt,
-        files: selectedFiles.map(({ path }) => ({ path })),
-      })
-      draft = ''
-      selectedFiles = []
-      messages = messages.map((message) => message.submissionId === submissionId ? { ...message, attachments: run.attachments ?? [] } : message)
-      active = { ...pending, id: run.runId }
-      const early = buffered.get(run.runId) ?? []
-      const projected = applyBufferedChatEvents(active, early)
-      buffered.delete(run.runId)
-      messages = messages.map((message) => message.run?.submissionId === submissionId ? { ...message, run: projected } : message)
-      announcedRun = projected
-      active = ['complete', 'cancelled', 'failed', 'interrupted'].includes(projected.phase) ? null : projected
-    } catch (error) {
-      const failed = { ...pending, id: `rejected-${messages.length}`, phase: 'failed' }
-      messages = messages.map((message) => message.run?.submissionId === submissionId ? { ...message, run: failed } : message)
-      announcedRun = failed
-      submitError = typeof error === 'string' ? error : 'The message could not be sent. Try again.'
-      active = null
-    }
-  }
 
   async function chooseFiles() {
     if (active) return
@@ -778,61 +593,11 @@
     selectedFiles = [...selectedFiles, ...additions]
   }
 
-  async function cancel() {
-    cancelError = ''
-    try {
-      await tauri.invoke('chat_cancel', { runId: active.id })
-    } catch (_) {
-      cancelError = 'Could not stop this reply. Try again.'
-    }
-  }
-
-  async function resume(run) {
-    if (active || dictationBusy() || !run.resumable || run.phase !== 'interrupted') return
-    const resuming = { ...run, phase: 'resuming', resumeError: '' }
-    active = resuming
-    announcedRun = resuming
-    messages = messages.map((message) => message.run?.id === run.id ? { ...message, run: resuming } : message)
-    try {
-      await tauri.invoke('chat_resume', { runId: run.id })
-      const early = buffered.get(run.id) ?? []
-      // Live events can arrive while invoke is still waiting for the durable
-      // run.resumed transition. Reconcile from that newer projection instead
-      // of restoring the stale, local `resuming` snapshot.
-      const current = messages.find((message) => message.run?.id === run.id)?.run ?? resuming
-      const projected = applyBufferedChatEvents(current, early)
-      buffered.delete(run.id)
-      messages = messages.map((message) => message.run?.id === run.id ? { ...message, run: projected } : message)
-      announcedRun = projected
-      active = ['complete', 'cancelled', 'failed', 'interrupted'].includes(projected.phase) ? null : projected
-    } catch (error) {
-      const interrupted = { ...run, phase: 'interrupted', resumeError: typeof error === 'string' ? error : 'This reply could not be resumed. Try again.' }
-      messages = messages.map((message) => message.run?.id === run.id ? { ...message, run: interrupted } : message)
-      announcedRun = interrupted
-      active = null
-    }
-  }
-
-  async function queue(delivery) {
-    const message = draft.trim()
-    if (!message || !active || active.id === 'pending' || dictationBusy()) return
-    const runId = active.id
-    queueError = ''
-    try {
-      await tauri.invoke('chat_queue', { runId, delivery, message })
-      messages.push({ role: 'user', text: message })
-      followNewContent()
-      if (draft.trim() === message) draft = ''
-    } catch (err) {
-      queueError = typeof err === 'string' ? err : String(err)
-    }
-  }
-
   function keydown(event) {
     const action = composerAction(event, draft, active)
     if (action) {
       event.preventDefault()
-      action === 'submit' ? send() : queue('steer')
+      action === 'submit' ? chatController.send() : chatController.queue('steer')
     }
   }
 </script>
@@ -887,7 +652,7 @@
         </aside>
         <div class="thread-shell">
         <div class="thread" bind:this={thread} onscroll={handleThreadScroll}>
-          {#if historyError}<p class="history-error" role="alert">{historyError} <button onclick={loadHistory}>Try again</button></p>{/if}
+          {#if historyError}<p class="history-error" role="alert">{historyError} <button onclick={() => chatController.loadHistory()}>Try again</button></p>{/if}
           {#if messages.length === 0}<p class="empty">Ask anything. Your org's routing decides which model answers.</p>{/if}
           {#each messages as message}
             {#if message.role === 'user'}
@@ -913,8 +678,8 @@
                 <span class="thinking" out:thinkingSettle><svg width="17" height="17" viewBox="0 0 48 48" aria-label="Thinking"><path d={thinkingMarkD} fill-rule="evenodd" /></svg><span>Routing</span></span>
               {:else if message.run.phase === 'streaming'}<p class="response-prose streaming" use:streamingUnderline={message.run.text}>{message.run.text}<span class="caret" aria-hidden="true"></span><span class="streaming-rule" aria-hidden="true"></span></p>
               {:else}<p class="response-prose">{message.run.text}</p>{/if}
-              {#if message.run.phase === 'failed'}<div class="run-error">Reply failed. <button disabled={dictationBusy()} onclick={() => { draft = message.run.prompt; send() }}>Try again</button></div>{/if}
-              {#if message.run.phase === 'interrupted'}<div class="run-error" role={message.run.resumeError ? 'alert' : undefined}>{message.run.resumeError ?? 'Reply interrupted.'} {#if message.run.resumable}<button disabled={!!active || dictationBusy()} onclick={() => resume(message.run)}>Resume</button>{:else if message.run.prompt}<button disabled={dictationBusy()} onclick={() => { draft = message.run.prompt; send() }}>Try again</button>{/if}</div>{/if}
+              {#if message.run.phase === 'failed'}<div class="run-error">Reply failed. <button disabled={dictationBusy()} onclick={() => { draft = message.run.prompt; chatController.send() }}>Try again</button></div>{/if}
+              {#if message.run.phase === 'interrupted'}<div class="run-error" role={message.run.resumeError ? 'alert' : undefined}>{message.run.resumeError ?? 'Reply interrupted.'} {#if message.run.resumable}<button disabled={!!active || dictationBusy()} onclick={() => chatController.resume(message.run)}>Resume</button>{:else if message.run.prompt}<button disabled={dictationBusy()} onclick={() => { draft = message.run.prompt; chatController.send() }}>Try again</button>{/if}</div>{/if}
               {#if groupedTools.length}
                 <div class="tool-card tool-group" role="group" aria-label={`Parallel tool activity: ${groupedTools.map((tool) => `${toolName(tool)} ${toolStatus(tool)}`).join(', ')}`}>
                   <div class="tool-group-title">Parallel tool activity</div>
@@ -1002,10 +767,10 @@
               {#if active?.phase === 'resuming'}
                 <button disabled>Resuming…</button>
               {:else if active && active.id !== 'pending'}
-                <button class="quiet follow-up" disabled={!draft.trim()} onclick={() => queue('followUp')}>Queue follow-up</button>
-                <button onclick={cancel}>Stop</button>
-                <button class="primary" disabled={!draft.trim()} onclick={() => queue('steer')}>Send</button>
-              {:else if !active}<button class="primary" disabled={!draft.trim() || dictationBusy()} onclick={send}>Send</button>{/if}
+                <button class="quiet follow-up" disabled={!draft.trim()} onclick={() => chatController.queue('followUp')}>Queue follow-up</button>
+                <button onclick={() => chatController.cancel()}>Stop</button>
+                <button class="primary" disabled={!draft.trim()} onclick={() => chatController.queue('steer')}>Send</button>
+              {:else if !active}<button class="primary" disabled={!draft.trim() || dictationBusy()} onclick={() => chatController.send()}>Send</button>{/if}
             </div>
           </div>
           {#if dictationError}<div class="dictation-error" role="alert">{dictationError}</div>{/if}

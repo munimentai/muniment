@@ -53,10 +53,27 @@ export function devicesLoadingState() {
   return { name: 'loading' }
 }
 
+export function platformDisplayName(platform) {
+  const id = String(platform ?? '')
+  const names = {
+    macos: 'macOS',
+    ios: 'iOS',
+    windows: 'Windows',
+    linux: 'Linux',
+    android: 'Android',
+    desktop: 'Desktop',
+  }
+
+  return Object.hasOwn(names, id) ? names[id] : `${id.charAt(0).toUpperCase()}${id.slice(1)}`
+}
+
 export function devicesReadyState(devices) {
   return {
     name: 'ready',
-    devices: [...devices].sort((a, b) => {
+    devices: devices.map((device) => ({
+      ...device,
+      platform: platformDisplayName(device.platform),
+    })).sort((a, b) => {
       const revoked = Number(Boolean(a.revoked_at)) - Number(Boolean(b.revoked_at))
       return revoked || Date.parse(b.last_active_at) - Date.parse(a.last_active_at) || a.device_id.localeCompare(b.device_id)
     }),
