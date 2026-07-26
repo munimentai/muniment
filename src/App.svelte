@@ -1231,7 +1231,6 @@
           ></div>
           <aside id="artifact-rail" class="artifact-rail" aria-labelledby="artifact-rail-title">
             <header>
-              <p class="eyebrow">Thread artifacts</p>
               <h2 id="artifact-rail-title">Artifacts</h2>
             </header>
             <div class="artifact-empty">
@@ -1300,7 +1299,6 @@
     text-align: center;
   }
 
-  .eyebrow { color: var(--muted); font: var(--text-12) var(--font-mono); }
   .primary { background: var(--ink); border-color: var(--ink); color: var(--paper); }
   .composer-actions .primary:disabled { background: var(--faint); border-color: var(--border); color: var(--muted); }
 
@@ -1391,8 +1389,8 @@
   .thread { width: min(760px, calc(100% - 48px)); height: 100%; margin: 0 auto; padding: 42px 0; overflow-y: auto; }
   .latest { position: absolute; left: 50%; bottom: 14px; transform: translateX(-50%); border-radius: var(--radius-control); background: var(--surface); color: var(--muted); font: var(--text-12) var(--font-mono); box-shadow: var(--shadow-overlay); }
   .empty { color: var(--muted); text-align: center; margin-top: 18vh; }
-  .user-turn { max-width: 78%; margin: 0 0 28px auto; }
-  .user-message { width: fit-content; margin-left: auto; padding: 9px 13px; background: var(--faint); border-radius: var(--radius-panel); }
+  .user-turn { margin: 0 0 28px auto; }
+  .user-message { width: fit-content; max-width: 78%; margin-left: auto; padding: 9px 13px; overflow-wrap: anywhere; background: var(--faint); border-radius: var(--radius-panel); }
   .user-message > p { margin: 0; white-space: pre-wrap; }
   .missing-prompt { color: var(--muted); font: var(--text-12) var(--font-mono); }
   .message-attachments { display: grid; justify-items: end; gap: 4px; margin: 8px 0 0; padding: 0; list-style: none; }
