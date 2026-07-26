@@ -17,6 +17,8 @@
   let pendingShortcut = $state('')
   let shortcutStatus = $state('')
   let theme = $state(readTheme())
+  let profileName = $derived(profileSnapshot?.user_display_name ?? subject ?? 'Signed in')
+  let profileDetails = $derived(profileSnapshot ? `${profileSnapshot.organization_display_name ?? profileSnapshot.org_id} · ${profileSnapshot.role}` : 'Access unavailable')
 
   const themeOptions = [['System', 'system'], ['Light', 'light'], ['Dark', 'dark']]
 
@@ -129,10 +131,10 @@
 </script>
 
 <div class="profile-block">
-  <button bind:this={profileButton} class="profile-button" aria-haspopup="dialog" aria-expanded={accessOpen} onclick={() => accessOpen ? closeAccess() : openAccess()}><span><strong>{profileSnapshot?.user_display_name ?? subject ?? 'Signed in'}</strong><small>{profileSnapshot ? `${profileSnapshot.organization_display_name ?? profileSnapshot.org_id} · ${profileSnapshot.role}` : 'Access unavailable'}</small></span></button>
+  <button bind:this={profileButton} class="profile-button" title={profileDetails} aria-haspopup="dialog" aria-expanded={accessOpen} onclick={() => accessOpen ? closeAccess() : openAccess()}><span><strong>{profileName}</strong><small>{profileDetails}</small></span></button>
   {#if accessOpen}
-    <div bind:this={accessPopover} class="access-popover" role="dialog" aria-label="Your access" tabindex="-1">
-      <header><div><h2>Your access</h2>{#if access.name === 'ready'}<p>Snapshot v{access.snapshot.snapshot_version}</p>{/if}</div><button class="quiet close-access" aria-label="Close your access" onclick={closeAccess}>×</button></header>
+    <div bind:this={accessPopover} class="access-popover" role="dialog" aria-label="Profile" tabindex="-1">
+      <header><div><h2>{profileName}</h2><p>{profileDetails}</p></div><button class="quiet close-access" aria-label="Close profile" onclick={closeAccess}>×</button></header>
       <div class="access-content">
         <section aria-labelledby="appearance-heading">
           <h3 id="appearance-heading" class="access-label">Appearance</h3>
@@ -143,13 +145,12 @@
           </div>
         </section>
         <section class="entitlements-section" aria-labelledby="entitlements-heading">
-          <h3 id="entitlements-heading" class="access-label">Your access</h3>
+          <div class="access-heading"><h3 id="entitlements-heading" class="access-label">Your access</h3>{#if access.name === 'ready'}<p>Snapshot v{access.snapshot.snapshot_version}</p>{/if}</div>
           {#if access.name === 'loading'}
             <p class="access-status" aria-live="polite">Checking your current access…</p>
           {:else if access.name === 'error'}
             <div class="access-status" role="alert"><p>Your access could not be loaded.</p><button onclick={openAccess}>Try again</button></div>
           {:else if access.name === 'ready'}
-            <p class="access-label">Your groups</p>
             {#if access.groups.length === 0}<p class="empty-grant">No groups granted</p>{/if}
             {#each access.groups as group, index}
               {@const open = expandedGroups.has(index)}
@@ -208,12 +209,14 @@
   .profile-button { width: 100%; display: flex; align-items: center; gap: 9px; padding: 9px 8px; border-color: transparent; background: transparent; text-align: left; }
   .profile-button > span:last-child { min-width: 0; display: grid; }
   .profile-button strong { overflow: hidden; text-overflow: ellipsis; font-size: var(--text-13); }
-  .profile-button small { color: var(--muted); font: var(--text-12) var(--font-mono); }
+  .profile-button small { overflow: hidden; color: var(--muted); font: var(--text-12) var(--font-mono); text-overflow: ellipsis; white-space: nowrap; }
   .access-popover { position: absolute; z-index: 5; left: 0; bottom: calc(100% + 8px); width: 330px; max-height: min(560px, 70vh); display: flex; flex-direction: column; overflow: hidden; background: var(--paper); border: 1px solid var(--border); border-radius: var(--radius-control); box-shadow: var(--shadow-overlay); outline: none; }
   .access-popover:focus-visible { border-color: var(--muted); }
   .access-popover header { display: flex; flex: none; align-items: start; justify-content: space-between; padding: 14px; border-bottom: 1px solid var(--border); }
   .access-popover h2 { margin: 0; font-size: var(--text-13); }
   .access-popover header p, .access-label { margin: 3px 0 0; color: var(--muted); font: var(--text-12) var(--font-mono); }
+  .access-heading { display: flex; align-items: baseline; justify-content: space-between; }
+  .access-heading p { margin: 0; color: var(--muted); font: var(--text-12) var(--font-mono); }
   .close-access { padding: 0 4px; font-size: var(--text-17); }
   .access-content { min-height: 0; overflow-y: auto; padding: 14px; }
   .access-label { margin: 0 0 6px; text-transform: uppercase; letter-spacing: .04em; }

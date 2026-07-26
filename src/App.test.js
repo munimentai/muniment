@@ -1282,7 +1282,7 @@ describe('voice dictation', () => {
     expect(registerGlobalShortcut).toHaveBeenCalledTimes(1)
     const profile = await screen.findByRole('button', { name: /Alice/i })
     await fireEvent.click(profile)
-    const dialog = screen.getByRole('dialog', { name: 'Your access' })
+    const dialog = screen.getByRole('dialog', { name: 'Profile' })
     const capture = within(dialog).getByRole('button', { name: /Change voice shortcut, current Control\+Shift\+Space/ })
 
     await fireEvent.click(capture)
@@ -1311,7 +1311,7 @@ describe('voice dictation', () => {
     })
     render(App)
     await fireEvent.click(await screen.findByRole('button', { name: /Alice/i }))
-    const dialog = screen.getByRole('dialog', { name: 'Your access' })
+    const dialog = screen.getByRole('dialog', { name: 'Profile' })
     const capture = within(dialog).getByRole('button', { name: /Change voice shortcut, current Control\+Shift\+Space/ })
     await fireEvent.click(capture)
     await fireEvent.keyDown(capture, { key: 'K', code: 'KeyK', ctrlKey: true, altKey: true })
@@ -1328,7 +1328,7 @@ describe('voice dictation', () => {
     const setItem = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => { throw new DOMException('private storage detail', 'QuotaExceededError') })
     const view = render(App)
     await fireEvent.click(await screen.findByRole('button', { name: /Alice/i }))
-    const dialog = screen.getByRole('dialog', { name: 'Your access' })
+    const dialog = screen.getByRole('dialog', { name: 'Profile' })
     const capture = within(dialog).getByRole('button', { name: /Change voice shortcut/ })
     await fireEvent.click(capture)
     await fireEvent.keyDown(capture, { key: 'K', code: 'KeyK', ctrlKey: true, altKey: true })
@@ -1350,7 +1350,7 @@ describe('voice dictation', () => {
     })
     render(App)
     await fireEvent.click(await screen.findByRole('button', { name: /Alice/i }))
-    const dialog = screen.getByRole('dialog', { name: 'Your access' })
+    const dialog = screen.getByRole('dialog', { name: 'Profile' })
     const capture = within(dialog).getByRole('button', { name: /Change voice shortcut/ })
     await fireEvent.click(capture)
     await fireEvent.keyDown(capture, { key: 'K', code: 'KeyK', ctrlKey: true, altKey: true })
@@ -1372,7 +1372,7 @@ describe('voice dictation', () => {
     })
     render(App)
     await fireEvent.click(await screen.findByRole('button', { name: /Alice/i }))
-    const capture = within(screen.getByRole('dialog', { name: 'Your access' })).getByRole('button', { name: /Change voice shortcut/ })
+    const capture = within(screen.getByRole('dialog', { name: 'Profile' })).getByRole('button', { name: /Change voice shortcut/ })
     expect(capture).toBeDisabled()
     await fireEvent.click(capture)
     expect(registerGlobalShortcut).toHaveBeenCalledTimes(1)
@@ -1398,7 +1398,7 @@ describe('voice dictation', () => {
       })
     }
     await fireEvent.click(await screen.findByRole('button', { name: /Alice/i }))
-    const dialog = screen.getByRole('dialog', { name: 'Your access' })
+    const dialog = screen.getByRole('dialog', { name: 'Profile' })
     const capture = within(dialog).getByRole('button', { name: /Change voice shortcut/ })
     await fireEvent.click(capture)
     await fireEvent.keyDown(capture, { key: 'K', code: 'KeyK', ctrlKey: true, altKey: true })
@@ -3185,7 +3185,7 @@ describe('signed-in access popover', () => {
     const profile = await screen.findByRole('button', { name: /Alice/i })
     await fireEvent.click(profile)
 
-    const dialog = screen.getByRole('dialog', { name: 'Your access' })
+    const dialog = screen.getByRole('dialog', { name: 'Profile' })
     expect(within(dialog).getByText('Checking your current access…')).toBeInTheDocument()
     expect(profile).toHaveTextContent('Acme · owner')
     expect(screen.getByText(/Ask anything/)).toBeInTheDocument()
@@ -3207,14 +3207,14 @@ describe('signed-in access popover', () => {
 
     document.body.focus()
     await fireEvent.keyDown(document, { key: 'Escape' })
-    expect(screen.queryByRole('dialog', { name: 'Your access' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('dialog', { name: 'Profile' })).not.toBeInTheDocument()
     expect(profile).toHaveFocus()
     expect(profile).toHaveAttribute('aria-expanded', 'false')
 
     await fireEvent.click(profile)
-    await screen.findByRole('dialog', { name: 'Your access' })
+    await screen.findByRole('dialog', { name: 'Profile' })
     await fireEvent.click(document.body)
-    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Your access' })).not.toBeInTheDocument())
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Profile' })).not.toBeInTheDocument())
     expect(profile).toHaveFocus()
   })
 
@@ -3232,7 +3232,7 @@ describe('signed-in access popover', () => {
     })
     render(App)
     await fireEvent.click(await screen.findByRole('button', { name: /Alice/i }))
-    const dialog = screen.getByRole('dialog', { name: 'Your access' })
+    const dialog = screen.getByRole('dialog', { name: 'Profile' })
     const rows = await within(dialog).findAllByRole('listitem')
     expect(rows.map((row) => row.textContent)).toEqual(expect.arrayContaining([
       expect.stringContaining('This device'), expect.stringContaining('Active'), expect.stringContaining('Revoked'),
@@ -3284,7 +3284,7 @@ describe('signed-in access popover', () => {
   it('keeps the primary action fixed and orders the scrolling profile sections', async () => {
     render(App)
     await fireEvent.click(await screen.findByRole('button', { name: /Alice/i }))
-    const dialog = screen.getByRole('dialog', { name: 'Your access' })
+    const dialog = screen.getByRole('dialog', { name: 'Profile' })
     const content = dialog.querySelector('.access-content')
     const signOut = within(dialog).getByRole('button', { name: 'Sign out' })
 
@@ -3298,6 +3298,24 @@ describe('signed-in access popover', () => {
       'voice-heading',
     ])
     expect(content.querySelector('.entitlements-section')).toHaveTextContent('Access is set by your admins.')
+  })
+
+  it('identifies the profile and keeps access snapshot metadata in its section', async () => {
+    render(App)
+    const profile = await screen.findByRole('button', { name: /Alice/i })
+    expect(profile).toHaveAttribute('title', 'Acme · owner')
+    await fireEvent.click(profile)
+
+    const dialog = screen.getByRole('dialog', { name: 'Profile' })
+    const header = dialog.querySelector(':scope > header')
+    const accessSection = dialog.querySelector('.entitlements-section')
+    expect(header).toHaveTextContent('Alice')
+    expect(header).toHaveTextContent('Acme · owner')
+    expect(within(dialog).getByRole('button', { name: 'Close profile' })).toBeInTheDocument()
+    expect(within(dialog).getAllByRole('heading', { name: 'Your access' })).toHaveLength(1)
+    expect(header).not.toHaveTextContent('Snapshot')
+    expect(accessSection).toHaveTextContent('Snapshot v2')
+    expect(dialog).not.toHaveTextContent('Your groups')
   })
 
   it('retries only a failed device request and keeps entitlement groups rendered', async () => {
@@ -3315,7 +3333,7 @@ describe('signed-in access popover', () => {
     })
     render(App)
     await fireEvent.click(await screen.findByRole('button', { name: /Alice/i }))
-    const dialog = screen.getByRole('dialog', { name: 'Your access' })
+    const dialog = screen.getByRole('dialog', { name: 'Profile' })
     expect(await within(dialog).findByText('Devices could not be loaded.')).toBeInTheDocument()
     expect(dialog).not.toHaveTextContent('raw backend secret')
     expect(within(dialog).getByRole('button', { name: 'members' })).toBeInTheDocument()
