@@ -41,3 +41,65 @@ export function isArtifactRailShortcut(event, platform = navigator.platform) {
     && !event.altKey
     && !event.shiftKey
 }
+
+export function createArtifactRailController({
+  readOpen,
+  readWidth,
+  readMaximum,
+  readPointer,
+  readAvailableWidth,
+  readRightEdge,
+  readViewportWidth,
+  onOpen,
+  onWidth,
+  onMaximum,
+  onPointer,
+}) {
+  function resetWidth() {
+    const maximum = readAvailableWidth()
+    onMaximum(maximum)
+    onWidth(clampArtifactRailWidth(defaultArtifactRailWidth(readViewportWidth()), maximum))
+  }
+
+  function fit() {
+    if (!readOpen()) return
+    const maximum = readAvailableWidth()
+    onMaximum(maximum)
+    onWidth(clampArtifactRailWidth(readWidth(), maximum))
+  }
+
+  function toggle() {
+    const open = !readOpen()
+    onOpen(open)
+    onPointer(undefined)
+    if (open) resetWidth()
+  }
+
+  function pointerDown(event) {
+    if (event.button !== 0 || readPointer() !== undefined) return
+    event.preventDefault()
+    event.currentTarget.focus()
+    onPointer(event.pointerId)
+    event.currentTarget.setPointerCapture?.(event.pointerId)
+  }
+
+  function pointerMove(event) {
+    if (event.pointerId !== readPointer()) return
+    onWidth(artifactRailWidthFromPointer(event.clientX, readRightEdge(), readMaximum()))
+  }
+
+  function pointerEnd(event) {
+    if (event.pointerId !== readPointer()) return
+    onPointer(undefined)
+    if (event.currentTarget.hasPointerCapture?.(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId)
+  }
+
+  function keydown(event) {
+    const width = artifactRailWidthFromKey(readWidth(), event.key, readMaximum())
+    if (width === readWidth() && !['Home', 'End', 'ArrowLeft', 'ArrowRight'].includes(event.key)) return
+    event.preventDefault()
+    onWidth(width)
+  }
+
+  return { fit, toggle, pointerDown, pointerMove, pointerEnd, keydown }
+}
