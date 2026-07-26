@@ -287,11 +287,11 @@
 
 <style>
   .onboarding { width: min(680px, calc(100vw - 48px)); margin-top: 28px; }
-  .onboarding h1 { margin: 4px 0 10px; font-size: 28px; letter-spacing: -.02em; }
+  .onboarding h1 { margin: 4px 0 10px; font-size: var(--text-28); letter-spacing: -.02em; }
   .model-status { margin: 18px 0 22px; padding: 13px 15px; border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--surface); }
   .model-status-heading { display: flex; justify-content: space-between; gap: 16px; font: var(--text-12) var(--font-mono); }
   .model-status-heading span, .model-status-copy, .model-progress-copy, .triage-generate span { color: var(--muted); }
-  .model-status-copy { margin: 7px 0 0; font-size: 13px; line-height: 1.45; }
+  .model-status-copy { margin: 7px 0 0; font-size: var(--text-13); line-height: 1.45; }
   .model-progress { height: 4px; margin-top: 11px; overflow: hidden; border-radius: var(--radius-chip); background: var(--border); }
   /* §1.2: downloading a model is not a model working, so the fill stays ink. */
   .model-progress span { display: block; height: 100%; background: var(--ink); }
@@ -301,7 +301,7 @@
   .eyebrow, .path-label, .privacy-note { color: var(--muted); font: var(--text-12) var(--font-mono); }
   .path-card { display: grid; grid-template-columns: 1fr auto; gap: 7px 16px; align-items: center; margin-top: 24px; padding: 15px 16px; border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--surface); }
   .path-label { grid-column: 1 / -1; }
-  .path-card strong { min-width: 0; overflow: hidden; text-overflow: ellipsis; font: 13px var(--font-mono); white-space: nowrap; }
+  .path-card strong { min-width: 0; overflow: hidden; text-overflow: ellipsis; font: var(--text-13) var(--font-mono); white-space: nowrap; }
   .folder-preview { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0 0; }
   .folder-preview span { padding: 4px 8px; border: 1px solid var(--border); border-radius: var(--radius-control); color: var(--muted); font: var(--text-12) var(--font-mono); }
   .onboarding-error { margin: 10px 0 0; color: var(--muted); font: var(--text-12) var(--font-mono); line-height: 1.5; }
