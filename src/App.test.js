@@ -1,10 +1,15 @@
 // @vitest-environment jsdom
 
+import fs from 'node:fs'
+import path from 'node:path'
+
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/svelte'
 import '@testing-library/jest-dom/vitest'
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { historyMessages } from './lib/chat-state.js'
+
+const accessPanelSource = fs.readFileSync(path.join(process.cwd(), 'src/lib/AccessPanel.svelte'), 'utf8')
 
 let App
 let invoke
@@ -268,6 +273,10 @@ describe('artifact rail', () => {
     render(App)
     const toggle = await screen.findByRole('button', { name: 'Open artifact rail' })
     expect(toggle).toHaveAttribute('aria-expanded', 'false')
+    expect(toggle).toHaveAttribute('aria-controls', 'artifact-rail')
+    expect(toggle).toHaveAttribute('aria-keyshortcuts', navigator.platform.startsWith('Mac') ? 'Meta+J' : 'Control+J')
+    expect(within(toggle).getByText('Artifacts')).toBeInTheDocument()
+    expect(within(toggle).getByText(navigator.platform.startsWith('Mac') ? '⌘J' : 'Ctrl J').tagName).toBe('KBD')
     expect(screen.queryByRole('complementary', { name: 'Artifacts' })).not.toBeInTheDocument()
 
     await fireEvent.click(toggle)
@@ -437,7 +446,10 @@ describe('sidebar collapse', () => {
 
   it('collapses to an icon rail from the in-sidebar control and expands again', async () => {
     render(App)
+    const modifier = navigator.platform.startsWith('Mac') ? '⌘' : 'Ctrl '
     const collapse = await screen.findByRole('button', { name: 'Collapse sidebar' })
+    expect(screen.getByText(`${modifier}N`).tagName).toBe('KBD')
+    expect(screen.getByText(`${modifier}F`).tagName).toBe('KBD')
     expect(collapse).toHaveAttribute('aria-expanded', 'true')
     expect(collapse).toHaveAttribute('aria-controls', 'sidebar')
     expect(collapse).toHaveAttribute('aria-keyshortcuts', navigator.platform.startsWith('Mac') ? 'Meta+\\' : 'Control+\\')
@@ -457,7 +469,6 @@ describe('sidebar collapse', () => {
       expect(control).toHaveAccessibleName(name)
       expect(control).toHaveAttribute('title', expect.stringContaining(name))
     }
-    const modifier = navigator.platform.startsWith('Mac') ? '⌘' : 'Ctrl '
     expect(screen.getByRole('button', { name: 'New thread' })).toHaveAttribute('title', `New thread (${modifier}N)`)
     expect(screen.getByRole('button', { name: 'Search' })).toHaveAttribute('title', `Search (${modifier}F)`)
     expect(screen.queryByText('Threads')).not.toBeInTheDocument()
@@ -3229,6 +3240,16 @@ describe('signed-in access popover', () => {
     expect(rows[0]).toHaveTextContent('desktopThis deviceActive')
     expect(rows[1]).toHaveTextContent('androidActive')
     expect(rows[2]).toHaveTextContent('iosRevoked')
+    expect(rows[2]).toHaveClass('revoked')
+    const activeIdentifier = within(rows[1]).getByText('android')
+    const revokedIdentifier = within(rows[2]).getByText('ios')
+    const revokedRule = accessPanelSource.match(/\.revoked \.device-heading strong\s*\{([^}]*)\}/)?.[1]
+    expect(revokedIdentifier.tagName).toBe('STRONG')
+    expect(activeIdentifier.tagName).toBe('STRONG')
+    expect(revokedRule).toMatch(/color:\s*var\(--oxide\)/)
+    expect(revokedRule).toMatch(/text-decoration:\s*line-through/)
+    expect(revokedRule).toMatch(/font-weight:\s*400/)
+    expect(within(rows[2]).getByText('Revoked')).toBeVisible()
     expect(within(dialog).getByRole('button', { name: 'members' })).toBeInTheDocument()
     expect(dialog).not.toHaveTextContent('revoked-newest')
   })
@@ -3258,6 +3279,25 @@ describe('signed-in access popover', () => {
     expect(document.documentElement).not.toHaveAttribute('data-theme')
     expect(localStorage.getItem('muniment.theme')).toBe('system')
     expect(system).toHaveAttribute('aria-pressed', 'true')
+  })
+
+  it('keeps the primary action fixed and orders the scrolling profile sections', async () => {
+    render(App)
+    await fireEvent.click(await screen.findByRole('button', { name: /Alice/i }))
+    const dialog = screen.getByRole('dialog', { name: 'Your access' })
+    const content = dialog.querySelector('.access-content')
+    const signOut = within(dialog).getByRole('button', { name: 'Sign out' })
+
+    expect(content).toBeInTheDocument()
+    expect(content).not.toContainElement(signOut)
+    expect(signOut.closest('.access-footer')).toBeInTheDocument()
+    expect([...content.querySelectorAll(':scope > section')].map((section) => section.getAttribute('aria-labelledby'))).toEqual([
+      'appearance-heading',
+      'entitlements-heading',
+      'devices-heading',
+      'voice-heading',
+    ])
+    expect(content.querySelector('.entitlements-section')).toHaveTextContent('Access is set by your admins.')
   })
 
   it('retries only a failed device request and keeps entitlement groups rendered', async () => {

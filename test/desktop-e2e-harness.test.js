@@ -69,6 +69,28 @@ describe('WDIO Tauri service dependency contract', () => {
   it('loads the installed ESM entry with compatible transitive named exports', async () => {
     await expect(import('@wdio/tauri-service')).resolves.toBeDefined()
   }, 15_000)
+
+  it('keeps WebdriverIO in remote mode at the external Tauri driver endpoint', async () => {
+    const previousBinary = process.env.MUNIMENT_E2E_APP_BINARY
+    const previousArtifacts = process.env.MUNIMENT_E2E_RAW_DIR
+    process.env.MUNIMENT_E2E_APP_BINARY = path.join(root, 'muniment-test-binary')
+    process.env.MUNIMENT_E2E_RAW_DIR = temp()
+    try {
+      const { config } = await import('./e2e/wdio.conf.js?endpoint-contract')
+      expect(config.capabilities).toEqual([{ browserName: 'tauri' }])
+      expect(config.hostname).toBe('127.0.0.1')
+      expect(config.port).toBe(4444)
+      expect(config.services[0][1]).toMatchObject({
+        driverProvider: 'external',
+        tauriDriverPort: config.port,
+      })
+    } finally {
+      if (previousBinary === undefined) delete process.env.MUNIMENT_E2E_APP_BINARY
+      else process.env.MUNIMENT_E2E_APP_BINARY = previousBinary
+      if (previousArtifacts === undefined) delete process.env.MUNIMENT_E2E_RAW_DIR
+      else process.env.MUNIMENT_E2E_RAW_DIR = previousArtifacts
+    }
+  })
 })
 
 describe('nightly asset identity', () => {
