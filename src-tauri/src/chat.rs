@@ -38,6 +38,7 @@ use crate::auth;
 
 const RPC_TIMEOUT: Duration = Duration::from_secs(30);
 const QUEUE_TIMEOUT: Duration = Duration::from_secs(2);
+const MAX_THREAD_SUMMARY_CORE_PAGES: usize = 100;
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -732,13 +733,20 @@ fn chat_thread_summaries_page(
     if !(1..=100).contains(&limit) {
         return Err("Conversation history is unavailable.".into());
     }
-    let page = journal
-        .thread_summaries(limit, cursor)
-        .map_err(|_| "Conversation history is unavailable.".to_string())?;
-    let mut summaries = Vec::with_capacity(page.summaries.len());
-    for summary in page.summaries {
-        if subject_owns_first_run(journal, &summary.thread_id, subject)? {
-            summaries.push(summary);
+    let mut summaries = Vec::with_capacity(limit);
+    let mut next_cursor = cursor.map(str::to_owned);
+    for _ in 0..MAX_THREAD_SUMMARY_CORE_PAGES {
+        let page = journal
+            .thread_summaries(limit - summaries.len(), next_cursor.as_deref())
+            .map_err(|_| "Conversation history is unavailable.".to_string())?;
+        for summary in page.summaries {
+            if subject_owns_first_run(journal, &summary.thread_id, subject)? {
+                summaries.push(summary);
+            }
+        }
+        next_cursor = page.next_cursor;
+        if summaries.len() == limit || next_cursor.is_none() {
+            break;
         }
     }
     Ok(ChatThreadSummaryPage {
@@ -756,7 +764,7 @@ fn chat_thread_summaries_page(
                 },
             )
             .collect(),
-        next_cursor: page.next_cursor,
+        next_cursor,
     })
 }
 
@@ -3955,36 +3963,75 @@ mod tests {
     }
 
     #[test]
-    fn thread_summary_page_does_not_scan_past_foreign_threads() {
+    fn thread_summary_page_fills_across_foreign_core_page_boundaries() {
         let directory = std::env::temp_dir().join(format!("muniment-chat-{}", Uuid::now_v7()));
         std::fs::create_dir_all(&directory).unwrap();
         let path = directory.join("runs.sqlite3");
-        let owner_run = "01900000-0000-7000-8000-000000000021";
-        let foreign_runs = [
-            "01900000-0000-7000-8000-000000000022",
-            "01900000-0000-7000-8000-000000000023",
-            "01900000-0000-7000-8000-000000000024",
+        let runs = [
+            ("01900000-0000-7000-8000-000000000021", "other"),
+            ("01900000-0000-7000-8000-000000000022", "owner"),
+            ("01900000-0000-7000-8000-000000000023", "other"),
+            ("01900000-0000-7000-8000-000000000024", "owner"),
         ];
         let mut journal = RunJournal::open(&path).unwrap();
-        let mut owner_envelope =
-            event_envelope(owner_run, 1, "run.started", json!({}), Some("owner"));
-        owner_envelope.recorded_at = "2026-01-01T00:00:00Z".into();
-        journal
-            .append_new_run("workspace-a", &owner_envelope)
-            .unwrap();
-        for run_id in foreign_runs {
-            let mut foreign_envelope =
-                event_envelope(run_id, 1, "run.started", json!({}), Some("other"));
-            foreign_envelope.recorded_at = "2026-01-02T00:00:00Z".into();
+        for (index, (run_id, subject)) in runs.into_iter().enumerate() {
+            let mut envelope = event_envelope(run_id, 1, "run.started", json!({}), Some(subject));
+            envelope.recorded_at = format!("2026-01-{:02}T00:00:00Z", 4 - index);
+            journal.append_new_run("workspace-a", &envelope).unwrap();
+        }
+
+        let page = chat_thread_summaries_page(&mut journal, Some("owner"), 2, None).unwrap();
+        assert_eq!(page.summaries.len(), 2);
+        assert!(page.next_cursor.is_none());
+
+        drop(journal);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn thread_summary_page_exhausts_an_all_foreign_journal() {
+        let directory = std::env::temp_dir().join(format!("muniment-chat-{}", Uuid::now_v7()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("runs.sqlite3");
+        let mut journal = RunJournal::open(&path).unwrap();
+        for index in 0..3 {
+            let run_id = format!("01900000-0000-7000-8000-{index:012x}");
             journal
-                .append_new_run("workspace-a", &foreign_envelope)
+                .append_new_run(
+                    "workspace-a",
+                    &event_envelope(&run_id, 1, "run.started", json!({}), Some("other")),
+                )
                 .unwrap();
         }
-        drop(journal);
 
+        let page = chat_thread_summaries_page(&mut journal, Some("owner"), 2, None).unwrap();
+        assert!(page.summaries.is_empty());
+        assert!(page.next_cursor.is_none());
+
+        drop(journal);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn thread_summary_page_returns_advanced_cursor_at_scan_bound() {
+        let directory = std::env::temp_dir().join(format!("muniment-chat-{}", Uuid::now_v7()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("runs.sqlite3");
         let mut journal = RunJournal::open(&path).unwrap();
+        for index in 0..(MAX_THREAD_SUMMARY_CORE_PAGES + 2) {
+            let run_id = format!("01900000-0000-7000-8001-{index:012x}");
+            let subject = if index == 0 || index == MAX_THREAD_SUMMARY_CORE_PAGES + 1 {
+                "owner"
+            } else {
+                "other"
+            };
+            let mut envelope = event_envelope(&run_id, 1, "run.started", json!({}), Some(subject));
+            envelope.recorded_at = format!("2026-01-01T00:{:02}:{:02}Z", index / 60, index % 60);
+            journal.append_new_run("workspace-a", &envelope).unwrap();
+        }
+
         let first = chat_thread_summaries_page(&mut journal, Some("owner"), 2, None).unwrap();
-        assert!(first.summaries.is_empty());
+        assert_eq!(first.summaries.len(), 1);
         assert!(first.next_cursor.is_some());
 
         let second = chat_thread_summaries_page(
