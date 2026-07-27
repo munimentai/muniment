@@ -39,7 +39,7 @@ Two components, one shared harness.
 │  UI (webview, single mode)   │◄──WS──►│  API + admin web app              │
 │  Pi sidecar (RPC/stdio)      │        │  better-auth (OIDC) + SCIM 2.0    │
 │  llama.cpp sidecar:          │        │  Postgres (entitlements, registry,│
-│    - Gemma quant (polish +   │        │            artifacts, audit)      │
+│    - Qwen quant (polish +    │        │            artifacts, audit)      │
 │      routing classifier)     │  HTTPS │  LiteLLM gateway (models, keys,   │
 │  sherpa-onnx: Parakeet ASR   │───────►│    budgets, routing)              │
 │  Kokoro TTS                  │        │  Flue runtime (scheduled          │
@@ -65,7 +65,7 @@ Two components, one shared harness.
 | Model gateway | LiteLLM | MIT | Virtual keys, budgets, routing |
 | Auth | better-auth | MIT | OIDC; SCIM endpoint is custom |
 | ASR | Parakeet-TDT 0.6B v3 INT8 (sherpa-onnx v1.13.2) | CC-BY-4.0 model; Apache-2.0 runtime | Offline, CPU-only desktop; exact artifacts in ADR 0004 |
-| Polish/classifier | Gemma (small quant) | Gemma Terms of Use | Commercial use permitted; review terms before sale |
+| Polish/classifier | Qwen3.5-4B Instruct Q4_K_M GGUF | Apache-2.0 | Same required on-device artifact as onboarding/routing (§15.3); exact pin in ADR 0017 |
 | TTS | Kokoro v1.0 INT8 (ONNX Runtime v1.20.1) | Apache 2.0 model; MIT runtime | Offline, CPU-only English read-aloud; exact foundation and validation gates in ADR 0015 |
 | Router bootstrap | RouteLLM pretrained | Apache 2.0 | mf / sw_ranking routers |
 
@@ -183,7 +183,7 @@ Scheduled Flue runs resolve entitlements against the owning user **at run time**
 ### 5.1 Flow
 
 1. User submits a prompt in the client.
-2. Resident local Gemma classifies: task type (code-plan, code-edit, general, extraction, vision, long-context, etc.) and difficulty tier. **The local model classifies, it never routes.**
+2. The resident local model classifies: task type (code-plan, code-edit, general, extraction, vision, long-context, etc.) and difficulty tier. **The local model classifies, it never routes.**
 3. Label rides as request metadata to the LiteLLM gateway.
 4. Gateway maps label → model per owner-defined policy (e.g. `code-plan/high → glm-5.2 via OpenRouter`, `vision → gemma-4 org endpoint`, `general/low → haiku-class`). Owner policy is authoritative; the gateway may ignore or re-derive the label.
 5. Users with `router.override` may pin a model; the pin is honored only within their entitled model list.
@@ -221,7 +221,7 @@ One conversation surface that scales from chat to full agentic runs. No mode swi
 
 ### 6.3 Local model sidecar
 
-- llama.cpp server managed by the app, loading one resident small Gemma quant (3-4 GB class). Serves two roles without reload: dictation polish and routing classification.
+- llama.cpp server managed by the app, loading one resident small Qwen quant (3-4 GB class), pinned exactly in [ADR 0017](../decisions/0017-resident-model-artifact-pin.md). Serves two roles without reload: dictation polish and routing classification.
 - Health-managed: crash restart, version pinning from the control plane, owner can pin the model build org-wide.
 
 ### 6.4 MCP
@@ -254,7 +254,7 @@ Full-auto mode (no prompts) is opt-in and requires `sandbox.full_auto` plus isol
 Zero voice bytes leave the machine. This is a selling point; keep it true.
 
 - **Capture (ASR):** the immutable Parakeet-TDT 0.6B v3 INT8 conversion via sherpa-onnx v1.13.2, pinned in ADR 0004. The desktop core owns 16 kHz mono PCM and in-process CPU inference; recognition is utterance-final/offline (VAD chunking would be simulated streaming), with no CUDA requirement and no ASR network boundary. Latency, memory, and quality remain gated on ADR 0004's target-hardware matrix. Eval alternative: Qwen3-ASR (verify open weights + license + CPU latency). whisper.cpp is fallback only (too slow for live dictation UX).
-- **Polish:** two-stage Eloquent pattern. Stage 1 verbatim live transcript; stage 2 on pause, the resident Gemma strips fillers, applies mid-sentence self-corrections, and offers transforms (key points / formal / short / long). Custom vocabulary per user (org jargon, names) stored locally, optionally seeded from the control plane org dictionary.
+- **Polish:** two-stage Eloquent pattern. Stage 1 verbatim live transcript; stage 2 on pause, the resident local model strips fillers, applies mid-sentence self-corrections, and offers transforms (key points / formal / short / long). Custom vocabulary per user (org jargon, names) stored locally, optionally seeded from the control plane org dictionary.
 - **Output (TTS):** Kokoro v1.0 INT8 through ONNX Runtime v1.20.1, pinned in [ADR 0015](../decisions/0015-kokoro-read-aloud-runtime.md). Offline, CPU-only English read-aloud for responses and artifacts; performance and quality remain gated on that ADR's target-hardware matrix. OS voices remain a separately labelled zero-effort fallback only. Qwen3-TTS is off the list under the on-device constraint (too heavy per laptop).
 - Hold-to-talk and toggle modes on a global hotkey; hold-to-talk is the default (clean capture boundaries).
 
@@ -439,14 +439,14 @@ Phases are dependency layers, not sprints. Within a phase, tracks run in paralle
 **Phase 2 — Client core**
 8. Tauri shell + auth handshake + entitlement snapshot consumption. Depends: 4, 5.
 9. Pi sidecar integration (RPC), chat against virtual key. Depends: 6, 8.
-10. Local model sidecar (llama.cpp + Gemma). Depends: 8. (Parallel with 9.)
+10. Local model sidecar (llama.cpp + the resident model). Depends: 8. (Parallel with 9.)
 11. Attachments pipeline + file store. Depends: 8; storage from Phase 0 infra.
 
 **Phase 3 — Routing and voice**
-12. Classifier prompt/finetune on Gemma + label metadata. Depends: 9, 10.
+12. Classifier prompt/finetune on the resident model + label metadata. Depends: 9, 10.
 13. Gateway label→model policy + owner policy editor. Depends: 6, 12.
 14. Routing log + eval harness + RouteLLM bootstrap. Depends: 13.
-15. Voice: Parakeet capture → Gemma polish → insert; Kokoro read-aloud; hotkeys. Depends: 10. (Parallel with 12-14.)
+15. Voice: Parakeet capture → resident-model polish → insert; Kokoro read-aloud; hotkeys. Depends: 10. (Parallel with 12-14.)
 
 **Phase 4 — Org surface**
 16. MCP connection registry + client remote MCP consumption. Depends: 5, 9.
@@ -468,7 +468,7 @@ Phases are dependency layers, not sprints. Within a phase, tracks run in paralle
 |---|---|
 | Qwen3-ASR | Verify open weights, license, CPU latency vs Parakeet |
 | Kokoro validation | Run ADR 0015's CPU latency, real-time-factor, peak-memory, cancellation, and English ear-test matrix before claiming the read-aloud UX bar |
-| Gemma terms | Legal read of Gemma Terms of Use before commercial sale |
+| Resident model licence | ADR 0017's pinned artifact is Apache-2.0, so no Gemma Terms read gates sale; re-run the licence read if the pinned artifact changes (the pending muniment-built build, or a Gemma-family alternate) |
 | Parakeet validation | Run ADR 0004's CPU latency, real-time-factor, peak-memory, and multilingual quality matrix before claiming the live-dictation UX bar |
 | Classifier taxonomy | Define the label set (task types x difficulty tiers) before Phase 3 |
 | Capability channel grants | Replace the package-level/per-version baseline with strict pin / gated / pure `:latest` capability grants in the follow-up migration |
@@ -787,7 +787,9 @@ distinct layers, and neither silently replaces or absorbs the other.
 
 ### 15.3 Required on-device onboard and query-router model
 
-The working pick is **Qwen3.5-4B Instruct, Q4 GGUF (Apache 2.0)**. It ships as a
+The model is **Qwen3.5-4B Instruct, Q4_K_M GGUF (Apache-2.0)**, pinned
+artifact-exactly by
+[ADR 0017](../decisions/0017-resident-model-artifact-pin.md). It ships as a
 pinned, checksummed descriptor through the verified runtime-acquisition path in
 [ADR 0008](../decisions/0008-pi-runtime-distribution.md) and is served by the
 `llama-server` distribution line in

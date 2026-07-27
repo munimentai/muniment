@@ -14,10 +14,11 @@ Phases mirror harness-spec §9. Muniment-cloud Phase 1 native auth and the cloud
 ### 9. Pi sidecar and cloud chat
 - DONE — verified Pi runtime acquisition/supervision, signed-in streamed chat, steering/follow-up, durable tool effects, provenance/receipts, inline tool cards, extension UI, permission-gate replay/answers, and safe interrupted-session resume.
 
-### 10. Local Gemma sidecar
+### 10. Local model sidecar
 - DONE — supervised local runtime, pinned model lifecycle, verified/cancellable acquisition, rollback, native adapters, and Tauri install/status/cancel commands.
 - DONE 2026-07-22 — first-use onboarding shows required local-model acquisition progress, readiness, and redacted background-retry status while keeping folder setup fail-open and AI proposal generation fail-closed.
-- NEXT — release notice delivery after the approved bundled terms surface is available.
+- DONE 2026-07-27 — ADR 0017 supersedes ADR 0003: the decision record now pins the artifact that actually ships (Qwen3.5-4B Q4_K_M GGUF, Apache-2.0, alias `muniment-required-qwen3.5-4b`, 262,144-token context) byte-for-byte against `RESIDENT_MODEL`, with a core guard test that fails if the ADR table or the descriptor is edited alone; ADR 0006's subject is now that artifact, and the sidecar/harness-spec Gemma alias and licence claims are corrected. The owner-decided swap to a muniment-built, muniment-hosted artifact is named as the pending follow-up rather than pinned with invented values.
+- NEXT — release notice delivery after the approved bundled terms surface is available; the notice is the shipped artifact's Apache-2.0 attribution, not a Gemma terms gate.
 
 ### 11. Attachments and local CAS
 - DONE groundwork — pure-Rust content-addressed local store with atomic deduplication, constant-memory I/O/verification, stale-temp cleanup, journal reference accounting, retention, export, and compaction. Cloud file flow follows items 8d/9.
@@ -32,7 +33,7 @@ Phases mirror harness-spec §9. Muniment-cloud Phase 1 native auth and the cloud
 
 ## Phase 3 — Routing metadata + voice (§9 items 12, 15)
 - Routing metadata carriage/policy integration follows item 9; the local classifier contract is complete.
-- Voice direction remains Parakeet capture → Gemma polish → transforms, with Kokoro read-aloud and global hotkeys.
+- Voice direction remains Parakeet capture → resident-model polish → transforms, with Kokoro read-aloud and global hotkeys.
 - DONE — pinned Parakeet/Silero acquisition and publication, sherpa-onnx packaging/bindings, fixed-capacity microphone capture, bounded utterance segmentation, safe VAD boundary, chunk-invariant dictation composition, desktop command/event wiring from native capture through recognition with redacted statuses, basic composer dictation controls/transcript insertion, a reproducible target-hardware evaluator, a bounded 100-utterance endurance mode, and composer press-and-hold dictation with Escape-to-cancel/restore.
 - DONE 2026-07-19 — accepted ADR 0014 pins the `ggml-org/llama.cpp` release `b10068` CPU-baseline archives for all four native targets, with a complete-entry-manifest extraction contract and pre-spawn re-verification.
 - DONE 2026-07-20 — ADR 0014 implementation through activation: pinned llama-server descriptors for all four targets, manifest-verified safe extraction and reusable tree verification, bounded download with staging/lock/pointer publication, pre-spawn re-verification at the spawn boundary, supervised llama-server activation with health readiness, and third-party notice content; the required Qwen3.5-4B descriptor rides the same verified path with background required-download acquisition deliberately detached from onboarding.
@@ -124,7 +125,7 @@ Phases mirror harness-spec §9. Muniment-cloud Phase 1 native auth and the cloud
 - VERIFIED 2026-07-26 (this wave's probe: stubbed signed-in bundle in headless Chromium, 1100×720 and 960×640, a live run driven through the stubbed transport) — the workspace, pre-first-token routing ring, streaming underline on the active line only, provenance/receipt registers, steer/queue composer hints, and the 960×640 minimum all render per spec after the 2026-07-26 landings; no new UI defect was found and no design slice is selected this wave.
 - OBSERVED, NOT YET SELECTED — `--space-*` tokens are absent, and a spacing sweep would touch nearly every declaration in the app, so it stays parked rather than half-done. The titlebar has no `⌘K` hint, and should not get one while the palette itself is deferred. The full §1.8 ring behavior engine (decorrelated breath/spin/trace, flexing milling depth) is explicitly gated on a ≥34px thinking surface per the 2026-07-26 design call.
 - No further artifact-rail content slice is selected. Artifact data, rendering, persistence, sharing, and cloud contracts remain deferred to Phase 4 item 19; select the first real-contract slice only when its authoritative event/data boundary is specified. CLI/VS Code defaults wait for workspace memory semantics.
-- Open items: headless/server CLI stance owner ruling; final model promotion waits on MUNIQA routing eval; Gemma 4 E2B remains a future owner-gated contingency pending llama.cpp PLE support. MUNICLOUD model artifact proxy/redirect is a ripple.
+- Open items: headless/server CLI stance owner ruling; final model promotion waits on MUNIQA routing eval; Gemma 4 E2B remains a future owner-gated contingency pending llama.cpp PLE support. MUNICLOUD model artifact proxy/redirect is a ripple, as is ADR 0017's pending swap to the muniment-built, muniment-org-hosted resident artifact.
 
 ## Desktop QA automation
 - RATIFIED — layered frontend browser coverage plus installed-nightly real-app validation on serialized pve01 desktop-ci VMs; Windows/Linux use WebdriverIO, macOS install/launch smoke plus screendumps/manual owner pass.
