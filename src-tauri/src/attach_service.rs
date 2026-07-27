@@ -428,6 +428,7 @@ impl<B: RunStartBoundaries, I: RunStartIdempotency> ThreadListService
                         files: Vec::new(),
                         workspace: Some(workspace.to_owned()),
                         provenance: Some(provenance),
+                        continue_thread: false,
                     },
                 )
                 .map_err(|error| error.protocol_error())?;
@@ -652,6 +653,10 @@ mod tests {
         assert_eq!(
             service.boundaries.launched_run.lock().unwrap().as_deref(),
             Some(accepted.run_id.as_str())
+        );
+        assert_eq!(
+            *service.boundaries.prepared_continue_thread.lock().unwrap(),
+            Some(false)
         );
         let provenance = service
             .boundaries

@@ -34,6 +34,7 @@ pub(crate) struct FakeRunStartBoundaries {
     pub(crate) prepare_error: Option<String>,
     pub(crate) projection_error: Option<String>,
     pub(crate) prepared_provenance: Mutex<Option<Provenance>>,
+    pub(crate) prepared_continue_thread: Mutex<Option<bool>>,
     pub(crate) journaled_events: Mutex<BTreeMap<String, Vec<EventEnvelope>>>,
     pub(crate) clear_calls: AtomicUsize,
     #[cfg(target_os = "linux")]
@@ -56,6 +57,7 @@ impl FakeRunStartBoundaries {
             prepare_error: None,
             projection_error: None,
             prepared_provenance: Mutex::new(None),
+            prepared_continue_thread: Mutex::new(None),
             journaled_events: Mutex::new(BTreeMap::new()),
             clear_calls: AtomicUsize::new(0),
             #[cfg(target_os = "linux")]
@@ -156,9 +158,11 @@ impl RunStartBoundaries for FakeRunStartBoundaries {
         tokens: &TokenSet,
         _files: Vec<SelectedFile>,
         provenance: Option<Provenance>,
+        continue_thread: bool,
     ) -> Result<(u64, ChatProjector), RunStartError> {
         self.prepare_calls.fetch_add(1, Ordering::SeqCst);
         *self.prepared_provenance.lock().unwrap() = provenance;
+        *self.prepared_continue_thread.lock().unwrap() = Some(continue_thread);
         if let Some(error) = &self.prepare_error {
             return Err(RunStartError::Persistence(error.clone()));
         }

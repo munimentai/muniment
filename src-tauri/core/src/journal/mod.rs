@@ -793,12 +793,12 @@ impl RunJournal {
         Ok(())
     }
 
-    /// Atomically creates a run and records its authoritative workspace.
+    /// Atomically creates a run, records its workspace, and returns its thread.
     pub fn append_new_run(
         &mut self,
         workspace: &str,
         event: &EventEnvelope,
-    ) -> Result<(), JournalError> {
+    ) -> Result<String, JournalError> {
         if workspace.is_empty() || event.run_seq != 1 {
             return Err(JournalError::InvalidEnvelope(
                 "new run workspace and sequence must be valid".into(),
@@ -846,7 +846,7 @@ impl RunJournal {
         )?;
         tx.commit()?;
         publish_commit_hint(coordination.as_deref(), &event.run_id, event.run_seq);
-        Ok(())
+        Ok(thread_id)
     }
 
     /// Atomically creates a run in an existing thread at its next ordinal.
