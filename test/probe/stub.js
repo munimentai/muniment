@@ -43,6 +43,26 @@ function recordInvoke(surface, command, payload) {
   invokedCommands.push({ surface, command, payload })
 }
 
+function fixtureRendered() {
+  const workspace = document.querySelector('.workspace')
+  if (!workspace) return false
+  if (history.length === 0) return workspace.querySelector('.empty') !== null
+  return history.every((run) => workspace.textContent.includes(run.prompt) && workspace.textContent.includes(run.text))
+}
+
+function markReadyAfterFixtureRender() {
+  if (fixtureRendered()) {
+    document.body.dataset.probeReady = ''
+    return
+  }
+  const observer = new MutationObserver(() => {
+    if (!fixtureRendered()) return
+    observer.disconnect()
+    document.body.dataset.probeReady = ''
+  })
+  observer.observe(document.getElementById('app'), { childList: true, subtree: true })
+}
+
 window.__PROBE__ = {
   eventListeners,
   invokedCommands,
@@ -65,6 +85,7 @@ window.__PROBE__ = {
     const module = builtPage.querySelector('script[type="module"][src]')
     if (!module) throw new Error('Could not find the built bundle module.')
     await import(`/dist${new URL(module.src).pathname}`)
+    markReadyAfterFixtureRender()
   },
 }
 
