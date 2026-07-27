@@ -11,9 +11,10 @@ use std::time::Duration;
 
 #[cfg(target_os = "linux")]
 use muniment_core::attach::linux::{
-    run_authenticated_session_with_service_and_approvals, AttachFilesystem, AttachTransport,
-    CompanionProvenance, RunStartAccepted, RunStartRequest as AttachRunStartRequest,
-    ThreadListPage, ThreadListRequest, ThreadListService, ThreadOpenPage, ThreadOpenRequest,
+    run_authenticated_session_with_service_and_approvals, AttachAcceptError, AttachFilesystem,
+    AttachTransport, CompanionProvenance, RunStartAccepted,
+    RunStartRequest as AttachRunStartRequest, ThreadListPage, ThreadListRequest, ThreadListService,
+    ThreadOpenPage, ThreadOpenRequest,
 };
 #[cfg(target_os = "linux")]
 use muniment_core::attach::{
@@ -164,6 +165,16 @@ fn desktop_attach_approval() -> Option<Approval> {
 }
 
 #[cfg(target_os = "linux")]
+fn should_retry_attach_accept(error: AttachAcceptError) -> bool {
+    matches!(
+        error,
+        AttachAcceptError::Accept
+            | AttachAcceptError::PeerCredentials
+            | AttachAcceptError::WrongUid(_)
+    )
+}
+
+#[cfg(target_os = "linux")]
 pub fn start_attach_listener<R: tauri::Runtime>(app: tauri::AppHandle<R>) {
     std::thread::spawn(move || {
         let Ok(filesystem) = AttachFilesystem::from_environment() else {
@@ -179,7 +190,17 @@ pub fn start_attach_listener<R: tauri::Runtime>(app: tauri::AppHandle<R>) {
         let Ok(state) = AttachListenerState::load(&credential_path) else {
             return;
         };
-        while let Ok((stream, credentials)) = listener.accept() {
+        loop {
+            let (stream, credentials) = match listener.accept() {
+                Ok(accepted) => accepted,
+                Err(error) if should_retry_attach_accept(error) => {
+                    if error == AttachAcceptError::Accept {
+                        std::thread::sleep(Duration::from_millis(50));
+                    }
+                    continue;
+                }
+                Err(_) => break,
+            };
             let app = app.clone();
             let workspace_contexts = state.workspace_contexts.clone();
             let client_credentials = state.client_credentials.clone();
@@ -513,6 +534,28 @@ mod tests {
     use muniment_core::journal::reducer::reduce;
     use muniment_core::journal::RunJournal;
     use std::sync::atomic::Ordering;
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn attach_accept_errors_retry_unless_listener_is_closed() {
+        use muniment_core::attach::linux::PeerCredentials;
+
+        let credentials = PeerCredentials {
+            pid: 42,
+            uid: 1001,
+            gid: 1001,
+        };
+        let cases = [
+            (AttachAcceptError::Closed, false),
+            (AttachAcceptError::Accept, true),
+            (AttachAcceptError::PeerCredentials, true),
+            (AttachAcceptError::WrongUid(credentials), true),
+        ];
+
+        for (error, expected) in cases {
+            assert_eq!(should_retry_attach_accept(error), expected, "{error:?}");
+        }
+    }
 
     #[cfg(target_os = "linux")]
     struct FailingFinalization;
