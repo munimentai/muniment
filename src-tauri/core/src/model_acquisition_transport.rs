@@ -555,9 +555,12 @@ mod tests {
 
     #[test]
     fn both_adapters_map_status_and_transport_failures() {
-        let mut gemma = transport(vec![Ok(reply(503, None, None, b"private body"))]);
+        let mut resident_model = transport(vec![Ok(reply(503, None, None, b"private body"))]);
         assert!(matches!(
-            ResidentModelDownloadTransport::download(&mut gemma, &resident_model_request()),
+            ResidentModelDownloadTransport::download(
+                &mut resident_model,
+                &resident_model_request()
+            ),
             Err(ResidentModelTransportError::Transient)
         ));
         let mut asr = transport(vec![Err(TransportFailure::Transient)]);
@@ -566,9 +569,12 @@ mod tests {
             Err(AsrTransportError::Transient)
         ));
         for status in [404, 410] {
-            let mut gemma = transport(vec![Ok(reply(status, None, None, b"secret body"))]);
+            let mut resident_model = transport(vec![Ok(reply(status, None, None, b"secret body"))]);
             assert!(matches!(
-                ResidentModelDownloadTransport::download(&mut gemma, &resident_model_request()),
+                ResidentModelDownloadTransport::download(
+                    &mut resident_model,
+                    &resident_model_request()
+                ),
                 Err(ResidentModelTransportError::Unavailable)
             ));
             let mut asr = transport(vec![Ok(reply(status, None, None, b"secret body"))]);
@@ -581,14 +587,17 @@ mod tests {
 
     #[test]
     fn rejects_downgrade_and_unrelated_redirects() {
-        let mut gemma = transport(vec![Ok(reply(
+        let mut resident_model = transport(vec![Ok(reply(
             302,
             Some("http://huggingface.co/file"),
             None,
             b"",
         ))]);
         assert!(matches!(
-            ResidentModelDownloadTransport::download(&mut gemma, &resident_model_request()),
+            ResidentModelDownloadTransport::download(
+                &mut resident_model,
+                &resident_model_request()
+            ),
             Err(ResidentModelTransportError::Rejected)
         ));
         let mut asr = transport(vec![Ok(reply(

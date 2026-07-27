@@ -1009,6 +1009,7 @@ fn redact_parakeet_failure(
 }
 
 #[tauri::command]
+// Keep this legacy model-specific command name for frontend wire compatibility.
 pub fn gemma_install_start(
     state: State<'_, ResidentModelInstallState>,
 ) -> ResidentModelInstallStatus {
@@ -1016,19 +1017,21 @@ pub fn gemma_install_start(
 }
 
 #[tauri::command]
+// Keep this legacy model-specific command name for frontend wire compatibility.
 pub async fn gemma_install_status(
     state: State<'_, ResidentModelInstallState>,
 ) -> Result<ResidentModelInstallStatus, String> {
-    gemma_install_status_handler(&state).await
+    resident_model_install_status_handler(&state).await
 }
 
-async fn gemma_install_status_handler(
+async fn resident_model_install_status_handler(
     state: &ResidentModelInstallState,
 ) -> Result<ResidentModelInstallStatus, String> {
     Ok(state.status().await)
 }
 
 #[tauri::command]
+// Keep this legacy model-specific command name for frontend wire compatibility.
 pub fn gemma_install_cancel(
     state: State<'_, ResidentModelInstallState>,
 ) -> ResidentModelInstallStatus {

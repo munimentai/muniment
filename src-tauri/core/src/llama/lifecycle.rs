@@ -13,6 +13,7 @@ use super::{
     RESIDENT_MODEL_REVISION,
 };
 
+// Keep this legacy header spelling to preserve the persisted pointer wire format.
 const POINTER_HEADER: &str = "muniment-gemma-pointer-v1";
 
 /// The only startup detail persisted by activation. These categories are
