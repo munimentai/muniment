@@ -645,6 +645,36 @@ fn newer_schema_version_fails_without_writing() {
 }
 
 #[test]
+fn head_schema_missing_journal_metadata_fails_without_recreating_it() {
+    let db = TestDb::new();
+    RunJournal::open(db.as_ref()).unwrap();
+    let raw = Connection::open(db.as_ref()).unwrap();
+    raw.execute_batch("DROP TABLE journal_metadata").unwrap();
+    drop(raw);
+
+    assert!(matches!(
+        RunJournal::open(db.as_ref()),
+        Err(JournalError::Sqlite(_))
+    ));
+    let raw = Connection::open(db.as_ref()).unwrap();
+    assert_eq!(
+        raw.pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
+            .unwrap(),
+        2
+    );
+    assert_eq!(
+        raw.query_row(
+            "SELECT COUNT(*) FROM sqlite_schema WHERE type='table' \
+             AND name='journal_metadata'",
+            [],
+            |row| row.get::<_, i64>(0)
+        )
+        .unwrap(),
+        0
+    );
+}
+
+#[test]
 fn failed_migration_rolls_back_schema_and_version() {
     let db = TestDb::new();
     RunJournal::open(db.as_ref()).unwrap();

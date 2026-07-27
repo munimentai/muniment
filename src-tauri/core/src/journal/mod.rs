@@ -542,9 +542,7 @@ impl RunJournal {
                 .iter()
                 .find(|migration| migration.version == current_version + 1)
                 .ok_or_else(|| {
-                    JournalError::Corrupt(format!(
-                        "unsupported schema version {current_version}"
-                    ))
+                    JournalError::Corrupt(format!("unsupported schema version {current_version}"))
                 })?;
             let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
             (migration.apply)(&tx)?;
@@ -1117,9 +1115,6 @@ fn decode_run_event_cursor(
 }
 
 fn load_or_create_cursor_key(connection: &Connection) -> Result<[u8; 32], JournalError> {
-    connection.execute_batch(
-        "CREATE TABLE IF NOT EXISTS journal_metadata (key TEXT PRIMARY KEY NOT NULL, value BLOB NOT NULL) STRICT;",
-    )?;
     let existing = connection
         .query_row(
             "SELECT value FROM journal_metadata WHERE key='run_summary_cursor_key'",
@@ -1556,9 +1551,7 @@ fn valid_receipt(receipt: &ReceiptProjection) -> bool {
         })
 }
 
-fn backfill_receipt_projection(
-    tx: &rusqlite::Transaction<'_>,
-) -> Result<(), JournalError> {
+fn backfill_receipt_projection(tx: &rusqlite::Transaction<'_>) -> Result<(), JournalError> {
     let rows = {
         let mut statement = tx.prepare(
             "SELECT run_id,run_seq,CASE WHEN length(CAST(envelope_json AS BLOB))<=?1 \
