@@ -17,6 +17,7 @@ use muniment_core::journal::reducer::{
     project_chat, reduce, ChatProjection, ChatProjector, PermissionGate, PermissionRequest,
     ProjectedAttachment, RunStatus,
 };
+use muniment_core::journal::thread_summaries::ThreadSummary;
 use muniment_core::journal::{EventEnvelope, EventPayload, Provenance, RunJournal};
 use muniment_core::sidecar::pi_chat::{
     cancel_command, ExtensionUiDialog, ExtensionUiRequest, PiChatEvent, PiImageContent,
@@ -95,6 +96,28 @@ pub struct HistoryEntry {
     #[serde(skip_serializing_if = "Option::is_none")]
     pending_permission: Option<ChatPendingPermission>,
     resumable: bool,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChatThreadSummary {
+    thread_id: String,
+    title: String,
+    updated_at: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChatThreadSummaryPage {
+    summaries: Vec<ChatThreadSummary>,
+    next_cursor: Option<String>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChatThreadOpenPage {
+    entries: Vec<HistoryEntry>,
+    next_cursor: Option<String>,
 }
 
 #[derive(Clone, Serialize)]
@@ -642,6 +665,168 @@ fn history_entries(
         });
     }
     Ok(entries)
+}
+
+fn subject_owns_first_run(
+    journal: &mut RunJournal,
+    thread_id: &str,
+    subject: Option<&str>,
+) -> Result<bool, String> {
+    let first_run = journal
+        .thread_run_ids(thread_id, 1, None)
+        .map_err(|_| "Conversation history is unavailable.".to_string())?
+        .run_ids
+        .into_iter()
+        .next()
+        .ok_or_else(|| "Conversation history is unavailable.".to_string())?;
+    let first = journal
+        .first_envelope(&first_run)
+        .map_err(|_| "Conversation history is unavailable.".to_string())?;
+    Ok(!matches!(
+        first.provenance.actor_id.as_deref(),
+        Some(owner) if Some(owner) != subject
+    ))
+}
+
+fn chat_thread_summaries_page(
+    journal: &mut RunJournal,
+    subject: Option<&str>,
+    limit: usize,
+    cursor: Option<&str>,
+) -> Result<ChatThreadSummaryPage, String> {
+    if !(1..=100).contains(&limit) {
+        return Err("Conversation history is unavailable.".into());
+    }
+    let mut summaries = Vec::with_capacity(limit);
+    let mut next_cursor = cursor.map(str::to_owned);
+    loop {
+        let remaining = limit - summaries.len();
+        let page = journal
+            .thread_summaries(remaining, next_cursor.as_deref())
+            .map_err(|_| "Conversation history is unavailable.".to_string())?;
+        next_cursor = page.next_cursor;
+        for summary in page.summaries {
+            if subject_owns_first_run(journal, &summary.thread_id, subject)? {
+                summaries.push(summary);
+            }
+        }
+        if summaries.len() == limit || next_cursor.is_none() {
+            break;
+        }
+    }
+    Ok(ChatThreadSummaryPage {
+        summaries: summaries
+            .into_iter()
+            .map(
+                |ThreadSummary {
+                     thread_id,
+                     title,
+                     updated_at,
+                 }| ChatThreadSummary {
+                    thread_id,
+                    title,
+                    updated_at,
+                },
+            )
+            .collect(),
+        next_cursor,
+    })
+}
+
+fn project_history_entry(
+    journal: &mut RunJournal,
+    run_id: String,
+    subject: Option<&str>,
+    session_root: &std::path::Path,
+) -> Result<HistoryEntry, String> {
+    let events = journal
+        .events(&run_id)
+        .map_err(|_| "Conversation history is unavailable.".to_string())?;
+    let projection =
+        project_chat(&events).map_err(|_| "Conversation history is unavailable.".to_string())?;
+    let resumable = resumable_context(&events, subject, session_root).is_ok();
+    Ok(HistoryEntry {
+        prompt: load_prompt(&run_id, subject)?,
+        phase: projection_phase(&projection.status).into(),
+        text: projection.text,
+        receipt: projection.receipt,
+        tool_activity: chat_tool_activity(&projection.tool_activity),
+        attachments: chat_attachments(&projection.attachments),
+        pending_permission: chat_pending_permission(projection.pending_permission),
+        resumable,
+        run_id,
+    })
+}
+
+fn chat_thread_open_page(
+    journal: &mut RunJournal,
+    subject: Option<&str>,
+    session_root: &std::path::Path,
+    thread_id: &str,
+    limit: usize,
+    cursor: Option<&str>,
+) -> Result<ChatThreadOpenPage, String> {
+    if !subject_owns_first_run(journal, thread_id, subject)? {
+        return Err("Conversation history is unavailable.".into());
+    }
+    let page = journal
+        .thread_run_ids(thread_id, limit, cursor)
+        .map_err(|_| "Conversation history is unavailable.".to_string())?;
+    let entries = page
+        .run_ids
+        .into_iter()
+        .map(|run_id| project_history_entry(journal, run_id, subject, session_root))
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(ChatThreadOpenPage {
+        entries,
+        next_cursor: page.next_cursor,
+    })
+}
+
+#[tauri::command]
+pub async fn chat_thread_summaries(
+    app_handle: tauri::AppHandle,
+    auth_state: tauri::State<'_, auth::AuthState>,
+    state: tauri::State<'_, ChatState>,
+    limit: usize,
+    cursor: Option<String>,
+) -> Result<ChatThreadSummaryPage, String> {
+    let tokens = auth::fresh_tokens(&auth_state, &app_handle)?;
+    let mut storage = state
+        .storage
+        .lock()
+        .map_err(|_| "Conversation history is unavailable.".to_string())?;
+    chat_thread_summaries_page(
+        &mut storage.journal,
+        tokens.subject.as_deref(),
+        limit,
+        cursor.as_deref(),
+    )
+}
+
+#[tauri::command]
+pub async fn chat_thread_open(
+    app_handle: tauri::AppHandle,
+    auth_state: tauri::State<'_, auth::AuthState>,
+    state: tauri::State<'_, ChatState>,
+    thread_id: String,
+    limit: usize,
+    cursor: Option<String>,
+) -> Result<ChatThreadOpenPage, String> {
+    let tokens = auth::fresh_tokens(&auth_state, &app_handle)?;
+    let session_root = state_session_root(&app_handle)?;
+    let mut storage = state
+        .storage
+        .lock()
+        .map_err(|_| "Conversation history is unavailable.".to_string())?;
+    chat_thread_open_page(
+        &mut storage.journal,
+        tokens.subject.as_deref(),
+        &session_root,
+        &thread_id,
+        limit,
+        cursor.as_deref(),
+    )
 }
 
 #[tauri::command]
@@ -3737,6 +3922,150 @@ mod tests {
                 .text,
             "private-a"
         );
+
+        drop(journal);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn thread_history_pages_and_rejects_inaccessible_threads() {
+        keyring::set_default_credential_builder(keyring::mock::default_credential_builder());
+        let directory = std::env::temp_dir().join(format!("muniment-chat-{}", Uuid::now_v7()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("runs.sqlite3");
+        let owner_runs = [
+            "01900000-0000-7000-8000-000000000011",
+            "01900000-0000-7000-8000-000000000012",
+            "01900000-0000-7000-8000-000000000013",
+            "01900000-0000-7000-8000-000000000014",
+        ];
+        let foreign_run = "01900000-0000-7000-8000-000000000015";
+        let mut journal = RunJournal::open(&path).unwrap();
+        for run_id in owner_runs {
+            journal
+                .append_new_run(
+                    "workspace-a",
+                    &event_envelope(run_id, 1, "run.started", json!({}), Some("owner")),
+                )
+                .unwrap();
+        }
+        journal
+            .append_new_run(
+                "workspace-a",
+                &event_envelope(foreign_run, 1, "run.started", json!({}), Some("other")),
+            )
+            .unwrap();
+        drop(journal);
+
+        let connection = rusqlite::Connection::open(&path).unwrap();
+        let thread_for = |run_id: &str| {
+            connection
+                .query_row(
+                    "SELECT thread_id FROM run_threads WHERE run_id=?1",
+                    [run_id],
+                    |row| row.get::<_, String>(0),
+                )
+                .unwrap()
+        };
+        let open_thread = thread_for(owner_runs[0]);
+        let merged_thread = thread_for(owner_runs[1]);
+        let deleted_thread = thread_for(owner_runs[2]);
+        let foreign_thread = thread_for(foreign_run);
+        connection
+            .execute(
+                "UPDATE run_threads SET thread_id=?1,thread_run_ordinal=2 WHERE run_id=?2",
+                rusqlite::params![open_thread, owner_runs[1]],
+            )
+            .unwrap();
+        connection
+            .execute(
+                "DELETE FROM thread_events WHERE thread_id=?1",
+                [merged_thread],
+            )
+            .unwrap();
+        drop(connection);
+
+        let mut journal = RunJournal::open(&path).unwrap();
+        let first = chat_thread_summaries_page(&mut journal, Some("owner"), 1, None).unwrap();
+        assert_eq!(first.summaries.len(), 1);
+        let second = chat_thread_summaries_page(
+            &mut journal,
+            Some("owner"),
+            1,
+            first.next_cursor.as_deref(),
+        )
+        .unwrap();
+        let third = chat_thread_summaries_page(
+            &mut journal,
+            Some("owner"),
+            1,
+            second.next_cursor.as_deref(),
+        )
+        .unwrap();
+        let visible = [first, second, third]
+            .into_iter()
+            .flat_map(|page| page.summaries)
+            .map(|summary| summary.thread_id)
+            .collect::<BTreeSet<_>>();
+        assert_eq!(visible.len(), 3);
+        assert!(!visible.contains(&foreign_thread));
+
+        let first_open = chat_thread_open_page(
+            &mut journal,
+            Some("owner"),
+            &directory,
+            &open_thread,
+            1,
+            None,
+        )
+        .unwrap();
+        assert_eq!(first_open.entries[0].run_id, owner_runs[0]);
+        let second_open = chat_thread_open_page(
+            &mut journal,
+            Some("owner"),
+            &directory,
+            &open_thread,
+            1,
+            first_open.next_cursor.as_deref(),
+        )
+        .unwrap();
+        assert_eq!(second_open.entries[0].run_id, owner_runs[1]);
+        assert!(second_open.next_cursor.is_none());
+
+        for thread_id in ["unknown", foreign_thread.as_str()] {
+            let error =
+                chat_thread_open_page(&mut journal, Some("owner"), &directory, thread_id, 1, None)
+                    .err()
+                    .unwrap();
+            assert_eq!(error, "Conversation history is unavailable.");
+        }
+        journal
+            .append_thread_deleted(
+                1,
+                &deleted_thread,
+                &Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true),
+                &Provenance {
+                    source: "test".into(),
+                    source_version: "1".into(),
+                    actor_id: Some("owner".into()),
+                    device_id: None,
+                    rpc_request_id: None,
+                    capability_versions: None,
+                    extra: BTreeMap::new(),
+                },
+            )
+            .unwrap();
+        let error = chat_thread_open_page(
+            &mut journal,
+            Some("owner"),
+            &directory,
+            &deleted_thread,
+            1,
+            None,
+        )
+        .err()
+        .unwrap();
+        assert_eq!(error, "Conversation history is unavailable.");
 
         drop(journal);
         std::fs::remove_dir_all(directory).unwrap();
