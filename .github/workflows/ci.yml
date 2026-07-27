@@ -307,7 +307,7 @@ jobs:
 
           cmd='cargo check --manifest-path src-tauri/Cargo.toml --locked --all-targets'
           if [ "$PLATFORM" = "linux" ]; then
-            cmd='sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends libasound2-dev -o DPkg::Lock::Timeout=300 && cargo check --manifest-path src-tauri/Cargo.toml --locked --all-targets'
+            cmd='sudo apt-get install -y -qq --no-install-recommends libasound2-dev -o DPkg::Lock::Timeout=300 && cargo check --manifest-path src-tauri/Cargo.toml --locked --all-targets'
           fi
           if [ "$PLATFORM" = "windows" ]; then
             cmd='cargo test --manifest-path src-tauri/core/Cargo.toml --locked --test browser_control_windows_transport && cargo check --manifest-path src-tauri/Cargo.toml --locked --all-targets'
