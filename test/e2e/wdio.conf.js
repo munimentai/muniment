@@ -4,6 +4,7 @@ const appBinary = process.env.MUNIMENT_E2E_APP_BINARY
 const artifactDir = process.env.MUNIMENT_E2E_RAW_DIR
 const reportName = process.env.MUNIMENT_E2E_CLEANUP_ONLY === '1' ? 'cleanup' : process.env.MUNIMENT_E2E_ONBOARDING_ONLY === '1' ? 'onboarding' : 'sign-in'
 const tauriDriverPort = 4444
+const externalDriver = process.env.MUNIMENT_E2E_EXTERNAL_DRIVER === '1'
 
 if (!appBinary || !path.isAbsolute(appBinary)) throw new Error('MUNIMENT_E2E_APP_BINARY must be an absolute path')
 if (!artifactDir || !path.isAbsolute(artifactDir)) throw new Error('MUNIMENT_E2E_RAW_DIR must be an absolute path')
@@ -12,11 +13,15 @@ export const config = {
   runner: 'local',
   specs: [process.env.MUNIMENT_E2E_CLEANUP_ONLY === '1' ? './specs/cleanup.spec.js' : process.env.MUNIMENT_E2E_ONBOARDING_ONLY === '1' ? './specs/onboarding.spec.js' : './specs/real-sign-in.spec.js'],
   maxInstances: 1,
-  // The Tauri service removes browserName before WebdriverIO creates the
-  // session. An explicit endpoint keeps WDIO in remote-driver mode afterward.
-  hostname: '127.0.0.1',
-  port: tauriDriverPort,
-  capabilities: [{ browserName: 'tauri' }],
+  ...(externalDriver ? {
+    hostname: '127.0.0.1',
+    port: tauriDriverPort,
+    capabilities: [{
+      'tauri:options': { application: appBinary },
+    }],
+  } : {
+    capabilities: [{ browserName: 'tauri' }],
+  }),
   logLevel: 'info',
   outputDir: artifactDir,
   framework: 'mocha',
@@ -29,7 +34,7 @@ export const config = {
   ],
   mochaOpts: { timeout: 180000 },
   waitforTimeout: 30000,
-  services: [['@wdio/tauri-service', {
+  services: externalDriver ? [] : [['@wdio/tauri-service', {
     appBinaryPath: appBinary,
     driverProvider: 'external',
     tauriDriverPort,
