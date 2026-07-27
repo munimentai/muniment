@@ -164,7 +164,7 @@ jobs:
 
       - name: Rust unit tests
         if: steps.changes.outputs.desktop == 'true' || steps.changes.outputs.resident_model_adr == 'true' || github.event_name != 'pull_request'
-        run: cargo test --manifest-path src-tauri/core/Cargo.toml --locked
+        run: cargo test --manifest-path src-tauri/core/Cargo.toml --locked --features network-tests
 
       - name: Companion formatting
         if: steps.changes.outputs.companion == 'true'
