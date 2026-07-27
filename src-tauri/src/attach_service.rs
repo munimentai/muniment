@@ -428,6 +428,7 @@ impl<B: RunStartBoundaries, I: RunStartIdempotency> ThreadListService
                         files: Vec::new(),
                         workspace: Some(workspace.to_owned()),
                         provenance: Some(provenance),
+                        continue_thread: false,
                     },
                 )
                 .map_err(|error| error.protocol_error())?;

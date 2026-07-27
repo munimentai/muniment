@@ -156,6 +156,7 @@ impl RunStartBoundaries for FakeRunStartBoundaries {
         tokens: &TokenSet,
         _files: Vec<SelectedFile>,
         provenance: Option<Provenance>,
+        _continue_thread: bool,
     ) -> Result<(u64, ChatProjector), RunStartError> {
         self.prepare_calls.fetch_add(1, Ordering::SeqCst);
         *self.prepared_provenance.lock().unwrap() = provenance;

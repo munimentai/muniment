@@ -847,6 +847,86 @@ fn new_run_is_stamped_and_deletion_removes_its_empty_thread() {
 }
 
 #[test]
+fn continued_runs_use_contiguous_thread_ordinals() {
+    let db = TestDb::new();
+    let mut journal = RunJournal::open(db.as_ref()).unwrap();
+    let thread_id = journal.append_new_run("workspace-a", &event(1)).unwrap();
+    let second_run = "0190a100-0000-7000-8000-000000000002";
+    journal
+        .append_run_to_thread(
+            "workspace-a",
+            &thread_id,
+            &event_for(
+                second_run,
+                "0190a100-0000-7000-8000-000000000102",
+                1,
+                "run.started",
+            ),
+        )
+        .unwrap();
+
+    let raw = Connection::open(db.as_ref()).unwrap();
+    let stamps: Vec<(String, u64)> = raw
+        .prepare(
+            "SELECT thread_id,thread_run_ordinal FROM run_threads \
+             ORDER BY thread_run_ordinal",
+        )
+        .unwrap()
+        .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
+    assert_eq!(stamps, [(thread_id.clone(), 1), (thread_id, 2)]);
+}
+
+#[test]
+fn continued_run_rejections_append_nothing() {
+    let db = TestDb::new();
+    let mut journal = RunJournal::open(db.as_ref()).unwrap();
+    let thread_id = journal.append_new_run("workspace-a", &event(1)).unwrap();
+    let live_run = "0190a100-0000-7000-8000-000000000005";
+    let live_thread = journal
+        .append_new_run(
+            "workspace-a",
+            &event_for(
+                live_run,
+                "0190a100-0000-7000-8000-000000000105",
+                1,
+                "run.started",
+            ),
+        )
+        .unwrap();
+    let provenance = test_provenance();
+    journal
+        .append_thread_deleted(1, &thread_id, "2026-07-10T12:00:01Z", &provenance)
+        .unwrap();
+
+    for (run_id, candidate_thread, workspace) in [
+        (
+            "0190a100-0000-7000-8000-000000000002",
+            "0190a100-0000-7000-8000-000000000099",
+            "workspace-a",
+        ),
+        (
+            "0190a100-0000-7000-8000-000000000003",
+            thread_id.as_str(),
+            "workspace-a",
+        ),
+        (
+            "0190a100-0000-7000-8000-000000000004",
+            live_thread.as_str(),
+            "workspace-b",
+        ),
+    ] {
+        let rejected = event_for(run_id, &Uuid::now_v7().to_string(), 1, "run.started");
+        assert!(journal
+            .append_run_to_thread(workspace, candidate_thread, &rejected)
+            .is_err());
+        assert!(journal.events(run_id).unwrap().is_empty());
+    }
+}
+
+#[test]
 fn thread_rename_and_delete_append_validated_canonical_events() {
     let db = TestDb::new();
     let mut journal = RunJournal::open(db.as_ref()).unwrap();

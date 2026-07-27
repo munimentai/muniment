@@ -200,6 +200,13 @@ pub struct ChatState {
     storage: SharedStorage,
     active: Mutex<Option<ActiveRun>>,
     runtime: Arc<Mutex<Option<PiRuntime>>>,
+    current_thread: Mutex<Option<CurrentThread>>,
+}
+
+struct CurrentThread {
+    id: String,
+    workspace: String,
+    subject: Option<String>,
 }
 
 pub(crate) struct RunStartRequest {
@@ -207,6 +214,7 @@ pub(crate) struct RunStartRequest {
     pub(crate) files: Vec<SelectedFile>,
     pub(crate) workspace: Option<String>,
     pub(crate) provenance: Option<Provenance>,
+    pub(crate) continue_thread: bool,
 }
 
 pub(crate) struct RunStartLaunch {
@@ -250,6 +258,7 @@ pub(crate) trait RunStartBoundaries {
         tokens: &TokenSet,
         files: Vec<SelectedFile>,
         provenance: Option<Provenance>,
+        continue_thread: bool,
     ) -> Result<(u64, ChatProjector), RunStartError>;
     fn project_attachments(
         &self,
@@ -329,14 +338,20 @@ pub(crate) fn prepare_desktop_run(
         boundaries.clear_active_run(&run_id);
         return Err(error);
     }
-    let prepared =
-        match boundaries.prepare_run(&run_id, &grant, &tokens, request.files, request.provenance) {
-            Ok(prepared) => prepared,
-            Err(error) => {
-                boundaries.clear_active_run(&run_id);
-                return Err(error);
-            }
-        };
+    let prepared = match boundaries.prepare_run(
+        &run_id,
+        &grant,
+        &tokens,
+        request.files,
+        request.provenance,
+        request.continue_thread,
+    ) {
+        Ok(prepared) => prepared,
+        Err(error) => {
+            boundaries.clear_active_run(&run_id);
+            return Err(error);
+        }
+    };
     let attachments = match boundaries.project_attachments(&prepared.1) {
         Ok(attachments) => attachments,
         Err(error) => {
@@ -445,9 +460,11 @@ impl<R: tauri::Runtime> RunStartBoundaries for TauriRunStartBoundaries<R> {
         tokens: &TokenSet,
         files: Vec<SelectedFile>,
         provenance: Option<Provenance>,
+        continue_thread: bool,
     ) -> Result<(u64, ChatProjector), RunStartError> {
-        prepare_new_run(
+        prepare_new_run_in_thread(
             &self.state().storage,
+            continue_thread.then_some(&self.state().current_thread),
             run_id,
             &grant.workspace,
             tokens.subject.as_deref(),
@@ -531,6 +548,7 @@ impl ChatState {
             })),
             active: Mutex::new(None),
             runtime: Arc::new(Mutex::new(None)),
+            current_thread: Mutex::new(None),
         })
     }
 }
@@ -933,6 +951,7 @@ pub async fn chat_submit(
                 files: files.unwrap_or_default(),
                 workspace: None,
                 provenance: None,
+                continue_thread: true,
             },
         )
         .map_err(RunStartError::into_message)
@@ -1140,14 +1159,46 @@ fn prepare_new_run(
     files: Vec<SelectedFile>,
     provenance: Option<Provenance>,
 ) -> Result<(u64, ChatProjector), String> {
+    prepare_new_run_in_thread(storage, None, run_id, workspace, subject, files, provenance)
+}
+
+fn prepare_new_run_in_thread(
+    storage: &SharedStorage,
+    current_thread: Option<&Mutex<Option<CurrentThread>>>,
+    run_id: &str,
+    workspace: &str,
+    subject: Option<&str>,
+    files: Vec<SelectedFile>,
+    provenance: Option<Provenance>,
+) -> Result<(u64, ChatProjector), String> {
     // Open and validate every selection before creating a run, so ordinary
     // selection failures cannot leave a rejected submission in the journal.
     let files = open_selected_files(files)?;
-    prepare_opened_run(storage, run_id, workspace, subject, files, provenance)
+    prepare_opened_run_in_thread(
+        storage,
+        current_thread,
+        run_id,
+        workspace,
+        subject,
+        files,
+        provenance,
+    )
 }
 
 fn prepare_opened_run(
     storage: &SharedStorage,
+    run_id: &str,
+    workspace: &str,
+    subject: Option<&str>,
+    files: Vec<OpenSelectedFile>,
+    provenance: Option<Provenance>,
+) -> Result<(u64, ChatProjector), String> {
+    prepare_opened_run_in_thread(storage, None, run_id, workspace, subject, files, provenance)
+}
+
+fn prepare_opened_run_in_thread(
+    storage: &SharedStorage,
+    current_thread: Option<&Mutex<Option<CurrentThread>>>,
     run_id: &str,
     workspace: &str,
     subject: Option<&str>,
@@ -1167,9 +1218,36 @@ fn prepare_opened_run(
     }
     projector.apply(&started).map_err(|_| attachment_error())?;
     if !workspace.is_empty() {
-        journal
-            .append_new_run(workspace, &started)
-            .map_err(|_| attachment_error())?;
+        let mut current_thread = current_thread.map(|thread| {
+            thread
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+        });
+        let continued_thread = current_thread
+            .as_ref()
+            .and_then(|current| current.as_ref())
+            .filter(|thread| thread.workspace == workspace && thread.subject.as_deref() == subject)
+            .map(|thread| thread.id.clone());
+        let fresh_thread = if continued_thread.as_ref().is_some_and(|thread_id| {
+            journal
+                .append_run_to_thread(workspace, thread_id, &started)
+                .is_ok()
+        }) {
+            None
+        } else {
+            Some(
+                journal
+                    .append_new_run(workspace, &started)
+                    .map_err(|_| attachment_error())?,
+            )
+        };
+        if let (Some(current), Some(thread_id)) = (current_thread.as_mut(), fresh_thread) {
+            **current = Some(CurrentThread {
+                id: thread_id,
+                workspace: workspace.to_owned(),
+                subject: subject.map(str::to_owned),
+            });
+        }
     } else {
         journal
             .append(0, &started)
@@ -2278,6 +2356,115 @@ mod tests {
     static PI_ENV_LOCK: Mutex<()> = Mutex::new(());
 
     #[test]
+    fn desktop_submits_continue_the_session_thread_and_recover_from_deletion() {
+        let directory =
+            std::env::temp_dir().join(format!("muniment-thread-session-{}", Uuid::now_v7()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let journal_path = directory.join("runs.sqlite3");
+        let storage = Arc::new(Mutex::new(ChatStorage {
+            journal: RunJournal::open(&journal_path).unwrap(),
+            cas: LocalCas::open(&directory.join("cas")).unwrap(),
+        }));
+        let current_thread = Mutex::new(None);
+        let first_run = Uuid::now_v7().to_string();
+        let second_run = Uuid::now_v7().to_string();
+        for run_id in [&first_run, &second_run] {
+            prepare_new_run_in_thread(
+                &storage,
+                Some(&current_thread),
+                run_id,
+                "workspace-a",
+                Some("owner"),
+                Vec::new(),
+                None,
+            )
+            .unwrap();
+        }
+        let first_thread = current_thread.lock().unwrap().as_ref().unwrap().id.clone();
+        {
+            let raw = rusqlite::Connection::open(&journal_path).unwrap();
+            let stamps: Vec<(String, u64)> = raw
+                .prepare(
+                    "SELECT thread_id,thread_run_ordinal FROM run_threads \
+                     ORDER BY thread_run_ordinal",
+                )
+                .unwrap()
+                .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+                .unwrap()
+                .collect::<Result<_, _>>()
+                .unwrap();
+            assert_eq!(
+                stamps,
+                [(first_thread.clone(), 1), (first_thread.clone(), 2)]
+            );
+        }
+        storage
+            .lock()
+            .unwrap()
+            .journal
+            .append_thread_deleted(
+                1,
+                &first_thread,
+                "2026-07-10T12:00:01Z",
+                &event_envelope(&first_run, 2, "run.completed", json!({}), Some("owner"))
+                    .provenance,
+            )
+            .unwrap();
+        let third_run = Uuid::now_v7().to_string();
+        prepare_new_run_in_thread(
+            &storage,
+            Some(&current_thread),
+            &third_run,
+            "workspace-a",
+            Some("owner"),
+            Vec::new(),
+            None,
+        )
+        .unwrap();
+        let replacement = current_thread.lock().unwrap().as_ref().unwrap().id.clone();
+        assert_ne!(replacement, first_thread);
+        let raw = rusqlite::Connection::open(&journal_path).unwrap();
+        assert_eq!(
+            raw.query_row(
+                "SELECT thread_id,thread_run_ordinal FROM run_threads WHERE run_id=?1",
+                [&third_run],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, u64>(1)?)),
+            )
+            .unwrap(),
+            (replacement.clone(), 1)
+        );
+        drop(raw);
+
+        let fourth_run = Uuid::now_v7().to_string();
+        prepare_new_run_in_thread(
+            &storage,
+            Some(&current_thread),
+            &fourth_run,
+            "workspace-a",
+            Some("other-owner"),
+            Vec::new(),
+            None,
+        )
+        .unwrap();
+        let other_subject_thread = current_thread.lock().unwrap().as_ref().unwrap().id.clone();
+        assert_ne!(other_subject_thread, replacement);
+        let raw = rusqlite::Connection::open(&journal_path).unwrap();
+        assert_eq!(
+            raw.query_row(
+                "SELECT thread_id,thread_run_ordinal FROM run_threads WHERE run_id=?1",
+                [&fourth_run],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, u64>(1)?)),
+            )
+            .unwrap(),
+            (other_subject_thread, 1)
+        );
+
+        drop(raw);
+        drop(storage);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
     fn run_start_coordinator_accepts_through_injected_boundaries() {
         let boundaries = FakeRunStartBoundaries::accepting();
 
@@ -2288,6 +2475,7 @@ mod tests {
                 files: Vec::new(),
                 workspace: None,
                 provenance: None,
+                continue_thread: false,
             },
         )
         .unwrap();
@@ -2314,6 +2502,7 @@ mod tests {
                 files: Vec::new(),
                 workspace: None,
                 provenance: None,
+                continue_thread: false,
             },
         )
         .err()

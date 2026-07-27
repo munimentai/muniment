@@ -798,7 +798,7 @@ impl RunJournal {
         &mut self,
         workspace: &str,
         event: &EventEnvelope,
-    ) -> Result<(), JournalError> {
+    ) -> Result<String, JournalError> {
         if workspace.is_empty() || event.run_seq != 1 {
             return Err(JournalError::InvalidEnvelope(
                 "new run workspace and sequence must be valid".into(),
@@ -843,6 +843,91 @@ impl RunJournal {
         tx.execute(
             "INSERT INTO run_threads(run_id,thread_id,thread_run_ordinal) VALUES(?1,?2,1)",
             params![event.run_id, thread_id],
+        )?;
+        tx.commit()?;
+        publish_commit_hint(coordination.as_deref(), &event.run_id, event.run_seq);
+        Ok(thread_id)
+    }
+
+    /// Atomically creates a run in an existing thread.
+    pub fn append_run_to_thread(
+        &mut self,
+        workspace: &str,
+        thread_id: &str,
+        event: &EventEnvelope,
+    ) -> Result<(), JournalError> {
+        if workspace.is_empty() || thread_id.is_empty() || event.run_seq != 1 {
+            return Err(JournalError::InvalidEnvelope(
+                "continued run workspace, thread, and sequence must be valid".into(),
+            ));
+        }
+        validate_envelope(event)?;
+        let canonical = canonical_envelope(event)?;
+        let coordination = self.coordination.clone();
+        let _operation = coordination
+            .as_ref()
+            .map(|state| state.operation.lock().unwrap());
+        self.refresh_after_compaction()?;
+        let tx = self
+            .connection
+            .as_mut()
+            .expect("journal connection is always present outside compaction")
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let exists: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM events WHERE run_id=?1)",
+            [&event.run_id],
+            |row| row.get(0),
+        )?;
+        if exists {
+            return Err(JournalError::Conflict(Conflict::Sequence {
+                run_id: event.run_id.clone(),
+                run_seq: 1,
+            }));
+        }
+        let thread_workspace: Option<String> = tx
+            .query_row(
+                "SELECT json_extract(envelope_json,'$.payload_json.workspace') \
+                 FROM thread_events WHERE thread_id=?1 AND thread_seq=1 \
+                 AND event_type='thread.created'",
+                [thread_id],
+                |row| row.get(0),
+            )
+            .optional()?
+            .flatten();
+        if thread_workspace.as_deref() != Some(workspace) {
+            return Err(JournalError::InvalidEnvelope(
+                "thread does not exist in the workspace".into(),
+            ));
+        }
+        let deleted: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM thread_events \
+             WHERE thread_id=?1 AND event_type='thread.deleted')",
+            [thread_id],
+            |row| row.get(0),
+        )?;
+        if deleted {
+            return Err(JournalError::InvalidEnvelope("thread is deleted".into()));
+        }
+        let ordinal: u64 = tx.query_row(
+            "SELECT COALESCE(MAX(thread_run_ordinal),0)+1 FROM run_threads \
+             WHERE thread_id=?1",
+            [thread_id],
+            |row| row.get(0),
+        )?;
+        tx.execute(
+            "INSERT INTO events(event_id,run_id,run_seq,event_type,event_version,envelope_version,recorded_at,envelope_json) VALUES(?1,?2,1,?3,?4,?5,?6,?7)",
+            params![event.event_id,event.run_id,event.event_type,event.event_version,event.envelope_version,event.recorded_at,canonical],
+        )?;
+        update_thread_projection(&tx, event)?;
+        update_permission_pending_projection(&tx, event)?;
+        update_receipt_projection(&tx, event)?;
+        tx.execute(
+            "INSERT INTO run_workspaces(run_id, workspace) VALUES(?1, ?2)",
+            params![event.run_id, workspace],
+        )?;
+        tx.execute(
+            "INSERT INTO run_threads(run_id,thread_id,thread_run_ordinal) VALUES(?1,?2,?3)",
+            params![event.run_id, thread_id, ordinal],
         )?;
         tx.commit()?;
         publish_commit_hint(coordination.as_deref(), &event.run_id, event.run_seq);
