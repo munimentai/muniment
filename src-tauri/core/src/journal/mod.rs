@@ -1510,11 +1510,7 @@ fn validate_thread_envelope(event: &ThreadEventEnvelope) -> Result<(), JournalEr
                 "thread.deleted payload is invalid".into(),
             ));
         }
-        _ => {
-            return Err(JournalError::InvalidEnvelope(
-                "thread event type is not supported".into(),
-            ));
-        }
+        _ => {}
     }
     Ok(())
 }

@@ -1033,6 +1033,53 @@ fn validation_rejects_an_event_after_thread_deletion() {
 }
 
 #[test]
+fn validation_allows_an_unknown_event_before_thread_deletion() {
+    let db = TestDb::new();
+    let mut journal = RunJournal::open(db.as_ref()).unwrap();
+    journal.append_new_run("workspace-a", &event(1)).unwrap();
+    let thread_id = thread_id(&db);
+    let provenance = test_provenance();
+    journal
+        .append_thread_deleted(1, &thread_id, "2026-07-10T12:00:02Z", &provenance)
+        .unwrap();
+    drop(journal);
+
+    let raw = Connection::open(db.as_ref()).unwrap();
+    let deleted: String = raw
+        .query_row(
+            "SELECT envelope_json FROM thread_events WHERE thread_id=?1 AND thread_seq=2",
+            [&thread_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let deleted = deleted.replace("\"thread_seq\":2", "\"thread_seq\":3");
+    raw.execute(
+        "UPDATE thread_events SET thread_seq=3,envelope_json=?1 \
+         WHERE thread_id=?2 AND thread_seq=2",
+        (&deleted, &thread_id),
+    )
+    .unwrap();
+    let event_id = "0190a100-0000-7000-8000-000000000099";
+    let unknown = format!(
+        "{{\"envelope_version\":1,\"event_id\":\"{event_id}\",\"event_type\":\"thread.future\",\
+         \"event_version\":1,\"payload_json\":{{\"future\":true}},\
+         \"provenance\":{{\"actor_id\":\"profile-a\",\"device_id\":\"device-a\",\
+         \"source\":\"desktop\",\"source_version\":\"1\"}},\
+         \"recorded_at\":\"2026-07-10T12:00:01Z\",\
+         \"thread_id\":\"{thread_id}\",\"thread_seq\":2}}"
+    );
+    raw.execute(
+        "INSERT INTO thread_events VALUES(?1,?2,2,'thread.future',1,1,\
+         '2026-07-10T12:00:01Z',?3)",
+        (&event_id, &thread_id, unknown),
+    )
+    .unwrap();
+    drop(raw);
+
+    RunJournal::open(db.as_ref()).unwrap();
+}
+
+#[test]
 fn failed_step_three_rolls_back_schema_and_version() {
     let db = TestDb::new();
     RunJournal::open(db.as_ref()).unwrap();
