@@ -1,0 +1,138 @@
+const historyFixtures = {
+  empty: [],
+  restored: [
+    {
+      runId: 'probe-complete',
+      prompt: 'Find the renewal terms in the lease.',
+      phase: 'complete',
+      text: 'The lease renews for one year unless either party gives 60 days notice.',
+      receipt: {
+        route: 'analysis/high',
+        model: 'pi-2',
+        cost: '$0.014',
+        time: '6.2s',
+        capabilities: [{ name: 'files', version: '2' }],
+      },
+      toolActivity: [
+        { effectId: 'probe-search', displayName: 'Search files', status: 'completed' },
+        { effectId: 'probe-read', displayName: 'Read lease.pdf', status: 'completed' },
+      ],
+      resumable: false,
+    },
+    {
+      runId: 'probe-interrupted',
+      prompt: 'Draft a short renewal reminder.',
+      phase: 'interrupted',
+      text: 'Subject: Lease renewal notice\n\nThis is a reminder that',
+      receipt: null,
+      toolActivity: [],
+      resumable: true,
+    },
+  ],
+}
+
+const fixtureName = document.currentScript.dataset.history
+const history = historyFixtures[fixtureName]
+if (!history) throw new Error(`Unknown probe history fixture: ${fixtureName}`)
+
+const eventListeners = []
+const invokedCommands = []
+let callbackId = 0
+
+function recordInvoke(surface, command, payload) {
+  invokedCommands.push({ surface, command, payload })
+}
+
+window.__PROBE__ = {
+  eventListeners,
+  invokedCommands,
+  emit(event, payload) {
+    for (const entry of eventListeners.filter((entry) => entry.event === event)) {
+      entry.listener({ event, payload })
+    }
+  },
+  async loadBundle() {
+    const response = await fetch('/dist/index.html')
+    if (!response.ok) throw new Error(`Could not load the built bundle: ${response.status}`)
+    const builtPage = new DOMParser().parseFromString(await response.text(), 'text/html')
+    for (const stylesheet of builtPage.querySelectorAll('link[rel="stylesheet"]')) {
+      const cssResponse = await fetch(`/dist${new URL(stylesheet.href).pathname}`)
+      if (!cssResponse.ok) throw new Error(`Could not load the built styles: ${cssResponse.status}`)
+      const style = document.createElement('style')
+      style.textContent = (await cssResponse.text()).replaceAll('url(/assets/', 'url(/dist/assets/')
+      document.head.append(style)
+    }
+    const module = builtPage.querySelector('script[type="module"][src]')
+    if (!module) throw new Error('Could not find the built bundle module.')
+    await import(`/dist${new URL(module.src).pathname}`)
+  },
+}
+
+window.__TAURI__ = {
+  core: {
+    async invoke(command, payload) {
+      recordInvoke('core', command, payload)
+      if (command === 'home_status') {
+        return { configured: true, homePath: '/Documents/Muniment' }
+      }
+      if (command === 'required_model_acquisition_status') {
+        return {
+          status: { state: 'installed' },
+          downloadedBytes: 100,
+          totalBytes: 100,
+          folderSetupAvailable: true,
+          aiFeaturesAvailable: true,
+          retryingInBackground: false,
+        }
+      }
+      if (command === 'auth_status') return { signed_in: true, subject: 'probe-user' }
+      if (command === 'chat_history') return structuredClone(history)
+      if (command === 'auth_entitlement_snapshot') {
+        return {
+          snapshot_version: 2,
+          subject: 'probe-user',
+          user_display_name: 'Alice',
+          org_id: 'probe-org',
+          organization_display_name: 'Acme',
+          role: 'owner',
+          territory: 'us',
+          groups: [],
+        }
+      }
+      if (command === 'auth_devices') return []
+      return null
+    },
+  },
+  event: {
+    async listen(event, listener) {
+      const entry = { event, listener }
+      eventListeners.push(entry)
+      return () => {
+        const index = eventListeners.indexOf(entry)
+        if (index !== -1) eventListeners.splice(index, 1)
+      }
+    },
+  },
+}
+
+window.__TAURI_INTERNALS__ = {
+  metadata: {
+    currentWindow: { label: 'main' },
+    currentWebview: { label: 'main' },
+  },
+  async invoke(command, payload) {
+    recordInvoke('internal', command, payload)
+    return null
+  },
+  transformCallback(callback, once = false) {
+    const id = callbackId++
+    window[`_${id}`] = (value) => {
+      if (once) delete window[`_${id}`]
+      return callback?.(value)
+    }
+    return id
+  },
+  unregisterCallback(id) {
+    delete window[`_${id}`]
+  },
+}
