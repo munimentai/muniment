@@ -30,6 +30,26 @@ stop_matching() {
   ! pgrep -f "$1" >/dev/null
 }
 
+run_e2e() {
+  local wdio_log=$1 driver_log=$2 run_timeout=${3:-0} run_status=0
+  tauri-driver --port 4444 >"$driver_log" 2>&1 &
+  if ! timeout 30 bash -c 'until (: >/dev/tcp/127.0.0.1/4444) 2>/dev/null; do sleep 0.2; done'; then
+    stop_matching '[t]auri-driver'
+    return 1
+  fi
+  if (( run_timeout > 0 )); then
+    timeout "$run_timeout" xvfb-run -a npm run test:e2e >"$wdio_log" 2>&1 || run_status=$?
+  else
+    xvfb-run -a npm run test:e2e >"$wdio_log" 2>&1 || run_status=$?
+  fi
+  stop_matching '[t]auri-driver' || run_status=1
+  return "$run_status"
+}
+
+run_cleanup_e2e() {
+  MUNIMENT_E2E_CLEANUP_ONLY=1 run_e2e "$raw/wdio-cleanup.log" "$raw/driver-cleanup.log" 45
+}
+
 emit_artifacts() {
   local source=$1 archive envelope
   archive=$(mktemp /tmp/muniment-e2e-artifacts.XXXXXX.tar.gz) || return 1
@@ -76,9 +96,9 @@ finalize() {
   # retaining the app, browser driver, and state that recovery needs.
   cleanup_step stop-wdio stop_matching '[w]dio.*test/e2e/wdio.conf.js'
   cleanup_step stop-driver stop_matching '[t]auri-driver'
-  # Launch a fresh official-driver session against the same app state. This is
+  # Launch a fresh external-driver session against the same app state. This is
   # bounded and idempotent, and still runs if the main WDIO process crashed.
-  if (( ready )); then cleanup_step revoke-session timeout 45 env MUNIMENT_E2E_CLEANUP_ONLY=1 xvfb-run -a npm run test:e2e; fi
+  if (( ready )); then cleanup_step revoke-session run_cleanup_e2e; fi
   cleanup_step stop-browser-driver stop_matching '[c]hromedriver.*9515'
   cleanup_step stop-app bash -c "pkill -f '(^|/)muniment-desktop( |$)' 2>/dev/null || true; pkill -x muniment 2>/dev/null || true; ! pgrep -f '(^|/)muniment-desktop( |$)' >/dev/null && ! pgrep -x muniment >/dev/null"
   if (( installed )); then cleanup_step remove-package sudo apt-get remove -y muniment; fi
@@ -155,15 +175,16 @@ command -v tauri-driver >/dev/null || cargo install tauri-driver --version 2.0.5
 app_binary=$(command -v muniment-desktop || command -v muniment) || { echo 'installed application binary is unavailable' >&2; status=1; exit; }
 chromedriver --port=9515 --allowed-ips=127.0.0.1 >>"$raw/chromedriver.log" 2>&1 &
 export MUNIMENT_E2E_APP_BINARY="$app_binary" MUNIMENT_E2E_RAW_DIR="$raw"
+export MUNIMENT_E2E_EXTERNAL_DRIVER=1
 export MUNIMENT_E2E_AUTH_URL_FILE="$auth_url_file" BROWSER="$PWD/test/e2e/support/browser-launcher.sh"
 export MUNIMENT_E2E_IMAGE_PATH="$image_fixture"
 ready=1
 export XDG_DATA_HOME="$state_root/ready/data" XDG_CONFIG_HOME="$state_root/ready/config" XDG_CACHE_HOME="$state_root/ready/cache"
 export MUNIMENT_E2E_ONBOARDING_ONLY=1 MUNIMENT_E2E_MODEL_READY=1 MUNIMENT_E2E_HOME_PATH="$state_root/ready-home"
-xvfb-run -a npm run test:e2e >"$raw/wdio-onboarding.log" 2>"$raw/driver-onboarding.log" || status=1
+run_e2e "$raw/wdio-onboarding.log" "$raw/driver-onboarding.log" || status=1
 unset MUNIMENT_E2E_ONBOARDING_ONLY MUNIMENT_E2E_MODEL_READY
 export XDG_DATA_HOME="$state_root/degraded/data" XDG_CONFIG_HOME="$state_root/degraded/config" XDG_CACHE_HOME="$state_root/degraded/cache"
 export MUNIMENT_E2E_HOME_PATH="$state_root/degraded-home"
 export MUNIMENT_E2E_FORCE_MANUAL=1
-xvfb-run -a npm run test:e2e >"$raw/wdio.log" 2>"$raw/driver-app.log" || status=1
+run_e2e "$raw/wdio.log" "$raw/driver-app.log" || status=1
 exit
