@@ -218,6 +218,34 @@ fn latest_rename_wins_and_fallback_uses_first_prompt_in_stamp_order() {
 }
 
 #[test]
+fn fallback_title_changes_when_first_prompt_arrives() {
+    let path = journal_file();
+    let mut journal = RunJournal::open(&path).unwrap();
+    journal
+        .append(
+            0,
+            &event(RUN_A, 1, "run.started", "2026-07-10T10:00:00Z", json!({})),
+        )
+        .unwrap();
+
+    assert_eq!(
+        journal.thread_summaries(1, None).unwrap().summaries[0].title,
+        "Untitled run"
+    );
+
+    journal
+        .append(
+            1,
+            &prompt(RUN_A, 2, "  first\n prompt  ", "2026-07-10T11:00:00Z"),
+        )
+        .unwrap();
+    assert_eq!(
+        journal.thread_summaries(1, None).unwrap().summaries[0].title,
+        "first prompt"
+    );
+}
+
+#[test]
 fn deleted_threads_and_other_workspaces_do_not_affect_pages() {
     let path = journal_file();
     let mut journal = RunJournal::open(&path).unwrap();
