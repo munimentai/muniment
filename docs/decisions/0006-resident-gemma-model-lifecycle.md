@@ -1,8 +1,33 @@
-# 0006 — Acquire and atomically publish resident Gemma revisions
+# 0006 — Acquire and atomically publish resident model revisions
 
 - Status: accepted
 - Date: 2026-07-11
-- Context: ROADMAP Phase 2 item 10; ADR 0003
+- Context: ROADMAP Phase 2 item 10; ADR 0003, superseded by ADR 0017
+
+> **Subject updated 2026-07-27.** This ADR's subject is the resident artifact
+> pinned by [ADR 0017](0017-resident-model-artifact-pin.md), which superseded
+> ADR 0003. The acquisition, integrity, staging, atomic publication, update,
+> rollback, recovery, and removal contract below is model-neutral and continues
+> to govern it: read "Gemma" as "the resident model", and read the ~3.15 GB
+> size, the `gemma-3-4b-it-q4_0.gguf` filename, the `gemma/` root, and the
+> `google/…` revision as the historical ADR 0003 values. What ships today is
+> `Qwen3.5-4B-Q4_K_M.gguf` (2,740,937,888 bytes) under the app-data root
+> `models/qwen3.5-4b/` with the same `install.lock` / `current` / `previous` /
+> `revisions/` / `staging/` layout; `Gemma*` code symbols and the
+> `muniment-gemma-pointer-v1` pointer header are vocabulary debt renamed under
+> a separate ticket.
+>
+> The exception is **Terms and notice delivery**. ADR 0017's artifact is
+> Apache-2.0, so the Gemma Terms of Use acceptance gate, the section 3.2 use
+> restrictions, and the section 3.1 notice wording below do not apply to it.
+> Each published revision carries the Apache-2.0 attribution notice for the
+> shipped artifact as its `NOTICE.txt`, and that section's mechanics — a
+> bundled offline copy of the applicable licence and notice reachable from
+> Settings/About before, during, and after installation, release checks for a
+> descriptor-to-notice association, and an approval screen that identifies the
+> publisher, artifact, source, and revision — apply to whatever licence the
+> pinned artifact carries. An acceptance gate is required only for a pinned
+> artifact whose licence imposes additional use restrictions.
 
 ## Context
 
@@ -182,7 +207,7 @@ UI, release terms, notices inventory, packaging, or uninstall behavior.
 
 ## Sources
 
-- Pinned model identity and launch verification: [ADR 0003](0003-resident-gemma-model.md)
+- Pinned model identity and launch verification: [ADR 0017](0017-resident-model-artifact-pin.md), superseding [ADR 0003](0003-resident-gemma-model.md)
 - Existing native lifecycle pattern: [ADR 0005](0005-asr-model-lifecycle.md)
 - Gemma Terms of Use: <https://ai.google.dev/gemma/terms>
 - Gemma Prohibited Use Policy: <https://ai.google.dev/gemma/prohibited_use_policy>
