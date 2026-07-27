@@ -13,7 +13,7 @@ use std::time::Duration;
 use muniment_core::attach::linux::{
     run_authenticated_session_with_service_and_approvals, AttachFilesystem, AttachTransport,
     CompanionProvenance, RunStartAccepted, RunStartRequest as AttachRunStartRequest,
-    ThreadListPage, ThreadListRequest, ThreadListService,
+    ThreadListPage, ThreadListRequest, ThreadListService, ThreadOpenPage, ThreadOpenRequest,
 };
 #[cfg(target_os = "linux")]
 use muniment_core::attach::{
@@ -320,10 +320,18 @@ impl<B: RunStartBoundaries, I: RunStartIdempotency> ThreadListService
 
     fn list_threads(
         &mut self,
-        _workspace: &str,
-        _request: ThreadListRequest,
+        workspace: &str,
+        request: ThreadListRequest,
     ) -> Result<ThreadListPage, ProtocolError> {
-        Err(ProtocolError::unsupported_operation())
+        self.boundaries.list_threads(workspace, request)
+    }
+
+    fn open_thread(
+        &mut self,
+        workspace: &str,
+        request: ThreadOpenRequest,
+    ) -> Result<ThreadOpenPage, ProtocolError> {
+        self.boundaries.open_thread(workspace, request)
     }
 
     fn start_run(
@@ -503,6 +511,7 @@ mod tests {
     use crate::test_support::FakeRunStartBoundaries;
     use muniment_core::attach::ErrorCode;
     use muniment_core::journal::reducer::reduce;
+    use muniment_core::journal::RunJournal;
     use std::sync::atomic::Ordering;
 
     #[cfg(target_os = "linux")]
@@ -618,6 +627,191 @@ mod tests {
         );
         assert_eq!(provenance.extra["companion_kind"], "cli");
         assert_eq!(provenance.extra["peer_uid"], 1000);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn attach_adapter_lists_and_opens_only_requested_workspace_threads() {
+        let root = std::env::temp_dir().join(format!("muniment-attach-threads-{}", Uuid::now_v7()));
+        std::fs::create_dir_all(&root).unwrap();
+        let mut boundaries = FakeRunStartBoundaries::accepting();
+        boundaries.journal = Mutex::new(RunJournal::open(root.join("runs.sqlite3")).unwrap());
+        {
+            let mut journal = boundaries.journal.lock().unwrap();
+            for (run_id, workspace, prompt, reply) in [
+                (
+                    "018f0000-0000-7000-8000-0000000000a1",
+                    "workspace-a",
+                    "first prompt",
+                    "first reply",
+                ),
+                (
+                    "018f0000-0000-7000-8000-0000000000a2",
+                    "workspace-a",
+                    "second prompt",
+                    "second reply",
+                ),
+                (
+                    "018f0000-0000-7000-8000-0000000000b1",
+                    "workspace-b",
+                    "hidden prompt",
+                    "hidden reply",
+                ),
+            ] {
+                journal
+                    .append_new_run(
+                        workspace,
+                        &crate::chat::event_envelope(
+                            run_id,
+                            1,
+                            "run.started",
+                            json!({}),
+                            Some("owner"),
+                        ),
+                    )
+                    .unwrap();
+                journal
+                    .append(
+                        1,
+                        &crate::chat::event_envelope(
+                            run_id,
+                            2,
+                            "user.prompt.submitted",
+                            json!({"prompt": prompt}),
+                            Some("owner"),
+                        ),
+                    )
+                    .unwrap();
+                journal
+                    .append(
+                        2,
+                        &crate::chat::event_envelope(
+                            run_id,
+                            3,
+                            "model.stream.delta",
+                            json!({"text": reply}),
+                            Some("owner"),
+                        ),
+                    )
+                    .unwrap();
+            }
+        }
+        let mut service = DesktopAttachService {
+            boundaries,
+            idempotency: IdempotencyStore::open(":memory:").unwrap(),
+            home: PathBuf::new(),
+            workspace_contexts: Arc::new(Mutex::new(HashMap::new())),
+            client_credentials: Arc::new(Mutex::new(HashMap::new())),
+            credential_path: None,
+            client_identity: Some("default".into()),
+        };
+
+        let first = service
+            .list_threads(
+                "workspace-a",
+                ThreadListRequest {
+                    limit: 1,
+                    cursor: None,
+                },
+            )
+            .unwrap();
+        assert_eq!(first.threads.len(), 1);
+        assert!(first.next_cursor.is_some());
+        let second = service
+            .list_threads(
+                "workspace-a",
+                ThreadListRequest {
+                    limit: 1,
+                    cursor: first.next_cursor,
+                },
+            )
+            .unwrap();
+        assert_eq!(second.threads.len(), 1);
+        assert_ne!(first.threads[0].thread_id, second.threads[0].thread_id);
+        assert!(second.next_cursor.is_none());
+
+        let thread_id = first.threads[0].thread_id.clone();
+        let opened = service
+            .open_thread(
+                "workspace-a",
+                ThreadOpenRequest {
+                    thread_id: thread_id.clone(),
+                    limit: 1,
+                    cursor: None,
+                },
+            )
+            .unwrap();
+        assert_eq!(opened.entries.len(), 1);
+        assert!(opened.next_cursor.is_some());
+        let rest = service
+            .open_thread(
+                "workspace-a",
+                ThreadOpenRequest {
+                    thread_id,
+                    limit: 10,
+                    cursor: opened.next_cursor,
+                },
+            )
+            .unwrap();
+        assert_eq!(rest.entries.len(), 1);
+        assert!(rest.next_cursor.is_none());
+        assert!(service
+            .list_threads(
+                "workspace-b",
+                ThreadListRequest {
+                    limit: 10,
+                    cursor: None,
+                },
+            )
+            .unwrap()
+            .threads
+            .iter()
+            .all(|thread| thread.thread_id != first.threads[0].thread_id
+                && thread.thread_id != second.threads[0].thread_id));
+
+        assert_eq!(
+            service
+                .list_threads(
+                    "workspace-a",
+                    ThreadListRequest {
+                        limit: 0,
+                        cursor: None,
+                    },
+                )
+                .unwrap_err()
+                .code(),
+            ErrorCode::InvalidRequest
+        );
+        assert_eq!(
+            service
+                .list_threads(
+                    "workspace-a",
+                    ThreadListRequest {
+                        limit: 1,
+                        cursor: Some("invalid".into()),
+                    },
+                )
+                .unwrap_err()
+                .code(),
+            ErrorCode::InvalidCursor
+        );
+        assert_eq!(
+            service
+                .open_thread(
+                    "workspace-a",
+                    ThreadOpenRequest {
+                        thread_id: first.threads[0].thread_id.clone(),
+                        limit: 1,
+                        cursor: Some("invalid".into()),
+                    },
+                )
+                .unwrap_err()
+                .code(),
+            ErrorCode::InvalidCursor
+        );
+
+        drop(service);
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[cfg(target_os = "linux")]
