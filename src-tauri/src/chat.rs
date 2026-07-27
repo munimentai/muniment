@@ -357,8 +357,8 @@ impl<R: tauri::Runtime> RunStartBoundaries for TauriRunStartBoundaries<R> {
         workspace: &str,
         request: ThreadListRequest,
     ) -> Result<ThreadListPage, ProtocolError> {
-        let mut storage = self
-            .state()
+        let state = self.state();
+        let mut storage = state
             .storage
             .lock()
             .map_err(|_| ProtocolError::persistence_failed())?;
@@ -371,8 +371,8 @@ impl<R: tauri::Runtime> RunStartBoundaries for TauriRunStartBoundaries<R> {
         workspace: &str,
         request: ThreadOpenRequest,
     ) -> Result<ThreadOpenPage, ProtocolError> {
-        let mut storage = self
-            .state()
+        let state = self.state();
+        let mut storage = state
             .storage
             .lock()
             .map_err(|_| ProtocolError::persistence_failed())?;

@@ -511,6 +511,7 @@ mod tests {
     use crate::test_support::FakeRunStartBoundaries;
     use muniment_core::attach::ErrorCode;
     use muniment_core::journal::reducer::reduce;
+    use muniment_core::journal::RunJournal;
     use std::sync::atomic::Ordering;
 
     #[cfg(target_os = "linux")]
@@ -638,9 +639,24 @@ mod tests {
         {
             let mut journal = boundaries.journal.lock().unwrap();
             for (run_id, workspace, prompt, reply) in [
-                ("run-a", "workspace-a", "first prompt", "first reply"),
-                ("run-b", "workspace-a", "second prompt", "second reply"),
-                ("run-hidden", "workspace-b", "hidden prompt", "hidden reply"),
+                (
+                    "018f0000-0000-7000-8000-0000000000a1",
+                    "workspace-a",
+                    "first prompt",
+                    "first reply",
+                ),
+                (
+                    "018f0000-0000-7000-8000-0000000000a2",
+                    "workspace-a",
+                    "second prompt",
+                    "second reply",
+                ),
+                (
+                    "018f0000-0000-7000-8000-0000000000b1",
+                    "workspace-b",
+                    "hidden prompt",
+                    "hidden reply",
+                ),
             ] {
                 journal
                     .append_new_run(
