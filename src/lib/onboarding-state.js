@@ -190,10 +190,6 @@ export function onboardingPreviewErrorState(state, error) {
   }
 }
 
-export function onboardingCompleteState(state) {
-  return { name: 'complete', homePath: state.homePath }
-}
-
 export function onboardingErrorState(state, error) {
   return {
     ...state,

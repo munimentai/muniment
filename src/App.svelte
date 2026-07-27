@@ -364,11 +364,15 @@
   onMount(() => {
     let pairingUnlisten
     window.__TAURI__?.event?.listen('attach-pairing-requested', async ({ payload: challenge }) => {
-      const approve = await confirm(
-        'Allow the CLI or VS Code to connect to this Muniment desktop session?',
-        { title: 'Approve Muniment connection', kind: 'info' },
-      )
-      await tauri.invoke('attach_pairing_decide', { challenge, approve })
+      try {
+        const approve = await confirm(
+          'Allow the CLI or VS Code to connect to this Muniment desktop session?',
+          { title: 'Approve Muniment connection', kind: 'info' },
+        )
+        await tauri.invoke('attach_pairing_decide', { challenge, approve })
+      } catch {
+        console.error('Pairing decision failed.')
+      }
     }).then((stop) => {
       if (destroyed) stop()
       else pairingUnlisten = stop
