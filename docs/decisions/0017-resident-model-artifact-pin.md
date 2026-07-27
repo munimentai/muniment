@@ -51,15 +51,15 @@ written with the descriptor's digit grouping.
 
 | Descriptor field | Pinned value |
 | --- | --- |
-| `source_url` | `https://huggingface.co/unsloth/Qwen3.5-4B-GGUF/resolve/e87f176479d0855a907a41277aca2f8ee7a09523/Qwen3.5-4B-Q4_K_M.gguf` |
+| `source_url` | `https://huggingface.co/munimentai/Qwen3.5-4B-GGUF/resolve/0ddb6039fd5a9d75a8a7fd03227de02c9e97daae/qwen3.5-4b-Q4_K_M.gguf` |
 | `license` | `Apache-2.0` |
-| `filename` | `Qwen3.5-4B-Q4_K_M.gguf` |
-| `byte_size` | `2_740_937_888` |
-| `sha256` | `00fe7986ff5f6b463e62455821146049db6f9313603938a70800d1fb69ef11a4` |
+| `filename` | `qwen3.5-4b-Q4_K_M.gguf` |
+| `byte_size` | `2_783_446_784` |
+| `sha256` | `5ca0d868d45462e33c7671740bbd97b1ec4d38834827609fcd1a3f726cf49649` |
 | `alias` | `muniment-required-qwen3.5-4b` |
 | `context_tokens` | `262_144` |
 
-The immutable upstream revision `e87f176479d0855a907a41277aca2f8ee7a09523` is
+The immutable repository revision `0ddb6039fd5a9d75a8a7fd03227de02c9e97daae` is
 also compiled as `RESIDENT_MODEL_REVISION` and is the only revision the
 downloader may form a URL from. The revision identity published on disk is
 `qwen3.5-4b-instruct-q4_k_m-v1`, beneath the app-data root
@@ -89,24 +89,12 @@ retired Gemma alias or any Gemma-as-resident-model wording in `docs/`.
 This guard is why the table above is the only place in `docs/` that restates
 the pinned values: every other document points here instead of copying them.
 
-### Artifact custody: pending follow-up
+### Artifact custody
 
 Owner decision 2026-07-27: muniment builds and owns its model artifacts and
-will host them in a muniment Hugging Face organisation, so the resident pin
-should name a muniment-built GGUF rather than a third-party requantisation.
-That artifact does not exist yet, so this ADR deliberately pins what ships
-today — the `unsloth/Qwen3.5-4B-GGUF` revision above — instead of inventing
-values for a file nobody can verify.
-
-**Follow-up, not decided here:** when the muniment-built GGUF is published,
-replace `source_url`, `filename`, `byte_size`, and `sha256` in this table and
-in `RESIDENT_MODEL` in the same change, keeping the guard test green, and
-decide in that change whether the alias and the on-disk revision identity move
-with it. Until then no code, document, or release note may describe the
-resident artifact as muniment-built or muniment-hosted. harness-spec §15.3's
-muniment download proxy/redirect and its MUNICLOUD ripple are the delivery
-side of the same follow-up and do not change the pinned digest, which stays
-authoritative regardless of origin.
+hosts them in the muniment Hugging Face organization. The resident pin names
+the muniment-built GGUF. Its upstream source revision is
+`851bf6e806efd8d0a36b00ddf55e13ccb7b8cd0a`.
 
 ## Consequences
 
@@ -135,5 +123,5 @@ authoritative regardless of origin.
 - Lifecycle and publication contract: [ADR 0006](0006-resident-gemma-model-lifecycle.md)
 - Serving runtime: [ADR 0014](0014-llama-server-distribution.md)
 - Required on-device onboard/router role: [harness-spec §15.3](../spec/harness-spec.md)
-- Upstream artifact: <https://huggingface.co/unsloth/Qwen3.5-4B-GGUF/tree/e87f176479d0855a907a41277aca2f8ee7a09523>
+- Resident artifact: <https://huggingface.co/munimentai/Qwen3.5-4B-GGUF/tree/0ddb6039fd5a9d75a8a7fd03227de02c9e97daae>
 - Apache License 2.0: <https://www.apache.org/licenses/LICENSE-2.0>
