@@ -23,8 +23,10 @@ let chatListener
 let dictationListener
 let entitlementListener
 let eventUnlisten
+let pairingListener
 let pairingUnlisten
 let dialogResult
+let confirmResult
 let dragDropListener
 let dragDropUnlisten
 let homeStatus
@@ -37,6 +39,11 @@ let registeredShortcuts
 vi.mock('@tauri-apps/plugin-global-shortcut', () => ({
   register: (...args) => registerGlobalShortcut(...args),
   unregister: (...args) => unregisterGlobalShortcut(...args),
+}))
+
+vi.mock('@tauri-apps/plugin-dialog', () => ({
+  confirm: (...args) => confirmResult(...args),
+  open: () => Promise.resolve(dialogResult),
 }))
 
 vi.mock('@tauri-apps/api/webview', () => ({
@@ -115,6 +122,7 @@ beforeAll(async () => {
       if (event === 'chat-event') chatListener = listener
       if (event === 'dictation-event') dictationListener = listener
       if (event === 'entitlement-changed') entitlementListener = listener
+      if (event === 'attach-pairing-requested') pairingListener = listener
       return Promise.resolve(event === 'attach-pairing-requested' ? pairingUnlisten : eventUnlisten)
     }) },
   }
@@ -133,10 +141,12 @@ beforeEach(() => {
   dictationListener = undefined
   entitlementListener = undefined
   eventUnlisten = vi.fn()
+  pairingListener = undefined
   pairingUnlisten = vi.fn()
   dragDropListener = undefined
   dragDropUnlisten = vi.fn()
   dialogResult = null
+  confirmResult = vi.fn().mockResolvedValue(false)
   globalShortcutHandler = undefined
   registeredShortcuts = new Set()
   registerGlobalShortcut = vi.fn(async (shortcut, handler) => {
@@ -193,6 +203,55 @@ describe('entitlement change toast', () => {
 
     expect(await screen.findByRole('button', { name: 'Sign in' })).toBeInTheDocument()
     expect(screen.queryByText(copy)).not.toBeInTheDocument()
+  })
+})
+
+describe('pairing decisions', () => {
+  it.each([
+    ['approves', true],
+    ['declines', false],
+  ])('%s a pairing request', async (_, approve) => {
+    confirmResult.mockResolvedValue(approve)
+    render(App)
+    await waitFor(() => expect(pairingListener).toBeDefined())
+
+    await pairingListener({ payload: 'challenge-1' })
+
+    expect(invoke).toHaveBeenCalledWith('attach_pairing_decide', {
+      challenge: 'challenge-1',
+      approve,
+    })
+  })
+
+  it('handles a rejected pairing decision without exposing its details', async () => {
+    invoke.mockImplementation(async (command) => {
+      if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
+      if (command === 'chat_history') return []
+      if (command === 'auth_entitlement_snapshot') return snapshot()
+      if (command === 'auth_devices') return []
+      if (command === 'attach_pairing_decide') throw new Error('sensitive pairing detail')
+      throw new Error(`unexpected command: ${command}`)
+    })
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+    render(App)
+    await waitFor(() => expect(pairingListener).toBeDefined())
+
+    await expect(pairingListener({ payload: 'challenge-2' })).resolves.toBeUndefined()
+
+    expect(error).toHaveBeenCalledWith('Pairing decision failed.')
+    expect(error).not.toHaveBeenCalledWith(expect.stringContaining('sensitive'))
+  })
+
+  it('handles a rejected confirmation without sending a pairing decision', async () => {
+    confirmResult.mockRejectedValue(new Error('sensitive confirmation detail'))
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+    render(App)
+    await waitFor(() => expect(pairingListener).toBeDefined())
+
+    await expect(pairingListener({ payload: 'challenge-3' })).resolves.toBeUndefined()
+
+    expect(invoke).not.toHaveBeenCalledWith('attach_pairing_decide', expect.anything())
+    expect(error).toHaveBeenCalledWith('Pairing decision failed.')
   })
 })
 
