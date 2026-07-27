@@ -697,21 +697,13 @@ fn chat_thread_summaries_page(
     if !(1..=100).contains(&limit) {
         return Err("Conversation history is unavailable.".into());
     }
-    let mut summaries = Vec::with_capacity(limit);
-    let mut next_cursor = cursor.map(str::to_owned);
-    loop {
-        let remaining = limit - summaries.len();
-        let page = journal
-            .thread_summaries(remaining, next_cursor.as_deref())
-            .map_err(|_| "Conversation history is unavailable.".to_string())?;
-        next_cursor = page.next_cursor;
-        for summary in page.summaries {
-            if subject_owns_first_run(journal, &summary.thread_id, subject)? {
-                summaries.push(summary);
-            }
-        }
-        if summaries.len() == limit || next_cursor.is_none() {
-            break;
+    let page = journal
+        .thread_summaries(limit, cursor)
+        .map_err(|_| "Conversation history is unavailable.".to_string())?;
+    let mut summaries = Vec::with_capacity(page.summaries.len());
+    for summary in page.summaries {
+        if subject_owns_first_run(journal, &summary.thread_id, subject)? {
+            summaries.push(summary);
         }
     }
     Ok(ChatThreadSummaryPage {
@@ -729,7 +721,7 @@ fn chat_thread_summaries_page(
                 },
             )
             .collect(),
-        next_cursor,
+        next_cursor: page.next_cursor,
     })
 }
 
@@ -3928,6 +3920,71 @@ mod tests {
     }
 
     #[test]
+    fn thread_summary_page_does_not_scan_past_foreign_threads() {
+        let directory = std::env::temp_dir().join(format!("muniment-chat-{}", Uuid::now_v7()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("runs.sqlite3");
+        let owner_run = "01900000-0000-7000-8000-000000000021";
+        let foreign_runs = [
+            "01900000-0000-7000-8000-000000000022",
+            "01900000-0000-7000-8000-000000000023",
+            "01900000-0000-7000-8000-000000000024",
+        ];
+        let mut journal = RunJournal::open(&path).unwrap();
+        journal
+            .append_new_run(
+                "workspace-a",
+                &event_envelope(owner_run, 1, "run.started", json!({}), Some("owner")),
+            )
+            .unwrap();
+        for run_id in foreign_runs {
+            journal
+                .append_new_run(
+                    "workspace-a",
+                    &event_envelope(run_id, 1, "run.started", json!({}), Some("other")),
+                )
+                .unwrap();
+        }
+        drop(journal);
+
+        let connection = rusqlite::Connection::open(&path).unwrap();
+        connection
+            .execute(
+                "UPDATE events SET recorded_at=CASE WHEN run_id=?1 \
+                 THEN '2026-01-01T00:00:00Z' ELSE '2026-01-02T00:00:00Z' END",
+                [owner_run],
+            )
+            .unwrap();
+        connection
+            .execute(
+                "UPDATE thread_events SET recorded_at=CASE WHEN thread_id=(\
+                 SELECT thread_id FROM run_threads WHERE run_id=?1) \
+                 THEN '2026-01-01T00:00:00Z' ELSE '2026-01-02T00:00:00Z' END",
+                [owner_run],
+            )
+            .unwrap();
+        drop(connection);
+
+        let mut journal = RunJournal::open(&path).unwrap();
+        let first = chat_thread_summaries_page(&mut journal, Some("owner"), 2, None).unwrap();
+        assert!(first.summaries.is_empty());
+        assert!(first.next_cursor.is_some());
+
+        let second = chat_thread_summaries_page(
+            &mut journal,
+            Some("owner"),
+            2,
+            first.next_cursor.as_deref(),
+        )
+        .unwrap();
+        assert_eq!(second.summaries.len(), 1);
+        assert!(second.next_cursor.is_none());
+
+        drop(journal);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
     fn thread_history_pages_and_rejects_inaccessible_threads() {
         keyring::set_default_credential_builder(keyring::mock::default_credential_builder());
         let directory = std::env::temp_dir().join(format!("muniment-chat-{}", Uuid::now_v7()));
@@ -4002,7 +4059,14 @@ mod tests {
             second.next_cursor.as_deref(),
         )
         .unwrap();
-        let visible = [first, second, third]
+        let fourth = chat_thread_summaries_page(
+            &mut journal,
+            Some("owner"),
+            1,
+            third.next_cursor.as_deref(),
+        )
+        .unwrap();
+        let visible = [first, second, third, fourth]
             .into_iter()
             .flat_map(|page| page.summaries)
             .map(|summary| summary.thread_id)
