@@ -9,5 +9,5 @@ Inspect `window.__PROBE__.invokedCommands` and `window.__PROBE__.eventListeners`
 Capture the restored history at the default desktop size:
 
 ```sh
-playwright screenshot --browser chromium --viewport-size "1100,720" http://127.0.0.1:4173/test/probe/history.html /tmp/muniment-probe.png
+playwright screenshot --browser chromium --viewport-size "1100,720" --wait-for-selector "[data-probe-ready]" http://127.0.0.1:4173/test/probe/history.html /tmp/muniment-probe.png
 ```
