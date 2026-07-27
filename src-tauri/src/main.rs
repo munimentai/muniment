@@ -24,7 +24,7 @@ fn main() {
             #[cfg(target_os = "linux")]
             chat::start_attach_listener(app.handle().clone());
             let model_root = app.path().app_data_dir()?.join("models").join("qwen3.5-4b");
-            let required_model = model_install::GemmaInstallState::new(model_root)?;
+            let required_model = model_install::ResidentModelInstallState::new(model_root)?;
             // Required acquisition is deliberately detached from onboarding: folder and
             // consent steps remain interactive while this worker downloads and activates AI.
             required_model.start();
