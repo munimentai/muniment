@@ -9,10 +9,7 @@
 > artifact the code verifies and launches and explains why the model changed.
 > Everything below is the record of what was decided on 2026-07-10 and must not
 > be read as the current pin, an installed filename, or a live licence
-> obligation. One value was deliberately dropped rather than kept: the retired
-> Gemma-era application alias literal, so that searching `docs/` for a resident
-> alias can only land on the shipped one (MUNIDESK-548). Git history retains
-> the original text.
+> obligation.
 
 ## Decision
 
@@ -27,7 +24,7 @@ Muniment's single resident local model is Google's instruction-tuned **Gemma 3
 | Byte size | `3,155,051,328` |
 | SHA-256 | `76aed0a8285b83102f18b5d60e53c70d09eb4e9917a20ce8956bd546452b56e2` |
 | Terms | <https://ai.google.dev/gemma/terms> |
-| Application alias | retired Gemma-era alias; the shipped alias is pinned by [ADR 0017](0017-resident-model-artifact-pin.md) |
+| Application alias | `muniment-resident-gemma` |
 | Context limit | 131,072 tokens |
 
 The source revision, file size, and LFS digest are recorded by the upstream

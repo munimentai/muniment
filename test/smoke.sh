@@ -48,9 +48,10 @@ grep -Fq 'muniment-required-qwen3.5-4b' "$model_adr"
 grep -Fq -- '- Status: superseded by ADR 0017' docs/decisions/0003-resident-gemma-model.md
 test -f src-tauri/core/tests/resident_model_adr.rs
 grep -Fq 'docs/decisions/0017-*.md)' "$ci"
-# no document may name the retired Gemma alias or call the resident model Gemma
+# no current document may name the retired Gemma alias; ADR 0003 preserves the
+# historical decision it records. No document may call the resident model Gemma.
 # (`! grep` would be exempt from errexit, so assert on empty output instead)
-test -z "$(grep -rl 'muniment-resident-gemma' docs/)"
+test -z "$(grep -rl --exclude='0003-resident-gemma-model.md' 'muniment-resident-gemma' docs/)"
 test -z "$(grep -ril 'resident local gemma' docs/)"
 # companion workspace and its path-scoped CI lane
 grep -Fq 'members = [".", "core", "attach", "cli"]' src-tauri/Cargo.toml
