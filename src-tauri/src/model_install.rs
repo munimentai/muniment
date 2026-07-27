@@ -12,12 +12,13 @@ use muniment_core::asr::{
 use muniment_core::import_preview::ExtractedEntry;
 use muniment_core::llama::acquisition::ModelDownloadProgress;
 use muniment_core::llama::acquisition::{
-    GemmaAcquisitionError, GemmaAcquisitionLimits, GemmaAcquisitionRuntime,
+    ResidentModelAcquisitionError, ResidentModelAcquisitionLimits, ResidentModelAcquisitionRuntime,
 };
-use muniment_core::llama::install::install_gemma_revision_with_progress;
+use muniment_core::llama::install::install_resident_model_revision_with_progress;
 use muniment_core::llama::lifecycle::{
-    GemmaActivation, GemmaActivationBoundary, GemmaActivationFailure, GemmaRecovery,
-    GemmaRevisionLifecycle, RESIDENT_GEMMA_REVISION, RESIDENT_GEMMA_REVISIONS,
+    ResidentModelActivation, ResidentModelActivationBoundary, ResidentModelActivationFailure,
+    ResidentModelRecovery, ResidentModelRevisionLifecycle, PINNED_RESIDENT_MODEL_REVISION,
+    RESIDENT_MODEL_REVISIONS,
 };
 use muniment_core::llama::runtime::{acquire_runtime, resolve_runtime};
 use muniment_core::llama::{
@@ -29,7 +30,8 @@ use muniment_core::model_acquisition_transport::NativeModelAcquisitionTransport;
 use muniment_core::model_install::ModelInstallError;
 use muniment_core::model_install_native::{
     NativeAcquisitionClock, NativeAsrLifecycleBoundary, NativeAvailableSpace,
-    NativeGemmaLifecycleBoundary, NativeInstallCancellation, NativeInstallLock, NativeRetryWait,
+    NativeInstallCancellation, NativeInstallLock, NativeResidentModelLifecycleBoundary,
+    NativeRetryWait,
 };
 use muniment_core::sidecar::SidecarStatus;
 use serde::Serialize;
@@ -37,7 +39,7 @@ use tauri::State;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase", tag = "state")]
-pub enum GemmaInstallStatus {
+pub enum ResidentModelInstallStatus {
     NotInstalled,
     Installing,
     Installed,
@@ -51,7 +53,7 @@ pub enum GemmaInstallStatus {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RequiredModelAcquisitionStatus {
-    pub status: GemmaInstallStatus,
+    pub status: ResidentModelInstallStatus,
     pub downloaded_bytes: u64,
     pub total_bytes: u64,
     /// Directory selection and consent are intentionally never gated on AI.
@@ -105,7 +107,7 @@ impl ServingServer {
     }
 }
 type Activator = dyn Fn(&Path) -> Result<ServingServer, InstallFailure> + Send + Sync;
-type Inspector = dyn Fn(&Path) -> GemmaInstallStatus + Send + Sync;
+type Inspector = dyn Fn(&Path) -> ResidentModelInstallStatus + Send + Sync;
 
 struct ActiveInstall {
     generation: u64,
@@ -115,7 +117,7 @@ struct ActiveInstall {
 struct Inner {
     generation: u64,
     state_version: u64,
-    status: GemmaInstallStatus,
+    status: ResidentModelInstallStatus,
     terminal_result: bool,
     completed_success: bool,
     active: Option<ActiveInstall>,
@@ -123,7 +125,7 @@ struct Inner {
     server: Option<ServingServer>,
 }
 
-pub struct GemmaInstallState {
+pub struct ResidentModelInstallState {
     root: PathBuf,
     inner: Arc<Mutex<Inner>>,
     runner: Arc<Runner>,
@@ -132,7 +134,7 @@ pub struct GemmaInstallState {
     inspector: Arc<Inspector>,
 }
 
-impl GemmaInstallState {
+impl ResidentModelInstallState {
     pub fn new(root: PathBuf) -> std::io::Result<Self> {
         fs::create_dir_all(root.join("staging"))?;
         let status = inspect(&root);
@@ -142,7 +144,7 @@ impl GemmaInstallState {
         Ok(state.with_background_retry())
     }
 
-    fn with_runner(root: PathBuf, status: GemmaInstallStatus, runner: Arc<Runner>) -> Self {
+    fn with_runner(root: PathBuf, status: ResidentModelInstallStatus, runner: Arc<Runner>) -> Self {
         Self {
             root,
             inner: Arc::new(Mutex::new(Inner {
@@ -154,7 +156,7 @@ impl GemmaInstallState {
                 active: None,
                 progress: ModelDownloadProgress {
                     downloaded_bytes: 0,
-                    total_bytes: RESIDENT_GEMMA_REVISION.model.byte_size,
+                    total_bytes: PINNED_RESIDENT_MODEL_REVISION.model.byte_size,
                 },
                 server: None,
             })),
@@ -170,7 +172,7 @@ impl GemmaInstallState {
         self
     }
 
-    async fn status(&self) -> GemmaInstallStatus {
+    async fn status(&self) -> ResidentModelInstallStatus {
         let state_version = {
             let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
             if inner.active.is_some() || inner.terminal_result {
@@ -187,7 +189,7 @@ impl GemmaInstallState {
         let inspector = Arc::clone(&self.inspector);
         let inspected = tauri::async_runtime::spawn_blocking(move || inspector(&root))
             .await
-            .unwrap_or(GemmaInstallStatus::Failed {
+            .unwrap_or(ResidentModelInstallStatus::Failed {
                 category: "inspectionFailed",
                 message: "The model installation could not be inspected.",
             });
@@ -199,7 +201,7 @@ impl GemmaInstallState {
         inner.status.clone()
     }
 
-    pub(crate) fn start(&self) -> GemmaInstallStatus {
+    pub(crate) fn start(&self) -> ResidentModelInstallStatus {
         let (generation, cancellation) = {
             let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
             if inner.active.is_some() {
@@ -215,7 +217,7 @@ impl GemmaInstallState {
             });
             inner.terminal_result = false;
             inner.completed_success = false;
-            inner.status = GemmaInstallStatus::Installing;
+            inner.status = ResidentModelInstallStatus::Installing;
             (generation, cancellation)
         };
 
@@ -250,7 +252,7 @@ impl GemmaInstallState {
                         Err(error) => error,
                         Ok(_) => unreachable!("the retry loop only runs after an error"),
                     };
-                    state.status = GemmaInstallStatus::Failed {
+                    state.status = ResidentModelInstallStatus::Failed {
                         category: error.category,
                         message: error.message,
                     };
@@ -267,7 +269,7 @@ impl GemmaInstallState {
                 }
                 {
                     let mut state = inner.lock().unwrap_or_else(|e| e.into_inner());
-                    state.status = GemmaInstallStatus::Installing;
+                    state.status = ResidentModelInstallStatus::Installing;
                     state.state_version = state.state_version.wrapping_add(1);
                 }
                 result = runner(&root, &cancellation, &progress)
@@ -294,11 +296,11 @@ impl GemmaInstallState {
                 Ok(server) => {
                     state.progress.downloaded_bytes = state.progress.total_bytes;
                     state.server = Some(server);
-                    (GemmaInstallStatus::Installed, false)
+                    (ResidentModelInstallStatus::Installed, false)
                 }
-                Err(error) if error.cancelled => (GemmaInstallStatus::Cancelled, true),
+                Err(error) if error.cancelled => (ResidentModelInstallStatus::Cancelled, true),
                 Err(error) => (
-                    GemmaInstallStatus::Failed {
+                    ResidentModelInstallStatus::Failed {
                         category: error.category,
                         message: error.message,
                     },
@@ -309,10 +311,10 @@ impl GemmaInstallState {
             state.terminal_result = terminal_result;
             state.completed_success = completed_success;
         });
-        GemmaInstallStatus::Installing
+        ResidentModelInstallStatus::Installing
     }
 
-    fn cancel(&self) -> GemmaInstallStatus {
+    fn cancel(&self) -> ResidentModelInstallStatus {
         let inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(active) = &inner.active {
             active.cancellation.cancel();
@@ -322,7 +324,7 @@ impl GemmaInstallState {
 
     pub(crate) async fn acquisition_status(&self) -> RequiredModelAcquisitionStatus {
         let status = self.status().await;
-        let total_bytes = RESIDENT_GEMMA_REVISION.model.byte_size;
+        let total_bytes = PINNED_RESIDENT_MODEL_REVISION.model.byte_size;
         let (progress, serving) = {
             let inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
             (
@@ -330,7 +332,7 @@ impl GemmaInstallState {
                 inner.server.as_ref().is_some_and(ServingServer::is_ready),
             )
         };
-        let ai_features_available = status == GemmaInstallStatus::Installed && serving;
+        let ai_features_available = status == ResidentModelInstallStatus::Installed && serving;
         RequiredModelAcquisitionStatus {
             downloaded_bytes: progress.downloaded_bytes.min(total_bytes),
             total_bytes,
@@ -339,7 +341,8 @@ impl GemmaInstallState {
             retrying_in_background: self.background_retry
                 && matches!(
                     status,
-                    GemmaInstallStatus::Installing | GemmaInstallStatus::Failed { .. }
+                    ResidentModelInstallStatus::Installing
+                        | ResidentModelInstallStatus::Failed { .. }
                 ),
             status,
         }
@@ -562,30 +565,30 @@ impl DictationTransformFailure {
     }
 }
 
-fn lifecycle(root: &Path) -> GemmaRevisionLifecycle {
-    GemmaRevisionLifecycle::new(
+fn lifecycle(root: &Path) -> ResidentModelRevisionLifecycle {
+    ResidentModelRevisionLifecycle::new(
         root.to_owned(),
-        &RESIDENT_GEMMA_REVISIONS,
-        &RESIDENT_GEMMA_REVISION,
+        &RESIDENT_MODEL_REVISIONS,
+        &PINNED_RESIDENT_MODEL_REVISION,
     )
-    .expect("the compiled resident Gemma descriptor must be valid")
+    .expect("the compiled resident-model descriptor must be valid")
 }
 
-fn inspect(root: &Path) -> GemmaInstallStatus {
+fn inspect(root: &Path) -> ResidentModelInstallStatus {
     inspect_lifecycle(&lifecycle(root))
 }
 
-fn inspect_lifecycle(lifecycle: &GemmaRevisionLifecycle) -> GemmaInstallStatus {
-    match lifecycle.recover(&NativeGemmaLifecycleBoundary) {
-        Ok(GemmaRecovery::Current(_) | GemmaRecovery::RestoredPrevious(_)) => {
-            GemmaInstallStatus::Installed
+fn inspect_lifecycle(lifecycle: &ResidentModelRevisionLifecycle) -> ResidentModelInstallStatus {
+    match lifecycle.recover(&NativeResidentModelLifecycleBoundary) {
+        Ok(ResidentModelRecovery::Current(_) | ResidentModelRecovery::RestoredPrevious(_)) => {
+            ResidentModelInstallStatus::Installed
         }
-        Ok(GemmaRecovery::NotInstalled) => GemmaInstallStatus::NotInstalled,
-        Ok(GemmaRecovery::RepairRequired) => GemmaInstallStatus::Failed {
+        Ok(ResidentModelRecovery::NotInstalled) => ResidentModelInstallStatus::NotInstalled,
+        Ok(ResidentModelRecovery::RepairRequired) => ResidentModelInstallStatus::Failed {
             category: "invalidInstall",
             message: "The installed model could not be verified.",
         },
-        Err(_) => GemmaInstallStatus::Failed {
+        Err(_) => ResidentModelInstallStatus::Failed {
             category: "inspectionFailed",
             message: "The model installation could not be inspected.",
         },
@@ -599,8 +602,8 @@ fn run_native_install(
 ) -> Result<PathBuf, InstallFailure> {
     if let Ok(revision) = lifecycle(root).resolve_current() {
         progress(ModelDownloadProgress {
-            downloaded_bytes: RESIDENT_GEMMA_REVISION.model.byte_size,
-            total_bytes: RESIDENT_GEMMA_REVISION.model.byte_size,
+            downloaded_bytes: PINNED_RESIDENT_MODEL_REVISION.model.byte_size,
+            total_bytes: PINNED_RESIDENT_MODEL_REVISION.model.byte_size,
         });
         return Ok(revision);
     }
@@ -610,13 +613,13 @@ fn run_native_install(
     let mut retry = NativeRetryWait;
     let mut lock = NativeInstallLock::new(root.join("install.lock"));
     let mut space = NativeAvailableSpace::new(root);
-    install_gemma_revision_with_progress(
+    install_resident_model_revision_with_progress(
         &staging,
-        RESIDENT_GEMMA_REVISION.identity,
-        &RESIDENT_GEMMA_REVISION,
-        GemmaAcquisitionLimits::default(),
+        PINNED_RESIDENT_MODEL_REVISION.identity,
+        &PINNED_RESIDENT_MODEL_REVISION,
+        ResidentModelAcquisitionLimits::default(),
         &mut transport,
-        GemmaAcquisitionRuntime {
+        ResidentModelAcquisitionRuntime {
             clock: &clock,
             retry_wait: &mut retry,
         },
@@ -624,13 +627,13 @@ fn run_native_install(
         &mut lock,
         &mut space,
         &lifecycle(root),
-        &NativeGemmaLifecycleBoundary,
+        &NativeResidentModelLifecycleBoundary,
         &mut |update| progress(update),
     )
     .map_err(redact_failure)
 }
 
-type RuntimeResolver = dyn Fn() -> Result<PathBuf, GemmaActivationFailure> + Send + Sync;
+type RuntimeResolver = dyn Fn() -> Result<PathBuf, ResidentModelActivationFailure> + Send + Sync;
 
 struct NativeActivation {
     resolve_runtime: Arc<RuntimeResolver>,
@@ -647,12 +650,12 @@ impl NativeActivation {
             resolve_runtime: Arc::new(move || {
                 let mut transport = NativeModelAcquisitionTransport::new();
                 acquire_runtime(&runtime_root, &mut transport)
-                    .map_err(|_| GemmaActivationFailure::Start)?;
+                    .map_err(|_| ResidentModelActivationFailure::Start)?;
                 // Resolve again at the spawn boundary so post-install modification of
                 // either retained evidence or extracted files fails closed.
-                resolve_runtime(&runtime_root).map_err(|_| GemmaActivationFailure::Start)
+                resolve_runtime(&runtime_root).map_err(|_| ResidentModelActivationFailure::Start)
             }),
-            model_descriptor: &RESIDENT_GEMMA_REVISION.model,
+            model_descriptor: &PINNED_RESIDENT_MODEL_REVISION.model,
             port: 32_391,
             tolerate_startup_transport_errors: false,
             health_interval: None,
@@ -660,10 +663,10 @@ impl NativeActivation {
     }
 }
 
-impl GemmaActivationBoundary for NativeActivation {
+impl ResidentModelActivationBoundary for NativeActivation {
     type Server = LlamaServer;
 
-    fn launch(&self, model: &Path) -> Result<Self::Server, GemmaActivationFailure> {
+    fn launch(&self, model: &Path) -> Result<Self::Server, ResidentModelActivationFailure> {
         let executable = (self.resolve_runtime)()?;
         let mut config = LlamaServerConfig::new(executable, model, self.port)
             .with_model_descriptor(self.model_descriptor);
@@ -673,21 +676,21 @@ impl GemmaActivationBoundary for NativeActivation {
         if let Some(interval) = self.health_interval {
             config = config.with_health_interval(interval);
         }
-        LlamaServer::spawn(config).map_err(|_| GemmaActivationFailure::Start)
+        LlamaServer::spawn(config).map_err(|_| ResidentModelActivationFailure::Start)
     }
 
-    fn await_ready(&self, server: &mut Self::Server) -> Result<(), GemmaActivationFailure> {
+    fn await_ready(&self, server: &mut Self::Server) -> Result<(), ResidentModelActivationFailure> {
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(120);
         while std::time::Instant::now() < deadline {
             match server.supervisor().status() {
                 SidecarStatus::Healthy => return Ok(()),
                 SidecarStatus::Stopped | SidecarStatus::Failed => {
-                    return Err(GemmaActivationFailure::ExitedBeforeReady)
+                    return Err(ResidentModelActivationFailure::ExitedBeforeReady)
                 }
                 _ => std::thread::sleep(std::time::Duration::from_millis(100)),
             }
         }
-        Err(GemmaActivationFailure::Readiness)
+        Err(ResidentModelActivationFailure::Readiness)
     }
 }
 
@@ -706,13 +709,14 @@ fn activate_native_server(revision: &Path) -> Result<LlamaServer, InstallFailure
 }
 
 fn activate_with(
-    lifecycle: &GemmaRevisionLifecycle,
+    lifecycle: &ResidentModelRevisionLifecycle,
     activation: &NativeActivation,
 ) -> Result<LlamaServer, InstallFailure> {
-    match lifecycle.activate(&NativeGemmaLifecycleBoundary, activation) {
-        Ok(GemmaActivation::Active { server, .. } | GemmaActivation::RolledBack { server, .. }) => {
-            Ok(server)
-        }
+    match lifecycle.activate(&NativeResidentModelLifecycleBoundary, activation) {
+        Ok(
+            ResidentModelActivation::Active { server, .. }
+            | ResidentModelActivation::RolledBack { server, .. },
+        ) => Ok(server),
         _ => Err(InstallFailure {
             category: "activationFailed",
             message: "The local AI service could not be started.",
@@ -721,11 +725,13 @@ fn activate_with(
     }
 }
 
-fn redact_failure(error: muniment_core::llama::install::GemmaInstallError) -> InstallFailure {
+fn redact_failure(
+    error: muniment_core::llama::install::ResidentModelInstallError,
+) -> InstallFailure {
     let cancelled = matches!(
         error,
         ModelInstallError::Cancelled
-            | ModelInstallError::Acquisition(GemmaAcquisitionError::Cancelled)
+            | ModelInstallError::Acquisition(ResidentModelAcquisitionError::Cancelled)
     );
     if cancelled {
         InstallFailure {
@@ -1003,31 +1009,38 @@ fn redact_parakeet_failure(
 }
 
 #[tauri::command]
-pub fn gemma_install_start(state: State<'_, GemmaInstallState>) -> GemmaInstallStatus {
+// Keep this legacy model-specific command name for frontend wire compatibility.
+pub fn gemma_install_start(
+    state: State<'_, ResidentModelInstallState>,
+) -> ResidentModelInstallStatus {
     state.start()
 }
 
 #[tauri::command]
+// Keep this legacy model-specific command name for frontend wire compatibility.
 pub async fn gemma_install_status(
-    state: State<'_, GemmaInstallState>,
-) -> Result<GemmaInstallStatus, String> {
-    gemma_install_status_handler(&state).await
+    state: State<'_, ResidentModelInstallState>,
+) -> Result<ResidentModelInstallStatus, String> {
+    resident_model_install_status_handler(&state).await
 }
 
-async fn gemma_install_status_handler(
-    state: &GemmaInstallState,
-) -> Result<GemmaInstallStatus, String> {
+async fn resident_model_install_status_handler(
+    state: &ResidentModelInstallState,
+) -> Result<ResidentModelInstallStatus, String> {
     Ok(state.status().await)
 }
 
 #[tauri::command]
-pub fn gemma_install_cancel(state: State<'_, GemmaInstallState>) -> GemmaInstallStatus {
+// Keep this legacy model-specific command name for frontend wire compatibility.
+pub fn gemma_install_cancel(
+    state: State<'_, ResidentModelInstallState>,
+) -> ResidentModelInstallStatus {
     state.cancel()
 }
 
 #[tauri::command]
 pub async fn required_model_acquisition_status(
-    state: State<'_, GemmaInstallState>,
+    state: State<'_, ResidentModelInstallState>,
 ) -> Result<RequiredModelAcquisitionStatus, String> {
     Ok(state.acquisition_status().await)
 }
@@ -1035,11 +1048,11 @@ pub async fn required_model_acquisition_status(
 #[tauri::command]
 pub async fn dictation_polish(
     transcript: String,
-    state: State<'_, GemmaInstallState>,
+    state: State<'_, ResidentModelInstallState>,
 ) -> Result<String, DictationPolishFailure> {
     let inner = Arc::clone(&state.inner);
     tauri::async_runtime::spawn_blocking(move || {
-        GemmaInstallState::polish_dictation_with_inner(inner, transcript)
+        ResidentModelInstallState::polish_dictation_with_inner(inner, transcript)
     })
     .await
     .unwrap_or_else(|_| Err(DictationPolishFailure::request_failed()))
@@ -1049,11 +1062,11 @@ pub async fn dictation_polish(
 pub async fn dictation_transform(
     transcript: String,
     transform: DictationTransform,
-    state: State<'_, GemmaInstallState>,
+    state: State<'_, ResidentModelInstallState>,
 ) -> Result<String, DictationTransformFailure> {
     let inner = Arc::clone(&state.inner);
     tauri::async_runtime::spawn_blocking(move || {
-        GemmaInstallState::transform_dictation_with_inner(inner, transcript, transform)
+        ResidentModelInstallState::transform_dictation_with_inner(inner, transcript, transform)
     })
     .await
     .unwrap_or_else(|_| Err(DictationTransformFailure::request_failed()))
@@ -1062,11 +1075,11 @@ pub async fn dictation_transform(
 #[tauri::command]
 pub async fn onboarding_triage(
     entries: Vec<ExtractedEntry>,
-    state: State<'_, GemmaInstallState>,
+    state: State<'_, ResidentModelInstallState>,
 ) -> Result<OnboardingTriageResponse, OnboardingTriageFailure> {
     let inner = Arc::clone(&state.inner);
     tauri::async_runtime::spawn_blocking(move || {
-        GemmaInstallState::triage_onboarding_with_inner(inner, entries)
+        ResidentModelInstallState::triage_onboarding_with_inner(inner, entries)
     })
     .await
     .unwrap_or_else(|_| Err(OnboardingTriageFailure::request_failed()))
@@ -1095,9 +1108,12 @@ mod tests {
     use muniment_core::asr::{AsrArtifactDescriptor, AsrArtifactManifest};
     #[cfg(unix)]
     use muniment_core::llama::acquisition::{
-        GemmaDownloadRequest, GemmaDownloadResponse, GemmaDownloadTransport, GemmaTransportError,
+        ResidentModelDownloadRequest, ResidentModelDownloadResponse,
+        ResidentModelDownloadTransport, ResidentModelTransportError,
     };
-    use muniment_core::llama::lifecycle::{GemmaNoticeDescriptor, GemmaRevisionDescriptor};
+    use muniment_core::llama::lifecycle::{
+        ResidentModelNoticeDescriptor, ResidentModelRevisionDescriptor,
+    };
     #[cfg(unix)]
     use muniment_core::llama::runtime::{
         acquire_runtime_for, resolve_runtime_for, LlamaRuntimeDescriptor, RuntimeArchiveError,
@@ -1114,11 +1130,11 @@ mod tests {
     use std::time::{Duration, Instant};
     use tauri::Manager;
 
-    fn state(status: GemmaInstallStatus, runner: Arc<Runner>) -> GemmaInstallState {
-        GemmaInstallState::with_runner(std::env::temp_dir(), status, runner)
+    fn state(status: ResidentModelInstallStatus, runner: Arc<Runner>) -> ResidentModelInstallState {
+        ResidentModelInstallState::with_runner(std::env::temp_dir(), status, runner)
     }
 
-    fn app_with_state(state: GemmaInstallState) -> tauri::App<tauri::test::MockRuntime> {
+    fn app_with_state(state: ResidentModelInstallState) -> tauri::App<tauri::test::MockRuntime> {
         let app = tauri::test::mock_app();
         assert!(app.manage(state));
         app
@@ -1178,13 +1194,13 @@ mod tests {
         app
     }
 
-    fn public_status(app: &tauri::App<tauri::test::MockRuntime>) -> GemmaInstallStatus {
+    fn public_status(app: &tauri::App<tauri::test::MockRuntime>) -> ResidentModelInstallStatus {
         tauri::async_runtime::block_on(gemma_install_status(app.state())).unwrap()
     }
 
     fn await_public_status(
         app: &tauri::App<tauri::test::MockRuntime>,
-        expected: GemmaInstallStatus,
+        expected: ResidentModelInstallStatus,
     ) {
         let deadline = Instant::now() + Duration::from_secs(2);
         while Instant::now() < deadline {
@@ -1236,7 +1252,7 @@ mod tests {
         let body = r#"{"choices":[{"message":{"role":"assistant","content":"Meet me at noon."}}]}"#;
         let (url, worker) = polish_fixture(body);
         let state = state(
-            GemmaInstallStatus::Installed,
+            ResidentModelInstallStatus::Installed,
             Arc::new(|root, _, _| Ok(root.into())),
         );
         state.inner.lock().unwrap().server = Some(ServingServer::Test(url));
@@ -1261,7 +1277,7 @@ mod tests {
         let url = format!("http://{}", listener.local_addr().unwrap());
         drop(listener);
         let state = state(
-            GemmaInstallStatus::Installed,
+            ResidentModelInstallStatus::Installed,
             Arc::new(|root, _, _| Ok(root.into())),
         );
         state.inner.lock().unwrap().server = Some(ServingServer::Test(url));
@@ -1278,13 +1294,13 @@ mod tests {
     fn dictation_polish_rejects_unavailable_and_empty_inputs_with_typed_errors() {
         let runner_calls = Arc::new(AtomicUsize::new(0));
         for status in [
-            GemmaInstallStatus::NotInstalled,
-            GemmaInstallStatus::Installing,
-            GemmaInstallStatus::Failed {
+            ResidentModelInstallStatus::NotInstalled,
+            ResidentModelInstallStatus::Installing,
+            ResidentModelInstallStatus::Failed {
                 category: "activationFailed",
                 message: "The model server could not be started.",
             },
-            GemmaInstallStatus::Installed,
+            ResidentModelInstallStatus::Installed,
         ] {
             let calls = Arc::clone(&runner_calls);
             let state = state(
@@ -1302,7 +1318,7 @@ mod tests {
         assert_eq!(runner_calls.load(Ordering::SeqCst), 0);
 
         let state = state(
-            GemmaInstallStatus::Installed,
+            ResidentModelInstallStatus::Installed,
             Arc::new(|root, _, _| Ok(root.into())),
         );
         state.inner.lock().unwrap().server =
@@ -1328,7 +1344,7 @@ mod tests {
             r#"{"choices":[{"message":{"role":"assistant","content":"A formal response."}}]}"#;
         let (url, worker) = polish_fixture(body);
         let state = state(
-            GemmaInstallStatus::Installed,
+            ResidentModelInstallStatus::Installed,
             Arc::new(|root, _, _| Ok(root.into())),
         );
         state.inner.lock().unwrap().server = Some(ServingServer::Test(url));
@@ -1355,7 +1371,7 @@ mod tests {
         let url = format!("http://{}", listener.local_addr().unwrap());
         drop(listener);
         let state = state(
-            GemmaInstallStatus::Installed,
+            ResidentModelInstallStatus::Installed,
             Arc::new(|root, _, _| Ok(root.into())),
         );
         state.inner.lock().unwrap().server = Some(ServingServer::Test(url));
@@ -1375,14 +1391,14 @@ mod tests {
     #[test]
     fn dictation_transform_rejects_empty_input_and_unavailable_server() {
         let state = state(
-            GemmaInstallStatus::Installed,
+            ResidentModelInstallStatus::Installed,
             Arc::new(|root, _, _| Ok(root.into())),
         );
         state.inner.lock().unwrap().server = Some(ServingServer::Test(
             "http://127.0.0.1:1/private-model.gguf".to_owned(),
         ));
 
-        let empty_error = GemmaInstallState::transform_dictation_with_inner(
+        let empty_error = ResidentModelInstallState::transform_dictation_with_inner(
             Arc::clone(&state.inner),
             " \n\t ".into(),
             DictationTransform::KeyPoints,
@@ -1391,7 +1407,7 @@ mod tests {
         assert_eq!(empty_error, DictationTransformFailure::invalid_transcript());
 
         state.inner.lock().unwrap().server = None;
-        let unavailable_error = GemmaInstallState::transform_dictation_with_inner(
+        let unavailable_error = ResidentModelInstallState::transform_dictation_with_inner(
             Arc::clone(&state.inner),
             "private transcript".into(),
             DictationTransform::Long,
@@ -1408,12 +1424,12 @@ mod tests {
     fn dictation_transform_maps_malformed_model_response_to_request_failure() {
         let (url, worker) = polish_fixture(r#"{"choices":[]}"#);
         let state = state(
-            GemmaInstallStatus::Installed,
+            ResidentModelInstallStatus::Installed,
             Arc::new(|root, _, _| Ok(root.into())),
         );
         state.inner.lock().unwrap().server = Some(ServingServer::Test(url));
 
-        let error = GemmaInstallState::transform_dictation_with_inner(
+        let error = ResidentModelInstallState::transform_dictation_with_inner(
             Arc::clone(&state.inner),
             "private transcript".into(),
             DictationTransform::Short,
@@ -1431,7 +1447,7 @@ mod tests {
         let body = r###"{"choices":[{"message":{"role":"assistant","content":"## User type\nDeveloper\n## Proposed Home layout\nProject folders\n## Starter agents\n- Researcher\n- Writer"}}],"usage":{"prompt_tokens":12,"completion_tokens":8,"total_tokens":20}}"###;
         let (url, worker) = polish_fixture(body);
         let state = state(
-            GemmaInstallStatus::Installed,
+            ResidentModelInstallStatus::Installed,
             Arc::new(|root, _, _| Ok(root.into())),
         );
         state.inner.lock().unwrap().server = Some(ServingServer::Test(url));
@@ -1453,7 +1469,7 @@ mod tests {
     #[test]
     fn onboarding_triage_rejects_unavailable_model_without_request() {
         let state = state(
-            GemmaInstallStatus::Installed,
+            ResidentModelInstallStatus::Installed,
             Arc::new(|root, _, _| Ok(root.into())),
         );
         let app = app_with_state(state);
@@ -1468,7 +1484,7 @@ mod tests {
     #[test]
     fn onboarding_triage_rejects_invalid_input_before_model_request() {
         let state = state(
-            GemmaInstallStatus::Installed,
+            ResidentModelInstallStatus::Installed,
             Arc::new(|root, _, _| Ok(root.into())),
         );
         state.inner.lock().unwrap().server =
@@ -1487,7 +1503,7 @@ mod tests {
         let body = r###"{"choices":[{"message":{"role":"assistant","content":"## User type\nDeveloper"}}]}"###;
         let (url, worker) = polish_fixture(body);
         let state = state(
-            GemmaInstallStatus::Installed,
+            ResidentModelInstallStatus::Installed,
             Arc::new(|root, _, _| Ok(root.into())),
         );
         state.inner.lock().unwrap().server = Some(ServingServer::Test(url));
@@ -1504,16 +1520,16 @@ mod tests {
         );
         worker.join().unwrap();
     }
-    static TEST_REVISION: GemmaRevisionDescriptor = GemmaRevisionDescriptor {
+    static TEST_REVISION: ResidentModelRevisionDescriptor = ResidentModelRevisionDescriptor {
         identity: "gemma-fixture-v1",
         revision: "test-revision",
         model: &TEST_MODEL,
-        notice: GemmaNoticeDescriptor {
+        notice: ResidentModelNoticeDescriptor {
             filename: "NOTICE.txt",
             contents: b"notice",
         },
     };
-    static TEST_REVISIONS: [&GemmaRevisionDescriptor; 1] = [&TEST_REVISION];
+    static TEST_REVISIONS: [&ResidentModelRevisionDescriptor; 1] = [&TEST_REVISION];
     static TEST_ASR_ARTIFACTS: [AsrArtifactDescriptor; 4] = [
         AsrArtifactDescriptor {
             filename: "a",
@@ -1554,8 +1570,9 @@ mod tests {
             Self(root)
         }
 
-        fn lifecycle(&self) -> GemmaRevisionLifecycle {
-            GemmaRevisionLifecycle::new(self.0.clone(), &TEST_REVISIONS, &TEST_REVISION).unwrap()
+        fn lifecycle(&self) -> ResidentModelRevisionLifecycle {
+            ResidentModelRevisionLifecycle::new(self.0.clone(), &TEST_REVISIONS, &TEST_REVISION)
+                .unwrap()
         }
     }
 
@@ -1570,7 +1587,7 @@ mod tests {
         let root = TestRoot::new();
         assert_eq!(
             inspect_lifecycle(&root.lifecycle()),
-            GemmaInstallStatus::NotInstalled
+            ResidentModelInstallStatus::NotInstalled
         );
     }
 
@@ -1579,9 +1596,9 @@ mod tests {
         let root = TestRoot::new();
         let attempts = Arc::new(AtomicUsize::new(0));
         let runner_attempts = Arc::clone(&attempts);
-        let state = GemmaInstallState::with_runner(
+        let state = ResidentModelInstallState::with_runner(
             root.0.clone(),
-            GemmaInstallStatus::NotInstalled,
+            ResidentModelInstallStatus::NotInstalled,
             Arc::new(move |_, _, _| {
                 runner_attempts.fetch_add(1, Ordering::SeqCst);
                 Err(InstallFailure {
@@ -1598,7 +1615,7 @@ mod tests {
         while Instant::now() < deadline {
             if matches!(
                 tauri::async_runtime::block_on(state.status()),
-                GemmaInstallStatus::Failed { .. }
+                ResidentModelInstallStatus::Failed { .. }
             ) {
                 break;
             }
@@ -1606,7 +1623,10 @@ mod tests {
         }
 
         let snapshot = tauri::async_runtime::block_on(state.acquisition_status());
-        assert!(matches!(snapshot.status, GemmaInstallStatus::Failed { .. }));
+        assert!(matches!(
+            snapshot.status,
+            ResidentModelInstallStatus::Failed { .. }
+        ));
         assert_eq!(attempts.load(Ordering::SeqCst), 1);
         assert!(snapshot.folder_setup_available);
         assert!(!snapshot.ai_features_available);
@@ -1614,7 +1634,7 @@ mod tests {
         assert_eq!(snapshot.downloaded_bytes, 0);
         assert_eq!(
             snapshot.total_bytes,
-            RESIDENT_GEMMA_REVISION.model.byte_size
+            PINNED_RESIDENT_MODEL_REVISION.model.byte_size
         );
         state.cancel();
     }
@@ -1634,12 +1654,12 @@ mod tests {
                 },
             )
         };
-        let state = state(GemmaInstallStatus::NotInstalled, runner);
+        let state = state(ResidentModelInstallStatus::NotInstalled, runner);
 
-        assert_eq!(state.start(), GemmaInstallStatus::Installing);
+        assert_eq!(state.start(), ResidentModelInstallStatus::Installing);
         entered.wait();
         let snapshot = tauri::async_runtime::block_on(state.acquisition_status());
-        assert_eq!(snapshot.status, GemmaInstallStatus::Installing);
+        assert_eq!(snapshot.status, ResidentModelInstallStatus::Installing);
         assert!(snapshot.folder_setup_available);
         assert!(!snapshot.ai_features_available);
         release.wait();
@@ -1672,9 +1692,9 @@ mod tests {
                 },
             )
         };
-        let mut state = state(GemmaInstallStatus::NotInstalled, runner);
+        let mut state = state(ResidentModelInstallStatus::NotInstalled, runner);
         state.inner.lock().unwrap().progress.total_bytes = 10;
-        state.inspector = Arc::new(|_| GemmaInstallStatus::Installed);
+        state.inspector = Arc::new(|_| ResidentModelInstallStatus::Installed);
         state.start();
         published.wait();
 
@@ -1695,15 +1715,16 @@ mod tests {
     #[test]
     fn production_composition_acquires_model_and_runtime_and_tracks_live_readiness() {
         struct ModelTransport;
-        impl GemmaDownloadTransport for ModelTransport {
+        impl ResidentModelDownloadTransport for ModelTransport {
             type Body = Cursor<Vec<u8>>;
 
             fn download(
                 &mut self,
-                request: &GemmaDownloadRequest,
-            ) -> Result<GemmaDownloadResponse<Self::Body>, GemmaTransportError> {
+                request: &ResidentModelDownloadRequest,
+            ) -> Result<ResidentModelDownloadResponse<Self::Body>, ResidentModelTransportError>
+            {
                 assert_eq!(request.offset, 1, "the staged model download must resume");
-                Ok(GemmaDownloadResponse {
+                Ok(ResidentModelDownloadResponse {
                     status: 206,
                     content_range: Some((1, 2, 3)),
                     body: Cursor::new(b"bc".to_vec()),
@@ -1741,26 +1762,26 @@ mod tests {
                 let clock = NativeAcquisitionClock::new();
                 let mut lock = NativeInstallLock::new(runner_root.join("install.lock"));
                 let mut space = NativeAvailableSpace::new(&runner_root);
-                install_gemma_revision_with_progress(
+                install_resident_model_revision_with_progress(
                     &runner_root.join("staging"),
                     TEST_REVISION.identity,
                     &TEST_REVISION,
-                    GemmaAcquisitionLimits::default(),
+                    ResidentModelAcquisitionLimits::default(),
                     &mut transport,
-                    GemmaAcquisitionRuntime {
+                    ResidentModelAcquisitionRuntime {
                         clock: &clock,
                         retry_wait: &mut retry,
                     },
                     cancellation,
                     &mut lock,
                     &mut space,
-                    &GemmaRevisionLifecycle::new(
+                    &ResidentModelRevisionLifecycle::new(
                         runner_root.clone(),
                         &TEST_REVISIONS,
                         &TEST_REVISION,
                     )
                     .unwrap(),
-                    &NativeGemmaLifecycleBoundary,
+                    &NativeResidentModelLifecycleBoundary,
                     &mut |update| progress(update),
                 )
                 .map_err(redact_failure)
@@ -1822,7 +1843,7 @@ server.serve_forever()
                     runtime_descriptor,
                     &mut RuntimeTransport(runtime_bytes.clone()),
                 )
-                .map_err(|_| GemmaActivationFailure::Start)
+                .map_err(|_| ResidentModelActivationFailure::Start)
             }),
             model_descriptor: &TEST_MODEL,
             port,
@@ -1831,9 +1852,9 @@ server.serve_forever()
         };
         let activation = Arc::new(activation);
         let activation_lifecycle = root.lifecycle();
-        let mut state = GemmaInstallState::with_runner(
+        let mut state = ResidentModelInstallState::with_runner(
             root.0.clone(),
-            GemmaInstallStatus::NotInstalled,
+            ResidentModelInstallStatus::NotInstalled,
             runner,
         );
         state.activator = Arc::new(move |_| {
@@ -1841,8 +1862,12 @@ server.serve_forever()
         });
         state.inspector = Arc::new(|root| {
             inspect_lifecycle(
-                &GemmaRevisionLifecycle::new(root.to_owned(), &TEST_REVISIONS, &TEST_REVISION)
-                    .unwrap(),
+                &ResidentModelRevisionLifecycle::new(
+                    root.to_owned(),
+                    &TEST_REVISIONS,
+                    &TEST_REVISION,
+                )
+                .unwrap(),
             )
         });
         state.start();
@@ -1912,13 +1937,13 @@ server.serve_forever()
         .unwrap();
         assert_eq!(
             inspect_lifecycle(&root.lifecycle()),
-            GemmaInstallStatus::Installed
+            ResidentModelInstallStatus::Installed
         );
 
         fs::remove_file(revision.join(TEST_MODEL.filename)).unwrap();
         assert_eq!(
             inspect_lifecycle(&root.lifecycle()),
-            GemmaInstallStatus::Failed {
+            ResidentModelInstallStatus::Failed {
                 category: "invalidInstall",
                 message: "The installed model could not be verified.",
             }
@@ -1940,12 +1965,12 @@ server.serve_forever()
                 },
             )
         };
-        let app = app_with_state(state(GemmaInstallStatus::NotInstalled, runner));
-        let state = app.state::<GemmaInstallState>();
-        assert_eq!(state.start(), GemmaInstallStatus::Installing);
-        assert_eq!(state.start(), GemmaInstallStatus::Installing);
+        let app = app_with_state(state(ResidentModelInstallStatus::NotInstalled, runner));
+        let state = app.state::<ResidentModelInstallState>();
+        assert_eq!(state.start(), ResidentModelInstallStatus::Installing);
+        assert_eq!(state.start(), ResidentModelInstallStatus::Installing);
         release.wait();
-        await_public_status(&app, GemmaInstallStatus::Installed);
+        await_public_status(&app, ResidentModelInstallStatus::Installed);
         assert_eq!(calls.load(Ordering::SeqCst), 1);
     }
 
@@ -1960,10 +1985,10 @@ server.serve_forever()
                 })
             },
         );
-        let app = app_with_state(state(GemmaInstallStatus::NotInstalled, runner));
-        let state = app.state::<GemmaInstallState>();
+        let app = app_with_state(state(ResidentModelInstallStatus::NotInstalled, runner));
+        let state = app.state::<ResidentModelInstallState>();
         state.start();
-        let expected = GemmaInstallStatus::Failed {
+        let expected = ResidentModelInstallStatus::Failed {
             category: "downloadFailed",
             message: "The model download failed.",
         };
@@ -1985,12 +2010,12 @@ server.serve_forever()
                 })
             },
         );
-        let app = app_with_state(state(GemmaInstallStatus::NotInstalled, runner));
-        let state = app.state::<GemmaInstallState>();
+        let app = app_with_state(state(ResidentModelInstallStatus::NotInstalled, runner));
+        let state = app.state::<ResidentModelInstallState>();
         state.start();
-        assert_eq!(state.cancel(), GemmaInstallStatus::Installing);
-        await_public_status(&app, GemmaInstallStatus::Cancelled);
-        assert_eq!(public_status(&app), GemmaInstallStatus::Cancelled);
+        assert_eq!(state.cancel(), ResidentModelInstallStatus::Installing);
+        await_public_status(&app, ResidentModelInstallStatus::Cancelled);
+        assert_eq!(public_status(&app), ResidentModelInstallStatus::Cancelled);
     }
 
     #[test]
