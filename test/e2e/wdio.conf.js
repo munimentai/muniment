@@ -12,11 +12,13 @@ export const config = {
   runner: 'local',
   specs: [process.env.MUNIMENT_E2E_CLEANUP_ONLY === '1' ? './specs/cleanup.spec.js' : process.env.MUNIMENT_E2E_ONBOARDING_ONLY === '1' ? './specs/onboarding.spec.js' : './specs/real-sign-in.spec.js'],
   maxInstances: 1,
-  // The Tauri service removes browserName before WebdriverIO creates the
-  // session. An explicit endpoint keeps WDIO in remote-driver mode afterward.
-  hostname: '127.0.0.1',
-  port: tauriDriverPort,
-  capabilities: [{ browserName: 'tauri' }],
+  // The service removes browserName before session creation. Keep the external
+  // endpoint on the capability so WDIO carries it into the worker session.
+  capabilities: [{
+    browserName: 'tauri',
+    hostname: '127.0.0.1',
+    port: tauriDriverPort,
+  }],
   logLevel: 'info',
   outputDir: artifactDir,
   framework: 'mocha',

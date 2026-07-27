@@ -77,12 +77,16 @@ describe('WDIO Tauri service dependency contract', () => {
     process.env.MUNIMENT_E2E_RAW_DIR = temp()
     try {
       const { config } = await import('./e2e/wdio.conf.js?endpoint-contract')
-      expect(config.capabilities).toEqual([{ browserName: 'tauri' }])
-      expect(config.hostname).toBe('127.0.0.1')
-      expect(config.port).toBe(4444)
+      expect(config.capabilities).toEqual([{
+        browserName: 'tauri',
+        hostname: '127.0.0.1',
+        port: 4444,
+      }])
+      expect(config.hostname).toBeUndefined()
+      expect(config.port).toBeUndefined()
       expect(config.services[0][1]).toMatchObject({
         driverProvider: 'external',
-        tauriDriverPort: config.port,
+        tauriDriverPort: config.capabilities[0].port,
       })
     } finally {
       if (previousBinary === undefined) delete process.env.MUNIMENT_E2E_APP_BINARY
@@ -90,6 +94,16 @@ describe('WDIO Tauri service dependency contract', () => {
       if (previousArtifacts === undefined) delete process.env.MUNIMENT_E2E_RAW_DIR
       else process.env.MUNIMENT_E2E_RAW_DIR = previousArtifacts
     }
+  })
+
+  it('starts and waits for the external Tauri driver around every Linux WDIO run', () => {
+    const runner = fs.readFileSync(path.join(root, 'test/e2e/runner/linux.sh'), 'utf8')
+    const runE2e = runner.slice(runner.indexOf('run_e2e()'), runner.indexOf('\nemit_artifacts()'))
+    expect(runE2e).toContain('tauri-driver --port 4444 >"$driver_log" 2>&1 &')
+    expect(runE2e).toContain('/dev/tcp/127.0.0.1/4444')
+    expect(runE2e.indexOf('/dev/tcp/127.0.0.1/4444')).toBeLessThan(runE2e.indexOf('npm run test:e2e'))
+    expect(runE2e).toContain("stop_matching '[t]auri-driver'")
+    expect(runner.match(/run_e2e .*driver-(?:onboarding|app|cleanup)\.log/g)).toHaveLength(3)
   })
 })
 
@@ -677,7 +691,7 @@ describe('cleanup failure accounting', () => {
     expect(invoked.slice(0, 5)).toEqual(['stop-wdio', 'stop-driver', 'revoke-session', 'stop-browser-driver', 'stop-app'])
     expect(command['stop-wdio']).toBe("stop_matching \\[w\\]dio.\\\*test/e2e/wdio.conf.js ")
     expect(command['stop-driver']).toBe("stop_matching \\[t\\]auri-driver ")
-    expect(command['revoke-session']).toBe('timeout 45 env MUNIMENT_E2E_CLEANUP_ONLY=1 xvfb-run -a npm run test:e2e ')
+    expect(command['revoke-session']).toBe('run_cleanup_e2e ')
     expect(command['stop-browser-driver']).toBe("stop_matching \\[c\\]hromedriver.\\\*9515 ")
     expect(command['stop-app']).toBe("bash -c pkill\\ -f\\ \\\'\\(\\^\\|/\\)muniment-desktop\\(\\ \\|\\\$\\)\\\'\\ 2\\\>/dev/null\\ \\|\\|\\ true\\\;\\ pkill\\ -x\\ muniment\\ 2\\\>/dev/null\\ \\|\\|\\ true\\\;\\ \\!\\ pgrep\\ -f\\ \\\'\\(\\^\\|/\\)muniment-desktop\\(\\ \\|\\\$\\)\\\'\\ \\>/dev/null\\ \\&\\&\\ \\!\\ pgrep\\ -x\\ muniment\\ \\>/dev/null ")
     expect(command['remove-package']).toBe('sudo apt-get remove -y muniment ')
