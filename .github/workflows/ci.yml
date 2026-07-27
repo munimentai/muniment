@@ -330,7 +330,14 @@ jobs:
             else
               status=$?
             fi
-            if [ "$PLATFORM" != "windows" ] || [ "$status" -ne 3 ] || [ "$attempt" -ge 2 ]; then
+            # A Windows guest setup failure normally returns desktop-ci's
+            # infrastructure status 3. If the failing guest closes the SSH
+            # connection first (for example, while initializing wincredman),
+            # OpenSSH reports 255 instead. Both get the same single bounded
+            # retry; command/test failures remain non-retryable.
+            if [ "$PLATFORM" != "windows" ] || \
+               { [ "$status" -ne 3 ] && [ "$status" -ne 255 ]; } || \
+               [ "$attempt" -ge 2 ]; then
               exit "$status"
             fi
             echo "desktop-ci infrastructure setup failed; retrying once"

@@ -22,6 +22,9 @@ grep -Fq "if: github.event_name == 'pull_request' && needs.smoke.outputs.desktop
 grep -Fq 'platform: [linux, windows, macos]' "$ci"
 grep -Fq "cmd='cargo check --manifest-path src-tauri/Cargo.toml --locked --all-targets'" "$ci"
 test "$(grep -Fc 'apt-get install -y -qq --no-install-recommends libasound2-dev' "$ci")" -eq 2
+# Windows guest setup can close SSH before desktop-ci returns infrastructure
+# status 3; keep the one-time retry covering OpenSSH's resulting status 255.
+grep -Fq '{ [ "$status" -ne 3 ] && [ "$status" -ne 255 ]; }' "$ci"
 test -f src-tauri/Cargo.lock
 # installed-nightly E2E architecture remains accepted and platform-bounded
 e2e_adr=docs/decisions/0013-desktop-e2e-harness.md
