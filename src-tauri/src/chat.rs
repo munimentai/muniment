@@ -5,6 +5,10 @@ use std::time::Duration;
 
 use chrono::{SecondsFormat, Utc};
 #[cfg(target_os = "linux")]
+use muniment_core::attach::linux::{
+    ThreadListPage, ThreadListRequest, ThreadListService, ThreadOpenPage, ThreadOpenRequest,
+};
+#[cfg(target_os = "linux")]
 use muniment_core::attach::ProtocolError;
 use muniment_core::attachment::{ingest_attachment, prepare_pi_images, AttachmentMetadata};
 use muniment_core::auth::TokenSet;
@@ -194,6 +198,18 @@ pub(crate) struct RunStartLaunch {
 }
 
 pub(crate) trait RunStartBoundaries {
+    #[cfg(target_os = "linux")]
+    fn list_threads(
+        &self,
+        workspace: &str,
+        request: ThreadListRequest,
+    ) -> Result<ThreadListPage, ProtocolError>;
+    #[cfg(target_os = "linux")]
+    fn open_thread(
+        &self,
+        workspace: &str,
+        request: ThreadOpenRequest,
+    ) -> Result<ThreadOpenPage, ProtocolError>;
     fn active_run_exists(&self) -> bool;
     fn fresh_tokens(&self) -> Result<TokenSet, RunStartError>;
     fn configure_run(
@@ -335,6 +351,34 @@ impl<R: tauri::Runtime> TauriRunStartBoundaries<R> {
 }
 
 impl<R: tauri::Runtime> RunStartBoundaries for TauriRunStartBoundaries<R> {
+    #[cfg(target_os = "linux")]
+    fn list_threads(
+        &self,
+        workspace: &str,
+        request: ThreadListRequest,
+    ) -> Result<ThreadListPage, ProtocolError> {
+        let state = self.state();
+        let mut storage = state
+            .storage
+            .lock()
+            .map_err(|_| ProtocolError::persistence_failed())?;
+        ThreadListService::list_threads(&mut storage.journal, workspace, request)
+    }
+
+    #[cfg(target_os = "linux")]
+    fn open_thread(
+        &self,
+        workspace: &str,
+        request: ThreadOpenRequest,
+    ) -> Result<ThreadOpenPage, ProtocolError> {
+        let state = self.state();
+        let mut storage = state
+            .storage
+            .lock()
+            .map_err(|_| ProtocolError::persistence_failed())?;
+        ThreadListService::open_thread(&mut storage.journal, workspace, request)
+    }
+
     fn active_run_exists(&self) -> bool {
         self.state()
             .active
