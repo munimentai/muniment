@@ -3,6 +3,7 @@ import { execFileSync, spawn, spawnSync } from 'node:child_process'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { startWebDriver } from '@wdio/utils'
 
 const root = process.cwd()
 const temporary = []
@@ -65,7 +66,7 @@ describe('installed production chat contract', () => {
   })
 })
 
-describe('WDIO Tauri service dependency contract', () => {
+describe('WDIO Tauri driver contract', () => {
   it('loads the installed ESM entry with compatible transitive named exports', async () => {
     await expect(import('@wdio/tauri-service')).resolves.toBeDefined()
   }, 15_000)
@@ -73,26 +74,26 @@ describe('WDIO Tauri service dependency contract', () => {
   it('keeps WebdriverIO in remote mode at the external Tauri driver endpoint', async () => {
     const previousBinary = process.env.MUNIMENT_E2E_APP_BINARY
     const previousArtifacts = process.env.MUNIMENT_E2E_RAW_DIR
+    const previousExternalDriver = process.env.MUNIMENT_E2E_EXTERNAL_DRIVER
     process.env.MUNIMENT_E2E_APP_BINARY = path.join(root, 'muniment-test-binary')
     process.env.MUNIMENT_E2E_RAW_DIR = temp()
+    process.env.MUNIMENT_E2E_EXTERNAL_DRIVER = '1'
     try {
       const { config } = await import('./e2e/wdio.conf.js?endpoint-contract')
       expect(config.capabilities).toEqual([{
-        browserName: 'tauri',
-        hostname: '127.0.0.1',
-        port: 4444,
+        'tauri:options': { application: process.env.MUNIMENT_E2E_APP_BINARY },
       }])
-      expect(config.hostname).toBeUndefined()
-      expect(config.port).toBeUndefined()
-      expect(config.services[0][1]).toMatchObject({
-        driverProvider: 'external',
-        tauriDriverPort: config.capabilities[0].port,
-      })
+      expect(config.hostname).toBe('127.0.0.1')
+      expect(config.port).toBe(4444)
+      await expect(startWebDriver(config)).resolves.toBeUndefined()
+      expect(config.services).toEqual([])
     } finally {
       if (previousBinary === undefined) delete process.env.MUNIMENT_E2E_APP_BINARY
       else process.env.MUNIMENT_E2E_APP_BINARY = previousBinary
       if (previousArtifacts === undefined) delete process.env.MUNIMENT_E2E_RAW_DIR
       else process.env.MUNIMENT_E2E_RAW_DIR = previousArtifacts
+      if (previousExternalDriver === undefined) delete process.env.MUNIMENT_E2E_EXTERNAL_DRIVER
+      else process.env.MUNIMENT_E2E_EXTERNAL_DRIVER = previousExternalDriver
     }
   })
 
@@ -103,6 +104,7 @@ describe('WDIO Tauri service dependency contract', () => {
     expect(runE2e).toContain('/dev/tcp/127.0.0.1/4444')
     expect(runE2e.indexOf('/dev/tcp/127.0.0.1/4444')).toBeLessThan(runE2e.indexOf('npm run test:e2e'))
     expect(runE2e).toContain("stop_matching '[t]auri-driver'")
+    expect(runner).toContain('export MUNIMENT_E2E_EXTERNAL_DRIVER=1')
     expect(runner.match(/run_e2e .*driver-(?:onboarding|app|cleanup)\.log/g)).toHaveLength(3)
   })
 })

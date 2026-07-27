@@ -175,6 +175,7 @@ command -v tauri-driver >/dev/null || cargo install tauri-driver --version 2.0.5
 app_binary=$(command -v muniment-desktop || command -v muniment) || { echo 'installed application binary is unavailable' >&2; status=1; exit; }
 chromedriver --port=9515 --allowed-ips=127.0.0.1 >>"$raw/chromedriver.log" 2>&1 &
 export MUNIMENT_E2E_APP_BINARY="$app_binary" MUNIMENT_E2E_RAW_DIR="$raw"
+export MUNIMENT_E2E_EXTERNAL_DRIVER=1
 export MUNIMENT_E2E_AUTH_URL_FILE="$auth_url_file" BROWSER="$PWD/test/e2e/support/browser-launcher.sh"
 export MUNIMENT_E2E_IMAGE_PATH="$image_fixture"
 ready=1
