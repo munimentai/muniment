@@ -50,8 +50,18 @@ jobs:
           attach_fixtures=false
           extension=false
           desktop=false
+          resident_model_adr=false
           while IFS= read -r path; do
             case "$path" in
+              docs/decisions/0017-*.md)
+                # Markdown, so this stays a docs-only PR for the native build
+                # gates. But ADR 0017's pinned table is asserted field by field
+                # against RESIDENT_MODEL by
+                # src-tauri/core/tests/resident_model_adr.rs, and that guard is
+                # worthless if it skips the case it exists for: the record
+                # changing on its own.
+                resident_model_adr=true
+                ;;
               *.md) ;;
               src-tauri/cli/*|src-tauri/cli/**)
                 docs_only=false
@@ -92,6 +102,7 @@ jobs:
           echo "attach_fixtures=$attach_fixtures" >> "$GITHUB_OUTPUT"
           echo "extension=$extension" >> "$GITHUB_OUTPUT"
           echo "desktop=$desktop" >> "$GITHUB_OUTPUT"
+          echo "resident_model_adr=$resident_model_adr" >> "$GITHUB_OUTPUT"
 
       - name: Node 24 (bootstrap if missing)
         if: steps.changes.outputs.desktop == 'true' || github.event_name != 'pull_request'
@@ -152,7 +163,7 @@ jobs:
         run: cargo clippy --manifest-path src-tauri/core/Cargo.toml --all-targets --locked -- -D warnings
 
       - name: Rust unit tests
-        if: steps.changes.outputs.desktop == 'true' || github.event_name != 'pull_request'
+        if: steps.changes.outputs.desktop == 'true' || steps.changes.outputs.resident_model_adr == 'true' || github.event_name != 'pull_request'
         run: cargo test --manifest-path src-tauri/core/Cargo.toml --locked
 
       - name: Companion formatting
@@ -319,7 +330,12 @@ jobs:
             else
               status=$?
             fi
-            if [ "$PLATFORM" != "windows" ] || [ "$status" -ne 3 ] || [ "$attempt" -ge 2 ]; then
+            # desktop-ci infrastructure failures return status 3, while an SSH
+            # connection lost before or during driver startup returns 255.
+            # Either gets one bounded retry on every platform; command/test
+            # failures remain non-retryable.
+            if { [ "$status" -ne 3 ] && [ "$status" -ne 255 ]; } || \
+               [ "$attempt" -ge 2 ]; then
               exit "$status"
             fi
             echo "desktop-ci infrastructure setup failed; retrying once"

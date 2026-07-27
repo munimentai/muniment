@@ -177,9 +177,9 @@ Desktop ASR is deliberately outside the sidecar boundary. As decided in
 microphone PCM and invoke the pinned sherpa-onnx v1.13.2 C API in process with
 the pinned Parakeet-TDT 0.6B v3 INT8 offline artifact. No ASR socket or child
 process is introduced; only utterance-final transcript text proceeds to the
-local Gemma dictation-polish contract, and voice bytes never enter a network
-client, Pi, llama-server, telemetry, or crash reports. Model acquisition also
-remains outside sidecar supervision: [ADR
+local resident-model dictation-polish contract, and voice bytes never enter a
+network client, Pi, llama-server, telemetry, or crash reports. Model acquisition
+also remains outside sidecar supervision: [ADR
 0005](decisions/0005-asr-model-lifecycle.md) selects a Rust-native first-use
 install with complete-set verification and atomic publication. Acquisition is
 the only ASR-related network boundary, and model bytes never cross the webview.
@@ -205,8 +205,9 @@ follow-up work. This boundary adds no PCM persistence, service, telemetry, or
 Pi routing.
 
 `muniment_core::llama` owns the local llama.cpp boundary. The typed resident
-descriptor pins the Gemma artifact identity, stable API alias, and context
-limit selected in [ADR 0003](decisions/0003-resident-gemma-model.md).
+descriptor pins the resident artifact identity, stable API alias, and context
+limit selected in [ADR 0017](decisions/0017-resident-model-artifact-pin.md),
+which supersedes ADR 0003.
 `LlamaServerConfig` turns an explicit executable, installed artifact path, and port into
 separate process arguments and always supplies `--host 127.0.0.1` (or the
 explicit IPv6 loopback `::1`). `LlamaServer` delegates spawning, restart
@@ -265,8 +266,9 @@ Before producing launch arguments, the core requires the installed artifact to
 be a regular file with the descriptor's exact byte size and SHA-256. Hashing is
 streamed, and missing, unreadable, wrong-size, and digest-mismatch failures do
 not disclose file contents or installation paths. llama-server receives the
-model path and `muniment-resident-gemma` alias as separate arguments; resident
-chat requests always use that alias rather than a caller-selected model name.
+model path and `muniment-required-qwen3.5-4b` alias as separate arguments;
+resident chat requests always use that alias rather than a caller-selected
+model name.
 
 Artifact acquisition and update/rollback policy remain out of scope.
 Dictation-polish and routing-classifier contract evaluation use deterministic

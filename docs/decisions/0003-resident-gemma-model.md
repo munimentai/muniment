@@ -1,8 +1,15 @@
 # 0003 — Pin the resident Gemma model artifact
 
-- Status: accepted
+- Status: superseded by ADR 0017
 - Date: 2026-07-10
 - Context: ROADMAP Phase 2 item 10; harness-spec §8.2
+
+> **Superseded 2026-07-27 by [ADR 0017](0017-resident-model-artifact-pin.md).**
+> The shipped resident model is not a Gemma artifact; ADR 0017 pins the
+> artifact the code verifies and launches and explains why the model changed.
+> Everything below is the record of what was decided on 2026-07-10 and must not
+> be read as the current pin, an installed filename, or a live licence
+> obligation.
 
 ## Decision
 
