@@ -41,6 +41,7 @@ features = ["apple-native", "windows-native", "sync-secret-service", "vendored"]
 base64 = "0.22"
 flate2 = "1"
 muniment-attach = { path = "attach", features = ["client"] }
+rusqlite = { version = "0.32", features = ["bundled"] }
 sha2 = "0.10"
 tar = "0.4"
 tauri = { version = "2", features = ["test"] }
