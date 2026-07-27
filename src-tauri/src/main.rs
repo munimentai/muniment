@@ -1,11 +1,14 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod attach_service;
 mod auth;
 mod chat;
 mod dictation;
 mod home;
 mod model_install;
 mod onboarding_import;
+#[cfg(test)]
+mod test_support;
 mod voice_capture;
 
 use std::sync::Arc;
@@ -18,11 +21,11 @@ fn main() {
         .plugin(tauri_plugin_window_state::Builder::default().build())
         .manage(auth::AuthState::new())
         .manage(Arc::new(voice_capture::VoiceCaptureState::new()))
-        .manage(chat::AttachApprovalState::default())
+        .manage(attach_service::AttachApprovalState::default())
         .setup(|app| {
             app.manage(chat::ChatState::new(app.handle())?);
             #[cfg(target_os = "linux")]
-            chat::start_attach_listener(app.handle().clone());
+            attach_service::start_attach_listener(app.handle().clone());
             let model_root = app.path().app_data_dir()?.join("models").join("qwen3.5-4b");
             let required_model = model_install::ResidentModelInstallState::new(model_root)?;
             // Required acquisition is deliberately detached from onboarding: folder and
@@ -49,7 +52,7 @@ fn main() {
             chat::chat_cancel,
             chat::chat_queue,
             chat::chat_history,
-            chat::attach_pairing_decide,
+            attach_service::attach_pairing_decide,
             model_install::gemma_install_start,
             model_install::gemma_install_status,
             model_install::gemma_install_cancel,
