@@ -2,8 +2,16 @@ use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Mutex;
 
+#[cfg(target_os = "linux")]
+use muniment_core::attach::linux::{
+    ThreadListPage, ThreadListRequest, ThreadListService, ThreadOpenPage, ThreadOpenRequest,
+};
+#[cfg(target_os = "linux")]
+use muniment_core::attach::ProtocolError;
 use muniment_core::auth::TokenSet;
 use muniment_core::journal::reducer::ChatProjector;
+#[cfg(target_os = "linux")]
+use muniment_core::journal::RunJournal;
 use muniment_core::journal::{EventEnvelope, Provenance};
 use serde_json::json;
 
@@ -28,6 +36,8 @@ pub(crate) struct FakeRunStartBoundaries {
     pub(crate) prepared_provenance: Mutex<Option<Provenance>>,
     pub(crate) journaled_events: Mutex<BTreeMap<String, Vec<EventEnvelope>>>,
     pub(crate) clear_calls: AtomicUsize,
+    #[cfg(target_os = "linux")]
+    pub(crate) journal: Mutex<RunJournal>,
 }
 
 impl FakeRunStartBoundaries {
@@ -48,11 +58,39 @@ impl FakeRunStartBoundaries {
             prepared_provenance: Mutex::new(None),
             journaled_events: Mutex::new(BTreeMap::new()),
             clear_calls: AtomicUsize::new(0),
+            #[cfg(target_os = "linux")]
+            journal: Mutex::new(RunJournal::open(":memory:").unwrap()),
         }
     }
 }
 
 impl RunStartBoundaries for FakeRunStartBoundaries {
+    #[cfg(target_os = "linux")]
+    fn list_threads(
+        &self,
+        workspace: &str,
+        request: ThreadListRequest,
+    ) -> Result<ThreadListPage, ProtocolError> {
+        let mut journal = self
+            .journal
+            .lock()
+            .map_err(|_| ProtocolError::persistence_failed())?;
+        ThreadListService::list_threads(&mut *journal, workspace, request)
+    }
+
+    #[cfg(target_os = "linux")]
+    fn open_thread(
+        &self,
+        workspace: &str,
+        request: ThreadOpenRequest,
+    ) -> Result<ThreadOpenPage, ProtocolError> {
+        let mut journal = self
+            .journal
+            .lock()
+            .map_err(|_| ProtocolError::persistence_failed())?;
+        ThreadListService::open_thread(&mut *journal, workspace, request)
+    }
+
     fn active_run_exists(&self) -> bool {
         self.active
     }
