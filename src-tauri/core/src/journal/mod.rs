@@ -633,7 +633,7 @@ impl RunJournal {
             params![event.run_id, workspace],
         )?;
         let thread_id = Uuid::now_v7().to_string();
-        append_thread_created(&tx, &thread_id, workspace, &event.recorded_at, false)?;
+        append_thread_created(&tx, &thread_id, Some(workspace), &event.recorded_at, false)?;
         tx.execute(
             "INSERT INTO run_threads(run_id,thread_id,thread_run_ordinal) VALUES(?1,?2,1)",
             params![event.run_id, thread_id],
@@ -713,7 +713,7 @@ impl RunJournal {
             // Low-level append remains available for import/tests. Production
             // creation uses append_new_run, which records the real scope.
             let thread_id = Uuid::now_v7().to_string();
-            append_thread_created(&tx, &thread_id, "", &events[0].recorded_at, false)?;
+            append_thread_created(&tx, &thread_id, Some(""), &events[0].recorded_at, false)?;
             tx.execute(
                 "INSERT INTO run_threads(run_id,thread_id,thread_run_ordinal) VALUES(?1,?2,1)",
                 params![run_id, thread_id],
@@ -795,7 +795,7 @@ impl RunJournal {
         )?;
         if !stamped {
             let thread_id = Uuid::now_v7().to_string();
-            append_thread_created(&tx, &thread_id, workspace, &recorded_at, false)?;
+            append_thread_created(&tx, &thread_id, Some(workspace), &recorded_at, false)?;
             tx.execute(
                 "INSERT INTO run_threads(run_id,thread_id,thread_run_ordinal) VALUES(?1,?2,1)",
                 params![run_id, thread_id],
@@ -1325,7 +1325,7 @@ fn canonical_thread_envelope(event: &ThreadEventEnvelope) -> Result<String, Jour
 fn append_thread_created(
     tx: &rusqlite::Transaction<'_>,
     thread_id: &str,
-    workspace: &str,
+    workspace: Option<&str>,
     recorded_at: &str,
     migration_backfill: bool,
 ) -> Result<(), JournalError> {
@@ -1431,13 +1431,54 @@ fn validate_database(connection: &Connection) -> Result<(), JournalError> {
         }
         previous = Some((event.run_id, event.run_seq));
     }
-    let has_thread_schema: bool = connection.query_row(
-        "SELECT EXISTS(SELECT 1 FROM sqlite_schema WHERE type='table' AND name='thread_events')",
+    let schema_version: i64 =
+        connection.pragma_query_value(None, "user_version", |row| row.get(0))?;
+    let thread_schema_objects: i64 = connection.query_row(
+        "SELECT COUNT(*) FROM sqlite_schema WHERE \
+         (type='table' AND name IN ('thread_events','run_threads')) OR \
+         (type='index' AND name IN ('thread_events_thread_order','run_threads_thread_run'))",
         [],
         |row| row.get(0),
     )?;
-    if has_thread_schema {
+    if schema_version >= 3 || thread_schema_objects != 0 {
+        validate_thread_schema(connection)?;
         validate_thread_identity(connection)?;
+    }
+    Ok(())
+}
+
+fn normalized_schema_sql(sql: &str) -> String {
+    sql.split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_ascii_lowercase()
+        .replace(" if not exists", "")
+}
+
+fn validate_thread_schema(connection: &Connection) -> Result<(), JournalError> {
+    for (object_type, name, expected) in [
+        ("table", "thread_events", CREATE_THREAD_EVENTS),
+        (
+            "index",
+            "thread_events_thread_order",
+            CREATE_THREAD_EVENTS_INDEX,
+        ),
+        ("table", "run_threads", CREATE_RUN_THREADS),
+        ("index", "run_threads_thread_run", CREATE_RUN_THREADS_INDEX),
+    ] {
+        let actual = connection
+            .query_row(
+                "SELECT sql FROM sqlite_schema WHERE type=?1 AND name=?2",
+                params![object_type, name],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?;
+        let expected = normalized_schema_sql(expected);
+        if actual.as_deref().map(normalized_schema_sql).as_deref() != Some(expected.as_str()) {
+            return Err(JournalError::Corrupt(format!(
+                "missing or malformed schema object {name}"
+            )));
+        }
     }
     Ok(())
 }
@@ -1464,6 +1505,19 @@ fn validate_thread_identity(connection: &Connection) -> Result<(), JournalError>
     if orphan_stamps != 0 {
         return Err(JournalError::Corrupt(
             "thread stamp references a missing run".into(),
+        ));
+    }
+    let noncontiguous_ordinals: i64 = connection.query_row(
+        "SELECT COUNT(*) FROM (SELECT thread_id, COUNT(*) AS stamp_count, \
+         MIN(thread_run_ordinal) AS first_ordinal, \
+         MAX(thread_run_ordinal) AS last_ordinal FROM run_threads GROUP BY thread_id \
+         HAVING first_ordinal != 1 OR last_ordinal != stamp_count)",
+        [],
+        |row| row.get(0),
+    )?;
+    if noncontiguous_ordinals != 0 {
+        return Err(JournalError::Corrupt(
+            "thread run ordinals must be contiguous starting at 1".into(),
         ));
     }
     let mut statement = connection.prepare(
@@ -1627,6 +1681,37 @@ const MIGRATIONS: &[Migration] = &[
     },
 ];
 
+const CREATE_THREAD_EVENTS: &str = "CREATE TABLE IF NOT EXISTS thread_events( \
+ event_id TEXT PRIMARY KEY NOT NULL, thread_id TEXT NOT NULL, \
+ thread_seq INTEGER NOT NULL CHECK(thread_seq > 0), event_type TEXT NOT NULL, \
+ event_version INTEGER NOT NULL CHECK(event_version > 0), \
+ envelope_version INTEGER NOT NULL CHECK(envelope_version > 0), \
+ recorded_at TEXT NOT NULL, envelope_json TEXT NOT NULL, \
+ UNIQUE(thread_id, thread_seq)) STRICT";
+const CREATE_THREAD_EVENTS_INDEX: &str = "CREATE INDEX IF NOT EXISTS thread_events_thread_order \
+ ON thread_events(thread_id, thread_seq)";
+const CREATE_RUN_THREADS: &str = "CREATE TABLE IF NOT EXISTS run_threads( \
+ run_id TEXT PRIMARY KEY NOT NULL, thread_id TEXT NOT NULL, \
+ thread_run_ordinal INTEGER NOT NULL CHECK(thread_run_ordinal > 0), \
+ UNIQUE(thread_id, thread_run_ordinal)) STRICT";
+const CREATE_RUN_THREADS_INDEX: &str = "CREATE INDEX IF NOT EXISTS run_threads_thread_run \
+ ON run_threads(thread_id, thread_run_ordinal)";
+const THREAD_SCHEMA: &str = "CREATE TABLE IF NOT EXISTS thread_events( \
+ event_id TEXT PRIMARY KEY NOT NULL, thread_id TEXT NOT NULL, \
+ thread_seq INTEGER NOT NULL CHECK(thread_seq > 0), event_type TEXT NOT NULL, \
+ event_version INTEGER NOT NULL CHECK(event_version > 0), \
+ envelope_version INTEGER NOT NULL CHECK(envelope_version > 0), \
+ recorded_at TEXT NOT NULL, envelope_json TEXT NOT NULL, \
+ UNIQUE(thread_id, thread_seq)) STRICT; \
+ CREATE INDEX IF NOT EXISTS thread_events_thread_order \
+ ON thread_events(thread_id, thread_seq); \
+ CREATE TABLE IF NOT EXISTS run_threads( \
+ run_id TEXT PRIMARY KEY NOT NULL, thread_id TEXT NOT NULL, \
+ thread_run_ordinal INTEGER NOT NULL CHECK(thread_run_ordinal > 0), \
+ UNIQUE(thread_id, thread_run_ordinal)) STRICT; \
+ CREATE INDEX IF NOT EXISTS run_threads_thread_run \
+ ON run_threads(thread_id, thread_run_ordinal);";
+
 fn migrate_to_1(tx: &rusqlite::Transaction<'_>) -> Result<(), JournalError> {
     tx.execute_batch(SCHEMA)?;
     Ok(())
@@ -1676,27 +1761,11 @@ fn migrate_to_2(tx: &rusqlite::Transaction<'_>) -> Result<(), JournalError> {
 }
 
 fn migrate_to_3(tx: &rusqlite::Transaction<'_>) -> Result<(), JournalError> {
-    tx.execute_batch(
-        "CREATE TABLE IF NOT EXISTS thread_events( \
-         event_id TEXT PRIMARY KEY NOT NULL, thread_id TEXT NOT NULL, \
-         thread_seq INTEGER NOT NULL CHECK(thread_seq > 0), event_type TEXT NOT NULL, \
-         event_version INTEGER NOT NULL CHECK(event_version > 0), \
-         envelope_version INTEGER NOT NULL CHECK(envelope_version > 0), \
-         recorded_at TEXT NOT NULL, envelope_json TEXT NOT NULL, \
-         UNIQUE(thread_id, thread_seq)) STRICT; \
-         CREATE INDEX IF NOT EXISTS thread_events_thread_order \
-         ON thread_events(thread_id, thread_seq); \
-         CREATE TABLE IF NOT EXISTS run_threads( \
-         run_id TEXT PRIMARY KEY NOT NULL, thread_id TEXT NOT NULL, \
-         thread_run_ordinal INTEGER NOT NULL CHECK(thread_run_ordinal > 0), \
-         UNIQUE(thread_id, thread_run_ordinal)) STRICT; \
-         CREATE INDEX IF NOT EXISTS run_threads_thread_run \
-         ON run_threads(thread_id, thread_run_ordinal);",
-    )?;
+    tx.execute_batch(THREAD_SCHEMA)?;
     let runs = {
         let mut statement = tx.prepare(
             "SELECT e.run_id, MIN(e.recorded_at), rw.workspace FROM events e \
-             JOIN run_workspaces rw ON rw.run_id=e.run_id \
+             LEFT JOIN run_workspaces rw ON rw.run_id=e.run_id \
              WHERE NOT EXISTS(SELECT 1 FROM run_threads rt WHERE rt.run_id=e.run_id) \
              GROUP BY e.run_id ORDER BY e.run_id",
         )?;
@@ -1705,7 +1774,7 @@ fn migrate_to_3(tx: &rusqlite::Transaction<'_>) -> Result<(), JournalError> {
                 Ok((
                     row.get::<_, String>(0)?,
                     row.get::<_, String>(1)?,
-                    row.get::<_, String>(2)?,
+                    row.get::<_, Option<String>>(2)?,
                 ))
             })?
             .collect::<Result<Vec<_>, _>>()?;
@@ -1713,7 +1782,7 @@ fn migrate_to_3(tx: &rusqlite::Transaction<'_>) -> Result<(), JournalError> {
     };
     for (run_id, recorded_at, workspace) in runs {
         let thread_id = Uuid::now_v7().to_string();
-        append_thread_created(tx, &thread_id, &workspace, &recorded_at, true)?;
+        append_thread_created(tx, &thread_id, workspace.as_deref(), &recorded_at, true)?;
         tx.execute(
             "INSERT INTO run_threads(run_id,thread_id,thread_run_ordinal) VALUES(?1,?2,1)",
             params![run_id, thread_id],
