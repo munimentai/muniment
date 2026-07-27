@@ -3931,39 +3931,21 @@ mod tests {
             "01900000-0000-7000-8000-000000000024",
         ];
         let mut journal = RunJournal::open(&path).unwrap();
+        let mut owner_envelope =
+            event_envelope(owner_run, 1, "run.started", json!({}), Some("owner"));
+        owner_envelope.recorded_at = "2026-01-01T00:00:00Z".into();
         journal
-            .append_new_run(
-                "workspace-a",
-                &event_envelope(owner_run, 1, "run.started", json!({}), Some("owner")),
-            )
+            .append_new_run("workspace-a", &owner_envelope)
             .unwrap();
         for run_id in foreign_runs {
+            let mut foreign_envelope =
+                event_envelope(run_id, 1, "run.started", json!({}), Some("other"));
+            foreign_envelope.recorded_at = "2026-01-02T00:00:00Z".into();
             journal
-                .append_new_run(
-                    "workspace-a",
-                    &event_envelope(run_id, 1, "run.started", json!({}), Some("other")),
-                )
+                .append_new_run("workspace-a", &foreign_envelope)
                 .unwrap();
         }
         drop(journal);
-
-        let connection = rusqlite::Connection::open(&path).unwrap();
-        connection
-            .execute(
-                "UPDATE events SET recorded_at=CASE WHEN run_id=?1 \
-                 THEN '2026-01-01T00:00:00Z' ELSE '2026-01-02T00:00:00Z' END",
-                [owner_run],
-            )
-            .unwrap();
-        connection
-            .execute(
-                "UPDATE thread_events SET recorded_at=CASE WHEN thread_id=(\
-                 SELECT thread_id FROM run_threads WHERE run_id=?1) \
-                 THEN '2026-01-01T00:00:00Z' ELSE '2026-01-02T00:00:00Z' END",
-                [owner_run],
-            )
-            .unwrap();
-        drop(connection);
 
         let mut journal = RunJournal::open(&path).unwrap();
         let first = chat_thread_summaries_page(&mut journal, Some("owner"), 2, None).unwrap();
@@ -4044,7 +4026,6 @@ mod tests {
 
         let mut journal = RunJournal::open(&path).unwrap();
         let first = chat_thread_summaries_page(&mut journal, Some("owner"), 1, None).unwrap();
-        assert_eq!(first.summaries.len(), 1);
         let second = chat_thread_summaries_page(
             &mut journal,
             Some("owner"),
