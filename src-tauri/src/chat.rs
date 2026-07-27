@@ -3826,7 +3826,7 @@ mod tests {
         assert_eq!(
             storage
                 .journal
-                .workspace_run_summaries("workspace-a", 10, None)
+                .workspace_thread_summaries("workspace-a", 10, None)
                 .unwrap()
                 .summaries
                 .len(),
