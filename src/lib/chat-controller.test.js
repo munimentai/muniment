@@ -93,6 +93,37 @@ describe('chat controller', () => {
     ])
   })
 
+  it('stops opening history after 100 pages and publishes them in order', async () => {
+    const entries = Array.from({ length: 100 }, (_, page) => ({
+      runId: `run-${page + 1}`,
+      phase: 'complete',
+      text: `Answer ${page + 1}`,
+      prompt: `Question ${page + 1}`,
+      receipt: {},
+      toolActivity: [],
+    }))
+    const invoke = vi.fn(async (command, payload) => {
+      if (command === 'chat_thread_summaries') {
+        return { summaries: [{ threadId: 'thread-1' }], nextCursor: null }
+      }
+      const page = payload.cursor === undefined ? 0 : Number(payload.cursor)
+      return { entries: [entries[page]], nextCursor: String(page + 1) }
+    })
+    const context = setup(invoke)
+
+    await context.controller.loadHistory()
+
+    const openCalls = invoke.mock.calls.filter(([command]) => command === 'chat_thread_open')
+    expect(openCalls).toHaveLength(100)
+    expect(openCalls.at(-1)).toEqual([
+      'chat_thread_open',
+      { threadId: 'thread-1', limit: 100, cursor: '99' },
+    ])
+    expect(context.messages().map((message) => message.text ?? message.run.text)).toEqual(
+      entries.flatMap((entry) => [entry.prompt, entry.text]),
+    )
+  })
+
   it.each(['chat_thread_summaries', 'chat_thread_open'])('reports a %s failure with the current copy', async (failedCommand) => {
     const onHistoryError = vi.fn()
     const invoke = vi.fn(async (command) => {
