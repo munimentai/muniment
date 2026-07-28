@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { applyBufferedChatEvents, applyChatEvent, composerAction, historyMessages, receiptLabel, receiptRows, receiptSummary, runAnnouncement, toolName, toolStatus } from './chat-state.js'
+import { applyBufferedChatEvents, applyChatEvent, composerAction, historyMessages, permissionGateAction, receiptLabel, receiptRows, receiptSummary, runAnnouncement, toolName, toolStatus } from './chat-state.js'
 
 describe('chat composer and projection', () => {
   it('chooses submit or steer from the active run', () => {
@@ -13,6 +13,22 @@ describe('chat composer and projection', () => {
     expect(composerAction({ key: 'Enter', shiftKey: true, isComposing: false }, 'hello', null)).toBeNull()
     expect(composerAction({ key: 'Enter', shiftKey: false, isComposing: true }, 'hello', null)).toBeNull()
     expect(composerAction({ key: 'Enter', shiftKey: false, isComposing: false }, '  ', null)).toBeNull()
+  })
+
+  it('commits permission fields with the key for their gate kind', () => {
+    expect(permissionGateAction({ key: 'Enter' }, 'input', 'Linux x86_64')).toBe('commit')
+    expect(permissionGateAction({ key: 'Enter', metaKey: true }, 'editor', 'MacIntel')).toBe('commit')
+    expect(permissionGateAction({ key: 'Enter', ctrlKey: true }, 'editor', 'Linux x86_64')).toBe('commit')
+  })
+
+  it('ignores permission field keys that do not commit', () => {
+    expect(permissionGateAction({ key: 'Enter' }, 'editor', 'Linux x86_64')).toBeNull()
+    expect(permissionGateAction({ key: 'Enter', shiftKey: true }, 'input', 'Linux x86_64')).toBeNull()
+    expect(permissionGateAction({ key: 'Enter', isComposing: true }, 'input', 'Linux x86_64')).toBeNull()
+    expect(permissionGateAction({ key: 'Escape' }, 'input', 'Linux x86_64')).toBeNull()
+    expect(permissionGateAction({ key: 'Enter', ctrlKey: true, metaKey: true }, 'editor', 'MacIntel')).toBeNull()
+    expect(permissionGateAction({ key: 'Enter', ctrlKey: true, altKey: true }, 'editor', 'Linux x86_64')).toBeNull()
+    expect(permissionGateAction({ key: 'Enter', ctrlKey: true }, 'input', 'Linux x86_64')).toBeNull()
   })
 
   it('moves thinking to streaming and removes signal on every terminal event', () => {

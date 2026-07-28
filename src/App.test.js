@@ -2879,6 +2879,62 @@ describe('permission gates', () => {
     })
   })
 
+  it('submits an input request from the keyboard with its current value', async () => {
+    const answer = restoreGate({
+      gateId: 'gate-input',
+      kind: 'input',
+      title: 'Change the request',
+      placeholder: 'Type a folder name',
+    })
+    const field = await screen.findByRole('textbox', { name: 'Change the request' })
+    await fireEvent.input(field, { target: { value: 'Quarterly records' } })
+    const enter = new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true })
+
+    field.dispatchEvent(enter)
+
+    expect(enter.defaultPrevented).toBe(true)
+    expect(answer).toHaveBeenCalledTimes(1)
+    expect(answer).toHaveBeenCalledWith({
+      runId: 'run-gated',
+      gateId: 'gate-input',
+      answer: { type: 'input', value: 'Quarterly records' },
+    })
+  })
+
+  it('keeps editor Enter native and submits its current value with the platform chord', async () => {
+    const answer = restoreGate({
+      gateId: 'gate-editor',
+      kind: 'editor',
+      title: 'Change the request',
+      prefill: 'rm old.csv',
+    })
+    const field = await screen.findByRole('textbox', { name: 'Change the request' })
+    await fireEvent.input(field, { target: { value: 'archive old.csv' } })
+    const enter = new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true })
+    field.dispatchEvent(enter)
+
+    expect(enter.defaultPrevented).toBe(false)
+    expect(answer).not.toHaveBeenCalled()
+
+    const mac = navigator.platform.startsWith('Mac')
+    const chord = new KeyboardEvent('keydown', {
+      key: 'Enter',
+      metaKey: mac,
+      ctrlKey: !mac,
+      bubbles: true,
+      cancelable: true,
+    })
+    field.dispatchEvent(chord)
+
+    expect(chord.defaultPrevented).toBe(true)
+    expect(answer).toHaveBeenCalledTimes(1)
+    expect(answer).toHaveBeenCalledWith({
+      runId: 'run-gated',
+      gateId: 'gate-editor',
+      answer: { type: 'editor', value: 'archive old.csv' },
+    })
+  })
+
   it.each([
     ['input', { placeholder: 'Type a folder name' }, 'Quarterly records'],
     ['editor', { prefill: 'rm old.csv' }, 'archive old.csv'],

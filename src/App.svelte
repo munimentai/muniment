@@ -9,7 +9,7 @@
   import { ARTIFACT_RAIL_MAX_WIDTH, ARTIFACT_RAIL_MIN_WIDTH, artifactRailShortcut, createArtifactRailController, defaultArtifactRailWidth, isArtifactRailShortcut, shortcutDisplayLabel } from './lib/artifact-rail-state.js'
   import { bootState, errorState, statusState, waitingState } from './lib/auth-state.js'
   import { ringPath, solidMilledRingPath } from './lib/mark.js'
-  import { composerAction, formatByteSize, receiptLabel, receiptRows, receiptSummary, runAnnouncement, toolName, toolStatus } from './lib/chat-state.js'
+  import { composerAction, formatByteSize, permissionGateAction, receiptLabel, receiptRows, receiptSummary, runAnnouncement, toolName, toolStatus } from './lib/chat-state.js'
   import { createChatController } from './lib/chat-controller.js'
   import { composerHeight } from './lib/composer-size.js'
   import { createDictationController } from './lib/dictation-controller.js'
@@ -255,6 +255,14 @@
   function setPermissionValue(run, value) {
     const gate = run.pendingPermission
     permissionValues = { ...permissionValues, [`${run.id}:${gate.gateId}`]: value }
+  }
+
+  function permissionKeydown(event, run) {
+    const gate = run.pendingPermission
+    if (!gate || !permissionGateAction(event, gate.kind)) return
+    event.preventDefault()
+    event.stopPropagation()
+    answerPermission(run, { type: gate.kind, value: permissionValue(run) })
   }
 
   function stopDictation(cancelled = false) {
@@ -666,6 +674,7 @@
                       value={permissionValue(message.run)}
                       disabled={answerState?.pending}
                       oninput={(event) => setPermissionValue(message.run, event.currentTarget.value)}
+                      onkeydown={(event) => permissionKeydown(event, message.run)}
                     >
                   {:else if gate.kind === 'editor'}
                     <textarea
@@ -674,6 +683,7 @@
                       value={permissionValue(message.run)}
                       disabled={answerState?.pending}
                       oninput={(event) => setPermissionValue(message.run, event.currentTarget.value)}
+                      onkeydown={(event) => permissionKeydown(event, message.run)}
                     ></textarea>
                   {/if}
                   <div class="permission-actions">
