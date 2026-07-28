@@ -323,30 +323,19 @@ pub async fn chat_thread_open(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::chat::event_envelope;
+    use crate::chat::{
+        chat_attachments, event_envelope, prepare_new_run, prepare_new_run_with_session_thread,
+        reconcile_interrupted_runs, ChatStorage, SelectedFile, SessionThreadStart,
+    };
     use crate::session_thread::OfferedThread;
+    use crate::test_support::append_test_event;
     use chrono::{SecondsFormat, Utc};
-    use muniment_core::journal::reducer::PermissionRequest;
-    use muniment_core::journal::Provenance;
+    use muniment_core::cas::LocalCas;
+    use muniment_core::journal::reducer::{project_chat, reduce, PermissionRequest, RunStatus};
+    use muniment_core::journal::{EventPayload, Provenance};
     use serde_json::json;
     use std::collections::{BTreeMap, BTreeSet};
     use uuid::Uuid;
-
-    fn append_test_event(
-        journal: &mut RunJournal,
-        run_id: &str,
-        seq: u64,
-        kind: &str,
-        payload: Value,
-        subject: Option<&str>,
-    ) {
-        journal
-            .append(
-                seq - 1,
-                &event_envelope(run_id, seq, kind, payload, subject),
-            )
-            .unwrap();
-    }
 
     #[test]
     fn thread_open_projects_and_clears_a_typed_pending_permission() {
@@ -831,6 +820,347 @@ mod tests {
         );
 
         drop(journal);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn fresh_session_tracker_adopts_the_newest_owned_workspace_thread() {
+        let directory =
+            std::env::temp_dir().join(format!("muniment-session-adoption-{}", Uuid::now_v7()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let database = directory.join("runs.sqlite3");
+        let mut journal = RunJournal::open(&database).unwrap();
+        let first_run = Uuid::now_v7().to_string();
+        journal
+            .append_new_run(
+                "workspace-a",
+                &event_envelope(&first_run, 1, "run.started", json!({}), Some("owner")),
+            )
+            .unwrap();
+        drop(journal);
+        let connection = rusqlite::Connection::open(&database).unwrap();
+        let thread_id = connection
+            .query_row(
+                "SELECT thread_id FROM run_threads WHERE run_id=?1",
+                [&first_run],
+                |row| row.get::<_, String>(0),
+            )
+            .unwrap();
+        drop(connection);
+        let storage = Arc::new(Mutex::new(ChatStorage {
+            journal: RunJournal::open(&database).unwrap(),
+            cas: LocalCas::open(&directory.join("cas")).unwrap(),
+        }));
+        let tracker = SessionThread::default();
+        let second_run = Uuid::now_v7().to_string();
+
+        prepare_new_run_with_session_thread(
+            &storage,
+            SessionThreadStart {
+                tracker: &tracker,
+                continue_existing: true,
+            },
+            &second_run,
+            "workspace-a",
+            Some("owner"),
+            Vec::new(),
+            None,
+        )
+        .unwrap();
+
+        let connection = rusqlite::Connection::open(&database).unwrap();
+        assert_eq!(
+            connection
+                .query_row(
+                    "SELECT thread_run_ordinal FROM run_threads \
+                     WHERE run_id=?1 AND thread_id=?2",
+                    (&second_run, &thread_id),
+                    |row| row.get::<_, u64>(0),
+                )
+                .unwrap(),
+            2
+        );
+        assert_eq!(
+            tracker.offered("workspace-a", Some("owner")),
+            OfferedThread::Selected(thread_id)
+        );
+
+        drop(connection);
+        drop(storage);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn completed_fresh_choice_controls_the_next_unstamped_run() {
+        let directory =
+            std::env::temp_dir().join(format!("muniment-session-fresh-race-{}", Uuid::now_v7()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let database = directory.join("runs.sqlite3");
+        let existing_run = Uuid::now_v7().to_string();
+        let mut journal = RunJournal::open(&database).unwrap();
+        journal
+            .append_new_run(
+                "workspace-a",
+                &event_envelope(&existing_run, 1, "run.started", json!({}), Some("owner")),
+            )
+            .unwrap();
+        drop(journal);
+        let connection = rusqlite::Connection::open(&database).unwrap();
+        let existing_thread = connection
+            .query_row(
+                "SELECT thread_id FROM run_threads WHERE run_id=?1",
+                [&existing_run],
+                |row| row.get::<_, String>(0),
+            )
+            .unwrap();
+        drop(connection);
+        let storage = Arc::new(Mutex::new(ChatStorage {
+            journal: RunJournal::open(&database).unwrap(),
+            cas: LocalCas::open(&directory.join("cas")).unwrap(),
+        }));
+        let tracker = SessionThread::default();
+
+        std::thread::scope(|scope| {
+            let storage_guard = storage.lock().unwrap();
+            let (started, waiting) = std::sync::mpsc::channel();
+            let (completed, completion) = std::sync::mpsc::channel();
+            let command_storage = Arc::clone(&storage);
+            let command_tracker = &tracker;
+            let command = scope.spawn(move || {
+                started.send(()).unwrap();
+                let result = fresh_session_thread(&command_storage, command_tracker, Some("owner"));
+                completed.send(()).unwrap();
+                result
+            });
+            waiting.recv().unwrap();
+            assert!(
+                completion.recv_timeout(Duration::from_millis(100)).is_err(),
+                "the fresh command must wait for run preparation"
+            );
+            tracker.record(existing_thread.clone(), "workspace-a", Some("owner"));
+            drop(storage_guard);
+            completion.recv().unwrap();
+            command.join().unwrap().unwrap();
+        });
+
+        let fresh_run = Uuid::now_v7().to_string();
+        prepare_new_run_with_session_thread(
+            &storage,
+            SessionThreadStart {
+                tracker: &tracker,
+                continue_existing: true,
+            },
+            &fresh_run,
+            "workspace-a",
+            Some("owner"),
+            Vec::new(),
+            None,
+        )
+        .unwrap();
+
+        let connection = rusqlite::Connection::open(&database).unwrap();
+        let fresh_thread = connection
+            .query_row(
+                "SELECT thread_id FROM run_threads WHERE run_id=?1",
+                [&fresh_run],
+                |row| row.get::<_, String>(0),
+            )
+            .unwrap();
+        assert_ne!(fresh_thread, existing_thread);
+
+        drop(connection);
+        drop(storage);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn new_run_ingests_multiple_files_into_one_sequence_and_projector() {
+        keyring::set_default_credential_builder(keyring::mock::default_credential_builder());
+        let directory =
+            std::env::temp_dir().join(format!("muniment-attachments-{}", Uuid::now_v7()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let first = directory.join("first.txt");
+        let second = directory.join("second.bin");
+        std::fs::write(&first, b"first attachment").unwrap();
+        std::fs::write(&second, b"second attachment").unwrap();
+        let storage = Arc::new(Mutex::new(ChatStorage {
+            journal: RunJournal::open(directory.join("runs.sqlite3")).unwrap(),
+            cas: LocalCas::open(&directory.join("cas")).unwrap(),
+        }));
+        let run_id = Uuid::now_v7().to_string();
+
+        let (seq, mut projector) = prepare_new_run(
+            &storage,
+            &run_id,
+            "workspace-a",
+            Some("owner"),
+            vec![SelectedFile { path: first }, SelectedFile { path: second }],
+            None,
+        )
+        .unwrap();
+        assert_eq!(seq, 3);
+        let mut storage = storage.lock().unwrap();
+        assert!(storage
+            .journal
+            .run_belongs_to_workspace(&run_id, "workspace-a")
+            .unwrap());
+        assert!(!storage
+            .journal
+            .run_belongs_to_workspace(&run_id, "owner")
+            .unwrap());
+        assert_eq!(
+            storage
+                .journal
+                .workspace_thread_summaries("workspace-a", 10, None)
+                .unwrap()
+                .summaries
+                .len(),
+            1
+        );
+        assert!(storage
+            .journal
+            .projected_thread_entries("workspace-a", &run_id, seq, 0, 10)
+            .is_ok());
+        assert!(storage
+            .journal
+            .projected_thread_entries("owner", &run_id, seq, 0, 10)
+            .is_err());
+        let events = storage.journal.events(&run_id).unwrap();
+        assert_eq!(
+            events
+                .iter()
+                .map(|event| event.event_type.as_str())
+                .collect::<Vec<_>>(),
+            [
+                "run.started",
+                "chat.attachment.ingested",
+                "chat.attachment.ingested",
+            ]
+        );
+        for event in &events[1..] {
+            let EventPayload::Attachment { attachment } = &event.payload else {
+                panic!("attachment payload")
+            };
+            storage.cas.verify(attachment.sha256()).unwrap();
+        }
+        let projection = projector.projection().unwrap();
+        assert_eq!(
+            projection
+                .attachments
+                .iter()
+                .map(|attachment| attachment.display_name.as_str())
+                .collect::<Vec<_>>(),
+            ["first.txt", "second.bin"]
+        );
+        let public = serde_json::to_string(&chat_attachments(&projection.attachments)).unwrap();
+        assert!(!public.contains("sha256"));
+        assert!(!public.contains(directory.to_string_lossy().as_ref()));
+        let summaries =
+            chat_thread_summaries_page(&mut storage.journal, Some("owner"), 10, None).unwrap();
+        let history = chat_thread_open_page(
+            &mut storage.journal,
+            Some("owner"),
+            &directory,
+            &summaries.summaries[0].thread_id,
+            10,
+            None,
+        )
+        .unwrap();
+        assert_eq!(history.entries.len(), 1);
+        assert_eq!(history.entries[0].attachments.len(), 2);
+        let restored = serde_json::to_string(&history.entries).unwrap();
+        assert!(!restored.contains("sha256"));
+        assert!(!restored.contains(directory.to_string_lossy().as_ref()));
+        let serialized = serde_json::to_string(&events).unwrap();
+        assert!(!serialized.contains(directory.to_string_lossy().as_ref()));
+        let next = event_envelope(
+            &run_id,
+            4,
+            "assistant.delta",
+            json!({"text":"ready"}),
+            Some("owner"),
+        );
+        projector.apply(&next).unwrap();
+        storage.journal.append(3, &next).unwrap();
+        assert_eq!(
+            storage
+                .journal
+                .events(&run_id)
+                .unwrap()
+                .last()
+                .unwrap()
+                .run_seq,
+            4
+        );
+        drop(storage);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn startup_reconciles_only_non_terminal_runs_once() {
+        let directory = std::env::temp_dir().join(format!("muniment-chat-{}", Uuid::now_v7()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("runs.sqlite3");
+        let interrupted = Uuid::now_v7().to_string();
+        let completed = Uuid::now_v7().to_string();
+
+        {
+            let mut journal = RunJournal::open(&path).unwrap();
+            append_test_event(
+                &mut journal,
+                &interrupted,
+                1,
+                "run.started",
+                json!({}),
+                None,
+            );
+            append_test_event(
+                &mut journal,
+                &interrupted,
+                2,
+                "runtime.pi_session.bound",
+                json!({"run_id": interrupted, "locator": "session.jsonl"}),
+                None,
+            );
+            append_test_event(
+                &mut journal,
+                &interrupted,
+                3,
+                "permission.requested",
+                json!({"gate_id":"gate-1","kind":"confirm","title":"Allow?","message":"Proceed?"}),
+                None,
+            );
+            let pending = project_chat(&journal.events(&interrupted).unwrap()).unwrap();
+            assert_eq!(projection_phase(&pending.status), "pending-permission");
+            assert_eq!(pending.pending_permission.unwrap().gate_id, "gate-1");
+            append_test_event(&mut journal, &completed, 1, "run.started", json!({}), None);
+            append_test_event(
+                &mut journal,
+                &completed,
+                2,
+                "run.completed",
+                json!({}),
+                None,
+            );
+        }
+
+        {
+            let mut reopened = RunJournal::open(&path).unwrap();
+            reconcile_interrupted_runs(&mut reopened);
+            let interrupted_events = reopened.events(&interrupted).unwrap();
+            assert_eq!(interrupted_events.len(), 4);
+            assert_eq!(interrupted_events[3].event_type, "run.needs_attention");
+            assert_eq!(interrupted_events[3].provenance.actor_id, None);
+            let state = reduce(&interrupted_events).unwrap();
+            assert!(matches!(state.status, RunStatus::NeedsAttention(_)));
+            assert_eq!(state.pi_session.unwrap().locator, "session.jsonl");
+            assert_eq!(reopened.events(&completed).unwrap().len(), 2);
+
+            reconcile_interrupted_runs(&mut reopened);
+            assert_eq!(reopened.events(&interrupted).unwrap().len(), 4);
+            assert_eq!(reopened.events(&completed).unwrap().len(), 2);
+        }
+
         std::fs::remove_dir_all(directory).unwrap();
     }
 }

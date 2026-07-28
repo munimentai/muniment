@@ -14,11 +14,28 @@ use muniment_core::journal::reducer::ChatProjector;
 use muniment_core::journal::RunJournal;
 use muniment_core::journal::{EventEnvelope, Provenance};
 use serde_json::json;
+use serde_json::Value;
 
 use crate::chat::{
     attachment_error, chat_attachments, event_envelope, ActiveRun, ChatAttachment, ChatGrant,
     RunStartBoundaries, RunStartError, RunStartLaunch, SelectedFile,
 };
+
+pub(crate) fn append_test_event(
+    journal: &mut muniment_core::journal::RunJournal,
+    run_id: &str,
+    seq: u64,
+    kind: &str,
+    payload: Value,
+    subject: Option<&str>,
+) {
+    journal
+        .append(
+            seq - 1,
+            &crate::chat::event_envelope(run_id, seq, kind, payload, subject),
+        )
+        .unwrap();
+}
 
 pub(crate) struct FakeRunStartBoundaries {
     pub(crate) active: bool,
