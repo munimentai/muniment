@@ -388,7 +388,7 @@ jobs:
           # build examples marked `test = false`, so build its current source first.
           cmd='CARGO_INCREMENTAL=0 cargo build --manifest-path src-tauri/Cargo.toml --locked --profile test --example sidecar-test-stub && CARGO_INCREMENTAL=0 cargo test --manifest-path src-tauri/Cargo.toml --locked -- --test-threads=1 && npm ci --no-audit --no-fund && npm run tauri build'
           if [ "$PLATFORM" = "linux" ]; then
-            cmd='sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends libasound2-dev && CARGO_INCREMENTAL=0 cargo build --manifest-path src-tauri/Cargo.toml --locked --profile test --example sidecar-test-stub && CARGO_INCREMENTAL=0 cargo test --manifest-path src-tauri/Cargo.toml --locked -- --test-threads=1 && npm ci --no-audit --no-fund && bash .github/build-linux.sh'
+            cmd='sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends libasound2-dev -o DPkg::Lock::Timeout=900 && CARGO_INCREMENTAL=0 cargo build --manifest-path src-tauri/Cargo.toml --locked --profile test --example sidecar-test-stub && CARGO_INCREMENTAL=0 cargo test --manifest-path src-tauri/Cargo.toml --locked -- --test-threads=1 && npm ci --no-audit --no-fund && bash .github/build-linux.sh'
           fi
           if [ "$PLATFORM" = "windows" ]; then
             cmd='npm ci --no-audit --no-fund && node .github/build-windows-installers.mjs && powershell.exe -NoProfile -ExecutionPolicy Bypass -File test/windows-installers.ps1'

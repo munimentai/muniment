@@ -51,6 +51,7 @@ fn main() {
             chat::chat_file_metadata,
             chat::chat_resume,
             chat::chat_cancel,
+            chat::chat_answer_permission,
             chat::chat_queue,
             chat::chat_history,
             chat::chat_thread_summaries,
