@@ -695,16 +695,18 @@ describe('sidebar collapse', () => {
     expect(collapse).toHaveAttribute('aria-controls', 'sidebar')
     expect(collapse).toHaveAttribute('aria-keyshortcuts', navigator.platform.startsWith('Mac') ? 'Meta+\\' : 'Control+\\')
     expect(screen.getByText('Threads')).toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: 'New thread' })).not.toBeInTheDocument()
+    const newThread = document.querySelector('.new-thread')
+    expect(newThread).toHaveAttribute('aria-keyshortcuts', navigator.platform.startsWith('Mac') ? 'Meta+N' : 'Control+N')
+    expect(newThread.querySelector('kbd')).toHaveTextContent(navigator.platform.startsWith('Mac') ? '⌘N' : 'Ctrl N')
     const currentThread = document.querySelector('.thread-row')
     expect(currentThread).toHaveTextContent('New thread')
     expect(currentThread).toHaveAttribute('aria-current', 'true')
     expect(currentThread).not.toHaveAttribute('tabindex')
     expect(currentThread.tabIndex).toBe(-1)
     expect(screen.queryByRole('button', { name: 'Search' })).not.toBeInTheDocument()
-    expect(document.querySelectorAll('.side-action')).toHaveLength(1)
-    expect(document.querySelector('.side-action')).toHaveTextContent('Home settings')
-    expect(document.querySelector('#sidebar kbd')).not.toBeInTheDocument()
+    expect(document.querySelectorAll('.side-action')).toHaveLength(2)
+    expect(screen.getByRole('button', { name: 'Home settings' })).toHaveTextContent('Home settings')
+    expect(document.querySelectorAll('#sidebar kbd')).toHaveLength(1)
 
     collapse.focus()
     await fireEvent.click(collapse)
@@ -715,7 +717,7 @@ describe('sidebar collapse', () => {
     expect(document.activeElement).toBe(expand)
     expect(expand).toHaveAttribute('aria-expanded', 'false')
     expect(expand).toHaveAttribute('title', expect.stringContaining('Expand sidebar'))
-    expect(screen.queryByRole('button', { name: 'New thread' })).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'New thread' })).toHaveAttribute('title', 'New thread')
     expect(screen.queryByRole('button', { name: 'Search' })).not.toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Home settings' })).toHaveAttribute('title', 'Home settings')
     expect(screen.queryByText('Threads')).not.toBeInTheDocument()
@@ -802,6 +804,82 @@ describe('sidebar collapse', () => {
     expect(separator).toHaveAttribute('aria-valuenow', '560')
     await fireEvent.click(screen.getByRole('button', { name: 'Expand sidebar' }))
     expect(screen.getByRole('separator', { name: 'Artifacts' })).toHaveAttribute('aria-valuenow', '444')
+  })
+})
+
+describe('new thread', () => {
+  const newThreadShortcut = () => navigator.platform.startsWith('Mac')
+    ? { key: 'n', metaKey: true }
+    : { key: 'n', ctrlKey: true }
+
+  it('clears the transcript, shows a fresh row, and focuses the composer', async () => {
+    invoke.mockImplementation(async (command) => {
+      if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
+      if (command === 'chat_thread_open') return [{
+        runId: 'run-1', phase: 'complete', text: 'Current answer',
+        prompt: 'Current question', receipt: null, toolActivity: [],
+      }]
+      if (command === 'chat_new_thread') return null
+      if (command === 'auth_entitlement_snapshot') return snapshot()
+      if (command === 'auth_devices') return []
+      throw new Error(`unexpected command: ${command}`)
+    })
+    render(App)
+    await screen.findByText('Current answer')
+
+    await fireEvent.click(screen.getByRole('button', { name: 'New thread' }))
+
+    await waitFor(() => expect(screen.queryByText('Current answer')).not.toBeInTheDocument())
+    expect(invoke.mock.calls.filter(([command]) => command === 'chat_new_thread')).toHaveLength(1)
+    const fresh = document.querySelector('[data-fresh-thread]')
+    expect(fresh).toHaveTextContent('New thread')
+    expect(fresh).toHaveAttribute('aria-current', 'true')
+    expect(fresh.tagName).toBe('DIV')
+    expect(document.querySelectorAll('.thread-row[aria-current="true"]')).toHaveLength(1)
+    expect(document.querySelectorAll('.thread-list button[aria-current="true"]')).toHaveLength(0)
+    expect(document.activeElement).toBe(screen.getByPlaceholderText('Ask anything'))
+  })
+
+  it('starts from the focused composer with the platform chord', async () => {
+    invoke.mockImplementation(async (command) => {
+      if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
+      if (command === 'chat_thread_open') return []
+      if (command === 'chat_new_thread') return null
+      if (command === 'auth_entitlement_snapshot') return snapshot()
+      if (command === 'auth_devices') return []
+      throw new Error(`unexpected command: ${command}`)
+    })
+    render(App)
+    const composer = await screen.findByPlaceholderText('Ask anything')
+    await waitFor(() => expect(document.querySelector('.thread-row[aria-current="true"]')).toBeInTheDocument())
+    composer.focus()
+
+    await fireEvent.keyDown(composer, newThreadShortcut())
+
+    await waitFor(() => expect(invoke.mock.calls.filter(([command]) => command === 'chat_new_thread')).toHaveLength(1))
+    expect(document.activeElement).toBe(composer)
+  })
+
+  it('keeps the transcript and current row when the command fails', async () => {
+    invoke.mockImplementation(async (command) => {
+      if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
+      if (command === 'chat_thread_open') return [{
+        runId: 'run-1', phase: 'complete', text: 'Current answer',
+        prompt: 'Current question', receipt: null, toolActivity: [],
+      }]
+      if (command === 'chat_new_thread') throw new Error('offline')
+      if (command === 'auth_entitlement_snapshot') return snapshot()
+      if (command === 'auth_devices') return []
+      throw new Error(`unexpected command: ${command}`)
+    })
+    render(App)
+    await screen.findByText('Current answer')
+
+    await fireEvent.click(screen.getByRole('button', { name: 'New thread' }))
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('A new thread could not be started. Try again.')
+    expect(screen.getByText('Current answer')).toBeInTheDocument()
+    expect(document.querySelector('.thread-row[aria-current="true"]')).toHaveTextContent('Current question')
   })
 })
 

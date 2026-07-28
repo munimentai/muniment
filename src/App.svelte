@@ -19,7 +19,7 @@
   import { copyAnnouncement, copyConfirmed, copyFailure, copyLabel } from './lib/message-actions.js'
   import { onboardingLoadingState, onboardingSettingsState } from './lib/onboarding-state.js'
   import { relativeTime } from './lib/relative-time.js'
-  import { SIDEBAR_STORAGE_KEY, isSidebarShortcut, serializeSidebarCollapsed, sidebarShortcut, storedSidebarCollapsed } from './lib/sidebar-state.js'
+  import { SIDEBAR_STORAGE_KEY, isNewThreadShortcut, isSidebarShortcut, newThreadShortcut, serializeSidebarCollapsed, sidebarShortcut, storedSidebarCollapsed } from './lib/sidebar-state.js'
   import { createStreamingUnderlineAction } from './lib/streaming-underline.js'
   import { thinkingSettle } from './lib/thinking-transition.js'
   import { threadTitle } from './lib/thread-title.js'
@@ -52,6 +52,7 @@
   let historyError = $state('')
   let threadSummaries = $state([])
   let currentThreadId = $state(null)
+  let freshThread = $state(false)
   let threadSwitching = $state(false)
   let permissionAnswer = $state(null)
   let permissionValues = $state({})
@@ -94,6 +95,7 @@
   const minimumThreadWidth = 320
   let sidebarCollapsed = $state(storedSidebarCollapsed())
   const sidebarKeyShortcut = sidebarShortcut()
+  const newThreadKeyShortcut = newThreadShortcut()
   const modifierLabel = shortcutDisplayLabel(sidebarKeyShortcut).slice(0, -1)
   const sidebarHint = `${modifierLabel}\\`
   // The newest copy attempt in the thread, or null once its confirmation lapses.
@@ -153,9 +155,11 @@
     onThreadSummaries: (next) => { threadSummaries = next },
     onThreadSelected: (next) => { currentThreadId = next },
     onThreadSwitch: (next) => { threadSwitching = next },
+    onFreshThread: (next) => { freshThread = next },
     onHistoryStart: () => { expandedReceipts = new Set(); parallelTools = new Map() },
     onHistoryLoaded: () => { pinned = true },
     onFollow: followNewContent,
+    onFocus: () => tick().then(() => composer?.focus()),
     onSend: invalidateDictationTransform,
   })
 
@@ -443,6 +447,11 @@
       voiceShortcutManager.start()
     }
     const shortcuts = (event) => {
+      if (auth.name === 'signed-in' && onboarding.name === 'complete' && isNewThreadShortcut(event)) {
+        event.preventDefault()
+        void chatController.newThread()
+        return
+      }
       if (auth.name === 'signed-in' && onboarding.name === 'complete' && isArtifactRailShortcut(event)) {
         event.preventDefault()
         toggleArtifactRail()
@@ -587,12 +596,19 @@
               <svg class="side-icon" width={sidebarCollapsed ? 18 : 16} height={sidebarCollapsed ? 18 : 16} viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="4" width="17" height="16" rx="2.5" /><path d="M9.5 4v16" /><path d={sidebarCollapsed ? 'm14 9 3 3-3 3' : 'm15.5 15-3-3 3-3'} /></svg>
             </button>
           </div>
+          <button type="button" class="side-action new-thread" aria-label="New thread" title={sidebarCollapsed ? 'New thread' : null} aria-keyshortcuts={newThreadKeyShortcut} disabled={!!active || threadSwitching} onclick={() => chatController.newThread()}>
+            <svg class="side-icon" width="18" height="18" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14" /></svg>
+            {#if !sidebarCollapsed}<span>New thread</span><kbd>{shortcutDisplayLabel(newThreadKeyShortcut)}</kbd>{/if}
+          </button>
           {#if !sidebarCollapsed}
             <p class="side-label">Threads</p>
             <div class="thread-list">
+              {#if freshThread && messages.length === 0}
+                <div class="thread-row active-thread" data-fresh-thread aria-current="true" title={currentThreadTitle}><span></span><div class="thread-row-title">{currentThreadTitle}</div></div>
+              {/if}
               {#each threadSummaries as summary (summary.threadId)}
                 {@const title = summary.title || 'New thread'}
-                {#if summary.threadId === (currentThreadId ?? threadSummaries[0]?.threadId)}
+                {#if !freshThread && summary.threadId === (currentThreadId ?? threadSummaries[0]?.threadId)}
                   {@const currentTitle = summary.title || currentThreadTitle}
                   <div class="thread-row active-thread" aria-current="true" title={currentTitle}><span></span><div class="thread-row-title">{currentTitle}</div><time datetime={summary.updatedAt} title={fullDateTime(summary.updatedAt)}>{relativeTime(summary.updatedAt)}</time></div>
                 {:else}
@@ -934,6 +950,7 @@
   .thread-row > span { flex: 0 0 5px; }
   .thread-row-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .side-action span { flex: 1; }
+  .new-thread kbd { margin-left: auto; }
   /* Collapsed rail: icon-only controls, names carried by aria-label + tooltip. */
   .workspace.sidebar-collapsed .sidebar { padding: 14px 6px 10px; }
   .workspace.sidebar-collapsed .side-brand { padding: 0 0 14px; }

@@ -16,6 +16,18 @@ export function isSidebarShortcut(event, platform = navigator.platform) {
     && !event.shiftKey
 }
 
+export function newThreadShortcut(platform = navigator.platform) {
+  return platform.startsWith('Mac') ? 'Meta+N' : 'Control+N'
+}
+
+export function isNewThreadShortcut(event, platform = navigator.platform) {
+  const mac = platform.startsWith('Mac')
+  return event.key.toLowerCase() === 'n'
+    && (mac ? event.metaKey && !event.ctrlKey : event.ctrlKey && !event.metaKey)
+    && !event.altKey
+    && !event.shiftKey
+}
+
 // Anything but an explicit collapsed marker — missing, malformed, or written
 // by an older shell — restores the documented default.
 export function parseSidebarCollapsed(stored) {
