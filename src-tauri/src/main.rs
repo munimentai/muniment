@@ -3,6 +3,7 @@
 mod attach_service;
 mod auth;
 mod chat;
+mod chat_threads;
 mod dictation;
 mod home;
 mod model_install;
@@ -53,10 +54,10 @@ fn main() {
             chat::chat_cancel,
             chat::chat_answer_permission,
             chat::chat_queue,
-            chat::chat_thread_summaries,
-            chat::chat_thread_open,
-            chat::chat_select_thread,
-            chat::chat_new_thread,
+            chat_threads::chat_thread_summaries,
+            chat_threads::chat_thread_open,
+            chat_threads::chat_select_thread,
+            chat_threads::chat_new_thread,
             attach_service::attach_pairing_decide,
             model_install::gemma_install_start,
             model_install::gemma_install_status,

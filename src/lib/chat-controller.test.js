@@ -62,7 +62,7 @@ describe('chat controller', () => {
     await context.controller.loadHistory()
 
     expect(invoke).toHaveBeenCalledOnce()
-    expect(invoke).toHaveBeenCalledWith('chat_thread_summaries', { limit: 1 })
+    expect(invoke).toHaveBeenCalledWith('chat_thread_summaries', { limit: 20 })
     expect(context.messages()).toEqual([])
   })
 
@@ -84,13 +84,280 @@ describe('chat controller', () => {
     await context.controller.loadHistory()
 
     expect(invoke.mock.calls).toEqual([
-      ['chat_thread_summaries', { limit: 1 }],
+      ['chat_thread_summaries', { limit: 20 }],
       ['chat_thread_open', { threadId: 'thread-1', limit: 100 }],
       ['chat_thread_open', { threadId: 'thread-1', limit: 100, cursor: 'page-2' }],
     ])
     expect(context.messages().map((message) => message.text ?? message.run.text)).toEqual([
       'First question', 'First answer', 'Second question', 'Second answer',
     ])
+  })
+
+  it('selects another thread and publishes it only after every page loads', async () => {
+    const previous = [{ role: 'user', text: 'Current transcript' }]
+    const onThreadSelected = vi.fn()
+    const invoke = vi.fn()
+      .mockResolvedValueOnce(undefined)
+      .mockResolvedValueOnce({ entries: [{
+        runId: 'run-2', phase: 'complete', text: 'New answer',
+        prompt: 'New question', receipt: {}, toolActivity: [],
+      }], nextCursor: null })
+    const context = setup(invoke)
+    context.setMessages(previous)
+    const controller = createChatController({
+      invoke,
+      listen: vi.fn(),
+      readMessages: context.messages,
+      readActive: context.active,
+      readAnnounced: () => null,
+      readDraft: () => '',
+      readFiles: () => [],
+      onMessages: context.setMessages,
+      onActive: vi.fn(),
+      onAnnounce: vi.fn(),
+      onDraft: vi.fn(),
+      onFiles: vi.fn(),
+      onSubmitError: vi.fn(),
+      onCancelError: vi.fn(),
+      onQueueError: vi.fn(),
+      onHistoryError: vi.fn(),
+      onThreadSelected,
+    })
+
+    await controller.openThread('thread-2')
+
+    expect(invoke.mock.calls).toEqual([
+      ['chat_select_thread', { threadId: 'thread-2' }],
+      ['chat_thread_open', { threadId: 'thread-2', limit: 100 }],
+    ])
+    expect(context.messages().map((message) => message.text ?? message.run.text)).toEqual([
+      'New question', 'New answer',
+    ])
+    expect(onThreadSelected).toHaveBeenCalledWith('thread-2')
+  })
+
+  it('blocks a send while another thread loads', async () => {
+    const history = deferred()
+    const invoke = vi.fn((command) => {
+      if (command === 'chat_thread_open') return history.promise
+      return Promise.resolve()
+    })
+    const context = setup(invoke)
+
+    const opening = context.controller.openThread('thread-2')
+    await Promise.resolve()
+    await context.controller.send()
+
+    expect(invoke).not.toHaveBeenCalledWith('chat_submit', expect.anything())
+    history.resolve({ entries: [], nextCursor: null })
+    await opening
+  })
+
+  it.each(['chat_select_thread', 'chat_thread_open'])('keeps the transcript when %s fails', async (failedCommand) => {
+    const previous = [{ role: 'user', text: 'Current transcript' }]
+    const onHistoryError = vi.fn()
+    const context = setup()
+    context.setMessages(previous)
+    const controller = createChatController({
+      invoke: vi.fn(async (command) => {
+        if (command === failedCommand) throw new Error('offline')
+        return command === 'chat_thread_open' ? { entries: [], nextCursor: null } : undefined
+      }),
+      listen: vi.fn(),
+      readMessages: context.messages,
+      readActive: context.active,
+      readAnnounced: () => null,
+      readDraft: () => '',
+      readFiles: () => [],
+      readThreadId: () => 'thread-1',
+      onMessages: context.setMessages,
+      onActive: vi.fn(),
+      onAnnounce: vi.fn(),
+      onDraft: vi.fn(),
+      onFiles: vi.fn(),
+      onSubmitError: vi.fn(),
+      onCancelError: vi.fn(),
+      onQueueError: vi.fn(),
+      onHistoryError,
+    })
+
+    await controller.openThread('thread-2')
+
+    expect(context.messages()).toBe(previous)
+    expect(onHistoryError).toHaveBeenLastCalledWith('Conversation history could not be restored. Try again.')
+  })
+
+  it('restores the previous backend thread when the selected thread fails to load', async () => {
+    const invoke = vi.fn()
+      .mockResolvedValueOnce()
+      .mockRejectedValueOnce(new Error('offline'))
+      .mockResolvedValueOnce()
+      .mockResolvedValueOnce({ runId: 'run-1' })
+    const context = setup()
+    const controller = createChatController({
+      invoke,
+      listen: vi.fn(),
+      readMessages: context.messages,
+      readActive: context.active,
+      readAnnounced: () => null,
+      readDraft: () => 'Send after recovery',
+      readFiles: () => [],
+      readThreadId: () => 'thread-1',
+      onMessages: context.setMessages,
+      onActive: vi.fn(),
+      onAnnounce: vi.fn(),
+      onDraft: vi.fn(),
+      onFiles: vi.fn(),
+      onSubmitError: vi.fn(),
+      onCancelError: vi.fn(),
+      onQueueError: vi.fn(),
+      onHistoryError: vi.fn(),
+    })
+
+    await controller.openThread('thread-2')
+    await controller.send()
+
+    expect(invoke.mock.calls.slice(0, 3)).toEqual([
+      ['chat_select_thread', { threadId: 'thread-2' }],
+      ['chat_thread_open', { threadId: 'thread-2', limit: 100 }],
+      ['chat_select_thread', { threadId: 'thread-1' }],
+    ])
+    expect(invoke).toHaveBeenCalledWith('chat_submit', {
+      prompt: 'Send after recovery',
+      files: [],
+    })
+  })
+
+  it('blocks sends after restoration fails until a thread retry succeeds', async () => {
+    const invoke = vi.fn()
+      .mockResolvedValueOnce()
+      .mockRejectedValueOnce(new Error('page offline'))
+      .mockRejectedValueOnce(new Error('restore offline'))
+      .mockResolvedValueOnce()
+      .mockResolvedValueOnce({ entries: [], nextCursor: null })
+      .mockResolvedValueOnce({ runId: 'run-1' })
+    const context = setup(invoke)
+    const controller = createChatController({
+      invoke,
+      listen: vi.fn(),
+      readMessages: context.messages,
+      readActive: context.active,
+      readAnnounced: () => null,
+      readDraft: () => 'Do not send',
+      readFiles: () => [],
+      readThreadId: () => 'thread-1',
+      onMessages: context.setMessages,
+      onActive: vi.fn(),
+      onAnnounce: vi.fn(),
+      onDraft: vi.fn(),
+      onFiles: vi.fn(),
+      onSubmitError: vi.fn(),
+      onCancelError: vi.fn(),
+      onQueueError: vi.fn(),
+      onHistoryError: vi.fn(),
+    })
+
+    await controller.openThread('thread-2')
+    await controller.send()
+
+    expect(invoke).not.toHaveBeenCalledWith('chat_submit', expect.anything())
+
+    await controller.openThread('thread-1')
+    await controller.send()
+
+    expect(invoke).toHaveBeenCalledWith('chat_submit', {
+      prompt: 'Do not send',
+      files: [],
+    })
+  })
+
+  it('keeps sends blocked when a thread selection retry fails', async () => {
+    const invoke = vi.fn()
+      .mockResolvedValueOnce()
+      .mockRejectedValueOnce(new Error('page offline'))
+      .mockRejectedValueOnce(new Error('restore offline'))
+      .mockRejectedValueOnce(new Error('select offline'))
+    const context = setup(invoke)
+    const controller = createChatController({
+      invoke,
+      listen: vi.fn(),
+      readMessages: context.messages,
+      readActive: context.active,
+      readAnnounced: () => null,
+      readDraft: () => 'Do not send',
+      readFiles: () => [],
+      readThreadId: () => 'thread-1',
+      onMessages: context.setMessages,
+      onActive: vi.fn(),
+      onAnnounce: vi.fn(),
+      onDraft: vi.fn(),
+      onFiles: vi.fn(),
+      onSubmitError: vi.fn(),
+      onCancelError: vi.fn(),
+      onQueueError: vi.fn(),
+      onHistoryError: vi.fn(),
+    })
+
+    await controller.openThread('thread-2')
+    await controller.openThread('thread-1')
+    await controller.send()
+
+    expect(invoke).not.toHaveBeenCalledWith('chat_submit', expect.anything())
+  })
+
+  it('selects and loads a known thread before a blocked history retry allows sends', async () => {
+    const invoke = vi.fn()
+      .mockResolvedValueOnce()
+      .mockRejectedValueOnce(new Error('page offline'))
+      .mockRejectedValueOnce(new Error('restore offline'))
+      .mockResolvedValueOnce({ summaries: [{ threadId: 'thread-1' }], nextCursor: null })
+      .mockResolvedValueOnce()
+      .mockResolvedValueOnce({ entries: [], nextCursor: null })
+      .mockResolvedValueOnce({ runId: 'run-1' })
+    const context = setup(invoke)
+    const controller = createChatController({
+      invoke,
+      listen: vi.fn(),
+      readMessages: context.messages,
+      readActive: context.active,
+      readAnnounced: () => null,
+      readDraft: () => 'Send after retry',
+      readFiles: () => [],
+      readThreadId: () => 'thread-1',
+      onMessages: context.setMessages,
+      onActive: vi.fn(),
+      onAnnounce: vi.fn(),
+      onDraft: vi.fn(),
+      onFiles: vi.fn(),
+      onSubmitError: vi.fn(),
+      onCancelError: vi.fn(),
+      onQueueError: vi.fn(),
+      onHistoryError: vi.fn(),
+    })
+
+    await controller.openThread('thread-2')
+    await controller.loadHistory()
+    await controller.send()
+
+    expect(invoke.mock.calls.slice(3, 6)).toEqual([
+      ['chat_thread_summaries', { limit: 20 }],
+      ['chat_select_thread', { threadId: 'thread-1' }],
+      ['chat_thread_open', { threadId: 'thread-1', limit: 100 }],
+    ])
+    expect(invoke).toHaveBeenCalledWith('chat_submit', {
+      prompt: 'Send after retry',
+      files: [],
+    })
+  })
+
+  it('does not select a thread while a run is active', async () => {
+    const invoke = vi.fn()
+    const context = setup(invoke)
+    context.setActive({ id: 'run-1', phase: 'streaming' })
+
+    await context.controller.openThread('thread-2')
+
+    expect(invoke).not.toHaveBeenCalled()
   })
 
   it('stops opening history after 100 pages and publishes them in order', async () => {

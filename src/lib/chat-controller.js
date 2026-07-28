@@ -12,6 +12,7 @@ export function createChatController({
   readAnnounced,
   readDraft,
   readFiles,
+  readThreadId = () => null,
   blocked = () => false,
   onMessages,
   onActive,
@@ -23,6 +24,9 @@ export function createChatController({
   onQueueError,
   onHistoryError,
   onHistoryStart = () => {},
+  onThreadSummaries = () => {},
+  onThreadSelected = () => {},
+  onThreadSwitch = () => {},
   onHistoryLoaded = () => {},
   onFollow = () => {},
   onSend = () => {},
@@ -31,6 +35,8 @@ export function createChatController({
   let submissionSequence = 0
   let unlisten
   let destroyed = false
+  let switchingThread = false
+  let switchBlocked = false
 
   const messages = () => readMessages()
   const active = () => readActive()
@@ -62,18 +68,39 @@ export function createChatController({
     onHistoryStart()
     onAnnounce(null)
     try {
-      const { summaries } = await invoke('chat_thread_summaries', { limit: 1 })
+      const { summaries } = await invoke('chat_thread_summaries', { limit: 20 })
       if (destroyed) return
+      onThreadSummaries(summaries)
       if (!summaries.length) {
         publishMessages([])
+        onThreadSelected(null)
         onHistoryLoaded()
         onFollow()
         return
       }
+      await openThread(summaries[0].threadId, switchBlocked)
+    } catch (_) {
+      if (!destroyed) onHistoryError('Conversation history could not be restored. Try again.')
+    }
+  }
+
+  async function openThread(threadId, select = false) {
+    if (active() || switchingThread) return
+    switchingThread = true
+    onThreadSwitch(true)
+    onHistoryError('')
+    const previousThreadId = readThreadId()
+    const wasBlocked = switchBlocked
+    let selected = false
+    try {
+      if (select) {
+        await invoke('chat_select_thread', { threadId })
+        selected = true
+      }
       const history = []
       let cursor
       for (let page = 0; page < historyPageCap; page += 1) {
-        const payload = { threadId: summaries[0].threadId, limit: historyPageLimit }
+        const payload = { threadId, limit: historyPageLimit }
         if (cursor !== undefined) payload.cursor = cursor
         const result = await invoke('chat_thread_open', payload)
         if (destroyed) return
@@ -82,17 +109,40 @@ export function createChatController({
         cursor = result.nextCursor
       }
       if (destroyed) return
+      onHistoryStart()
+      onAnnounce(null)
+      onThreadSelected(threadId)
       publishMessages(historyMessages(history))
       onHistoryLoaded()
       onFollow()
+      switchBlocked = false
     } catch (_) {
-      if (!destroyed) onHistoryError('Conversation history could not be restored. Try again.')
+      if (!destroyed) {
+        if (wasBlocked) {
+          switchBlocked = true
+        } else if (selected) {
+          if (previousThreadId == null) {
+            switchBlocked = true
+          } else {
+            try {
+              await invoke('chat_select_thread', { threadId: previousThreadId })
+              switchBlocked = false
+            } catch (_) {
+              switchBlocked = true
+            }
+          }
+        }
+        onHistoryError('Conversation history could not be restored. Try again.')
+      }
+    } finally {
+      switchingThread = false
+      if (!destroyed) onThreadSwitch(switchBlocked)
     }
   }
 
   async function send() {
     const prompt = readDraft().trim()
-    if (!prompt || active() || blocked()) return
+    if (!prompt || active() || switchingThread || switchBlocked || blocked()) return
     onSend()
     onSubmitError('')
     const submissionId = ++submissionSequence
@@ -186,5 +236,5 @@ export function createChatController({
     buffered.clear()
   }
 
-  return { start, loadHistory, send, cancel, resume, queue, cleanup }
+  return { start, loadHistory, openThread: (threadId) => openThread(threadId, true), send, cancel, resume, queue, cleanup }
 }

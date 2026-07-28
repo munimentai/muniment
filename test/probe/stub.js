@@ -85,6 +85,13 @@ const historyFixtures = {
 const fixtureName = document.currentScript.dataset.history
 const history = historyFixtures[fixtureName]
 if (!history) throw new Error(`Unknown probe history fixture: ${fixtureName}`)
+const threadSummaries = history.length
+  ? [
+      { threadId: 'probe-thread', title: 'Lease renewal', updatedAt: '2026-07-28T11:55:00Z' },
+      { threadId: 'probe-archive', title: 'Archive review', updatedAt: '2026-07-28T09:00:00Z' },
+      { threadId: 'probe-notes', title: 'Client notes', updatedAt: '2026-07-25T12:00:00Z' },
+    ]
+  : []
 
 const eventListeners = []
 const invokedCommands = []
@@ -159,9 +166,7 @@ window.__TAURI__ = {
       }
       if (command === 'auth_status') return { signed_in: true, subject: 'probe-user' }
       if (command === 'chat_thread_summaries') {
-        return history.length
-          ? { summaries: [{ threadId: 'probe-thread', title: 'Probe thread', updatedAt: '2026-01-01T00:00:00Z' }], nextCursor: null }
-          : { summaries: [], nextCursor: null }
+        return { summaries: structuredClone(threadSummaries), nextCursor: null }
       }
       if (command === 'chat_thread_open') return { entries: structuredClone(history), nextCursor: null }
       if (command === 'auth_entitlement_snapshot') {
