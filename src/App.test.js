@@ -85,8 +85,9 @@ async function stopClickCapture(voice) {
 
 function deferred() {
   let resolve
-  const promise = new Promise((res) => { resolve = res })
-  return { promise, resolve }
+  let reject
+  const promise = new Promise((res, rej) => { resolve = res; reject = rej })
+  return { promise, resolve, reject }
 }
 
 beforeAll(async () => {
@@ -2725,11 +2726,61 @@ describe('permission gates', () => {
     })
   })
 
-  it.each(['input', 'editor', 'unknown'])('renders Deny alone for a %s request', async (kind) => {
+  it('renders Deny alone for an unknown request', async () => {
+    const kind = 'unknown'
     restoreGate({ gateId: `gate-${kind}`, kind, title: 'Unsupported request' })
 
     expect(await screen.findByRole('button', { name: 'Deny' })).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Allow' })).not.toBeInTheDocument()
+  })
+
+  it.each([
+    ['input', { placeholder: 'Type a folder name' }, '', 'Quarterly records'],
+    ['editor', { prefill: 'rm old.csv\n' }, 'rm old.csv\n', 'archive old.csv\nremove temp.csv'],
+  ])('renders and submits a %s request', async (kind, fields, initialValue, submittedValue) => {
+    const answer = restoreGate({
+      gateId: `gate-${kind}`,
+      kind,
+      title: 'Change the request',
+      ...fields,
+    })
+
+    const field = await screen.findByRole('textbox', { name: 'Change the request' })
+    expect(field).toHaveValue(initialValue)
+    if (kind === 'input') expect(field).toHaveAttribute('placeholder', fields.placeholder)
+
+    await fireEvent.input(field, { target: { value: submittedValue } })
+    await fireEvent.click(screen.getByRole('button', { name: 'Submit' }))
+
+    expect(answer).toHaveBeenCalledWith({
+      runId: 'run-gated',
+      gateId: `gate-${kind}`,
+      answer: { type: kind, value: submittedValue },
+    })
+  })
+
+  it.each([
+    ['input', { placeholder: 'Type a folder name' }, 'Quarterly records'],
+    ['editor', { prefill: 'rm old.csv' }, 'archive old.csv'],
+  ])('disables a %s request in flight and keeps its value after failure', async (kind, fields, typedValue) => {
+    const pending = deferred()
+    restoreGate(
+      { gateId: `gate-${kind}`, kind, title: 'Change the request', ...fields },
+      'pending-permission',
+      vi.fn(() => pending.promise),
+    )
+
+    const field = await screen.findByRole('textbox', { name: 'Change the request' })
+    await fireEvent.input(field, { target: { value: typedValue } })
+    await fireEvent.click(screen.getByRole('button', { name: 'Submit' }))
+
+    expect(field).toBeDisabled()
+    expect(screen.getByRole('button', { name: 'Submit' })).toBeDisabled()
+    pending.reject(new Error('offline'))
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Could not answer this request. Try again.')
+    expect(field).toBeEnabled()
+    expect(field).toHaveValue(typedValue)
   })
 
   it('keeps a rejected request, states the failure, and accepts a retry', async () => {
