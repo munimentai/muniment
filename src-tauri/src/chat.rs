@@ -906,6 +906,18 @@ fn select_session_thread(
     Ok(())
 }
 
+fn fresh_session_thread(
+    storage: &SharedStorage,
+    tracker: &SessionThread,
+    subject: Option<&str>,
+) -> Result<(), String> {
+    let _storage = storage
+        .lock()
+        .map_err(|_| "Conversation history is unavailable.".to_string())?;
+    tracker.fresh(subject);
+    Ok(())
+}
+
 #[tauri::command]
 pub async fn chat_thread_summaries(
     app_handle: tauri::AppHandle,
@@ -953,9 +965,12 @@ pub async fn chat_new_thread(
     auth_state: tauri::State<'_, auth::AuthState>,
     state: tauri::State<'_, ChatState>,
 ) -> Result<(), String> {
-    auth::fresh_tokens(&auth_state, &app_handle)?;
-    state.session_thread.fresh();
-    Ok(())
+    let tokens = auth::fresh_tokens(&auth_state, &app_handle)?;
+    fresh_session_thread(
+        &state.storage,
+        &state.session_thread,
+        tokens.subject.as_deref(),
+    )
 }
 
 #[tauri::command]
@@ -3074,7 +3089,7 @@ mod tests {
             cas: LocalCas::open(&directory.join("cas")).unwrap(),
         }));
         let tracker = SessionThread::default();
-        tracker.fresh();
+        tracker.fresh(Some("owner"));
         let fresh_run = Uuid::now_v7().to_string();
 
         prepare_new_run_with_session_thread(
@@ -3106,6 +3121,87 @@ mod tests {
             tracker.offered("workspace-a", Some("owner")),
             OfferedThread::Selected(thread_for(&fresh_run))
         );
+
+        drop(connection);
+        drop(storage);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn completed_fresh_choice_controls_the_next_unstamped_run() {
+        let directory =
+            std::env::temp_dir().join(format!("muniment-session-fresh-race-{}", Uuid::now_v7()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let database = directory.join("runs.sqlite3");
+        let existing_run = Uuid::now_v7().to_string();
+        let mut journal = RunJournal::open(&database).unwrap();
+        journal
+            .append_new_run(
+                "workspace-a",
+                &event_envelope(&existing_run, 1, "run.started", json!({}), Some("owner")),
+            )
+            .unwrap();
+        drop(journal);
+        let connection = rusqlite::Connection::open(&database).unwrap();
+        let existing_thread = connection
+            .query_row(
+                "SELECT thread_id FROM run_threads WHERE run_id=?1",
+                [&existing_run],
+                |row| row.get::<_, String>(0),
+            )
+            .unwrap();
+        drop(connection);
+        let storage = Arc::new(Mutex::new(ChatStorage {
+            journal: RunJournal::open(&database).unwrap(),
+            cas: LocalCas::open(&directory.join("cas")).unwrap(),
+        }));
+        let tracker = SessionThread::default();
+
+        std::thread::scope(|scope| {
+            let storage_guard = storage.lock().unwrap();
+            let (started, waiting) = std::sync::mpsc::channel();
+            let (completed, completion) = std::sync::mpsc::channel();
+            let command = scope.spawn(|| {
+                started.send(()).unwrap();
+                let result = fresh_session_thread(&storage, &tracker, Some("owner"));
+                completed.send(()).unwrap();
+                result
+            });
+            waiting.recv().unwrap();
+            assert!(
+                completion.recv_timeout(Duration::from_millis(100)).is_err(),
+                "the fresh command must wait for run preparation"
+            );
+            tracker.record(existing_thread.clone(), "workspace-a", Some("owner"));
+            drop(storage_guard);
+            completion.recv().unwrap();
+            command.join().unwrap().unwrap();
+        });
+
+        let fresh_run = Uuid::now_v7().to_string();
+        prepare_new_run_with_session_thread(
+            &storage,
+            SessionThreadStart {
+                tracker: &tracker,
+                continue_existing: true,
+            },
+            &fresh_run,
+            "workspace-a",
+            Some("owner"),
+            Vec::new(),
+            None,
+        )
+        .unwrap();
+
+        let connection = rusqlite::Connection::open(&database).unwrap();
+        let fresh_thread = connection
+            .query_row(
+                "SELECT thread_id FROM run_threads WHERE run_id=?1",
+                [&fresh_run],
+                |row| row.get::<_, String>(0),
+            )
+            .unwrap();
+        assert_ne!(fresh_thread, existing_thread);
 
         drop(connection);
         drop(storage);

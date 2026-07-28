@@ -12,7 +12,7 @@ enum ThreadChoice {
     #[default]
     Unset,
     Selected(SelectedThread),
-    Fresh,
+    Fresh(Option<String>),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -43,8 +43,11 @@ impl SessionThread {
             {
                 OfferedThread::Selected(selected.thread_id.clone())
             }
-            ThreadChoice::Fresh => OfferedThread::Fresh,
+            ThreadChoice::Fresh(fresh_subject) if fresh_subject.as_deref() == subject => {
+                OfferedThread::Fresh
+            }
             ThreadChoice::Unset | ThreadChoice::Selected(_) => OfferedThread::AdoptNewest,
+            ThreadChoice::Fresh(_) => OfferedThread::AdoptNewest,
         }
     }
 
@@ -60,11 +63,12 @@ impl SessionThread {
             });
     }
 
-    pub(crate) fn fresh(&self) {
+    pub(crate) fn fresh(&self, subject: Option<&str>) {
         *self
             .choice
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = ThreadChoice::Fresh;
+            .unwrap_or_else(std::sync::PoisonError::into_inner) =
+            ThreadChoice::Fresh(subject.map(str::to_owned));
     }
 
     pub(crate) fn record(&self, thread_id: String, workspace: &str, subject: Option<&str>) {
@@ -134,11 +138,22 @@ mod tests {
     fn fresh_forces_a_new_thread() {
         let tracker = SessionThread::default();
         tracker.select("thread-a".into(), Some("owner"));
-        tracker.fresh();
+        tracker.fresh(Some("owner"));
 
         assert_eq!(
             tracker.offered("workspace-a", Some("owner")),
             OfferedThread::Fresh
+        );
+    }
+
+    #[test]
+    fn fresh_choice_does_not_cross_subjects() {
+        let tracker = SessionThread::default();
+        tracker.fresh(Some("owner"));
+
+        assert_eq!(
+            tracker.offered("workspace-a", Some("other")),
+            OfferedThread::AdoptNewest
         );
     }
 }
