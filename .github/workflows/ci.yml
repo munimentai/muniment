@@ -403,7 +403,20 @@ jobs:
           # inside --cmd instead of being parsed by the pve01 shell.
           # desktop-ci accepts clone credentials only in --repo, so the token is
           # temporarily visible in local and remote process listings.
-          ssh -i "$key" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
-              -o BatchMode=yes -o ServerAliveInterval=30 -o ServerAliveCountMax=8 \
-              desktopci@10.1.10.10 \
-              "sudo desktop-ci $PLATFORM --repo '$repo_url' --ref '$REF' --cmd '$cmd'"
+          attempt=1
+          while true; do
+            if ssh -i "$key" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+                 -o BatchMode=yes -o ServerAliveInterval=30 -o ServerAliveCountMax=8 \
+                 desktopci@10.1.10.10 \
+                 "sudo desktop-ci $PLATFORM --repo '$repo_url' --ref '$REF' --cmd '$cmd'"; then
+              status=0
+            else
+              status=$?
+            fi
+            if { [ "$status" -ne 3 ] && [ "$status" -ne 255 ]; } || \
+               [ "$attempt" -ge 2 ]; then
+              exit "$status"
+            fi
+            echo "desktop-ci infrastructure setup failed; retrying once"
+            attempt=$((attempt + 1))
+          done
