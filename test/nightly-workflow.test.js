@@ -25,20 +25,20 @@ const conditionResult = ({ eventName, platform, build, publish }) => {
 }
 
 describe('nightly Linux E2E workflow', () => {
-  it('finalizes with contents write without PATCHing target_commitish', () => {
+  it('finalizes with contents write without moving the rolling tag', () => {
     expect(publish).toContain('permissions:\n      contents: write')
     expect(publish).not.toContain('target_commitish: sha')
-    expect(publish.indexOf('github.rest.git.updateRef')).toBeLessThan(publish.indexOf('github.rest.repos.updateRelease'))
+    expect(publish).not.toContain('github.rest.git.updateRef')
   })
 
   it('runs after a successful full-nightly publish', () => {
     expect(conditionResult({ eventName: 'schedule', platform: '', build: 'success', publish: 'success' })).toBe(true)
   })
 
-  it('runs a Linux-only dispatch after its package build and finalizes the release identity', () => {
+  it('runs a Linux-only dispatch after its package build and validates its asset', () => {
     expect(conditionResult({ eventName: 'workflow_dispatch', platform: 'linux', build: 'success', publish: 'skipped' })).toBe(true)
     expect(linuxE2e).toContain("if: github.event_name == 'workflow_dispatch' && github.event.inputs.platform == 'linux'")
-    expect(linuxE2e).toContain('ref: "tags/nightly"')
+    expect(linuxE2e).not.toContain('github.rest.git.updateRef')
     expect(linuxE2e).toContain('`nightly-${sha}-linux-muniment.deb`')
   })
 
