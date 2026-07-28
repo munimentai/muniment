@@ -2023,7 +2023,14 @@ fn validate_database(connection: &Connection) -> Result<(), JournalError> {
     )?;
     if schema_version >= 3 || thread_schema_objects != 0 {
         if thread_schema_objects == 4 {
-            validate_thread_identity(connection)?;
+            match validate_thread_identity(connection) {
+                Err(JournalError::Sqlite(error)) => {
+                    return Err(JournalError::Corrupt(format!(
+                        "malformed thread schema: {error}"
+                    )));
+                }
+                result => result?,
+            }
             validate_thread_schema(connection)?;
         } else {
             validate_thread_schema(connection)?;

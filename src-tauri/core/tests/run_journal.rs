@@ -755,6 +755,29 @@ fn schema_v3_requires_each_thread_table() {
 }
 
 #[test]
+fn schema_v3_rejects_four_named_objects_with_a_missing_column_as_corrupt() {
+    let db = TestDb::new();
+    RunJournal::open(db.as_ref()).unwrap();
+    let raw = Connection::open(db.as_ref()).unwrap();
+    raw.execute_batch(
+        "DROP INDEX run_threads_thread_run;
+         DROP TABLE run_threads;
+         CREATE TABLE run_threads(
+           run_id TEXT PRIMARY KEY NOT NULL,
+           thread_id TEXT NOT NULL
+         ) STRICT;
+         CREATE INDEX run_threads_thread_run ON run_threads(thread_id);",
+    )
+    .unwrap();
+    drop(raw);
+
+    assert!(matches!(
+        RunJournal::open(db.as_ref()),
+        Err(JournalError::Corrupt(_))
+    ));
+}
+
+#[test]
 fn schema_v3_rejects_thread_identity_invariant_violations() {
     for mutation in [
         "DELETE FROM run_threads",
