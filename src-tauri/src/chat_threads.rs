@@ -424,6 +424,7 @@ mod tests {
         let owned_thread = new_thread("owner");
         let foreign_thread = new_thread("other");
         let deleted_thread = new_thread("owner");
+        let unknown_thread = Uuid::now_v7().to_string();
         let provenance = Provenance {
             source: "test".into(),
             source_version: "1".into(),
@@ -438,7 +439,7 @@ mod tests {
             .unwrap();
 
         for (thread_id, title, expected_seq) in [
-            ("unknown", "title".to_string(), 0),
+            (unknown_thread.as_str(), "title".to_string(), 0),
             (foreign_thread.as_str(), "title".to_string(), 1),
             (deleted_thread.as_str(), "title".to_string(), 2),
             (owned_thread.as_str(), " \n\t ".to_string(), 1),
