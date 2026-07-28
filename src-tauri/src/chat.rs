@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -20,8 +20,8 @@ use muniment_core::journal::reducer::{
 use muniment_core::journal::thread_summaries::ThreadSummary;
 use muniment_core::journal::{EventEnvelope, EventPayload, Provenance, RunEventType, RunJournal};
 use muniment_core::sidecar::pi_chat::{
-    cancel_command, ExtensionUiDialog, ExtensionUiRequest, PiChatEvent, PiImageContent,
-    PiRunAdapter, PromptCommand, Receipt,
+    cancel_command, ExtensionUiAnswer, ExtensionUiDialog, ExtensionUiRequest, ExtensionUiResponse,
+    PiChatEvent, PiImageContent, PiRunAdapter, PromptCommand, Receipt,
 };
 use muniment_core::sidecar::pi_install::resolve_current;
 use muniment_core::sidecar::{
@@ -184,6 +184,44 @@ pub(crate) struct ActiveRun {
     pub(crate) cancelled: Arc<AtomicBool>,
     pub(crate) transport: Arc<Mutex<Option<Arc<PiRpcTransport>>>>,
     pub(crate) adapter: Arc<Mutex<Option<Arc<PiRunAdapter>>>>,
+    permission_answers: Arc<Mutex<VecDeque<PendingPermissionAnswer>>>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(
+    tag = "type",
+    content = "value",
+    rename_all = "camelCase",
+    deny_unknown_fields
+)]
+pub enum ChatPermissionAnswer {
+    Select(String),
+    Confirm(bool),
+    Input(String),
+    Editor(String),
+    Cancelled,
+}
+
+impl ChatPermissionAnswer {
+    fn pi_answer(&self) -> ExtensionUiAnswer {
+        match self {
+            Self::Select(value) => ExtensionUiAnswer::Selection(value.clone()),
+            Self::Confirm(value) => ExtensionUiAnswer::Confirmation(*value),
+            Self::Input(value) => ExtensionUiAnswer::Input(value.clone()),
+            Self::Editor(value) => ExtensionUiAnswer::Editor(value.clone()),
+            Self::Cancelled => ExtensionUiAnswer::Cancelled,
+        }
+    }
+
+    fn decision(&self) -> Value {
+        serde_json::to_value(self).expect("permission answers serialize")
+    }
+}
+
+#[derive(Clone, Debug)]
+struct PendingPermissionAnswer {
+    gate_id: String,
+    answer: ChatPermissionAnswer,
 }
 
 struct PiRuntime {
@@ -220,6 +258,7 @@ pub(crate) struct RunStartLaunch {
     pub(crate) cancelled: Arc<AtomicBool>,
     pub(crate) transport: Arc<Mutex<Option<Arc<PiRpcTransport>>>>,
     pub(crate) adapter: Arc<Mutex<Option<Arc<PiRunAdapter>>>>,
+    permission_answers: Arc<Mutex<VecDeque<PendingPermissionAnswer>>>,
     pub(crate) prepared: (u64, ChatProjector),
 }
 
@@ -323,11 +362,13 @@ pub(crate) fn prepare_desktop_run(
     let cancelled = Arc::new(AtomicBool::new(false));
     let transport = Arc::new(Mutex::new(None));
     let adapter = Arc::new(Mutex::new(None));
+    let permission_answers = Arc::new(Mutex::new(VecDeque::new()));
     if let Err(error) = boundaries.install_active_run(ActiveRun {
         id: run_id.clone(),
         cancelled: Arc::clone(&cancelled),
         transport: Arc::clone(&transport),
         adapter: Arc::clone(&adapter),
+        permission_answers: Arc::clone(&permission_answers),
     }) {
         boundaries.clear_active_run(&run_id);
         return Err(error);
@@ -361,6 +402,7 @@ pub(crate) fn prepare_desktop_run(
         cancelled,
         transport,
         adapter,
+        permission_answers,
         prepared,
     };
     Ok((result, launch))
@@ -515,6 +557,7 @@ impl<R: tauri::Runtime> RunStartBoundaries for TauriRunStartBoundaries<R> {
                 launch.cancelled,
                 launch.transport,
                 launch.adapter,
+                launch.permission_answers,
                 None,
                 None,
                 Some(launch.prepared),
@@ -997,6 +1040,7 @@ pub async fn chat_resume(
     let cancelled = Arc::new(AtomicBool::new(false));
     let transport = Arc::new(Mutex::new(None));
     let adapter = Arc::new(Mutex::new(None));
+    let permission_answers = Arc::new(Mutex::new(VecDeque::new()));
     install_active_run(
         &state.active,
         ActiveRun {
@@ -1004,6 +1048,7 @@ pub async fn chat_resume(
             cancelled: Arc::clone(&cancelled),
             transport: Arc::clone(&transport),
             adapter: Arc::clone(&adapter),
+            permission_answers: Arc::clone(&permission_answers),
         },
     )?;
     let storage = Arc::clone(&state.storage);
@@ -1023,6 +1068,7 @@ pub async fn chat_resume(
             cancelled,
             transport,
             adapter,
+            permission_answers,
             Some(resume),
             Some(attempt_sender),
             None,
@@ -1445,6 +1491,36 @@ pub async fn chat_cancel(state: tauri::State<'_, ChatState>, run_id: String) -> 
     Ok(())
 }
 
+#[tauri::command]
+pub async fn chat_answer_permission(
+    state: tauri::State<'_, ChatState>,
+    run_id: String,
+    gate_id: String,
+    answer: ChatPermissionAnswer,
+) -> Result<(), String> {
+    queue_permission_answer(&state.active, run_id, gate_id, answer)
+}
+
+fn queue_permission_answer(
+    active: &Mutex<Option<ActiveRun>>,
+    run_id: String,
+    gate_id: String,
+    answer: ChatPermissionAnswer,
+) -> Result<(), String> {
+    let active = active
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let run = active
+        .as_ref()
+        .filter(|run| run.id == run_id)
+        .ok_or_else(|| "That reply is no longer active.".to_string())?;
+    run.permission_answers
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .push_back(PendingPermissionAnswer { gate_id, answer });
+    Ok(())
+}
+
 fn coordinate<R: tauri::Runtime>(
     app: tauri::AppHandle<R>,
     journal: SharedStorage,
@@ -1457,6 +1533,7 @@ fn coordinate<R: tauri::Runtime>(
     cancelled: Arc<AtomicBool>,
     active_transport: Arc<Mutex<Option<Arc<PiRpcTransport>>>>,
     active_adapter: Arc<Mutex<Option<Arc<PiRunAdapter>>>>,
+    permission_answers: Arc<Mutex<VecDeque<PendingPermissionAnswer>>>,
     resume: Option<ResumeContext>,
     resume_result: Option<std::sync::mpsc::Sender<Result<(), String>>>,
     prepared: Option<(u64, ChatProjector)>,
@@ -1856,10 +1933,39 @@ fn coordinate<R: tauri::Runtime>(
     let mut buffered_events = buffered_events.into_iter();
     let mut aborting = false;
     let mut open_effects = BTreeSet::new();
-    loop {
+    let mut pending_permission = None;
+    'coordinate: loop {
         if cancelled.swap(false, Ordering::SeqCst) {
             aborting = true;
             let _ = transport.call(cancel_command(), Duration::from_secs(2));
+        }
+        let answers: Vec<_> = permission_answers
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .drain(..)
+            .collect();
+        for answer in answers {
+            if coordinate_permission_answer(
+                &mut pending_permission,
+                answer,
+                |request, answer| adapter.answer_extension_ui(&transport, request, answer),
+                |kind, payload| {
+                    append_emit(
+                        &app,
+                        &journal,
+                        &mut projector,
+                        &run_id,
+                        &mut seq,
+                        kind,
+                        payload,
+                        subject.as_deref(),
+                    )
+                },
+            )
+            .is_err()
+            {
+                break 'coordinate;
+            }
         }
         let event = buffered_events
             .next()
@@ -1973,18 +2079,22 @@ fn coordinate<R: tauri::Runtime>(
                 }
             }
             Ok(event @ PiChatEvent::ExtensionUiRequest(_)) => {
-                if coordinate_extension_ui_request(event, |kind, payload| {
-                    append_emit(
-                        &app,
-                        &journal,
-                        &mut projector,
-                        &run_id,
-                        &mut seq,
-                        kind,
-                        payload,
-                        subject.as_deref(),
-                    )
-                })
+                if coordinate_extension_ui_request(
+                    event,
+                    &mut pending_permission,
+                    |kind, payload| {
+                        append_emit(
+                            &app,
+                            &journal,
+                            &mut projector,
+                            &run_id,
+                            &mut seq,
+                            kind,
+                            payload,
+                            subject.as_deref(),
+                        )
+                    },
+                )
                 .is_err()
                 {
                     break;
@@ -2028,12 +2138,42 @@ fn coordinate<R: tauri::Runtime>(
 
 fn coordinate_extension_ui_request(
     event: PiChatEvent,
+    pending: &mut Option<ExtensionUiRequest>,
     append: impl FnOnce(&str, Value) -> Result<(), ()>,
 ) -> Result<(), ()> {
     let PiChatEvent::ExtensionUiRequest(request) = event else {
         return Ok(());
     };
-    append("permission.requested", permission_journal_payload(&request))
+    append("permission.requested", permission_journal_payload(&request))?;
+    *pending = Some(request);
+    Ok(())
+}
+
+fn coordinate_permission_answer(
+    pending: &mut Option<ExtensionUiRequest>,
+    queued: PendingPermissionAnswer,
+    send: impl FnOnce(&ExtensionUiRequest, ExtensionUiAnswer) -> Result<(), String>,
+    append: impl FnOnce(&str, Value) -> Result<(), ()>,
+) -> Result<(), ()> {
+    let Some(request) = pending
+        .as_ref()
+        .filter(|request| request.id == queued.gate_id)
+    else {
+        return Ok(());
+    };
+    let answer = queued.answer.pi_answer();
+    if ExtensionUiResponse::new(request, answer.clone()).is_err() {
+        return Ok(());
+    }
+    if send(request, answer).is_err() {
+        return Ok(());
+    }
+    append(
+        "permission.resolved",
+        json!({"gate_id": queued.gate_id, "decision": queued.answer.decision()}),
+    )?;
+    *pending = None;
+    Ok(())
 }
 
 fn tool_journal_entry(
@@ -2520,6 +2660,7 @@ mod tests {
             cancelled: Arc::new(AtomicBool::new(false)),
             transport: Arc::new(Mutex::new(None)),
             adapter: Arc::new(Mutex::new(None)),
+            permission_answers: Arc::new(Mutex::new(VecDeque::new())),
         }
     }
 
@@ -3162,6 +3303,7 @@ mod tests {
                 Arc::new(AtomicBool::new(false)),
                 Arc::new(Mutex::new(None)),
                 Arc::new(Mutex::new(None)),
+                Arc::new(Mutex::new(VecDeque::new())),
                 None,
                 None,
                 Some(prepared),
@@ -3335,6 +3477,7 @@ mod tests {
                 Arc::new(AtomicBool::new(false)),
                 Arc::new(Mutex::new(None)),
                 Arc::new(Mutex::new(None)),
+                Arc::new(Mutex::new(VecDeque::new())),
                 None,
                 None,
                 Some(prepared),
@@ -3408,6 +3551,59 @@ mod tests {
             queue_message(&active, request("run-1")).unwrap_err(),
             "The reply is not ready for messages yet."
         );
+    }
+
+    #[test]
+    fn permission_answer_handoff_rejects_stale_runs_and_queues_typed_answers() {
+        let active = Mutex::new(Some(inactive_transport_run("run-1")));
+        assert_eq!(
+            queue_permission_answer(
+                &active,
+                "stale-run".into(),
+                "gate-1".into(),
+                ChatPermissionAnswer::Confirm(true),
+            )
+            .unwrap_err(),
+            "That reply is no longer active."
+        );
+        queue_permission_answer(
+            &active,
+            "run-1".into(),
+            "gate-1".into(),
+            ChatPermissionAnswer::Select("A".into()),
+        )
+        .unwrap();
+        let active = active.lock().unwrap();
+        let queued = active
+            .as_ref()
+            .unwrap()
+            .permission_answers
+            .lock()
+            .unwrap()
+            .pop_front()
+            .unwrap();
+        assert_eq!(queued.gate_id, "gate-1");
+        assert!(matches!(queued.answer, ChatPermissionAnswer::Select(value) if value == "A"));
+    }
+
+    #[test]
+    fn permission_answers_are_closed_and_cover_each_dialog() {
+        for value in [
+            json!({"type": "select", "value": "A"}),
+            json!({"type": "confirm", "value": true}),
+            json!({"type": "input", "value": "text"}),
+            json!({"type": "editor", "value": "draft"}),
+            json!({"type": "cancelled"}),
+        ] {
+            assert!(serde_json::from_value::<ChatPermissionAnswer>(value).is_ok());
+        }
+        for value in [
+            json!({"type": "select", "value": 1}),
+            json!({"type": "unknown", "value": "A"}),
+            json!({"type": "cancelled", "extra": true}),
+        ] {
+            assert!(serde_json::from_value::<ChatPermissionAnswer>(value).is_err());
+        }
     }
 
     #[test]
@@ -3593,6 +3789,7 @@ mod tests {
             Arc::new(AtomicBool::new(false)),
             Arc::new(Mutex::new(None)),
             Arc::new(Mutex::new(None)),
+            Arc::new(Mutex::new(VecDeque::new())),
             Some(ResumeContext {
                 events: before.clone(),
                 locator,
@@ -3713,6 +3910,7 @@ mod tests {
             Arc::new(AtomicBool::new(false)),
             Arc::new(Mutex::new(None)),
             Arc::new(Mutex::new(None)),
+            Arc::new(Mutex::new(VecDeque::new())),
             Some(ResumeContext {
                 events: existing,
                 locator,
@@ -3866,6 +4064,7 @@ mod tests {
             .apply(&journal.events(&run_id).unwrap()[0])
             .unwrap();
         let mut emitted = Vec::new();
+        let mut pending = None;
 
         coordinate_extension_ui_request(
             PiChatEvent::ExtensionUiRequest(ExtensionUiRequest {
@@ -3876,6 +4075,7 @@ mod tests {
                 },
                 timeout: Some(5_000),
             }),
+            &mut pending,
             |kind, payload| {
                 let envelope = event_envelope(&run_id, 2, kind, payload, None);
                 journal.append(1, &envelope).map_err(|_| ())?;
@@ -3908,6 +4108,7 @@ mod tests {
                 },
                 timeout: None,
             }),
+            &mut pending,
             |_kind, _payload| {
                 append_attempts += 1;
                 Err(())
@@ -3926,6 +4127,7 @@ mod tests {
                 },
                 timeout: None,
             }),
+            &mut pending,
             |kind, payload| {
                 let envelope = event_envelope(&run_id, 3, kind, payload, None);
                 let mut next_projector = projector.clone();
@@ -3949,6 +4151,89 @@ mod tests {
 
         drop(journal);
         std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn coordinator_resolves_only_matching_valid_permission_answers() {
+        let request = ExtensionUiRequest {
+            id: "gate-1".into(),
+            dialog: ExtensionUiDialog::Select {
+                title: "Choose".into(),
+                options: vec!["A".into(), "B".into()],
+            },
+            timeout: None,
+        };
+        let mut pending = Some(request.clone());
+        let mut sent = Vec::new();
+        let mut appended = Vec::new();
+        coordinate_permission_answer(
+            &mut pending,
+            PendingPermissionAnswer {
+                gate_id: "other-gate".into(),
+                answer: ChatPermissionAnswer::Select("A".into()),
+            },
+            |_, answer| {
+                sent.push(answer);
+                Ok(())
+            },
+            |kind, payload| {
+                appended.push((kind.to_string(), payload));
+                Ok(())
+            },
+        )
+        .unwrap();
+        assert!(sent.is_empty());
+        assert!(appended.is_empty());
+        assert_eq!(pending, Some(request.clone()));
+
+        coordinate_permission_answer(
+            &mut pending,
+            PendingPermissionAnswer {
+                gate_id: "gate-1".into(),
+                answer: ChatPermissionAnswer::Select("C".into()),
+            },
+            |_, answer| {
+                sent.push(answer);
+                Ok(())
+            },
+            |kind, payload| {
+                appended.push((kind.to_string(), payload));
+                Ok(())
+            },
+        )
+        .unwrap();
+        assert!(sent.is_empty());
+        assert!(appended.is_empty());
+        assert_eq!(pending, Some(request));
+
+        coordinate_permission_answer(
+            &mut pending,
+            PendingPermissionAnswer {
+                gate_id: "gate-1".into(),
+                answer: ChatPermissionAnswer::Select("B".into()),
+            },
+            |_, answer| {
+                sent.push(answer);
+                Ok(())
+            },
+            |kind, payload| {
+                appended.push((kind.to_string(), payload));
+                Ok(())
+            },
+        )
+        .unwrap();
+        assert_eq!(sent, [ExtensionUiAnswer::Selection("B".into())]);
+        assert_eq!(
+            appended,
+            [(
+                "permission.resolved".into(),
+                json!({
+                    "gate_id": "gate-1",
+                    "decision": {"type": "select", "value": "B"}
+                }),
+            )]
+        );
+        assert!(pending.is_none());
     }
 
     #[test]
