@@ -776,6 +776,29 @@ fn subject_owns_first_run(
     ))
 }
 
+fn newest_owned_workspace_thread(
+    journal: &mut RunJournal,
+    workspace: &str,
+    subject: Option<&str>,
+) -> Result<Option<String>, String> {
+    let mut cursor = None;
+    for _ in 0..MAX_THREAD_SUMMARY_CORE_PAGES {
+        let page = journal
+            .workspace_thread_summaries(workspace, 100, cursor.as_deref())
+            .map_err(|_| "Conversation history is unavailable.".to_string())?;
+        for summary in page.summaries {
+            if subject_owns_first_run(journal, &summary.thread_id, subject)? {
+                return Ok(Some(summary.thread_id));
+            }
+        }
+        match page.next_cursor {
+            Some(next_cursor) => cursor = Some(next_cursor),
+            None => return Ok(None),
+        }
+    }
+    Ok(None)
+}
+
 fn chat_thread_summaries_page(
     journal: &mut RunJournal,
     subject: Option<&str>,
@@ -1250,7 +1273,15 @@ fn prepare_opened_run(
     projector.apply(&started).map_err(|_| attachment_error())?;
     if !workspace.is_empty() {
         let thread_id = if session_thread.continue_existing {
-            match session_thread.tracker.offered(workspace, subject) {
+            let offered = session_thread
+                .tracker
+                .offered(workspace, subject)
+                .or_else(|| {
+                    newest_owned_workspace_thread(journal, workspace, subject)
+                        .ok()
+                        .flatten()
+                });
+            match offered {
                 Some(thread_id) => journal
                     .append_new_run_in_thread(workspace, &thread_id, &started)
                     .map(|()| thread_id)
@@ -2724,6 +2755,180 @@ mod tests {
             tracker.offered("workspace-a", Some("owner")),
             Some(thread_id)
         );
+
+        drop(connection);
+        drop(storage);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn fresh_session_tracker_adopts_the_newest_owned_workspace_thread() {
+        let directory =
+            std::env::temp_dir().join(format!("muniment-session-adoption-{}", Uuid::now_v7()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let database = directory.join("runs.sqlite3");
+        let mut journal = RunJournal::open(&database).unwrap();
+        let first_run = Uuid::now_v7().to_string();
+        journal
+            .append_new_run(
+                "workspace-a",
+                &event_envelope(&first_run, 1, "run.started", json!({}), Some("owner")),
+            )
+            .unwrap();
+        drop(journal);
+        let connection = rusqlite::Connection::open(&database).unwrap();
+        let thread_id = connection
+            .query_row(
+                "SELECT thread_id FROM run_threads WHERE run_id=?1",
+                [&first_run],
+                |row| row.get::<_, String>(0),
+            )
+            .unwrap();
+        drop(connection);
+        let storage = Arc::new(Mutex::new(ChatStorage {
+            journal: RunJournal::open(&database).unwrap(),
+            cas: LocalCas::open(&directory.join("cas")).unwrap(),
+        }));
+        let tracker = SessionThread::default();
+        let second_run = Uuid::now_v7().to_string();
+
+        prepare_new_run_with_session_thread(
+            &storage,
+            SessionThreadStart {
+                tracker: &tracker,
+                continue_existing: true,
+            },
+            &second_run,
+            "workspace-a",
+            Some("owner"),
+            Vec::new(),
+            None,
+        )
+        .unwrap();
+
+        let connection = rusqlite::Connection::open(&database).unwrap();
+        assert_eq!(
+            connection
+                .query_row(
+                    "SELECT thread_run_ordinal FROM run_threads \
+                     WHERE run_id=?1 AND thread_id=?2",
+                    (&second_run, &thread_id),
+                    |row| row.get::<_, u64>(0),
+                )
+                .unwrap(),
+            2
+        );
+        assert_eq!(
+            tracker.offered("workspace-a", Some("owner")),
+            Some(thread_id)
+        );
+
+        drop(connection);
+        drop(storage);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn fresh_session_tracker_skips_a_newer_foreign_thread() {
+        let directory =
+            std::env::temp_dir().join(format!("muniment-session-owner-{}", Uuid::now_v7()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let database = directory.join("runs.sqlite3");
+        let owner_run = Uuid::now_v7().to_string();
+        let foreign_run = Uuid::now_v7().to_string();
+        let mut owner_started =
+            event_envelope(&owner_run, 1, "run.started", json!({}), Some("owner"));
+        owner_started.recorded_at = "2026-01-01T00:00:00Z".into();
+        let mut foreign_started =
+            event_envelope(&foreign_run, 1, "run.started", json!({}), Some("other"));
+        foreign_started.recorded_at = "2026-01-02T00:00:00Z".into();
+        let mut journal = RunJournal::open(&database).unwrap();
+        journal
+            .append_new_run("workspace-a", &owner_started)
+            .unwrap();
+        journal
+            .append_new_run("workspace-a", &foreign_started)
+            .unwrap();
+        drop(journal);
+        let connection = rusqlite::Connection::open(&database).unwrap();
+        let owner_thread = connection
+            .query_row(
+                "SELECT thread_id FROM run_threads WHERE run_id=?1",
+                [&owner_run],
+                |row| row.get::<_, String>(0),
+            )
+            .unwrap();
+        drop(connection);
+        let storage = Arc::new(Mutex::new(ChatStorage {
+            journal: RunJournal::open(&database).unwrap(),
+            cas: LocalCas::open(&directory.join("cas")).unwrap(),
+        }));
+        let tracker = SessionThread::default();
+        let continued_run = Uuid::now_v7().to_string();
+
+        prepare_new_run_with_session_thread(
+            &storage,
+            SessionThreadStart {
+                tracker: &tracker,
+                continue_existing: true,
+            },
+            &continued_run,
+            "workspace-a",
+            Some("owner"),
+            Vec::new(),
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(
+            tracker.offered("workspace-a", Some("owner")),
+            Some(owner_thread)
+        );
+
+        drop(storage);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn fresh_session_tracker_mints_a_thread_when_no_candidate_exists() {
+        let directory =
+            std::env::temp_dir().join(format!("muniment-session-empty-{}", Uuid::now_v7()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let database = directory.join("runs.sqlite3");
+        let storage = Arc::new(Mutex::new(ChatStorage {
+            journal: RunJournal::open(&database).unwrap(),
+            cas: LocalCas::open(&directory.join("cas")).unwrap(),
+        }));
+        let tracker = SessionThread::default();
+        let run_id = Uuid::now_v7().to_string();
+
+        prepare_new_run_with_session_thread(
+            &storage,
+            SessionThreadStart {
+                tracker: &tracker,
+                continue_existing: true,
+            },
+            &run_id,
+            "workspace-a",
+            Some("owner"),
+            Vec::new(),
+            None,
+        )
+        .unwrap();
+
+        let connection = rusqlite::Connection::open(&database).unwrap();
+        assert_eq!(
+            connection
+                .query_row(
+                    "SELECT COUNT(*) FROM events \
+                     WHERE run_id=?1 AND event_type='run.started'",
+                    [&run_id],
+                    |row| row.get::<_, u64>(0),
+                )
+                .unwrap(),
+            1
+        );
+        assert!(tracker.offered("workspace-a", Some("owner")).is_some());
 
         drop(connection);
         drop(storage);
