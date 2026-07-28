@@ -1,6 +1,8 @@
 import { applyBufferedChatEvents, applyChatEvent, historyMessages } from './chat-state.js'
 
 const settledPhases = new Set(['complete', 'cancelled', 'failed', 'interrupted'])
+const historyPageCap = 100
+const historyPageLimit = 100
 
 export function createChatController({
   invoke,
@@ -60,7 +62,25 @@ export function createChatController({
     onHistoryStart()
     onAnnounce(null)
     try {
-      const history = await invoke('chat_history')
+      const { summaries } = await invoke('chat_thread_summaries', { limit: 1 })
+      if (destroyed) return
+      if (!summaries.length) {
+        publishMessages([])
+        onHistoryLoaded()
+        onFollow()
+        return
+      }
+      const history = []
+      let cursor
+      for (let page = 0; page < historyPageCap; page += 1) {
+        const payload = { threadId: summaries[0].threadId, limit: historyPageLimit }
+        if (cursor !== undefined) payload.cursor = cursor
+        const result = await invoke('chat_thread_open', payload)
+        if (destroyed) return
+        history.push(...result.entries)
+        if (result.nextCursor == null) break
+        cursor = result.nextCursor
+      }
       if (destroyed) return
       publishMessages(historyMessages(history))
       onHistoryLoaded()

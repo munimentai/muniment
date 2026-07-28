@@ -113,11 +113,19 @@ beforeAll(async () => {
     return animation
   }
   window.__TAURI__ = {
-    core: { invoke: (command, ...args) => command === 'home_status'
-      ? Promise.resolve(homeStatus)
-      : command === 'required_model_acquisition_status'
-        ? requiredModelInvoke(...args)
-      : invoke(command, ...args) },
+    core: { invoke: (command, ...args) => {
+      if (command === 'chat_thread_summaries') {
+        return Promise.resolve({ summaries: [{ threadId: 'thread-1', title: '', updatedAt: '' }], nextCursor: null })
+      }
+      if (command === 'chat_thread_open') {
+        return Promise.resolve(invoke(command, ...args)).then((entries) => ({ entries, nextCursor: null }))
+      }
+      return command === 'home_status'
+        ? Promise.resolve(homeStatus)
+        : command === 'required_model_acquisition_status'
+          ? requiredModelInvoke(...args)
+          : invoke(command, ...args)
+    } },
     event: { listen: vi.fn((event, listener) => {
       if (event === 'chat-event') chatListener = listener
       if (event === 'dictation-event') dictationListener = listener
@@ -156,7 +164,7 @@ beforeEach(() => {
   unregisterGlobalShortcut = vi.fn(async (shortcut) => { registeredShortcuts.delete(shortcut) })
   invoke = vi.fn(async (command, payload) => {
     if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
-    if (command === 'chat_history') return []
+    if (command === 'chat_thread_open') return []
     if (command === 'chat_file_metadata') return { displayName: payload.path.split(/[\\/]/).pop(), byteLength: 1536 }
     if (command === 'auth_entitlement_snapshot') return snapshot()
     if (command === 'auth_devices') return []
@@ -187,7 +195,7 @@ describe('entitlement change toast', () => {
   it('clears a visible toast when the user signs out', async () => {
     invoke.mockImplementation(async (command) => {
       if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
-      if (command === 'chat_history') return []
+      if (command === 'chat_thread_open') return []
       if (command === 'auth_entitlement_snapshot') return snapshot()
       if (command === 'auth_devices') return []
       if (command === 'auth_sign_out') return { signed_in: false, subject: null }
@@ -226,7 +234,7 @@ describe('pairing decisions', () => {
   it('handles a rejected pairing decision without exposing its details', async () => {
     invoke.mockImplementation(async (command) => {
       if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
-      if (command === 'chat_history') return []
+      if (command === 'chat_thread_open') return []
       if (command === 'auth_entitlement_snapshot') return snapshot()
       if (command === 'auth_devices') return []
       if (command === 'attach_pairing_decide') throw new Error('sensitive pairing detail')
@@ -325,7 +333,7 @@ describe('workspace composer entry', () => {
     let resolveResume
     invoke.mockImplementation(async (command) => {
       if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
-      if (command === 'chat_history') return [{
+      if (command === 'chat_thread_open') return [{
         runId: 'run-interrupted', phase: 'interrupted', text: 'Partial answer',
         prompt: 'Original prompt', receipt: null, toolActivity: [], resumable: true,
       }]
@@ -361,7 +369,7 @@ describe('workspace composer entry', () => {
     let resolvePolish
     invoke.mockImplementation(async (command) => {
       if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
-      if (command === 'chat_history') return []
+      if (command === 'chat_thread_open') return []
       if (command === 'auth_entitlement_snapshot') return snapshot()
       if (command === 'auth_devices') return []
       if (command === 'dictation_start') return { state: 'running' }
@@ -502,7 +510,7 @@ describe('artifact rail', () => {
   it('closes with Escape while active dictation is also cancelled', async () => {
     invoke.mockImplementation(async (command) => {
       if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
-      if (command === 'chat_history') return []
+      if (command === 'chat_thread_open') return []
       if (command === 'auth_entitlement_snapshot') return snapshot()
       if (command === 'auth_devices') return []
       if (command === 'dictation_start') return { state: 'running' }
@@ -536,7 +544,7 @@ describe('artifact rail', () => {
         signedIn = false
         return { signed_in: false, subject: null }
       }
-      if (command === 'chat_history') return []
+      if (command === 'chat_thread_open') return []
       if (command === 'auth_entitlement_snapshot') return snapshot()
       if (command === 'auth_devices') return []
       throw new Error(`unexpected command: ${command}`)
@@ -599,7 +607,7 @@ describe('thread name', () => {
   it('shows the first restored prompt in the titlebar and current thread record', async () => {
     invoke.mockImplementation(async (command) => {
       if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
-      if (command === 'chat_history') return [{
+      if (command === 'chat_thread_open') return [{
         runId: 'run-1',
         phase: 'complete',
         text: 'The renewal date is September 1.',
@@ -784,7 +792,7 @@ describe('Home onboarding', () => {
       if (command === 'onboarding_import_preview') return { entries: [{ name: 'profile.json', kind: 'json', byteSize: 2, excerpt: '{}', excerptTruncated: false }], totalByteSize: 2 }
       if (command === 'onboarding_import_extract') return [{ sourceName: 'profile.json', text: '{}', sourceProvenance: 'stable' }]
       if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
-      if (command === 'chat_history') return []
+      if (command === 'chat_thread_open') return []
       if (command === 'auth_entitlement_snapshot') return snapshot()
       if (command === 'auth_devices') return []
       throw new Error(`unexpected command: ${command}`)
@@ -822,7 +830,7 @@ describe('Home onboarding', () => {
     invoke.mockImplementation(async (command, payload) => {
       if (command === 'home_confirm') return { configured: true, homePath: payload.homePath }
       if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
-      if (command === 'chat_history') return []
+      if (command === 'chat_thread_open') return []
       if (command === 'auth_entitlement_snapshot') return snapshot()
       if (command === 'auth_devices') return []
       throw new Error(`unexpected command: ${command}`)
@@ -853,7 +861,7 @@ describe('Home onboarding', () => {
         totalByteSize: 5128,
       }
       if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
-      if (command === 'chat_history') return []
+      if (command === 'chat_thread_open') return []
       if (command === 'auth_entitlement_snapshot') return snapshot()
       if (command === 'auth_devices') return []
       throw new Error(`unexpected command: ${command}`)
@@ -886,7 +894,7 @@ describe('Home onboarding', () => {
       ], totalByteSize: 26 }
       if (command === 'onboarding_import_extract') return extracted
       if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
-      if (command === 'chat_history') return []
+      if (command === 'chat_thread_open') return []
       if (command === 'auth_entitlement_snapshot') return snapshot()
       if (command === 'auth_devices') return []
       throw new Error(`unexpected command: ${command}`)
@@ -923,7 +931,7 @@ describe('Home onboarding', () => {
       if (command === 'onboarding_triage') return new Promise((resolve) => { resolveTriage = resolve })
       if (command === 'home_confirm_import') return save.promise
       if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
-      if (command === 'chat_history') return []
+      if (command === 'chat_thread_open') return []
       if (command === 'auth_entitlement_snapshot') return snapshot()
       if (command === 'auth_devices') return []
       throw new Error(`unexpected command: ${command}`)
@@ -977,7 +985,7 @@ describe('Home onboarding', () => {
       if (command === 'onboarding_triage') return { report }
       if (command === 'home_confirm_import') throw { kind, message: 'sensitive backend detail' }
       if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
-      if (command === 'chat_history') return []
+      if (command === 'chat_thread_open') return []
       if (command === 'auth_entitlement_snapshot') return snapshot()
       if (command === 'auth_devices') return []
       throw new Error(`unexpected command: ${command}`)
@@ -1010,7 +1018,7 @@ describe('Home onboarding', () => {
       if (command === 'home_confirm_import' && saveAttempts++ === 0) throw { kind: 'destinationConflict', relativePath: 'memory/profile.md', message: '/private/absolute/path' }
       if (command === 'home_confirm_import') return { configured: true, importedFileCount: 1 }
       if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
-      if (command === 'chat_history') return []
+      if (command === 'chat_thread_open') return []
       if (command === 'auth_entitlement_snapshot') return snapshot()
       if (command === 'auth_devices') return []
       throw new Error(`unexpected command: ${command}`)
@@ -1052,7 +1060,7 @@ describe('Home onboarding', () => {
         return new Promise((resolve) => { resolveRetry = resolve })
       }
       if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
-      if (command === 'chat_history') return []
+      if (command === 'chat_thread_open') return []
       if (command === 'auth_entitlement_snapshot') return snapshot()
       if (command === 'auth_devices') return []
       throw new Error(`unexpected command: ${command}`)
@@ -1092,7 +1100,7 @@ describe('Home onboarding', () => {
       }
       if (command === 'home_confirm') return { configured: true, homePath: payload.homePath }
       if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
-      if (command === 'chat_history') return []
+      if (command === 'chat_thread_open') return []
       if (command === 'auth_entitlement_snapshot') return snapshot()
       if (command === 'auth_devices') return []
       throw new Error(`unexpected command: ${command}`)
@@ -1117,7 +1125,7 @@ describe('Home onboarding', () => {
     invoke.mockImplementation(async (command, payload) => {
       if (command === 'home_confirm') return { configured: true, homePath: payload.homePath }
       if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
-      if (command === 'chat_history') return []
+      if (command === 'chat_thread_open') return []
       if (command === 'auth_entitlement_snapshot') return snapshot()
       if (command === 'auth_devices') return []
       throw new Error(`unexpected command: ${command}`)
@@ -1140,7 +1148,7 @@ describe('Home onboarding', () => {
       if (command === 'home_confirm') return { configured: true, homePath: payload.homePath }
       if (command === 'onboarding_import_preview') return new Promise((resolve) => { resolvePreview = resolve })
       if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
-      if (command === 'chat_history') return []
+      if (command === 'chat_thread_open') return []
       if (command === 'auth_entitlement_snapshot') return snapshot()
       if (command === 'auth_devices') return []
       throw new Error(`unexpected command: ${command}`)
@@ -1162,7 +1170,7 @@ describe('Home onboarding', () => {
       if (command === 'home_confirm') return { configured: true, homePath: payload.homePath }
       if (command === 'onboarding_import_preview') throw { kind: 'invalidArchive', message: 'backend detail' }
       if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
-      if (command === 'chat_history') return []
+      if (command === 'chat_thread_open') return []
       if (command === 'auth_entitlement_snapshot') return snapshot()
       if (command === 'auth_devices') return []
       throw new Error(`unexpected command: ${command}`)
@@ -1211,7 +1219,7 @@ describe('voice dictation', () => {
     vi.useFakeTimers({ shouldAdvanceTime: true })
     invoke.mockImplementation(async (command) => {
       if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
-      if (command === 'chat_history') return []
+      if (command === 'chat_thread_open') return []
       if (command === 'auth_entitlement_snapshot') return snapshot()
       if (command === 'auth_devices') return []
       if (command === 'dictation_start') return { state: 'running' }
@@ -1237,7 +1245,7 @@ describe('voice dictation', () => {
     vi.useFakeTimers({ shouldAdvanceTime: true })
     invoke.mockImplementation(async (command) => {
       if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
-      if (command === 'chat_history') return []
+      if (command === 'chat_thread_open') return []
       if (command === 'auth_entitlement_snapshot') return snapshot()
       if (command === 'auth_devices') return []
       if (command === 'dictation_start') return { state: 'running' }
@@ -1260,7 +1268,7 @@ describe('voice dictation', () => {
     vi.useFakeTimers({ shouldAdvanceTime: true })
     invoke.mockImplementation(async (command) => {
       if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
-      if (command === 'chat_history') return []
+      if (command === 'chat_thread_open') return []
       if (command === 'auth_entitlement_snapshot') return snapshot()
       if (command === 'auth_devices') return []
       if (command === 'dictation_start') return { state: 'running' }
@@ -1289,7 +1297,7 @@ describe('voice dictation', () => {
     vi.useFakeTimers({ shouldAdvanceTime: true })
     invoke.mockImplementation(async (command) => {
       if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
-      if (command === 'chat_history') return []
+      if (command === 'chat_thread_open') return []
       if (command === 'auth_entitlement_snapshot') return snapshot()
       if (command === 'auth_devices') return []
       if (command === 'dictation_start') return { state: 'running' }
@@ -1321,7 +1329,7 @@ describe('voice dictation', () => {
     vi.useFakeTimers({ shouldAdvanceTime: true })
     invoke.mockImplementation(async (command) => {
       if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
-      if (command === 'chat_history') return []
+      if (command === 'chat_thread_open') return []
       if (command === 'auth_entitlement_snapshot') return snapshot()
       if (command === 'auth_devices') return []
       if (command === 'dictation_start') return { state: 'running' }
@@ -1350,7 +1358,7 @@ describe('voice dictation', () => {
     let startCalls = 0
     invoke.mockImplementation(async (command) => {
       if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
-      if (command === 'chat_history') return []
+      if (command === 'chat_thread_open') return []
       if (command === 'auth_entitlement_snapshot') return snapshot()
       if (command === 'auth_devices') return []
       if (command === 'dictation_start') {
@@ -1379,7 +1387,7 @@ describe('voice dictation', () => {
     let resolveSubmit
     invoke.mockImplementation(async (command) => {
       if (command === 'auth_status') return { signed_in: signedIn, subject: signedIn ? 'token-subject' : undefined }
-      if (command === 'chat_history') return []
+      if (command === 'chat_thread_open') return []
       if (command === 'auth_entitlement_snapshot') return snapshot()
       if (command === 'auth_devices') return []
       if (command === 'chat_submit') return new Promise((resolve) => { resolveSubmit = resolve })
@@ -1406,7 +1414,7 @@ describe('voice dictation', () => {
     let resolvePolish
     invoke.mockImplementation(async (command) => {
       if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
-      if (command === 'chat_history') return []
+      if (command === 'chat_thread_open') return []
       if (command === 'auth_entitlement_snapshot') return snapshot()
       if (command === 'auth_devices') return []
       if (command === 'dictation_start') return { state: 'running' }
@@ -1624,7 +1632,7 @@ describe('voice dictation', () => {
   it('offers all transforms after polish and replaces only the captured segment', async () => {
     invoke.mockImplementation(async (command, payload) => {
       if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
-      if (command === 'chat_history') return []
+      if (command === 'chat_thread_open') return []
       if (command === 'auth_entitlement_snapshot') return snapshot()
       if (command === 'auth_devices') return []
       if (command === 'dictation_start') return { state: 'running' }
@@ -1663,7 +1671,7 @@ describe('voice dictation', () => {
     let polishCalls = 0
     invoke.mockImplementation(async (command) => {
       if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
-      if (command === 'chat_history') return []
+      if (command === 'chat_thread_open') return []
       if (command === 'auth_entitlement_snapshot') return snapshot()
       if (command === 'auth_devices') return []
       if (command === 'dictation_start') return { state: 'running' }
@@ -1699,7 +1707,7 @@ describe('voice dictation', () => {
     let resolveTransform
     invoke.mockImplementation(async (command) => {
       if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
-      if (command === 'chat_history') return []
+      if (command === 'chat_thread_open') return []
       if (command === 'auth_entitlement_snapshot') return snapshot()
       if (command === 'auth_devices') return []
       if (command === 'dictation_start') return { state: 'running' }
@@ -1736,7 +1744,7 @@ describe('voice dictation', () => {
     let resolveTransform
     invoke.mockImplementation(async (command) => {
       if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
-      if (command === 'chat_history') return []
+      if (command === 'chat_thread_open') return []
       if (command === 'auth_entitlement_snapshot') return snapshot()
       if (command === 'auth_devices') return []
       if (command === 'dictation_start') return { state: 'running' }
@@ -1772,7 +1780,7 @@ describe('voice dictation', () => {
     let resolveLate
     invoke.mockImplementation(async (command) => {
       if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
-      if (command === 'chat_history') return []
+      if (command === 'chat_thread_open') return []
       if (command === 'auth_entitlement_snapshot') return snapshot()
       if (command === 'auth_devices') return []
       if (command === 'dictation_start') return { state: 'running' }
@@ -1813,7 +1821,7 @@ describe('voice dictation', () => {
     let resolveStop
     invoke.mockImplementation(async (command) => {
       if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
-      if (command === 'chat_history') return []
+      if (command === 'chat_thread_open') return []
       if (command === 'auth_entitlement_snapshot') return snapshot()
       if (command === 'auth_devices') return []
       if (command === 'dictation_start') return { state: 'running' }
@@ -1853,7 +1861,7 @@ describe('voice dictation', () => {
     let resolveStart
     invoke.mockImplementation(async (command) => {
       if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
-      if (command === 'chat_history') return []
+      if (command === 'chat_thread_open') return []
       if (command === 'auth_entitlement_snapshot') return snapshot()
       if (command === 'auth_devices') return []
       if (command === 'dictation_start') return new Promise((resolve) => { resolveStart = resolve })
@@ -1888,7 +1896,7 @@ describe('voice dictation', () => {
   it('keeps the verbatim capture editable and explains a polish failure', async () => {
     invoke.mockImplementation(async (command) => {
       if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
-      if (command === 'chat_history') return []
+      if (command === 'chat_thread_open') return []
       if (command === 'auth_entitlement_snapshot') return snapshot()
       if (command === 'auth_devices') return []
       if (command === 'dictation_start') return { state: 'running' }
@@ -1915,7 +1923,7 @@ describe('voice dictation', () => {
     let starts = 0
     invoke.mockImplementation(async (command) => {
       if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
-      if (command === 'chat_history') return []
+      if (command === 'chat_thread_open') return []
       if (command === 'auth_entitlement_snapshot') return snapshot()
       if (command === 'auth_devices') return []
       if (command === 'dictation_start') {
@@ -1959,7 +1967,7 @@ describe('voice dictation', () => {
     let stopping = false
     invoke.mockImplementation(async (command) => {
       if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
-      if (command === 'chat_history') return []
+      if (command === 'chat_thread_open') return []
       if (command === 'auth_entitlement_snapshot') return snapshot()
       if (command === 'auth_devices') return []
       if (command === 'dictation_start') return { state: 'running' }
@@ -1995,7 +2003,7 @@ describe('voice dictation', () => {
     let statusCalls = 0
     invoke.mockImplementation(async (command) => {
       if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
-      if (command === 'chat_history') return []
+      if (command === 'chat_thread_open') return []
       if (command === 'auth_entitlement_snapshot') return snapshot()
       if (command === 'auth_devices') return []
       if (command === 'dictation_start') {
@@ -2046,7 +2054,7 @@ describe('voice dictation', () => {
   it.each([' ', 'Enter'])('supports a %s key hold without synthesized-click duplicates', async (key) => {
     invoke.mockImplementation(async (command) => {
       if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
-      if (command === 'chat_history') return []
+      if (command === 'chat_thread_open') return []
       if (command === 'auth_entitlement_snapshot') return snapshot()
       if (command === 'auth_devices') return []
       if (command === 'dictation_start') return { state: 'running' }
@@ -2070,7 +2078,7 @@ describe('voice dictation', () => {
     let starts = 0
     invoke.mockImplementation(async (command) => {
       if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
-      if (command === 'chat_history') return []
+      if (command === 'chat_thread_open') return []
       if (command === 'auth_entitlement_snapshot') return snapshot()
       if (command === 'auth_devices') return []
       if (command === 'dictation_start') {
@@ -2108,7 +2116,7 @@ describe('voice dictation', () => {
   it('starts, appends transcript to an editable draft, and stops', async () => {
     invoke.mockImplementation(async (command) => {
       if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
-      if (command === 'chat_history') return []
+      if (command === 'chat_thread_open') return []
       if (command === 'auth_entitlement_snapshot') return snapshot()
       if (command === 'auth_devices') return []
       if (command === 'dictation_start') return { state: 'starting' }
@@ -2138,7 +2146,7 @@ describe('voice dictation', () => {
   it('keeps an active capture stoppable and prevents starting a chat', async () => {
     invoke.mockImplementation(async (command) => {
       if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
-      if (command === 'chat_history') return []
+      if (command === 'chat_thread_open') return []
       if (command === 'auth_entitlement_snapshot') return snapshot()
       if (command === 'auth_devices') return []
       if (command === 'dictation_start') return { state: 'starting' }
@@ -2169,7 +2177,7 @@ describe('voice dictation', () => {
   ])('renders a terminal %s message and becomes retryable', async (state, message) => {
     invoke.mockImplementation(async (command) => {
       if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
-      if (command === 'chat_history') return []
+      if (command === 'chat_thread_open') return []
       if (command === 'auth_entitlement_snapshot') return snapshot()
       if (command === 'auth_devices') return []
       if (command === 'dictation_start') return { state: 'starting' }
@@ -2192,7 +2200,7 @@ describe('voice dictation', () => {
     let statusCalls = 0
     invoke.mockImplementation(async (command) => {
       if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
-      if (command === 'chat_history') return []
+      if (command === 'chat_thread_open') return []
       if (command === 'auth_entitlement_snapshot') return snapshot()
       if (command === 'auth_devices') return []
       if (command === 'dictation_start') return { state: 'starting' }
@@ -2221,7 +2229,7 @@ describe('voice dictation', () => {
     let stopCalls = 0
     invoke.mockImplementation(async (command) => {
       if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
-      if (command === 'chat_history') return []
+      if (command === 'chat_thread_open') return []
       if (command === 'auth_entitlement_snapshot') return snapshot()
       if (command === 'auth_devices') return []
       if (command === 'dictation_start') return { state: 'running' }
@@ -2251,7 +2259,7 @@ describe('voice dictation', () => {
     let resolveSubmit
     invoke.mockImplementation(async (command) => {
       if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
-      if (command === 'chat_history') return []
+      if (command === 'chat_thread_open') return []
       if (command === 'auth_entitlement_snapshot') return snapshot()
       if (command === 'auth_devices') return []
       if (command === 'dictation_start') return { state: 'starting' }
@@ -2341,7 +2349,7 @@ describe('local file selection', () => {
   it('retains draft and selection when local ingestion fails', async () => {
     invoke.mockImplementation(async (command, payload) => {
       if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
-      if (command === 'chat_history') return []
+      if (command === 'chat_thread_open') return []
       if (command === 'chat_file_metadata') return { displayName: 'evidence.pdf', byteLength: 2048 }
       if (command === 'auth_entitlement_snapshot') return snapshot()
       if (command === 'auth_devices') return []
@@ -2368,7 +2376,7 @@ describe('local file selection', () => {
     let resolveSubmit
     invoke.mockImplementation(async (command, payload) => {
       if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
-      if (command === 'chat_history') return []
+      if (command === 'chat_thread_open') return []
       if (command === 'chat_file_metadata') {
         return { displayName: payload.path.split('/').pop(), byteLength: 1024 }
       }
@@ -2411,7 +2419,7 @@ describe('local file selection', () => {
 it('hydrates safe durable attachment chips without paths or hashes', async () => {
   invoke.mockImplementation(async (command) => {
     if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
-    if (command === 'chat_history') return [{
+    if (command === 'chat_thread_open') return [{
       runId: 'restored', prompt: 'Review it', phase: 'complete', text: 'Done', receipt: {},
       toolActivity: [], resumable: false,
       attachments: [{ displayName: 'contract.pdf', byteLength: 219136 }],
@@ -2431,7 +2439,7 @@ it('hydrates safe durable attachment chips without paths or hashes', async () =>
 it('hydrates durable attachment chips when the prompt is unavailable', async () => {
   invoke.mockImplementation(async (command) => {
     if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
-    if (command === 'chat_history') return [{
+    if (command === 'chat_thread_open') return [{
       runId: 'restored-without-prompt', prompt: null, phase: 'complete', text: 'Done', receipt: {},
       toolActivity: [], resumable: false,
       attachments: [{ displayName: 'evidence.txt', byteLength: 1536 }],
@@ -2486,7 +2494,7 @@ describe('interrupted reply resume', () => {
     let resolveResume
     invoke.mockImplementation(async (command) => {
       if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
-      if (command === 'chat_history') return interrupted()
+      if (command === 'chat_thread_open') return interrupted()
       if (command === 'auth_entitlement_snapshot') return snapshot()
       if (command === 'auth_devices') return []
       if (command === 'chat_resume') return new Promise((resolve) => { resolveResume = resolve })
@@ -2511,7 +2519,7 @@ describe('interrupted reply resume', () => {
     let resolveResume
     invoke.mockImplementation(async (command) => {
       if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
-      if (command === 'chat_history') return interrupted()
+      if (command === 'chat_thread_open') return interrupted()
       if (command === 'auth_entitlement_snapshot') return snapshot()
       if (command === 'auth_devices') return []
       if (command === 'chat_resume') return new Promise((resolve) => { resolveResume = resolve })
@@ -2534,7 +2542,7 @@ describe('interrupted reply resume', () => {
   it('offers a new-run fallback only when interruption is not resumable', async () => {
     invoke.mockImplementation(async (command) => {
       if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
-      if (command === 'chat_history') return interrupted(false)
+      if (command === 'chat_thread_open') return interrupted(false)
       if (command === 'auth_entitlement_snapshot') return snapshot()
       if (command === 'auth_devices') return []
       throw new Error(`unexpected command: ${command}`)
@@ -2547,7 +2555,7 @@ describe('interrupted reply resume', () => {
   it('keeps a rejected resume interrupted with a retryable error', async () => {
     invoke.mockImplementation(async (command) => {
       if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
-      if (command === 'chat_history') return interrupted()
+      if (command === 'chat_thread_open') return interrupted()
       if (command === 'auth_entitlement_snapshot') return snapshot()
       if (command === 'auth_devices') return []
       if (command === 'chat_resume') throw 'This reply cannot be resumed.'
@@ -2575,7 +2583,7 @@ describe('chat submission settlement', () => {
     let resolveSubmit
     invoke.mockImplementation(async (command) => {
       if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
-      if (command === 'chat_history') return [existingRun]
+      if (command === 'chat_thread_open') return [existingRun]
       if (command === 'auth_entitlement_snapshot') return snapshot()
       if (command === 'auth_devices') return []
       if (command === 'chat_submit') return new Promise((resolve) => { resolveSubmit = resolve })
@@ -2602,7 +2610,7 @@ describe('chat submission settlement', () => {
   it('replaces only the matching pending run after a failed submission', async () => {
     invoke.mockImplementation(async (command) => {
       if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
-      if (command === 'chat_history') return [existingRun]
+      if (command === 'chat_thread_open') return [existingRun]
       if (command === 'auth_entitlement_snapshot') return snapshot()
       if (command === 'auth_devices') return []
       if (command === 'chat_submit') throw 'The submission was rejected.'
@@ -2627,7 +2635,7 @@ describe('permission gates', () => {
   function restoreGate(gate, phase = 'pending-permission', answer = vi.fn().mockResolvedValue(undefined)) {
     invoke.mockImplementation(async (command, payload) => {
       if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
-      if (command === 'chat_history') {
+      if (command === 'chat_thread_open') {
         return [{
           runId: 'run-gated',
           phase,
@@ -2754,7 +2762,7 @@ describe('thread announcements', () => {
   function signedIn(history, submit) {
     invoke.mockImplementation(async (command) => {
       if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
-      if (command === 'chat_history') return history
+      if (command === 'chat_thread_open') return history
       if (command === 'auth_entitlement_snapshot') return snapshot()
       if (command === 'auth_devices') return []
       if (command === 'chat_submit' && submit) return submit
@@ -2901,7 +2909,7 @@ describe('thread announcements', () => {
       if (command === 'auth_status') return { signed_in: authed, subject: authed ? 'user-a' : null }
       if (command === 'auth_sign_in') { authed = true; return { signed_in: true, subject: 'user-a' } }
       if (command === 'auth_sign_out') { authed = false; return { signed_in: false, subject: null } }
-      if (command === 'chat_history') return restored
+      if (command === 'chat_thread_open') return restored
       if (command === 'auth_entitlement_snapshot') return snapshot()
       if (command === 'auth_devices') return []
       if (command === 'chat_submit') return { runId: 'run-11', attachments: [] }
@@ -2975,7 +2983,7 @@ describe('tool activity cards', () => {
   function restore(toolActivity, phase) {
     invoke.mockImplementation(async (command) => {
       if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
-      if (command === 'chat_history') return historyWith(toolActivity, phase)
+      if (command === 'chat_thread_open') return historyWith(toolActivity, phase)
       if (command === 'auth_entitlement_snapshot') return snapshot()
       if (command === 'auth_devices') return []
       throw new Error(`unexpected command: ${command}`)
@@ -3048,7 +3056,7 @@ describe('tool activity cards', () => {
         signedIn = true
         return { signed_in: true, subject: 'user-a' }
       }
-      if (command === 'chat_history') {
+      if (command === 'chat_thread_open') {
         historyLoads += 1
         return historyLoads === 1
           ? historyWith([
@@ -3066,7 +3074,7 @@ describe('tool activity cards', () => {
     render(App)
     expect(await screen.findByRole('group', { name: /Parallel tool activity/ })).toBeInTheDocument()
 
-    await fireEvent.click(screen.getByRole('button', { name: /Access unavailable/ }))
+    await fireEvent.click(screen.getByRole('button', { name: /Access unavailable|Alice/ }))
     await fireEvent.click(await screen.findByRole('button', { name: 'Sign out' }))
     await fireEvent.click(await screen.findByRole('button', { name: 'Sign in' }))
 
@@ -3084,7 +3092,7 @@ describe('message action row', () => {
   function restore(history = [reply()]) {
     invoke.mockImplementation(async (command) => {
       if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
-      if (command === 'chat_history') return history
+      if (command === 'chat_thread_open') return history
       if (command === 'auth_entitlement_snapshot') return snapshot()
       if (command === 'auth_devices') return []
       if (command === 'chat_submit') return { runId: 'run-live', attachments: [] }
@@ -3237,7 +3245,7 @@ describe('provenance line', () => {
   function restore(receipt) {
     invoke.mockImplementation(async (command) => {
       if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
-      if (command === 'chat_history') return [{ runId: 'run-receipt', phase: 'complete', text: 'A routed answer', prompt: 'A question', receipt, toolActivity: [] }]
+      if (command === 'chat_thread_open') return [{ runId: 'run-receipt', phase: 'complete', text: 'A routed answer', prompt: 'A question', receipt, toolActivity: [] }]
       if (command === 'auth_entitlement_snapshot') return snapshot()
       if (command === 'auth_devices') return []
       throw new Error(`unexpected command: ${command}`)
@@ -3304,7 +3312,7 @@ describe('active run composer queue', () => {
   beforeEach(() => {
     invoke.mockImplementation(async (command) => {
       if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
-      if (command === 'chat_history') return []
+      if (command === 'chat_thread_open') return []
       if (command === 'auth_entitlement_snapshot') return snapshot()
       if (command === 'auth_devices') return []
       if (command === 'chat_submit') return { runId: 'run-7' }
@@ -3350,7 +3358,7 @@ describe('active run composer queue', () => {
   it('shows a queue rejection and preserves the draft', async () => {
     invoke.mockImplementation(async (command) => {
       if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
-      if (command === 'chat_history') return []
+      if (command === 'chat_thread_open') return []
       if (command === 'auth_entitlement_snapshot') return snapshot()
       if (command === 'auth_devices') return []
       if (command === 'chat_submit') return { runId: 'run-7' }
@@ -3414,7 +3422,7 @@ describe('composer auto-grow', () => {
   it('shrinks as text is deleted and rests at two rows once the draft clears', async () => {
     invoke.mockImplementation(async (command) => {
       if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
-      if (command === 'chat_history') return []
+      if (command === 'chat_thread_open') return []
       if (command === 'auth_entitlement_snapshot') return snapshot()
       if (command === 'auth_devices') return []
       if (command === 'chat_submit') return { runId: 'run-9', attachments: [] }
@@ -3436,7 +3444,7 @@ describe('composer auto-grow', () => {
   it('resizes for programmatic draft changes, not only typed input', async () => {
     invoke.mockImplementation(async (command) => {
       if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
-      if (command === 'chat_history') return []
+      if (command === 'chat_thread_open') return []
       if (command === 'auth_entitlement_snapshot') return snapshot()
       if (command === 'auth_devices') return []
       if (command === 'dictation_start') return { state: 'running' }
@@ -3461,7 +3469,7 @@ describe('composer auto-grow', () => {
   it('reveals streamed transcript chunks past the cap while the composer is focused', async () => {
     invoke.mockImplementation(async (command) => {
       if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
-      if (command === 'chat_history') return []
+      if (command === 'chat_thread_open') return []
       if (command === 'auth_entitlement_snapshot') return snapshot()
       if (command === 'auth_devices') return []
       if (command === 'dictation_start') return { state: 'running' }
@@ -3492,7 +3500,7 @@ describe('composer auto-grow', () => {
     const submitted = deferred()
     invoke.mockImplementation(async (command) => {
       if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
-      if (command === 'chat_history') return [{
+      if (command === 'chat_thread_open') return [{
         runId: 'run-interrupted', phase: 'interrupted', text: 'Partial answer',
         prompt: lines(4), receipt: null, toolActivity: [], resumable: false,
       }]
@@ -3559,7 +3567,7 @@ describe('signed-in access popover', () => {
     const newSessionAccess = new Promise((_, reject) => { rejectNewSessionAccess = reject })
     invoke.mockImplementation(async (command) => {
       if (command === 'auth_status') return { signed_in: true, subject: 'user-a' }
-      if (command === 'chat_history') return []
+      if (command === 'chat_thread_open') return []
       if (command === 'auth_entitlement_snapshot') {
         accessCalls += 1
         if (accessCalls <= 2) return snapshot()
@@ -3596,7 +3604,7 @@ describe('signed-in access popover', () => {
     let accessCalls = 0
     invoke.mockImplementation(async (command) => {
       if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
-      if (command === 'chat_history') return []
+      if (command === 'chat_thread_open') return []
       if (command === 'auth_entitlement_snapshot') {
         accessCalls += 1
         if (accessCalls === 1) return snapshot()
@@ -3650,7 +3658,7 @@ describe('signed-in access popover', () => {
   it('renders mixed device states in deterministic order without disturbing groups', async () => {
     invoke.mockImplementation(async (command) => {
       if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
-      if (command === 'chat_history') return []
+      if (command === 'chat_thread_open') return []
       if (command === 'auth_entitlement_snapshot') return snapshot([{ name: 'members', models: ['gpt'], connections: [], capabilities: [] }])
       if (command === 'auth_devices') return [
         device('revoked-newest', { platform: 'ios', revoked_at: '2026-06-01T00:00:00Z', last_active_at: '2026-07-01T00:00:00Z' }),
@@ -3751,7 +3759,7 @@ describe('signed-in access popover', () => {
     let deviceCalls = 0
     invoke.mockImplementation(async (command) => {
       if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
-      if (command === 'chat_history') return []
+      if (command === 'chat_thread_open') return []
       if (command === 'auth_entitlement_snapshot') return snapshot([{ name: 'members', models: [], connections: [], capabilities: [] }])
       if (command === 'auth_devices') {
         deviceCalls += 1
