@@ -35,6 +35,7 @@ use tauri::{Emitter, Manager};
 use uuid::Uuid;
 
 use crate::auth;
+use crate::session_thread::SessionThread;
 
 const RPC_TIMEOUT: Duration = Duration::from_secs(30);
 const QUEUE_TIMEOUT: Duration = Duration::from_secs(2);
@@ -201,6 +202,7 @@ pub struct ChatState {
     storage: SharedStorage,
     active: Mutex<Option<ActiveRun>>,
     runtime: Arc<Mutex<Option<PiRuntime>>>,
+    session_thread: SessionThread,
 }
 
 pub(crate) struct RunStartRequest {
@@ -366,6 +368,7 @@ pub(crate) fn prepare_desktop_run(
 
 pub(crate) struct TauriRunStartBoundaries<R: tauri::Runtime> {
     pub(crate) app: tauri::AppHandle<R>,
+    pub(crate) continue_session_thread: bool,
 }
 
 impl<R: tauri::Runtime> TauriRunStartBoundaries<R> {
@@ -447,8 +450,13 @@ impl<R: tauri::Runtime> RunStartBoundaries for TauriRunStartBoundaries<R> {
         files: Vec<SelectedFile>,
         provenance: Option<Provenance>,
     ) -> Result<(u64, ChatProjector), RunStartError> {
-        prepare_new_run(
-            &self.state().storage,
+        let state = self.state();
+        prepare_new_run_with_session_thread(
+            &state.storage,
+            SessionThreadStart {
+                tracker: &state.session_thread,
+                continue_existing: self.continue_session_thread,
+            },
             run_id,
             &grant.workspace,
             tokens.subject.as_deref(),
@@ -532,6 +540,7 @@ impl ChatState {
             })),
             active: Mutex::new(None),
             runtime: Arc::new(Mutex::new(None)),
+            session_thread: SessionThread::default(),
         })
     }
 }
@@ -935,7 +944,10 @@ pub async fn chat_submit(
     let _ = (&auth_state, &state);
     tauri::async_runtime::spawn_blocking(move || {
         start_desktop_run(
-            &TauriRunStartBoundaries { app },
+            &TauriRunStartBoundaries {
+                app,
+                continue_session_thread: true,
+            },
             RunStartRequest {
                 prompt,
                 files: files.unwrap_or_default(),
@@ -1140,8 +1152,15 @@ fn open_selected_files(files: Vec<SelectedFile>) -> Result<Vec<OpenSelectedFile>
         .collect()
 }
 
-fn prepare_new_run(
+#[derive(Clone, Copy)]
+struct SessionThreadStart<'a> {
+    tracker: &'a SessionThread,
+    continue_existing: bool,
+}
+
+fn prepare_new_run_with_session_thread(
     storage: &SharedStorage,
+    session_thread: SessionThreadStart<'_>,
     run_id: &str,
     workspace: &str,
     subject: Option<&str>,
@@ -1151,11 +1170,20 @@ fn prepare_new_run(
     // Open and validate every selection before creating a run, so ordinary
     // selection failures cannot leave a rejected submission in the journal.
     let files = open_selected_files(files)?;
-    prepare_opened_run(storage, run_id, workspace, subject, files, provenance)
+    prepare_opened_run(
+        storage,
+        session_thread,
+        run_id,
+        workspace,
+        subject,
+        files,
+        provenance,
+    )
 }
 
 fn prepare_opened_run(
     storage: &SharedStorage,
+    session_thread: SessionThreadStart<'_>,
     run_id: &str,
     workspace: &str,
     subject: Option<&str>,
@@ -1175,9 +1203,21 @@ fn prepare_opened_run(
     }
     projector.apply(&started).map_err(|_| attachment_error())?;
     if !workspace.is_empty() {
-        journal
-            .append_new_run(workspace, &started)
-            .map_err(|_| attachment_error())?;
+        let thread_id = if session_thread.continue_existing {
+            match session_thread.tracker.offered(workspace, subject) {
+                Some(thread_id) => journal
+                    .append_new_run_in_thread(workspace, &thread_id, &started)
+                    .map(|()| thread_id)
+                    .or_else(|_| journal.append_new_run(workspace, &started)),
+                None => journal.append_new_run(workspace, &started),
+            }
+        } else {
+            journal.append_new_run(workspace, &started)
+        }
+        .map_err(|_| attachment_error())?;
+        if session_thread.continue_existing {
+            session_thread.tracker.record(thread_id, workspace, subject);
+        }
     } else {
         journal
             .append(0, &started)
@@ -1237,6 +1277,29 @@ fn prepare_opened_run(
         }
     }
     Ok((seq, projector))
+}
+
+#[cfg(test)]
+fn prepare_new_run(
+    storage: &SharedStorage,
+    run_id: &str,
+    workspace: &str,
+    subject: Option<&str>,
+    files: Vec<SelectedFile>,
+    provenance: Option<Provenance>,
+) -> Result<(u64, ChatProjector), String> {
+    prepare_new_run_with_session_thread(
+        storage,
+        SessionThreadStart {
+            tracker: &SessionThread::default(),
+            continue_existing: false,
+        },
+        run_id,
+        workspace,
+        subject,
+        files,
+        provenance,
+    )
 }
 
 fn record_preparation_failure(
@@ -2461,6 +2524,157 @@ mod tests {
     }
 
     #[test]
+    fn session_thread_continues_at_the_next_ordinal() {
+        let directory =
+            std::env::temp_dir().join(format!("muniment-session-thread-{}", Uuid::now_v7()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let database = directory.join("runs.sqlite3");
+        let storage = Arc::new(Mutex::new(ChatStorage {
+            journal: RunJournal::open(&database).unwrap(),
+            cas: LocalCas::open(&directory.join("cas")).unwrap(),
+        }));
+        let tracker = SessionThread::default();
+        let first_run = Uuid::now_v7().to_string();
+        let second_run = Uuid::now_v7().to_string();
+
+        prepare_new_run_with_session_thread(
+            &storage,
+            SessionThreadStart {
+                tracker: &tracker,
+                continue_existing: true,
+            },
+            &first_run,
+            "workspace-a",
+            Some("owner"),
+            Vec::new(),
+            None,
+        )
+        .unwrap();
+        let thread_id = tracker
+            .offered("workspace-a", Some("owner"))
+            .expect("the first run records its thread");
+        prepare_new_run_with_session_thread(
+            &storage,
+            SessionThreadStart {
+                tracker: &tracker,
+                continue_existing: true,
+            },
+            &second_run,
+            "workspace-a",
+            Some("owner"),
+            Vec::new(),
+            None,
+        )
+        .unwrap();
+
+        let connection = rusqlite::Connection::open(&database).unwrap();
+        assert_eq!(
+            connection
+                .query_row(
+                    "SELECT thread_run_ordinal FROM run_threads \
+                     WHERE run_id=?1 AND thread_id=?2",
+                    (&second_run, &thread_id),
+                    |row| row.get::<_, u64>(0),
+                )
+                .unwrap(),
+            2
+        );
+        assert_eq!(
+            tracker.offered("workspace-a", Some("owner")),
+            Some(thread_id)
+        );
+
+        drop(connection);
+        drop(storage);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn rejected_session_thread_falls_back_without_duplicate_start() {
+        let directory =
+            std::env::temp_dir().join(format!("muniment-session-fallback-{}", Uuid::now_v7()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let database = directory.join("runs.sqlite3");
+        let storage = Arc::new(Mutex::new(ChatStorage {
+            journal: RunJournal::open(&database).unwrap(),
+            cas: LocalCas::open(&directory.join("cas")).unwrap(),
+        }));
+        let tracker = SessionThread::default();
+        tracker.record("unknown-thread".into(), "workspace-a", Some("owner"));
+        let run_id = Uuid::now_v7().to_string();
+
+        prepare_new_run_with_session_thread(
+            &storage,
+            SessionThreadStart {
+                tracker: &tracker,
+                continue_existing: true,
+            },
+            &run_id,
+            "workspace-a",
+            Some("owner"),
+            Vec::new(),
+            None,
+        )
+        .unwrap();
+
+        let connection = rusqlite::Connection::open(&database).unwrap();
+        assert_eq!(
+            connection
+                .query_row(
+                    "SELECT COUNT(*) FROM events \
+                     WHERE run_id=?1 AND event_type='run.started'",
+                    [&run_id],
+                    |row| row.get::<_, u64>(0),
+                )
+                .unwrap(),
+            1
+        );
+        assert_ne!(
+            tracker.offered("workspace-a", Some("owner")),
+            Some("unknown-thread".into())
+        );
+
+        drop(connection);
+        drop(storage);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn disabled_continuation_leaves_the_session_thread_unchanged() {
+        let directory =
+            std::env::temp_dir().join(format!("muniment-session-disabled-{}", Uuid::now_v7()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let storage = Arc::new(Mutex::new(ChatStorage {
+            journal: RunJournal::open(directory.join("runs.sqlite3")).unwrap(),
+            cas: LocalCas::open(&directory.join("cas")).unwrap(),
+        }));
+        let tracker = SessionThread::default();
+        tracker.record("thread-a".into(), "workspace-a", Some("owner"));
+
+        prepare_new_run_with_session_thread(
+            &storage,
+            SessionThreadStart {
+                tracker: &tracker,
+                continue_existing: false,
+            },
+            &Uuid::now_v7().to_string(),
+            "workspace-a",
+            Some("owner"),
+            Vec::new(),
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(
+            tracker.offered("workspace-a", Some("owner")),
+            Some("thread-a".into())
+        );
+
+        drop(storage);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
     fn new_run_ingests_multiple_files_into_one_sequence_and_projector() {
         keyring::set_default_credential_builder(keyring::mock::default_credential_builder());
         let directory =
@@ -2672,6 +2886,10 @@ mod tests {
 
         let error = match prepare_opened_run(
             &storage,
+            SessionThreadStart {
+                tracker: &SessionThread::default(),
+                continue_existing: false,
+            },
             &run_id,
             "workspace-a",
             Some("owner"),
