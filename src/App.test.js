@@ -2623,6 +2623,128 @@ describe('chat submission settlement', () => {
   })
 })
 
+describe('permission gates', () => {
+  function restoreGate(gate, phase = 'pending-permission', answer = vi.fn().mockResolvedValue(undefined)) {
+    invoke.mockImplementation(async (command, payload) => {
+      if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
+      if (command === 'chat_history') {
+        return [{
+          runId: 'run-gated',
+          phase,
+          text: 'I need access.',
+          prompt: 'Help with this file.',
+          receipt: null,
+          toolActivity: [],
+          pendingPermission: gate,
+        }]
+      }
+      if (command === 'auth_entitlement_snapshot') return snapshot()
+      if (command === 'auth_devices') return []
+      if (command === 'chat_answer_permission') return answer(payload)
+      throw new Error(`unexpected command: ${command}`)
+    })
+    render(App)
+    return answer
+  }
+
+  it('renders a confirm request with its title, message, and two choices', async () => {
+    restoreGate({
+      gateId: 'gate-confirm',
+      kind: 'confirm',
+      title: 'Run a command',
+      message: 'rm /tmp/draft',
+    })
+
+    const card = await screen.findByText('Run a command')
+    expect(card.closest('.permission-card')).toHaveClass('tool-card')
+    expect(screen.getByText('rm /tmp/draft')).toBeInTheDocument()
+    expect(screen.getAllByRole('button').filter((button) => ['Allow', 'Deny'].includes(button.textContent)))
+      .toHaveLength(2)
+  })
+
+  it('renders no request outside the pending permission phase', async () => {
+    restoreGate({ gateId: 'gate-hidden', kind: 'confirm', title: 'Hidden request', message: 'A path' }, 'streaming')
+
+    expect(await screen.findByText('I need access.')).toBeInTheDocument()
+    expect(screen.queryByText('Hidden request')).not.toBeInTheDocument()
+  })
+
+  it('sends a typed confirm answer and disables every choice until it settles', async () => {
+    const pending = deferred()
+    const answer = restoreGate(
+      { gateId: 'gate-confirm', kind: 'confirm', title: 'Run a command', message: 'rm /tmp/draft' },
+      'pending-permission',
+      vi.fn(() => pending.promise),
+    )
+
+    const allow = await screen.findByRole('button', { name: 'Allow' })
+    const deny = screen.getByRole('button', { name: 'Deny' })
+    await fireEvent.click(allow)
+
+    expect(answer).toHaveBeenCalledWith({
+      runId: 'run-gated',
+      gateId: 'gate-confirm',
+      answer: { type: 'confirm', value: true },
+    })
+    expect(allow).toBeDisabled()
+    expect(deny).toBeDisabled()
+
+    pending.resolve()
+    await waitFor(() => expect(allow).toBeEnabled())
+    expect(deny).toBeEnabled()
+  })
+
+  it('sends each select option and Deny with their typed answers', async () => {
+    const answer = restoreGate({
+      gateId: 'gate-select',
+      kind: 'select',
+      title: 'Choose access',
+      options: ['Allow once', 'Allow for this thread'],
+    })
+
+    await fireEvent.click(await screen.findByRole('button', { name: 'Allow for this thread' }))
+    expect(answer).toHaveBeenLastCalledWith({
+      runId: 'run-gated',
+      gateId: 'gate-select',
+      answer: { type: 'select', value: 'Allow for this thread' },
+    })
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Deny' }))
+    expect(answer).toHaveBeenLastCalledWith({
+      runId: 'run-gated',
+      gateId: 'gate-select',
+      answer: { type: 'cancelled' },
+    })
+  })
+
+  it.each(['input', 'editor', 'unknown'])('renders Deny alone for a %s request', async (kind) => {
+    restoreGate({ gateId: `gate-${kind}`, kind, title: 'Unsupported request' })
+
+    expect(await screen.findByRole('button', { name: 'Deny' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Allow' })).not.toBeInTheDocument()
+  })
+
+  it('keeps a rejected request, states the failure, and accepts a retry', async () => {
+    const answer = restoreGate(
+      { gateId: 'gate-retry', kind: 'confirm', title: 'Run a command', message: 'rm /tmp/draft' },
+      'pending-permission',
+      vi.fn().mockRejectedValueOnce(new Error('offline')).mockResolvedValue(undefined),
+    )
+
+    await fireEvent.click(await screen.findByRole('button', { name: 'Allow' }))
+
+    const failure = await screen.findByRole('alert')
+    expect(failure).toHaveClass('run-error')
+    expect(failure).toHaveTextContent('Could not answer this request. Try again.')
+    expect(screen.getByText('Run a command')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Allow' })).toBeEnabled()
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Allow' }))
+    expect(answer).toHaveBeenCalledTimes(2)
+    await waitFor(() => expect(screen.queryByText('Could not answer this request. Try again.')).not.toBeInTheDocument())
+  })
+})
+
 describe('thread announcements', () => {
   const restored = [{
     runId: 'run-old', phase: 'complete', text: 'Restored answer',
@@ -2733,7 +2855,7 @@ describe('thread announcements', () => {
     expect(region.textContent).toBe('')
   })
 
-  it('announces one generation and one completion across a streamed run', async () => {
+  it('announces a permission pause during a streamed run', async () => {
     signedIn([], { runId: 'run-9', attachments: [] })
     const composer = await screen.findByPlaceholderText('Ask anything')
     await fireEvent.input(composer, { target: { value: 'A question' } })
@@ -2743,11 +2865,26 @@ describe('thread announcements', () => {
     await waitFor(() => expect(region).toHaveTextContent('Generating a reply.'))
     const drain = watch(region)
 
-    for (const [phase, text] of [['streaming', 'A'], ['pending-permission', 'A routed'], ['streaming', 'A routed answer']]) {
+    chatListener({ payload: { runId: 'run-9', phase: 'streaming', text: 'A', receipt: null, toolActivity: [] } })
+    await waitFor(() => expect(document.querySelector('.response p')).toHaveTextContent('A'))
+    expect(drain()).toEqual([])
+
+    chatListener({ payload: {
+      runId: 'run-9',
+      phase: 'pending-permission',
+      text: 'A routed',
+      receipt: null,
+      toolActivity: [],
+      pendingPermission: { gateId: 'gate-9', kind: 'confirm', title: 'Run a command' },
+    } })
+    await waitFor(() => expect(region).toHaveTextContent('Waiting for your decision.'))
+    expect(drain().length).toBeGreaterThan(0)
+
+    for (const [phase, text] of [['streaming', 'A routed answer']]) {
       chatListener({ payload: { runId: 'run-9', phase, text, receipt: null, toolActivity: [] } })
       await waitFor(() => expect(document.querySelector('.response p')).toHaveTextContent(text))
     }
-    expect(drain()).toEqual([])
+    expect(drain().length).toBeGreaterThan(0)
     expect(region).toHaveTextContent('Generating a reply.')
 
     chatListener({ payload: { runId: 'run-9', phase: 'complete', text: 'A routed answer', receipt: {}, toolActivity: [] } })

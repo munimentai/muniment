@@ -3,6 +3,7 @@
 Run `npm run probe` from the repository root. The command builds the frontend and prints both local probe URLs.
 
 Open `index.html` for an empty signed-in workspace. Open `history.html` for completed and interrupted fixture runs.
+Open `permission.html` for a run paused on a permission decision.
 
 Inspect `window.__PROBE__.invokedCommands` and `window.__PROBE__.eventListeners` in the browser console. Emit an event with `window.__PROBE__.emit(event, payload)`.
 

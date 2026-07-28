@@ -29,6 +29,23 @@ const historyFixtures = {
       resumable: true,
     },
   ],
+  'pending-permission': [
+    {
+      runId: 'probe-permission',
+      prompt: 'Delete the old export.',
+      phase: 'pending-permission',
+      text: 'I need permission before I continue.',
+      receipt: null,
+      toolActivity: [],
+      pendingPermission: {
+        gateId: 'probe-gate',
+        kind: 'confirm',
+        title: 'Delete a file',
+        message: '/Documents/Muniment/exports/old.csv',
+      },
+      resumable: false,
+    },
+  ],
 }
 
 const fixtureName = document.currentScript.dataset.history
