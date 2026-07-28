@@ -1,8 +1,10 @@
+use chrono::{SecondsFormat, Utc};
 use muniment_core::journal::reducer::{project_chat_with_state, RunStatus};
 use muniment_core::journal::thread_summaries::ThreadSummary;
-use muniment_core::journal::RunJournal;
+use muniment_core::journal::{Provenance, RunJournal};
 use serde::Serialize;
 use serde_json::Value;
+use std::collections::BTreeMap;
 
 use crate::auth;
 use crate::chat::{
@@ -237,6 +239,37 @@ pub(crate) fn select_session_thread(
     Ok(())
 }
 
+pub(crate) fn rename_thread(
+    journal: &mut RunJournal,
+    subject: Option<&str>,
+    thread_id: &str,
+    title: &str,
+) -> Result<(), String> {
+    if !subject_owns_first_run(journal, thread_id, subject)? {
+        return Err("Conversation history is unavailable.".into());
+    }
+    let last_thread_seq = journal
+        .last_thread_seq(thread_id)
+        .map_err(|_| "Conversation history is unavailable.".to_string())?;
+    journal
+        .append_thread_title_renamed(
+            last_thread_seq,
+            thread_id,
+            title,
+            &Utc::now().to_rfc3339_opts(SecondsFormat::AutoSi, true),
+            &Provenance {
+                source: "muniment-desktop".into(),
+                source_version: env!("CARGO_PKG_VERSION").into(),
+                actor_id: subject.map(str::to_owned),
+                device_id: None,
+                rpc_request_id: None,
+                capability_versions: None,
+                extra: BTreeMap::new(),
+            },
+        )
+        .map_err(|_| "Conversation history is unavailable.".to_string())
+}
+
 pub(crate) fn fresh_session_thread(
     storage: &SharedStorage,
     tracker: &SessionThread,
@@ -287,6 +320,27 @@ pub async fn chat_select_thread(
         &state.session_thread,
         tokens.subject.as_deref(),
         &thread_id,
+    )
+}
+
+#[tauri::command]
+pub async fn chat_rename_thread(
+    app_handle: tauri::AppHandle,
+    auth_state: tauri::State<'_, auth::AuthState>,
+    state: tauri::State<'_, ChatState>,
+    thread_id: String,
+    title: String,
+) -> Result<(), String> {
+    let tokens = auth::fresh_tokens(&auth_state, &app_handle)?;
+    let mut storage = state
+        .storage
+        .lock()
+        .map_err(|_| "Conversation history is unavailable.".to_string())?;
+    rename_thread(
+        &mut storage.journal,
+        tokens.subject.as_deref(),
+        &thread_id,
+        &title,
     )
 }
 
@@ -347,6 +401,77 @@ mod tests {
     use std::sync::{Arc, Mutex};
     use std::time::Duration;
     use uuid::Uuid;
+
+    #[test]
+    fn rename_thread_accepts_owned_thread_and_rejects_invalid_requests() {
+        let directory = std::env::temp_dir().join(format!("muniment-chat-{}", Uuid::now_v7()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let mut journal = RunJournal::open(directory.join("runs.sqlite3")).unwrap();
+        let mut new_thread = |owner| {
+            journal
+                .append_new_run(
+                    "workspace-a",
+                    &event_envelope(
+                        &Uuid::now_v7().to_string(),
+                        1,
+                        "run.started",
+                        json!({}),
+                        Some(owner),
+                    ),
+                )
+                .unwrap()
+        };
+        let owned_thread = new_thread("owner");
+        let foreign_thread = new_thread("other");
+        let deleted_thread = new_thread("owner");
+        let unknown_thread = Uuid::now_v7().to_string();
+        let provenance = Provenance {
+            source: "test".into(),
+            source_version: "1".into(),
+            actor_id: Some("owner".into()),
+            device_id: None,
+            rpc_request_id: None,
+            capability_versions: None,
+            extra: BTreeMap::new(),
+        };
+        journal
+            .append_thread_deleted(1, &deleted_thread, "2026-07-10T12:00:01Z", &provenance)
+            .unwrap();
+
+        for (thread_id, title, expected_seq) in [
+            (unknown_thread.as_str(), "title".to_string(), 0),
+            (foreign_thread.as_str(), "title".to_string(), 1),
+            (deleted_thread.as_str(), "title".to_string(), 2),
+            (owned_thread.as_str(), " \n\t ".to_string(), 1),
+            (
+                owned_thread.as_str(),
+                "é".repeat(muniment_core::journal::MAX_THREAD_TITLE_CHARS + 1),
+                1,
+            ),
+        ] {
+            assert_eq!(
+                rename_thread(&mut journal, Some("owner"), thread_id, &title).unwrap_err(),
+                "Conversation history is unavailable."
+            );
+            assert_eq!(journal.last_thread_seq(thread_id).unwrap(), expected_seq);
+        }
+
+        rename_thread(&mut journal, Some("owner"), &owned_thread, "  New title  ").unwrap();
+        assert_eq!(journal.last_thread_seq(&owned_thread).unwrap(), 2);
+        let summaries = chat_thread_summaries_page(&mut journal, Some("owner"), 10, None).unwrap();
+        assert_eq!(
+            summaries
+                .summaries
+                .iter()
+                .find(|summary| summary.thread_id == owned_thread)
+                .unwrap()
+                .title,
+            "New title"
+        );
+
+        drop(journal);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
 
     #[test]
     fn thread_open_projects_and_clears_a_typed_pending_permission() {
