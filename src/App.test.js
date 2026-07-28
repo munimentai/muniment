@@ -35,6 +35,7 @@ let globalShortcutHandler
 let registerGlobalShortcut
 let unregisterGlobalShortcut
 let registeredShortcuts
+let threadSummaryResult
 
 vi.mock('@tauri-apps/plugin-global-shortcut', () => ({
   register: (...args) => registerGlobalShortcut(...args),
@@ -116,7 +117,7 @@ beforeAll(async () => {
   window.__TAURI__ = {
     core: { invoke: (command, ...args) => {
       if (command === 'chat_thread_summaries') {
-        return Promise.resolve({ summaries: [{ threadId: 'thread-1', title: '', updatedAt: '' }], nextCursor: null })
+        return Promise.resolve({ summaries: threadSummaryResult, nextCursor: null })
       }
       if (command === 'chat_thread_open') {
         return Promise.resolve(invoke(command, ...args)).then((entries) => ({ entries, nextCursor: null }))
@@ -144,6 +145,7 @@ beforeAll(async () => {
 
 beforeEach(() => {
   localStorage.clear()
+  threadSummaryResult = [{ threadId: 'thread-1', title: '', updatedAt: '' }]
   homeStatus = { configured: true, homePath: '/Documents/Muniment' }
   requiredModelInvoke = vi.fn().mockResolvedValue({ status: { state: 'installed' }, downloadedBytes: 100, totalBytes: 100, folderSetupAvailable: true, aiFeaturesAvailable: true, retryingInBackground: false })
   chatListener = undefined
@@ -593,6 +595,38 @@ describe('message grammar', () => {
 })
 
 describe('thread name', () => {
+  it('renders every summary and opens another thread from its button', async () => {
+    threadSummaryResult = [
+      { threadId: 'thread-1', title: 'Lease renewal', updatedAt: '2026-07-28T11:55:00Z' },
+      { threadId: 'thread-2', title: 'Archive review', updatedAt: '2026-07-28T09:00:00Z' },
+      { threadId: 'thread-3', title: 'Client notes', updatedAt: '2026-07-25T12:00:00Z' },
+    ]
+    invoke.mockImplementation(async (command, payload) => {
+      if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
+      if (command === 'chat_select_thread') return undefined
+      if (command === 'chat_thread_open') return payload.threadId === 'thread-2'
+        ? [{ runId: 'run-2', phase: 'complete', prompt: 'Archive review', text: 'Archived.', toolActivity: [] }]
+        : []
+      if (command === 'auth_entitlement_snapshot') return snapshot()
+      if (command === 'auth_devices') return []
+      throw new Error(`unexpected command: ${command}`)
+    })
+    render(App)
+
+    const current = await screen.findByText('Lease renewal')
+    expect(current.closest('.thread-row')).toHaveAttribute('aria-current', 'true')
+    expect(document.querySelectorAll('.thread-row')).toHaveLength(3)
+    const archive = screen.getByRole('button', { name: /Archive review/ })
+    expect(archive.tabIndex).toBe(0)
+
+    await fireEvent.click(archive)
+
+    expect(await screen.findByText('Archived.')).toBeInTheDocument()
+    expect(invoke).toHaveBeenCalledWith('chat_select_thread', { threadId: 'thread-2' })
+    expect(archive).not.toBeInTheDocument()
+    expect(document.querySelector('.thread-row[aria-current="true"]')).toHaveTextContent('Archive review')
+  })
+
   it('shows the empty name in the titlebar and current thread record', async () => {
     render(App)
     await screen.findByPlaceholderText('Ask anything')
