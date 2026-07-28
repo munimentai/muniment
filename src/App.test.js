@@ -616,6 +616,9 @@ describe('thread name', () => {
     const current = await screen.findByText('Lease renewal')
     expect(current.closest('.thread-row')).toHaveAttribute('aria-current', 'true')
     expect(document.querySelectorAll('.thread-row')).toHaveLength(3)
+    for (const summary of threadSummaryResult) {
+      expect(document.querySelector(`time[datetime="${summary.updatedAt}"]`)).toHaveAttribute('title', new Date(summary.updatedAt).toLocaleString())
+    }
     const archive = screen.getByRole('button', { name: /Archive review/ })
     expect(archive.tabIndex).toBe(0)
 
@@ -637,6 +640,7 @@ describe('thread name', () => {
     expect(titlebarName).toHaveAttribute('title', 'New thread')
     expect(sidebarName).toHaveTextContent('New thread')
     expect(sidebarName).toHaveAttribute('title', 'New thread')
+    expect(sidebarName.querySelector('time')).toHaveAttribute('title', '')
   })
 
   it('shows the first restored prompt in the titlebar and current thread record', async () => {
@@ -672,6 +676,10 @@ describe('thread name', () => {
     expect(appRules.get('.thread-row-title')).toMatch(/overflow:\s*hidden/)
     expect(appRules.get('.thread-row-title')).toMatch(/text-overflow:\s*ellipsis/)
     expect(appRules.get('.thread-row-title')).toMatch(/white-space:\s*nowrap/)
+  })
+
+  it('reserves the current-thread dot width in every row', () => {
+    expect(appRules.get('.thread-row > span')).toMatch(/flex:\s*0 0 5px/)
   })
 })
 

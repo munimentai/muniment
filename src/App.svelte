@@ -30,6 +30,11 @@
   const thinkingMarkD = solidMilledRingPath()
   const version = __APP_VERSION__
 
+  function fullDateTime(timestamp) {
+    const date = new Date(timestamp)
+    return Number.isNaN(date.getTime()) ? '' : date.toLocaleString()
+  }
+
   const tauri = window.__TAURI__?.core
   let auth = $state(bootState)
   let draft = $state('')
@@ -589,9 +594,9 @@
                 {@const title = summary.title || 'New thread'}
                 {#if summary.threadId === (currentThreadId ?? threadSummaries[0]?.threadId)}
                   {@const currentTitle = summary.title || currentThreadTitle}
-                  <div class="thread-row active-thread" aria-current="true" title={currentTitle}><span></span><div class="thread-row-title">{currentTitle}</div><time datetime={summary.updatedAt}>{relativeTime(summary.updatedAt)}</time></div>
+                  <div class="thread-row active-thread" aria-current="true" title={currentTitle}><span></span><div class="thread-row-title">{currentTitle}</div><time datetime={summary.updatedAt} title={fullDateTime(summary.updatedAt)}>{relativeTime(summary.updatedAt)}</time></div>
                 {:else}
-                  <button class="thread-row" title={title} aria-disabled={active ? 'true' : undefined} onclick={() => chatController.openThread(summary.threadId)}><span></span><div class="thread-row-title">{title}</div><time datetime={summary.updatedAt}>{relativeTime(summary.updatedAt)}</time></button>
+                  <button class="thread-row" title={title} aria-disabled={active ? 'true' : undefined} onclick={() => chatController.openThread(summary.threadId)}><span></span><div class="thread-row-title">{title}</div><time datetime={summary.updatedAt} title={fullDateTime(summary.updatedAt)}>{relativeTime(summary.updatedAt)}</time></button>
                 {/if}
               {/each}
             </div>
@@ -926,6 +931,7 @@
   button.thread-row:hover:not([aria-disabled="true"]) { background: var(--faint); }
   button.thread-row[aria-disabled="true"] { opacity: .55; }
   .thread-row time { margin-left: auto; color: var(--muted); font: var(--text-provenance) var(--font-mono); }
+  .thread-row > span { flex: 0 0 5px; }
   .thread-row-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .side-action span { flex: 1; }
   /* Collapsed rail: icon-only controls, names carried by aria-label + tooltip. */
