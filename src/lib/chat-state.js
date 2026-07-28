@@ -69,9 +69,7 @@ const generating = 'Generating a reply.'
 const runPhaseAnnouncements = {
   thinking: generating,
   streaming: generating,
-  // A run paused on a permission decision has no affordance to announce yet, so it
-  // stays inside the same coarse in-progress state rather than inventing copy.
-  'pending-permission': generating,
+  'pending-permission': 'Waiting for your decision.',
   resuming: 'Resuming the interrupted reply.',
   cancelled: 'Reply stopped.',
   failed: 'Reply failed.',
@@ -102,12 +100,13 @@ export function formatByteSize(bytes) {
 
 export function applyChatEvent(run, event) {
   if (!run || event.runId !== run.id) return run
-  if (event.phase) return { ...run, phase: event.phase, text: event.text ?? '', receipt: event.receipt ?? null, toolActivity: event.toolActivity ?? [], attachments: event.attachments ?? run.attachments ?? [] }
-  if (event.type === 'prompt-accepted') return { ...run, accepted: true }
-  if (event.type === 'text-delta') return { ...run, phase: 'streaming', text: run.text + event.text }
-  if (event.type === 'completed') return { ...run, phase: 'complete', receipt: event.receipt ?? {} }
-  if (event.type === 'cancelled') return { ...run, phase: 'cancelled' }
-  if (event.type === 'failed') return { ...run, phase: 'failed' }
+  const pendingPermission = event.pendingPermission ?? null
+  if (event.phase) return { ...run, phase: event.phase, text: event.text ?? '', receipt: event.receipt ?? null, toolActivity: event.toolActivity ?? [], attachments: event.attachments ?? run.attachments ?? [], pendingPermission }
+  if (event.type === 'prompt-accepted') return { ...run, accepted: true, pendingPermission }
+  if (event.type === 'text-delta') return { ...run, phase: 'streaming', text: run.text + event.text, pendingPermission }
+  if (event.type === 'completed') return { ...run, phase: 'complete', receipt: event.receipt ?? {}, pendingPermission }
+  if (event.type === 'cancelled') return { ...run, phase: 'cancelled', pendingPermission }
+  if (event.type === 'failed') return { ...run, phase: 'failed', pendingPermission }
   return run
 }
 
@@ -118,6 +117,6 @@ export function applyBufferedChatEvents(run, events) {
 export function historyMessages(history) {
   return history.flatMap((entry) => [
     ...(entry.prompt || entry.attachments?.length ? [{ role: 'user', text: entry.prompt ?? '', attachments: entry.attachments ?? [] }] : []),
-    { role: 'assistant', run: { id: entry.runId, phase: entry.phase, text: entry.text, receipt: entry.receipt ?? null, prompt: entry.prompt ?? '', toolActivity: entry.toolActivity ?? [], resumable: entry.resumable === true } },
+    { role: 'assistant', run: { id: entry.runId, phase: entry.phase, text: entry.text, receipt: entry.receipt ?? null, prompt: entry.prompt ?? '', toolActivity: entry.toolActivity ?? [], pendingPermission: entry.pendingPermission ?? null, resumable: entry.resumable === true } },
   ])
 }
