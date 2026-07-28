@@ -62,7 +62,7 @@ describe('chat controller', () => {
     await context.controller.loadHistory()
 
     expect(invoke).toHaveBeenCalledOnce()
-    expect(invoke).toHaveBeenCalledWith('chat_thread_summaries', { limit: 1 })
+    expect(invoke).toHaveBeenCalledWith('chat_thread_summaries', { limit: 20 })
     expect(context.messages()).toEqual([])
   })
 
@@ -84,13 +84,99 @@ describe('chat controller', () => {
     await context.controller.loadHistory()
 
     expect(invoke.mock.calls).toEqual([
-      ['chat_thread_summaries', { limit: 1 }],
+      ['chat_thread_summaries', { limit: 20 }],
       ['chat_thread_open', { threadId: 'thread-1', limit: 100 }],
       ['chat_thread_open', { threadId: 'thread-1', limit: 100, cursor: 'page-2' }],
     ])
     expect(context.messages().map((message) => message.text ?? message.run.text)).toEqual([
       'First question', 'First answer', 'Second question', 'Second answer',
     ])
+  })
+
+  it('selects another thread and publishes it only after every page loads', async () => {
+    const previous = [{ role: 'user', text: 'Current transcript' }]
+    const onThreadSelected = vi.fn()
+    const invoke = vi.fn()
+      .mockResolvedValueOnce(undefined)
+      .mockResolvedValueOnce({ entries: [{
+        runId: 'run-2', phase: 'complete', text: 'New answer',
+        prompt: 'New question', receipt: {}, toolActivity: [],
+      }], nextCursor: null })
+    const context = setup(invoke)
+    context.setMessages(previous)
+    const controller = createChatController({
+      invoke,
+      listen: vi.fn(),
+      readMessages: context.messages,
+      readActive: context.active,
+      readAnnounced: () => null,
+      readDraft: () => '',
+      readFiles: () => [],
+      onMessages: context.setMessages,
+      onActive: vi.fn(),
+      onAnnounce: vi.fn(),
+      onDraft: vi.fn(),
+      onFiles: vi.fn(),
+      onSubmitError: vi.fn(),
+      onCancelError: vi.fn(),
+      onQueueError: vi.fn(),
+      onHistoryError: vi.fn(),
+      onThreadSelected,
+    })
+
+    await controller.openThread('thread-2')
+
+    expect(invoke.mock.calls).toEqual([
+      ['chat_select_thread', { threadId: 'thread-2' }],
+      ['chat_thread_open', { threadId: 'thread-2', limit: 100 }],
+    ])
+    expect(context.messages().map((message) => message.text ?? message.run.text)).toEqual([
+      'New question', 'New answer',
+    ])
+    expect(onThreadSelected).toHaveBeenCalledWith('thread-2')
+  })
+
+  it.each(['chat_select_thread', 'chat_thread_open'])('keeps the transcript when %s fails', async (failedCommand) => {
+    const previous = [{ role: 'user', text: 'Current transcript' }]
+    const onHistoryError = vi.fn()
+    const context = setup()
+    context.setMessages(previous)
+    const controller = createChatController({
+      invoke: vi.fn(async (command) => {
+        if (command === failedCommand) throw new Error('offline')
+        return command === 'chat_thread_open' ? { entries: [], nextCursor: null } : undefined
+      }),
+      listen: vi.fn(),
+      readMessages: context.messages,
+      readActive: context.active,
+      readAnnounced: () => null,
+      readDraft: () => '',
+      readFiles: () => [],
+      onMessages: context.setMessages,
+      onActive: vi.fn(),
+      onAnnounce: vi.fn(),
+      onDraft: vi.fn(),
+      onFiles: vi.fn(),
+      onSubmitError: vi.fn(),
+      onCancelError: vi.fn(),
+      onQueueError: vi.fn(),
+      onHistoryError,
+    })
+
+    await controller.openThread('thread-2')
+
+    expect(context.messages()).toBe(previous)
+    expect(onHistoryError).toHaveBeenLastCalledWith('Conversation history could not be restored. Try again.')
+  })
+
+  it('does not select a thread while a run is active', async () => {
+    const invoke = vi.fn()
+    const context = setup(invoke)
+    context.setActive({ id: 'run-1', phase: 'streaming' })
+
+    await context.controller.openThread('thread-2')
+
+    expect(invoke).not.toHaveBeenCalled()
   })
 
   it('stops opening history after 100 pages and publishes them in order', async () => {

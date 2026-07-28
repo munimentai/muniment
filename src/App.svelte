@@ -18,6 +18,7 @@
   import { createChatTranscriptController } from './lib/chat-transcript-controller.js'
   import { copyAnnouncement, copyConfirmed, copyFailure, copyLabel } from './lib/message-actions.js'
   import { onboardingLoadingState, onboardingSettingsState } from './lib/onboarding-state.js'
+  import { relativeTime } from './lib/relative-time.js'
   import { SIDEBAR_STORAGE_KEY, isSidebarShortcut, serializeSidebarCollapsed, sidebarShortcut, storedSidebarCollapsed } from './lib/sidebar-state.js'
   import { createStreamingUnderlineAction } from './lib/streaming-underline.js'
   import { thinkingSettle } from './lib/thinking-transition.js'
@@ -44,6 +45,8 @@
   let cancelError = $state('')
   let queueError = $state('')
   let historyError = $state('')
+  let threadSummaries = $state([])
+  let currentThreadId = $state(null)
   let permissionAnswer = $state(null)
   let permissionValues = $state({})
   let thread = $state()
@@ -140,6 +143,8 @@
     onCancelError: (next) => { cancelError = next },
     onQueueError: (next) => { queueError = next },
     onHistoryError: (next) => { historyError = next },
+    onThreadSummaries: (next) => { threadSummaries = next },
+    onThreadSelected: (next) => { currentThreadId = next },
     onHistoryStart: () => { expandedReceipts = new Set(); parallelTools = new Map() },
     onHistoryLoaded: () => { pinned = true },
     onFollow: followNewContent,
@@ -576,7 +581,17 @@
           </div>
           {#if !sidebarCollapsed}
             <p class="side-label">Threads</p>
-            <div class="thread-row active-thread" aria-current="true" title={currentThreadTitle}><span></span><div class="thread-row-title">{currentThreadTitle}</div></div>
+            <div class="thread-list">
+              {#each threadSummaries as summary (summary.threadId)}
+                {@const title = summary.title || 'New thread'}
+                {#if summary.threadId === (currentThreadId ?? threadSummaries[0]?.threadId)}
+                  {@const currentTitle = summary.title || currentThreadTitle}
+                  <div class="thread-row active-thread" aria-current="true" title={currentTitle}><span></span><div class="thread-row-title">{currentTitle}</div><time datetime={summary.updatedAt}>{relativeTime(summary.updatedAt)}</time></div>
+                {:else}
+                  <button class="thread-row" title={title} aria-disabled={active ? 'true' : undefined} onclick={() => chatController.openThread(summary.threadId)}><span></span><div class="thread-row-title">{title}</div><time datetime={summary.updatedAt}>{relativeTime(summary.updatedAt)}</time></button>
+                {/if}
+              {/each}
+            </div>
           {/if}
           <button class="side-action home-settings" aria-label={sidebarCollapsed ? 'Home settings' : null} title={sidebarCollapsed ? 'Home settings' : null} onclick={() => { onboarding = onboardingSettingsState(onboarding) }}><svg class="side-icon" width="18" height="18" viewBox="0 0 24 24" aria-hidden="true"><path d="M4.5 10.5 12 4.75l7.5 5.75V19a1.5 1.5 0 0 1-1.5 1.5H6A1.5 1.5 0 0 1 4.5 19z" /><path d="M9.75 20.5v-5.75h4.5v5.75" /></svg>{#if !sidebarCollapsed}<span>Home settings</span>{/if}</button>
           {#if !sidebarCollapsed}
@@ -903,7 +918,11 @@
   .side-icon { flex: none; display: block; color: var(--muted); }
   .side-icon rect, .side-icon path { fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
   .side-action, .thread-row { width: 100%; display: flex; align-items: center; gap: 9px; padding: 7px 8px; border-color: transparent; background: transparent; text-align: left; }
+  .thread-list { min-height: 0; overflow-y: auto; }
   .thread-row { font: inherit; font-size: var(--text-13); color: var(--ink); border: 1px solid transparent; border-radius: var(--radius-control); }
+  button.thread-row:hover:not([aria-disabled="true"]) { background: var(--faint); }
+  button.thread-row[aria-disabled="true"] { opacity: .55; }
+  .thread-row time { margin-left: auto; color: var(--muted); font: var(--text-provenance) var(--font-mono); }
   .thread-row-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .side-action span { flex: 1; }
   /* Collapsed rail: icon-only controls, names carried by aria-label + tooltip. */

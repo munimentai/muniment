@@ -23,6 +23,8 @@ export function createChatController({
   onQueueError,
   onHistoryError,
   onHistoryStart = () => {},
+  onThreadSummaries = () => {},
+  onThreadSelected = () => {},
   onHistoryLoaded = () => {},
   onFollow = () => {},
   onSend = () => {},
@@ -31,6 +33,7 @@ export function createChatController({
   let submissionSequence = 0
   let unlisten
   let destroyed = false
+  let selectingThread = false
 
   const messages = () => readMessages()
   const active = () => readActive()
@@ -62,18 +65,32 @@ export function createChatController({
     onHistoryStart()
     onAnnounce(null)
     try {
-      const { summaries } = await invoke('chat_thread_summaries', { limit: 1 })
+      const { summaries } = await invoke('chat_thread_summaries', { limit: 20 })
       if (destroyed) return
+      onThreadSummaries(summaries)
       if (!summaries.length) {
         publishMessages([])
+        onThreadSelected(null)
         onHistoryLoaded()
         onFollow()
         return
       }
+      await openThread(summaries[0].threadId)
+    } catch (_) {
+      if (!destroyed) onHistoryError('Conversation history could not be restored. Try again.')
+    }
+  }
+
+  async function openThread(threadId, select = false) {
+    if (active() || selectingThread) return
+    selectingThread = true
+    onHistoryError('')
+    try {
+      if (select) await invoke('chat_select_thread', { threadId })
       const history = []
       let cursor
       for (let page = 0; page < historyPageCap; page += 1) {
-        const payload = { threadId: summaries[0].threadId, limit: historyPageLimit }
+        const payload = { threadId, limit: historyPageLimit }
         if (cursor !== undefined) payload.cursor = cursor
         const result = await invoke('chat_thread_open', payload)
         if (destroyed) return
@@ -82,11 +99,16 @@ export function createChatController({
         cursor = result.nextCursor
       }
       if (destroyed) return
+      onHistoryStart()
+      onAnnounce(null)
+      onThreadSelected(threadId)
       publishMessages(historyMessages(history))
       onHistoryLoaded()
       onFollow()
     } catch (_) {
       if (!destroyed) onHistoryError('Conversation history could not be restored. Try again.')
+    } finally {
+      selectingThread = false
     }
   }
 
@@ -186,5 +208,5 @@ export function createChatController({
     buffered.clear()
   }
 
-  return { start, loadHistory, send, cancel, resume, queue, cleanup }
+  return { start, loadHistory, openThread: (threadId) => openThread(threadId, true), send, cancel, resume, queue, cleanup }
 }
