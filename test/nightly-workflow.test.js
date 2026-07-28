@@ -25,20 +25,27 @@ const conditionResult = ({ eventName, platform, build, publish }) => {
 }
 
 describe('nightly Linux E2E workflow', () => {
-  it('finalizes with contents write without PATCHing target_commitish', () => {
+  it('finalizes with contents write without moving the rolling tag', () => {
     expect(publish).toContain('permissions:\n      contents: write')
     expect(publish).not.toContain('target_commitish: sha')
-    expect(publish.indexOf('github.rest.git.updateRef')).toBeLessThan(publish.indexOf('github.rest.repos.updateRelease'))
+    expect(publish).not.toContain('github.rest.git.updateRef')
   })
 
   it('runs after a successful full-nightly publish', () => {
     expect(conditionResult({ eventName: 'schedule', platform: '', build: 'success', publish: 'success' })).toBe(true)
   })
 
-  it('runs a Linux-only dispatch after its package build and finalizes the release identity', () => {
+  it('runs after a failed full-nightly publish', () => {
+    expect(linuxE2e).toContain('# Publishing is distribution and must never gate testing.')
+    expect(jobCondition).not.toContain('needs.publish.result')
+    expect(publish).not.toContain('continue-on-error')
+    expect(conditionResult({ eventName: 'schedule', platform: '', build: 'success', publish: 'failure' })).toBe(true)
+  })
+
+  it('runs a Linux-only dispatch after its package build and validates its asset', () => {
     expect(conditionResult({ eventName: 'workflow_dispatch', platform: 'linux', build: 'success', publish: 'skipped' })).toBe(true)
     expect(linuxE2e).toContain("if: github.event_name == 'workflow_dispatch' && github.event.inputs.platform == 'linux'")
-    expect(linuxE2e).toContain('ref: "tags/nightly"')
+    expect(linuxE2e).not.toContain('github.rest.git.updateRef')
     expect(linuxE2e).toContain('`nightly-${sha}-linux-muniment.deb`')
   })
 
@@ -204,6 +211,13 @@ describe('nightly installed-E2E failure reporting', () => {
     expect(shouldReport({ linux: 'failure', windows: 'skipped', macos: 'skipped' })).toBe(true)
     expect(shouldReport({ linux: 'success', windows: 'failure', macos: 'success' })).toBe(true)
     expect(shouldReport({ linux: 'success', windows: 'success', macos: 'failure' })).toBe(true)
+  })
+
+  it('remains reachable after publish fails', () => {
+    expect(conditionResult({ eventName: 'schedule', platform: '', build: 'success', publish: 'failure' })).toBe(true)
+    expect(report).not.toMatch(/needs: \[[^\]]*publish/)
+    expect(reportCondition).toContain('always()')
+    expect(shouldReport({ linux: 'failure', windows: 'success', macos: 'success' })).toBe(true)
   })
 
   it('uses only safe workflow metadata in the issue body', () => {

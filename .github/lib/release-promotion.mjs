@@ -62,8 +62,7 @@ export async function promoteRelease({ token, repository, sha, version, fetchImp
   const checkRuns = await getAllCheckRuns(fetchImpl, token, repoApi, sha);
   assertGreenCi(checkRuns, sha);
   const nightly = await (await request(fetchImpl, token, `${repoApi}/releases/tags/nightly`)).json();
-  const nightlyRef = await (await request(fetchImpl, token, `${repoApi}/git/ref/tags/nightly`)).json();
-  if (nightly.draft || !nightly.prerelease || nightlyRef.object.sha !== sha || !nightly.body?.includes(sha)) throw new Error(`nightly release is not finalized at ${sha}`);
+  if (nightly.draft || !nightly.prerelease || !nightly.body?.includes(sha)) throw new Error(`nightly release is not finalized at ${sha}`);
   if (!nightly.body.includes(windowsSigningProvenance(sha))) throw new Error(`nightly Windows installers are not verified as signed for ${sha}`);
   const assets = expectedNightlyAssets(nightly.assets, sha);
   let created;

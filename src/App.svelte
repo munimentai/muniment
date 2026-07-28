@@ -44,6 +44,7 @@
   let cancelError = $state('')
   let queueError = $state('')
   let historyError = $state('')
+  let permissionAnswer = $state(null)
   let thread = $state()
   let pinned = $state(true)
   let hasContentBelow = $state(false)
@@ -194,6 +195,35 @@
 
   function invalidateDictationTransform() {
     dictationController.invalidateTransform()
+  }
+
+  async function answerPermission(run, answer) {
+    const gate = run.pendingPermission
+    const current = permissionState(run)
+    if (!gate || current?.pending) return
+    const request = { runId: run.id, gateId: gate.gateId }
+    permissionAnswer = { ...request, pending: true, error: '' }
+    try {
+      await tauri.invoke('chat_answer_permission', { ...request, answer })
+      if (permissionAnswer?.runId === request.runId && permissionAnswer.gateId === request.gateId) {
+        permissionAnswer = { ...request, pending: false, error: '' }
+      }
+    } catch (_) {
+      if (permissionAnswer?.runId === request.runId && permissionAnswer.gateId === request.gateId) {
+        permissionAnswer = {
+          ...request,
+          pending: false,
+          error: 'Could not answer this request. Try again.',
+        }
+      }
+    }
+  }
+
+  function permissionState(run) {
+    const gate = run.pendingPermission
+    return gate && permissionAnswer?.runId === run.id && permissionAnswer.gateId === gate.gateId
+      ? permissionAnswer
+      : null
   }
 
   function stopDictation(cancelled = false) {
@@ -569,6 +599,25 @@
               {:else}<p class="response-prose">{message.run.text}</p>{/if}
               {#if message.run.phase === 'failed'}<div class="run-error">Reply failed. <button disabled={dictationBusy()} onclick={() => { draft = message.run.prompt; chatController.send() }}>Try again</button></div>{/if}
               {#if message.run.phase === 'interrupted'}<div class="run-error" role={message.run.resumeError ? 'alert' : undefined}>{message.run.resumeError ?? 'Reply interrupted.'} {#if message.run.resumable}<button disabled={!!active || dictationBusy()} onclick={() => chatController.resume(message.run)}>Resume</button>{:else if message.run.prompt}<button disabled={dictationBusy()} onclick={() => { draft = message.run.prompt; chatController.send() }}>Try again</button>{/if}</div>{/if}
+              {#if message.run.phase === 'pending-permission' && message.run.pendingPermission}
+                {@const gate = message.run.pendingPermission}
+                {@const answerState = permissionState(message.run)}
+                <div class="permission-card tool-card">
+                  <strong>{gate.title}</strong>
+                  {#if gate.kind === 'confirm' && gate.message}<p>{gate.message}</p>{/if}
+                  <div class="permission-actions">
+                    {#if gate.kind === 'confirm'}
+                      <button disabled={answerState?.pending} onclick={() => answerPermission(message.run, { type: 'confirm', value: true })}>Allow</button>
+                    {:else if gate.kind === 'select'}
+                      {#each gate.options ?? [] as option}
+                        <button disabled={answerState?.pending} onclick={() => answerPermission(message.run, { type: 'select', value: option })}>{option}</button>
+                      {/each}
+                    {/if}
+                    <button disabled={answerState?.pending} onclick={() => answerPermission(message.run, { type: 'cancelled' })}>Deny</button>
+                  </div>
+                  {#if answerState?.error}<div class="run-error" role="alert">{answerState.error}</div>{/if}
+                </div>
+              {/if}
               {#if groupedTools.length}
                 <div class="tool-card tool-group" role="group" aria-label={`Parallel tool activity: ${groupedTools.map((tool) => `${toolName(tool)} ${toolStatus(tool)}`).join(', ')}`}>
                   <div class="tool-group-title">Parallel tool activity</div>
@@ -874,6 +923,12 @@
   .tool-running { color: var(--signal); }
   .tool-running .tool-dot { animation: tool-pulse 1.4s ease-in-out infinite; }
   .tool-failed .tool-status::before { content: 'error · '; }
+  .permission-card { color: var(--ink); }
+  .permission-card strong { font-weight: 600; }
+  .permission-card p { margin: 4px 0 0; color: var(--muted); white-space: pre-wrap; overflow-wrap: anywhere; }
+  .permission-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+  .permission-actions button { padding: 4px 8px; font: inherit; }
+  .permission-card .run-error { margin-top: 6px; }
   /* §2.2 mono 11.5px; §1.4 records line up their figures. The shorthand resets
      font-variant-numeric, so tabular-nums follows it. */
   .provenance { display: block; margin-top: 10px; padding: 0; border: 0; background: transparent; color: var(--muted); font: var(--text-provenance)/1.45 var(--font-mono); font-variant-numeric: tabular-nums; text-align: left; }

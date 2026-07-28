@@ -29,6 +29,23 @@ const historyFixtures = {
       resumable: true,
     },
   ],
+  'pending-permission': [
+    {
+      runId: 'probe-permission',
+      prompt: 'Delete the old export.',
+      phase: 'pending-permission',
+      text: 'I need permission before I continue.',
+      receipt: null,
+      toolActivity: [],
+      pendingPermission: {
+        gateId: 'probe-gate',
+        kind: 'confirm',
+        title: 'Delete a file',
+        message: '/Documents/Muniment/exports/old.csv',
+      },
+      resumable: false,
+    },
+  ],
 }
 
 const fixtureName = document.currentScript.dataset.history
@@ -107,7 +124,12 @@ window.__TAURI__ = {
         }
       }
       if (command === 'auth_status') return { signed_in: true, subject: 'probe-user' }
-      if (command === 'chat_history') return structuredClone(history)
+      if (command === 'chat_thread_summaries') {
+        return history.length
+          ? { summaries: [{ threadId: 'probe-thread', title: 'Probe thread', updatedAt: '2026-01-01T00:00:00Z' }], nextCursor: null }
+          : { summaries: [], nextCursor: null }
+      }
+      if (command === 'chat_thread_open') return { entries: structuredClone(history), nextCursor: null }
       if (command === 'auth_entitlement_snapshot') {
         return {
           snapshot_version: 2,

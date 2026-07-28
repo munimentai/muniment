@@ -35,7 +35,6 @@ const promotionFetch = (overrides = {}) => {
       id: 1, draft: false, prerelease: true, target_commitish: overrides.targetCommitish ?? "stale-branch-value",
       body: `Automated desktop build from ${sha}.\n\n${windowsSigningProvenance(sha)}`, assets,
     });
-    if (url.endsWith("/git/ref/tags/nightly")) return response({ object: { sha } });
     if (url.endsWith("/releases") && method === "POST") return response({ id: 42 });
     if (url.startsWith("https://api.github.test/assets/")) return response("asset bytes");
     if (url.startsWith("https://uploads.github.com/")) return response({});
@@ -101,14 +100,10 @@ describe("stable release promotion", () => {
     expect(JSON.parse(create.options.body)).toMatchObject({ tag_name: version, target_commitish: sha, draft: true, prerelease: false });
     expect(calls.filter(({ url }) => url.startsWith("https://api.github.test/assets/"))).toHaveLength(6);
     expect(calls.filter(({ url }) => url.startsWith("https://uploads.github.com/"))).toHaveLength(6);
+    expect(calls.some(({ url }) => url.endsWith("/git/ref/tags/nightly"))).toBe(false);
     expect(calls.some(({ url, options }) => url.includes("/releases/1") && options.method)).toBe(false);
     const publish = calls.find(({ url, options }) => url.endsWith("/releases/42") && options.method === "PATCH");
     expect(JSON.parse(publish.options.body)).toEqual({ draft: false, prerelease: false });
-  });
-
-  it("rejects a nightly tag mismatch", async () => {
-    const { fetchImpl } = promotionFetch({ route: (url) => url.endsWith("/git/ref/tags/nightly") ? response({ object: { sha: "b".repeat(40) } }) : null });
-    await expect(promote(fetchImpl)).rejects.toThrow("not finalized");
   });
 
   it("fails closed when finalized nightly signing provenance is absent", async () => {

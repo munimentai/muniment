@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { applyBufferedChatEvents, applyChatEvent, composerAction, receiptLabel, receiptRows, receiptSummary, runAnnouncement, toolName, toolStatus } from './chat-state.js'
+import { applyBufferedChatEvents, applyChatEvent, composerAction, historyMessages, receiptLabel, receiptRows, receiptSummary, runAnnouncement, toolName, toolStatus } from './chat-state.js'
 
 describe('chat composer and projection', () => {
   it('chooses submit or steer from the active run', () => {
@@ -32,6 +32,36 @@ describe('chat composer and projection', () => {
       { id: 'r', phase: 'thinking', text: '' },
       { runId: 'r', phase: 'streaming', text: 'Working', toolActivity },
     )).toMatchObject({ phase: 'streaming', text: 'Working', toolActivity })
+  })
+
+  it('sets and clears a projected permission gate', () => {
+    const gate = { gateId: 'gate-1', kind: 'confirm', title: 'Run rm?', message: '/tmp/draft' }
+    const waiting = applyChatEvent(
+      { id: 'r', phase: 'thinking', text: '' },
+      { runId: 'r', phase: 'pending-permission', text: '', pendingPermission: gate },
+    )
+    expect(waiting.pendingPermission).toEqual(gate)
+    expect(applyChatEvent(waiting, { runId: 'r', phase: 'streaming', text: 'Allowed' }).pendingPermission).toBeNull()
+  })
+
+  it('carries and clears permission gates across buffered events', () => {
+    const gate = { gateId: 'gate-1', kind: 'select', title: 'Choose access', options: ['Once'] }
+    const waiting = applyBufferedChatEvents({ id: 'r', phase: 'thinking', text: '' }, [
+      { runId: 'r', phase: 'pending-permission', text: '', pendingPermission: gate },
+    ])
+    expect(waiting.pendingPermission).toEqual(gate)
+    expect(applyBufferedChatEvents(waiting, [
+      { runId: 'r', phase: 'streaming', text: 'Continuing' },
+    ]).pendingPermission).toBeNull()
+  })
+
+  it('restores a permission gate from history', () => {
+    const gate = { gateId: 'gate-1', kind: 'input', title: 'Enter a value' }
+    const [, assistant] = historyMessages([{
+      runId: 'r', prompt: 'Help', phase: 'pending-permission', text: '', pendingPermission: gate,
+    }])
+    expect(assistant.run.pendingPermission).toEqual(gate)
+    expect(historyMessages([{ runId: 'r', phase: 'streaming', text: 'Hi' }])[0].run.pendingPermission).toBeNull()
   })
 
   it('gives tools accessible neutral names and explicit statuses', () => {
@@ -130,7 +160,7 @@ describe('chat composer and projection', () => {
     expect(runAnnouncement({ phase: 'resuming', text: 'Partial answer' })).toBe('Resuming the interrupted reply.')
   })
 
-  it('keeps the announcement identical across every streamed chunk and pause of a run', () => {
+  it('announces a permission pause between streamed chunks', () => {
     // src-tauri/src/chat.rs projection_phase also emits pending-permission mid-run.
     const phases = [
       { phase: 'thinking', text: '' },
@@ -138,7 +168,12 @@ describe('chat composer and projection', () => {
       { phase: 'pending-permission', text: 'A rout' },
       { phase: 'streaming', text: 'A routed answer' },
     ].map(runAnnouncement)
-    expect(new Set(phases)).toEqual(new Set(['Generating a reply.']))
+    expect(phases).toEqual([
+      'Generating a reply.',
+      'Generating a reply.',
+      'Waiting for your decision.',
+      'Generating a reply.',
+    ])
   })
 
   it('announces the finished reply once with its text', () => {

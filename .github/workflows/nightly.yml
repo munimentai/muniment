@@ -204,15 +204,8 @@ jobs:
             const macSigning = process.env.MACOS_SIGNING_ENABLED === "true"
               ? `\n\nmacOS app for \`${sha}\` was signed and notarized by the nightly workflow.`
               : "\n\nmacOS app is unsigned pending Apple credentials.";
-            await github.rest.git.updateRef({
-              ...context.repo,
-              ref: "tags/nightly",
-              sha,
-              force: true,
-            });
-            // A published release follows its tag. Sending target_commitish in
-            // this PATCH makes GitHub treat workflow-changing SHAs as workflow
-            // updates, which GITHUB_TOKEN cannot authorize (workflows:write).
+            // Keep the rolling tag at its original commit. GitHub blocks
+            // GITHUB_TOKEN when a commit range changes workflow files.
             await github.rest.repos.updateRelease({
               ...context.repo,
               release_id: release.id,
@@ -222,11 +215,12 @@ jobs:
             });
 
   linux-e2e:
+    # Publishing is distribution and must never gate testing.
     needs: [prepare, build, publish]
     if: >-
       always() && needs.build.result == 'success' &&
-      (needs.publish.result == 'success' ||
-      (github.event_name == 'workflow_dispatch' && github.event.inputs.platform == 'linux' && needs.publish.result == 'skipped'))
+      (github.event_name != 'workflow_dispatch' || github.event.inputs.platform == 'all' ||
+      github.event.inputs.platform == 'linux')
     runs-on: self-hosted
     timeout-minutes: 45
     env:
@@ -240,7 +234,7 @@ jobs:
         run: |
           [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo 'source_sha must be exactly 40 lowercase hex characters' >&2; exit 1; }
 
-      - name: Finalize targeted Linux pre-release identity
+      - name: Validate targeted Linux pre-release asset
         if: github.event_name == 'workflow_dispatch' && github.event.inputs.platform == 'linux'
         uses: actions/github-script@v8
         env:
@@ -257,12 +251,6 @@ jobs:
               core.setFailed(`expected one ${assetName} asset before Linux E2E`);
               return;
             }
-            await github.rest.git.updateRef({
-              ...context.repo,
-              ref: "tags/nightly",
-              sha,
-              force: true,
-            });
 
       - name: Run installed Linux sign-in via desktop-ci
         id: e2e
