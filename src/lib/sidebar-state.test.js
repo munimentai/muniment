@@ -5,6 +5,8 @@ import { describe, expect, it } from 'vitest'
 import {
   SIDEBAR_STORAGE_KEY,
   isSidebarShortcut,
+  isNewThreadShortcut,
+  newThreadShortcut,
   parseSidebarCollapsed,
   serializeSidebarCollapsed,
   sidebarShortcut,
@@ -45,5 +47,19 @@ describe('sidebar state', () => {
     expect(parseSidebarCollapsed('')).toBe(false)
     expect(parseSidebarCollapsed('true')).toBe(false)
     expect(parseSidebarCollapsed('{"collapsed":true}')).toBe(false)
+  })
+})
+
+describe('new thread shortcut', () => {
+  it('uses the platform modifier', () => {
+    expect(newThreadShortcut('MacIntel')).toBe('Meta+N')
+    expect(newThreadShortcut('Win32')).toBe('Control+N')
+  })
+
+  it('matches only the platform chord from editable targets', () => {
+    const target = document.createElement('textarea')
+    expect(isNewThreadShortcut({ key: 'n', metaKey: true, ctrlKey: false, altKey: false, shiftKey: false, target }, 'MacIntel')).toBe(true)
+    expect(isNewThreadShortcut({ key: 'N', metaKey: false, ctrlKey: true, altKey: false, shiftKey: false, target }, 'Win32')).toBe(true)
+    expect(isNewThreadShortcut({ key: 'n', metaKey: false, ctrlKey: true, altKey: false, shiftKey: true, target }, 'Win32')).toBe(false)
   })
 })
