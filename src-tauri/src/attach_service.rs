@@ -143,7 +143,10 @@ impl<R: tauri::Runtime> DesktopAttachService<TauriRunStartBoundaries<R>> {
             .map_err(|_| ProtocolError::persistence_failed())?
             .join("attach-client-credentials.json");
         Ok(Self {
-            boundaries: TauriRunStartBoundaries { app },
+            boundaries: TauriRunStartBoundaries {
+                app,
+                continue_session_thread: false,
+            },
             idempotency,
             home,
             workspace_contexts,
