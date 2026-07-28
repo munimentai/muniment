@@ -78,7 +78,7 @@ export function createChatController({
         onFollow()
         return
       }
-      await openThread(summaries[0].threadId)
+      await openThread(summaries[0].threadId, switchBlocked)
     } catch (_) {
       if (!destroyed) onHistoryError('Conversation history could not be restored. Try again.')
     }
@@ -90,6 +90,7 @@ export function createChatController({
     onThreadSwitch(true)
     onHistoryError('')
     const previousThreadId = readThreadId()
+    const wasBlocked = switchBlocked
     let selected = false
     try {
       if (select) {
@@ -117,7 +118,9 @@ export function createChatController({
       switchBlocked = false
     } catch (_) {
       if (!destroyed) {
-        if (selected) {
+        if (wasBlocked) {
+          switchBlocked = true
+        } else if (selected) {
           if (previousThreadId == null) {
             switchBlocked = true
           } else {
@@ -128,8 +131,6 @@ export function createChatController({
               switchBlocked = true
             }
           }
-        } else {
-          switchBlocked = false
         }
         onHistoryError('Conversation history could not be restored. Try again.')
       }
