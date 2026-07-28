@@ -1,7 +1,11 @@
 export function relativeTime(timestamp, now = new Date()) {
   const date = new Date(timestamp)
   if (Number.isNaN(date.getTime())) return ''
-  const elapsed = Math.max(0, new Date(now).getTime() - date.getTime())
+  const current = new Date(now)
+  if (date.getFullYear() !== current.getFullYear()) {
+    return date.toLocaleDateString('en-US', { day: 'numeric', month: 'short', year: 'numeric' })
+  }
+  const elapsed = Math.max(0, current.getTime() - date.getTime())
 
   if (elapsed < 60_000) return 'Just now'
   if (elapsed < 3_600_000) return `${Math.floor(elapsed / 60_000)}m`
