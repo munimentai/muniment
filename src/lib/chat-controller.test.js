@@ -55,6 +55,100 @@ function setup(invoke = vi.fn()) {
 }
 
 describe('chat controller', () => {
+  it('starts a fresh thread only after the command succeeds', async () => {
+    const request = deferred()
+    const previous = [{ role: 'user', text: 'Current transcript' }]
+    const onThreadSelected = vi.fn()
+    const onHistoryError = vi.fn()
+    const onFocus = vi.fn()
+    const invoke = vi.fn(() => request.promise)
+    const context = setup()
+    context.setMessages(previous)
+    const controller = createChatController({
+      invoke,
+      listen: vi.fn(),
+      readMessages: context.messages,
+      readActive: context.active,
+      readAnnounced: () => null,
+      readDraft: () => '',
+      readFiles: () => [],
+      onMessages: context.setMessages,
+      onActive: vi.fn(),
+      onAnnounce: vi.fn(),
+      onDraft: vi.fn(),
+      onFiles: vi.fn(),
+      onSubmitError: vi.fn(),
+      onCancelError: vi.fn(),
+      onQueueError: vi.fn(),
+      onHistoryError,
+      onThreadSelected,
+      onFocus,
+    })
+
+    const starting = controller.newThread()
+    expect(context.messages()).toBe(previous)
+    request.resolve()
+    await starting
+
+    expect(context.messages()).toEqual([])
+    expect(invoke).toHaveBeenCalledOnce()
+    expect(invoke).toHaveBeenCalledWith('chat_new_thread')
+    expect(onThreadSelected).toHaveBeenCalledWith(null)
+    expect(onFocus).toHaveBeenCalledOnce()
+  })
+
+  it('keeps the current thread when a fresh thread request fails', async () => {
+    const previous = [{ role: 'user', text: 'Current transcript' }]
+    const onThreadSelected = vi.fn()
+    const onHistoryError = vi.fn()
+    const context = setup(vi.fn().mockRejectedValue(new Error('offline')))
+    context.setMessages(previous)
+    const controller = createChatController({
+      invoke: vi.fn().mockRejectedValue(new Error('offline')),
+      listen: vi.fn(),
+      readMessages: context.messages,
+      readActive: context.active,
+      readAnnounced: () => null,
+      readDraft: () => '',
+      readFiles: () => [],
+      onMessages: context.setMessages,
+      onActive: vi.fn(),
+      onAnnounce: vi.fn(),
+      onDraft: vi.fn(),
+      onFiles: vi.fn(),
+      onSubmitError: vi.fn(),
+      onCancelError: vi.fn(),
+      onQueueError: vi.fn(),
+      onHistoryError,
+      onThreadSelected,
+    })
+
+    await controller.newThread()
+
+    expect(context.messages()).toBe(previous)
+    expect(onThreadSelected).not.toHaveBeenCalled()
+    expect(onHistoryError).toHaveBeenLastCalledWith('A new thread could not be started. Try again.')
+  })
+
+  it('blocks a fresh thread during a run or thread switch', async () => {
+    const history = deferred()
+    const invoke = vi.fn((command) => command === 'chat_thread_open' ? history.promise : Promise.resolve())
+    const context = setup(invoke)
+    context.setActive({ id: 'run-1' })
+
+    await context.controller.newThread()
+    expect(invoke).not.toHaveBeenCalled()
+
+    context.setActive(null)
+    const opening = context.controller.openThread('thread-2')
+    await Promise.resolve()
+    await context.controller.newThread()
+    expect(invoke).not.toHaveBeenCalledWith('chat_new_thread')
+
+    history.resolve({ entries: [], nextCursor: null })
+    await opening
+  })
+
   it('publishes an empty transcript without opening a missing thread', async () => {
     const invoke = vi.fn().mockResolvedValue({ summaries: [], nextCursor: null })
     const context = setup(invoke)

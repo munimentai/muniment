@@ -27,8 +27,10 @@ export function createChatController({
   onThreadSummaries = () => {},
   onThreadSelected = () => {},
   onThreadSwitch = () => {},
+  onFreshThread = () => {},
   onHistoryLoaded = () => {},
   onFollow = () => {},
+  onFocus = () => {},
   onSend = () => {},
 }) {
   const buffered = new Map()
@@ -74,6 +76,7 @@ export function createChatController({
       if (!summaries.length) {
         publishMessages([])
         onThreadSelected(null)
+        onFreshThread(true)
         onHistoryLoaded()
         onFollow()
         return
@@ -112,6 +115,7 @@ export function createChatController({
       onHistoryStart()
       onAnnounce(null)
       onThreadSelected(threadId)
+      onFreshThread(false)
       publishMessages(historyMessages(history))
       onHistoryLoaded()
       onFollow()
@@ -134,6 +138,30 @@ export function createChatController({
         }
         onHistoryError('Conversation history could not be restored. Try again.')
       }
+    } finally {
+      switchingThread = false
+      if (!destroyed) onThreadSwitch(switchBlocked)
+    }
+  }
+
+  async function newThread() {
+    if (active() || switchingThread || switchBlocked) return
+    switchingThread = true
+    onThreadSwitch(true)
+    onHistoryError('')
+    try {
+      await invoke('chat_new_thread')
+      if (destroyed) return
+      onHistoryStart()
+      onAnnounce(null)
+      onThreadSelected(null)
+      onFreshThread(true)
+      publishMessages([])
+      onHistoryLoaded()
+      onFollow()
+      onFocus()
+    } catch (_) {
+      if (!destroyed) onHistoryError('A new thread could not be started. Try again.')
     } finally {
       switchingThread = false
       if (!destroyed) onThreadSwitch(switchBlocked)
@@ -236,5 +264,5 @@ export function createChatController({
     buffered.clear()
   }
 
-  return { start, loadHistory, openThread: (threadId) => openThread(threadId, true), send, cancel, resume, queue, cleanup }
+  return { start, loadHistory, openThread: (threadId) => openThread(threadId, true), newThread, send, cancel, resume, queue, cleanup }
 }
