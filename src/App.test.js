@@ -583,6 +583,55 @@ describe('message grammar', () => {
   })
 })
 
+describe('thread name', () => {
+  it('shows the empty name in the titlebar and current thread record', async () => {
+    render(App)
+    await screen.findByPlaceholderText('Ask anything')
+
+    const titlebarName = document.querySelector('.thread-title')
+    const sidebarName = document.querySelector('.thread-row')
+    expect(titlebarName).toHaveTextContent('New thread')
+    expect(titlebarName).toHaveAttribute('title', 'New thread')
+    expect(sidebarName).toHaveTextContent('New thread')
+    expect(sidebarName).toHaveAttribute('title', 'New thread')
+  })
+
+  it('shows the first restored prompt in the titlebar and current thread record', async () => {
+    invoke.mockImplementation(async (command) => {
+      if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
+      if (command === 'chat_history') return [{
+        runId: 'run-1',
+        phase: 'complete',
+        text: 'The renewal date is September 1.',
+        prompt: '  Review \n the lease renewal  ',
+        receipt: null,
+        toolActivity: [],
+      }]
+      if (command === 'auth_entitlement_snapshot') return snapshot()
+      if (command === 'auth_devices') return []
+      throw new Error(`unexpected command: ${command}`)
+    })
+    render(App)
+    await screen.findByText('The renewal date is September 1.')
+
+    const titlebarName = document.querySelector('.thread-title')
+    const sidebarName = document.querySelector('.thread-row')
+    expect(titlebarName).toHaveTextContent('Review the lease renewal')
+    expect(titlebarName).toHaveAttribute('title', 'Review the lease renewal')
+    expect(sidebarName).toHaveTextContent('Review the lease renewal')
+    expect(sidebarName).toHaveAttribute('title', 'Review the lease renewal')
+  })
+
+  it('uses one-line ellipsis styles for both thread names', () => {
+    expect(appRules.get('.thread-title')).toMatch(/overflow:\s*hidden/)
+    expect(appRules.get('.thread-title')).toMatch(/text-overflow:\s*ellipsis/)
+    expect(appRules.get('.thread-title')).toMatch(/white-space:\s*nowrap/)
+    expect(appRules.get('.thread-row-title')).toMatch(/overflow:\s*hidden/)
+    expect(appRules.get('.thread-row-title')).toMatch(/text-overflow:\s*ellipsis/)
+    expect(appRules.get('.thread-row-title')).toMatch(/white-space:\s*nowrap/)
+  })
+})
+
 describe('sidebar collapse', () => {
   const sidebarShortcut = () => navigator.platform.startsWith('Mac')
     ? { key: '\\', metaKey: true }

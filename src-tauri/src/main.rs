@@ -7,6 +7,7 @@ mod dictation;
 mod home;
 mod model_install;
 mod onboarding_import;
+mod session_thread;
 #[cfg(test)]
 mod test_support;
 mod voice_capture;
