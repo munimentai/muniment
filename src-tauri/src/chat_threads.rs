@@ -1,4 +1,4 @@
-use muniment_core::journal::reducer::{project_chat, RunStatus};
+use muniment_core::journal::reducer::{project_chat_with_state, RunStatus};
 use muniment_core::journal::thread_summaries::ThreadSummary;
 use muniment_core::journal::RunJournal;
 use serde::Serialize;
@@ -6,7 +6,7 @@ use serde_json::Value;
 
 use crate::auth;
 use crate::chat::{
-    chat_attachments, chat_pending_permission, chat_tool_activity, resumable_context,
+    chat_attachments, chat_pending_permission, chat_tool_activity, resumable_locator,
     state_session_root, ChatAttachment, ChatPendingPermission, ChatState, ChatToolActivity,
     SharedStorage,
 };
@@ -174,9 +174,9 @@ fn project_history_entry(
     let events = journal
         .events(&run_id)
         .map_err(|_| "Conversation history is unavailable.".to_string())?;
-    let projection =
-        project_chat(&events).map_err(|_| "Conversation history is unavailable.".to_string())?;
-    let resumable = resumable_context(&events, subject, session_root).is_ok();
+    let (projection, state) = project_chat_with_state(&events)
+        .map_err(|_| "Conversation history is unavailable.".to_string())?;
+    let resumable = history_resumable(&events, &state, subject, session_root);
     Ok(HistoryEntry {
         prompt: load_prompt(&run_id, subject)?,
         phase: projection_phase(&projection.status).into(),
@@ -188,6 +188,15 @@ fn project_history_entry(
         resumable,
         run_id,
     })
+}
+
+fn history_resumable(
+    events: &[muniment_core::journal::EventEnvelope],
+    state: &muniment_core::journal::reducer::RunState,
+    subject: Option<&str>,
+    session_root: &std::path::Path,
+) -> bool {
+    resumable_locator(events.first(), state, subject, session_root).is_ok()
 }
 
 pub(crate) fn chat_thread_open_page(
@@ -412,6 +421,103 @@ mod tests {
         assert_eq!(entry.phase, "thinking");
 
         drop(journal);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn history_resumable_rejects_each_unsafe_state() {
+        let directory = std::env::temp_dir().join(format!("muniment-resume-{}", Uuid::now_v7()));
+        std::fs::create_dir_all(&directory).unwrap();
+        std::fs::write(directory.join("session.jsonl"), "{}\n").unwrap();
+        let run_id = Uuid::now_v7().to_string();
+        let events = |tail: Vec<(&str, Value)>| {
+            let mut values = vec![event_envelope(
+                &run_id,
+                1,
+                "run.started",
+                json!({}),
+                Some("owner"),
+            )];
+            values.extend(
+                tail.into_iter()
+                    .enumerate()
+                    .map(|(index, (kind, payload))| {
+                        event_envelope(&run_id, index as u64 + 2, kind, payload, Some("owner"))
+                    }),
+            );
+            values
+        };
+        let eligible_tail = || {
+            vec![
+                (
+                    "runtime.pi_session.bound",
+                    json!({"run_id":run_id, "locator":"session.jsonl"}),
+                ),
+                ("run.needs_attention", json!({"reason":"interrupted"})),
+            ]
+        };
+        let eligible = events(eligible_tail());
+        let (_, eligible_state) = project_chat_with_state(&eligible).unwrap();
+        assert!(history_resumable(
+            &eligible,
+            &eligible_state,
+            Some("owner"),
+            &directory
+        ));
+        let rejected = [
+            (events(eligible_tail()), Some("another-subject")),
+            (
+                events(vec![(
+                    "runtime.pi_session.bound",
+                    json!({"run_id":run_id, "locator":"session.jsonl"}),
+                )]),
+                Some("owner"),
+            ),
+            (
+                events(vec![
+                    (
+                        "runtime.pi_session.bound",
+                        json!({"run_id":run_id, "locator":"session.jsonl"}),
+                    ),
+                    (
+                        "permission.requested",
+                        json!({"gate_id":"gate", "kind":"confirm", "title":"Allow?", "message":"Proceed?"}),
+                    ),
+                    ("run.needs_attention", json!({"reason":"interrupted"})),
+                ]),
+                Some("owner"),
+            ),
+            (
+                events(vec![
+                    (
+                        "runtime.pi_session.bound",
+                        json!({"run_id":run_id, "locator":"session.jsonl"}),
+                    ),
+                    (
+                        "tool.effect.started",
+                        json!({"effect_id":"effect", "display_name":"Command"}),
+                    ),
+                    ("run.needs_attention", json!({"reason":"interrupted"})),
+                ]),
+                Some("owner"),
+            ),
+            (
+                events(vec![
+                    (
+                        "runtime.pi_session.bound",
+                        json!({"run_id":run_id, "locator":"missing.jsonl"}),
+                    ),
+                    ("run.needs_attention", json!({"reason":"interrupted"})),
+                ]),
+                Some("owner"),
+            ),
+        ];
+
+        for (events, subject) in rejected {
+            let (_, state) = project_chat_with_state(&events).unwrap();
+            assert!(!history_resumable(&events, &state, subject, &directory));
+        }
+
         std::fs::remove_dir_all(directory).unwrap();
     }
 

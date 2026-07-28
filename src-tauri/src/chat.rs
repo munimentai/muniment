@@ -671,16 +671,29 @@ pub(crate) fn resumable_context(
     subject: Option<&str>,
     session_root: &std::path::Path,
 ) -> Result<ResumeContext, String> {
-    if events.is_empty()
+    let state = reduce(events).map_err(|_| "This reply cannot be resumed.".to_string())?;
+    let locator = resumable_locator(events.first(), &state, subject, session_root)?;
+    Ok(ResumeContext {
+        events: events.to_vec(),
+        locator,
+    })
+}
+
+pub(crate) fn resumable_locator(
+    first_event: Option<&EventEnvelope>,
+    state: &muniment_core::journal::reducer::RunState,
+    subject: Option<&str>,
+    session_root: &std::path::Path,
+) -> Result<PiSessionLocator, String> {
+    if first_event.is_none()
         || matches!(
-            events.first().and_then(|event| event.provenance.actor_id.as_deref()),
+            first_event.and_then(|event| event.provenance.actor_id.as_deref()),
             Some(owner) if Some(owner) != subject
         )
     {
         return Err("This reply cannot be resumed.".into());
     }
-    let state = reduce(events).map_err(|_| "This reply cannot be resumed.".to_string())?;
-    if !matches!(state.status, RunStatus::NeedsAttention(_))
+    if !matches!(&state.status, RunStatus::NeedsAttention(_))
         || state.pending_permission.is_some()
         || !state.running_effects.is_empty()
     {
@@ -688,13 +701,11 @@ pub(crate) fn resumable_context(
     }
     let binding = state
         .pi_session
+        .as_ref()
         .ok_or_else(|| "This reply cannot be resumed.".to_string())?;
     let (locator, _) = validate_pi_session(session_root, &binding.locator)
         .map_err(|_| "This reply cannot be resumed.".to_string())?;
-    Ok(ResumeContext {
-        events: events.to_vec(),
-        locator,
-    })
+    Ok(locator)
 }
 
 #[tauri::command]
