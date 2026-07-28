@@ -4,6 +4,14 @@ export function composerAction(event, text, active) {
   return active.id === 'pending' ? null : 'steer'
 }
 
+export function permissionGateAction(event, kind, platform = navigator.platform) {
+  if (event.key !== 'Enter' || event.shiftKey || event.isComposing) return null
+  if (kind === 'input') return event.metaKey || event.ctrlKey || event.altKey ? null : 'commit'
+  if (kind !== 'editor' || event.altKey) return null
+  const mac = platform.startsWith('Mac')
+  return (mac ? event.metaKey && !event.ctrlKey : event.ctrlKey && !event.metaKey) ? 'commit' : null
+}
+
 // A receipt field is recorded when the server sent something to show. Zero is a
 // record (a route can genuinely cost nothing); a blank is a gap and would only
 // render as a stray separator.
