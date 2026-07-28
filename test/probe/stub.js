@@ -46,6 +46,40 @@ const historyFixtures = {
       resumable: false,
     },
   ],
+  input: [
+    {
+      runId: 'probe-input',
+      prompt: 'Find the client folder.',
+      phase: 'pending-permission',
+      text: 'I need the folder name before I continue.',
+      receipt: null,
+      toolActivity: [],
+      pendingPermission: {
+        gateId: 'probe-input-gate',
+        kind: 'input',
+        title: 'Client folder name',
+        placeholder: 'Example: Northwind',
+      },
+      resumable: false,
+    },
+  ],
+  editor: [
+    {
+      runId: 'probe-editor',
+      prompt: 'Archive the old export.',
+      phase: 'pending-permission',
+      text: 'Review the command before I continue.',
+      receipt: null,
+      toolActivity: [],
+      pendingPermission: {
+        gateId: 'probe-editor-gate',
+        kind: 'editor',
+        title: 'Archive command',
+        prefill: 'mv exports/old.csv archive/old.csv',
+      },
+      resumable: false,
+    },
+  ],
 }
 
 const fixtureName = document.currentScript.dataset.history

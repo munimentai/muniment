@@ -45,6 +45,7 @@
   let queueError = $state('')
   let historyError = $state('')
   let permissionAnswer = $state(null)
+  let permissionValues = $state({})
   let thread = $state()
   let pinned = $state(true)
   let hasContentBelow = $state(false)
@@ -224,6 +225,19 @@
     return gate && permissionAnswer?.runId === run.id && permissionAnswer.gateId === gate.gateId
       ? permissionAnswer
       : null
+  }
+
+  function permissionValue(run) {
+    const gate = run.pendingPermission
+    const key = `${run.id}:${gate.gateId}`
+    return Object.hasOwn(permissionValues, key)
+      ? permissionValues[key]
+      : gate.kind === 'editor' ? gate.prefill ?? '' : ''
+  }
+
+  function setPermissionValue(run, value) {
+    const gate = run.pendingPermission
+    permissionValues = { ...permissionValues, [`${run.id}:${gate.gateId}`]: value }
   }
 
   function stopDictation(cancelled = false) {
@@ -605,6 +619,24 @@
                 <div class="permission-card tool-card">
                   <strong>{gate.title}</strong>
                   {#if gate.kind === 'confirm' && gate.message}<p>{gate.message}</p>{/if}
+                  {#if gate.kind === 'input'}
+                    <input
+                      class="permission-field"
+                      aria-label={gate.title}
+                      placeholder={gate.placeholder ?? ''}
+                      value={permissionValue(message.run)}
+                      disabled={answerState?.pending}
+                      oninput={(event) => setPermissionValue(message.run, event.currentTarget.value)}
+                    >
+                  {:else if gate.kind === 'editor'}
+                    <textarea
+                      class="permission-field permission-editor"
+                      aria-label={gate.title}
+                      value={permissionValue(message.run)}
+                      disabled={answerState?.pending}
+                      oninput={(event) => setPermissionValue(message.run, event.currentTarget.value)}
+                    ></textarea>
+                  {/if}
                   <div class="permission-actions">
                     {#if gate.kind === 'confirm'}
                       <button disabled={answerState?.pending} onclick={() => answerPermission(message.run, { type: 'confirm', value: true })}>Allow</button>
@@ -612,6 +644,8 @@
                       {#each gate.options ?? [] as option}
                         <button disabled={answerState?.pending} onclick={() => answerPermission(message.run, { type: 'select', value: option })}>{option}</button>
                       {/each}
+                    {:else if gate.kind === 'input' || gate.kind === 'editor'}
+                      <button disabled={answerState?.pending} onclick={() => answerPermission(message.run, { type: gate.kind, value: permissionValue(message.run) })}>Submit</button>
                     {/if}
                     <button disabled={answerState?.pending} onclick={() => answerPermission(message.run, { type: 'cancelled' })}>Deny</button>
                   </div>
@@ -926,6 +960,10 @@
   .permission-card { color: var(--ink); }
   .permission-card strong { font-weight: 600; }
   .permission-card p { margin: 4px 0 0; color: var(--muted); white-space: pre-wrap; overflow-wrap: anywhere; }
+  .permission-field { display: block; width: 100%; margin-top: 8px; padding: 7px 9px; border: 1px solid var(--border); border-radius: var(--radius-control); outline: 0; background: var(--surface); color: var(--ink); font: inherit; }
+  .permission-field:focus { border-color: var(--muted); }
+  .permission-field::placeholder { color: var(--muted); }
+  .permission-editor { min-height: 84px; resize: vertical; }
   .permission-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
   .permission-actions button { padding: 4px 8px; font: inherit; }
   .permission-card .run-error { margin-top: 6px; }
