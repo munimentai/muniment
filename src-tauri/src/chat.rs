@@ -718,43 +718,6 @@ fn projection_phase(status: &Option<RunStatus>) -> &'static str {
     }
 }
 
-fn history_entries(
-    journal: &mut RunJournal,
-    subject: Option<&str>,
-    session_root: &std::path::Path,
-) -> Result<Vec<HistoryEntry>, String> {
-    let mut entries = Vec::new();
-    for run_id in journal
-        .run_ids()
-        .map_err(|_| "Conversation history is unavailable.".to_string())?
-    {
-        let events = journal
-            .events(&run_id)
-            .map_err(|_| "Conversation history is unavailable.".to_string())?;
-        if matches!(
-            events.first().and_then(|event| event.provenance.actor_id.as_deref()),
-            Some(owner) if Some(owner) != subject
-        ) {
-            continue;
-        }
-        let projection = project_chat(&events)
-            .map_err(|_| "Conversation history is unavailable.".to_string())?;
-        let resumable = resumable_context(&events, subject, session_root).is_ok();
-        entries.push(HistoryEntry {
-            prompt: load_prompt(&run_id, subject)?,
-            phase: projection_phase(&projection.status).into(),
-            text: projection.text,
-            receipt: projection.receipt,
-            tool_activity: chat_tool_activity(&projection.tool_activity),
-            attachments: chat_attachments(&projection.attachments),
-            pending_permission: chat_pending_permission(projection.pending_permission),
-            resumable,
-            run_id,
-        });
-    }
-    Ok(entries)
-}
-
 fn subject_owns_first_run(
     journal: &mut RunJournal,
     thread_id: &str,
@@ -995,26 +958,6 @@ pub async fn chat_thread_open(
         &thread_id,
         limit,
         cursor.as_deref(),
-    )
-}
-
-#[tauri::command]
-pub async fn chat_history(
-    app_handle: tauri::AppHandle,
-    auth_state: tauri::State<'_, auth::AuthState>,
-    state: tauri::State<'_, ChatState>,
-) -> Result<Vec<HistoryEntry>, String> {
-    // History is conversation data and follows the same signed-in gate as send.
-    let tokens = auth::fresh_tokens(&auth_state, &app_handle)?;
-    let mut storage = state
-        .storage
-        .lock()
-        .map_err(|_| "Conversation history is unavailable.".to_string())?;
-    let session_root = state_session_root(&app_handle)?;
-    history_entries(
-        &mut storage.journal,
-        tokens.subject.as_deref(),
-        &session_root,
     )
 }
 
@@ -3377,10 +3320,20 @@ mod tests {
         let public = serde_json::to_string(&chat_attachments(&projection.attachments)).unwrap();
         assert!(!public.contains("sha256"));
         assert!(!public.contains(directory.to_string_lossy().as_ref()));
-        let history = history_entries(&mut storage.journal, Some("owner"), &directory).unwrap();
-        assert_eq!(history.len(), 1);
-        assert_eq!(history[0].attachments.len(), 2);
-        let restored = serde_json::to_string(&history).unwrap();
+        let summaries =
+            chat_thread_summaries_page(&mut storage.journal, Some("owner"), 10, None).unwrap();
+        let history = chat_thread_open_page(
+            &mut storage.journal,
+            Some("owner"),
+            &directory,
+            &summaries.summaries[0].thread_id,
+            10,
+            None,
+        )
+        .unwrap();
+        assert_eq!(history.entries.len(), 1);
+        assert_eq!(history.entries[0].attachments.len(), 2);
+        let restored = serde_json::to_string(&history.entries).unwrap();
         assert!(!restored.contains("sha256"));
         assert!(!restored.contains(directory.to_string_lossy().as_ref()));
         let serialized = serde_json::to_string(&events).unwrap();
@@ -4717,13 +4670,18 @@ mod tests {
     }
 
     #[test]
-    fn history_projects_and_clears_a_typed_pending_permission() {
+    fn thread_open_projects_and_clears_a_typed_pending_permission() {
         keyring::set_default_credential_builder(keyring::mock::default_credential_builder());
         let directory = std::env::temp_dir().join(format!("muniment-chat-{}", Uuid::now_v7()));
         std::fs::create_dir_all(&directory).unwrap();
         let mut journal = RunJournal::open(directory.join("runs.sqlite3")).unwrap();
         let run_id = Uuid::now_v7().to_string();
-        append_test_event(&mut journal, &run_id, 1, "run.started", json!({}), None);
+        journal
+            .append_new_run(
+                "workspace-a",
+                &event_envelope(&run_id, 1, "run.started", json!({}), None),
+            )
+            .unwrap();
         append_test_event(
             &mut journal,
             &run_id,
@@ -4739,8 +4697,18 @@ mod tests {
             None,
         );
 
-        let entries = history_entries(&mut journal, None, std::path::Path::new(".")).unwrap();
-        let entry = entries.iter().find(|entry| entry.run_id == run_id).unwrap();
+        let summaries = chat_thread_summaries_page(&mut journal, None, 10, None).unwrap();
+        let thread_id = summaries.summaries[0].thread_id.clone();
+        let entries = chat_thread_open_page(
+            &mut journal,
+            None,
+            std::path::Path::new("."),
+            &thread_id,
+            10,
+            None,
+        )
+        .unwrap();
+        let entry = &entries.entries[0];
         assert_eq!(entry.phase, "pending-permission");
         let pending = entry.pending_permission.as_ref().unwrap();
         assert_eq!(pending.gate_id, "pi-request-1");
@@ -4760,8 +4728,16 @@ mod tests {
             json!({"gate_id": "pi-request-1", "decision": "cancelled"}),
             None,
         );
-        let entries = history_entries(&mut journal, None, std::path::Path::new(".")).unwrap();
-        let entry = entries.iter().find(|entry| entry.run_id == run_id).unwrap();
+        let entries = chat_thread_open_page(
+            &mut journal,
+            None,
+            std::path::Path::new("."),
+            &thread_id,
+            10,
+            None,
+        )
+        .unwrap();
+        let entry = &entries.entries[0];
         assert!(entry.pending_permission.is_none());
         assert_eq!(entry.phase, "thinking");
 
@@ -4819,7 +4795,7 @@ mod tests {
     }
 
     #[test]
-    fn history_is_scoped_by_the_first_events_actor() {
+    fn thread_commands_are_scoped_by_the_first_events_actor() {
         keyring::set_default_credential_builder(keyring::mock::default_credential_builder());
         let directory = std::env::temp_dir().join(format!("muniment-chat-{}", Uuid::now_v7()));
         std::fs::create_dir_all(&directory).unwrap();
@@ -4829,14 +4805,12 @@ mod tests {
         let run_b = "01900000-0000-7000-8000-000000000003";
         let run_legacy = "01900000-0000-7000-8000-000000000004";
 
-        append_test_event(
-            &mut journal,
-            run_a,
-            1,
-            "run.started",
-            json!({}),
-            Some("sub-a"),
-        );
+        journal
+            .append_new_run(
+                "workspace-a",
+                &event_envelope(run_a, 1, "run.started", json!({}), Some("sub-a")),
+            )
+            .unwrap();
         append_test_event(
             &mut journal,
             run_a,
@@ -4853,14 +4827,12 @@ mod tests {
             json!({"receipt": {"owner": "sub-a"}}),
             Some("sub-a"),
         );
-        append_test_event(
-            &mut journal,
-            run_a_reconciled,
-            1,
-            "run.started",
-            json!({}),
-            Some("sub-a"),
-        );
+        journal
+            .append_new_run(
+                "workspace-a",
+                &event_envelope(run_a_reconciled, 1, "run.started", json!({}), Some("sub-a")),
+            )
+            .unwrap();
         append_test_event(
             &mut journal,
             run_a_reconciled,
@@ -4870,14 +4842,12 @@ mod tests {
             None,
         );
 
-        append_test_event(
-            &mut journal,
-            run_b,
-            1,
-            "run.started",
-            json!({}),
-            Some("sub-b"),
-        );
+        journal
+            .append_new_run(
+                "workspace-a",
+                &event_envelope(run_b, 1, "run.started", json!({}), Some("sub-b")),
+            )
+            .unwrap();
         append_test_event(
             &mut journal,
             run_b,
@@ -4895,7 +4865,12 @@ mod tests {
             Some("sub-b"),
         );
 
-        append_test_event(&mut journal, run_legacy, 1, "run.started", json!({}), None);
+        journal
+            .append_new_run(
+                "workspace-a",
+                &event_envelope(run_legacy, 1, "run.started", json!({}), None),
+            )
+            .unwrap();
         append_test_event(
             &mut journal,
             run_legacy,
@@ -4905,8 +4880,24 @@ mod tests {
             None,
         );
 
-        let sub_b =
-            history_entries(&mut journal, Some("sub-b"), std::path::Path::new(".")).unwrap();
+        let sub_b_summaries =
+            chat_thread_summaries_page(&mut journal, Some("sub-b"), 10, None).unwrap();
+        let sub_b = sub_b_summaries
+            .summaries
+            .iter()
+            .flat_map(|summary| {
+                chat_thread_open_page(
+                    &mut journal,
+                    Some("sub-b"),
+                    std::path::Path::new("."),
+                    &summary.thread_id,
+                    10,
+                    None,
+                )
+                .unwrap()
+                .entries
+            })
+            .collect::<Vec<_>>();
         assert_eq!(
             sub_b
                 .iter()
@@ -4923,8 +4914,24 @@ mod tests {
                 != Some(&json!("sub-a"))
         }));
 
-        let sub_a =
-            history_entries(&mut journal, Some("sub-a"), std::path::Path::new(".")).unwrap();
+        let sub_a_summaries =
+            chat_thread_summaries_page(&mut journal, Some("sub-a"), 10, None).unwrap();
+        let sub_a = sub_a_summaries
+            .summaries
+            .iter()
+            .flat_map(|summary| {
+                chat_thread_open_page(
+                    &mut journal,
+                    Some("sub-a"),
+                    std::path::Path::new("."),
+                    &summary.thread_id,
+                    10,
+                    None,
+                )
+                .unwrap()
+                .entries
+            })
+            .collect::<Vec<_>>();
         assert_eq!(
             sub_a
                 .iter()
