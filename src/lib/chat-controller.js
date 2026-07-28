@@ -12,6 +12,7 @@ export function createChatController({
   readAnnounced,
   readDraft,
   readFiles,
+  readThreadId = () => null,
   blocked = () => false,
   onMessages,
   onActive,
@@ -25,6 +26,7 @@ export function createChatController({
   onHistoryStart = () => {},
   onThreadSummaries = () => {},
   onThreadSelected = () => {},
+  onThreadSwitch = () => {},
   onHistoryLoaded = () => {},
   onFollow = () => {},
   onSend = () => {},
@@ -33,7 +35,8 @@ export function createChatController({
   let submissionSequence = 0
   let unlisten
   let destroyed = false
-  let selectingThread = false
+  let switchingThread = false
+  let switchBlocked = false
 
   const messages = () => readMessages()
   const active = () => readActive()
@@ -82,11 +85,17 @@ export function createChatController({
   }
 
   async function openThread(threadId, select = false) {
-    if (active() || selectingThread) return
-    selectingThread = true
+    if (active() || switchingThread) return
+    switchingThread = true
+    onThreadSwitch(true)
     onHistoryError('')
+    const previousThreadId = readThreadId()
+    let selected = false
     try {
-      if (select) await invoke('chat_select_thread', { threadId })
+      if (select) {
+        await invoke('chat_select_thread', { threadId })
+        selected = true
+      }
       const history = []
       let cursor
       for (let page = 0; page < historyPageCap; page += 1) {
@@ -105,16 +114,34 @@ export function createChatController({
       publishMessages(historyMessages(history))
       onHistoryLoaded()
       onFollow()
+      switchBlocked = false
     } catch (_) {
-      if (!destroyed) onHistoryError('Conversation history could not be restored. Try again.')
+      if (!destroyed) {
+        if (selected) {
+          if (previousThreadId == null) {
+            switchBlocked = true
+          } else {
+            try {
+              await invoke('chat_select_thread', { threadId: previousThreadId })
+              switchBlocked = false
+            } catch (_) {
+              switchBlocked = true
+            }
+          }
+        } else {
+          switchBlocked = false
+        }
+        onHistoryError('Conversation history could not be restored. Try again.')
+      }
     } finally {
-      selectingThread = false
+      switchingThread = false
+      if (!destroyed) onThreadSwitch(switchBlocked)
     }
   }
 
   async function send() {
     const prompt = readDraft().trim()
-    if (!prompt || active() || blocked()) return
+    if (!prompt || active() || switchingThread || switchBlocked || blocked()) return
     onSend()
     onSubmitError('')
     const submissionId = ++submissionSequence

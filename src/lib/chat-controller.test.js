@@ -136,6 +136,23 @@ describe('chat controller', () => {
     expect(onThreadSelected).toHaveBeenCalledWith('thread-2')
   })
 
+  it('blocks a send while another thread loads', async () => {
+    const history = deferred()
+    const invoke = vi.fn((command) => {
+      if (command === 'chat_thread_open') return history.promise
+      return Promise.resolve()
+    })
+    const context = setup(invoke)
+
+    const opening = context.controller.openThread('thread-2')
+    await Promise.resolve()
+    await context.controller.send()
+
+    expect(invoke).not.toHaveBeenCalledWith('chat_submit', expect.anything())
+    history.resolve({ entries: [], nextCursor: null })
+    await opening
+  })
+
   it.each(['chat_select_thread', 'chat_thread_open'])('keeps the transcript when %s fails', async (failedCommand) => {
     const previous = [{ role: 'user', text: 'Current transcript' }]
     const onHistoryError = vi.fn()
@@ -152,6 +169,7 @@ describe('chat controller', () => {
       readAnnounced: () => null,
       readDraft: () => '',
       readFiles: () => [],
+      readThreadId: () => 'thread-1',
       onMessages: context.setMessages,
       onActive: vi.fn(),
       onAnnounce: vi.fn(),
@@ -167,6 +185,90 @@ describe('chat controller', () => {
 
     expect(context.messages()).toBe(previous)
     expect(onHistoryError).toHaveBeenLastCalledWith('Conversation history could not be restored. Try again.')
+  })
+
+  it('restores the previous backend thread when the selected thread fails to load', async () => {
+    const invoke = vi.fn()
+      .mockResolvedValueOnce()
+      .mockRejectedValueOnce(new Error('offline'))
+      .mockResolvedValueOnce()
+      .mockResolvedValueOnce({ runId: 'run-1' })
+    const context = setup()
+    const controller = createChatController({
+      invoke,
+      listen: vi.fn(),
+      readMessages: context.messages,
+      readActive: context.active,
+      readAnnounced: () => null,
+      readDraft: () => 'Send after recovery',
+      readFiles: () => [],
+      readThreadId: () => 'thread-1',
+      onMessages: context.setMessages,
+      onActive: vi.fn(),
+      onAnnounce: vi.fn(),
+      onDraft: vi.fn(),
+      onFiles: vi.fn(),
+      onSubmitError: vi.fn(),
+      onCancelError: vi.fn(),
+      onQueueError: vi.fn(),
+      onHistoryError: vi.fn(),
+    })
+
+    await controller.openThread('thread-2')
+    await controller.send()
+
+    expect(invoke.mock.calls.slice(0, 3)).toEqual([
+      ['chat_select_thread', { threadId: 'thread-2' }],
+      ['chat_thread_open', { threadId: 'thread-2', limit: 100 }],
+      ['chat_select_thread', { threadId: 'thread-1' }],
+    ])
+    expect(invoke).toHaveBeenCalledWith('chat_submit', {
+      prompt: 'Send after recovery',
+      files: [],
+    })
+  })
+
+  it('blocks sends after restoration fails until a thread retry succeeds', async () => {
+    const invoke = vi.fn()
+      .mockResolvedValueOnce()
+      .mockRejectedValueOnce(new Error('page offline'))
+      .mockRejectedValueOnce(new Error('restore offline'))
+      .mockResolvedValueOnce()
+      .mockResolvedValueOnce({ entries: [], nextCursor: null })
+      .mockResolvedValueOnce({ runId: 'run-1' })
+    const context = setup(invoke)
+    const controller = createChatController({
+      invoke,
+      listen: vi.fn(),
+      readMessages: context.messages,
+      readActive: context.active,
+      readAnnounced: () => null,
+      readDraft: () => 'Do not send',
+      readFiles: () => [],
+      readThreadId: () => 'thread-1',
+      onMessages: context.setMessages,
+      onActive: vi.fn(),
+      onAnnounce: vi.fn(),
+      onDraft: vi.fn(),
+      onFiles: vi.fn(),
+      onSubmitError: vi.fn(),
+      onCancelError: vi.fn(),
+      onQueueError: vi.fn(),
+      onHistoryError: vi.fn(),
+    })
+
+    await controller.openThread('thread-2')
+    await controller.send()
+
+    expect(invoke).not.toHaveBeenCalledWith('chat_submit', expect.anything())
+
+    await controller.openThread('thread-1')
+    await controller.send()
+
+    expect(invoke).toHaveBeenCalledWith('chat_submit', {
+      prompt: 'Do not send',
+      files: [],
+    })
   })
 
   it('does not select a thread while a run is active', async () => {

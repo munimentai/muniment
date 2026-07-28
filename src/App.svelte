@@ -47,6 +47,7 @@
   let historyError = $state('')
   let threadSummaries = $state([])
   let currentThreadId = $state(null)
+  let threadSwitching = $state(false)
   let permissionAnswer = $state(null)
   let permissionValues = $state({})
   let thread = $state()
@@ -133,6 +134,7 @@
     readAnnounced: () => announcedRun,
     readDraft: () => draft,
     readFiles: () => selectedFiles,
+    readThreadId: () => currentThreadId,
     blocked: () => dictationBusy(),
     onMessages: (next) => { messages = next },
     onActive: (next) => { active = next },
@@ -145,6 +147,7 @@
     onHistoryError: (next) => { historyError = next },
     onThreadSummaries: (next) => { threadSummaries = next },
     onThreadSelected: (next) => { currentThreadId = next },
+    onThreadSwitch: (next) => { threadSwitching = next },
     onHistoryStart: () => { expandedReceipts = new Set(); parallelTools = new Map() },
     onHistoryLoaded: () => { pinned = true },
     onFollow: followNewContent,
@@ -720,7 +723,7 @@
             </ul>
           {/if}
           <div class="composer-input">
-            <textarea class:polishing={dictationPolishing} bind:this={composer} bind:value={draft} oninput={composerInput} onkeydown={keydown} onscroll={syncPolishPreviewScroll} rows="2" placeholder={active?.phase === 'resuming' ? 'Resuming interrupted reply…' : 'Ask anything'} disabled={active?.phase === 'resuming'} readonly={dictationPolishing}></textarea>
+            <textarea class:polishing={dictationPolishing} bind:this={composer} bind:value={draft} oninput={composerInput} onkeydown={keydown} onscroll={syncPolishPreviewScroll} rows="2" placeholder={active?.phase === 'resuming' ? 'Resuming interrupted reply…' : 'Ask anything'} disabled={active?.phase === 'resuming' || threadSwitching} readonly={dictationPolishing}></textarea>
             {#if dictationPolishing}
               <div class="polish-preview" bind:this={polishPreview} aria-hidden="true"><span data-testid="polish-draft">{appendTranscript(dictationDraftSnapshot, dictationTranscript).slice(0, -dictationTranscript.length)}</span><span class="polish-transcript" data-testid="polish-transcript">{dictationTranscript}</span></div>
             {/if}
@@ -757,7 +760,7 @@
                 <button class="quiet follow-up" disabled={!draft.trim()} onclick={() => chatController.queue('followUp')}>Queue follow-up</button>
                 <button onclick={() => chatController.cancel()}>Stop</button>
                 <button class="primary" disabled={!draft.trim()} onclick={() => chatController.queue('steer')}>Send</button>
-              {:else if !active}<button class="primary" disabled={!draft.trim() || dictationBusy()} onclick={() => chatController.send()}>Send</button>{/if}
+              {:else if !active}<button class="primary" disabled={!draft.trim() || dictationBusy() || threadSwitching} onclick={() => chatController.send()}>Send</button>{/if}
             </div>
           </div>
           {#if dictationError}<div class="dictation-error" role="alert">{dictationError}</div>{/if}
