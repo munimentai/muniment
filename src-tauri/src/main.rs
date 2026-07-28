@@ -57,6 +57,7 @@ fn main() {
             chat_threads::chat_thread_summaries,
             chat_threads::chat_thread_open,
             chat_threads::chat_select_thread,
+            chat_threads::chat_rename_thread,
             chat_threads::chat_new_thread,
             attach_service::attach_pairing_decide,
             model_install::gemma_install_start,
