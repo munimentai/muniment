@@ -17,4 +17,15 @@ describe('relative time', () => {
   ])('formats %s as %s', (timestamp, expected) => {
     expect(relativeTime(timestamp, now)).toBe(expected)
   })
+
+  it('distinguishes matching dates across calendar years', () => {
+    const labels = [
+      relativeTime('2026-03-28T12:00:00Z', now),
+      relativeTime('2025-03-28T12:00:00Z', now),
+      relativeTime('2024-03-28T12:00:00Z', now),
+    ]
+
+    expect(labels).toEqual(['Mar 28', 'Mar 28, 2025', 'Mar 28, 2024'])
+    expect(new Set(labels)).toHaveLength(3)
+  })
 })
