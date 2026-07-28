@@ -53,7 +53,6 @@ fn main() {
             chat::chat_cancel,
             chat::chat_answer_permission,
             chat::chat_queue,
-            chat::chat_history,
             chat::chat_thread_summaries,
             chat::chat_thread_open,
             chat::chat_select_thread,
