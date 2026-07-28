@@ -35,7 +35,7 @@ use tauri::{Emitter, Manager};
 use uuid::Uuid;
 
 use crate::auth;
-use crate::session_thread::SessionThread;
+use crate::session_thread::{OfferedThread, SessionThread};
 
 const RPC_TIMEOUT: Duration = Duration::from_secs(30);
 const QUEUE_TIMEOUT: Duration = Duration::from_secs(2);
@@ -893,6 +893,19 @@ fn chat_thread_open_page(
     })
 }
 
+fn select_session_thread(
+    journal: &mut RunJournal,
+    tracker: &SessionThread,
+    subject: Option<&str>,
+    thread_id: &str,
+) -> Result<(), String> {
+    if !subject_owns_first_run(journal, thread_id, subject)? {
+        return Err("Conversation history is unavailable.".into());
+    }
+    tracker.select(thread_id.to_owned(), subject);
+    Ok(())
+}
+
 #[tauri::command]
 pub async fn chat_thread_summaries(
     app_handle: tauri::AppHandle,
@@ -912,6 +925,37 @@ pub async fn chat_thread_summaries(
         limit,
         cursor.as_deref(),
     )
+}
+
+#[tauri::command]
+pub async fn chat_select_thread(
+    app_handle: tauri::AppHandle,
+    auth_state: tauri::State<'_, auth::AuthState>,
+    state: tauri::State<'_, ChatState>,
+    thread_id: String,
+) -> Result<(), String> {
+    let tokens = auth::fresh_tokens(&auth_state, &app_handle)?;
+    let mut storage = state
+        .storage
+        .lock()
+        .map_err(|_| "Conversation history is unavailable.".to_string())?;
+    select_session_thread(
+        &mut storage.journal,
+        &state.session_thread,
+        tokens.subject.as_deref(),
+        &thread_id,
+    )
+}
+
+#[tauri::command]
+pub async fn chat_new_thread(
+    app_handle: tauri::AppHandle,
+    auth_state: tauri::State<'_, auth::AuthState>,
+    state: tauri::State<'_, ChatState>,
+) -> Result<(), String> {
+    auth::fresh_tokens(&auth_state, &app_handle)?;
+    state.session_thread.fresh();
+    Ok(())
 }
 
 #[tauri::command]
@@ -1273,14 +1317,15 @@ fn prepare_opened_run(
     projector.apply(&started).map_err(|_| attachment_error())?;
     if !workspace.is_empty() {
         let thread_id = if session_thread.continue_existing {
-            let offered = session_thread
-                .tracker
-                .offered(workspace, subject)
-                .or_else(|| {
+            let offered = match session_thread.tracker.offered(workspace, subject) {
+                OfferedThread::AdoptNewest => {
                     newest_owned_workspace_thread(journal, workspace, subject)
                         .ok()
                         .flatten()
-                });
+                }
+                OfferedThread::Selected(thread_id) => Some(thread_id),
+                OfferedThread::Fresh => None,
+            };
             match offered {
                 Some(thread_id) => journal
                     .append_new_run_in_thread(workspace, &thread_id, &started)
@@ -2722,9 +2767,10 @@ mod tests {
             None,
         )
         .unwrap();
-        let thread_id = tracker
-            .offered("workspace-a", Some("owner"))
-            .expect("the first run records its thread");
+        let OfferedThread::Selected(thread_id) = tracker.offered("workspace-a", Some("owner"))
+        else {
+            panic!("the first run must record its thread");
+        };
         prepare_new_run_with_session_thread(
             &storage,
             SessionThreadStart {
@@ -2753,7 +2799,7 @@ mod tests {
         );
         assert_eq!(
             tracker.offered("workspace-a", Some("owner")),
-            Some(thread_id)
+            OfferedThread::Selected(thread_id)
         );
 
         drop(connection);
@@ -2820,7 +2866,7 @@ mod tests {
         );
         assert_eq!(
             tracker.offered("workspace-a", Some("owner")),
-            Some(thread_id)
+            OfferedThread::Selected(thread_id)
         );
 
         drop(connection);
@@ -2882,7 +2928,7 @@ mod tests {
 
         assert_eq!(
             tracker.offered("workspace-a", Some("owner")),
-            Some(owner_thread)
+            OfferedThread::Selected(owner_thread)
         );
 
         drop(storage);
@@ -2928,7 +2974,138 @@ mod tests {
                 .unwrap(),
             1
         );
-        assert!(tracker.offered("workspace-a", Some("owner")).is_some());
+        assert!(matches!(
+            tracker.offered("workspace-a", Some("owner")),
+            OfferedThread::Selected(_)
+        ));
+
+        drop(connection);
+        drop(storage);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn selected_thread_overrides_the_newest_workspace_thread() {
+        let directory =
+            std::env::temp_dir().join(format!("muniment-session-selected-{}", Uuid::now_v7()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let database = directory.join("runs.sqlite3");
+        let selected_run = Uuid::now_v7().to_string();
+        let newest_run = Uuid::now_v7().to_string();
+        let mut journal = RunJournal::open(&database).unwrap();
+        journal
+            .append_new_run(
+                "workspace-a",
+                &event_envelope(&selected_run, 1, "run.started", json!({}), Some("owner")),
+            )
+            .unwrap();
+        journal
+            .append_new_run(
+                "workspace-a",
+                &event_envelope(&newest_run, 1, "run.started", json!({}), Some("owner")),
+            )
+            .unwrap();
+        drop(journal);
+        let connection = rusqlite::Connection::open(&database).unwrap();
+        let selected_thread = connection
+            .query_row(
+                "SELECT thread_id FROM run_threads WHERE run_id=?1",
+                [&selected_run],
+                |row| row.get::<_, String>(0),
+            )
+            .unwrap();
+        drop(connection);
+        let storage = Arc::new(Mutex::new(ChatStorage {
+            journal: RunJournal::open(&database).unwrap(),
+            cas: LocalCas::open(&directory.join("cas")).unwrap(),
+        }));
+        let tracker = SessionThread::default();
+        tracker.select(selected_thread.clone(), Some("owner"));
+        let continued_run = Uuid::now_v7().to_string();
+
+        prepare_new_run_with_session_thread(
+            &storage,
+            SessionThreadStart {
+                tracker: &tracker,
+                continue_existing: true,
+            },
+            &continued_run,
+            "workspace-a",
+            Some("owner"),
+            Vec::new(),
+            None,
+        )
+        .unwrap();
+
+        let connection = rusqlite::Connection::open(&database).unwrap();
+        assert_eq!(
+            connection
+                .query_row(
+                    "SELECT thread_id FROM run_threads WHERE run_id=?1",
+                    [&continued_run],
+                    |row| row.get::<_, String>(0),
+                )
+                .unwrap(),
+            selected_thread
+        );
+
+        drop(connection);
+        drop(storage);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn fresh_choice_overrides_the_newest_workspace_thread() {
+        let directory =
+            std::env::temp_dir().join(format!("muniment-session-fresh-{}", Uuid::now_v7()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let database = directory.join("runs.sqlite3");
+        let existing_run = Uuid::now_v7().to_string();
+        let mut journal = RunJournal::open(&database).unwrap();
+        journal
+            .append_new_run(
+                "workspace-a",
+                &event_envelope(&existing_run, 1, "run.started", json!({}), Some("owner")),
+            )
+            .unwrap();
+        drop(journal);
+        let storage = Arc::new(Mutex::new(ChatStorage {
+            journal: RunJournal::open(&database).unwrap(),
+            cas: LocalCas::open(&directory.join("cas")).unwrap(),
+        }));
+        let tracker = SessionThread::default();
+        tracker.fresh();
+        let fresh_run = Uuid::now_v7().to_string();
+
+        prepare_new_run_with_session_thread(
+            &storage,
+            SessionThreadStart {
+                tracker: &tracker,
+                continue_existing: true,
+            },
+            &fresh_run,
+            "workspace-a",
+            Some("owner"),
+            Vec::new(),
+            None,
+        )
+        .unwrap();
+
+        let connection = rusqlite::Connection::open(&database).unwrap();
+        let thread_for = |run_id: &str| {
+            connection
+                .query_row(
+                    "SELECT thread_id FROM run_threads WHERE run_id=?1",
+                    [run_id],
+                    |row| row.get::<_, String>(0),
+                )
+                .unwrap()
+        };
+        assert_ne!(thread_for(&fresh_run), thread_for(&existing_run));
+        assert_eq!(
+            tracker.offered("workspace-a", Some("owner")),
+            OfferedThread::Selected(thread_for(&fresh_run))
+        );
 
         drop(connection);
         drop(storage);
@@ -2977,7 +3154,7 @@ mod tests {
         );
         assert_ne!(
             tracker.offered("workspace-a", Some("owner")),
-            Some("unknown-thread".into())
+            OfferedThread::Selected("unknown-thread".into())
         );
 
         drop(connection);
@@ -3013,7 +3190,7 @@ mod tests {
 
         assert_eq!(
             tracker.offered("workspace-a", Some("owner")),
-            Some("thread-a".into())
+            OfferedThread::Selected("thread-a".into())
         );
 
         drop(storage);
@@ -4867,12 +5044,21 @@ mod tests {
         assert_eq!(second_open.entries[0].run_id, owner_runs[1]);
         assert!(second_open.next_cursor.is_none());
 
+        let tracker = SessionThread::default();
+        select_session_thread(&mut journal, &tracker, Some("owner"), &open_thread).unwrap();
         for thread_id in ["unknown", foreign_thread.as_str()] {
             let error =
                 chat_thread_open_page(&mut journal, Some("owner"), &directory, thread_id, 1, None)
                     .err()
                     .unwrap();
             assert_eq!(error, "Conversation history is unavailable.");
+            let error = select_session_thread(&mut journal, &tracker, Some("owner"), thread_id)
+                .unwrap_err();
+            assert_eq!(error, "Conversation history is unavailable.");
+            assert_eq!(
+                tracker.offered("workspace-a", Some("owner")),
+                OfferedThread::Selected(open_thread.clone())
+            );
         }
         journal
             .append_thread_deleted(
@@ -4901,6 +5087,13 @@ mod tests {
         .err()
         .unwrap();
         assert_eq!(error, "Conversation history is unavailable.");
+        let error = select_session_thread(&mut journal, &tracker, Some("owner"), &deleted_thread)
+            .unwrap_err();
+        assert_eq!(error, "Conversation history is unavailable.");
+        assert_eq!(
+            tracker.offered("workspace-a", Some("owner")),
+            OfferedThread::Selected(open_thread)
+        );
 
         drop(journal);
         std::fs::remove_dir_all(directory).unwrap();
