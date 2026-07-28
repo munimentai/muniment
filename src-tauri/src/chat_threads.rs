@@ -335,6 +335,8 @@ mod tests {
     use muniment_core::journal::{EventPayload, Provenance};
     use serde_json::json;
     use std::collections::{BTreeMap, BTreeSet};
+    use std::sync::{Arc, Mutex};
+    use std::time::Duration;
     use uuid::Uuid;
 
     #[test]
