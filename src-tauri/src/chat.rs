@@ -3161,9 +3161,11 @@ mod tests {
             let storage_guard = storage.lock().unwrap();
             let (started, waiting) = std::sync::mpsc::channel();
             let (completed, completion) = std::sync::mpsc::channel();
-            let command = scope.spawn(|| {
+            let command_storage = Arc::clone(&storage);
+            let command_tracker = &tracker;
+            let command = scope.spawn(move || {
                 started.send(()).unwrap();
-                let result = fresh_session_thread(&storage, &tracker, Some("owner"));
+                let result = fresh_session_thread(&command_storage, command_tracker, Some("owner"));
                 completed.send(()).unwrap();
                 result
             });
