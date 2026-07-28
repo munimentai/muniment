@@ -215,11 +215,12 @@ jobs:
             });
 
   linux-e2e:
+    # Publishing is distribution and must never gate testing.
     needs: [prepare, build, publish]
     if: >-
       always() && needs.build.result == 'success' &&
-      (needs.publish.result == 'success' ||
-      (github.event_name == 'workflow_dispatch' && github.event.inputs.platform == 'linux' && needs.publish.result == 'skipped'))
+      (github.event_name != 'workflow_dispatch' || github.event.inputs.platform == 'all' ||
+      github.event.inputs.platform == 'linux')
     runs-on: self-hosted
     timeout-minutes: 45
     env:
