@@ -55,6 +55,76 @@ function setup(invoke = vi.fn()) {
 }
 
 describe('chat controller', () => {
+  it('publishes an empty transcript without opening a missing thread', async () => {
+    const invoke = vi.fn().mockResolvedValue({ summaries: [], nextCursor: null })
+    const context = setup(invoke)
+
+    await context.controller.loadHistory()
+
+    expect(invoke).toHaveBeenCalledOnce()
+    expect(invoke).toHaveBeenCalledWith('chat_thread_summaries', { limit: 1 })
+    expect(context.messages()).toEqual([])
+  })
+
+  it('opens every history page in chronological page order', async () => {
+    const first = {
+      runId: 'run-1', phase: 'complete', text: 'First answer',
+      prompt: 'First question', receipt: {}, toolActivity: [],
+    }
+    const second = {
+      runId: 'run-2', phase: 'complete', text: 'Second answer',
+      prompt: 'Second question', receipt: {}, toolActivity: [],
+    }
+    const invoke = vi.fn()
+      .mockResolvedValueOnce({ summaries: [{ threadId: 'thread-1' }], nextCursor: null })
+      .mockResolvedValueOnce({ entries: [first], nextCursor: 'page-2' })
+      .mockResolvedValueOnce({ entries: [second], nextCursor: null })
+    const context = setup(invoke)
+
+    await context.controller.loadHistory()
+
+    expect(invoke.mock.calls).toEqual([
+      ['chat_thread_summaries', { limit: 1 }],
+      ['chat_thread_open', { threadId: 'thread-1', limit: 100 }],
+      ['chat_thread_open', { threadId: 'thread-1', limit: 100, cursor: 'page-2' }],
+    ])
+    expect(context.messages().map((message) => message.text ?? message.run.text)).toEqual([
+      'First question', 'First answer', 'Second question', 'Second answer',
+    ])
+  })
+
+  it.each(['chat_thread_summaries', 'chat_thread_open'])('reports a %s failure with the current copy', async (failedCommand) => {
+    const onHistoryError = vi.fn()
+    const invoke = vi.fn(async (command) => {
+      if (command === 'chat_thread_summaries') {
+        if (failedCommand === command) throw new Error('offline')
+        return { summaries: [{ threadId: 'thread-1' }], nextCursor: null }
+      }
+      throw new Error('offline')
+    })
+    const controller = createChatController({
+      invoke,
+      listen: vi.fn(),
+      readMessages: () => [],
+      readActive: () => null,
+      readAnnounced: () => null,
+      readDraft: () => '',
+      readFiles: () => [],
+      onMessages: vi.fn(),
+      onActive: vi.fn(),
+      onAnnounce: vi.fn(),
+      onDraft: vi.fn(),
+      onFiles: vi.fn(),
+      onSubmitError: vi.fn(),
+      onCancelError: vi.fn(),
+      onQueueError: vi.fn(),
+      onHistoryError,
+    })
+    await controller.loadHistory()
+
+    expect(onHistoryError).toHaveBeenLastCalledWith('Conversation history could not be restored. Try again.')
+  })
+
   it('replays events buffered before a submitted run id is known', async () => {
     const submit = deferred()
     const context = setup(vi.fn(() => submit.promise))
