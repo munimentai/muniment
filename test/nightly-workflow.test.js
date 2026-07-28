@@ -35,6 +35,13 @@ describe('nightly Linux E2E workflow', () => {
     expect(conditionResult({ eventName: 'schedule', platform: '', build: 'success', publish: 'success' })).toBe(true)
   })
 
+  it('runs after a failed full-nightly publish', () => {
+    expect(linuxE2e).toContain('# Publishing is distribution and must never gate testing.')
+    expect(jobCondition).not.toContain('needs.publish.result')
+    expect(publish).not.toContain('continue-on-error')
+    expect(conditionResult({ eventName: 'schedule', platform: '', build: 'success', publish: 'failure' })).toBe(true)
+  })
+
   it('runs a Linux-only dispatch after its package build and validates its asset', () => {
     expect(conditionResult({ eventName: 'workflow_dispatch', platform: 'linux', build: 'success', publish: 'skipped' })).toBe(true)
     expect(linuxE2e).toContain("if: github.event_name == 'workflow_dispatch' && github.event.inputs.platform == 'linux'")
@@ -204,6 +211,13 @@ describe('nightly installed-E2E failure reporting', () => {
     expect(shouldReport({ linux: 'failure', windows: 'skipped', macos: 'skipped' })).toBe(true)
     expect(shouldReport({ linux: 'success', windows: 'failure', macos: 'success' })).toBe(true)
     expect(shouldReport({ linux: 'success', windows: 'success', macos: 'failure' })).toBe(true)
+  })
+
+  it('remains reachable after publish fails', () => {
+    expect(conditionResult({ eventName: 'schedule', platform: '', build: 'success', publish: 'failure' })).toBe(true)
+    expect(report).not.toMatch(/needs: \[[^\]]*publish/)
+    expect(reportCondition).toContain('always()')
+    expect(shouldReport({ linux: 'failure', windows: 'success', macos: 'success' })).toBe(true)
   })
 
   it('uses only safe workflow metadata in the issue body', () => {
