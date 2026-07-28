@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "probe": "npm run build && printf 'Empty history: http://127.0.0.1:4173/test/probe/index.html\\nRestored history: http://127.0.0.1:4173/test/probe/history.html\\nInput request: http://127.0.0.1:4173/test/probe/input.html\\nEditor request: http://127.0.0.1:4173/test/probe/editor.html\\n' && python3 -m http.server 4173 --bind 127.0.0.1",
+    "probe": "npm run build && printf 'Empty history: http://127.0.0.1:4173/test/probe/index.html\\nRestored history: http://127.0.0.1:4173/test/probe/history.html\\nInput request: http://127.0.0.1:4173/test/probe/input.html\\nEditor request: http://127.0.0.1:4173/test/probe/editor.html\\nPermission request: http://127.0.0.1:4173/test/probe/permission.html\\n' && python3 -m http.server 4173 --bind 127.0.0.1",
     "preview": "vite preview",
     "test": "vitest run --root . --exclude 'editor-extension/**' --exclude 'test/e2e/**'",
     "test:e2e": "wdio run test/e2e/wdio.conf.js",
