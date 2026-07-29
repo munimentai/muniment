@@ -111,6 +111,7 @@ type Inspector = dyn Fn(&Path) -> ResidentModelInstallStatus + Send + Sync;
 
 struct ActiveInstall {
     generation: u64,
+    #[cfg(test)]
     cancellation: NativeInstallCancellation,
 }
 
@@ -213,6 +214,7 @@ impl ResidentModelInstallState {
             let cancellation = NativeInstallCancellation::new();
             inner.active = Some(ActiveInstall {
                 generation,
+                #[cfg(test)]
                 cancellation: cancellation.clone(),
             });
             inner.terminal_result = false;
@@ -314,6 +316,7 @@ impl ResidentModelInstallState {
         ResidentModelInstallStatus::Installing
     }
 
+    #[cfg(test)]
     fn cancel(&self) -> ResidentModelInstallStatus {
         let inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(active) = &inner.active {
@@ -1009,36 +1012,6 @@ fn redact_parakeet_failure(
 }
 
 #[tauri::command]
-// Keep this legacy model-specific command name for frontend wire compatibility.
-pub fn gemma_install_start(
-    state: State<'_, ResidentModelInstallState>,
-) -> ResidentModelInstallStatus {
-    state.start()
-}
-
-#[tauri::command]
-// Keep this legacy model-specific command name for frontend wire compatibility.
-pub async fn gemma_install_status(
-    state: State<'_, ResidentModelInstallState>,
-) -> Result<ResidentModelInstallStatus, String> {
-    resident_model_install_status_handler(&state).await
-}
-
-async fn resident_model_install_status_handler(
-    state: &ResidentModelInstallState,
-) -> Result<ResidentModelInstallStatus, String> {
-    Ok(state.status().await)
-}
-
-#[tauri::command]
-// Keep this legacy model-specific command name for frontend wire compatibility.
-pub fn gemma_install_cancel(
-    state: State<'_, ResidentModelInstallState>,
-) -> ResidentModelInstallStatus {
-    state.cancel()
-}
-
-#[tauri::command]
 pub async fn required_model_acquisition_status(
     state: State<'_, ResidentModelInstallState>,
 ) -> Result<RequiredModelAcquisitionStatus, String> {
@@ -1194,22 +1167,22 @@ mod tests {
         app
     }
 
-    fn public_status(app: &tauri::App<tauri::test::MockRuntime>) -> ResidentModelInstallStatus {
-        tauri::async_runtime::block_on(gemma_install_status(app.state())).unwrap()
+    fn resident_status(state: &ResidentModelInstallState) -> ResidentModelInstallStatus {
+        tauri::async_runtime::block_on(state.status())
     }
 
-    fn await_public_status(
-        app: &tauri::App<tauri::test::MockRuntime>,
+    fn await_resident_status(
+        state: &ResidentModelInstallState,
         expected: ResidentModelInstallStatus,
     ) {
         let deadline = Instant::now() + Duration::from_secs(2);
         while Instant::now() < deadline {
-            if public_status(app) == expected {
+            if resident_status(state) == expected {
                 return;
             }
             std::thread::sleep(Duration::from_millis(5));
         }
-        assert_eq!(public_status(app), expected);
+        assert_eq!(resident_status(state), expected);
     }
 
     fn parakeet_state(
@@ -1951,7 +1924,7 @@ server.serve_forever()
     }
 
     #[test]
-    fn public_status_command_exposes_successful_completion() {
+    fn resident_state_exposes_successful_completion() {
         let calls = Arc::new(AtomicUsize::new(0));
         let release = Arc::new(std::sync::Barrier::new(2));
         let runner = {
@@ -1965,17 +1938,16 @@ server.serve_forever()
                 },
             )
         };
-        let app = app_with_state(state(ResidentModelInstallStatus::NotInstalled, runner));
-        let state = app.state::<ResidentModelInstallState>();
+        let state = state(ResidentModelInstallStatus::NotInstalled, runner);
         assert_eq!(state.start(), ResidentModelInstallStatus::Installing);
         assert_eq!(state.start(), ResidentModelInstallStatus::Installing);
         release.wait();
-        await_public_status(&app, ResidentModelInstallStatus::Installed);
+        await_resident_status(&state, ResidentModelInstallStatus::Installed);
         assert_eq!(calls.load(Ordering::SeqCst), 1);
     }
 
     #[test]
-    fn public_status_command_preserves_redacted_failure() {
+    fn resident_state_preserves_redacted_failure() {
         let runner = Arc::new(
             |_: &Path, _: &NativeInstallCancellation, _: &ProgressSink| {
                 Err(InstallFailure {
@@ -1985,19 +1957,18 @@ server.serve_forever()
                 })
             },
         );
-        let app = app_with_state(state(ResidentModelInstallStatus::NotInstalled, runner));
-        let state = app.state::<ResidentModelInstallState>();
+        let state = state(ResidentModelInstallStatus::NotInstalled, runner);
         state.start();
         let expected = ResidentModelInstallStatus::Failed {
             category: "downloadFailed",
             message: "The model download failed.",
         };
-        await_public_status(&app, expected.clone());
-        assert_eq!(public_status(&app), expected);
+        await_resident_status(&state, expected.clone());
+        assert_eq!(resident_status(&state), expected);
     }
 
     #[test]
-    fn public_status_command_preserves_cancelled_completion() {
+    fn resident_state_preserves_cancelled_completion() {
         let runner = Arc::new(
             |_: &Path, cancellation: &NativeInstallCancellation, _: &ProgressSink| {
                 while !cancellation.is_cancelled() {
@@ -2010,12 +1981,14 @@ server.serve_forever()
                 })
             },
         );
-        let app = app_with_state(state(ResidentModelInstallStatus::NotInstalled, runner));
-        let state = app.state::<ResidentModelInstallState>();
+        let state = state(ResidentModelInstallStatus::NotInstalled, runner);
         state.start();
         assert_eq!(state.cancel(), ResidentModelInstallStatus::Installing);
-        await_public_status(&app, ResidentModelInstallStatus::Cancelled);
-        assert_eq!(public_status(&app), ResidentModelInstallStatus::Cancelled);
+        await_resident_status(&state, ResidentModelInstallStatus::Cancelled);
+        assert_eq!(
+            resident_status(&state),
+            ResidentModelInstallStatus::Cancelled
+        );
     }
 
     #[test]
