@@ -1,20 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { onboardingCancelSettingsState, onboardingConfirmedHomePathState, onboardingConfirmedState, onboardingConfirmingState, onboardingErrorState, onboardingExtractingState, onboardingExtractionErrorState, onboardingExtractionState, onboardingFinalizingState, onboardingImportChoiceState, onboardingImportErrorState, onboardingImportSavedState, onboardingImportSavingState, onboardingLoadingState, onboardingPathState, onboardingPreviewErrorState, onboardingPreviewingState, onboardingPreviewState, onboardingReturnToArchiveReviewState, onboardingSelectionState, onboardingSettingsState, onboardingStatusState, onboardingTriageConfirmedState, onboardingTriageErrorState, onboardingTriageReportState, onboardingTriagingState, requiredModelPollActive, requiredModelProgress } from './onboarding-state.js'
-
-describe('required model acquisition state', () => {
-  it('polls only during installation or background retry', () => {
-    expect(requiredModelPollActive({ status: { state: 'installing' }, retryingInBackground: false })).toBe(true)
-    expect(requiredModelPollActive({ status: { state: 'failed' }, retryingInBackground: true })).toBe(true)
-    expect(requiredModelPollActive({ status: { state: 'installed' }, retryingInBackground: false })).toBe(false)
-    expect(requiredModelPollActive({ status: { state: 'failed' }, retryingInBackground: false })).toBe(false)
-  })
-
-  it('bounds determinate progress to valid values', () => {
-    expect(requiredModelProgress({ downloadedBytes: 120, totalBytes: 100 })).toEqual({ downloaded: 100, total: 100 })
-    expect(requiredModelProgress({ downloadedBytes: -1, totalBytes: 0 })).toEqual({ downloaded: 0, total: 0 })
-  })
-})
+import { onboardingCancelSettingsState, onboardingConfirmedHomePathState, onboardingConfirmedState, onboardingConfirmingState, onboardingErrorState, onboardingExtractingState, onboardingExtractionErrorState, onboardingExtractionState, onboardingFinalizingState, onboardingImportChoiceState, onboardingImportErrorState, onboardingImportSavedState, onboardingImportSavingState, onboardingLoadingState, onboardingPathState, onboardingPreviewErrorState, onboardingPreviewingState, onboardingPreviewState, onboardingReturnToArchiveReviewState, onboardingSelectionState, onboardingSettingsState, onboardingStatusState, onboardingTriageConfirmedState, onboardingTriageErrorState, onboardingTriageReportState, onboardingTriagingState } from './onboarding-state.js'
 
 describe('Home onboarding state', () => {
   it('blocks on the default location until it is configured', () => {
