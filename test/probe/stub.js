@@ -175,6 +175,12 @@ window.__TAURI__ = {
         if (summary) summary.title = payload.title
         return null
       }
+      if (command === 'chat_delete_thread') {
+        const index = threadSummaries.findIndex(({ threadId }) => threadId === payload.threadId)
+        if (index !== -1) threadSummaries.splice(index, 1)
+        if (currentThreadId === payload.threadId) currentThreadId = null
+        return null
+      }
       if (command === 'chat_submit') {
         const runId = 'probe-new-run'
         currentThreadId = 'probe-new-thread'

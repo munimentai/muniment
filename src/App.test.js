@@ -595,6 +595,68 @@ describe('message grammar', () => {
 })
 
 describe('thread name', () => {
+  it('reveals a quiet delete action and cancels its inline confirmation', async () => {
+    threadSummaryResult = [{ threadId: 'thread-1', title: 'Lease renewal', updatedAt: '' }]
+    render(App)
+    const remove = await screen.findByRole('button', { name: 'Delete Lease renewal' })
+
+    expect(remove.tabIndex).toBe(0)
+    expect(appRules.get('.thread-delete')).toMatch(/opacity:\s*0/)
+    expect(appRules.get('.thread-record:hover .thread-delete, .thread-record:focus-within .thread-delete')).toMatch(/opacity:\s*1/)
+    await fireEvent.click(remove)
+    expect(screen.getByLabelText('Delete Lease renewal?')).toHaveTextContent('Delete “Lease renewal”?')
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+    expect(screen.queryByLabelText('Delete Lease renewal?')).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Delete Lease renewal' })).toHaveFocus()
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Delete Lease renewal' }))
+    await fireEvent.keyDown(screen.getByRole('button', { name: 'Delete' }), { key: 'Escape' })
+    expect(screen.queryByLabelText('Delete Lease renewal?')).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Delete Lease renewal' })).toHaveFocus()
+  })
+
+  it('deletes the open thread and focuses the fresh composer', async () => {
+    threadSummaryResult = [{ threadId: 'thread-1', title: 'Lease renewal', updatedAt: '' }]
+    invoke.mockImplementation(async (command) => {
+      if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
+      if (command === 'chat_thread_open') return [{ runId: 'run-1', phase: 'complete', prompt: 'Question', text: 'Answer', toolActivity: [] }]
+      if (command === 'chat_delete_thread') return undefined
+      if (command === 'auth_entitlement_snapshot') return snapshot()
+      if (command === 'auth_devices') return []
+      throw new Error(`unexpected command: ${command}`)
+    })
+    render(App)
+    await screen.findByText('Answer')
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Delete Lease renewal' }))
+    await fireEvent.click(screen.getByRole('button', { name: 'Delete' }))
+
+    await waitFor(() => expect(screen.queryByText('Answer')).not.toBeInTheDocument())
+    expect(invoke).toHaveBeenCalledWith('chat_delete_thread', { threadId: 'thread-1' })
+    expect(document.querySelector('[data-fresh-thread]')).toBeInTheDocument()
+    expect(screen.getByPlaceholderText('Ask anything')).toHaveFocus()
+  })
+
+  it('keeps the row and reports a failed delete', async () => {
+    threadSummaryResult = [{ threadId: 'thread-1', title: 'Lease renewal', updatedAt: '' }]
+    invoke.mockImplementation(async (command) => {
+      if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
+      if (command === 'chat_thread_open') return []
+      if (command === 'chat_delete_thread') throw new Error('offline')
+      if (command === 'auth_entitlement_snapshot') return snapshot()
+      if (command === 'auth_devices') return []
+      throw new Error(`unexpected command: ${command}`)
+    })
+    render(App)
+    await fireEvent.click(await screen.findByRole('button', { name: 'Delete Lease renewal' }))
+    await fireEvent.click(screen.getByRole('button', { name: 'Delete' }))
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('The thread could not be deleted. Try again.')
+    expect(screen.getByRole('button', { name: 'Delete Lease renewal' })).toBeInTheDocument()
+    expect(screen.queryByLabelText('Delete Lease renewal?')).not.toBeInTheDocument()
+  })
+
   it('uses the stored title and renames it from the keyboard', async () => {
     threadSummaryResult = [{ threadId: 'thread-1', title: 'Stored name', updatedAt: '' }]
     invoke.mockImplementation(async (command) => {
@@ -703,7 +765,7 @@ describe('thread name', () => {
     for (const summary of threadSummaryResult) {
       expect(document.querySelector(`time[datetime="${summary.updatedAt}"]`)).toHaveAttribute('title', new Date(summary.updatedAt).toLocaleString())
     }
-    const archive = screen.getByRole('button', { name: /Archive review/ })
+    const archive = screen.getByRole('button', { name: /^Archive review/ })
     expect(archive.tabIndex).toBe(0)
 
     await fireEvent.click(archive)
