@@ -12,11 +12,19 @@ afterEach(() => { for (const value of temporary.splice(0)) fs.rmSync(value, { re
 const runNode = (script, args, options = {}) => spawnSync(process.execPath, [path.join(root, script), ...args], { encoding: 'utf8', ...options })
 
 describe('installed onboarding spec contract', () => {
+  const onboardingSpec = fs.readFileSync(path.join(root, 'test/e2e/specs/onboarding.spec.js'), 'utf8')
+
   it.each(['onboarding.spec.js', 'real-sign-in.spec.js'])('%s uses only shipped onboarding controls', (name) => {
     const spec = fs.readFileSync(path.join(root, 'test/e2e/specs', name), 'utf8')
     const selectors = [...spec.matchAll(/data-testid=(["'])(onboarding-[^"']+)\1/g)].map((match) => match[2])
     expect(selectors.length).toBeGreaterThan(0)
     expect(new Set(selectors)).toEqual(new Set(['onboarding-home-path', 'onboarding-picker', 'onboarding-confirm']))
+  })
+
+  it('bounds the first render wait and names its diagnostic log', () => {
+    expect(onboardingSpec).toMatch(/location\.waitForDisplayed\(\{\s*timeout: 120000,/)
+    expect(onboardingSpec).toContain("timeoutMsg: 'model-ready onboarding first render did not show the Home picker'")
+    expect(onboardingSpec).toContain("'onboarding-first-render.log'")
   })
 })
 
