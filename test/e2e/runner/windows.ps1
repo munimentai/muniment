@@ -123,6 +123,12 @@ function Finalize-Run {
     if (@(Get-HarnessProcesses).Count -ne 0) { throw "test process remains" }
   }
   if ($cleanupLog -and $raw) { Copy-Item $cleanupLog (Join-Path $raw "cleanup.log") -Force -ErrorAction SilentlyContinue }
+  Invoke-Cleanup "index-failure-artifacts" {
+    Get-ChildItem -LiteralPath $raw -File |
+      Where-Object { $_.Name -like "page-source-*.html" -or $_.Name -like "screenshot-*.png" } |
+      Select-Object -ExpandProperty FullName |
+      Set-Content (Join-Path $raw "failure-artifacts.log")
+  }
   Invoke-Cleanup "redact-artifacts" {
     if (-not $raw -or -not (Test-Path $raw)) { throw "raw staging is unavailable" }
     & node test/e2e/support/redact.mjs $raw $safe
