@@ -75,10 +75,16 @@ fn config_dir(app: &AppHandle) -> Result<PathBuf, String> {
 }
 
 fn default_home(app: &AppHandle) -> Result<PathBuf, String> {
-    app.path()
-        .document_dir()
+    let documents = app.path().document_dir().ok();
+    let home = app.path().home_dir().ok();
+    default_home_from_paths(documents, home)
+        .ok_or_else(|| "The Documents folder is unavailable.".to_string())
+}
+
+fn default_home_from_paths(documents: Option<PathBuf>, home: Option<PathBuf>) -> Option<PathBuf> {
+    documents
+        .or_else(|| home.map(|path| path.join("Documents")))
         .map(|path| path.join("Muniment"))
-        .map_err(|_| "The Documents folder is unavailable.".to_string())
 }
 
 #[tauri::command]
@@ -214,6 +220,19 @@ mod tests {
             text: "Original\r\n---\nbody 🦀\n".into(),
             source_provenance: "claude-export:notes.md".into(),
         }
+    }
+
+    #[test]
+    fn default_home_falls_back_when_xdg_documents_is_unconfigured() {
+        assert_eq!(
+            default_home_from_paths(None, Some(PathBuf::from("/home/tester"))),
+            Some(PathBuf::from("/home/tester/Documents/Muniment"))
+        );
+    }
+
+    #[test]
+    fn default_home_requires_a_documents_or_home_directory() {
+        assert_eq!(default_home_from_paths(None, None), None);
     }
 
     #[test]
