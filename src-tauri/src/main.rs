@@ -3,6 +3,7 @@
 mod attach_service;
 mod auth;
 mod chat;
+mod chat_coordinate;
 mod chat_threads;
 mod dictation;
 mod home;
