@@ -75,6 +75,69 @@ describe('installed production chat contract', () => {
 })
 
 describe('WDIO Tauri driver contract', () => {
+  it.each([
+    ['linux.sh', /-name 'page-source-\*\.html'[\s\S]+-name 'screenshot-\*\.png'/],
+    ['macos.sh', /-name 'page-source-\*\.html'[\s\S]+-name 'screenshot-\*\.png'/],
+    ['windows.ps1', /-like "page-source-\*\.html"[\s\S]+-like "screenshot-\*\.png"/],
+  ])('%s collects failure page source and screenshots', (name, pattern) => {
+    expect(fs.readFileSync(path.join(root, 'test/e2e/runner', name), 'utf8')).toMatch(pattern)
+  })
+
+  it('redacts every fixture value from captured page source', async () => {
+    const previousBinary = process.env.MUNIMENT_E2E_APP_BINARY
+    const previousArtifacts = process.env.MUNIMENT_E2E_RAW_DIR
+    const previousUsername = process.env.MUNIMENT_E2E_USERNAME
+    const previousPassword = process.env.MUNIMENT_E2E_PASSWORD
+    process.env.MUNIMENT_E2E_APP_BINARY = path.join(root, 'muniment-test-binary')
+    process.env.MUNIMENT_E2E_RAW_DIR = temp()
+    process.env.MUNIMENT_E2E_USERNAME = 'user@example.test'
+    process.env.MUNIMENT_E2E_PASSWORD = 'secret'
+    try {
+      const { redactPageSource } = await import('./e2e/wdio.conf.js?redaction-contract')
+      expect(redactPageSource('user@example.test secret user@example.test secret'))
+        .toBe('[REDACTED] [REDACTED] [REDACTED] [REDACTED]')
+    } finally {
+      if (previousBinary === undefined) delete process.env.MUNIMENT_E2E_APP_BINARY
+      else process.env.MUNIMENT_E2E_APP_BINARY = previousBinary
+      if (previousArtifacts === undefined) delete process.env.MUNIMENT_E2E_RAW_DIR
+      else process.env.MUNIMENT_E2E_RAW_DIR = previousArtifacts
+      if (previousUsername === undefined) delete process.env.MUNIMENT_E2E_USERNAME
+      else process.env.MUNIMENT_E2E_USERNAME = previousUsername
+      if (previousPassword === undefined) delete process.env.MUNIMENT_E2E_PASSWORD
+      else process.env.MUNIMENT_E2E_PASSWORD = previousPassword
+    }
+  })
+
+  it('does not propagate capture failures and attempts both captures', async () => {
+    const previousBinary = process.env.MUNIMENT_E2E_APP_BINARY
+    const previousArtifacts = process.env.MUNIMENT_E2E_RAW_DIR
+    process.env.MUNIMENT_E2E_APP_BINARY = path.join(root, 'muniment-test-binary')
+    process.env.MUNIMENT_E2E_RAW_DIR = temp()
+    try {
+      const { captureFailureArtifacts } = await import('./e2e/wdio.conf.js?capture-contract')
+      const calls = []
+      await expect(captureFailureArtifacts({ passed: false }, {
+        getPageSource: async () => { calls.push('source'); throw new Error('source failed') },
+        saveScreenshot: async () => { calls.push('screenshot'); throw new Error('screenshot failed') },
+        writeFile: async () => { calls.push('write') },
+        log: () => { throw new Error('log failed') },
+      })).resolves.toBeUndefined()
+      expect(calls).toEqual(['source', 'screenshot'])
+      await captureFailureArtifacts({ passed: true }, {
+        getPageSource: async () => { calls.push('passing source') },
+        saveScreenshot: async () => { calls.push('passing screenshot') },
+        writeFile: async () => { calls.push('passing write') },
+        log: () => {},
+      })
+      expect(calls).toEqual(['source', 'screenshot'])
+    } finally {
+      if (previousBinary === undefined) delete process.env.MUNIMENT_E2E_APP_BINARY
+      else process.env.MUNIMENT_E2E_APP_BINARY = previousBinary
+      if (previousArtifacts === undefined) delete process.env.MUNIMENT_E2E_RAW_DIR
+      else process.env.MUNIMENT_E2E_RAW_DIR = previousArtifacts
+    }
+  })
+
   it('loads the installed ESM entry with compatible transitive named exports', async () => {
     await expect(import('@wdio/tauri-service')).resolves.toBeDefined()
   }, 15_000)
