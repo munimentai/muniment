@@ -29,6 +29,9 @@ describe('installed nightly', () => {
     try { await access(home) } catch { homeExists = false }
     expect(homeExists).toBe(false)
     await (await $('[data-testid="onboarding-confirm"]')).click()
+    const skipImport = await $('button=Continue without importing')
+    await skipImport.waitForDisplayed()
+    await skipImport.click()
 
     const signedOut = await $('button=Sign in')
     await signedOut.waitForDisplayed()
