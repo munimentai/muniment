@@ -156,14 +156,21 @@ describe('chat controller', () => {
     ])
   })
 
-  it('ignores an older rename that resolves after a newer rename', async () => {
+  it('serializes renames so a reload keeps the newer title', async () => {
     const first = deferred()
     const second = deferred()
     let summaries = [{ threadId: 'thread-1', title: 'Old name' }]
+    let storedTitle = 'Old name'
     const onThreadSummaries = vi.fn((next) => { summaries = next })
     const invoke = vi.fn()
-      .mockImplementationOnce(() => first.promise)
-      .mockImplementationOnce(() => second.promise)
+      .mockImplementationOnce(async () => {
+        await first.promise
+        storedTitle = 'Older name'
+      })
+      .mockImplementationOnce(async () => {
+        await second.promise
+        storedTitle = 'Newer name'
+      })
     const controller = createChatController({
       invoke,
       listen: vi.fn(),
@@ -188,13 +195,17 @@ describe('chat controller', () => {
 
     const olderRename = controller.renameThread('Older name', 'Old name')
     const newerRename = controller.renameThread('Newer name', 'Old name')
+    await vi.waitFor(() => expect(invoke).toHaveBeenCalledTimes(1))
     second.resolve()
-    await expect(newerRename).resolves.toBe(true)
+    expect(invoke).toHaveBeenCalledTimes(1)
     first.resolve()
 
-    await expect(olderRename).resolves.toBe(false)
-    expect(onThreadSummaries).toHaveBeenCalledTimes(1)
+    await expect(olderRename).resolves.toBe(true)
+    await vi.waitFor(() => expect(invoke).toHaveBeenCalledTimes(2))
+    await expect(newerRename).resolves.toBe(true)
+    expect(onThreadSummaries).toHaveBeenCalledTimes(2)
     expect(summaries).toEqual([{ threadId: 'thread-1', title: 'Newer name' }])
+    expect(storedTitle).toBe('Newer name')
   })
 
   it.each([
