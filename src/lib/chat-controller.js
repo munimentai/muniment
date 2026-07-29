@@ -41,6 +41,7 @@ export function createChatController({
   let switchingThread = false
   let switchBlocked = false
   let threadRefreshSequence = 0
+  const renameSequences = new Map()
 
   const messages = () => readMessages()
   const active = () => readActive()
@@ -198,16 +199,20 @@ export function createChatController({
     const threadId = readThreadId()
     const trimmed = title.trim()
     if (!threadId || !trimmed || trimmed === previousTitle) return false
+    const sequence = (renameSequences.get(threadId) ?? 0) + 1
+    renameSequences.set(threadId, sequence)
     onHistoryError('')
     try {
       await invoke('chat_rename_thread', { threadId, title: trimmed })
-      if (destroyed || readThreadId() !== threadId) return false
+      if (destroyed || renameSequences.get(threadId) !== sequence) return false
       onThreadSummaries(readThreadSummaries().map((summary) => (
         summary.threadId === threadId ? { ...summary, title: trimmed } : summary
       )))
       return true
     } catch (_) {
-      if (!destroyed) onHistoryError('The thread name could not be changed. Try again.')
+      if (!destroyed && renameSequences.get(threadId) === sequence) {
+        onHistoryError('The thread name could not be changed. Try again.')
+      }
       return false
     }
   }

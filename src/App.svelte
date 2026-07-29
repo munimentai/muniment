@@ -57,6 +57,7 @@
   let editingThreadTitle = $state(false)
   let threadTitleDraft = $state('')
   let threadTitleInput = $state()
+  let threadTitleButton = $state()
   let threadTitleBeforeEdit = ''
   let permissionAnswer = $state(null)
   let permissionValues = $state({})
@@ -190,7 +191,9 @@
   function threadTitleKeydown(event) {
     if (event.key === 'Escape') {
       event.preventDefault()
+      threadTitleDraft = threadTitleBeforeEdit
       editingThreadTitle = false
+      void tick().then(() => threadTitleButton?.focus())
     } else if (event.key === 'Enter') {
       event.preventDefault()
       commitThreadTitle()
@@ -207,6 +210,13 @@
     if (!editingThreadTitle) return
     editingThreadTitle = false
     void chatController.renameThread(threadTitleDraft, threadTitleBeforeEdit)
+    void tick().then(() => threadTitleButton?.focus())
+  }
+
+  function limitThreadTitle(event) {
+    const limited = Array.from(event.currentTarget.value).slice(0, 80).join('')
+    threadTitleDraft = limited
+    event.currentTarget.value = limited
   }
 
   function availableArtifactRailWidth() {
@@ -627,7 +637,7 @@
     {:else if auth.name === 'signed-in'}
       <section class="workspace" class:sidebar-collapsed={sidebarCollapsed} class:artifact-open={artifactRailOpen} class:artifact-resizing={artifactRailPointer !== undefined} style:--artifact-rail-width={`${artifactRailWidth}px`} bind:this={workspace}>
         {#if draggingFiles}<div class="drop-affordance" role="status"><strong>Drop files to add them</strong><span>Saved locally · supported images sent with first prompt</span></div>{/if}
-        <header class="titlebar">{#if editingThreadTitle}<input class="thread-title" aria-label="Thread name" maxlength="80" bind:this={threadTitleInput} bind:value={threadTitleDraft} onkeydown={threadTitleKeydown} onblur={commitThreadTitle}>{:else}<button type="button" class="thread-title" aria-label="Rename thread" title={currentThreadTitle} disabled={!currentThreadId} onclick={(event) => editThreadTitle(event.currentTarget.title)} onkeydown={threadTitleButtonKeydown}>{currentThreadTitle}</button>{/if}<span class="thread-id">local · durable</span><span class="title-spacer"></span><button type="button" class="quiet" aria-controls="artifact-rail" aria-expanded={artifactRailOpen} aria-keyshortcuts={artifactShortcut} aria-label={`${artifactRailOpen ? 'Close' : 'Open'} artifact rail`} onclick={toggleArtifactRail}>Artifacts <kbd>{shortcutDisplayLabel(artifactShortcut)}</kbd></button></header>
+        <header class="titlebar">{#if editingThreadTitle}<input class="thread-title" aria-label="Thread name" maxlength="160" bind:this={threadTitleInput} value={threadTitleDraft} oninput={limitThreadTitle} onkeydown={threadTitleKeydown} onblur={commitThreadTitle}>{:else}<button type="button" class="thread-title" aria-label="Rename thread" title={currentThreadTitle} disabled={!currentThreadId} bind:this={threadTitleButton} onclick={(event) => editThreadTitle(event.currentTarget.title)} onkeydown={threadTitleButtonKeydown}>{currentThreadTitle}</button>{/if}<span class="thread-id">local · durable</span><span class="title-spacer"></span><button type="button" class="quiet" aria-controls="artifact-rail" aria-expanded={artifactRailOpen} aria-keyshortcuts={artifactShortcut} aria-label={`${artifactRailOpen ? 'Close' : 'Open'} artifact rail`} onclick={toggleArtifactRail}>Artifacts <kbd>{shortcutDisplayLabel(artifactShortcut)}</kbd></button></header>
         <aside id="sidebar" class="sidebar">
           <div class="side-brand">
             {#if !sidebarCollapsed}
