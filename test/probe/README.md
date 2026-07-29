@@ -1,8 +1,9 @@
 # Browser probe
 
-Run `npm run probe` from the repository root. The command builds the frontend and prints both local probe URLs.
+Run `npm run probe` from the repository root. The command builds the frontend and prints the local probe URLs.
 
 Open `index.html` for an empty signed-in workspace. Open `history.html` for completed and interrupted fixture runs.
+Open `onboarding.html` for first-run setup during the required local AI model download.
 Open `permission.html` for a run paused on a permission decision.
 Open `input.html` for a run paused on a single-line text request.
 Open `editor.html` for a run paused on a multi-line text request.
