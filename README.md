@@ -5,6 +5,8 @@ SPEC.md / ROADMAP.md / DESIGN.md. The muniment-cloud Phase 1 prerequisite is
 live and the desktop client lane is active; see ROADMAP.md for current
 implementation status.
 
+See [THREAT_MODEL.md](THREAT_MODEL.md) for the desktop runtime trust boundary.
+
 ## Build
 
 ```sh
