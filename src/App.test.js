@@ -595,6 +595,90 @@ describe('message grammar', () => {
 })
 
 describe('thread name', () => {
+  it('uses the stored title and renames it from the keyboard', async () => {
+    threadSummaryResult = [{ threadId: 'thread-1', title: 'Stored name', updatedAt: '' }]
+    invoke.mockImplementation(async (command) => {
+      if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
+      if (command === 'chat_thread_open') return [{
+        runId: 'run-1', phase: 'complete', prompt: 'Derived name', text: 'Answer', toolActivity: [],
+      }]
+      if (command === 'chat_rename_thread') return undefined
+      if (command === 'auth_entitlement_snapshot') return snapshot()
+      if (command === 'auth_devices') return []
+      throw new Error(`unexpected command: ${command}`)
+    })
+    render(App)
+
+    await screen.findByText('Answer')
+    const name = screen.getByRole('button', { name: 'Rename thread' })
+    name.focus()
+    await fireEvent.keyDown(name, { key: 'Enter' })
+    const field = await screen.findByRole('textbox', { name: 'Thread name' })
+    expect(field).toHaveValue('Stored name')
+    expect(field).toHaveAttribute('maxlength', '160')
+    expect(field.selectionStart).toBe(0)
+    expect(field.selectionEnd).toBe('Stored name'.length)
+
+    await fireEvent.input(field, { target: { value: '  Renamed thread  ' } })
+    await fireEvent.keyDown(field, { key: 'Enter' })
+
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('chat_rename_thread', {
+      threadId: 'thread-1',
+      title: 'Renamed thread',
+    }))
+    const renamed = screen.getByRole('button', { name: 'Rename thread' })
+    expect(renamed).toHaveTextContent('Renamed thread')
+    expect(renamed).toHaveFocus()
+    expect(document.querySelector('.thread-row[aria-current="true"]')).toHaveTextContent('Renamed thread')
+  })
+
+  it('caps a thread name at 80 Unicode scalars', async () => {
+    threadSummaryResult = [{ threadId: 'thread-1', title: 'Stored name', updatedAt: '' }]
+    render(App)
+    const name = await screen.findByRole('button', { name: 'Rename thread' })
+
+    await fireEvent.click(name)
+    const field = await screen.findByRole('textbox', { name: 'Thread name' })
+    await fireEvent.input(field, { target: { value: `${'😀'.repeat(80)}x` } })
+
+    expect(field).toHaveValue('😀'.repeat(80))
+  })
+
+  it('commits on blur and restores focus to the rename button', async () => {
+    threadSummaryResult = [{ threadId: 'thread-1', title: 'Stored name', updatedAt: '' }]
+    render(App)
+    const name = await screen.findByRole('button', { name: 'Rename thread' })
+
+    await fireEvent.click(name)
+    const field = await screen.findByRole('textbox', { name: 'Thread name' })
+    await fireEvent.input(field, { target: { value: 'Blurred name' } })
+    await fireEvent.blur(field)
+
+    const renamed = screen.getByRole('button', { name: 'Rename thread' })
+    await waitFor(() => expect(renamed).toHaveFocus())
+    expect(invoke).toHaveBeenCalledWith('chat_rename_thread', {
+      threadId: 'thread-1',
+      title: 'Blurred name',
+    })
+  })
+
+  it('cancels a rename with Escape', async () => {
+    threadSummaryResult = [{ threadId: 'thread-1', title: 'Stored name', updatedAt: '' }]
+    render(App)
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Rename thread' })).toBeEnabled())
+    const name = screen.getByRole('button', { name: 'Rename thread' })
+
+    await fireEvent.keyDown(name, { key: 'Enter' })
+    const field = await screen.findByRole('textbox', { name: 'Thread name' })
+    await fireEvent.input(field, { target: { value: 'Discarded name' } })
+    await fireEvent.keyDown(field, { key: 'Escape' })
+
+    const restored = screen.getByRole('button', { name: 'Rename thread' })
+    expect(restored).toHaveTextContent('Stored name')
+    expect(restored).toHaveFocus()
+    expect(invoke).not.toHaveBeenCalledWith('chat_rename_thread', expect.anything())
+  })
+
   it('renders every summary and opens another thread from its button', async () => {
     threadSummaryResult = [
       { threadId: 'thread-1', title: 'Lease renewal', updatedAt: '2026-07-28T11:55:00Z' },

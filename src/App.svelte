@@ -41,7 +41,6 @@
   let selectedFiles = $state([])
   let submitError = $state('')
   let messages = $state([])
-  let currentThreadTitle = $derived(threadTitle(messages))
   let active = $state(null)
   // The transcript is not a live region; only the run the user is waiting on is
   // announced, and only when its phase changes. Restored history announces nothing.
@@ -52,8 +51,14 @@
   let historyError = $state('')
   let threadSummaries = $state([])
   let currentThreadId = $state(null)
+  let currentThreadTitle = $derived(threadSummaries.find(({ threadId }) => threadId === currentThreadId)?.title || threadTitle(messages))
   let freshThread = $state(false)
   let threadSwitching = $state(false)
+  let editingThreadTitle = $state(false)
+  let threadTitleDraft = $state('')
+  let threadTitleInput = $state()
+  let threadTitleButton = $state()
+  let threadTitleBeforeEdit = ''
   let permissionAnswer = $state(null)
   let permissionValues = $state({})
   let thread = $state()
@@ -142,6 +147,7 @@
     readDraft: () => draft,
     readFiles: () => selectedFiles,
     readThreadId: () => currentThreadId,
+    readThreadSummaries: () => threadSummaries,
     blocked: () => dictationBusy(),
     onMessages: (next) => { messages = next },
     onActive: (next) => { active = next },
@@ -172,6 +178,45 @@
     sidebarCollapsed = !sidebarCollapsed
     try { localStorage.setItem(SIDEBAR_STORAGE_KEY, serializeSidebarCollapsed(sidebarCollapsed)) } catch (_) {}
     fitArtifactRail()
+  }
+
+  function editThreadTitle(title) {
+    if (editingThreadTitle) return
+    threadTitleBeforeEdit = title
+    threadTitleDraft = title
+    editingThreadTitle = true
+    void tick().then(() => threadTitleInput?.select())
+  }
+
+  function threadTitleKeydown(event) {
+    if (event.key === 'Escape') {
+      event.preventDefault()
+      threadTitleDraft = threadTitleBeforeEdit
+      editingThreadTitle = false
+      void tick().then(() => threadTitleButton?.focus())
+    } else if (event.key === 'Enter') {
+      event.preventDefault()
+      commitThreadTitle()
+    }
+  }
+
+  function threadTitleButtonKeydown(event) {
+    if (event.key !== 'Enter' && event.key !== ' ') return
+    event.preventDefault()
+    editThreadTitle(event.currentTarget.title)
+  }
+
+  function commitThreadTitle() {
+    if (!editingThreadTitle) return
+    editingThreadTitle = false
+    void chatController.renameThread(threadTitleDraft, threadTitleBeforeEdit)
+    void tick().then(() => threadTitleButton?.focus())
+  }
+
+  function limitThreadTitle(event) {
+    const limited = Array.from(event.currentTarget.value).slice(0, 80).join('')
+    threadTitleDraft = limited
+    event.currentTarget.value = limited
   }
 
   function availableArtifactRailWidth() {
@@ -592,7 +637,7 @@
     {:else if auth.name === 'signed-in'}
       <section class="workspace" class:sidebar-collapsed={sidebarCollapsed} class:artifact-open={artifactRailOpen} class:artifact-resizing={artifactRailPointer !== undefined} style:--artifact-rail-width={`${artifactRailWidth}px`} bind:this={workspace}>
         {#if draggingFiles}<div class="drop-affordance" role="status"><strong>Drop files to add them</strong><span>Saved locally · supported images sent with first prompt</span></div>{/if}
-        <header class="titlebar"><span class="thread-title" title={currentThreadTitle}>{currentThreadTitle}</span><span class="thread-id">local · durable</span><span class="title-spacer"></span><button type="button" class="quiet" aria-controls="artifact-rail" aria-expanded={artifactRailOpen} aria-keyshortcuts={artifactShortcut} aria-label={`${artifactRailOpen ? 'Close' : 'Open'} artifact rail`} onclick={toggleArtifactRail}>Artifacts <kbd>{shortcutDisplayLabel(artifactShortcut)}</kbd></button></header>
+        <header class="titlebar">{#if editingThreadTitle}<input class="thread-title" aria-label="Thread name" maxlength="160" bind:this={threadTitleInput} value={threadTitleDraft} oninput={limitThreadTitle} onkeydown={threadTitleKeydown} onblur={commitThreadTitle}>{:else}<button type="button" class="thread-title" aria-label="Rename thread" title={currentThreadTitle} disabled={!currentThreadId} bind:this={threadTitleButton} onclick={(event) => editThreadTitle(event.currentTarget.title)} onkeydown={threadTitleButtonKeydown}>{currentThreadTitle}</button>{/if}<span class="thread-id">local · durable</span><span class="title-spacer"></span><button type="button" class="quiet" aria-controls="artifact-rail" aria-expanded={artifactRailOpen} aria-keyshortcuts={artifactShortcut} aria-label={`${artifactRailOpen ? 'Close' : 'Open'} artifact rail`} onclick={toggleArtifactRail}>Artifacts <kbd>{shortcutDisplayLabel(artifactShortcut)}</kbd></button></header>
         <aside id="sidebar" class="sidebar">
           <div class="side-brand">
             {#if !sidebarCollapsed}
@@ -939,7 +984,8 @@
   .drop-affordance { position: fixed; z-index: 4; inset: 52px 0 0 260px; display: grid; place-content: center; gap: 5px; background: color-mix(in srgb, var(--paper) 92%, transparent); border: 1px dashed var(--muted); color: var(--ink); text-align: center; pointer-events: none; }
   .drop-affordance span { color: var(--muted); font: var(--text-12) var(--font-mono); }
   .titlebar { grid-area: title; display: flex; align-items: center; padding: 0 18px 0 278px; border-bottom: 1px solid var(--border); background: var(--surface); transition: padding-left 180ms ease; }
-  .thread-title { min-width: 0; overflow: hidden; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+  .thread-title { min-width: 0; max-width: 100%; overflow: hidden; padding: 2px; border: 0; background: transparent; color: var(--ink); font: inherit; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+  button.thread-title:disabled { opacity: 1; }
   .thread-id, kbd { margin-left: 10px; color: var(--muted); font: var(--text-12) var(--font-mono); }
   .title-spacer { flex: 1; }
   .sidebar { grid-area: side; min-width: 0; display: flex; flex-direction: column; padding: 14px 10px 10px; background: var(--surface); border-right: 1px solid var(--border); }
