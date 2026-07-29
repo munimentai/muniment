@@ -72,6 +72,112 @@ function setup(invoke = vi.fn()) {
 }
 
 describe('chat controller', () => {
+  it('deletes another thread without changing the transcript', async () => {
+    const previous = [{ role: 'user', text: 'Keep this transcript' }]
+    let summaries = [{ threadId: 'thread-1' }, { threadId: 'thread-2' }]
+    const context = setup(vi.fn().mockResolvedValue(undefined))
+    const invoke = vi.fn().mockResolvedValue(undefined)
+    context.setMessages(previous)
+    const controller = createChatController({
+      invoke,
+      listen: vi.fn(),
+      readMessages: context.messages,
+      readActive: context.active,
+      readAnnounced: () => null,
+      readDraft: () => '',
+      readFiles: () => [],
+      readThreadId: () => 'thread-1',
+      readThreadSummaries: () => summaries,
+      onMessages: context.setMessages,
+      onActive: vi.fn(),
+      onAnnounce: vi.fn(),
+      onDraft: vi.fn(),
+      onFiles: vi.fn(),
+      onSubmitError: vi.fn(),
+      onCancelError: vi.fn(),
+      onQueueError: vi.fn(),
+      onHistoryError: vi.fn(),
+      onThreadSummaries: (next) => { summaries = next },
+    })
+
+    await expect(controller.deleteThread('thread-2')).resolves.toBe(true)
+
+    expect(invoke).toHaveBeenCalledWith('chat_delete_thread', { threadId: 'thread-2' })
+    expect(summaries).toEqual([{ threadId: 'thread-1' }])
+    expect(context.messages()).toBe(previous)
+  })
+
+  it('clears the selected thread only after a successful delete', async () => {
+    const request = deferred()
+    const previous = [{ role: 'user', text: 'Delete this transcript' }]
+    let summaries = [{ threadId: 'thread-1' }]
+    const context = setup()
+    context.setMessages(previous)
+    const onHistoryError = vi.fn()
+    const onFocus = vi.fn()
+    const controller = createChatController({
+      invoke: vi.fn(() => request.promise),
+      listen: vi.fn(),
+      readMessages: context.messages,
+      readActive: context.active,
+      readAnnounced: () => null,
+      readDraft: () => '',
+      readFiles: () => [],
+      readThreadId: () => 'thread-1',
+      readThreadSummaries: () => summaries,
+      onMessages: context.setMessages,
+      onActive: vi.fn(),
+      onAnnounce: vi.fn(),
+      onDraft: vi.fn(),
+      onFiles: vi.fn(),
+      onSubmitError: vi.fn(),
+      onCancelError: vi.fn(),
+      onQueueError: vi.fn(),
+      onHistoryError,
+      onThreadSummaries: (next) => { summaries = next },
+      onThreadSelected: context.onThreadSelected,
+      onFreshThread: context.onFreshThread,
+      onFocus,
+    })
+
+    const deleting = controller.deleteThread('thread-1')
+    expect(context.messages()).toBe(previous)
+    request.resolve()
+    await expect(deleting).resolves.toBe(true)
+
+    expect(context.messages()).toEqual([])
+    expect(summaries).toEqual([])
+    expect(context.onThreadSelected).toHaveBeenCalledWith(null)
+    expect(context.onFreshThread).toHaveBeenCalledWith(true)
+    expect(onFocus).toHaveBeenCalledOnce()
+
+    context.setMessages(previous)
+    const failedController = createChatController({
+      invoke: vi.fn().mockRejectedValue(new Error('offline')),
+      listen: vi.fn(),
+      readMessages: context.messages,
+      readActive: context.active,
+      readAnnounced: () => null,
+      readDraft: () => '',
+      readFiles: () => [],
+      readThreadId: () => 'thread-1',
+      readThreadSummaries: () => [{ threadId: 'thread-1' }],
+      onMessages: context.setMessages,
+      onActive: vi.fn(),
+      onAnnounce: vi.fn(),
+      onDraft: vi.fn(),
+      onFiles: vi.fn(),
+      onSubmitError: vi.fn(),
+      onCancelError: vi.fn(),
+      onQueueError: vi.fn(),
+      onHistoryError,
+      onThreadSummaries: vi.fn(),
+    })
+    await expect(failedController.deleteThread('thread-1')).resolves.toBe(false)
+    expect(context.messages()).toBe(previous)
+    expect(onHistoryError).toHaveBeenLastCalledWith('The thread could not be deleted. Try again.')
+  })
+
   it('renames the selected thread and publishes its new title', async () => {
     const invoke = vi.fn().mockResolvedValue(undefined)
     const summaries = [
