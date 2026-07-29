@@ -4,7 +4,7 @@ describe('fixture cleanup', () => {
     if (await profile.isExisting()) {
       await profile.click()
       await (await $('button=Sign out')).click()
+      await (await $('button=Sign in')).waitForDisplayed({ timeout: 20000 })
     }
-    await (await $('button=Sign in')).waitForDisplayed({ timeout: 20000 })
   })
 })
