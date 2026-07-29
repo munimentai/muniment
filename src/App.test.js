@@ -725,6 +725,7 @@ describe('thread name', () => {
     expect(sidebarName).toHaveTextContent('New thread')
     expect(sidebarName).toHaveAttribute('title', 'New thread')
     expect(sidebarName.querySelector('time')).toHaveAttribute('title', '')
+    expect(screen.queryByText('local · durable')).not.toBeInTheDocument()
   })
 
   it('shows the first restored prompt in the titlebar and current thread record', async () => {
@@ -751,6 +752,7 @@ describe('thread name', () => {
     expect(titlebarName).toHaveAttribute('title', 'Review the lease renewal')
     expect(sidebarName).toHaveTextContent('Review the lease renewal')
     expect(sidebarName).toHaveAttribute('title', 'Review the lease renewal')
+    expect(screen.queryByText('local · durable')).not.toBeInTheDocument()
   })
 
   it('uses one-line ellipsis styles for both thread names', () => {
