@@ -156,6 +156,7 @@ jobs:
     runs-on: self-hosted
     permissions:
       contents: write
+      workflows: write
     env:
       WINDOWS_SIGNING_ENABLED: ${{ secrets.AZURE_CLIENT_SECRET != '' }}
       MACOS_SIGNING_ENABLED: ${{ secrets.APPLE_CERTIFICATE != '' }}
