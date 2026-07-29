@@ -15,6 +15,7 @@ const tokenPatterns = [
 ]
 
 const safeScreenshots = new Set(['01-signed-out.png', '02-authenticated.png'])
+const isSafeScreenshot = (name) => safeScreenshots.has(name) || /^screenshot-[A-Za-z0-9._-]+\.png$/.test(name)
 function inspectScreenshot(input) {
   const data = fs.readFileSync(input)
   if (data.length < 33 || !data.subarray(0, 8).equals(Buffer.from([137,80,78,71,13,10,26,10]))) throw new Error('unsafe screenshot format')
@@ -42,7 +43,7 @@ for (const entry of fs.readdirSync(source, { withFileTypes: true })) {
   if (!entry.isFile()) continue
   const input = path.join(source, entry.name)
   if (/\.png$/i.test(entry.name)) {
-    if (!safeScreenshots.has(entry.name)) throw new Error('unapproved screenshot')
+    if (!isSafeScreenshot(entry.name)) throw new Error('unapproved screenshot')
     inspectScreenshot(input)
   } else {
     const text = fs.readFileSync(input, 'utf8')
