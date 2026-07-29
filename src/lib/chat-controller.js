@@ -225,6 +225,37 @@ export function createChatController({
     }
   }
 
+  async function deleteThread(threadId) {
+    if (!threadId || active() || switchingThread || switchBlocked) return false
+    const deletingCurrent = threadId === readThreadId()
+    threadRefreshSequence += 1
+    switchingThread = true
+    onThreadSwitch(true)
+    onHistoryError('')
+    try {
+      await invoke('chat_delete_thread', { threadId })
+      if (destroyed) return false
+      onThreadSummaries(readThreadSummaries().filter((summary) => summary.threadId !== threadId))
+      if (deletingCurrent) {
+        onHistoryStart()
+        onAnnounce(null)
+        onThreadSelected(null)
+        onFreshThread(true)
+        publishMessages([])
+        onHistoryLoaded()
+        onFollow()
+        onFocus()
+      }
+      return true
+    } catch (_) {
+      if (!destroyed) onHistoryError('The thread could not be deleted. Try again.')
+      return false
+    } finally {
+      switchingThread = false
+      if (!destroyed) onThreadSwitch(switchBlocked)
+    }
+  }
+
   async function send() {
     const prompt = readDraft().trim()
     if (!prompt || active() || switchingThread || switchBlocked || blocked()) return
@@ -326,5 +357,5 @@ export function createChatController({
     buffered.clear()
   }
 
-  return { start, loadHistory, openThread: (threadId) => openThread(threadId, true), newThread, renameThread, send, cancel, resume, queue, cleanup }
+  return { start, loadHistory, openThread: (threadId) => openThread(threadId, true), newThread, renameThread, deleteThread, send, cancel, resume, queue, cleanup }
 }

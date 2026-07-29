@@ -59,6 +59,8 @@
   let threadTitleInput = $state()
   let threadTitleButton = $state()
   let threadTitleBeforeEdit = ''
+  let deletingThreadId = $state(null)
+  let deletePending = $state(false)
   let permissionAnswer = $state(null)
   let permissionValues = $state({})
   let thread = $state()
@@ -217,6 +219,33 @@
     const limited = Array.from(event.currentTarget.value).slice(0, 80).join('')
     threadTitleDraft = limited
     event.currentTarget.value = limited
+  }
+
+  function askToDeleteThread(threadId) {
+    deletingThreadId = threadId
+  }
+
+  function cancelDeleteThread() {
+    const threadId = deletingThreadId
+    deletingThreadId = null
+    void tick().then(() => {
+      Array.from(document.querySelectorAll('[data-delete-thread]'))
+        .find((button) => button.dataset.deleteThread === threadId)?.focus()
+    })
+  }
+
+  function deleteConfirmKeydown(event) {
+    if (event.key !== 'Escape') return
+    event.preventDefault()
+    cancelDeleteThread()
+  }
+
+  async function confirmDeleteThread(threadId) {
+    if (deletePending) return
+    deletePending = true
+    await chatController.deleteThread(threadId)
+    deletePending = false
+    deletingThreadId = null
   }
 
   function availableArtifactRailWidth() {
@@ -661,12 +690,24 @@
               {/if}
               {#each threadSummaries as summary (summary.threadId)}
                 {@const title = summary.title || 'New thread'}
-                {#if !freshThread && summary.threadId === (currentThreadId ?? threadSummaries[0]?.threadId)}
-                  {@const currentTitle = summary.title || currentThreadTitle}
-                  <div class="thread-row active-thread" aria-current="true" title={currentTitle}><span></span><div class="thread-row-title">{currentTitle}</div><time datetime={summary.updatedAt} title={fullDateTime(summary.updatedAt)}>{relativeTime(summary.updatedAt)}</time></div>
-                {:else}
-                  <button class="thread-row" title={title} aria-disabled={active ? 'true' : undefined} onclick={() => chatController.openThread(summary.threadId)}><span></span><div class="thread-row-title">{title}</div><time datetime={summary.updatedAt} title={fullDateTime(summary.updatedAt)}>{relativeTime(summary.updatedAt)}</time></button>
-                {/if}
+                {@const current = !freshThread && summary.threadId === (currentThreadId ?? threadSummaries[0]?.threadId)}
+                {@const rowTitle = current ? summary.title || currentThreadTitle : title}
+                <div class="thread-record">
+                  {#if current}
+                    <div class="thread-row active-thread" aria-current="true" title={rowTitle}><span></span><div class="thread-row-title">{rowTitle}</div><time datetime={summary.updatedAt} title={fullDateTime(summary.updatedAt)}>{relativeTime(summary.updatedAt)}</time></div>
+                  {:else}
+                    <button class="thread-row" title={rowTitle} aria-disabled={active ? 'true' : undefined} onclick={() => chatController.openThread(summary.threadId)}><span></span><div class="thread-row-title">{rowTitle}</div><time datetime={summary.updatedAt} title={fullDateTime(summary.updatedAt)}>{relativeTime(summary.updatedAt)}</time></button>
+                  {/if}
+                  {#if deletingThreadId === summary.threadId}
+                    <div class="thread-delete-confirm" role="group" aria-label={`Delete ${rowTitle}?`}>
+                      <span>Delete “{rowTitle}”?</span>
+                      <button type="button" disabled={deletePending} onclick={() => confirmDeleteThread(summary.threadId)} onkeydown={deleteConfirmKeydown}>Delete</button>
+                      <button type="button" disabled={deletePending} onclick={cancelDeleteThread} onkeydown={deleteConfirmKeydown}>Cancel</button>
+                    </div>
+                  {:else}
+                    <button type="button" class="thread-delete" data-delete-thread={summary.threadId} aria-label={`Delete ${rowTitle}`} disabled={!!active || threadSwitching} onclick={() => askToDeleteThread(summary.threadId)}>Delete</button>
+                  {/if}
+                </div>
               {/each}
             </div>
           {/if}
@@ -999,12 +1040,21 @@
   .side-icon rect, .side-icon path { fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
   .side-action, .thread-row { width: 100%; display: flex; align-items: center; gap: 9px; padding: 7px 8px; border-color: transparent; background: transparent; text-align: left; }
   .thread-list { min-height: 0; overflow-y: auto; }
+  .thread-record { position: relative; }
   .thread-row { font: inherit; font-size: var(--text-13); color: var(--ink); border: 1px solid transparent; border-radius: var(--radius-control); }
   button.thread-row:hover:not([aria-disabled="true"]) { background: var(--faint); }
   button.thread-row[aria-disabled="true"] { opacity: .55; }
   .thread-row time { margin-left: auto; color: var(--muted); font: var(--text-provenance) var(--font-mono); }
   .thread-row > span { flex: 0 0 5px; }
   .thread-row-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .thread-delete { position: absolute; top: 4px; right: 5px; padding: 3px 6px; border-color: transparent; background: var(--surface); color: var(--muted); font: var(--text-12) var(--font-mono); opacity: 0; transition: opacity 120ms ease; }
+  .thread-record:hover .thread-delete, .thread-record:focus-within .thread-delete { opacity: 1; }
+  .thread-delete:hover:not(:disabled) { border-color: transparent; background: var(--faint); color: var(--ink); }
+  .thread-delete:focus-visible, .thread-delete-confirm button:focus-visible { outline-color: var(--ink); }
+  .thread-delete-confirm { position: absolute; inset: 0; display: flex; align-items: center; justify-content: flex-end; gap: 5px; min-width: 0; padding: 5px 7px; border-radius: var(--radius-control); background: var(--surface); color: var(--ink); font: var(--text-12) var(--font-mono); }
+  .thread-delete-confirm > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .thread-delete-confirm button { flex: none; padding: 3px 6px; border-color: transparent; background: transparent; color: var(--ink); font: inherit; }
+  .thread-delete-confirm button:hover:not(:disabled) { background: var(--faint); }
   .side-action span { flex: 1; }
   .new-thread kbd { margin-left: auto; }
   /* Collapsed rail: icon-only controls, names carried by aria-label + tooltip. */
