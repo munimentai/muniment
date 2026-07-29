@@ -1,4 +1,5 @@
 const historyFixtures = {
+  onboarding: [],
   empty: [],
   restored: [
     {
@@ -85,6 +86,8 @@ const historyFixtures = {
 const fixtureName = document.currentScript.dataset.history
 const history = historyFixtures[fixtureName]
 if (!history) throw new Error(`Unknown probe history fixture: ${fixtureName}`)
+const onboardingFixture = fixtureName === 'onboarding'
+const onboardingHomePath = '/Users/alice/Documents/Muniment'
 const threadSummaries = history.length
   ? [
       { threadId: 'probe-thread', title: 'Lease renewal', updatedAt: '2026-07-28T11:55:00Z' },
@@ -103,6 +106,11 @@ function recordInvoke(surface, command, payload) {
 }
 
 function fixtureRendered() {
+  if (onboardingFixture) {
+    const heading = document.querySelector('#onboarding-title')
+    const homePath = document.querySelector('[data-testid="onboarding-home-path"]')
+    return heading?.textContent === 'Choose your Muniment Home' && homePath?.textContent === onboardingHomePath
+  }
   const workspace = document.querySelector('.workspace')
   if (!workspace) return false
   if (history.length === 0) return workspace.querySelector('.empty') !== null
@@ -153,9 +161,20 @@ window.__TAURI__ = {
     async invoke(command, payload) {
       recordInvoke('core', command, payload)
       if (command === 'home_status') {
+        if (onboardingFixture) return { configured: false, homePath: onboardingHomePath }
         return { configured: true, homePath: '/Documents/Muniment' }
       }
       if (command === 'required_model_acquisition_status') {
+        if (onboardingFixture) {
+          return {
+            status: { state: 'installing' },
+            downloadedBytes: 591_000_000,
+            totalBytes: 2_200_000_000,
+            folderSetupAvailable: true,
+            aiFeaturesAvailable: false,
+            retryingInBackground: false,
+          }
+        }
         return {
           status: { state: 'installed' },
           downloadedBytes: 100,
