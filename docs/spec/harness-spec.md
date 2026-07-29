@@ -778,7 +778,9 @@ distinct layers, and neither silently replaces or absorbs the other.
 ### 15.2 Per-surface defaults
 
 - **Desktop:** first run has an explicit, unskippable directory picker, defaulted
-  to `Documents/Muniment`. The location remains changeable later.
+  to `Documents/Muniment`. If the platform Documents folder is unavailable, the
+  default uses `Documents/Muniment` under Home when that directory exists, or
+  `Muniment` under Home otherwise. The location remains changeable later.
 - **CLI and VS Code extension:** the directory in which the surface was opened
   **is** the workspace memory location by default, without asking again. Both
   surfaces expose a visible option to change it.
