@@ -96,6 +96,7 @@ const threadSummaries = history.length
 const eventListeners = []
 const invokedCommands = []
 let callbackId = 0
+let currentThreadId = history.length ? 'probe-thread' : null
 
 function recordInvoke(surface, command, payload) {
   invokedCommands.push({ surface, command, payload })
@@ -167,6 +168,22 @@ window.__TAURI__ = {
       if (command === 'auth_status') return { signed_in: true, subject: 'probe-user' }
       if (command === 'chat_thread_summaries') {
         return { summaries: structuredClone(threadSummaries), nextCursor: null }
+      }
+      if (command === 'chat_current_thread') return currentThreadId
+      if (command === 'chat_submit') {
+        const runId = 'probe-new-run'
+        currentThreadId = 'probe-new-thread'
+        threadSummaries.unshift({
+          threadId: currentThreadId,
+          title: payload.prompt,
+          updatedAt: new Date().toISOString(),
+        })
+        queueMicrotask(() => {
+          for (const entry of eventListeners.filter(({ event }) => event === 'chat-event')) {
+            entry.listener({ payload: { runId, type: 'completed', receipt: null } })
+          }
+        })
+        return { runId, attachments: [] }
       }
       if (command === 'chat_thread_open') return { entries: structuredClone(history), nextCursor: null }
       if (command === 'auth_entitlement_snapshot') {

@@ -54,6 +54,7 @@ fn main() {
             chat::chat_cancel,
             chat::chat_answer_permission,
             chat::chat_queue,
+            chat_threads::chat_current_thread,
             chat_threads::chat_thread_summaries,
             chat_threads::chat_thread_open,
             chat_threads::chat_select_thread,

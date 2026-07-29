@@ -881,6 +881,36 @@ describe('new thread', () => {
     expect(screen.getByText('Current answer')).toBeInTheDocument()
     expect(document.querySelector('.thread-row[aria-current="true"]')).toHaveTextContent('Current question')
   })
+
+  it('keeps the fresh row current until the submitted thread appears', async () => {
+    invoke.mockImplementation(async (command) => {
+      if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
+      if (command === 'chat_thread_open') return []
+      if (command === 'chat_new_thread') return null
+      if (command === 'chat_submit') return { runId: 'run-new', attachments: [] }
+      if (command === 'chat_current_thread') return 'thread-new'
+      if (command === 'auth_entitlement_snapshot') return snapshot()
+      if (command === 'auth_devices') return []
+      throw new Error(`unexpected command: ${command}`)
+    })
+    render(App)
+    const composer = await screen.findByPlaceholderText('Ask anything')
+    const newThread = screen.getByRole('button', { name: 'New thread' })
+    await waitFor(() => expect(newThread).toBeEnabled())
+    await fireEvent.click(newThread)
+    await waitFor(() => expect(document.querySelector('[data-fresh-thread]')).toBeInTheDocument())
+    await fireEvent.input(composer, { target: { value: 'First prompt' } })
+    await fireEvent.click(screen.getByRole('button', { name: 'Send' }))
+
+    expect(document.querySelector('[data-fresh-thread]')).toHaveAttribute('aria-current', 'true')
+    const threadOpenCount = invoke.mock.calls.filter(([command]) => command === 'chat_thread_open').length
+    threadSummaryResult = [{ threadId: 'thread-new', title: 'First prompt', updatedAt: '' }]
+    chatListener({ payload: { runId: 'run-new', type: 'completed', receipt: null } })
+
+    await waitFor(() => expect(document.querySelector('[data-fresh-thread]')).not.toBeInTheDocument())
+    expect(document.querySelector('.thread-row[aria-current="true"]')).toHaveTextContent('First prompt')
+    expect(invoke.mock.calls.filter(([command]) => command === 'chat_thread_open')).toHaveLength(threadOpenCount)
+  })
 })
 
 describe('Home onboarding', () => {
