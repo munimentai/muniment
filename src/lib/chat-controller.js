@@ -13,6 +13,7 @@ export function createChatController({
   readDraft,
   readFiles,
   readThreadId = () => null,
+  readThreadSummaries = () => [],
   blocked = () => false,
   onMessages,
   onActive,
@@ -40,6 +41,7 @@ export function createChatController({
   let switchingThread = false
   let switchBlocked = false
   let threadRefreshSequence = 0
+  const renameQueues = new Map()
 
   const messages = () => readMessages()
   const active = () => readActive()
@@ -193,6 +195,36 @@ export function createChatController({
     }
   }
 
+  async function renameThread(title, previousTitle) {
+    const threadId = readThreadId()
+    const trimmed = title.trim()
+    if (!threadId || !trimmed || trimmed === previousTitle) return false
+    const previousRename = renameQueues.get(threadId) ?? Promise.resolve()
+    const rename = previousRename.then(async () => {
+      if (destroyed) return false
+      onHistoryError('')
+      try {
+        await invoke('chat_rename_thread', { threadId, title: trimmed })
+        if (destroyed) return false
+        onThreadSummaries(readThreadSummaries().map((summary) => (
+          summary.threadId === threadId ? { ...summary, title: trimmed } : summary
+        )))
+        return true
+      } catch (_) {
+        if (!destroyed) {
+          onHistoryError('The thread name could not be changed. Try again.')
+        }
+        return false
+      }
+    })
+    renameQueues.set(threadId, rename)
+    try {
+      return await rename
+    } finally {
+      if (renameQueues.get(threadId) === rename) renameQueues.delete(threadId)
+    }
+  }
+
   async function send() {
     const prompt = readDraft().trim()
     if (!prompt || active() || switchingThread || switchBlocked || blocked()) return
@@ -294,5 +326,5 @@ export function createChatController({
     buffered.clear()
   }
 
-  return { start, loadHistory, openThread: (threadId) => openThread(threadId, true), newThread, send, cancel, resume, queue, cleanup }
+  return { start, loadHistory, openThread: (threadId) => openThread(threadId, true), newThread, renameThread, send, cancel, resume, queue, cleanup }
 }

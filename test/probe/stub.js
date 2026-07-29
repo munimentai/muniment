@@ -170,6 +170,11 @@ window.__TAURI__ = {
         return { summaries: structuredClone(threadSummaries), nextCursor: null }
       }
       if (command === 'chat_current_thread') return currentThreadId
+      if (command === 'chat_rename_thread') {
+        const summary = threadSummaries.find(({ threadId }) => threadId === payload.threadId)
+        if (summary) summary.title = payload.title
+        return null
+      }
       if (command === 'chat_submit') {
         const runId = 'probe-new-run'
         currentThreadId = 'probe-new-thread'
