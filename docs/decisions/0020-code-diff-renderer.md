@@ -95,11 +95,14 @@ This ADR does not select that renderer.
 
 ### Implementation slices
 
-Slice 2 owns the TypeSpec schema, generated Rust and TypeScript artifacts,
-compatibility fixtures, publication, and exact dependency pins. It also owns
-validation for empty, binary, truncated, malformed, contradictory, and stale
-diffs. Those changes follow ADR 0019 and span the cloud publication repository
-and each consuming manifest.
+Slice 2 selects the Rust terminal renderer for the CLI. It also records whether
+each web candidate can run under React Native.
+
+A later contract slice owns the TypeSpec schema, generated Rust and TypeScript
+artifacts, compatibility fixtures, publication, and exact dependency pins. It
+also owns validation for empty, binary, truncated, malformed, contradictory,
+and stale diffs. Those changes follow ADR 0019 and span the cloud publication
+repository and each consuming manifest.
 
 The first implementation slice in this repository starts after those
 artifacts publish. It adds `src/lib/code-diff.js`,
@@ -127,5 +130,6 @@ terminal renderer under `src-tauri/cli/`.
 - The editor extension uses VS Code's native diff editor.
 - Approval binds to the displayed diff identifier.
 - Large, binary, empty, and truncated diffs have explicit behavior.
-- Slice 2 must publish the shared contract before renderer work starts.
+- Slice 2 selects the terminal renderer and records React Native compatibility.
+- Later contract work publishes the shared model before renderer implementation.
 - This decision adds no dependency, generated file, renderer, or runtime code.
