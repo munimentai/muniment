@@ -19,29 +19,24 @@ describe('installed nightly', () => {
     this.timeout(360000)
     const home = process.env.MUNIMENT_E2E_HOME_PATH
     const location = await $('[data-testid="onboarding-home-path"]')
-    const signedOut = await $('button=Sign in')
-    await browser.waitUntil(async () => (
-      await location.isDisplayed() || await signedOut.isDisplayed()
-    ), {
-      timeoutMsg: 'the production UI did not show onboarding or sign-in',
-    })
+    await location.waitForDisplayed()
 
     const dialog = await browser.tauri.mock('plugin:dialog|open')
-    if (await location.isDisplayed()) {
-      await dialog.mockReturnValue(home)
-      await (await $('[data-testid="onboarding-picker"]')).click()
-      expect(await location.getText()).toBe(home)
-      let homeExists = true
-      try { await access(home) } catch { homeExists = false }
-      expect(homeExists).toBe(false)
-      await (await $('[data-testid="onboarding-confirm"]')).click()
-      const skipImport = await $('button=Continue without importing')
-      await skipImport.waitForDisplayed()
-      await skipImport.click()
-      await signedOut.waitForDisplayed()
-      for (const directory of ['memory', 'agents', 'projects', 'sessions']) {
-        expect(await readFile(path.join(home, directory, 'README.md'), 'utf8')).toContain(`# ${directory[0].toUpperCase()}${directory.slice(1)}`)
-      }
+    await dialog.mockReturnValue(home)
+    await (await $('[data-testid="onboarding-picker"]')).click()
+    expect(await location.getText()).toBe(home)
+    let homeExists = true
+    try { await access(home) } catch { homeExists = false }
+    expect(homeExists).toBe(false)
+    await (await $('[data-testid="onboarding-confirm"]')).click()
+    const skipImport = await $('button=Continue without importing')
+    await skipImport.waitForDisplayed()
+    await skipImport.click()
+
+    const signedOut = await $('button=Sign in')
+    await signedOut.waitForDisplayed()
+    for (const directory of ['memory', 'agents', 'projects', 'sessions']) {
+      expect(await readFile(path.join(home, directory, 'README.md'), 'utf8')).toContain(`# ${directory[0].toUpperCase()}${directory.slice(1)}`)
     }
 
     await browser.saveScreenshot(path.join(rawDir, '01-signed-out.png'))
