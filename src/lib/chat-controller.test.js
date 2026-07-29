@@ -20,6 +20,12 @@ function setup(invoke = vi.fn()) {
   let files = []
   let listener
   const errors = []
+  const onMessages = vi.fn((next) => { messages = next })
+  const onThreadSummaries = vi.fn()
+  const onThreadSelected = vi.fn()
+  const onFreshThread = vi.fn()
+  const onFocus = vi.fn()
+  const onFollow = vi.fn()
   const controller = createChatController({
     invoke,
     listen: vi.fn(async (_, callback) => {
@@ -31,7 +37,7 @@ function setup(invoke = vi.fn()) {
     readAnnounced: () => announced,
     readDraft: () => draft,
     readFiles: () => files,
-    onMessages: (next) => { messages = next },
+    onMessages,
     onActive: (next) => { active = next },
     onAnnounce: (next) => { announced = next },
     onDraft: (next) => { draft = next },
@@ -40,6 +46,11 @@ function setup(invoke = vi.fn()) {
     onCancelError: vi.fn(),
     onQueueError: vi.fn(),
     onHistoryError: vi.fn(),
+    onThreadSummaries,
+    onThreadSelected,
+    onFreshThread,
+    onFocus,
+    onFollow,
   })
   return {
     controller,
@@ -48,6 +59,12 @@ function setup(invoke = vi.fn()) {
     messages: () => messages,
     active: () => active,
     errors,
+    onMessages,
+    onThreadSummaries,
+    onThreadSelected,
+    onFreshThread,
+    onFocus,
+    onFollow,
     setActive: (next) => { active = next },
     setDraft: (next) => { draft = next },
     setMessages: (next) => { messages = next },
@@ -556,14 +573,51 @@ describe('chat controller', () => {
   })
 
   it('clears active when an event settles the current run', async () => {
-    const context = setup()
+    const summaries = [{ threadId: 'thread-1', title: 'Hello' }]
+    const invoke = vi.fn((command) => {
+      if (command === 'chat_thread_summaries') return { summaries, nextCursor: null }
+      if (command === 'chat_current_thread') return 'thread-1'
+      throw new Error(`unexpected command: ${command}`)
+    })
+    const context = setup(invoke)
     await context.start()
     const run = { id: 'run-1', phase: 'streaming', text: 'Done' }
     context.setMessages([{ role: 'assistant', run }])
     context.setActive(run)
     context.event({ runId: 'run-1', type: 'completed' })
+    const messagePublishCount = context.onMessages.mock.calls.length
 
     expect(context.active()).toBeNull()
+    await vi.waitFor(() => expect(context.onThreadSelected).toHaveBeenCalledWith('thread-1'))
+    expect(invoke.mock.calls).toEqual([
+      ['chat_thread_summaries', { limit: 20 }],
+      ['chat_current_thread'],
+    ])
+    expect(context.onThreadSummaries).toHaveBeenCalledWith(summaries)
+    expect(context.onFreshThread).toHaveBeenCalledWith(false)
+    expect(context.onMessages).toHaveBeenCalledTimes(messagePublishCount)
+    expect(context.onFocus).not.toHaveBeenCalled()
+    expect(context.onFollow).not.toHaveBeenCalled()
+  })
+
+  it('leaves thread state unchanged when a settlement refresh fails', async () => {
+    const invoke = vi.fn((command) => {
+      if (command === 'chat_thread_summaries') return Promise.reject(new Error('offline'))
+      if (command === 'chat_current_thread') return 'thread-2'
+      throw new Error(`unexpected command: ${command}`)
+    })
+    const context = setup(invoke)
+    await context.start()
+    const run = { id: 'run-1', phase: 'streaming', text: 'Done' }
+    context.setMessages([{ role: 'assistant', run }])
+    context.setActive(run)
+
+    context.event({ runId: 'run-1', type: 'completed' })
+    await vi.waitFor(() => expect(invoke).toHaveBeenCalledTimes(2))
+
+    expect(context.onThreadSummaries).not.toHaveBeenCalled()
+    expect(context.onThreadSelected).not.toHaveBeenCalled()
+    expect(context.onFreshThread).not.toHaveBeenCalled()
   })
 
   it('surfaces a failed submit only when it is the latest submission', async () => {
