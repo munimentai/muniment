@@ -18,6 +18,7 @@
   import { createChatTranscriptController } from './lib/chat-transcript-controller.js'
   import { copyAnnouncement, copyConfirmed, copyFailure, copyLabel } from './lib/message-actions.js'
   import { onboardingLoadingState, onboardingSettingsState } from './lib/onboarding-state.js'
+  import { requiredModelLabel, requiredModelLoadingState, requiredModelMessage, requiredModelPollActive, requiredModelProgress } from './lib/model-acquisition-state.js'
   import { relativeTime } from './lib/relative-time.js'
   import { SIDEBAR_STORAGE_KEY, isNewThreadShortcut, isSidebarShortcut, newThreadShortcut, serializeSidebarCollapsed, sidebarShortcut, storedSidebarCollapsed } from './lib/sidebar-state.js'
   import { createStreamingUnderlineAction } from './lib/streaming-underline.js'
@@ -89,6 +90,9 @@
   let composerInputDraft
   let wasInWorkspace = false
   let onboarding = $state(onboardingLoadingState)
+  let requiredModel = $state(requiredModelLoadingState)
+  let modelProgress = $derived(requiredModelProgress(requiredModel))
+  let requiredModelTimer
   let artifactRailOpen = $state(false)
   let artifactRailWidth = $state(defaultArtifactRailWidth(window.innerWidth))
   let artifactRailMaximum = $state(ARTIFACT_RAIL_MAX_WIDTH)
@@ -523,6 +527,22 @@
       else pairingUnlisten = stop
     })
     if (tauri) {
+      const pollRequiredModel = async () => {
+        try {
+          const status = await tauri.invoke('required_model_acquisition_status')
+          if (destroyed) return
+          requiredModel = status
+        } catch (_) {
+          if (destroyed) return
+          if (!requiredModelPollActive(requiredModel)) {
+            requiredModel = { ...requiredModelLoadingState, status: { state: 'failed' } }
+          }
+        }
+        if (!destroyed && requiredModelPollActive(requiredModel)) {
+          requiredModelTimer = setTimeout(pollRequiredModel, 1000)
+        }
+      }
+      void pollRequiredModel()
       run('status')
       chatController.start()
       entitlementToast.start()
@@ -586,6 +606,7 @@
       })
     return () => {
       destroyed = true
+      clearTimeout(requiredModelTimer)
       dictationController.cleanup()
       chatController.cleanup()
       entitlementToast.cleanup()
@@ -651,7 +672,7 @@
   {/if}
 
   {#if tauri}
-    <Onboarding {tauri} bind:onboarding />
+    <Onboarding {tauri} {requiredModel} bind:onboarding />
     {#if onboarding.name === 'complete'}
       {#if auth.name === 'signed-out'}
       <section class="auth-state">
@@ -666,7 +687,7 @@
     {:else if auth.name === 'signed-in'}
       <section class="workspace" class:sidebar-collapsed={sidebarCollapsed} class:artifact-open={artifactRailOpen} class:artifact-resizing={artifactRailPointer !== undefined} style:--artifact-rail-width={`${artifactRailWidth}px`} bind:this={workspace}>
         {#if draggingFiles}<div class="drop-affordance" role="status"><strong>Drop files to add them</strong><span>Saved locally · supported images sent with first prompt</span></div>{/if}
-        <header class="titlebar">{#if editingThreadTitle}<input class="thread-title" aria-label="Thread name" maxlength="160" bind:this={threadTitleInput} value={threadTitleDraft} oninput={limitThreadTitle} onkeydown={threadTitleKeydown} onblur={commitThreadTitle}>{:else}<button type="button" class="thread-title" aria-label="Rename thread" title={currentThreadTitle} disabled={!currentThreadId} bind:this={threadTitleButton} onclick={(event) => editThreadTitle(event.currentTarget.title)} onkeydown={threadTitleButtonKeydown}>{currentThreadTitle}</button>{/if}<span class="title-spacer"></span><button type="button" class="quiet" aria-controls="artifact-rail" aria-expanded={artifactRailOpen} aria-keyshortcuts={artifactShortcut} aria-label={`${artifactRailOpen ? 'Close' : 'Open'} artifact rail`} onclick={toggleArtifactRail}>Artifacts <kbd>{shortcutDisplayLabel(artifactShortcut)}</kbd></button></header>
+        <header class="titlebar">{#if editingThreadTitle}<input class="thread-title" aria-label="Thread name" maxlength="160" bind:this={threadTitleInput} value={threadTitleDraft} oninput={limitThreadTitle} onkeydown={threadTitleKeydown} onblur={commitThreadTitle}>{:else}<button type="button" class="thread-title" aria-label="Rename thread" title={currentThreadTitle} disabled={!currentThreadId} bind:this={threadTitleButton} onclick={(event) => editThreadTitle(event.currentTarget.title)} onkeydown={threadTitleButtonKeydown}>{currentThreadTitle}</button>{/if}<span class="title-spacer"></span>{#if !requiredModel.aiFeaturesAvailable}<div class="model-record" aria-label={requiredModelMessage(requiredModel)} title={requiredModelMessage(requiredModel)}><span>Qwen3.5-4B · {requiredModelLabel(requiredModel)}</span>{#if modelProgress.total > 0}<div class="model-record-progress" role="progressbar" aria-label="Required local model download" aria-valuemin="0" aria-valuemax={modelProgress.total} aria-valuenow={modelProgress.downloaded}><span style={`width: ${modelProgress.downloaded / modelProgress.total * 100}%`}></span></div><span>{formatByteSize(modelProgress.downloaded)} of {formatByteSize(modelProgress.total)}</span>{/if}</div>{/if}<button type="button" class="quiet" aria-controls="artifact-rail" aria-expanded={artifactRailOpen} aria-keyshortcuts={artifactShortcut} aria-label={`${artifactRailOpen ? 'Close' : 'Open'} artifact rail`} onclick={toggleArtifactRail}>Artifacts <kbd>{shortcutDisplayLabel(artifactShortcut)}</kbd></button></header>
         <aside id="sidebar" class="sidebar">
           <div class="side-brand">
             {#if !sidebarCollapsed}
@@ -1025,6 +1046,9 @@
   .drop-affordance { position: fixed; z-index: 4; inset: 52px 0 0 260px; display: grid; place-content: center; gap: 5px; background: color-mix(in srgb, var(--paper) 92%, transparent); border: 1px dashed var(--muted); color: var(--ink); text-align: center; pointer-events: none; }
   .drop-affordance span { color: var(--muted); font: var(--text-12) var(--font-mono); }
   .titlebar { grid-area: title; display: flex; align-items: center; padding: 0 18px 0 278px; border-bottom: 1px solid var(--border); background: var(--surface); transition: padding-left 180ms ease; }
+  .model-record { display: flex; align-items: center; gap: 8px; margin-right: 14px; color: var(--muted); font: var(--text-12) var(--font-mono); white-space: nowrap; }
+  .model-record-progress { width: 72px; height: 3px; overflow: hidden; border-radius: var(--radius-chip); background: var(--border); }
+  .model-record-progress span { display: block; height: 100%; background: var(--ink); }
   .thread-title { min-width: 0; max-width: 100%; overflow: hidden; padding: 2px; border: 0; background: transparent; color: var(--ink); font: inherit; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
   button.thread-title:disabled { opacity: 1; }
   kbd { margin-left: 10px; color: var(--muted); font: var(--text-12) var(--font-mono); }
