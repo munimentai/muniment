@@ -64,12 +64,12 @@ add little shipped bundle weight. It must use a permissive license. Its styles
 must map to the design tokens without fighting global CSS. It must not require
 a frontend framework that this repository does not use.
 
-| Candidate | Syntax highlighting | Side by side | Unified | Intra-line words | Large diffs | Shipped weight | License | Design-token theming | Framework coupling |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| `diff2html` parser and HTML generator | Optional `highlight.js` adapter | Built in | Built in | Built-in word matching | Change, line-length, and comparison limits | Parser and generator can ship without the UI or highlighter bundles | MIT | CSS classes and replaceable templates need a token override sheet | Framework-neutral DOM output |
-| `react-diff-view` | Token API with optional Refractor and worker | Built in | Built in | Token enhancer | Lazy rendering is possible, but the published 2.2 MB example renders slowly without it | Core plus React, React DOM, and optional tokenizer | MIT | Custom classes and token rendering | Requires React |
-| `react-diff-viewer` | Caller supplies a syntax renderer | Built in | Built in | Built in through `jsdiff` | No documented virtualization or input limits | Component plus React, Emotion, and `jsdiff` | MIT | Light and dark style objects can map tokens, but Emotion owns output styles | Requires React |
-| Svelte renderer over `jsdiff` | Must be built and integrated | Must be built | Must be built | `diffWords` supplies data | Async diffing, timeouts, and edit limits exist, but virtualization must be built | Small differ plus all renderer and highlighter code we build | BSD-3-Clause | Full control through Svelte and design tokens | Couples only to the existing Svelte stack |
+| Candidate | Syntax highlighting | Side by side | Unified | Intra-line words | Large diffs | Shipped weight | License | Design-token theming | Framework coupling | React Native |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| `diff2html` parser and HTML generator | Optional `highlight.js` adapter | Built in | Built in | Built-in word matching | Change, line-length, and comparison limits | Parser and generator can ship without the UI or highlighter bundles | MIT | CSS classes and replaceable templates need a token override sheet | Framework-neutral DOM output | No. Its output is HTML and CSS, not native `View` and `Text` components. |
+| `react-diff-view` | Token API with optional Refractor and worker | Built in | Built in | Token enhancer | Lazy rendering is possible, but the published 2.2 MB example renders slowly without it | Core plus React, React DOM, and optional tokenizer | MIT | Custom classes and token rendering | Requires React | No. React alone is insufficient because the component renders DOM tables and imports CSS. |
+| `react-diff-viewer` | Caller supplies a syntax renderer | Built in | Built in | Built in through `jsdiff` | No documented virtualization or input limits | Component plus React, Emotion, and `jsdiff` | MIT | Light and dark style objects can map tokens, but Emotion owns output styles | Requires React | No. The component renders DOM elements and uses Emotion's web styling. |
+| Svelte renderer over `jsdiff` | Must be built and integrated | Must be built | Must be built | `diffWords` supplies data | Async diffing, timeouts, and edit limits exist, but virtualization must be built | Small differ plus all renderer and highlighter code we build | BSD-3-Clause | Full control through Svelte and design tokens | Couples only to the existing Svelte stack | No. `jsdiff` can supply data, but the Svelte web renderer cannot supply native components. |
 
 `diff2html` meets every display bar without adding React. Its parser accepts
 unified diff text, but the application will adapt the shared model into its
@@ -89,14 +89,52 @@ command. This keeps VS Code navigation, syntax highlighting, themes, and
 accessibility behavior. The virtual document provider reads the same
 `CodeDiff` value and preserves its `id`.
 
-The CLI will render the shared model with a Rust terminal renderer. It will
-use unified mode, terminal colors, and the same producer-supplied segments.
-This ADR does not select that renderer.
+### Terminal renderer bars
+
+The CLI renderer must consume `CodeDiff` without computing another diff. It
+must preserve the `muniment-cli` dependency boundary. It must support color
+and plain output. It must define bounded, predictable output for every model
+state. Syntax highlighting is optional because the shared segments already
+carry the required intra-line emphasis.
+
+The scores use `++` for a strong fit, `+` for a fit with some work, `-` for a
+poor fit, and `--` for a conflict.
+
+| Candidate | Shared-model fit | `muniment-cli` boundary | Color and plain output | Bounded behavior | Syntax highlighting |
+| --- | --- | --- | --- | --- | --- |
+| `similar` plus `anstyle` | `--` computes a diff the producer already supplied | `--` requires at least two new allowlist entries | `++` with `anstyle` policy | `+` supports diff deadlines, but rendering remains custom | `--` none |
+| `imara-diff` plus `anstyle` | `--` computes a diff the producer already supplied | `--` requires at least two new allowlist entries | `++` with `anstyle` policy | `+` bounds pathological diff computation, but rendering remains custom | `--` none |
+| `diffy` | `-` expects or computes patches instead of consuming `CodeDiff` | `--` requires a new allowlist entry and optional color dependencies | `+` has colored and plain patch formatters | `-` does not define this model's truncation or wrapping policy | `--` none |
+| Hand-written renderer plus `console` | `++` reads the model directly | `--` requires `console` and its support crates in the allowlist | `++` delegates terminal styling | `++` keeps all output policy local | `--` none |
+| Hand-written renderer plus `syntect` | `++` reads the model directly | `--` adds a large highlighting dependency tree to the allowlist | `+` still needs terminal styling policy | `+` must bound highlighting work | `++` built in |
+| Hand-written standard-library renderer | `++` reads the model directly | `++` adds no crate and keeps the allowlist unchanged | `+` owns a small ANSI policy | `++` keeps all output policy local | `--` none |
+
+The CLI selects the hand-written standard-library renderer. The CLI has no
+need for a diff algorithm because `CodeDiff` contains hunks, lines, and
+segments. Syntax highlighting does not justify `syntect` and its dependency
+tree. The selection adds no crate, so `test/cli-dependency-boundary.sh` and
+its allowlist remain unchanged.
+
+The renderer uses unified mode. It writes ANSI SGR colors only when stdout is
+a terminal and `NO_COLOR` is absent. It colors additions green, deletions red,
+and file and hunk headers cyan. It emphasizes producer-supplied addition and
+deletion segments with bold color. Plain output contains no ANSI bytes and
+keeps the usual space, `+`, and `-` line markers.
+
+The renderer never inserts hard wraps and never truncates a line. The terminal
+may soft-wrap a long line at its viewport edge. This behavior preserves every
+model character and keeps redirected output stable.
+
+For a binary file, it prints the paths and `Binary file changed`, with no
+hunks. For an empty `files` list, it prints `No changes.`. For a truncated
+diff, it prints `Warning: This diff is truncated.` before any file output.
+That warning remains present in color and plain output.
 
 ### Implementation slices
 
-Slice 2 selects the Rust terminal renderer for the CLI. It also records whether
-each web candidate can run under React Native.
+Slice 2 selects the hand-written standard-library terminal renderer. It also
+records that none of the web renderers run unchanged under React Native.
+`jsdiff` remains a possible data-layer input to a separate native renderer.
 
 A later contract slice owns the TypeSpec schema, generated Rust and TypeScript
 artifacts, compatibility fixtures, publication, and exact dependency pins. It
@@ -121,6 +159,15 @@ terminal renderer under `src-tauri/cli/`.
 - [`react-diff-view` documentation](https://github.com/otakustay/react-diff-view)
 - [`react-diff-viewer` documentation](https://github.com/praneshr/react-diff-viewer)
 - [`jsdiff` documentation](https://github.com/kpdecker/jsdiff)
+- [`similar` documentation](https://docs.rs/similar/latest/similar/)
+- [`imara-diff` documentation](https://docs.rs/imara-diff/latest/imara_diff/)
+- [`diffy` documentation](https://docs.rs/diffy/latest/diffy/)
+- [`anstyle` documentation](https://docs.rs/anstyle/latest/anstyle/)
+- [`console` documentation](https://docs.rs/console/latest/console/)
+- [`syntect` documentation](https://docs.rs/syntect/latest/syntect/)
+- [`std::io::IsTerminal` documentation](https://doc.rust-lang.org/std/io/trait.IsTerminal.html)
+- [`NO_COLOR` convention](https://no-color.org/)
+- [React Native core components](https://reactnative.dev/docs/components-and-apis)
 - [VS Code extension API](https://code.visualstudio.com/api/references/vscode-api)
 
 ## Consequences
@@ -128,8 +175,9 @@ terminal renderer under `src-tauri/cli/`.
 - All three surfaces display one versioned diff value.
 - Desktop rendering adds `diff2html` and a curated syntax highlighter.
 - The editor extension uses VS Code's native diff editor.
+- The CLI renderer adds no dependency and leaves its dependency check unchanged.
 - Approval binds to the displayed diff identifier.
 - Large, binary, empty, and truncated diffs have explicit behavior.
-- Slice 2 selects the terminal renderer and records React Native compatibility.
+- None of the evaluated web renderers can serve as a React Native renderer unchanged.
 - Later contract work publishes the shared model before renderer implementation.
 - This decision adds no dependency, generated file, renderer, or runtime code.
