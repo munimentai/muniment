@@ -611,7 +611,7 @@
           {#if !sidebarCollapsed}
             <p class="side-label">Threads</p>
             <div class="thread-list">
-              {#if freshThread && messages.length === 0}
+              {#if freshThread}
                 <div class="thread-row active-thread" data-fresh-thread aria-current="true" title={currentThreadTitle}><span></span><div class="thread-row-title">{currentThreadTitle}</div></div>
               {/if}
               {#each threadSummaries as summary (summary.threadId)}

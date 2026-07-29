@@ -283,6 +283,16 @@ pub(crate) fn fresh_session_thread(
 }
 
 #[tauri::command]
+pub async fn chat_current_thread(
+    app_handle: tauri::AppHandle,
+    auth_state: tauri::State<'_, auth::AuthState>,
+    state: tauri::State<'_, ChatState>,
+) -> Result<Option<String>, String> {
+    let tokens = auth::fresh_tokens(&auth_state, &app_handle)?;
+    Ok(state.session_thread.current(tokens.subject.as_deref()))
+}
+
+#[tauri::command]
 pub async fn chat_thread_summaries(
     app_handle: tauri::AppHandle,
     auth_state: tauri::State<'_, auth::AuthState>,

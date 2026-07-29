@@ -39,11 +39,30 @@ export function createChatController({
   let destroyed = false
   let switchingThread = false
   let switchBlocked = false
+  let threadRefreshSequence = 0
 
   const messages = () => readMessages()
   const active = () => readActive()
   const publishMessages = (next) => {
     if (!destroyed) onMessages(next)
+  }
+
+  async function refreshThreads() {
+    const sequence = ++threadRefreshSequence
+    try {
+      const [{ summaries }, currentThreadId] = await Promise.all([
+        invoke('chat_thread_summaries', { limit: 20 }),
+        invoke('chat_current_thread'),
+      ])
+      if (destroyed || sequence !== threadRefreshSequence) return
+      onThreadSummaries(summaries)
+      onThreadSelected(currentThreadId)
+      if (currentThreadId && summaries.some((summary) => summary.threadId === currentThreadId)) {
+        onFreshThread(false)
+      }
+    } catch (_) {
+      // A settlement refresh must not disturb the visible conversation state.
+    }
   }
 
   function handleEvent({ payload }) {
@@ -55,7 +74,11 @@ export function createChatController({
     const projected = applyChatEvent(current, payload)
     if (projected) publishMessages(messages().map((message) => message.run?.id === projected.id ? { ...message, run: projected } : message))
     if (projected && (!settledPhases.has(current.phase) || readAnnounced()?.id === payload.runId)) onAnnounce(projected)
-    if (active()?.id === payload.runId) onActive(projected && !settledPhases.has(projected.phase) ? projected : null)
+    if (active()?.id === payload.runId) {
+      const settled = projected && settledPhases.has(projected.phase)
+      onActive(settled ? null : projected)
+      if (settled) void refreshThreads()
+    }
   }
 
   async function start() {
@@ -89,6 +112,7 @@ export function createChatController({
 
   async function openThread(threadId, select = false) {
     if (active() || switchingThread) return
+    threadRefreshSequence += 1
     switchingThread = true
     onThreadSwitch(true)
     onHistoryError('')
@@ -146,6 +170,7 @@ export function createChatController({
 
   async function newThread() {
     if (active() || switchingThread || switchBlocked) return
+    threadRefreshSequence += 1
     switchingThread = true
     onThreadSwitch(true)
     onHistoryError('')
@@ -194,7 +219,9 @@ export function createChatController({
       buffered.delete(run.runId)
       publishMessages(messages().map((message) => message.run?.submissionId === submissionId ? { ...message, run: projected } : message))
       onAnnounce(projected)
-      onActive(settledPhases.has(projected.phase) ? null : projected)
+      const settled = settledPhases.has(projected.phase)
+      onActive(settled ? null : projected)
+      if (settled) await refreshThreads()
     } catch (error) {
       if (destroyed) return
       const failed = { ...pending, id: `rejected-${messages().length}`, phase: 'failed' }
@@ -231,7 +258,9 @@ export function createChatController({
       buffered.delete(run.id)
       publishMessages(messages().map((message) => message.run?.id === run.id ? { ...message, run: projected } : message))
       onAnnounce(projected)
-      onActive(settledPhases.has(projected.phase) ? null : projected)
+      const settled = settledPhases.has(projected.phase)
+      onActive(settled ? null : projected)
+      if (settled) await refreshThreads()
     } catch (error) {
       if (destroyed) return
       const interrupted = { ...run, phase: 'interrupted', resumeError: typeof error === 'string' ? error : 'This reply could not be resumed. Try again.' }
@@ -259,6 +288,7 @@ export function createChatController({
 
   function cleanup() {
     destroyed = true
+    threadRefreshSequence += 1
     unlisten?.()
     unlisten = undefined
     buffered.clear()
