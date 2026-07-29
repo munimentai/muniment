@@ -84,6 +84,20 @@ impl SessionThread {
             ThreadChoice::Fresh(subject.map(str::to_owned));
     }
 
+    pub(crate) fn fresh_if_current(&self, thread_id: &str, subject: Option<&str>) {
+        let mut choice = self
+            .choice
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if matches!(
+            &*choice,
+            ThreadChoice::Selected(selected)
+                if selected.thread_id == thread_id && selected.subject.as_deref() == subject
+        ) {
+            *choice = ThreadChoice::Fresh(subject.map(str::to_owned));
+        }
+    }
+
     pub(crate) fn record(&self, thread_id: String, workspace: &str, subject: Option<&str>) {
         *self
             .choice
@@ -192,5 +206,24 @@ mod tests {
         tracker.record("thread-a".into(), "workspace-a", Some("owner"));
 
         assert_eq!(tracker.current(Some("other")), None);
+    }
+
+    #[test]
+    fn fresh_if_current_only_clears_the_matching_selection() {
+        let tracker = SessionThread::default();
+        tracker.select("thread-a".into(), Some("owner"));
+
+        tracker.fresh_if_current("thread-b", Some("owner"));
+        assert_eq!(tracker.current(Some("owner")), Some("thread-a".into()));
+
+        tracker.fresh_if_current("thread-a", Some("other"));
+        assert_eq!(tracker.current(Some("owner")), Some("thread-a".into()));
+
+        tracker.fresh_if_current("thread-a", Some("owner"));
+        assert_eq!(tracker.current(Some("owner")), None);
+        assert_eq!(
+            tracker.offered("workspace-a", Some("owner")),
+            OfferedThread::Fresh
+        );
     }
 }
