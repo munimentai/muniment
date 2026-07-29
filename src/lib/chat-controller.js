@@ -13,6 +13,7 @@ export function createChatController({
   readDraft,
   readFiles,
   readThreadId = () => null,
+  readThreadSummaries = () => [],
   blocked = () => false,
   onMessages,
   onActive,
@@ -193,6 +194,24 @@ export function createChatController({
     }
   }
 
+  async function renameThread(title, previousTitle) {
+    const threadId = readThreadId()
+    const trimmed = title.trim()
+    if (!threadId || !trimmed || trimmed === previousTitle) return false
+    onHistoryError('')
+    try {
+      await invoke('chat_rename_thread', { threadId, title: trimmed })
+      if (destroyed || readThreadId() !== threadId) return false
+      onThreadSummaries(readThreadSummaries().map((summary) => (
+        summary.threadId === threadId ? { ...summary, title: trimmed } : summary
+      )))
+      return true
+    } catch (_) {
+      if (!destroyed) onHistoryError('The thread name could not be changed. Try again.')
+      return false
+    }
+  }
+
   async function send() {
     const prompt = readDraft().trim()
     if (!prompt || active() || switchingThread || switchBlocked || blocked()) return
@@ -294,5 +313,5 @@ export function createChatController({
     buffered.clear()
   }
 
-  return { start, loadHistory, openThread: (threadId) => openThread(threadId, true), newThread, send, cancel, resume, queue, cleanup }
+  return { start, loadHistory, openThread: (threadId) => openThread(threadId, true), newThread, renameThread, send, cancel, resume, queue, cleanup }
 }

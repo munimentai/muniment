@@ -72,6 +72,110 @@ function setup(invoke = vi.fn()) {
 }
 
 describe('chat controller', () => {
+  it('renames the selected thread and publishes its new title', async () => {
+    const invoke = vi.fn().mockResolvedValue(undefined)
+    const summaries = [
+      { threadId: 'thread-1', title: 'Old name' },
+      { threadId: 'thread-2', title: 'Other name' },
+    ]
+    const onThreadSummaries = vi.fn()
+    const onHistoryError = vi.fn()
+    const controller = createChatController({
+      invoke,
+      listen: vi.fn(),
+      readMessages: () => [],
+      readActive: () => null,
+      readAnnounced: () => null,
+      readDraft: () => '',
+      readFiles: () => [],
+      readThreadId: () => 'thread-1',
+      readThreadSummaries: () => summaries,
+      onMessages: vi.fn(),
+      onActive: vi.fn(),
+      onAnnounce: vi.fn(),
+      onDraft: vi.fn(),
+      onFiles: vi.fn(),
+      onSubmitError: vi.fn(),
+      onCancelError: vi.fn(),
+      onQueueError: vi.fn(),
+      onHistoryError,
+      onThreadSummaries,
+    })
+
+    await expect(controller.renameThread('  New name  ', 'Old name')).resolves.toBe(true)
+
+    expect(invoke).toHaveBeenCalledWith('chat_rename_thread', {
+      threadId: 'thread-1',
+      title: 'New name',
+    })
+    expect(onThreadSummaries).toHaveBeenCalledWith([
+      { threadId: 'thread-1', title: 'New name' },
+      { threadId: 'thread-2', title: 'Other name' },
+    ])
+    expect(onHistoryError).toHaveBeenCalledWith('')
+  })
+
+  it.each([
+    [null, 'New name', 'Old name'],
+    ['thread-1', '   ', 'Old name'],
+    ['thread-1', ' Old name ', 'Old name'],
+  ])('does not rename for thread %s and title %j', async (threadId, title, previousTitle) => {
+    const invoke = vi.fn()
+    const controller = createChatController({
+      invoke,
+      listen: vi.fn(),
+      readMessages: () => [],
+      readActive: () => null,
+      readAnnounced: () => null,
+      readDraft: () => '',
+      readFiles: () => [],
+      readThreadId: () => threadId,
+      onMessages: vi.fn(),
+      onActive: vi.fn(),
+      onAnnounce: vi.fn(),
+      onDraft: vi.fn(),
+      onFiles: vi.fn(),
+      onSubmitError: vi.fn(),
+      onCancelError: vi.fn(),
+      onQueueError: vi.fn(),
+      onHistoryError: vi.fn(),
+    })
+
+    await expect(controller.renameThread(title, previousTitle)).resolves.toBe(false)
+    expect(invoke).not.toHaveBeenCalled()
+  })
+
+  it('reports a rename failure without publishing a title', async () => {
+    const onThreadSummaries = vi.fn()
+    const onHistoryError = vi.fn()
+    const controller = createChatController({
+      invoke: vi.fn().mockRejectedValue(new Error('offline')),
+      listen: vi.fn(),
+      readMessages: () => [],
+      readActive: () => null,
+      readAnnounced: () => null,
+      readDraft: () => '',
+      readFiles: () => [],
+      readThreadId: () => 'thread-1',
+      readThreadSummaries: () => [{ threadId: 'thread-1', title: 'Old name' }],
+      onMessages: vi.fn(),
+      onActive: vi.fn(),
+      onAnnounce: vi.fn(),
+      onDraft: vi.fn(),
+      onFiles: vi.fn(),
+      onSubmitError: vi.fn(),
+      onCancelError: vi.fn(),
+      onQueueError: vi.fn(),
+      onHistoryError,
+      onThreadSummaries,
+    })
+
+    await expect(controller.renameThread('New name', 'Old name')).resolves.toBe(false)
+
+    expect(onThreadSummaries).not.toHaveBeenCalled()
+    expect(onHistoryError).toHaveBeenLastCalledWith('The thread name could not be changed. Try again.')
+  })
+
   it('starts a fresh thread only after the command succeeds', async () => {
     const request = deferred()
     const previous = [{ role: 'user', text: 'Current transcript' }]
