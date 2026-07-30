@@ -56,41 +56,11 @@ export function onboardingExtractingState(state) {
 }
 
 export function onboardingExtractionState(state, extractedEntries) {
-  return { ...state, name: 'pre-triage', extractedEntries, error: undefined }
-}
-
-export function onboardingTriagingState(state) {
-  return { ...state, name: 'triaging', report: undefined, error: undefined }
-}
-
-export function onboardingTriageReportState(state, response) {
-  return { ...state, name: 'triage-review', report: response.report, error: undefined }
-}
-
-export function onboardingTriageErrorState(state, error) {
-  const messages = {
-    empty: 'No approved files are available. Return to archive review and select at least one file.',
-    tooManyEntries: 'Too many approved files were selected. Return to archive review and choose fewer files.',
-    malformedSource: 'An approved file has invalid source information. Return to archive review and choose the ZIP again.',
-    inputTooLarge: 'The approved files are too large to review together. Return to archive review and choose fewer files.',
-    localAiUnavailable: 'Local AI is unavailable. Start the local model and try again.',
-    transportFailed: 'Local AI could not be reached. Check that the local model is running and try again.',
-    invalidModelResponse: 'Local AI returned an incomplete proposal. Try generating it again.',
-    requestFailed: 'The proposal could not be generated. Try again.',
-  }
-  return {
-    ...state,
-    name: 'triage-error',
-    error: messages[error?.kind] ?? 'The proposal could not be generated. Try again.',
-  }
-}
-
-export function onboardingTriageConfirmedState(state) {
-  return { ...state, name: 'triage-confirmed', error: undefined }
+  return { ...state, name: 'approved-review', extractedEntries, error: undefined }
 }
 
 export function onboardingImportSavingState(state) {
-  return { ...state, name: 'triage-saving', error: undefined, errorKind: undefined, conflictPath: undefined }
+  return { ...state, name: 'import-saving', error: undefined, errorKind: undefined, conflictPath: undefined }
 }
 
 export function onboardingImportSavedState(state) {
@@ -101,15 +71,15 @@ export function onboardingImportErrorState(state, error) {
   if (error?.kind === 'invalidInput') {
     return {
       ...state,
-      name: 'triage-invalid',
+      name: 'import-invalid',
       errorKind: 'invalidInput',
-      error: 'The confirmed proposal is no longer valid. Return to archive review and review the approved files again.',
+      error: 'The approved files are no longer valid. Return to archive review and review them again.',
     }
   }
   if (error?.kind === 'destinationConflict') {
     return {
       ...state,
-      name: 'triage-confirmed',
+      name: 'approved-review',
       errorKind: 'destinationConflict',
       conflictPath: typeof error.relativePath === 'string' && error.relativePath ? error.relativePath : undefined,
       error: 'That Home already contains an item at the proposed destination. Choose a different Home folder and try again.',
@@ -117,7 +87,7 @@ export function onboardingImportErrorState(state, error) {
   }
   return {
     ...state,
-    name: 'triage-confirmed',
+    name: 'approved-review',
     errorKind: 'saveFailed',
     conflictPath: undefined,
     error: 'The import could not be saved. Check that the Home folder is available and try again.',
@@ -125,11 +95,11 @@ export function onboardingImportErrorState(state, error) {
 }
 
 export function onboardingConfirmedHomePathState(state, homePath) {
-  return { ...state, name: 'triage-confirmed', homePath, error: undefined, errorKind: undefined, conflictPath: undefined }
+  return { ...state, name: 'approved-review', homePath, error: undefined, errorKind: undefined, conflictPath: undefined }
 }
 
 export function onboardingReturnToArchiveReviewState(state) {
-  return { ...state, name: 'reviewing', report: undefined, error: undefined }
+  return { ...state, name: 'reviewing', error: undefined }
 }
 
 export function onboardingExtractionErrorState(state, error) {

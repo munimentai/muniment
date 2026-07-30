@@ -120,17 +120,22 @@ pub fn attach_pairing_decide(
 }
 
 #[cfg(target_os = "linux")]
+fn resolve_attach_home(
+    documents: Option<PathBuf>,
+    home: Option<PathBuf>,
+) -> Result<PathBuf, ProtocolError> {
+    crate::home::choose_default_home(documents, home)
+        .map_err(|_| ProtocolError::persistence_failed())
+}
+
+#[cfg(target_os = "linux")]
 impl<R: tauri::Runtime> DesktopAttachService<TauriRunStartBoundaries<R>> {
     pub fn new(
         app: tauri::AppHandle<R>,
         workspace_contexts: Arc<Mutex<HashMap<String, HashMap<PathBuf, Option<String>>>>>,
         client_credentials: Arc<Mutex<HashMap<String, String>>>,
     ) -> Result<Self, ProtocolError> {
-        let home = app
-            .path()
-            .document_dir()
-            .map_err(|_| ProtocolError::persistence_failed())?
-            .join("Muniment");
+        let home = resolve_attach_home(app.path().document_dir().ok(), app.path().home_dir().ok())?;
         let idempotency = IdempotencyStore::open(
             app.path()
                 .app_data_dir()
@@ -558,6 +563,20 @@ mod tests {
         for (error, expected) in cases {
             assert_eq!(should_retry_attach_accept(error), expected, "{error:?}");
         }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn attach_home_uses_home_once_when_documents_directory_is_absent() {
+        let root = std::env::temp_dir().join(format!("muniment-attach-home-{}", Uuid::now_v7()));
+        std::fs::create_dir(&root).unwrap();
+
+        assert_eq!(
+            resolve_attach_home(None, Some(root.clone())).unwrap(),
+            root.join("Muniment")
+        );
+
+        std::fs::remove_dir(root).unwrap();
     }
 
     #[cfg(target_os = "linux")]

@@ -1,5 +1,6 @@
 const historyFixtures = {
   onboarding: [],
+  approved: [],
   empty: [],
   restored: [
     {
@@ -86,7 +87,8 @@ const historyFixtures = {
 const fixtureName = document.currentScript.dataset.history
 const history = historyFixtures[fixtureName]
 if (!history) throw new Error(`Unknown probe history fixture: ${fixtureName}`)
-const onboardingFixture = fixtureName === 'onboarding'
+const onboardingFixture = fixtureName === 'onboarding' || fixtureName === 'approved'
+const approvedFixture = fixtureName === 'approved'
 const onboardingHomePath = '/Users/alice/Documents/Muniment'
 const threadSummaries = history.length
   ? [
@@ -106,6 +108,11 @@ function recordInvoke(surface, command, payload) {
 }
 
 function fixtureRendered() {
+  if (approvedFixture) {
+    const heading = document.querySelector('#onboarding-title')
+    const save = document.querySelector('[data-testid="onboarding-import-save"]')
+    return heading?.textContent === 'Save approved files' && save?.textContent === 'Save Home and finish'
+  }
   if (onboardingFixture) {
     const heading = document.querySelector('#onboarding-title')
     const homePath = document.querySelector('[data-testid="onboarding-home-path"]')
@@ -117,12 +124,35 @@ function fixtureRendered() {
   return history.every((run) => workspace.textContent.includes(run.prompt) && workspace.textContent.includes(run.text))
 }
 
+function advanceApprovedFixture() {
+  if (!approvedFixture || fixtureRendered()) return
+  const confirm = document.querySelector('[data-testid="onboarding-confirm"]')
+  if (confirm) {
+    confirm.click()
+    return
+  }
+  const archivePicker = document.querySelector('[data-testid="onboarding-import-picker"]')
+  if (archivePicker && !document.querySelector('[aria-label="Export manifest"]')) {
+    archivePicker.click()
+    return
+  }
+  const checkbox = document.querySelector('[aria-label="Export manifest"] input[type="checkbox"]')
+  if (checkbox && !checkbox.checked) {
+    checkbox.click()
+    queueMicrotask(advanceApprovedFixture)
+    return
+  }
+  document.querySelector('[data-testid="onboarding-import-continue"]')?.click()
+}
+
 function markReadyAfterFixtureRender() {
+  advanceApprovedFixture()
   if (fixtureRendered()) {
     document.body.dataset.probeReady = ''
     return
   }
   const observer = new MutationObserver(() => {
+    advanceApprovedFixture()
     if (!fixtureRendered()) return
     observer.disconnect()
     document.body.dataset.probeReady = ''
@@ -164,6 +194,16 @@ window.__TAURI__ = {
         if (onboardingFixture) return { configured: false, homePath: onboardingHomePath }
         return { configured: true, homePath: '/Documents/Muniment' }
       }
+      if (command === 'home_confirm') return { configured: true, homePath: payload.homePath }
+      if (command === 'onboarding_import_preview') return {
+        entries: [
+          { name: 'profile.json', kind: 'json', byteSize: 24, excerpt: '{"name":"Alice"}', excerptTruncated: false },
+        ],
+        totalByteSize: 24,
+      }
+      if (command === 'onboarding_import_extract') return [
+        { sourceName: 'profile.json', kind: 'json', text: '{"name":"Alice"}', sourceProvenance: 'assistant-export:profile.json' },
+      ]
       if (command === 'auth_status') return { signed_in: true, subject: 'probe-user' }
       if (command === 'chat_thread_summaries') {
         return { summaries: structuredClone(threadSummaries), nextCursor: null }
@@ -231,6 +271,7 @@ window.__TAURI_INTERNALS__ = {
   },
   async invoke(command, payload) {
     recordInvoke('internal', command, payload)
+    if (approvedFixture && command.includes('open')) return '/Users/alice/Downloads/assistant-export.zip'
     return null
   },
   transformCallback(callback, once = false) {
