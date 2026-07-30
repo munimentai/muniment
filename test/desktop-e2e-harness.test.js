@@ -263,7 +263,8 @@ describe('Windows auth URL capture seam', () => {
   })
 })
 
-describe('macOS installed launch harness', () => {
+// This block runs a POSIX shell script, and Windows has no shell for it.
+describe.skipIf(process.platform === 'win32')('macOS installed launch harness', () => {
   const runnerPath = path.join(root, 'test/e2e/runner/macos.sh')
   const runner = fs.readFileSync(path.join(root, 'test/e2e/runner/macos.sh'), 'utf8')
   const finalizer = runner.slice(runner.indexOf('finalize()'), runner.indexOf('\nif [[ ${MUNIMENT_E2E_FINALIZER_TEST_MODE'))
@@ -553,7 +554,8 @@ describe('artifact redaction boundary', () => {
   })
 })
 
-describe('desktop-ci payload extraction', () => {
+// This block runs a POSIX shell script, and Windows has no shell for it.
+describe.skipIf(process.platform === 'win32')('desktop-ci payload extraction', () => {
   const markers = (body) => `=== DESKTOP-CI ARTIFACTS BEGIN ===\n${body}\n=== DESKTOP-CI ARTIFACTS END ===\n`
   // The driver's own --collect-artifacts fence, used when the guest never
   // published an envelope of its own (runner contract).
@@ -722,7 +724,8 @@ describe('desktop-ci payload extraction', () => {
   })
 })
 
-describe('cleanup failure accounting', () => {
+// This block runs a POSIX shell script, and Windows has no shell for it.
+describe.skipIf(process.platform === 'win32')('cleanup failure accounting', () => {
   const runner = fs.readFileSync(path.join(root, 'test/e2e/runner/linux.sh'), 'utf8')
   const phases = ['stop-wdio', 'stop-driver', 'revoke-session', 'stop-browser-driver', 'stop-app', 'remove-package', 'remove-state', 'package-gone', 'processes-gone', 'state-gone', 'stage-cleanup-log', 'redact-artifacts', 'remove-raw', 'remove-package-file', 'remove-auth-url', 'replace-artifacts', 'publish-artifacts', 'suppress-artifacts', 'remove-safe', 'raw-gone', 'package-file-gone', 'auth-url-gone', 'safe-gone', 'remove-cleanup-log']
   const runFinalizer = (failed = '', extraEnv = {}) => {
