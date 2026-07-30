@@ -55,7 +55,7 @@ grep -Fq 'The desktop sends no classification metadata.' docs/spec/harness-spec.
 test -z "$(grep -rl --exclude='0003-resident-gemma-model.md' 'muniment-resident-gemma' docs/)"
 test -z "$(grep -ril 'resident local gemma' docs/)"
 # companion workspace and its path-scoped CI lane
-grep -Fq 'members = [".", "core", "attach", "cli"]' src-tauri/Cargo.toml
+grep -Fq 'members = [".", "core", "attach", "cli", "acp"]' src-tauri/Cargo.toml
 grep -Fq 'resolver = "2"' src-tauri/Cargo.toml
 test -f src-tauri/attach/Cargo.toml
 test -f src-tauri/attach/src/lib.rs
@@ -67,9 +67,9 @@ grep -Fq 'src-tauri/attach/*|src-tauri/attach/**)' "$ci"
 grep -Fq 'protocol-fixtures/*|protocol-fixtures/**)' "$ci"
 grep -Fq 'echo "companion=$companion" >> "$GITHUB_OUTPUT"' "$ci"
 grep -Fq "if: steps.changes.outputs.companion == 'true'" "$ci"
-grep -Fq 'cargo fmt --manifest-path src-tauri/Cargo.toml --package muniment-attach --package muniment-cli --check' "$ci"
-grep -Fq 'cargo clippy --manifest-path src-tauri/Cargo.toml --package muniment-attach --package muniment-cli --all-targets --locked -- -D warnings' "$ci"
-grep -Fq 'cargo test --manifest-path src-tauri/Cargo.toml --package muniment-attach --package muniment-cli --locked' "$ci"
+grep -Fq 'cargo fmt --manifest-path src-tauri/Cargo.toml --package muniment-attach --package muniment-cli --package muniment-acp --check' "$ci"
+grep -Fq 'cargo clippy --manifest-path src-tauri/Cargo.toml --package muniment-attach --package muniment-cli --package muniment-acp --all-targets --locked -- -D warnings' "$ci"
+grep -Fq 'cargo test --manifest-path src-tauri/Cargo.toml --package muniment-attach --package muniment-cli --package muniment-acp --locked' "$ci"
 grep -Fq 'run: test/cli-dependency-boundary.sh' "$ci"
 test -d protocol-fixtures/muniment.attach/1
 grep -Fq 'name: attach-fixtures-current' "$ci"
