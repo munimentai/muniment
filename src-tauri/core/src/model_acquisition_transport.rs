@@ -624,5 +624,4 @@ mod tests {
             Err(TransportFailure::Rejected)
         );
     }
-
 }

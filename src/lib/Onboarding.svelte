@@ -197,7 +197,11 @@
       </div>
     {/if}
   {:else if onboarding.name === 'load-error'}
-    <p class="support">Onboarding could not start.</p><button onclick={loadOnboarding}>Try again</button>
+    <p class="support">Onboarding could not start.</p>
+    <div class="onboarding-actions">
+      <button data-testid="onboarding-picker" class="primary" onclick={chooseHome}>Choose folder…</button>
+      <button onclick={loadOnboarding}>Try again</button>
+    </div>
     <p class="onboarding-error" role="alert">{onboarding.error}</p>
   {/if}
   </div>
