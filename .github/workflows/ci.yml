@@ -84,6 +84,10 @@ jobs:
                 attach_fixtures=true
                 extension=true
                 ;;
+              src-tauri/acp/*|src-tauri/acp/**)
+                docs_only=false
+                companion=true
+                ;;
               src-tauri/Cargo.toml|src-tauri/Cargo.lock)
                 docs_only=false
                 companion=true
@@ -168,15 +172,15 @@ jobs:
 
       - name: Companion formatting
         if: steps.changes.outputs.companion == 'true'
-        run: cargo fmt --manifest-path src-tauri/Cargo.toml --package muniment-attach --package muniment-cli --check
+        run: cargo fmt --manifest-path src-tauri/Cargo.toml --package muniment-attach --package muniment-cli --package muniment-acp --check
 
       - name: Companion lint
         if: steps.changes.outputs.companion == 'true'
-        run: cargo clippy --manifest-path src-tauri/Cargo.toml --package muniment-attach --package muniment-cli --all-targets --locked -- -D warnings
+        run: cargo clippy --manifest-path src-tauri/Cargo.toml --package muniment-attach --package muniment-cli --package muniment-acp --all-targets --locked -- -D warnings
 
       - name: Companion unit tests
         if: steps.changes.outputs.companion == 'true'
-        run: cargo test --manifest-path src-tauri/Cargo.toml --package muniment-attach --package muniment-cli --locked
+        run: cargo test --manifest-path src-tauri/Cargo.toml --package muniment-attach --package muniment-cli --package muniment-acp --locked
 
       - name: CLI dependency boundary
         if: steps.changes.outputs.companion == 'true'
