@@ -41,14 +41,16 @@ runtime access.
 | Surface | Runtime execution | Permission gates | Receipts | Local capabilities | State in this repository |
 | --- | --- | --- | --- | --- | --- |
 | Desktop | Starts and steers runs | Answers locally | Shows governed run records | May invoke granted runtime capabilities | Built |
-| CLI | Starts and steers runs through attach | Answers in the terminal | Prints run receipts | May invoke granted runtime capabilities | Built |
-| Editor extension | Starts and steers runs through attach | Answers in the editor | Shows run receipts | May invoke granted runtime capabilities | Built |
+| CLI | Starts and steers runs through attach | Answers in the terminal | Prints run receipts | May invoke granted runtime capabilities | **Deferred indefinitely under the 2026-07-29 owner ruling ([ADR 0022](docs/decisions/0022-acp-agent-interop.md))** |
+| Editor extension | Starts and steers runs through attach | Answers in the editor | Shows run receipts | May invoke granted runtime capabilities | **Retired under the 2026-07-29 owner ruling ([ADR 0022](docs/decisions/0022-acp-agent-interop.md))** |
+| ACP adapter | Starts and steers runs through attach | An editor answer is input to a Muniment gate, not a grant | Shows runtime-owned receipts | No claimed local filesystem or terminal capability | **Not built ([ADR 0022](docs/decisions/0022-acp-agent-interop.md))** |
 | Mobile companion | No local runtime | Planned remote answers for live desktop runs | Planned display | None | **Not built** |
 | Agent access | Planned server-side headless access | Not defined here | Server-owned, when designed | No local surface claim | **Not built** |
 
-All built execution surfaces use the same governed runtime boundary. Mobile is
-a companion, not a local execution surface. The CLI is for interactive human
-use, not scripted agent access.
+The desktop uses the governed runtime boundary. Mobile is a companion, not a
+local execution surface. The 2026-07-29 owner ruling retires the editor
+extension and defers the CLI indefinitely.
+[ADR 0022](docs/decisions/0022-acp-agent-interop.md) records both dispositions.
 
 ## Loopback identities
 
@@ -60,6 +62,7 @@ No loopback assigns authority to a magic username.
 | Sign-in redirect catcher | The catcher trusts a callback on an ephemeral `127.0.0.1` port only when its `state` matches the current sign-in attempt. | A callback cannot choose the expected random state. A wrong state ends the attempt. The listener accepts no LAN address or durable account name. |
 | Browser-control relay | The relay trusts a single-use random token plus the browser process and canonical executable identity derived through OS process and socket APIs. | The client cannot assert its executable path. The OS supplies the process identity, and the desktop supplies the expected path and token. Missing or contradictory evidence fails closed. |
 | ADR 0012 runtime service | The accepted design trusts one per-user service managed by the OS and the same attach peer checks. The desktop still owns the runtime today. | No service identity exists to mint today. The design defines no privileged username or client-claimed role. Its service boundary remains unimplemented. |
+| Editor-spawned ACP adapter ([ADR 0022](docs/decisions/0022-acp-agent-interop.md)) | ADR 0009 peer checks establish the same OS user. Attach approval binds the adapter identity, connection nonces, signed-in profile, and workspace scopes to a revocable capability. | The claimed process name, ACP session ID, and `cwd` grant no authority. Missing, contradictory, or stale identity evidence fails closed. |
 
 These checks do not distinguish hostile processes after the current OS account
 is compromised. They prevent names supplied inside the protocol from becoming
@@ -87,3 +90,6 @@ defines a model-context boundary.
 - **Agent access has no implementation here.**
   [ADR 0009](docs/decisions/0009-companion-attach-protocol.md) assigns
   automation to a server-side layer.
+- **The ACP adapter has no implementation here.** It depends on the ADR 0012
+  runtime service. [ADR 0022](docs/decisions/0022-acp-agent-interop.md) defines
+  that boundary.
