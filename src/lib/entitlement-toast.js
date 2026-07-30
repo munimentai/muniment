@@ -27,10 +27,14 @@ export function createEntitlementToast({
   }
 
   async function start() {
-    const stop = await listen('entitlement-changed', show)
-    if (!stop) return
-    if (destroyed) stop()
-    else unlisten = stop
+    try {
+      const stop = await listen('entitlement-changed', show)
+      if (!stop) return
+      if (destroyed) stop()
+      else unlisten = stop
+    } catch (_) {
+      console.error('Entitlement listener registration failed.')
+    }
   }
 
   function cleanup() {

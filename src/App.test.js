@@ -25,10 +25,12 @@ let entitlementListener
 let eventUnlisten
 let pairingListener
 let pairingUnlisten
+let pairingRegistrationError
 let dialogResult
 let confirmResult
 let dragDropListener
 let dragDropUnlisten
+let dragDropRegistrationError
 let homeStatus
 let requiredModelInvoke
 let globalShortcutHandler
@@ -51,7 +53,9 @@ vi.mock('@tauri-apps/api/webview', () => ({
   getCurrentWebview: () => ({
     onDragDropEvent: vi.fn((listener) => {
       dragDropListener = listener
-      return Promise.resolve(dragDropUnlisten)
+      return dragDropRegistrationError
+        ? Promise.reject(dragDropRegistrationError)
+        : Promise.resolve(dragDropUnlisten)
     }),
   }),
 }))
@@ -133,6 +137,9 @@ beforeAll(async () => {
       if (event === 'dictation-event') dictationListener = listener
       if (event === 'entitlement-changed') entitlementListener = listener
       if (event === 'attach-pairing-requested') pairingListener = listener
+      if (event === 'attach-pairing-requested' && pairingRegistrationError) {
+        return Promise.reject(pairingRegistrationError)
+      }
       return Promise.resolve(event === 'attach-pairing-requested' ? pairingUnlisten : eventUnlisten)
     }) },
   }
@@ -154,8 +161,10 @@ beforeEach(() => {
   eventUnlisten = vi.fn()
   pairingListener = undefined
   pairingUnlisten = vi.fn()
+  pairingRegistrationError = undefined
   dragDropListener = undefined
   dragDropUnlisten = vi.fn()
+  dragDropRegistrationError = undefined
   dialogResult = null
   confirmResult = vi.fn().mockResolvedValue(false)
   globalShortcutHandler = undefined
@@ -227,6 +236,18 @@ describe('entitlement change toast', () => {
 })
 
 describe('pairing decisions', () => {
+  it('records a rejected listener registration without a stale unlisten handle', async () => {
+    pairingRegistrationError = new Error('sensitive registration detail')
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const view = render(App)
+
+    await waitFor(() => expect(error).toHaveBeenCalledWith('Pairing decision failed.'))
+    view.unmount()
+
+    expect(pairingUnlisten).not.toHaveBeenCalled()
+    expect(error).not.toHaveBeenCalledWith(expect.stringContaining('sensitive'))
+  })
+
   it.each([
     ['approves', true],
     ['declines', false],
@@ -2701,6 +2722,18 @@ describe('voice dictation', () => {
 })
 
 describe('local file selection', () => {
+  it('records a rejected drop listener registration without a stale unlisten handle', async () => {
+    dragDropRegistrationError = new Error('sensitive registration detail')
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const view = render(App)
+
+    await waitFor(() => expect(error).toHaveBeenCalledWith('File drop listener registration failed.'))
+    view.unmount()
+
+    expect(dragDropUnlisten).not.toHaveBeenCalled()
+    expect(error).not.toHaveBeenCalledWith(expect.stringContaining('sensitive'))
+  })
+
   it('shows and clears the native drop affordance, then de-duplicates dropped files', async () => {
     dialogResult = ['/private/contracts/lease.pdf']
     render(App)
