@@ -23,6 +23,7 @@ describe('entitlement toast controller', () => {
   afterEach(() => {
     vi.clearAllTimers()
     vi.useRealTimers()
+    vi.restoreAllMocks()
   })
 
   it('records a rejected listener registration', async () => {
