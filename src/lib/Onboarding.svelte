@@ -21,7 +21,7 @@
       const picked = await open({ directory: true, multiple: false, defaultPath: onboarding.homePath })
       if (typeof picked === 'string') onboarding = onboardingPathState(onboarding, picked)
     } catch (_) {
-      onboarding = onboardingErrorState(onboarding, 'The folder picker could not be opened. Try again.')
+      onboarding = onboardingErrorState(onboarding, 'The folder picker could not be opened.')
     }
   }
 

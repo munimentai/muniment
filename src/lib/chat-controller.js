@@ -98,7 +98,7 @@ export function createChatController({
         return !destroyed
       } catch (_) {
         registrationFailed = true
-        if (!destroyed) onHistoryError('Live replies cannot arrive. Try again.')
+        if (!destroyed) onHistoryError('Live replies cannot arrive.')
         return false
       } finally {
         registration = undefined
@@ -126,7 +126,7 @@ export function createChatController({
       }
       await openThread(summaries[0].threadId, switchBlocked)
     } catch (_) {
-      if (!destroyed) onHistoryError('Conversation history could not be restored. Try again.')
+      if (!destroyed) onHistoryError('Conversation history could not be restored.')
     }
   }
 
@@ -180,7 +180,7 @@ export function createChatController({
             }
           }
         }
-        onHistoryError('Conversation history could not be restored. Try again.')
+        onHistoryError('Conversation history could not be restored.')
       }
     } finally {
       switchingThread = false
@@ -206,7 +206,7 @@ export function createChatController({
       onFollow()
       onFocus()
     } catch (_) {
-      if (!destroyed) onHistoryError('A new thread could not be started. Try again.')
+      if (!destroyed) onHistoryError('A new thread could not be started.')
     } finally {
       switchingThread = false
       if (!destroyed) onThreadSwitch(switchBlocked)
@@ -230,7 +230,7 @@ export function createChatController({
         return true
       } catch (_) {
         if (!destroyed) {
-          onHistoryError('The thread name could not be changed. Try again.')
+          onHistoryError('The thread name could not be changed.')
         }
         return false
       }
@@ -266,7 +266,7 @@ export function createChatController({
       }
       return true
     } catch (_) {
-      if (!destroyed) onHistoryError('The thread could not be deleted. Try again.')
+      if (!destroyed) onHistoryError('The thread could not be deleted.')
       return false
     } finally {
       switchingThread = false
@@ -344,7 +344,7 @@ export function createChatController({
       if (settled) await refreshThreads()
     } catch (error) {
       if (destroyed) return
-      const interrupted = { ...run, phase: 'interrupted', resumeError: typeof error === 'string' ? error : 'This reply could not be resumed. Try again.' }
+      const interrupted = { ...run, phase: 'interrupted', resumeError: typeof error === 'string' ? error : 'This reply could not be resumed.' }
       publishMessages(messages().map((message) => message.run?.id === run.id ? { ...message, run: interrupted } : message))
       onAnnounce(interrupted)
       onActive(null)

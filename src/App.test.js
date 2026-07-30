@@ -692,7 +692,7 @@ describe('thread name', () => {
     await fireEvent.click(await screen.findByRole('button', { name: 'Delete Lease renewal' }))
     await fireEvent.click(screen.getByRole('button', { name: 'Delete' }))
 
-    expect(await screen.findByRole('alert')).toHaveTextContent('The thread could not be deleted. Try again.')
+    expect(await screen.findByRole('alert')).toHaveTextContent('The thread could not be deleted.')
     expect(screen.getByRole('button', { name: 'Delete Lease renewal' })).toBeInTheDocument()
     expect(screen.queryByLabelText('Delete Lease renewal?')).not.toBeInTheDocument()
   })
@@ -1065,7 +1065,7 @@ describe('new thread', () => {
 
     await fireEvent.click(screen.getByRole('button', { name: 'New thread' }))
 
-    expect(await screen.findByRole('alert')).toHaveTextContent('A new thread could not be started. Try again.')
+    expect(await screen.findByRole('alert')).toHaveTextContent('A new thread could not be started.')
     expect(screen.getByText('Current answer')).toBeInTheDocument()
     expect(document.querySelector('.thread-row[aria-current="true"]')).toHaveTextContent('Current question')
   })
