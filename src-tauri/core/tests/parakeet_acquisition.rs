@@ -184,6 +184,10 @@ fn resumes_files_and_returns_only_the_verified_complete_set() {
         [(0, 0), (1, 1), (2, 0), (3, 0), (4, 1)]
     );
     assert_eq!(
+        transport.requests.first().unwrap().3,
+        "https://huggingface.co/munimentai/parakeet-tdt-0.6b-v3-int8/resolve/0123456789abcdef/encoder"
+    );
+    assert_eq!(
         transport.requests.last().unwrap().3,
         "https://huggingface.co/csukuangfj/vad/resolve/vad-revision/silero_vad.onnx"
     );

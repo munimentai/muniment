@@ -135,7 +135,11 @@ impl AsrDownloadTransport for NativeModelAcquisitionTransport {
     ) -> Result<AsrDownloadResponse<Self::Body>, AsrTransportError> {
         self.request(
             request.url(),
-            HostPolicy::HuggingFace,
+            if request.artifact_index < crate::asr::PARAKEET_ARTIFACTS.len() {
+                HostPolicy::MunimentHuggingFace
+            } else {
+                HostPolicy::HuggingFace
+            },
             request.offset,
             request.limits.connect_timeout,
             request.limits.read_timeout,
@@ -479,7 +483,7 @@ mod tests {
 
     fn asr_request() -> AsrDownloadRequest {
         AsrDownloadRequest::for_transport_test(
-            "https://huggingface.co/repo/resolve/revision/model?secret=value".into(),
+            "https://huggingface.co/munimentai/repo/resolve/revision/model?secret=value".into(),
             7,
             AsrAcquisitionLimits {
                 connect_timeout: Duration::from_secs(10),
@@ -526,6 +530,21 @@ mod tests {
         let mut bytes = Vec::new();
         response.body.read_to_end(&mut bytes).unwrap();
         assert_eq!(bytes, b"abc");
+    }
+
+    #[test]
+    fn asr_adapter_rejects_another_hugging_face_namespace() {
+        let request = AsrDownloadRequest::for_transport_test(
+            "https://huggingface.co/another-account/repo/resolve/revision/model".into(),
+            7,
+            AsrAcquisitionLimits::default(),
+        );
+        let mut transport = transport(Vec::new());
+
+        assert!(matches!(
+            AsrDownloadTransport::download(&mut transport, &request),
+            Err(AsrTransportError::Rejected)
+        ));
     }
 
     #[test]

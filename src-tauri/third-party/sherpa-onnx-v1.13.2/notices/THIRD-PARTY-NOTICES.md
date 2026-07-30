@@ -19,6 +19,6 @@ release archives (SHA-256 from the v1.13.2 release `checksum.txt`):
   packaged ONNX Runtime revision.
 
 The separately installed Parakeet model is NVIDIA `parakeet-tdt-0.6b-v3`,
-converted to ONNX/INT8 by the sherpa-onnx project. It is licensed under
-[CC BY 4.0](https://creativecommons.org/licenses/by/4.0/) and pinned to the
-converted revision `2bda32ec70b097a55adaa07d9a7173915b43cc78`.
+converted to ONNX/INT8 by Muniment with sherpa-onnx tooling. NVIDIA licenses it
+under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). Muniment pins
+its conversion to revision `6da52323c581857056f9845291a40fb3846304eb`.
