@@ -167,7 +167,7 @@
     <p class="support">{onboarding.extractedEntries.length} approved {onboarding.extractedEntries.length === 1 ? 'file is' : 'files are'} ready to save as verbatim originals.</p>
     <ul class="approved-sources" aria-label="Approved sources">{#each onboarding.extractedEntries as entry}<li><strong>{entry.sourceName}</strong><span>{entry.sourceProvenance}</span></li>{/each}</ul>
     <div class="path-card">
-      <span class="path-label">Muniment Home</span>
+      <span class="path-label">Home location</span>
       <strong data-testid="onboarding-home-path">{onboarding.homePath}</strong>
       <button data-testid="onboarding-confirmed-picker" onclick={chooseConfirmedHome} disabled={onboarding.name !== 'approved-review'}>Choose folder…</button>
     </div>
@@ -202,7 +202,7 @@
       {#if onboarding.name === 'import-invalid'}
         <button data-testid="onboarding-import-recover" onclick={returnToArchiveReview}>Back to archive review</button>
       {:else}
-        <span class="privacy-note">Local import · reviewed files only</span>
+        <button data-testid="onboarding-import-recover" onclick={returnToArchiveReview} disabled={onboarding.name === 'import-saving'}>Back to archive review</button>
         <button data-testid="onboarding-import-save" class="primary" onclick={saveConfirmedImport} disabled={onboarding.name === 'import-saving'}>{onboarding.name === 'import-saving' ? 'Saving Home…' : 'Save Home and finish'}</button>
       {/if}
     </footer>
