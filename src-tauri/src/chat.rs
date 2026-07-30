@@ -2337,6 +2337,7 @@ mod tests {
                 serde_json::from_str(requests.lines().next().unwrap()).unwrap();
             assert_eq!(prompt["type"], "prompt");
             assert_eq!(prompt["message"], "original text prompt");
+            assert!(prompt.get("classification").is_none());
             if with_images {
                 assert_eq!(
                     prompt["images"],

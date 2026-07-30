@@ -1,11 +1,14 @@
 # 0018 — The untrusted-content boundary
 
-- Status: accepted
+- Status: superseded by the 2026-07-29 cloud ingress ruling
 - Date: 2026-07-28
 - Context: harness-spec §§16.1 and 16.2, operator review of Odysseus,
   2026-07-21
 
 ## Context
+
+> Historical record. The ruling deleted the resident request builders and
+> `src-tauri/core/src/llama.rs`. The Pi boundary remains separate.
 
 External content can contain text that looks like model instructions. The
 resident-model path already treats that text as data, but it has no shared
@@ -14,7 +17,6 @@ serialize content with `serde_json::to_string` and write a different warning:
 
 - `DictationPolishRequest::chat_request`
 - `DictationTransformRequest::chat_request`
-- `RoutingClassifierRequest::chat_request`
 - `OnboardingTriageRequest::chat_request`.
 
 `ChatMessage::system`, `ChatMessage::user`, and the public
@@ -46,9 +48,8 @@ External content never enters a system-role message.
 
 The single enforcement point is `ChatMessage::untrusted_json` in
 `src-tauri/core/src/llama.rs`. The first implementation slice replaces the
-four divergent wrappers in `DictationPolishRequest::chat_request`,
+three divergent wrappers in `DictationPolishRequest::chat_request`,
 `DictationTransformRequest::chat_request`,
-`RoutingClassifierRequest::chat_request`, and
 `OnboardingTriageRequest::chat_request` with that constructor.
 
 That later slice makes raw message construction inaccessible outside the
@@ -68,7 +69,6 @@ and known future channels.
 | --- | --- | --- |
 | Dictation transcript for polish | `src-tauri/core/src/llama.rs` (`DictationPolishRequest`) | Built |
 | Dictation transcript for transform | `src-tauri/core/src/llama.rs` (`DictationTransformRequest`) | Built |
-| User prompt for resident routing | `src-tauri/core/src/llama.rs` (`RoutingClassifierRequest`) | Built |
 | Approved export entries for onboarding triage | `src-tauri/core/src/llama.rs` (`OnboardingTriageRequest`) | Built |
 | User prompt sent to Pi | `src-tauri/core/src/sidecar/pi_chat.rs` (`PromptCommand`) | Built, Pi-owned boundary |
 | Browser-control page reads sent to a model | Browser-control capability, module not built | Planned |

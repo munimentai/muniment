@@ -176,9 +176,9 @@ Desktop ASR is deliberately outside the sidecar boundary. As decided in
 [ADR 0004](decisions/0004-desktop-asr-runtime.md), `muniment_core` will own
 microphone PCM and invoke the pinned sherpa-onnx v1.13.2 C API in process with
 the pinned Parakeet-TDT 0.6B v3 INT8 offline artifact. No ASR socket or child
-process is introduced; only utterance-final transcript text proceeds to the
-local resident-model dictation-polish contract, and voice bytes never enter a
-network client, Pi, llama-server, telemetry, or crash reports. Model acquisition
+process is introduced. Only utterance-final transcript text proceeds to the
+composer, and voice bytes never enter a network client, Pi, telemetry, or crash
+reports. Model acquisition
 also remains outside sidecar supervision: [ADR
 0005](decisions/0005-asr-model-lifecycle.md) selects a Rust-native first-use
 install with complete-set verification and atomic publication. Acquisition is
@@ -204,7 +204,10 @@ install UI, and the ADR 0004 target-hardware latency/quality matrix remain
 follow-up work. This boundary adds no PCM persistence, service, telemetry, or
 Pi routing.
 
-`muniment_core::llama` owns the local llama.cpp boundary. The typed resident
+The following resident runtime design is superseded by the 2026-07-29 cloud
+ingress ruling. The desktop no longer ships this runtime.
+
+`muniment_core::llama` owned the local llama.cpp boundary. The typed resident
 descriptor pins the resident artifact identity, stable API alias, and context
 limit selected in [ADR 0017](decisions/0017-resident-model-artifact-pin.md),
 which supersedes ADR 0003.
@@ -215,9 +218,9 @@ budget/backoff, stderr diagnostics, and shutdown to `SidecarSupervisor`; it is
 not a second process manager. Dropping it therefore retains the supervisor's
 forced child cleanup guarantee.
 
-The corresponding base URL is deliberately restricted to numeric loopback
+The corresponding base URL was restricted to numeric loopback
 addresses and plain HTTP. Wildcard, LAN, hostname, path-bearing, and HTTPS URLs
-are rejected. This matters even though llama-server currently defaults to
+were rejected. This mattered even though the server defaulted to
 loopback: its public health API does not perform an API-key check, and a future
 upstream default must not silently widen local access.
 
@@ -244,35 +247,20 @@ requiring meaning and detail to be preserved. Streaming remains out of scope.
 UI wiring and cloud or Pi behavior are also deferred, as are virtual keys and
 control-plane version negotiation.
 
-The routing-classifier role is a separate typed, zero-temperature contract. It
-returns only `task_type` and `difficulty`, plus llama.cpp token usage. The closed
-task vocabulary is `general`, `analysis`, `code-plan`, `code-edit`, `extraction`,
-`vision`, and `long-context`; difficulty is `low`, `medium`, or `high`. Its prompt
-serializes the user's request as one JSON string explicitly identified as
-untrusted data. JSON escaping keeps request-controlled tag-like text, quotes,
-and line breaks inside that string, making the framing unambiguous and testable;
-this separation reduces ambiguity but does not eliminate prompt-injection risk.
-The classifier requires one compact JSON object. Application-side decoding
-rejects malformed JSON, missing or extra fields, unknown labels, and surrounding
-prose without including the prompt or raw assistant response in diagnostics.
+The replacement contract sends each prompt without classification metadata.
+The cloud classifies it at ingress.
 
-This is classification evidence, not a routing decision. The response cannot
-name a model, provider, route, policy, entitlement, capability, or cost; those
-decisions belong to gateway policy as specified in §5 of the harness spec.
-Carrying these labels as request metadata and wiring the role into Pi or the
-gateway are explicitly deferred.
-
-Before producing launch arguments, the core requires the installed artifact to
+Before producing launch arguments, the deleted core required the artifact to
 be a regular file with the descriptor's exact byte size and SHA-256. Hashing is
 streamed, and missing, unreadable, wrong-size, and digest-mismatch failures do
-not disclose file contents or installation paths. llama-server receives the
-model path and `muniment-required-qwen3.5-4b` alias as separate arguments;
-resident chat requests always use that alias rather than a caller-selected
+not disclose file contents or installation paths. The server received the
+model path and alias as separate arguments. Resident requests always used that
+alias rather than a caller-selected
 model name.
 
 Artifact acquisition and update/rollback policy remain out of scope.
-Dictation-polish and routing-classifier contract evaluation use deterministic
-golden fixtures and mock HTTP responses; CI never loads the model.
+Dictation-polish contract evaluation uses deterministic golden fixtures and
+mock HTTP responses. CI never loads the model.
 
 Supervisor lifecycle events and stderr are diagnostic telemetry, not durable
 user-session history. Pi integration will translate only user-relevant domain
