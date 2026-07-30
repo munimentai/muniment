@@ -73,7 +73,7 @@ fn config_dir(app: &AppHandle) -> Result<PathBuf, String> {
         .map_err(|_| "Muniment configuration storage is unavailable.".to_string())
 }
 
-fn choose_default_home(
+pub(crate) fn choose_default_home(
     documents: Option<PathBuf>,
     home: Option<PathBuf>,
 ) -> Result<PathBuf, String> {
@@ -238,16 +238,6 @@ mod tests {
     #[test]
     fn default_home_uses_home_when_documents_directory_is_absent() {
         let root = TempRoot::new("default-home");
-
-        assert_eq!(
-            choose_default_home(None, Some(root.0.clone())).unwrap(),
-            root.0.join("Muniment")
-        );
-    }
-
-    #[test]
-    fn attach_default_home_uses_home_when_documents_directory_is_absent() {
-        let root = TempRoot::new("attach-default-home");
 
         assert_eq!(
             choose_default_home(None, Some(root.0.clone())).unwrap(),
