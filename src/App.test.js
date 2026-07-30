@@ -1178,6 +1178,7 @@ describe('Home onboarding', () => {
     homeStatus = { configured: false, homePath: '/Documents/Muniment' }
     dialogResult = '/Exports/assistant.zip'
     const extracted = [{ sourceName: 'profile.json', kind: 'json', text: '{"name":"Alice"}', sourceProvenance: 'assistant-export-zip:v1:stable' }]
+    const importSave = deferred()
     invoke.mockImplementation(async (command, payload) => {
       if (command === 'home_confirm') return { configured: true, homePath: '/Documents/Muniment' }
       if (command === 'onboarding_import_preview') return { entries: [
@@ -1185,7 +1186,7 @@ describe('Home onboarding', () => {
         { name: 'profile.json', kind: 'json', byteSize: 16, excerpt: '{}', excerptTruncated: false },
       ], totalByteSize: 26 }
       if (command === 'onboarding_import_extract') return extracted
-      if (command === 'home_confirm_import') return { configured: true, importedFileCount: 1 }
+      if (command === 'home_confirm_import') return importSave.promise
       if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
       if (command === 'chat_thread_open') return []
       if (command === 'auth_entitlement_snapshot') return snapshot()
@@ -1193,6 +1194,7 @@ describe('Home onboarding', () => {
       throw new Error(`unexpected command: ${command}`)
     })
     render(App)
+    expect(await screen.findByText('Home location')).toBeInTheDocument()
     await fireEvent.click(await screen.findByTestId('onboarding-confirm'))
     await fireEvent.click(screen.getByTestId('onboarding-import-picker'))
     const checks = await screen.findAllByRole('checkbox')
@@ -1207,13 +1209,22 @@ describe('Home onboarding', () => {
       archivePath: '/Exports/assistant.zip', selectedNames: ['profile.json'],
     })
     expect(await screen.findByText('Save approved files')).toBeInTheDocument()
+    expect(screen.getByText('Home location')).toBeInTheDocument()
     expect(screen.getByText('1 approved file is ready to save as verbatim originals.')).toBeInTheDocument()
     expect(screen.getByText('profile.json')).toBeInTheDocument()
+    await fireEvent.click(screen.getByTestId('onboarding-import-recover'))
+    expect(await screen.findByRole('list', { name: 'Export manifest' })).toBeInTheDocument()
+    expect(screen.getAllByRole('checkbox')[1]).toBeChecked()
+    await fireEvent.click(screen.getByTestId('onboarding-import-continue'))
+    expect(await screen.findByText('Save approved files')).toBeInTheDocument()
     await fireEvent.click(screen.getByTestId('onboarding-import-save'))
+    expect(screen.getByTestId('onboarding-import-recover')).toBeDisabled()
+    expect(screen.getByTestId('onboarding-import-save')).toBeDisabled()
     expect(invoke).toHaveBeenCalledWith('home_confirm_import', {
       homePath: '/Documents/Muniment',
       approvedEntries: extracted,
     })
+    importSave.resolve({ configured: true, importedFileCount: 1 })
     expect(await screen.findByPlaceholderText('Ask anything')).toBeInTheDocument()
     expect(invoke).toHaveBeenCalledWith('home_confirm', { homePath: '/Documents/Muniment' })
   })
