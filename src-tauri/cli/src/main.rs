@@ -8,8 +8,18 @@ use std::io::{self, BufRead, IsTerminal, Read, Write};
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
 
-const USAGE: &str =
-    "usage: muniment [--workspace <directory>] threads list | muniment [--workspace <directory>] threads open <thread-id> | muniment [--workspace <directory>] run start | muniment [--workspace <directory>] workspace init";
+const HELP: &str = "\
+Usage: muniment [--workspace <directory>] <command>
+
+Commands:
+  threads list
+  threads open <thread-id>
+  run start
+  workspace init
+
+Options:
+  -h, --help  Print help
+  --version   Print version";
 
 enum Command {
     List,
@@ -35,14 +45,35 @@ fn main() {
     if let Err(error) = run() {
         eprintln!("muniment: {}", guidance(&error));
         if matches!(error, CliError::Usage) {
-            eprintln!("{USAGE}");
+            eprintln!("{HELP}");
         }
         std::process::exit(1);
     }
 }
 
 fn run() -> Result<(), CliError> {
-    let mut args: Vec<_> = std::env::args_os().skip(1).collect();
+    let args: Vec<_> = std::env::args_os().skip(1).collect();
+    let mut stdout = io::stdout();
+    run_args(args, &mut stdout, run_command)
+}
+
+fn run_args(
+    args: Vec<OsString>,
+    output: &mut impl Write,
+    run_command: impl FnOnce(Vec<OsString>) -> Result<(), CliError>,
+) -> Result<(), CliError> {
+    if args.iter().any(|arg| arg == "-h" || arg == "--help") {
+        writeln!(output, "{HELP}").map_err(|_| CliError::Workspace)?;
+        return Ok(());
+    }
+    if args == [OsString::from("--version")] {
+        writeln!(output, "{}", env!("CARGO_PKG_VERSION")).map_err(|_| CliError::Workspace)?;
+        return Ok(());
+    }
+    run_command(args)
+}
+
+fn run_command(mut args: Vec<OsString>) -> Result<(), CliError> {
     let opened = std::env::current_dir().map_err(|_| CliError::Workspace)?;
     let workspace = workspace_argument(&mut args)?.unwrap_or_else(|| opened.clone());
     if !recognized_command(&args) {
@@ -1540,6 +1571,32 @@ mod tests {
             );
             assert!(guidance(&result.unwrap_err()).contains(expected));
             assert!(output.is_empty());
+        }
+    }
+
+    #[test]
+    fn help_and_version_exit_before_credentials_or_connection() {
+        assert_eq!(HELP.matches("muniment").count(), 1);
+        assert_eq!(HELP.matches("--workspace").count(), 1);
+        for command in [
+            "  threads list\n",
+            "  threads open <thread-id>\n",
+            "  run start\n",
+            "  workspace init\n",
+        ] {
+            assert!(HELP.contains(command));
+        }
+        for (args, expected) in [
+            (vec![OsString::from("--help")], HELP),
+            (vec![OsString::from("-h")], HELP),
+            (vec![OsString::from("--version")], env!("CARGO_PKG_VERSION")),
+        ] {
+            let mut output = Vec::new();
+            run_args(args, &mut output, |_| {
+                panic!("credential read or connection attempted")
+            })
+            .unwrap();
+            assert_eq!(String::from_utf8(output).unwrap(), format!("{expected}\n"));
         }
     }
 
