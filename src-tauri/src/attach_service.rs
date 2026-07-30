@@ -568,12 +568,15 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[test]
     fn attach_home_uses_home_once_when_documents_directory_is_absent() {
-        let root = TempRoot::new("attach-default-home");
+        let root = std::env::temp_dir().join(format!("muniment-attach-home-{}", Uuid::now_v7()));
+        std::fs::create_dir(&root).unwrap();
 
         assert_eq!(
-            resolve_attach_home(None, Some(root.0.clone())).unwrap(),
-            root.0.join("Muniment")
+            resolve_attach_home(None, Some(root.clone())).unwrap(),
+            root.join("Muniment")
         );
+
+        std::fs::remove_dir(root).unwrap();
     }
 
     #[cfg(target_os = "linux")]
