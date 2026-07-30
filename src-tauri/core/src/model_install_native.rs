@@ -241,11 +241,8 @@ mod tests {
         let cancellation = NativeInstallCancellation::new();
         cancellation.cancel();
         let started = Instant::now();
-        let result = AsrRetryWait::wait(
-            &mut NativeRetryWait,
-            Duration::from_secs(1),
-            &cancellation,
-        );
+        let result =
+            AsrRetryWait::wait(&mut NativeRetryWait, Duration::from_secs(1), &cancellation);
         assert!(!result);
         assert!(started.elapsed() < Duration::from_millis(100));
     }
