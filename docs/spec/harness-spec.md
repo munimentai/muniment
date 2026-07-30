@@ -789,22 +789,9 @@ distinct layers, and neither silently replaces or absorbs the other.
 
 ### 15.3 Required on-device onboard and query-router model
 
-The model is **Qwen3.5-4B Instruct, Q4_K_M GGUF (Apache-2.0)**, pinned
-artifact-exactly by
-[ADR 0017](../decisions/0017-resident-model-artifact-pin.md). It ships as a
-pinned, checksummed descriptor through the verified runtime-acquisition path in
-[ADR 0008](../decisions/0008-pi-runtime-distribution.md) and is served by the
-`llama-server` distribution line in
-[ADR 0014](../decisions/0014-llama-server-distribution.md). A descriptor bump can
-swap the model without changing this contract. Artifact download uses a Muniment
-proxy or redirect; this requirement has a corresponding MUNICLOUD implementation
-ripple.
-
-The model has two continuing roles: onboarding/import triage and the per-query
-front-door router. For each query it selects a route class — **cloud model**,
-**proxy**, or **local** — before the selected route's own governed model policy
-and entitlements apply. Voice and audio models remain optional. The Qwen
-onboard/router model is the only required on-device model artifact.
+Superseded 2026-07-29. The cloud classifies every prompt at ingress.
+The desktop has no required language model, classifier, or language-model runtime.
+The desktop sends no classification metadata. Parakeet remains the ASR model.
 
 ### 15.4 Consent-gated onboarding and import
 

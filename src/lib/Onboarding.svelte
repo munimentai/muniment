@@ -3,11 +3,9 @@
   import { open } from '@tauri-apps/plugin-dialog'
 
   import { formatByteSize } from './chat-state.js'
-  import { requiredModelLabel, requiredModelMessage, requiredModelProgress } from './model-acquisition-state.js'
   import { onboardingCancelSettingsState, onboardingConfirmedHomePathState, onboardingConfirmedState, onboardingConfirmingState, onboardingErrorState, onboardingExtractingState, onboardingExtractionErrorState, onboardingExtractionState, onboardingFinalizingState, onboardingImportChoiceState, onboardingImportErrorState, onboardingImportSavedState, onboardingImportSavingState, onboardingPathState, onboardingPreviewErrorState, onboardingPreviewingState, onboardingPreviewState, onboardingReturnToArchiveReviewState, onboardingSelectionState, onboardingStatusState, onboardingTriageConfirmedState, onboardingTriageErrorState, onboardingTriageReportState, onboardingTriagingState } from './onboarding-state.js'
 
-  let { tauri, requiredModel, onboarding = $bindable() } = $props()
-  let modelProgress = $derived(requiredModelProgress(requiredModel))
+  let { tauri, onboarding = $bindable() } = $props()
   let onboardingPreviewSequence = 0
 
   async function loadOnboarding() {
@@ -28,10 +26,6 @@
   }
 
   async function confirmHome() {
-    if (!onboarding.savedHomePath) {
-      onboarding = onboardingImportChoiceState(onboarding)
-      return
-    }
     const pending = onboardingConfirmingState(onboarding)
     onboarding = pending
     try {
@@ -92,19 +86,6 @@
     }
   }
 
-  async function generateTriageReport() {
-    if (!requiredModel.aiFeaturesAvailable || !['pre-triage', 'triage-error'].includes(onboarding.name)) return
-    const triageId = ++onboardingPreviewSequence
-    const pending = onboardingTriagingState(onboarding)
-    onboarding = pending
-    try {
-      const response = await tauri.invoke('onboarding_triage', { entries: pending.extractedEntries })
-      if (triageId === onboardingPreviewSequence) onboarding = onboardingTriageReportState(pending, response)
-    } catch (error) {
-      if (triageId === onboardingPreviewSequence) onboarding = onboardingTriageErrorState(pending, error)
-    }
-  }
-
   function returnToArchiveReview() {
     onboardingPreviewSequence += 1
     onboarding = onboardingReturnToArchiveReviewState(onboarding)
@@ -144,21 +125,6 @@
 <section class="onboarding" aria-labelledby="onboarding-title">
   <p class="eyebrow">{onboarding.savedHomePath ? 'Home settings' : 'First-run setup'}</p>
   <h1 id="onboarding-title">{['pre-triage', 'triaging', 'triage-error'].includes(onboarding.name) ? 'Create your local proposal' : ['triage-review', 'triage-confirmed', 'triage-saving', 'triage-invalid'].includes(onboarding.name) ? 'Review your onboarding proposal' : ['import-choice', 'previewing', 'reviewing', 'extracting', 'finalizing'].includes(onboarding.name) ? 'Review an assistant export' : 'Choose your Muniment Home'}</h1>
-  {#if !onboarding.savedHomePath}
-    <aside class="model-status" aria-labelledby="model-status-title">
-      <div class="model-status-heading">
-        <span id="model-status-title">Local AI</span>
-        <strong>{requiredModelLabel(requiredModel)}</strong>
-      </div>
-      <p class="model-status-copy" aria-live="polite">{requiredModelMessage(requiredModel)}</p>
-      {#if modelProgress.total > 0}
-        <div class="model-progress" role="progressbar" aria-label="Required local AI model download" aria-valuemin="0" aria-valuemax={modelProgress.total} aria-valuenow={modelProgress.downloaded}>
-          <span style={`width: ${modelProgress.downloaded / modelProgress.total * 100}%`}></span>
-        </div>
-        <p class="model-progress-copy">{formatByteSize(modelProgress.downloaded)} of {formatByteSize(modelProgress.total)}</p>
-      {/if}
-    </aside>
-  {/if}
   {#if onboarding.name === 'loading'}
     <p class="support" role="status">Finding your Documents folder…</p>
   {:else if ['choosing', 'confirming', 'settings', 'confirming-settings'].includes(onboarding.name)}
@@ -210,7 +176,7 @@
     {#if onboarding.error}<p class="onboarding-error" role="alert">{onboarding.error}</p>{/if}
     <div class="onboarding-footer">
       <button data-testid="onboarding-triage-back" onclick={returnToArchiveReview}>Back to archive review</button>
-      <div class="triage-generate"><button data-testid="onboarding-triage-generate" class="primary" onclick={generateTriageReport} disabled={onboarding.name === 'triaging' || !requiredModel.aiFeaturesAvailable}>{onboarding.name === 'triaging' ? 'Generating proposal…' : onboarding.name === 'triage-error' ? 'Try generating again' : 'Generate local proposal'}</button>{#if !requiredModel.aiFeaturesAvailable}<span>Available when the local AI model is ready.</span>{/if}</div>
+      <p class="support">This import path is unavailable.</p>
     </div>
   {:else if onboarding.name === 'triage-review'}
     <p class="support">Review the local AI proposal and the approved sources that informed it. Confirming only records your choice for this onboarding session.</p>
@@ -254,16 +220,6 @@
 <style>
   .onboarding { width: min(680px, calc(100vw - 48px)); margin-top: 28px; }
   .onboarding h1 { margin: 4px 0 10px; font-size: var(--text-28); letter-spacing: -.02em; }
-  .model-status { margin: 18px 0 22px; padding: 13px 15px; border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--surface); }
-  .model-status-heading { display: flex; justify-content: space-between; gap: 16px; font: var(--text-12) var(--font-mono); }
-  .model-status-heading span, .model-status-copy, .model-progress-copy, .triage-generate span { color: var(--muted); }
-  .model-status-copy { margin: 7px 0 0; font-size: var(--text-13); line-height: 1.45; }
-  .model-progress { height: 4px; margin-top: 11px; overflow: hidden; border-radius: var(--radius-chip); background: var(--border); }
-  /* §1.2: downloading a model is not a model working, so the fill stays ink. */
-  .model-progress span { display: block; height: 100%; background: var(--ink); }
-  .model-progress-copy { margin: 6px 0 0; font: var(--text-12) var(--font-mono); }
-  .triage-generate { display: flex; flex-direction: column; align-items: flex-end; gap: 6px; }
-  .triage-generate span { max-width: 250px; font: var(--text-12) var(--font-mono); text-align: right; }
   .eyebrow, .path-label, .privacy-note { color: var(--muted); font: var(--text-12) var(--font-mono); }
   .path-card { display: grid; grid-template-columns: 1fr auto; gap: 7px 16px; align-items: center; margin-top: 24px; padding: 15px 16px; border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--surface); }
   .path-label { grid-column: 1 / -1; }

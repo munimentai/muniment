@@ -204,7 +204,10 @@ install UI, and the ADR 0004 target-hardware latency/quality matrix remain
 follow-up work. This boundary adds no PCM persistence, service, telemetry, or
 Pi routing.
 
-`muniment_core::llama` owns the local llama.cpp boundary. The typed resident
+The following resident runtime design is superseded by the 2026-07-29 cloud
+ingress ruling. The desktop no longer ships this runtime.
+
+`muniment_core::llama` owned the local llama.cpp boundary. The typed resident
 descriptor pins the resident artifact identity, stable API alias, and context
 limit selected in [ADR 0017](decisions/0017-resident-model-artifact-pin.md),
 which supersedes ADR 0003.

@@ -3,10 +3,9 @@ use muniment_core::{
     home::{
         compile_onboarding_home_write_plan, confirm_home, persist_onboarding_home_write_plan,
         scaffold_home, validate_home_selection, HomeError, HomeErrorKind,
-        OnboardingHomePersistenceError,
+        OnboardingHomePersistenceError, OnboardingTriageReport,
     },
     import_preview::ExtractedEntry,
-    llama::OnboardingTriageReport,
 };
 use serde::Serialize;
 use std::path::{Path, PathBuf};

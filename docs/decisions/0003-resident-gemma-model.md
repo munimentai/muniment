@@ -1,6 +1,6 @@
 # 0003 — Pin the resident Gemma model artifact
 
-- Status: superseded by ADR 0017
+- Status: superseded by the 2026-07-29 cloud ingress ruling
 - Date: 2026-07-10
 - Context: ROADMAP Phase 2 item 10; harness-spec §8.2
 

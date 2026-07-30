@@ -1,6 +1,6 @@
 # 0017 — Pin the resident Qwen3.5-4B model artifact
 
-- Status: accepted
+- Status: superseded by the 2026-07-29 cloud ingress ruling
 - Date: 2026-07-27
 - Context: harness-spec §15.3; ADR 0003, 0006, 0014; owner decision 2026-07-27
 

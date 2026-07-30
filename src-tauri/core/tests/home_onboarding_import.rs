@@ -7,7 +7,7 @@ use muniment_core::{
         ONBOARDING_IMPORT_MAX_ENTRIES, ONBOARDING_IMPORT_MAX_TOTAL_BYTES,
     },
     import_preview::{EntryKind, ExtractedEntry},
-    llama::OnboardingTriageReport,
+    home::OnboardingTriageReport,
 };
 use std::{
     fs,
