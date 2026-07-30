@@ -25,3 +25,5 @@ Conversation, tool, permission, and receipt state is rebuilt from the
 append-only local run journal (ADR 0002). Reopen reduces committed events;
 snapshots are disposable, and uncertain external effects require explicit
 attention rather than silent replay.
+
+The signed-in shell has one workspace `h1`, a headed thread list, and a transcript region named for the open thread.
