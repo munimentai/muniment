@@ -10,6 +10,7 @@
    is the reference geometry + thinking-animation engine (§1.8). At rest:
    static ink. Thinking: verdigris breath/spin/trace, all visible instances
    in sync. ≤20px: solid two-edge reduction.
+4. **Remote Control:** [docs/design-reference/remote-control-ux.md](docs/design-reference/remote-control-ux.md) records the pending desktop session UX reference.
 
 Key grammar (short form; design-spec §2 is authoritative): sidebar /
 thread / artifact rail (⌘J) layout; user messages right in `faint` bubbles,
