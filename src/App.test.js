@@ -588,6 +588,23 @@ describe('message grammar', () => {
 })
 
 describe('thread name', () => {
+  it('exposes the workspace heading, thread list, and named transcript region', async () => {
+    threadSummaryResult = [
+      { threadId: 'thread-1', title: 'Lease renewal', updatedAt: '' },
+      { threadId: 'thread-2', title: 'Archive review', updatedAt: '' },
+    ]
+    render(App)
+
+    const heading = await screen.findByRole('heading', { level: 1, name: 'Lease renewal' })
+    const listHeading = screen.getByRole('heading', { level: 2, name: 'Threads' })
+    const list = screen.getByRole('list', { name: 'Threads' })
+
+    expect(heading).toContainElement(screen.getByRole('button', { name: 'Rename thread' }))
+    expect(listHeading).toBeInTheDocument()
+    expect(within(list).getAllByRole('listitem')).toHaveLength(2)
+    expect(screen.getByRole('region', { name: 'Transcript: Lease renewal' })).toBeInTheDocument()
+  })
+
   it('reveals a quiet delete action and cancels its inline confirmation', async () => {
     threadSummaryResult = [{ threadId: 'thread-1', title: 'Lease renewal', updatedAt: '' }]
     render(App)
@@ -975,7 +992,7 @@ describe('new thread', () => {
     const fresh = document.querySelector('[data-fresh-thread]')
     expect(fresh).toHaveTextContent('New thread')
     expect(fresh).toHaveAttribute('aria-current', 'true')
-    expect(fresh.tagName).toBe('DIV')
+    expect(fresh.tagName).toBe('LI')
     expect(document.querySelectorAll('.thread-row[aria-current="true"]')).toHaveLength(1)
     expect(document.querySelectorAll('.thread-list button[aria-current="true"]')).toHaveLength(0)
     expect(document.activeElement).toBe(screen.getByPlaceholderText('Ask anything'))
@@ -2779,7 +2796,8 @@ describe('thread announcements', () => {
     expect(await screen.findByText('Restored answer')).toBeInTheDocument()
     const thread = document.querySelector('.thread')
     expect(thread).not.toHaveAttribute('aria-live')
-    expect(thread).not.toHaveAttribute('role')
+    expect(thread).toHaveAttribute('role', 'region')
+    expect(thread).toHaveAccessibleName('Transcript: Old question')
     const region = screen.getByTestId('run-announcement')
     expect(thread).not.toContainElement(region)
     expect(document.querySelectorAll('.thread-shell [aria-live]')).toHaveLength(1)

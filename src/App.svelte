@@ -634,7 +634,7 @@
     {:else if auth.name === 'signed-in'}
       <section class="workspace" class:sidebar-collapsed={sidebarCollapsed} class:artifact-open={artifactRailOpen} class:artifact-resizing={artifactRailPointer !== undefined} style:--artifact-rail-width={`${artifactRailWidth}px`} bind:this={workspace}>
         {#if draggingFiles}<div class="drop-affordance" role="status"><strong>Drop files to add them</strong><span>Saved locally · supported images sent with first prompt</span></div>{/if}
-        <header class="titlebar">{#if editingThreadTitle}<input class="thread-title" aria-label="Thread name" maxlength="160" bind:this={threadTitleInput} value={threadTitleDraft} oninput={limitThreadTitle} onkeydown={threadTitleKeydown} onblur={commitThreadTitle}>{:else}<button type="button" class="thread-title" aria-label="Rename thread" title={currentThreadTitle} disabled={!currentThreadId} bind:this={threadTitleButton} onclick={(event) => editThreadTitle(event.currentTarget.title)} onkeydown={threadTitleButtonKeydown}>{currentThreadTitle}</button>{/if}<span class="title-spacer"></span><button type="button" class="quiet" aria-controls="artifact-rail" aria-expanded={artifactRailOpen} aria-keyshortcuts={artifactShortcut} aria-label={`${artifactRailOpen ? 'Close' : 'Open'} artifact rail`} onclick={toggleArtifactRail}>Artifacts <kbd>{shortcutDisplayLabel(artifactShortcut)}</kbd></button></header>
+        <header class="titlebar">{#if editingThreadTitle}<input class="thread-title" aria-label="Thread name" maxlength="160" bind:this={threadTitleInput} value={threadTitleDraft} oninput={limitThreadTitle} onkeydown={threadTitleKeydown} onblur={commitThreadTitle}>{:else}<h1 class="thread-title-heading" aria-label={currentThreadTitle}><button type="button" class="thread-title" aria-label="Rename thread" title={currentThreadTitle} disabled={!currentThreadId} bind:this={threadTitleButton} onclick={(event) => editThreadTitle(event.currentTarget.title)} onkeydown={threadTitleButtonKeydown}>{currentThreadTitle}</button></h1>{/if}<span class="title-spacer"></span><button type="button" class="quiet" aria-controls="artifact-rail" aria-expanded={artifactRailOpen} aria-keyshortcuts={artifactShortcut} aria-label={`${artifactRailOpen ? 'Close' : 'Open'} artifact rail`} onclick={toggleArtifactRail}>Artifacts <kbd>{shortcutDisplayLabel(artifactShortcut)}</kbd></button></header>
         <aside id="sidebar" class="sidebar">
           <div class="side-brand">
             {#if !sidebarCollapsed}
@@ -651,16 +651,16 @@
             {#if !sidebarCollapsed}<span>New thread</span><kbd>{shortcutDisplayLabel(newThreadKeyShortcut)}</kbd>{/if}
           </button>
           {#if !sidebarCollapsed}
-            <p class="side-label">Threads</p>
-            <div class="thread-list">
+            <h2 id="thread-list-title" class="side-label">Threads</h2>
+            <ul class="thread-list" aria-labelledby="thread-list-title">
               {#if freshThread}
-                <div class="thread-row active-thread" data-fresh-thread aria-current="true" title={currentThreadTitle}><span></span><div class="thread-row-title">{currentThreadTitle}</div></div>
+                <li class="thread-row active-thread" data-fresh-thread aria-current="true" title={currentThreadTitle}><span></span><div class="thread-row-title">{currentThreadTitle}</div></li>
               {/if}
               {#each threadSummaries as summary (summary.threadId)}
                 {@const title = summary.title || 'New thread'}
                 {@const current = !freshThread && summary.threadId === (currentThreadId ?? threadSummaries[0]?.threadId)}
                 {@const rowTitle = current ? summary.title || currentThreadTitle : title}
-                <div class="thread-record">
+                <li class="thread-record">
                   {#if current}
                     <div class="thread-row active-thread" aria-current="true" title={rowTitle}><span></span><div class="thread-row-title">{rowTitle}</div><time datetime={summary.updatedAt} title={fullDateTime(summary.updatedAt)}>{relativeTime(summary.updatedAt)}</time></div>
                   {:else}
@@ -675,9 +675,9 @@
                   {:else}
                     <button type="button" class="thread-delete" data-delete-thread={summary.threadId} aria-label={`Delete ${rowTitle}`} disabled={!!active || threadSwitching} onclick={() => askToDeleteThread(summary.threadId)}>Delete</button>
                   {/if}
-                </div>
+                </li>
               {/each}
-            </div>
+            </ul>
           {/if}
           <button class="side-action home-settings" aria-label={sidebarCollapsed ? 'Home settings' : null} title={sidebarCollapsed ? 'Home settings' : null} onclick={() => { onboarding = onboardingSettingsState(onboarding) }}><svg class="side-icon" width="18" height="18" viewBox="0 0 24 24" aria-hidden="true"><path d="M4.5 10.5 12 4.75l7.5 5.75V19a1.5 1.5 0 0 1-1.5 1.5H6A1.5 1.5 0 0 1 4.5 19z" /><path d="M9.75 20.5v-5.75h4.5v5.75" /></svg>{#if !sidebarCollapsed}<span>Home settings</span>{/if}</button>
           {#if !sidebarCollapsed}
@@ -685,7 +685,7 @@
           {/if}
         </aside>
         <div class="thread-shell">
-        <div class="thread" bind:this={thread} onscroll={handleThreadScroll}>
+        <div class="thread" role="region" aria-label={`Transcript: ${currentThreadTitle}`} bind:this={thread} onscroll={handleThreadScroll}>
           {#if historyError}<p class="history-error" role="alert">{historyError} <button onclick={() => chatController.loadHistory()}>Try again</button></p>{/if}
           {#if messages.length === 0}<p class="empty">Ask anything. Your org's routing decides which model answers.</p>{/if}
           {#each messages as message}
@@ -988,6 +988,7 @@
   .drop-affordance { position: fixed; z-index: 4; inset: 52px 0 0 260px; display: grid; place-content: center; gap: 5px; background: color-mix(in srgb, var(--paper) 92%, transparent); border: 1px dashed var(--muted); color: var(--ink); text-align: center; pointer-events: none; }
   .drop-affordance span { color: var(--muted); font: var(--text-12) var(--font-mono); }
   .titlebar { grid-area: title; display: flex; align-items: center; padding: 0 18px 0 278px; border-bottom: 1px solid var(--border); background: var(--surface); transition: padding-left 180ms ease; }
+  .thread-title-heading { min-width: 0; max-width: 100%; font: inherit; }
   .thread-title { min-width: 0; max-width: 100%; overflow: hidden; padding: 2px; border: 0; background: transparent; color: var(--ink); font: inherit; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
   button.thread-title:disabled { opacity: 1; }
   kbd { margin-left: 10px; color: var(--muted); font: var(--text-12) var(--font-mono); }
@@ -1002,7 +1003,7 @@
   .side-icon { flex: none; display: block; color: var(--muted); }
   .side-icon rect, .side-icon path { fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
   .side-action, .thread-row { width: 100%; display: flex; align-items: center; gap: 9px; padding: 7px 8px; border-color: transparent; background: transparent; text-align: left; }
-  .thread-list { min-height: 0; overflow-y: auto; }
+  .thread-list { min-height: 0; padding: 0; overflow-y: auto; list-style: none; }
   .thread-record { position: relative; }
   .thread-row { font: inherit; font-size: var(--text-13); color: var(--ink); border: 1px solid transparent; border-radius: var(--radius-control); }
   button.thread-row:hover:not([aria-disabled="true"]) { background: var(--faint); }
