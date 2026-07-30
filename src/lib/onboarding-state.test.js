@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { onboardingCancelSettingsState, onboardingConfirmedHomePathState, onboardingConfirmedState, onboardingConfirmingState, onboardingErrorState, onboardingExtractingState, onboardingExtractionErrorState, onboardingExtractionState, onboardingFinalizingState, onboardingImportChoiceState, onboardingImportErrorState, onboardingImportSavedState, onboardingImportSavingState, onboardingLoadingState, onboardingPathState, onboardingPreviewErrorState, onboardingPreviewingState, onboardingPreviewState, onboardingReturnToArchiveReviewState, onboardingSelectionState, onboardingSettingsState, onboardingStatusState, onboardingTriageConfirmedState, onboardingTriageErrorState, onboardingTriageReportState, onboardingTriagingState } from './onboarding-state.js'
+import { onboardingCancelSettingsState, onboardingConfirmedHomePathState, onboardingConfirmedState, onboardingConfirmingState, onboardingErrorState, onboardingExtractingState, onboardingExtractionErrorState, onboardingExtractionState, onboardingFinalizingState, onboardingImportChoiceState, onboardingImportErrorState, onboardingImportSavedState, onboardingImportSavingState, onboardingLoadingState, onboardingPathState, onboardingPreviewErrorState, onboardingPreviewingState, onboardingPreviewState, onboardingReturnToArchiveReviewState, onboardingSelectionState, onboardingSettingsState, onboardingStatusState } from './onboarding-state.js'
 
 describe('Home onboarding state', () => {
   it('blocks on the default location until it is configured', () => {
@@ -82,47 +82,38 @@ describe('Home onboarding state', () => {
       name: 'reviewing', selectedNames: ['b.json'], manifest: review.manifest,
     })
     const extractedEntries = [{ sourceName: 'b.json', text: '{}', sourceProvenance: 'stable' }]
-    expect(onboardingExtractionState(extracting, extractedEntries)).toMatchObject({ name: 'pre-triage', extractedEntries })
+    expect(onboardingExtractionState(extracting, extractedEntries)).toMatchObject({ name: 'approved-review', extractedEntries })
     expect(onboardingFinalizingState(extracting)).toEqual({ name: 'finalizing', homePath: '/Home', error: undefined })
   })
 
-  it('keeps approved sources through triage review, retry, confirmation, and return', () => {
+  it('keeps approved sources through save review and return', () => {
     const extractedEntries = [{ sourceName: 'profile.json', text: '{}', sourceProvenance: 'assistant-export:stable' }]
-    const ready = { name: 'pre-triage', homePath: '/Home', archivePath: '/export.zip', manifest: { entries: [{ name: 'profile.json' }] }, selectedNames: ['profile.json'], extractedEntries }
-    const pending = onboardingTriagingState(ready)
-    expect(pending).toMatchObject({ name: 'triaging', extractedEntries })
-    const failed = onboardingTriageErrorState(pending, { kind: 'localAiUnavailable', message: 'sensitive detail' })
-    expect(failed).toMatchObject({ name: 'triage-error', extractedEntries, error: 'Local AI is unavailable. Start the local model and try again.' })
-    expect(failed.error).not.toContain('sensitive')
-    const report = { userType: 'Writer', proposedHomeLayout: 'Projects by topic', starterAgents: ['Researcher', 'Editor'] }
-    const review = onboardingTriageReportState(onboardingTriagingState(failed), { report, usage: null })
-    expect(review).toMatchObject({ name: 'triage-review', report, extractedEntries })
-    expect(onboardingTriageConfirmedState(review)).toMatchObject({ name: 'triage-confirmed', report, extractedEntries })
-    expect(onboardingReturnToArchiveReviewState(review)).toMatchObject({ name: 'reviewing', selectedNames: ['profile.json'], manifest: ready.manifest, extractedEntries })
+    const review = { name: 'approved-review', homePath: '/Home', archivePath: '/export.zip', manifest: { entries: [{ name: 'profile.json' }] }, selectedNames: ['profile.json'], extractedEntries }
+    expect(onboardingReturnToArchiveReviewState(review)).toMatchObject({ name: 'reviewing', selectedNames: ['profile.json'], manifest: review.manifest, extractedEntries })
   })
 
   it('retains confirmed import inputs through saving and typed recovery states', () => {
     const confirmed = {
-      name: 'triage-confirmed', homePath: '/Home', report: { userType: 'Writer' },
+      name: 'approved-review', homePath: '/Home',
       extractedEntries: [{ sourceName: 'profile.json', text: '{}' }],
       manifest: { entries: [{ name: 'profile.json' }] }, selectedNames: ['profile.json'],
     }
     const saving = onboardingImportSavingState(confirmed)
-    expect(saving).toMatchObject({ name: 'triage-saving', homePath: '/Home', report: confirmed.report, extractedEntries: confirmed.extractedEntries })
+    expect(saving).toMatchObject({ name: 'import-saving', homePath: '/Home', extractedEntries: confirmed.extractedEntries })
     expect(onboardingImportSavedState(saving)).toEqual({ name: 'complete', homePath: '/Home' })
 
     const conflict = onboardingImportErrorState(saving, { kind: 'destinationConflict', relativePath: 'memory/profile.md', message: 'private detail' })
-    expect(conflict).toMatchObject({ name: 'triage-confirmed', errorKind: 'destinationConflict', conflictPath: 'memory/profile.md', report: confirmed.report, extractedEntries: confirmed.extractedEntries })
+    expect(conflict).toMatchObject({ name: 'approved-review', errorKind: 'destinationConflict', conflictPath: 'memory/profile.md', extractedEntries: confirmed.extractedEntries })
     expect(conflict.error).not.toContain('private')
     expect(onboardingConfirmedHomePathState(conflict, '/Other')).toMatchObject({
-      name: 'triage-confirmed', homePath: '/Other', report: confirmed.report, extractedEntries: confirmed.extractedEntries, error: undefined,
+      name: 'approved-review', homePath: '/Other', extractedEntries: confirmed.extractedEntries, error: undefined,
     })
 
     const saveFailed = onboardingImportErrorState(saving, { kind: 'saveFailed', message: 'disk secret' })
-    expect(saveFailed).toMatchObject({ name: 'triage-confirmed', errorKind: 'saveFailed', report: confirmed.report, extractedEntries: confirmed.extractedEntries })
+    expect(saveFailed).toMatchObject({ name: 'approved-review', errorKind: 'saveFailed', extractedEntries: confirmed.extractedEntries })
     expect(saveFailed.error).not.toContain('secret')
     const invalid = onboardingImportErrorState(saving, { kind: 'invalidInput', message: 'parser secret' })
-    expect(invalid).toMatchObject({ name: 'triage-invalid', errorKind: 'invalidInput', report: confirmed.report, extractedEntries: confirmed.extractedEntries })
+    expect(invalid).toMatchObject({ name: 'import-invalid', errorKind: 'invalidInput', extractedEntries: confirmed.extractedEntries })
     expect(invalid.error).not.toContain('secret')
   })
 })

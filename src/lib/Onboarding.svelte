@@ -3,7 +3,7 @@
   import { open } from '@tauri-apps/plugin-dialog'
 
   import { formatByteSize } from './chat-state.js'
-  import { onboardingCancelSettingsState, onboardingConfirmedHomePathState, onboardingConfirmedState, onboardingConfirmingState, onboardingErrorState, onboardingExtractingState, onboardingExtractionErrorState, onboardingExtractionState, onboardingFinalizingState, onboardingImportChoiceState, onboardingImportErrorState, onboardingImportSavedState, onboardingImportSavingState, onboardingPathState, onboardingPreviewErrorState, onboardingPreviewingState, onboardingPreviewState, onboardingReturnToArchiveReviewState, onboardingSelectionState, onboardingStatusState, onboardingTriageConfirmedState, onboardingTriageErrorState, onboardingTriageReportState, onboardingTriagingState } from './onboarding-state.js'
+  import { onboardingCancelSettingsState, onboardingConfirmedHomePathState, onboardingConfirmedState, onboardingConfirmingState, onboardingErrorState, onboardingExtractingState, onboardingExtractionErrorState, onboardingExtractionState, onboardingFinalizingState, onboardingImportChoiceState, onboardingImportErrorState, onboardingImportSavedState, onboardingImportSavingState, onboardingPathState, onboardingPreviewErrorState, onboardingPreviewingState, onboardingPreviewState, onboardingReturnToArchiveReviewState, onboardingSelectionState, onboardingStatusState } from './onboarding-state.js'
 
   let { tauri, onboarding = $bindable() } = $props()
   let onboardingPreviewSequence = 0
@@ -101,13 +101,12 @@
   }
 
   async function saveConfirmedImport() {
-    if (onboarding.name !== 'triage-confirmed') return
+    if (onboarding.name !== 'approved-review') return
     const pending = onboardingImportSavingState(onboarding)
     onboarding = pending
     try {
       await tauri.invoke('home_confirm_import', {
         homePath: pending.homePath,
-        triageReport: pending.report,
         approvedEntries: pending.extractedEntries,
       })
       onboarding = onboardingImportSavedState(pending)
@@ -125,7 +124,7 @@
 <section class="onboarding" aria-labelledby="onboarding-title">
   <header>
     <p class="eyebrow">{onboarding.savedHomePath ? 'Home settings' : 'First-run setup'}</p>
-    <h1 id="onboarding-title">{['pre-triage', 'triaging', 'triage-error'].includes(onboarding.name) ? 'Create your local proposal' : ['triage-review', 'triage-confirmed', 'triage-saving', 'triage-invalid'].includes(onboarding.name) ? 'Review your onboarding proposal' : ['import-choice', 'previewing', 'reviewing', 'extracting', 'finalizing'].includes(onboarding.name) ? 'Review an assistant export' : 'Choose your Muniment Home'}</h1>
+    <h1 id="onboarding-title">{['approved-review', 'import-saving', 'import-invalid'].includes(onboarding.name) ? 'Save approved files' : ['import-choice', 'previewing', 'reviewing', 'extracting', 'finalizing'].includes(onboarding.name) ? 'Review an assistant export' : 'Choose your Muniment Home'}</h1>
   </header>
   <div class="onboarding-content">
   {#if onboarding.name === 'loading'}
@@ -164,32 +163,15 @@
       </div>
     {/if}
     {#if onboarding.error}<p class="onboarding-error" role="alert">{onboarding.error}</p>{/if}
-  {:else if ['pre-triage', 'triaging', 'triage-error'].includes(onboarding.name)}
-    <p class="support">Generate a local proposal from {onboarding.extractedEntries.length} approved {onboarding.extractedEntries.length === 1 ? 'file' : 'files'}. You will review it before anything can be imported.</p>
-    <ul class="triage-sources" aria-label="Approved sources">{#each onboarding.extractedEntries as entry}<li><strong>{entry.sourceName}</strong><span>{entry.sourceProvenance}</span></li>{/each}</ul>
-    {#if onboarding.name === 'triaging'}<p class="support" role="status">Generating proposal on this device…</p>{/if}
-    {#if onboarding.error}<p class="onboarding-error" role="alert">{onboarding.error}</p>{/if}
-    <div class="onboarding-footer">
-      <button data-testid="onboarding-triage-back" onclick={returnToArchiveReview}>Back to archive review</button>
-      <p class="support">This import path is unavailable.</p>
-    </div>
-  {:else if onboarding.name === 'triage-review'}
-    <p class="support">Review the local AI proposal and the approved sources that informed it. Confirming only records your choice for this onboarding session.</p>
-    <div class="triage-report">
-      <section aria-labelledby="triage-user-type"><h2 id="triage-user-type">User type</h2><p>{onboarding.report.userType}</p></section>
-      <section aria-labelledby="triage-home-layout"><h2 id="triage-home-layout">Proposed Home layout</h2><p>{onboarding.report.proposedHomeLayout}</p></section>
-      <section aria-labelledby="triage-starter-agents"><h2 id="triage-starter-agents">Starter agents</h2><ul>{#each onboarding.report.starterAgents as agent}<li>{agent}</li>{/each}</ul></section>
-    </div>
-    <h2 class="source-heading">Approved sources</h2>
-    <ul class="triage-sources" aria-label="Approved sources">{#each onboarding.extractedEntries as entry}<li><strong>{entry.sourceName}</strong><span>{entry.sourceProvenance}</span></li>{/each}</ul>
-  {:else if ['triage-confirmed', 'triage-saving', 'triage-invalid'].includes(onboarding.name)}
-    <p class="support">Your reviewed proposal and approved files are ready to save to this Muniment Home.</p>
+  {:else if ['approved-review', 'import-saving', 'import-invalid'].includes(onboarding.name)}
+    <p class="support">{onboarding.extractedEntries.length} approved {onboarding.extractedEntries.length === 1 ? 'file is' : 'files are'} ready to save as verbatim originals.</p>
+    <ul class="approved-sources" aria-label="Approved sources">{#each onboarding.extractedEntries as entry}<li><strong>{entry.sourceName}</strong><span>{entry.sourceProvenance}</span></li>{/each}</ul>
     <div class="path-card">
       <span class="path-label">Muniment Home</span>
       <strong data-testid="onboarding-home-path">{onboarding.homePath}</strong>
-      <button data-testid="onboarding-confirmed-picker" onclick={chooseConfirmedHome} disabled={onboarding.name !== 'triage-confirmed'}>Choose folder…</button>
+      <button data-testid="onboarding-confirmed-picker" onclick={chooseConfirmedHome} disabled={onboarding.name !== 'approved-review'}>Choose folder…</button>
     </div>
-    {#if onboarding.name === 'triage-saving'}<p class="support" role="status">Saving your Home and approved files…</p>{/if}
+    {#if onboarding.name === 'import-saving'}<p class="support" role="status">Saving your Home and approved files…</p>{/if}
     {#if onboarding.error}
       <div class="onboarding-error" role="alert">
         <p>{onboarding.error}</p>
@@ -215,15 +197,13 @@
       {#if ['reviewing', 'extracting'].includes(onboarding.name)}<button data-testid="onboarding-import-picker" onclick={chooseImportArchive}>Choose a different ZIP…</button>{:else}<span class="privacy-note">Local preview · no Home writes</span>{/if}
       <div class="onboarding-actions"><button data-testid="onboarding-import-skip" onclick={skipImport} disabled={onboarding.name === 'finalizing'}>{onboarding.name === 'finalizing' ? 'Creating Home…' : 'Continue without importing'}</button>{#if ['reviewing', 'extracting'].includes(onboarding.name)}<button data-testid="onboarding-import-continue" class="primary" onclick={extractImportSelection} disabled={onboarding.name === 'extracting' || onboarding.selectedNames.length === 0}>{onboarding.name === 'extracting' ? 'Reading approved files…' : 'Continue with selected'}</button>{/if}</div>
     </footer>
-  {:else if onboarding.name === 'triage-review'}
-    <footer class="onboarding-footer"><button data-testid="onboarding-triage-back" onclick={returnToArchiveReview}>Back to archive review</button><button data-testid="onboarding-triage-confirm" class="primary" onclick={() => { onboarding = onboardingTriageConfirmedState(onboarding) }}>Confirm onboarding proposal</button></footer>
-  {:else if ['triage-confirmed', 'triage-saving', 'triage-invalid'].includes(onboarding.name)}
+  {:else if ['approved-review', 'import-saving', 'import-invalid'].includes(onboarding.name)}
     <footer class="onboarding-footer">
-      {#if onboarding.name === 'triage-invalid'}
+      {#if onboarding.name === 'import-invalid'}
         <button data-testid="onboarding-import-recover" onclick={returnToArchiveReview}>Back to archive review</button>
       {:else}
         <span class="privacy-note">Local import · reviewed files only</span>
-        <button data-testid="onboarding-import-save" class="primary" onclick={saveConfirmedImport} disabled={onboarding.name === 'triage-saving'}>{onboarding.name === 'triage-saving' ? 'Saving Home…' : 'Save Home and finish'}</button>
+        <button data-testid="onboarding-import-save" class="primary" onclick={saveConfirmedImport} disabled={onboarding.name === 'import-saving'}>{onboarding.name === 'import-saving' ? 'Saving Home…' : 'Save Home and finish'}</button>
       {/if}
     </footer>
   {/if}
@@ -256,16 +236,10 @@
   .manifest pre { margin: 8px 0 0; padding: 8px 10px; border-radius: var(--radius-control); background: var(--faint); color: var(--muted); font: var(--text-12) var(--font-mono); white-space: pre-wrap; overflow-wrap: anywhere; }
   .empty-manifest { margin: 0; padding: 18px 0; border-bottom: 1px solid var(--border); color: var(--muted); font: var(--text-12) var(--font-mono); }
   .onboarding-actions { display: flex; gap: 8px; }
-  .triage-report { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-top: 22px; }
-  .triage-report section { min-width: 0; padding: 14px; border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--surface); }
-  .triage-report h2, .source-heading { margin: 0 0 8px; font-size: var(--text-13); }
-  .triage-report p, .triage-report ul { margin: 0; padding-left: 18px; line-height: var(--leading-body); white-space: pre-wrap; overflow-wrap: anywhere; }
-  .triage-report p { padding-left: 0; }
-  .source-heading { margin-top: 20px; }
-  .triage-sources { margin: 0; padding: 0; border-top: 1px solid var(--border); list-style: none; }
-  .triage-sources li { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 12px; padding: 8px 0; border-bottom: 1px solid var(--border); font: var(--text-12) var(--font-mono); }
-  .triage-sources strong { overflow-wrap: anywhere; font-weight: 500; }
-  .triage-sources span { color: var(--muted); overflow-wrap: anywhere; }
+  .approved-sources { margin: 20px 0 0; padding: 0; border-top: 1px solid var(--border); list-style: none; }
+  .approved-sources li { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 12px; padding: 8px 0; border-bottom: 1px solid var(--border); font: var(--text-12) var(--font-mono); }
+  .approved-sources strong { overflow-wrap: anywhere; font-weight: 500; }
+  .approved-sources span { color: var(--muted); overflow-wrap: anywhere; }
   .support { color: var(--muted); }
   button { font: inherit; font-size: var(--text-13); color: var(--ink); background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-control); padding: 5px 12px; cursor: pointer; }
   button:hover:not(:disabled) { border-color: var(--muted); }
