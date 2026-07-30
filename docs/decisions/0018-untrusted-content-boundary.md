@@ -1,11 +1,14 @@
 # 0018 — The untrusted-content boundary
 
-- Status: accepted
+- Status: superseded by the 2026-07-29 cloud ingress ruling
 - Date: 2026-07-28
 - Context: harness-spec §§16.1 and 16.2, operator review of Odysseus,
   2026-07-21
 
 ## Context
+
+> Historical record. The ruling deleted the resident request builders and
+> `src-tauri/core/src/llama.rs`. The Pi boundary remains separate.
 
 External content can contain text that looks like model instructions. The
 resident-model path already treats that text as data, but it has no shared

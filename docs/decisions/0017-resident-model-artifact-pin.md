@@ -6,6 +6,8 @@
 
 ## Context
 
+> Historical record. The desktop no longer downloads or ships this artifact.
+
 [ADR 0003](0003-resident-gemma-model.md) pinned Google's Gemma 3 4B QAT Q4_0
 GGUF as the single resident local model. Since MUNIDESK-391 (2026-07-20) the
 code has verified and launched a different artifact: `RESIDENT_MODEL` in

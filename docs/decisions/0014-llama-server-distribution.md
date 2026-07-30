@@ -6,6 +6,8 @@
 
 ## Context
 
+> Historical record. The desktop no longer downloads or ships this runtime.
+
 The resident Gemma boundary requires an explicit `llama-server` executable
 path. ADR 0003 pins the model, ADR 0006 pins its acquisition lifecycle, and the
 core already constrains the server to loopback and verifies the model before

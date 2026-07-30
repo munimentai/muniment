@@ -10,6 +10,9 @@
 The 2026-07-29 owner ruling supersedes this decision. The cloud now classifies
 prompts at ingress. Desktop clients do not download or run a classifier.
 
+> The remaining sections record the superseded design. They do not describe
+> current behavior or planned desktop work.
+
 The desktop, CLI, and editor extension classify each prompt on the device.
 They send the prompt and classification to the Muniment cloud. The cloud then
 routes the request to the customer's model providers. Local classification is

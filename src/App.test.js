@@ -30,7 +30,6 @@ let confirmResult
 let dragDropListener
 let dragDropUnlisten
 let homeStatus
-let requiredModelInvoke
 let globalShortcutHandler
 let registerGlobalShortcut
 let unregisterGlobalShortcut
@@ -124,9 +123,7 @@ beforeAll(async () => {
       }
       return command === 'home_status'
         ? Promise.resolve(homeStatus)
-        : command === 'required_model_acquisition_status'
-          ? requiredModelInvoke(...args)
-          : invoke(command, ...args)
+        : invoke(command, ...args)
     } },
     event: { listen: vi.fn((event, listener) => {
       if (event === 'chat-event') chatListener = listener
@@ -147,7 +144,6 @@ beforeEach(() => {
   localStorage.clear()
   threadSummaryResult = [{ threadId: 'thread-1', title: '', updatedAt: '' }]
   homeStatus = { configured: true, homePath: '/Documents/Muniment' }
-  requiredModelInvoke = vi.fn().mockResolvedValue({ status: { state: 'installed' }, downloadedBytes: 100, totalBytes: 100, folderSetupAvailable: true, aiFeaturesAvailable: true, retryingInBackground: false })
   chatListener = undefined
   dictationListener = undefined
   entitlementListener = undefined
@@ -368,40 +364,7 @@ describe('workspace composer entry', () => {
     expect(railToggle).toHaveFocus()
   })
 
-  it('waits to focus on workspace re-entry until dictation polishing finishes', async () => {
-    let resolvePolish
-    invoke.mockImplementation(async (command) => {
-      if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
-      if (command === 'chat_thread_open') return []
-      if (command === 'auth_entitlement_snapshot') return snapshot()
-      if (command === 'auth_devices') return []
-      if (command === 'dictation_start') return { state: 'running' }
-      if (command === 'dictation_stop') return { state: 'stopped' }
-      if (command === 'dictation_polish') return new Promise((resolve) => { resolvePolish = resolve })
-      throw new Error(`unexpected command: ${command}`)
-    })
-    render(App)
-    const voice = await screen.findByRole('button', { name: 'Voice' })
-    await fireEvent.click(voice)
-    dictationListener({ payload: { type: 'transcript', text: 'captured words' } })
-    await stopClickCapture(voice)
-    await screen.findByText('Polishing on this device…')
-    await fireEvent.click(screen.getByText('Home settings'))
-    await fireEvent.click(screen.getByTestId('onboarding-cancel'))
 
-    const composer = await screen.findByPlaceholderText('Ask anything')
-    expect(composer).toHaveAttribute('readonly')
-    expect(composer).not.toHaveFocus()
-
-    resolvePolish('Polished words')
-    await waitFor(() => expect(composer).not.toHaveAttribute('readonly'))
-    expect(composer).toHaveFocus()
-
-    const railToggle = screen.getByRole('button', { name: 'Open artifact rail' })
-    railToggle.focus()
-    await fireEvent.input(composer, { target: { value: 'Edited after polishing' } })
-    expect(railToggle).toHaveFocus()
-  })
 })
 
 describe('artifact rail', () => {
@@ -1062,67 +1025,8 @@ describe('new thread', () => {
 })
 
 describe('Home onboarding', () => {
-  it('shows active model progress and stops polling when local AI becomes ready', async () => {
-    vi.useFakeTimers({ shouldAdvanceTime: true })
-    homeStatus = { configured: false, homePath: '/Documents/Muniment' }
-    requiredModelInvoke
-      .mockResolvedValueOnce({ status: { state: 'installing' }, downloadedBytes: 25, totalBytes: 100, folderSetupAvailable: true, aiFeaturesAvailable: false, retryingInBackground: true })
-      .mockResolvedValueOnce({ status: { state: 'installed' }, downloadedBytes: 100, totalBytes: 100, folderSetupAvailable: true, aiFeaturesAvailable: true, retryingInBackground: false })
-    render(App)
-    const progress = await screen.findByRole('progressbar', { name: 'Required local AI model download' })
-    expect(progress).toHaveAttribute('aria-valuemin', '0')
-    expect(progress).toHaveAttribute('aria-valuemax', '100')
-    expect(progress).toHaveAttribute('aria-valuenow', '25')
-    expect(screen.getByText('25 B of 100 B')).toBeInTheDocument()
-    await vi.advanceTimersByTimeAsync(1000)
-    expect(await screen.findByText('Local proposal generation is ready.')).toBeInTheDocument()
-    expect(screen.getByText('100 B of 100 B')).toBeInTheDocument()
-    expect(screen.getByRole('progressbar', { name: 'Required local AI model download' })).toHaveAttribute('aria-valuenow', '100')
-    await vi.advanceTimersByTimeAsync(2000)
-    expect(requiredModelInvoke).toHaveBeenCalledTimes(2)
-    vi.useRealTimers()
-  })
 
-  it('shows redacted retry status without blocking fail-open onboarding actions', async () => {
-    homeStatus = { configured: false, homePath: '/Documents/Muniment' }
-    dialogResult = '/Exports/assistant.zip'
-    requiredModelInvoke.mockResolvedValue({ status: { state: 'failed', category: 'network', message: 'redacted' }, downloadedBytes: 40, totalBytes: 100, folderSetupAvailable: true, aiFeaturesAvailable: false, retryingInBackground: true })
-    invoke.mockImplementation(async (command) => {
-      if (command === 'onboarding_import_preview') return { entries: [{ name: 'profile.json', kind: 'json', byteSize: 2, excerpt: '{}', excerptTruncated: false }], totalByteSize: 2 }
-      if (command === 'onboarding_import_extract') return [{ sourceName: 'profile.json', text: '{}', sourceProvenance: 'stable' }]
-      if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
-      if (command === 'chat_thread_open') return []
-      if (command === 'auth_entitlement_snapshot') return snapshot()
-      if (command === 'auth_devices') return []
-      throw new Error(`unexpected command: ${command}`)
-    })
-    render(App)
-    expect(await screen.findByText('Retrying in background')).toBeInTheDocument()
-    expect(screen.queryByText('redacted')).not.toBeInTheDocument()
-    expect(screen.getByTestId('onboarding-picker')).toBeEnabled()
-    expect(screen.getByTestId('onboarding-confirm')).toBeEnabled()
-    await fireEvent.click(screen.getByTestId('onboarding-confirm'))
-    expect(screen.getByTestId('onboarding-import-picker')).toBeEnabled()
-    expect(screen.getByTestId('onboarding-import-skip')).toBeEnabled()
-    await fireEvent.click(screen.getByTestId('onboarding-import-picker'))
-    await fireEvent.click(await screen.findByRole('checkbox'))
-    await fireEvent.click(screen.getByTestId('onboarding-import-continue'))
-    expect(await screen.findByTestId('onboarding-triage-generate')).toBeDisabled()
-    expect(screen.getByText('Available when the local AI model is ready.')).toBeInTheDocument()
-    expect(invoke.mock.calls.map(([command]) => command)).not.toContain('onboarding_triage')
-  })
 
-  it('cleans up active model polling when onboarding is unmounted', async () => {
-    vi.useFakeTimers({ shouldAdvanceTime: true })
-    homeStatus = { configured: false, homePath: '/Documents/Muniment' }
-    requiredModelInvoke.mockResolvedValue({ status: { state: 'installing' }, downloadedBytes: 0, totalBytes: 100, folderSetupAvailable: true, aiFeaturesAvailable: false, retryingInBackground: true })
-    const view = render(App)
-    await screen.findByText('Downloading')
-    view.unmount()
-    await vi.advanceTimersByTimeAsync(2000)
-    expect(requiredModelInvoke).toHaveBeenCalledTimes(1)
-    vi.useRealTimers()
-  })
 
   it('blocks the shell and confirms the displayed Documents default', async () => {
     homeStatus = { configured: false, homePath: '/Documents/Muniment' }
@@ -1139,7 +1043,7 @@ describe('Home onboarding', () => {
     expect(screen.queryByText('Sign in')).not.toBeInTheDocument()
     expect(screen.queryByPlaceholderText('Ask anything')).not.toBeInTheDocument()
     await fireEvent.click(screen.getByTestId('onboarding-confirm'))
-    expect(invoke).not.toHaveBeenCalledWith('home_confirm', expect.anything())
+    expect(invoke).toHaveBeenCalledWith('home_confirm', { homePath: '/Documents/Muniment' })
     expect(await screen.findByText('Review an assistant export')).toBeInTheDocument()
     expect(screen.getByText(/Preview happens locally and is read-only/)).toBeInTheDocument()
     await fireEvent.click(screen.getByTestId('onboarding-import-skip'))
@@ -1167,11 +1071,11 @@ describe('Home onboarding', () => {
     })
     render(App)
     await fireEvent.click(await screen.findByTestId('onboarding-confirm'))
-    expect(invoke).not.toHaveBeenCalledWith('home_confirm', expect.anything())
+    expect(invoke).toHaveBeenCalledWith('home_confirm', { homePath: '/Documents/Muniment' })
     expect(invoke).not.toHaveBeenCalledWith('onboarding_import_preview', expect.anything())
     await fireEvent.click(await screen.findByTestId('onboarding-import-picker'))
     expect(invoke).toHaveBeenCalledWith('onboarding_import_preview', { archivePath: '/Exports/assistant.zip' })
-    expect(invoke).not.toHaveBeenCalledWith('home_confirm', expect.anything())
+    expect(invoke).toHaveBeenCalledWith('home_confirm', { homePath: '/Documents/Muniment' })
     const manifest = await screen.findByRole('list', { name: 'Export manifest' })
     expect(within(manifest).getByText('conversations/chat.md')).toBeInTheDocument()
     expect(within(manifest).getByText('markdown · 128 B · complete excerpt')).toBeInTheDocument()
@@ -1187,6 +1091,7 @@ describe('Home onboarding', () => {
     dialogResult = '/Exports/assistant.zip'
     const extracted = [{ sourceName: 'profile.json', kind: 'json', text: '{"name":"Alice"}', sourceProvenance: 'assistant-export-zip:v1:stable' }]
     invoke.mockImplementation(async (command) => {
+      if (command === 'home_confirm') return { configured: true, homePath: '/Documents/Muniment' }
       if (command === 'onboarding_import_preview') return { entries: [
         { name: 'chat.md', kind: 'markdown', byteSize: 10, excerpt: 'chat', excerptTruncated: false },
         { name: 'profile.json', kind: 'json', byteSize: 16, excerpt: '{}', excerptTruncated: false },
@@ -1213,174 +1118,9 @@ describe('Home onboarding', () => {
       archivePath: '/Exports/assistant.zip', selectedNames: ['profile.json'],
     })
     expect(await screen.findByText('Create your local proposal')).toBeInTheDocument()
-    expect(screen.getByText(/Generate a local proposal from 1 approved file/)).toBeInTheDocument()
-    expect(invoke).not.toHaveBeenCalledWith('home_confirm', expect.anything())
-  })
-
-  it('saves a confirmed local triage report exactly once and completes onboarding', async () => {
-    homeStatus = { configured: false, homePath: '/Documents/Muniment' }
-    dialogResult = '/Exports/assistant.zip'
-    const extracted = [{ sourceName: 'profile.json', kind: 'json', text: '{"role":"writer"}', sourceProvenance: 'assistant-export-zip:v1:stable' }]
-    let resolveTriage
-    const save = deferred()
-    const report = { userType: 'Writer', proposedHomeLayout: 'Projects organized by topic.', starterAgents: ['Researcher', 'Editor'] }
-    invoke.mockImplementation(async (command, payload) => {
-      if (command === 'onboarding_import_preview') return { entries: [{ name: 'profile.json', kind: 'json', byteSize: 17, excerpt: '{}', excerptTruncated: false }], totalByteSize: 17 }
-      if (command === 'onboarding_import_extract') return extracted
-      if (command === 'onboarding_triage') return new Promise((resolve) => { resolveTriage = resolve })
-      if (command === 'home_confirm_import') return save.promise
-      if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
-      if (command === 'chat_thread_open') return []
-      if (command === 'auth_entitlement_snapshot') return snapshot()
-      if (command === 'auth_devices') return []
-      throw new Error(`unexpected command: ${command}`)
-    })
-    render(App)
-    await fireEvent.click(await screen.findByTestId('onboarding-confirm'))
-    await fireEvent.click(screen.getByTestId('onboarding-import-picker'))
-    await fireEvent.click(await screen.findByRole('checkbox'))
-    await fireEvent.click(screen.getByTestId('onboarding-import-continue'))
-    const generate = await screen.findByTestId('onboarding-triage-generate')
-    await fireEvent.click(generate)
-    await fireEvent.click(generate)
-    expect(invoke.mock.calls.filter(([command]) => command === 'onboarding_triage')).toEqual([['onboarding_triage', { entries: extracted }]])
-    expect(generate).toBeDisabled()
-    expect(screen.getByRole('status')).toHaveTextContent('Generating proposal on this device')
-    resolveTriage({ report, usage: null })
-    expect(await screen.findByRole('heading', { name: 'User type' })).toBeInTheDocument()
-    expect(screen.getByText('Writer')).toBeInTheDocument()
-    expect(screen.getByRole('heading', { name: 'Proposed Home layout' })).toBeInTheDocument()
-    expect(screen.getByText('Projects organized by topic.')).toBeInTheDocument()
-    expect(screen.getByRole('heading', { name: 'Starter agents' })).toBeInTheDocument()
-    expect(screen.getByText('Researcher')).toBeInTheDocument()
-    expect(screen.getByText('profile.json')).toBeInTheDocument()
-    expect(screen.getByText('assistant-export-zip:v1:stable')).toBeInTheDocument()
-    await fireEvent.click(screen.getByTestId('onboarding-triage-confirm'))
-    const saveButton = await screen.findByTestId('onboarding-import-save')
-    await fireEvent.click(saveButton)
-    await fireEvent.click(saveButton)
-    expect(saveButton).toBeDisabled()
-    expect(screen.getByRole('status')).toHaveTextContent('Saving your Home and approved files')
-    expect(invoke.mock.calls.filter(([command]) => command === 'home_confirm_import')).toEqual([[
-      'home_confirm_import',
-      { homePath: '/Documents/Muniment', triageReport: report, approvedEntries: extracted },
-    ]])
-    expect(invoke.mock.calls.map(([command]) => command)).not.toContain('home_confirm')
-    save.resolve({ configured: true, importedFileCount: 1 })
-    await waitFor(() => expect(screen.queryByTestId('onboarding-import-save')).not.toBeInTheDocument())
-  })
-
-  it.each([
-    ['saveFailed', 'The import could not be saved', true],
-    ['invalidInput', 'The confirmed proposal is no longer valid', false],
-  ])('shows a redacted, accessible %s recovery path', async (kind, expected, retryable) => {
-    homeStatus = { configured: false, homePath: '/Documents/Muniment' }
-    dialogResult = '/Exports/assistant.zip'
-    const extracted = [{ sourceName: 'profile.json', kind: 'json', text: '{}', sourceProvenance: 'stable' }]
-    const report = { userType: 'Writer', proposedHomeLayout: 'Projects', starterAgents: ['Researcher'] }
-    invoke.mockImplementation(async (command) => {
-      if (command === 'onboarding_import_preview') return { entries: [{ name: 'profile.json', kind: 'json', byteSize: 2, excerpt: '{}', excerptTruncated: false }], totalByteSize: 2 }
-      if (command === 'onboarding_import_extract') return extracted
-      if (command === 'onboarding_triage') return { report }
-      if (command === 'home_confirm_import') throw { kind, message: 'sensitive backend detail' }
-      if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
-      if (command === 'chat_thread_open') return []
-      if (command === 'auth_entitlement_snapshot') return snapshot()
-      if (command === 'auth_devices') return []
-      throw new Error(`unexpected command: ${command}`)
-    })
-    render(App)
-    await fireEvent.click(await screen.findByTestId('onboarding-confirm'))
-    await fireEvent.click(screen.getByTestId('onboarding-import-picker'))
-    await fireEvent.click(await screen.findByRole('checkbox'))
-    await fireEvent.click(screen.getByTestId('onboarding-import-continue'))
-    await fireEvent.click(await screen.findByTestId('onboarding-triage-generate'))
-    await fireEvent.click(await screen.findByTestId('onboarding-triage-confirm'))
-    await fireEvent.click(await screen.findByTestId('onboarding-import-save'))
-    const alert = await screen.findByRole('alert')
-    expect(alert).toHaveTextContent(expected)
-    expect(alert).not.toHaveTextContent('sensitive backend detail')
-    if (retryable) expect(screen.getByTestId('onboarding-import-save')).toBeEnabled()
-    else expect(screen.getByTestId('onboarding-import-recover')).toBeEnabled()
-  })
-
-  it('identifies a destination conflict and retries retained inputs with a different Home', async () => {
-    homeStatus = { configured: false, homePath: '/Documents/Muniment' }
-    dialogResult = '/Exports/assistant.zip'
-    const extracted = [{ sourceName: 'profile.json', kind: 'json', text: '{}', sourceProvenance: 'stable' }]
-    const report = { userType: 'Writer', proposedHomeLayout: 'Projects', starterAgents: ['Researcher'] }
-    let saveAttempts = 0
-    invoke.mockImplementation(async (command) => {
-      if (command === 'onboarding_import_preview') return { entries: [{ name: 'profile.json', kind: 'json', byteSize: 2, excerpt: '{}', excerptTruncated: false }], totalByteSize: 2 }
-      if (command === 'onboarding_import_extract') return extracted
-      if (command === 'onboarding_triage') return { report }
-      if (command === 'home_confirm_import' && saveAttempts++ === 0) throw { kind: 'destinationConflict', relativePath: 'memory/profile.md', message: '/private/absolute/path' }
-      if (command === 'home_confirm_import') return { configured: true, importedFileCount: 1 }
-      if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
-      if (command === 'chat_thread_open') return []
-      if (command === 'auth_entitlement_snapshot') return snapshot()
-      if (command === 'auth_devices') return []
-      throw new Error(`unexpected command: ${command}`)
-    })
-    render(App)
-    await fireEvent.click(await screen.findByTestId('onboarding-confirm'))
-    await fireEvent.click(screen.getByTestId('onboarding-import-picker'))
-    await fireEvent.click(await screen.findByRole('checkbox'))
-    await fireEvent.click(screen.getByTestId('onboarding-import-continue'))
-    await fireEvent.click(await screen.findByTestId('onboarding-triage-generate'))
-    await fireEvent.click(await screen.findByTestId('onboarding-triage-confirm'))
-    await fireEvent.click(await screen.findByTestId('onboarding-import-save'))
-    const alert = await screen.findByRole('alert')
-    expect(alert).toHaveTextContent('memory/profile.md')
-    expect(alert).not.toHaveTextContent('/private/absolute/path')
-    dialogResult = '/Other/Muniment'
-    await fireEvent.click(screen.getByTestId('onboarding-confirmed-picker'))
-    expect(await screen.findByTestId('onboarding-home-path')).toHaveTextContent('/Other/Muniment')
-    await fireEvent.click(screen.getByTestId('onboarding-import-save'))
-    expect(invoke.mock.calls.filter(([command]) => command === 'home_confirm_import')).toEqual([
-      ['home_confirm_import', { homePath: '/Documents/Muniment', triageReport: report, approvedEntries: extracted }],
-      ['home_confirm_import', { homePath: '/Other/Muniment', triageReport: report, approvedEntries: extracted }],
-    ])
-    expect(invoke.mock.calls.filter(([command]) => ['onboarding_import_preview', 'onboarding_import_extract', 'onboarding_triage'].includes(command))).toHaveLength(3)
-  })
-
-  it('retries a redacted triage failure and suppresses its stale result after returning', async () => {
-    homeStatus = { configured: false, homePath: '/Documents/Muniment' }
-    dialogResult = '/Exports/assistant.zip'
-    const extracted = [{ sourceName: 'chat.md', kind: 'markdown', text: 'chat', sourceProvenance: 'stable' }]
-    let triageAttempt = 0
-    let resolveRetry
-    invoke.mockImplementation(async (command) => {
-      if (command === 'onboarding_import_preview') return { entries: [{ name: 'chat.md', kind: 'markdown', byteSize: 4, excerpt: 'chat', excerptTruncated: false }], totalByteSize: 4 }
-      if (command === 'onboarding_import_extract') return extracted
-      if (command === 'onboarding_triage') {
-        triageAttempt += 1
-        if (triageAttempt === 1) throw { kind: 'invalidModelResponse', message: 'private model output' }
-        return new Promise((resolve) => { resolveRetry = resolve })
-      }
-      if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
-      if (command === 'chat_thread_open') return []
-      if (command === 'auth_entitlement_snapshot') return snapshot()
-      if (command === 'auth_devices') return []
-      throw new Error(`unexpected command: ${command}`)
-    })
-    render(App)
-    await fireEvent.click(await screen.findByTestId('onboarding-confirm'))
-    await fireEvent.click(screen.getByTestId('onboarding-import-picker'))
-    await fireEvent.click(await screen.findByRole('checkbox'))
-    await fireEvent.click(screen.getByTestId('onboarding-import-continue'))
-    await fireEvent.click(await screen.findByTestId('onboarding-triage-generate'))
-    expect(await screen.findByRole('alert')).toHaveTextContent('Local AI returned an incomplete proposal. Try generating it again.')
-    expect(screen.getByRole('alert')).not.toHaveTextContent('private model output')
-    expect(screen.getByText('chat.md')).toBeInTheDocument()
-    await fireEvent.click(screen.getByTestId('onboarding-triage-generate'))
-    await fireEvent.click(screen.getByTestId('onboarding-triage-back'))
-    expect(await screen.findByRole('checkbox')).toBeChecked()
-    resolveRetry({ report: { userType: 'Writer', proposedHomeLayout: 'Layout', starterAgents: ['A', 'B'] }, usage: null })
-    await Promise.resolve()
-    expect(screen.queryByRole('heading', { name: 'User type' })).not.toBeInTheDocument()
-    expect(screen.getByRole('checkbox')).toBeChecked()
-    expect(invoke.mock.calls.filter(([command]) => command === 'onboarding_triage')).toHaveLength(2)
+    expect(screen.getByText('This import path is unavailable.')).toBeInTheDocument()
+    expect(invoke.mock.calls.map(([command]) => command)).not.toContain('onboarding_triage')
+    expect(invoke).toHaveBeenCalledWith('home_confirm', { homePath: '/Documents/Muniment' })
   })
 
   it('keeps consent for extraction retry and suppresses stale extraction after skip', async () => {
@@ -1433,7 +1173,7 @@ describe('Home onboarding', () => {
     await fireEvent.click(await screen.findByTestId('onboarding-confirm'))
     await fireEvent.click(await screen.findByTestId('onboarding-import-picker'))
     expect(invoke).not.toHaveBeenCalledWith('onboarding_import_preview', expect.anything())
-    expect(invoke).not.toHaveBeenCalledWith('home_confirm', expect.anything())
+    expect(invoke).toHaveBeenCalledWith('home_confirm', { homePath: '/Documents/Muniment' })
     await fireEvent.click(screen.getByTestId('onboarding-import-skip'))
     expect(invoke).toHaveBeenCalledWith('home_confirm', { homePath: '/Documents/Muniment' })
     expect(await screen.findByPlaceholderText('Ask anything')).toBeInTheDocument()
@@ -1479,9 +1219,9 @@ describe('Home onboarding', () => {
     await fireEvent.click(await screen.findByTestId('onboarding-import-picker'))
     expect(await screen.findByRole('alert')).toHaveTextContent('That file is not a readable ZIP archive. Choose a different export ZIP.')
     expect(screen.getByText('/Exports/not-an-export.zip')).toBeInTheDocument()
-    expect(invoke).not.toHaveBeenCalledWith('home_confirm', expect.anything())
+    expect(invoke).toHaveBeenCalledWith('home_confirm', { homePath: '/Documents/Muniment' })
     await fireEvent.click(screen.getByTestId('onboarding-import-picker'))
-    expect(invoke).not.toHaveBeenCalledWith('home_confirm', expect.anything())
+    expect(invoke).toHaveBeenCalledWith('home_confirm', { homePath: '/Documents/Muniment' })
     await fireEvent.click(screen.getByTestId('onboarding-import-skip'))
     expect(invoke).toHaveBeenCalledWith('home_confirm', { homePath: '/Documents/Muniment' })
   })
@@ -1492,11 +1232,10 @@ describe('Home onboarding', () => {
     invoke.mockRejectedValue('Muniment Home could not be created.')
     render(App)
     await fireEvent.click(await screen.findByTestId('onboarding-confirm'))
-    expect(invoke).not.toHaveBeenCalledWith('home_confirm', expect.anything())
-    await fireEvent.click(await screen.findByTestId('onboarding-import-skip'))
+    expect(invoke).toHaveBeenCalledWith('home_confirm', { homePath: '/read-only/Muniment' })
     expect(await screen.findByRole('alert')).toHaveTextContent('Muniment Home could not be created.')
     expect(screen.queryByPlaceholderText('Ask anything')).not.toBeInTheDocument()
-    expect(screen.getByText('No ZIP selected')).toBeInTheDocument()
+    expect(screen.getByTestId('onboarding-picker')).toBeEnabled()
   })
 
   it('cancels Home settings back to the configured workspace', async () => {
@@ -1505,7 +1244,6 @@ describe('Home onboarding', () => {
     expect(screen.getByTestId('onboarding-home-path')).toHaveTextContent('/Documents/Muniment')
     expect(screen.queryByText('Local AI')).not.toBeInTheDocument()
     expect(screen.queryByText('Starting setup')).not.toBeInTheDocument()
-    expect(requiredModelInvoke).toHaveBeenCalledTimes(1)
     await fireEvent.click(screen.getByTestId('onboarding-picker'))
     await fireEvent.click(screen.getByTestId('onboarding-cancel'))
     expect(await screen.findByPlaceholderText('Ask anything')).toBeInTheDocument()
@@ -1513,97 +1251,6 @@ describe('Home onboarding', () => {
   })
 })
 
-describe('required local model workspace status', () => {
-  it('shows determinate progress without blocking the workspace', async () => {
-    requiredModelInvoke.mockResolvedValue({
-      status: { state: 'installing' },
-      downloadedBytes: 536870912,
-      totalBytes: 1073741824,
-      folderSetupAvailable: true,
-      aiFeaturesAvailable: false,
-      retryingInBackground: false,
-    })
-
-    render(App)
-
-    expect(await screen.findByText('Qwen3.5-4B · Downloading')).toBeInTheDocument()
-    expect(screen.getByText('512 MB of 1.0 GB')).toBeInTheDocument()
-    expect(screen.getByRole('progressbar', { name: 'Required local model download' })).toHaveAttribute('aria-valuenow', '536870912')
-    expect(screen.getByPlaceholderText('Ask anything')).toBeInTheDocument()
-  })
-
-  it('shows a fail-open retry and removes the record when ready', async () => {
-    vi.useFakeTimers({ shouldAdvanceTime: true })
-    requiredModelInvoke
-      .mockResolvedValueOnce({
-        status: { state: 'failed' },
-        downloadedBytes: 40,
-        totalBytes: 100,
-        folderSetupAvailable: true,
-        aiFeaturesAvailable: false,
-        retryingInBackground: true,
-      })
-      .mockResolvedValueOnce({
-        status: { state: 'installed' },
-        downloadedBytes: 100,
-        totalBytes: 100,
-        folderSetupAvailable: true,
-        aiFeaturesAvailable: true,
-        retryingInBackground: false,
-      })
-
-    render(App)
-
-    const retry = await screen.findByText('Qwen3.5-4B · Retrying in background')
-    expect(retry.closest('.model-record')).toHaveAttribute('title', expect.stringContaining('rest of the app remain usable'))
-    expect(screen.getByPlaceholderText('Ask anything')).toBeInTheDocument()
-    await vi.advanceTimersByTimeAsync(1000)
-    await waitFor(() => expect(screen.queryByText(/Qwen3.5-4B/)).not.toBeInTheDocument())
-    await vi.advanceTimersByTimeAsync(2000)
-    expect(requiredModelInvoke).toHaveBeenCalledTimes(2)
-    vi.useRealTimers()
-  })
-
-  it('stops polling after teardown', async () => {
-    vi.useFakeTimers({ shouldAdvanceTime: true })
-    requiredModelInvoke.mockResolvedValue({
-      status: { state: 'installing' },
-      downloadedBytes: 0,
-      totalBytes: 100,
-      folderSetupAvailable: true,
-      aiFeaturesAvailable: false,
-      retryingInBackground: false,
-    })
-    const view = render(App)
-    await screen.findByText('Qwen3.5-4B · Downloading')
-
-    view.unmount()
-    await vi.advanceTimersByTimeAsync(2000)
-
-    expect(requiredModelInvoke).toHaveBeenCalledTimes(1)
-    vi.useRealTimers()
-  })
-
-  it('shows a terminal failure without polling again', async () => {
-    vi.useFakeTimers({ shouldAdvanceTime: true })
-    requiredModelInvoke.mockResolvedValue({
-      status: { state: 'failed' },
-      downloadedBytes: 40,
-      totalBytes: 100,
-      folderSetupAvailable: true,
-      aiFeaturesAvailable: false,
-      retryingInBackground: false,
-    })
-
-    render(App)
-
-    const failure = await screen.findByText('Qwen3.5-4B · Setup unavailable')
-    expect(failure.closest('.model-record')).toHaveAttribute('aria-label', expect.stringContaining('rest of the app remain usable'))
-    await vi.advanceTimersByTimeAsync(2000)
-    expect(requiredModelInvoke).toHaveBeenCalledTimes(1)
-    vi.useRealTimers()
-  })
-})
 
 describe('voice dictation', () => {
   it('routes one global press and matching release through the existing dictation lifecycle', async () => {
@@ -1801,32 +1448,6 @@ describe('voice dictation', () => {
     resolveSubmit({ runId: 'run-1', attachments: [] })
   })
 
-  it('preserves the polished draft and ignores global presses while polish is busy', async () => {
-    let resolvePolish
-    invoke.mockImplementation(async (command) => {
-      if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
-      if (command === 'chat_thread_open') return []
-      if (command === 'auth_entitlement_snapshot') return snapshot()
-      if (command === 'auth_devices') return []
-      if (command === 'dictation_start') return { state: 'running' }
-      if (command === 'dictation_stop') return { state: 'stopped' }
-      if (command === 'dictation_polish') return new Promise((resolve) => { resolvePolish = resolve })
-      throw new Error(`unexpected command: ${command}`)
-    })
-    render(App)
-    const composer = await screen.findByPlaceholderText('Ask anything')
-    await fireEvent.input(composer, { target: { value: 'Keep this' } })
-    globalShortcutHandler({ state: 'Pressed' })
-    await waitFor(() => expect(invoke).toHaveBeenCalledWith('dictation_start'))
-    dictationListener({ payload: { type: 'transcript', text: 'captured words' } })
-    globalShortcutHandler({ state: 'Released' })
-    await waitFor(() => expect(invoke).toHaveBeenCalledWith('dictation_polish', { transcript: 'captured words' }))
-    globalShortcutHandler({ state: 'Pressed' })
-    expect(invoke.mock.calls.filter(([command]) => command === 'dictation_start')).toHaveLength(1)
-    expect(composer).toHaveValue('Keep this captured words')
-    resolvePolish('Polished words')
-    await waitFor(() => expect(composer).toHaveValue('Keep this Polished words'))
-  })
 
   it('redacts registration failures and unregisters a successful binding on teardown', async () => {
     registerGlobalShortcut.mockRejectedValueOnce(new Error('Control+Shift+Space owned by SecretApp.exe'))
@@ -2020,192 +1641,10 @@ describe('voice dictation', () => {
     await waitFor(() => expect(registeredShortcuts).toEqual(new Set()))
   })
 
-  it('offers all transforms after polish and replaces only the captured segment', async () => {
-    invoke.mockImplementation(async (command, payload) => {
-      if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
-      if (command === 'chat_thread_open') return []
-      if (command === 'auth_entitlement_snapshot') return snapshot()
-      if (command === 'auth_devices') return []
-      if (command === 'dictation_start') return { state: 'running' }
-      if (command === 'dictation_stop') return { state: 'stopped' }
-      if (command === 'dictation_polish') return 'Polished capture.'
-      if (command === 'dictation_transform') return payload.transform === 'key-points' ? '• Captured point' : 'Formal capture.'
-      throw new Error(`unexpected command: ${command}`)
-    })
-    render(App)
-    const composer = await screen.findByPlaceholderText('Ask anything')
-    await fireEvent.input(composer, { target: { value: 'Existing draft' } })
-    const voice = screen.getByRole('button', { name: 'Voice' })
-    await fireEvent.click(voice)
-    expect(screen.queryByRole('button', { name: /key points/ })).not.toBeInTheDocument()
-    dictationListener({ payload: { type: 'transcript', text: 'captured words' } })
-    await stopClickCapture(voice)
 
-    const chips = await screen.findByLabelText('Voice transforms')
-    for (const [label, shortcut] of [['key points', 'Alt+1'], ['formal', 'Alt+2'], ['short', 'Alt+3'], ['long', 'Alt+4']]) {
-      expect(within(chips).getByRole('button', { name: new RegExp(label) })).toHaveAttribute('aria-keyshortcuts', shortcut)
-    }
-    const keyPoints = within(chips).getByRole('button', { name: /key points/ })
-    await fireEvent.click(keyPoints)
-    await waitFor(() => expect(invoke).toHaveBeenCalledWith('dictation_transform', { transform: 'key-points', transcript: 'Polished capture.' }))
-    await waitFor(() => expect(composer).toHaveValue('Existing draft • Captured point'))
-    expect(composer).toHaveFocus()
 
-    await fireEvent.keyDown(composer, { key: '¡', code: 'Digit2', altKey: true })
-    await waitFor(() => expect(invoke).toHaveBeenCalledWith('dictation_transform', { transform: 'formal', transcript: '• Captured point' }))
-    await waitFor(() => expect(composer).toHaveValue('Existing draft Formal capture.'))
-    expect(composer).toHaveFocus()
-  })
 
-  it('expires transform actions after six seconds without letting an old timer hide a newer capture', async () => {
-    vi.useFakeTimers({ shouldAdvanceTime: true })
-    let polishCalls = 0
-    invoke.mockImplementation(async (command) => {
-      if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
-      if (command === 'chat_thread_open') return []
-      if (command === 'auth_entitlement_snapshot') return snapshot()
-      if (command === 'auth_devices') return []
-      if (command === 'dictation_start') return { state: 'running' }
-      if (command === 'dictation_stop') return { state: 'stopped' }
-      if (command === 'dictation_polish') return `Polished capture ${++polishCalls}`
-      throw new Error(`unexpected command: ${command}`)
-    })
-    render(App)
-    const composer = await screen.findByPlaceholderText('Ask anything')
-    const voice = screen.getByRole('button', { name: 'Voice' })
 
-    await fireEvent.click(voice)
-    dictationListener({ payload: { type: 'transcript', text: 'first' } })
-    await stopClickCapture(voice)
-    expect(await screen.findByLabelText('Voice transforms')).toBeInTheDocument()
-
-    await vi.advanceTimersByTimeAsync(3000)
-    await fireEvent.input(composer, { target: { value: 'Edited between captures' } })
-    await fireEvent.click(voice)
-    dictationListener({ payload: { type: 'transcript', text: 'second' } })
-    await stopClickCapture(voice)
-    expect(await screen.findByLabelText('Voice transforms')).toBeInTheDocument()
-
-    await vi.advanceTimersByTimeAsync(3000)
-    expect(screen.getByLabelText('Voice transforms')).toBeInTheDocument()
-    await vi.advanceTimersByTimeAsync(2500)
-    expect(screen.getByLabelText('Voice transforms')).toBeInTheDocument()
-    await vi.advanceTimersByTimeAsync(500)
-    expect(screen.queryByLabelText('Voice transforms')).not.toBeInTheDocument()
-  })
-
-  it('blocks duplicate actions and rejects a transform result after editing', async () => {
-    let resolveTransform
-    invoke.mockImplementation(async (command) => {
-      if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
-      if (command === 'chat_thread_open') return []
-      if (command === 'auth_entitlement_snapshot') return snapshot()
-      if (command === 'auth_devices') return []
-      if (command === 'dictation_start') return { state: 'running' }
-      if (command === 'dictation_stop') return { state: 'stopped' }
-      if (command === 'dictation_polish') return 'Editable capture'
-      if (command === 'dictation_transform') return new Promise((resolve) => { resolveTransform = resolve })
-      throw new Error(`unexpected command: ${command}`)
-    })
-    render(App)
-    const composer = await screen.findByPlaceholderText('Ask anything')
-    const voice = screen.getByRole('button', { name: 'Voice' })
-    await fireEvent.click(voice)
-    dictationListener({ payload: { type: 'transcript', text: 'capture' } })
-    await stopClickCapture(voice)
-    const formal = await screen.findByRole('button', { name: /formal/ })
-    await fireEvent.click(formal)
-
-    expect(formal).toBeDisabled()
-    expect(voice).toBeDisabled()
-    expect(screen.getByRole('button', { name: 'Send' })).toBeDisabled()
-    await fireEvent.click(formal)
-    await fireEvent.keyDown(composer, { key: '2', altKey: true })
-    expect(invoke.mock.calls.filter(([command]) => command === 'dictation_transform')).toHaveLength(1)
-    await fireEvent.input(composer, { target: { value: 'My newer edit' } })
-    expect(screen.queryByLabelText('Voice transforms')).not.toBeInTheDocument()
-    resolveTransform('Late replacement')
-    await Promise.resolve()
-    await waitFor(() => expect(screen.queryByText('Transforming on this device…')).not.toBeInTheDocument())
-    expect(composer).toHaveValue('My newer edit')
-    expect(composer).toHaveFocus()
-  })
-
-  it('ignores the global shortcut while a transform is pending', async () => {
-    let resolveTransform
-    invoke.mockImplementation(async (command) => {
-      if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
-      if (command === 'chat_thread_open') return []
-      if (command === 'auth_entitlement_snapshot') return snapshot()
-      if (command === 'auth_devices') return []
-      if (command === 'dictation_start') return { state: 'running' }
-      if (command === 'dictation_stop') return { state: 'stopped' }
-      if (command === 'dictation_polish') return 'Polished capture'
-      if (command === 'dictation_transform') return new Promise((resolve) => { resolveTransform = resolve })
-      throw new Error(`unexpected command: ${command}`)
-    })
-    render(App)
-    const composer = await screen.findByPlaceholderText('Ask anything')
-    await fireEvent.input(composer, { target: { value: 'Existing draft' } })
-    const voice = screen.getByRole('button', { name: 'Voice' })
-    await fireEvent.click(voice)
-    await waitFor(() => expect(voice).toHaveAttribute('aria-pressed', 'true'))
-    dictationListener({ payload: { type: 'transcript', text: 'captured words' } })
-    await stopClickCapture(voice)
-    await fireEvent.click(await screen.findByRole('button', { name: /formal/ }))
-    await waitFor(() => expect(invoke).toHaveBeenCalledWith('dictation_transform', { transform: 'formal', transcript: 'Polished capture' }))
-
-    invoke.mockClear()
-    globalShortcutHandler({ state: 'Pressed' })
-    globalShortcutHandler({ state: 'Released' })
-    expect(invoke).not.toHaveBeenCalledWith('dictation_start')
-    expect(invoke.mock.calls.filter(([command]) => command === 'dictation_stop')).toHaveLength(0)
-    expect(composer).toHaveValue('Existing draft Polished capture')
-
-    resolveTransform('Formal capture')
-    await waitFor(() => expect(composer).toHaveValue('Existing draft Formal capture'))
-  })
-
-  it('keeps text and reports a redacted transform failure, then cancels late work with Escape', async () => {
-    let transformCalls = 0
-    let resolveLate
-    invoke.mockImplementation(async (command) => {
-      if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
-      if (command === 'chat_thread_open') return []
-      if (command === 'auth_entitlement_snapshot') return snapshot()
-      if (command === 'auth_devices') return []
-      if (command === 'dictation_start') return { state: 'running' }
-      if (command === 'dictation_stop') return { state: 'stopped' }
-      if (command === 'dictation_polish') return 'Keep polished text'
-      if (command === 'dictation_transform') {
-        transformCalls += 1
-        if (transformCalls === 1) throw { category: 'requestFailed', message: 'sensitive backend detail' }
-        return new Promise((resolve) => { resolveLate = resolve })
-      }
-      throw new Error(`unexpected command: ${command}`)
-    })
-    render(App)
-    const composer = await screen.findByPlaceholderText('Ask anything')
-    const voice = screen.getByRole('button', { name: 'Voice' })
-    await fireEvent.click(voice)
-    dictationListener({ payload: { type: 'transcript', text: 'keep words' } })
-    await stopClickCapture(voice)
-    await fireEvent.click(await screen.findByRole('button', { name: /short/ }))
-    expect(await screen.findByRole('alert')).toHaveTextContent('That voice transform is unavailable. Your text is unchanged; try again.')
-    expect(screen.getByRole('alert')).not.toHaveTextContent('sensitive backend detail')
-    expect(composer).toHaveValue('Keep polished text')
-
-    await fireEvent.click(screen.getByRole('button', { name: /long/ }))
-    await fireEvent.click(screen.getByRole('button', { name: 'Open artifact rail' }))
-    await fireEvent.keyDown(document, { key: 'Escape' })
-    expect(screen.getByRole('button', { name: 'Open artifact rail' })).toHaveAttribute('aria-expanded', 'false')
-    expect(composer).toHaveValue('Keep polished text')
-    expect(screen.queryByLabelText('Voice transforms')).not.toBeInTheDocument()
-    expect(composer).toHaveFocus()
-    resolveLate('Late after Escape')
-    await Promise.resolve()
-    expect(composer).toHaveValue('Keep polished text')
-  })
 
   it('starts on primary pointer down and stops on release while preserving transcript', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true })
@@ -2217,7 +1656,6 @@ describe('voice dictation', () => {
       if (command === 'auth_devices') return []
       if (command === 'dictation_start') return { state: 'running' }
       if (command === 'dictation_stop') return new Promise((resolve) => { resolveStop = resolve })
-      if (command === 'dictation_polish') return 'Polished after.'
       throw new Error(`unexpected command: ${command}`)
     })
     render(App)
@@ -2235,16 +1673,15 @@ describe('voice dictation', () => {
     await Promise.resolve()
     await new Promise((resolve) => setTimeout(resolve, 0))
     expect(invoke).not.toHaveBeenCalledWith('dictation_polish', expect.anything())
-    expect(voice).toBeDisabled()
-    await fireEvent.click(voice)
+    await vi.advanceTimersByTimeAsync(300)
+    expect(voice).toBeEnabled()
     expect(invoke.mock.calls.filter(([command]) => command === 'dictation_start')).toHaveLength(1)
     dictationListener({ payload: { type: 'transcript', text: 'at the boundary' } })
 
-    await waitFor(() => expect(invoke).toHaveBeenCalledWith('dictation_polish', { transcript: 'after at the boundary' }))
-    await waitFor(() => expect(composer).toHaveValue('Before Polished after.'))
+    await waitFor(() => expect(composer).toHaveValue('Before after'))
     expect(invoke.mock.calls.filter(([command]) => command === 'dictation_start')).toHaveLength(1)
     expect(invoke.mock.calls.filter(([command]) => command === 'dictation_stop')).toHaveLength(1)
-    expect(invoke.mock.calls.filter(([command]) => command === 'dictation_polish')).toHaveLength(1)
+    expect(invoke.mock.calls.map(([command]) => command)).not.toContain('dictation_polish')
   })
 
   it('promotes a rapid button double activation to hands-free and Escape restores the draft during a late start', async () => {
@@ -2284,75 +1721,7 @@ describe('voice dictation', () => {
     await waitFor(() => expect(voice).toHaveAttribute('aria-pressed', 'false'))
   })
 
-  it('keeps the verbatim capture editable and explains a polish failure', async () => {
-    invoke.mockImplementation(async (command) => {
-      if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
-      if (command === 'chat_thread_open') return []
-      if (command === 'auth_entitlement_snapshot') return snapshot()
-      if (command === 'auth_devices') return []
-      if (command === 'dictation_start') return { state: 'running' }
-      if (command === 'dictation_stop') return { state: 'stopped' }
-      if (command === 'dictation_polish') throw { category: 'localAiUnavailable', message: 'Local AI is unavailable.' }
-      throw new Error(`unexpected command: ${command}`)
-    })
-    render(App)
-    const composer = await screen.findByPlaceholderText('Ask anything')
-    const voice = screen.getByRole('button', { name: 'Voice' })
-    await fireEvent.input(composer, { target: { value: 'Keep' } })
-    await fireEvent.click(voice)
-    dictationListener({ payload: { type: 'transcript', text: 'verbatim words' } })
-    await stopClickCapture(voice)
 
-    expect(await screen.findByRole('alert')).toHaveTextContent('Polishing is unavailable. You can edit or send the captured text.')
-    expect(composer).toHaveValue('Keep verbatim words')
-    expect(composer).not.toHaveAttribute('readonly')
-    expect(screen.getByRole('button', { name: 'Send' })).toBeEnabled()
-  })
-
-  it('styles only the captured segment and rejects stale capture completions while mounted', async () => {
-    let resolvePolish
-    let starts = 0
-    invoke.mockImplementation(async (command) => {
-      if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
-      if (command === 'chat_thread_open') return []
-      if (command === 'auth_entitlement_snapshot') return snapshot()
-      if (command === 'auth_devices') return []
-      if (command === 'dictation_start') {
-        starts += 1
-        return { state: 'running' }
-      }
-      if (command === 'dictation_stop') return { state: 'stopped' }
-      if (command === 'dictation_polish') return new Promise((resolve) => { resolvePolish = resolve })
-      throw new Error(`unexpected command: ${command}`)
-    })
-    render(App)
-    const composer = await screen.findByPlaceholderText('Ask anything')
-    const voice = screen.getByRole('button', { name: 'Voice' })
-    await fireEvent.input(composer, { target: { value: 'Existing draft' } })
-    await fireEvent.click(voice)
-    const oldCaptureListener = dictationListener
-    dictationListener({ payload: { type: 'transcript', text: 'old capture' } })
-    await stopClickCapture(voice)
-
-    expect(await screen.findByRole('status')).toHaveTextContent('Polishing on this device…')
-    expect(screen.getByTestId('polish-draft').textContent).toBe('Existing draft ')
-    expect(screen.getByTestId('polish-draft')).not.toHaveClass('polish-transcript')
-    expect(screen.getByTestId('polish-transcript')).toHaveTextContent('old capture')
-    expect(screen.getByTestId('polish-transcript')).toHaveClass('polish-transcript')
-    expect(voice).toBeDisabled()
-    expect(screen.getByRole('button', { name: 'Send' })).toBeDisabled()
-    expect(composer).toHaveAttribute('readonly')
-
-    await fireEvent.keyDown(document, { key: 'Escape' })
-    await fireEvent.input(composer, { target: { value: 'Newer draft exactly' } })
-    await fireEvent.click(voice)
-    await waitFor(() => expect(starts).toBe(2))
-    oldCaptureListener({ payload: { type: 'transcript', text: 'late old transcript' } })
-    resolvePolish('Stale replacement')
-    await Promise.resolve()
-    await new Promise((resolve) => setTimeout(resolve, 0))
-    expect(composer).toHaveValue('Newer draft exactly')
-  })
 
   it('cancels a primary pointer capture, restores the snapshot, and focuses the composer', async () => {
     let stopping = false

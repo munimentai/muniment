@@ -28,6 +28,9 @@
 > publisher, artifact, source, and revision — apply to whatever licence the
 > pinned artifact carries. An acceptance gate is required only for a pinned
 > artifact whose licence imposes additional use restrictions.
+>
+> **Superseded 2026-07-29.** The desktop no longer acquires, stores, loads, or
+> runs a resident language model. The lifecycle below is a historical record.
 
 ## Context
 

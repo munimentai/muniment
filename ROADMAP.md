@@ -24,11 +24,14 @@ Phases mirror harness-spec §9. Muniment-cloud Phase 1 native auth and the cloud
 - DONE 2026-07-28 — the keyboard commit landed (MUNIDESK-605): plain Enter commits the single-line `input` gate, the platform chord plus Enter commits the multi-line `editor` gate, and `npm run probe` now prints all five fixture URLs. Planner check 2026-07-28 confirmed the `permissionGateAction` helper beside `composerAction` in `src/lib/chat-state.js`, its Shift/Alt/composition rejections, and the two new gate tests. The timeout countdown and the §8 `Allow for this thread` policy stay parked, and the ask card rests again.
 
 ### 10. Local model sidecar
+The 2026-07-29 cloud ingress ruling supersedes this section. These entries
+record deleted runtime work.
+
 - DONE — supervised local runtime, pinned model lifecycle, verified/cancellable acquisition, rollback, native adapters, and Tauri install/status/cancel commands.
 - DONE 2026-07-22 — first-use onboarding shows required local-model acquisition progress, readiness, and redacted background-retry status while keeping folder setup fail-open and AI proposal generation fail-closed.
 - DONE 2026-07-27 — ADR 0017 supersedes ADR 0003: the decision record now pins the artifact that actually ships (Qwen3.5-4B Q4_K_M GGUF, Apache-2.0, alias `muniment-required-qwen3.5-4b`, 262,144-token context) byte-for-byte against `RESIDENT_MODEL`, with a core guard test that fails if the ADR table or the descriptor is edited alone; ADR 0006's subject is now that artifact, and the sidecar/harness-spec Gemma alias and licence claims are corrected. The owner-decided swap to a muniment-built, muniment-hosted artifact is named as the pending follow-up rather than pinned with invented values.
 - DONE 2026-07-27 — the owner-decided swap landed (MUNIDESK-571/572). The first-run required-model download now follows Hugging Face's regional Xet CDN redirect, because the initial-URL policy is split from the redirect policy, and `RESIDENT_MODEL` plus ADR 0017 pin muniment's own hosted Qwen3.5-4B Q4_K_M build with the initial URL constrained to the munimentai org.
-- NEXT — release notice delivery after the approved bundled terms surface is available; the notice is the shipped artifact's Apache-2.0 attribution, not a Gemma terms gate.
+- CANCELLED 2026-07-29 — the desktop ships no resident artifact notice.
 
 ### 11. Attachments and local CAS
 - DONE groundwork — pure-Rust content-addressed local store with atomic deduplication, constant-memory I/O/verification, stale-temp cleanup, journal reference accounting, retention, export, and compaction. Cloud file flow follows items 8d/9.
@@ -44,8 +47,8 @@ Phases mirror harness-spec §9. Muniment-cloud Phase 1 native auth and the cloud
 - DONE — user surfaces say “capabilities” and receipts render only server-supplied route/model/cost/time/capability provenance.
 
 ## Phase 3 — Routing metadata + voice (§9 items 12, 15)
-- Routing metadata carriage/policy integration follows item 9; the local classifier contract is complete.
-- Voice direction remains Parakeet capture → resident-model polish → transforms, with Kokoro read-aloud and global hotkeys.
+- SUPERSEDED 2026-07-29 — cloud ingress classification replaces the completed local classifier contract.
+- Voice direction is Parakeet verbatim capture with Kokoro read-aloud and global hotkeys.
 - DONE — pinned Parakeet/Silero acquisition and publication, sherpa-onnx packaging/bindings, fixed-capacity microphone capture, bounded utterance segmentation, safe VAD boundary, chunk-invariant dictation composition, desktop command/event wiring from native capture through recognition with redacted statuses, basic composer dictation controls/transcript insertion, a reproducible target-hardware evaluator, a bounded 100-utterance endurance mode, and composer press-and-hold dictation with Escape-to-cancel/restore.
 - DONE 2026-07-19 — accepted ADR 0014 pins the `ggml-org/llama.cpp` release `b10068` CPU-baseline archives for all four native targets, with a complete-entry-manifest extraction contract and pre-spawn re-verification.
 - DONE 2026-07-20 — ADR 0014 implementation through activation: pinned llama-server descriptors for all four targets, manifest-verified safe extraction and reusable tree verification, bounded download with staging/lock/pointer publication, pre-spawn re-verification at the spawn boundary, supervised llama-server activation with health readiness, and third-party notice content; the required Qwen3.5-4B descriptor rides the same verified path with background required-download acquisition deliberately detached from onboarding.
@@ -98,9 +101,9 @@ Phases mirror harness-spec §9. Muniment-cloud Phase 1 native auth and the cloud
 ## Onboarding, memory, and the Muniment Home (owner rulings 2026-07-19)
 - RATIFIED — visible human-editable Markdown Home under `memory/`, `agents/`, `projects/<name>/`, `sessions/`; files are source of truth, indexes are rebuildable caches, no hidden primary store or Muniment sync, semantic transcript names and visible retention.
 - RATIFIED — desktop has an unskippable first-run directory picker (default `Documents/Muniment`); CLI/VS Code use the opened directory by default and lazily create user Home for cross-project need. Honor nearest `AGENTS.md`; instructions and memory remain distinct.
-- RATIFIED — required Qwen3.5-4B instruct Q4 GGUF serves onboarding triage and front-door routing, via the verified ADR 0008/0014 path. Import is consent-gated with preview, provenance, verbatim originals, and a user-confirmed report before writes; folder setup fails open and only AI-dependent features fail closed.
+- SUPERSEDED 2026-07-29 — the required resident model no longer serves onboarding triage or routing. Import retains consent, preview, provenance, and verbatim originals.
 - RATIFIED — agent system prompt has five binding rules, hand-written/versioned/eval-gated base v0, and a bounded audited labeled-data tail.
-- DONE 2026-07-20 — rulings codified in harness-spec §15/§16; required Qwen descriptor and background acquisition landed.
+- HISTORICAL 2026-07-20 — the superseded required-model descriptor and background acquisition landed.
 - DONE 2026-07-21 — first-run Home picker/scaffold; bounded ZIP preview and manifest review; bounded extraction of explicitly selected entries with verbatim text and stable provenance; consent checklist and Tauri extraction bridge retaining approved content only in transient pre-triage state. No Home writes or model calls occur in these slices.
 - DONE 2026-07-21 — typed, bounded local-model triage request/report-validation contract over approved extracted entries, plus its typed Tauri invocation against the resident local model.
 - DONE 2026-07-21 — structured local-triage report review, approved-source display, redacted retry handling, and explicit in-session confirmation; no Home writes occur in this slice.

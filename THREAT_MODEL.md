@@ -67,28 +67,16 @@ privileged identities.
 
 ## Prompt injection
 
-External content is untrusted data. Four resident-model request builders in
-`src-tauri/core/src/llama.rs` currently JSON-encode content and add separate
-hand-written warnings:
-
-- `DictationPolishRequest` warns around a transcript.
-- `DictationTransformRequest` warns around a transcript.
-- `OnboardingTriageRequest` warns around approved export entries.
-
-These warnings reduce accidental instruction following, but they do not
-provide a security boundary or guarantee safe model output. Pi assembles its
-own model context outside this resident-model boundary. ADR 0018 accepts one
-shared wrapper, but that wrapper has not landed.
+Pi assembles model context for prompts sent through
+`src-tauri/core/src/sidecar/pi_chat.rs`. The cloud classifies each prompt at
+ingress. The deleted resident path in `src-tauri/core/src/llama.rs` no longer
+defines a model-context boundary.
 
 ## Known gaps
 
 - **Runtime service extraction remains open.** The desktop still owns the
   runtime. [ADR 0012](docs/decisions/0012-user-level-runtime-service.md)
   defines the target boundary.
-- **The resident-model wrapper remains open.** Four hand-written warnings and
-  raw message constructors remain.
-  [ADR 0018](docs/decisions/0018-untrusted-content-boundary.md) defines the
-  wrapper, construction boundary, lint, and evaluation work.
 - **Default permission gates are not isolation.** Windows has no claimed
   native full-auto sandbox.
   [ADR 0009](docs/decisions/0009-companion-attach-protocol.md) records

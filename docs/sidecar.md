@@ -176,9 +176,9 @@ Desktop ASR is deliberately outside the sidecar boundary. As decided in
 [ADR 0004](decisions/0004-desktop-asr-runtime.md), `muniment_core` will own
 microphone PCM and invoke the pinned sherpa-onnx v1.13.2 C API in process with
 the pinned Parakeet-TDT 0.6B v3 INT8 offline artifact. No ASR socket or child
-process is introduced; only utterance-final transcript text proceeds to the
-local resident-model dictation-polish contract, and voice bytes never enter a
-network client, Pi, llama-server, telemetry, or crash reports. Model acquisition
+process is introduced. Only utterance-final transcript text proceeds to the
+composer, and voice bytes never enter a network client, Pi, telemetry, or crash
+reports. Model acquisition
 also remains outside sidecar supervision: [ADR
 0005](decisions/0005-asr-model-lifecycle.md) selects a Rust-native first-use
 install with complete-set verification and atomic publication. Acquisition is
@@ -218,9 +218,9 @@ budget/backoff, stderr diagnostics, and shutdown to `SidecarSupervisor`; it is
 not a second process manager. Dropping it therefore retains the supervisor's
 forced child cleanup guarantee.
 
-The corresponding base URL is deliberately restricted to numeric loopback
+The corresponding base URL was restricted to numeric loopback
 addresses and plain HTTP. Wildcard, LAN, hostname, path-bearing, and HTTPS URLs
-are rejected. This matters even though llama-server currently defaults to
+were rejected. This mattered even though the server defaulted to
 loopback: its public health API does not perform an API-key check, and a future
 upstream default must not silently widen local access.
 
@@ -247,15 +247,15 @@ requiring meaning and detail to be preserved. Streaming remains out of scope.
 UI wiring and cloud or Pi behavior are also deferred, as are virtual keys and
 control-plane version negotiation.
 
-The cloud classifies prompts at ingress. The desktop sends no classification
-field and runs no classification inference.
+The replacement contract sends each prompt without classification metadata.
+The cloud classifies it at ingress.
 
-Before producing launch arguments, the core requires the installed artifact to
+Before producing launch arguments, the deleted core required the artifact to
 be a regular file with the descriptor's exact byte size and SHA-256. Hashing is
 streamed, and missing, unreadable, wrong-size, and digest-mismatch failures do
-not disclose file contents or installation paths. llama-server receives the
-model path and `muniment-required-qwen3.5-4b` alias as separate arguments;
-resident chat requests always use that alias rather than a caller-selected
+not disclose file contents or installation paths. The server received the
+model path and alias as separate arguments. Resident requests always used that
+alias rather than a caller-selected
 model name.
 
 Artifact acquisition and update/rollback policy remain out of scope.
