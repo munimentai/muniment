@@ -9,7 +9,7 @@ use muniment_core::{
 };
 use serde::Serialize;
 use std::path::{Path, PathBuf};
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Manager, Runtime};
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -92,7 +92,7 @@ fn choose_default_home(
     })
 }
 
-fn default_home(app: &AppHandle) -> Result<PathBuf, String> {
+pub(crate) fn default_home<R: Runtime>(app: &AppHandle<R>) -> Result<PathBuf, String> {
     choose_default_home(app.path().document_dir().ok(), app.path().home_dir().ok())
 }
 
@@ -257,6 +257,16 @@ mod tests {
     #[test]
     fn default_home_uses_home_when_documents_directory_is_absent() {
         let root = TempRoot::new("default-home");
+
+        assert_eq!(
+            choose_default_home(None, Some(root.0.clone())).unwrap(),
+            root.0.join("Muniment")
+        );
+    }
+
+    #[test]
+    fn attach_default_home_uses_home_when_documents_directory_is_absent() {
+        let root = TempRoot::new("attach-default-home");
 
         assert_eq!(
             choose_default_home(None, Some(root.0.clone())).unwrap(),

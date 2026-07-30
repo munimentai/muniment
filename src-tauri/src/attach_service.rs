@@ -126,11 +126,8 @@ impl<R: tauri::Runtime> DesktopAttachService<TauriRunStartBoundaries<R>> {
         workspace_contexts: Arc<Mutex<HashMap<String, HashMap<PathBuf, Option<String>>>>>,
         client_credentials: Arc<Mutex<HashMap<String, String>>>,
     ) -> Result<Self, ProtocolError> {
-        let home = app
-            .path()
-            .document_dir()
-            .map_err(|_| ProtocolError::persistence_failed())?
-            .join("Muniment");
+        let home =
+            crate::home::default_home(&app).map_err(|_| ProtocolError::persistence_failed())?;
         let idempotency = IdempotencyStore::open(
             app.path()
                 .app_data_dir()
