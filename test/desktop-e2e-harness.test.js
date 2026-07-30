@@ -552,6 +552,23 @@ describe('artifact redaction boundary', () => {
     const { result, destination } = redact({ '01-signed-out.png': Buffer.concat([png, Buffer.from('private-user')]) }, { MUNIMENT_E2E_USERNAME: 'private-user' })
     expect(result.status).not.toBe(0); expect(fs.existsSync(destination)).toBe(false)
   })
+  it('strips harmless screenshot metadata', () => {
+    const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=', 'base64')
+    const metadata = Buffer.alloc(16)
+    metadata.writeUInt32BE(4); metadata.write('tEXt', 4); metadata.write('test', 8)
+    const input = Buffer.concat([png.subarray(0, 33), metadata, png.subarray(33)])
+    const { result, destination } = redact({ 'screenshot-cleanup.png': input })
+    expect(result.status, result.stderr).toBe(0)
+    expect(fs.readFileSync(path.join(destination, 'screenshot-cleanup.png'))).toEqual(png)
+  })
+  it('blocks an unknown critical screenshot chunk', () => {
+    const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=', 'base64')
+    const chunk = Buffer.alloc(12)
+    chunk.write('ABCD', 4)
+    const input = Buffer.concat([png.subarray(0, 33), chunk, png.subarray(33)])
+    const { result, destination } = redact({ 'screenshot-cleanup.png': input })
+    expect(result.status).not.toBe(0); expect(fs.existsSync(destination)).toBe(false)
+  })
 })
 
 // This block runs a POSIX shell script, and Windows has no shell for it.
