@@ -13,7 +13,7 @@
   import { createChatController } from './lib/chat-controller.js'
   import { composerHeight } from './lib/composer-size.js'
   import { createDictationController } from './lib/dictation-controller.js'
-  import { appendTranscript, ariaKeyShortcut, dictationTransforms, holdToTalkShortcut, isDictationActive } from './lib/dictation-state.js'
+  import { ariaKeyShortcut, holdToTalkShortcut, isDictationActive } from './lib/dictation-state.js'
   import { createEntitlementToast } from './lib/entitlement-toast.js'
   import { createChatTranscriptController } from './lib/chat-transcript-controller.js'
   import { copyAnnouncement, copyConfirmed, copyFailure, copyLabel } from './lib/message-actions.js'
@@ -76,15 +76,11 @@
   let dictationDraftSnapshot = $state('')
   let dictationTranscript = $state('')
   let dictationFinishing = $state(false)
-  let dictationPolishing = $state(false)
-  let dictationTransformPending = $state(false)
-  let eligibleDictation = $state(null)
   let globalVoiceRegistered = false
   let globalVoiceError = $state(false)
   let globalVoiceShortcutValue = $state(holdToTalkShortcut())
   let globalVoiceChanging = $state(true)
   let composer = $state()
-  let polishPreview = $state()
   let composerRow = $state()
   let composerInputDraft
   let wasInWorkspace = false
@@ -168,7 +164,7 @@
     onHistoryLoaded: () => { pinned = true },
     onFollow: followNewContent,
     onFocus: () => tick().then(() => composer?.focus()),
-    onSend: invalidateDictationTransform,
+    onSend: () => {},
   })
 
   const entitlementToast = createEntitlementToast({
@@ -263,9 +259,6 @@
       dictationCommandPending = state.commandPending
       dictationRequested = state.requested
       dictationFinishing = state.finishing
-      dictationPolishing = state.polishing
-      dictationTransformPending = state.transformPending
-      eligibleDictation = state.eligible
       dictationDraftSnapshot = state.draftSnapshot
       dictationTranscript = state.transcript
     },
@@ -279,14 +272,8 @@
     // Establish Svelte dependencies for the controller state read below.
     dictationCommandPending
     dictationFinishing
-    dictationPolishing
-    dictationTransformPending
     dictation
     return dictationController.busy()
-  }
-
-  function invalidateDictationTransform() {
-    dictationController.invalidateTransform()
   }
 
   async function answerPermission(run, answer) {
@@ -375,20 +362,8 @@
     return voiceShortcutManager.change(next)
   }
 
-  function transformDictation(action) {
-    return dictationController.transform(action)
-  }
-
   function composerInput(event) {
     composerInputDraft = event.currentTarget.value
-    if (eligibleDictation && event.currentTarget.value !== eligibleDictation.draft) invalidateDictationTransform()
-  }
-
-  // The polish overlay covers a textarea that scrolls once the draft passes the
-  // ten-line cap; keep the two scrolled together so the underlined transcript
-  // stays on the line it belongs to.
-  function syncPolishPreviewScroll() {
-    if (composer && polishPreview) polishPreview.scrollTop = composer.scrollTop
   }
 
   // §4: the input grows with the draft to a ten-line cap, then scrolls.
@@ -426,7 +401,6 @@
       // handleThreadScroll does not read the correction as an upward scroll.
       transcriptController.syncScrollTop(thread.scrollTop)
     }
-    syncPolishPreviewScroll()
   }
 
   // Keyed off `draft` rather than the input event so every programmatic write
@@ -437,7 +411,6 @@
   // draft alone, never to a scroll already in flight.
   $effect(() => {
     draft
-    polishPreview
     if (composer) untrack(() => {
       const typed = draft === composerInputDraft
       composerInputDraft = undefined
@@ -476,7 +449,7 @@
 
   $effect(() => {
     const inWorkspace = auth.name === 'signed-in' && onboarding.name === 'complete'
-    if (inWorkspace && !wasInWorkspace && active?.phase !== 'resuming' && !dictationPolishing && composer) {
+    if (inWorkspace && !wasInWorkspace && active?.phase !== 'resuming' && composer) {
       wasInWorkspace = true
       composer.focus()
     } else if (!inWorkspace) {
@@ -521,6 +494,9 @@
     }).then((stop) => {
       if (destroyed) stop()
       else pairingUnlisten = stop
+    }).catch(() => {
+      pairingUnlisten = undefined
+      console.error('Pairing decision failed.')
     })
     if (tauri) {
       run('status')
@@ -549,18 +525,7 @@
         artifactRailOpen = false
         artifactRailPointer = undefined
       }
-      const action = event.altKey && !event.ctrlKey && !event.metaKey ? dictationTransforms.find(({ key }) => `Digit${key}` === event.code) : undefined
-      if (action && eligibleDictation && !dictationBusy()) {
-        event.preventDefault()
-        void transformDictation(action)
-        return
-      }
-      if (event.key === 'Escape' && dictationTransformPending) {
-        event.preventDefault()
-        dictationController.cancelTransform()
-        return
-      }
-      if (event.key === 'Escape' && (dictationRequested || isDictationActive(dictation) || dictationFinishing || dictationPolishing)) {
+      if (event.key === 'Escape' && (dictationRequested || isDictationActive(dictation) || dictationFinishing)) {
         event.preventDefault()
         stopDictation(true)
         return
@@ -583,6 +548,9 @@
       }).then((stop) => {
         if (destroyed) stop()
         else stopDragDrop = stop
+      }).catch(() => {
+        stopDragDrop = undefined
+        console.error('File drop listener registration failed.')
       })
     return () => {
       destroyed = true
@@ -639,7 +607,7 @@
   }
 </script>
 
-<main>
+<main class:onboarding-active={tauri && onboarding.name !== 'complete'}>
   {#if auth.name !== 'signed-in' || onboarding.name !== 'complete'}
     <div class="lockup">
       <svg width="34" height="34" viewBox="0 0 48 48" role="img" aria-label="muniment">
@@ -840,27 +808,13 @@
             </ul>
           {/if}
           <div class="composer-input">
-            <textarea class:polishing={dictationPolishing} bind:this={composer} bind:value={draft} oninput={composerInput} onkeydown={keydown} onscroll={syncPolishPreviewScroll} rows="2" placeholder={active?.phase === 'resuming' ? 'Resuming interrupted reply…' : 'Ask anything'} disabled={active?.phase === 'resuming' || threadSwitching} readonly={dictationPolishing}></textarea>
-            {#if dictationPolishing}
-              <div class="polish-preview" bind:this={polishPreview} aria-hidden="true"><span data-testid="polish-draft">{appendTranscript(dictationDraftSnapshot, dictationTranscript).slice(0, -dictationTranscript.length)}</span><span class="polish-transcript" data-testid="polish-transcript">{dictationTranscript}</span></div>
-            {/if}
+            <textarea bind:this={composer} bind:value={draft} oninput={composerInput} onkeydown={keydown} rows="2" placeholder={active?.phase === 'resuming' ? 'Resuming interrupted reply…' : 'Ask anything'} disabled={active?.phase === 'resuming' || threadSwitching}></textarea>
           </div>
           {#if submitError}<p class="cancel-error" role="alert">{submitError}</p>{/if}
           {#if cancelError}<p class="cancel-error" role="alert">{cancelError}</p>{/if}
           {#if queueError}<p class="cancel-error" role="alert">{queueError}</p>{/if}
-          {#if eligibleDictation}
-            <div class="dictation-transforms" aria-label="Voice transforms">
-              {#each dictationTransforms as action}
-                <button type="button" aria-label={action.label} aria-keyshortcuts={action.shortcut} title={`${action.label} (Option+${action.key} / Alt+${action.key})`} disabled={dictationTransformPending} onclick={() => transformDictation(action)}><span>{action.label}</span><kbd>⌥{action.key}</kbd></button>
-              {/each}
-            </div>
-          {/if}
           <div class="composer-row" bind:this={composerRow}>
-            {#if dictationTransformPending}
-              <span class="polish-status" role="status">Transforming on this device…</span>
-            {:else if dictationPolishing}
-              <span class="polish-status" role="status">Polishing on this device…</span>
-            {:else if isDictationActive(dictation)}
+            {#if isDictationActive(dictation)}
               <span class="capture-status" role="status">
                 <span class="capture-meter" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></span>
                 {dictation.state === 'starting' ? 'Starting local dictation…' : 'Listening on this device…'}
@@ -869,7 +823,7 @@
               <span>{active?.phase === 'resuming' ? 'Reopening the existing secure session…' : active && active.id !== 'pending' ? '⏎ steers this reply · queue as follow-up' : 'Routing is automatic. Every reply carries its receipt.'}</span>
             {/if}
             <div class="composer-actions">
-              <button type="button" class="quiet" aria-pressed={isDictationActive(dictation)} aria-keyshortcuts={ariaKeyShortcut(globalVoiceShortcutValue)} disabled={!!active || dictationFinishing || dictationPolishing || dictationTransformPending} onpointerdown={voicePointerDown} onpointerup={voicePointerEnd} onpointercancel={voicePointerEnd} onkeydown={voiceKeyDown} onkeyup={voiceKeyUp} onclick={voiceClick}>Voice</button>
+              <button type="button" class="quiet" aria-pressed={isDictationActive(dictation)} aria-keyshortcuts={ariaKeyShortcut(globalVoiceShortcutValue)} disabled={!!active || dictationFinishing} onpointerdown={voicePointerDown} onpointerup={voicePointerEnd} onpointercancel={voicePointerEnd} onkeydown={voiceKeyDown} onkeyup={voiceKeyUp} onclick={voiceClick}>Voice</button>
               {#if !active}<button type="button" class="quiet" onclick={chooseFiles}>Add files</button>{/if}
               {#if active?.phase === 'resuming'}
                 <button disabled>Resuming…</button>
@@ -936,6 +890,15 @@
     display: grid;
     place-content: center;
     justify-items: center;
+  }
+
+  main.onboarding-active {
+    height: 100vh;
+    min-height: 0;
+    grid-template-rows: auto auto minmax(0, 1fr);
+    align-content: center;
+    box-sizing: border-box;
+    padding: 24px;
   }
 
   /* Lockup (§1.8): mark at rest — static, ink — beside the wordmark,
@@ -1157,18 +1120,6 @@
   /* No padding and no border: the composer supplies both, so the measured
      scrollHeight is pure text and the overlay lands on the same grid. */
   textarea { display: block; width: 100%; resize: none; padding: 0; border: 0; outline: 0; background: transparent; color: var(--ink); font: inherit; }
-  textarea.polishing { color: transparent; caret-color: transparent; }
-  /* overflow-wrap matches the textarea's UA style so a single long token breaks
-     on the same character in both layers. */
-  .polish-preview { position: absolute; inset: 0; overflow: hidden; pointer-events: none; white-space: pre-wrap; overflow-wrap: break-word; color: var(--ink); font: inherit; }
-  .polish-transcript { text-decoration-line: underline; text-decoration-color: var(--signal); text-decoration-thickness: 2px; text-underline-offset: 3px; }
-  .dictation-transforms { display: flex; flex-wrap: wrap; gap: 5px; margin: 7px 0; }
-  /* These chips appear after the polish flash has settled to ink, and §2.4 lets
-     signal touch the composer only for the flash itself — so the group keeps the
-     base button's ink-on-hairline treatment at chip radius. */
-  .dictation-transforms button { display: inline-flex; align-items: center; gap: 7px; padding: 3px 7px; border-radius: var(--radius-chip); background: transparent; font: var(--text-12) var(--font-mono); }
-  .dictation-transforms button:hover:not(:disabled) { background: var(--faint); }
-  .dictation-transforms kbd { color: var(--muted); font: inherit; }
   /* The input no longer keeps a spare empty row once it grows, so the action
      row carries the gap itself — the owner mockup's 8px .comprow rhythm. */
   .composer-row { display: flex; justify-content: space-between; align-items: center; margin-top: 8px; color: var(--muted); font-size: var(--text-12); }
@@ -1178,7 +1129,6 @@
   .capture-meter i { width: 2px; height: 6px; background: var(--muted); animation: capture 900ms ease-in-out infinite alternate; }
   .capture-meter i:nth-child(2), .capture-meter i:nth-child(4) { height: 10px; animation-delay: -300ms; }
   .capture-meter i:nth-child(3) { height: 14px; animation-delay: -600ms; }
-  .polish-status { color: var(--signal); font-family: var(--font-mono); text-decoration: underline 2px; text-underline-offset: 3px; }
   .dictation-error { margin-top: 7px; color: var(--muted); font: var(--text-12) var(--font-mono); }
   .follow-up { color: var(--muted); font-family: var(--font-mono); }
   @media (max-width: 1100px) {

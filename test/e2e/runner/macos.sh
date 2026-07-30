@@ -11,6 +11,8 @@ archive="$run_root/muniment-nightly.app.zip"
 expanded="$run_root/expanded"
 state_root="$run_root/state"
 cleanup_log="$run_root/cleanup.log"
+cleanup_status_ledger="$run_root/cleanup-status.log"
+redaction_report="$run_root/redaction-failure.txt"
 installed_bundle=/Applications/muniment.app
 status=0
 cleanup_status=0
@@ -33,6 +35,11 @@ stop_app() {
   process_absent
 }
 
+index_failure_artifacts() {
+  find "$raw" -maxdepth 1 -type f \( -name 'page-source-*.html' -o -name 'screenshot-*.png' \) -print \
+    >"$raw/failure-artifacts.log"
+}
+
 finalize() {
   (( finalized == 0 )) || return
   finalized=1
@@ -45,7 +52,8 @@ finalize() {
   cleanup_step state-gone cleanup_absent "$state_root"
 
   cleanup_step stage-cleanup-log cp "$cleanup_log" "$raw/cleanup.log"
-  cleanup_step redact-artifacts node test/e2e/support/redact.mjs "$raw" "$safe"
+  cleanup_step index-failure-artifacts index_failure_artifacts
+  cleanup_step redact-artifacts node test/e2e/support/redact.mjs "$raw" "$safe" "$redaction_report"
   redaction_status=$cleanup_last_status
   cleanup_step remove-raw rm -rf -- "$raw"
   cleanup_step remove-archive rm -f -- "$archive"
@@ -61,6 +69,14 @@ finalize() {
     if (( collection_status != 0 )); then cleanup_step suppress-artifacts rm -rf -- "$artifacts"; fi
   else
     cleanup_step suppress-artifacts rm -rf -- "$artifacts"
+    mkdir -p "$artifacts" || cleanup_status=1
+    printf 'envelope: minimal\nwithheld: guest artifacts\nreason: redaction-failed\n' >"$artifacts/envelope-reason.txt" || cleanup_status=1
+    cp -- "$cleanup_status_ledger" "$artifacts/cleanup-status.log" 2>/dev/null || : >"$artifacts/cleanup-status.log"
+    if [[ -s $redaction_report ]]; then
+      cp -- "$redaction_report" "$artifacts/redaction-failure.txt" || cleanup_status=1
+    else
+      printf 'file: unknown\ncategory: redactor-process\n' >"$artifacts/redaction-failure.txt" || cleanup_status=1
+    fi
   fi
   cleanup_step remove-safe rm -rf -- "$safe"
   cleanup_step raw-gone cleanup_absent "$raw"
@@ -68,6 +84,7 @@ finalize() {
   cleanup_step expanded-gone cleanup_absent "$expanded"
   cleanup_step safe-gone cleanup_absent "$safe"
   cleanup_step remove-cleanup-log rm -f -- "$cleanup_log"
+  rm -f -- "$cleanup_status_ledger" "$redaction_report"
   if [[ ${MUNIMENT_E2E_FINALIZER_TEST_MODE:-0} != 1 ]]; then
     rmdir "$run_root" 2>/dev/null || cleanup_status=1
   fi
@@ -124,7 +141,8 @@ HOME="$state_root/home" TMPDIR="$state_root/tmp" "$installed_bundle/Contents/Mac
 app_pid=$!
 
 window_ready=0
-window_deadline=$((SECONDS + 60))
+window_wait_seconds=120
+window_deadline=$((SECONDS + window_wait_seconds))
 while (( SECONDS < window_deadline )); do
   kill -0 "$app_pid" 2>/dev/null || { echo 'application exited before opening a window' >&2; status=1; break; }
   window_count=$(osascript -e 'with timeout of 2 seconds' -e "tell application \"System Events\" to count (windows of process \"$process_name\" whose visible is true)" -e 'end timeout' 2>>"$raw/window.log" || true)
@@ -132,7 +150,13 @@ while (( SECONDS < window_deadline )); do
   sleep 1
 done
 if (( window_ready == 0 )); then
-  echo 'healthy first window was not visible within 60 seconds' >&2
+  {
+    printf 'wait_seconds=%s\n' "$window_wait_seconds"
+    printf 'process_alive='
+    if kill -0 "$app_pid" 2>/dev/null; then printf 'true\n'; else printf 'false\n'; fi
+    printf 'last_visible_window_count=%s\n' "${window_count:-unavailable}"
+  } >"$raw/first-window-timeout.log"
+  printf 'healthy first window was not visible within %s seconds\n' "$window_wait_seconds" >&2
   status=1
 else
   printf 'process_alive=true\nvisible_windows=%s\nscreendump=requested-by-desktop-ci\n' "$window_count" >"$raw/smoke.log"

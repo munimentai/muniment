@@ -3,10 +3,9 @@ use muniment_core::{
     home::{
         compile_onboarding_home_write_plan, confirm_home, persist_onboarding_home_write_plan,
         scaffold_home, validate_home_selection, HomeError, HomeErrorKind,
-        OnboardingHomePersistenceError,
+        OnboardingHomePersistenceError, OnboardingTriageReport,
     },
     import_preview::ExtractedEntry,
-    llama::OnboardingTriageReport,
 };
 use serde::Serialize;
 use std::path::{Path, PathBuf};
@@ -74,11 +73,27 @@ fn config_dir(app: &AppHandle) -> Result<PathBuf, String> {
         .map_err(|_| "Muniment configuration storage is unavailable.".to_string())
 }
 
+fn choose_default_home(
+    documents: Option<PathBuf>,
+    home: Option<PathBuf>,
+) -> Result<PathBuf, String> {
+    if let Some(documents) = documents {
+        return Ok(documents.join("Muniment"));
+    }
+
+    let home = home
+        .filter(|path| path.is_dir())
+        .ok_or_else(|| "The Documents folder is unavailable.".to_string())?;
+    let documents = home.join("Documents");
+    Ok(if documents.is_dir() {
+        documents.join("Muniment")
+    } else {
+        home.join("Muniment")
+    })
+}
+
 fn default_home(app: &AppHandle) -> Result<PathBuf, String> {
-    app.path()
-        .document_dir()
-        .map(|path| path.join("Muniment"))
-        .map_err(|_| "The Documents folder is unavailable.".to_string())
+    choose_default_home(app.path().document_dir().ok(), app.path().home_dir().ok())
 }
 
 #[tauri::command]
@@ -214,6 +229,57 @@ mod tests {
             text: "Original\r\n---\nbody 🦀\n".into(),
             source_provenance: "claude-export:notes.md".into(),
         }
+    }
+
+    #[test]
+    fn default_home_uses_resolved_documents_directory() {
+        let root = TempRoot::new("default-resolved-documents");
+        let documents = root.0.join("Custom Documents");
+
+        assert_eq!(
+            choose_default_home(Some(documents.clone()), None).unwrap(),
+            documents.join("Muniment")
+        );
+    }
+
+    #[test]
+    fn default_home_uses_existing_documents_directory_under_home() {
+        let root = TempRoot::new("default-home-documents");
+        let documents = root.0.join("Documents");
+        fs::create_dir(&documents).unwrap();
+
+        assert_eq!(
+            choose_default_home(None, Some(root.0.clone())).unwrap(),
+            documents.join("Muniment")
+        );
+    }
+
+    #[test]
+    fn default_home_uses_home_when_documents_directory_is_absent() {
+        let root = TempRoot::new("default-home");
+
+        assert_eq!(
+            choose_default_home(None, Some(root.0.clone())).unwrap(),
+            root.0.join("Muniment")
+        );
+    }
+
+    #[test]
+    fn default_home_fails_when_documents_and_home_are_unavailable() {
+        assert_eq!(
+            choose_default_home(None, None).unwrap_err(),
+            "The Documents folder is unavailable."
+        );
+    }
+
+    #[test]
+    fn default_home_fails_when_resolved_home_is_not_a_directory() {
+        let root = TempRoot::new("default-missing-home");
+
+        assert_eq!(
+            choose_default_home(None, Some(root.0.join("missing"))).unwrap_err(),
+            "The Documents folder is unavailable."
+        );
     }
 
     #[test]

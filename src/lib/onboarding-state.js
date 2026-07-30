@@ -1,23 +1,5 @@
 export const onboardingLoadingState = { name: 'loading', homePath: '' }
 
-export const requiredModelLoadingState = {
-  status: { state: 'notInstalled' },
-  downloadedBytes: 0,
-  totalBytes: 0,
-  aiFeaturesAvailable: false,
-  retryingInBackground: false,
-}
-
-export function requiredModelPollActive(model) {
-  return model.status?.state === 'installing' || model.retryingInBackground === true
-}
-
-export function requiredModelProgress(model) {
-  const total = Number.isFinite(model.totalBytes) ? Math.max(0, model.totalBytes) : 0
-  const downloaded = Number.isFinite(model.downloadedBytes) ? Math.max(0, model.downloadedBytes) : 0
-  return { downloaded: Math.min(downloaded, total), total }
-}
-
 export function onboardingStatusState(status) {
   return status.configured
     ? { name: 'complete', homePath: status.homePath }

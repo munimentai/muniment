@@ -37,6 +37,8 @@ export function createChatController({
   const buffered = new Map()
   let submissionSequence = 0
   let unlisten
+  let registration
+  let registrationFailed = false
   let destroyed = false
   let switchingThread = false
   let switchBlocked = false
@@ -84,14 +86,30 @@ export function createChatController({
   }
 
   async function start() {
-    const stop = await listen('chat-event', handleEvent)
-    if (!stop) return
-    if (destroyed) stop()
-    else unlisten = stop
+    if (destroyed || unlisten) return !!unlisten
+    if (registration) return registration
+    registration = (async () => {
+      try {
+        const stop = await listen('chat-event', handleEvent)
+        if (!stop) return false
+        if (destroyed) stop()
+        else unlisten = stop
+        registrationFailed = false
+        return !destroyed
+      } catch (_) {
+        registrationFailed = true
+        if (!destroyed) onHistoryError('Live replies cannot arrive. Try again.')
+        return false
+      } finally {
+        registration = undefined
+      }
+    })()
+    return registration
   }
 
   async function loadHistory() {
     onHistoryError('')
+    if (registrationFailed && !await start()) return
     onHistoryStart()
     onAnnounce(null)
     try {

@@ -12,6 +12,7 @@ state_root=$(mktemp -d /tmp/muniment-e2e-state.XXXXXX)
 image_fixture="$state_root/image-token.png"
 cleanup_log=$(mktemp /tmp/muniment-e2e-cleanup.XXXXXX.log)
 cleanup_status_ledger=$(mktemp /tmp/muniment-e2e-cleanup-status.XXXXXX.log)
+redaction_report=$(mktemp /tmp/muniment-e2e-redaction.XXXXXX.log)
 installer_log="$raw/installer.log"
 status=${MUNIMENT_E2E_FINALIZER_TEST_STATUS:-0}
 cleanup_status=0
@@ -28,6 +29,11 @@ package_absent() { ! dpkg-query -W -f='${db:Status-Status}' muniment 2>/dev/null
 stop_matching() {
   pkill -f "$1" 2>/dev/null || true
   ! pgrep -f "$1" >/dev/null
+}
+
+index_failure_artifacts() {
+  find "$raw" -maxdepth 1 -type f \( -name 'page-source-*.html' -o -name 'screenshot-*.png' \) -print \
+    >"$raw/failure-artifacts.log"
 }
 
 run_e2e() {
@@ -83,6 +89,13 @@ emit_minimal_artifacts() {
     rm -rf -- "$minimal"; return 1
   }
   cp -- "$cleanup_status_ledger" "$minimal/cleanup-status.log" 2>/dev/null || : >"$minimal/cleanup-status.log"
+  if [[ $reason == redaction-failed ]]; then
+    if [[ -s $redaction_report ]]; then
+      cp -- "$redaction_report" "$minimal/redaction-failure.txt"
+    else
+      printf 'file: unknown\ncategory: redactor-process\n' >"$minimal/redaction-failure.txt"
+    fi
+  fi
   emit_artifacts "$minimal"
   emit_status=$?
   rm -rf -- "$minimal"
@@ -108,7 +121,8 @@ finalize() {
   cleanup_step state-gone cleanup_absent "$state_root"
 
   cleanup_step stage-cleanup-log cp "$cleanup_log" "$raw/cleanup.log"
-  cleanup_step redact-artifacts node test/e2e/support/redact.mjs "$raw" "$safe"
+  cleanup_step index-failure-artifacts index_failure_artifacts
+  cleanup_step redact-artifacts node test/e2e/support/redact.mjs "$raw" "$safe" "$redaction_report"
   redaction_status=$cleanup_last_status
   cleanup_step remove-raw rm -rf -- "$raw"
   cleanup_step remove-package-file rm -f -- "$deb"
@@ -144,7 +158,7 @@ finalize() {
   else
     emit_minimal_artifacts publication-failed || cleanup_status=1
   fi
-  rm -f -- "$cleanup_status_ledger"
+  rm -f -- "$cleanup_status_ledger" "$redaction_report"
   if (( status != 0 || cleanup_status != 0 || redaction_status != 0 )); then exit 1; fi
 }
 
@@ -179,12 +193,12 @@ export MUNIMENT_E2E_EXTERNAL_DRIVER=1
 export MUNIMENT_E2E_AUTH_URL_FILE="$auth_url_file" BROWSER="$PWD/test/e2e/support/browser-launcher.sh"
 export MUNIMENT_E2E_IMAGE_PATH="$image_fixture"
 ready=1
+# The per-phase XDG roots and MUNIMENT_E2E_ONBOARDING_ONLY separate the two phases.
 export XDG_DATA_HOME="$state_root/ready/data" XDG_CONFIG_HOME="$state_root/ready/config" XDG_CACHE_HOME="$state_root/ready/cache"
-export MUNIMENT_E2E_ONBOARDING_ONLY=1 MUNIMENT_E2E_MODEL_READY=1 MUNIMENT_E2E_HOME_PATH="$state_root/ready-home"
+export MUNIMENT_E2E_ONBOARDING_ONLY=1 MUNIMENT_E2E_HOME_PATH="$state_root/ready-home"
 run_e2e "$raw/wdio-onboarding.log" "$raw/driver-onboarding.log" || status=1
-unset MUNIMENT_E2E_ONBOARDING_ONLY MUNIMENT_E2E_MODEL_READY
+unset MUNIMENT_E2E_ONBOARDING_ONLY
 export XDG_DATA_HOME="$state_root/degraded/data" XDG_CONFIG_HOME="$state_root/degraded/config" XDG_CACHE_HOME="$state_root/degraded/cache"
 export MUNIMENT_E2E_HOME_PATH="$state_root/degraded-home"
-export MUNIMENT_E2E_FORCE_MANUAL=1
 run_e2e "$raw/wdio.log" "$raw/driver-app.log" || status=1
 exit
