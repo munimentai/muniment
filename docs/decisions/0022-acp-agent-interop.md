@@ -121,23 +121,111 @@ model rule that a client-chosen name or loopback location cannot mint
 authority. The model still does not defend against a compromised process
 running as the current OS user.
 
+### ACP v1 method subset
+
+The adapter implements this exact client-to-agent subset:
+
+- `initialize`.
+- `session/new` and `session/load`.
+- `session/prompt`.
+- The `session/cancel` notification.
+
+It advertises `loadSession: true`. The runtime creates, loads, prompts, and
+cancels the bound Muniment thread and run. The adapter translates those
+requests and returns the runtime result.
+
+The adapter implements this exact agent-to-client subset:
+
+- `session/request_permission`.
+- The `session/update` notification.
+
+The adapter uses `session/update` for text, tool-call, plan, and command
+updates that the runtime can project without granting authority. It uses
+`session/request_permission` only for the gate flow defined above.
+
+The adapter does not implement these remaining ACP v1 methods:
+
+- `authenticate` and `logout`, because the runtime owns one shared device
+  session and exposes no ACP authentication method.
+- `session/list` and `session/delete`, because this slice exposes only the
+  session named by `session/new` or `session/load`. Muniment remains the owner
+  of thread discovery and deletion.
+- `session/fork`, `session/resume`, and `session/close`, because the adapter uses
+  `session/load` for a journal-backed restore. A client process exit does not
+  own, copy, or close the service-owned session.
+- `session/set_mode` and `session/set_config_option`, because Muniment has no
+  ACP mode or configuration-option contract. The adapter advertises neither.
+- `fs/read_text_file` and `fs/write_text_file`, because the runtime performs
+  governed filesystem effects.
+- `terminal/create`, `terminal/output`, `terminal/release`,
+  `terminal/wait_for_exit`, and `terminal/kill`, because the runtime performs
+  governed tool execution.
+- `elicitation/create` and the `elicitation/complete` notification, because
+  Muniment uses its permission-gate contract for user input and offers no ACP
+  elicitation mode.
+
+The adapter defines no custom ACP method. An unknown request gets the standard
+JSON-RPC method-not-found error. An unknown notification has no effect.
+
+### Client capabilities and effect ownership
+
+The filesystem client-capability answer is no for both `fs.readTextFile` and
+`fs.writeTextFile`. The terminal client-capability answer is no. The adapter
+never calls these client methods, even when an editor advertises them. Because
+the editor sends these flags in `initialize`, no means the adapter requires
+neither capability and treats either advertised value the same way.
+
+The runtime service reads and writes files through its governed filesystem
+path. It also starts, observes, stops, and releases commands through its
+governed tool path. The adapter projects resulting tool calls and updates to
+the editor. An editor never performs a Muniment effect or supplies its
+receipt.
+
+### Protocol version and SDK pin
+
+The adapter negotiates the integer `1` in `initialize`. ACP version negotiation
+uses one integer for the wire protocol, independent of an SDK package version.
+The stable protocol version is 1.
+
+Muniment does not adopt the ACP v2 draft. The draft exists to make breaking
+changes and may change incompatibly during development. A stable adapter needs
+the v1 wire contract and capability negotiation instead.
+
+The implementation will pin the Rust crate `agent-client-protocol` at exactly
+`2.0.0`. That release comes from `agentclientprotocol/rust-sdk`, requires Rust
+1.88.0, and implements the stable v1 protocol despite its crate major version.
+The later implementation slice will add the exact manifest and lockfile pin.
+
+ADR 0019 governs this external generated protocol artifact by composition.
+The consuming manifest and lockfile pin one immutable version. A pin update
+must review generated types and wire changes, run compatibility fixtures, and
+ship as a deliberate dependency update. This repository does not edit the
+SDK's generated schema or infer wire compatibility from its crate version.
+
+### Claimed editors
+
+The first release claims Zed and JetBrains IDEs. Zed documents custom external
+agents as separate ACP processes configured with a command and arguments.
+JetBrains documents custom ACP agents in `~/.jetbrains/acp.json`, including
+their command and arguments. Both paths can launch the Muniment ACP adapter
+without companion code.
+
+These claims cover current generally available editor releases that expose
+the cited custom-agent paths. Release validation must run the method subset
+above in each editor before shipment. A limitation found during validation
+blocks that editor claim rather than expanding the method subset silently.
+
+An unlisted ACP editor gets standards-based best-effort interoperability. It
+gets the same v1 negotiation, advertised subset, unsupported capabilities,
+authorization, and failure behavior. Muniment makes no compatibility or
+release-validation claim for that editor.
+
 ### Follow-up slices
 
 This slice changes no runtime, protocol, dependency, or companion code.
 Follow-up work will decide the disposition of the existing
 `editor-extension/` tree under the owner ruling. It will not treat that tree
 as the planned first-party extension.
-
-Slice 2 will decide all of these items:
-
-- The supported ACP v1 method subset.
-- The answers for ACP filesystem and terminal client capabilities.
-- The protocol version stance.
-- The exact pinned Rust or TypeScript SDK version under ADR 0019.
-- The editors Muniment claims to support.
-
-This ADR does not decide those items. In particular, it does not select an
-SDK, pin a version, claim an editor, or adopt the ACP v2 draft.
 
 ### Sources
 
@@ -148,6 +236,20 @@ SDK, pin a version, claim an editor, or adopt the ACP v2 draft.
 - [ACP filesystem specification](https://agentclientprotocol.com/protocol/v1/file-system)
 - [ACP terminal specification](https://agentclientprotocol.com/protocol/v1/terminals)
 - [ACP v2 draft announcement](https://agentclientprotocol.com/announcements/acp-v2-draft)
+- [ACP v1 method overview](https://agentclientprotocol.com/protocol/v1/overview)
+- [ACP v1 authentication specification](https://agentclientprotocol.com/protocol/v1/authentication)
+- [ACP v1 session-list specification](https://agentclientprotocol.com/protocol/v1/session-list)
+- [ACP v1 session-delete specification](https://agentclientprotocol.com/protocol/v1/session-delete)
+- [ACP v1 session-resume announcement](https://agentclientprotocol.com/announcements/session-resume-stabilized)
+- [ACP v1 session-close announcement](https://agentclientprotocol.com/updates)
+- [ACP v1 session-mode specification](https://agentclientprotocol.com/protocol/v1/session-modes)
+- [ACP v1 session-config-option specification](https://agentclientprotocol.com/protocol/v1/session-config-options)
+- [ACP v1 elicitation specification](https://agentclientprotocol.com/protocol/v1/elicitation)
+- [`agent-client-protocol` 2.0.0 release entry](https://docs.rs/crate/agent-client-protocol/2.0.0)
+- [`agent-client-protocol` 2.0.0 source and Rust requirement](https://github.com/agentclientprotocol/rust-sdk/blob/v2.0.0/Cargo.toml)
+- [ACP Rust SDK repository](https://github.com/agentclientprotocol/rust-sdk)
+- [Zed external-agent documentation](https://zed.dev/docs/ai/external-agents)
+- [JetBrains ACP documentation](https://www.jetbrains.com/help/ai-assistant/acp.html)
 
 ## Consequences
 
@@ -159,5 +261,8 @@ SDK, pin a version, claim an editor, or adopt the ACP v2 draft.
 - The existing threat model gains a new local client identity.
 - The first-party editor extension stops as a product direction.
 - The CLI remains deferred indefinitely.
-- Slice 2 owns method, capability, version, SDK, and editor decisions.
+- The adapter implements a bounded ACP v1 subset and delegates every effect.
+- Filesystem and terminal client capabilities remain unused.
+- The implementation will pin `agent-client-protocol` 2.0.0 under ADR 0019.
+- The release claims Zed and JetBrains IDEs after release validation.
 - This decision adds no dependency or code.
