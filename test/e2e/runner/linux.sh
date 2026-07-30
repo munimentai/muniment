@@ -12,6 +12,7 @@ state_root=$(mktemp -d /tmp/muniment-e2e-state.XXXXXX)
 image_fixture="$state_root/image-token.png"
 cleanup_log=$(mktemp /tmp/muniment-e2e-cleanup.XXXXXX.log)
 cleanup_status_ledger=$(mktemp /tmp/muniment-e2e-cleanup-status.XXXXXX.log)
+redaction_report=$(mktemp /tmp/muniment-e2e-redaction.XXXXXX.log)
 installer_log="$raw/installer.log"
 status=${MUNIMENT_E2E_FINALIZER_TEST_STATUS:-0}
 cleanup_status=0
@@ -88,6 +89,13 @@ emit_minimal_artifacts() {
     rm -rf -- "$minimal"; return 1
   }
   cp -- "$cleanup_status_ledger" "$minimal/cleanup-status.log" 2>/dev/null || : >"$minimal/cleanup-status.log"
+  if [[ $reason == redaction-failed ]]; then
+    if [[ -s $redaction_report ]]; then
+      cp -- "$redaction_report" "$minimal/redaction-failure.txt"
+    else
+      printf 'file: unknown\ncategory: redactor-process\n' >"$minimal/redaction-failure.txt"
+    fi
+  fi
   emit_artifacts "$minimal"
   emit_status=$?
   rm -rf -- "$minimal"
@@ -114,7 +122,7 @@ finalize() {
 
   cleanup_step stage-cleanup-log cp "$cleanup_log" "$raw/cleanup.log"
   cleanup_step index-failure-artifacts index_failure_artifacts
-  cleanup_step redact-artifacts node test/e2e/support/redact.mjs "$raw" "$safe"
+  cleanup_step redact-artifacts node test/e2e/support/redact.mjs "$raw" "$safe" "$redaction_report"
   redaction_status=$cleanup_last_status
   cleanup_step remove-raw rm -rf -- "$raw"
   cleanup_step remove-package-file rm -f -- "$deb"
@@ -150,7 +158,7 @@ finalize() {
   else
     emit_minimal_artifacts publication-failed || cleanup_status=1
   fi
-  rm -f -- "$cleanup_status_ledger"
+  rm -f -- "$cleanup_status_ledger" "$redaction_report"
   if (( status != 0 || cleanup_status != 0 || redaction_status != 0 )); then exit 1; fi
 }
 
