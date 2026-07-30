@@ -278,7 +278,6 @@ try {
   $env:MUNIMENT_E2E_AUTH_URL_FILE = $authUrlFile
   $env:MUNIMENT_E2E_HOME_PATH = Join-Path $stateRoot 'home-override'
   $env:MUNIMENT_E2E_IMAGE_PATH = $imageFixture
-  $env:MUNIMENT_E2E_FORCE_MANUAL = '1'
   $ready = $true
   $wdioLog = Join-Path $raw "wdio.log"
   $driverAppLog = Join-Path $raw "driver-app.log"
