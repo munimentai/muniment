@@ -1,7 +1,6 @@
 import { appendTranscript, isDictationActive } from './dictation-state.js'
 
 const transcriptQuietPeriod = 25
-const transformOfferPeriod = 6000
 
 export function createDictationController({
   invoke,
@@ -28,14 +27,6 @@ export function createDictationController({
   let completionEpoch
   let completionTimer
   let finishing = false
-  let polishEpoch
-  let polishing = false
-  let transformEpoch = 0
-  let transformPending = false
-  let transformPendingEpoch
-  let eligible = null
-  let eligibleTimer
-  let eligibleTimerEpoch = 0
   let destroyed = false
 
   function snapshot() {
@@ -44,9 +35,6 @@ export function createDictationController({
       commandPending,
       requested,
       finishing,
-      polishing,
-      transformPending,
-      eligible,
       draftSnapshot,
       transcript,
     }
@@ -61,7 +49,7 @@ export function createDictationController({
   }
 
   function busy() {
-    return commandPending || finishing || polishing || transformPending || isDictationActive(status)
+    return commandPending || finishing || isDictationActive(status)
   }
 
   function stopPolling() {
@@ -72,25 +60,6 @@ export function createDictationController({
   function invalidatePolls() {
     pollEpoch += 1
     stopPolling()
-  }
-
-  function invalidateTransform() {
-    transformEpoch += 1
-    eligibleTimerEpoch += 1
-    clearTimeout(eligibleTimer)
-    eligibleTimer = undefined
-    eligible = null
-    publish()
-  }
-
-  function offerTransforms(next) {
-    const timerEpoch = ++eligibleTimerEpoch
-    clearTimeout(eligibleTimer)
-    eligible = next
-    publish()
-    eligibleTimer = setTimeout(() => {
-      if (timerEpoch === eligibleTimerEpoch) invalidateTransform()
-    }, transformOfferPeriod)
   }
 
   async function listenForDictation(epoch) {
@@ -112,10 +81,7 @@ export function createDictationController({
     completionEpoch = undefined
     finishing = false
     publish()
-    if (!cancelled) {
-      polishEpoch = epoch
-      void polish(epoch)
-    }
+    if (!cancelled) Promise.resolve().then(onFocus)
   }
 
   function waitForTranscriptQuiet(epoch) {
@@ -126,37 +92,6 @@ export function createDictationController({
   function finish(epoch) {
     clearTimeout(completionTimer)
     completionTimer = setTimeout(() => waitForTranscriptQuiet(epoch))
-  }
-
-  async function polish(epoch) {
-    if (cancelled || epoch !== captureEpoch || epoch !== polishEpoch) return
-    const captured = transcript
-    if (!captured.trim()) {
-      polishEpoch = undefined
-      return
-    }
-    polishing = true
-    error('')
-    publish()
-    const verbatimDraft = appendTranscript(draftSnapshot, captured)
-    try {
-      const polished = await invoke('dictation_polish', { transcript: captured })
-      if (destroyed || cancelled || epoch !== captureEpoch || epoch !== polishEpoch) return
-      if (readDraft() === verbatimDraft && polished.trim()) {
-        const draft = appendTranscript(draftSnapshot, polished)
-        updateDraft(draft)
-        offerTransforms({ epoch, snapshot: draftSnapshot, segment: polished, draft })
-      }
-    } catch (_) {
-      if (destroyed || cancelled || epoch !== captureEpoch || epoch !== polishEpoch) return
-      error('Polishing is unavailable. You can edit or send the captured text.')
-    } finally {
-      if (epoch === polishEpoch) {
-        polishEpoch = undefined
-        polishing = false
-        publish()
-      }
-    }
   }
 
   function applyStatus(next) {
@@ -200,8 +135,6 @@ export function createDictationController({
     invalidatePolls()
     if (cancel) {
       cancelled = true
-      polishEpoch = undefined
-      polishing = false
       updateDraft(draftSnapshot)
       onCancel()
       Promise.resolve().then(onFocus)
@@ -237,14 +170,12 @@ export function createDictationController({
     }
     invalidatePolls()
     requested = true
-    invalidateTransform()
     cancelled = false
     draftSnapshot = readDraft()
     transcript = ''
     captureEpoch += 1
     completionEpoch = undefined
     finishing = false
-    polishEpoch = undefined
     commandPending = true
     error('')
     status = { state: 'starting' }
@@ -271,55 +202,13 @@ export function createDictationController({
     }
   }
 
-  async function transform(action) {
-    const current = eligible
-    if (!current || busy() || readDraft() !== current.draft) return
-    const operation = ++transformEpoch
-    clearTimeout(eligibleTimer)
-    eligibleTimer = undefined
-    transformPending = true
-    transformPendingEpoch = operation
-    error('')
-    publish()
-    try {
-      const transformed = await invoke('dictation_transform', { transform: action.transform, transcript: current.segment })
-      if (destroyed || operation !== transformEpoch || readDraft() !== current.draft) return
-      if (!transformed.trim()) throw new Error('empty transform')
-      updateDraft(appendTranscript(current.snapshot, transformed))
-      offerTransforms({ ...current, segment: transformed, draft: readDraft() })
-    } catch (_) {
-      if (destroyed || operation !== transformEpoch) return
-      error('That voice transform is unavailable. Your text is unchanged; try again.')
-      offerTransforms(current)
-    } finally {
-      if (!destroyed && operation === transformPendingEpoch) {
-        transformPending = false
-        transformPendingEpoch = undefined
-      }
-      if (!destroyed) {
-        publish()
-        Promise.resolve().then(onFocus)
-      }
-    }
-  }
-
-  function cancelTransform() {
-    invalidateTransform()
-    transformPending = false
-    transformPendingEpoch = undefined
-    error('')
-    publish()
-    Promise.resolve().then(onFocus)
-  }
-
   function cleanup() {
     destroyed = true
     invalidatePolls()
     clearTimeout(completionTimer)
-    clearTimeout(eligibleTimer)
     unlisten?.()
   }
 
   publish()
-  return { start, stop, transform, busy, invalidateTransform, cancelTransform, snapshot, cleanup }
+  return { start, stop, busy, snapshot, cleanup }
 }

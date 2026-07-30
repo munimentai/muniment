@@ -41,17 +41,14 @@ grep -Fq 'ci_gate_wait_minutes' "$e2e_adr"
 grep -Fq 'non-human E2E identity' "$e2e_adr"
 grep -Fq 'desktop E2E runner contract' "$e2e_adr"
 grep -Fq '0013-desktop-e2e-harness.md' README.md
-# the resident model is pinned by ADR 0017, whose table is compared field by
-# field against RESIDENT_MODEL by src-tauri/core/tests/resident_model_adr.rs.
-# These checks run on markdown-only PRs too, where the Rust suite is gated on
-# the ADR itself changing, so a doc edit cannot quietly unpin the artifact.
-model_adr=docs/decisions/0017-resident-model-artifact-pin.md
-test -f "$model_adr"
-grep -Fq -- '- Status: accepted' "$model_adr"
-grep -Fq 'muniment-required-qwen3.5-4b' "$model_adr"
-grep -Fq -- '- Status: superseded by ADR 0017' docs/decisions/0003-resident-gemma-model.md
-test -f src-tauri/core/tests/resident_model_adr.rs
-grep -Fq 'docs/decisions/0017-*.md)' "$ci"
+# The desktop must not restore the removed resident classifier.
+test -z "$(grep -RilE \
+  --exclude='*.test.js' \
+  'Qwen3\.5|llama-server|RESIDENT_MODEL|MunimentHuggingFace|required_model_acquisition_status|dictation_polish|dictation_transform|onboarding_triage' \
+  src src-tauri/src src-tauri/core/src test/probe 2>/dev/null)"
+grep -Fq -- '- Status: superseded by the 2026-07-29 cloud ingress ruling' \
+  docs/decisions/0017-resident-model-artifact-pin.md
+grep -Fq 'The desktop sends no classification metadata.' docs/spec/harness-spec.md
 # no current document may name the retired Gemma alias; ADR 0003 preserves the
 # historical decision it records. No document may call the resident model Gemma.
 # (`! grep` would be exempt from errexit, so assert on empty output instead)

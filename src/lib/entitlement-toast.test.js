@@ -23,6 +23,20 @@ describe('entitlement toast controller', () => {
   afterEach(() => {
     vi.clearAllTimers()
     vi.useRealTimers()
+    vi.restoreAllMocks()
+  })
+
+  it('records a rejected listener registration', async () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const controller = createEntitlementToast({
+      listen: vi.fn().mockRejectedValue(new Error('registration failed')),
+      onVisible: vi.fn(),
+    })
+
+    await expect(controller.start()).resolves.toBeUndefined()
+
+    expect(error).toHaveBeenCalledOnce()
+    expect(error).toHaveBeenCalledWith('Entitlement listener registration failed.')
   })
 
   it('shows on an entitlement change and auto-dismisses after five seconds', async () => {
