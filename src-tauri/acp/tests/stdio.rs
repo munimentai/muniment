@@ -88,10 +88,13 @@ fn session_requests_fail_without_an_authorized_attach() {
 
 #[cfg(target_os = "linux")]
 #[test]
-fn new_session_pairs_and_rejects_relative_cwd_and_mcp_servers() {
-    use muniment_attach::{authorized, encode_frame, welcome, Id, Protocol, Response, Success};
+fn new_session_reuses_authorization_and_rejects_invalid_parameters() {
+    use muniment_attach::{
+        authorized_with_client_credential, encode_frame, welcome, Id, Protocol, Response, Success,
+    };
     use std::collections::BTreeMap;
     use std::io::Read;
+    use std::os::unix::fs::PermissionsExt;
     use std::os::unix::net::{UnixListener, UnixStream};
     use std::thread;
 
@@ -112,78 +115,109 @@ fn new_session_pairs_and_rejects_relative_cwd_and_mcp_servers() {
             .as_nanos()
     ));
     let socket_directory = runtime.join("muniment");
+    let config = runtime.join("config");
     std::fs::create_dir_all(&socket_directory).unwrap();
     let listener = UnixListener::bind(socket_directory.join("attach-v1.sock")).unwrap();
     let workspace = runtime.join("workspace");
     std::fs::create_dir(&workspace).unwrap();
     let expected_workspace = workspace.to_string_lossy().into_owned();
     let server = thread::spawn(move || {
-        let (mut stream, _) = listener.accept().unwrap();
-        let hello = read_frame(&mut stream);
-        assert_eq!(hello["client"]["kind"], "acp-adapter");
-        stream
-            .write_all(
-                &encode_frame(&welcome(1, "0.0.1", "11".repeat(16), "22".repeat(16))).unwrap(),
-            )
-            .unwrap();
-        stream
-            .write_all(
-                &encode_frame(&authorized("33".repeat(32), 3600, 900, BTreeMap::new())).unwrap(),
-            )
-            .unwrap();
-        let onboard = read_frame(&mut stream);
-        assert_eq!(onboard["operation"], "workspace.onboard");
-        assert_eq!(onboard["body"]["opened_directory"], expected_workspace);
-        assert_eq!(onboard["body"]["memory_location"], expected_workspace);
-        stream
-            .write_all(
-                &encode_frame(&Response {
-                    protocol: Protocol,
-                    request_id: Id::new(onboard["request_id"].as_str().unwrap()).unwrap(),
-                    ok: Success,
-                    body: json!({
-                        "opened_directory": expected_workspace,
-                        "memory_location": expected_workspace,
-                        "instructions": null
-                    }),
-                })
-                .unwrap(),
-            )
-            .unwrap();
+        let mut client_id = None;
+        for _ in 0..2 {
+            let (mut stream, _) = listener.accept().unwrap();
+            let hello = read_frame(&mut stream);
+            assert_eq!(hello["client"]["kind"], "acp-adapter");
+            if let Some(client_id) = &client_id {
+                assert_eq!(hello["authorized_client_id"], *client_id);
+                assert_eq!(hello["authorized_client_credential"], "44".repeat(32));
+            } else {
+                client_id = Some(hello["authorized_client_id"].clone());
+                assert!(hello.get("authorized_client_credential").is_none());
+            }
+            stream
+                .write_all(
+                    &encode_frame(&welcome(1, "0.0.1", "11".repeat(16), "22".repeat(16))).unwrap(),
+                )
+                .unwrap();
+            stream
+                .write_all(
+                    &encode_frame(&authorized_with_client_credential(
+                        "33".repeat(32),
+                        3600,
+                        900,
+                        BTreeMap::new(),
+                        "44".repeat(32),
+                    ))
+                    .unwrap(),
+                )
+                .unwrap();
+            let onboard = read_frame(&mut stream);
+            assert_eq!(onboard["operation"], "workspace.onboard");
+            assert_eq!(onboard["body"]["opened_directory"], expected_workspace);
+            assert_eq!(onboard["body"]["memory_location"], expected_workspace);
+            stream
+                .write_all(
+                    &encode_frame(&Response {
+                        protocol: Protocol,
+                        request_id: Id::new(onboard["request_id"].as_str().unwrap()).unwrap(),
+                        ok: Success,
+                        body: json!({
+                            "opened_directory": expected_workspace,
+                            "memory_location": expected_workspace,
+                            "instructions": null
+                        }),
+                    })
+                    .unwrap(),
+                )
+                .unwrap();
+        }
     });
 
-    let mut command = Command::new(env!("CARGO_BIN_EXE_muniment-acp"));
-    command.env("XDG_RUNTIME_DIR", &runtime);
-    let responses = exchange_with_command(
-        command,
-        &[
-            request(
-                1,
-                "session/new",
-                json!({"cwd": workspace, "mcpServers": []}),
-            ),
-            request(
-                2,
-                "session/new",
-                json!({"cwd": "relative/workspace", "mcpServers": []}),
-            ),
-            request(
-                3,
-                "session/new",
-                json!({
-                    "cwd": "/workspace",
-                    "mcpServers": [{"name": "tools", "command": "secret-command"}]
-                }),
-            ),
-        ],
-    );
+    let messages = [
+        request(
+            1,
+            "session/new",
+            json!({"cwd": workspace, "mcpServers": []}),
+        ),
+        request(
+            2,
+            "session/new",
+            json!({"cwd": "relative/workspace", "mcpServers": []}),
+        ),
+        request(
+            3,
+            "session/new",
+            json!({
+                "cwd": "/workspace",
+                "mcpServers": [{"name": "tools", "command": "secret-command"}]
+            }),
+        ),
+    ];
+    let mut first = Command::new(env!("CARGO_BIN_EXE_muniment-acp"));
+    first
+        .env("XDG_RUNTIME_DIR", &runtime)
+        .env("XDG_CONFIG_HOME", &config);
+    let responses = exchange_with_command(first, &messages);
+    let mut second = Command::new(env!("CARGO_BIN_EXE_muniment-acp"));
+    second
+        .env("XDG_RUNTIME_DIR", &runtime)
+        .env("XDG_CONFIG_HOME", &config);
+    let second_responses = exchange_with_command(second, &messages[..1]);
     server.join().unwrap();
 
+    let client_files = config.join("muniment");
+    for name in ["acp-client-id", "acp-client-credential"] {
+        let metadata = std::fs::metadata(client_files.join(name)).unwrap();
+        assert_eq!(metadata.permissions().mode() & 0o777, 0o600);
+    }
+    assert!(!client_files.join("cli-client-id").exists());
+    assert!(!client_files.join("cli-client-credential").exists());
     let session_id = responses[0]["result"]["sessionId"].as_str().unwrap();
     assert_eq!(
         uuid::Uuid::parse_str(session_id).unwrap().get_version_num(),
         7
     );
+    assert!(second_responses[0]["result"]["sessionId"].is_string());
     assert_eq!(
         responses[1]["error"]["message"],
         "session/new cwd must be absolute"
