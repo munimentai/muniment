@@ -12,6 +12,8 @@ $stateRoot = $null
 $msi = $null
 $authUrlFile = $null
 $cleanupLog = $null
+$cleanupStatusLedger = $null
+$redactionReport = $null
 $installerLog = $null
 $status = 0
 $cleanupStatus = 0
@@ -83,6 +85,9 @@ function Invoke-Cleanup([string]$Name, [scriptblock]$Action) {
     if ($cleanupLog) { Add-Content $cleanupLog "$Name`: failed" -ErrorAction SilentlyContinue }
     $script:cleanupStatus = 1
   } finally {
+    if ($cleanupStatusLedger) {
+      Add-Content $cleanupStatusLedger "$Name`: $(if ($phaseStatus) { 'failed' } else { 'ok' })" -ErrorAction SilentlyContinue
+    }
     if ($env:MUNIMENT_E2E_FINALIZER_TEST_STATUS_LEDGER) {
       Add-Content $env:MUNIMENT_E2E_FINALIZER_TEST_STATUS_LEDGER "$Name`t$phaseStatus" -ErrorAction SilentlyContinue
     }
@@ -131,7 +136,7 @@ function Finalize-Run {
   }
   Invoke-Cleanup "redact-artifacts" {
     if (-not $raw -or -not (Test-Path $raw)) { throw "raw staging is unavailable" }
-    & node test/e2e/support/redact.mjs $raw $safe
+    & node test/e2e/support/redact.mjs $raw $safe $redactionReport
     if ($LASTEXITCODE -ne 0) { $script:redacted = $false; throw "artifact redaction failed" }
   }
   Invoke-Cleanup "remove-raw" { if ($raw) { Remove-Item $raw -Recurse -Force -ErrorAction SilentlyContinue } }
@@ -143,6 +148,22 @@ function Finalize-Run {
     if ($cleanupStatus -ne $publicationStatus) { Invoke-Cleanup "suppress-artifacts" { Remove-Item $artifacts -Recurse -Force -ErrorAction SilentlyContinue; if ($safe) { Remove-Item $safe -Recurse -Force -ErrorAction SilentlyContinue } } }
   } else {
     Invoke-Cleanup "suppress-artifacts" { if ($artifacts) { Remove-Item $artifacts -Recurse -Force -ErrorAction SilentlyContinue }; if ($safe) { Remove-Item $safe -Recurse -Force -ErrorAction SilentlyContinue } }
+    try {
+      New-Item -ItemType Directory -Force $artifacts | Out-Null
+      Set-Content (Join-Path $artifacts "envelope-reason.txt") "envelope: minimal`nwithheld: guest artifacts`nreason: redaction-failed"
+      if ($cleanupStatusLedger -and (Test-Path $cleanupStatusLedger)) {
+        Copy-Item $cleanupStatusLedger (Join-Path $artifacts "cleanup-status.log")
+      } else {
+        New-Item -ItemType File -Force (Join-Path $artifacts "cleanup-status.log") | Out-Null
+      }
+      if ($redactionReport -and (Test-Path $redactionReport) -and (Get-Item $redactionReport).Length -gt 0) {
+        Copy-Item $redactionReport (Join-Path $artifacts "redaction-failure.txt")
+      } else {
+        Set-Content (Join-Path $artifacts "redaction-failure.txt") "file: unknown`ncategory: redactor-process"
+      }
+    } catch {
+      $script:cleanupStatus = 1
+    }
   }
   if ($cleanupLog) { Remove-Item $cleanupLog -Force -ErrorAction SilentlyContinue }
   if ($runRoot) { Remove-Item $runRoot -Recurse -Force -ErrorAction SilentlyContinue }
@@ -161,6 +182,8 @@ try {
   $msi = Join-Path $runRoot "muniment-nightly.msi"
   $authUrlFile = Join-Path $runRoot "auth-url"
   $cleanupLog = Join-Path $runRoot "cleanup.log"
+  $cleanupStatusLedger = Join-Path $runRoot "cleanup-status.log"
+  $redactionReport = Join-Path $runRoot "redaction-failure.txt"
   $installerLog = Join-Path $raw "installer.log"
   if ($env:MUNIMENT_E2E_FINALIZER_TEST_SETUP_FAIL -eq "before-directories") { throw "injected setup failure" }
   New-Item -ItemType Directory -Force $raw, $stateRoot | Out-Null

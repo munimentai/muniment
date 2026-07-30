@@ -11,6 +11,8 @@ archive="$run_root/muniment-nightly.app.zip"
 expanded="$run_root/expanded"
 state_root="$run_root/state"
 cleanup_log="$run_root/cleanup.log"
+cleanup_status_ledger="$run_root/cleanup-status.log"
+redaction_report="$run_root/redaction-failure.txt"
 installed_bundle=/Applications/muniment.app
 status=0
 cleanup_status=0
@@ -51,7 +53,7 @@ finalize() {
 
   cleanup_step stage-cleanup-log cp "$cleanup_log" "$raw/cleanup.log"
   cleanup_step index-failure-artifacts index_failure_artifacts
-  cleanup_step redact-artifacts node test/e2e/support/redact.mjs "$raw" "$safe"
+  cleanup_step redact-artifacts node test/e2e/support/redact.mjs "$raw" "$safe" "$redaction_report"
   redaction_status=$cleanup_last_status
   cleanup_step remove-raw rm -rf -- "$raw"
   cleanup_step remove-archive rm -f -- "$archive"
@@ -67,6 +69,14 @@ finalize() {
     if (( collection_status != 0 )); then cleanup_step suppress-artifacts rm -rf -- "$artifacts"; fi
   else
     cleanup_step suppress-artifacts rm -rf -- "$artifacts"
+    mkdir -p "$artifacts" || cleanup_status=1
+    printf 'envelope: minimal\nwithheld: guest artifacts\nreason: redaction-failed\n' >"$artifacts/envelope-reason.txt" || cleanup_status=1
+    cp -- "$cleanup_status_ledger" "$artifacts/cleanup-status.log" 2>/dev/null || : >"$artifacts/cleanup-status.log"
+    if [[ -s $redaction_report ]]; then
+      cp -- "$redaction_report" "$artifacts/redaction-failure.txt" || cleanup_status=1
+    else
+      printf 'file: unknown\ncategory: redactor-process\n' >"$artifacts/redaction-failure.txt" || cleanup_status=1
+    fi
   fi
   cleanup_step remove-safe rm -rf -- "$safe"
   cleanup_step raw-gone cleanup_absent "$raw"
@@ -74,6 +84,7 @@ finalize() {
   cleanup_step expanded-gone cleanup_absent "$expanded"
   cleanup_step safe-gone cleanup_absent "$safe"
   cleanup_step remove-cleanup-log rm -f -- "$cleanup_log"
+  rm -f -- "$cleanup_status_ledger" "$redaction_report"
   if [[ ${MUNIMENT_E2E_FINALIZER_TEST_MODE:-0} != 1 ]]; then
     rmdir "$run_root" 2>/dev/null || cleanup_status=1
   fi
