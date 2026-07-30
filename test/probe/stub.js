@@ -164,26 +164,6 @@ window.__TAURI__ = {
         if (onboardingFixture) return { configured: false, homePath: onboardingHomePath }
         return { configured: true, homePath: '/Documents/Muniment' }
       }
-      if (command === 'required_model_acquisition_status') {
-        if (onboardingFixture) {
-          return {
-            status: { state: 'installing' },
-            downloadedBytes: 591_000_000,
-            totalBytes: 2_200_000_000,
-            folderSetupAvailable: true,
-            aiFeaturesAvailable: false,
-            retryingInBackground: false,
-          }
-        }
-        return {
-          status: { state: 'installed' },
-          downloadedBytes: 100,
-          totalBytes: 100,
-          folderSetupAvailable: true,
-          aiFeaturesAvailable: true,
-          retryingInBackground: false,
-        }
-      }
       if (command === 'auth_status') return { signed_in: true, subject: 'probe-user' }
       if (command === 'chat_thread_summaries') {
         return { summaries: structuredClone(threadSummaries), nextCursor: null }

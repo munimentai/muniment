@@ -29,12 +29,6 @@ fn main() {
             app.manage(chat::ChatState::new(app.handle())?);
             #[cfg(target_os = "linux")]
             attach_service::start_attach_listener(app.handle().clone());
-            let model_root = app.path().app_data_dir()?.join("models").join("qwen3.5-4b");
-            let required_model = model_install::ResidentModelInstallState::new(model_root)?;
-            // Required acquisition is deliberately detached from onboarding: folder and
-            // consent steps remain interactive while this worker downloads and activates AI.
-            required_model.start();
-            app.manage(required_model);
             let parakeet_root = app.path().app_data_dir()?.join("models").join("parakeet");
             app.manage(model_install::ParakeetInstallState::new(
                 parakeet_root.clone(),
@@ -63,10 +57,6 @@ fn main() {
             chat_threads::chat_delete_thread,
             chat_threads::chat_new_thread,
             attach_service::attach_pairing_decide,
-            model_install::required_model_acquisition_status,
-            model_install::dictation_polish,
-            model_install::dictation_transform,
-            model_install::onboarding_triage,
             home::home_status,
             home::home_confirm,
             home::home_confirm_import,
