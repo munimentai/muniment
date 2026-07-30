@@ -1004,12 +1004,7 @@ where
             None => {
                 let remaining = challenge_expires_at.saturating_sub(clock.now());
                 let Some(ApprovalDecision::Approve(approval)) =
-                    approvals.wait(
-                        &challenge,
-                        &companion_kind,
-                        &companion_version,
-                        remaining,
-                    )
+                    approvals.wait(&challenge, &companion_kind, &companion_version, remaining)
                 else {
                     return Ok(());
                 };
@@ -1025,14 +1020,12 @@ where
             })?;
         if reconnect_credential.is_none() {
             // Reject one already-queued repeat action against the consumed challenge.
-            if let Some(ApprovalDecision::Approve(approval)) =
-                approvals.wait(
-                    &challenge,
-                    &companion_kind,
-                    &companion_version,
-                    Duration::ZERO,
-                )
-            {
+            if let Some(ApprovalDecision::Approve(approval)) = approvals.wait(
+                &challenge,
+                &companion_kind,
+                &companion_version,
+                Duration::ZERO,
+            ) {
                 if authorization.approve(&challenge, approval)
                     != Err(AuthorizationError::ChallengeConsumed)
                 {

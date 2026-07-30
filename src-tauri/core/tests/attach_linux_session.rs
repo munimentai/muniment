@@ -2,8 +2,9 @@
 
 use muniment_core::attach::linux::{
     approval_waiter_with_claims, run_authenticated_session_with,
-    run_authenticated_session_with_authorization, run_authenticated_session_with_service_and_approvals,
-    ApprovalDecision, AttachSessionError, AuthorizationSessionDependencies, CompanionProvenance, PeerCredentials,
+    run_authenticated_session_with_authorization,
+    run_authenticated_session_with_service_and_approvals, ApprovalDecision, AttachSessionError,
+    AuthorizationSessionDependencies, CompanionProvenance, PeerCredentials,
     PermissionAnswerAccepted, PermissionAnswerRequest, RedactedThreadSummary, RunStartAccepted,
     RunStartRequest, RunStreamPage, ThreadListPage, ThreadListRequest, ThreadListService,
     ThreadOpenRequest, MAX_PERMISSION_GATE_ID_LENGTH, MAX_RUN_START_CONTEXT_LENGTH,
