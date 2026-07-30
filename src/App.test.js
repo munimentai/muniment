@@ -1127,17 +1127,18 @@ describe('Home onboarding', () => {
     expect(invoke).toHaveBeenCalledWith('home_confirm', { homePath: '/Documents/Muniment' })
   })
 
-  it('extracts exactly checked entries and advances only to transient pre-triage', async () => {
+  it('extracts exactly checked entries and saves the approved originals', async () => {
     homeStatus = { configured: false, homePath: '/Documents/Muniment' }
     dialogResult = '/Exports/assistant.zip'
     const extracted = [{ sourceName: 'profile.json', kind: 'json', text: '{"name":"Alice"}', sourceProvenance: 'assistant-export-zip:v1:stable' }]
-    invoke.mockImplementation(async (command) => {
+    invoke.mockImplementation(async (command, payload) => {
       if (command === 'home_confirm') return { configured: true, homePath: '/Documents/Muniment' }
       if (command === 'onboarding_import_preview') return { entries: [
         { name: 'chat.md', kind: 'markdown', byteSize: 10, excerpt: 'chat', excerptTruncated: false },
         { name: 'profile.json', kind: 'json', byteSize: 16, excerpt: '{}', excerptTruncated: false },
       ], totalByteSize: 26 }
       if (command === 'onboarding_import_extract') return extracted
+      if (command === 'home_confirm_import') return { configured: true, importedFileCount: 1 }
       if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
       if (command === 'chat_thread_open') return []
       if (command === 'auth_entitlement_snapshot') return snapshot()
@@ -1158,9 +1159,15 @@ describe('Home onboarding', () => {
     expect(invoke).toHaveBeenCalledWith('onboarding_import_extract', {
       archivePath: '/Exports/assistant.zip', selectedNames: ['profile.json'],
     })
-    expect(await screen.findByText('Create your local proposal')).toBeInTheDocument()
-    expect(screen.getByText('This import path is unavailable.')).toBeInTheDocument()
-    expect(invoke.mock.calls.map(([command]) => command)).not.toContain('onboarding_triage')
+    expect(await screen.findByText('Save approved files')).toBeInTheDocument()
+    expect(screen.getByText('1 approved file is ready to save as verbatim originals.')).toBeInTheDocument()
+    expect(screen.getByText('profile.json')).toBeInTheDocument()
+    await fireEvent.click(screen.getByTestId('onboarding-import-save'))
+    expect(invoke).toHaveBeenCalledWith('home_confirm_import', {
+      homePath: '/Documents/Muniment',
+      approvedEntries: extracted,
+    })
+    expect(await screen.findByPlaceholderText('Ask anything')).toBeInTheDocument()
     expect(invoke).toHaveBeenCalledWith('home_confirm', { homePath: '/Documents/Muniment' })
   })
 

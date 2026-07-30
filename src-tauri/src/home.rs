@@ -3,7 +3,7 @@ use muniment_core::{
     home::{
         compile_onboarding_home_write_plan, confirm_home, persist_onboarding_home_write_plan,
         scaffold_home, validate_home_selection, HomeError, HomeErrorKind,
-        OnboardingHomePersistenceError, OnboardingTriageReport,
+        OnboardingHomePersistenceError,
     },
     import_preview::ExtractedEntry,
 };
@@ -127,14 +127,12 @@ pub fn home_confirm(app: AppHandle, home_path: String) -> Result<HomeStatus, Str
 pub fn home_confirm_import(
     app: AppHandle,
     home_path: String,
-    triage_report: OnboardingTriageReport,
     approved_entries: Vec<ExtractedEntry>,
 ) -> Result<HomeImportSuccess, HomeImportError> {
     let config = config_dir(&app).map_err(|_| HomeImportError::save_failed())?;
     confirm_import(
         &config,
         Path::new(&home_path),
-        &triage_report,
         &approved_entries,
         chrono::Local::now().date_naive(),
     )
@@ -143,29 +141,20 @@ pub fn home_confirm_import(
 fn confirm_import(
     config: &Path,
     home: &Path,
-    triage_report: &OnboardingTriageReport,
     approved_entries: &[ExtractedEntry],
     import_date: NaiveDate,
 ) -> Result<HomeImportSuccess, HomeImportError> {
-    confirm_import_with_hook(
-        config,
-        home,
-        triage_report,
-        approved_entries,
-        import_date,
-        || {},
-    )
+    confirm_import_with_hook(config, home, approved_entries, import_date, || {})
 }
 
 fn confirm_import_with_hook(
     config: &Path,
     home: &Path,
-    triage_report: &OnboardingTriageReport,
     approved_entries: &[ExtractedEntry],
     import_date: NaiveDate,
     before_confirm: impl FnOnce(),
 ) -> Result<HomeImportSuccess, HomeImportError> {
-    let plan = compile_onboarding_home_write_plan(triage_report, approved_entries, import_date)
+    let plan = compile_onboarding_home_write_plan(approved_entries, import_date)
         .map_err(|_| HomeImportError::invalid_input())?;
     let imported_file_count = plan.writes().len();
 
@@ -211,14 +200,6 @@ mod tests {
     impl Drop for TempRoot {
         fn drop(&mut self) {
             let _ = fs::remove_dir_all(&self.0);
-        }
-    }
-
-    fn report() -> OnboardingTriageReport {
-        OnboardingTriageReport {
-            user_type: "Independent researcher".into(),
-            proposed_home_layout: "Organize work by topic.".into(),
-            starter_agents: vec!["Research Scout".into(), "Writing Partner".into()],
         }
     }
 
@@ -288,11 +269,10 @@ mod tests {
         let config = root.0.join("config");
         let home = root.0.join("home");
         let date = NaiveDate::from_ymd_opt(2026, 7, 24).unwrap();
-        let report = report();
         let entry = entry();
-        let expected = compile_onboarding_home_write_plan(&report, &[entry.clone()], date).unwrap();
+        let expected = compile_onboarding_home_write_plan(&[entry.clone()], date).unwrap();
 
-        let result = confirm_import(&config, &home, &report, &[entry], date).unwrap();
+        let result = confirm_import(&config, &home, &[entry], date).unwrap();
 
         assert_eq!(
             result,
@@ -316,14 +296,14 @@ mod tests {
         let config = root.0.join("config");
         let home = root.0.join("home");
         let date = NaiveDate::from_ymd_opt(2026, 7, 24).unwrap();
-        let report = report();
         let entry = entry();
-        let plan = compile_onboarding_home_write_plan(&report, &[entry.clone()], date).unwrap();
+        let plan = compile_onboarding_home_write_plan(&[entry.clone()], date).unwrap();
         let collision = &plan.writes()[0];
         scaffold_home(&home).unwrap();
+        fs::create_dir_all(home.join(collision.relative_path()).parent().unwrap()).unwrap();
         fs::write(home.join(collision.relative_path()), b"user content").unwrap();
 
-        let error = confirm_import(&config, &home, &report, &[entry], date).unwrap_err();
+        let error = confirm_import(&config, &home, &[entry], date).unwrap_err();
 
         assert_eq!(
             error,
@@ -351,7 +331,7 @@ mod tests {
         fs::write(&home, b"not a directory").unwrap();
         let date = NaiveDate::from_ymd_opt(2026, 7, 24).unwrap();
 
-        let error = confirm_import(&config, &home, &report(), &[entry()], date).unwrap_err();
+        let error = confirm_import(&config, &home, &[entry()], date).unwrap_err();
 
         assert_eq!(
             serde_json::to_value(error).unwrap(),
@@ -373,7 +353,7 @@ mod tests {
         let home = root.0.join("home");
         let date = NaiveDate::from_ymd_opt(2026, 7, 24).unwrap();
 
-        let error = confirm_import(&config, &home, &report(), &[entry()], date).unwrap_err();
+        let error = confirm_import(&config, &home, &[entry()], date).unwrap_err();
 
         assert_eq!(
             serde_json::to_value(error).unwrap(),
@@ -393,7 +373,7 @@ mod tests {
         let home = root.0.join("home");
         let date = NaiveDate::from_ymd_opt(2026, 7, 24).unwrap();
 
-        let error = confirm_import_with_hook(&config, &home, &report(), &[entry()], date, || {
+        let error = confirm_import_with_hook(&config, &home, &[entry()], date, || {
             fs::remove_dir(home.join("projects")).unwrap();
             fs::write(home.join("projects"), b"not a directory").unwrap();
         })
@@ -417,7 +397,7 @@ mod tests {
         let home = root.0.join("home");
         let date = NaiveDate::from_ymd_opt(2026, 7, 24).unwrap();
 
-        let error = confirm_import_with_hook(&config, &home, &report(), &[entry()], date, || {
+        let error = confirm_import_with_hook(&config, &home, &[entry()], date, || {
             fs::write(&config, b"not a directory").unwrap()
         })
         .unwrap_err();
