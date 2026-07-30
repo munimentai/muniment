@@ -84,6 +84,7 @@ fn run_command(mut args: Vec<OsString>) -> Result<(), CliError> {
     if args == [OsString::from("workspace"), OsString::from("init")] {
         let mut client = handshake_as_with_credential(
             env!("CARGO_PKG_VERSION"),
+            "cli",
             &client_identity,
             client_credential.as_deref(),
             || {},
@@ -108,6 +109,7 @@ fn run_command(mut args: Vec<OsString>) -> Result<(), CliError> {
         |pairing_pending| {
             let mut client = handshake_as_with_credential(
                 env!("CARGO_PKG_VERSION"),
+                "cli",
                 &client_identity,
                 client_credential.as_deref(),
                 pairing_pending,
