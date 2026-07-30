@@ -1,6 +1,6 @@
 # 0006 — Acquire and atomically publish resident model revisions
 
-- Status: accepted
+- Status: superseded by the 2026-07-29 cloud ingress ruling
 - Date: 2026-07-11
 - Context: ROADMAP Phase 2 item 10; ADR 0003, superseded by ADR 0017
 
@@ -28,6 +28,9 @@
 > publisher, artifact, source, and revision — apply to whatever licence the
 > pinned artifact carries. An acceptance gate is required only for a pinned
 > artifact whose licence imposes additional use restrictions.
+>
+> **Superseded 2026-07-29.** The desktop no longer acquires, stores, loads, or
+> runs a resident language model. The lifecycle below is a historical record.
 
 ## Context
 

@@ -1,10 +1,12 @@
 # 0014 — Acquire a pinned llama-server executable
 
-- Status: accepted
+- Status: superseded by the 2026-07-29 cloud ingress ruling
 - Date: 2026-07-19
 - Context: Phase 3 voice; ADRs 0003 and 0006
 
 ## Context
+
+> Historical record. The desktop no longer downloads or ships this runtime.
 
 The resident Gemma boundary requires an explicit `llama-server` executable
 path. ADR 0003 pins the model, ADR 0006 pins its acquisition lifecycle, and the

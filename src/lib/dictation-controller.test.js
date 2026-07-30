@@ -54,11 +54,10 @@ describe('dictation controller', () => {
     expect(context.draft()).toBe('fresh')
   })
 
-  it('completes and polishes once after transcript silence', async () => {
+  it('completes with the verbatim transcript after transcript silence', async () => {
     const invoke = vi.fn(async (command) => {
       if (command === 'dictation_start') return { state: 'running' }
       if (command === 'dictation_stop') return { state: 'stopped' }
-      if (command === 'dictation_polish') return 'Polished'
     })
     const context = setup({ invoke })
     await context.controller.start()
@@ -67,35 +66,23 @@ describe('dictation controller', () => {
     await vi.advanceTimersByTimeAsync(20)
     context.transcript(0, 'two')
     await vi.advanceTimersByTimeAsync(24)
-    expect(invoke).not.toHaveBeenCalledWith('dictation_polish', expect.anything())
     await vi.advanceTimersByTimeAsync(1)
     await Promise.resolve()
 
-    expect(invoke.mock.calls.filter(([command]) => command === 'dictation_polish')).toEqual([
-      ['dictation_polish', { transcript: 'one two' }],
+    expect(context.draft()).toBe('one two')
+    expect(invoke.mock.calls.map(([command]) => command)).toEqual([
+      'dictation_start',
+      'dictation_stop',
     ])
   })
 
-  it('expires a transform offer after six seconds and invalidates it on a new capture', async () => {
+  it('does not offer resident transforms after capture', async () => {
     const context = setup()
     await context.controller.start()
     context.transcript(0, 'captured')
     await context.controller.stop()
     await vi.advanceTimersByTimeAsync(26)
-    expect(context.controller.snapshot().eligible).toMatchObject({ segment: 'Polished' })
-
-    await vi.advanceTimersByTimeAsync(5998)
-    expect(context.controller.snapshot().eligible).not.toBeNull()
-    await vi.advanceTimersByTimeAsync(2)
-    expect(context.controller.snapshot().eligible).toBeNull()
-
-    await context.controller.start()
-    context.transcript(1, 'again')
-    await context.controller.stop()
-    await vi.advanceTimersByTimeAsync(26)
-    expect(context.controller.snapshot().eligible).not.toBeNull()
-    await context.controller.start()
-    expect(context.controller.snapshot().eligible).toBeNull()
+    expect(context.controller.snapshot()).not.toHaveProperty('eligible')
   })
 
   it.each([

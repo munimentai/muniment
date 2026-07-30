@@ -14,8 +14,6 @@ const ALLOWED = {
     '.tool-running': '§1.2 the running-tool status pulse',
     '.provenance .route-segment': '§1.2 the route segment of the provenance line',
     '.receipt-record .route-value': '§1.2 the route segment, expanded into the receipt (§2.2)',
-    '.polish-transcript': '§1.2 the live voice-polish flash (§2.4)',
-    '.polish-status': '§1.2 the live voice-polish flash (§2.4)',
   },
   // Nothing in the access popover is computation: focus rings, badges and device
   // states are all on §1.2's forbidden list.
