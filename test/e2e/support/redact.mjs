@@ -25,18 +25,21 @@ function inspectScreenshot(input) {
   const data = fs.readFileSync(input)
   const name = path.basename(input)
   if (data.length < 33 || !data.subarray(0, 8).equals(Buffer.from([137,80,78,71,13,10,26,10]))) fail(name, 'screenshot-format')
-  // Boundary captures are element crops. Reject textual metadata and any
-  // injected value embedded in the binary; only structural PNG chunks pass.
+  // Boundary captures are element crops. Remove ancillary metadata and reject
+  // any injected value embedded in the binary.
   for (const secret of secrets) if (data.includes(Buffer.from(secret))) fail(name, 'verbatim-injected-secret')
   let offset = 8
   const allowed = new Set(['IHDR', 'PLTE', 'IDAT', 'IEND', 'tRNS'])
+  const chunks = [data.subarray(0, 8)]
   while (offset + 12 <= data.length) {
     const length = data.readUInt32BE(offset); const type = data.toString('ascii', offset + 4, offset + 8)
-    if (!allowed.has(type) || offset + 12 + length > data.length) fail(name, 'screenshot-metadata')
+    if (offset + 12 + length > data.length) fail(name, 'screenshot-metadata')
+    if (allowed.has(type)) chunks.push(data.subarray(offset, offset + 12 + length))
+    else if ((data[offset + 4] & 0x20) === 0) fail(name, 'screenshot-format')
     offset += 12 + length
     if (type === 'IEND') {
       if (offset !== data.length) fail(name, 'screenshot-trailing-data')
-      return
+      return Buffer.concat(chunks)
     }
   }
   fail(name, 'screenshot-truncated')
@@ -63,7 +66,7 @@ for (const entry of fs.readdirSync(source, { withFileTypes: true })) {
   const input = path.join(source, entry.name)
   const output = path.join(destination, entry.name.replace(/[^A-Za-z0-9._-]/g, '_'))
   if (/\.png$/i.test(entry.name)) {
-    fs.copyFileSync(input, output)
+    fs.writeFileSync(output, inspectScreenshot(input), { mode: 0o600 })
     continue
   }
   let text = fs.readFileSync(input, 'utf8')
