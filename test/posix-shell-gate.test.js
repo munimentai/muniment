@@ -3,13 +3,13 @@ import fs from 'node:fs'
 import path from 'node:path'
 
 const ALLOWED = {
-  'test/desktop-e2e-harness.test.js:283': "describe.skipIf(process.platform === 'win32')('macOS installed launch harness')",
-  'test/desktop-e2e-harness.test.js:288': "describe.skipIf(process.platform === 'win32')('macOS installed launch harness')",
-  'test/desktop-e2e-harness.test.js:589': "describe.skipIf(process.platform === 'win32')('desktop-ci payload extraction')",
-  'test/desktop-e2e-harness.test.js:755': "describe.skipIf(process.platform === 'win32')('cleanup failure accounting')",
-  'test/desktop-e2e-harness.test.js:771': "describe.skipIf(process.platform === 'win32')('cleanup failure accounting')",
-  'test/desktop-e2e-harness.test.js:801': "describe.skipIf(process.platform === 'win32')('cleanup failure accounting')",
-  'test/nightly-workflow.test.js:12': "it.skipIf(process.platform === 'win32') on every runReportFallback caller",
+  'test/desktop-e2e-harness.test.js:283:28': "describe.skipIf(process.platform === 'win32')('macOS installed launch harness')",
+  'test/desktop-e2e-harness.test.js:288:19': "describe.skipIf(process.platform === 'win32')('macOS installed launch harness')",
+  'test/desktop-e2e-harness.test.js:589:20': "describe.skipIf(process.platform === 'win32')('desktop-ci payload extraction')",
+  'test/desktop-e2e-harness.test.js:755:20': "describe.skipIf(process.platform === 'win32')('cleanup failure accounting')",
+  'test/desktop-e2e-harness.test.js:771:20': "describe.skipIf(process.platform === 'win32')('cleanup failure accounting')",
+  'test/desktop-e2e-harness.test.js:801:24': "describe.skipIf(process.platform === 'win32')('cleanup failure accounting')",
+  'test/nightly-workflow.test.js:12:18': "it.skipIf(process.platform === 'win32') on every runReportFallback caller",
 }
 
 const root = process.cwd()
@@ -25,16 +25,44 @@ const testFiles = (directory = '.') => fs.readdirSync(path.join(root, directory)
     return entry.name.endsWith('.test.js') ? [file] : []
   })
 
-const bashCallSites = (file) => {
-  const source = fs.readFileSync(path.join(root, file), 'utf8')
-  return [...source.matchAll(/\bspawn(?:Sync)?\s*\(\s*(['"])bash\1/g)]
-    .map((match) => `${file}:${source.slice(0, match.index).split('\n').length}`)
-}
+const bashCallSitesIn = (source, file) => [
+  ...source.matchAll(/\bspawn(?:Sync)?\s*\(\s*(?:(?:\/\*[\s\S]*?\*\/|\/\/[^\n]*(?:\n|$))\s*)*(?:'bash'|"bash"|`bash`)/g),
+].map((match) => {
+  const before = source.slice(0, match.index)
+  const line = before.split('\n').length
+  const column = match.index - before.lastIndexOf('\n')
+  return `${file}:${line}:${column}`
+})
+
+const bashCallSites = (file) => bashCallSitesIn(
+  fs.readFileSync(path.join(root, file), 'utf8'),
+  file,
+)
+const unexpectedSites = (used, allowed) => used.filter((site) => !(site in allowed))
 
 describe('POSIX shell test gate', () => {
+  const command = 'ba' + 'sh'
+
+  it.each([
+    ['single-quoted strings', `spawn('${command}', [])`],
+    ['double-quoted strings', `spawnSync("${command}", [])`],
+    ['template literals', 'spawn(`' + command + '`, [])'],
+    ['block comments before the command', `spawn(/* command */ '${command}', [])`],
+    ['line comments before the command', `spawn(// command\n'${command}', [])`],
+  ])('finds bash commands in %s', (_form, source) => {
+    expect(bashCallSitesIn(source, 'example.test.js')).toHaveLength(1)
+  })
+
+  it('gives same-line calls separate keys', () => {
+    const used = bashCallSitesIn(`spawn('${command}'); spawnSync(\`${command}\`)`, 'example.test.js')
+    expect(used).toHaveLength(2)
+    expect(new Set(used).size).toBe(2)
+    expect(unexpectedSites(used, { [used[0]]: 'Windows skip' })).toEqual([used[1]])
+  })
+
   it('keeps every bash process call under a Windows skip', () => {
     const used = testFiles().flatMap(bashCallSites).sort()
-    expect(used.filter((site) => !(site in ALLOWED))).toEqual([])
+    expect(unexpectedSites(used, ALLOWED)).toEqual([])
     expect(Object.keys(ALLOWED).filter((site) => !used.includes(site))).toEqual([])
   })
 })
