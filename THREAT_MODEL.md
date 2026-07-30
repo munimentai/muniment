@@ -73,7 +73,6 @@ hand-written warnings:
 
 - `DictationPolishRequest` warns around a transcript.
 - `DictationTransformRequest` warns around a transcript.
-- `RoutingClassifierRequest` warns around a user prompt.
 - `OnboardingTriageRequest` warns around approved export entries.
 
 These warnings reduce accidental instruction following, but they do not

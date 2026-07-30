@@ -1,11 +1,14 @@
 # 0021 — The shared on-device classifier store
 
-- Status: accepted
+- Status: superseded by the 2026-07-29 owner ruling
 - Date: 2026-07-29
 - Context: owner decision 2026-07-29, harness-spec §§12.1, 12.2, and 13,
   ADRs 0007, 0011, and 0012
 
 ## Context
+
+The 2026-07-29 owner ruling supersedes this decision. The cloud now classifies
+prompts at ingress. Desktop clients do not download or run a classifier.
 
 The desktop, CLI, and editor extension classify each prompt on the device.
 They send the prompt and classification to the Muniment cloud. The cloud then

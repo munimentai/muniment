@@ -19,10 +19,6 @@ fn raw_chat_message_calls_stay_at_reviewed_sites() {
             "dictation transform selector instruction",
         ),
         (
-            "ChatMessage::system(ROUTING_CLASSIFIER_SYSTEM_PROMPT),",
-            "routing classifier system prompt",
-        ),
-        (
             "ChatMessage::system(ONBOARDING_TRIAGE_SYSTEM_PROMPT),",
             "onboarding triage system prompt",
         ),
