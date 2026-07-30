@@ -146,30 +146,6 @@ impl KokoroDownloadTransport for NativeModelAcquisitionTransport {
     }
 }
 
-impl RuntimeDownloadTransport for NativeModelAcquisitionTransport {
-    type Body = ModelResponseBody;
-
-    fn download(
-        &mut self,
-        request: &RuntimeDownloadRequest,
-    ) -> Result<RuntimeDownloadResponse<Self::Body>, RuntimeArchiveError> {
-        self.request(
-            request.url(),
-            HostPolicy::GitHub,
-            request.offset,
-            request.connect_timeout,
-            request.read_timeout,
-            request.deadline,
-        )
-        .map(|response| RuntimeDownloadResponse {
-            status: response.status,
-            content_range: response.content_range,
-            body: response.body,
-        })
-        .map_err(|_| RuntimeArchiveError::Download)
-    }
-}
-
 impl PiDownloadTransport for NativeModelAcquisitionTransport {
     type Body = ModelResponseBody;
 
