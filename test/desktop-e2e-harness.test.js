@@ -494,12 +494,33 @@ describe('artifact redaction boundary', () => {
   })
   it.each([
     ['injected text', { 'app.log': 'private-user' }, { MUNIMENT_E2E_USERNAME: 'private-user' }],
-    ['header token', { 'driver.log': 'Authorization: Bearer abcdefghijklmnopqrstuvwxyz' }, {}],
     ['unapproved screenshot', { 'failure-current-window.png': Buffer.from('not safe') }, {}],
     ['rendered production conversation', { '03-chat-complete.png': Buffer.from('not safe') }, {}],
   ])('blocks %s before destination creation', (_name, files, env) => {
     const { result, destination } = redact(files, env)
     expect(result.status).not.toBe(0); expect(fs.existsSync(destination)).toBe(false)
+  })
+  it.each([
+    ['credential-header', 'Authorization: Basic abcdefghijklmnopqrstuvwxyz'],
+    ['bearer-token', 'Bearer abcdefghijklmnopqrstuvwxyz'],
+    ['oauth-token', 'id_token=abcdef'],
+    ['github-token', 'ghp_abcdefghijklmnopqrstuvwxyz'],
+    ['jwt', 'eyJheader.eyJpayload.signature'],
+  ])('redacts %s content and names the category', (category, content) => {
+    const { result, destination } = redact({ 'page-source-sign-in.html': content })
+    expect(result.status).toBe(0)
+    expect(fs.readFileSync(path.join(destination, 'page-source-sign-in.html'), 'utf8')).toBe(`[REDACTED:${category}]`)
+  })
+  it('reports the file and category without reporting an injected value', () => {
+    const source = temp(); const destination = path.join(temp(), 'safe'); const report = path.join(temp(), 'failure')
+    fs.writeFileSync(path.join(source, 'app.log'), 'before private-user after')
+    const result = runNode('test/e2e/support/redact.mjs', [source, destination, report], {
+      env: { ...process.env, MUNIMENT_E2E_USERNAME: 'private-user' },
+    })
+    expect(result.status).not.toBe(0)
+    expect(fs.readFileSync(report, 'utf8')).toBe('file: "app.log"\ncategory: verbatim-injected-secret\n')
+    expect(fs.readFileSync(report, 'utf8')).not.toContain('private-user')
+    expect(fs.existsSync(destination)).toBe(false)
   })
   it('blocks an injected value hidden in an approved screenshot file', () => {
     const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=', 'base64')
@@ -748,8 +769,14 @@ describe('cleanup failure accounting', () => {
     expect(envelopeMarkers(result.stdout)).toEqual([1, 1])
     const { result: extraction, extracted } = extractEnvelope(result.stdout)
     expect(extraction.status, extraction.stderr).toBe(0)
-    expect(fs.readdirSync(extracted).sort()).toEqual(['cleanup-status.log', 'envelope-reason.txt'])
+    const expectedFiles = failed === 'redact-artifacts'
+      ? ['cleanup-status.log', 'envelope-reason.txt', 'redaction-failure.txt']
+      : ['cleanup-status.log', 'envelope-reason.txt']
+    expect(fs.readdirSync(extracted).sort()).toEqual(expectedFiles)
     expect(fs.readFileSync(path.join(extracted, 'envelope-reason.txt'), 'utf8')).toContain(`reason: ${reason}`)
+    if (failed === 'redact-artifacts') {
+      expect(fs.readFileSync(path.join(extracted, 'redaction-failure.txt'), 'utf8')).toBe('file: unknown\ncategory: redactor-process\n')
+    }
     const ledger = fs.readFileSync(path.join(extracted, 'cleanup-status.log'), 'utf8').trim().split('\n')
     expect(ledger).toContain(`${failed}: failed`)
     for (const line of ledger) expect(line).toMatch(/^[a-z-]+: (?:ok|failed)$/)
@@ -788,7 +815,7 @@ describe('cleanup failure accounting', () => {
     expect(command['package-file-gone']).toBe(`cleanup_absent ${deb} `)
     expect(command['auth-url-gone']).toBe(`cleanup_absent ${auth} `)
     expect(command['safe-gone']).toBe(`cleanup_absent ${safe} `)
-    expect(command['redact-artifacts']).toBe(`node test/e2e/support/redact.mjs ${raw} ${safe} `)
+    expect(command['redact-artifacts']).toMatch(new RegExp(`^node test/e2e/support/redact\\.mjs ${raw} ${safe} /tmp/muniment-e2e-redaction\\.[^ ]+\\.log $`))
     expect(command['stage-cleanup-log']).toMatch(new RegExp(`^cp /tmp/muniment-e2e-cleanup\\.[^ ]+\\.log ${raw}/cleanup\\.log $`))
     const cleanupLog = command['stage-cleanup-log'].split(' ')[1]
     expect(command['replace-artifacts']).toMatch(/^rm -rf -- \/tmp\/muniment-e2e-test-[^/]+\/artifacts $/)
