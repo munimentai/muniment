@@ -193,12 +193,12 @@ export MUNIMENT_E2E_EXTERNAL_DRIVER=1
 export MUNIMENT_E2E_AUTH_URL_FILE="$auth_url_file" BROWSER="$PWD/test/e2e/support/browser-launcher.sh"
 export MUNIMENT_E2E_IMAGE_PATH="$image_fixture"
 ready=1
+# The per-phase XDG roots and MUNIMENT_E2E_ONBOARDING_ONLY separate the two phases.
 export XDG_DATA_HOME="$state_root/ready/data" XDG_CONFIG_HOME="$state_root/ready/config" XDG_CACHE_HOME="$state_root/ready/cache"
-export MUNIMENT_E2E_ONBOARDING_ONLY=1 MUNIMENT_E2E_MODEL_READY=1 MUNIMENT_E2E_HOME_PATH="$state_root/ready-home"
+export MUNIMENT_E2E_ONBOARDING_ONLY=1 MUNIMENT_E2E_HOME_PATH="$state_root/ready-home"
 run_e2e "$raw/wdio-onboarding.log" "$raw/driver-onboarding.log" || status=1
-unset MUNIMENT_E2E_ONBOARDING_ONLY MUNIMENT_E2E_MODEL_READY
+unset MUNIMENT_E2E_ONBOARDING_ONLY
 export XDG_DATA_HOME="$state_root/degraded/data" XDG_CONFIG_HOME="$state_root/degraded/config" XDG_CACHE_HOME="$state_root/degraded/cache"
 export MUNIMENT_E2E_HOME_PATH="$state_root/degraded-home"
-export MUNIMENT_E2E_FORCE_MANUAL=1
 run_e2e "$raw/wdio.log" "$raw/driver-app.log" || status=1
 exit
