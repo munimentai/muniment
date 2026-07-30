@@ -170,6 +170,10 @@ jobs:
         if: steps.changes.outputs.desktop == 'true' || steps.changes.outputs.resident_model_adr == 'true' || github.event_name != 'pull_request'
         run: cargo test --manifest-path src-tauri/core/Cargo.toml --locked --features network-tests
 
+      - name: Core and ACP unit tests
+        if: steps.changes.outputs.desktop == 'true' || steps.changes.outputs.companion == 'true' || github.event_name != 'pull_request'
+        run: cargo test --manifest-path src-tauri/Cargo.toml --package muniment-core --package muniment-acp --locked
+
       - name: Companion formatting
         if: steps.changes.outputs.companion == 'true'
         run: cargo fmt --manifest-path src-tauri/Cargo.toml --package muniment-attach --package muniment-cli --package muniment-acp --check
