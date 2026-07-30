@@ -9,7 +9,7 @@ use muniment_core::{
 };
 use serde::Serialize;
 use std::path::{Path, PathBuf};
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Manager, Runtime};
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -73,7 +73,7 @@ fn config_dir(app: &AppHandle) -> Result<PathBuf, String> {
         .map_err(|_| "Muniment configuration storage is unavailable.".to_string())
 }
 
-fn choose_default_home(
+pub(crate) fn choose_default_home(
     documents: Option<PathBuf>,
     home: Option<PathBuf>,
 ) -> Result<PathBuf, String> {
@@ -92,7 +92,7 @@ fn choose_default_home(
     })
 }
 
-fn default_home(app: &AppHandle) -> Result<PathBuf, String> {
+pub(crate) fn default_home<R: Runtime>(app: &AppHandle<R>) -> Result<PathBuf, String> {
     choose_default_home(app.path().document_dir().ok(), app.path().home_dir().ok())
 }
 
