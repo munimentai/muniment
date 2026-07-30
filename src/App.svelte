@@ -525,6 +525,9 @@
     }).then((stop) => {
       if (destroyed) stop()
       else pairingUnlisten = stop
+    }).catch(() => {
+      pairingUnlisten = undefined
+      console.error('Pairing decision failed.')
     })
     if (tauri) {
       const pollRequiredModel = async () => {
@@ -603,6 +606,9 @@
       }).then((stop) => {
         if (destroyed) stop()
         else stopDragDrop = stop
+      }).catch(() => {
+        stopDragDrop = undefined
+        console.error('File drop listener registration failed.')
       })
     return () => {
       destroyed = true
