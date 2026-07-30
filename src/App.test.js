@@ -1071,6 +1071,20 @@ describe('new thread', () => {
 })
 
 describe('Home onboarding', () => {
+  it('picks a Home after onboarding fails to load', async () => {
+    homeStatus = Promise.reject('The saved Home could not be read.')
+    dialogResult = '/Other/Muniment'
+    render(App)
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('The saved Home could not be read.')
+    expect(screen.getByRole('button', { name: 'Try again' })).toBeInTheDocument()
+    await fireEvent.click(screen.getByTestId('onboarding-picker'))
+
+    expect(await screen.findByTestId('onboarding-home-path')).toHaveTextContent('/Other/Muniment')
+    expect(screen.getByTestId('onboarding-confirm')).toBeEnabled()
+    expect(screen.queryByText('The saved Home could not be read.')).not.toBeInTheDocument()
+  })
+
   it('shows active model progress and stops polling when local AI becomes ready', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true })
     homeStatus = { configured: false, homePath: '/Documents/Muniment' }
