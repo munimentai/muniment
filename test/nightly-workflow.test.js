@@ -7,6 +7,7 @@ import { spawnSync } from 'node:child_process'
 const workflow = fs.readFileSync('.github/workflows/nightly.yml', 'utf8')
 const ensureJunitReport = 'test/e2e/support/ensure-junit-report.sh'
 
+// This helper needs a POSIX shell, and Windows has none.
 const runReportFallback = (directory, suite, runStatus, extractStatus, createSuccessReport = false) => {
   const result = spawnSync('bash', [ensureJunitReport, directory, suite, String(runStatus), String(extractStatus), createSuccessReport ? '1' : '0'], { encoding: 'utf8' })
   expect(result.status, result.stderr).toBe(0)
@@ -98,7 +99,7 @@ describe('nightly Windows E2E workflow', () => {
     expect(reportStep).not.toContain('path: ${{ runner.temp }}/muniment-windows-e2e-artifacts\n')
   })
 
-  it('publishes a parseable infrastructure failure when an extracted failure has no JUnit', () => {
+  it.skipIf(process.platform === 'win32')('publishes a parseable infrastructure failure when an extracted failure has no JUnit', () => {
     const artifacts = fs.mkdtempSync(path.join(os.tmpdir(), 'muniment-junit-'))
     fs.writeFileSync(path.join(artifacts, 'desktop-ci.log'), 'setup failed')
 
@@ -154,7 +155,7 @@ describe('nightly E2E JUnit fallback', () => {
     expect(workflow.match(/extract-artifacts\.sh "\$output" "\$RUNNER_TEMP\/[a-z0-9-]+" "\$run_status"/g)).toHaveLength(3)
   })
 
-  it('covers Linux and macOS setup failures with valid artifact envelopes', () => {
+  it.skipIf(process.platform === 'win32')('covers Linux and macOS setup failures with valid artifact envelopes', () => {
     for (const suite of ['installed-linux', 'installed-macos']) {
       const artifacts = fs.mkdtempSync(path.join(os.tmpdir(), 'muniment-junit-'))
       fs.writeFileSync(path.join(artifacts, 'diagnostics.log'), 'retained')
@@ -169,7 +170,7 @@ describe('nightly E2E JUnit fallback', () => {
     }
   })
 
-  it('retains an existing JUnit report instead of replacing it', () => {
+  it.skipIf(process.platform === 'win32')('retains an existing JUnit report instead of replacing it', () => {
     const artifacts = fs.mkdtempSync(path.join(os.tmpdir(), 'muniment-junit-'))
     const existing = path.join(artifacts, 'junit-results.xml')
     fs.writeFileSync(existing, '<testsuites/>')
@@ -178,7 +179,7 @@ describe('nightly E2E JUnit fallback', () => {
     expect(fs.existsSync(path.join(artifacts, 'junit-infrastructure.xml'))).toBe(false)
   })
 
-  it('creates the macOS smoke report required on a successful run', () => {
+  it.skipIf(process.platform === 'win32')('creates the macOS smoke report required on a successful run', () => {
     const artifacts = fs.mkdtempSync(path.join(os.tmpdir(), 'muniment-junit-'))
     runReportFallback(artifacts, 'installed-macos', 0, 0, true)
     const report = fs.readFileSync(path.join(artifacts, 'junit-smoke.xml'), 'utf8')

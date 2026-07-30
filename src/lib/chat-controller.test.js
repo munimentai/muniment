@@ -72,6 +72,39 @@ function setup(invoke = vi.fn()) {
 }
 
 describe('chat controller', () => {
+  it('reports a rejected listener registration and retries it with history', async () => {
+    const listen = vi.fn()
+      .mockRejectedValueOnce(new Error('registration failed'))
+      .mockResolvedValueOnce(vi.fn())
+    const onHistoryError = vi.fn()
+    const controller = createChatController({
+      invoke: vi.fn().mockResolvedValue({ summaries: [] }),
+      listen,
+      readMessages: () => [],
+      readActive: () => null,
+      readAnnounced: () => null,
+      readDraft: () => '',
+      readFiles: () => [],
+      onMessages: vi.fn(),
+      onActive: vi.fn(),
+      onAnnounce: vi.fn(),
+      onDraft: vi.fn(),
+      onFiles: vi.fn(),
+      onSubmitError: vi.fn(),
+      onCancelError: vi.fn(),
+      onQueueError: vi.fn(),
+      onHistoryError,
+    })
+
+    await expect(controller.start()).resolves.toBe(false)
+    expect(onHistoryError).toHaveBeenLastCalledWith('Live replies cannot arrive. Try again.')
+
+    await controller.loadHistory()
+
+    expect(listen).toHaveBeenCalledTimes(2)
+    expect(onHistoryError).toHaveBeenLastCalledWith('')
+  })
+
   it('deletes another thread without changing the transcript', async () => {
     const previous = [{ role: 'user', text: 'Keep this transcript' }]
     let summaries = [{ threadId: 'thread-1' }, { threadId: 'thread-2' }]

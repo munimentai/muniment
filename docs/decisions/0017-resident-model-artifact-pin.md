@@ -1,10 +1,12 @@
 # 0017 — Pin the resident Qwen3.5-4B model artifact
 
-- Status: accepted
+- Status: superseded by the 2026-07-29 cloud ingress ruling
 - Date: 2026-07-27
 - Context: harness-spec §15.3; ADR 0003, 0006, 0014; owner decision 2026-07-27
 
 ## Context
+
+> Historical record. The desktop no longer downloads or ships this artifact.
 
 [ADR 0003](0003-resident-gemma-model.md) pinned Google's Gemma 3 4B QAT Q4_0
 GGUF as the single resident local model. Since MUNIDESK-391 (2026-07-20) the

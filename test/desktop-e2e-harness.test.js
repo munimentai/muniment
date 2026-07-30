@@ -263,22 +263,23 @@ describe('Windows auth URL capture seam', () => {
   })
 })
 
-describe('macOS installed launch harness', () => {
+// This block runs a POSIX shell script, and Windows has no shell for it.
+describe.skipIf(process.platform === 'win32')('macOS installed launch harness', () => {
   const runnerPath = path.join(root, 'test/e2e/runner/macos.sh')
   const runner = fs.readFileSync(path.join(root, 'test/e2e/runner/macos.sh'), 'utf8')
   const finalizer = runner.slice(runner.indexOf('finalize()'), runner.indexOf('\nif [[ ${MUNIMENT_E2E_FINALIZER_TEST_MODE'))
   const finalizerPhases = [...finalizer.matchAll(/cleanup_step ([a-z-]+)/g)].map((match) => match[1])
 
-  const macosFixture = (failed = '') => {
+  const macosFixture = (failed = '', extraEnv = {}) => {
     const directory = temp(); const ledger = path.join(directory, 'ledger'); const statusLedger = path.join(directory, 'status-ledger'); const artifacts = path.join(directory, 'artifacts')
-    const env = { ...process.env, TMPDIR: directory, DCI_ARTIFACTS_DIR: artifacts, MUNIMENT_E2E_FINALIZER_TEST_MODE: '1', MUNIMENT_E2E_FINALIZER_TEST_LEDGER: ledger, MUNIMENT_E2E_FINALIZER_TEST_STATUS_LEDGER: statusLedger, MUNIMENT_E2E_FINALIZER_TEST_FAIL: failed }
+    const env = { ...process.env, TMPDIR: directory, DCI_ARTIFACTS_DIR: artifacts, MUNIMENT_E2E_FINALIZER_TEST_MODE: '1', MUNIMENT_E2E_FINALIZER_TEST_LEDGER: ledger, MUNIMENT_E2E_FINALIZER_TEST_STATUS_LEDGER: statusLedger, MUNIMENT_E2E_FINALIZER_TEST_FAIL: failed, ...extraEnv }
     const read = (file) => fs.existsSync(file) ? fs.readFileSync(file, 'utf8').trim().split(/\r?\n/).filter(Boolean) : []
-    const outcome = (result) => ({ result, invoked: read(ledger).map((line) => line.split('\t')[0]), statuses: Object.fromEntries(read(statusLedger).map((line) => line.split('\t'))) })
+    const outcome = (result) => ({ result, artifacts, invoked: read(ledger).map((line) => line.split('\t')[0]), statuses: Object.fromEntries(read(statusLedger).map((line) => line.split('\t'))) })
     return { directory, env, outcome }
   }
 
-  const runMacosFinalizer = (failed = '') => {
-    const fixture = macosFixture(failed)
+  const runMacosFinalizer = (failed = '', extraEnv = {}) => {
+    const fixture = macosFixture(failed, extraEnv)
     return fixture.outcome(spawnSync('bash', [runnerPath], { encoding: 'utf8', env: fixture.env }))
   }
 
@@ -350,6 +351,19 @@ describe('macOS installed launch harness', () => {
       else expect(invoked).toContain('suppress-artifacts')
     },
   )
+
+  it('publishes a minimal report without the planted secret after redaction fails', () => {
+    const plantedSecret = 'macos-planted-secret'
+    const { result, artifacts } = runMacosFinalizer('redact-artifacts', {
+      MUNIMENT_E2E_PASSWORD: plantedSecret,
+    })
+    expect(result.status).not.toBe(0)
+    expect(fs.readdirSync(artifacts).sort()).toEqual(['cleanup-status.log', 'envelope-reason.txt', 'redaction-failure.txt'])
+    expect(fs.readFileSync(path.join(artifacts, 'envelope-reason.txt'), 'utf8')).toContain('reason: redaction-failed')
+    const report = fs.readFileSync(path.join(artifacts, 'redaction-failure.txt'), 'utf8')
+    expect(report).toBe('file: unknown\ncategory: redactor-process\n')
+    expect(report).not.toContain(plantedSecret)
+  })
 })
 
 describe('Windows finalizer contract', () => {
@@ -444,8 +458,19 @@ describe('Windows finalizer contract', () => {
     expect(invoked.at(-1)).toBe('suppress-artifacts')
   })
 
-  it.skipIf(process.platform !== 'win32').each(['redact-artifacts', 'publish-artifacts'])('destroys raw/safe staging and suppresses publication after %s failure', (failed) => {
-    const { result, artifacts, directory, invoked } = runWindowsFinalizer(failed)
+  it.skipIf(process.platform !== 'win32')('publishes a minimal report after redaction failure', () => {
+    const { result, artifacts, directory, invoked } = runWindowsFinalizer('redact-artifacts')
+    expect(result.status).not.toBe(0)
+    expect(invoked).toContain('suppress-artifacts')
+    expect(fs.readdirSync(artifacts).sort()).toEqual(['cleanup-status.log', 'envelope-reason.txt', 'redaction-failure.txt'])
+    expect(fs.readFileSync(path.join(artifacts, 'envelope-reason.txt'), 'utf8')).toContain('reason: redaction-failed')
+    const report = fs.readFileSync(path.join(artifacts, 'redaction-failure.txt'), 'utf8').replaceAll('\r\n', '\n')
+    expect(report).toBe('file: unknown\ncategory: redactor-process\n')
+    expect(fs.readdirSync(directory).filter((name) => name.startsWith('muniment-e2e-'))).toEqual([])
+  })
+
+  it.skipIf(process.platform !== 'win32')('destroys raw and safe staging after publication failure', () => {
+    const { result, artifacts, directory, invoked } = runWindowsFinalizer('publish-artifacts')
     expect(result.status).not.toBe(0)
     expect(invoked).toContain('suppress-artifacts')
     expect(fs.existsSync(artifacts)).toBe(false)
@@ -494,21 +519,60 @@ describe('artifact redaction boundary', () => {
   })
   it.each([
     ['injected text', { 'app.log': 'private-user' }, { MUNIMENT_E2E_USERNAME: 'private-user' }],
-    ['header token', { 'driver.log': 'Authorization: Bearer abcdefghijklmnopqrstuvwxyz' }, {}],
     ['unapproved screenshot', { 'failure-current-window.png': Buffer.from('not safe') }, {}],
     ['rendered production conversation', { '03-chat-complete.png': Buffer.from('not safe') }, {}],
   ])('blocks %s before destination creation', (_name, files, env) => {
     const { result, destination } = redact(files, env)
     expect(result.status).not.toBe(0); expect(fs.existsSync(destination)).toBe(false)
   })
+  it.each([
+    ['credential-header', 'Authorization: Basic abcdefghijklmnopqrstuvwxyz'],
+    ['bearer-token', 'Bearer abcdefghijklmnopqrstuvwxyz'],
+    ['oauth-token', 'id_token=abcdef'],
+    ['github-token', 'ghp_abcdefghijklmnopqrstuvwxyz'],
+    ['jwt', 'eyJheader.eyJpayload.signature'],
+  ])('redacts %s content and names the category', (category, content) => {
+    const { result, destination } = redact({ 'page-source-sign-in.html': content })
+    expect(result.status).toBe(0)
+    expect(fs.readFileSync(path.join(destination, 'page-source-sign-in.html'), 'utf8')).toBe(`[REDACTED:${category}]`)
+  })
+  it('reports the file and category without reporting an injected value', () => {
+    const source = temp(); const destination = path.join(temp(), 'safe'); const report = path.join(temp(), 'failure')
+    fs.writeFileSync(path.join(source, 'app.log'), 'before private-user after')
+    const result = runNode('test/e2e/support/redact.mjs', [source, destination, report], {
+      env: { ...process.env, MUNIMENT_E2E_USERNAME: 'private-user' },
+    })
+    expect(result.status).not.toBe(0)
+    expect(fs.readFileSync(report, 'utf8')).toBe('file: "app.log"\ncategory: verbatim-injected-secret\n')
+    expect(fs.readFileSync(report, 'utf8')).not.toContain('private-user')
+    expect(fs.existsSync(destination)).toBe(false)
+  })
   it('blocks an injected value hidden in an approved screenshot file', () => {
     const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=', 'base64')
     const { result, destination } = redact({ '01-signed-out.png': Buffer.concat([png, Buffer.from('private-user')]) }, { MUNIMENT_E2E_USERNAME: 'private-user' })
     expect(result.status).not.toBe(0); expect(fs.existsSync(destination)).toBe(false)
   })
+  it('strips harmless screenshot metadata', () => {
+    const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=', 'base64')
+    const metadata = Buffer.alloc(16)
+    metadata.writeUInt32BE(4); metadata.write('tEXt', 4); metadata.write('test', 8)
+    const input = Buffer.concat([png.subarray(0, 33), metadata, png.subarray(33)])
+    const { result, destination } = redact({ 'screenshot-cleanup.png': input })
+    expect(result.status, result.stderr).toBe(0)
+    expect(fs.readFileSync(path.join(destination, 'screenshot-cleanup.png'))).toEqual(png)
+  })
+  it('blocks an unknown critical screenshot chunk', () => {
+    const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=', 'base64')
+    const chunk = Buffer.alloc(12)
+    chunk.write('ABCD', 4)
+    const input = Buffer.concat([png.subarray(0, 33), chunk, png.subarray(33)])
+    const { result, destination } = redact({ 'screenshot-cleanup.png': input })
+    expect(result.status).not.toBe(0); expect(fs.existsSync(destination)).toBe(false)
+  })
 })
 
-describe('desktop-ci payload extraction', () => {
+// This block runs a POSIX shell script, and Windows has no shell for it.
+describe.skipIf(process.platform === 'win32')('desktop-ci payload extraction', () => {
   const markers = (body) => `=== DESKTOP-CI ARTIFACTS BEGIN ===\n${body}\n=== DESKTOP-CI ARTIFACTS END ===\n`
   // The driver's own --collect-artifacts fence, used when the guest never
   // published an envelope of its own (runner contract).
@@ -677,7 +741,8 @@ describe('desktop-ci payload extraction', () => {
   })
 })
 
-describe('cleanup failure accounting', () => {
+// This block runs a POSIX shell script, and Windows has no shell for it.
+describe.skipIf(process.platform === 'win32')('cleanup failure accounting', () => {
   const runner = fs.readFileSync(path.join(root, 'test/e2e/runner/linux.sh'), 'utf8')
   const phases = ['stop-wdio', 'stop-driver', 'revoke-session', 'stop-browser-driver', 'stop-app', 'remove-package', 'remove-state', 'package-gone', 'processes-gone', 'state-gone', 'stage-cleanup-log', 'redact-artifacts', 'remove-raw', 'remove-package-file', 'remove-auth-url', 'replace-artifacts', 'publish-artifacts', 'suppress-artifacts', 'remove-safe', 'raw-gone', 'package-file-gone', 'auth-url-gone', 'safe-gone', 'remove-cleanup-log']
   const runFinalizer = (failed = '', extraEnv = {}) => {
@@ -748,8 +813,14 @@ describe('cleanup failure accounting', () => {
     expect(envelopeMarkers(result.stdout)).toEqual([1, 1])
     const { result: extraction, extracted } = extractEnvelope(result.stdout)
     expect(extraction.status, extraction.stderr).toBe(0)
-    expect(fs.readdirSync(extracted).sort()).toEqual(['cleanup-status.log', 'envelope-reason.txt'])
+    const expectedFiles = failed === 'redact-artifacts'
+      ? ['cleanup-status.log', 'envelope-reason.txt', 'redaction-failure.txt']
+      : ['cleanup-status.log', 'envelope-reason.txt']
+    expect(fs.readdirSync(extracted).sort()).toEqual(expectedFiles)
     expect(fs.readFileSync(path.join(extracted, 'envelope-reason.txt'), 'utf8')).toContain(`reason: ${reason}`)
+    if (failed === 'redact-artifacts') {
+      expect(fs.readFileSync(path.join(extracted, 'redaction-failure.txt'), 'utf8')).toBe('file: unknown\ncategory: redactor-process\n')
+    }
     const ledger = fs.readFileSync(path.join(extracted, 'cleanup-status.log'), 'utf8').trim().split('\n')
     expect(ledger).toContain(`${failed}: failed`)
     for (const line of ledger) expect(line).toMatch(/^[a-z-]+: (?:ok|failed)$/)
@@ -788,7 +859,7 @@ describe('cleanup failure accounting', () => {
     expect(command['package-file-gone']).toBe(`cleanup_absent ${deb} `)
     expect(command['auth-url-gone']).toBe(`cleanup_absent ${auth} `)
     expect(command['safe-gone']).toBe(`cleanup_absent ${safe} `)
-    expect(command['redact-artifacts']).toBe(`node test/e2e/support/redact.mjs ${raw} ${safe} `)
+    expect(command['redact-artifacts']).toMatch(new RegExp(`^node test/e2e/support/redact\\.mjs ${raw} ${safe} /tmp/muniment-e2e-redaction\\.[^ ]+\\.log $`))
     expect(command['stage-cleanup-log']).toMatch(new RegExp(`^cp /tmp/muniment-e2e-cleanup\\.[^ ]+\\.log ${raw}/cleanup\\.log $`))
     const cleanupLog = command['stage-cleanup-log'].split(' ')[1]
     expect(command['replace-artifacts']).toMatch(/^rm -rf -- \/tmp\/muniment-e2e-test-[^/]+\/artifacts $/)
