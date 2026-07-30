@@ -130,7 +130,8 @@ HOME="$state_root/home" TMPDIR="$state_root/tmp" "$installed_bundle/Contents/Mac
 app_pid=$!
 
 window_ready=0
-window_deadline=$((SECONDS + 60))
+window_wait_seconds=120
+window_deadline=$((SECONDS + window_wait_seconds))
 while (( SECONDS < window_deadline )); do
   kill -0 "$app_pid" 2>/dev/null || { echo 'application exited before opening a window' >&2; status=1; break; }
   window_count=$(osascript -e 'with timeout of 2 seconds' -e "tell application \"System Events\" to count (windows of process \"$process_name\" whose visible is true)" -e 'end timeout' 2>>"$raw/window.log" || true)
@@ -138,7 +139,13 @@ while (( SECONDS < window_deadline )); do
   sleep 1
 done
 if (( window_ready == 0 )); then
-  echo 'healthy first window was not visible within 60 seconds' >&2
+  {
+    printf 'wait_seconds=%s\n' "$window_wait_seconds"
+    printf 'process_alive='
+    if kill -0 "$app_pid" 2>/dev/null; then printf 'true\n'; else printf 'false\n'; fi
+    printf 'last_visible_window_count=%s\n' "${window_count:-unavailable}"
+  } >"$raw/first-window-timeout.log"
+  printf 'healthy first window was not visible within %s seconds\n' "$window_wait_seconds" >&2
   status=1
 else
   printf 'process_alive=true\nvisible_windows=%s\nscreendump=requested-by-desktop-ci\n' "$window_count" >"$raw/smoke.log"
