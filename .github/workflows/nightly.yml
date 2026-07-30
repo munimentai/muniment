@@ -505,7 +505,7 @@ jobs:
     if: >-
       always() && (needs.linux-e2e.result == 'failure' ||
       needs.windows-e2e.result == 'failure' || needs.macos-e2e.result == 'failure')
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     permissions:
       issues: write
     steps:
