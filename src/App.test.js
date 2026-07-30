@@ -252,8 +252,18 @@ describe('pairing decisions', () => {
     render(App)
     await waitFor(() => expect(pairingListener).toBeDefined())
 
-    await pairingListener({ payload: 'challenge-1' })
+    await pairingListener({
+      payload: {
+        challenge: 'challenge-1',
+        claimed_kind: 'ACP adapter',
+        claimed_version: '2.4.1',
+      },
+    })
 
+    expect(confirmResult).toHaveBeenCalledWith(
+      'The connecting program supplied these claims: kind ACP adapter and version 2.4.1. Allow this program to connect to this Muniment desktop session?',
+      { title: 'Approve Muniment connection', kind: 'info' },
+    )
     expect(invoke).toHaveBeenCalledWith('attach_pairing_decide', {
       challenge: 'challenge-1',
       approve,
@@ -273,7 +283,7 @@ describe('pairing decisions', () => {
     render(App)
     await waitFor(() => expect(pairingListener).toBeDefined())
 
-    await expect(pairingListener({ payload: 'challenge-2' })).resolves.toBeUndefined()
+    await expect(pairingListener({ payload: { challenge: 'challenge-2' } })).resolves.toBeUndefined()
 
     expect(error).toHaveBeenCalledWith('Pairing decision failed.')
     expect(error).not.toHaveBeenCalledWith(expect.stringContaining('sensitive'))
@@ -285,10 +295,30 @@ describe('pairing decisions', () => {
     render(App)
     await waitFor(() => expect(pairingListener).toBeDefined())
 
-    await expect(pairingListener({ payload: 'challenge-3' })).resolves.toBeUndefined()
+    await expect(pairingListener({ payload: { challenge: 'challenge-3' } })).resolves.toBeUndefined()
 
     expect(invoke).not.toHaveBeenCalledWith('attach_pairing_decide', expect.anything())
     expect(error).toHaveBeenCalledWith('Pairing decision failed.')
+  })
+
+  it.each([
+    ['missing', {}],
+    ['empty', { claimed_kind: '', claimed_version: '   ' }],
+    ['over-long', { claimed_kind: 'x'.repeat(81), claimed_version: '1.0.0' }],
+    ['control-character', { claimed_kind: 'ACP\u0000adapter', claimed_version: '1.0.0' }],
+  ])('uses a neutral fallback for a %s claim', async (_, claim) => {
+    render(App)
+    await waitFor(() => expect(pairingListener).toBeDefined())
+
+    await expect(pairingListener({
+      payload: { challenge: 'challenge-hostile', ...claim },
+    })).resolves.toBeUndefined()
+
+    expect(confirmResult.mock.calls[0][0]).toContain('unknown')
+    expect(invoke).toHaveBeenCalledWith('attach_pairing_decide', {
+      challenge: 'challenge-hostile',
+      approve: false,
+    })
   })
 })
 

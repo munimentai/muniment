@@ -11,8 +11,8 @@ use std::time::Duration;
 
 #[cfg(target_os = "linux")]
 use muniment_core::attach::linux::{
-    run_authenticated_session_with_service_and_approvals, AttachAcceptError, AttachFilesystem,
-    AttachTransport, CompanionProvenance, RunStartAccepted,
+    approval_waiter_with_claims, run_authenticated_session_with_service_and_approvals,
+    AttachAcceptError, AttachFilesystem, AttachTransport, CompanionProvenance, RunStartAccepted,
     RunStartRequest as AttachRunStartRequest, ThreadListPage, ThreadListRequest, ThreadListService,
     ThreadOpenPage, ThreadOpenRequest,
 };
@@ -104,6 +104,27 @@ impl AttachListenerState {
 #[derive(Default)]
 pub struct AttachApprovalState {
     pending: Mutex<HashMap<String, std::sync::mpsc::SyncSender<bool>>>,
+}
+
+#[cfg(target_os = "linux")]
+#[derive(serde::Serialize)]
+struct AttachPairingRequest {
+    challenge: String,
+    claimed_kind: String,
+    claimed_version: String,
+}
+
+#[cfg(target_os = "linux")]
+fn bounded_claim(claim: &str) -> String {
+    const MAX_CLAIM_LENGTH: usize = 80;
+    if claim.chars().any(char::is_control)
+        || claim.trim().is_empty()
+        || claim.chars().take(MAX_CLAIM_LENGTH + 1).count() > MAX_CLAIM_LENGTH
+    {
+        "unknown".into()
+    } else {
+        claim.into()
+    }
 }
 
 #[tauri::command]
@@ -224,28 +245,37 @@ pub fn start_attach_listener<R: tauri::Runtime>(app: tauri::AppHandle<R>) {
                     credentials,
                     env!("CARGO_PKG_VERSION"),
                     &mut service,
-                    move |challenge: &muniment_core::attach::PairingChallenge,
-                          remaining: Duration| {
-                        let challenge = challenge.as_str().to_owned();
-                        let (sender, receiver) = std::sync::mpsc::sync_channel(1);
-                        let state = approval_app.state::<AttachApprovalState>();
-                        state.pending.lock().ok()?.insert(challenge.clone(), sender);
-                        if approval_app
-                            .emit("attach-pairing-requested", &challenge)
-                            .is_err()
-                        {
+                    approval_waiter_with_claims(
+                        move |challenge: &muniment_core::attach::PairingChallenge,
+                              claimed_kind: &str,
+                              claimed_version: &str,
+                              remaining: Duration| {
+                            let challenge = challenge.as_str().to_owned();
+                            let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+                            let state = approval_app.state::<AttachApprovalState>();
+                            state.pending.lock().ok()?.insert(challenge.clone(), sender);
+                            let request = AttachPairingRequest {
+                                challenge: challenge.clone(),
+                                claimed_kind: bounded_claim(claimed_kind),
+                                claimed_version: bounded_claim(claimed_version),
+                            };
+                            if approval_app
+                                .emit("attach-pairing-requested", &request)
+                                .is_err()
+                            {
+                                state.pending.lock().ok()?.remove(&challenge);
+                                return Some(muniment_core::attach::linux::ApprovalDecision::Deny);
+                            }
+                            let approved = receiver.recv_timeout(remaining).unwrap_or(false);
                             state.pending.lock().ok()?.remove(&challenge);
-                            return Some(muniment_core::attach::linux::ApprovalDecision::Deny);
-                        }
-                        let approved = receiver.recv_timeout(remaining).unwrap_or(false);
-                        state.pending.lock().ok()?.remove(&challenge);
-                        if !approved {
-                            return Some(muniment_core::attach::linux::ApprovalDecision::Deny);
-                        }
-                        Some(muniment_core::attach::linux::ApprovalDecision::Approve(
-                            desktop_attach_approval()?,
-                        ))
-                    },
+                            if !approved {
+                                return Some(muniment_core::attach::linux::ApprovalDecision::Deny);
+                            }
+                            Some(muniment_core::attach::linux::ApprovalDecision::Approve(
+                                desktop_attach_approval()?,
+                            ))
+                        },
+                    ),
                 );
             });
         }

@@ -30,6 +30,16 @@
   const thinkingMarkD = solidMilledRingPath()
   const version = __APP_VERSION__
 
+  function boundedAttachClaim(value) {
+    const claim = typeof value === 'string' ? [...value] : []
+    return claim.length > 0
+      && claim.length <= 80
+      && claim.join('').trim()
+      && !claim.some((character) => /[\p{Cc}\p{Cf}]/u.test(character))
+      ? value
+      : 'unknown'
+  }
+
   function fullDateTime(timestamp) {
     const date = new Date(timestamp)
     return Number.isNaN(date.getTime()) ? '' : date.toLocaleString()
@@ -481,10 +491,13 @@
 
   onMount(() => {
     let pairingUnlisten
-    window.__TAURI__?.event?.listen('attach-pairing-requested', async ({ payload: challenge }) => {
+    window.__TAURI__?.event?.listen('attach-pairing-requested', async ({ payload }) => {
       try {
+        const challenge = payload?.challenge
+        const claimedKind = boundedAttachClaim(payload?.claimed_kind)
+        const claimedVersion = boundedAttachClaim(payload?.claimed_version)
         const approve = await confirm(
-          'Allow the CLI or VS Code to connect to this Muniment desktop session?',
+          `The connecting program supplied these claims: kind ${claimedKind} and version ${claimedVersion}. Allow this program to connect to this Muniment desktop session?`,
           { title: 'Approve Muniment connection', kind: 'info' },
         )
         await tauri.invoke('attach_pairing_decide', { challenge, approve })
