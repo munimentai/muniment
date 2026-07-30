@@ -269,16 +269,16 @@ describe('macOS installed launch harness', () => {
   const finalizer = runner.slice(runner.indexOf('finalize()'), runner.indexOf('\nif [[ ${MUNIMENT_E2E_FINALIZER_TEST_MODE'))
   const finalizerPhases = [...finalizer.matchAll(/cleanup_step ([a-z-]+)/g)].map((match) => match[1])
 
-  const macosFixture = (failed = '') => {
+  const macosFixture = (failed = '', extraEnv = {}) => {
     const directory = temp(); const ledger = path.join(directory, 'ledger'); const statusLedger = path.join(directory, 'status-ledger'); const artifacts = path.join(directory, 'artifacts')
-    const env = { ...process.env, TMPDIR: directory, DCI_ARTIFACTS_DIR: artifacts, MUNIMENT_E2E_FINALIZER_TEST_MODE: '1', MUNIMENT_E2E_FINALIZER_TEST_LEDGER: ledger, MUNIMENT_E2E_FINALIZER_TEST_STATUS_LEDGER: statusLedger, MUNIMENT_E2E_FINALIZER_TEST_FAIL: failed }
+    const env = { ...process.env, TMPDIR: directory, DCI_ARTIFACTS_DIR: artifacts, MUNIMENT_E2E_FINALIZER_TEST_MODE: '1', MUNIMENT_E2E_FINALIZER_TEST_LEDGER: ledger, MUNIMENT_E2E_FINALIZER_TEST_STATUS_LEDGER: statusLedger, MUNIMENT_E2E_FINALIZER_TEST_FAIL: failed, ...extraEnv }
     const read = (file) => fs.existsSync(file) ? fs.readFileSync(file, 'utf8').trim().split(/\r?\n/).filter(Boolean) : []
-    const outcome = (result) => ({ result, invoked: read(ledger).map((line) => line.split('\t')[0]), statuses: Object.fromEntries(read(statusLedger).map((line) => line.split('\t'))) })
+    const outcome = (result) => ({ result, artifacts, invoked: read(ledger).map((line) => line.split('\t')[0]), statuses: Object.fromEntries(read(statusLedger).map((line) => line.split('\t'))) })
     return { directory, env, outcome }
   }
 
-  const runMacosFinalizer = (failed = '') => {
-    const fixture = macosFixture(failed)
+  const runMacosFinalizer = (failed = '', extraEnv = {}) => {
+    const fixture = macosFixture(failed, extraEnv)
     return fixture.outcome(spawnSync('bash', [runnerPath], { encoding: 'utf8', env: fixture.env }))
   }
 
@@ -350,6 +350,19 @@ describe('macOS installed launch harness', () => {
       else expect(invoked).toContain('suppress-artifacts')
     },
   )
+
+  it('publishes a minimal report without the planted secret after redaction fails', () => {
+    const plantedSecret = 'macos-planted-secret'
+    const { result, artifacts } = runMacosFinalizer('redact-artifacts', {
+      MUNIMENT_E2E_PASSWORD: plantedSecret,
+    })
+    expect(result.status).not.toBe(0)
+    expect(fs.readdirSync(artifacts).sort()).toEqual(['cleanup-status.log', 'envelope-reason.txt', 'redaction-failure.txt'])
+    expect(fs.readFileSync(path.join(artifacts, 'envelope-reason.txt'), 'utf8')).toContain('reason: redaction-failed')
+    const report = fs.readFileSync(path.join(artifacts, 'redaction-failure.txt'), 'utf8')
+    expect(report).toBe('file: unknown\ncategory: redactor-process\n')
+    expect(report).not.toContain(plantedSecret)
+  })
 })
 
 describe('Windows finalizer contract', () => {
@@ -444,8 +457,19 @@ describe('Windows finalizer contract', () => {
     expect(invoked.at(-1)).toBe('suppress-artifacts')
   })
 
-  it.skipIf(process.platform !== 'win32').each(['redact-artifacts', 'publish-artifacts'])('destroys raw/safe staging and suppresses publication after %s failure', (failed) => {
-    const { result, artifacts, directory, invoked } = runWindowsFinalizer(failed)
+  it.skipIf(process.platform !== 'win32')('publishes a minimal report after redaction failure', () => {
+    const { result, artifacts, directory, invoked } = runWindowsFinalizer('redact-artifacts')
+    expect(result.status).not.toBe(0)
+    expect(invoked).toContain('suppress-artifacts')
+    expect(fs.readdirSync(artifacts).sort()).toEqual(['cleanup-status.log', 'envelope-reason.txt', 'redaction-failure.txt'])
+    expect(fs.readFileSync(path.join(artifacts, 'envelope-reason.txt'), 'utf8')).toContain('reason: redaction-failed')
+    const report = fs.readFileSync(path.join(artifacts, 'redaction-failure.txt'), 'utf8').replaceAll('\r\n', '\n')
+    expect(report).toBe('file: unknown\ncategory: redactor-process\n')
+    expect(fs.readdirSync(directory).filter((name) => name.startsWith('muniment-e2e-'))).toEqual([])
+  })
+
+  it.skipIf(process.platform !== 'win32')('destroys raw and safe staging after publication failure', () => {
+    const { result, artifacts, directory, invoked } = runWindowsFinalizer('publish-artifacts')
     expect(result.status).not.toBe(0)
     expect(invoked).toContain('suppress-artifacts')
     expect(fs.existsSync(artifacts)).toBe(false)
