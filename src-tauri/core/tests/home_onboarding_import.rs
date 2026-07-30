@@ -111,8 +111,7 @@ fn rejects_empty_inputs_and_disambiguates_duplicate_destinations() {
 
     let duplicate = entry("same.md", "same-source", "body");
     let duplicate_plan =
-        compile_onboarding_home_write_plan(&[duplicate.clone(), duplicate], date)
-            .unwrap();
+        compile_onboarding_home_write_plan(&[duplicate.clone(), duplicate], date).unwrap();
     assert_ne!(
         duplicate_plan.writes()[0].relative_path(),
         duplicate_plan.writes()[1].relative_path()
