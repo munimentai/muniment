@@ -300,6 +300,7 @@ mod tests {
         let plan = compile_onboarding_home_write_plan(&[entry.clone()], date).unwrap();
         let collision = &plan.writes()[0];
         scaffold_home(&home).unwrap();
+        fs::create_dir_all(home.join(collision.relative_path()).parent().unwrap()).unwrap();
         fs::write(home.join(collision.relative_path()), b"user content").unwrap();
 
         let error = confirm_import(&config, &home, &[entry], date).unwrap_err();
