@@ -123,8 +123,11 @@
 
 {#if onboarding.name !== 'complete'}
 <section class="onboarding" aria-labelledby="onboarding-title">
-  <p class="eyebrow">{onboarding.savedHomePath ? 'Home settings' : 'First-run setup'}</p>
-  <h1 id="onboarding-title">{['pre-triage', 'triaging', 'triage-error'].includes(onboarding.name) ? 'Create your local proposal' : ['triage-review', 'triage-confirmed', 'triage-saving', 'triage-invalid'].includes(onboarding.name) ? 'Review your onboarding proposal' : ['import-choice', 'previewing', 'reviewing', 'extracting', 'finalizing'].includes(onboarding.name) ? 'Review an assistant export' : 'Choose your Muniment Home'}</h1>
+  <header>
+    <p class="eyebrow">{onboarding.savedHomePath ? 'Home settings' : 'First-run setup'}</p>
+    <h1 id="onboarding-title">{['pre-triage', 'triaging', 'triage-error'].includes(onboarding.name) ? 'Create your local proposal' : ['triage-review', 'triage-confirmed', 'triage-saving', 'triage-invalid'].includes(onboarding.name) ? 'Review your onboarding proposal' : ['import-choice', 'previewing', 'reviewing', 'extracting', 'finalizing'].includes(onboarding.name) ? 'Review an assistant export' : 'Choose your Muniment Home'}</h1>
+  </header>
+  <div class="onboarding-content">
   {#if onboarding.name === 'loading'}
     <p class="support" role="status">Finding your Documents folder…</p>
   {:else if ['choosing', 'confirming', 'settings', 'confirming-settings'].includes(onboarding.name)}
@@ -135,10 +138,6 @@
       <button data-testid="onboarding-picker" onclick={chooseHome} disabled={onboarding.name.startsWith('confirming')}>Choose folder…</button>
     </div>
     <p class="folder-preview"><span>memory/</span><span>agents/</span><span>projects/</span><span>sessions/</span></p>
-    <div class="onboarding-footer">
-      {#if onboarding.savedHomePath}<button data-testid="onboarding-cancel" onclick={() => { onboarding = onboardingCancelSettingsState(onboarding) }} disabled={onboarding.name === 'confirming-settings'}>Cancel</button>{:else}<span class="privacy-note">Plain Markdown · stored locally</span>{/if}
-      <button data-testid="onboarding-confirm" class="primary" onclick={confirmHome} disabled={onboarding.name.startsWith('confirming') || !onboarding.homePath}>{onboarding.name.startsWith('confirming') ? 'Creating Home…' : 'Confirm and continue'}</button>
-    </div>
     {#if onboarding.error}<p class="onboarding-error" role="alert">{onboarding.error}</p>{/if}
   {:else if ['import-choice', 'previewing', 'reviewing', 'extracting', 'finalizing'].includes(onboarding.name)}
     <p class="support">Optionally choose one assistant export ZIP. Preview happens locally and is read-only; nothing is imported or sent to a model.</p>
@@ -165,10 +164,6 @@
       </div>
     {/if}
     {#if onboarding.error}<p class="onboarding-error" role="alert">{onboarding.error}</p>{/if}
-    <div class="onboarding-footer">
-      {#if ['reviewing', 'extracting'].includes(onboarding.name)}<button data-testid="onboarding-import-picker" onclick={chooseImportArchive}>Choose a different ZIP…</button>{:else}<span class="privacy-note">Local preview · no Home writes</span>{/if}
-      <div class="onboarding-actions"><button data-testid="onboarding-import-skip" onclick={skipImport} disabled={onboarding.name === 'finalizing'}>{onboarding.name === 'finalizing' ? 'Creating Home…' : 'Continue without importing'}</button>{#if ['reviewing', 'extracting'].includes(onboarding.name)}<button data-testid="onboarding-import-continue" class="primary" onclick={extractImportSelection} disabled={onboarding.name === 'extracting' || onboarding.selectedNames.length === 0}>{onboarding.name === 'extracting' ? 'Reading approved files…' : 'Continue with selected'}</button>{/if}</div>
-    </div>
   {:else if ['pre-triage', 'triaging', 'triage-error'].includes(onboarding.name)}
     <p class="support">Generate a local proposal from {onboarding.extractedEntries.length} approved {onboarding.extractedEntries.length === 1 ? 'file' : 'files'}. You will review it before anything can be imported.</p>
     <ul class="triage-sources" aria-label="Approved sources">{#each onboarding.extractedEntries as entry}<li><strong>{entry.sourceName}</strong><span>{entry.sourceProvenance}</span></li>{/each}</ul>
@@ -187,7 +182,6 @@
     </div>
     <h2 class="source-heading">Approved sources</h2>
     <ul class="triage-sources" aria-label="Approved sources">{#each onboarding.extractedEntries as entry}<li><strong>{entry.sourceName}</strong><span>{entry.sourceProvenance}</span></li>{/each}</ul>
-    <div class="onboarding-footer"><button data-testid="onboarding-triage-back" onclick={returnToArchiveReview}>Back to archive review</button><button data-testid="onboarding-triage-confirm" class="primary" onclick={() => { onboarding = onboardingTriageConfirmedState(onboarding) }}>Confirm onboarding proposal</button></div>
   {:else if ['triage-confirmed', 'triage-saving', 'triage-invalid'].includes(onboarding.name)}
     <p class="support">Your reviewed proposal and approved files are ready to save to this Muniment Home.</p>
     <div class="path-card">
@@ -202,23 +196,40 @@
         {#if onboarding.errorKind === 'destinationConflict' && onboarding.conflictPath}<p>Conflicting destination: <strong>{onboarding.conflictPath}</strong></p>{/if}
       </div>
     {/if}
-    <div class="onboarding-footer">
+  {:else if onboarding.name === 'load-error'}
+    <p class="support">Onboarding could not start.</p><button onclick={loadOnboarding}>Try again</button>
+    <p class="onboarding-error" role="alert">{onboarding.error}</p>
+  {/if}
+  </div>
+  {#if ['choosing', 'confirming', 'settings', 'confirming-settings'].includes(onboarding.name)}
+    <footer class="onboarding-footer">
+      {#if onboarding.savedHomePath}<button data-testid="onboarding-cancel" onclick={() => { onboarding = onboardingCancelSettingsState(onboarding) }} disabled={onboarding.name === 'confirming-settings'}>Cancel</button>{:else}<span class="privacy-note">Plain Markdown · stored locally</span>{/if}
+      <button data-testid="onboarding-confirm" class="primary" onclick={confirmHome} disabled={onboarding.name.startsWith('confirming') || !onboarding.homePath}>{onboarding.name.startsWith('confirming') ? 'Creating Home…' : 'Confirm and continue'}</button>
+    </footer>
+  {:else if ['import-choice', 'previewing', 'reviewing', 'extracting', 'finalizing'].includes(onboarding.name)}
+    <footer class="onboarding-footer">
+      {#if ['reviewing', 'extracting'].includes(onboarding.name)}<button data-testid="onboarding-import-picker" onclick={chooseImportArchive}>Choose a different ZIP…</button>{:else}<span class="privacy-note">Local preview · no Home writes</span>{/if}
+      <div class="onboarding-actions"><button data-testid="onboarding-import-skip" onclick={skipImport} disabled={onboarding.name === 'finalizing'}>{onboarding.name === 'finalizing' ? 'Creating Home…' : 'Continue without importing'}</button>{#if ['reviewing', 'extracting'].includes(onboarding.name)}<button data-testid="onboarding-import-continue" class="primary" onclick={extractImportSelection} disabled={onboarding.name === 'extracting' || onboarding.selectedNames.length === 0}>{onboarding.name === 'extracting' ? 'Reading approved files…' : 'Continue with selected'}</button>{/if}</div>
+    </footer>
+  {:else if onboarding.name === 'triage-review'}
+    <footer class="onboarding-footer"><button data-testid="onboarding-triage-back" onclick={returnToArchiveReview}>Back to archive review</button><button data-testid="onboarding-triage-confirm" class="primary" onclick={() => { onboarding = onboardingTriageConfirmedState(onboarding) }}>Confirm onboarding proposal</button></footer>
+  {:else if ['triage-confirmed', 'triage-saving', 'triage-invalid'].includes(onboarding.name)}
+    <footer class="onboarding-footer">
       {#if onboarding.name === 'triage-invalid'}
         <button data-testid="onboarding-import-recover" onclick={returnToArchiveReview}>Back to archive review</button>
       {:else}
         <span class="privacy-note">Local import · reviewed files only</span>
         <button data-testid="onboarding-import-save" class="primary" onclick={saveConfirmedImport} disabled={onboarding.name === 'triage-saving'}>{onboarding.name === 'triage-saving' ? 'Saving Home…' : 'Save Home and finish'}</button>
       {/if}
-    </div>
-  {:else if onboarding.name === 'load-error'}
-    <p class="support">Onboarding could not start.</p><button onclick={loadOnboarding}>Try again</button>
-    <p class="onboarding-error" role="alert">{onboarding.error}</p>
+    </footer>
   {/if}
 </section>
 {/if}
 
 <style>
-  .onboarding { width: min(680px, calc(100vw - 48px)); margin-top: 28px; }
+  .onboarding { width: min(680px, calc(100vw - 48px)); max-height: 100%; min-height: 0; display: flex; flex-direction: column; align-self: center; overflow: hidden; }
+  .onboarding > header { flex: none; }
+  .onboarding-content { min-height: 0; overflow-y: auto; }
   .onboarding h1 { margin: 4px 0 10px; font-size: var(--text-28); letter-spacing: -.02em; }
   .eyebrow, .path-label, .privacy-note { color: var(--muted); font: var(--text-12) var(--font-mono); }
   .path-card { display: grid; grid-template-columns: 1fr auto; gap: 7px 16px; align-items: center; margin-top: 24px; padding: 15px 16px; border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--surface); }
@@ -227,18 +238,18 @@
   .folder-preview { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0 0; }
   .folder-preview span { padding: 4px 8px; border: 1px solid var(--border); border-radius: var(--radius-control); color: var(--muted); font: var(--text-12) var(--font-mono); }
   .onboarding-error { margin: 10px 0 0; color: var(--muted); font: var(--text-12) var(--font-mono); line-height: 1.5; }
-  .onboarding-footer { display: flex; justify-content: space-between; align-items: center; gap: 16px; margin-top: 22px; }
+  .onboarding-footer { display: flex; flex: none; justify-content: space-between; align-items: center; gap: 16px; padding-top: 22px; }
   .primary { background: var(--ink); border-color: var(--ink); color: var(--paper); }
   .manifest-summary { display: flex; justify-content: space-between; gap: 16px; margin-top: 22px; padding-bottom: 9px; border-bottom: 1px solid var(--border); color: var(--muted); font: var(--text-12) var(--font-mono); }
   .manifest-summary strong { color: var(--ink); font-weight: 500; }
-  .manifest { max-height: min(42vh, 360px); margin: 0; padding: 0; overflow-y: auto; list-style: none; }
+  .manifest { margin: 0; padding: 0; list-style: none; }
   .manifest li { padding: 12px 0; border-bottom: 1px solid var(--border); }
   .manifest-consent { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 10px; align-items: start; cursor: pointer; }
   .manifest-consent input { margin-top: 2px; accent-color: var(--ink); }
   .manifest-meta { display: flex; justify-content: space-between; gap: 16px; font: var(--text-12) var(--font-mono); }
   .manifest-meta strong { min-width: 0; overflow-wrap: anywhere; font-weight: 500; }
   .manifest-meta span { flex: 0 0 auto; color: var(--muted); }
-  .manifest pre { max-height: 96px; margin: 8px 0 0; padding: 8px 10px; overflow: auto; border-radius: var(--radius-control); background: var(--faint); color: var(--muted); font: var(--text-12) var(--font-mono); white-space: pre-wrap; overflow-wrap: anywhere; }
+  .manifest pre { margin: 8px 0 0; padding: 8px 10px; border-radius: var(--radius-control); background: var(--faint); color: var(--muted); font: var(--text-12) var(--font-mono); white-space: pre-wrap; overflow-wrap: anywhere; }
   .empty-manifest { margin: 0; padding: 18px 0; border-bottom: 1px solid var(--border); color: var(--muted); font: var(--text-12) var(--font-mono); }
   .onboarding-actions { display: flex; gap: 8px; }
   .triage-report { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-top: 22px; }

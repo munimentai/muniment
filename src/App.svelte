@@ -601,7 +601,7 @@
   }
 </script>
 
-<main>
+<main class:onboarding-active={tauri && onboarding.name !== 'complete'}>
   {#if auth.name !== 'signed-in' || onboarding.name !== 'complete'}
     <div class="lockup">
       <svg width="34" height="34" viewBox="0 0 48 48" role="img" aria-label="muniment">
@@ -884,6 +884,15 @@
     display: grid;
     place-content: center;
     justify-items: center;
+  }
+
+  main.onboarding-active {
+    height: 100vh;
+    min-height: 0;
+    grid-template-rows: auto auto minmax(0, 1fr);
+    align-content: center;
+    box-sizing: border-box;
+    padding: 24px;
   }
 
   /* Lockup (§1.8): mark at rest — static, ink — beside the wordmark,

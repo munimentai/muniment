@@ -177,6 +177,15 @@ afterEach(() => {
   vi.restoreAllMocks()
 })
 
+describe('onboarding window layout', () => {
+  it('bounds active onboarding without changing the other main layouts', () => {
+    expect(appSource).toMatch(/<main class:onboarding-active=\{tauri && onboarding\.name !== 'complete'\}>/)
+    expect(appRules.get('main.onboarding-active')).toMatch(/height:\s*100vh/)
+    expect(appRules.get('main.onboarding-active')).toMatch(/grid-template-rows:\s*auto auto minmax\(0,\s*1fr\)/)
+    expect(appRules.get('main.onboarding-active')).toMatch(/box-sizing:\s*border-box/)
+  })
+})
+
 describe('entitlement change toast', () => {
   const copy = 'Your access changed. Some models or connections may differ.'
 
