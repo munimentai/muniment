@@ -5,12 +5,17 @@ use agent_client_protocol::schema::{
     },
     ProtocolVersion,
 };
-use muniment_attach::{handshake, ClientError};
+use muniment_attach::{handshake_as_with_credential, ClientError, Id};
 use serde_json::{json, Value};
-use std::io::{self, BufRead, Write};
+use std::io::{self, BufRead, Read, Write};
+#[cfg(unix)]
+use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
+use std::path::{Path, PathBuf};
 
 const NO_ATTACH: &str = "no authorized Muniment runtime attach exists";
 const CLIENT_KIND: &str = "acp-adapter";
+const CLIENT_ID_FILE: &str = "acp-client-id";
+const CLIENT_CREDENTIAL_FILE: &str = "acp-client-credential";
 
 fn main() -> io::Result<()> {
     let stdin = io::stdin();
@@ -76,8 +81,21 @@ fn new_session(id: Value, params: Option<&Value>) -> Value {
     }
 
     let workspace = request.cwd.to_string_lossy();
-    let result = handshake(env!("CARGO_PKG_VERSION"), CLIENT_KIND, || {})
-        .and_then(|mut client| client.onboard_workspace(&workspace, &workspace));
+    let result = (|| {
+        let identity = authorized_client_identity().map_err(|_| ClientError::UnexpectedMessage)?;
+        let credential =
+            authorized_client_credential().map_err(|_| ClientError::UnexpectedMessage)?;
+        let mut client = handshake_as_with_credential(
+            env!("CARGO_PKG_VERSION"),
+            CLIENT_KIND,
+            &identity,
+            credential.as_deref(),
+            || {},
+        )?;
+        persist_authorized_client_credential(client.authorized_client_credential())
+            .map_err(|_| ClientError::UnexpectedMessage)?;
+        client.onboard_workspace(&workspace, &workspace)
+    })();
     match result {
         Ok(_) => {
             let result = NewSessionResponse::new(uuid::Uuid::now_v7().to_string());
@@ -89,6 +107,177 @@ fn new_session(id: Value, params: Option<&Value>) -> Value {
             "error": {"code": -32000, "message": pairing_failure(error)}
         }),
     }
+}
+
+fn config_directory() -> io::Result<PathBuf> {
+    std::env::var_os("XDG_CONFIG_HOME")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".config")))
+        .filter(|path| path.is_absolute())
+        .map(|path| path.join("muniment"))
+        .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "config directory is unavailable"))
+}
+
+fn authorized_client_identity() -> io::Result<String> {
+    let directory = config_directory()?;
+    let path = directory.join(CLIENT_ID_FILE);
+    match read_private_file(&path) {
+        Ok(value) => return valid_identity(&value),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error),
+    }
+    std::fs::create_dir_all(&directory)?;
+    let mut bytes = [0u8; 16];
+    std::fs::File::open("/dev/urandom")?.read_exact(&mut bytes)?;
+    bytes[6] = (bytes[6] & 0x0f) | 0x40;
+    bytes[8] = (bytes[8] & 0x3f) | 0x80;
+    let value = format!(
+        "{:02x}{:02x}{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}",
+        bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7],
+        bytes[8], bytes[9], bytes[10], bytes[11], bytes[12], bytes[13], bytes[14], bytes[15]
+    );
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    options.mode(0o600);
+    match options
+        .open(&path)
+        .and_then(|mut file| file.write_all(value.as_bytes()))
+    {
+        Ok(()) => Ok(value),
+        Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
+            valid_identity(&read_private_file(&path)?)
+        }
+        Err(error) => Err(error),
+    }
+}
+
+fn valid_identity(value: &str) -> io::Result<String> {
+    let value = value.trim();
+    Id::new(value)
+        .map(|_| value.to_owned())
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "client identity is invalid"))
+}
+
+fn authorized_client_credential() -> io::Result<Option<String>> {
+    let path = config_directory()?.join(CLIENT_CREDENTIAL_FILE);
+    match read_private_file(&path) {
+        Ok(value)
+            if value.trim().len() == 64
+                && value.trim().bytes().all(|byte| byte.is_ascii_hexdigit()) =>
+        {
+            Ok(Some(value.trim().to_owned()))
+        }
+        Ok(_) => Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "client credential is invalid",
+        )),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(error),
+    }
+}
+
+fn persist_authorized_client_credential(credential: &str) -> io::Result<()> {
+    let directory = config_directory()?;
+    std::fs::create_dir_all(&directory)?;
+    atomic_write_private_file(
+        &directory.join(CLIENT_CREDENTIAL_FILE),
+        credential.as_bytes(),
+    )
+}
+
+#[cfg(unix)]
+fn read_private_file(path: &Path) -> io::Result<String> {
+    let mut options = std::fs::OpenOptions::new();
+    options
+        .read(true)
+        .custom_flags(unix_abi::O_NOFOLLOW | unix_abi::O_NONBLOCK);
+    let mut file = options.open(path)?;
+    let metadata = file.metadata()?;
+    if !metadata.is_file()
+        || metadata.uid() != unix_abi::effective_uid()
+        || metadata.mode() & 0o077 != 0
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "client authorization file is not private",
+        ));
+    }
+    let mut value = String::new();
+    file.read_to_string(&mut value)?;
+    Ok(value)
+}
+
+#[cfg(unix)]
+fn atomic_write_private_file(path: &Path, value: &[u8]) -> io::Result<()> {
+    let directory = path
+        .parent()
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "missing parent directory"))?;
+    let mut random = [0u8; 16];
+    std::fs::File::open("/dev/urandom")?.read_exact(&mut random)?;
+    let temporary = directory.join(format!(
+        ".acp-client-credential.{}.tmp",
+        random
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>()
+    ));
+    let mut options = std::fs::OpenOptions::new();
+    options
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .custom_flags(unix_abi::O_NOFOLLOW);
+    let result = (|| {
+        let mut file = options.open(&temporary)?;
+        file.write_all(value)?;
+        file.sync_all()?;
+        std::fs::rename(&temporary, path)
+    })();
+    if result.is_err() {
+        let _ = std::fs::remove_file(&temporary);
+    }
+    result
+}
+
+#[cfg(unix)]
+mod unix_abi {
+    #[cfg(any(
+        target_os = "linux",
+        target_os = "android",
+        target_os = "solaris",
+        target_os = "illumos"
+    ))]
+    pub const O_NOFOLLOW: i32 = 0x20000;
+    #[cfg(any(
+        target_os = "macos",
+        target_os = "ios",
+        target_os = "freebsd",
+        target_os = "dragonfly",
+        target_os = "netbsd",
+        target_os = "openbsd"
+    ))]
+    pub const O_NOFOLLOW: i32 = 0x100;
+    pub const O_NONBLOCK: i32 = 0x4;
+
+    unsafe extern "C" {
+        fn geteuid() -> u32;
+    }
+
+    pub fn effective_uid() -> u32 {
+        // SAFETY: geteuid takes no arguments and has no preconditions.
+        unsafe { geteuid() }
+    }
+}
+
+#[cfg(not(unix))]
+fn read_private_file(path: &Path) -> io::Result<String> {
+    std::fs::read_to_string(path)
+}
+
+#[cfg(not(unix))]
+fn atomic_write_private_file(path: &Path, value: &[u8]) -> io::Result<()> {
+    std::fs::write(path, value)
 }
 
 fn invalid_params(id: Value, message: &str) -> Value {
