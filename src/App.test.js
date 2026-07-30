@@ -1505,11 +1505,103 @@ describe('Home onboarding', () => {
     expect(screen.getByTestId('onboarding-home-path')).toHaveTextContent('/Documents/Muniment')
     expect(screen.queryByText('Local AI')).not.toBeInTheDocument()
     expect(screen.queryByText('Starting setup')).not.toBeInTheDocument()
-    expect(requiredModelInvoke).not.toHaveBeenCalled()
+    expect(requiredModelInvoke).toHaveBeenCalledTimes(1)
     await fireEvent.click(screen.getByTestId('onboarding-picker'))
     await fireEvent.click(screen.getByTestId('onboarding-cancel'))
     expect(await screen.findByPlaceholderText('Ask anything')).toBeInTheDocument()
     expect(invoke).not.toHaveBeenCalledWith('home_confirm', expect.anything())
+  })
+})
+
+describe('required local model workspace status', () => {
+  it('shows determinate progress without blocking the workspace', async () => {
+    requiredModelInvoke.mockResolvedValue({
+      status: { state: 'installing' },
+      downloadedBytes: 536870912,
+      totalBytes: 1073741824,
+      folderSetupAvailable: true,
+      aiFeaturesAvailable: false,
+      retryingInBackground: false,
+    })
+
+    render(App)
+
+    expect(await screen.findByText('Qwen3.5-4B · Downloading')).toBeInTheDocument()
+    expect(screen.getByText('512 MB of 1.0 GB')).toBeInTheDocument()
+    expect(screen.getByRole('progressbar', { name: 'Required local model download' })).toHaveAttribute('aria-valuenow', '536870912')
+    expect(screen.getByPlaceholderText('Ask anything')).toBeInTheDocument()
+  })
+
+  it('shows a fail-open retry and removes the record when ready', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    requiredModelInvoke
+      .mockResolvedValueOnce({
+        status: { state: 'failed' },
+        downloadedBytes: 40,
+        totalBytes: 100,
+        folderSetupAvailable: true,
+        aiFeaturesAvailable: false,
+        retryingInBackground: true,
+      })
+      .mockResolvedValueOnce({
+        status: { state: 'installed' },
+        downloadedBytes: 100,
+        totalBytes: 100,
+        folderSetupAvailable: true,
+        aiFeaturesAvailable: true,
+        retryingInBackground: false,
+      })
+
+    render(App)
+
+    const retry = await screen.findByText('Qwen3.5-4B · Retrying in background')
+    expect(retry.closest('.model-record')).toHaveAttribute('title', expect.stringContaining('rest of the app remain usable'))
+    expect(screen.getByPlaceholderText('Ask anything')).toBeInTheDocument()
+    await vi.advanceTimersByTimeAsync(1000)
+    await waitFor(() => expect(screen.queryByText(/Qwen3.5-4B/)).not.toBeInTheDocument())
+    await vi.advanceTimersByTimeAsync(2000)
+    expect(requiredModelInvoke).toHaveBeenCalledTimes(2)
+    vi.useRealTimers()
+  })
+
+  it('stops polling after teardown', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    requiredModelInvoke.mockResolvedValue({
+      status: { state: 'installing' },
+      downloadedBytes: 0,
+      totalBytes: 100,
+      folderSetupAvailable: true,
+      aiFeaturesAvailable: false,
+      retryingInBackground: false,
+    })
+    const view = render(App)
+    await screen.findByText('Qwen3.5-4B · Downloading')
+
+    view.unmount()
+    await vi.advanceTimersByTimeAsync(2000)
+
+    expect(requiredModelInvoke).toHaveBeenCalledTimes(1)
+    vi.useRealTimers()
+  })
+
+  it('shows a terminal failure without polling again', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    requiredModelInvoke.mockResolvedValue({
+      status: { state: 'failed' },
+      downloadedBytes: 40,
+      totalBytes: 100,
+      folderSetupAvailable: true,
+      aiFeaturesAvailable: false,
+      retryingInBackground: false,
+    })
+
+    render(App)
+
+    const failure = await screen.findByText('Qwen3.5-4B · Setup unavailable')
+    expect(failure.closest('.model-record')).toHaveAttribute('aria-label', expect.stringContaining('rest of the app remain usable'))
+    await vi.advanceTimersByTimeAsync(2000)
+    expect(requiredModelInvoke).toHaveBeenCalledTimes(1)
+    vi.useRealTimers()
   })
 })
 

@@ -3,46 +3,19 @@
   import { open } from '@tauri-apps/plugin-dialog'
 
   import { formatByteSize } from './chat-state.js'
-  import { onboardingCancelSettingsState, onboardingConfirmedHomePathState, onboardingConfirmedState, onboardingConfirmingState, onboardingErrorState, onboardingExtractingState, onboardingExtractionErrorState, onboardingExtractionState, onboardingFinalizingState, onboardingImportChoiceState, onboardingImportErrorState, onboardingImportSavedState, onboardingImportSavingState, onboardingPathState, onboardingPreviewErrorState, onboardingPreviewingState, onboardingPreviewState, onboardingReturnToArchiveReviewState, onboardingSelectionState, onboardingStatusState, onboardingTriageConfirmedState, onboardingTriageErrorState, onboardingTriageReportState, onboardingTriagingState, requiredModelLoadingState, requiredModelPollActive, requiredModelProgress } from './onboarding-state.js'
+  import { requiredModelLabel, requiredModelMessage, requiredModelProgress } from './model-acquisition-state.js'
+  import { onboardingCancelSettingsState, onboardingConfirmedHomePathState, onboardingConfirmedState, onboardingConfirmingState, onboardingErrorState, onboardingExtractingState, onboardingExtractionErrorState, onboardingExtractionState, onboardingFinalizingState, onboardingImportChoiceState, onboardingImportErrorState, onboardingImportSavedState, onboardingImportSavingState, onboardingPathState, onboardingPreviewErrorState, onboardingPreviewingState, onboardingPreviewState, onboardingReturnToArchiveReviewState, onboardingSelectionState, onboardingStatusState, onboardingTriageConfirmedState, onboardingTriageErrorState, onboardingTriageReportState, onboardingTriagingState } from './onboarding-state.js'
 
-  let { tauri, onboarding = $bindable() } = $props()
-  let requiredModel = $state(requiredModelLoadingState)
+  let { tauri, requiredModel, onboarding = $bindable() } = $props()
   let modelProgress = $derived(requiredModelProgress(requiredModel))
-  let requiredModelTimer
-  let requiredModelPollEpoch = 0
   let onboardingPreviewSequence = 0
-  let destroyed = false
 
   async function loadOnboarding() {
     try {
       onboarding = onboardingStatusState(await tauri.invoke('home_status'))
-      if (onboarding.name !== 'complete') pollRequiredModel()
     } catch (error) {
       onboarding = { name: 'load-error', homePath: '', error: typeof error === 'string' ? error : 'Onboarding could not be loaded.' }
     }
-  }
-
-  async function pollRequiredModel() {
-    if (destroyed || onboarding.name === 'complete') return
-    const epoch = ++requiredModelPollEpoch
-    clearTimeout(requiredModelTimer)
-    try {
-      const status = await tauri.invoke('required_model_acquisition_status')
-      if (destroyed || epoch !== requiredModelPollEpoch || onboarding.name === 'complete') return
-      requiredModel = status
-      if (requiredModelPollActive(status)) {
-        requiredModelTimer = setTimeout(pollRequiredModel, 1000)
-      }
-    } catch (_) {
-      if (destroyed || epoch !== requiredModelPollEpoch || onboarding.name === 'complete') return
-      requiredModel = { ...requiredModelLoadingState, status: { state: 'failed' } }
-    }
-  }
-
-  function stopRequiredModelPolling() {
-    requiredModelPollEpoch += 1
-    clearTimeout(requiredModelTimer)
-    requiredModelTimer = undefined
   }
 
   async function chooseHome() {
@@ -63,7 +36,6 @@
     onboarding = pending
     try {
       onboarding = onboardingConfirmedState(pending, await tauri.invoke('home_confirm', { homePath: pending.homePath }))
-      if (onboarding.name === 'complete') stopRequiredModelPolling()
     } catch (error) {
       onboarding = onboardingErrorState(pending, typeof error === 'string' ? error : undefined)
     }
@@ -95,7 +67,6 @@
     onboarding = pending
     try {
       onboarding = onboardingConfirmedState(pending, await tauri.invoke('home_confirm', { homePath: pending.homePath }))
-      if (onboarding.name === 'complete') stopRequiredModelPolling()
     } catch (error) {
       onboarding = onboardingErrorState(pending, typeof error === 'string' ? error : undefined)
     }
@@ -159,7 +130,6 @@
         approvedEntries: pending.extractedEntries,
       })
       onboarding = onboardingImportSavedState(pending)
-      stopRequiredModelPolling()
     } catch (error) {
       onboarding = onboardingImportErrorState(pending, error)
     }
@@ -167,10 +137,6 @@
 
   onMount(() => {
     loadOnboarding()
-    return () => {
-      destroyed = true
-      stopRequiredModelPolling()
-    }
   })
 </script>
 
@@ -182,9 +148,9 @@
     <aside class="model-status" aria-labelledby="model-status-title">
       <div class="model-status-heading">
         <span id="model-status-title">Local AI</span>
-        <strong>{requiredModel.aiFeaturesAvailable ? 'Ready' : requiredModel.status?.state === 'failed' || requiredModel.status?.state === 'cancelled' ? requiredModel.retryingInBackground ? 'Retrying in background' : 'Setup unavailable' : requiredModel.status?.state === 'installing' ? 'Downloading' : 'Starting setup'}</strong>
+        <strong>{requiredModelLabel(requiredModel)}</strong>
       </div>
-      <p class="model-status-copy" aria-live="polite">{requiredModel.aiFeaturesAvailable ? 'Local proposal generation is ready.' : requiredModel.status?.state === 'failed' || requiredModel.status?.state === 'cancelled' ? requiredModel.retryingInBackground ? 'The download did not finish. Muniment will keep retrying in the background.' : 'Local AI setup could not finish. You can continue setting up your Home.' : 'The required model is being prepared in the background. You can continue setting up your Home.'}</p>
+      <p class="model-status-copy" aria-live="polite">{requiredModelMessage(requiredModel)}</p>
       {#if modelProgress.total > 0}
         <div class="model-progress" role="progressbar" aria-label="Required local AI model download" aria-valuemin="0" aria-valuemax={modelProgress.total} aria-valuenow={modelProgress.downloaded}>
           <span style={`width: ${modelProgress.downloaded / modelProgress.total * 100}%`}></span>

@@ -33,6 +33,11 @@ stop_app() {
   process_absent
 }
 
+index_failure_artifacts() {
+  find "$raw" -maxdepth 1 -type f \( -name 'page-source-*.html' -o -name 'screenshot-*.png' \) -print \
+    >"$raw/failure-artifacts.log"
+}
+
 finalize() {
   (( finalized == 0 )) || return
   finalized=1
@@ -45,6 +50,7 @@ finalize() {
   cleanup_step state-gone cleanup_absent "$state_root"
 
   cleanup_step stage-cleanup-log cp "$cleanup_log" "$raw/cleanup.log"
+  cleanup_step index-failure-artifacts index_failure_artifacts
   cleanup_step redact-artifacts node test/e2e/support/redact.mjs "$raw" "$safe"
   redaction_status=$cleanup_last_status
   cleanup_step remove-raw rm -rf -- "$raw"
