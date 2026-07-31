@@ -13,7 +13,12 @@ const ALLOWED = {
 }
 
 const root = process.cwd()
-const excluded = (file) => file.split('/').includes('node_modules')
+const excluded = (file) => file.split('/').some((segment) => [
+  'node_modules',
+  // Build output directories contain no test files.
+  'target',
+  'dist',
+].includes(segment))
   || file.startsWith('.git/')
   || file.startsWith('editor-extension/')
   || file.startsWith('test/e2e/')
@@ -42,6 +47,15 @@ const unexpectedSites = (used, allowed) => used.filter((site) => !(site in allow
 
 describe('POSIX shell test gate', () => {
   const command = 'ba' + 'sh'
+
+  it('excludes build output directories', () => {
+    expect([
+      'src-tauri/target/debug/deps',
+      'dist/assets',
+      'browser-control/dist',
+    ].every(excluded)).toBe(true)
+    expect(['test', 'src/lib'].some(excluded)).toBe(false)
+  })
 
   it.each([
     ['single-quoted strings', `spawn('${command}', [])`],
