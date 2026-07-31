@@ -61,6 +61,8 @@
   let queueError = $state('')
   let historyError = $state('')
   let threadSummaries = $state([])
+  let moreThreads = $state(false)
+  let loadingOlderThreads = $state(false)
   let currentThreadId = $state(null)
   let currentThreadTitle = $derived(threadSummaries.find(({ threadId }) => threadId === currentThreadId)?.title || threadTitle(messages))
   let freshThread = $state(false)
@@ -168,6 +170,7 @@
     onQueueError: (next) => { queueError = next },
     onHistoryError: (next) => { historyError = next },
     onThreadSummaries: (next) => { threadSummaries = next },
+    onMoreThreads: (next) => { moreThreads = next },
     onThreadSelected: (next) => { currentThreadId = next },
     onThreadSwitch: (next) => { threadSwitching = next },
     onFreshThread: (next) => { freshThread = next },
@@ -177,6 +180,15 @@
     onFocus: () => tick().then(() => composer?.focus()),
     onSend: () => {},
   })
+
+  async function loadOlderThreads() {
+    loadingOlderThreads = true
+    const firstThreadId = await chatController.loadOlderThreads()
+    loadingOlderThreads = false
+    if (!firstThreadId) return
+    await tick()
+    document.querySelector(`[data-thread-id="${CSS.escape(firstThreadId)}"]`)?.focus()
+  }
 
   const entitlementToast = createEntitlementToast({
     listen: (...args) => window.__TAURI__?.event?.listen(...args),
@@ -678,7 +690,7 @@
                   {#if current}
                     <div class="thread-row active-thread" aria-current="true" title={rowTitle}><span></span><div class="thread-row-title">{rowTitle}</div><time datetime={summary.updatedAt} title={fullDateTime(summary.updatedAt)}>{relativeTime(summary.updatedAt)}</time></div>
                   {:else}
-                    <button class="thread-row" title={rowTitle} aria-disabled={active ? 'true' : undefined} onclick={() => chatController.openThread(summary.threadId)}><span></span><div class="thread-row-title">{rowTitle}</div><time datetime={summary.updatedAt} title={fullDateTime(summary.updatedAt)}>{relativeTime(summary.updatedAt)}</time></button>
+                    <button class="thread-row" data-thread-id={summary.threadId} title={rowTitle} aria-disabled={active ? 'true' : undefined} onclick={() => chatController.openThread(summary.threadId)}><span></span><div class="thread-row-title">{rowTitle}</div><time datetime={summary.updatedAt} title={fullDateTime(summary.updatedAt)}>{relativeTime(summary.updatedAt)}</time></button>
                   {/if}
                   {#if deletingThreadId === summary.threadId}
                     <div class="thread-delete-confirm" role="group" aria-label={`Delete ${rowTitle}?`}>
@@ -691,6 +703,9 @@
                   {/if}
                 </li>
               {/each}
+              {#if moreThreads}
+                <li><button type="button" class="older-threads" disabled={loadingOlderThreads} onclick={loadOlderThreads}>Older threads</button></li>
+              {/if}
             </ul>
           {/if}
           <button class="side-action home-settings" aria-label={sidebarCollapsed ? 'Home settings' : null} title={sidebarCollapsed ? 'Home settings' : null} onclick={() => { onboarding = onboardingSettingsState(onboarding) }}><svg class="side-icon" width="18" height="18" viewBox="0 0 24 24" aria-hidden="true"><path d="M4.5 10.5 12 4.75l7.5 5.75V19a1.5 1.5 0 0 1-1.5 1.5H6A1.5 1.5 0 0 1 4.5 19z" /><path d="M9.75 20.5v-5.75h4.5v5.75" /></svg>{#if !sidebarCollapsed}<span>Home settings</span>{/if}</button>
@@ -1019,6 +1034,7 @@
   .side-icon rect, .side-icon path { fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
   .side-action, .thread-row { width: 100%; display: flex; align-items: center; gap: 9px; padding: 7px 8px; border-color: transparent; background: transparent; text-align: left; }
   .thread-list { min-height: 0; padding: 0; overflow-y: auto; list-style: none; }
+  .older-threads { width: 100%; margin-top: 4px; border-color: transparent; background: transparent; color: var(--muted); }
   .thread-record { position: relative; }
   .thread-row { font: inherit; font-size: var(--text-13); color: var(--ink); border: 1px solid transparent; border-radius: var(--radius-control); }
   button.thread-row:hover:not([aria-disabled="true"]) { background: var(--faint); }
