@@ -4,6 +4,10 @@ fn token(prefix: &str, body: char, length: usize) -> String {
     format!("{prefix}{}", body.to_string().repeat(length))
 }
 
+fn pem(body: &str) -> String {
+    format!("-----BEGIN PRIVATE KEY-----\n{body}-----END PRIVATE KEY-----")
+}
+
 #[test]
 fn matches_each_provider_alternative() {
     let cases = [
@@ -76,11 +80,53 @@ fn overlapping_openai_and_anthropic_alternatives_make_one_match() {
 
 #[test]
 fn reports_complete_and_incomplete_retention() {
-    let content = format!("{}é", "x".repeat(600));
+    let content = format!("xé{}", "x".repeat(65_534));
     let incomplete = scan(&content, false);
+    assert!(incomplete.retention_offset > 0);
     assert!(content.is_char_boundary(incomplete.retention_offset));
-    assert!(content.len() - incomplete.retention_offset <= 512);
+    assert!(content.len() - incomplete.retention_offset <= 65_536);
     assert_eq!(scan(&content, true).retention_offset, content.len());
+}
+
+#[test]
+fn matches_a_complete_pem_private_key_without_its_trailing_lf() {
+    let value = format!("{}\n", pem("YWJj\n"));
+    let result = scan(&value, true);
+    assert_eq!(result.matches.len(), 1);
+    assert_eq!(result.matches[0].range, 0..value.len() - 1);
+    assert_eq!(result.matches[0].rule, Rule::SecretPemPrivateKey);
+    assert_eq!(result.withhold_from, None);
+}
+
+#[test]
+fn matches_a_pem_private_key_at_the_body_ceiling() {
+    let value = pem(&"A".repeat(65_460));
+    let result = scan(&value, true);
+    assert_eq!(result.matches[0].range, 0..value.len());
+    assert_eq!(result.matches[0].rule, Rule::SecretPemPrivateKey);
+    assert_eq!(result.withhold_from, None);
+}
+
+#[test]
+fn rejects_pem_private_key_near_misses() {
+    let mid_line = format!("x{}", pem("YQ==\n"));
+    assert!(scan(&mid_line, true).matches.is_empty());
+
+    let mismatched_end = "-----BEGIN PRIVATE KEY-----\nYQ==\n-----END ENCRYPTED PRIVATE KEY-----";
+    assert!(scan(mismatched_end, true).matches.is_empty());
+
+    let carriage_return = pem("YQ==\r\n");
+    assert!(scan(&carriage_return, true).matches.is_empty());
+}
+
+#[test]
+fn every_incomplete_pem_private_key_prefix_waits() {
+    let value = pem("YQ==\n");
+    for end in 0..=value.len() {
+        let result = scan(&value[..end], false);
+        assert!(result.matches.is_empty(), "prefix length {end}");
+        assert_eq!(result.withhold_from, None, "prefix length {end}");
+    }
 }
 
 #[test]

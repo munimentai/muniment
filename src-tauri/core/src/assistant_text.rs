@@ -7,9 +7,11 @@ use std::ops::Range;
 pub enum Rule {
     /// A provider credential such as a GitHub or OpenAI token.
     SecretProviderToken,
+    /// A PEM-encoded private key.
+    SecretPemPrivateKey,
 }
 
-const RULE_ORDER: [Rule; 1] = [Rule::SecretProviderToken];
+const RULE_ORDER: [Rule; 2] = [Rule::SecretProviderToken, Rule::SecretPemPrivateKey];
 
 /// One non-overlapping byte range selected by the scanner.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -128,13 +130,51 @@ impl Rule {
     fn candidate(self, bytes: &[u8], start: usize, complete: bool) -> RuleCandidate {
         match self {
             Self::SecretProviderToken => provider_token_candidate(bytes, start, complete),
+            Self::SecretPemPrivateKey => pem_private_key_candidate(bytes, start, complete),
         }
     }
 
     const fn max_span(self) -> usize {
         match self {
             Self::SecretProviderToken => 512,
+            Self::SecretPemPrivateKey => 65_536,
         }
+    }
+}
+
+fn pem_private_key_candidate(bytes: &[u8], start: usize, complete: bool) -> RuleCandidate {
+    const BEGIN_LINE: &[u8] = b"-----BEGIN PRIVATE KEY-----\n";
+    const END_LINE: &[u8] = b"-----END PRIVATE KEY-----";
+    const MAX_BODY_LEN: usize = 65_460;
+
+    if start != 0 && bytes[start - 1] != b'\n' || !bytes[start..].starts_with(BEGIN_LINE) {
+        return RuleCandidate::None;
+    }
+
+    let body_start = start + BEGIN_LINE.len();
+    let mut end = body_start;
+    while end < bytes.len()
+        && end - body_start < MAX_BODY_LEN
+        && is_pem_private_key_body(bytes[end])
+    {
+        end += 1;
+    }
+    if end == body_start || !bytes[end..].starts_with(END_LINE) {
+        return RuleCandidate::None;
+    }
+
+    end += END_LINE.len();
+    if end == bytes.len() {
+        return if complete {
+            RuleCandidate::Matched(end)
+        } else {
+            RuleCandidate::None
+        };
+    }
+    if bytes[end] == b'\n' {
+        RuleCandidate::Matched(end)
+    } else {
+        RuleCandidate::None
     }
 }
 
@@ -259,6 +299,10 @@ const fn is_alnum_hyphen(byte: u8) -> bool {
 
 const fn is_upper_alnum(byte: u8) -> bool {
     byte.is_ascii_uppercase() || byte.is_ascii_digit()
+}
+
+const fn is_pem_private_key_body(byte: u8) -> bool {
+    byte.is_ascii_alphanumeric() || byte == b'+' || byte == b'/' || byte == b'=' || byte == b'\n'
 }
 
 #[cfg(test)]
