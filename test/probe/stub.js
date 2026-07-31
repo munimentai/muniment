@@ -151,7 +151,9 @@ function fixtureRendered() {
       && workspace.querySelector('.assistant-markdown table')
       && workspace.querySelector('.assistant-markdown a')?.textContent.startsWith('Ready')
   }
-  return history.every((run) => workspace.textContent.includes(run.prompt) && workspace.textContent.includes(run.text))
+  const renderedText = workspace.textContent.replaceAll(/\s/g, '')
+  return history.every((run) => renderedText.includes(run.prompt.replaceAll(/\s/g, ''))
+    && renderedText.includes(run.text.replaceAll(/\s/g, '')))
 }
 
 function advanceApprovedFixture() {
@@ -175,17 +177,22 @@ function advanceApprovedFixture() {
   document.querySelector('[data-testid="onboarding-import-continue"]')?.click()
 }
 
+async function markProbeReady() {
+  await document.fonts.ready
+  document.body.dataset.probeReady = ''
+}
+
 function markReadyAfterFixtureRender() {
   advanceApprovedFixture()
   if (fixtureRendered()) {
-    document.body.dataset.probeReady = ''
+    void markProbeReady()
     return
   }
   const observer = new MutationObserver(() => {
     advanceApprovedFixture()
     if (!fixtureRendered()) return
     observer.disconnect()
-    document.body.dataset.probeReady = ''
+    void markProbeReady()
   })
   observer.observe(document.getElementById('app'), { childList: true, subtree: true })
 }
