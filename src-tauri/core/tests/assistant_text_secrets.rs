@@ -9,6 +9,10 @@ fn only_match(text: &[u8], rule: SecretRule) {
     assert_eq!(result.withhold_from, None);
 }
 
+fn pem_line(action: &str, name: &str, ending: &str) -> String {
+    format!("-----{action} {name}-----{ending}")
+}
+
 #[test]
 fn matches_assignment_and_rejects_near_misses() {
     let assignment = b"API_KEY := 'abcdefghij'";
@@ -156,24 +160,28 @@ fn matches_pem_names_line_endings_and_span_boundary() {
         "EC PRIVATE KEY",
         "OPENSSH PRIVATE KEY",
     ] {
-        let pem = format!("-----BEGIN {name}-----\r\nYQ==\r\n-----END {name}-----");
+        let pem = format!(
+            "{}YQ==\r\n{}",
+            pem_line("BEGIN", name, "\r\n"),
+            pem_line("END", name, "")
+        );
         only_match(pem.as_bytes(), SecretRule::PemPrivateKey);
     }
-    assert!(scan_secrets(
-        b"x-----BEGIN PRIVATE KEY-----\nYQ==\n-----END PRIVATE KEY-----",
-        true
-    )
-    .matches
-    .is_empty());
-    assert!(scan_secrets(
-        b"-----BEGIN PUBLIC KEY-----\nYQ==\n-----END PUBLIC KEY-----",
-        true
-    )
-    .matches
-    .is_empty());
+    let prefixed = format!(
+        "x{}YQ==\n{}",
+        pem_line("BEGIN", "PRIVATE KEY", "\n"),
+        pem_line("END", "PRIVATE KEY", "")
+    );
+    assert!(scan_secrets(prefixed.as_bytes(), true).matches.is_empty());
+    let public = format!(
+        "{}YQ==\n{}",
+        pem_line("BEGIN", "PUBLIC KEY", "\n"),
+        pem_line("END", "PUBLIC KEY", "")
+    );
+    assert!(scan_secrets(public.as_bytes(), true).matches.is_empty());
 
-    let prefix = "-----BEGIN PRIVATE KEY-----\n";
-    let suffix = "-----END PRIVATE KEY-----";
+    let prefix = pem_line("BEGIN", "PRIVATE KEY", "\n");
+    let suffix = pem_line("END", "PRIVATE KEY", "");
     let pem = format!("{prefix}{}{suffix}", "A".repeat(65_460));
     only_match(pem.as_bytes(), SecretRule::PemPrivateKey);
     assert_eq!(
@@ -181,8 +189,8 @@ fn matches_pem_names_line_endings_and_span_boundary() {
         Some(0)
     );
 
-    let ceiling_prefix = "-----BEGIN ENCRYPTED PRIVATE KEY-----\r\n";
-    let ceiling_suffix = "-----END ENCRYPTED PRIVATE KEY-----\r\n";
+    let ceiling_prefix = pem_line("BEGIN", "ENCRYPTED PRIVATE KEY", "\r\n");
+    let ceiling_suffix = pem_line("END", "ENCRYPTED PRIVATE KEY", "\r\n");
     let ceiling = format!("{ceiling_prefix}{}{ceiling_suffix}", "A".repeat(65_460));
     assert_eq!(ceiling.len(), 65_536);
     only_match(ceiling.as_bytes(), SecretRule::PemPrivateKey);
@@ -231,10 +239,20 @@ fn missing_bounded_terminators_withhold_the_remainder() {
         Some(7)
     );
 
-    let pem = format!("x\n-----BEGIN PRIVATE KEY-----\n{}", "A".repeat(65_536));
+    let pem = format!(
+        "x\n{}{}",
+        pem_line("BEGIN", "PRIVATE KEY", "\n"),
+        "A".repeat(65_536)
+    );
     assert_eq!(scan_secrets(pem.as_bytes(), false).withhold_from, Some(2));
 
-    let short_pem = b"x\n-----BEGIN PRIVATE KEY-----\nYQ==";
-    assert_eq!(scan_secrets(short_pem, false).withhold_from, Some(2));
-    assert_eq!(scan_secrets(short_pem, true).withhold_from, Some(2));
+    let short_pem = format!("x\n{}YQ==", pem_line("BEGIN", "PRIVATE KEY", "\n"));
+    assert_eq!(
+        scan_secrets(short_pem.as_bytes(), false).withhold_from,
+        Some(2)
+    );
+    assert_eq!(
+        scan_secrets(short_pem.as_bytes(), true).withhold_from,
+        Some(2)
+    );
 }
