@@ -19,7 +19,7 @@ export function errorState(action, error) {
 
   return {
     name: 'error',
-    message: `${labels[action]} — ${String(error)}. Try again.`,
+    message: `${labels[action]} — ${String(error)}.`,
     retry: action,
   }
 }

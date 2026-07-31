@@ -97,7 +97,7 @@ describe('chat controller', () => {
     })
 
     await expect(controller.start()).resolves.toBe(false)
-    expect(onHistoryError).toHaveBeenLastCalledWith('Live replies cannot arrive. Try again.')
+    expect(onHistoryError).toHaveBeenLastCalledWith('Live replies cannot arrive.')
 
     await controller.loadHistory()
 
@@ -208,7 +208,7 @@ describe('chat controller', () => {
     })
     await expect(failedController.deleteThread('thread-1')).resolves.toBe(false)
     expect(context.messages()).toBe(previous)
-    expect(onHistoryError).toHaveBeenLastCalledWith('The thread could not be deleted. Try again.')
+    expect(onHistoryError).toHaveBeenLastCalledWith('The thread could not be deleted.')
   })
 
   it('renames the selected thread and publishes its new title', async () => {
@@ -405,7 +405,7 @@ describe('chat controller', () => {
     await expect(controller.renameThread('New name', 'Old name')).resolves.toBe(false)
 
     expect(onThreadSummaries).not.toHaveBeenCalled()
-    expect(onHistoryError).toHaveBeenLastCalledWith('The thread name could not be changed. Try again.')
+    expect(onHistoryError).toHaveBeenLastCalledWith('The thread name could not be changed.')
   })
 
   it('starts a fresh thread only after the command succeeds', async () => {
@@ -480,7 +480,7 @@ describe('chat controller', () => {
 
     expect(context.messages()).toBe(previous)
     expect(onThreadSelected).not.toHaveBeenCalled()
-    expect(onHistoryError).toHaveBeenLastCalledWith('A new thread could not be started. Try again.')
+    expect(onHistoryError).toHaveBeenLastCalledWith('A new thread could not be started.')
   })
 
   it('blocks a fresh thread during a run or thread switch', async () => {
@@ -631,7 +631,7 @@ describe('chat controller', () => {
     await controller.openThread('thread-2')
 
     expect(context.messages()).toBe(previous)
-    expect(onHistoryError).toHaveBeenLastCalledWith('Conversation history could not be restored. Try again.')
+    expect(onHistoryError).toHaveBeenLastCalledWith('Conversation history could not be restored.')
   })
 
   it('restores the previous backend thread when the selected thread fails to load', async () => {
@@ -867,7 +867,7 @@ describe('chat controller', () => {
     })
     await controller.loadHistory()
 
-    expect(onHistoryError).toHaveBeenLastCalledWith('Conversation history could not be restored. Try again.')
+    expect(onHistoryError).toHaveBeenLastCalledWith('Conversation history could not be restored.')
   })
 
   it('replays events buffered before a submitted run id is known', async () => {

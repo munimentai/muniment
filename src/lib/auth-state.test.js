@@ -19,7 +19,7 @@ describe('auth state transitions', () => {
   it('keeps the failed action available for retry', () => {
     expect(errorState('sign-in', 'the browser session was cancelled')).toEqual({
       name: 'error',
-      message: 'Sign-in not completed — the browser session was cancelled. Try again.',
+      message: 'Sign-in not completed — the browser session was cancelled.',
       retry: 'sign-in',
     })
   })
