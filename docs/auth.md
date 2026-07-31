@@ -66,7 +66,7 @@ are rejected until the worker exits, including failure paths. Only the existing
 secret-free `AuthStatus` shape is returned to the webview.
 
 `auth_status` reads subject and expiry only from that coherent native record
-and performs no network request. `auth_ensure_fresh` and the pre-chat
+and performs no network request. `ensure_native_session` and the pre-chat
 credential path refresh at the existing 60-second skew, persist the complete
 rotation, and validate the authoritative native session before reporting a
 signed-in state or using its access token. Missing or refresh-expired native
@@ -132,7 +132,7 @@ record described above; the generic RFC 7009 path is not used by Tauri.
 
 ## Session freshness
 
-`auth_ensure_fresh` checks stored expiry with a 60-second safety margin. Fresh
+`ensure_native_session` checks stored expiry with a 60-second safety margin. Fresh
 sessions and signed-out state require no network. Expired or nearly-expired
 sessions are renewed with the refresh grant and the rotated tokens are saved.
 If the provider rejects a dead refresh token (or none is stored), the local
@@ -205,7 +205,6 @@ the webview.
 |-----------------|------------------------|-----------------------------------|
 | `auth_sign_in`  | `AuthStatus` or error  | Runs native registration/browser/exchange; 5-min timeout; concurrent calls rejected |
 | `auth_status`   | `AuthStatus`           | Local only, no network            |
-| `auth_ensure_fresh` | `AuthStatus` or error | Refreshes at expiry or within 60 seconds |
 | `auth_entitlement_snapshot` | `EntitlementSnapshotView` or error | Authoritative network inspection; safe display hints only |
 | `auth_sign_out` | `AuthStatus`           | Best-effort current-session revocation, then local clear; preserves installation |
 

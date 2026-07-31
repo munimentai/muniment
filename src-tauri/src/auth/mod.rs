@@ -206,21 +206,6 @@ pub async fn auth_status(state: tauri::State<'_, AuthState>) -> Result<AuthStatu
         .map_err(|e| e.to_string())
 }
 
-/// Return session status after renewing expired or nearly-expired tokens.
-#[tauri::command]
-pub async fn auth_ensure_fresh(
-    app: tauri::AppHandle,
-    state: tauri::State<'_, AuthState>,
-) -> Result<AuthStatus, String> {
-    let store = state.native_store.clone();
-    let result =
-        tauri::async_runtime::spawn_blocking(move || ensure_native_session(store.as_ref()))
-            .await
-            .map_err(|e| format!("session refresh task failed: {e}"))??;
-    observe_snapshot(&state, &app, &result)?;
-    Ok(result.status)
-}
-
 /// Fetch the authoritative native session and expose only its typed,
 /// display-only entitlement projection.
 #[tauri::command]
