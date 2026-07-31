@@ -213,9 +213,17 @@ Relay publication remains explicitly deferred to slice 5.
 
 This amendment replaces: “On open, SQLite integrity and envelope/sequence
 validation precede replay.” On open, the desktop runs `PRAGMA quick_check` and
-validates only the newest 256 event envelopes and newest 256 thread envelopes.
-Each suffix read includes its preceding row so sequence validation covers the
-boundary. Replay may start after these checks pass.
+validates the 256 event envelopes with the greatest `append_ordinal` values and
+the 256 thread envelopes with the greatest `append_ordinal` values. Each table
+has its own stored, unique, monotonically increasing `append_ordinal`. The
+migration assigns existing rows ordinals in ascending SQLite `rowid` order.
+Each later append transaction assigns the next ordinal. Clocks and UUID order
+do not select either suffix. For every run or thread represented in a suffix,
+the read also includes the envelope at the lowest selected sequence minus one
+when it exists. This extra envelope
+does not count toward the 256-envelope limit. It lets sequence validation cover
+each represented stream's suffix boundary. Replay may start after these checks
+pass.
 
 The open-time checks still catch SQLite structural corruption reported by
 `quick_check`. They also catch malformed or noncanonical envelopes, indexed-
@@ -227,10 +235,15 @@ pass checks.
 The desktop runs the full integrity, envelope, sequence, schema, identity, and
 aggregate validation pass after the first frame on every launch. It uses a
 stable read snapshot, then validates events appended after that snapshot
-before it records completion. A corruption result immediately blocks new
-effects and makes the journal read-only. The desktop preserves the original
-files, reports needs-attention, and offers export or recovery from the last
-verified prefix. It never continues effects from the corrupt journal.
+before it records completion. The desktop gates every external effect until
+the full pass succeeds, including effects requested by replay or recovery. A
+corruption result makes the journal read-only. The desktop stops tracking any
+effect already in progress and requests cancellation when cancellation is
+safe. It quarantines every later result, including results from effects that
+cannot stop safely. It does not retry the effect, append its result, or use its
+result to continue a run. The desktop preserves the original files, reports
+needs-attention, and offers export or recovery from the last verified prefix.
+It never continues effects from the corrupt journal.
 
 `reconcile_interrupted_runs` reads candidate run IDs from a transactionally
 maintained recovery-state projection instead of reading every event type. It
@@ -240,10 +253,12 @@ types ends in a terminal event. A gap, an unknown event type, a nonterminal
 last event, or missing projection state classifies the run as a candidate.
 This keeps the current fail-open classification.
 
-The bounded open-time envelope checks need no schema step. The recovery-state
-projection does need one. A later schema slice adds and backfills the
-projection, updates it in each append transaction, and adds rebuild and stale-
-state tests. The first implementation slice replaces the launch-time full
-validation with `quick_check` plus the bounded suffix checks. It also moves the
-full pass after the first frame and adds corruption-gating tests. This
+The bounded checks and recovery-state projection need a schema step. A later
+schema slice adds each table's `append_ordinal` and the projection. It backfills
+ordinals in ascending `rowid` order and backfills the projection. It assigns
+later ordinals and updates the projection in each append transaction. It also
+adds ordinal, rebuild, and stale-state tests. The first implementation slice
+applies that schema step. The next slice replaces the launch-time full
+validation with `quick_check` plus the bounded suffix checks. It moves the full
+pass after the first frame and adds effect-gating and corruption tests. This
 amendment changes no runtime code.
