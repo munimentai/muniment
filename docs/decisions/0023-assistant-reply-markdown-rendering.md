@@ -31,16 +31,49 @@ tokens so the application can enforce a small element subset. It must not
 render raw HTML. It must define partial-syntax behavior. It must fit Svelte 5
 without React and use a permissive license.
 
-The dependency counts below cover direct runtime dependencies. Bundle sizes
-are minified and gzip-compressed Bundlephobia measurements from 2026-07-30.
-The selected sanitizer adds 10.4 kB gzip and no direct dependency.
+The dependency counts below cover direct runtime dependencies. The `marked`,
+`markdown-it`, and DOMPurify sizes are Bundlephobia measurements from
+2026-07-30. The selected sanitizer adds 10.4 kB gzip and no direct dependency.
+
+The compound candidate totals use Node 24.18.0, npm 11.16.0, and esbuild
+0.25.8 with browser ESM output, minification, and tree shaking. The entry
+files import `micromark` with `gfm()` and `gfmHtml()`, or `Streamdown` with
+`streamdown/styles.css`.
+The Streamdown install includes its React 19.1.1 and React DOM 19.1.1 peers.
+The totals sum `gzip -9` sizes for all emitted JavaScript and CSS files.
+Run these measurements against exact package pins in a clean directory:
+
+```sh
+npm install --no-save esbuild@0.25.8 micromark@4.0.2 \
+  micromark-extension-gfm@3.0.0 streamdown@2.5.0 \
+  react@19.1.1 react-dom@19.1.1
+```
+
+```js
+// micromark-entry.js
+import { micromark } from "micromark";
+import { gfm, gfmHtml } from "micromark-extension-gfm";
+globalThis.render = (text) => micromark(text, {
+  extensions: [gfm()],
+  htmlExtensions: [gfmHtml()]
+});
+
+// streamdown-entry.js
+import { Streamdown } from "streamdown";
+import "streamdown/styles.css";
+globalThis.Streamdown = Streamdown;
+```
+
+Bundle each entry with
+`esbuild ENTRY --bundle --minify --platform=browser --format=esm --outdir=OUT`.
+Compress every output with `gzip -9 -c`, then add the byte counts.
 
 | Candidate | CommonMark and GFM coverage | Dependencies and added bundle size | Raw-HTML stance | Partial syntax while streaming | Svelte 5 fit | License |
 | --- | --- | --- | --- | --- | --- | --- |
 | `marked` 18.0.7 | Its published suites report 98% CommonMark and 97% GFM. Tables, task lists, and strikethrough are built in. | It has zero direct dependencies and adds 12.5 kB gzip. | It emits raw HTML unless a token renderer replaces HTML tokens. DOMPurify must sanitize the final output. | It parses the accumulated text as a complete document. Open constructs can change earlier output. | Its framework-neutral token API fits Svelte 5. | It uses MIT. |
 | `markdown-it` 15.0.0 | It reports CommonMark compliance. Tables and strikethrough are built in, while other GFM features need plugins. | It has six direct dependencies and adds 47.0 kB gzip before plugins. | Its `html: false` option escapes raw HTML. A sanitizer must still guard the DOM boundary. | It reparses the complete accumulated document. Open constructs can change earlier output. | Its framework-neutral renderer fits Svelte 5. | It uses MIT. |
-| `micromark` 4.0.2 plus `micromark-extension-gfm` | The core targets CommonMark. The extension adds GFM autolinks, footnotes, tables, task lists, and strikethrough. | The core has 17 direct dependencies and adds 14.6 kB gzip. The GFM extension adds eight direct dependencies. | HTML is encoded by default. Custom HTML output still needs sanitization. | Its streaming tokenizer can accept chunks, but safe DOM output needs a custom token-to-node layer. | Its framework-neutral events fit Svelte 5, but the application must build a renderer. | Both packages use MIT. |
-| `Streamdown` 2.5.0 | Its unified pipeline uses `remark-gfm` and handles common assistant Markdown. | It has 16 direct dependencies. Its entry chunks alone add 21.6 kB gzip before React, Mermaid, and other dependencies. | It uses `rehype-harden` and `rehype-sanitize` with configurable link and image rules. | `remend` repairs open emphasis, fences, links, and other partial constructs during streaming. | Its published component requires React and a React JSX runtime. | It uses Apache-2.0. |
+| `micromark` 4.0.2 plus `micromark-extension-gfm` 3.0.0 | The core targets CommonMark. The extension adds GFM autolinks, footnotes, tables, task lists, and strikethrough. | The core has 17 direct dependencies, and the GFM extension has eight. The complete CommonMark and GFM bundle adds 21.0 kB gzip. | HTML is encoded by default. Custom HTML output still needs sanitization. | Its streaming tokenizer can accept chunks, but safe DOM output needs a custom token-to-node layer. | Its framework-neutral events fit Svelte 5, but the application must build a renderer. | Both packages use MIT. |
+| `Streamdown` 2.5.0 | Its unified pipeline uses `remark-gfm` and handles common assistant Markdown. | It has 16 direct dependencies and two React peers. The complete component and stylesheet bundle adds 156.3 kB gzip. | It uses `rehype-harden` and `rehype-sanitize` with configurable link and image rules. | `remend` repairs open emphasis, fences, links, and other partial constructs during streaming. | Its published component requires React and a React JSX runtime. | It uses Apache-2.0. |
 
 ## Decision
 
