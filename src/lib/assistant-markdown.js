@@ -8,7 +8,6 @@ const ALLOWED_TAGS = [
 const ALLOWED_ATTR = ['class', 'href', 'rel', 'target', 'title']
 const LINK_PROTOCOLS = new Set(['http:', 'https:', 'mailto:'])
 const LANGUAGE = /^[A-Za-z0-9_+-]+$/u
-const MALFORMED_LINK = /(?<!!)\[([^\]\n]+)\]\(([^)\n]*)(\)|$)/gu
 
 function escapeHtml(value) {
   return String(value)
@@ -102,23 +101,144 @@ const renderer = {
   },
 }
 
+function malformedLinkSource(source) {
+  if (source[0] !== '[') return null
+
+  let bracketDepth = 1
+  let labelEnd = -1
+  for (let index = 1; index < source.length; index += 1) {
+    if (source[index] === '\\') {
+      index += 1
+    } else if (source[index] === '[') {
+      bracketDepth += 1
+    } else if (source[index] === ']') {
+      bracketDepth -= 1
+      if (bracketDepth === 0) {
+        labelEnd = index
+        break
+      }
+    } else if (source[index] === '\n') {
+      return null
+    }
+  }
+
+  if (labelEnd < 1 || source[labelEnd + 1] !== '(') return null
+
+  const destinationStart = labelEnd + 2
+  const lineEnd = source.indexOf('\n', destinationStart)
+  const closing = source.indexOf(')', destinationStart)
+  const destinationEnd = closing < 0 || (lineEnd >= 0 && lineEnd < closing)
+    ? (lineEnd < 0 ? source.length : lineEnd)
+    : closing
+  const destination = source.slice(destinationStart, destinationEnd)
+  if (closing >= 0 && closing < destinationEnd) return null
+  if (
+    closing >= 0
+    && /^\S+(?:\s+(?:"[^"]*"|'[^']*'|\([^)]*\)))?\s*$/u.test(destination)
+  ) return null
+
+  return {
+    label: source.slice(1, labelEnd),
+    raw: source.slice(0, closing >= 0 && closing < (lineEnd < 0 ? source.length : lineEnd)
+      ? closing + 1
+      : destinationEnd),
+  }
+}
+
+const malformedLink = {
+  name: 'malformedLink',
+  level: 'inline',
+  renderer(token) {
+    return this.parser.parseInline(token.tokens)
+  },
+}
+
 const markdown = new Marked({
   async: false,
+  extensions: [malformedLink],
   gfm: true,
   renderer,
 })
 
-function containsLink(tokens, source) {
-  return tokens.some((token) =>
-    (token.type === 'link' && token.raw === source)
-    || (Array.isArray(token.tokens) && containsLink(token.tokens, source)),
-  )
+function splitMalformedLinks(token) {
+  const tokens = []
+  let rest = token.raw
+
+  while (rest) {
+    const start = rest.indexOf('[')
+    if (start < 0) break
+    const match = malformedLinkSource(rest.slice(start))
+    if (!match || (start > 0 && rest[start - 1] === '!')) {
+      const end = start + 1
+      tokens.push({ type: 'text', raw: rest.slice(0, end), text: rest.slice(0, end) })
+      rest = rest.slice(end)
+      continue
+    }
+    if (start > 0) {
+      tokens.push({ type: 'text', raw: rest.slice(0, start), text: rest.slice(0, start) })
+    }
+    tokens.push({
+      type: 'malformedLink',
+      raw: match.raw,
+      tokens: markdown.Lexer.lexInline(match.label),
+    })
+    rest = rest.slice(start + match.raw.length)
+  }
+
+  if (rest) tokens.push({ type: 'text', raw: rest, text: rest })
+  return tokens.length > 0 ? tokens : [token]
 }
 
-function removeMalformedLinkSource(text) {
-  return text.replace(MALFORMED_LINK, (source, label) =>
-    containsLink(markdown.lexer(source), source) ? source : label,
-  )
+function rewriteMalformedLinks(tokens) {
+  const rewritten = []
+  const htmlStack = []
+
+  for (let index = 0; index < tokens.length; index += 1) {
+    const token = tokens[index]
+    if (token.type === 'html' && !token.block) {
+      const closing = token.raw.match(/^<\/([A-Za-z][\w-]*)/u)
+      const opening = token.raw.match(/^<([A-Za-z][\w-]*)\b/u)
+      if (closing) htmlStack.pop()
+      rewritten.push(token)
+      if (opening && !/\/>\s*$/u.test(token.raw)) htmlStack.push(opening[1].toLowerCase())
+      continue
+    }
+
+    if (token.type === 'text' && htmlStack.length === 0) {
+      const start = token.raw.indexOf('[')
+      const combined = tokens.slice(index).map(({ raw }) => raw).join('')
+      const match = start >= 0 ? malformedLinkSource(combined.slice(start)) : null
+      if (match && start + match.raw.length > token.raw.length) {
+        const consumedLength = start + match.raw.length
+        let coveredLength = 0
+        let lastIndex = index
+        while (lastIndex < tokens.length && coveredLength < consumedLength) {
+          coveredLength += tokens[lastIndex].raw.length
+          lastIndex += 1
+        }
+        if (coveredLength === consumedLength) {
+          if (start > 0) {
+            rewritten.push({ type: 'text', raw: token.raw.slice(0, start), text: token.raw.slice(0, start) })
+          }
+          rewritten.push({
+            type: 'malformedLink',
+            raw: match.raw,
+            tokens: markdown.Lexer.lexInline(match.label),
+          })
+          index = lastIndex - 1
+          continue
+        }
+      }
+      rewritten.push(...splitMalformedLinks(token))
+      continue
+    }
+
+    if (Array.isArray(token.tokens)) rewriteMalformedLinks(token.tokens)
+    rewritten.push(token)
+  }
+
+  tokens.splice(0, tokens.length, ...rewritten)
+  return tokens
 }
 
 function hasForbiddenAttributes(html) {
@@ -145,7 +265,7 @@ export function renderAssistantMarkdown(reply, {
   const text = typeof reply === 'string' ? reply : String(reply ?? '')
   if (!text) return { kind: 'text', text: '' }
 
-  const parsed = markdown.parse(removeMalformedLinkSource(text))
+  const parsed = markdown.parser(rewriteMalformedLinks(markdown.lexer(text)))
   const html = purifier.sanitize(parsed, {
     ALLOWED_ATTR,
     ALLOWED_TAGS,

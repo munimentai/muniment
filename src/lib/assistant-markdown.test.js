@@ -109,14 +109,28 @@ describe('assistant Markdown', () => {
   })
 
   it.each([
-    ['whitespace in the destination', '[safe label](https:// example.com)'],
-    ['a missing closing parenthesis', '[safe label](https://example.com'],
-  ])('renders only the label for malformed link source with %s', (_name, source) => {
+    ['whitespace in the destination', '[safe label](https:// example.com)', 'safe label'],
+    ['a missing closing parenthesis', '[safe label](https://example.com', 'safe label'],
+    ['a nested label', '[outer [inner]](https:// example.com)', 'outer [inner]'],
+  ])('renders only the label for malformed link source with %s', (_name, source, label) => {
     const result = html(source)
 
-    expect(new DOMParser().parseFromString(result, 'text/html').body.textContent).toBe('safe label')
+    expect(new DOMParser().parseFromString(result, 'text/html').body.textContent)
+      .toBe(label)
     expect(result).not.toContain('<a')
     expect(result).not.toContain('href=')
+  })
+
+  it.each([
+    ['an inline code span', '`[safe](https:// example.com)`'],
+    ['a fenced code block', '```\n[safe](https:// example.com)\n```'],
+    ['escaped syntax', '\\[safe](https:// example.com)'],
+    ['raw HTML', '<span>[safe](https:// example.com)</span>'],
+  ])('preserves malformed link source inside %s', (_name, source) => {
+    const result = html(source)
+
+    expect(new DOMParser().parseFromString(result, 'text/html').body.textContent)
+      .toContain('[safe](https:// example.com)')
   })
 
   it.each([
