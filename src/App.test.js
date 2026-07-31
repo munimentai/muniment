@@ -326,6 +326,14 @@ describe('pairing decisions', () => {
 })
 
 describe('workspace composer entry', () => {
+  it('names and describes the composer in its default state', async () => {
+    render(App)
+
+    const composer = await screen.findByRole('textbox', { name: 'Message' })
+    expect(composer).toHaveAccessibleDescription('Routing is automatic. Every reply carries its receipt.')
+    expect(composer).toHaveAttribute('placeholder', 'Ask anything')
+  })
+
   it('renders only the sidebar brand in the signed-in workspace', async () => {
     const { container } = render(App)
 
@@ -409,8 +417,10 @@ describe('workspace composer entry', () => {
     await fireEvent.click(screen.getByText('Home settings'))
     await fireEvent.click(screen.getByTestId('onboarding-cancel'))
 
-    const composer = await screen.findByPlaceholderText('Resuming interrupted reply…')
+    const composer = await screen.findByRole('textbox', { name: 'Message' })
     expect(composer).toBeDisabled()
+    expect(composer).toHaveAccessibleDescription('Reopening the existing secure session…')
+    expect(composer).toHaveAttribute('placeholder', 'Resuming interrupted reply…')
     expect(composer).not.toHaveFocus()
 
     chatListener({ payload: {
@@ -2014,6 +2024,7 @@ describe('voice dictation', () => {
 
     expect(voice).toHaveAttribute('aria-pressed', 'true')
     expect(screen.getByRole('status')).toHaveTextContent('Starting local dictation…')
+    expect(composer).toHaveAccessibleDescription('Starting local dictation…')
     dictationListener({ payload: { type: 'transcript', text: 'spoken words' } })
     await waitFor(() => expect(composer).toHaveValue('Existing draft spoken words'))
     await fireEvent.input(composer, { target: { value: 'Edited transcript' } })
