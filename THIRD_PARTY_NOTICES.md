@@ -1,5 +1,25 @@
 # Third-party notices
 
+## Bundled frontend code and fonts
+
+The built desktop bundle carries the following code with no embedded license comment. This document provides the notice for that code.
+
+- `marked` 18.0.7 — MIT
+- `dompurify` 3.4.12 — MPL-2.0 OR Apache-2.0
+- `svelte` 5.56.4 — MIT
+- `@tauri-apps/api` 2.11.1 — Apache-2.0 OR MIT
+- `@tauri-apps/plugin-dialog` 2.7.1 — MIT OR Apache-2.0
+- `@tauri-apps/plugin-global-shortcut` 2.3.2 — MIT OR Apache-2.0
+- `@tauri-apps/plugin-opener` 2.5.4 — MIT OR Apache-2.0
+
+The bundle also carries these font files:
+
+- `src/fonts/SchibstedGrotesk-latin.woff2`
+- `src/fonts/SchibstedGrotesk-latin-ext.woff2`
+- `src/fonts/CommitMono-VF.woff2`
+
+Both Schibsted Grotesk and Commit Mono use SIL OFL 1.1. Their license texts are `src/fonts/SchibstedGrotesk-OFL.txt` and `src/fonts/CommitMono-LICENSE.txt`.
+
 ## Playwright relay core
 
 Portions of `browser-control/src/index.ts` are derived from Playwright at commit `2bcd8f21ad032744763f2f0c7ba6e7006e13fa11`.
