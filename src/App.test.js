@@ -37,6 +37,7 @@ let registerGlobalShortcut
 let unregisterGlobalShortcut
 let registeredShortcuts
 let threadSummaryResult
+let olderThreadSummaryResult
 
 vi.mock('@tauri-apps/plugin-global-shortcut', () => ({
   register: (...args) => registerGlobalShortcut(...args),
@@ -120,7 +121,8 @@ beforeAll(async () => {
   window.__TAURI__ = {
     core: { invoke: (command, ...args) => {
       if (command === 'chat_thread_summaries') {
-        return Promise.resolve({ summaries: threadSummaryResult, nextCursor: null })
+        if (args[0]?.cursor === 'older') return Promise.resolve({ summaries: olderThreadSummaryResult, nextCursor: null })
+        return Promise.resolve({ summaries: threadSummaryResult, nextCursor: olderThreadSummaryResult ? 'older' : null })
       }
       if (command === 'chat_thread_open') {
         return Promise.resolve(invoke(command, ...args)).then((entries) => ({ entries, nextCursor: null }))
@@ -150,6 +152,7 @@ beforeAll(async () => {
 beforeEach(() => {
   localStorage.clear()
   threadSummaryResult = [{ threadId: 'thread-1', title: '', updatedAt: '' }]
+  olderThreadSummaryResult = null
   homeStatus = { configured: true, homePath: '/Documents/Muniment' }
   chatListener = undefined
   dictationListener = undefined
@@ -633,6 +636,19 @@ describe('thread name', () => {
     expect(listHeading).toBeInTheDocument()
     expect(within(list).getAllByRole('listitem')).toHaveLength(2)
     expect(screen.getByRole('region', { name: 'Transcript: Lease renewal' })).toBeInTheDocument()
+  })
+
+  it('appends older threads, moves focus, and removes the control on the last page', async () => {
+    threadSummaryResult = [{ threadId: 'thread-1', title: 'Lease renewal', updatedAt: '' }]
+    olderThreadSummaryResult = [{ threadId: 'thread-2', title: 'Older review', updatedAt: '' }]
+    render(App)
+
+    const control = await screen.findByRole('button', { name: 'Older threads' })
+    await fireEvent.click(control)
+
+    const olderThread = await screen.findByRole('button', { name: 'Older review' })
+    expect(olderThread).toHaveFocus()
+    expect(screen.queryByRole('button', { name: 'Older threads' })).not.toBeInTheDocument()
   })
 
   it('reveals a quiet delete action and cancels its inline confirmation', async () => {
