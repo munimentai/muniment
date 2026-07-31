@@ -7,9 +7,20 @@ use std::ops::Range;
 pub enum Rule {
     /// A provider credential such as a GitHub or OpenAI token.
     SecretProviderToken,
+    /// A PEM-encoded private key.
+    SecretPemPrivateKey,
 }
 
-const RULE_ORDER: [Rule; 1] = [Rule::SecretProviderToken];
+const RULE_ORDER: [Rule; 2] = [Rule::SecretProviderToken, Rule::SecretPemPrivateKey];
+
+const PEM_NAMES: [&[u8]; 6] = [
+    b"PRIVATE KEY",
+    b"ENCRYPTED PRIVATE KEY",
+    b"RSA PRIVATE KEY",
+    b"DSA PRIVATE KEY",
+    b"EC PRIVATE KEY",
+    b"OPENSSH PRIVATE KEY",
+];
 
 /// One non-overlapping byte range selected by the scanner.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -128,13 +139,98 @@ impl Rule {
     fn candidate(self, bytes: &[u8], start: usize, complete: bool) -> RuleCandidate {
         match self {
             Self::SecretProviderToken => provider_token_candidate(bytes, start, complete),
+            Self::SecretPemPrivateKey => pem_private_key_candidate(bytes, start, complete),
         }
     }
 
     const fn max_span(self) -> usize {
         match self {
             Self::SecretProviderToken => 512,
+            Self::SecretPemPrivateKey => 65_536,
         }
+    }
+}
+
+fn pem_private_key_candidate(bytes: &[u8], start: usize, complete: bool) -> RuleCandidate {
+    if start != 0 && bytes[start - 1] != b'\n' {
+        return RuleCandidate::None;
+    }
+
+    let Some((name, body_start)) = PEM_NAMES.iter().find_map(|name| {
+        let prefix_len = b"-----BEGIN ".len() + name.len() + b"-----".len();
+        let line = bytes.get(start..start.checked_add(prefix_len)?)?;
+        (line.starts_with(b"-----BEGIN ")
+            && line[b"-----BEGIN ".len()..].starts_with(name)
+            && line.ends_with(b"-----"))
+        .then_some((*name, start + prefix_len))
+    }) else {
+        return RuleCandidate::None;
+    };
+
+    let Some(mut cursor) = line_ending_end(bytes, body_start) else {
+        return RuleCandidate::None;
+    };
+    let body_start = cursor;
+    let span_end = start.saturating_add(65_536);
+    while cursor < bytes.len() && cursor < span_end {
+        if let Some(end) = pem_end_line_end(bytes, cursor, name, complete) {
+            if cursor == body_start {
+                return RuleCandidate::None;
+            }
+            if cursor - body_start <= 65_460 && end - start <= 65_536 {
+                return RuleCandidate::Matched(end);
+            }
+            return RuleCandidate::OverSpan;
+        }
+
+        match bytes[cursor] {
+            byte if is_pem_body_base64(byte) || byte == b'\n' => cursor += 1,
+            b'\r' if bytes.get(cursor + 1) == Some(&b'\n') => cursor += 2,
+            b'\r' => return RuleCandidate::None,
+            b'-' => {
+                return if complete {
+                    RuleCandidate::OverSpan
+                } else {
+                    RuleCandidate::None
+                }
+            }
+            _ => return RuleCandidate::None,
+        }
+
+        if cursor - body_start > 65_460 {
+            return RuleCandidate::OverSpan;
+        }
+    }
+
+    if cursor >= span_end || complete {
+        RuleCandidate::OverSpan
+    } else {
+        RuleCandidate::None
+    }
+}
+
+fn pem_end_line_end(bytes: &[u8], start: usize, name: &[u8], complete: bool) -> Option<usize> {
+    let line_len = b"-----END ".len() + name.len() + b"-----".len();
+    let line_end = start.checked_add(line_len)?;
+    let line = bytes.get(start..line_end)?;
+    if !line.starts_with(b"-----END ")
+        || !line[b"-----END ".len()..].starts_with(name)
+        || !line.ends_with(b"-----")
+    {
+        return None;
+    }
+    if line_end == bytes.len() {
+        complete.then_some(line_end)
+    } else {
+        line_ending_end(bytes, line_end)
+    }
+}
+
+fn line_ending_end(bytes: &[u8], start: usize) -> Option<usize> {
+    match bytes.get(start..) {
+        Some([b'\n', ..]) => Some(start + 1),
+        Some([b'\r', b'\n', ..]) => Some(start + 2),
+        _ => None,
     }
 }
 
@@ -261,6 +357,10 @@ const fn is_upper_alnum(byte: u8) -> bool {
     byte.is_ascii_uppercase() || byte.is_ascii_digit()
 }
 
+const fn is_pem_body_base64(byte: u8) -> bool {
+    byte.is_ascii_alphanumeric() || matches!(byte, b'+' | b'/' | b'=')
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -302,5 +402,13 @@ mod tests {
             rule_order: 0,
         };
         assert_eq!(arbitrate([later_rule, earlier_rule]), Some(earlier_rule));
+    }
+
+    #[test]
+    fn dispatch_starts_provider_and_pem_candidates_at_the_same_byte() {
+        let content = b"-----BEGIN PRIVATE KEY-----\nYQ==\n-----END PRIVATE KEY-----";
+        let candidates = RULE_ORDER.map(|rule| rule.candidate(content, 0, true));
+        assert_eq!(candidates[0], RuleCandidate::None);
+        assert_eq!(candidates[1], RuleCandidate::Matched(content.len()));
     }
 }
