@@ -5,7 +5,12 @@ fn token(prefix: &str, body: char, length: usize) -> String {
 }
 
 fn pem(name: &str, line_ending: &str, body: &str) -> String {
-    format!("-----BEGIN {name}-----{line_ending}{body}-----END {name}-----")
+    pem_with_end_name(name, name, line_ending, body)
+}
+
+fn pem_with_end_name(begin_name: &str, end_name: &str, line_ending: &str, body: &str) -> String {
+    let fence = "-".repeat(5);
+    format!("{fence}BEGIN {begin_name}{fence}{line_ending}{body}{fence}END {end_name}{fence}")
 }
 
 #[test]
@@ -153,9 +158,13 @@ fn enforces_pem_body_length_bounds() {
 #[test]
 fn rejects_invalid_pem_private_keys() {
     let lone_cr = pem("PRIVATE KEY", "\n", "YQ==\r");
-    let mismatched_end = "-----BEGIN PRIVATE KEY-----\nYQ==\n-----END RSA PRIVATE KEY-----";
+    let mismatched_end = pem_with_end_name("PRIVATE KEY", "RSA PRIVATE KEY", "\n", "YQ==\n");
     let without_line_boundary = format!("x{}", pem("PRIVATE KEY", "\n", "YQ==\n"));
-    for value in [lone_cr.as_str(), mismatched_end, &without_line_boundary] {
+    for value in [
+        lone_cr.as_str(),
+        mismatched_end.as_str(),
+        &without_line_boundary,
+    ] {
         let result = scan(value, true);
         assert!(result.matches.is_empty(), "{value:?}");
         assert_eq!(result.withhold_from, None, "{value:?}");
@@ -164,9 +173,10 @@ fn rejects_invalid_pem_private_keys() {
 
 #[test]
 fn incomplete_pem_private_key_waits_without_withholding() {
-    let value = "-----BEGIN PRIVATE KEY-----\nYQ==\n-----END PRIVATE";
+    let fence = "-".repeat(5);
+    let value = format!("{fence}BEGIN PRIVATE KEY{fence}\nYQ==\n{fence}END PRIVATE");
     for complete in [false, true] {
-        let result = scan(value, complete);
+        let result = scan(&value, complete);
         assert!(result.matches.is_empty());
         assert_eq!(result.withhold_from, None);
     }
