@@ -7,9 +7,20 @@ use std::ops::Range;
 pub enum Rule {
     /// A provider credential such as a GitHub or OpenAI token.
     SecretProviderToken,
+    /// A PEM-encoded private key.
+    SecretPemPrivateKey,
 }
 
-const RULE_ORDER: [Rule; 1] = [Rule::SecretProviderToken];
+const RULE_ORDER: [Rule; 2] = [Rule::SecretProviderToken, Rule::SecretPemPrivateKey];
+
+const PEM_HEADER_NAMES: [&[u8]; 6] = [
+    b"PRIVATE KEY",
+    b"ENCRYPTED PRIVATE KEY",
+    b"RSA PRIVATE KEY",
+    b"DSA PRIVATE KEY",
+    b"EC PRIVATE KEY",
+    b"OPENSSH PRIVATE KEY",
+];
 
 /// One non-overlapping byte range selected by the scanner.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -128,13 +139,75 @@ impl Rule {
     fn candidate(self, bytes: &[u8], start: usize, complete: bool) -> RuleCandidate {
         match self {
             Self::SecretProviderToken => provider_token_candidate(bytes, start, complete),
+            Self::SecretPemPrivateKey => pem_private_key_candidate(bytes, start),
         }
     }
 
     const fn max_span(self) -> usize {
         match self {
             Self::SecretProviderToken => 512,
+            Self::SecretPemPrivateKey => 65_536,
         }
+    }
+}
+
+fn pem_private_key_candidate(bytes: &[u8], start: usize) -> RuleCandidate {
+    if start != 0 && bytes[start - 1] != b'\n' {
+        return RuleCandidate::None;
+    }
+
+    let Some(after_begin) = bytes[start..].strip_prefix(b"-----BEGIN ") else {
+        return RuleCandidate::None;
+    };
+    let Some(name) = PEM_HEADER_NAMES.into_iter().find(|name| {
+        after_begin.starts_with(name) && after_begin[name.len()..].starts_with(b"-----")
+    }) else {
+        return RuleCandidate::None;
+    };
+    let line_end = start + b"-----BEGIN ".len() + name.len() + b"-----".len();
+    let Some(body_start) = line_ending_end(bytes, line_end) else {
+        return RuleCandidate::None;
+    };
+
+    let mut end = body_start;
+    while end - body_start < 65_460 {
+        match bytes.get(end) {
+            Some(byte) if byte.is_ascii_alphanumeric() || matches!(byte, b'+' | b'/' | b'=') => {
+                end += 1;
+            }
+            Some(b'\n') => end += 1,
+            Some(b'\r') if end - body_start + 2 <= 65_460 && bytes.get(end + 1) == Some(&b'\n') => {
+                end += 2;
+            }
+            _ => break,
+        }
+    }
+    if end == body_start {
+        return RuleCandidate::None;
+    }
+
+    let footer = [b"-----END ".as_slice(), name, b"-----"].concat();
+    if !bytes[end..].starts_with(&footer) {
+        return RuleCandidate::None;
+    }
+    let match_end = end + footer.len();
+    if match_end == bytes.len()
+        || bytes[match_end..].starts_with(b"\n")
+        || bytes[match_end..].starts_with(b"\r\n")
+    {
+        RuleCandidate::Matched(match_end)
+    } else {
+        RuleCandidate::None
+    }
+}
+
+fn line_ending_end(bytes: &[u8], start: usize) -> Option<usize> {
+    if bytes[start..].starts_with(b"\r\n") {
+        Some(start + 2)
+    } else if bytes[start..].starts_with(b"\n") {
+        Some(start + 1)
+    } else {
+        None
     }
 }
 
