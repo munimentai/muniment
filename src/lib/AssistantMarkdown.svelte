@@ -1,11 +1,15 @@
 <script>
+  import { openUrl } from '@tauri-apps/plugin-opener'
   import { renderAssistantMarkdown } from './assistant-markdown.js'
+  import { createExternalLinkHandler } from './external-link.js'
 
   let { text = '' } = $props()
   let rendered = $derived(renderAssistantMarkdown(text))
+  const handleExternalLink = createExternalLinkHandler(openUrl)
 </script>
 
-<div class="assistant-markdown">
+<!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions (The handler delegates native link activation.) -->
+<div class="assistant-markdown" onclick={handleExternalLink}>
   {#if rendered.kind === 'html'}
     {@html rendered.html}
   {:else}{rendered.text}{/if}
