@@ -772,14 +772,14 @@
                 <div class="tool-card tool-group" role="group" aria-label={`Parallel tool activity: ${groupedTools.map((tool) => `${toolName(tool)} ${toolStatus(tool)}`).join(', ')}`}>
                   <div class="tool-group-title">Parallel tool activity</div>
                   {#each groupedTools as tool}
-                    <div class:tool-running={toolStatus(tool) === 'running'} class:tool-failed={toolStatus(tool) === 'failed'} class="tool-row" aria-label={`${toolName(tool)}: ${toolStatus(tool)}`}>
+                    <div class:tool-running={toolStatus(tool) === 'running'} class:tool-failed={toolStatus(tool) === 'failed'} class="tool-row" role="status" aria-label={`${toolName(tool)} ${toolStatus(tool)}`}>
                       <span class="tool-dot" aria-hidden="true"></span><span class="tool-name">{toolName(tool)}</span><span class="tool-status">{toolStatus(tool)}</span>
                     </div>
                   {/each}
                 </div>
               {/if}
               {#each singleTools as tool}
-                <div class:tool-running={toolStatus(tool) === 'running'} class:tool-failed={toolStatus(tool) === 'failed'} class="tool-card tool-row" role="status" aria-label={`${toolName(tool)}: ${toolStatus(tool)}`}>
+                <div class:tool-running={toolStatus(tool) === 'running'} class:tool-failed={toolStatus(tool) === 'failed'} class="tool-card tool-row" role="status" aria-label={`${toolName(tool)} ${toolStatus(tool)}`}>
                   <span class="tool-dot" aria-hidden="true"></span><span class="tool-name">{toolName(tool)}</span><span class="tool-status">{toolStatus(tool)}</span>
                 </div>
               {/each}
@@ -1084,7 +1084,7 @@
   .tool-status { margin-left: auto; }
   .tool-running { color: var(--signal); }
   .tool-running .tool-dot { animation: tool-pulse 1.4s ease-in-out infinite; }
-  .tool-failed .tool-status::before { content: 'error · '; }
+  .tool-failed .tool-status { color: var(--oxide); }
   .permission-card { color: var(--ink); }
   .permission-card strong { font-weight: 600; }
   .permission-card p { margin: 4px 0 0; color: var(--muted); white-space: pre-wrap; overflow-wrap: anywhere; }
