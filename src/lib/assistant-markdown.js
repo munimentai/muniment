@@ -8,6 +8,10 @@ const ALLOWED_TAGS = [
 const ALLOWED_ATTR = ['class', 'href', 'rel', 'target', 'title']
 const LINK_PROTOCOLS = new Set(['http:', 'https:', 'mailto:'])
 const LANGUAGE = /^[A-Za-z0-9_+-]+$/u
+const VOID_HTML_TAGS = new Set([
+  'area', 'base', 'br', 'col', 'embed', 'hr', 'img', 'input', 'link', 'meta',
+  'param', 'source', 'track', 'wbr',
+])
 
 function escapeHtml(value) {
   return String(value)
@@ -195,12 +199,27 @@ function rewriteMalformedLinks(tokens) {
 
   for (let index = 0; index < tokens.length; index += 1) {
     const token = tokens[index]
+    if (token.type === 'html' && token.block && token.raw.startsWith('<!--')) {
+      const commentEnd = token.raw.indexOf('-->')
+      const trailing = commentEnd >= 0 ? token.raw.slice(commentEnd + 3) : ''
+      if (trailing) {
+        rewritten.push({ ...token, raw: token.raw.slice(0, commentEnd + 3) })
+        rewritten.push(...rewriteMalformedLinks(markdown.lexer(trailing)))
+        continue
+      }
+    }
+
     if (token.type === 'html' && !token.block) {
       const closing = token.raw.match(/^<\/([A-Za-z][\w-]*)/u)
       const opening = token.raw.match(/^<([A-Za-z][\w-]*)\b/u)
       if (closing) htmlStack.pop()
       rewritten.push(token)
-      if (opening && !/\/>\s*$/u.test(token.raw)) htmlStack.push(opening[1].toLowerCase())
+      const openingTag = opening?.[1].toLowerCase()
+      if (
+        openingTag
+        && !VOID_HTML_TAGS.has(openingTag)
+        && !/\/>\s*$/u.test(token.raw)
+      ) htmlStack.push(openingTag)
       continue
     }
 

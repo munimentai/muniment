@@ -134,6 +134,18 @@ describe('assistant Markdown', () => {
   })
 
   it.each([
+    ['a void HTML element', '<br> [safe](bad url)', '<br> safe'],
+    ['an HTML comment', '<!-- x --> [safe](bad url)', '<!-- x --> safe'],
+  ])('renders only the malformed link label after %s', (_name, source, expected) => {
+    const result = html(source)
+
+    expect(new DOMParser().parseFromString(result, 'text/html').body.textContent)
+      .toBe(expected)
+    expect(result).not.toContain('<a')
+    expect(result).not.toContain('href=')
+  })
+
+  it.each([
     ['class on a paragraph', '<p class="language-js">changed</p>'],
     ['href on a heading', '<h2 href="https://example.com">changed</h2>'],
   ])('uses plain text when the sanitizer returns %s', (_name, sanitized) => {
