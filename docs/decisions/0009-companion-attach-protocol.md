@@ -401,6 +401,126 @@ split at every adjacent-delta boundary, across three deltas, beside safe text,
 and at the terminal boundary. They also compare live, replayed, resubscribed,
 and `thread.open` output. This amendment changes no runtime or companion code.
 
+## Amendment — 2026-07-31: assistant-text redaction rule set
+
+The canonical projector uses the `assistant-text-v1` rule set. The repository's
+existing secret-pattern source is [`.gitleaks.toml`](../../.gitleaks.toml).
+That file protects committed source, not runtime assistant text. This rule set
+adapts its generic API key, JWT, and private-key classes to bounded runtime
+matching. It also defines the path and withheld-content classes required by
+this ADR. The set is closed and versioned. Changing a pattern or span requires
+another amendment and new golden fixtures.
+
+The grammar below operates on UTF-8 bytes. ASCII literals are case-sensitive
+unless a rule says otherwise. `B64` is `[A-Za-z0-9_-]`, `ALNUM` is
+`[A-Za-z0-9]`, and `VALUE` is `[A-Za-z0-9_./+=-]`. A token boundary is the
+start or end of content, or a byte outside that token's alphabet. At each byte,
+the projector selects the longest match, then the rule named first below.
+Matches do not overlap. After a rule's fixed prefix matches, failure to find
+its required terminator within its maximum span makes an over-span candidate.
+
+`secret.assignment` matches, case-insensitively, one complete label from
+`key`, `api_key`, `apikey`, `api-token`, `token`, `secret`, `client_secret`,
+`passwd`, `password`, `auth`, `authorization`, or `access_token`. The label
+needs an ASCII identifier boundary on each side, where an identifier byte is
+`[A-Za-z0-9_-]`. Zero through 20 bytes from `[A-Za-z0-9_. \t-]` may follow.
+Next comes one delimiter from `=`, `>`, `:`, `:=`, `=>`, `<=`, `?=`, `,`, or
+`||`, then zero through five bytes from space, tab, `=`, single quote, double
+quote, or backtick. The value is 10 through 150 `VALUE` bytes. It ends at
+content end or before ASCII whitespace, single quote, double quote, backtick,
+semicolon, or backslash. The complete match spans at most 192 UTF-8 bytes.
+
+`secret.provider-token` is the following closed alternation. GitHub matches
+`gh[pousr]_` plus 36 through 508 `ALNUM` bytes, or `github_pat_` plus 82
+through 501 `[A-Za-z0-9_]` bytes. OpenAI matches `sk-` plus 20 through 509
+`B64` bytes. Anthropic matches `sk-ant-` plus 20 through 505 `B64` bytes.
+Slack matches `xox[baprs]-` plus 10 through 504 `[A-Za-z0-9-]` bytes. Stripe
+matches `sk_live_` or `rk_live_` plus 16 through 504 `ALNUM` bytes. Hugging
+Face matches `hf_` plus 20 through 509 `ALNUM` bytes. AWS matches `AKIA` or
+`ASIA` plus exactly 16 `[A-Z0-9]` bytes. Each alternative spans at most 512
+UTF-8 bytes. The preceding byte must be outside `[A-Za-z0-9_]`. The following
+byte must be outside the credential alphabet for the selected alternative.
+
+Those provider alternatives derive from Gitleaks 8.30.1 default rules, the
+revision pinned by `.github/workflows/secret-scan.yml`. No other default
+Gitleaks rule enters `assistant-text-v1`. Gitleaks entropy thresholds, keyword
+prefilters, path allowlists, stopwords, and global allowlists do not apply at
+runtime. In particular, the test and fixture allowlists in `.gitleaks.toml`
+do not release assistant text.
+
+`secret.jwt` matches three `B64` segments separated by literal periods. The
+first two segments contain 17 through 2,726 bytes. The third contains zero
+through 2,724 bytes followed by zero through two `=` bytes. The match needs a
+`B64` token boundary on both sides and spans at most 8,192 UTF-8 bytes.
+
+`secret.pem-private-key` recognizes exactly `PRIVATE KEY`,
+`ENCRYPTED PRIVATE KEY`, `RSA PRIVATE KEY`, `DSA PRIVATE KEY`,
+`EC PRIVATE KEY`, and `OPENSSH PRIVATE KEY` as header names. It matches a line
+`-----BEGIN `, the name, and `-----`, followed by LF or CRLF. The line starts
+at content start or after LF. The body has one through 65,460 bytes from
+`[A-Za-z0-9+/=]`, LF, and CR. It then matches `-----END `, the same name, and
+`-----`, followed by content end, LF, or CRLF. The body permits only LF and
+CRLF line endings. The complete match spans at most 65,536 UTF-8 bytes. A
+`BEGIN` line with no matching bounded `END` line is an over-span candidate.
+
+The path rules share these terms. `PATH_END` is ASCII NUL, space, tab, CR, LF,
+single quote, double quote, backtick, `<`, `>`, `|`, or content end. A path
+boundary before a match is content start or one of `(`, `[`, `{`, `:`, `=`,
+`,`, `;`, or ASCII whitespace. A path component is one or more UTF-8 scalars
+other than `PATH_END`, `/`, or `\`. Dot and dot-dot are components. The
+terminating `PATH_END` byte is not part of the match.
+
+`path.posix-absolute` matches `/` followed by zero or more path components
+separated by `/`. It needs the path boundary before its leading slash and ends
+at `PATH_END`. Its maximum match span is 4,096 UTF-8 bytes.
+`path.windows-absolute` matches a drive root `[A-Za-z]:\`, a UNC root
+`\\component\component\`, an extended drive root `\\?\[A-Za-z]:\`, or an
+extended UNC root `\\?\UNC\component\component\`. A root may be followed by
+components separated by `\`. It needs the path boundary before its root and
+ends at `PATH_END`. Its maximum match span is 131,068 UTF-8 bytes.
+A path candidate that reaches its span without `PATH_END` is over-span.
+Both rules withhold a path outside the companion's approved workspace. They
+release a path inside that workspace after current canonical scope validation.
+
+`content.withheld` is a metadata rule, not a text pattern. The journal writer
+commits each `model.stream.delta` with `content_disclosure:"released"` or
+`content_disclosure:"withheld"` and, for withheld content, one reason from
+`workspace`, `connector`, `artifact`, `permission`, or `content_policy`.
+The projector receives those committed fields beside the delta text. It feeds
+no bytes from a withheld delta to the text matchers and withholds the complete
+delta. Its maximum match span is the 65,536 UTF-8-byte delta limit. Missing,
+unknown, or contradictory disclosure metadata withholds the complete delta.
+
+The greatest declared span is 131,068 UTF-8 bytes. The projector therefore
+retains at most 131,067 UTF-8 bytes, ending only at a UTF-8 scalar boundary.
+A configured rule that declares no finite span withholds the remaining
+assistant content through the terminal event. An over-span candidate has the
+same result. A withheld match contributes no replacement text. If an event has
+no released text, the companion receives `payload.withheld:true` with no
+`payload.text`. A partly withheld event contains only released text and no
+inline placeholder.
+
+Today, `thread.open` returns stored assistant text without assistant-text
+redaction. Adopting `assistant-text-v1` changes that authorized disclosure.
+The canonical projector reprojects all committed assistant deltas when
+`thread.open` reads them, including text committed before this rule set lands.
+It does not rewrite the journal. Live, replayed, and historical reads therefore
+disclose the same redacted projection under the active rule-set version.
+
+NVIDIA NeMo Guardrails documents a recent-token buffer for violations that
+span streamed chunks in [its streaming design][nemo-streaming]. LiveKit's
+[LLM output replacement recipe][livekit-output] holds a trailing partial
+prefix so a stateful filter can match a tag split across chunks. These sources
+support bounded cross-delta retention, but neither defines this rule set.
+
+The first implementation slice adds the committed disclosure fields, pure-core
+`assistant-text-v1` matcher, stateful retained-suffix projector, and golden
+boundary fixtures. It then makes the attach run stream and `thread.open` read
+that projector. This amendment changes no runtime code.
+
+[nemo-streaming]: https://developer.nvidia.com/blog/stream-smarter-and-safer-learn-how-nvidia-nemo-guardrails-enhance-llm-output-streaming/
+[livekit-output]: https://docs.livekit.io/reference/recipes/replacing_llm_output/
+
 ## Rejected alternatives
 
 **TCP loopback alone.** Loopback limits network reach but supplies no portable
