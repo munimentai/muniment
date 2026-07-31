@@ -486,7 +486,7 @@ pub(super) fn coordinate<R: tauri::Runtime>(
                         &run_id,
                         &mut seq,
                         "model.stream.delta",
-                        json!({"text": slice}),
+                        model_stream_delta_payload(slice),
                         subject.as_deref(),
                     )
                     .is_err()
@@ -641,6 +641,10 @@ pub(super) fn coordinate<R: tauri::Runtime>(
             }
         }
     }
+}
+
+fn model_stream_delta_payload(text: &str) -> Value {
+    json!({"text": text, "content_disclosure": "released"})
 }
 
 fn coordinate_extension_ui_request(
@@ -874,6 +878,19 @@ mod tests {
     use muniment_core::journal::reducer::{project_chat, RunStatus};
     use muniment_core::journal::RunJournal;
     use uuid::Uuid;
+
+    #[test]
+    fn each_split_delta_payload_commits_released_disclosure() {
+        let text = "a".repeat(muniment_core::journal::MAX_MODEL_STREAM_DELTA_BYTES + 1);
+        let payloads: Vec<_> = split_model_stream_delta(&text)
+            .map(model_stream_delta_payload)
+            .collect();
+
+        assert_eq!(payloads.len(), 2);
+        assert!(payloads
+            .iter()
+            .all(|payload| { payload.get("content_disclosure") == Some(&json!("released")) }));
+    }
 
     #[test]
     fn tool_frames_ignore_duplicate_starts_and_unmatched_finishes() {
