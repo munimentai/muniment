@@ -486,7 +486,7 @@ pub(super) fn coordinate<R: tauri::Runtime>(
                         &run_id,
                         &mut seq,
                         "model.stream.delta",
-                        json!({"text": slice}),
+                        model_stream_delta_payload(slice),
                         subject.as_deref(),
                     )
                     .is_err()
@@ -641,6 +641,10 @@ pub(super) fn coordinate<R: tauri::Runtime>(
             }
         }
     }
+}
+
+fn model_stream_delta_payload(text: &str) -> Value {
+    json!({"text": text, "content_disclosure": "released"})
 }
 
 fn coordinate_extension_ui_request(
@@ -869,11 +873,66 @@ fn fail_start<R: tauri::Runtime>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::chat::ChatPermissionAnswer;
+    use crate::chat::{ChatPermissionAnswer, ChatStorage};
     use crate::test_support::append_test_event;
+    use muniment_core::cas::LocalCas;
     use muniment_core::journal::reducer::{project_chat, RunStatus};
-    use muniment_core::journal::RunJournal;
+    use muniment_core::journal::{EventPayload, RunJournal};
     use uuid::Uuid;
+
+    #[test]
+    fn each_split_delta_payload_commits_released_disclosure() {
+        let app = tauri::test::mock_app();
+        let directory = std::env::temp_dir().join(format!("muniment-chat-{}", Uuid::now_v7()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let storage = Arc::new(Mutex::new(ChatStorage {
+            journal: RunJournal::open(directory.join("runs.sqlite3")).unwrap(),
+            cas: LocalCas::open(&directory.join("cas")).unwrap(),
+        }));
+        let run_id = Uuid::now_v7().to_string();
+        let mut projector = ChatProjector::new();
+        let mut seq = 0;
+        append_emit(
+            app.handle(),
+            &storage,
+            &mut projector,
+            &run_id,
+            &mut seq,
+            "run.started",
+            json!({}),
+            None,
+        )
+        .unwrap();
+        let text = "a".repeat(muniment_core::journal::MAX_MODEL_STREAM_DELTA_BYTES + 1);
+        for slice in split_model_stream_delta(&text) {
+            append_emit(
+                app.handle(),
+                &storage,
+                &mut projector,
+                &run_id,
+                &mut seq,
+                "model.stream.delta",
+                model_stream_delta_payload(slice),
+                None,
+            )
+            .unwrap();
+        }
+
+        let events = storage.lock().unwrap().journal.events(&run_id).unwrap();
+        assert_eq!(events.len(), 3);
+        for event in &events[1..] {
+            assert_eq!(event.event_type, "model.stream.delta");
+            let payload = match &event.payload {
+                EventPayload::Inline { payload_json } => payload_json,
+                _ => panic!("model stream delta must have an inline payload"),
+            };
+            assert_eq!(payload.get("content_disclosure"), Some(&json!("released")));
+        }
+
+        drop(events);
+        drop(storage);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
 
     #[test]
     fn tool_frames_ignore_duplicate_starts_and_unmatched_finishes() {
