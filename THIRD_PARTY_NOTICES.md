@@ -18,7 +18,7 @@ The bundle also carries these font files:
 - `src/fonts/SchibstedGrotesk-latin-ext.woff2`
 - `src/fonts/CommitMono-VF.woff2`
 
-Both Schibsted Grotesk and Commit Mono use SIL OFL 1.1. Their license texts are `src/fonts/SchibstedGrotesk-OFL.txt` and `src/fonts/CommitMono-LICENSE.txt`.
+Both Schibsted Grotesk and Commit Mono use SIL OFL 1.1. Their license texts are `third-party-notices/SchibstedGrotesk-OFL.txt` and `third-party-notices/CommitMono-LICENSE.txt`.
 
 ## Playwright relay core
 
