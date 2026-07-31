@@ -121,6 +121,9 @@ const threadSummaries = history.length
       { threadId: 'probe-notes', title: 'Client notes', updatedAt: '2026-07-25T12:00:00Z' },
     ]
   : []
+const olderThreadSummaries = history.length
+  ? [{ threadId: 'probe-older', title: 'Older correspondence', updatedAt: '2026-07-20T12:00:00Z' }]
+  : []
 
 const eventListeners = []
 const invokedCommands = []
@@ -243,7 +246,8 @@ window.__TAURI__ = {
       ]
       if (command === 'auth_status') return { signed_in: true, subject: 'probe-user' }
       if (command === 'chat_thread_summaries') {
-        return { summaries: structuredClone(threadSummaries), nextCursor: null }
+        if (payload.cursor === 'older') return { summaries: structuredClone(olderThreadSummaries), nextCursor: null }
+        return { summaries: structuredClone(threadSummaries), nextCursor: history.length ? 'older' : null }
       }
       if (command === 'chat_current_thread') return currentThreadId
       if (command === 'chat_rename_thread') {

@@ -26,6 +26,7 @@ export function createChatController({
   onHistoryError,
   onHistoryStart = () => {},
   onThreadSummaries = () => {},
+  onMoreThreads = () => {},
   onThreadSelected = () => {},
   onThreadSwitch = () => {},
   onFreshThread = () => {},
@@ -43,6 +44,9 @@ export function createChatController({
   let switchingThread = false
   let switchBlocked = false
   let threadRefreshSequence = 0
+  let threadPageCount = 1
+  let nextThreadCursor = null
+  let loadingOlderThreads = false
   const renameQueues = new Map()
 
   const messages = () => readMessages()
@@ -54,12 +58,21 @@ export function createChatController({
   async function refreshThreads() {
     const sequence = ++threadRefreshSequence
     try {
-      const [{ summaries }, currentThreadId] = await Promise.all([
+      const [firstPage, currentThreadId] = await Promise.all([
         invoke('chat_thread_summaries', { limit: 20 }),
         invoke('chat_current_thread'),
       ])
+      const summaries = [...firstPage.summaries]
+      let cursor = firstPage.nextCursor
+      for (let page = 1; page < threadPageCount && cursor != null; page += 1) {
+        const result = await invoke('chat_thread_summaries', { limit: 20, cursor })
+        summaries.push(...result.summaries)
+        cursor = result.nextCursor
+      }
       if (destroyed || sequence !== threadRefreshSequence) return
+      nextThreadCursor = cursor
       onThreadSummaries(summaries)
+      onMoreThreads(nextThreadCursor != null)
       onThreadSelected(currentThreadId)
       if (currentThreadId && summaries.some((summary) => summary.threadId === currentThreadId)) {
         onFreshThread(false)
@@ -113,9 +126,12 @@ export function createChatController({
     onHistoryStart()
     onAnnounce(null)
     try {
-      const { summaries } = await invoke('chat_thread_summaries', { limit: 20 })
+      const { summaries, nextCursor } = await invoke('chat_thread_summaries', { limit: 20 })
       if (destroyed) return
+      threadPageCount = 1
+      nextThreadCursor = nextCursor
       onThreadSummaries(summaries)
+      onMoreThreads(nextThreadCursor != null)
       if (!summaries.length) {
         publishMessages([])
         onThreadSelected(null)
@@ -127,6 +143,29 @@ export function createChatController({
       await openThread(summaries[0].threadId, switchBlocked)
     } catch (_) {
       if (!destroyed) onHistoryError('Conversation history could not be restored.')
+    }
+  }
+
+  async function loadOlderThreads() {
+    if (destroyed || loadingOlderThreads || nextThreadCursor == null) return null
+    loadingOlderThreads = true
+    onHistoryError('')
+    const cursor = nextThreadCursor
+    const sequence = threadRefreshSequence
+    try {
+      const result = await invoke('chat_thread_summaries', { limit: 20, cursor })
+      if (destroyed || sequence !== threadRefreshSequence) return null
+      const firstThreadId = result.summaries[0]?.threadId ?? null
+      onThreadSummaries([...readThreadSummaries(), ...result.summaries])
+      threadPageCount += 1
+      nextThreadCursor = result.nextCursor
+      onMoreThreads(nextThreadCursor != null)
+      return firstThreadId
+    } catch (_) {
+      if (!destroyed && sequence === threadRefreshSequence) onHistoryError('Older threads could not be loaded.')
+      return null
+    } finally {
+      loadingOlderThreads = false
     }
   }
 
@@ -375,5 +414,5 @@ export function createChatController({
     buffered.clear()
   }
 
-  return { start, loadHistory, openThread: (threadId) => openThread(threadId, true), newThread, renameThread, deleteThread, send, cancel, resume, queue, cleanup }
+  return { start, loadHistory, loadOlderThreads, openThread: (threadId) => openThread(threadId, true), newThread, renameThread, deleteThread, send, cancel, resume, queue, cleanup }
 }

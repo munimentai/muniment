@@ -22,6 +22,7 @@ function setup(invoke = vi.fn()) {
   const errors = []
   const onMessages = vi.fn((next) => { messages = next })
   const onThreadSummaries = vi.fn()
+  const onMoreThreads = vi.fn()
   const onThreadSelected = vi.fn()
   const onFreshThread = vi.fn()
   const onFocus = vi.fn()
@@ -47,6 +48,7 @@ function setup(invoke = vi.fn()) {
     onQueueError: vi.fn(),
     onHistoryError: vi.fn(),
     onThreadSummaries,
+    onMoreThreads,
     onThreadSelected,
     onFreshThread,
     onFocus,
@@ -61,6 +63,7 @@ function setup(invoke = vi.fn()) {
     errors,
     onMessages,
     onThreadSummaries,
+    onMoreThreads,
     onThreadSelected,
     onFreshThread,
     onFocus,
@@ -511,6 +514,112 @@ describe('chat controller', () => {
     expect(invoke).toHaveBeenCalledOnce()
     expect(invoke).toHaveBeenCalledWith('chat_thread_summaries', { limit: 20 })
     expect(context.messages()).toEqual([])
+  })
+
+  it('appends older threads and reports when the last page arrives', async () => {
+    let summaries = [{ threadId: 'thread-1' }]
+    const invoke = vi.fn()
+      .mockResolvedValueOnce({ summaries, nextCursor: 'page-2' })
+      .mockResolvedValueOnce({ entries: [], nextCursor: null })
+      .mockResolvedValueOnce({ summaries: [{ threadId: 'thread-2' }], nextCursor: null })
+    const context = setup(invoke)
+    const controller = createChatController({
+      invoke,
+      listen: vi.fn(),
+      readMessages: context.messages,
+      readActive: context.active,
+      readAnnounced: () => null,
+      readDraft: () => '',
+      readFiles: () => [],
+      readThreadSummaries: () => summaries,
+      onMessages: context.setMessages,
+      onActive: vi.fn(),
+      onAnnounce: vi.fn(),
+      onDraft: vi.fn(),
+      onFiles: vi.fn(),
+      onSubmitError: vi.fn(),
+      onCancelError: vi.fn(),
+      onQueueError: vi.fn(),
+      onHistoryError: vi.fn(),
+      onThreadSummaries: (next) => { summaries = next },
+      onMoreThreads: context.onMoreThreads,
+    })
+
+    await controller.loadHistory()
+    await expect(controller.loadOlderThreads()).resolves.toBe('thread-2')
+
+    expect(summaries).toEqual([{ threadId: 'thread-1' }, { threadId: 'thread-2' }])
+    expect(invoke).toHaveBeenLastCalledWith('chat_thread_summaries', { limit: 20, cursor: 'page-2' })
+    expect(context.onMoreThreads.mock.calls).toEqual([[true], [false]])
+  })
+
+  it('keeps shown threads when an older page fails', async () => {
+    const summaries = [{ threadId: 'thread-1' }]
+    const onThreadSummaries = vi.fn()
+    const onHistoryError = vi.fn()
+    const invoke = vi.fn()
+      .mockResolvedValueOnce({ summaries, nextCursor: 'page-2' })
+      .mockResolvedValueOnce({ entries: [], nextCursor: null })
+      .mockRejectedValueOnce(new Error('offline'))
+    const controller = createChatController({
+      invoke, listen: vi.fn(), readMessages: () => [], readActive: () => null,
+      readAnnounced: () => null, readDraft: () => '', readFiles: () => [],
+      readThreadSummaries: () => summaries, onMessages: vi.fn(), onActive: vi.fn(),
+      onAnnounce: vi.fn(), onDraft: vi.fn(), onFiles: vi.fn(), onSubmitError: vi.fn(),
+      onCancelError: vi.fn(), onQueueError: vi.fn(), onHistoryError, onThreadSummaries,
+    })
+
+    await controller.loadHistory()
+    onThreadSummaries.mockClear()
+    await expect(controller.loadOlderThreads()).resolves.toBeNull()
+
+    expect(onThreadSummaries).not.toHaveBeenCalled()
+    expect(onHistoryError).toHaveBeenLastCalledWith('Older threads could not be loaded.')
+  })
+
+  it('refreshes every summary page already shown after a run settles', async () => {
+    let summaryCall = 0
+    let summaries = []
+    const invoke = vi.fn(async (command, payload) => {
+      if (command === 'chat_thread_open') return { entries: [], nextCursor: null }
+      if (command === 'chat_current_thread') return 'thread-1'
+      summaryCall += 1
+      if (summaryCall === 1) return { summaries: [{ threadId: 'thread-1', title: 'First' }], nextCursor: 'page-2' }
+      if (summaryCall === 2) return { summaries: [{ threadId: 'thread-2', title: 'Second' }], nextCursor: 'page-3' }
+      if (payload.cursor === undefined) return { summaries: [{ threadId: 'thread-1', title: 'First updated' }], nextCursor: 'refresh-2' }
+      return { summaries: [{ threadId: 'thread-2', title: 'Second updated' }], nextCursor: 'refresh-3' }
+    })
+    const context = setup(invoke)
+    let listener
+    const controller = createChatController({
+      invoke,
+      listen: vi.fn(async (_, nextListener) => { listener = nextListener; return vi.fn() }),
+      readMessages: context.messages,
+      readActive: context.active,
+      readAnnounced: () => null,
+      readDraft: () => '',
+      readFiles: () => [],
+      readThreadId: () => 'thread-1',
+      readThreadSummaries: () => summaries,
+      onMessages: context.setMessages,
+      onActive: (next) => context.setActive(next),
+      onAnnounce: vi.fn(), onDraft: vi.fn(), onFiles: vi.fn(), onSubmitError: vi.fn(),
+      onCancelError: vi.fn(), onQueueError: vi.fn(), onHistoryError: vi.fn(),
+      onThreadSummaries: (next) => { summaries = next },
+    })
+    await controller.loadHistory()
+    await controller.loadOlderThreads()
+    const run = { id: 'run-1', phase: 'streaming', text: '' }
+    context.setMessages([{ role: 'assistant', run }])
+    context.setActive(run)
+    await controller.start()
+
+    listener({ payload: { runId: 'run-1', type: 'completed', receipt: null } })
+    await vi.waitFor(() => expect(summaries).toEqual([
+      { threadId: 'thread-1', title: 'First updated' },
+      { threadId: 'thread-2', title: 'Second updated' },
+    ]))
+    expect(invoke).toHaveBeenCalledWith('chat_thread_summaries', { limit: 20, cursor: 'refresh-2' })
   })
 
   it('opens every history page in chronological page order', async () => {
