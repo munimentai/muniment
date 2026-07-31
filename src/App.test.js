@@ -2789,6 +2789,44 @@ describe('thread announcements', () => {
     expect(container.querySelectorAll('.streaming-rule')).toHaveLength(ruleCount)
   })
 
+  it('swaps streaming source text for terminal Markdown', async () => {
+    const { container } = signedIn([{
+      runId: 'run-markdown', phase: 'streaming', text: '## Draft',
+      prompt: 'A question', receipt: null, toolActivity: [], resumable: false,
+    }])
+
+    const streaming = await screen.findByText('## Draft')
+    expect(streaming).toHaveProperty('tagName', 'P')
+    expect(streaming).toHaveClass('response-prose', 'streaming')
+    expect(container.querySelector('.caret')).toBeInTheDocument()
+    expect(container.querySelector('.streaming-rule')).toBeInTheDocument()
+    expect(screen.queryByRole('heading', { name: 'Draft' })).not.toBeInTheDocument()
+
+    chatListener({ payload: {
+      runId: 'run-markdown', phase: 'complete', text: '## Final',
+      receipt: {}, toolActivity: [],
+    } })
+
+    expect(await screen.findByRole('heading', { name: 'Final' })).toHaveProperty('tagName', 'H3')
+    expect(container.querySelector('.assistant-markdown')).toBeInTheDocument()
+    expect(container.querySelector('.streaming')).not.toBeInTheDocument()
+    expect(container.querySelector('.caret')).not.toBeInTheDocument()
+    expect(container.querySelector('.streaming-rule')).not.toBeInTheDocument()
+  })
+
+  it('keeps a paused reply as plain text', async () => {
+    const { container } = signedIn([{
+      runId: 'run-paused', phase: 'pending-permission', text: '## Not terminal',
+      prompt: 'A question', receipt: null, toolActivity: [], resumable: false,
+      pendingPermission: null,
+    }])
+
+    const reply = await screen.findByText('## Not terminal')
+    expect(reply).toHaveProperty('tagName', 'P')
+    expect(reply).toHaveClass('response-prose')
+    expect(container.querySelector('.assistant-markdown')).not.toBeInTheDocument()
+  })
+
   it('keeps the thinking chip mounted through its eased handoff to streaming', async () => {
     signedIn([{
       runId: 'run-thinking', phase: 'thinking', text: '', prompt: 'A question',

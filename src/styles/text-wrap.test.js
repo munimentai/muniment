@@ -4,7 +4,6 @@ import path from 'node:path'
 
 // Each entry states which unbreakable text the surface can render.
 const WRAPPING_SELECTORS = {
-  '.response-prose': 'model replies can contain digests, base64, identifiers, and paths',
   '.provenance': 'provenance can contain server-supplied routes, models, and capabilities',
   '.user-message': 'user messages can contain pasted identifiers and paths',
   '.tool-name': 'tool names can come from external tool definitions',
@@ -34,6 +33,7 @@ const selectorsWithoutWrap = (source, selectors) => {
 describe('text wrapping', () => {
   it('wraps unbreakable text in every text-bearing surface', () => {
     expect(selectorsWithoutWrap(read('src/App.svelte'), Object.keys(WRAPPING_SELECTORS))).toEqual([])
+    expect(selectorsWithoutWrap(read('src/lib/AssistantMarkdown.svelte'), ['.assistant-markdown'])).toEqual([])
   })
 
   it('rejects a listed selector without overflow-wrap anywhere', () => {
