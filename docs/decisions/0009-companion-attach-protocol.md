@@ -457,7 +457,7 @@ through 2,724 bytes followed by zero through two `=` bytes. The match needs a
 `ENCRYPTED PRIVATE KEY`, `RSA PRIVATE KEY`, `DSA PRIVATE KEY`,
 `EC PRIVATE KEY`, and `OPENSSH PRIVATE KEY` as header names. It matches a line
 `-----BEGIN `, the name, and `-----`, followed by LF or CRLF. The line starts
-at content start or after LF. The body has one through 65,464 bytes from
+at content start or after LF. The body has one through 65,460 bytes from
 `[A-Za-z0-9+/=]`, LF, and CR. It then matches `-----END `, the same name, and
 `-----`, followed by content end, LF, or CRLF. The body permits only LF and
 CRLF line endings. The complete match spans at most 65,536 UTF-8 bytes. A
