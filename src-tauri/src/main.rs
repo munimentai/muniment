@@ -41,7 +41,6 @@ fn main() {
             auth::auth_status,
             auth::auth_entitlement_snapshot,
             auth::auth_devices,
-            auth::auth_ensure_fresh,
             auth::auth_sign_out,
             chat::chat_submit,
             chat::chat_file_metadata,

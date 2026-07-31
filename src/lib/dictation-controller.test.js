@@ -11,7 +11,6 @@ function setup({ invoke } = {}) {
     invoke: invoke ?? vi.fn(async (command) => {
       if (command === 'dictation_start') return { state: 'running' }
       if (command === 'dictation_stop') return { state: 'stopped' }
-      if (command === 'dictation_polish') return 'Polished'
       return { state: 'stopped' }
     }),
     listen: vi.fn(async (_, callback) => {
