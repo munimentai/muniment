@@ -337,7 +337,7 @@ adapter so platform transports do not change protocol semantics.
 ## Amendment — 2026-07-30: assistant reply text projection
 
 An authorized companion receives assistant reply text through the existing
-`run.event` stream. Each committed `assistant.message` envelope projects as a
+`run.event` stream. Each committed `model.stream.delta` envelope projects as a
 `run.event` whose `payload.text` field contains the assistant text. The
 alternative was to wait for the terminal event, call `thread.open`, and emit
 one ACP `agent_message_chunk`. That choice would suppress live output and add a
@@ -346,30 +346,46 @@ text ordered with every other committed event and uses the existing replay,
 authorization, and flow-control rules.
 
 `payload.text` contains at most 65,536 UTF-8 bytes. The journal writer splits a
-larger reply at UTF-8 scalar boundaries into ordered `assistant.message`
+larger model delta at UTF-8 scalar boundaries into ordered `model.stream.delta`
 envelopes before commit. It emits no empty envelope. Text counts against a
 262,144-byte text budget in each advertised acknowledgement window. The
 existing 1 MiB frame ceiling and event-count window also apply. The server
 pauses before an event that would exceed either window bound.
 
-The projector applies the desktop secret, path, and content redaction rule
-before it writes `payload.text`. It never truncates, summarizes, or invents
-replacement text. If that rule withholds the whole message, the event retains
-`payload.withheld:true` and omits `payload.text`.
+One stateful canonical assistant-text projector applies the desktop secret,
+path, and content redaction rule across ordered deltas. It retains a bounded
+candidate suffix until later text proves that the suffix cannot form part of a
+secret. Each redaction rule declares a finite maximum match span. The suffix
+bound is one UTF-8 scalar less than the greatest declared span. A rule without
+a finite span withholds the remaining assistant content. The projector
+withholds every matched secret, including a match split across two or more
+deltas. It then assigns released text to its original `model.stream.delta` and
+preserves that envelope's `run_seq`. The stream does not pass a pending delta.
+The terminal event makes the projector resolve its retained suffix before
+delivery. Redaction therefore delays an event when needed. It never adds,
+removes, or renumbers a journal cursor.
+
+The projector never truncates, summarizes, or invents replacement text. If the
+rule withholds a whole delta, the event retains `payload.withheld:true` and
+omits `payload.text`. A partly withheld delta carries only its released,
+redacted `payload.text`.
 
 The run stream and `thread.open` disclose the same assistant content.
 The canonical assistant-text projection rule enforces this invariant:
-`thread.open` concatenates the same redacted `assistant.message` text in
-`run_seq` order. It does not read or redact a second source. A withheld stream
-event contributes no text to the thread projection.
+both consumers read the output of the same stateful projector.
+`thread.open` concatenates its redacted `model.stream.delta` text in `run_seq`
+order. It does not read or redact a second source. A withheld stream event
+contributes no text to the thread projection.
 
-Each committed `assistant.message` envelope has one `run_seq` and produces one
+Each committed `model.stream.delta` envelope has one `run_seq` and produces one
 text projection. A resubscription supplies the last committed `run_seq` that
-the companion processed. The server starts at `after_run_seq + 1`, so that
-subscription emits each later text projection once. A companion persists its
-cursor only after processing the event. Transport retries may redeliver an
-unacknowledged event, and the companion deduplicates it by `(run_id, run_seq)`
-as the base reconnect rule requires.
+the companion processed. The server rebuilds the projector state through that
+sequence without emitting it, then emits projections after that sequence.
+Thus, boundary-spanning redaction has the same result without changing cursor
+semantics and emits each later text projection exactly once. A companion
+persists its cursor only after processing the event. Transport retries may
+redeliver an unacknowledged event, and the companion deduplicates it by
+`(run_id, run_seq)` as the base reconnect rule requires.
 
 An unauthorized or out-of-scope companion receives an authorization error and
 no stream event. Revocation sends only `capability.revoked`, closes the
@@ -380,8 +396,10 @@ path stays fail-closed and never falls back to `thread.open`.
 The first implementation slice adds `payload.text` to the attach run-event
 type and canonical projector. It also adds journal splitting, shared
 `thread.open` projection, byte-window accounting, ACP
-`agent_message_chunk` translation, and contract tests. This amendment changes
-no runtime or companion code.
+`agent_message_chunk` translation, and contract tests. The tests cover secrets
+split at every adjacent-delta boundary, across three deltas, beside safe text,
+and at the terminal boundary. They also compare live, replayed, resubscribed,
+and `thread.open` output. This amendment changes no runtime or companion code.
 
 ## Rejected alternatives
 
