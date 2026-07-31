@@ -31,6 +31,30 @@ const historyFixtures = {
       resumable: true,
     },
   ],
+  markdown: [
+    {
+      runId: 'probe-markdown',
+      prompt: 'Summarize the release notes.',
+      phase: 'complete',
+      text: [
+        '## Release notes',
+        '',
+        '- Added **terminal Markdown**',
+        '- Kept `streaming` replies plain',
+        '',
+        '```text',
+        'A fenced line that stays inside its own horizontally scrolling block.',
+        '```',
+        '',
+        '| Surface | Result |',
+        '| --- | --- |',
+        '| Thread | [Ready with a deliberately wide table value](https://example.com) |',
+      ].join('\n'),
+      receipt: null,
+      toolActivity: [],
+      resumable: false,
+    },
+  ],
   'pending-permission': [
     {
       runId: 'probe-permission',
@@ -121,6 +145,12 @@ function fixtureRendered() {
   const workspace = document.querySelector('.workspace')
   if (!workspace) return false
   if (history.length === 0) return workspace.querySelector('.empty') !== null
+  if (fixtureName === 'markdown') {
+    return workspace.querySelector('.assistant-markdown h3')?.textContent === 'Release notes'
+      && workspace.querySelector('.assistant-markdown pre code')
+      && workspace.querySelector('.assistant-markdown table')
+      && workspace.querySelector('.assistant-markdown a')?.textContent.startsWith('Ready')
+  }
   return history.every((run) => workspace.textContent.includes(run.prompt) && workspace.textContent.includes(run.text))
 }
 
