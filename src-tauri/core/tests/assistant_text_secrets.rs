@@ -5,7 +5,11 @@ fn token(prefix: &str, body: char, length: usize) -> String {
 }
 
 fn pem(body: &str) -> String {
-    format!("-----BEGIN PRIVATE KEY-----\n{body}-----END PRIVATE KEY-----")
+    format!(
+        "{}\n{body}{}",
+        concat!("-----BEGIN", " PRIVATE KEY-----"),
+        concat!("-----END", " PRIVATE KEY-----")
+    )
 }
 
 #[test]
@@ -112,7 +116,10 @@ fn rejects_pem_private_key_near_misses() {
     let mid_line = format!("x{}", pem("YQ==\n"));
     assert!(scan(&mid_line, true).matches.is_empty());
 
-    let mismatched_end = "-----BEGIN PRIVATE KEY-----\nYQ==\n-----END ENCRYPTED PRIVATE KEY-----";
+    let mismatched_end = concat!(
+        "-----BEGIN",
+        " PRIVATE KEY-----\nYQ==\n-----END ENCRYPTED PRIVATE KEY-----"
+    );
     assert!(scan(mismatched_end, true).matches.is_empty());
 
     let carriage_return = pem("YQ==\r\n");
