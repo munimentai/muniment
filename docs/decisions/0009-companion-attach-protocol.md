@@ -401,6 +401,77 @@ split at every adjacent-delta boundary, across three deltas, beside safe text,
 and at the terminal boundary. They also compare live, replayed, resubscribed,
 and `thread.open` output. This amendment changes no runtime or companion code.
 
+## Amendment — 2026-07-31: assistant-text redaction rule set
+
+The canonical projector uses the `assistant-text-v1` rule set. The repository's
+existing secret-pattern source is [`.gitleaks.toml`](../../.gitleaks.toml).
+That file protects committed source, not runtime assistant text. This rule set
+adapts its generic API key, JWT, and private-key classes to bounded runtime
+matching. It also defines the path and withheld-content classes required by
+this ADR. The set is closed and versioned. Changing a pattern or span requires
+another amendment and new golden fixtures.
+
+`secret.assignment` matches an ASCII secret label such as `api_key`, `token`,
+`secret`, `password`, or `authorization`, its assignment punctuation, and an
+ASCII credential value. Its maximum match span is 192 UTF-8 bytes.
+`secret.provider-token` matches a provider-specific literal prefix and its
+credential alphabet from the Gitleaks default rules enabled by `useDefault`.
+Its maximum match span is 512 UTF-8 bytes. The implementation pins the default
+rule revision and records it in the `assistant-text-v1` golden fixtures.
+`secret.jwt` matches a three-segment compact JWT with base64url segments and
+optional trailing base64 padding. Its maximum match span is 8,192 UTF-8 bytes.
+`secret.pem-private-key` matches a PEM private-key block from a recognized
+`BEGIN ... PRIVATE KEY` line through its matching `END` line. Its maximum match
+span is 65,536 UTF-8 bytes. These rules use the corresponding
+`generic-api-key`, `jwt`, and `private-key` classes in `.gitleaks.toml` as their
+pattern source. The runtime grammar makes every repetition finite and treats a
+candidate that exceeds its declared span as an unbounded match.
+
+`path.posix-absolute` matches a slash-rooted absolute path through the next
+ASCII NUL, line break, quote, or spacing delimiter. Its maximum match span is
+4,096 UTF-8 bytes. `path.windows-absolute` matches a drive-rooted, UNC, or
+extended-length Windows absolute path through the same delimiters. Its maximum
+match span is 131,068 UTF-8 bytes. Both rules withhold a path outside the
+companion's approved workspace.
+They release an absolute path inside that workspace because its current grant
+already authorizes disclosure.
+
+`content.withheld` matches text in a committed delta that the desktop projection
+has already marked as withheld by workspace, connector, artifact, permission,
+or content policy. Its maximum match span is the 65,536 UTF-8-byte delta limit.
+The projector does not infer new content policy from assistant prose. It
+preserves the desktop's committed withheld classification.
+
+The greatest declared span is 131,068 UTF-8 bytes. The projector therefore
+retains at most 131,067 UTF-8 bytes, ending only at a UTF-8 scalar boundary.
+A configured rule that declares no finite span withholds the remaining
+assistant content through the terminal event. An over-span candidate has the
+same result. A withheld match contributes no replacement text. If an event has
+no released text, the companion receives `payload.withheld:true` with no
+`payload.text`. A partly withheld event contains only released text and no
+inline placeholder.
+
+Today, `thread.open` returns stored assistant text without assistant-text
+redaction. Adopting `assistant-text-v1` changes that authorized disclosure.
+The canonical projector reprojects all committed assistant deltas when
+`thread.open` reads them, including text committed before this rule set lands.
+It does not rewrite the journal. Live, replayed, and historical reads therefore
+disclose the same redacted projection under the active rule-set version.
+
+NVIDIA NeMo Guardrails documents a recent-token buffer for violations that
+span streamed chunks in [its streaming design][nemo-streaming]. LiveKit's
+[LLM output replacement recipe][livekit-output] holds a trailing partial
+prefix so a stateful filter can match a tag split across chunks. These sources
+support bounded cross-delta retention, but neither defines this rule set.
+
+The first implementation slice adds the pure-core `assistant-text-v1` matcher,
+stateful retained-suffix projector, and golden boundary fixtures. It then makes
+the attach run stream and `thread.open` read that projector. This amendment
+changes no runtime code.
+
+[nemo-streaming]: https://developer.nvidia.com/blog/stream-smarter-and-safer-learn-how-nvidia-nemo-guardrails-enhance-llm-output-streaming/
+[livekit-output]: https://docs.livekit.io/reference/recipes/replacing_llm_output/
+
 ## Rejected alternatives
 
 **TCP loopback alone.** Loopback limits network reach but supplies no portable
