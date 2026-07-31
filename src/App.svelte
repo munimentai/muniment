@@ -1069,7 +1069,7 @@
   .message-attachments li { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 5px 8px; max-width: 100%; padding: 5px 8px; border: 1px solid var(--border); border-radius: var(--radius-chip); color: var(--muted); font: var(--text-12) var(--font-mono); }
   .message-attachments strong { flex-basis: 100%; color: var(--muted); font-weight: 400; font-size: var(--text-12); }
   .response { margin: 0 0 34px; }
-  .response-prose { max-width: 92%; white-space: pre-wrap; }
+  .response-prose { max-width: 92%; white-space: pre-wrap; overflow-wrap: anywhere; }
   .streaming { position: relative; }
   .streaming-rule { position: absolute; height: 2px; background: var(--signal); pointer-events: none; }
   .caret { display: inline-block; height: 1em; border-right: 2px solid var(--signal); margin-left: 2px; vertical-align: -2px; animation: blink 800ms step-end infinite; }
@@ -1097,7 +1097,7 @@
   .permission-card .run-error { margin-top: 6px; }
   /* §2.2 mono 11.5px; §1.4 records line up their figures. The shorthand resets
      font-variant-numeric, so tabular-nums follows it. */
-  .provenance { display: block; margin-top: 10px; padding: 0; border: 0; background: transparent; color: var(--muted); font: var(--text-provenance)/1.45 var(--font-mono); font-variant-numeric: tabular-nums; text-align: left; }
+  .provenance { display: block; margin-top: 10px; padding: 0; border: 0; background: transparent; color: var(--muted); font: var(--text-provenance)/1.45 var(--font-mono); font-variant-numeric: tabular-nums; text-align: left; overflow-wrap: anywhere; }
   .provenance:hover:not(:disabled) { color: var(--ink); }
   /* §1.2 permits --signal on the route segment only. */
   .provenance .route-segment { color: var(--signal); }
