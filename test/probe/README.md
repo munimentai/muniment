@@ -12,8 +12,10 @@ Open `editor.html` for a run paused on a multi-line text request.
 
 Inspect `window.__PROBE__.invokedCommands` and `window.__PROBE__.eventListeners` in the browser console. Emit an event with `window.__PROBE__.emit(event, payload)`.
 
-Capture the restored history at the default desktop size:
+Capture every fixture at the default desktop size:
 
 ```sh
-playwright screenshot --browser chromium --viewport-size "1100,720" --wait-for-selector "[data-probe-ready]" http://127.0.0.1:4173/test/probe/history.html /tmp/muniment-probe.png
+for fixture in index history markdown onboarding approved-files permission input editor; do
+  playwright screenshot --browser chromium --viewport-size "1100,720" --wait-for-selector "[data-probe-ready]" "http://127.0.0.1:4173/test/probe/$fixture.html" "/tmp/muniment-probe-$fixture.png"
+done
 ```
