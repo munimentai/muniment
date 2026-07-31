@@ -108,6 +108,35 @@ describe('assistant Markdown', () => {
     expect(result).not.toContain('href=')
   })
 
+  it.each([
+    ['whitespace in the destination', '[safe label](https:// example.com)'],
+    ['a missing closing parenthesis', '[safe label](https://example.com'],
+  ])('renders only the label for malformed link source with %s', (_name, source) => {
+    const result = html(source)
+
+    expect(new DOMParser().parseFromString(result, 'text/html').body.textContent).toBe('safe label')
+    expect(result).not.toContain('<a')
+    expect(result).not.toContain('href=')
+  })
+
+  it.each([
+    ['class on a paragraph', '<p class="language-js">changed</p>'],
+    ['href on a heading', '<h2 href="https://example.com">changed</h2>'],
+  ])('uses plain text when the sanitizer returns %s', (_name, sanitized) => {
+    const reply = '**private reply text**'
+    const reportDiagnostic = vi.fn()
+    const purifier = {
+      removed: [],
+      sanitize: vi.fn(() => sanitized),
+    }
+
+    expect(renderAssistantMarkdown(reply, { purifier, reportDiagnostic })).toEqual({
+      kind: 'text',
+      text: reply,
+    })
+    expect(reportDiagnostic).toHaveBeenCalledOnce()
+  })
+
   it('returns the complete source and records no source text when sanitization removes content', () => {
     const reply = '**private reply text**'
     const reportDiagnostic = vi.fn()

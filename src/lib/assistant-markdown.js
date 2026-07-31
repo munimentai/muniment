@@ -8,6 +8,7 @@ const ALLOWED_TAGS = [
 const ALLOWED_ATTR = ['class', 'href', 'rel', 'target', 'title']
 const LINK_PROTOCOLS = new Set(['http:', 'https:', 'mailto:'])
 const LANGUAGE = /^[A-Za-z0-9_+-]+$/u
+const MALFORMED_LINK = /(?<!!)\[([^\]\n]+)\]\(([^)\n]*)(\)|$)/gu
 
 function escapeHtml(value) {
   return String(value)
@@ -107,6 +108,36 @@ const markdown = new Marked({
   renderer,
 })
 
+function containsLink(tokens, source) {
+  return tokens.some((token) =>
+    (token.type === 'link' && token.raw === source)
+    || (Array.isArray(token.tokens) && containsLink(token.tokens, source)),
+  )
+}
+
+function removeMalformedLinkSource(text) {
+  return text.replace(MALFORMED_LINK, (source, label) =>
+    containsLink(markdown.lexer(source), source) ? source : label,
+  )
+}
+
+function hasForbiddenAttributes(html) {
+  const template = document.createElement('template')
+  template.innerHTML = html
+
+  return [...template.content.querySelectorAll('*')].some((element) =>
+    [...element.attributes].some(({ name, value }) => {
+      if (element.localName === 'a') {
+        return !['href', 'rel', 'target', 'title'].includes(name)
+      }
+      if (element.localName === 'code' && name === 'class') {
+        return !value.split(/\s+/u).every((item) => /^language-[A-Za-z0-9_+-]+$/u.test(item))
+      }
+      return true
+    }),
+  )
+}
+
 export function renderAssistantMarkdown(reply, {
   purifier = DOMPurify,
   reportDiagnostic = (message) => console.warn(message),
@@ -114,7 +145,7 @@ export function renderAssistantMarkdown(reply, {
   const text = typeof reply === 'string' ? reply : String(reply ?? '')
   if (!text) return { kind: 'text', text: '' }
 
-  const parsed = markdown.parse(text)
+  const parsed = markdown.parse(removeMalformedLinkSource(text))
   const html = purifier.sanitize(parsed, {
     ALLOWED_ATTR,
     ALLOWED_TAGS,
@@ -124,7 +155,7 @@ export function renderAssistantMarkdown(reply, {
 
   // DOMPurify reports its internal fragment body, which did not come from the renderer.
   const removals = purifier.removed.filter(({ element }) => element?.nodeName !== 'BODY')
-  if (removals.length > 0) {
+  if (removals.length > 0 || hasForbiddenAttributes(html)) {
     reportDiagnostic('Assistant Markdown sanitizer removed generated content.')
     return { kind: 'text', text }
   }
