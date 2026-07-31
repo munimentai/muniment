@@ -1,0 +1,126 @@
+import { describe, expect, it, vi } from 'vitest'
+
+import { renderAssistantMarkdown } from './assistant-markdown.js'
+
+function html(markdown) {
+  const result = renderAssistantMarkdown(markdown)
+  expect(result.kind).toBe('html')
+  return result.html
+}
+
+describe('assistant Markdown', () => {
+  it('returns an empty plain-text result for empty input', () => {
+    expect(renderAssistantMarkdown('')).toEqual({ kind: 'text', text: '' })
+  })
+
+  it('renders every allowed element and attribute', () => {
+    const result = html([
+      '# One',
+      '## Two',
+      '### Three',
+      '#### Four',
+      '',
+      'A **strong**, *emphasized*, ~~deleted~~ [link](https://example.com "Title"), and `code` line.  ',
+      'Next line.',
+      '',
+      '> Quote',
+      '',
+      '---',
+      '',
+      '- unordered',
+      '  - nested',
+      '',
+      '3. ordered',
+      '',
+      '```javascript',
+      'const value = 1',
+      '```',
+      '',
+      '| Head |',
+      '| :---: |',
+      '| Cell |',
+    ].join('\n'))
+
+    for (const tag of [
+      'a', 'blockquote', 'br', 'code', 'del', 'em', 'h2', 'h3', 'h4', 'h5', 'hr',
+      'li', 'ol', 'p', 'pre', 'strong', 'table', 'tbody', 'td', 'th', 'thead', 'tr', 'ul',
+    ]) {
+      expect(result).toContain(`<${tag}`)
+    }
+    expect(result).toContain('class="language-javascript"')
+    expect(result).toContain('href="https://example.com/"')
+    expect(result).toContain('title="Title"')
+    expect(result).toContain('target="_blank"')
+    expect(result).toContain('rel="noopener noreferrer"')
+    expect(result).not.toContain('start=')
+    expect(result).not.toContain('align=')
+  })
+
+  it.each([
+    ['raw HTML', '<aside>unsafe</aside>', '<aside', '<aside>unsafe</aside>'],
+    ['a level-five heading', '##### Too deep', '<h6', '##### Too deep'],
+    ['a task checkbox', '- [ ] undone', '<input', '- [ ] undone'],
+    ['a footnote', 'Text[^1]\\n\\n[^1]: Note', '<sup', '[^1]'],
+    ['a definition', '[term]: https://example.com', '<a', '[term]: https://example.com'],
+  ])('renders %s as literal source without its element', (_name, source, forbidden, literal) => {
+    const result = html(source.replaceAll('\\n', '\n'))
+
+    expect(result).not.toContain(forbidden)
+    expect(new DOMParser().parseFromString(result, 'text/html').body.textContent).toContain(literal)
+  })
+
+  it('renders image alt text without an image element', () => {
+    const result = html('![remote description](https://example.com/tracker.png)')
+
+    expect(result).toBe('<p>remote description</p>')
+    expect(result).not.toContain('<img')
+    expect(result).not.toContain('tracker.png')
+  })
+
+  it('omits an invalid code language class', () => {
+    const result = html('```bad\" onclick=\"alert(1)\ncode\n```')
+
+    expect(result).toBe('<pre><code>code</code></pre>')
+    expect(result).not.toContain('class=')
+  })
+
+  it.each([
+    ['https://example.com/path', 'https://example.com/path'],
+    ['http://example.com/path', 'http://example.com/path'],
+    ['mailto:person@example.com', 'mailto:person@example.com'],
+  ])('allows the %s URL', (url, expected) => {
+    const result = html(`[label](${url})`)
+
+    expect(result).toContain(`<a href="${expected}"`)
+    expect(result).toContain('target="_blank" rel="noopener noreferrer"')
+  })
+
+  it.each([
+    ['relative', '/relative'],
+    ['malformed', 'https://[invalid'],
+    ['JavaScript', 'javascript:alert(1)'],
+  ])('renders only the label for a %s URL', (_name, url) => {
+    const result = html(`[safe label](${url})`)
+
+    const text = new DOMParser().parseFromString(result, 'text/html').body.textContent
+    expect(text).toBe('safe label')
+    expect(result).not.toContain('<a')
+    expect(result).not.toContain('href=')
+  })
+
+  it('returns the complete source and records no source text when sanitization removes content', () => {
+    const reply = '**private reply text**'
+    const reportDiagnostic = vi.fn()
+    const purifier = {
+      removed: [{ element: document.createElement('script') }],
+      sanitize: vi.fn(() => '<strong>changed</strong>'),
+    }
+
+    expect(renderAssistantMarkdown(reply, { purifier, reportDiagnostic })).toEqual({
+      kind: 'text',
+      text: reply,
+    })
+    expect(reportDiagnostic).toHaveBeenCalledOnce()
+    expect(reportDiagnostic.mock.calls.flat().join(' ')).not.toContain(reply)
+  })
+})
