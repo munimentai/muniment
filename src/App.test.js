@@ -2024,6 +2024,7 @@ describe('voice dictation', () => {
 
     expect(voice).toHaveAttribute('aria-pressed', 'true')
     expect(screen.getByRole('status')).toHaveTextContent('Starting local dictation…')
+    expect(composer).toHaveAccessibleDescription('Starting local dictation…')
     dictationListener({ payload: { type: 'transcript', text: 'spoken words' } })
     await waitFor(() => expect(composer).toHaveValue('Existing draft spoken words'))
     await fireEvent.input(composer, { target: { value: 'Edited transcript' } })

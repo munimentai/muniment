@@ -846,7 +846,7 @@
           {#if queueError}<p class="cancel-error" role="alert">{queueError}</p>{/if}
           <div class="composer-row" bind:this={composerRow}>
             {#if isDictationActive(dictation)}
-              <span class="capture-status" role="status">
+              <span id="composer-hint" class="capture-status" role="status">
                 <span class="capture-meter" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></span>
                 {dictation.state === 'starting' ? 'Starting local dictation…' : 'Listening on this device…'}
               </span>
