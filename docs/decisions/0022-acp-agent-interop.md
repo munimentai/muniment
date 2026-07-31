@@ -142,6 +142,8 @@ The adapter implements this exact agent-to-client subset:
 The adapter uses `session/update` for text, tool-call, plan, and command
 updates that the runtime can project without granting authority. It uses
 `session/request_permission` only for the gate flow defined above.
+ADR 0009's 2026-07-30 amendment defines the assistant text projection that the
+adapter maps to ACP `agent_message_chunk` updates.
 
 The adapter does not implement these remaining ACP v1 methods:
 
