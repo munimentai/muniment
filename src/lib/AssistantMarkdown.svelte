@@ -25,6 +25,7 @@
   .assistant-markdown :global(hr) { margin: 20px 0; border: 0; border-top: 1px solid var(--border); }
   .assistant-markdown :global(a) { color: var(--ink); text-decoration: underline; text-decoration-color: var(--border); text-underline-offset: 2px; }
   .assistant-markdown :global(a:hover) { color: var(--muted); text-decoration-color: var(--muted); }
+  .assistant-markdown :global(a:focus-visible) { outline: 2px solid var(--ink); outline-offset: 2px; }
   .assistant-markdown :global(code) { padding: 1px 3px; border-radius: var(--radius-chip); background: var(--faint); font: var(--text-13) var(--font-mono); }
   .assistant-markdown :global(pre) { max-width: 100%; margin: 0 0 12px; overflow-x: auto; border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--faint); }
   .assistant-markdown :global(pre code) { display: block; width: max-content; min-width: 100%; padding: 10px 12px; border-radius: var(--radius-control); background: var(--faint); white-space: pre; }
