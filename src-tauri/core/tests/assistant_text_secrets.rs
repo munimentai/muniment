@@ -130,12 +130,9 @@ fn matches_each_pem_private_key_name_and_line_ending() {
 fn pem_requires_a_line_boundary_and_matching_end_name() {
     let value = pem("PRIVATE KEY", "YQ==\n", "\n");
     assert!(scan(&format!("x{value}"), true).matches.is_empty());
-    assert!(scan(
-        "-----BEGIN PRIVATE KEY-----\nYQ==\n-----END RSA PRIVATE KEY-----",
-        true
-    )
-    .matches
-    .is_empty());
+    let mismatched_end =
+        pem("PRIVATE KEY", "YQ==\n", "\n").replacen("END PRIVATE KEY", "END RSA PRIVATE KEY", 1);
+    assert!(scan(&mismatched_end, true).matches.is_empty());
 
     let after_lf = format!("x\n{value}");
     assert_eq!(scan(&after_lf, true).matches[0].range, 2..after_lf.len());
