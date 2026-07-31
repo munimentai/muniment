@@ -208,3 +208,42 @@ upcasters, integrity checks, and contract tests, without Pi wiring.
    duplicate it.
 
 Relay publication remains explicitly deferred to slice 5.
+
+## Amendment — 2026-07-31: launch-path journal reads
+
+This amendment replaces: “On open, SQLite integrity and envelope/sequence
+validation precede replay.” On open, the desktop runs `PRAGMA quick_check` and
+validates only the newest 256 event envelopes and newest 256 thread envelopes.
+Each suffix read includes its preceding row so sequence validation covers the
+boundary. Replay may start after these checks pass.
+
+The open-time checks still catch SQLite structural corruption reported by
+`quick_check`. They also catch malformed or noncanonical envelopes, indexed-
+column mismatches, and sequence gaps in either checked suffix. They do not
+catch historical envelope or sequence corruption outside those suffixes.
+They also do not catch every cross-table invariant that the full validation
+pass checks.
+
+The desktop runs the full integrity, envelope, sequence, schema, identity, and
+aggregate validation pass after the first frame on every launch. It uses a
+stable read snapshot, then validates events appended after that snapshot
+before it records completion. A corruption result immediately blocks new
+effects and makes the journal read-only. The desktop preserves the original
+files, reports needs-attention, and offers export or recovery from the last
+verified prefix. It never continues effects from the corrupt journal.
+
+`reconcile_interrupted_runs` reads candidate run IDs from a transactionally
+maintained recovery-state projection instead of reading every event type. It
+loads and reduces the complete stream only for each candidate. The projection
+may classify a run as terminal only after a contiguous stream of known event
+types ends in a terminal event. A gap, an unknown event type, a nonterminal
+last event, or missing projection state classifies the run as a candidate.
+This keeps the current fail-open classification.
+
+The bounded open-time envelope checks need no schema step. The recovery-state
+projection does need one. A later schema slice adds and backfills the
+projection, updates it in each append transaction, and adds rebuild and stale-
+state tests. The first implementation slice replaces the launch-time full
+validation with `quick_check` plus the bounded suffix checks. It also moves the
+full pass after the first frame and adds corruption-gating tests. This
+amendment changes no runtime code.
