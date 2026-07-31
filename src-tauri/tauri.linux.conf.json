@@ -4,7 +4,9 @@
       "third-party/sherpa-onnx-v1.13.2/linux-x86_64/libsherpa-onnx-c-api.so": "asr-runtime/libsherpa-onnx-c-api.so",
       "third-party/sherpa-onnx-v1.13.2/linux-x86_64/libonnxruntime.so": "asr-runtime/libonnxruntime.so",
       "third-party/sherpa-onnx-v1.13.2/notices/": "third-party-notices/asr/",
-      "../THIRD_PARTY_NOTICES.md": "third-party-notices/THIRD_PARTY_NOTICES.md"
+      "../THIRD_PARTY_NOTICES.md": "third-party-notices/THIRD_PARTY_NOTICES.md",
+      "../src/fonts/SchibstedGrotesk-OFL.txt": "third-party-notices/SchibstedGrotesk-OFL.txt",
+      "../src/fonts/CommitMono-LICENSE.txt": "third-party-notices/CommitMono-LICENSE.txt"
     }
   }
 }
