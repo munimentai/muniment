@@ -29,6 +29,17 @@ fn matches_assignment_and_rejects_near_misses() {
     assert!(scan_secrets(format!("{maximum}a").as_bytes(), true)
         .matches
         .is_empty());
+
+    let at_ceiling = format!("authorization{}:='''''{}", ".".repeat(20), "a".repeat(152));
+    assert_eq!(at_ceiling.len(), 192);
+    assert_eq!(
+        scan_secrets(at_ceiling.as_bytes(), false).withhold_from,
+        Some(0)
+    );
+    assert_eq!(
+        scan_secrets(format!("{at_ceiling}a").as_bytes(), false).withhold_from,
+        Some(0)
+    );
 }
 
 #[test]
@@ -78,6 +89,38 @@ fn matches_jwt_limits_and_rejects_near_misses() {
     only_match(
         format!("{}.{}.", "a".repeat(17), "b".repeat(17)).as_bytes(),
         SecretRule::Jwt,
+    );
+
+    let padded = format!("{}.{}.c===", "a".repeat(17), "b".repeat(17));
+    let padded_result = scan_secrets(padded.as_bytes(), true);
+    assert_eq!(padded_result.matches[0].range, 0..padded.len() - 1);
+    assert_eq!(padded_result.withhold_from, None);
+
+    let invalid_suffix = format!("{}.{}.c==d", "a".repeat(17), "b".repeat(17));
+    let invalid_result = scan_secrets(invalid_suffix.as_bytes(), true);
+    assert!(invalid_result.matches.is_empty());
+    assert_eq!(invalid_result.withhold_from, None);
+
+    let before_ceiling = format!(
+        "{}.{}.{}",
+        "a".repeat(2726),
+        "b".repeat(2726),
+        "c".repeat(2737)
+    );
+    assert_eq!(before_ceiling.len(), 8191);
+    assert_eq!(
+        scan_secrets(before_ceiling.as_bytes(), false).withhold_from,
+        None
+    );
+    let at_ceiling = format!("{before_ceiling}c");
+    assert_eq!(at_ceiling.len(), 8192);
+    assert_eq!(
+        scan_secrets(at_ceiling.as_bytes(), false).withhold_from,
+        Some(0)
+    );
+    assert_eq!(
+        scan_secrets(format!("{at_ceiling}c").as_bytes(), false).withhold_from,
+        Some(0)
     );
     assert!(scan_secrets(
         format!("{}.{}.", "a".repeat(16), "b".repeat(17)).as_bytes(),
@@ -137,6 +180,20 @@ fn matches_pem_names_line_endings_and_span_boundary() {
         scan_secrets(format!("{prefix}{}", "A".repeat(65_461)).as_bytes(), false).withhold_from,
         Some(0)
     );
+
+    let ceiling_prefix = "-----BEGIN ENCRYPTED PRIVATE KEY-----\r\n";
+    let ceiling_suffix = "-----END ENCRYPTED PRIVATE KEY-----\r\n";
+    let ceiling = format!("{ceiling_prefix}{}{ceiling_suffix}", "A".repeat(65_460));
+    assert_eq!(ceiling.len(), 65_536);
+    only_match(ceiling.as_bytes(), SecretRule::PemPrivateKey);
+    assert_eq!(
+        scan_secrets(
+            format!("{ceiling_prefix}{}{ceiling_suffix}", "A".repeat(65_461)).as_bytes(),
+            false
+        )
+        .withhold_from,
+        Some(0)
+    );
 }
 
 #[test]
@@ -153,13 +210,16 @@ fn longest_match_wins_and_rule_order_breaks_a_tie() {
 }
 
 #[test]
-fn incomplete_scan_retains_a_utf8_scalar_boundary() {
-    let result = scan_secrets("éé sk".as_bytes(), false);
-    assert_eq!(result.retain_from, Some(0));
+fn incomplete_scan_retains_the_earliest_pending_candidate() {
+    assert_eq!(scan_secrets(b"ordinary text ", false).retain_from, Some(14));
+    assert_eq!(scan_secrets(b"ordinary sk", false).retain_from, Some(9));
+    assert_eq!(
+        scan_secrets(b"sk-aaaaaaaaaaaaaaaaaaaa ", false).retain_from,
+        Some(24)
+    );
 
-    let mut boundary = "é".as_bytes().to_vec();
-    boundary.resize(65_536, b'!');
-    assert_eq!(scan_secrets(&boundary, false).retain_from, Some(0));
+    let boundary = b"ordinary \xc3";
+    assert_eq!(scan_secrets(boundary, false).retain_from, Some(9));
     assert_eq!(scan_secrets(b"sk-", true).retain_from, None);
 }
 
@@ -173,4 +233,8 @@ fn missing_bounded_terminators_withhold_the_remainder() {
 
     let pem = format!("x\n-----BEGIN PRIVATE KEY-----\n{}", "A".repeat(65_536));
     assert_eq!(scan_secrets(pem.as_bytes(), false).withhold_from, Some(2));
+
+    let short_pem = b"x\n-----BEGIN PRIVATE KEY-----\nYQ==";
+    assert_eq!(scan_secrets(short_pem, false).withhold_from, Some(2));
+    assert_eq!(scan_secrets(short_pem, true).withhold_from, Some(2));
 }

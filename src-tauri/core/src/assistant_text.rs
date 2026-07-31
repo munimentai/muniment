@@ -52,6 +52,7 @@ const RULES: [SecretRule; 4] = [
 pub fn scan_secrets(bytes: &[u8], complete: bool) -> SecretScan {
     let mut matches = Vec::new();
     let mut withhold_from = None;
+    let mut earliest_pending = None;
     let mut offset = 0;
 
     while offset < bytes.len() {
@@ -65,7 +66,9 @@ pub fn scan_secrets(bytes: &[u8], complete: bool) -> SecretScan {
                         best = Some((end, rule));
                     }
                 }
-                State::Pending => {}
+                State::Pending => {
+                    earliest_pending.get_or_insert(offset);
+                }
                 State::OverSpan => over_span = true,
                 State::No => {}
             }
@@ -89,8 +92,10 @@ pub fn scan_secrets(bytes: &[u8], complete: bool) -> SecretScan {
     let retain_from = if complete || withhold_from.is_some() {
         None
     } else {
-        let bounded = bytes.len().saturating_sub(MAX_SECRET_SPAN_BYTES - 1);
-        Some(utf8_boundary_at_or_before(bytes, bounded))
+        Some(utf8_boundary_at_or_before(
+            bytes,
+            earliest_pending.unwrap_or(bytes.len()),
+        ))
     };
 
     SecretScan {
@@ -405,8 +410,15 @@ fn jwt(bytes: &[u8], start: usize, complete: bool) -> State {
         at += 1;
         padding += 1;
     }
-    if at - start > 8192 || (at < bytes.len() && (is_b64(bytes[at]) || bytes[at] == b'=')) {
+    if at - start > 8192 {
         return State::OverSpan;
+    }
+    if at < bytes.len() && is_b64(bytes[at]) {
+        return if at - start >= 8192 {
+            State::OverSpan
+        } else {
+            State::No
+        };
     }
     if at == bytes.len() && !complete {
         return State::Pending;
@@ -463,6 +475,9 @@ fn pem(bytes: &[u8], start: usize, complete: bool) -> State {
         } else {
             continue;
         }
+        if body_at == bytes.len() {
+            return State::OverSpan;
+        }
         let end_marker = [b"-----END ".as_slice(), name, b"-----"].concat();
         let mut at = body_at;
         while at < bytes.len() && at - start <= 65_536 {
@@ -517,7 +532,7 @@ fn pem(bytes: &[u8], start: usize, complete: bool) -> State {
         if at - start >= 65_536 {
             return State::OverSpan;
         }
-        pending |= !complete;
+        return State::OverSpan;
     }
     if pending {
         State::Pending
@@ -546,11 +561,10 @@ fn literal_end(
     }
 }
 
-fn utf8_boundary_at_or_before(bytes: &[u8], mut offset: usize) -> usize {
-    while offset > 0 && offset < bytes.len() && bytes[offset] & 0xc0 == 0x80 {
-        offset -= 1;
-    }
-    offset
+fn utf8_boundary_at_or_before(bytes: &[u8], offset: usize) -> usize {
+    std::str::from_utf8(&bytes[..offset])
+        .map(|_| offset)
+        .unwrap_or_else(|error| error.valid_up_to())
 }
 
 fn is_alnum(byte: u8) -> bool {
