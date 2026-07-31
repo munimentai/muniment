@@ -196,10 +196,6 @@ fn pem_private_key_candidate(bytes: &[u8], start: usize, complete: bool) -> Rule
             }
             _ => return RuleCandidate::None,
         }
-
-        if cursor - body_start > 65_460 {
-            return RuleCandidate::OverSpan;
-        }
     }
 
     if cursor >= span_end || complete {

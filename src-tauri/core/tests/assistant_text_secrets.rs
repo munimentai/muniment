@@ -172,6 +172,20 @@ fn withholds_an_over_span_pem_candidate() {
 }
 
 #[test]
+fn incomplete_oversized_pem_body_waits_for_the_span_boundary() {
+    let begin = "-----BEGIN PRIVATE KEY-----\n";
+    let inside_span = format!("{begin}{}", "a".repeat(65_461));
+    let inside_result = scan(&inside_span, false);
+    assert!(inside_result.matches.is_empty());
+    assert_eq!(inside_result.withhold_from, None);
+
+    let at_boundary = format!("{begin}{}", "a".repeat(65_536 - begin.len()));
+    let boundary_result = scan(&at_boundary, false);
+    assert!(boundary_result.matches.is_empty());
+    assert_eq!(boundary_result.withhold_from, Some(0));
+}
+
+#[test]
 fn incomplete_pem_waits_inside_its_span_and_retains_the_maximum_suffix() {
     let begin = "-----BEGIN PRIVATE KEY-----\n";
     let content = format!("é{}{begin}YQ==\n", "x".repeat(65_534));
