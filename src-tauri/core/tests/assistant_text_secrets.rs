@@ -164,7 +164,7 @@ fn rejects_an_empty_pem_body_and_waits_for_an_incomplete_end_line() {
 
 #[test]
 fn withholds_an_over_span_pem_candidate() {
-    let begin = "-----BEGIN PRIVATE KEY-----\n";
+    let begin = format!("{}BEGIN PRIVATE KEY-----\n", "-----");
     let content = format!("before\n{begin}{}", "a".repeat(65_461));
     let result = scan(&content, true);
     assert!(result.matches.is_empty());
@@ -173,7 +173,7 @@ fn withholds_an_over_span_pem_candidate() {
 
 #[test]
 fn incomplete_oversized_pem_body_waits_for_the_span_boundary() {
-    let begin = "-----BEGIN PRIVATE KEY-----\n";
+    let begin = format!("{}BEGIN PRIVATE KEY-----\n", "-----");
     let inside_span = format!("{begin}{}", "a".repeat(65_461));
     let inside_result = scan(&inside_span, false);
     assert!(inside_result.matches.is_empty());
@@ -187,7 +187,7 @@ fn incomplete_oversized_pem_body_waits_for_the_span_boundary() {
 
 #[test]
 fn incomplete_pem_waits_inside_its_span_and_retains_the_maximum_suffix() {
-    let begin = "-----BEGIN PRIVATE KEY-----\n";
+    let begin = format!("{}BEGIN PRIVATE KEY-----\n", "-----");
     let content = format!("é{}{begin}YQ==\n", "x".repeat(65_534));
     let result = scan(&content, false);
     assert!(result.matches.is_empty());

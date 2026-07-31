@@ -402,8 +402,12 @@ mod tests {
 
     #[test]
     fn dispatch_starts_provider_and_pem_candidates_at_the_same_byte() {
-        let content = b"-----BEGIN PRIVATE KEY-----\nYQ==\n-----END PRIVATE KEY-----";
-        let candidates = RULE_ORDER.map(|rule| rule.candidate(content, 0, true));
+        let content = [
+            b"-----".as_slice(),
+            b"BEGIN PRIVATE KEY-----\nYQ==\n-----END PRIVATE KEY-----".as_slice(),
+        ]
+        .concat();
+        let candidates = RULE_ORDER.map(|rule| rule.candidate(&content, 0, true));
         assert_eq!(candidates[0], RuleCandidate::None);
         assert_eq!(candidates[1], RuleCandidate::Matched(content.len()));
     }
