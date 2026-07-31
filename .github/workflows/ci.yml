@@ -166,6 +166,10 @@ jobs:
           CARGO_INCREMENTAL: "0"
         run: cargo clippy --manifest-path src-tauri/core/Cargo.toml --all-targets --locked -- -D warnings
 
+      - name: Core and ACP lint
+        if: steps.changes.outputs.desktop == 'true' || steps.changes.outputs.companion == 'true' || github.event_name != 'pull_request'
+        run: cargo clippy --manifest-path src-tauri/Cargo.toml --package muniment-core --package muniment-acp --all-targets --locked -- -D warnings
+
       - name: Rust unit tests
         if: steps.changes.outputs.desktop == 'true' || steps.changes.outputs.resident_model_adr == 'true' || github.event_name != 'pull_request'
         run: cargo test --manifest-path src-tauri/core/Cargo.toml --locked --features network-tests
