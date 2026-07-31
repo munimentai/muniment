@@ -6,6 +6,7 @@ use std::time::Duration;
 use muniment_core::journal::reducer::{
     ChatProjection, ChatProjector, PermissionGate, PermissionRequest,
 };
+use muniment_core::journal::split_model_stream_delta;
 use muniment_core::sidecar::pi_chat::{
     cancel_command, ExtensionUiAnswer, ExtensionUiDialog, ExtensionUiRequest, ExtensionUiResponse,
     PiChatEvent, PiRunAdapter,
@@ -477,19 +478,21 @@ pub(super) fn coordinate<R: tauri::Runtime>(
             .unwrap_or_else(|| adapter.next(Duration::from_millis(100)));
         match event {
             Ok(PiChatEvent::TextDelta(text)) => {
-                if append_emit(
-                    &app,
-                    &journal,
-                    &mut projector,
-                    &run_id,
-                    &mut seq,
-                    "model.stream.delta",
-                    json!({"text": text}),
-                    subject.as_deref(),
-                )
-                .is_err()
-                {
-                    break;
+                for slice in split_model_stream_delta(&text) {
+                    if append_emit(
+                        &app,
+                        &journal,
+                        &mut projector,
+                        &run_id,
+                        &mut seq,
+                        "model.stream.delta",
+                        json!({"text": slice}),
+                        subject.as_deref(),
+                    )
+                    .is_err()
+                    {
+                        break 'coordinate;
+                    }
                 }
             }
             Ok(PiChatEvent::Completed) if aborting => {
