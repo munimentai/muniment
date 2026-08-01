@@ -1021,6 +1021,57 @@ describe('sidebar collapse', () => {
   })
 })
 
+describe('thread row shortcuts', () => {
+  const rowShortcut = (position) => ({
+    key: position.toString(),
+    code: `Digit${position}`,
+    metaKey: navigator.platform.startsWith('Mac'),
+    ctrlKey: !navigator.platform.startsWith('Mac'),
+  })
+
+  it('opens a rendered row from the focused composer and names the first nine rows', async () => {
+    threadSummaryResult = Array.from({ length: 10 }, (_, index) => ({
+      threadId: `thread-${index + 1}`,
+      title: `Thread ${index + 1}`,
+      updatedAt: '2026-01-01T00:00:00Z',
+    }))
+    render(App)
+    const composer = await screen.findByPlaceholderText('Ask anything')
+    await waitFor(() => expect(document.querySelectorAll('.thread-row')).toHaveLength(10))
+    invoke.mockClear()
+
+    const rows = document.querySelectorAll('.thread-row')
+    const modifier = navigator.platform.startsWith('Mac') ? 'Meta' : 'Control'
+    for (let index = 0; index < 9; index += 1) {
+      expect(rows[index]).toHaveAttribute('aria-keyshortcuts', `${modifier}+${index + 1}`)
+    }
+    expect(rows[9]).not.toHaveAttribute('aria-keyshortcuts')
+
+    composer.focus()
+    const event = new KeyboardEvent('keydown', { ...rowShortcut(2), bubbles: true, cancelable: true })
+    composer.dispatchEvent(event)
+
+    expect(event.defaultPrevented).toBe(true)
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('chat_select_thread', { threadId: 'thread-2' }))
+  })
+
+  it('does not reopen the current row or open a position past the rendered rows', async () => {
+    threadSummaryResult = [
+      { threadId: 'thread-1', title: 'Current', updatedAt: '' },
+      { threadId: 'thread-2', title: 'Other', updatedAt: '' },
+    ]
+    render(App)
+    await screen.findByPlaceholderText('Ask anything')
+    invoke.mockClear()
+
+    await fireEvent.keyDown(document, rowShortcut(1))
+    await fireEvent.keyDown(document, rowShortcut(9))
+
+    expect(invoke).not.toHaveBeenCalledWith('chat_thread_open', expect.anything())
+    expect(invoke).not.toHaveBeenCalledWith('chat_select_thread', expect.anything())
+  })
+})
+
 describe('new thread', () => {
   const newThreadShortcut = () => navigator.platform.startsWith('Mac')
     ? { key: 'n', metaKey: true }
@@ -1048,6 +1099,7 @@ describe('new thread', () => {
     const fresh = document.querySelector('[data-fresh-thread]')
     expect(fresh).toHaveTextContent('New thread')
     expect(fresh).toHaveAttribute('aria-current', 'true')
+    expect(fresh).toHaveAttribute('aria-keyshortcuts', navigator.platform.startsWith('Mac') ? 'Meta+1' : 'Control+1')
     expect(fresh.tagName).toBe('LI')
     expect(document.querySelectorAll('.thread-row[aria-current="true"]')).toHaveLength(1)
     expect(document.querySelectorAll('.thread-list button[aria-current="true"]')).toHaveLength(0)

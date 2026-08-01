@@ -10,6 +10,8 @@ import {
   parseSidebarCollapsed,
   serializeSidebarCollapsed,
   sidebarShortcut,
+  threadRowShortcut,
+  threadRowShortcutPosition,
 } from './sidebar-state.js'
 
 describe('sidebar state', () => {
@@ -61,5 +63,28 @@ describe('new thread shortcut', () => {
     expect(isNewThreadShortcut({ key: 'n', metaKey: true, ctrlKey: false, altKey: false, shiftKey: false, target }, 'MacIntel')).toBe(true)
     expect(isNewThreadShortcut({ key: 'N', metaKey: false, ctrlKey: true, altKey: false, shiftKey: false, target }, 'Win32')).toBe(true)
     expect(isNewThreadShortcut({ key: 'n', metaKey: false, ctrlKey: true, altKey: false, shiftKey: true, target }, 'Win32')).toBe(false)
+  })
+})
+
+describe('thread row shortcuts', () => {
+  it('uses the platform modifier in accessibility labels', () => {
+    expect(threadRowShortcut(1, 'MacIntel')).toBe('Meta+1')
+    expect(threadRowShortcut(9, 'Win32')).toBe('Control+9')
+  })
+
+  it('maps physical digit chords to positions', () => {
+    expect(threadRowShortcutPosition({ code: 'Digit1', key: '&', metaKey: true, ctrlKey: false, altKey: false, shiftKey: false }, 'MacIntel')).toBe(1)
+    expect(threadRowShortcutPosition({ code: 'Digit9', key: '9', metaKey: false, ctrlKey: true, altKey: false, shiftKey: false }, 'Linux x86_64')).toBe(9)
+  })
+
+  it('rejects other keys, modifiers, and numpad digits', () => {
+    const chord = { code: 'Digit4', metaKey: false, ctrlKey: true, altKey: false, shiftKey: false }
+    expect(threadRowShortcutPosition({ ...chord, code: 'Digit0' }, 'Win32')).toBeNull()
+    expect(threadRowShortcutPosition({ ...chord, code: 'Numpad4' }, 'Win32')).toBeNull()
+    expect(threadRowShortcutPosition({ ...chord, metaKey: true }, 'Win32')).toBeNull()
+    expect(threadRowShortcutPosition({ ...chord, ctrlKey: false, metaKey: true }, 'Win32')).toBeNull()
+    expect(threadRowShortcutPosition({ ...chord, altKey: true }, 'Win32')).toBeNull()
+    expect(threadRowShortcutPosition({ ...chord, shiftKey: true }, 'Win32')).toBeNull()
+    expect(threadRowShortcutPosition({ ...chord, ctrlKey: true, metaKey: false }, 'MacIntel')).toBeNull()
   })
 })
