@@ -3,14 +3,14 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use muniment_core::asr::acquisition::{
-    AsrAcquisitionError, AsrAcquisitionLimits, AsrAcquisitionRuntime,
+    AsrAcquisitionError, AsrAcquisitionLimits, AsrAcquisitionRuntime, SOURCE_REPOSITORY,
 };
 use muniment_core::asr::install::install_parakeet_revision;
 use muniment_core::asr::{
     AsrRecovery, AsrRevisionLifecycle, PARAKEET_MODEL_MANIFEST, PARAKEET_MODEL_MANIFESTS,
 };
 use muniment_core::model_acquisition_transport::NativeModelAcquisitionTransport;
-use muniment_core::model_install::ModelInstallError;
+use muniment_core::model_install::{required_free_bytes, ModelInstallError};
 use muniment_core::model_install_native::{
     NativeAcquisitionClock, NativeAsrLifecycleBoundary, NativeAvailableSpace,
     NativeInstallCancellation, NativeInstallLock, NativeRetryWait,
@@ -29,6 +29,44 @@ pub enum ParakeetInstallStatus {
         category: &'static str,
         message: &'static str,
     },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ParakeetInstallFacts {
+    identity: &'static str,
+    revision: &'static str,
+    source_repository: &'static str,
+    total_download_bytes: u64,
+    required_free_bytes: u64,
+    speech_model_license: &'static str,
+    voice_activity_model_license: &'static str,
+}
+
+#[tauri::command]
+pub fn parakeet_install_facts() -> ParakeetInstallFacts {
+    let total_download_bytes = PARAKEET_MODEL_MANIFEST
+        .artifacts
+        .iter()
+        .map(|artifact| artifact.byte_size)
+        .chain(
+            PARAKEET_MODEL_MANIFEST
+                .additional_artifact
+                .iter()
+                .map(|artifact| artifact.artifact.byte_size),
+        )
+        .try_fold(0_u64, u64::checked_add)
+        .expect("the compiled Parakeet manifest size must fit in u64");
+    ParakeetInstallFacts {
+        identity: PARAKEET_MODEL_MANIFEST.identity,
+        revision: PARAKEET_MODEL_MANIFEST.revision,
+        source_repository: SOURCE_REPOSITORY,
+        total_download_bytes,
+        required_free_bytes: required_free_bytes(total_download_bytes)
+            .expect("the compiled Parakeet manifest size must fit in u64"),
+        speech_model_license: "CC BY 4.0",
+        voice_activity_model_license: "MIT",
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -290,4 +328,36 @@ pub async fn parakeet_install_status(
 #[tauri::command]
 pub fn parakeet_install_cancel(state: State<'_, ParakeetInstallState>) -> ParakeetInstallStatus {
     state.cancel()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn install_facts_match_the_pinned_manifest() {
+        let facts = parakeet_install_facts();
+        let total_download_bytes = PARAKEET_MODEL_MANIFEST
+            .artifacts
+            .iter()
+            .map(|artifact| artifact.byte_size)
+            .sum::<u64>()
+            + PARAKEET_MODEL_MANIFEST
+                .additional_artifact
+                .map(|artifact| artifact.artifact.byte_size)
+                .unwrap_or(0);
+
+        assert_eq!(facts.identity, PARAKEET_MODEL_MANIFEST.identity);
+        assert_eq!(facts.revision, PARAKEET_MODEL_MANIFEST.revision);
+        assert_eq!(facts.source_repository, SOURCE_REPOSITORY);
+        assert_eq!(total_download_bytes, 672_384_307);
+        assert_eq!(facts.total_download_bytes, total_download_bytes);
+        assert_eq!(
+            facts.required_free_bytes,
+            required_free_bytes(total_download_bytes).unwrap()
+        );
+        assert_eq!(facts.required_free_bytes, 940_819_763);
+        assert_eq!(facts.speech_model_license, "CC BY 4.0");
+        assert_eq!(facts.voice_activity_model_license, "MIT");
+    }
 }
