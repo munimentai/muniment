@@ -227,7 +227,10 @@ fn reports_fresh_retried_and_completed_progress_without_double_counting() {
     )
     .unwrap();
 
-    assert_eq!(progress, [(0, 8), (1, 8), (2, 8), (3, 8), (4, 8), (6, 8), (8, 8)]);
+    assert_eq!(
+        progress,
+        [(0, 8), (1, 8), (2, 8), (3, 8), (4, 8), (6, 8), (8, 8)]
+    );
     assert_eq!(transport.requests[1].1, 0);
     assert_eq!(transport.requests[2].1, 1);
     fs::remove_dir_all(root).unwrap();
