@@ -249,9 +249,9 @@ fn private_key_enforces_body_length_bounds() {
 #[test]
 fn incomplete_private_key_requires_a_complete_begin_line() {
     let cases = [
-        "-----BEGIN UNKNOWN PRIVATE KEY-----\nYQ==\n",
-        "-----BEGIN PRIVATE KEY-----",
-        "x-----BEGIN PRIVATE KEY-----\nYQ==\n",
+        concat!("-----BEGIN UNKNOWN ", "PRIVATE KEY-----\nYQ==\n"),
+        concat!("-----BEGIN ", "PRIVATE KEY-----"),
+        concat!("x-----BEGIN ", "PRIVATE KEY-----\nYQ==\n"),
     ];
     for content in cases {
         let result = scan(content, true);
@@ -263,7 +263,10 @@ fn incomplete_private_key_requires_a_complete_begin_line() {
 #[test]
 fn incomplete_private_key_withholds_from_begin_and_keeps_earlier_match() {
     let token = token("hf_", 'a', 20);
-    let content = format!("{token} released\n-----BEGIN PRIVATE KEY-----\nYQ==\n");
+    let content = format!(
+        "{token} released\n{}\nYQ==\n",
+        concat!("-----BEGIN ", "PRIVATE KEY-----")
+    );
     let begin = token.len() + " released\n".len();
     let result = scan(&content, true);
     assert_eq!(result.matches.len(), 1);
