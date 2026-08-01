@@ -62,17 +62,11 @@ export function createChatController({
         invoke('chat_thread_summaries', { limit: 20 }),
         invoke('chat_current_thread'),
       ])
-      const summaries = [...firstPage.summaries]
-      let cursor = firstPage.nextCursor
-      for (let page = 1; page < threadPageCount && cursor != null; page += 1) {
-        const result = await invoke('chat_thread_summaries', { limit: 20, cursor })
-        summaries.push(...result.summaries)
-        cursor = result.nextCursor
-      }
       if (destroyed || sequence !== threadRefreshSequence) return
-      nextThreadCursor = cursor
+      const refreshedThreadIds = new Set(firstPage.summaries.map((summary) => summary.threadId))
+      const retainedSummaries = readThreadSummaries().filter((summary) => !refreshedThreadIds.has(summary.threadId))
+      const summaries = [...firstPage.summaries, ...retainedSummaries]
       onThreadSummaries(summaries)
-      onMoreThreads(nextThreadCursor != null)
       onThreadSelected(currentThreadId)
       if (currentThreadId && summaries.some((summary) => summary.threadId === currentThreadId)) {
         onFreshThread(false)

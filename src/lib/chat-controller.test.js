@@ -577,17 +577,18 @@ describe('chat controller', () => {
     expect(onHistoryError).toHaveBeenLastCalledWith('Older threads could not be loaded.')
   })
 
-  it('refreshes every summary page already shown after a run settles', async () => {
+  it('refreshes only the newest page and removes its threads from retained pages', async () => {
     let summaryCall = 0
     let summaries = []
     const invoke = vi.fn(async (command, payload) => {
       if (command === 'chat_thread_open') return { entries: [], nextCursor: null }
-      if (command === 'chat_current_thread') return 'thread-1'
+      if (command === 'chat_current_thread') return 'thread-3'
       summaryCall += 1
       if (summaryCall === 1) return { summaries: [{ threadId: 'thread-1', title: 'First' }], nextCursor: 'page-2' }
       if (summaryCall === 2) return { summaries: [{ threadId: 'thread-2', title: 'Second' }], nextCursor: 'page-3' }
-      if (payload.cursor === undefined) return { summaries: [{ threadId: 'thread-1', title: 'First updated' }], nextCursor: 'refresh-2' }
-      return { summaries: [{ threadId: 'thread-2', title: 'Second updated' }], nextCursor: 'refresh-3' }
+      if (summaryCall === 3) return { summaries: [{ threadId: 'thread-3', title: 'Third' }], nextCursor: 'page-4' }
+      if (payload.cursor === undefined) return { summaries: [{ threadId: 'thread-3', title: 'Third updated' }], nextCursor: 'refresh-2' }
+      return { summaries: [{ threadId: 'thread-4', title: 'Fourth' }], nextCursor: null }
     })
     const context = setup(invoke)
     let listener
@@ -606,20 +607,32 @@ describe('chat controller', () => {
       onAnnounce: vi.fn(), onDraft: vi.fn(), onFiles: vi.fn(), onSubmitError: vi.fn(),
       onCancelError: vi.fn(), onQueueError: vi.fn(), onHistoryError: vi.fn(),
       onThreadSummaries: (next) => { summaries = next },
+      onMoreThreads: context.onMoreThreads,
     })
     await controller.loadHistory()
+    await controller.loadOlderThreads()
     await controller.loadOlderThreads()
     const run = { id: 'run-1', phase: 'streaming', text: '' }
     context.setMessages([{ role: 'assistant', run }])
     context.setActive(run)
     await controller.start()
+    invoke.mockClear()
+    context.onMoreThreads.mockClear()
 
     listener({ payload: { runId: 'run-1', type: 'completed', receipt: null } })
     await vi.waitFor(() => expect(summaries).toEqual([
-      { threadId: 'thread-1', title: 'First updated' },
-      { threadId: 'thread-2', title: 'Second updated' },
+      { threadId: 'thread-3', title: 'Third updated' },
+      { threadId: 'thread-1', title: 'First' },
+      { threadId: 'thread-2', title: 'Second' },
     ]))
-    expect(invoke).toHaveBeenCalledWith('chat_thread_summaries', { limit: 20, cursor: 'refresh-2' })
+    expect(invoke.mock.calls).toEqual([
+      ['chat_thread_summaries', { limit: 20 }],
+      ['chat_current_thread'],
+    ])
+    expect(context.onMoreThreads).not.toHaveBeenCalled()
+
+    await expect(controller.loadOlderThreads()).resolves.toBe('thread-4')
+    expect(invoke).toHaveBeenLastCalledWith('chat_thread_summaries', { limit: 20, cursor: 'page-4' })
   })
 
   it('opens every history page in chronological page order', async () => {
