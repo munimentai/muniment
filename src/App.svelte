@@ -917,6 +917,8 @@
                       {/each}
                     </dl>
                   {/if}
+                {:else}
+                  <p class="provenance">Receipt unavailable</p>
                 {/if}
                 {@const failure = copyFailure(copy, message.run.id, modifierLabel)}
                 <!-- §3.2's action row, copy only in this slice. -->
@@ -1252,7 +1254,7 @@
   .provenance:hover:not(:disabled) { color: var(--ink); }
   /* §1.2 permits --signal on the route segment only. */
   .provenance .route-segment { color: var(--signal); }
-  .receipt-record { width: fit-content; min-width: 240px; margin: 8px 0 0; padding: 8px 12px; border: 1px solid var(--border); border-radius: var(--radius-control); color: var(--muted); font-size: var(--text-12); }
+  .receipt-record { width: fit-content; min-width: 240px; margin: 8px 0 0; padding: 8px 12px; border: 1px solid var(--border); border-radius: var(--radius-control); color: var(--muted); font: var(--text-12) var(--font-mono); }
   .receipt-record div { display: grid; grid-template-columns: 88px minmax(0, 1fr); gap: 12px; }
   .receipt-record dd { margin: 0; font-family: var(--font-mono); font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
   .receipt-record .route-value { color: var(--signal); }

@@ -3597,18 +3597,18 @@ describe('provenance line', () => {
     await waitFor(() => expect(document.querySelector('.receipt-record')).toBeNull())
   })
 
-  it('renders no provenance line for a receipt with nothing to record', async () => {
+  it('renders a provenance line when a reply has an empty receipt', async () => {
     restore({})
 
     expect(await screen.findByText('A routed answer')).toBeInTheDocument()
-    expect(document.querySelector('.provenance')).toBeNull()
+    expect(screen.getByText('Receipt unavailable')).toHaveClass('provenance')
   })
 
-  it('keeps the reply readable when the run carries no receipt at all', async () => {
+  it('renders a provenance line when a reply has no receipt', async () => {
     restore(null)
 
     expect(await screen.findByText('A routed answer')).toBeInTheDocument()
-    expect(document.querySelector('.provenance')).toBeNull()
+    expect(screen.getByText('Receipt unavailable')).toHaveClass('provenance')
   })
 })
 
