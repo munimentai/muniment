@@ -203,7 +203,10 @@ fn unmatched_private_key_header_name_withholds_nothing() {
 
 #[test]
 fn unmatched_private_key_begin_line_without_line_ending_withholds_nothing() {
-    let content = "-----BEGIN PRIVATE KEY-----YQ==\n-----END PRIVATE KEY-----";
+    let content = concat!(
+        "-----BEGIN ",
+        "PRIVATE KEY-----YQ==\n-----END PRIVATE KEY-----"
+    );
     let result = scan(content, true);
     assert!(result.matches.is_empty());
     assert_eq!(result.withhold_from, None);
