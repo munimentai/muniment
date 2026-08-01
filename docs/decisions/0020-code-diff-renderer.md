@@ -170,6 +170,47 @@ terminal renderer under `src-tauri/cli/`.
 - [React Native core components](https://reactnative.dev/docs/components-and-apis)
 - [VS Code extension API](https://code.visualstudio.com/api/references/vscode-api)
 
+## Amendment — 2026-08-01: desktop build order
+
+Two measured facts block the implementation slices above. First, the public
+npm registry returned 404 for `@muniment/e0-code-diff-v1` on 2026-08-01. The
+expected TypeScript and Rust artifacts come from this document's declaration
+at `docs/decisions/0020-code-diff-renderer.md:25-29`. No repository manifest
+names either artifact. In particular, the desktop dependencies at
+`package.json:36-42` name neither the TypeScript package nor `diff2html`.
+The repository has no `.npmrc` that could select a private registry.
+
+Second, this repository has no producer of a `CodeDiff` value.
+`src-tauri/src/chat_coordinate.rs:690-713` journals only the effect identifier,
+display name, and completion state. `src-tauri/core/src/sidecar/pi_chat.rs:221-238`
+reads only `toolCallId` and `toolName` from `tool_execution_start`.
+`src-tauri/core/src/journal/reducer.rs:178-204` defines four permission kinds.
+None carries a file path, before text, after text, patch, or `CodeDiff`. The
+`confirm` kind carries only a title, message, and optional timeout.
+
+The desktop may add `src/lib/code-diff.js` and its renderer before the generated
+contract artifacts publish. That slice is presentation-only and accepts an
+already validated `CodeDiff` value at its boundary. It adds no runtime wiring.
+ADR 0019 still forbids this repository from restating the wire type, validator,
+or endpoint client. That ban includes a hand-vendored copy of the schema or
+generated shape used as a substitute for the published artifact.
+
+On the day both artifacts publish, the desktop pins the TypeScript package in
+`package.json` and `package-lock.json`. The pin uses the exact published
+version. The runtime boundary imports the generated types and codecs. Consumer
+compatibility tests then read the published fixtures. A Rust surface pins the
+crate in its manifest and lockfile when it first consumes `CodeDiff`. Neither
+version-pin change infers or adds a producer.
+
+The producer is a separate follow-up decision. A new
+`docs/decisions/0024-code-diff-producer.md` must decide which trusted runtime
+boundary creates `CodeDiff`, how the journal preserves it for replay, and how
+approval binds to its `id`. This amendment does not choose that boundary.
+The first implementation slice adds `src/lib/code-diff.js`, its tests, and the
+desktop renderer named above. It can proceed before publication or ADR 0024.
+Permission-gate and receipt-replay wiring wait for both prerequisites. They
+consume the journal value that ADR 0024 decides.
+
 ## Consequences
 
 - All three surfaces display one versioned diff value.
