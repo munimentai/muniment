@@ -26,6 +26,7 @@
   import { threadTitle } from './lib/thread-title.js'
   import { createVoiceGesture } from './lib/voice-gesture.js'
   import { createVoiceShortcutManager } from './lib/voice-shortcut.js'
+  import { createWindowTitle } from './lib/window-title.js'
 
   const markD = ringPath()
   const thinkingMarkD = solidMilledRingPath()
@@ -117,6 +118,7 @@
   // The newest copy attempt in the thread, or null once its confirmation lapses.
   let copy = $state(null)
   const streamingUnderline = createStreamingUnderlineAction(tick)
+  const windowTitle = createWindowTitle(window.__TAURI__?.window?.getCurrentWindow?.())
 
   const transcriptController = createChatTranscriptController({
     tick,
@@ -460,6 +462,12 @@
   $effect(() => {
     messages
     followNewContent()
+  })
+
+  $effect(() => {
+    const inWorkspace = auth.name === 'signed-in' && onboarding.name === 'complete'
+    const hasConversation = currentThreadId !== null || messages.some(({ role }) => role === 'user')
+    void windowTitle.set(inWorkspace && hasConversation ? currentThreadTitle : undefined)
   })
 
   $effect(() => {
