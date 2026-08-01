@@ -367,7 +367,13 @@ describe('workspace composer entry', () => {
     })
     render(App)
 
-    expect(await screen.findByRole('button', { name: 'Sign in' })).not.toHaveFocus()
+    const signIn = await screen.findByRole('button', { name: 'Sign in' })
+    expect(signIn).not.toHaveFocus()
+    expect(signIn).toHaveClass('primary')
+    expect(screen.getAllByRole('heading', { level: 1 })).toHaveLength(1)
+    expect(screen.getByRole('heading', { level: 1, name: 'muniment' })).toBeInTheDocument()
+    expect(document.querySelector('.lockup svg')).toHaveAttribute('aria-hidden', 'true')
+    expect(document.querySelector('.lockup svg')).not.toHaveAttribute('aria-label')
     expect(screen.queryByPlaceholderText('Ask anything')).not.toBeInTheDocument()
   })
 
@@ -388,6 +394,8 @@ describe('workspace composer entry', () => {
     await fireEvent.click(signIn)
 
     expect(screen.getByText('Waiting for the browser sign-in…')).toHaveAttribute('aria-live', 'polite')
+    expect(screen.getAllByRole('heading', { level: 1 })).toHaveLength(1)
+    expect(screen.getByRole('heading', { level: 1, name: 'muniment' })).toBeInTheDocument()
     expect(container.querySelectorAll('[aria-live="polite"]')).toHaveLength(1)
     expect(screen.getByRole('button', { name: 'Sign in' })).toBe(signIn)
     expect(signIn).toHaveFocus()
@@ -416,6 +424,8 @@ describe('workspace composer entry', () => {
     render(App)
 
     expect(await screen.findByRole('heading', { name: 'Choose your Muniment Home' })).toBeInTheDocument()
+    expect(screen.getAllByRole('heading', { level: 1 })).toHaveLength(1)
+    expect(document.querySelector('.lockup .name')?.tagName).toBe('SPAN')
     expect(screen.queryByPlaceholderText('Ask anything')).not.toBeInTheDocument()
   })
 
