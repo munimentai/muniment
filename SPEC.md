@@ -90,8 +90,8 @@ call.
 5. A release promotes only the exact bytes of a green nightly SHA.
    Enforcer: .github/lib/release-promotion.mjs.
 6. UI copy obeys the forbidden-vocabulary law, records render in mono, and
-   the provenance line is present on every reply. Enforcer: gap - no lint
-   or test covers laws 4, 5, and 6 today.
+   the provenance line is present on every reply. Enforcers: the UI copy law,
+   record font law, and provenance line law steps in the ci.yml smoke job.
 7. An update path exists or is explicitly deferred by ADR. Enforcer: gap -
    no updater and no ADR records the deferral.
 
