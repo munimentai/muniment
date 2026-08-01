@@ -247,6 +247,7 @@ fn run_native_parakeet_install(
     let mut transport = NativeModelAcquisitionTransport::new();
     let clock = NativeAcquisitionClock::new();
     let mut retry = NativeRetryWait;
+    let mut progress = |_, _| {};
     let mut lock = NativeInstallLock::new(root.join("install.lock"));
     let mut space = NativeAvailableSpace::new(root);
     install_parakeet_revision(
@@ -264,6 +265,7 @@ fn run_native_parakeet_install(
         &mut space,
         &parakeet_lifecycle(root),
         &NativeAsrLifecycleBoundary,
+        &mut progress,
     )
     .map(|_| ())
     .map_err(redact_parakeet_failure)
