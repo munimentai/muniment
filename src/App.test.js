@@ -2749,8 +2749,9 @@ describe('permission gates', () => {
     const card = await screen.findByText('Run a command')
     expect(card.closest('.permission-card')).toHaveClass('tool-card')
     expect(screen.getByText('rm /tmp/draft')).toBeInTheDocument()
-    expect(screen.getAllByRole('button').filter((button) => ['Allow', 'Deny'].includes(button.textContent)))
-      .toHaveLength(2)
+    const allow = screen.getByRole('button', { name: 'Allow' })
+    const deny = screen.getByRole('button', { name: 'Deny' })
+    expect(allow.closest('.permission-approve-actions')).not.toContainElement(deny)
   })
 
   it('renders no request outside the pending permission phase', async () => {
@@ -2793,14 +2794,19 @@ describe('permission gates', () => {
       options: ['Allow once', 'Allow for this thread'],
     })
 
-    await fireEvent.click(await screen.findByRole('button', { name: 'Allow for this thread' }))
+    const options = await screen.findByRole('group', { name: 'Choose access' })
+    const selected = within(options).getByRole('button', { name: 'Allow for this thread' })
+    const deny = screen.getByRole('button', { name: 'Deny' })
+    expect(options).not.toContainElement(deny)
+
+    await fireEvent.click(selected)
     expect(answer).toHaveBeenLastCalledWith({
       runId: 'run-gated',
       gateId: 'gate-select',
       answer: { type: 'select', value: 'Allow for this thread' },
     })
 
-    await fireEvent.click(screen.getByRole('button', { name: 'Deny' }))
+    await fireEvent.click(deny)
     expect(answer).toHaveBeenLastCalledWith({
       runId: 'run-gated',
       gateId: 'gate-select',
