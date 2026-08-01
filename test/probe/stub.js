@@ -1,4 +1,5 @@
 const historyFixtures = {
+  'signed-out': [],
   onboarding: [],
   approved: [],
   empty: [],
@@ -130,6 +131,7 @@ const history = historyFixtures[fixtureName]
 if (!history) throw new Error(`Unknown probe history fixture: ${fixtureName}`)
 const onboardingFixture = fixtureName === 'onboarding' || fixtureName === 'approved'
 const approvedFixture = fixtureName === 'approved'
+const signedOutFixture = fixtureName === 'signed-out'
 const onboardingHomePath = '/Users/alice/Documents/Muniment'
 const threadSummaries = history.length
   ? [
@@ -152,6 +154,11 @@ function recordInvoke(surface, command, payload) {
 }
 
 function fixtureRendered() {
+  if (signedOutFixture) {
+    const heading = document.querySelector('.lockup h1')
+    const signIn = document.querySelector('.auth-state button')
+    return heading?.textContent === 'muniment' && signIn?.textContent === 'Sign in'
+  }
   if (approvedFixture) {
     const heading = document.querySelector('#onboarding-title')
     const save = document.querySelector('[data-testid="onboarding-import-save"]')
@@ -261,7 +268,10 @@ window.__TAURI__ = {
       if (command === 'onboarding_import_extract') return [
         { sourceName: 'profile.json', kind: 'json', text: '{"name":"Alice"}', sourceProvenance: 'assistant-export:profile.json' },
       ]
-      if (command === 'auth_status') return { signed_in: true, subject: 'probe-user' }
+      if (command === 'auth_status') {
+        if (signedOutFixture) return { signed_in: false, subject: null }
+        return { signed_in: true, subject: 'probe-user' }
+      }
       if (command === 'chat_thread_summaries') {
         if (payload.cursor === 'older') return { summaries: structuredClone(olderThreadSummaries), nextCursor: null }
         return { summaries: structuredClone(threadSummaries), nextCursor: history.length ? 'older' : null }
