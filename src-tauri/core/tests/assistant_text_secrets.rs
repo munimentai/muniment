@@ -208,11 +208,13 @@ fn private_key_rejects_carriage_returns_without_line_feeds() {
 #[test]
 fn incomplete_private_key_returns_no_match_or_withhold() {
     let content = format!("{}\nYQ==\n", concat!("-----BEGIN ", "PRIVATE KEY-----"));
-    for complete in [true, false] {
-        let result = scan(&content, complete);
-        assert!(result.matches.is_empty());
-        assert_eq!(result.withhold_from, None);
-    }
+    let complete = scan(&content, true);
+    assert!(complete.matches.is_empty());
+    assert_eq!(complete.withhold_from, Some(0));
+
+    let incomplete = scan(&content, false);
+    assert!(incomplete.matches.is_empty());
+    assert_eq!(incomplete.withhold_from, None);
 }
 
 #[test]
@@ -241,5 +243,31 @@ fn private_key_enforces_body_length_bounds() {
     let over_limit = private_key(&"A".repeat(65_461));
     let result = scan(&over_limit, true);
     assert!(result.matches.is_empty());
-    assert_eq!(result.withhold_from, None);
+    assert_eq!(result.withhold_from, Some(0));
+}
+
+#[test]
+fn incomplete_private_key_requires_a_complete_begin_line() {
+    let cases = [
+        "-----BEGIN UNKNOWN PRIVATE KEY-----\nYQ==\n",
+        "-----BEGIN PRIVATE KEY-----",
+        "x-----BEGIN PRIVATE KEY-----\nYQ==\n",
+    ];
+    for content in cases {
+        let result = scan(content, true);
+        assert!(result.matches.is_empty(), "{content:?}");
+        assert_eq!(result.withhold_from, None, "{content:?}");
+    }
+}
+
+#[test]
+fn incomplete_private_key_withholds_from_begin_and_keeps_earlier_match() {
+    let token = token("hf_", 'a', 20);
+    let content = format!("{token} released\n-----BEGIN PRIVATE KEY-----\nYQ==\n");
+    let begin = token.len() + " released\n".len();
+    let result = scan(&content, true);
+    assert_eq!(result.matches.len(), 1);
+    assert_eq!(result.matches[0].range, 0..token.len());
+    assert_eq!(result.matches[0].rule, Rule::SecretProviderToken);
+    assert_eq!(result.withhold_from, Some(begin));
 }
