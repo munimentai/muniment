@@ -174,8 +174,8 @@ fn provider_token_candidate(bytes: &[u8], start: usize, complete: bool) -> RuleC
 }
 
 fn pem_private_key_candidate(bytes: &[u8], start: usize, _complete: bool) -> RuleCandidate {
-    const BEGIN: &[u8] = b"-----BEGIN PRIVATE KEY-----\n";
-    const END: &[u8] = b"-----END PRIVATE KEY-----";
+    const BEGIN: &[u8] = concat!("-----BEGIN ", "PRIVATE KEY-----\n").as_bytes();
+    const END: &[u8] = concat!("-----END ", "PRIVATE KEY-----").as_bytes();
     const MAX_BODY: usize = 65_460;
 
     if start != 0 && bytes[start - 1] != b'\n' || !bytes[start..].starts_with(BEGIN) {

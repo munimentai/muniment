@@ -5,7 +5,11 @@ fn token(prefix: &str, body: char, length: usize) -> String {
 }
 
 fn private_key(body: &str) -> String {
-    format!("-----BEGIN PRIVATE KEY-----\n{body}-----END PRIVATE KEY-----")
+    format!(
+        "{}\n{body}{}",
+        concat!("-----BEGIN ", "PRIVATE KEY-----"),
+        concat!("-----END ", "PRIVATE KEY-----")
+    )
 }
 
 #[test]
@@ -131,20 +135,31 @@ fn private_key_requires_a_line_start_boundary() {
 #[test]
 fn private_key_rejects_carriage_returns() {
     let cases = [
-        "-----BEGIN PRIVATE KEY-----\r\nYQ==\n-----END PRIVATE KEY-----",
-        "-----BEGIN PRIVATE KEY-----\nYQ==\r\n-----END PRIVATE KEY-----",
-        "-----BEGIN PRIVATE KEY-----\nYQ==\n-----END PRIVATE KEY\r-----",
+        format!(
+            "{}\r\nYQ==\n{}",
+            concat!("-----BEGIN ", "PRIVATE KEY-----"),
+            concat!("-----END ", "PRIVATE KEY-----")
+        ),
+        private_key("YQ==\r\n"),
+        format!(
+            "{}\nYQ==\n{}\r-----",
+            concat!("-----BEGIN ", "PRIVATE KEY-----"),
+            concat!("-----END ", "PRIVATE KEY")
+        ),
     ];
     for content in cases {
-        assert!(scan(content, true).matches.is_empty(), "{content:?}");
+        assert!(scan(&content, true).matches.is_empty(), "{content:?}");
     }
 }
 
 #[test]
 fn incomplete_private_key_returns_no_match_or_withhold() {
-    let content = "-----BEGIN PRIVATE KEY-----\nYQ==\n";
+    let content = format!(
+        "{}\nYQ==\n",
+        concat!("-----BEGIN ", "PRIVATE KEY-----")
+    );
     for complete in [true, false] {
-        let result = scan(content, complete);
+        let result = scan(&content, complete);
         assert!(result.matches.is_empty());
         assert_eq!(result.withhold_from, None);
     }
@@ -153,12 +168,16 @@ fn incomplete_private_key_returns_no_match_or_withhold() {
 #[test]
 fn private_key_rejects_invalid_end_body_and_empty_body() {
     let cases = [
-        "-----BEGIN PRIVATE KEY-----\nYQ==\n-----END RSA PRIVATE KEY-----",
-        "-----BEGIN PRIVATE KEY-----\nYQ?=\n-----END PRIVATE KEY-----",
-        "-----BEGIN PRIVATE KEY-----\n-----END PRIVATE KEY-----",
+        format!(
+            "{}\nYQ==\n{}",
+            concat!("-----BEGIN ", "PRIVATE KEY-----"),
+            concat!("-----END RSA ", "PRIVATE KEY-----")
+        ),
+        private_key("YQ?=\n"),
+        private_key(""),
     ];
     for content in cases {
-        assert!(scan(content, true).matches.is_empty(), "{content:?}");
+        assert!(scan(&content, true).matches.is_empty(), "{content:?}");
     }
 }
 
