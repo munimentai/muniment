@@ -20,7 +20,7 @@
   import { copyAnnouncement, copyConfirmed, copyFailure, copyLabel } from './lib/message-actions.js'
   import { onboardingLoadingState, onboardingSettingsState } from './lib/onboarding-state.js'
   import { relativeTime } from './lib/relative-time.js'
-  import { SIDEBAR_STORAGE_KEY, isNewThreadShortcut, isSidebarShortcut, newThreadShortcut, serializeSidebarCollapsed, sidebarShortcut, storedSidebarCollapsed } from './lib/sidebar-state.js'
+  import { SIDEBAR_STORAGE_KEY, isNewThreadShortcut, isSidebarShortcut, newThreadShortcut, serializeSidebarCollapsed, sidebarShortcut, storedSidebarCollapsed, threadRowShortcut, threadRowShortcutPosition } from './lib/sidebar-state.js'
   import { createStreamingUnderlineAction } from './lib/streaming-underline.js'
   import { thinkingSettle } from './lib/thinking-transition.js'
   import { threadTitle } from './lib/thread-title.js'
@@ -531,6 +531,15 @@
       voiceShortcutManager.start()
     }
     const shortcuts = (event) => {
+      const rowPosition = threadRowShortcutPosition(event)
+      if (auth.name === 'signed-in' && onboarding.name === 'complete' && rowPosition !== null) {
+        event.preventDefault()
+        if (sidebarCollapsed || active || threadSwitching) return
+        const threadId = freshThread ? threadSummaries[rowPosition - 2]?.threadId : threadSummaries[rowPosition - 1]?.threadId
+        if (!threadId || threadId === currentThreadId) return
+        void chatController.openThread(threadId)
+        return
+      }
       if (auth.name === 'signed-in' && onboarding.name === 'complete' && isNewThreadShortcut(event)) {
         event.preventDefault()
         void chatController.newThread()
@@ -680,17 +689,18 @@
             <h2 id="thread-list-title" class="side-label">Threads</h2>
             <ul class="thread-list" aria-labelledby="thread-list-title">
               {#if freshThread}
-                <li class="thread-row active-thread" data-fresh-thread aria-current="true" title={currentThreadTitle}><span></span><div class="thread-row-title">{currentThreadTitle}</div></li>
+                <li class="thread-row active-thread" data-fresh-thread aria-current="true" aria-keyshortcuts={threadRowShortcut(1)} title={currentThreadTitle}><span></span><div class="thread-row-title">{currentThreadTitle}</div></li>
               {/if}
-              {#each threadSummaries as summary (summary.threadId)}
+              {#each threadSummaries as summary, index (summary.threadId)}
                 {@const title = summary.title || 'New thread'}
                 {@const current = !freshThread && summary.threadId === (currentThreadId ?? threadSummaries[0]?.threadId)}
                 {@const rowTitle = current ? summary.title || currentThreadTitle : title}
+                {@const rowPosition = index + 1 + (freshThread ? 1 : 0)}
                 <li class="thread-record">
                   {#if current}
-                    <div class="thread-row active-thread" aria-current="true" title={rowTitle}><span></span><div class="thread-row-title">{rowTitle}</div><time datetime={summary.updatedAt} title={fullDateTime(summary.updatedAt)}>{relativeTime(summary.updatedAt)}</time></div>
+                    <div class="thread-row active-thread" aria-current="true" aria-keyshortcuts={rowPosition <= 9 ? threadRowShortcut(rowPosition) : undefined} title={rowTitle}><span></span><div class="thread-row-title">{rowTitle}</div><time datetime={summary.updatedAt} title={fullDateTime(summary.updatedAt)}>{relativeTime(summary.updatedAt)}</time></div>
                   {:else}
-                    <button class="thread-row" data-thread-id={summary.threadId} title={rowTitle} aria-disabled={active ? 'true' : undefined} onclick={() => chatController.openThread(summary.threadId)}><span></span><div class="thread-row-title">{rowTitle}</div><time datetime={summary.updatedAt} title={fullDateTime(summary.updatedAt)}>{relativeTime(summary.updatedAt)}</time></button>
+                    <button class="thread-row" data-thread-id={summary.threadId} title={rowTitle} aria-keyshortcuts={rowPosition <= 9 ? threadRowShortcut(rowPosition) : undefined} aria-disabled={active ? 'true' : undefined} onclick={() => chatController.openThread(summary.threadId)}><span></span><div class="thread-row-title">{rowTitle}</div><time datetime={summary.updatedAt} title={fullDateTime(summary.updatedAt)}>{relativeTime(summary.updatedAt)}</time></button>
                   {/if}
                   {#if deletingThreadId === summary.threadId}
                     <div class="thread-delete-confirm" role="group" aria-label={`Delete ${rowTitle}?`}>
