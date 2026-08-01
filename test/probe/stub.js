@@ -72,6 +72,23 @@ const historyFixtures = {
       resumable: false,
     },
   ],
+  select: [
+    {
+      runId: 'probe-select',
+      prompt: 'Export the renewal summary.',
+      phase: 'pending-permission',
+      text: 'Choose an export target before I continue.',
+      receipt: null,
+      toolActivity: [],
+      pendingPermission: {
+        gateId: 'probe-select-gate',
+        kind: 'select',
+        title: 'Export target',
+        options: ['PDF', 'Word', 'Plain text', 'Markdown', 'Email draft', 'Clipboard'],
+      },
+      resumable: false,
+    },
+  ],
   input: [
     {
       runId: 'probe-input',
