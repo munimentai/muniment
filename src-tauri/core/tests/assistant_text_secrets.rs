@@ -141,8 +141,12 @@ fn matches_each_private_key_header_name() {
 
 #[test]
 fn private_key_end_name_must_match_begin_name() {
-    let content = "-----BEGIN EC PRIVATE KEY-----\nYQ==\n-----END RSA PRIVATE KEY-----";
-    assert!(scan(content, true).matches.is_empty());
+    let content = format!(
+        "{}\nYQ==\n{}",
+        concat!("-----BEGIN EC ", "PRIVATE KEY-----"),
+        concat!("-----END RSA ", "PRIVATE KEY-----")
+    );
+    assert!(scan(&content, true).matches.is_empty());
 }
 
 #[test]
