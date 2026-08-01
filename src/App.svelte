@@ -510,6 +510,11 @@
     }
   }
 
+  function signIn() {
+    if (auth.name !== 'signed-out') return
+    void run('sign-in')
+  }
+
   onMount(() => {
     let pairingUnlisten
     window.__TAURI__?.event?.listen('attach-pairing-requested', async ({ payload }) => {
@@ -664,15 +669,10 @@
   {#if tauri}
     <Onboarding {tauri} bind:onboarding />
     {#if onboarding.name === 'complete'}
-      {#if auth.name === 'signed-out'}
+      {#if auth.name === 'signed-out' || auth.name === 'signing-in'}
       <section class="auth-state">
-        <p class="support">Sign in to continue to your workspace.</p>
-        <button onclick={() => run('sign-in')}>Sign in</button>
-      </section>
-    {:else if auth.name === 'signing-in'}
-      <section class="auth-state" aria-live="polite">
-        <button disabled>Sign in</button>
-        <p class="record">Waiting for the browser sign-in…</p>
+        <p class="support" aria-live="polite">{auth.name === 'signing-in' ? 'Waiting for the browser sign-in…' : 'Sign in to continue to your workspace.'}</p>
+        <button aria-disabled={auth.name === 'signing-in' ? 'true' : undefined} onclick={signIn}>Sign in</button>
       </section>
     {:else if auth.name === 'signed-in'}
       <section class="workspace" class:sidebar-collapsed={sidebarCollapsed} class:artifact-open={artifactRailOpen} class:artifact-resizing={artifactRailPointer !== undefined} style:--artifact-rail-width={`${artifactRailWidth}px`} bind:this={workspace}>

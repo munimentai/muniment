@@ -371,6 +371,34 @@ describe('workspace composer entry', () => {
     expect(screen.queryByPlaceholderText('Ask anything')).not.toBeInTheDocument()
   })
 
+  it('keeps one focused sign-in button while browser sign-in is pending', async () => {
+    const signInRequest = deferred()
+    invoke.mockImplementation(async (command) => {
+      if (command === 'auth_status') return { signed_in: false, subject: null }
+      if (command === 'auth_sign_in') return signInRequest.promise
+      throw new Error(`unexpected command: ${command}`)
+    })
+    const { container } = render(App)
+    const signIn = await screen.findByRole('button', { name: 'Sign in' })
+    expect(screen.getByText('Sign in to continue to your workspace.')).toHaveAttribute('aria-live', 'polite')
+    expect(container.querySelectorAll('[aria-live="polite"]')).toHaveLength(1)
+    expect(signIn).not.toHaveAttribute('aria-live')
+    signIn.focus()
+
+    await fireEvent.click(signIn)
+
+    expect(screen.getByText('Waiting for the browser sign-in…')).toHaveAttribute('aria-live', 'polite')
+    expect(container.querySelectorAll('[aria-live="polite"]')).toHaveLength(1)
+    expect(screen.getByRole('button', { name: 'Sign in' })).toBe(signIn)
+    expect(signIn).toHaveFocus()
+    expect(signIn).toHaveAttribute('aria-disabled', 'true')
+    expect(signIn).not.toBeDisabled()
+    expect(container.querySelectorAll('button')).toHaveLength(1)
+
+    await fireEvent.click(signIn)
+    expect(invoke.mock.calls.filter(([command]) => command === 'auth_sign_in')).toHaveLength(1)
+  })
+
   it('does not focus a composer in the auth-error state', async () => {
     invoke.mockRejectedValue('Authentication is unavailable.')
     render(App)
