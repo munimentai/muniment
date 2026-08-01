@@ -3083,6 +3083,42 @@ describe('thread announcements', () => {
     await waitFor(() => expect(region).toHaveTextContent('Reply failed.'))
     expect(drain()).toHaveLength(1)
   })
+
+  it('records a stopped live reply and retries its prompt without a second live region', async () => {
+    signedIn([], { runId: 'run-stopped', attachments: [] })
+    const composer = await screen.findByPlaceholderText('Ask anything')
+    await fireEvent.input(composer, { target: { value: 'Explain the record' } })
+    await fireEvent.click(screen.getByRole('button', { name: 'Send' }))
+    chatListener({ payload: { runId: 'run-stopped', type: 'text-delta', text: 'A partial reply' } })
+
+    await fireEvent.click(await screen.findByRole('button', { name: 'Stop' }))
+    expect(invoke).toHaveBeenCalledWith('chat_cancel', { runId: 'run-stopped' })
+    chatListener({ payload: { runId: 'run-stopped', type: 'cancelled' } })
+
+    await waitFor(() => expect(document.querySelector('.run-error')).toHaveTextContent('Reply stopped.'))
+    const record = document.querySelector('.run-error')
+    expect(record).toHaveClass('run-error')
+    expect(record).not.toHaveAttribute('role')
+    expect(record).not.toHaveAttribute('aria-live')
+    expect(screen.getByTestId('run-announcement')).toHaveTextContent('Reply stopped.')
+    expect(document.querySelectorAll('.thread-shell [aria-live]')).toHaveLength(1)
+
+    await fireEvent.click(within(record).getByRole('button', { name: 'Try again' }))
+    expect(invoke).toHaveBeenLastCalledWith('chat_submit', { prompt: 'Explain the record', files: [] })
+  })
+
+  it('records a restored stopped reply without a retry when its prompt is absent', async () => {
+    signedIn([{
+      runId: 'run-restored-stopped', phase: 'cancelled', text: 'A restored partial reply',
+      receipt: null, toolActivity: [],
+    }])
+
+    const record = await screen.findByText('Reply stopped.')
+    expect(record).toHaveClass('run-error')
+    expect(within(record).queryByRole('button', { name: 'Try again' })).not.toBeInTheDocument()
+    expect(screen.getByText('A restored partial reply')).toBeInTheDocument()
+    expect(screen.getByTestId('run-announcement')).toHaveTextContent('')
+  })
 })
 
 describe('tool activity cards', () => {
