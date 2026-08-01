@@ -28,6 +28,20 @@ export function isNewThreadShortcut(event, platform = navigator.platform) {
     && !event.shiftKey
 }
 
+export function threadRowShortcut(position, platform = navigator.platform) {
+  return `${platform.startsWith('Mac') ? 'Meta' : 'Control'}+${position}`
+}
+
+export function threadRowShortcutPosition(event, platform = navigator.platform) {
+  const mac = platform.startsWith('Mac')
+  const match = /^Digit([1-9])$/.exec(event.code)
+  if (!match
+    || (mac ? !event.metaKey || event.ctrlKey : !event.ctrlKey || event.metaKey)
+    || event.altKey
+    || event.shiftKey) return null
+  return Number(match[1])
+}
+
 // Anything but an explicit collapsed marker — missing, malformed, or written
 // by an older shell — restores the documented default.
 export function parseSidebarCollapsed(stored) {
