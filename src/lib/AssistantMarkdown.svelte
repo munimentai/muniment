@@ -2,14 +2,46 @@
   import { openUrl } from '@tauri-apps/plugin-opener'
   import { renderAssistantMarkdown } from './assistant-markdown.js'
   import { createExternalLinkHandler } from './external-link.js'
+  import { scrollRegionOverflows } from './scroll-region.js'
 
   let { text = '' } = $props()
   let rendered = $derived(renderAssistantMarkdown(text))
+  let container
   const handleExternalLink = createExternalLinkHandler(openUrl)
+
+  function updateScrollRegions() {
+    for (const element of container?.querySelectorAll('pre, table') ?? []) {
+      const overflows = scrollRegionOverflows({
+        scrollWidth: element.scrollWidth,
+        clientWidth: element.clientWidth,
+      })
+
+      if (overflows) {
+        element.setAttribute('tabindex', '0')
+        element.setAttribute('role', 'group')
+        element.setAttribute('aria-label', element.tagName === 'PRE' ? 'Code block' : 'Table')
+      } else {
+        element.removeAttribute('tabindex')
+        element.removeAttribute('role')
+        element.removeAttribute('aria-label')
+      }
+    }
+  }
+
+  $effect(() => {
+    void rendered
+    updateScrollRegions()
+
+    if (!container || typeof ResizeObserver === 'undefined') return
+
+    const observer = new ResizeObserver(updateScrollRegions)
+    observer.observe(container)
+    return () => observer.disconnect()
+  })
 </script>
 
 <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions (The handler delegates native link activation.) -->
-<div class="assistant-markdown" onclick={handleExternalLink}>
+<div class="assistant-markdown" onclick={handleExternalLink} bind:this={container}>
   {#if rendered.kind === 'html'}
     {@html rendered.html}
   {:else}{rendered.text}{/if}
@@ -30,6 +62,7 @@
   .assistant-markdown :global(a) { color: var(--ink); text-decoration: underline; text-decoration-color: var(--border); text-underline-offset: 2px; }
   .assistant-markdown :global(a:hover) { color: var(--muted); text-decoration-color: var(--muted); }
   .assistant-markdown :global(a:focus-visible) { outline: 2px solid var(--ink); outline-offset: 2px; }
+  .assistant-markdown :global(pre:focus-visible), .assistant-markdown :global(table:focus-visible) { outline: 2px solid var(--ink); outline-offset: 2px; }
   .assistant-markdown :global(code) { padding: 1px 3px; border-radius: var(--radius-chip); background: var(--faint); font: var(--text-13) var(--font-mono); }
   .assistant-markdown :global(pre) { max-width: 100%; margin: 0 0 12px; overflow-x: auto; border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--faint); }
   .assistant-markdown :global(pre code) { display: block; width: max-content; min-width: 100%; padding: 10px 12px; border-radius: var(--radius-control); background: var(--faint); white-space: pre; }
