@@ -38,8 +38,13 @@ describe('installed nightly model-ready onboarding', () => {
       throw waitError
     }
 
-    const dialog = await browser.tauri.mock('plugin:dialog|open')
-    await dialog.mockReturnValue(home)
+    expect(path.isAbsolute(home)).toBe(true)
+    await browser.execute((selectedHome) => {
+      const invoke = window.__TAURI_INTERNALS__.invoke
+      window.__TAURI_INTERNALS__.invoke = (command, args, options) => command === 'plugin:dialog|open'
+        ? Promise.resolve(selectedHome)
+        : invoke(command, args, options)
+    }, home)
     await (await $('[data-testid="onboarding-picker"]')).click()
     expect(await location.getText()).toBe(home)
     let homeExists = true
