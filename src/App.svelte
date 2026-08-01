@@ -672,7 +672,7 @@
       {#if auth.name === 'signed-out' || auth.name === 'signing-in'}
       <section class="auth-state">
         <p class="support" aria-live="polite">{auth.name === 'signing-in' ? 'Waiting for the browser sign-in…' : 'Sign in to continue to your workspace.'}</p>
-        <button aria-disabled={auth.name === 'signing-in' ? 'true' : undefined} onclick={signIn}>Sign in</button>
+        <button class:inactive={auth.name === 'signing-in'} aria-disabled={auth.name === 'signing-in' ? 'true' : undefined} onclick={signIn}>Sign in</button>
       </section>
     {:else if auth.name === 'signed-in'}
       <section class="workspace" class:sidebar-collapsed={sidebarCollapsed} class:artifact-open={artifactRailOpen} class:artifact-resizing={artifactRailPointer !== undefined} style:--artifact-rail-width={`${artifactRailWidth}px`} bind:this={workspace}>
@@ -1002,11 +1002,16 @@
     cursor: pointer;
   }
 
-  button:hover:not(:disabled) {
+  button:hover:not(:disabled):not([aria-disabled="true"]) {
     border-color: var(--muted);
   }
 
   button:disabled {
+    color: var(--muted);
+    cursor: default;
+  }
+
+  button[aria-disabled="true"].inactive {
     color: var(--muted);
     cursor: default;
   }

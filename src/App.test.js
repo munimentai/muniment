@@ -393,7 +393,11 @@ describe('workspace composer entry', () => {
     expect(signIn).toHaveFocus()
     expect(signIn).toHaveAttribute('aria-disabled', 'true')
     expect(signIn).not.toBeDisabled()
+    expect(signIn).toHaveClass('inactive')
     expect(container.querySelectorAll('button')).toHaveLength(1)
+    expect(appRules.get('button[aria-disabled="true"].inactive')).toMatch(/color:\s*var\(--muted\)/)
+    expect(appRules.get('button[aria-disabled="true"].inactive')).toMatch(/cursor:\s*default/)
+    expect(appRules.has('button:hover:not(:disabled):not([aria-disabled="true"])')).toBe(true)
 
     await fireEvent.click(signIn)
     expect(invoke.mock.calls.filter(([command]) => command === 'auth_sign_in')).toHaveLength(1)
