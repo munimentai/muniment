@@ -2166,17 +2166,15 @@ describe('voice dictation', () => {
     await waitFor(() => expect(send).toBeEnabled())
   })
 
-  it.each([
-    ['modelNotInstalled', 'The speech model is not installed.'],
-    ['failed', 'Microphone capture failed.'],
-  ])('renders a terminal %s message and becomes retryable', async (state, message) => {
+  it('renders a terminal failed message and becomes retryable', async () => {
+    const message = 'Microphone capture failed.'
     invoke.mockImplementation(async (command) => {
       if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
       if (command === 'chat_thread_open') return []
       if (command === 'auth_entitlement_snapshot') return snapshot()
       if (command === 'auth_devices') return []
       if (command === 'dictation_start') return { state: 'starting' }
-      if (command === 'dictation_status') return { state, category: 'redacted', message }
+      if (command === 'dictation_status') return { state: 'failed', category: 'redacted', message }
       throw new Error(`unexpected command: ${command}`)
     })
     render(App)
@@ -2189,6 +2187,79 @@ describe('voice dictation', () => {
     expect(voice).toHaveAttribute('aria-pressed', 'false')
     expect(voice).toBeEnabled()
     expect(composer).toHaveValue('Keep this')
+  })
+
+  it('shows install facts and installs a missing speech model', async () => {
+    let installStatusCalls = 0
+    invoke.mockImplementation(async (command) => {
+      if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
+      if (command === 'chat_thread_open') return []
+      if (command === 'auth_entitlement_snapshot') return snapshot()
+      if (command === 'auth_devices') return []
+      if (command === 'dictation_start') return { state: 'modelNotInstalled', message: 'The speech model is not installed.' }
+      if (command === 'parakeet_install_facts') return {
+        identity: 'parakeet-tdt-0.6b-v3',
+        revision: 'pinned-revision',
+        sourceRepository: 'nvidia/parakeet-tdt-0.6b-v3',
+        totalDownloadBytes: 672_384_307,
+        requiredFreeBytes: 940_819_763,
+        speechModelLicense: 'CC BY 4.0',
+        voiceActivityModelLicense: 'MIT',
+      }
+      if (command === 'parakeet_install_start') return { state: 'installing' }
+      if (command === 'parakeet_install_status') {
+        installStatusCalls += 1
+        if (installStatusCalls === 1) return { state: 'notInstalled' }
+        return { state: installStatusCalls === 2 ? 'installing' : 'installed' }
+      }
+      throw new Error(`unexpected command: ${command}`)
+    })
+    render(App)
+    await fireEvent.click(await screen.findByRole('button', { name: 'Voice' }))
+
+    const card = await screen.findByRole('region', { name: 'Speech model install' })
+    await within(card).findByText('641 MB')
+    expect(card).toHaveTextContent('Download641 MB')
+    expect(card).toHaveTextContent('Sourcenvidia/parakeet-tdt-0.6b-v3')
+    expect(card).toHaveTextContent('Speech model licenseCC BY 4.0')
+    expect(card).toHaveTextContent('Voice activity model licenseMIT')
+    expect(card).toHaveTextContent('Free disk required897 MB')
+    expect(card).not.toHaveTextContent('The speech model is not installed.')
+
+    await fireEvent.click(within(card).getByRole('button', { name: 'Install' }))
+    expect(within(card).getByRole('status')).toHaveTextContent('Installing.')
+    await waitFor(() => expect(within(card).getByRole('status')).toHaveTextContent('Installed. Press Voice again to dictate.'))
+    expect(invoke).toHaveBeenCalledWith('parakeet_install_start')
+    expect(invoke.mock.calls.filter(([command]) => command === 'parakeet_install_status')).toHaveLength(3)
+    expect(within(card).queryByRole('button', { name: 'Install' })).not.toBeInTheDocument()
+  })
+
+  it.each([
+    ['cancelled', 'Cancelled.'],
+    ['failed', 'Failed.'],
+  ])('states a %s install and returns the Install control', async (installState, words) => {
+    invoke.mockImplementation(async (command) => {
+      if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
+      if (command === 'chat_thread_open') return []
+      if (command === 'auth_entitlement_snapshot') return snapshot()
+      if (command === 'auth_devices') return []
+      if (command === 'dictation_start') return { state: 'modelNotInstalled', message: 'The speech model is not installed.' }
+      if (command === 'parakeet_install_facts') return {
+        sourceRepository: 'source', totalDownloadBytes: 1, requiredFreeBytes: 2,
+        speechModelLicense: 'CC BY 4.0', voiceActivityModelLicense: 'MIT',
+      }
+      if (command === 'parakeet_install_status') return { state: installState === 'failed' ? 'notInstalled' : installState }
+      if (command === 'parakeet_install_start') return { state: installState }
+      throw new Error(`unexpected command: ${command}`)
+    })
+    render(App)
+    await fireEvent.click(await screen.findByRole('button', { name: 'Voice' }))
+
+    const card = await screen.findByRole('region', { name: 'Speech model install' })
+    await within(card).findByText('source')
+    if (installState === 'failed') await fireEvent.click(within(card).getByRole('button', { name: 'Install' }))
+    expect(within(card).getByRole('status')).toHaveTextContent(words)
+    expect(within(card).getByRole('button', { name: 'Install' })).toBeEnabled()
   })
 
   it('keeps capture active and stoppable when status IPC rejects', async () => {
