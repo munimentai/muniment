@@ -654,6 +654,13 @@ describe('thread name', () => {
     render(App)
 
     const control = await screen.findByRole('button', { name: 'Older threads' })
+    const list = screen.getByRole('list', { name: 'Threads' })
+    const homeSettings = screen.getByRole('button', { name: 'Home settings' })
+
+    expect(within(list).getAllByRole('listitem')).toHaveLength(1)
+    expect(within(list).queryByRole('button', { name: 'Older threads' })).not.toBeInTheDocument()
+    expect(list.compareDocumentPosition(control)).toBe(Node.DOCUMENT_POSITION_FOLLOWING)
+    expect(control.compareDocumentPosition(homeSettings)).toBe(Node.DOCUMENT_POSITION_FOLLOWING)
     await fireEvent.click(control)
 
     const olderThread = await screen.findByRole('button', { name: 'Older review' })
@@ -701,6 +708,7 @@ describe('thread name', () => {
     await waitFor(() => expect(screen.queryByText('Answer')).not.toBeInTheDocument())
     expect(invoke).toHaveBeenCalledWith('chat_delete_thread', { threadId: 'thread-1' })
     expect(document.querySelector('[data-fresh-thread]')).toBeInTheDocument()
+    expect(within(screen.getByRole('list', { name: 'Threads' })).getAllByRole('listitem')).toHaveLength(1)
     expect(screen.getByPlaceholderText('Ask anything')).toHaveFocus()
   })
 
