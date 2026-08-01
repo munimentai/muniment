@@ -154,10 +154,7 @@ fn private_key_rejects_carriage_returns() {
 
 #[test]
 fn incomplete_private_key_returns_no_match_or_withhold() {
-    let content = format!(
-        "{}\nYQ==\n",
-        concat!("-----BEGIN ", "PRIVATE KEY-----")
-    );
+    let content = format!("{}\nYQ==\n", concat!("-----BEGIN ", "PRIVATE KEY-----"));
     for complete in [true, false] {
         let result = scan(&content, complete);
         assert!(result.matches.is_empty());
