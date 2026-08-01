@@ -69,6 +69,32 @@ reference implementation: [docs/design-reference/ring/](docs/design-reference/ri
     public surface without updating evidence. Merged evidence changes are
     picked up automatically by the site lane — do not file site tickets by hand.
 
+## Production-ready gates (release gate)
+
+A desktop release is production-ready when every criterion below holds.
+Each criterion names its enforcing artifact. A criterion whose enforcer
+reads "gap" is open work: closing it is a gate change first and a symptom
+ticket second. Declaring readiness is a gate reading, never a judgment
+call.
+
+1. The nightly three-platform e2e run is green with a readable evidence
+   envelope on every platform. Enforcer: .github/workflows/nightly.yml,
+   with linux-e2e-report consumed by the factory tester.
+2. The PR compile and build matrix is green on linux, windows, and macos.
+   Enforcer: the desktop-compile and desktop-build jobs in ci.yml.
+3. Windows installers are signed and verified. Enforcer:
+   test/windows-installers.ps1 in the desktop-build job.
+4. macOS builds are signed, notarized, and stapled once Apple clears the
+   enrollment. Owner-gated. Enforcer: docs/macos-signing.md checklist plus
+   the pre-staged .github/lib/macos-signing.mjs fail-fast behavior.
+5. A release promotes only the exact bytes of a green nightly SHA.
+   Enforcer: .github/lib/release-promotion.mjs.
+6. UI copy obeys the forbidden-vocabulary law, records render in mono, and
+   the provenance line is present on every reply. Enforcer: gap - no lint
+   or test covers laws 4, 5, and 6 today.
+7. An update path exists or is explicitly deferred by ADR. Enforcer: gap -
+   no updater and no ADR records the deferral.
+
 ## CI
 
 Desktop builds run on ephemeral pve01 VM clones via the `desktop-ci` driver
