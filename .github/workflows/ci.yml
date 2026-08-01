@@ -130,6 +130,18 @@ jobs:
         if: steps.changes.outputs.desktop == 'true' || github.event_name != 'pull_request'
         run: npm ci --no-audit --no-fund && npm test
 
+      - name: UI copy law
+        if: steps.changes.outputs.desktop == 'true' || github.event_name != 'pull_request'
+        run: npm run lint:copy
+
+      - name: Record font law
+        if: steps.changes.outputs.desktop == 'true' || github.event_name != 'pull_request'
+        run: npm run test:records
+
+      - name: Provenance line law
+        if: steps.changes.outputs.desktop == 'true' || github.event_name != 'pull_request'
+        run: npm run test:provenance
+
       - name: Browser control relay core
         if: steps.changes.outputs.desktop == 'true' || github.event_name != 'pull_request'
         run: npm ci --prefix browser-control --no-audit --no-fund && npm run browser-control
