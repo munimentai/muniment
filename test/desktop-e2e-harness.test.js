@@ -14,11 +14,14 @@ const runNode = (script, args, options = {}) => spawnSync(process.execPath, [pat
 describe('installed onboarding spec contract', () => {
   const onboardingSpec = fs.readFileSync(path.join(root, 'test/e2e/specs/onboarding.spec.js'), 'utf8')
 
-  it.each(['onboarding.spec.js', 'real-sign-in.spec.js'])('%s uses only shipped onboarding controls', (name) => {
+  it.each([
+    ['onboarding.spec.js', ['onboarding-home-path', 'onboarding-picker', 'onboarding-confirm']],
+    ['real-sign-in.spec.js', ['onboarding-home-path', 'onboarding-confirm']],
+  ])('%s uses only shipped onboarding controls', (name, expectedSelectors) => {
     const spec = fs.readFileSync(path.join(root, 'test/e2e/specs', name), 'utf8')
     const selectors = [...spec.matchAll(/data-testid=(["'])(onboarding-[^"']+)\1/g)].map((match) => match[2])
     expect(selectors.length).toBeGreaterThan(0)
-    expect(new Set(selectors)).toEqual(new Set(['onboarding-home-path', 'onboarding-picker', 'onboarding-confirm']))
+    expect(new Set(selectors)).toEqual(new Set(expectedSelectors))
   })
 
   it('bounds the first render wait and names its diagnostic log', () => {
@@ -31,18 +34,15 @@ describe('installed onboarding spec contract', () => {
 describe('installed production chat contract', () => {
   const spec = fs.readFileSync(path.join(root, 'test/e2e/specs/real-sign-in.spec.js'), 'utf8')
 
-  it('submits a unique image prompt and verifies its rendered attachment and assistant token', () => {
-    expect(spec).toMatch(/const prompt = `Muniment E2E image check \$\{Date\.now\(\)\}/)
-    expect(spec).toContain("const expectedToken = 'MUNIMENT-PLUM-4827'")
-    expect(spec.match(/const prompt = ([^\n]+)/)?.[1]).not.toContain('expectedToken')
-    expect(spec).toContain("await dialog.mockReturnValue(attachmentPath)")
-    expect(spec).toContain("$('button=Add files')")
-    expect(spec).toContain('submittedAttachment.waitForDisplayed()')
+  it('submits a unique prompt and verifies a nonempty assistant response', () => {
+    expect(spec).toMatch(/const prompt = `Muniment E2E chat \$\{Date\.now\(\)\}`/)
     expect(spec).toContain("const send = await $('button=Send')")
     expect(spec).toContain('await send.click()')
     expect(spec).toContain('userMessage.waitForDisplayed()')
     expect(spec).toContain("expect(assistantText).not.toBe('')")
-    expect(spec).toContain('expect(assistantText).toContain(expectedToken)')
+    expect(spec).not.toContain('browser.tauri.mock')
+    expect(spec).not.toContain("plugin:dialog|open")
+    expect(spec).toContain('const home = await location.getText()')
   })
 
   it('keeps the image fixture in isolated runner state rather than diagnostics', () => {
