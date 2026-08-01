@@ -36,6 +36,7 @@ describe('code diff presentation', () => {
     expect(presentation.renderer.options).toBe(codeDiffRendererOptions)
     expect(presentation.renderer.options).toMatchObject({
       outputFormat: 'side-by-side',
+      matching: 'none',
       matchingMaxComparisons: 2500,
       maxLineSizeInBlockForComparison: 200,
       maxLineLengthHighlight: 10000,
@@ -52,9 +53,9 @@ describe('code diff presentation', () => {
         oldStartLine: 7,
         newStartLine: 7,
         lines: [
-          { type: 'context', oldNumber: 7, newNumber: 7, content: ' const fixed = true' },
-          { type: 'delete', oldNumber: 8, newNumber: undefined, content: '-const name = "old"' },
-          { type: 'insert', oldNumber: undefined, newNumber: 8, content: '+const name = "new"' },
+          { type: 'context', oldNumber: 7, newNumber: 7, content: ' const fixed = true', segments: [] },
+          { type: 'delete', oldNumber: 8, newNumber: undefined, content: '-const name = "old"', segments: [] },
+          { type: 'insert', oldNumber: undefined, newNumber: 8, content: '+const name = "new"', segments: [] },
         ],
       })],
     })])
@@ -89,10 +90,51 @@ describe('code diff presentation', () => {
     expect(presentation.binaryFiles).toEqual([{
       oldName: 'asset.png',
       newName: 'asset.png',
+      position: 0,
       message: 'Binary file changed',
     }])
     expect(presentation.renderer.input).toEqual([])
     expect(presentation.emptyMessage).toBeNull()
+  })
+
+  it('preserves contract order across text and binary presentation states', () => {
+    const secondTextFile = structuredClone(textDiff.files[0])
+    secondTextFile.oldPath = 'src/second.js'
+    secondTextFile.newPath = 'src/second.js'
+    const presentation = codeDiffPresentation({
+      schemaVersion: 1,
+      id: 'mixed',
+      truncated: false,
+      files: [
+        textDiff.files[0],
+        { oldPath: 'asset.png', newPath: 'asset.png', status: 'modified', binary: true, hunks: [] },
+        secondTextFile,
+      ],
+    })
+
+    expect(presentation.renderer.input.map(({ newName, position }) => ({ newName, position }))).toEqual([
+      { newName: 'src/new.js', position: 0 },
+      { newName: 'src/second.js', position: 2 },
+    ])
+    expect(presentation.binaryFiles).toEqual([expect.objectContaining({ newName: 'asset.png', position: 1 })])
+  })
+
+  it('preserves producer-supplied segment boundaries', () => {
+    const value = structuredClone(textDiff)
+    value.files[0].hunks[0].lines[2].segments = [
+      { kind: 'plain', text: 'const name = "' },
+      { kind: 'addition', text: 'new' },
+      { kind: 'plain', text: '"' },
+    ]
+
+    const presentation = codeDiffPresentation(value)
+
+    expect(presentation.renderer.options.matching).toBe('none')
+    expect(presentation.renderer.input[0].blocks[0].lines[2].segments).toEqual([
+      { kind: 'plain', text: 'const name = "' },
+      { kind: 'addition', text: 'new' },
+      { kind: 'plain', text: '"' },
+    ])
   })
 
   it('returns the truncation warning before complete and empty presentations', () => {

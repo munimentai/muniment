@@ -7,7 +7,7 @@ const lineTypes = {
 export const codeDiffRendererOptions = Object.freeze({
   outputFormat: 'side-by-side',
   drawFileList: false,
-  matching: 'words',
+  matching: 'none',
   matchingMaxComparisons: 2500,
   maxLineSizeInBlockForComparison: 200,
   maxLineLengthHighlight: 10000,
@@ -19,15 +19,17 @@ function rendererLine(line) {
     oldNumber: line.oldLineNumber,
     newNumber: line.newLineNumber,
     content: `${line.kind === 'addition' ? '+' : line.kind === 'deletion' ? '-' : ' '}${line.text}`,
+    segments: line.segments,
   }
 }
 
-function rendererFile(file) {
+function rendererFile(file, position) {
   const lines = file.hunks.flatMap((hunk) => hunk.lines)
 
   return {
     oldName: file.oldPath ?? '/dev/null',
     newName: file.newPath ?? '/dev/null',
+    position,
     oldMode: file.oldMode,
     newMode: file.newMode,
     addedLines: lines.filter((line) => line.kind === 'addition').length,
@@ -47,17 +49,26 @@ function rendererFile(file) {
   }
 }
 
-function binaryFile(file) {
+function binaryFile(file, position) {
   return {
     oldName: file.oldPath ?? '/dev/null',
     newName: file.newPath ?? '/dev/null',
+    position,
     message: 'Binary file changed',
   }
 }
 
 export function codeDiffPresentation(codeDiff) {
-  const binaryFiles = codeDiff.files.filter((file) => file.binary).map(binaryFile)
-  const textFiles = codeDiff.files.filter((file) => !file.binary).map(rendererFile)
+  const binaryFiles = []
+  const textFiles = []
+
+  codeDiff.files.forEach((file, position) => {
+    if (file.binary) {
+      binaryFiles.push(binaryFile(file, position))
+    } else {
+      textFiles.push(rendererFile(file, position))
+    }
+  })
 
   return {
     id: codeDiff.id,
