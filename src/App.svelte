@@ -513,6 +513,11 @@
     })
   })
 
+  $effect(() => {
+    selectedFiles
+    if (composer) untrack(syncComposerHeight)
+  })
+
   // The composer also rewraps when only its width changes, and most of those
   // never touch the window: ⌘J opening the artifact rail, the rail separator
   // being dragged or arrow-keyed, the sidebar collapsing. A height measured at
