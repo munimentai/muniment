@@ -14,9 +14,11 @@ describe('fixture cleanup', () => {
         return true
       }
       if (await onboarding.isDisplayed()) {
-        const signedIn = await browser.execute(async () => (
-          await window.__TAURI__.core.invoke('auth_status')
-        ).signed_in)
+        const signedIn = await browser.executeAsync((done) => {
+          window.__TAURI__.core.invoke('auth_status')
+            .then((status) => done(status.signed_in))
+            .catch(() => done(true))
+        })
         if (!signedIn) {
           authState = 'onboarding'
           return true
