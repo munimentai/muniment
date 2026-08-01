@@ -875,16 +875,18 @@
                     ></textarea>
                   {/if}
                   <div class="permission-actions">
-                    {#if gate.kind === 'confirm'}
-                      <button disabled={answerState?.pending} onclick={() => answerPermission(message.run, { type: 'confirm', value: true })}>Allow</button>
-                    {:else if gate.kind === 'select'}
-                      {#each gate.options ?? [] as option}
-                        <button disabled={answerState?.pending} onclick={() => answerPermission(message.run, { type: 'select', value: option })}>{option}</button>
-                      {/each}
-                    {:else if gate.kind === 'input' || gate.kind === 'editor'}
-                      <button disabled={answerState?.pending} onclick={() => answerPermission(message.run, { type: gate.kind, value: permissionValue(message.run) })}>Submit</button>
-                    {/if}
                     <button disabled={answerState?.pending} onclick={() => answerPermission(message.run, { type: 'cancelled' })}>Deny</button>
+                    <div class="permission-approve-actions" role={gate.kind === 'select' ? 'group' : undefined} aria-label={gate.kind === 'select' ? gate.title : undefined}>
+                      {#if gate.kind === 'confirm'}
+                        <button disabled={answerState?.pending} onclick={() => answerPermission(message.run, { type: 'confirm', value: true })}>Allow</button>
+                      {:else if gate.kind === 'select'}
+                        {#each gate.options ?? [] as option}
+                          <button disabled={answerState?.pending} onclick={() => answerPermission(message.run, { type: 'select', value: option })}>{option}</button>
+                        {/each}
+                      {:else if gate.kind === 'input' || gate.kind === 'editor'}
+                        <button disabled={answerState?.pending} onclick={() => answerPermission(message.run, { type: gate.kind, value: permissionValue(message.run) })}>Submit</button>
+                      {/if}
+                    </div>
                   </div>
                   {#if answerState?.error}<div class="run-error" role="alert">{answerState.error}</div>{/if}
                 </div>
@@ -1245,7 +1247,9 @@
   .permission-field:focus { border-color: var(--muted); }
   .permission-field::placeholder { color: var(--muted); }
   .permission-editor { min-height: 84px; resize: vertical; }
-  .permission-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+  .permission-actions, .permission-approve-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+  .permission-actions { align-items: flex-start; margin-top: 8px; }
+  .permission-approve-actions { justify-content: flex-end; margin-left: auto; }
   .permission-actions button { padding: 4px 8px; font: inherit; }
   .permission-card .run-error { margin-top: 6px; }
   /* §2.2 mono 11.5px; §1.4 records line up their figures. The shorthand resets
