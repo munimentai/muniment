@@ -658,10 +658,14 @@
 <main class:onboarding-active={tauri && onboarding.name !== 'complete'}>
   {#if auth.name !== 'signed-in' || onboarding.name !== 'complete'}
     <div class="lockup">
-      <svg width="34" height="34" viewBox="0 0 48 48" role="img" aria-label="muniment">
+      <svg width="34" height="34" viewBox="0 0 48 48" aria-hidden="true">
         <path d={markD} stroke-width="4.5" />
       </svg>
-      <span class="name">muniment</span>
+      {#if onboarding.name === 'complete' && (auth.name === 'signed-out' || auth.name === 'signing-in')}
+        <h1 class="name">muniment</h1>
+      {:else}
+        <span class="name">muniment</span>
+      {/if}
     </div>
     <p class="meta">shell v{version}</p>
   {/if}
@@ -672,7 +676,7 @@
       {#if auth.name === 'signed-out' || auth.name === 'signing-in'}
       <section class="auth-state">
         <p class="support" aria-live="polite">{auth.name === 'signing-in' ? 'Waiting for the browser sign-in…' : 'Sign in to continue to your workspace.'}</p>
-        <button class:inactive={auth.name === 'signing-in'} aria-disabled={auth.name === 'signing-in' ? 'true' : undefined} onclick={signIn}>Sign in</button>
+        <button class="primary" class:inactive={auth.name === 'signing-in'} aria-disabled={auth.name === 'signing-in' ? 'true' : undefined} onclick={signIn}>Sign in</button>
       </section>
     {:else if auth.name === 'signed-in'}
       <section class="workspace" class:sidebar-collapsed={sidebarCollapsed} class:artifact-open={artifactRailOpen} class:artifact-resizing={artifactRailPointer !== undefined} style:--artifact-rail-width={`${artifactRailWidth}px`} bind:this={workspace}>
@@ -968,6 +972,7 @@
   .name {
     font-size: var(--text-28);
     font-weight: 600;
+    line-height: var(--leading-body);
     letter-spacing: -0.01em;
   }
 
