@@ -95,6 +95,35 @@ call.
 7. An update path exists or is explicitly deferred by ADR. Enforcer: gap -
    no updater and no ADR records the deferral.
 
+## Folder hierarchy standard
+
+- **Ceiling:** A directory holds at most 50 source files. At the ceiling,
+  split along the largest naming family.
+- **Floor:** A new folder needs at least 5 files or a machine reader named in
+  the pull request. No folders exist for human browsing alone.
+- **Depth:** The source layout has at most 3 directory levels below the source
+  root.
+- **Naming families first:** Related files share a prefix stem. A family of 15
+  or more files is the designated split when the ceiling hits.
+- **Tests mirror source:** Tests mirror the source layout, except layouts that
+  a test harness requires.
+- **Ceiling exemptions:** The ceiling does not apply to append-only stores,
+  generated trees, vendored trees, or asset directories.
+- **Frozen machine-read paths:** Never move or rename a machine-read path
+  without a consumer sweep first. The frozen paths in this repo are
+  `docs/public-evidence/` (docs-sync reads it by path), `protocol-fixtures/`
+  (the versioned fixture contract), and `docs/decisions/`.
+- **Recorded gaps:** Directories already over the ceiling are recorded gaps. A
+  gap closes gate-first: the split ships with a check that holds the new shape.
+  The production-ready model applies: every criterion names one enforcer. A
+  criterion without an enforcer is a recorded gap (harness-spec section 14,
+  vendored by MUNICLOUD-833). New files must not push a recorded directory
+  past its recorded count.
+
+| Directory | Recorded file count | Designated split |
+| --- | ---: | --- |
+| `src/lib` | 56 | Largest naming family |
+
 ## CI
 
 Desktop builds run on ephemeral pve01 VM clones via the `desktop-ci` driver
