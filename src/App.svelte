@@ -21,6 +21,7 @@
   import { onboardingLoadingState, onboardingSettingsState } from './lib/onboarding-state.js'
   import { relativeTime } from './lib/relative-time.js'
   import { SIDEBAR_STORAGE_KEY, isNewThreadShortcut, isSidebarShortcut, newThreadShortcut, serializeSidebarCollapsed, sidebarShortcut, storedSidebarCollapsed, threadRowShortcut, threadRowShortcutPosition } from './lib/sidebar-state.js'
+  import { formatBytes, installStateWords } from './lib/speech-install.js'
   import { createStreamingUnderlineAction } from './lib/streaming-underline.js'
   import { thinkingSettle } from './lib/thinking-transition.js'
   import { threadTitle } from './lib/thread-title.js'
@@ -90,6 +91,12 @@
   let dictationDraftSnapshot = $state('')
   let dictationTranscript = $state('')
   let dictationFinishing = $state(false)
+  let speechInstallFacts = $state(null)
+  let speechInstallStatus = $state(null)
+  let speechInstallError = $state('')
+  let speechInstallPending = $state(false)
+  let speechInstallTimer
+  let speechInstallEpoch = 0
   let globalVoiceRegistered = false
   let globalVoiceError = $state(false)
   let globalVoiceShortcutValue = $state(holdToTalkShortcut())
@@ -286,12 +293,75 @@
       dictationFinishing = state.finishing
       dictationDraftSnapshot = state.draftSnapshot
       dictationTranscript = state.transcript
+      if (state.status.state === 'modelNotInstalled') void openSpeechInstall()
     },
     onError: (message) => { dictationError = message },
     onInactive: () => voiceGesture.inactive(),
     onCancel: () => voiceGesture.cancel(),
     onFocus: () => tick().then(() => composer?.focus()),
   })
+
+  function stopSpeechInstallPolling() {
+    clearTimeout(speechInstallTimer)
+    speechInstallTimer = undefined
+  }
+
+  async function readSpeechInstallStatus(epoch) {
+    try {
+      const next = await tauri.invoke('parakeet_install_status')
+      if (destroyed || epoch !== speechInstallEpoch) return
+      speechInstallStatus = next
+      if (next.state === 'installing') {
+        speechInstallTimer = setTimeout(() => readSpeechInstallStatus(epoch), 250)
+      }
+    } catch (_) {
+      if (destroyed || epoch !== speechInstallEpoch) return
+      speechInstallError = 'The speech model install state could not be checked. Try again.'
+      speechInstallStatus = { state: 'failed' }
+    }
+  }
+
+  async function openSpeechInstall() {
+    if (speechInstallFacts || speechInstallPending) return
+    speechInstallPending = true
+    speechInstallError = ''
+    try {
+      const facts = await tauri.invoke('parakeet_install_facts')
+      const status = await tauri.invoke('parakeet_install_status')
+      if (destroyed) return
+      speechInstallFacts = facts
+      speechInstallStatus = status
+      if (status.state === 'installing') {
+        const epoch = ++speechInstallEpoch
+        speechInstallTimer = setTimeout(() => readSpeechInstallStatus(epoch), 250)
+      }
+    } catch (_) {
+      if (destroyed) return
+      speechInstallError = 'The speech model install details could not be loaded. Try again.'
+    } finally {
+      if (!destroyed) speechInstallPending = false
+    }
+  }
+
+  async function startSpeechInstall() {
+    if (speechInstallPending || speechInstallStatus?.state === 'installing') return
+    stopSpeechInstallPolling()
+    const epoch = ++speechInstallEpoch
+    speechInstallPending = true
+    speechInstallError = ''
+    try {
+      const next = await tauri.invoke('parakeet_install_start')
+      if (destroyed || epoch !== speechInstallEpoch) return
+      speechInstallStatus = next
+      if (next.state === 'installing') await readSpeechInstallStatus(epoch)
+    } catch (_) {
+      if (destroyed || epoch !== speechInstallEpoch) return
+      speechInstallError = 'The speech model install could not start. Try again.'
+      speechInstallStatus = { state: 'failed' }
+    } finally {
+      if (!destroyed && epoch === speechInstallEpoch) speechInstallPending = false
+    }
+  }
 
   function dictationBusy() {
     // Establish Svelte dependencies for the controller state read below.
@@ -602,6 +672,8 @@
       })
     return () => {
       destroyed = true
+      speechInstallEpoch += 1
+      stopSpeechInstallPolling()
       dictationController.cleanup()
       chatController.cleanup()
       entitlementToast.cleanup()
@@ -888,7 +960,29 @@
               {:else if !active}<button class="primary" disabled={!draft.trim() || dictationBusy() || threadSwitching} onclick={() => chatController.send()}>Send</button>{/if}
             </div>
           </div>
-          {#if dictationError}<div class="dictation-error" role="alert">{dictationError}</div>{/if}
+          {#if dictation.state === 'modelNotInstalled'}
+            <section class="speech-install-card" aria-labelledby="speech-install-title">
+              <strong id="speech-install-title">Speech model install</strong>
+              {#if speechInstallFacts}
+                <dl>
+                  <div><dt>Download</dt><dd>{formatBytes(speechInstallFacts.totalDownloadBytes)}</dd></div>
+                  <div><dt>Source</dt><dd>{speechInstallFacts.sourceRepository}</dd></div>
+                  <div><dt>Speech model license</dt><dd>{speechInstallFacts.speechModelLicense}</dd></div>
+                  <div><dt>Voice activity model license</dt><dd>{speechInstallFacts.voiceActivityModelLicense}</dd></div>
+                  <div><dt>Free disk required</dt><dd>{formatBytes(speechInstallFacts.requiredFreeBytes)}</dd></div>
+                </dl>
+                {#if speechInstallStatus}<p role="status">{installStateWords(speechInstallStatus.state)}</p>{/if}
+                {#if speechInstallStatus?.state === 'notInstalled' || speechInstallStatus?.state === 'cancelled' || speechInstallStatus?.state === 'failed'}
+                  <button type="button" disabled={speechInstallPending} onclick={startSpeechInstall}>Install</button>
+                {/if}
+              {:else if speechInstallPending}
+                <p role="status">Loading install details.</p>
+              {:else}
+                <button type="button" onclick={openSpeechInstall}>Try again</button>
+              {/if}
+              {#if speechInstallError}<p class="speech-install-error" role="alert">{speechInstallError}</p>{/if}
+            </section>
+          {:else if dictationError}<div class="dictation-error" role="alert">{dictationError}</div>{/if}
           {#if globalVoiceError}<div class="dictation-error" role="alert">The system-wide voice shortcut is unavailable. Voice remains available from the button.</div>{/if}
         </div>
         {#if entitlementToastVisible}
@@ -1192,6 +1286,15 @@
   .capture-meter i:nth-child(2), .capture-meter i:nth-child(4) { height: 10px; animation-delay: -300ms; }
   .capture-meter i:nth-child(3) { height: 14px; animation-delay: -600ms; }
   .dictation-error { margin-top: 7px; color: var(--muted); font: var(--text-12) var(--font-mono); }
+  .speech-install-card { margin-top: 9px; padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--surface); color: var(--ink); font: var(--text-12) var(--font-mono); }
+  .speech-install-card strong { font-weight: 600; }
+  .speech-install-card dl { margin: 7px 0; }
+  .speech-install-card dl div { display: grid; grid-template-columns: minmax(130px, 1fr) minmax(0, 2fr); gap: 12px; }
+  .speech-install-card dt { color: var(--muted); }
+  .speech-install-card dd { margin: 0; overflow-wrap: anywhere; }
+  .speech-install-card p { margin: 7px 0 0; color: var(--muted); }
+  .speech-install-card button { margin-top: 7px; padding: 4px 8px; font: inherit; }
+  .speech-install-card .speech-install-error { color: var(--oxide); }
   .follow-up { color: var(--muted); font-family: var(--font-mono); }
   @media (max-width: 1100px) {
     .workspace.artifact-open .composer-row { flex-wrap: wrap; gap: 8px; }
