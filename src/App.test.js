@@ -2429,6 +2429,38 @@ describe('local file selection', () => {
     expect(screen.getByText('brief.txt')).toBeInTheDocument()
   })
 
+  it.each([
+    ['a pinned transcript', 200, 300, 200],
+    ['a transcript scrolled up', 75, 75, 75],
+  ])('restores %s after files are added and removed', async (_case, initial, withFiles, withoutFiles) => {
+    dialogResult = ['/private/contracts/lease.pdf', '/private/notes.txt']
+    render(App)
+    const thread = await screen.findByRole('region', { name: /Transcript:/ })
+    Object.defineProperties(thread, {
+      scrollHeight: { configurable: true, value: 600 },
+      clientHeight: {
+        configurable: true,
+        get: () => screen.queryByRole('list', { name: 'Selected files' }) ? 300 : 400,
+      },
+    })
+    thread.scrollTop = 200
+    await fireEvent.scroll(thread)
+    if (initial !== 200) {
+      thread.scrollTop = initial
+      await fireEvent.scroll(thread)
+    }
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Add files' }))
+    await screen.findByRole('list', { name: 'Selected files' })
+    await waitFor(() => expect(thread.scrollTop).toBe(withFiles))
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Remove lease.pdf' }))
+    await waitFor(() => expect(thread.scrollTop).toBe(withFiles))
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Remove notes.txt' }))
+    await waitFor(() => expect(thread.scrollTop).toBe(withoutFiles))
+  })
+
   it('retains draft and selection when local ingestion fails', async () => {
     invoke.mockImplementation(async (command, payload) => {
       if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
