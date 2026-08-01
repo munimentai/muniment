@@ -352,7 +352,12 @@ describe('workspace composer entry', () => {
 
     expect(composer).toHaveFocus()
     expect(send).toHaveClass('primary')
-    expect(send).toBeDisabled()
+    expect(send).toHaveAttribute('aria-disabled', 'true')
+    expect(send).not.toBeDisabled()
+    const disabledSendRule = appRules.get('.composer-actions .primary[aria-disabled="true"]')
+    expect(disabledSendRule).toMatch(/background:\s*var\(--faint\)/)
+    expect(disabledSendRule).toMatch(/border-color:\s*var\(--border\)/)
+    expect(disabledSendRule).toMatch(/color:\s*var\(--muted\)/)
 
     const railToggle = screen.getByRole('button', { name: 'Open artifact rail' })
     railToggle.focus()
@@ -2155,7 +2160,7 @@ describe('voice dictation', () => {
     await fireEvent.click(voice)
 
     const send = screen.getByRole('button', { name: 'Send' })
-    expect(send).toBeDisabled()
+    expect(send).toHaveAttribute('aria-disabled', 'true')
     expect(voice).toBeEnabled()
     await fireEvent.click(send)
     expect(invoke).not.toHaveBeenCalledWith('chat_submit', expect.anything())
@@ -2163,7 +2168,7 @@ describe('voice dictation', () => {
     await stopClickCapture(voice)
     expect(invoke).toHaveBeenCalledWith('dictation_stop')
     expect(voice).toHaveAttribute('aria-pressed', 'false')
-    await waitFor(() => expect(send).toBeEnabled())
+    await waitFor(() => expect(send).not.toHaveAttribute('aria-disabled'))
   })
 
   it('renders a terminal failed message and becomes retryable', async () => {
@@ -2585,7 +2590,7 @@ describe('interrupted reply resume', () => {
     expect(screen.getByText('Partial answer')).toBeInTheDocument()
     expect(screen.getByPlaceholderText('Resuming interrupted reply…')).toBeDisabled()
     expect(screen.queryByRole('button', { name: 'Queue follow-up' })).not.toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: 'Send' })).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Send' })).toHaveAttribute('aria-disabled', 'true')
     expect(screen.getByRole('button', { name: 'Resuming…' })).toBeDisabled()
     expect(invoke.mock.calls.filter(([command]) => command === 'chat_resume')).toEqual([
       ['chat_resume', { runId: 'run-interrupted' }],
@@ -3652,6 +3657,20 @@ describe('active run composer queue', () => {
     await fireEvent.click(send)
 
     expectQueuePayload({ runId: 'run-7', delivery: 'steer', message: 'Focus on the risks' })
+  })
+
+  it('keeps focus on the same Send button when a run starts', async () => {
+    render(App)
+    const composer = await screen.findByPlaceholderText('Ask anything')
+    await fireEvent.input(composer, { target: { value: 'Initial prompt' } })
+    const send = screen.getByRole('button', { name: 'Send' })
+    send.focus()
+
+    await fireEvent.click(send)
+
+    expect(document.activeElement).toBe(send)
+    expect(screen.getByRole('button', { name: 'Send' })).toBe(send)
+    expect(send).toHaveAttribute('aria-disabled', 'true')
   })
 
   it('shows a queue rejection and preserves the draft', async () => {

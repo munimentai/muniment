@@ -725,6 +725,15 @@
       action === 'submit' ? chatController.send() : chatController.queue('steer')
     }
   }
+
+  function sendDisabled() {
+    return !draft.trim() || active?.phase === 'resuming' || active?.id === 'pending' || (!active && (dictationBusy() || threadSwitching))
+  }
+
+  function send() {
+    if (sendDisabled()) return
+    active ? chatController.queue('steer') : chatController.send()
+  }
 </script>
 
 <main class:onboarding-active={tauri && onboarding.name !== 'complete'}>
@@ -956,8 +965,8 @@
               {:else if active && active.id !== 'pending'}
                 <button class="quiet follow-up" disabled={!draft.trim()} onclick={() => chatController.queue('followUp')}>Queue follow-up</button>
                 <button onclick={() => chatController.cancel()}>Stop</button>
-                <button class="primary" disabled={!draft.trim()} onclick={() => chatController.queue('steer')}>Send</button>
-              {:else if !active}<button class="primary" disabled={!draft.trim() || dictationBusy() || threadSwitching} onclick={() => chatController.send()}>Send</button>{/if}
+              {/if}
+              <button class="primary" aria-disabled={sendDisabled() ? 'true' : undefined} onclick={send}>Send</button>
             </div>
           </div>
           {#if dictation.state === 'modelNotInstalled'}
@@ -1088,7 +1097,7 @@
   }
 
   .primary { background: var(--ink); border-color: var(--ink); color: var(--paper); }
-  .composer-actions .primary:disabled { background: var(--faint); border-color: var(--border); color: var(--muted); }
+  .composer-actions .primary[aria-disabled="true"] { background: var(--faint); border-color: var(--border); color: var(--muted); }
 
   button {
     font: inherit;
