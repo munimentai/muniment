@@ -2,7 +2,7 @@
 
 use super::{
     ledger::{Ledger, LedgerError, Projection as LedgerProjection},
-    scan_with_workspace, Match,
+    scan_with_workspace_for_projector, Match,
 };
 use std::{
     collections::BTreeMap,
@@ -109,7 +109,7 @@ impl<C> Projector<C> {
     where
         C: FnMut(&Path) -> Result<PathBuf, E>,
     {
-        let scan = scan_with_workspace(
+        let scan = scan_with_workspace_for_projector(
             &self.content,
             complete,
             &self.approved_workspace,
