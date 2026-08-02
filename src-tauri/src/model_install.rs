@@ -22,7 +22,10 @@ use tauri::State;
 #[serde(rename_all = "camelCase", tag = "state")]
 pub enum ParakeetInstallStatus {
     NotInstalled,
-    Installing,
+    Installing {
+        completed_bytes: u64,
+        total_bytes: u64,
+    },
     Installed,
     Cancelled,
     Failed {
@@ -76,8 +79,9 @@ struct InstallFailure {
     cancelled: bool,
 }
 
-type ParakeetRunner =
-    dyn Fn(&Path, &NativeInstallCancellation) -> Result<(), InstallFailure> + Send + Sync;
+type ParakeetRunner = dyn Fn(&Path, &NativeInstallCancellation, &mut dyn FnMut(u64, u64)) -> Result<(), InstallFailure>
+    + Send
+    + Sync;
 
 struct ParakeetActiveInstall {
     generation: u64,
@@ -172,14 +176,21 @@ impl ParakeetInstallState {
             });
             inner.terminal_result = false;
             inner.completed_success = false;
-            inner.status = ParakeetInstallStatus::Installing;
+            inner.status = ParakeetInstallStatus::Installing {
+                completed_bytes: 0,
+                total_bytes: 0,
+            };
             (generation, cancellation)
         };
         let root = self.root.clone();
         let inner = Arc::clone(&self.inner);
         let runner = Arc::clone(&self.runner);
         tauri::async_runtime::spawn_blocking(move || {
-            let result = runner(&root, &cancellation);
+            let progress_inner = Arc::clone(&inner);
+            let mut progress = move |completed_bytes, total_bytes| {
+                update_progress(&progress_inner, generation, completed_bytes, total_bytes);
+            };
+            let result = runner(&root, &cancellation, &mut progress);
             let mut state = inner.lock().unwrap_or_else(|error| error.into_inner());
             if !matches!(state.active, Some(ref active) if active.generation == generation) {
                 return;
@@ -201,7 +212,10 @@ impl ParakeetInstallState {
             state.status = status;
             state.terminal_result = terminal_result;
         });
-        ParakeetInstallStatus::Installing
+        ParakeetInstallStatus::Installing {
+            completed_bytes: 0,
+            total_bytes: 0,
+        }
     }
 
     fn cancel(&self) -> ParakeetInstallStatus {
@@ -211,6 +225,32 @@ impl ParakeetInstallState {
         }
         inner.status.clone()
     }
+}
+
+fn update_progress(
+    inner: &Arc<Mutex<ParakeetInner>>,
+    generation: u64,
+    completed_bytes: u64,
+    total_bytes: u64,
+) {
+    let mut state = inner.lock().unwrap_or_else(|error| error.into_inner());
+    if !matches!(state.active, Some(ref active) if active.generation == generation) {
+        return;
+    }
+    let ParakeetInstallStatus::Installing {
+        completed_bytes: current_completed,
+        total_bytes: current_total,
+    } = &state.status
+    else {
+        return;
+    };
+    let current_completed = *current_completed;
+    let current_total = *current_total;
+    let total_bytes = total_bytes.max(current_total).max(current_completed);
+    state.status = ParakeetInstallStatus::Installing {
+        completed_bytes: completed_bytes.max(current_completed).min(total_bytes),
+        total_bytes,
+    };
 }
 
 pub(crate) fn parakeet_lifecycle(root: &Path) -> AsrRevisionLifecycle {
@@ -242,12 +282,15 @@ fn inspect_parakeet(root: &Path) -> ParakeetInstallStatus {
 fn run_native_parakeet_install(
     root: &Path,
     cancellation: &NativeInstallCancellation,
+    progress: &mut dyn FnMut(u64, u64),
 ) -> Result<(), InstallFailure> {
     let staging = root.join("staging");
     let mut transport = NativeModelAcquisitionTransport::new();
     let clock = NativeAcquisitionClock::new();
     let mut retry = NativeRetryWait;
-    let mut progress = |_, _| {};
+    let mut report_progress = |completed_bytes, total_bytes| {
+        progress(completed_bytes, total_bytes);
+    };
     let mut lock = NativeInstallLock::new(root.join("install.lock"));
     let mut space = NativeAvailableSpace::new(root);
     install_parakeet_revision(
@@ -265,7 +308,7 @@ fn run_native_parakeet_install(
         &mut space,
         &parakeet_lifecycle(root),
         &NativeAsrLifecycleBoundary,
-        &mut progress,
+        &mut report_progress,
     )
     .map(|_| ())
     .map_err(redact_parakeet_failure)
@@ -335,6 +378,56 @@ pub fn parakeet_install_cancel(state: State<'_, ParakeetInstallState>) -> Parake
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn progress_inner(generation: u64) -> Arc<Mutex<ParakeetInner>> {
+        Arc::new(Mutex::new(ParakeetInner {
+            generation,
+            state_version: 0,
+            status: ParakeetInstallStatus::Installing {
+                completed_bytes: 0,
+                total_bytes: 0,
+            },
+            terminal_result: false,
+            completed_success: false,
+            active: Some(ParakeetActiveInstall {
+                generation,
+                cancellation: NativeInstallCancellation::new(),
+            }),
+        }))
+    }
+
+    #[test]
+    fn active_install_progress_is_monotonic_and_bounded() {
+        let inner = progress_inner(2);
+
+        update_progress(&inner, 2, 40, 100);
+        update_progress(&inner, 2, 20, 80);
+        update_progress(&inner, 2, 140, 100);
+
+        assert_eq!(
+            inner.lock().unwrap().status,
+            ParakeetInstallStatus::Installing {
+                completed_bytes: 100,
+                total_bytes: 100,
+            }
+        );
+    }
+
+    #[test]
+    fn stale_install_progress_cannot_change_the_active_generation() {
+        let inner = progress_inner(3);
+
+        update_progress(&inner, 3, 10, 100);
+        update_progress(&inner, 2, 90, 100);
+
+        assert_eq!(
+            inner.lock().unwrap().status,
+            ParakeetInstallStatus::Installing {
+                completed_bytes: 10,
+                total_bytes: 100,
+            }
+        );
+    }
 
     #[test]
     fn install_facts_match_the_pinned_manifest() {

@@ -2211,11 +2211,13 @@ describe('voice dictation', () => {
         speechModelLicense: 'CC BY 4.0',
         voiceActivityModelLicense: 'MIT',
       }
-      if (command === 'parakeet_install_start') return { state: 'installing' }
+      if (command === 'parakeet_install_start') return { state: 'installing', completedBytes: 0, totalBytes: 672_384_307 }
       if (command === 'parakeet_install_status') {
         installStatusCalls += 1
         if (installStatusCalls === 1) return { state: 'notInstalled' }
-        return { state: installStatusCalls === 2 ? 'installing' : 'installed' }
+        return installStatusCalls === 2
+          ? { state: 'installing', completedBytes: 134_476_861, totalBytes: 672_384_307 }
+          : { state: 'installed' }
       }
       throw new Error(`unexpected command: ${command}`)
     })
@@ -2233,6 +2235,10 @@ describe('voice dictation', () => {
 
     await fireEvent.click(within(card).getByRole('button', { name: 'Install' }))
     expect(within(card).getByRole('status')).toHaveTextContent('Installing.')
+    const progress = within(card).getByRole('progressbar', { name: 'Speech model download progress' })
+    expect(progress).toHaveAttribute('value', '134476861')
+    expect(progress).toHaveAttribute('max', '672384307')
+    expect(card).toHaveTextContent('128 MB / 641 MB')
     await waitFor(() => expect(within(card).getByRole('status')).toHaveTextContent('Installed. Press Voice again to dictate.'))
     expect(invoke).toHaveBeenCalledWith('parakeet_install_start')
     expect(invoke.mock.calls.filter(([command]) => command === 'parakeet_install_status')).toHaveLength(3)
