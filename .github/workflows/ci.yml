@@ -128,7 +128,10 @@ jobs:
 
       - name: Frontend unit tests
         if: steps.changes.outputs.desktop == 'true' || github.event_name != 'pull_request'
-        run: npm ci --no-audit --no-fund && npm test
+        run: |
+          npm ci --no-audit --no-fund
+          npx playwright install --with-deps chromium
+          npm test
 
       - name: UI copy law
         if: steps.changes.outputs.desktop == 'true' || github.event_name != 'pull_request'
