@@ -306,18 +306,21 @@
     speechInstallTimer = undefined
   }
 
-  async function readSpeechInstallStatus(epoch) {
+  async function readSpeechInstallStatus(epoch, pendingUntilTerminal = false) {
     try {
       const next = await tauri.invoke('parakeet_install_status')
       if (destroyed || epoch !== speechInstallEpoch) return
       speechInstallStatus = next
       if (next.state === 'installing') {
-        speechInstallTimer = setTimeout(() => readSpeechInstallStatus(epoch), 250)
+        speechInstallTimer = setTimeout(() => readSpeechInstallStatus(epoch, pendingUntilTerminal), 250)
+      } else if (pendingUntilTerminal) {
+        speechInstallPending = false
       }
     } catch (_) {
       if (destroyed || epoch !== speechInstallEpoch) return
       speechInstallError = 'The speech model install state could not be checked. Try again.'
       speechInstallStatus = { state: 'failed' }
+      if (pendingUntilTerminal) speechInstallPending = false
     }
   }
 
@@ -358,6 +361,31 @@
       if (destroyed || epoch !== speechInstallEpoch) return
       speechInstallError = 'The speech model install could not start. Try again.'
       speechInstallStatus = { state: 'failed' }
+    } finally {
+      if (!destroyed && epoch === speechInstallEpoch) speechInstallPending = false
+    }
+  }
+
+  async function cancelSpeechInstall() {
+    if (speechInstallPending || speechInstallStatus?.state !== 'installing') return
+    stopSpeechInstallPolling()
+    const epoch = ++speechInstallEpoch
+    speechInstallPending = true
+    speechInstallError = ''
+    try {
+      const next = await tauri.invoke('parakeet_install_cancel')
+      if (destroyed || epoch !== speechInstallEpoch) return
+      speechInstallStatus = next
+      if (next.state === 'installing') {
+        const pollingEpoch = ++speechInstallEpoch
+        await readSpeechInstallStatus(pollingEpoch, true)
+      }
+    } catch (_) {
+      if (destroyed || epoch !== speechInstallEpoch) return
+      speechInstallError = 'The speech model install could not be cancelled. Try again.'
+      speechInstallPending = false
+      const pollingEpoch = ++speechInstallEpoch
+      await readSpeechInstallStatus(pollingEpoch)
     } finally {
       if (!destroyed && epoch === speechInstallEpoch) speechInstallPending = false
     }
@@ -1002,6 +1030,8 @@
                 {#if speechInstallStatus}<p role="status">{installStateWords(speechInstallStatus.state)}</p>{/if}
                 {#if speechInstallStatus?.state === 'notInstalled' || speechInstallStatus?.state === 'cancelled' || speechInstallStatus?.state === 'failed'}
                   <button type="button" disabled={speechInstallPending} onclick={startSpeechInstall}>Install</button>
+                {:else if speechInstallStatus?.state === 'installing'}
+                  <button type="button" disabled={speechInstallPending} onclick={cancelSpeechInstall}>Cancel install</button>
                 {/if}
               {:else if speechInstallPending}
                 <p role="status">Loading install details.</p>
