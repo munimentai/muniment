@@ -150,6 +150,13 @@ impl super::RunJournal {
             std::fs::canonicalize(path)
         });
         let mut released = String::new();
+        let terminal = events.iter().any(|event| {
+            event.run_seq <= snapshot_seq
+                && matches!(
+                    event.event_type.as_str(),
+                    "run.completed" | "run.cancelled" | "run.failed"
+                )
+        });
         for event in events.iter().filter(|event| {
             event.run_seq <= snapshot_seq && event.event_type == "model.stream.delta"
         }) {
@@ -160,24 +167,25 @@ impl super::RunJournal {
                 .get("text")
                 .and_then(Value::as_str)
                 .unwrap_or_default();
-            for projection in projector
-                .push(event.run_seq, text, payload_json)
+            projector
+                .push_deferred(event.run_seq, text, payload_json)
                 .map_err(|_| {
                     super::RunEventPageError::Journal(super::JournalError::Corrupt(
                         "assistant text projection failed".into(),
                     ))
-                })?
-            {
-                if let Some(text) = projection.text {
-                    released.push_str(&text);
-                }
-            }
+                })?;
         }
-        for projection in projector.finish::<std::io::Error>().map_err(|_| {
+        let projections = if terminal {
+            projector.finish::<std::io::Error>()
+        } else {
+            projector.flush::<std::io::Error>()
+        }
+        .map_err(|_| {
             super::RunEventPageError::Journal(super::JournalError::Corrupt(
                 "assistant text projection failed".into(),
             ))
-        })? {
+        })?;
+        for projection in projections {
             if let Some(text) = projection.text {
                 released.push_str(&text);
             }

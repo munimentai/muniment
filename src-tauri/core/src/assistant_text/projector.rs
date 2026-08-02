@@ -7,7 +7,7 @@ use super::{
 use crate::journal::content_disclosure::{read_content_disclosure, ContentDisclosure};
 use serde_json::Value;
 use std::{
-    collections::BTreeMap,
+    collections::HashMap,
     ops::Range,
     path::{Path, PathBuf},
 };
@@ -42,7 +42,7 @@ pub struct Projector<C> {
     content_start: u64,
     stream_end: u64,
     ledger: Ledger,
-    released: BTreeMap<u64, u8>,
+    released: HashMap<u64, u8>,
     withhold_from: Option<u64>,
     finished: bool,
 }
@@ -56,7 +56,7 @@ impl<C> Projector<C> {
             content_start: 0,
             stream_end: 0,
             ledger: Ledger::new(),
-            released: BTreeMap::new(),
+            released: HashMap::new(),
             withhold_from: None,
             finished: false,
         }
@@ -101,6 +101,45 @@ impl<C> Projector<C> {
         }
 
         self.content.push_str(text);
+        self.scan_and_resolve(false)
+    }
+
+    /// Appends one committed delta without scanning the accumulated stream.
+    pub fn push_deferred(
+        &mut self,
+        run_seq: u64,
+        text: &str,
+        payload: &Value,
+    ) -> Result<(), ProjectorError> {
+        if self.finished {
+            return Err(ProjectorError::Finished);
+        }
+        if matches!(
+            read_content_disclosure(payload),
+            ContentDisclosure::Withheld(_)
+        ) {
+            self.ledger.push_withheld(run_seq);
+            return Ok(());
+        }
+        let byte_len =
+            u64::try_from(text.len()).map_err(|_| ProjectorError::InvalidStreamOffset)?;
+        self.ledger.push(run_seq, byte_len)?;
+        self.stream_end = self
+            .stream_end
+            .checked_add(byte_len)
+            .ok_or(ProjectorError::InvalidStreamOffset)?;
+        self.content.push_str(text);
+        Ok(())
+    }
+
+    /// Resolves the safe prefix while retaining an unresolved suffix.
+    pub fn flush<E>(&mut self) -> Result<Vec<Projection>, ProjectorError>
+    where
+        C: FnMut(&Path) -> Result<PathBuf, E>,
+    {
+        if self.finished {
+            return Err(ProjectorError::Finished);
+        }
         self.scan_and_resolve(false)
     }
 
