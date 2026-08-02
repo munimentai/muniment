@@ -41,6 +41,7 @@ pub struct Projector<C> {
     approved_workspace: PathBuf,
     canonicalize: C,
     content: String,
+    content_candidate_free: bool,
     content_start: u64,
     stream_end: u64,
     ledger: Ledger,
@@ -52,6 +53,7 @@ pub struct Projector<C> {
 struct ReleasedSpan {
     start: u64,
     bytes: Vec<u8>,
+    offset: usize,
 }
 
 impl<C> Projector<C> {
@@ -60,6 +62,7 @@ impl<C> Projector<C> {
             approved_workspace: approved_workspace.into(),
             canonicalize,
             content: String::new(),
+            content_candidate_free: true,
             content_start: 0,
             stream_end: 0,
             ledger: Ledger::new(),
@@ -107,7 +110,7 @@ impl<C> Projector<C> {
             );
         }
 
-        if candidate_free(&self.content)
+        if self.content_candidate_free
             && candidate_free(text)
             && !(self.content.ends_with('\\') && text.starts_with('\\'))
         {
@@ -180,6 +183,7 @@ impl<C> Projector<C> {
             withheld.push(start..end);
             self.remember_released(local_start, &scan.matches, false);
             self.content.clear();
+            self.content_candidate_free = true;
             self.content_start = end;
             return self.resolve(end, &withheld);
         }
@@ -208,6 +212,7 @@ impl<C> Projector<C> {
         self.remember_released(boundary, &scan.matches, complete);
         let projections = self.resolve(global_boundary, &final_matches)?;
         self.content.drain(..boundary);
+        self.content_candidate_free = candidate_free(&self.content);
         self.content_start = global_boundary;
         Ok(projections)
     }
@@ -236,7 +241,7 @@ impl<C> Projector<C> {
         let start = self.content_start + range.start as u64;
         let bytes = &self.content.as_bytes()[range];
         if let Some(last) = self.released.back_mut() {
-            if last.start + last.bytes.len() as u64 == start {
+            if last.start + (last.bytes.len() - last.offset) as u64 == start {
                 last.bytes.extend_from_slice(bytes);
                 return;
             }
@@ -244,6 +249,7 @@ impl<C> Projector<C> {
         self.released.push_back(ReleasedSpan {
             start,
             bytes: bytes.to_vec(),
+            offset: 0,
         });
     }
 
@@ -275,7 +281,8 @@ impl<C> Projector<C> {
 
     fn take_released(&mut self, range: Range<u64>, output: &mut Vec<u8>) {
         while let Some(mut span) = self.released.pop_front() {
-            let end = span.start + span.bytes.len() as u64;
+            let remaining_len = span.bytes.len() - span.offset;
+            let end = span.start + remaining_len as u64;
             if end <= range.start {
                 continue;
             }
@@ -285,11 +292,11 @@ impl<C> Projector<C> {
             }
             let start = usize::try_from(range.start.saturating_sub(span.start)).unwrap();
             let take_end =
-                usize::try_from((range.end - span.start).min(span.bytes.len() as u64)).unwrap();
-            output.extend_from_slice(&span.bytes[start..take_end]);
-            if take_end < span.bytes.len() {
-                span.bytes.drain(..take_end);
+                usize::try_from((range.end - span.start).min(remaining_len as u64)).unwrap();
+            output.extend_from_slice(&span.bytes[span.offset + start..span.offset + take_end]);
+            if take_end < remaining_len {
                 span.start += take_end as u64;
+                span.offset += take_end;
                 self.released.push_front(span);
                 break;
             }

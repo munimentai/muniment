@@ -736,21 +736,22 @@ impl ThreadListService for RunJournal {
         expanded.truncate(usize::from(request.limit));
         let mut entries = Vec::new();
         let mut emitted_position = None;
+        let mut page_length = serde_json::to_vec(&ThreadOpenPage {
+            thread_id: request.thread_id.clone(),
+            entries: Vec::new(),
+            next_cursor: Some("x".repeat(MAX_CURSOR_LENGTH)),
+        })
+        .map_err(|_| ProtocolError::persistence_failed())?
+        .len();
         for (position, entry) in expanded.iter() {
-            let mut candidate = entries.clone();
-            candidate.push(entry.clone());
-            let candidate_page = ThreadOpenPage {
-                thread_id: request.thread_id.clone(),
-                entries: candidate,
-                next_cursor: Some("x".repeat(MAX_CURSOR_LENGTH)),
-            };
-            if serde_json::to_vec(&candidate_page)
+            let entry_length = serde_json::to_vec(entry)
                 .map_err(|_| ProtocolError::persistence_failed())?
-                .len()
-                > MAX_RESPONSE_BODY_LENGTH
-            {
+                .len();
+            let separator_length = usize::from(!entries.is_empty());
+            if page_length + separator_length + entry_length > MAX_RESPONSE_BODY_LENGTH {
                 break;
             }
+            page_length += separator_length + entry_length;
             entries.push(entry.clone());
             emitted_position = Some(*position);
         }
