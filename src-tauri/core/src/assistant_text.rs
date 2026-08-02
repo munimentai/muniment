@@ -481,13 +481,20 @@ mod tests {
     }
 
     #[test]
-    fn assignment_labels_ignore_ascii_case() {
+    fn assignment_labels_ignore_mixed_ascii_case() {
         for label in ASSIGNMENT_LABELS {
-            let uppercase = label.to_ascii_uppercase();
-            assert_eq!(
-                assignment_label_end(&uppercase, 0),
-                Some(uppercase.len())
-            );
+            let mixed_case: Vec<u8> = label
+                .iter()
+                .enumerate()
+                .map(|(index, byte)| {
+                    if index % 2 == 0 {
+                        byte.to_ascii_uppercase()
+                    } else {
+                        byte.to_ascii_lowercase()
+                    }
+                })
+                .collect();
+            assert_eq!(assignment_label_end(&mixed_case, 0), Some(mixed_case.len()));
         }
     }
 
@@ -503,7 +510,7 @@ mod tests {
             assert_eq!(assignment_label_end(&invalid_after, 0), None);
         }
 
-        for identifier in [b'a', b'Z', b'0', b'_', b'-'] {
+        for identifier in *b"aZ0_-" {
             let invalid_before = [identifier, b'k', b'e', b'y'];
             assert_eq!(assignment_label_end(&invalid_before, 1), None);
 
