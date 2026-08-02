@@ -68,27 +68,48 @@ effect. The core never reuses approval for regenerated content.
 
 The core stores the complete canonical `CodeDiff` bytes in the existing CAS.
 It uses media type `application/vnd.muniment.code-diff.v1+json`. The
-`code.diff.proposed` journal event uses `payload_cas` for that object.
-The event also stores the write-plan CAS hash as a typed reference. The write
-plan stays internal to the core and does not copy or embed `CodeDiff` fields.
+`code.diff.proposed` version 1 event uses `payload_cas` for that object. A
+separate `code.write-plan.staged` version 1 event uses `payload_cas` for the
+write plan and media type `application/vnd.muniment.write-plan.v1+json`.
 
-The event's envelope links the proposal to the effect through
-`correlation_id`. The following `permission.requested` payload stores the five
-approval fields named above. `permission.resolved` repeats them with the
-decision and actor.
+Both envelopes use the effect identifier as `correlation_id`. The diff event
+uses the plan event's `event_id` as `causation_id`. The core appends the plan
+event first and the diff event second in one SQLite transaction. It publishes
+the proposal only after that transaction commits. An orphaned CAS object has
+no journal authority and follows existing garbage collection.
 
-After a restart, the reducer restores a pending gate only when both referenced
-CAS objects pass hash verification. Approval then resumes with the same stale
-check and verified write plan. A resolved approval with no completed effect
-does not write automatically after restart. The coordinator resumes it only
-through the normal effect recovery policy and repeats every verification.
+This two-event structure keeps ADR 0002's payload XOR unchanged. Existing CAS
+scanners see both objects through their events' standard `payload_cas` fields.
+Retention preserves both events and objects while the proposal remains live.
+Export includes both ordered envelopes and both objects. Deletion processes
+both references through the existing deletion ledger and removes each object
+only when no retained event references it.
+
+The event versions define the link semantics. A future incompatible link or
+payload change requires a new event version and an in-memory upcaster. Readers
+that do not know either event type skip its domain projection under ADR 0002.
+They still retain, export, and delete its `payload_cas` through generic envelope
+scanning. They must not approve or execute an unknown proposal version.
+
+The following `permission.requested` payload stores the five approval fields
+named above. `permission.resolved` repeats them with the decision and actor.
+
+After a restart, the reducer follows the diff event's `causation_id` to the
+plan event. It requires the same `run_id` and `correlation_id`, the expected
+event types and versions, and the hashes recorded by the permission event. It
+then loads each object only through that event's `payload_cas` and verifies its
+hash, media type, and byte length. A missing, duplicate, reversed, or mismatched
+pair fails closed. Approval then resumes with the same stale check and verified
+write plan. A resolved approval with no completed effect does not write
+automatically after restart. The coordinator resumes it only through the
+normal effect recovery policy and repeats every verification.
 
 Reducers expose a diff only after CAS hash verification and generated-codec
 validation. Live approval and replay use the same journal projection. Replay
 never asks Pi to recreate a diff and never rereads the workspace for display.
 
-The generated Rust type and codec are the only payload contract in this
-repository. Journal code stores their serialized bytes and typed references.
+The generated Rust type and codec are the only `CodeDiff` payload contract in
+this repository. Journal code stores its serialized bytes in `payload_cas`.
 It must not define a second `CodeDiff` struct, decoder, or field validator.
 
 A missing or corrupt diff object makes the diff unavailable. A missing or
@@ -142,9 +163,10 @@ operations in `src-tauri/core/src/sidecar/pi_chat.rs`. It adds production and
 limit tests in `src-tauri/core/src/code_diff.rs`. It defines CAS serialization
 and verification for the immutable plan in `src-tauri/core/src/write_plan.rs`.
 
-The slice exports that module from `src-tauri/core/src/lib.rs`. It adds typed
-journal references and replay validation in `src-tauri/core/src/journal/mod.rs`
-and `src-tauri/core/src/journal/reducer.rs`.
+The slice exports that module from `src-tauri/core/src/lib.rs`. It adds the two
+journal events, their atomic append, and replay validation in
+`src-tauri/core/src/journal/mod.rs` and
+`src-tauri/core/src/journal/reducer.rs`.
 
 The slice connects proposals, permission answers, and stale checks in
 `src-tauri/src/chat_coordinate.rs`. It pins the published generated Rust crate
