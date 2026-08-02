@@ -2273,6 +2273,72 @@ describe('voice dictation', () => {
     expect(within(card).getByRole('button', { name: 'Install' })).toBeEnabled()
   })
 
+  it('cancels an active speech model install and ignores stale status', async () => {
+    let resolveStatus
+    const staleStatus = new Promise((resolve) => { resolveStatus = resolve })
+    let statusCalls = 0
+    invoke.mockImplementation(async (command) => {
+      if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
+      if (command === 'chat_thread_open') return []
+      if (command === 'auth_entitlement_snapshot') return snapshot()
+      if (command === 'auth_devices') return []
+      if (command === 'dictation_start') return { state: 'modelNotInstalled', message: 'The speech model is not installed.' }
+      if (command === 'parakeet_install_facts') return {
+        sourceRepository: 'source', totalDownloadBytes: 1, requiredFreeBytes: 2,
+        speechModelLicense: 'CC BY 4.0', voiceActivityModelLicense: 'MIT',
+      }
+      if (command === 'parakeet_install_status') {
+        statusCalls += 1
+        return statusCalls === 1
+          ? { state: 'installing', completedBytes: 1, totalBytes: 2 }
+          : staleStatus
+      }
+      if (command === 'parakeet_install_cancel') return { state: 'cancelled' }
+      throw new Error(`unexpected command: ${command}`)
+    })
+    render(App)
+    await fireEvent.click(await screen.findByRole('button', { name: 'Voice' }))
+
+    const card = await screen.findByRole('region', { name: 'Speech model install' })
+    const cancel = await within(card).findByRole('button', { name: 'Cancel install' })
+    await waitFor(() => expect(statusCalls).toBe(2))
+    await fireEvent.click(cancel)
+    await fireEvent.click(cancel)
+
+    expect(invoke.mock.calls.filter(([command]) => command === 'parakeet_install_cancel')).toHaveLength(1)
+    expect(await within(card).findByRole('status')).toHaveTextContent('Cancelled.')
+    expect(within(card).getByRole('button', { name: 'Install' })).toBeEnabled()
+
+    resolveStatus({ state: 'installed' })
+    await Promise.resolve()
+    expect(within(card).getByRole('status')).toHaveTextContent('Cancelled.')
+  })
+
+  it('shows recovery help when speech model cancellation fails', async () => {
+    invoke.mockImplementation(async (command) => {
+      if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
+      if (command === 'chat_thread_open') return []
+      if (command === 'auth_entitlement_snapshot') return snapshot()
+      if (command === 'auth_devices') return []
+      if (command === 'dictation_start') return { state: 'modelNotInstalled', message: 'The speech model is not installed.' }
+      if (command === 'parakeet_install_facts') return {
+        sourceRepository: 'source', totalDownloadBytes: 1, requiredFreeBytes: 2,
+        speechModelLicense: 'CC BY 4.0', voiceActivityModelLicense: 'MIT',
+      }
+      if (command === 'parakeet_install_status') return { state: 'installing', completedBytes: 1, totalBytes: 2 }
+      if (command === 'parakeet_install_cancel') throw new Error('cancel failed')
+      throw new Error(`unexpected command: ${command}`)
+    })
+    render(App)
+    await fireEvent.click(await screen.findByRole('button', { name: 'Voice' }))
+
+    const card = await screen.findByRole('region', { name: 'Speech model install' })
+    await fireEvent.click(await within(card).findByRole('button', { name: 'Cancel install' }))
+
+    expect(await within(card).findByRole('alert')).toHaveTextContent('The speech model install could not be cancelled. Try again.')
+    expect(within(card).getByRole('button', { name: 'Cancel install' })).toBeEnabled()
+  })
+
   it('keeps capture active and stoppable when status IPC rejects', async () => {
     let statusCalls = 0
     invoke.mockImplementation(async (command) => {

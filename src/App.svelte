@@ -363,6 +363,24 @@
     }
   }
 
+  async function cancelSpeechInstall() {
+    if (speechInstallPending || speechInstallStatus?.state !== 'installing') return
+    stopSpeechInstallPolling()
+    const epoch = ++speechInstallEpoch
+    speechInstallPending = true
+    speechInstallError = ''
+    try {
+      const next = await tauri.invoke('parakeet_install_cancel')
+      if (destroyed || epoch !== speechInstallEpoch) return
+      speechInstallStatus = next
+    } catch (_) {
+      if (destroyed || epoch !== speechInstallEpoch) return
+      speechInstallError = 'The speech model install could not be cancelled. Try again.'
+    } finally {
+      if (!destroyed && epoch === speechInstallEpoch) speechInstallPending = false
+    }
+  }
+
   function dictationBusy() {
     // Establish Svelte dependencies for the controller state read below.
     dictationCommandPending
@@ -1002,6 +1020,8 @@
                 {#if speechInstallStatus}<p role="status">{installStateWords(speechInstallStatus.state)}</p>{/if}
                 {#if speechInstallStatus?.state === 'notInstalled' || speechInstallStatus?.state === 'cancelled' || speechInstallStatus?.state === 'failed'}
                   <button type="button" disabled={speechInstallPending} onclick={startSpeechInstall}>Install</button>
+                {:else if speechInstallStatus?.state === 'installing'}
+                  <button type="button" disabled={speechInstallPending} onclick={cancelSpeechInstall}>Cancel install</button>
                 {/if}
               {:else if speechInstallPending}
                 <p role="status">Loading install details.</p>
