@@ -306,18 +306,21 @@
     speechInstallTimer = undefined
   }
 
-  async function readSpeechInstallStatus(epoch) {
+  async function readSpeechInstallStatus(epoch, pendingUntilTerminal = false) {
     try {
       const next = await tauri.invoke('parakeet_install_status')
       if (destroyed || epoch !== speechInstallEpoch) return
       speechInstallStatus = next
       if (next.state === 'installing') {
-        speechInstallTimer = setTimeout(() => readSpeechInstallStatus(epoch), 250)
+        speechInstallTimer = setTimeout(() => readSpeechInstallStatus(epoch, pendingUntilTerminal), 250)
+      } else if (pendingUntilTerminal) {
+        speechInstallPending = false
       }
     } catch (_) {
       if (destroyed || epoch !== speechInstallEpoch) return
       speechInstallError = 'The speech model install state could not be checked. Try again.'
       speechInstallStatus = { state: 'failed' }
+      if (pendingUntilTerminal) speechInstallPending = false
     }
   }
 
@@ -373,9 +376,16 @@
       const next = await tauri.invoke('parakeet_install_cancel')
       if (destroyed || epoch !== speechInstallEpoch) return
       speechInstallStatus = next
+      if (next.state === 'installing') {
+        const pollingEpoch = ++speechInstallEpoch
+        await readSpeechInstallStatus(pollingEpoch, true)
+      }
     } catch (_) {
       if (destroyed || epoch !== speechInstallEpoch) return
       speechInstallError = 'The speech model install could not be cancelled. Try again.'
+      speechInstallPending = false
+      const pollingEpoch = ++speechInstallEpoch
+      await readSpeechInstallStatus(pollingEpoch)
     } finally {
       if (!destroyed && epoch === speechInstallEpoch) speechInstallPending = false
     }

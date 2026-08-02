@@ -2314,7 +2314,10 @@ describe('voice dictation', () => {
     expect(within(card).getByRole('status')).toHaveTextContent('Cancelled.')
   })
 
-  it('shows recovery help when speech model cancellation fails', async () => {
+  it('polls until an asynchronous speech model cancellation finishes', async () => {
+    let resolveStatus
+    const cancelledStatus = new Promise((resolve) => { resolveStatus = resolve })
+    let statusCalls = 0
     invoke.mockImplementation(async (command) => {
       if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
       if (command === 'chat_thread_open') return []
@@ -2325,7 +2328,48 @@ describe('voice dictation', () => {
         sourceRepository: 'source', totalDownloadBytes: 1, requiredFreeBytes: 2,
         speechModelLicense: 'CC BY 4.0', voiceActivityModelLicense: 'MIT',
       }
-      if (command === 'parakeet_install_status') return { state: 'installing', completedBytes: 1, totalBytes: 2 }
+      if (command === 'parakeet_install_status') {
+        statusCalls += 1
+        return statusCalls === 1
+          ? { state: 'installing', completedBytes: 1, totalBytes: 2 }
+          : cancelledStatus
+      }
+      if (command === 'parakeet_install_cancel') return { state: 'installing', completedBytes: 1, totalBytes: 2 }
+      throw new Error(`unexpected command: ${command}`)
+    })
+    render(App)
+    await fireEvent.click(await screen.findByRole('button', { name: 'Voice' }))
+
+    const card = await screen.findByRole('region', { name: 'Speech model install' })
+    const cancel = await within(card).findByRole('button', { name: 'Cancel install' })
+    await fireEvent.click(cancel)
+
+    expect(cancel).toBeDisabled()
+    resolveStatus({ state: 'cancelled' })
+    await waitFor(() => expect(within(card).getByRole('status')).toHaveTextContent('Cancelled.'))
+    expect(within(card).getByRole('button', { name: 'Install' })).toBeEnabled()
+  })
+
+  it('shows recovery help when speech model cancellation fails', async () => {
+    let resolveStatus
+    const resumedStatus = new Promise((resolve) => { resolveStatus = resolve })
+    let statusCalls = 0
+    invoke.mockImplementation(async (command) => {
+      if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
+      if (command === 'chat_thread_open') return []
+      if (command === 'auth_entitlement_snapshot') return snapshot()
+      if (command === 'auth_devices') return []
+      if (command === 'dictation_start') return { state: 'modelNotInstalled', message: 'The speech model is not installed.' }
+      if (command === 'parakeet_install_facts') return {
+        sourceRepository: 'source', totalDownloadBytes: 1, requiredFreeBytes: 2,
+        speechModelLicense: 'CC BY 4.0', voiceActivityModelLicense: 'MIT',
+      }
+      if (command === 'parakeet_install_status') {
+        statusCalls += 1
+        if (statusCalls === 1) return { state: 'installing', completedBytes: 1, totalBytes: 2 }
+        if (statusCalls === 2) return resumedStatus
+        return { state: 'cancelled' }
+      }
       if (command === 'parakeet_install_cancel') throw new Error('cancel failed')
       throw new Error(`unexpected command: ${command}`)
     })
@@ -2336,7 +2380,12 @@ describe('voice dictation', () => {
     await fireEvent.click(await within(card).findByRole('button', { name: 'Cancel install' }))
 
     expect(await within(card).findByRole('alert')).toHaveTextContent('The speech model install could not be cancelled. Try again.')
-    expect(within(card).getByRole('button', { name: 'Cancel install' })).toBeEnabled()
+    expect(statusCalls).toBe(2)
+    resolveStatus({ state: 'installing', completedBytes: 1, totalBytes: 2 })
+    await waitFor(() => expect(within(card).getByRole('status')).toHaveTextContent('Cancelled.'))
+    expect(statusCalls).toBe(3)
+    expect(within(card).getByRole('alert')).toHaveTextContent('The speech model install could not be cancelled. Try again.')
+    expect(within(card).getByRole('button', { name: 'Install' })).toBeEnabled()
   })
 
   it('keeps capture active and stoppable when status IPC rejects', async () => {
