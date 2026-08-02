@@ -207,12 +207,14 @@ fn assignment_label_end(bytes: &[u8], start: usize) -> Option<usize> {
 }
 
 fn assignment_delimiter_end(bytes: &[u8], start: usize) -> Option<usize> {
-    const DELIMITERS: [&[u8]; 9] = [
-        b":=", b"=>", b"<=", b"?=", b"||", b"=", b">", b":", b",",
-    ];
+    const DELIMITERS: [&[u8]; 9] = [b":=", b"=>", b"<=", b"?=", b"||", b"=", b">", b":", b","];
 
     let mut end = start;
-    while end - start < 20 && bytes.get(end).is_some_and(|byte| is_assignment_filler(*byte)) {
+    while end - start < 20
+        && bytes
+            .get(end)
+            .is_some_and(|byte| is_assignment_filler(*byte))
+    {
         end += 1;
     }
     DELIMITERS
