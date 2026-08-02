@@ -784,7 +784,7 @@ mod tests {
                             run_id,
                             3,
                             "model.stream.delta",
-                            json!({"text": reply}),
+                            json!({"text": reply, "content_disclosure": "released"}),
                             Some("owner"),
                         ),
                     )
