@@ -27,6 +27,12 @@ workspace and rejects links or path escapes. It reads the current bytes and
 applies the operations to an in-memory staging tree. It does not change the
 workspace during this step.
 
+The core also creates an immutable write plan from the resolved operations.
+The plan contains the exact output bytes, line endings, modes, renames, and
+deletions that the effect will apply. It also records the observed state and
+resolved parent identity for every affected path. The core stores the plan in
+CAS before it opens an approval gate. Pi cannot supply the plan or its hash.
+
 The core computes ordered files, hunks, lines, and segments from the current
 tree and the staged tree. It then validates the value with the generated Rust
 `code-diff/1` codec. Neither Pi nor a web surface may supply a `CodeDiff`, its
@@ -37,28 +43,45 @@ identifier, or trusted hashes.
 The producer assigns a new UUIDv7 as `id` for each proposal. The generated
 codec creates its JSON value. The core applies RFC 8785 JSON canonicalization
 and stores those exact bytes in CAS. Approval records `gate_id`, `effect_id`,
-`code_diff_id`, and the CAS SHA-256 for those bytes. The approval surface
-renders only that CAS object and repeats both identifiers in its answer.
+`code_diff_id`, the diff CAS SHA-256, and the write-plan CAS SHA-256. The
+approval surface renders only that diff object and repeats the gate, effect,
+diff, and write-plan identifiers in its answer.
 
 The core accepts an answer only for the pending gate and matching identifiers.
-It reloads the CAS object, verifies its hash, decodes it with the generated
-codec, and compares the decoded `id`. A mismatch rejects the answer.
+It reloads both CAS objects and verifies both hashes. It decodes the diff with
+the generated codec and compares the decoded `id`. A mismatch rejects the
+answer. The effect executes only the verified write plan. It never rebuilds
+operations from the displayed diff or asks Pi for output after approval.
 
-Immediately before the write, the core rereads every source path. Changed
-bytes, file types, modes, links, or workspace authority make the approval
-stale. The core records the rejection and requests a new proposal. It never
-reuses approval for regenerated content.
+Immediately before the write, the core re-resolves workspace authority and
+every affected source, destination, rename target, and parent component. It
+compares existence, bytes, file type, mode, link state, stable file identity,
+and each resolved parent identity with the write plan. A new destination must
+remain absent. A rename target must remain unchanged and free of collisions.
+Replaced parents, new links, path escapes, changed metadata, and changed
+authority make the approval stale. The core records the rejection and requests
+a new proposal. The write uses the verified parent handles with no path
+re-resolution gap. A concurrent identity or collision mismatch rejects the
+effect. The core never reuses approval for regenerated content.
 
 ### Journal storage and replay
 
 The core stores the complete canonical `CodeDiff` bytes in the existing CAS.
 It uses media type `application/vnd.muniment.code-diff.v1+json`. The
 `code.diff.proposed` journal event uses `payload_cas` for that object.
+The event also stores the write-plan CAS hash as a typed reference. The write
+plan stays internal to the core and does not copy or embed `CodeDiff` fields.
 
 The event's envelope links the proposal to the effect through
-`correlation_id`. The following `permission.requested` payload stores the four
+`correlation_id`. The following `permission.requested` payload stores the five
 approval fields named above. `permission.resolved` repeats them with the
 decision and actor.
+
+After a restart, the reducer restores a pending gate only when both referenced
+CAS objects pass hash verification. Approval then resumes with the same stale
+check and verified write plan. A resolved approval with no completed effect
+does not write automatically after restart. The coordinator resumes it only
+through the normal effect recovery policy and repeats every verification.
 
 Reducers expose a diff only after CAS hash verification and generated-codec
 validation. Live approval and replay use the same journal projection. Replay
@@ -68,20 +91,31 @@ The generated Rust type and codec are the only payload contract in this
 repository. Journal code stores their serialized bytes and typed references.
 It must not define a second `CodeDiff` struct, decoder, or field validator.
 
-A missing or corrupt CAS object makes the diff unavailable. A pending approval
-then fails closed. Receipt replay shows unavailable evidence and does not
-reconstruct content from later workspace state.
+A missing or corrupt diff object makes the diff unavailable. A missing or
+corrupt write plan makes the proposal non-executable. A pending approval then
+fails closed. Receipt replay shows unavailable evidence and does not
+reconstruct content from the plan or later workspace state. Replay exposes the
+diff reference and write-plan hash, but never the plan's output bytes.
 
 ### Limits and failures
 
 The producer accepts at most 200 files, 20,000 rendered lines, and 2 MiB of
 canonical `CodeDiff` JSON. It reads at most 8 MiB per file and 64 MiB per
-proposal. The implementation checks byte totals with overflow-safe arithmetic.
+proposal. Pi may propose at most 400 operations, 8 MiB of output per operation,
+and 64 MiB of output across the proposal. The core checks encoded lengths and
+totals with overflow-safe arithmetic before it copies bytes, builds the staging
+tree, reads current files, or reserves output storage.
 
-More than 200 files or crossing a read limit rejects the proposal before
-staging. Crossing a rendered line or JSON limit produces a valid value with
-`truncated: true`. The producer may omit only complete trailing files or hunks,
-in stable path order.
+The Pi message frame declares each payload length and the operation count. A
+bounded streaming decoder rejects an excessive declaration before it buffers
+the payload. It stops reading when the checked running total reaches a limit.
+
+More than 400 operations, an oversized operation payload, an overflowing sum,
+or crossing the total proposed-output limit rejects the input before staging
+or allocation. More than 200 files or crossing a read limit also rejects the
+proposal before staging. Crossing a rendered line or JSON limit produces a
+valid value with `truncated: true`. The producer may omit only complete
+trailing files or hunks, in stable path order.
 
 A truncated value may appear as evidence, with ADR 0020's warning. It cannot
 open an approval gate or authorize a write. The user must narrow the proposal
@@ -105,7 +139,8 @@ core publishes the proposal to any surface.
 
 The first slice extends Pi file-tool messages with structured proposed
 operations in `src-tauri/core/src/sidecar/pi_chat.rs`. It adds production and
-limit tests in `src-tauri/core/src/code_diff.rs`.
+limit tests in `src-tauri/core/src/code_diff.rs`. It defines CAS serialization
+and verification for the immutable plan in `src-tauri/core/src/write_plan.rs`.
 
 The slice exports that module from `src-tauri/core/src/lib.rs`. It adds typed
 journal references and replay validation in `src-tauri/core/src/journal/mod.rs`
@@ -126,8 +161,8 @@ desktop's current files or workspace authority.
 **The Svelte adapter produces `CodeDiff`.** A presentation process cannot own
 filesystem truth or authorize a native write.
 
-**The core stores only source operations.** Replay would recompute against
-changed files and could show evidence that the user never approved.
+**The core stores only the rendered diff.** A diff omits exact output bytes,
+line endings, and binary content. It cannot define the approved write.
 
 **The journal stores a handwritten diff payload.** That copy would violate ADR
 0019 and could drift from every renderer's generated contract.
@@ -135,7 +170,7 @@ changed files and could show evidence that the user never approved.
 ## Consequences
 
 - One native boundary creates every trusted `CodeDiff`.
-- Approval names one diff identifier and its exact CAS object.
+- Approval names exact diff and write-plan CAS objects.
 - Workspace changes invalidate approval before an effect starts.
 - Journal replay displays the original validated bytes.
 - Truncated and binary diffs cannot authorize writes.
