@@ -2747,7 +2747,7 @@ fn authorized_thread_open_pages_a_redacted_journal_projection() {
     second.run_seq = 2;
     second.event_type = "model.stream.delta".into();
     second.payload = EventPayload::Inline {
-        payload_json: json!({"text": "answer", "secret": "/home/user/private"}),
+        payload_json: json!({"text": "answer", "secret": "/home/user/private", "content_disclosure": "released"}),
     };
     journal.append_batch(0, &[first, second]).unwrap();
     journal.bind_run_workspace(RUN, "workspace-1").unwrap();
@@ -2811,6 +2811,76 @@ fn authorized_thread_open_pages_a_redacted_journal_projection() {
 }
 
 #[test]
+fn thread_open_uses_released_deltas_and_workspace_path_policy() {
+    const RUN: &str = "0190a105-0000-7000-8000-000000000001";
+    let root = std::env::temp_dir().join(format!("muniment-thread-open-{}", uuid::Uuid::now_v7()));
+    let workspace = root.join("workspace");
+    let outside = root.join("private.txt");
+    let inside = workspace.join("notes.txt");
+    std::fs::create_dir_all(&workspace).unwrap();
+    std::fs::write(&inside, "inside").unwrap();
+    std::fs::write(&outside, "outside").unwrap();
+
+    let mut events = vec![prompt(RUN, "question", "2026-07-16T03:00:00Z")];
+    for (seq, payload) in [
+        (
+            2,
+            json!({"text":"safe AKIAAAAA", "content_disclosure":"released"}),
+        ),
+        (
+            3,
+            json!({"text":"AAAAAAAAAAAA end ", "content_disclosure":"released"}),
+        ),
+        (
+            4,
+            json!({
+                "text": format!("inside {} outside {} done", inside.display(), outside.display()),
+                "content_disclosure":"released"
+            }),
+        ),
+        (5, json!({"text":" legacy must stay hidden"})),
+    ] {
+        let mut event = events[0].clone();
+        event.event_id = format!("0190a205-0000-7000-8000-{seq:012}");
+        event.run_seq = seq;
+        event.event_type = "model.stream.delta".into();
+        event.payload = EventPayload::Inline {
+            payload_json: payload,
+        };
+        events.push(event);
+    }
+    let workspace = workspace.to_string_lossy().into_owned();
+    let mut journal = RunJournal::open(":memory:").unwrap();
+    journal.append_batch(0, &events).unwrap();
+    journal.bind_run_workspace(RUN, &workspace).unwrap();
+    let thread_id = sole_thread_id(&mut journal, &workspace);
+    let page = journal
+        .open_thread(
+            &workspace,
+            ThreadOpenRequest {
+                thread_id,
+                limit: 10,
+                cursor: None,
+            },
+        )
+        .unwrap();
+    let assistant = page
+        .entries
+        .iter()
+        .filter(|entry| entry.kind == "assistant_message")
+        .filter_map(|entry| entry.text.as_deref())
+        .collect::<String>();
+    assert_eq!(
+        assistant,
+        format!("safe  end inside {} outside  done", inside.display())
+    );
+    assert!(!assistant.contains("AKIA"));
+    assert!(!assistant.contains(outside.to_string_lossy().as_ref()));
+    assert!(!assistant.contains("legacy"));
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn journal_attach_uses_renamed_ledger_threads_and_hides_tombstones() {
     const LIVE_RUN: &str = "0190a110-0000-7000-8000-000000000001";
     const DELETED_RUN: &str = "0190a110-0000-7000-8000-000000000002";
@@ -2822,7 +2892,7 @@ fn journal_attach_uses_renamed_ledger_threads_and_hides_tombstones() {
     live_second.run_seq = 2;
     live_second.event_type = "model.stream.delta".into();
     live_second.payload = EventPayload::Inline {
-        payload_json: json!({"text":"answer"}),
+        payload_json: json!({"text":"answer", "content_disclosure":"released"}),
     };
     journal.append_batch(0, &[live_first, live_second]).unwrap();
     journal.bind_run_workspace(LIVE_RUN, "workspace-1").unwrap();
@@ -2922,7 +2992,7 @@ fn thread_open_cursor_is_bound_to_its_thread_and_workspace() {
         second.run_seq = 2;
         second.event_type = "model.stream.delta".into();
         second.payload = EventPayload::Inline {
-            payload_json: json!({"text":"answer"}),
+            payload_json: json!({"text":"answer", "content_disclosure":"released"}),
         };
         journal.append_batch(0, &[first, second]).unwrap();
         journal.bind_run_workspace(run_id, workspace).unwrap();
@@ -2960,9 +3030,17 @@ fn projected_pages_preserve_cross_boundary_state_and_ignore_unknown_events() {
     let mut events = Vec::new();
     for (seq, kind, payload) in [
         (1, "run.started", json!({})),
-        (2, "model.stream.delta", json!({"text":"hello "})),
+        (
+            2,
+            "model.stream.delta",
+            json!({"text":"hello ", "content_disclosure":"released"}),
+        ),
         (3, "future.event", json!({"private":"ignored"})),
-        (4, "model.stream.delta", json!({"text":"world"})),
+        (
+            4,
+            "model.stream.delta",
+            json!({"text":"world", "content_disclosure":"released"}),
+        ),
         (
             5,
             "tool.effect.started",
@@ -3059,7 +3137,7 @@ fn large_escaped_projection_continues_losslessly_with_bounded_pages() {
             payload_json: if seq == 1 {
                 json!({})
             } else {
-                json!({"text": fragment})
+                json!({"text": fragment, "content_disclosure":"released"})
             },
         };
         events.push(event);
@@ -3160,7 +3238,11 @@ fn thread_projection_cursor_keeps_its_snapshot_after_later_deltas() {
     for (seq, kind, payload) in [
         (1, "run.started", json!({})),
         (2, "user.prompt.submitted", json!({"prompt":"question"})),
-        (3, "model.stream.delta", json!({"text":"hello"})),
+        (
+            3,
+            "model.stream.delta",
+            json!({"text":"hello", "content_disclosure":"released"}),
+        ),
     ] {
         let mut event = prompt(RUN, "unused", "2026-07-16T03:00:00Z");
         event.event_id = format!("0190a300-0000-7000-8000-{seq:012}");
@@ -3191,7 +3273,7 @@ fn thread_projection_cursor_keeps_its_snapshot_after_later_deltas() {
     later.run_seq = 4;
     later.event_type = "model.stream.delta".into();
     later.payload = EventPayload::Inline {
-        payload_json: json!({"text":" world"}),
+        payload_json: json!({"text":" world", "content_disclosure":"released"}),
     };
     journal.append(3, &later).unwrap();
 

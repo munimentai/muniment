@@ -1,6 +1,6 @@
 //! Linux filesystem boundary for the companion attach endpoint.
 
-use std::collections::VecDeque;
+use std::collections::{BTreeMap, VecDeque};
 use std::env;
 use std::ffi::{CString, OsStr};
 use std::fmt;
@@ -682,15 +682,49 @@ impl ThreadListService for RunJournal {
                 RunEventPageError::NotFoundOrInaccessible => ProtocolError::invalid_request(),
                 _ => ProtocolError::persistence_failed(),
             })?;
+        let mut assistant_text = BTreeMap::new();
+        for entry in &projected {
+            if entry.kind == "assistant_message"
+                && !assistant_text.contains_key(&(entry.run_id.clone(), entry.snapshot_seq))
+            {
+                let ordinals = projected
+                    .iter()
+                    .filter(|candidate| {
+                        candidate.kind == "assistant_message"
+                            && candidate.run_id == entry.run_id
+                            && candidate.snapshot_seq == entry.snapshot_seq
+                    })
+                    .map(|candidate| candidate.entry_ordinal)
+                    .collect::<Vec<_>>();
+                let projection = self
+                    .projected_assistant_text(
+                        workspace,
+                        &entry.run_id,
+                        entry.snapshot_seq,
+                        &ordinals,
+                    )
+                    .map_err(|_| ProtocolError::persistence_failed())?;
+                assistant_text.insert((entry.run_id.clone(), entry.snapshot_seq), projection);
+            }
+        }
         let mut expanded = projected
             .into_iter()
             .map(|entry| {
+                let text = if entry.kind == "assistant_message" {
+                    assistant_text
+                        .get(&(entry.run_id.clone(), entry.snapshot_seq))
+                        .and_then(|projection| projection.get(&entry.entry_ordinal))
+                        .cloned()
+                        .flatten()
+                } else {
+                    entry.text
+                };
                 (
                     (entry.run_ordinal, entry.run_seq, entry.entry_ordinal),
                     RedactedThreadEntry {
                         run_seq: entry.run_seq,
                         kind: entry.kind,
-                        text: entry.text,
+                        text,
                     },
                 )
             })
