@@ -989,6 +989,16 @@
                   <div><dt>Voice activity model license</dt><dd>{speechInstallFacts.voiceActivityModelLicense}</dd></div>
                   <div><dt>Free disk required</dt><dd>{formatBytes(speechInstallFacts.requiredFreeBytes)}</dd></div>
                 </dl>
+                {#if speechInstallStatus?.state === 'installing'}
+                  <div class="speech-install-progress">
+                    <progress
+                      aria-label="Speech model download progress"
+                      max={Math.max(speechInstallStatus.totalBytes, 1)}
+                      value={Math.min(speechInstallStatus.completedBytes, speechInstallStatus.totalBytes)}
+                    ></progress>
+                    <span>{formatBytes(speechInstallStatus.completedBytes)} / {formatBytes(speechInstallStatus.totalBytes)}</span>
+                  </div>
+                {/if}
                 {#if speechInstallStatus}<p role="status">{installStateWords(speechInstallStatus.state)}</p>{/if}
                 {#if speechInstallStatus?.state === 'notInstalled' || speechInstallStatus?.state === 'cancelled' || speechInstallStatus?.state === 'failed'}
                   <button type="button" disabled={speechInstallPending} onclick={startSpeechInstall}>Install</button>
@@ -1313,6 +1323,8 @@
   .speech-install-card dt { color: var(--muted); }
   .speech-install-card dd { margin: 0; overflow-wrap: anywhere; }
   .speech-install-card p { margin: 7px 0 0; color: var(--muted); }
+  .speech-install-progress { display: grid; gap: 4px; margin-top: 9px; color: var(--muted); }
+  .speech-install-progress progress { width: 100%; height: 6px; accent-color: var(--muted); }
   .speech-install-card button { margin-top: 7px; padding: 4px 8px; font: inherit; }
   .speech-install-card .speech-install-error { color: var(--oxide); }
   .follow-up { color: var(--muted); font-family: var(--font-mono); }
