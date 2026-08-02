@@ -81,6 +81,11 @@ describe('nightly Linux E2E workflow', () => {
     }
   })
 
+  it('checks out the pinned E2E harness in every installed lane', () => {
+    expect(workflow.match(/- name: Check out E2E harness/g)).toHaveLength(3)
+    expect(workflow.match(/ref: \$\{\{ needs\.prepare\.outputs\.source_sha \}\}/g)).toHaveLength(3)
+  })
+
   it('uses the SSH key provided by the self-hosted runner for every E2E lane', () => {
     expect(workflow).not.toContain('DESKTOP_CI_SSH_KEY: ${{ secrets.DESKTOP_CI_SSH_KEY }}')
     expect(workflow.match(/printf '%s' "\$DESKTOP_CI_SSH_KEY"/g)).toHaveLength(4)
