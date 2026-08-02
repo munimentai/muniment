@@ -84,6 +84,17 @@ fn workspace_scan_releases_an_in_scope_path() {
 }
 
 #[test]
+fn workspace_scan_preserves_a_secret_inside_a_released_path() {
+    let content = format!("/workspace/sk-{}", "a".repeat(20));
+    let expected = scan(&content, true);
+    let actual = scan_with_workspace(&content, true, Path::new("/workspace"), |path| {
+        Ok::<_, io::Error>(path.to_path_buf())
+    });
+
+    assert_eq!(actual, expected);
+}
+
+#[test]
 fn workspace_scan_withholds_an_escape_and_a_validation_error() {
     let content = "open /workspace/../outside.txt now";
     let result = scan_with_workspace(content, true, Path::new("/workspace"), |path| {

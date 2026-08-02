@@ -374,8 +374,8 @@ fn scan_with_path_candidate(
             continue;
         }
         match classify_path(content, start) {
-            PathClassification::Released(range) => {
-                start = range.end;
+            PathClassification::Released(_) => {
+                start += 1;
                 continue;
             }
             PathClassification::Withheld(withheld_start) => {
