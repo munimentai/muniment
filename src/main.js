@@ -1,6 +1,7 @@
 import { mount } from 'svelte'
 import './styles/tokens.css'
 import './styles/base.css'
+import './styles/code-diff.css'
 import App from './App.svelte'
 import { THEME_STORAGE_KEY, parseTheme } from './lib/theme-state.js'
 

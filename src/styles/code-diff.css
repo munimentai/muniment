@@ -1,0 +1,64 @@
+@import 'diff2html/bundles/css/diff2html.min.css';
+
+.code-diff .d2h-wrapper {
+  color: var(--ink);
+  text-align: left;
+}
+
+.code-diff .d2h-file-wrapper {
+  border-color: var(--border);
+  border-radius: var(--radius-control);
+  background: var(--surface);
+}
+
+.code-diff .d2h-file-header,
+.code-diff .d2h-code-side-linenumber,
+.code-diff .d2h-code-linenumber,
+.code-diff .d2h-info {
+  border-color: var(--border);
+  background: var(--faint);
+  color: var(--muted);
+}
+
+.code-diff .d2h-file-name,
+.code-diff .d2h-code-line,
+.code-diff .d2h-code-side-line {
+  color: var(--ink);
+}
+
+.code-diff .d2h-del {
+  border-color: color-mix(in srgb, var(--oxide) 30%, transparent);
+  background: color-mix(in srgb, var(--oxide) 12%, var(--surface));
+}
+
+.code-diff .d2h-ins {
+  border-color: color-mix(in srgb, var(--signal) 30%, transparent);
+  background: var(--signal-soft);
+}
+
+.code-diff .d2h-del del,
+.code-diff .d2h-change {
+  background: color-mix(in srgb, var(--oxide) 24%, transparent);
+}
+
+.code-diff .d2h-ins ins {
+  background: color-mix(in srgb, var(--signal) 24%, transparent);
+}
+
+.code-diff .d2h-code-side-emptyplaceholder,
+.code-diff .d2h-emptyplaceholder {
+  border-color: var(--border);
+  background: var(--faint);
+}
+
+.code-diff .d2h-file-diff {
+  overflow-x: auto;
+}
+
+@media (max-width: 720px) {
+  .code-diff .d2h-file-side-diff {
+    display: block;
+    width: 100%;
+    overflow-x: auto;
+  }
+}
