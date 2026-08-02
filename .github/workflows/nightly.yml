@@ -230,6 +230,11 @@ jobs:
       FIXTURE_USERNAME: ${{ secrets.DESKTOP_E2E_USERNAME }}
       FIXTURE_PASSWORD: ${{ secrets.DESKTOP_E2E_PASSWORD }}
     steps:
+      - name: Check out E2E harness
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.prepare.outputs.source_sha }}
+
       - name: Validate pinned source identity
         run: |
           [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo 'source_sha must be exactly 40 lowercase hex characters' >&2; exit 1; }
@@ -340,6 +345,11 @@ jobs:
       FIXTURE_USERNAME: ${{ secrets.DESKTOP_E2E_USERNAME }}
       FIXTURE_PASSWORD: ${{ secrets.DESKTOP_E2E_PASSWORD }}
     steps:
+      - name: Check out E2E harness
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.prepare.outputs.source_sha }}
+
       - name: Validate pinned source identity
         run: |
           [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo 'source_sha must be exactly 40 lowercase hex characters' >&2; exit 1; }
@@ -428,6 +438,11 @@ jobs:
       REPOSITORY: ${{ github.repository }}
       RELEASE_TOKEN: ${{ github.token }}
     steps:
+      - name: Check out E2E harness
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.prepare.outputs.source_sha }}
+
       - name: Validate pinned source identity
         run: |
           [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo 'source_sha must be exactly 40 lowercase hex characters' >&2; exit 1; }
