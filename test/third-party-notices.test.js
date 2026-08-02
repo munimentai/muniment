@@ -11,9 +11,18 @@ const bundleConfigs = [
 ]
 const requiredResources = {
   '../THIRD_PARTY_NOTICES.md': 'third-party-notices/THIRD_PARTY_NOTICES.md',
+  '../THIRD_PARTY_RUST_NOTICES.md': 'third-party-notices/THIRD_PARTY_RUST_NOTICES.md',
   '../src/fonts/SchibstedGrotesk-OFL.txt': 'third-party-notices/SchibstedGrotesk-OFL.txt',
   '../src/fonts/CommitMono-LICENSE.txt': 'third-party-notices/CommitMono-LICENSE.txt',
 }
+
+const cargoPackages = (lockfile) => [...lockfile.matchAll(
+  /\[\[package\]\]\nname = "([^"]+)"\nversion = "([^"]+)"\nsource = /g,
+)].map(([, name, version]) => `${name}\t${version}`).sort()
+
+const recordedCargoPackages = (notices) => [...notices.matchAll(
+  /^- `([^`]+)` ([^ ]+) — .+$/gm,
+)].map(([, name, version]) => `${name}\t${version}`).sort()
 
 const missingPackageNotices = (packageJson, packageLock, notices) => {
   const bundledPackages = [...Object.keys(packageJson.dependencies), 'svelte']
@@ -40,6 +49,27 @@ describe('third-party notices', () => {
     const notices = read('THIRD_PARTY_NOTICES.md')
 
     expect(missingPackageNotices(packageJson, packageLock, notices)).toEqual([])
+  })
+
+  it('records every non-workspace crate at its locked version', () => {
+    const lockfile = read('src-tauri/Cargo.lock')
+    const notices = read('THIRD_PARTY_RUST_NOTICES.md')
+
+    expect(recordedCargoPackages(notices)).toEqual(cargoPackages(lockfile))
+  })
+
+  it('rejects a crate recorded at a different version', () => {
+    const lockfile = '[[package]]\nname = "example"\nversion = "1.0.0"\nsource = "registry"'
+    const notices = '- `example` 1.0.1 — MIT'
+
+    expect(recordedCargoPackages(notices)).not.toEqual(cargoPackages(lockfile))
+  })
+
+  it('rejects a crate recorded under a different name', () => {
+    const lockfile = '[[package]]\nname = "example"\nversion = "1.0.0"\nsource = "registry"'
+    const notices = '- `other` 1.0.0 — MIT'
+
+    expect(recordedCargoPackages(notices)).not.toEqual(cargoPackages(lockfile))
   })
 
   it('rejects an unnamed package', () => {
