@@ -3270,7 +3270,7 @@ fn large_escaped_projection_continues_losslessly_with_bounded_pages() {
             break;
         }
     }
-    assert!(started.elapsed() < Duration::from_secs(30));
+    assert!(started.elapsed() < Duration::from_secs(19));
     assert_eq!(found, expected);
 }
 

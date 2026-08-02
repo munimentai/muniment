@@ -7,10 +7,12 @@ use super::{
 use crate::journal::content_disclosure::{read_content_disclosure, ContentDisclosure};
 use serde_json::Value;
 use std::{
-    collections::HashMap,
+    collections::VecDeque,
     ops::Range,
     path::{Path, PathBuf},
 };
+
+const MAX_UNRESOLVED_SUFFIX: usize = 65_535;
 
 /// One assistant text envelope after redaction.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -42,9 +44,14 @@ pub struct Projector<C> {
     content_start: u64,
     stream_end: u64,
     ledger: Ledger,
-    released: HashMap<u64, u8>,
+    released: VecDeque<ReleasedSpan>,
     withhold_from: Option<u64>,
     finished: bool,
+}
+
+struct ReleasedSpan {
+    start: u64,
+    bytes: Vec<u8>,
 }
 
 impl<C> Projector<C> {
@@ -56,7 +63,7 @@ impl<C> Projector<C> {
             content_start: 0,
             stream_end: 0,
             ledger: Ledger::new(),
-            released: HashMap::new(),
+            released: VecDeque::new(),
             withhold_from: None,
             finished: false,
         }
@@ -100,36 +107,25 @@ impl<C> Projector<C> {
             );
         }
 
+        if candidate_free(&self.content)
+            && candidate_free(text)
+            && !(self.content.ends_with('\\') && text.starts_with('\\'))
+        {
+            self.content.push_str(text);
+            let mut boundary = self.content.len().saturating_sub(MAX_UNRESOLVED_SUFFIX);
+            while !self.content.is_char_boundary(boundary) {
+                boundary -= 1;
+            }
+            let global_boundary = self.global_offset(boundary)?;
+            self.remember_span(0..boundary);
+            let projections = self.resolve(global_boundary, &[])?;
+            self.content.drain(..boundary);
+            self.content_start = global_boundary;
+            return Ok(projections);
+        }
+
         self.content.push_str(text);
         self.scan_and_resolve(false)
-    }
-
-    /// Appends one committed delta without scanning the accumulated stream.
-    pub fn push_deferred(
-        &mut self,
-        run_seq: u64,
-        text: &str,
-        payload: &Value,
-    ) -> Result<(), ProjectorError> {
-        if self.finished {
-            return Err(ProjectorError::Finished);
-        }
-        if matches!(
-            read_content_disclosure(payload),
-            ContentDisclosure::Withheld(_)
-        ) {
-            self.ledger.push_withheld(run_seq);
-            return Ok(());
-        }
-        let byte_len =
-            u64::try_from(text.len()).map_err(|_| ProjectorError::InvalidStreamOffset)?;
-        self.ledger.push(run_seq, byte_len)?;
-        self.stream_end = self
-            .stream_end
-            .checked_add(byte_len)
-            .ok_or(ProjectorError::InvalidStreamOffset)?;
-        self.content.push_str(text);
-        Ok(())
     }
 
     /// Resolves the safe prefix while retaining an unresolved suffix.
@@ -182,20 +178,7 @@ impl<C> Projector<C> {
                 .filter_map(|matched| local_range_to_global(self.content_start, &matched.range))
                 .collect();
             withheld.push(start..end);
-            for (offset, byte) in self.content.as_bytes()[..local_start]
-                .iter()
-                .copied()
-                .enumerate()
-            {
-                if !scan
-                    .matches
-                    .iter()
-                    .any(|matched| matched.range.contains(&offset))
-                {
-                    self.released
-                        .insert(self.content_start + offset as u64, byte);
-                }
-            }
+            self.remember_released(local_start, &scan.matches, false);
             self.content.clear();
             self.content_start = end;
             return self.resolve(end, &withheld);
@@ -230,21 +213,38 @@ impl<C> Projector<C> {
     }
 
     fn remember_released(&mut self, boundary: usize, matches: &[Match], complete: bool) {
-        let withheld: Vec<_> = matches
+        let mut withheld: Vec<_> = matches
             .iter()
             .filter(|matched| complete || matched.range.end < self.content.len())
             .map(|matched| matched.range.clone())
             .collect();
-        for (offset, byte) in self.content.as_bytes()[..boundary]
-            .iter()
-            .copied()
-            .enumerate()
-        {
-            if !withheld.iter().any(|range| range.contains(&offset)) {
-                self.released
-                    .insert(self.content_start + offset as u64, byte);
+        withheld.sort_by_key(|range| range.start);
+        let mut cursor = 0;
+        for range in withheld {
+            let start = range.start.min(boundary);
+            if cursor < start {
+                self.remember_span(cursor..start);
+            }
+            cursor = cursor.max(range.end.min(boundary));
+        }
+        if cursor < boundary {
+            self.remember_span(cursor..boundary);
+        }
+    }
+
+    fn remember_span(&mut self, range: Range<usize>) {
+        let start = self.content_start + range.start as u64;
+        let bytes = &self.content.as_bytes()[range];
+        if let Some(last) = self.released.back_mut() {
+            if last.start + last.bytes.len() as u64 == start {
+                last.bytes.extend_from_slice(bytes);
+                return;
             }
         }
+        self.released.push_back(ReleasedSpan {
+            start,
+            bytes: bytes.to_vec(),
+        });
     }
 
     fn resolve(
@@ -262,11 +262,7 @@ impl<C> Projector<C> {
     fn project(&mut self, projection: LedgerProjection) -> Projection {
         let mut bytes = Vec::new();
         for range in projection.released_ranges {
-            for offset in range {
-                if let Some(byte) = self.released.remove(&offset) {
-                    bytes.push(byte);
-                }
-            }
+            self.take_released(range, &mut bytes);
         }
         let text = (!bytes.is_empty())
             .then(|| String::from_utf8(bytes).expect("scanner boundaries preserve UTF-8"));
@@ -277,11 +273,42 @@ impl<C> Projector<C> {
         }
     }
 
+    fn take_released(&mut self, range: Range<u64>, output: &mut Vec<u8>) {
+        while let Some(mut span) = self.released.pop_front() {
+            let end = span.start + span.bytes.len() as u64;
+            if end <= range.start {
+                continue;
+            }
+            if span.start >= range.end {
+                self.released.push_front(span);
+                break;
+            }
+            let start = usize::try_from(range.start.saturating_sub(span.start)).unwrap();
+            let take_end =
+                usize::try_from((range.end - span.start).min(span.bytes.len() as u64)).unwrap();
+            output.extend_from_slice(&span.bytes[start..take_end]);
+            if take_end < span.bytes.len() {
+                span.bytes.drain(..take_end);
+                span.start += take_end as u64;
+                self.released.push_front(span);
+                break;
+            }
+        }
+    }
+
     fn global_offset(&self, local: usize) -> Result<u64, ProjectorError> {
         self.content_start
             .checked_add(u64::try_from(local).map_err(|_| ProjectorError::InvalidStreamOffset)?)
             .ok_or(ProjectorError::InvalidStreamOffset)
     }
+}
+
+fn candidate_free(text: &str) -> bool {
+    let bytes = text.as_bytes();
+    !bytes
+        .iter()
+        .any(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'/' | b'-' | b'_'))
+        && !bytes.windows(2).any(|pair| pair == b"\\\\")
 }
 
 fn local_range_to_global(start: u64, range: &Range<usize>) -> Option<Range<u64>> {

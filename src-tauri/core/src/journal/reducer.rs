@@ -167,13 +167,18 @@ impl super::RunJournal {
                 .get("text")
                 .and_then(Value::as_str)
                 .unwrap_or_default();
-            projector
-                .push_deferred(event.run_seq, text, payload_json)
+            let projections = projector
+                .push(event.run_seq, text, payload_json)
                 .map_err(|_| {
                     super::RunEventPageError::Journal(super::JournalError::Corrupt(
                         "assistant text projection failed".into(),
                     ))
                 })?;
+            for projection in projections {
+                if let Some(text) = projection.text {
+                    released.push_str(&text);
+                }
+            }
         }
         let projections = if terminal {
             projector.finish::<std::io::Error>()
