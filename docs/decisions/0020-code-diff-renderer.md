@@ -202,14 +202,18 @@ compatibility tests then read the published fixtures. A Rust surface pins the
 crate in its manifest and lockfile when it first consumes `CodeDiff`. Neither
 version-pin change infers or adds a producer.
 
-The producer is a separate follow-up decision. A new
-`docs/decisions/0024-code-diff-producer.md` must decide which trusted runtime
-boundary creates `CodeDiff`, how the journal preserves it for replay, and how
-approval binds to its `id`. This amendment does not choose that boundary.
+The producer belongs to the follow-up decision in
+`docs/decisions/0024-code-diff-producer.md`. That decision names the trusted
+runtime boundary, journal replay rules, and approval binding.
 The first implementation slice adds `src/lib/code-diff.js`, its tests, and the
 desktop renderer named above. It can proceed before publication or ADR 0024.
 Permission-gate and receipt-replay wiring wait for both prerequisites. They
 consume the journal value that ADR 0024 decides.
+
+ADR 0024 now selects the Tauri core as the trusted producer. It stores each
+validated value in CAS and binds approval to its `id` and exact CAS hash.
+Truncated and binary values remain display-only. This decision's
+presentation adapter continues to accept only a validated value.
 
 ## Consequences
 
