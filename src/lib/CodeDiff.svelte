@@ -2,10 +2,12 @@
   import DOMPurify from 'dompurify'
   import { html } from 'diff2html'
   import { codeDiffPresentation } from './code-diff.js'
+  import { scrollRegionOverflows } from './scroll-region.js'
 
   let { codeDiff } = $props()
 
   let presentation = $derived(codeDiffPresentation(codeDiff))
+  let container
   let records = $derived.by(() => {
     const textFiles = presentation.renderer.input.map((file) => ({
       kind: 'text',
@@ -24,9 +26,39 @@
 
     return [...textFiles, ...binaryFiles].sort((left, right) => left.position - right.position)
   })
+
+  function updateScrollRegions() {
+    for (const element of container?.querySelectorAll('.d2h-file-side-diff') ?? []) {
+      const overflows = scrollRegionOverflows({
+        scrollWidth: element.scrollWidth,
+        clientWidth: element.clientWidth,
+      })
+
+      if (overflows) {
+        element.setAttribute('tabindex', '0')
+        element.setAttribute('role', 'group')
+        element.setAttribute('aria-label', 'Code diff panel')
+      } else {
+        element.removeAttribute('tabindex')
+        element.removeAttribute('role')
+        element.removeAttribute('aria-label')
+      }
+    }
+  }
+
+  $effect(() => {
+    void records
+    updateScrollRegions()
+
+    if (!container || typeof ResizeObserver === 'undefined') return
+
+    const observer = new ResizeObserver(updateScrollRegions)
+    observer.observe(container)
+    return () => observer.disconnect()
+  })
 </script>
 
-<section class="code-diff" aria-label="Code changes" data-diff-id={presentation.id}>
+<section class="code-diff" aria-label="Code changes" data-diff-id={presentation.id} bind:this={container}>
   {#if presentation.truncatedWarning}
     <p class="code-diff-warning" role="status">{presentation.truncatedWarning}</p>
   {/if}

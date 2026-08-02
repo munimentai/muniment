@@ -1,6 +1,53 @@
 @import 'diff2html/bundles/css/diff2html.min.css';
 
 .code-diff .d2h-wrapper {
+  --d2h-bg-color: var(--surface);
+  --d2h-border-color: var(--border);
+  --d2h-dim-color: var(--muted);
+  --d2h-line-border-color: var(--border);
+  --d2h-file-header-bg-color: var(--faint);
+  --d2h-file-header-border-color: var(--border);
+  --d2h-empty-placeholder-bg-color: var(--faint);
+  --d2h-empty-placeholder-border-color: var(--border);
+  --d2h-selected-color: var(--faint);
+  --d2h-ins-bg-color: var(--signal-soft);
+  --d2h-ins-border-color: color-mix(in srgb, var(--signal) 30%, transparent);
+  --d2h-ins-highlight-bg-color: color-mix(in srgb, var(--signal) 24%, transparent);
+  --d2h-ins-label-color: var(--signal);
+  --d2h-del-bg-color: color-mix(in srgb, var(--oxide) 12%, var(--surface));
+  --d2h-del-border-color: color-mix(in srgb, var(--oxide) 30%, transparent);
+  --d2h-del-highlight-bg-color: color-mix(in srgb, var(--oxide) 24%, transparent);
+  --d2h-del-label-color: var(--oxide);
+  --d2h-change-del-color: color-mix(in srgb, var(--oxide) 12%, var(--surface));
+  --d2h-change-ins-color: var(--signal-soft);
+  --d2h-info-bg-color: var(--faint);
+  --d2h-info-border-color: var(--border);
+  --d2h-change-label-color: var(--ochre);
+  --d2h-moved-label-color: var(--muted);
+  --d2h-dark-color: var(--ink);
+  --d2h-dark-bg-color: var(--surface);
+  --d2h-dark-border-color: var(--border);
+  --d2h-dark-dim-color: var(--muted);
+  --d2h-dark-line-border-color: var(--border);
+  --d2h-dark-file-header-bg-color: var(--faint);
+  --d2h-dark-file-header-border-color: var(--border);
+  --d2h-dark-empty-placeholder-bg-color: var(--faint);
+  --d2h-dark-empty-placeholder-border-color: var(--border);
+  --d2h-dark-selected-color: var(--faint);
+  --d2h-dark-ins-bg-color: var(--signal-soft);
+  --d2h-dark-ins-border-color: color-mix(in srgb, var(--signal) 30%, transparent);
+  --d2h-dark-ins-highlight-bg-color: color-mix(in srgb, var(--signal) 24%, transparent);
+  --d2h-dark-ins-label-color: var(--signal);
+  --d2h-dark-del-bg-color: color-mix(in srgb, var(--oxide) 12%, var(--surface));
+  --d2h-dark-del-border-color: color-mix(in srgb, var(--oxide) 30%, transparent);
+  --d2h-dark-del-highlight-bg-color: color-mix(in srgb, var(--oxide) 24%, transparent);
+  --d2h-dark-del-label-color: var(--oxide);
+  --d2h-dark-change-del-color: color-mix(in srgb, var(--oxide) 12%, var(--surface));
+  --d2h-dark-change-ins-color: var(--signal-soft);
+  --d2h-dark-info-bg-color: var(--faint);
+  --d2h-dark-info-border-color: var(--border);
+  --d2h-dark-change-label-color: var(--ochre);
+  --d2h-dark-moved-label-color: var(--muted);
   color: var(--ink);
   text-align: left;
 }
@@ -37,11 +84,12 @@
 }
 
 .code-diff .d2h-del del,
-.code-diff .d2h-change {
+.code-diff .d2h-file-diff .d2h-del.d2h-change {
   background: color-mix(in srgb, var(--oxide) 24%, transparent);
 }
 
-.code-diff .d2h-ins ins {
+.code-diff .d2h-ins ins,
+.code-diff .d2h-file-diff .d2h-ins.d2h-change {
   background: color-mix(in srgb, var(--signal) 24%, transparent);
 }
 
@@ -56,6 +104,10 @@
 }
 
 @media (max-width: 720px) {
+  .code-diff .d2h-files-diff {
+    display: block;
+  }
+
   .code-diff .d2h-file-side-diff {
     display: block;
     width: 100%;

@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { render, screen } from '@testing-library/svelte'
+import { render, screen, waitFor } from '@testing-library/svelte'
 import '@testing-library/jest-dom/vitest'
 import { afterEach, describe, expect, it } from 'vitest'
 import CodeDiff from './CodeDiff.svelte'
@@ -90,5 +90,43 @@ describe('code diff view', () => {
     expect(container.querySelector('[onerror]')).not.toBeInTheDocument()
     expect(document.body).not.toHaveAttribute('data-pwned')
     expect(container).toHaveTextContent(attack)
+  })
+
+  it('makes overflowing diff panels keyboard accessible', async () => {
+    let scrollWidth = 500
+    let resize
+    class ResizeObserver {
+      constructor(callback) {
+        resize = callback
+      }
+      observe() {}
+      disconnect() {}
+    }
+    Object.defineProperties(HTMLElement.prototype, {
+      scrollWidth: { configurable: true, get: () => scrollWidth },
+      clientWidth: { configurable: true, get: () => 400 },
+    })
+    globalThis.ResizeObserver = ResizeObserver
+
+    const { container } = render(CodeDiff, {
+      props: { codeDiff: value([textFile('src/file.js')]) },
+    })
+    const panels = [...container.querySelectorAll('.d2h-file-side-diff')]
+
+    expect(panels).toHaveLength(2)
+    await waitFor(() => expect(panels[0]).toHaveAttribute('tabindex', '0'))
+    for (const panel of panels) {
+      expect(panel).toHaveAttribute('role', 'group')
+      expect(panel).toHaveAccessibleName('Code diff panel')
+    }
+
+    scrollWidth = 400
+    resize()
+
+    for (const panel of panels) {
+      expect(panel).not.toHaveAttribute('tabindex')
+      expect(panel).not.toHaveAttribute('role')
+      expect(panel).not.toHaveAttribute('aria-label')
+    }
   })
 })
