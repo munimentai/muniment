@@ -87,9 +87,11 @@ only when no retained event references it.
 
 The event versions define the link semantics. A future incompatible link or
 payload change requires a new event version and an in-memory upcaster. Readers
-that do not know either event type skip its domain projection under ADR 0002.
-They still retain, export, and delete its `payload_cas` through generic envelope
-scanning. They must not approve or execute an unknown proposal version.
+that do not know either event type must treat it as bearing on effects and
+permissions under ADR 0002. They fail both projections closed for the affected
+run, even if they recognize a later `permission.requested` event. They expose
+no approval and execute no effect from that run. Generic envelope scanning may
+still retain, export, and delete each `payload_cas`.
 
 The following `permission.requested` payload stores the five approval fields
 named above. `permission.resolved` repeats them with the decision and actor.
