@@ -21,6 +21,8 @@ The bundle also carries these font files:
 
 Both Schibsted Grotesk and Commit Mono use SIL OFL 1.1. Their license texts are `third-party-notices/SchibstedGrotesk-OFL.txt` and `third-party-notices/CommitMono-LICENSE.txt`.
 
+The Rust crate inventory is `third-party-notices/THIRD_PARTY_RUST_NOTICES.md`.
+
 ## Playwright relay core
 
 Portions of `browser-control/src/index.ts` are derived from Playwright at commit `2bcd8f21ad032744763f2f0c7ba6e7006e13fa11`.

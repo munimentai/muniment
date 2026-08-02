@@ -6,6 +6,7 @@
       "third-party/sherpa-onnx-v1.13.2/windows-x86_64/onnxruntime_providers_shared.dll": "onnxruntime_providers_shared.dll",
       "third-party/sherpa-onnx-v1.13.2/notices/": "third-party-notices/asr/",
       "../THIRD_PARTY_NOTICES.md": "third-party-notices/THIRD_PARTY_NOTICES.md",
+      "../THIRD_PARTY_RUST_NOTICES.md": "third-party-notices/THIRD_PARTY_RUST_NOTICES.md",
       "../src/fonts/SchibstedGrotesk-OFL.txt": "third-party-notices/SchibstedGrotesk-OFL.txt",
       "../src/fonts/CommitMono-LICENSE.txt": "third-party-notices/CommitMono-LICENSE.txt"
     }
