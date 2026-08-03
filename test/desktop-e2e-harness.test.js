@@ -42,7 +42,7 @@ describe('installed production chat contract', () => {
     expect(spec).toContain("expect(assistantText).not.toBe('')")
     expect(spec).not.toContain('browser.tauri.mock')
     expect(spec).not.toContain("plugin:dialog|open")
-    expect(spec).toContain('const home = await location.getText()')
+    expect(spec).toContain("const home = await location.getAttribute('textContent')")
   })
 
   it('keeps the image fixture in isolated runner state rather than diagnostics', () => {
