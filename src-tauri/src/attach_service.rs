@@ -12,9 +12,9 @@ use std::time::Duration;
 #[cfg(target_os = "linux")]
 use muniment_core::attach::linux::{
     approval_waiter_with_claims, run_authenticated_session_with_service_and_approvals,
-    AttachAcceptError, AttachFilesystem, AttachTransport, CompanionProvenance, RunStartAccepted,
-    RunStartRequest as AttachRunStartRequest, ThreadListPage, ThreadListRequest, ThreadListService,
-    ThreadOpenPage, ThreadOpenRequest,
+    AttachAcceptError, AttachFilesystem, AttachTransport, CompanionProvenance, RunCancelAccepted,
+    RunCancelRequest, RunStartAccepted, RunStartRequest as AttachRunStartRequest, ThreadListPage,
+    ThreadListRequest, ThreadListService, ThreadOpenPage, ThreadOpenRequest,
 };
 #[cfg(target_os = "linux")]
 use muniment_core::attach::{
@@ -507,6 +507,50 @@ impl<B: RunStartBoundaries, I: RunStartIdempotency> ThreadListService
         };
         serde_json::from_value(committed.body).map_err(|_| ProtocolError::persistence_failed())
     }
+
+    fn cancel_run(
+        &mut self,
+        workspace: &str,
+        request: RunCancelRequest,
+        request_id: &Id,
+        idempotency_key: &Id,
+        companion: CompanionProvenance,
+    ) -> Result<RunCancelAccepted, ProtocolError> {
+        let canonical_input = json!({"workspace": workspace, "run_id": &request.run_id});
+        let ledger_request = AttachRequest {
+            protocol: Protocol,
+            request_id: request_id.clone(),
+            operation: Operation::RunCancel,
+            capability: String::new(),
+            idempotency_key: Some(idempotency_key.clone()),
+            body: canonical_input.clone(),
+        };
+        let outcome = self.idempotency.execute(
+            &companion.profile,
+            &ledger_request,
+            &canonical_input,
+            || Ok(()),
+            || {
+                self.boundaries
+                    .cancel_run(workspace, &request.run_id)
+                    .map_err(|error| error.protocol_error())?;
+                Ok(CommittedResult {
+                    body: json!({
+                        "run_id": request.run_id,
+                        "accepted_at": chrono::Utc::now().to_rfc3339_opts(
+                            chrono::SecondsFormat::AutoSi,
+                            true,
+                        ),
+                    }),
+                    cursor: None,
+                })
+            },
+        )?;
+        let committed = match outcome {
+            IdempotencyOutcome::Committed(result) | IdempotencyOutcome::Replayed(result) => result,
+        };
+        serde_json::from_value(committed.body).map_err(|_| ProtocolError::persistence_failed())
+    }
 }
 
 #[cfg(target_os = "linux")]
@@ -674,6 +718,107 @@ mod tests {
             },
         );
         (result, service)
+    }
+
+    #[cfg(target_os = "linux")]
+    fn cancel_request(
+        service: &mut DesktopAttachService<FakeRunStartBoundaries>,
+        workspace: &str,
+        run_id: &str,
+        request_id: &str,
+        key: &str,
+    ) -> Result<RunCancelAccepted, ProtocolError> {
+        service.cancel_run(
+            workspace,
+            RunCancelRequest {
+                run_id: run_id.into(),
+            },
+            &Id::new(request_id).unwrap(),
+            &Id::new(key).unwrap(),
+            CompanionProvenance {
+                profile: "default".into(),
+                companion_kind: "cli".into(),
+                companion_version: "1.2.3".into(),
+                peer_uid: 1000,
+                peer_pid: 42,
+            },
+        )
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn attach_cancel_replays_without_a_second_cancellation() {
+        let boundaries = FakeRunStartBoundaries::accepting();
+        *boundaries.active_run.lock().unwrap() = Some((
+            "0190a100-0000-7000-8000-000000000001".into(),
+            "workspace-a".into(),
+        ));
+        let mut service = DesktopAttachService {
+            boundaries,
+            idempotency: IdempotencyStore::open(":memory:").unwrap(),
+            home: PathBuf::new(),
+            workspace_contexts: Arc::new(Mutex::new(HashMap::new())),
+            client_credentials: Arc::new(Mutex::new(HashMap::new())),
+            credential_path: None,
+            client_identity: Some("default".into()),
+        };
+        let run_id = "0190a100-0000-7000-8000-000000000001";
+        let key = "018f0000-0000-7000-8000-000000000002";
+        let first = cancel_request(
+            &mut service,
+            "workspace-a",
+            run_id,
+            "018f0000-0000-7000-8000-000000000003",
+            key,
+        )
+        .unwrap();
+        let replay = cancel_request(
+            &mut service,
+            "workspace-a",
+            run_id,
+            "018f0000-0000-7000-8000-000000000004",
+            key,
+        )
+        .unwrap();
+        assert_eq!(replay, first);
+        assert_eq!(service.boundaries.cancel_calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn attach_cancel_rejects_unknown_settled_and_other_workspace_runs() {
+        for active in [
+            None,
+            Some((
+                "0190a100-0000-7000-8000-000000000002".into(),
+                "workspace-a".into(),
+            )),
+            Some((
+                "0190a100-0000-7000-8000-000000000001".into(),
+                "workspace-b".into(),
+            )),
+        ] {
+            let boundaries = FakeRunStartBoundaries::accepting();
+            *boundaries.active_run.lock().unwrap() = active;
+            let mut service = DesktopAttachService {
+                boundaries,
+                idempotency: IdempotencyStore::open(":memory:").unwrap(),
+                home: PathBuf::new(),
+                workspace_contexts: Arc::new(Mutex::new(HashMap::new())),
+                client_credentials: Arc::new(Mutex::new(HashMap::new())),
+                credential_path: None,
+                client_identity: Some("default".into()),
+            };
+            assert!(cancel_request(
+                &mut service,
+                "workspace-a",
+                "0190a100-0000-7000-8000-000000000001",
+                "018f0000-0000-7000-8000-000000000003",
+                "018f0000-0000-7000-8000-000000000002",
+            )
+            .is_err());
+            assert_eq!(service.boundaries.cancel_calls.load(Ordering::SeqCst), 0);
+        }
     }
 
     #[cfg(target_os = "linux")]

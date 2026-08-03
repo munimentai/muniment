@@ -145,6 +145,7 @@ pub(crate) fn chat_pending_permission(
 
 pub(crate) struct ActiveRun {
     pub(crate) id: String,
+    pub(crate) workspace: String,
     pub(crate) cancelled: Arc<AtomicBool>,
     pub(crate) transport: Arc<Mutex<Option<Arc<PiRpcTransport>>>>,
     pub(crate) adapter: Arc<Mutex<Option<Arc<PiRunAdapter>>>>,
@@ -266,6 +267,7 @@ pub(crate) trait RunStartBoundaries {
     ) -> Result<Vec<ChatAttachment>, RunStartError>;
     fn run_thread_id(&self, run_id: &str) -> Result<String, RunStartError>;
     fn fail_prepared_run(&self, launch: &RunStartLaunch) -> Result<(), RunStartError>;
+    fn cancel_run(&self, workspace: &str, run_id: &str) -> Result<(), RunStartError>;
     fn clear_active_run(&self, run_id: &str);
     fn launch(&self, launch: RunStartLaunch);
 }
@@ -336,6 +338,7 @@ pub(crate) fn prepare_desktop_run(
     let permission_answers = Arc::new(Mutex::new(VecDeque::new()));
     if let Err(error) = boundaries.install_active_run(ActiveRun {
         id: run_id.clone(),
+        workspace: grant.workspace.clone(),
         cancelled: Arc::clone(&cancelled),
         transport: Arc::clone(&transport),
         adapter: Arc::clone(&adapter),
@@ -432,6 +435,11 @@ impl<R: tauri::Runtime> RunStartBoundaries for TauriRunStartBoundaries<R> {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .is_some()
+    }
+
+    fn cancel_run(&self, workspace: &str, run_id: &str) -> Result<(), RunStartError> {
+        cancel_active_run(&self.state().active, run_id, Some(workspace))
+            .map_err(RunStartError::InvalidRequest)
     }
 
     fn fresh_tokens(&self) -> Result<TokenSet, RunStartError> {
@@ -825,6 +833,7 @@ pub async fn chat_resume(
         &state.active,
         ActiveRun {
             id: run_id.clone(),
+            workspace: grant.workspace.clone(),
             cancelled: Arc::clone(&cancelled),
             transport: Arc::clone(&transport),
             adapter: Arc::clone(&adapter),
@@ -1336,13 +1345,20 @@ pub(super) fn coordinate_prepared_prompt<R: tauri::Runtime, T>(
 
 #[tauri::command]
 pub async fn chat_cancel(state: tauri::State<'_, ChatState>, run_id: String) -> Result<(), String> {
-    let active = state
-        .active
+    cancel_active_run(&state.active, &run_id, None)
+}
+
+fn cancel_active_run(
+    active_runs: &Mutex<Option<ActiveRun>>,
+    run_id: &str,
+    workspace: Option<&str>,
+) -> Result<(), String> {
+    let active = active_runs
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
     let run = active
         .as_ref()
-        .filter(|run| run.id == run_id)
+        .filter(|run| run.id == run_id && workspace.is_none_or(|value| value == run.workspace))
         .ok_or_else(|| "That reply is no longer active.".to_string())?;
     let cancelled = Arc::clone(&run.cancelled);
     let transport = run
@@ -1674,6 +1690,7 @@ mod tests {
     fn inactive_transport_run(id: &str) -> ActiveRun {
         ActiveRun {
             id: id.into(),
+            workspace: "workspace-a".into(),
             cancelled: Arc::new(AtomicBool::new(false)),
             transport: Arc::new(Mutex::new(None)),
             adapter: Arc::new(Mutex::new(None)),
