@@ -1138,6 +1138,19 @@ impl RunJournal {
         Ok(())
     }
 
+    pub fn run_thread_id(&self, run_id: &str) -> Result<Option<String>, JournalError> {
+        self.connection
+            .as_ref()
+            .expect("journal connection is always present outside compaction")
+            .query_row(
+                "SELECT thread_id FROM run_threads WHERE run_id=?1",
+                [run_id],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(Into::into)
+    }
+
     pub fn append_batch(
         &mut self,
         expected_last_seq: u64,

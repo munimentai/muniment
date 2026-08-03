@@ -408,6 +408,7 @@ impl<B: RunStartBoundaries, I: RunStartIdempotency> ThreadListService
             "workspace": workspace,
             "text": &request.text,
             "context": &request.context,
+            "thread_id": &request.thread_id,
         });
         let ledger_request = AttachRequest {
             protocol: Protocol,
@@ -466,13 +467,19 @@ impl<B: RunStartBoundaries, I: RunStartIdempotency> ThreadListService
                         files: Vec::new(),
                         workspace: Some(workspace.to_owned()),
                         provenance: Some(provenance),
+                        thread_id: request.thread_id,
                     },
                 )
                 .map_err(|error| error.protocol_error())?;
                 pending_launch = Some(launch);
+                let thread_id = self
+                    .boundaries
+                    .run_thread_id(&result.run_id)
+                    .map_err(|error| error.protocol_error())?;
                 Ok(CommittedResult {
                     body: json!({
                         "run_id": result.run_id,
+                        "thread_id": thread_id,
                         "committed_seq": result.committed_seq,
                         "accepted_at": result.accepted_at,
                     }),
@@ -654,6 +661,7 @@ mod tests {
             AttachRunStartRequest {
                 text: "hello".into(),
                 context,
+                thread_id: None,
             },
             &Id::new("018f0000-0000-7000-8000-000000000001").unwrap(),
             &Id::new("018f0000-0000-7000-8000-000000000002").unwrap(),
@@ -674,12 +682,14 @@ mod tests {
         text: &str,
         request_id: &str,
         idempotency_key: &str,
+        thread_id: Option<&str>,
     ) -> Result<RunStartAccepted, ProtocolError> {
         service.start_run(
             "workspace-a",
             AttachRunStartRequest {
                 text: text.into(),
                 context: None,
+                thread_id: thread_id.map(str::to_owned),
             },
             &Id::new(request_id).unwrap(),
             &Id::new(idempotency_key).unwrap(),
@@ -1027,6 +1037,7 @@ mod tests {
                 AttachRunStartRequest {
                     text: "use repository context".into(),
                     context: None,
+                    thread_id: None,
                 },
                 &Id::new("018f0000-0000-7000-8000-000000000011").unwrap(),
                 &Id::new("018f0000-0000-7000-8000-000000000012").unwrap(),
@@ -1077,6 +1088,7 @@ mod tests {
                 AttachRunStartRequest {
                     text: "second context".into(),
                     context: None,
+                    thread_id: None,
                 },
                 &Id::new("018f0000-0000-7000-8000-000000000021").unwrap(),
                 &Id::new("018f0000-0000-7000-8000-000000000022").unwrap(),
@@ -1497,6 +1509,7 @@ mod tests {
             "hello",
             "018f0000-0000-7000-8000-000000000001",
             key,
+            Some("0190a100-0000-7000-8000-000000000099"),
         )
         .unwrap();
         let replay = attach_start_on(
@@ -1504,6 +1517,7 @@ mod tests {
             "hello",
             "018f0000-0000-7000-8000-000000000003",
             key,
+            Some("0190a100-0000-7000-8000-000000000099"),
         )
         .unwrap();
 
@@ -1537,13 +1551,15 @@ mod tests {
             "hello",
             "018f0000-0000-7000-8000-000000000001",
             key,
+            Some("0190a100-0000-7000-8000-000000000099"),
         )
         .unwrap();
         let conflict = attach_start_on(
             &mut service,
-            "different",
+            "hello",
             "018f0000-0000-7000-8000-000000000003",
             key,
+            None,
         )
         .unwrap_err();
 
@@ -1603,6 +1619,7 @@ mod tests {
             AttachRunStartRequest {
                 text: "hello".into(),
                 context: None,
+                thread_id: None,
             },
             &Id::new("018f0000-0000-7000-8000-000000000001").unwrap(),
             &Id::new("018f0000-0000-7000-8000-000000000002").unwrap(),
@@ -1672,6 +1689,7 @@ mod tests {
             AttachRunStartRequest {
                 text: "private prompt".into(),
                 context: None,
+                thread_id: None,
             },
             &Id::new("018f0000-0000-7000-8000-000000000001").unwrap(),
             &Id::new("018f0000-0000-7000-8000-000000000002").unwrap(),

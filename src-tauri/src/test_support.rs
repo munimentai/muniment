@@ -173,6 +173,7 @@ impl RunStartBoundaries for FakeRunStartBoundaries {
         tokens: &TokenSet,
         _files: Vec<SelectedFile>,
         provenance: Option<Provenance>,
+        _thread_id: Option<&str>,
     ) -> Result<(u64, ChatProjector), RunStartError> {
         self.prepare_calls.fetch_add(1, Ordering::SeqCst);
         *self.prepared_provenance.lock().unwrap() = provenance;
@@ -193,6 +194,10 @@ impl RunStartBoundaries for FakeRunStartBoundaries {
             .unwrap()
             .insert(run_id.to_owned(), vec![started]);
         Ok((1, projector))
+    }
+
+    fn run_thread_id(&self, _run_id: &str) -> Result<String, RunStartError> {
+        Ok("0190a100-0000-7000-8000-000000000002".into())
     }
 
     fn project_attachments(

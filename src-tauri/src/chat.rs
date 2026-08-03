@@ -17,7 +17,9 @@ use muniment_core::journal::reducer::{
     project_chat, reduce, ChatProjector, PermissionGate, PermissionRequest, ProjectedAttachment,
     RunStatus,
 };
-use muniment_core::journal::{EventEnvelope, EventPayload, Provenance, RunEventType, RunJournal};
+use muniment_core::journal::{
+    EventEnvelope, EventPayload, JournalError, Provenance, RunEventType, RunJournal,
+};
 use muniment_core::sidecar::pi_chat::{
     cancel_command, ExtensionUiAnswer, PiChatEvent, PiImageContent, PiRunAdapter, PromptCommand,
     Receipt,
@@ -210,6 +212,7 @@ pub(crate) struct RunStartRequest {
     pub(crate) files: Vec<SelectedFile>,
     pub(crate) workspace: Option<String>,
     pub(crate) provenance: Option<Provenance>,
+    pub(crate) thread_id: Option<String>,
 }
 
 pub(crate) struct RunStartLaunch {
@@ -254,11 +257,13 @@ pub(crate) trait RunStartBoundaries {
         tokens: &TokenSet,
         files: Vec<SelectedFile>,
         provenance: Option<Provenance>,
+        thread_id: Option<&str>,
     ) -> Result<(u64, ChatProjector), RunStartError>;
     fn project_attachments(
         &self,
         projector: &ChatProjector,
     ) -> Result<Vec<ChatAttachment>, RunStartError>;
+    fn run_thread_id(&self, run_id: &str) -> Result<String, RunStartError>;
     fn fail_prepared_run(&self, launch: &RunStartLaunch) -> Result<(), RunStartError>;
     fn clear_active_run(&self, run_id: &str);
     fn launch(&self, launch: RunStartLaunch);
@@ -268,6 +273,7 @@ pub(crate) trait RunStartBoundaries {
 pub(crate) enum RunStartError {
     Unauthorized(String),
     InvalidRequest(String),
+    ThreadNotFound,
     Persistence(String),
 }
 
@@ -277,6 +283,7 @@ impl RunStartError {
         match self {
             Self::Unauthorized(_) => ProtocolError::unauthorized(),
             Self::InvalidRequest(_) => ProtocolError::invalid_request(),
+            Self::ThreadNotFound => ProtocolError::thread_not_found(),
             Self::Persistence(_) => ProtocolError::persistence_failed(),
         }
     }
@@ -286,6 +293,7 @@ impl RunStartError {
             Self::Unauthorized(message)
             | Self::InvalidRequest(message)
             | Self::Persistence(message) => message,
+            Self::ThreadNotFound => "The thread was not found.".into(),
         }
     }
 }
@@ -335,14 +343,20 @@ pub(crate) fn prepare_desktop_run(
         boundaries.clear_active_run(&run_id);
         return Err(error);
     }
-    let prepared =
-        match boundaries.prepare_run(&run_id, &grant, &tokens, request.files, request.provenance) {
-            Ok(prepared) => prepared,
-            Err(error) => {
-                boundaries.clear_active_run(&run_id);
-                return Err(error);
-            }
-        };
+    let prepared = match boundaries.prepare_run(
+        &run_id,
+        &grant,
+        &tokens,
+        request.files,
+        request.provenance,
+        request.thread_id.as_deref(),
+    ) {
+        Ok(prepared) => prepared,
+        Err(error) => {
+            boundaries.clear_active_run(&run_id);
+            return Err(error);
+        }
+    };
     let attachments = match boundaries.project_attachments(&prepared.1) {
         Ok(attachments) => attachments,
         Err(error) => {
@@ -453,21 +467,39 @@ impl<R: tauri::Runtime> RunStartBoundaries for TauriRunStartBoundaries<R> {
         tokens: &TokenSet,
         files: Vec<SelectedFile>,
         provenance: Option<Provenance>,
+        thread_id: Option<&str>,
     ) -> Result<(u64, ChatProjector), RunStartError> {
         let state = self.state();
-        prepare_new_run_with_session_thread(
-            &state.storage,
-            SessionThreadStart {
-                tracker: &state.session_thread,
-                continue_existing: self.continue_session_thread,
-            },
-            run_id,
-            &grant.workspace,
-            tokens.subject.as_deref(),
-            files,
-            provenance,
-        )
-        .map_err(RunStartError::Persistence)
+        let result = match thread_id {
+            Some(thread_id) => prepare_new_run_in_thread(
+                &state.storage,
+                run_id,
+                &grant.workspace,
+                tokens.subject.as_deref(),
+                files,
+                provenance,
+                thread_id,
+            ),
+            None => prepare_new_run_with_session_thread(
+                &state.storage,
+                SessionThreadStart {
+                    tracker: &state.session_thread,
+                    continue_existing: self.continue_session_thread,
+                },
+                run_id,
+                &grant.workspace,
+                tokens.subject.as_deref(),
+                files,
+                provenance,
+            ),
+        };
+        result.map_err(|error| {
+            if error == "thread_not_found" {
+                RunStartError::ThreadNotFound
+            } else {
+                RunStartError::Persistence(error)
+            }
+        })
     }
 
     fn project_attachments(
@@ -478,6 +510,17 @@ impl<R: tauri::Runtime> RunStartBoundaries for TauriRunStartBoundaries<R> {
             .projection()
             .map(|projection| chat_attachments(&projection.attachments))
             .map_err(|_| RunStartError::Persistence(attachment_error()))
+    }
+
+    fn run_thread_id(&self, run_id: &str) -> Result<String, RunStartError> {
+        self.state()
+            .storage
+            .lock()
+            .map_err(|_| RunStartError::Persistence(attachment_error()))?
+            .journal
+            .run_thread_id(run_id)
+            .map_err(|_| RunStartError::Persistence(attachment_error()))?
+            .ok_or_else(|| RunStartError::Persistence(attachment_error()))
     }
 
     fn fail_prepared_run(&self, launch: &RunStartLaunch) -> Result<(), RunStartError> {
@@ -729,6 +772,7 @@ pub async fn chat_submit(
                 files: files.unwrap_or_default(),
                 workspace: None,
                 provenance: None,
+                thread_id: None,
             },
         )
         .map_err(RunStartError::into_message)
@@ -957,6 +1001,32 @@ pub(crate) fn prepare_new_run_with_session_thread(
         subject,
         files,
         provenance,
+        None,
+    )
+}
+
+fn prepare_new_run_in_thread(
+    storage: &SharedStorage,
+    run_id: &str,
+    workspace: &str,
+    subject: Option<&str>,
+    files: Vec<SelectedFile>,
+    provenance: Option<Provenance>,
+    thread_id: &str,
+) -> Result<(u64, ChatProjector), String> {
+    let files = open_selected_files(files)?;
+    prepare_opened_run(
+        storage,
+        SessionThreadStart {
+            tracker: &SessionThread::default(),
+            continue_existing: false,
+        },
+        run_id,
+        workspace,
+        subject,
+        files,
+        provenance,
+        Some(thread_id),
     )
 }
 
@@ -968,6 +1038,7 @@ fn prepare_opened_run(
     subject: Option<&str>,
     files: Vec<OpenSelectedFile>,
     provenance: Option<Provenance>,
+    requested_thread_id: Option<&str>,
 ) -> Result<(u64, ChatProjector), String> {
     let mut storage = storage.lock().map_err(|_| attachment_error())?;
     let ChatStorage { journal, cas } = &mut *storage;
@@ -982,7 +1053,11 @@ fn prepare_opened_run(
     }
     projector.apply(&started).map_err(|_| attachment_error())?;
     if !workspace.is_empty() {
-        let thread_id = if session_thread.continue_existing {
+        let thread_id = if let Some(thread_id) = requested_thread_id {
+            journal
+                .append_new_run_in_thread(workspace, thread_id, &started)
+                .map(|()| thread_id.to_owned())
+        } else if session_thread.continue_existing {
             let offered = match session_thread.tracker.offered(workspace, subject) {
                 OfferedThread::AdoptNewest => {
                     newest_owned_workspace_thread(journal, workspace, subject)
@@ -1002,7 +1077,13 @@ fn prepare_opened_run(
         } else {
             journal.append_new_run(workspace, &started)
         }
-        .map_err(|_| attachment_error())?;
+        .map_err(|error| {
+            if requested_thread_id.is_some() && matches!(error, JournalError::InvalidEnvelope(_)) {
+                "thread_not_found".to_owned()
+            } else {
+                attachment_error()
+            }
+        })?;
         if session_thread.continue_existing {
             session_thread.tracker.record(thread_id, workspace, subject);
         }
@@ -1403,6 +1484,7 @@ mod tests {
                 files: Vec::new(),
                 workspace: None,
                 provenance: None,
+                thread_id: None,
             },
         )
         .unwrap();
@@ -1429,6 +1511,7 @@ mod tests {
                 files: Vec::new(),
                 workspace: None,
                 provenance: None,
+                thread_id: None,
             },
         )
         .err()
@@ -2049,6 +2132,7 @@ mod tests {
             "workspace-a",
             Some("owner"),
             opened,
+            None,
             None,
         ) {
             Ok(_) => panic!("changed attachment length must fail"),
