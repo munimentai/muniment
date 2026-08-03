@@ -243,7 +243,7 @@ fn new_session_reuses_authorization_and_rejects_invalid_parameters() {
 
 #[cfg(target_os = "linux")]
 #[test]
-fn prompt_streams_text_denies_permission_and_returns_the_terminal_result() {
+fn consecutive_prompts_continue_one_thread() {
     use muniment_attach::{
         authorized_with_client_credential, encode_frame, welcome, Event, EventName, Id, Protocol,
         Response, Success,
@@ -333,13 +333,16 @@ fn prompt_streams_text_denies_permission_and_returns_the_terminal_result() {
         assert_eq!(start["operation"], "run.start");
         assert_eq!(start["body"]["workspace"], expected_workspace);
         assert_eq!(start["body"]["text"], "Tell me more.");
+        assert!(start["body"].get("thread_id").is_none());
         let run_id = "01900000-0000-7000-8000-000000000001";
+        let thread_id = "01900000-0000-7000-8000-000000000003";
         let subscription_id = "01900000-0000-7000-8000-000000000002";
         respond(
             &mut stream,
             &start,
             json!({
                 "run_id": run_id,
+                "thread_id": thread_id,
                 "committed_seq": 1,
                 "accepted_at": "2026-08-03T00:00:00Z"
             }),
@@ -440,6 +443,63 @@ fn prompt_streams_text_denies_permission_and_returns_the_terminal_result() {
                 json!({"subscription_id": subscription_id, "through_run_seq": sequence}),
             );
         }
+
+        let (mut stream, _) = listener.accept().unwrap();
+        pair(&mut stream);
+        let start = read_frame(&mut stream);
+        assert_eq!(start["operation"], "run.start");
+        assert_eq!(start["body"]["workspace"], expected_workspace);
+        assert_eq!(start["body"]["text"], "Continue.");
+        assert_eq!(start["body"]["thread_id"], thread_id);
+        let run_id = "01900000-0000-7000-8000-000000000004";
+        let subscription_id = "01900000-0000-7000-8000-000000000005";
+        respond(
+            &mut stream,
+            &start,
+            json!({
+                "run_id": run_id,
+                "thread_id": thread_id,
+                "committed_seq": 1,
+                "accepted_at": "2026-08-03T00:01:00Z"
+            }),
+        );
+        let subscribe = read_frame(&mut stream);
+        assert_eq!(subscribe["operation"], "run.stream");
+        respond(
+            &mut stream,
+            &subscribe,
+            json!({
+                "subscription_id": subscription_id,
+                "run_id": run_id,
+                "first_available_run_seq": 2,
+                "current_run_seq": 2,
+                "window": {"max_events": 16, "max_bytes": 1048576, "max_text_bytes": 262144}
+            }),
+        );
+        stream
+            .write_all(
+                &encode_frame(&Event {
+                    protocol: Protocol,
+                    subscription_id: Id::new(subscription_id).unwrap(),
+                    event: EventName::RunEvent,
+                    run_id: Some(Id::new(run_id).unwrap()),
+                    run_seq: Some(2),
+                    body: json!({
+                        "event_type": "run.completed", "event_version": 1,
+                        "recorded_at": "2026-08-03T00:01:01Z", "payload": {"withheld": true}
+                    }),
+                })
+                .unwrap(),
+            )
+            .unwrap();
+        let acknowledgement = read_frame(&mut stream);
+        assert_eq!(acknowledgement["operation"], "run.cursor_ack");
+        assert_eq!(acknowledgement["body"]["through_run_seq"], 2);
+        respond(
+            &mut stream,
+            &acknowledgement,
+            json!({"subscription_id": subscription_id, "through_run_seq": 2}),
+        );
     });
 
     let mut child = Command::new(env!("CARGO_BIN_EXE_muniment-acp"))
@@ -476,12 +536,30 @@ fn prompt_streams_text_denies_permission_and_returns_the_terminal_result() {
     )
     .unwrap();
     input.write_all(b"\n").unwrap();
+    input.flush().unwrap();
+    let mut responses: Vec<Value> = Vec::new();
+    for _ in 0..3 {
+        let mut line = String::new();
+        output.read_line(&mut line).unwrap();
+        responses.push(serde_json::from_str(&line).unwrap());
+    }
+    serde_json::to_writer(
+        &mut input,
+        &request(
+            3,
+            "session/prompt",
+            json!({"sessionId": session_id, "prompt": [{"type": "text", "text": "Continue."}]}),
+        ),
+    )
+    .unwrap();
+    input.write_all(b"\n").unwrap();
     drop(input);
-    let responses: Vec<Value> = output
-        .lines()
-        .map(|line| serde_json::from_str(&line.unwrap()).unwrap())
-        .collect();
-    assert_eq!(responses.len(), 3);
+    responses.extend(
+        output
+            .lines()
+            .map(|line| serde_json::from_str(&line.unwrap()).unwrap()),
+    );
+    assert_eq!(responses.len(), 4);
     assert_eq!(responses[0]["method"], "session/update");
     assert_eq!(
         responses[0]["params"]["update"]["content"]["text"],
@@ -490,6 +568,8 @@ fn prompt_streams_text_denies_permission_and_returns_the_terminal_result() {
     assert_eq!(responses[1]["params"]["update"]["content"]["text"], "reply");
     assert_eq!(responses[2]["id"], 2);
     assert_eq!(responses[2]["result"]["stopReason"], "end_turn");
+    assert_eq!(responses[3]["id"], 3);
+    assert_eq!(responses[3]["result"]["stopReason"], "end_turn");
     assert!(child.wait().unwrap().success());
     server.join().unwrap();
     std::fs::remove_dir_all(runtime).unwrap();
