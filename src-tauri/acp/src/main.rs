@@ -202,17 +202,30 @@ fn load_session(id: Value, params: Option<&Value>, output: &mut impl Write) -> V
                 break;
             }
         }
-        for update in updates {
-            let notification = SessionNotification::new(session_id.clone(), update);
-            write_message(
-                output,
-                json!({"jsonrpc": "2.0", "method": "session/update", "params": notification}),
-            )
-            .map_err(|_| ClientError::ConnectionClosed)?;
-        }
+        send_load_updates(output, &session_id, updates)?;
         Ok(())
     })();
 
+    load_session_response(id, result)
+}
+
+fn send_load_updates(
+    output: &mut impl Write,
+    session_id: &str,
+    updates: Vec<SessionUpdate>,
+) -> Result<(), ClientError> {
+    for update in updates {
+        let notification = SessionNotification::new(session_id.to_owned(), update);
+        write_message(
+            output,
+            json!({"jsonrpc": "2.0", "method": "session/update", "params": notification}),
+        )
+        .map_err(|_| ClientError::ConnectionClosed)?;
+    }
+    Ok(())
+}
+
+fn load_session_response(id: Value, result: Result<(), ClientError>) -> Value {
     match result {
         Ok(()) => json!({"jsonrpc": "2.0", "id": id, "result": LoadSessionResponse::new()}),
         Err(error) => json!({
@@ -220,6 +233,41 @@ fn load_session(id: Value, params: Option<&Value>, output: &mut impl Write) -> V
             "id": id,
             "error": {"code": -32000, "message": pairing_failure(error)}
         }),
+    }
+}
+
+#[cfg(test)]
+mod load_tests {
+    use super::*;
+
+    struct FailedOutput;
+
+    impl Write for FailedOutput {
+        fn write(&mut self, _buffer: &[u8]) -> io::Result<usize> {
+            Err(io::Error::new(
+                io::ErrorKind::BrokenPipe,
+                "test output failed",
+            ))
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn load_rejects_a_notification_failure() {
+        let update = SessionUpdate::UserMessageChunk(ContentChunk::new(ContentBlock::Text(
+            TextContent::new("Question"),
+        )));
+        let result = send_load_updates(&mut FailedOutput, "session-id", vec![update]);
+        let response = load_session_response(json!(1), result);
+
+        assert_eq!(response["error"]["code"], -32000);
+        assert_eq!(
+            response["error"]["message"],
+            "Muniment runtime pairing was denied or closed"
+        );
     }
 }
 
