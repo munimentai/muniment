@@ -1056,6 +1056,22 @@ impl RunJournal {
         thread_id: &str,
         event: &EventEnvelope,
     ) -> Result<(), JournalError> {
+        self.append_new_run_in_thread_after_validation(workspace, thread_id, event, || {
+            Ok::<(), JournalError>(())
+        })
+        .and_then(|result| result)
+    }
+
+    pub fn append_new_run_in_thread_after_validation<F, E>(
+        &mut self,
+        workspace: &str,
+        thread_id: &str,
+        event: &EventEnvelope,
+        after_validation: F,
+    ) -> Result<Result<(), E>, JournalError>
+    where
+        F: FnOnce() -> Result<(), E>,
+    {
         if workspace.is_empty() || event.run_seq != 1 {
             return Err(JournalError::InvalidEnvelope(
                 "new run workspace and sequence must be valid".into(),
@@ -1129,6 +1145,9 @@ impl RunJournal {
                 "thread belongs to another profile".into(),
             ));
         }
+        if let Err(error) = after_validation() {
+            return Ok(Err(error));
+        }
         let next_ordinal: u64 = tx.query_row(
             "SELECT COALESCE(MAX(thread_run_ordinal), 0) + 1 \
              FROM run_threads WHERE thread_id=?1",
@@ -1152,7 +1171,7 @@ impl RunJournal {
         )?;
         tx.commit()?;
         publish_commit_hint(coordination.as_deref(), &event.run_id, event.run_seq);
-        Ok(())
+        Ok(Ok(()))
     }
 
     pub fn run_thread_id(&self, run_id: &str) -> Result<Option<String>, JournalError> {

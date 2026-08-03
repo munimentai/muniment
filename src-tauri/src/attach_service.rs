@@ -1770,6 +1770,46 @@ mod tests {
 
     #[cfg(target_os = "linux")]
     #[test]
+    fn prompt_protection_failure_leaves_bound_and_new_thread_ordinals_unchanged() {
+        for bound in [false, true] {
+            let (mut service, thread_id, first_run_id) = attach_service_with_thread();
+            service.boundaries.protect_error = Some("keyring failed".into());
+            let before = service
+                .boundaries
+                .journal
+                .lock()
+                .unwrap()
+                .run_event_types()
+                .unwrap();
+
+            let result = attach_start_on(
+                &mut service,
+                "hello",
+                "018f0000-0000-7000-8000-000000000001",
+                "018f0000-0000-7000-8000-000000000002",
+                bound.then_some(thread_id.as_str()),
+            );
+
+            assert_eq!(
+                serde_json::to_value(result.unwrap_err()).unwrap()["code"],
+                "persistence_failed"
+            );
+            let mut journal = service.boundaries.journal.lock().unwrap();
+            assert_eq!(journal.run_event_types().unwrap(), before, "bound={bound}");
+            let page = journal.thread_run_ids(&thread_id, 10, None).unwrap();
+            assert_eq!(page.run_ids, [first_run_id], "bound={bound}");
+            assert_eq!(
+                service
+                    .boundaries
+                    .prompt_protection_calls
+                    .load(Ordering::SeqCst),
+                1
+            );
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
     fn attach_adapter_rejects_in_flight_and_unsupported_context() {
         let boundaries = FakeRunStartBoundaries {
             active: true,

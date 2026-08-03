@@ -249,16 +249,11 @@ pub(crate) trait RunStartBoundaries {
         tokens: &TokenSet,
         requested_workspace: Option<&str>,
     ) -> Result<ChatGrant, RunStartError>;
-    fn protect_prompt(
-        &self,
-        run_id: &str,
-        prompt: &str,
-        subject: Option<&str>,
-    ) -> Result<(), RunStartError>;
     fn install_active_run(&self, run: ActiveRun) -> Result<(), RunStartError>;
     fn prepare_run(
         &self,
         run_id: &str,
+        prompt: &str,
         grant: &ChatGrant,
         tokens: &TokenSet,
         files: Vec<SelectedFile>,
@@ -351,6 +346,7 @@ pub(crate) fn prepare_desktop_run(
     }
     let prepared = match boundaries.prepare_run(
         &run_id,
+        &prompt,
         &grant,
         &tokens,
         request.files,
@@ -363,10 +359,6 @@ pub(crate) fn prepare_desktop_run(
             return Err(error);
         }
     };
-    if let Err(error) = boundaries.protect_prompt(&run_id, &prompt, tokens.subject.as_deref()) {
-        boundaries.clear_active_run(&run_id);
-        return Err(error);
-    }
     let attachments = match boundaries.project_attachments(&prepared.1) {
         Ok(attachments) => attachments,
         Err(error) => {
@@ -464,15 +456,6 @@ impl<R: tauri::Runtime> RunStartBoundaries for TauriRunStartBoundaries<R> {
         Ok(grant)
     }
 
-    fn protect_prompt(
-        &self,
-        run_id: &str,
-        prompt: &str,
-        subject: Option<&str>,
-    ) -> Result<(), RunStartError> {
-        protect_prompt(run_id, prompt, subject).map_err(RunStartError::Persistence)
-    }
-
     fn install_active_run(&self, run: ActiveRun) -> Result<(), RunStartError> {
         install_active_run(&self.state().active, run).map_err(RunStartError::InvalidRequest)
     }
@@ -480,6 +463,7 @@ impl<R: tauri::Runtime> RunStartBoundaries for TauriRunStartBoundaries<R> {
     fn prepare_run(
         &self,
         run_id: &str,
+        prompt: &str,
         grant: &ChatGrant,
         tokens: &TokenSet,
         files: Vec<SelectedFile>,
@@ -488,7 +472,7 @@ impl<R: tauri::Runtime> RunStartBoundaries for TauriRunStartBoundaries<R> {
     ) -> Result<(u64, ChatProjector), RunStartError> {
         let state = self.state();
         let result = match thread_id {
-            Some(thread_id) => prepare_new_run_in_thread(
+            Some(thread_id) => prepare_new_run_in_thread_after_validation(
                 &state.storage,
                 run_id,
                 &grant.workspace,
@@ -496,8 +480,9 @@ impl<R: tauri::Runtime> RunStartBoundaries for TauriRunStartBoundaries<R> {
                 files,
                 provenance,
                 thread_id,
+                || protect_prompt(run_id, prompt, tokens.subject.as_deref()),
             ),
-            None => prepare_new_run_with_session_thread(
+            None => prepare_new_run_with_session_thread_after_validation(
                 &state.storage,
                 SessionThreadStart {
                     tracker: &state.session_thread,
@@ -508,6 +493,7 @@ impl<R: tauri::Runtime> RunStartBoundaries for TauriRunStartBoundaries<R> {
                 tokens.subject.as_deref(),
                 files,
                 provenance,
+                || protect_prompt(run_id, prompt, tokens.subject.as_deref()),
             ),
         };
         result.map_err(|error| {
@@ -1007,6 +993,31 @@ pub(crate) fn prepare_new_run_with_session_thread(
     files: Vec<SelectedFile>,
     provenance: Option<Provenance>,
 ) -> Result<(u64, ChatProjector), String> {
+    prepare_new_run_with_session_thread_after_validation(
+        storage,
+        session_thread,
+        run_id,
+        workspace,
+        subject,
+        files,
+        provenance,
+        || Ok(()),
+    )
+}
+
+fn prepare_new_run_with_session_thread_after_validation<F>(
+    storage: &SharedStorage,
+    session_thread: SessionThreadStart<'_>,
+    run_id: &str,
+    workspace: &str,
+    subject: Option<&str>,
+    files: Vec<SelectedFile>,
+    provenance: Option<Provenance>,
+    after_validation: F,
+) -> Result<(u64, ChatProjector), String>
+where
+    F: FnOnce() -> Result<(), String>,
+{
     // Open and validate every selection before creating a run, so ordinary
     // selection failures cannot leave a rejected submission in the journal.
     let files = open_selected_files(files)?;
@@ -1019,10 +1030,11 @@ pub(crate) fn prepare_new_run_with_session_thread(
         files,
         provenance,
         None,
+        after_validation,
     )
 }
 
-fn prepare_new_run_in_thread(
+fn prepare_new_run_in_thread_after_validation<F>(
     storage: &SharedStorage,
     run_id: &str,
     workspace: &str,
@@ -1030,7 +1042,11 @@ fn prepare_new_run_in_thread(
     files: Vec<SelectedFile>,
     provenance: Option<Provenance>,
     thread_id: &str,
-) -> Result<(u64, ChatProjector), String> {
+    after_validation: F,
+) -> Result<(u64, ChatProjector), String>
+where
+    F: FnOnce() -> Result<(), String>,
+{
     let files = open_selected_files(files)?;
     prepare_opened_run(
         storage,
@@ -1044,10 +1060,11 @@ fn prepare_new_run_in_thread(
         files,
         provenance,
         Some(thread_id),
+        after_validation,
     )
 }
 
-fn prepare_opened_run(
+fn prepare_opened_run<F>(
     storage: &SharedStorage,
     session_thread: SessionThreadStart<'_>,
     run_id: &str,
@@ -1056,7 +1073,11 @@ fn prepare_opened_run(
     files: Vec<OpenSelectedFile>,
     provenance: Option<Provenance>,
     requested_thread_id: Option<&str>,
-) -> Result<(u64, ChatProjector), String> {
+    after_validation: F,
+) -> Result<(u64, ChatProjector), String>
+where
+    F: FnOnce() -> Result<(), String>,
+{
     let mut storage = storage.lock().map_err(|_| attachment_error())?;
     let ChatStorage { journal, cas } = &mut *storage;
     let mut projector = ChatProjector::new();
@@ -1069,30 +1090,37 @@ fn prepare_opened_run(
         };
     }
     projector.apply(&started).map_err(|_| attachment_error())?;
+    let mut after_validation = Some(after_validation);
     if !workspace.is_empty() {
         let thread_id = if let Some(thread_id) = requested_thread_id {
             journal
-                .append_new_run_in_thread(workspace, thread_id, &started)
+                .append_new_run_in_thread_after_validation(workspace, thread_id, &started, || {
+                    after_validation.take().unwrap()()
+                })
+                .and_then(|result| result.map_err(|_| JournalError::Corrupt(attachment_error())))
                 .map(|()| thread_id.to_owned())
-        } else if session_thread.continue_existing {
-            let offered = match session_thread.tracker.offered(workspace, subject) {
-                OfferedThread::AdoptNewest => {
-                    newest_owned_workspace_thread(journal, workspace, subject)
-                        .ok()
-                        .flatten()
-                }
-                OfferedThread::Selected(thread_id) => Some(thread_id),
-                OfferedThread::Fresh => None,
-            };
-            match offered {
-                Some(thread_id) => journal
-                    .append_new_run_in_thread(workspace, &thread_id, &started)
-                    .map(|()| thread_id)
-                    .or_else(|_| journal.append_new_run(workspace, &started)),
-                None => journal.append_new_run(workspace, &started),
-            }
         } else {
-            journal.append_new_run(workspace, &started)
+            after_validation.take().unwrap()()?;
+            if session_thread.continue_existing {
+                let offered = match session_thread.tracker.offered(workspace, subject) {
+                    OfferedThread::AdoptNewest => {
+                        newest_owned_workspace_thread(journal, workspace, subject)
+                            .ok()
+                            .flatten()
+                    }
+                    OfferedThread::Selected(thread_id) => Some(thread_id),
+                    OfferedThread::Fresh => None,
+                };
+                match offered {
+                    Some(thread_id) => journal
+                        .append_new_run_in_thread(workspace, &thread_id, &started)
+                        .map(|()| thread_id)
+                        .or_else(|_| journal.append_new_run(workspace, &started)),
+                    None => journal.append_new_run(workspace, &started),
+                }
+            } else {
+                journal.append_new_run(workspace, &started)
+            }
         }
         .map_err(|error| {
             if requested_thread_id.is_some() && matches!(error, JournalError::InvalidEnvelope(_)) {
@@ -1105,6 +1133,7 @@ fn prepare_opened_run(
             session_thread.tracker.record(thread_id, workspace, subject);
         }
     } else {
+        after_validation.take().unwrap()()?;
         journal
             .append(0, &started)
             .map_err(|_| attachment_error())?;
@@ -2151,6 +2180,7 @@ mod tests {
             opened,
             None,
             None,
+            || Ok(()),
         ) {
             Ok(_) => panic!("changed attachment length must fail"),
             Err(error) => error,

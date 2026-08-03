@@ -47,6 +47,7 @@ pub(crate) struct FakeRunStartBoundaries {
     pub(crate) launched_run: Mutex<Option<String>>,
     pub(crate) auth_error: Option<String>,
     pub(crate) configure_error: Option<String>,
+    pub(crate) protect_error: Option<String>,
     pub(crate) install_error: Option<String>,
     pub(crate) prepare_error: Option<String>,
     pub(crate) projection_error: Option<String>,
@@ -69,6 +70,7 @@ impl FakeRunStartBoundaries {
             launched_run: Mutex::new(None),
             auth_error: None,
             configure_error: None,
+            protect_error: None,
             install_error: None,
             prepare_error: None,
             projection_error: None,
@@ -158,16 +160,6 @@ impl RunStartBoundaries for FakeRunStartBoundaries {
         })
     }
 
-    fn protect_prompt(
-        &self,
-        _run_id: &str,
-        _prompt: &str,
-        _subject: Option<&str>,
-    ) -> Result<(), RunStartError> {
-        self.prompt_protection_calls.fetch_add(1, Ordering::SeqCst);
-        Ok(())
-    }
-
     fn install_active_run(&self, _run: ActiveRun) -> Result<(), RunStartError> {
         if let Some(error) = &self.install_error {
             return Err(RunStartError::InvalidRequest(error.clone()));
@@ -178,6 +170,7 @@ impl RunStartBoundaries for FakeRunStartBoundaries {
     fn prepare_run(
         &self,
         run_id: &str,
+        _prompt: &str,
         grant: &ChatGrant,
         tokens: &TokenSet,
         _files: Vec<SelectedFile>,
@@ -214,8 +207,19 @@ impl RunStartBoundaries for FakeRunStartBoundaries {
                 .journal
                 .lock()
                 .map_err(|_| RunStartError::Persistence(attachment_error()))?;
-            journal
-                .append_new_run_in_thread(&grant.workspace, thread_id, &started)
+            let protect = || {
+                self.prompt_protection_calls.fetch_add(1, Ordering::SeqCst);
+                self.protect_error
+                    .as_ref()
+                    .map_or(Ok(()), |error| Err(error.clone()))
+            };
+            let protection = journal
+                .append_new_run_in_thread_after_validation(
+                    &grant.workspace,
+                    thread_id,
+                    &started,
+                    protect,
+                )
                 .map_err(|error| {
                     if matches!(
                         error,
@@ -226,6 +230,7 @@ impl RunStartBoundaries for FakeRunStartBoundaries {
                         RunStartError::Persistence(attachment_error())
                     }
                 })?;
+            protection.map_err(RunStartError::Persistence)?;
             let prompt = event_envelope(
                 run_id,
                 2,
@@ -239,6 +244,11 @@ impl RunStartBoundaries for FakeRunStartBoundaries {
                 .map_err(|_| RunStartError::Persistence(attachment_error()))?;
             events.push(prompt);
             committed_seq = 2;
+        } else {
+            self.prompt_protection_calls.fetch_add(1, Ordering::SeqCst);
+            if let Some(error) = &self.protect_error {
+                return Err(RunStartError::Persistence(error.clone()));
+            }
         }
         self.journaled_events
             .lock()
