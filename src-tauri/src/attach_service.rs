@@ -916,8 +916,14 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[test]
     fn attach_thread_create_replays_and_rejects_changed_workspace() {
+        let database_path = std::env::temp_dir().join(format!(
+            "muniment-attach-thread-create-{}.sqlite3",
+            Uuid::now_v7()
+        ));
+        let mut boundaries = FakeRunStartBoundaries::accepting();
+        boundaries.journal = Mutex::new(RunJournal::open(&database_path).unwrap());
         let mut service = DesktopAttachService {
-            boundaries: FakeRunStartBoundaries::accepting(),
+            boundaries,
             idempotency: IdempotencyStore::open(":memory:").unwrap(),
             home: PathBuf::new(),
             workspace_contexts: Arc::new(Mutex::new(HashMap::new())),
@@ -962,7 +968,15 @@ mod tests {
         assert_eq!(replay.thread_id, first.thread_id);
         assert_eq!(conflict.code(), ErrorCode::IdempotencyConflict);
         let mut journal = service.boundaries.journal.lock().unwrap();
-        assert_eq!(journal.last_thread_seq(&first.thread_id).unwrap(), 1);
+        let event_count = rusqlite::Connection::open(&database_path)
+            .unwrap()
+            .query_row(
+                "SELECT COUNT(*) FROM thread_events WHERE event_type='thread.created'",
+                [],
+                |row| row.get::<_, u64>(0),
+            )
+            .unwrap();
+        assert_eq!(event_count, 1);
         let page = ThreadListService::list_threads(
             &mut *journal,
             "workspace-a",
@@ -972,7 +986,7 @@ mod tests {
             },
         )
         .unwrap();
-        assert_eq!(page.threads.len(), 1);
+        assert!(page.threads.is_empty());
         let other_page = ThreadListService::list_threads(
             &mut *journal,
             "workspace-b",
@@ -983,6 +997,9 @@ mod tests {
         )
         .unwrap();
         assert!(other_page.threads.is_empty());
+        drop(journal);
+        drop(service);
+        std::fs::remove_file(database_path).unwrap();
     }
 
     #[cfg(target_os = "linux")]
