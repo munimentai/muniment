@@ -18,7 +18,8 @@ use muniment_core::journal::reducer::{
     RunStatus,
 };
 use muniment_core::journal::{
-    EventEnvelope, EventPayload, JournalError, Provenance, RunEventType, RunJournal,
+    EventEnvelope, EventPayload, JournalCommitHint, JournalError, Provenance, RunEventType,
+    RunJournal,
 };
 use muniment_core::sidecar::pi_chat::{
     cancel_command, ExtensionUiAnswer, PiChatEvent, PiImageContent, PiRunAdapter, PromptCommand,
@@ -241,6 +242,26 @@ pub(crate) trait RunStartBoundaries {
         workspace: &str,
         request: ThreadOpenRequest,
     ) -> Result<ThreadOpenPage, ProtocolError>;
+    #[cfg(target_os = "linux")]
+    fn stream_run(
+        &self,
+        workspace: &str,
+        run_id: &str,
+        after_run_seq: u64,
+    ) -> Result<muniment_core::attach::linux::RunStreamPage, ProtocolError>;
+    #[cfg(target_os = "linux")]
+    fn subscribe_run_commits(
+        &self,
+        run_id: &str,
+    ) -> Result<(u64, std::sync::mpsc::Receiver<JournalCommitHint>), ProtocolError>;
+    #[cfg(target_os = "linux")]
+    fn queue_attach_permission_answer(
+        &self,
+        workspace: &str,
+        run_id: &str,
+        gate_id: &str,
+        answer: ChatPermissionAnswer,
+    ) -> Result<(), RunStartError>;
     fn active_run_exists(&self) -> bool;
     fn fresh_tokens(&self) -> Result<TokenSet, RunStartError>;
     fn configure_run(
@@ -427,6 +448,64 @@ impl<R: tauri::Runtime> RunStartBoundaries for TauriRunStartBoundaries<R> {
             .lock()
             .map_err(|_| ProtocolError::persistence_failed())?;
         ThreadListService::open_thread(&mut storage.journal, workspace, request)
+    }
+
+    #[cfg(target_os = "linux")]
+    fn stream_run(
+        &self,
+        workspace: &str,
+        run_id: &str,
+        after_run_seq: u64,
+    ) -> Result<muniment_core::attach::linux::RunStreamPage, ProtocolError> {
+        let state = self.state();
+        let mut storage = state
+            .storage
+            .lock()
+            .map_err(|_| ProtocolError::persistence_failed())?;
+        ThreadListService::stream_run(&mut storage.journal, workspace, run_id, after_run_seq)
+    }
+
+    #[cfg(target_os = "linux")]
+    fn subscribe_run_commits(
+        &self,
+        run_id: &str,
+    ) -> Result<(u64, std::sync::mpsc::Receiver<JournalCommitHint>), ProtocolError> {
+        self.state()
+            .storage
+            .lock()
+            .map_err(|_| ProtocolError::persistence_failed())?
+            .journal
+            .subscribe_commits(run_id)
+            .map_err(|_| ProtocolError::persistence_failed())
+    }
+
+    #[cfg(target_os = "linux")]
+    fn queue_attach_permission_answer(
+        &self,
+        workspace: &str,
+        run_id: &str,
+        gate_id: &str,
+        answer: ChatPermissionAnswer,
+    ) -> Result<(), RunStartError> {
+        let state = self.state();
+        let active = state
+            .active
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let run = active
+            .as_ref()
+            .filter(|run| run.id == run_id && run.workspace == workspace)
+            .ok_or_else(|| {
+                RunStartError::InvalidRequest("That reply is no longer active.".into())
+            })?;
+        run.permission_answers
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push_back(PendingPermissionAnswer {
+                gate_id: gate_id.to_owned(),
+                answer,
+            });
+        Ok(())
     }
 
     fn active_run_exists(&self) -> bool {
