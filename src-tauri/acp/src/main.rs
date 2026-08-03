@@ -4,14 +4,14 @@ use agent_client_protocol::schema::{
         LoadSessionRequest, LoadSessionResponse, NewSessionRequest, NewSessionResponse,
         PermissionOption, PermissionOptionKind, PromptRequest, PromptResponse,
         RequestPermissionOutcome, RequestPermissionRequest, RequestPermissionResponse,
-        SessionNotification, SessionUpdate, StopReason, TextContent, ToolCallContent,
+        SessionNotification, SessionUpdate, StopReason, TextContent, ToolCall, ToolCallContent,
         ToolCallStatus, ToolCallUpdate, ToolCallUpdateFields,
     },
     ProtocolVersion,
 };
 use muniment_attach::{
     handshake_as_with_credential, AuthorizedClient, ClientError, Id, PermissionDecision,
-    RunStreamMessage,
+    RedactedRunEvent, RunStreamMessage,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -251,6 +251,68 @@ fn replayed_tool_update(
             .title(text.unwrap_or_default())
             .content(Vec::new()),
     ))
+}
+
+fn live_tool_update(event: &RedactedRunEvent) -> Option<SessionUpdate> {
+    let effect_id = event.effect_id.clone()?;
+    match event.event_type.as_str() {
+        "tool.effect.started" => Some(SessionUpdate::ToolCall(
+            ToolCall::new(effect_id, event.display_name.clone().unwrap_or_default())
+                .status(ToolCallStatus::Pending)
+                .content(Vec::new()),
+        )),
+        "tool.effect.completed" => Some(SessionUpdate::ToolCallUpdate(ToolCallUpdate::new(
+            effect_id,
+            ToolCallUpdateFields::new().status(ToolCallStatus::Completed),
+        ))),
+        "tool.effect.failed" => Some(SessionUpdate::ToolCallUpdate(ToolCallUpdate::new(
+            effect_id,
+            ToolCallUpdateFields::new().status(ToolCallStatus::Failed),
+        ))),
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+mod live_tool_tests {
+    use super::*;
+
+    fn event(event_type: &str, display_name: Option<&str>) -> RedactedRunEvent {
+        RedactedRunEvent {
+            run_seq: 1,
+            event_type: event_type.to_owned(),
+            event_version: 1,
+            recorded_at: "2026-08-03T00:00:00Z".to_owned(),
+            text: None,
+            effect_id: Some("tool-1".to_owned()),
+            display_name: display_name.map(str::to_owned),
+            receipt: None,
+        }
+    }
+
+    #[test]
+    fn maps_live_tool_effects_without_inventing_a_title() {
+        let started = live_tool_update(&event("tool.effect.started", None)).unwrap();
+        assert_eq!(
+            serde_json::to_value(started).unwrap(),
+            json!({"sessionUpdate": "tool_call", "toolCallId": "tool-1", "title": ""})
+        );
+
+        for (event_type, status) in [
+            ("tool.effect.completed", "completed"),
+            ("tool.effect.failed", "failed"),
+        ] {
+            let update = live_tool_update(&event(event_type, None)).unwrap();
+            assert_eq!(
+                serde_json::to_value(update).unwrap(),
+                json!({
+                    "sessionUpdate": "tool_call_update",
+                    "toolCallId": "tool-1",
+                    "status": status
+                })
+            );
+        }
+    }
 }
 
 fn send_load_updates(
@@ -566,6 +628,14 @@ fn prompt(
         loop {
             let (run_seq, terminal) = match client.read_run_stream_message()? {
                 RunStreamMessage::Event(event) => {
+                    if let Some(update) = live_tool_update(&event) {
+                        let update = SessionNotification::new(session_id.clone(), update);
+                        write_message(
+                            output,
+                            json!({"jsonrpc": "2.0", "method": "session/update", "params": update}),
+                        )
+                        .map_err(|_| PromptFailure::Client(ClientError::ConnectionClosed))?;
+                    }
                     if let Some(text) = event.text {
                         let update = SessionNotification::new(
                             session_id.clone(),
