@@ -3427,6 +3427,128 @@ fn run_stream_page_projects_tool_effect_fields() {
 }
 
 #[test]
+fn run_stream_tool_effect_projection_enforces_identity_bounds() {
+    const RUN: &str = "0190a100-0000-7000-8000-000000000044";
+    let boundary = "x".repeat(65_536);
+    let valid = RunEventProjection {
+        effect_id: Some(boundary.clone()),
+        display_name: Some(boundary.clone()),
+        tool_effect_valid: true,
+        ..stream_projection(RUN, 1, "tool.effect.started".into())
+    };
+    let invalid = [
+        RunEventProjection {
+            effect_id: Some(String::new()),
+            tool_effect_valid: true,
+            ..stream_projection(RUN, 1, "tool.effect.started".into())
+        },
+        RunEventProjection {
+            effect_id: Some("x".repeat(65_537)),
+            tool_effect_valid: true,
+            ..stream_projection(RUN, 1, "tool.effect.started".into())
+        },
+        RunEventProjection {
+            effect_id: Some("private-effect".into()),
+            display_name: Some("x".repeat(65_537)),
+            tool_effect_valid: true,
+            ..stream_projection(RUN, 1, "tool.effect.started".into())
+        },
+        RunEventProjection {
+            effect_id: Some("private-effect".into()),
+            display_name: Some("private-name".into()),
+            tool_effect_valid: true,
+            ..stream_projection(RUN, 1, "tool.effect.completed".into())
+        },
+        RunEventProjection {
+            effect_id: Some("private-effect".into()),
+            display_name: Some("private-name".into()),
+            tool_effect_valid: true,
+            ..stream_projection(RUN, 1, "tool.effect.failed".into())
+        },
+    ];
+
+    let mut valid_service = StreamService {
+        page: RunStreamPage {
+            run_id: RUN.into(),
+            first_available_run_seq: 1,
+            current_run_seq: 1,
+            events: vec![valid],
+            exhausted: true,
+        },
+    };
+    let (mut client, server) = UnixStream::pair().unwrap();
+    client.write_all(&hello(1, 1)).unwrap();
+    client
+        .write_all(&request(
+            45,
+            Operation::RunStream,
+            json!({"run_id": RUN, "after_run_seq": 0}),
+        ))
+        .unwrap();
+    client.shutdown(Shutdown::Write).unwrap();
+    assert_eq!(
+        dispatch_session(
+            &mut client,
+            server,
+            TestClock(Rc::new(Cell::new(Duration::ZERO))),
+            &mut valid_service,
+        ),
+        Ok(())
+    );
+    let _: Response = read_frame(&mut client);
+    let Envelope::Event(event) = read_frame::<Envelope>(&mut client) else {
+        panic!("expected boundary tool effect")
+    };
+    assert_eq!(event.body["payload"]["effect_id"], boundary);
+    assert_eq!(event.body["payload"]["display_name"], boundary);
+
+    for projection in invalid {
+        let mut service = StreamService {
+            page: RunStreamPage {
+                run_id: RUN.into(),
+                first_available_run_seq: 1,
+                current_run_seq: 2,
+                events: vec![
+                    projection,
+                    RunEventProjection {
+                        effect_id: Some("later-private-effect".into()),
+                        tool_effect_valid: true,
+                        ..stream_projection(RUN, 2, "tool.effect.completed".into())
+                    },
+                ],
+                exhausted: true,
+            },
+        };
+        let (mut client, server) = UnixStream::pair().unwrap();
+        client.write_all(&hello(1, 1)).unwrap();
+        client
+            .write_all(&request(
+                46,
+                Operation::RunStream,
+                json!({"run_id": RUN, "after_run_seq": 0}),
+            ))
+            .unwrap();
+        client.shutdown(Shutdown::Write).unwrap();
+        assert_eq!(
+            dispatch_session(
+                &mut client,
+                server,
+                TestClock(Rc::new(Cell::new(Duration::ZERO))),
+                &mut service,
+            ),
+            Ok(())
+        );
+        let error: ErrorEnvelope = read_frame(&mut client);
+        assert_eq!(error.error.code(), ErrorCode::PersistenceFailed);
+        let encoded = serde_json::to_string(&error).unwrap();
+        assert!(!encoded.contains("private-effect"));
+        assert!(!encoded.contains("private-name"));
+        assert!(!encoded.contains("later-private-effect"));
+        assert_eq!(client.read(&mut [0]).unwrap(), 0);
+    }
+}
+
+#[test]
 fn thread_open_keeps_an_active_suffix_withheld_until_terminal_projection() {
     const RUN: &str = "0190a106-0000-7000-8000-000000000001";
     let mut journal = RunJournal::open(":memory:").unwrap();
