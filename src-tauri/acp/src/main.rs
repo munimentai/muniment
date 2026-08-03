@@ -10,7 +10,7 @@ use muniment_attach::{
     handshake_as_with_credential, ClientError, Id, PermissionDecision, RunStreamMessage,
 };
 use serde_json::{json, Value};
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::io::{self, BufRead, BufReader, Read, Write};
 #[cfg(unix)]
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
@@ -56,8 +56,16 @@ fn serve(input: impl BufRead + Send + 'static, mut output: impl Write) -> io::Re
         }
     });
     let mut sessions = HashMap::new();
+    let mut pending = VecDeque::new();
     let result = (|| {
-        while let Ok(line) = receiver.recv() {
+        loop {
+            let line = match pending.pop_front() {
+                Some(line) => line,
+                None => match receiver.recv() {
+                    Ok(line) => line,
+                    Err(_) => break,
+                },
+            };
             let line = line?;
             let Ok(message) = serde_json::from_str::<Value>(&line) else {
                 write_message(
@@ -66,7 +74,9 @@ fn serve(input: impl BufRead + Send + 'static, mut output: impl Write) -> io::Re
                 )?;
                 continue;
             };
-            if let Some(response) = response(message, &mut sessions, &mut output, &receiver) {
+            if let Some(response) =
+                response(message, &mut sessions, &mut output, &receiver, &mut pending)
+            {
                 write_message(&mut output, response)?;
             }
         }
@@ -83,6 +93,7 @@ fn response(
     sessions: &mut HashMap<String, Session>,
     output: &mut impl Write,
     input: &Receiver<io::Result<String>>,
+    pending: &mut VecDeque<io::Result<String>>,
 ) -> Option<Value> {
     let object = message.as_object()?;
     let method = object.get("method")?.as_str()?;
@@ -92,7 +103,14 @@ fn response(
     match method {
         "initialize" => Some(initialize(id, object.get("params"))),
         "session/new" => Some(new_session(id, object.get("params"), sessions)),
-        "session/prompt" => Some(prompt(id, object.get("params"), sessions, output, input)),
+        "session/prompt" => Some(prompt(
+            id,
+            object.get("params"),
+            sessions,
+            output,
+            input,
+            pending,
+        )),
         "session/load" => Some(json!({
             "jsonrpc": "2.0",
             "id": id,
@@ -170,7 +188,8 @@ fn prompt(
     params: Option<&Value>,
     sessions: &mut HashMap<String, Session>,
     output: &mut impl Write,
-    _input: &Receiver<io::Result<String>>,
+    input: &Receiver<io::Result<String>>,
+    pending: &mut VecDeque<io::Result<String>>,
 ) -> Value {
     let Some(params) = params else {
         return invalid_params(id, "session/prompt parameters are invalid");
@@ -254,7 +273,7 @@ fn prompt(
                         "run.failed" => Some(Err(PromptFailure::Run)),
                         _ => None,
                     };
-                    (event.run_seq, terminal)
+                    (Some(event.run_seq), terminal)
                 }
                 RunStreamMessage::PermissionPending(permission) => {
                     client.answer_permission(
@@ -262,13 +281,34 @@ fn prompt(
                         &permission.gate_id,
                         PermissionDecision::Deny,
                     )?;
-                    (permission.run_seq, None)
+                    (Some(permission.run_seq), None)
                 }
-                RunStreamMessage::CaughtUp { .. } => continue,
+                RunStreamMessage::CaughtUp { .. } => (None, None),
             };
-            client.acknowledge_run_cursor(run_seq)?;
+            if let Some(run_seq) = run_seq {
+                client.acknowledge_run_cursor(run_seq)?;
+            }
             if let Some(terminal) = terminal {
                 break terminal;
+            }
+            while let Ok(line) = input.try_recv() {
+                let cancel = line.as_ref().ok().and_then(|line| {
+                    let message = serde_json::from_str::<Value>(line).ok()?;
+                    let object = message.as_object()?;
+                    (object.get("id").is_none()
+                        && object.get("method").and_then(Value::as_str) == Some("session/cancel")
+                        && object
+                            .get("params")
+                            .and_then(|params| params.get("sessionId"))
+                            .and_then(Value::as_str)
+                            == Some(&session_id))
+                    .then_some(())
+                });
+                if cancel.is_some() {
+                    let _ = client.run_cancel(&accepted.run_id);
+                } else {
+                    pending.push_back(line);
+                }
             }
         }
     })();
