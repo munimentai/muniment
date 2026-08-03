@@ -232,6 +232,7 @@ pub enum ErrorCode {
     InvalidCursor,
     InvalidArtifactCursor,
     InvalidRequest,
+    ThreadNotFound,
     Unauthorized,
     UnsupportedOperation,
 }
@@ -412,6 +413,8 @@ pub enum ErrorMessage {
     InvalidArtifactCursor,
     #[serde(rename = "The request is invalid.")]
     InvalidRequest,
+    #[serde(rename = "The thread was not found.")]
+    ThreadNotFound,
     #[serde(rename = "The capability is not authorized.")]
     Unauthorized,
     #[serde(rename = "The operation is not supported.")]
@@ -490,6 +493,10 @@ impl ProtocolError {
         Self::simple(ErrorCode::InvalidRequest, ErrorMessage::InvalidRequest)
     }
 
+    pub fn thread_not_found() -> Self {
+        Self::simple(ErrorCode::ThreadNotFound, ErrorMessage::ThreadNotFound)
+    }
+
     pub fn unauthorized() -> Self {
         Self::simple(ErrorCode::Unauthorized, ErrorMessage::Unauthorized)
     }
@@ -556,6 +563,7 @@ impl<'de> Deserialize<'de> for ProtocolError {
             (ErrorCode::InvalidCursor, None, None) => Self::invalid_cursor(),
             (ErrorCode::InvalidArtifactCursor, None, None) => Self::invalid_artifact_cursor(),
             (ErrorCode::InvalidRequest, None, None) => Self::invalid_request(),
+            (ErrorCode::ThreadNotFound, None, None) => Self::thread_not_found(),
             (ErrorCode::Unauthorized, None, None) => Self::unauthorized(),
             (ErrorCode::UnsupportedOperation, None, None) => Self::unsupported_operation(),
             _ => return Err(de::Error::custom("invalid error schema")),
