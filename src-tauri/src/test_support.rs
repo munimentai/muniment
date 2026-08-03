@@ -4,7 +4,8 @@ use std::sync::Mutex;
 
 #[cfg(target_os = "linux")]
 use muniment_core::attach::linux::{
-    ThreadListPage, ThreadListRequest, ThreadListService, ThreadOpenPage, ThreadOpenRequest,
+    RunStreamPage, ThreadListPage, ThreadListRequest, ThreadListService, ThreadOpenPage,
+    ThreadOpenRequest,
 };
 #[cfg(target_os = "linux")]
 use muniment_core::attach::ProtocolError;
@@ -12,13 +13,13 @@ use muniment_core::auth::TokenSet;
 use muniment_core::journal::reducer::ChatProjector;
 #[cfg(target_os = "linux")]
 use muniment_core::journal::RunJournal;
-use muniment_core::journal::{EventEnvelope, Provenance};
+use muniment_core::journal::{EventEnvelope, JournalCommitHint, Provenance};
 use serde_json::json;
 use serde_json::Value;
 
 use crate::chat::{
     attachment_error, chat_attachments, event_envelope, ActiveRun, ChatAttachment, ChatGrant,
-    RunStartBoundaries, RunStartError, RunStartLaunch, SelectedFile,
+    ChatPermissionAnswer, RunStartBoundaries, RunStartError, RunStartLaunch, SelectedFile,
 };
 
 pub(crate) fn append_test_event(
@@ -57,6 +58,18 @@ pub(crate) struct FakeRunStartBoundaries {
     pub(crate) cancel_calls: AtomicUsize,
     pub(crate) active_run: Mutex<Option<(String, String)>>,
     #[cfg(target_os = "linux")]
+    pub(crate) queued_permission_answers: Mutex<Vec<(String, ChatPermissionAnswer)>>,
+    #[cfg(target_os = "linux")]
+    pub(crate) permission_auto_commit: bool,
+    #[cfg(target_os = "linux")]
+    pub(crate) permission_competing_answer: bool,
+    #[cfg(target_os = "linux")]
+    pub(crate) permission_resolution_sender:
+        Mutex<Option<std::sync::mpsc::SyncSender<Option<u64>>>>,
+    #[cfg(target_os = "linux")]
+    pub(crate) permission_commit_sender:
+        Mutex<Option<std::sync::mpsc::SyncSender<JournalCommitHint>>>,
+    #[cfg(target_os = "linux")]
     pub(crate) journal: Mutex<RunJournal>,
 }
 
@@ -81,6 +94,16 @@ impl FakeRunStartBoundaries {
             clear_calls: AtomicUsize::new(0),
             cancel_calls: AtomicUsize::new(0),
             active_run: Mutex::new(None),
+            #[cfg(target_os = "linux")]
+            queued_permission_answers: Mutex::new(Vec::new()),
+            #[cfg(target_os = "linux")]
+            permission_auto_commit: true,
+            #[cfg(target_os = "linux")]
+            permission_competing_answer: false,
+            #[cfg(target_os = "linux")]
+            permission_resolution_sender: Mutex::new(None),
+            #[cfg(target_os = "linux")]
+            permission_commit_sender: Mutex::new(None),
             #[cfg(target_os = "linux")]
             journal: Mutex::new(RunJournal::open(":memory:").unwrap()),
         }
@@ -112,6 +135,116 @@ impl RunStartBoundaries for FakeRunStartBoundaries {
             .lock()
             .map_err(|_| ProtocolError::persistence_failed())?;
         ThreadListService::open_thread(&mut *journal, workspace, request)
+    }
+
+    #[cfg(target_os = "linux")]
+    fn stream_run(
+        &self,
+        workspace: &str,
+        run_id: &str,
+        after_run_seq: u64,
+    ) -> Result<RunStreamPage, ProtocolError> {
+        ThreadListService::stream_run(
+            &mut *self
+                .journal
+                .lock()
+                .map_err(|_| ProtocolError::persistence_failed())?,
+            workspace,
+            run_id,
+            after_run_seq,
+        )
+    }
+
+    #[cfg(target_os = "linux")]
+    fn subscribe_run_commits(
+        &self,
+        run_id: &str,
+    ) -> Result<(u64, std::sync::mpsc::Receiver<JournalCommitHint>), ProtocolError> {
+        let high_water = self
+            .journal
+            .lock()
+            .map_err(|_| ProtocolError::persistence_failed())?
+            .run_event_types()
+            .map_err(|_| ProtocolError::persistence_failed())?
+            .into_iter()
+            .filter(|event| event.run_id == run_id)
+            .last()
+            .map_or(0, |event| event.run_seq);
+        let (sender, receiver) = std::sync::mpsc::sync_channel(4);
+        *self.permission_commit_sender.lock().unwrap() = Some(sender);
+        Ok((high_water, receiver))
+    }
+
+    #[cfg(target_os = "linux")]
+    fn queue_attach_permission_answer(
+        &self,
+        workspace: &str,
+        run_id: &str,
+        gate_id: &str,
+        answer: ChatPermissionAnswer,
+    ) -> Result<std::sync::mpsc::Receiver<Option<u64>>, RunStartError> {
+        if !self
+            .active_run
+            .lock()
+            .unwrap()
+            .as_ref()
+            .is_some_and(|active| active.0 == run_id && active.1 == workspace)
+        {
+            return Err(RunStartError::InvalidRequest(
+                "That reply is no longer active.".into(),
+            ));
+        }
+        let (resolved_sender, resolved_receiver) = std::sync::mpsc::sync_channel(1);
+        self.queued_permission_answers
+            .lock()
+            .unwrap()
+            .push((gate_id.to_owned(), answer.clone()));
+        if !self.permission_auto_commit {
+            *self.permission_resolution_sender.lock().unwrap() = Some(resolved_sender);
+            return Ok(resolved_receiver);
+        }
+        let mut journal = self.journal.lock().unwrap();
+        let seq = journal
+            .run_event_types()
+            .unwrap()
+            .into_iter()
+            .filter(|event| event.run_id == run_id)
+            .last()
+            .unwrap()
+            .run_seq
+            + 1;
+        journal
+            .append(
+                seq - 1,
+                &event_envelope(
+                    run_id,
+                    seq,
+                    "permission.resolved",
+                    json!({
+                        "gate_id": gate_id,
+                        "decision": if self.permission_competing_answer {
+                            ChatPermissionAnswer::Confirm(!matches!(answer, ChatPermissionAnswer::Confirm(true))).decision()
+                        } else {
+                            answer.decision()
+                        }
+                    }),
+                    None,
+                ),
+            )
+            .unwrap();
+        drop(journal);
+        if let Some(sender) = self.permission_commit_sender.lock().unwrap().as_ref() {
+            sender
+                .send(JournalCommitHint {
+                    run_id: run_id.to_owned(),
+                    run_seq: seq,
+                })
+                .unwrap();
+        }
+        resolved_sender
+            .send((!self.permission_competing_answer).then_some(seq))
+            .unwrap();
+        Ok(resolved_receiver)
     }
 
     fn active_run_exists(&self) -> bool {
