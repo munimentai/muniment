@@ -411,3 +411,30 @@ paging, the complete replay mapping above, and contract tests for every failure
 path. Until that slice ships, it continues to advertise `loadSession: false`
 and reject `session/load`. The first implementation slice is **ACP session load
 translation**. This amendment changes no code.
+
+## Amendment — 2026-08-03: live tool-call translation
+
+The adapter maps each live `tool.effect.started` event to one ACP
+`session/update` notification containing `SessionUpdate::ToolCall`. It uses the
+event's `effect_id` as the tool-call ID, the released `display_name` as the
+title, `pending` as the status, and empty content. When `display_name` is
+absent, the title is the empty string. The adapter invents no replacement.
+
+The adapter maps the matching live `tool.effect.completed` event to a
+`session/update` notification containing `SessionUpdate::ToolCallUpdate`. The
+update uses the same `effect_id` as its tool-call ID and sets the status to
+`completed`. It maps `tool.effect.failed` in the same way and sets the status
+to `failed`. Terminal updates add no title, content, output, or error detail.
+
+Live and replayed tool-call IDs intentionally differ. Live updates use
+`effect_id` so terminal events can update the call that the started event
+created. Replay keeps its deterministic `<session-id>:<position>` IDs because
+`thread.open` exposes ordered entries rather than one live update stream.
+This difference is safe because `session/load` sends a bounded snapshot before
+it returns, while live IDs correlate updates within a later run stream. The
+adapter does not join a replayed call to a live call by ID.
+
+This amendment leaves the `session/request_permission` gate translation and
+the `session/load` replay mapping unchanged. The implementation slice is
+**ACP live tool-call translation**. It adds the three live projections and
+their contract tests. This amendment changes no code.
