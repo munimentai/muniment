@@ -138,6 +138,19 @@ impl RunStartBoundaries for FakeRunStartBoundaries {
     }
 
     #[cfg(target_os = "linux")]
+    fn create_thread(
+        &self,
+        workspace: &str,
+        provenance: Provenance,
+    ) -> Result<String, ProtocolError> {
+        self.journal
+            .lock()
+            .map_err(|_| ProtocolError::persistence_failed())?
+            .create_thread(workspace, "2026-01-01T00:00:00Z", provenance)
+            .map_err(|_| ProtocolError::persistence_failed())
+    }
+
+    #[cfg(target_os = "linux")]
     fn stream_run(
         &self,
         workspace: &str,
