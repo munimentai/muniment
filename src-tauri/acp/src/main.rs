@@ -629,6 +629,9 @@ fn prompt(
         loop {
             let (run_seq, terminal) = match client.read_run_stream_message()? {
                 RunStreamMessage::Event(event) => {
+                    if event.run_seq <= last_processed_run_seq {
+                        continue;
+                    }
                     if let Some(update) = live_tool_update(&event) {
                         let update = SessionNotification::new(session_id.clone(), update);
                         write_message(
@@ -660,6 +663,9 @@ fn prompt(
                     (Some(event.run_seq), terminal)
                 }
                 RunStreamMessage::PermissionPending(permission) => {
+                    if permission.run_seq <= last_processed_run_seq {
+                        continue;
+                    }
                     let request_id = *next_request_id;
                     *next_request_id = next_request_id.wrapping_add(1);
                     let content = permission

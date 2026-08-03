@@ -647,7 +647,7 @@ fn prompt_rejects_an_unknown_session_without_an_attach() {
 }
 
 #[cfg(target_os = "linux")]
-fn scripted_prompt_ending(event_type: &str, stream_resumable: Option<bool>) -> Vec<Value> {
+fn scripted_prompt_ending(event_type: &str, stream_closed_body: Option<Value>) -> Vec<Value> {
     use muniment_attach::{
         authorized_with_client_credential, encode_frame, welcome, Event, EventName, Id, Protocol,
         Response, Success,
@@ -755,7 +755,34 @@ fn scripted_prompt_ending(event_type: &str, stream_resumable: Option<bool>) -> V
             }),
         );
 
-        if let Some(resumable) = stream_resumable {
+        if let Some(stream_closed_body) = stream_closed_body {
+            let resumable = stream_closed_body["resumable"].as_bool().unwrap_or(false);
+            if resumable {
+                stream
+                    .write_all(
+                        &encode_frame(&Event {
+                            protocol: Protocol,
+                            subscription_id: Id::new(first_subscription).unwrap(),
+                            event: EventName::RunEvent,
+                            run_id: Some(Id::new(run_id).unwrap()),
+                            run_seq: Some(2),
+                            body: json!({
+                                "event_type": "model.stream.delta", "event_version": 1,
+                                "recorded_at": "2026-08-03T00:00:01Z",
+                                "payload": {"withheld": false, "text": "Once"}
+                            }),
+                        })
+                        .unwrap(),
+                    )
+                    .unwrap();
+                let acknowledgement = read_frame(&mut stream);
+                assert_eq!(acknowledgement["operation"], "run.cursor_ack");
+                respond(
+                    &mut stream,
+                    &acknowledgement,
+                    json!({"subscription_id": first_subscription, "through_run_seq": 2}),
+                );
+            }
             stream
                 .write_all(
                     &encode_frame(&Event {
@@ -763,8 +790,8 @@ fn scripted_prompt_ending(event_type: &str, stream_resumable: Option<bool>) -> V
                         subscription_id: Id::new(first_subscription).unwrap(),
                         event: EventName::StreamClosed,
                         run_id: Some(Id::new(run_id).unwrap()),
-                        run_seq: Some(1),
-                        body: json!({"code": "closed", "resumable": resumable}),
+                        run_seq: Some(if resumable { 2 } else { 1 }),
+                        body: stream_closed_body,
                     })
                     .unwrap(),
                 )
@@ -772,14 +799,14 @@ fn scripted_prompt_ending(event_type: &str, stream_resumable: Option<bool>) -> V
             if resumable {
                 let resumed = read_frame(&mut stream);
                 assert_eq!(resumed["operation"], "run.stream");
-                assert_eq!(resumed["body"]["after_run_seq"], 1);
+                assert_eq!(resumed["body"]["after_run_seq"], 2);
                 let resumed_subscription = "01900000-0000-7000-8000-000000000025";
                 respond(
                     &mut stream,
                     &resumed,
                     json!({
                         "subscription_id": resumed_subscription, "run_id": run_id,
-                        "first_available_run_seq": 2, "current_run_seq": 2,
+                        "first_available_run_seq": 2, "current_run_seq": 3,
                         "window": {"max_events": 16, "max_bytes": 1048576, "max_text_bytes": 262144}
                     }),
                 );
@@ -792,8 +819,25 @@ fn scripted_prompt_ending(event_type: &str, stream_resumable: Option<bool>) -> V
                             run_id: Some(Id::new(run_id).unwrap()),
                             run_seq: Some(2),
                             body: json!({
-                                "event_type": "run.completed", "event_version": 1,
+                                "event_type": "model.stream.delta", "event_version": 1,
                                 "recorded_at": "2026-08-03T00:00:01Z",
+                                "payload": {"withheld": false, "text": "Once"}
+                            }),
+                        })
+                        .unwrap(),
+                    )
+                    .unwrap();
+                stream
+                    .write_all(
+                        &encode_frame(&Event {
+                            protocol: Protocol,
+                            subscription_id: Id::new(resumed_subscription).unwrap(),
+                            event: EventName::RunEvent,
+                            run_id: Some(Id::new(run_id).unwrap()),
+                            run_seq: Some(3),
+                            body: json!({
+                                "event_type": "run.completed", "event_version": 1,
+                                "recorded_at": "2026-08-03T00:00:02Z",
                                 "payload": {"withheld": true}
                             }),
                         })
@@ -805,7 +849,7 @@ fn scripted_prompt_ending(event_type: &str, stream_resumable: Option<bool>) -> V
                 respond(
                     &mut stream,
                     &acknowledgement,
-                    json!({"subscription_id": resumed_subscription, "through_run_seq": 2}),
+                    json!({"subscription_id": resumed_subscription, "through_run_seq": 3}),
                 );
             }
         } else {
@@ -871,7 +915,7 @@ fn prompt_ends_when_a_run_needs_attention() {
 #[cfg(target_os = "linux")]
 #[test]
 fn prompt_ends_when_a_run_stream_cannot_resume() {
-    let responses = scripted_prompt_ending("", Some(false));
+    let responses = scripted_prompt_ending("", Some(json!({"code": "closed", "resumable": false})));
     assert_eq!(responses.len(), 1);
     assert_eq!(responses[0]["error"]["code"], -32000);
     assert_eq!(
@@ -882,10 +926,34 @@ fn prompt_ends_when_a_run_stream_cannot_resume() {
 
 #[cfg(target_os = "linux")]
 #[test]
+fn prompt_ends_when_a_run_stream_omits_resumable() {
+    let responses = scripted_prompt_ending("", Some(json!({"code": "closed"})));
+    assert_eq!(responses[0]["error"]["code"], -32000);
+    assert_eq!(
+        responses[0]["error"]["message"],
+        "Muniment run stream closed"
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn prompt_ends_when_a_run_stream_has_a_non_boolean_resumable() {
+    let responses = scripted_prompt_ending("", Some(json!({"code": "closed", "resumable": "yes"})));
+    assert_eq!(responses[0]["error"]["code"], -32000);
+    assert_eq!(
+        responses[0]["error"]["message"],
+        "Muniment run stream closed"
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
 fn prompt_resubscribes_when_a_run_stream_can_resume() {
-    let responses = scripted_prompt_ending("", Some(true));
-    assert_eq!(responses.len(), 1);
-    assert_eq!(responses[0]["result"]["stopReason"], "end_turn");
+    let responses = scripted_prompt_ending("", Some(json!({"code": "closed", "resumable": true})));
+    assert_eq!(responses.len(), 2);
+    assert_eq!(responses[0]["method"], "session/update");
+    assert_eq!(responses[0]["params"]["update"]["content"]["text"], "Once");
+    assert_eq!(responses[1]["result"]["stopReason"], "end_turn");
 }
 
 #[cfg(target_os = "linux")]
