@@ -570,21 +570,18 @@ fn load_replays_all_entry_kinds_across_pages_before_responding() {
     assert_eq!(
         responses[3]["params"]["update"],
         json!({
-            "sessionUpdate": "tool_call_update",
+            "sessionUpdate": "tool_call",
             "toolCallId": format!("{session_id}:2"),
-            "status": "pending",
-            "title": "Read file",
-            "content": []
+            "title": "Read file"
         })
     );
     assert_eq!(
         responses[4]["params"]["update"],
         json!({
-            "sessionUpdate": "tool_call_update",
+            "sessionUpdate": "tool_call",
             "toolCallId": format!("{session_id}:3"),
             "status": "completed",
-            "title": "Ran command",
-            "content": []
+            "title": "Ran command"
         })
     );
     assert_eq!(
@@ -597,21 +594,18 @@ fn load_replays_all_entry_kinds_across_pages_before_responding() {
     assert_eq!(
         responses[6]["params"]["update"],
         json!({
-            "sessionUpdate": "tool_call_update",
+            "sessionUpdate": "tool_call",
             "toolCallId": format!("{session_id}:5"),
             "status": "failed",
-            "title": "",
-            "content": []
+            "title": ""
         })
     );
     assert_eq!(
         responses[7]["params"]["update"],
         json!({
-            "sessionUpdate": "tool_call_update",
+            "sessionUpdate": "tool_call",
             "toolCallId": format!("{session_id}:6"),
-            "status": "pending",
-            "title": "Allow write",
-            "content": []
+            "title": "Allow write"
         })
     );
     assert_eq!(
@@ -625,6 +619,12 @@ fn load_replays_all_entry_kinds_across_pages_before_responding() {
     assert!(responses[1..9]
         .iter()
         .all(|response| response["method"] == "session/update"));
+    assert_eq!(
+        [3, 4, 6, 7].map(|index| responses[index]["params"]["update"]["status"]
+            .as_str()
+            .unwrap_or("pending")),
+        ["pending", "completed", "failed", "pending"]
+    );
     assert!(responses
         .iter()
         .all(|response| response["method"] != "session/request_permission"));
