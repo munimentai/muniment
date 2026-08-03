@@ -151,6 +151,7 @@ fn new_session_reuses_authorization_and_rejects_invalid_parameters() {
             stream
                 .write_all(
                     &encode_frame(&authorized_with_client_credential(
+                        "profile-id",
                         "33".repeat(32),
                         3600,
                         900,
@@ -286,6 +287,7 @@ fn consecutive_prompts_continue_one_thread() {
         stream
             .write_all(
                 &encode_frame(&authorized_with_client_credential(
+                    "profile-id",
                     "33".repeat(32),
                     3600,
                     900,
@@ -803,6 +805,7 @@ fn cancel_during_a_prompt_targets_the_bound_run_and_drains_to_cancelled() {
         stream
             .write_all(
                 &encode_frame(&authorized_with_client_credential(
+                    "profile-id",
                     "33".repeat(32),
                     3600,
                     900,
