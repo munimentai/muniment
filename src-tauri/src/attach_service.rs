@@ -15,7 +15,8 @@ use muniment_core::attach::linux::{
     AttachAcceptError, AttachFilesystem, AttachTransport, CompanionProvenance,
     PermissionAnswerAccepted, PermissionAnswerRequest, PermissionDecision, RunCancelAccepted,
     RunCancelRequest, RunStartAccepted, RunStartRequest as AttachRunStartRequest, RunStreamPage,
-    ThreadListPage, ThreadListRequest, ThreadListService, ThreadOpenPage, ThreadOpenRequest,
+    ThreadCreateAccepted, ThreadListPage, ThreadListRequest, ThreadListService, ThreadOpenPage,
+    ThreadOpenRequest,
 };
 #[cfg(target_os = "linux")]
 use muniment_core::attach::{
@@ -398,6 +399,60 @@ impl<B: RunStartBoundaries, I: RunStartIdempotency> ThreadListService
         request: ThreadOpenRequest,
     ) -> Result<ThreadOpenPage, ProtocolError> {
         self.boundaries.open_thread(workspace, request)
+    }
+
+    fn create_thread(
+        &mut self,
+        workspace: &str,
+        request_id: &Id,
+        idempotency_key: &Id,
+        companion: CompanionProvenance,
+    ) -> Result<ThreadCreateAccepted, ProtocolError> {
+        let canonical_input = json!({"workspace": workspace});
+        let ledger_request = AttachRequest {
+            protocol: Protocol,
+            request_id: request_id.clone(),
+            operation: Operation::ThreadCreate,
+            capability: String::new(),
+            idempotency_key: Some(idempotency_key.clone()),
+            body: canonical_input.clone(),
+        };
+        let mut extra = BTreeMap::new();
+        extra.insert("attach_profile".into(), json!(&companion.profile));
+        extra.insert("companion_kind".into(), json!(companion.companion_kind));
+        extra.insert(
+            "companion_version".into(),
+            json!(companion.companion_version),
+        );
+        extra.insert("peer_uid".into(), json!(companion.peer_uid));
+        extra.insert("peer_pid".into(), json!(companion.peer_pid));
+        extra.insert("idempotency_key".into(), json!(idempotency_key.as_str()));
+        let provenance = Provenance {
+            source: "muniment-attach".into(),
+            source_version: env!("CARGO_PKG_VERSION").into(),
+            actor_id: None,
+            device_id: None,
+            rpc_request_id: Some(request_id.as_str().to_owned()),
+            capability_versions: None,
+            extra,
+        };
+        let outcome = self.idempotency.execute(
+            &companion.profile,
+            &ledger_request,
+            &canonical_input,
+            || Ok(()),
+            || {
+                let thread_id = self.boundaries.create_thread(workspace, provenance)?;
+                Ok(CommittedResult {
+                    body: json!({"thread_id": thread_id}),
+                    cursor: None,
+                })
+            },
+        )?;
+        let committed = match outcome {
+            IdempotencyOutcome::Committed(result) | IdempotencyOutcome::Replayed(result) => result,
+        };
+        serde_json::from_value(committed.body).map_err(|_| ProtocolError::persistence_failed())
     }
 
     fn start_run(
