@@ -521,6 +521,54 @@ that projector. This amendment changes no runtime code.
 [nemo-streaming]: https://developer.nvidia.com/blog/stream-smarter-and-safer-learn-how-nvidia-nemo-guardrails-enhance-llm-output-streaming/
 [livekit-output]: https://docs.livekit.io/reference/recipes/replacing_llm_output/
 
+## Amendment — 2026-08-03: named thread continuation on run start
+
+An authorized companion may supply `thread_id` in the `run.start` body. The
+field is optional. When present, it is a valid UUID string of at most 36 UTF-8
+bytes. A malformed or overlong value returns non-retryable `invalid_request`.
+The desktop creates a new run in that thread at its next ordinal. When
+the field is absent, the desktop creates a new thread as before. Every accepted
+`run.start` response contains `{run_id, thread_id, committed_seq, accepted_at}`.
+This lets the first prompt learn its desktop-created thread identity.
+
+The desktop resolves the selected workspace from the authorized capability
+before it resolves `thread_id`. The thread must exist, must not have a
+`thread.deleted` tombstone, and must belong to that exact profile and workspace.
+An unknown, tombstoned, foreign-profile, or wrong-workspace thread returns the
+non-retryable `thread_not_found` protocol error. The error uses the same
+redacted body for every case and appends nothing. Unlike the desktop chat path,
+the attach path never falls back to a fresh thread after this rejection.
+
+The supplied `thread_id` is part of the canonical `run.start` input for
+idempotency. An exact retry returns the original acceptance, including its
+`run_id` and `thread_id`, without creating or dispatching another run. This
+rule also applies when the original request omitted `thread_id`. A retry that
+changes whether `thread_id` is present, or changes its value, returns
+non-retryable `idempotency_conflict`. Current capability and workspace checks
+still run before replay. Later deletion of the accepted thread does not change
+the stored acceptance.
+
+The ACP adapter extends its process-local session table with the accepted
+`thread_id`. Its first `session/prompt` omits `thread_id`, then stores the
+returned value. Later prompts supply that value. If a stored binding gets
+`thread_not_found`, the adapter clears only that thread binding. It retries the
+prompt once without `thread_id` and with a new idempotency key, then stores the
+new accepted thread. It does not retry another error or loop on a second
+rejection.
+
+This binding governs journal identity and the pages returned by `thread.open`.
+It does not change the run path's model-context behavior. In particular,
+continuing a thread does not load earlier journal messages into the model
+context or alter the current `session/prompt` context translation.
+
+The first implementation slice is **attach run thread continuation**. It adds
+the request field, validates and stamps the selected thread, returns the
+accepted thread, and adds exact-replay and rejection contract tests. Both
+`RunStartAccepted` structs use `deny_unknown_fields`, so the accept field and
+the attach client struct must move in one diff. The adapter binding and stale
+binding recovery follow after that wire-compatible slice. This amendment
+changes no runtime or companion code.
+
 ## Rejected alternatives
 
 **TCP loopback alone.** Loopback limits network reach but supplies no portable
