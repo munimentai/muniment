@@ -340,6 +340,7 @@ fn prompt_streams_text_denies_permission_and_returns_the_terminal_result() {
             &start,
             json!({
                 "run_id": run_id,
+                "thread_id": "0190a100-0000-7000-8000-000000000002",
                 "committed_seq": 1,
                 "accepted_at": "2026-08-03T00:00:00Z"
             }),

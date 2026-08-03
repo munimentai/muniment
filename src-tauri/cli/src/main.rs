@@ -1052,6 +1052,7 @@ mod tests {
                 ok: Success,
                 body: serde_json::json!({
                     "run_id": run_id,
+                    "thread_id": "0190a100-0000-7000-8000-000000000002",
                     "committed_seq": 7,
                     "accepted_at": "2026-07-17T12:00:00Z"
                 }),

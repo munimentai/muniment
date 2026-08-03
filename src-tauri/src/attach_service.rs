@@ -408,6 +408,7 @@ impl<B: RunStartBoundaries, I: RunStartIdempotency> ThreadListService
             "workspace": workspace,
             "text": &request.text,
             "context": &request.context,
+            "thread_id": &request.thread_id,
         });
         let ledger_request = AttachRequest {
             protocol: Protocol,
@@ -466,13 +467,19 @@ impl<B: RunStartBoundaries, I: RunStartIdempotency> ThreadListService
                         files: Vec::new(),
                         workspace: Some(workspace.to_owned()),
                         provenance: Some(provenance),
+                        thread_id: request.thread_id,
                     },
                 )
                 .map_err(|error| error.protocol_error())?;
                 pending_launch = Some(launch);
+                let thread_id = self
+                    .boundaries
+                    .run_thread_id(&result.run_id)
+                    .map_err(|error| error.protocol_error())?;
                 Ok(CommittedResult {
                     body: json!({
                         "run_id": result.run_id,
+                        "thread_id": thread_id,
                         "committed_seq": result.committed_seq,
                         "accepted_at": result.accepted_at,
                     }),
@@ -654,6 +661,7 @@ mod tests {
             AttachRunStartRequest {
                 text: "hello".into(),
                 context,
+                thread_id: None,
             },
             &Id::new("018f0000-0000-7000-8000-000000000001").unwrap(),
             &Id::new("018f0000-0000-7000-8000-000000000002").unwrap(),
@@ -674,12 +682,14 @@ mod tests {
         text: &str,
         request_id: &str,
         idempotency_key: &str,
+        thread_id: Option<&str>,
     ) -> Result<RunStartAccepted, ProtocolError> {
         service.start_run(
             "workspace-a",
             AttachRunStartRequest {
                 text: text.into(),
                 context: None,
+                thread_id: thread_id.map(str::to_owned),
             },
             &Id::new(request_id).unwrap(),
             &Id::new(idempotency_key).unwrap(),
@@ -691,6 +701,56 @@ mod tests {
                 peer_pid: 42,
             },
         )
+    }
+
+    #[cfg(target_os = "linux")]
+    fn attach_service_with_thread() -> (DesktopAttachService<FakeRunStartBoundaries>, String, String)
+    {
+        let boundaries = FakeRunStartBoundaries::accepting();
+        let first_run_id = "0190a100-0000-7000-8000-000000000010".to_owned();
+        let mut first = crate::chat::event_envelope(
+            &first_run_id,
+            1,
+            "user.prompt.submitted",
+            json!({"prompt": "first"}),
+            Some("owner"),
+        );
+        first
+            .provenance
+            .extra
+            .insert("attach_profile".into(), json!("default"));
+        let thread_id = boundaries
+            .journal
+            .lock()
+            .unwrap()
+            .append_new_run("workspace-a", &first)
+            .unwrap();
+        (
+            DesktopAttachService {
+                boundaries,
+                idempotency: IdempotencyStore::open(":memory:").unwrap(),
+                home: PathBuf::new(),
+                workspace_contexts: Arc::new(Mutex::new(HashMap::new())),
+                client_credentials: Arc::new(Mutex::new(HashMap::new())),
+                credential_path: None,
+                client_identity: Some("default".into()),
+            },
+            thread_id,
+            first_run_id,
+        )
+    }
+
+    #[cfg(target_os = "linux")]
+    fn attach_test_provenance() -> Provenance {
+        Provenance {
+            source: "test".into(),
+            source_version: "1".into(),
+            actor_id: None,
+            device_id: None,
+            rpc_request_id: None,
+            capability_versions: None,
+            extra: BTreeMap::new(),
+        }
     }
 
     #[cfg(target_os = "linux")]
@@ -1027,6 +1087,7 @@ mod tests {
                 AttachRunStartRequest {
                     text: "use repository context".into(),
                     context: None,
+                    thread_id: None,
                 },
                 &Id::new("018f0000-0000-7000-8000-000000000011").unwrap(),
                 &Id::new("018f0000-0000-7000-8000-000000000012").unwrap(),
@@ -1077,6 +1138,7 @@ mod tests {
                 AttachRunStartRequest {
                     text: "second context".into(),
                     context: None,
+                    thread_id: None,
                 },
                 &Id::new("018f0000-0000-7000-8000-000000000021").unwrap(),
                 &Id::new("018f0000-0000-7000-8000-000000000022").unwrap(),
@@ -1482,28 +1544,34 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[test]
     fn attach_adapter_replays_exact_retry_without_second_coordinator_run() {
-        let mut service = DesktopAttachService {
-            boundaries: FakeRunStartBoundaries::accepting(),
-            idempotency: IdempotencyStore::open(":memory:").unwrap(),
-            home: PathBuf::new(),
-            workspace_contexts: Arc::new(Mutex::new(HashMap::new())),
-            client_credentials: Arc::new(Mutex::new(HashMap::new())),
-            credential_path: None,
-            client_identity: Some("default".into()),
-        };
+        let (mut service, thread_id, _) = attach_service_with_thread();
         let key = "018f0000-0000-7000-8000-000000000002";
         let first = attach_start_on(
             &mut service,
             "hello",
             "018f0000-0000-7000-8000-000000000001",
             key,
+            Some(&thread_id),
         )
         .unwrap();
+        service
+            .boundaries
+            .journal
+            .lock()
+            .unwrap()
+            .append_thread_deleted(
+                1,
+                &thread_id,
+                "2026-08-03T00:00:00Z",
+                &attach_test_provenance(),
+            )
+            .unwrap();
         let replay = attach_start_on(
             &mut service,
             "hello",
             "018f0000-0000-7000-8000-000000000003",
             key,
+            Some(&thread_id),
         )
         .unwrap();
 
@@ -1522,28 +1590,22 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[test]
     fn attach_adapter_rejects_conflicting_key_without_second_coordinator_run() {
-        let mut service = DesktopAttachService {
-            boundaries: FakeRunStartBoundaries::accepting(),
-            idempotency: IdempotencyStore::open(":memory:").unwrap(),
-            home: PathBuf::new(),
-            workspace_contexts: Arc::new(Mutex::new(HashMap::new())),
-            client_credentials: Arc::new(Mutex::new(HashMap::new())),
-            credential_path: None,
-            client_identity: Some("default".into()),
-        };
+        let (mut service, thread_id, _) = attach_service_with_thread();
         let key = "018f0000-0000-7000-8000-000000000002";
         attach_start_on(
             &mut service,
             "hello",
             "018f0000-0000-7000-8000-000000000001",
             key,
+            Some(&thread_id),
         )
         .unwrap();
         let conflict = attach_start_on(
             &mut service,
-            "different",
+            "hello",
             "018f0000-0000-7000-8000-000000000003",
             key,
+            None,
         )
         .unwrap_err();
 
@@ -1560,6 +1622,190 @@ mod tests {
         );
         assert_eq!(service.boundaries.prepare_calls.load(Ordering::SeqCst), 1);
         assert_eq!(service.boundaries.launch_calls.load(Ordering::SeqCst), 1);
+
+        let changed = attach_start_on(
+            &mut service,
+            "hello",
+            "018f0000-0000-7000-8000-000000000004",
+            key,
+            Some("0190a100-0000-7000-8000-000000000099"),
+        )
+        .unwrap_err();
+        assert_eq!(
+            serde_json::to_value(changed).unwrap()["code"],
+            "idempotency_conflict"
+        );
+        assert_eq!(service.boundaries.prepare_calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn attach_thread_binding_uses_next_ordinal_and_opens_both_runs() {
+        let (mut service, thread_id, first_run_id) = attach_service_with_thread();
+        let accepted = attach_start_on(
+            &mut service,
+            "hello",
+            "018f0000-0000-7000-8000-000000000001",
+            "018f0000-0000-7000-8000-000000000002",
+            Some(&thread_id),
+        )
+        .unwrap();
+
+        assert_eq!(accepted.thread_id, thread_id);
+        let run_page = service
+            .boundaries
+            .journal
+            .lock()
+            .unwrap()
+            .thread_run_ids(&thread_id, 10, None)
+            .unwrap();
+        assert_eq!(run_page.run_ids, [first_run_id, accepted.run_id.clone()]);
+        let opened = service
+            .open_thread(
+                "workspace-a",
+                ThreadOpenRequest {
+                    thread_id: thread_id.clone(),
+                    limit: 10,
+                    cursor: None,
+                },
+            )
+            .unwrap();
+        assert_eq!(opened.thread_id, thread_id);
+        assert_eq!(opened.entries.len(), 2);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn attach_thread_binding_rejections_leave_the_journal_unchanged() {
+        for case in [
+            "unknown",
+            "tombstoned",
+            "wrong-workspace",
+            "foreign-profile",
+        ] {
+            let (mut service, thread_id, first_run_id) = attach_service_with_thread();
+            if case == "tombstoned" {
+                service
+                    .boundaries
+                    .journal
+                    .lock()
+                    .unwrap()
+                    .append_thread_deleted(
+                        1,
+                        &thread_id,
+                        "2026-08-03T00:00:00Z",
+                        &attach_test_provenance(),
+                    )
+                    .unwrap();
+            }
+            let event_count = service
+                .boundaries
+                .journal
+                .lock()
+                .unwrap()
+                .run_event_types()
+                .unwrap()
+                .len();
+            if case == "wrong-workspace" {
+                service
+                    .boundaries
+                    .granted_workspaces
+                    .push("workspace-b".into());
+            }
+            let selected = if case == "unknown" {
+                "0190a100-0000-7000-8000-000000000099"
+            } else {
+                &thread_id
+            };
+            let workspace = if case == "wrong-workspace" {
+                "workspace-b"
+            } else {
+                "workspace-a"
+            };
+            let result = service.start_run(
+                workspace,
+                AttachRunStartRequest {
+                    text: "hello".into(),
+                    context: None,
+                    thread_id: Some(selected.into()),
+                },
+                &Id::new("018f0000-0000-7000-8000-000000000001").unwrap(),
+                &Id::new("018f0000-0000-7000-8000-000000000002").unwrap(),
+                CompanionProvenance {
+                    profile: if case == "foreign-profile" {
+                        "another-profile"
+                    } else {
+                        "default"
+                    }
+                    .into(),
+                    companion_kind: "cli".into(),
+                    companion_version: "1.2.3".into(),
+                    peer_uid: 1000,
+                    peer_pid: 42,
+                },
+            );
+            assert_eq!(
+                serde_json::to_value(result.unwrap_err()).unwrap()["code"],
+                "thread_not_found",
+                "{case}"
+            );
+            let mut journal = service.boundaries.journal.lock().unwrap();
+            assert_eq!(journal.events(&first_run_id).unwrap().len(), 1, "{case}");
+            assert_eq!(
+                journal.run_event_types().unwrap().len(),
+                event_count,
+                "{case}"
+            );
+            assert_eq!(service.boundaries.launch_calls.load(Ordering::SeqCst), 0);
+            assert_eq!(
+                service
+                    .boundaries
+                    .prompt_protection_calls
+                    .load(Ordering::SeqCst),
+                0,
+                "{case}"
+            );
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn prompt_protection_failure_leaves_bound_and_new_thread_ordinals_unchanged() {
+        for bound in [false, true] {
+            let (mut service, thread_id, first_run_id) = attach_service_with_thread();
+            service.boundaries.protect_error = Some("keyring failed".into());
+            let before = service
+                .boundaries
+                .journal
+                .lock()
+                .unwrap()
+                .run_event_types()
+                .unwrap();
+
+            let result = attach_start_on(
+                &mut service,
+                "hello",
+                "018f0000-0000-7000-8000-000000000001",
+                "018f0000-0000-7000-8000-000000000002",
+                bound.then_some(thread_id.as_str()),
+            );
+
+            assert_eq!(
+                serde_json::to_value(result.unwrap_err()).unwrap()["code"],
+                "persistence_failed"
+            );
+            let mut journal = service.boundaries.journal.lock().unwrap();
+            assert_eq!(journal.run_event_types().unwrap(), before, "bound={bound}");
+            let page = journal.thread_run_ids(&thread_id, 10, None).unwrap();
+            assert_eq!(page.run_ids, [first_run_id], "bound={bound}");
+            assert_eq!(
+                service
+                    .boundaries
+                    .prompt_protection_calls
+                    .load(Ordering::SeqCst),
+                1
+            );
+        }
     }
 
     #[cfg(target_os = "linux")]
@@ -1603,6 +1849,7 @@ mod tests {
             AttachRunStartRequest {
                 text: "hello".into(),
                 context: None,
+                thread_id: None,
             },
             &Id::new("018f0000-0000-7000-8000-000000000001").unwrap(),
             &Id::new("018f0000-0000-7000-8000-000000000002").unwrap(),
@@ -1672,6 +1919,7 @@ mod tests {
             AttachRunStartRequest {
                 text: "private prompt".into(),
                 context: None,
+                thread_id: None,
             },
             &Id::new("018f0000-0000-7000-8000-000000000001").unwrap(),
             &Id::new("018f0000-0000-7000-8000-000000000002").unwrap(),
