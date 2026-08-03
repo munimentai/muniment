@@ -521,6 +521,44 @@ that projector. This amendment changes no runtime code.
 [nemo-streaming]: https://developer.nvidia.com/blog/stream-smarter-and-safer-learn-how-nvidia-nemo-guardrails-enhance-llm-output-streaming/
 [livekit-output]: https://docs.livekit.io/reference/recipes/replacing_llm_output/
 
+## Amendment — 2026-08-03: tool-effect disclosure
+
+An authorized companion receives tool activity through the existing
+`run.event` stream. Each committed tool-effect envelope has this projection:
+
+| Journal event | `run.event` payload |
+| --- | --- |
+| `tool.effect.started` | `{effect_id, display_name?}` |
+| `tool.effect.completed` | `{effect_id}` |
+| `tool.effect.failed` | `{effect_id}` |
+
+`payload.effect_id` is nonempty and contains at most 65,536 UTF-8 bytes.
+`payload.display_name` is optional and contains at most 65,536 UTF-8 bytes.
+The existing 1 MiB frame ceiling and event-count and byte windows also apply.
+An absent display name stays absent. An empty or overlong effect ID, or an
+overlong display name, makes the projection fail closed. It emits no partial
+identity.
+No tool input, output, error detail, artifact content, or permission description
+enters these payloads.
+
+The run stream and `thread.open` disclose the same display name. Both project
+the `display_name` committed on `tool.effect.started`, so live delivery adds no
+content beyond the authorized replay. The terminal events carry no display
+name. Their `effect_id` associates them with the started event and its released
+display name.
+
+Tool-effect projection is stateless because each journal envelope contains all
+fields that its stream event discloses. A resubscription supplies the last
+processed `run_seq` and rereads committed envelopes after that cursor. It does
+not rebuild projector state. Transport retries may redeliver an unacknowledged
+event, and the companion deduplicates it by `(run_id, run_seq)`.
+
+The first implementation slice is **attach tool-effect projection**. It adds
+the three payload shapes, field validation, byte-window accounting, and
+ACP tool-call translation. It also adds contract tests. The tests compare live,
+replayed, and resubscribed events with `thread.open`. This amendment changes no
+runtime or companion code.
+
 ## Amendment — 2026-08-03: named thread continuation on run start
 
 An authorized companion may supply `thread_id` in the `run.start` body. The
