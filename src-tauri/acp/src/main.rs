@@ -486,7 +486,7 @@ fn initialize(id: Value, params: Option<&Value>) -> Value {
         });
     }
 
-    let capabilities = AgentCapabilities::new().load_session(true);
+    let capabilities = AgentCapabilities::new().load_session(false);
     let result = InitializeResponse::new(ProtocolVersion::V1).agent_capabilities(capabilities);
     json!({"jsonrpc": "2.0", "id": id, "result": result})
 }
