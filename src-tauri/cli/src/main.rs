@@ -840,6 +840,7 @@ mod tests {
             event_type: event_type.into(),
             event_version: 1,
             recorded_at: "2026-07-18T15:50:00Z".into(),
+            text: None,
             receipt: None,
         };
         for (event_type, detail) in [

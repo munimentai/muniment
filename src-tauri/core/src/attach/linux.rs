@@ -600,7 +600,7 @@ impl ThreadListService for RunJournal {
         run_id: &str,
         after_run_seq: u64,
     ) -> Result<RunStreamPage, ProtocolError> {
-        let page = self
+        let mut page = self
             .workspace_catch_up(
                 workspace,
                 run_id,
@@ -614,6 +614,28 @@ impl ThreadListService for RunJournal {
                 RunEventPageError::InvalidLimit => ProtocolError::invalid_request(),
                 RunEventPageError::Journal(_) => ProtocolError::persistence_failed(),
             })?;
+        let projected = self
+            .projected_run_stream_text(workspace, run_id, page.current_run_seq)
+            .map_err(|_| ProtocolError::persistence_failed())?;
+        let projected_len = page
+            .events
+            .iter()
+            .take_while(|event| projected.contains_key(&event.run_seq))
+            .count();
+        if projected_len != page.events.len() {
+            page.events.truncate(projected_len);
+            page.exhausted = false;
+        }
+        for event in &mut page.events {
+            if event.event_type == "model.stream.delta" {
+                event.text = match projected.get(&event.run_seq) {
+                    Some(crate::assistant_text::stream::AssistantText::Released(text)) => {
+                        Some(text.clone())
+                    }
+                    _ => None,
+                };
+            }
+        }
         Ok(RunStreamPage {
             run_id: run_id.to_owned(),
             first_available_run_seq: page.first_available_run_seq,
@@ -1468,6 +1490,11 @@ fn append_run_stream_page(
             (EventName::PermissionPending, body)
         } else {
             let mut payload = serde_json::json!({ "withheld": true });
+            if journal_event.event_type == "model.stream.delta" {
+                if let Some(text) = &journal_event.text {
+                    payload = serde_json::json!({ "text": text });
+                }
+            }
             if let Some(receipt) = &journal_event.receipt {
                 payload["receipt"] = serde_json::to_value(receipt)
                     .map_err(|_| ProtocolError::persistence_failed())?;

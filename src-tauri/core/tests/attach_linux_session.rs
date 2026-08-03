@@ -449,6 +449,7 @@ fn stream_projection(run_id: &str, run_seq: u64, event_type: String) -> RunEvent
         event_type,
         event_version: 1,
         recorded_at: "2026-07-16T03:00:00Z".into(),
+        text: None,
         pending_permission: None,
         receipt: None,
     }
@@ -1247,9 +1248,24 @@ fn authorized_run_stream_catches_up_in_order_with_redacted_projection() {
     journal
         .append(0, &prompt(RUN, "private prompt", "2026-07-16T03:00:00Z"))
         .unwrap();
+    let mut delta = prompt(RUN, "unused", "2026-07-16T03:00:01Z");
+    delta.event_id = "0190a200-0000-7000-8000-000000000013".into();
+    delta.run_seq = 2;
+    delta.event_type = "model.stream.delta".into();
+    delta.payload = EventPayload::Inline {
+        payload_json: json!({"text":"released reply", "content_disclosure":"released"}),
+    };
+    journal.append(1, &delta).unwrap();
+    let mut withheld = delta.clone();
+    withheld.event_id = "0190a200-0000-7000-8000-000000000014".into();
+    withheld.run_seq = 3;
+    withheld.payload = EventPayload::Inline {
+        payload_json: json!({"text":"legacy reply"}),
+    };
+    journal.append(2, &withheld).unwrap();
     let mut completed = prompt(RUN, "unused", "2026-07-16T03:00:01Z");
     completed.event_id = "0190a200-0000-7000-8000-000000000012".into();
-    completed.run_seq = 2;
+    completed.run_seq = 4;
     completed.event_type = "run.completed".into();
     completed.payload = EventPayload::Inline {
         payload_json: json!({
@@ -1257,7 +1273,7 @@ fn authorized_run_stream_catches_up_in_order_with_redacted_projection() {
             "private": "must remain withheld"
         }),
     };
-    journal.append(1, &completed).unwrap();
+    journal.append(3, &completed).unwrap();
     journal.bind_run_workspace(RUN, "workspace-1").unwrap();
 
     let (mut client, server) = UnixStream::pair().unwrap();
@@ -1282,7 +1298,7 @@ fn authorized_run_stream_catches_up_in_order_with_redacted_projection() {
     let response: Response = read_frame(&mut client);
     assert_eq!(response.body["run_id"], RUN);
     assert_eq!(response.body["first_available_run_seq"], 1);
-    assert_eq!(response.body["current_run_seq"], 2);
+    assert_eq!(response.body["current_run_seq"], 4);
     let subscription = response.body["subscription_id"].as_str().unwrap();
     let Envelope::Event(event) = read_frame::<Envelope>(&mut client) else {
         panic!("expected run event")
@@ -1292,10 +1308,21 @@ fn authorized_run_stream_catches_up_in_order_with_redacted_projection() {
     assert_eq!(event.run_seq, Some(1));
     assert_eq!(event.body["payload"]["withheld"], true);
     assert!(!event.body.to_string().contains("private"));
+    let Envelope::Event(delta) = read_frame::<Envelope>(&mut client) else {
+        panic!("expected assistant delta")
+    };
+    assert_eq!(delta.run_seq, Some(2));
+    assert_eq!(delta.body["payload"], json!({"text":"released reply"}));
+    let Envelope::Event(withheld) = read_frame::<Envelope>(&mut client) else {
+        panic!("expected withheld assistant delta")
+    };
+    assert_eq!(withheld.run_seq, Some(3));
+    assert_eq!(withheld.body["payload"], json!({"withheld":true}));
+    assert!(!withheld.body.to_string().contains("legacy reply"));
     let Envelope::Event(completed) = read_frame::<Envelope>(&mut client) else {
         panic!("expected completed event")
     };
-    assert_eq!(completed.run_seq, Some(2));
+    assert_eq!(completed.run_seq, Some(4));
     assert_eq!(completed.body["payload"]["withheld"], true);
     assert_eq!(completed.body["payload"]["receipt"]["route"], "cloud");
     assert!(completed.body["payload"]["receipt"].get("model").is_none());
@@ -2895,6 +2922,86 @@ fn thread_open_uses_released_deltas_and_workspace_path_policy() {
     assert!(!assistant.contains(outside.to_string_lossy().as_ref()));
     assert!(!assistant.contains("legacy"));
     std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn run_stream_text_matches_thread_open_and_replay_skips_the_cursor() {
+    const RUN: &str = "0190a105-0000-7000-8000-000000000002";
+    let mut events = vec![prompt(RUN, "question", "2026-07-16T03:00:00Z")];
+    for (seq, text) in [(2, "safe AKIAAAAA"), (3, "AAAAAAAAAAAA end")] {
+        let mut delta = events[0].clone();
+        delta.event_id = format!("0190a205-0000-7000-8001-{seq:012}");
+        delta.run_seq = seq;
+        delta.event_type = "model.stream.delta".into();
+        delta.payload = EventPayload::Inline {
+            payload_json: json!({"text":text, "content_disclosure":"released"}),
+        };
+        events.push(delta);
+    }
+    let mut completed = events[0].clone();
+    completed.event_id = "0190a205-0000-7000-8001-000000000004".into();
+    completed.run_seq = 4;
+    completed.event_type = "run.completed".into();
+    completed.payload = EventPayload::Inline {
+        payload_json: json!({}),
+    };
+    events.push(completed);
+
+    let mut journal = RunJournal::open(":memory:").unwrap();
+    journal.append_batch(0, &events).unwrap();
+    journal.bind_run_workspace(RUN, "workspace-1").unwrap();
+    let stream = journal.stream_run("workspace-1", RUN, 0).unwrap();
+    assert_eq!(
+        stream
+            .events
+            .iter()
+            .map(|event| event.run_seq)
+            .collect::<Vec<_>>(),
+        vec![1, 2, 3, 4]
+    );
+    let stream_text = stream
+        .events
+        .iter()
+        .filter_map(|event| event.text.as_deref())
+        .collect::<String>();
+    let thread_id = sole_thread_id(&mut journal, "workspace-1");
+    let thread = journal
+        .open_thread(
+            "workspace-1",
+            ThreadOpenRequest {
+                thread_id,
+                limit: 10,
+                cursor: None,
+            },
+        )
+        .unwrap();
+    let thread_text = thread
+        .entries
+        .iter()
+        .filter(|entry| entry.kind == "assistant_message")
+        .filter_map(|entry| entry.text.as_deref())
+        .collect::<String>();
+    assert_eq!(stream_text, thread_text);
+    assert_eq!(stream_text, "safe  end");
+    assert!(!stream_text.contains("AKIA"));
+
+    let resumed = journal.stream_run("workspace-1", RUN, 2).unwrap();
+    assert_eq!(
+        resumed
+            .events
+            .iter()
+            .map(|event| event.run_seq)
+            .collect::<Vec<_>>(),
+        vec![3, 4]
+    );
+    assert_eq!(
+        resumed
+            .events
+            .iter()
+            .filter_map(|event| event.text.as_deref())
+            .collect::<String>(),
+        " end"
+    );
 }
 
 #[test]
