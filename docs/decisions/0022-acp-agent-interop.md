@@ -130,7 +130,9 @@ The adapter implements this exact client-to-agent subset:
 - `session/prompt`.
 - The `session/cancel` notification.
 
-It advertises `loadSession: true`. The runtime creates, loads, prompts, and
+It advertises `loadSession: true`. The 2026-08-03 permission-gate amendment
+below supersedes that advertisement with the interim `loadSession: false`
+stance until `session/load` works. The runtime creates, loads, prompts, and
 cancels the bound Muniment thread and run. The adapter translates those
 requests and returns the runtime result.
 
@@ -316,3 +318,34 @@ each event in the order above. It does not add cancellation or the permission
 gate bridge. This amendment changes no code.
 
 [sdk-stop-reason]: https://docs.rs/agent-client-protocol/2.0.0/agent_client_protocol/schema/v1/enum.StopReason.html
+
+## Amendment — 2026-08-03: `session/request_permission` gate translation
+
+For each attach `permission.pending` event, the adapter sends one ACP
+`session/request_permission` request. Its tool call uses `gate_id` as the tool
+call ID and `title` as the title. When `message` is present, the content
+contains one text block with that value. When `message` is absent, the content
+is empty.
+
+The request offers only `allow_once` and `reject_once`. The adapter does not
+offer `allow_always` or `reject_always`, because ADR 0025's durable-policy
+consumers remain parked on the Pi resource contract. The runtime cannot map a
+durable choice without that contract.
+
+The selected `allow_once` option maps to the attach `allow` decision. The
+selected `reject_once` option maps to `deny`. A `cancelled` outcome, an unknown
+option ID, or a malformed response also maps to `deny`. No editor outcome
+creates a grant by itself. The runtime still validates the matching gate and
+current authority under this ADR.
+
+After it gets an editor outcome, the adapter submits the mapped decision
+through the matching attach `permission.answer` operation. It acknowledges
+the `permission.pending` event only after the attach answer is accepted. An
+attach failure leaves the event unacknowledged for replay.
+
+The adapter advertises `loadSession: false` until `session/load` works. This
+interim stance supersedes the `loadSession: true` statement above.
+
+The implementation slice is **ACP permission gate translation**. It adds the
+request projection, one-time option mapping, deny-closed response handling,
+and acknowledge order defined above. This amendment changes no code.
