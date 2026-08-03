@@ -569,6 +569,53 @@ the attach client struct must move in one diff. The adapter binding and stale
 binding recovery follow after that wire-compatible slice. This amendment
 changes no runtime or companion code.
 
+## Amendment — 2026-08-03: thread creation and profile disclosure
+
+The attach vocabulary adds the effectful `thread.create` operation. Its body is
+the empty object `{}`. Unknown body fields return non-retryable
+`invalid_request`. The desktop derives the workspace from the authorized
+connection and never accepts a client-supplied workspace or profile. The
+operation requires `run.write` for that workspace and a valid current session,
+entitlement, capability, and workspace grant.
+
+`thread.create` requires an `idempotency_key`. The desktop applies the durable
+idempotency rules in this ADR under `(profile, "thread.create",
+idempotency_key)`. Its canonical input is the server-resolved workspace. An
+exact retry returns the original result without creating another thread. A
+retry under another resolved workspace returns non-retryable
+`idempotency_conflict`. A missing key returns `idempotency_key_required` before
+the desktop appends anything.
+
+The desktop creates the durable thread by appending its `thread.created` event
+with the resolved workspace. It returns success only after that event commits.
+The accepted response body is `{thread_id}`, where `thread_id` is the created
+thread's opaque UUID. A commit failure returns a retryable storage error and no
+accepted response.
+
+The post-approval `authorized` message adds `profile_id`, which contains the
+signed-in profile identifier. The desktop sends that message only after the
+user approves the peer and only over the approved connection. Welcome and all
+pairing or compatibility errors omit `profile_id`. An unauthorized peer never
+receives `authorized`, so same-UID endpoint access alone does not disclose the
+identifier. This placement follows the `THREAT_MODEL.md` rule that same-UID
+identity does not grant authority.
+
+A run-less thread has no subject owner because ownership remains derived from
+the first stamped run. The change adds no owner column, table, or other schema.
+Before the first run, `thread.open` may resolve the returned `thread_id` only
+under a current capability for the same profile and exact workspace.
+`thread.list` omits run-less threads. The desktop sidebar also omits them and
+does not call `subject_owns_first_run` until a first run exists. The first run
+stamps its actor through existing provenance. Normal first-run ownership then
+governs desktop reads and sidebar visibility.
+
+Implementation proceeds in three slices. First, **authorized profile
+disclosure** adds `profile_id` after approval and its negative-handshake tests.
+Second, **attach thread creation** adds `thread.create` routing, journal commit,
+idempotency, visibility, and contract tests. Third, **ACP session record** uses
+the disclosed profile identifier and created thread ID when `session/new`
+writes the record from ADR 0022. This amendment changes no code.
+
 ## Rejected alternatives
 
 **TCP loopback alone.** Loopback limits network reach but supplies no portable
