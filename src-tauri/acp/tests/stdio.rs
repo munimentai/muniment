@@ -60,7 +60,7 @@ fn initializes_with_only_the_supported_capabilities() {
     assert_eq!(response["id"], 1);
     assert_eq!(response["result"]["protocolVersion"], 1);
     let capabilities = &response["result"]["agentCapabilities"];
-    assert_eq!(capabilities["loadSession"], true);
+    assert_eq!(capabilities["loadSession"], false);
     assert!(capabilities.get("modes").is_none());
     assert!(capabilities.get("configOptions").is_none());
     assert!(capabilities.get("fs").is_none());
