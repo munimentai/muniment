@@ -1,12 +1,16 @@
 use agent_client_protocol::schema::{
     v1::{
-        AgentCapabilities, InitializeRequest, InitializeResponse, NewSessionRequest,
-        NewSessionResponse,
+        AgentCapabilities, ContentBlock, ContentChunk, InitializeRequest, InitializeResponse,
+        NewSessionRequest, NewSessionResponse, PromptRequest, PromptResponse, SessionNotification,
+        SessionUpdate, StopReason, TextContent,
     },
     ProtocolVersion,
 };
-use muniment_attach::{handshake_as_with_credential, ClientError, Id};
+use muniment_attach::{
+    handshake_as_with_credential, ClientError, Id, PermissionDecision, RunStreamMessage,
+};
 use serde_json::{json, Value};
+use std::collections::HashMap;
 use std::io::{self, BufRead, Read, Write};
 #[cfg(unix)]
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
@@ -17,6 +21,17 @@ const CLIENT_KIND: &str = "acp-adapter";
 const CLIENT_ID_FILE: &str = "acp-client-id";
 const CLIENT_CREDENTIAL_FILE: &str = "acp-client-credential";
 
+enum PromptFailure {
+    Client(ClientError),
+    Run,
+}
+
+impl From<ClientError> for PromptFailure {
+    fn from(error: ClientError) -> Self {
+        Self::Client(error)
+    }
+}
+
 fn main() -> io::Result<()> {
     let stdin = io::stdin();
     let stdout = io::stdout();
@@ -24,6 +39,7 @@ fn main() -> io::Result<()> {
 }
 
 fn serve(input: impl BufRead, mut output: impl Write) -> io::Result<()> {
+    let mut sessions = HashMap::new();
     for line in input.lines() {
         let line = line?;
         let Ok(message) = serde_json::from_str::<Value>(&line) else {
@@ -33,14 +49,18 @@ fn serve(input: impl BufRead, mut output: impl Write) -> io::Result<()> {
             )?;
             continue;
         };
-        if let Some(response) = response(message) {
+        if let Some(response) = response(message, &mut sessions, &mut output) {
             write_message(&mut output, response)?;
         }
     }
     Ok(())
 }
 
-fn response(message: Value) -> Option<Value> {
+fn response(
+    message: Value,
+    sessions: &mut HashMap<String, String>,
+    output: &mut impl Write,
+) -> Option<Value> {
     let object = message.as_object()?;
     let method = object.get("method")?.as_str()?;
     let id = object.get("id").cloned();
@@ -48,8 +68,9 @@ fn response(message: Value) -> Option<Value> {
 
     match method {
         "initialize" => Some(initialize(id, object.get("params"))),
-        "session/new" => Some(new_session(id, object.get("params"))),
-        "session/load" | "session/prompt" => Some(json!({
+        "session/new" => Some(new_session(id, object.get("params"), sessions)),
+        "session/prompt" => Some(prompt(id, object.get("params"), sessions, output)),
+        "session/load" => Some(json!({
             "jsonrpc": "2.0",
             "id": id,
             "error": {"code": -32000, "message": NO_ATTACH}
@@ -62,7 +83,7 @@ fn response(message: Value) -> Option<Value> {
     }
 }
 
-fn new_session(id: Value, params: Option<&Value>) -> Value {
+fn new_session(id: Value, params: Option<&Value>, sessions: &mut HashMap<String, String>) -> Value {
     let Some(params) = params else {
         return invalid_params(id, "session/new requires an absolute cwd");
     };
@@ -97,11 +118,119 @@ fn new_session(id: Value, params: Option<&Value>) -> Value {
         client.onboard_workspace(&workspace, &workspace)
     })();
     match result {
-        Ok(_) => {
-            let result = NewSessionResponse::new(uuid::Uuid::now_v7().to_string());
+        Ok(onboarded) => {
+            let session_id = uuid::Uuid::now_v7().to_string();
+            sessions.insert(session_id.clone(), onboarded.opened_directory);
+            let result = NewSessionResponse::new(session_id);
             json!({"jsonrpc": "2.0", "id": id, "result": result})
         }
         Err(error) => json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "error": {"code": -32000, "message": pairing_failure(error)}
+        }),
+    }
+}
+
+fn prompt(
+    id: Value,
+    params: Option<&Value>,
+    sessions: &HashMap<String, String>,
+    output: &mut impl Write,
+) -> Value {
+    let Some(params) = params else {
+        return invalid_params(id, "session/prompt parameters are invalid");
+    };
+    let Ok(request) = serde_json::from_value::<PromptRequest>(params.clone()) else {
+        return invalid_params(id, "session/prompt parameters are invalid");
+    };
+    let session_id = request.session_id.0.to_string();
+    let Some(workspace) = sessions.get(&session_id) else {
+        return json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "error": {"code": -32002, "message": "Resource not found"}
+        });
+    };
+    let mut text = String::new();
+    for block in request.prompt {
+        match block {
+            ContentBlock::Text(content) => text.push_str(&content.text),
+            _ => return invalid_params(id, "session/prompt accepts text content only"),
+        }
+    }
+    if text.trim().is_empty() {
+        return invalid_params(id, "session/prompt requires text content");
+    }
+
+    let result: Result<StopReason, PromptFailure> = (|| {
+        let identity = authorized_client_identity().map_err(|_| ClientError::UnexpectedMessage)?;
+        let credential =
+            authorized_client_credential().map_err(|_| ClientError::UnexpectedMessage)?;
+        let mut client = handshake_as_with_credential(
+            env!("CARGO_PKG_VERSION"),
+            CLIENT_KIND,
+            &identity,
+            credential.as_deref(),
+            || {},
+        )?;
+        persist_authorized_client_credential(client.authorized_client_credential())
+            .map_err(|_| ClientError::UnexpectedMessage)?;
+        let accepted = client.start_run_in_workspace(&text, None, Some(workspace))?;
+        client.subscribe_run(&accepted.run_id, accepted.committed_seq)?;
+        loop {
+            let (run_seq, terminal) = match client.read_run_stream_message()? {
+                RunStreamMessage::Event(event) => {
+                    if let Some(text) = event.text {
+                        let update = SessionNotification::new(
+                            session_id.clone(),
+                            SessionUpdate::AgentMessageChunk(ContentChunk::new(
+                                ContentBlock::Text(TextContent::new(text)),
+                            )),
+                        );
+                        write_message(
+                            output,
+                            json!({"jsonrpc": "2.0", "method": "session/update", "params": update}),
+                        )
+                        .map_err(|_| PromptFailure::Client(ClientError::ConnectionClosed))?;
+                    }
+                    let terminal = match event.event_type.as_str() {
+                        "run.completed" => Some(Ok(StopReason::EndTurn)),
+                        "run.cancelled" => Some(Ok(StopReason::Cancelled)),
+                        "run.failed" => Some(Err(PromptFailure::Run)),
+                        _ => None,
+                    };
+                    (event.run_seq, terminal)
+                }
+                RunStreamMessage::PermissionPending(permission) => {
+                    client.answer_permission(
+                        &accepted.run_id,
+                        &permission.gate_id,
+                        PermissionDecision::Deny,
+                    )?;
+                    (permission.run_seq, None)
+                }
+                RunStreamMessage::CaughtUp { .. } => continue,
+            };
+            client.acknowledge_run_cursor(run_seq)?;
+            if let Some(terminal) = terminal {
+                break terminal;
+            }
+        }
+    })();
+
+    match result {
+        Ok(stop_reason) => json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "result": PromptResponse::new(stop_reason)
+        }),
+        Err(PromptFailure::Run) => json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "error": {"code": -32603, "message": "Muniment run failed"}
+        }),
+        Err(PromptFailure::Client(error)) => json!({
             "jsonrpc": "2.0",
             "id": id,
             "error": {"code": -32000, "message": pairing_failure(error)}
