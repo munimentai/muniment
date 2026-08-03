@@ -256,12 +256,137 @@ mod load_tests {
     }
 
     #[test]
+    #[cfg(target_os = "linux")]
     fn load_rejects_a_notification_failure() {
-        let update = SessionUpdate::UserMessageChunk(ContentChunk::new(ContentBlock::Text(
-            TextContent::new("Question"),
-        )));
-        let result = send_load_updates(&mut FailedOutput, "session-id", vec![update]);
-        let response = load_session_response(json!(1), result);
+        use muniment_attach::{
+            authorized_with_client_credential, encode_frame, welcome, Id, Protocol, Response,
+            Success,
+        };
+        use std::collections::BTreeMap;
+        use std::os::unix::fs::PermissionsExt;
+        use std::os::unix::net::{UnixListener, UnixStream};
+
+        fn read_frame(stream: &mut UnixStream) -> Value {
+            let mut prefix = [0; 4];
+            stream.read_exact(&mut prefix).unwrap();
+            let mut payload = vec![0; u32::from_be_bytes(prefix) as usize];
+            stream.read_exact(&mut payload).unwrap();
+            serde_json::from_slice(&payload).unwrap()
+        }
+
+        fn respond(stream: &mut UnixStream, request: &Value, body: Value) {
+            stream
+                .write_all(
+                    &encode_frame(&Response {
+                        protocol: Protocol,
+                        request_id: Id::new(request["request_id"].as_str().unwrap()).unwrap(),
+                        ok: Success,
+                        body,
+                    })
+                    .unwrap(),
+                )
+                .unwrap();
+        }
+
+        let root = std::env::temp_dir().join(format!(
+            "muniment-acp-failed-load-output-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let socket_directory = root.join("muniment");
+        let config = root.join("config");
+        let workspace = root.join("workspace");
+        std::fs::create_dir_all(&socket_directory).unwrap();
+        std::fs::create_dir(&workspace).unwrap();
+        let listener = UnixListener::bind(socket_directory.join("attach-v1.sock")).unwrap();
+        let session_id = "01900000-0000-7000-8000-000000000030";
+        let thread_id = "01900000-0000-7000-8000-000000000031";
+        let record_directory = config.join("muniment/acp-sessions");
+        std::fs::create_dir_all(&record_directory).unwrap();
+        let record_path = record_directory.join(format!("{session_id}.json"));
+        std::fs::write(
+            &record_path,
+            serde_json::to_vec(&json!({
+                "version": 1,
+                "session_id": session_id,
+                "workspace_root": workspace,
+                "thread_id": thread_id,
+                "profile_id": "profile-id"
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        std::fs::set_permissions(&record_path, std::fs::Permissions::from_mode(0o600)).unwrap();
+
+        let opened_directory = workspace.to_string_lossy().into_owned();
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let _hello = read_frame(&mut stream);
+            stream
+                .write_all(
+                    &encode_frame(&welcome(1, "0.0.1", "11".repeat(16), "22".repeat(16))).unwrap(),
+                )
+                .unwrap();
+            stream
+                .write_all(
+                    &encode_frame(&authorized_with_client_credential(
+                        "profile-id",
+                        "33".repeat(32),
+                        3600,
+                        900,
+                        BTreeMap::new(),
+                        "44".repeat(32),
+                    ))
+                    .unwrap(),
+                )
+                .unwrap();
+            let onboard = read_frame(&mut stream);
+            assert_eq!(onboard["operation"], "workspace.onboard");
+            respond(
+                &mut stream,
+                &onboard,
+                json!({
+                    "opened_directory": opened_directory,
+                    "memory_location": opened_directory,
+                    "instructions": null
+                }),
+            );
+            let open = read_frame(&mut stream);
+            assert_eq!(open["operation"], "thread.open");
+            respond(
+                &mut stream,
+                &open,
+                json!({
+                    "thread_id": thread_id,
+                    "entries": [{"run_seq": 1, "kind": "user_message", "text": "Question"}]
+                }),
+            );
+        });
+
+        let previous_runtime = std::env::var_os("XDG_RUNTIME_DIR");
+        let previous_config = std::env::var_os("XDG_CONFIG_HOME");
+        std::env::set_var("XDG_RUNTIME_DIR", &root);
+        std::env::set_var("XDG_CONFIG_HOME", &config);
+        let response = load_session(
+            json!(1),
+            Some(&json!({"sessionId": session_id, "cwd": workspace, "mcpServers": []})),
+            &mut FailedOutput,
+        );
+        if let Some(value) = previous_runtime {
+            std::env::set_var("XDG_RUNTIME_DIR", value);
+        } else {
+            std::env::remove_var("XDG_RUNTIME_DIR");
+        }
+        if let Some(value) = previous_config {
+            std::env::set_var("XDG_CONFIG_HOME", value);
+        } else {
+            std::env::remove_var("XDG_CONFIG_HOME");
+        }
+        server.join().unwrap();
+        std::fs::remove_dir_all(root).unwrap();
 
         assert_eq!(response["error"]["code"], -32000);
         assert_eq!(
