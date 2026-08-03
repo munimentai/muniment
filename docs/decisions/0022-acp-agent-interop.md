@@ -438,3 +438,41 @@ This amendment leaves the `session/request_permission` gate translation and
 the `session/load` replay mapping unchanged. The implementation slice is
 **ACP live tool-call translation**. It adds the three live projections and
 their contract tests. This amendment changes no code.
+
+## Amendment — 2026-08-03: prompt-ending contract
+
+This amendment supersedes the prompt amendment's statement that the adapter
+ignores `session/cancel`. The shipped **ACP prompt cancellation** slice maps a
+matching notification to attach `run.cancel` for the run bound to that ACP
+session's active prompt. A notification for another session cannot cancel the
+bound run. The prompt remains active until the runtime emits a terminal run
+event, because an accepted `run.cancel` records a request rather than a
+terminal result.
+
+The adapter must treat `run.needs_attention` as a terminal event. It must end
+the active `session/prompt` with the JSON-RPC `InternalError` code `-32603` and
+the exact message `Muniment run needs attention`. No ACP stop reason describes
+an interrupted run that needs user action. In particular, `cancelled` would
+incorrectly claim that cancellation ended the run. The implementation slice
+is **ACP needs-attention prompt termination**.
+
+When the adapter receives `stream.closed` with `resumable: true`, it must not
+end `session/prompt`. It must open a new attach `run.stream` subscription for
+the same bound run from the last processed `run_seq`, then continue the prompt.
+The adapter must deduplicate replayed events by `(run_id, run_seq)`. A failed
+resubscription ends the prompt with JSON-RPC server error code `-32000` and the
+exact message `Muniment run stream closed`.
+
+When `stream.closed` has `resumable: false`, the adapter must not resubscribe.
+It must end the prompt with JSON-RPC server error code `-32000` and the exact
+message `Muniment run stream closed`. A missing or non-Boolean `resumable`
+value fails closed and follows the `false` rule. The implementation slice is
+**ACP prompt stream recovery**.
+
+The attach envelope defines `capability.revoked`, but the runtime emits no
+such event today. This amendment reserves its ACP mapping. An implementation
+must not emit `capability.revoked` until a later amendment defines the exact
+prompt outcome and reconnect behavior. The implementation slice is
+**ACP capability-revocation mapping**.
+
+This amendment changes no code.
