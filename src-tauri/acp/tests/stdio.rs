@@ -180,6 +180,22 @@ fn new_session_reuses_authorization_and_rejects_invalid_parameters() {
                     .unwrap(),
                 )
                 .unwrap();
+            let create = read_frame(&mut stream);
+            assert_eq!(create["operation"], "thread.create");
+            assert!(create["body"].as_object().unwrap().is_empty());
+            stream
+                .write_all(
+                    &encode_frame(&Response {
+                        protocol: Protocol,
+                        request_id: Id::new(create["request_id"].as_str().unwrap()).unwrap(),
+                        ok: Success,
+                        body: json!({
+                            "thread_id": "01900000-0000-7000-8000-000000000000"
+                        }),
+                    })
+                    .unwrap(),
+                )
+                .unwrap();
         }
     });
 
@@ -228,6 +244,21 @@ fn new_session_reuses_authorization_and_rejects_invalid_parameters() {
         7
     );
     assert!(second_responses[0]["result"]["sessionId"].is_string());
+    let record_path = client_files
+        .join("acp-sessions")
+        .join(format!("{session_id}.json"));
+    let metadata = std::fs::metadata(&record_path).unwrap();
+    assert_eq!(metadata.permissions().mode() & 0o777, 0o600);
+    let record: Value = serde_json::from_slice(&std::fs::read(record_path).unwrap()).unwrap();
+    assert_eq!(record.as_object().unwrap().len(), 5);
+    assert_eq!(record["version"], 1);
+    assert_eq!(record["session_id"], session_id);
+    assert_eq!(
+        record["workspace_root"],
+        workspace.to_string_lossy().as_ref()
+    );
+    assert_eq!(record["thread_id"], "01900000-0000-7000-8000-000000000000");
+    assert_eq!(record["profile_id"], "profile-id");
     assert_eq!(
         responses[1]["error"]["message"],
         "session/new cwd must be absolute"
@@ -328,6 +359,10 @@ fn consecutive_prompts_continue_one_thread() {
                 "instructions": null
             }),
         );
+        let create = read_frame(&mut stream);
+        assert_eq!(create["operation"], "thread.create");
+        let thread_id = "01900000-0000-7000-8000-000000000003";
+        respond(&mut stream, &create, json!({"thread_id": thread_id}));
 
         let (mut stream, _) = listener.accept().unwrap();
         pair(&mut stream);
@@ -335,9 +370,8 @@ fn consecutive_prompts_continue_one_thread() {
         assert_eq!(start["operation"], "run.start");
         assert_eq!(start["body"]["workspace"], expected_workspace);
         assert_eq!(start["body"]["text"], "Tell me more.");
-        assert!(start["body"].get("thread_id").is_none());
+        assert_eq!(start["body"]["thread_id"], thread_id);
         let run_id = "01900000-0000-7000-8000-000000000001";
-        let thread_id = "01900000-0000-7000-8000-000000000003";
         let subscription_id = "01900000-0000-7000-8000-000000000002";
         respond(
             &mut stream,
@@ -757,6 +791,16 @@ fn consecutive_prompts_continue_one_thread() {
     assert_eq!(responses[7]["error"]["code"], -32000);
     assert!(child.wait().unwrap().success());
     server.join().unwrap();
+    let record: Value = serde_json::from_slice(
+        &std::fs::read(
+            config
+                .join("muniment/acp-sessions")
+                .join(format!("{session_id}.json")),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(record["thread_id"], "0190a100-0000-7000-8000-000000000002");
     std::fs::remove_dir_all(runtime).unwrap();
 }
 
@@ -846,6 +890,13 @@ fn cancel_during_a_prompt_targets_the_bound_run_and_drains_to_cancelled() {
                 "memory_location": expected_workspace,
                 "instructions": null
             }),
+        );
+        let create = read_frame(&mut stream);
+        assert_eq!(create["operation"], "thread.create");
+        respond(
+            &mut stream,
+            &create,
+            json!({"thread_id": "01900000-0000-7000-8000-000000000013"}),
         );
 
         let (mut stream, _) = listener.accept().unwrap();

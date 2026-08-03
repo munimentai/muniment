@@ -12,8 +12,9 @@ use muniment_attach::{
     handshake_as_with_credential, AuthorizedClient, ClientError, Id, PermissionDecision,
     RunStreamMessage,
 };
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::collections::{HashMap, VecDeque};
+use std::collections::VecDeque;
 use std::io::{self, BufRead, BufReader, Read, Write};
 #[cfg(unix)]
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
@@ -25,15 +26,22 @@ const NO_ATTACH: &str = "no authorized Muniment runtime attach exists";
 const CLIENT_KIND: &str = "acp-adapter";
 const CLIENT_ID_FILE: &str = "acp-client-id";
 const CLIENT_CREDENTIAL_FILE: &str = "acp-client-credential";
+const SESSION_DIRECTORY: &str = "acp-sessions";
+const SESSION_RECORD_VERSION: u32 = 1;
 
 enum PromptFailure {
     Client(ClientError),
     Run,
 }
 
-struct Session {
-    workspace: String,
-    thread_id: Option<String>,
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct SessionRecord {
+    version: u32,
+    session_id: String,
+    workspace_root: String,
+    thread_id: String,
+    profile_id: String,
 }
 
 impl From<ClientError> for PromptFailure {
@@ -58,7 +66,6 @@ fn serve(input: impl BufRead + Send + 'static, mut output: impl Write) -> io::Re
             }
         }
     });
-    let mut sessions = HashMap::new();
     let mut pending = VecDeque::new();
     let mut next_request_id = 1_u64;
     let result = (|| {
@@ -80,7 +87,6 @@ fn serve(input: impl BufRead + Send + 'static, mut output: impl Write) -> io::Re
             };
             if let Some(response) = response(
                 message,
-                &mut sessions,
                 &mut output,
                 &receiver,
                 &mut pending,
@@ -99,7 +105,6 @@ fn serve(input: impl BufRead + Send + 'static, mut output: impl Write) -> io::Re
 
 fn response(
     message: Value,
-    sessions: &mut HashMap<String, Session>,
     output: &mut impl Write,
     input: &Receiver<io::Result<String>>,
     pending: &mut VecDeque<io::Result<String>>,
@@ -112,11 +117,10 @@ fn response(
 
     match method {
         "initialize" => Some(initialize(id, object.get("params"))),
-        "session/new" => Some(new_session(id, object.get("params"), sessions)),
+        "session/new" => Some(new_session(id, object.get("params"))),
         "session/prompt" => Some(prompt(
             id,
             object.get("params"),
-            sessions,
             output,
             input,
             pending,
@@ -135,11 +139,7 @@ fn response(
     }
 }
 
-fn new_session(
-    id: Value,
-    params: Option<&Value>,
-    sessions: &mut HashMap<String, Session>,
-) -> Value {
+fn new_session(id: Value, params: Option<&Value>) -> Value {
     let Some(params) = params else {
         return invalid_params(id, "session/new requires an absolute cwd");
     };
@@ -171,18 +171,21 @@ fn new_session(
         )?;
         persist_authorized_client_credential(client.authorized_client_credential())
             .map_err(|_| ClientError::UnexpectedMessage)?;
-        client.onboard_workspace(&workspace, &workspace)
+        let onboarded = client.onboard_workspace(&workspace, &workspace)?;
+        let thread = client.create_thread()?;
+        let session_id = uuid::Uuid::now_v7().to_string();
+        let record = SessionRecord {
+            version: SESSION_RECORD_VERSION,
+            session_id: session_id.clone(),
+            workspace_root: onboarded.opened_directory,
+            thread_id: thread.thread_id,
+            profile_id: client.profile_id().to_owned(),
+        };
+        write_session_record(&record).map_err(|_| ClientError::UnexpectedMessage)?;
+        Ok(session_id)
     })();
     match result {
-        Ok(onboarded) => {
-            let session_id = uuid::Uuid::now_v7().to_string();
-            sessions.insert(
-                session_id.clone(),
-                Session {
-                    workspace: onboarded.opened_directory,
-                    thread_id: None,
-                },
-            );
+        Ok(session_id) => {
             let result = NewSessionResponse::new(session_id);
             json!({"jsonrpc": "2.0", "id": id, "result": result})
         }
@@ -197,7 +200,6 @@ fn new_session(
 fn prompt(
     id: Value,
     params: Option<&Value>,
-    sessions: &mut HashMap<String, Session>,
     output: &mut impl Write,
     input: &Receiver<io::Result<String>>,
     pending: &mut VecDeque<io::Result<String>>,
@@ -210,14 +212,14 @@ fn prompt(
         return invalid_params(id, "session/prompt parameters are invalid");
     };
     let session_id = request.session_id.0.to_string();
-    let Some(session) = sessions.get(&session_id) else {
+    let Ok(mut session) = read_session_record(&session_id) else {
         return json!({
             "jsonrpc": "2.0",
             "id": id,
             "error": {"code": -32002, "message": "Resource not found"}
         });
     };
-    let workspace = session.workspace.clone();
+    let workspace = session.workspace_root.clone();
     let thread_id = session.thread_id.clone();
     let mut text = String::new();
     for block in request.prompt {
@@ -247,21 +249,18 @@ fn prompt(
             &text,
             None,
             Some(&workspace),
-            thread_id.as_deref(),
+            Some(&thread_id),
         ) {
-            Err(ClientError::ThreadNotFound) if thread_id.is_some() => {
-                sessions
-                    .get_mut(&session_id)
-                    .expect("session exists")
-                    .thread_id = None;
+            Err(ClientError::ThreadNotFound) => {
                 client.start_run_in_workspace_thread(&text, None, Some(&workspace), None)?
             }
             result => result?,
         };
-        sessions
-            .get_mut(&session_id)
-            .expect("session exists")
-            .thread_id = Some(accepted.thread_id.clone());
+        if accepted.thread_id != session.thread_id {
+            session.thread_id.clone_from(&accepted.thread_id);
+            write_session_record(&session)
+                .map_err(|_| PromptFailure::Client(ClientError::UnexpectedMessage))?;
+        }
         client.subscribe_run(&accepted.run_id, accepted.committed_seq)?;
         loop {
             let (run_seq, terminal) = match client.read_run_stream_message()? {
@@ -585,6 +584,46 @@ fn persist_authorized_client_credential(credential: &str) -> io::Result<()> {
         &directory.join(CLIENT_CREDENTIAL_FILE),
         credential.as_bytes(),
     )
+}
+
+fn session_record_path(session_id: &str) -> io::Result<PathBuf> {
+    let parsed = uuid::Uuid::parse_str(session_id)
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "session ID is invalid"))?;
+    if parsed.to_string() != session_id {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "session ID is invalid",
+        ));
+    }
+    Ok(config_directory()?
+        .join(SESSION_DIRECTORY)
+        .join(format!("{session_id}.json")))
+}
+
+fn read_session_record(session_id: &str) -> io::Result<SessionRecord> {
+    let value = read_private_file(&session_record_path(session_id)?)?;
+    let record: SessionRecord = serde_json::from_str(&value)
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "session record is invalid"))?;
+    if record.version != SESSION_RECORD_VERSION
+        || record.session_id != session_id
+        || !Path::new(&record.workspace_root).is_absolute()
+        || Id::new(&record.thread_id).is_err()
+        || record.profile_id.is_empty()
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "session record is invalid",
+        ));
+    }
+    Ok(record)
+}
+
+fn write_session_record(record: &SessionRecord) -> io::Result<()> {
+    let path = session_record_path(&record.session_id)?;
+    std::fs::create_dir_all(path.parent().expect("session record has a parent"))?;
+    let value = serde_json::to_vec(record)
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "session record is invalid"))?;
+    atomic_write_private_file(&path, &value)
 }
 
 #[cfg(unix)]
