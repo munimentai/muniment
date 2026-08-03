@@ -465,7 +465,7 @@ pub(super) fn coordinate<R: tauri::Runtime>(
                         payload,
                         subject.as_deref(),
                     )?;
-                    Ok(*seq)
+                    Ok(seq)
                 },
             )
             .is_err()
