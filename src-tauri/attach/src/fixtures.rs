@@ -809,6 +809,7 @@ mod tests {
             crate::ErrorCode::InvalidCursor,
             crate::ErrorCode::InvalidArtifactCursor,
             crate::ErrorCode::InvalidRequest,
+            crate::ErrorCode::ThreadNotFound,
             crate::ErrorCode::Unauthorized,
             crate::ErrorCode::UnsupportedOperation,
         ];
@@ -832,7 +833,7 @@ mod tests {
         }
         assert_eq!(
             fixtures.len(),
-            38,
+            39,
             "every canonical fixture must be inventoried"
         );
     }

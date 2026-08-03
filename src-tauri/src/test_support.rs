@@ -169,11 +169,11 @@ impl RunStartBoundaries for FakeRunStartBoundaries {
     fn prepare_run(
         &self,
         run_id: &str,
-        _grant: &ChatGrant,
+        grant: &ChatGrant,
         tokens: &TokenSet,
         _files: Vec<SelectedFile>,
         provenance: Option<Provenance>,
-        _thread_id: Option<&str>,
+        thread_id: Option<&str>,
     ) -> Result<(u64, ChatProjector), RunStartError> {
         self.prepare_calls.fetch_add(1, Ordering::SeqCst);
         *self.prepared_provenance.lock().unwrap() = provenance;
@@ -189,14 +189,58 @@ impl RunStartBoundaries for FakeRunStartBoundaries {
             tokens.subject.as_deref(),
         );
         projector.apply(&started).unwrap();
+        let mut events = vec![started.clone()];
+        let mut committed_seq = 1;
+        #[cfg(target_os = "linux")]
+        if let Some(thread_id) = thread_id {
+            let mut journal = self
+                .journal
+                .lock()
+                .map_err(|_| RunStartError::Persistence(attachment_error()))?;
+            journal
+                .append_new_run_in_thread(&grant.workspace, thread_id, &started)
+                .map_err(|error| {
+                    if matches!(
+                        error,
+                        muniment_core::journal::JournalError::InvalidEnvelope(_)
+                    ) {
+                        RunStartError::ThreadNotFound
+                    } else {
+                        RunStartError::Persistence(attachment_error())
+                    }
+                })?;
+            let prompt = event_envelope(
+                run_id,
+                2,
+                "user.prompt.submitted",
+                json!({"prompt": "hello"}),
+                tokens.subject.as_deref(),
+            );
+            projector.apply(&prompt).unwrap();
+            journal
+                .append(1, &prompt)
+                .map_err(|_| RunStartError::Persistence(attachment_error()))?;
+            events.push(prompt);
+            committed_seq = 2;
+        }
         self.journaled_events
             .lock()
             .unwrap()
-            .insert(run_id.to_owned(), vec![started]);
-        Ok((1, projector))
+            .insert(run_id.to_owned(), events);
+        Ok((committed_seq, projector))
     }
 
-    fn run_thread_id(&self, _run_id: &str) -> Result<String, RunStartError> {
+    fn run_thread_id(&self, run_id: &str) -> Result<String, RunStartError> {
+        #[cfg(target_os = "linux")]
+        if let Some(thread_id) = self
+            .journal
+            .lock()
+            .map_err(|_| RunStartError::Persistence(attachment_error()))?
+            .run_thread_id(run_id)
+            .map_err(|_| RunStartError::Persistence(attachment_error()))?
+        {
+            return Ok(thread_id);
+        }
         Ok("0190a100-0000-7000-8000-000000000002".into())
     }
 
