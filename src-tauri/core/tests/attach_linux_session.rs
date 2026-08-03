@@ -2368,6 +2368,207 @@ fn file_journal_run_stream_stays_live_and_ignores_other_run_commits() {
 }
 
 #[test]
+fn run_stream_waits_for_an_initial_held_suffix_without_advancing_or_repeating() {
+    const RUN: &str = "0190a100-0000-7000-8000-000000000032";
+    let path = std::env::temp_dir().join(format!(
+        "muniment-attach-held-initial-{}-{}.sqlite",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    let mut writer = RunJournal::open(&path).unwrap();
+    let first = prompt(RUN, "question", "2026-07-16T03:00:00Z");
+    let mut held = first.clone();
+    held.event_id = "0190a200-0000-7000-8003-000000000002".into();
+    held.run_seq = 2;
+    held.event_type = "model.stream.delta".into();
+    held.payload = EventPayload::Inline {
+        payload_json: json!({"text":"safe AKIAAAAA", "content_disclosure":"released"}),
+    };
+    writer.append_batch(0, &[first, held]).unwrap();
+    writer.bind_run_workspace(RUN, "workspace-1").unwrap();
+    let mut service = RunJournal::open(&path).unwrap();
+
+    let (mut client, server) = UnixStream::pair().unwrap();
+    let server_thread = thread::spawn(move || {
+        run_authenticated_session_with_authorization(
+            server,
+            credentials(),
+            "0.1.0",
+            Duration::from_secs(2),
+            AuthorizationSessionDependencies {
+                fill_random: |bytes: &mut [u8]| {
+                    bytes.fill(9);
+                    Ok(())
+                },
+                clock: TestClock(Rc::new(Cell::new(Duration::ZERO))),
+                tokens: TestTokens(1),
+                approvals: |_: &muniment_core::attach::PairingChallenge, _: Duration| {
+                    Some(ApprovalDecision::Approve(approval()))
+                },
+            },
+            &mut service,
+        )
+    });
+    client.write_all(&hello(1, 1)).unwrap();
+    let _: Welcome = read_frame(&mut client);
+    let _: Authorized = read_frame(&mut client);
+    client
+        .write_all(&request(
+            79,
+            Operation::RunStream,
+            json!({"run_id": RUN, "after_run_seq": 0}),
+        ))
+        .unwrap();
+    let _: Response = read_frame(&mut client);
+    let Envelope::Event(first_event) = read_frame::<Envelope>(&mut client) else {
+        panic!("expected the first event")
+    };
+    assert_eq!(first_event.run_seq, Some(1));
+    client
+        .set_read_timeout(Some(Duration::from_millis(150)))
+        .unwrap();
+    let mut byte = [0];
+    assert!(matches!(
+        client.read(&mut byte).unwrap_err().kind(),
+        std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+    ));
+
+    let mut remainder = prompt(RUN, "unused", "2026-07-16T03:00:01Z");
+    remainder.event_id = "0190a200-0000-7000-8003-000000000003".into();
+    remainder.run_seq = 3;
+    remainder.event_type = "model.stream.delta".into();
+    remainder.payload = EventPayload::Inline {
+        payload_json: json!({"text":"AAAAAAAAAAAA end", "content_disclosure":"released"}),
+    };
+    let mut completed = remainder.clone();
+    completed.event_id = "0190a200-0000-7000-8003-000000000004".into();
+    completed.run_seq = 4;
+    completed.event_type = "run.completed".into();
+    completed.payload = EventPayload::Inline {
+        payload_json: json!({}),
+    };
+    writer.append_batch(2, &[remainder, completed]).unwrap();
+    client
+        .set_read_timeout(Some(Duration::from_secs(2)))
+        .unwrap();
+    let mut sequences = Vec::new();
+    for _ in 0..3 {
+        let Envelope::Event(event) = read_frame::<Envelope>(&mut client) else {
+            panic!("expected a released event")
+        };
+        sequences.push(event.run_seq.unwrap());
+    }
+    assert_eq!(sequences, [2, 3, 4]);
+    let Envelope::Event(caught_up) = read_frame::<Envelope>(&mut client) else {
+        panic!("expected a caught-up event")
+    };
+    assert_eq!(caught_up.event, EventName::SubscriptionCaughtUp);
+    assert_eq!(caught_up.run_seq, Some(4));
+
+    client.shutdown(Shutdown::Write).unwrap();
+    assert_eq!(server_thread.join().unwrap(), Ok(()));
+}
+
+#[test]
+fn live_run_stream_waits_for_a_held_delta_without_advancing_or_repeating() {
+    const RUN: &str = "0190a100-0000-7000-8000-000000000033";
+    let path = std::env::temp_dir().join(format!(
+        "muniment-attach-held-live-{}-{}.sqlite",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    let mut writer = RunJournal::open(&path).unwrap();
+    writer
+        .append(0, &prompt(RUN, "question", "2026-07-16T03:00:00Z"))
+        .unwrap();
+    writer.bind_run_workspace(RUN, "workspace-1").unwrap();
+    let mut service = RunJournal::open(&path).unwrap();
+
+    let (mut client, server) = UnixStream::pair().unwrap();
+    let server_thread = thread::spawn(move || {
+        run_authenticated_session_with_authorization(
+            server,
+            credentials(),
+            "0.1.0",
+            Duration::from_secs(2),
+            AuthorizationSessionDependencies {
+                fill_random: |bytes: &mut [u8]| {
+                    bytes.fill(9);
+                    Ok(())
+                },
+                clock: TestClock(Rc::new(Cell::new(Duration::ZERO))),
+                tokens: TestTokens(1),
+                approvals: |_: &muniment_core::attach::PairingChallenge, _: Duration| {
+                    Some(ApprovalDecision::Approve(approval()))
+                },
+            },
+            &mut service,
+        )
+    });
+    client.write_all(&hello(1, 1)).unwrap();
+    let _: Welcome = read_frame(&mut client);
+    let _: Authorized = read_frame(&mut client);
+    client
+        .write_all(&request(
+            80,
+            Operation::RunStream,
+            json!({"run_id": RUN, "after_run_seq": 1}),
+        ))
+        .unwrap();
+    let _: Response = read_frame(&mut client);
+    let Envelope::Event(caught_up) = read_frame::<Envelope>(&mut client) else {
+        panic!("expected the initial caught-up event")
+    };
+    assert_eq!(caught_up.run_seq, Some(1));
+
+    let mut held = prompt(RUN, "unused", "2026-07-16T03:00:01Z");
+    held.event_id = "0190a200-0000-7000-8004-000000000002".into();
+    held.run_seq = 2;
+    held.event_type = "model.stream.delta".into();
+    held.payload = EventPayload::Inline {
+        payload_json: json!({"text":"safe AKIAAAAA", "content_disclosure":"released"}),
+    };
+    writer.append(1, &held).unwrap();
+    client
+        .set_read_timeout(Some(Duration::from_millis(150)))
+        .unwrap();
+    let mut byte = [0];
+    assert!(matches!(
+        client.read(&mut byte).unwrap_err().kind(),
+        std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+    ));
+
+    let mut completed = held.clone();
+    completed.event_id = "0190a200-0000-7000-8004-000000000003".into();
+    completed.run_seq = 3;
+    completed.event_type = "run.completed".into();
+    completed.payload = EventPayload::Inline {
+        payload_json: json!({}),
+    };
+    writer.append(2, &completed).unwrap();
+    client
+        .set_read_timeout(Some(Duration::from_secs(2)))
+        .unwrap();
+    let Envelope::Event(delta) = read_frame::<Envelope>(&mut client) else {
+        panic!("expected the held delta")
+    };
+    let Envelope::Event(terminal) = read_frame::<Envelope>(&mut client) else {
+        panic!("expected the terminal event")
+    };
+    assert_eq!(delta.run_seq, Some(2));
+    assert_eq!(terminal.run_seq, Some(3));
+
+    client.shutdown(Shutdown::Write).unwrap();
+    assert_eq!(server_thread.join().unwrap(), Ok(()));
+}
+
+#[test]
 fn file_journal_run_stream_captures_commit_racing_subscription_snapshot() {
     const RUN: &str = "0190a100-0000-7000-8000-000000000030";
     let path = std::env::temp_dir().join(format!(

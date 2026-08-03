@@ -1403,8 +1403,7 @@ fn poll_run_streams<S: ThreadListService>(
     let mut events = Vec::new();
     for stream in subscriptions {
         let window = stream.cursor.window();
-        if !stream.caught_up
-            || !stream.pending.is_empty()
+        if !stream.pending.is_empty()
             || stream.cursor.outstanding_events() == window.max_events
             || stream.cursor.outstanding_bytes() == window.max_bytes
         {
@@ -1456,7 +1455,6 @@ fn append_run_stream_page(
     {
         return Err(ProtocolError::persistence_failed());
     }
-    let page_was_empty = page.events.is_empty();
     for journal_event in page.events {
         if journal_event.run_seq > stream.snapshot_run_seq {
             break;
@@ -1528,9 +1526,6 @@ fn append_run_stream_page(
         stream.pending.push_back(event);
     }
     stream.exhausted = stream.fetched_through_run_seq == stream.snapshot_run_seq;
-    if !stream.exhausted && page_was_empty {
-        return Err(ProtocolError::persistence_failed());
-    }
     Ok(())
 }
 
@@ -1668,12 +1663,16 @@ fn dispatch_request<S: ThreadListService>(
             });
         }
         while subscriptions[index].pending.is_empty() && !subscriptions[index].exhausted {
+            let fetched_through_run_seq = subscriptions[index].fetched_through_run_seq;
             let page = service.stream_run(
                 &subscriptions[index].workspace,
                 subscriptions[index].cursor.run_id().as_str(),
                 subscriptions[index].fetched_through_run_seq,
             )?;
             append_run_stream_page(&mut subscriptions[index], page)?;
+            if subscriptions[index].fetched_through_run_seq == fetched_through_run_seq {
+                break;
+            }
         }
         let events = drain_run_stream(&mut subscriptions[index])?;
         return Ok(DispatchResult {
