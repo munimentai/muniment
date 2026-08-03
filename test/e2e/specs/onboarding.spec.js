@@ -39,17 +39,28 @@ describe('installed nightly model-ready onboarding', () => {
     }
 
     expect(path.isAbsolute(home)).toBe(true)
-    await browser.execute((selectedHome) => {
-      const invoke = window.__TAURI_INTERNALS__.invoke
-      window.__TAURI_INTERNALS__.invoke = (command, args, options) => command === 'plugin:dialog|open'
-        ? Promise.resolve(selectedHome)
-        : invoke(command, args, options)
-    }, home)
-    await (await $('[data-testid="onboarding-picker"]')).click()
-    expect(await location.getText()).toBe(home)
     let homeExists = true
     try { await access(home) } catch { homeExists = false }
     expect(homeExists).toBe(false)
+
+    await browser.execute((selectedHome) => {
+      window.__MUNIMENT_E2E_DIALOG_INVOKE__ = window.__TAURI_INTERNALS__.invoke
+      window.__TAURI_INTERNALS__.invoke = (command, args, options) => command === 'plugin:dialog|open'
+        ? Promise.resolve(selectedHome)
+        : window.__MUNIMENT_E2E_DIALOG_INVOKE__(command, args, options)
+    }, home)
+    try {
+      await (await $('[data-testid="onboarding-picker"]')).click()
+      await browser.waitUntil(async () => await location.getText() === home, {
+        timeoutMsg: 'the Home picker did not select the isolated Home',
+      })
+    } finally {
+      await browser.execute(() => {
+        window.__TAURI_INTERNALS__.invoke = window.__MUNIMENT_E2E_DIALOG_INVOKE__
+        delete window.__MUNIMENT_E2E_DIALOG_INVOKE__
+      })
+    }
+    expect(await location.getText()).toBe(home)
     await (await $('[data-testid="onboarding-confirm"]')).click()
     const skipImport = await $('button=Continue without importing')
     await skipImport.waitForDisplayed()
