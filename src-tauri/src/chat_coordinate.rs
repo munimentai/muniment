@@ -464,7 +464,8 @@ pub(super) fn coordinate<R: tauri::Runtime>(
                         kind,
                         payload,
                         subject.as_deref(),
-                    )
+                    )?;
+                    Ok(*seq)
                 },
             )
             .is_err()
@@ -664,25 +665,38 @@ fn coordinate_permission_answer(
     pending: &mut Option<ExtensionUiRequest>,
     queued: PendingPermissionAnswer,
     send: impl FnOnce(&ExtensionUiRequest, ExtensionUiAnswer) -> Result<(), String>,
-    append: impl FnOnce(&str, Value) -> Result<(), ()>,
+    append: impl FnOnce(&str, Value) -> Result<u64, ()>,
 ) -> Result<(), ()> {
+    let resolved = queued.resolved;
     let Some(request) = pending
         .as_ref()
         .filter(|request| request.id == queued.gate_id)
     else {
+        if let Some(resolved) = resolved {
+            let _ = resolved.send(None);
+        }
         return Ok(());
     };
     let answer = queued.answer.pi_answer();
     if ExtensionUiResponse::new(request, answer.clone()).is_err() {
+        if let Some(resolved) = resolved {
+            let _ = resolved.send(None);
+        }
         return Ok(());
     }
     if send(request, answer).is_err() {
+        if let Some(resolved) = resolved {
+            let _ = resolved.send(None);
+        }
         return Ok(());
     }
-    append(
+    let committed_seq = append(
         "permission.resolved",
         json!({"gate_id": queued.gate_id, "decision": queued.answer.decision()}),
     )?;
+    if let Some(resolved) = resolved {
+        let _ = resolved.send(Some(committed_seq));
+    }
     *pending = None;
     Ok(())
 }
@@ -1140,6 +1154,7 @@ mod tests {
             PendingPermissionAnswer {
                 gate_id: "other-gate".into(),
                 answer: ChatPermissionAnswer::Select("A".into()),
+                resolved: None,
             },
             |_, answer| {
                 sent.push(answer);
@@ -1147,7 +1162,7 @@ mod tests {
             },
             |kind, payload| {
                 appended.push((kind.to_string(), payload));
-                Ok(())
+                Ok(1)
             },
         )
         .unwrap();
@@ -1160,6 +1175,7 @@ mod tests {
             PendingPermissionAnswer {
                 gate_id: "gate-1".into(),
                 answer: ChatPermissionAnswer::Select("C".into()),
+                resolved: None,
             },
             |_, answer| {
                 sent.push(answer);
@@ -1167,7 +1183,7 @@ mod tests {
             },
             |kind, payload| {
                 appended.push((kind.to_string(), payload));
-                Ok(())
+                Ok(1)
             },
         )
         .unwrap();
@@ -1180,6 +1196,7 @@ mod tests {
             PendingPermissionAnswer {
                 gate_id: "gate-1".into(),
                 answer: ChatPermissionAnswer::Select("B".into()),
+                resolved: None,
             },
             |_, answer| {
                 sent.push(answer);
@@ -1187,7 +1204,7 @@ mod tests {
             },
             |kind, payload| {
                 appended.push((kind.to_string(), payload));
-                Ok(())
+                Ok(1)
             },
         )
         .unwrap();

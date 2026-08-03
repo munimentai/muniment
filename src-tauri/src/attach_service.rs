@@ -565,7 +565,8 @@ impl<B: RunStartBoundaries, I: RunStartIdempotency> ThreadListService
                     PermissionDecision::Allow => ChatPermissionAnswer::Confirm(true),
                     PermissionDecision::Deny => ChatPermissionAnswer::Confirm(false),
                 };
-                self.boundaries
+                let resolved = self
+                    .boundaries
                     .queue_attach_permission_answer(
                         workspace,
                         &request.run_id,
@@ -574,6 +575,13 @@ impl<B: RunStartBoundaries, I: RunStartIdempotency> ThreadListService
                     )
                     .map_err(|error| error.protocol_error())?;
                 let deadline = std::time::Instant::now() + PERMISSION_COMMIT_TIMEOUT;
+                let remaining = deadline
+                    .checked_duration_since(std::time::Instant::now())
+                    .ok_or_else(ProtocolError::persistence_failed)?;
+                let expected_seq = resolved
+                    .recv_timeout(remaining)
+                    .map_err(|_| ProtocolError::persistence_failed())?
+                    .ok_or_else(ProtocolError::invalid_request)?;
                 let committed_seq = loop {
                     let remaining = deadline
                         .checked_duration_since(std::time::Instant::now())
@@ -581,7 +589,7 @@ impl<B: RunStartBoundaries, I: RunStartIdempotency> ThreadListService
                     let hint = commits
                         .recv_timeout(remaining)
                         .map_err(|_| ProtocolError::persistence_failed())?;
-                    if hint.run_id != request.run_id || hint.run_seq <= high_water {
+                    if hint.run_id != request.run_id || hint.run_seq != expected_seq {
                         continue;
                     }
                     let page = self.boundaries.stream_run(
@@ -1078,6 +1086,63 @@ mod tests {
             PermissionDecision::Allow,
             "018f0000-0000-7000-8000-000000000003",
             "018f0000-0000-7000-8000-000000000002",
+        )
+        .is_err());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn attach_permission_answer_rejects_a_settled_run_without_queueing() {
+        let run_id = "0190a100-0000-7000-8000-000000000001";
+        let mut service = permission_service(
+            FakeRunStartBoundaries::accepting(),
+            Some((run_id, "workspace-a")),
+        );
+        append_test_event(
+            &mut service.boundaries.journal.lock().unwrap(),
+            run_id,
+            3,
+            "permission.resolved",
+            json!({"gate_id": "gate-1", "decision": {"type": "confirm", "value": true}}),
+            None,
+        );
+
+        assert!(permission_request(
+            &mut service,
+            "workspace-a",
+            run_id,
+            "gate-1",
+            PermissionDecision::Allow,
+            "018f0000-0000-7000-8000-000000000013",
+            "018f0000-0000-7000-8000-000000000012",
+        )
+        .is_err());
+        assert!(service
+            .boundaries
+            .queued_permission_answers
+            .lock()
+            .unwrap()
+            .is_empty());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn attach_permission_answer_rejects_a_competing_desktop_resolution() {
+        let run_id = "0190a100-0000-7000-8000-000000000001";
+        let boundaries = FakeRunStartBoundaries {
+            permission_competing_answer: true,
+            ..FakeRunStartBoundaries::accepting()
+        };
+        let mut service = permission_service(boundaries, Some((run_id, "workspace-a")));
+
+        assert!(permission_request(
+            &mut service,
+            "workspace-a",
+            run_id,
+            "gate-1",
+            PermissionDecision::Allow,
+            "018f0000-0000-7000-8000-000000000023",
+            "018f0000-0000-7000-8000-000000000022",
         )
         .is_err());
     }

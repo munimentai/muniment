@@ -188,6 +188,7 @@ impl ChatPermissionAnswer {
 pub(super) struct PendingPermissionAnswer {
     pub(super) gate_id: String,
     pub(super) answer: ChatPermissionAnswer,
+    pub(super) resolved: Option<std::sync::mpsc::SyncSender<Option<u64>>>,
 }
 
 pub(super) struct PiRuntime {
@@ -261,7 +262,7 @@ pub(crate) trait RunStartBoundaries {
         run_id: &str,
         gate_id: &str,
         answer: ChatPermissionAnswer,
-    ) -> Result<(), RunStartError>;
+    ) -> Result<std::sync::mpsc::Receiver<Option<u64>>, RunStartError>;
     fn active_run_exists(&self) -> bool;
     fn fresh_tokens(&self) -> Result<TokenSet, RunStartError>;
     fn configure_run(
@@ -486,7 +487,7 @@ impl<R: tauri::Runtime> RunStartBoundaries for TauriRunStartBoundaries<R> {
         run_id: &str,
         gate_id: &str,
         answer: ChatPermissionAnswer,
-    ) -> Result<(), RunStartError> {
+    ) -> Result<std::sync::mpsc::Receiver<Option<u64>>, RunStartError> {
         let state = self.state();
         let active = state
             .active
@@ -498,14 +499,16 @@ impl<R: tauri::Runtime> RunStartBoundaries for TauriRunStartBoundaries<R> {
             .ok_or_else(|| {
                 RunStartError::InvalidRequest("That reply is no longer active.".into())
             })?;
+        let (sender, receiver) = std::sync::mpsc::sync_channel(1);
         run.permission_answers
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .push_back(PendingPermissionAnswer {
                 gate_id: gate_id.to_owned(),
                 answer,
+                resolved: Some(sender),
             });
-        Ok(())
+        Ok(receiver)
     }
 
     fn active_run_exists(&self) -> bool {
@@ -1481,7 +1484,11 @@ fn queue_permission_answer(
     run.permission_answers
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .push_back(PendingPermissionAnswer { gate_id, answer });
+        .push_back(PendingPermissionAnswer {
+            gate_id,
+            answer,
+            resolved: None,
+        });
     Ok(())
 }
 

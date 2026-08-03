@@ -62,6 +62,11 @@ pub(crate) struct FakeRunStartBoundaries {
     #[cfg(target_os = "linux")]
     pub(crate) permission_auto_commit: bool,
     #[cfg(target_os = "linux")]
+    pub(crate) permission_competing_answer: bool,
+    #[cfg(target_os = "linux")]
+    pub(crate) permission_resolution_sender:
+        Mutex<Option<std::sync::mpsc::SyncSender<Option<u64>>>>,
+    #[cfg(target_os = "linux")]
     pub(crate) permission_commit_sender:
         Mutex<Option<std::sync::mpsc::SyncSender<JournalCommitHint>>>,
     #[cfg(target_os = "linux")]
@@ -93,6 +98,10 @@ impl FakeRunStartBoundaries {
             queued_permission_answers: Mutex::new(Vec::new()),
             #[cfg(target_os = "linux")]
             permission_auto_commit: true,
+            #[cfg(target_os = "linux")]
+            permission_competing_answer: false,
+            #[cfg(target_os = "linux")]
+            permission_resolution_sender: Mutex::new(None),
             #[cfg(target_os = "linux")]
             permission_commit_sender: Mutex::new(None),
             #[cfg(target_os = "linux")]
@@ -173,7 +182,7 @@ impl RunStartBoundaries for FakeRunStartBoundaries {
         run_id: &str,
         gate_id: &str,
         answer: ChatPermissionAnswer,
-    ) -> Result<(), RunStartError> {
+    ) -> Result<std::sync::mpsc::Receiver<Option<u64>>, RunStartError> {
         if !self
             .active_run
             .lock()
@@ -185,12 +194,14 @@ impl RunStartBoundaries for FakeRunStartBoundaries {
                 "That reply is no longer active.".into(),
             ));
         }
+        let (resolved_sender, resolved_receiver) = std::sync::mpsc::sync_channel(1);
         self.queued_permission_answers
             .lock()
             .unwrap()
             .push((gate_id.to_owned(), answer.clone()));
         if !self.permission_auto_commit {
-            return Ok(());
+            *self.permission_resolution_sender.lock().unwrap() = Some(resolved_sender);
+            return Ok(resolved_receiver);
         }
         let mut journal = self.journal.lock().unwrap();
         let seq = journal
@@ -209,7 +220,14 @@ impl RunStartBoundaries for FakeRunStartBoundaries {
                     run_id,
                     seq,
                     "permission.resolved",
-                    json!({"gate_id": gate_id, "decision": answer.decision()}),
+                    json!({
+                        "gate_id": gate_id,
+                        "decision": if self.permission_competing_answer {
+                            ChatPermissionAnswer::Confirm(!matches!(answer, ChatPermissionAnswer::Confirm(true))).decision()
+                        } else {
+                            answer.decision()
+                        }
+                    }),
                     None,
                 ),
             )
@@ -223,7 +241,10 @@ impl RunStartBoundaries for FakeRunStartBoundaries {
                 })
                 .unwrap();
         }
-        Ok(())
+        resolved_sender
+            .send((!self.permission_competing_answer).then_some(seq))
+            .unwrap();
+        Ok(resolved_receiver)
     }
 
     fn active_run_exists(&self) -> bool {
