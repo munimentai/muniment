@@ -349,3 +349,65 @@ interim stance supersedes the `loadSession: true` statement above.
 The implementation slice is **ACP permission gate translation**. It adds the
 request projection, one-time option mapping, deny-closed response handling,
 and acknowledge order defined above. This amendment changes no code.
+
+## Amendment — 2026-08-03: `session/load` translation
+
+The adapter persists one versioned JSON record per adapter-minted session UUID
+under `$XDG_CONFIG_HOME/muniment/acp-sessions/<session-id>.json`, beside its
+persisted client identity and credential. The record contains the ACP session
+ID, canonical workspace root, durable Muniment thread ID, and signed-in profile
+identifier. The adapter writes records atomically with user-only access. It
+stores no attach capability, connection nonce, grant, credential, current run,
+journal content, or replay cursor in a session record. An ACP session ID with
+no valid record returns the SDK's ACP `ResourceNotFound` error and opens no
+thread.
+
+`session/new` writes the record after the runtime authorizes the workspace and
+creates the durable thread. It returns success only after the atomic write
+succeeds. This record replaces the process-local table from the prompt
+amendment. It also supersedes this ADR's earlier service-owned ACP mapping. The
+runtime journal remains the authoritative source for the referenced thread.
+
+`session/load` requires an absolute `cwd`. The runtime canonicalizes that path
+and requires exact equality with the record's canonical workspace root. It then
+checks the current signed-in profile, workspace scope, attach capability, and
+thread access before `thread.open`. A profile mismatch, workspace mismatch,
+missing thread, revoked capability, or failed check returns a fail-closed ACP
+error and sends no update.
+
+The adapter pages `thread.open` to its snapshot boundary and sends every entry
+in page order before it returns the successful `session/load` response. It maps
+the current `thread.open` entry kinds as follows:
+
+| `thread.open` entry kind | ACP `session/update` notification |
+| --- | --- |
+| `user_message` | `user_message_chunk` with one text block |
+| `assistant_message` | `agent_message_chunk` with one text block |
+| `attachment` | `user_message_chunk` with one text block containing the released display name |
+| `tool_running:<effect_id>` | `tool_call` with `pending` status |
+| `tool_completed` | `tool_call` with `completed` status |
+| `tool_failed` | `tool_call` with `failed` status |
+| `permission_pending` | `tool_call` with `pending` status and no permission request |
+
+Each replayed tool entry gets a deterministic tool-call ID from the session ID
+and its zero-based position in the complete replay. The adapter uses the
+released entry text as its title when present. A withheld entry has no text.
+It still replays the mapped update with empty text or content. Replay discloses
+the entry's existence but invents no replacement. An unknown entry kind,
+invalid tool effect ID, page failure, or notification send failure aborts the
+load with a fail-closed ACP error. The adapter never sends
+`session/request_permission` during replay.
+
+The persisted record is only a locator. Under `THREAT_MODEL.md`, its ACP session
+ID, profile identifier, thread ID, and `cwd` remain client-side claims and grant
+no authority. Each load needs a fresh authorized attach and the runtime checks
+above. Copying, editing, or replaying a record therefore cannot select a
+subject, expand workspace scope, open an unauthorized thread, or revive a
+revoked capability.
+
+`initialize` advertises `loadSession: true` only when **ACP session load
+translation** ships with atomic record persistence, authorized `thread.open`
+paging, the complete replay mapping above, and contract tests for every failure
+path. Until that slice ships, it continues to advertise `loadSession: false`
+and reject `session/load`. The first implementation slice is **ACP session load
+translation**. This amendment changes no code.
