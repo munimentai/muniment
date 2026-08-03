@@ -534,10 +534,13 @@ This lets the first prompt learn its desktop-created thread identity.
 The desktop resolves the selected workspace from the authorized capability
 before it resolves `thread_id`. The thread must exist, must not have a
 `thread.deleted` tombstone, and must belong to that exact profile and workspace.
-An unknown, tombstoned, foreign-profile, or wrong-workspace thread returns the
-non-retryable `thread_not_found` protocol error. The error uses the same
-redacted body for every case and appends nothing. Unlike the desktop chat path,
-the attach path never falls back to a fresh thread after this rejection.
+For a run-less thread, the runtime gets its profile from the durable
+`thread.created` provenance defined below. After the first run, existing
+first-run ownership remains authoritative. An unknown, tombstoned,
+foreign-profile, or wrong-workspace thread returns the non-retryable
+`thread_not_found` protocol error. The error uses the same redacted body for
+every case and appends nothing. Unlike the desktop chat path, the attach path
+never falls back to a fresh thread after this rejection.
 
 The supplied `thread_id` is part of the canonical `run.start` input for
 idempotency. An exact retry returns the original acceptance, including its
@@ -587,10 +590,13 @@ retry under another resolved workspace returns non-retryable
 the desktop appends anything.
 
 The desktop creates the durable thread by appending its `thread.created` event
-with the resolved workspace. It returns success only after that event commits.
-The accepted response body is `{thread_id}`, where `thread_id` is the created
-thread's opaque UUID. A commit failure returns a retryable storage error and no
-accepted response.
+with the resolved workspace. It stamps the authorized profile identifier as
+`provenance.attach_profile` on that event. The existing durable
+`thread_events.envelope_json` stores this provenance, so this rule needs no new
+column or table. It returns success only after that event commits. The accepted
+response body is `{thread_id}`, where `thread_id` is the created thread's opaque
+UUID. A commit failure returns a retryable storage error and no accepted
+response.
 
 The post-approval `authorized` message adds `profile_id`, which contains the
 signed-in profile identifier. The desktop sends that message only after the
@@ -600,14 +606,20 @@ receives `authorized`, so same-UID endpoint access alone does not disclose the
 identifier. This placement follows the `THREAT_MODEL.md` rule that same-UID
 identity does not grant authority.
 
-A run-less thread has no subject owner because ownership remains derived from
-the first stamped run. The change adds no owner column, table, or other schema.
-Before the first run, `thread.open` may resolve the returned `thread_id` only
-under a current capability for the same profile and exact workspace.
-`thread.list` omits run-less threads. The desktop sidebar also omits them and
-does not call `subject_owns_first_run` until a first run exists. The first run
-stamps its actor through existing provenance. Normal first-run ownership then
-governs desktop reads and sidebar visibility.
+A run-less thread has no first-run subject owner. Its creator profile is the
+`provenance.attach_profile` value on its committed `thread.created` event. For
+both `thread.open` and a named-thread `run.start`, the runtime loads that event
+from the journal and requires its profile to equal the current authorized
+connection's profile. It also requires the event's workspace to equal the
+connection's exact workspace. This lookup runs on every request, including a
+request from a fresh authorized connection. A missing or malformed creator
+profile fails closed as `thread_not_found`.
+
+The change adds no owner column, table, or other schema. `thread.list` omits
+run-less threads. The desktop sidebar also omits them and does not call
+`subject_owns_first_run` until a first run exists. The first run stamps its
+actor through existing provenance. Existing first-run ownership then governs
+desktop reads, later attach operations, and sidebar visibility.
 
 Implementation proceeds in three slices. First, **authorized profile
 disclosure** adds `profile_id` after approval and its negative-handshake tests.
