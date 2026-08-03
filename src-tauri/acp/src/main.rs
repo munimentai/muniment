@@ -199,7 +199,7 @@ fn prompt(
             Some(&workspace),
             thread_id.as_deref(),
         ) {
-            Err(ClientError::RequestRejected) if thread_id.is_some() => {
+            Err(ClientError::ThreadNotFound) if thread_id.is_some() => {
                 sessions
                     .get_mut(&session_id)
                     .expect("session exists")
@@ -456,6 +456,7 @@ fn pairing_failure(error: ClientError) -> &'static str {
     match error {
         ClientError::UnsupportedPlatform => "Muniment runtime attach is unsupported",
         ClientError::AuthorizationExpired => "Muniment runtime attach authorization expired",
+        ClientError::ThreadNotFound => "Muniment runtime could not find the thread",
         ClientError::RequestRejected => "Muniment runtime rejected workspace registration",
         ClientError::DesktopFailed => "Muniment runtime failed workspace registration",
         ClientError::RuntimeDirectoryMissing => "Muniment runtime directory is unavailable",
