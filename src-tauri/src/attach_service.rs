@@ -708,13 +708,17 @@ mod tests {
     {
         let boundaries = FakeRunStartBoundaries::accepting();
         let first_run_id = "0190a100-0000-7000-8000-000000000010".to_owned();
-        let first = crate::chat::event_envelope(
+        let mut first = crate::chat::event_envelope(
             &first_run_id,
             1,
             "user.prompt.submitted",
             json!({"prompt": "first"}),
             Some("owner"),
         );
+        first
+            .provenance
+            .extra
+            .insert("attach_profile".into(), json!("default"));
         let thread_id = boundaries
             .journal
             .lock()
@@ -1673,7 +1677,12 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[test]
     fn attach_thread_binding_rejections_leave_the_journal_unchanged() {
-        for case in ["unknown", "tombstoned", "wrong-workspace"] {
+        for case in [
+            "unknown",
+            "tombstoned",
+            "wrong-workspace",
+            "foreign-profile",
+        ] {
             let (mut service, thread_id, first_run_id) = attach_service_with_thread();
             if case == "tombstoned" {
                 service
@@ -1723,7 +1732,12 @@ mod tests {
                 &Id::new("018f0000-0000-7000-8000-000000000001").unwrap(),
                 &Id::new("018f0000-0000-7000-8000-000000000002").unwrap(),
                 CompanionProvenance {
-                    profile: "default".into(),
+                    profile: if case == "foreign-profile" {
+                        "another-profile"
+                    } else {
+                        "default"
+                    }
+                    .into(),
                     companion_kind: "cli".into(),
                     companion_version: "1.2.3".into(),
                     peer_uid: 1000,
@@ -1743,6 +1757,14 @@ mod tests {
                 "{case}"
             );
             assert_eq!(service.boundaries.launch_calls.load(Ordering::SeqCst), 0);
+            assert_eq!(
+                service
+                    .boundaries
+                    .prompt_protection_calls
+                    .load(Ordering::SeqCst),
+                0,
+                "{case}"
+            );
         }
     }
 

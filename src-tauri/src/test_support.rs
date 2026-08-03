@@ -139,7 +139,6 @@ impl RunStartBoundaries for FakeRunStartBoundaries {
                 "sensitive workspace detail".into(),
             ));
         }
-        self.prompt_protection_calls.fetch_add(1, Ordering::SeqCst);
         if let Some(error) = &self.configure_error {
             return Err(RunStartError::Persistence(error.clone()));
         }
@@ -159,6 +158,16 @@ impl RunStartBoundaries for FakeRunStartBoundaries {
         })
     }
 
+    fn protect_prompt(
+        &self,
+        _run_id: &str,
+        _prompt: &str,
+        _subject: Option<&str>,
+    ) -> Result<(), RunStartError> {
+        self.prompt_protection_calls.fetch_add(1, Ordering::SeqCst);
+        Ok(())
+    }
+
     fn install_active_run(&self, _run: ActiveRun) -> Result<(), RunStartError> {
         if let Some(error) = &self.install_error {
             return Err(RunStartError::InvalidRequest(error.clone()));
@@ -176,18 +185,26 @@ impl RunStartBoundaries for FakeRunStartBoundaries {
         thread_id: Option<&str>,
     ) -> Result<(u64, ChatProjector), RunStartError> {
         self.prepare_calls.fetch_add(1, Ordering::SeqCst);
-        *self.prepared_provenance.lock().unwrap() = provenance;
+        *self.prepared_provenance.lock().unwrap() = provenance.clone();
         if let Some(error) = &self.prepare_error {
             return Err(RunStartError::Persistence(error.clone()));
         }
         let mut projector = ChatProjector::new();
-        let started = event_envelope(
+        let mut started = event_envelope(
             run_id,
             1,
             "run.started",
             json!({}),
             tokens.subject.as_deref(),
         );
+        if let Some(provenance) = provenance {
+            started.provenance = Provenance {
+                actor_id: provenance
+                    .actor_id
+                    .or_else(|| tokens.subject.as_deref().map(str::to_owned)),
+                ..provenance
+            };
+        }
         projector.apply(&started).unwrap();
         let mut events = vec![started.clone()];
         let mut committed_seq = 1;

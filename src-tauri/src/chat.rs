@@ -249,6 +249,12 @@ pub(crate) trait RunStartBoundaries {
         tokens: &TokenSet,
         requested_workspace: Option<&str>,
     ) -> Result<ChatGrant, RunStartError>;
+    fn protect_prompt(
+        &self,
+        run_id: &str,
+        prompt: &str,
+        subject: Option<&str>,
+    ) -> Result<(), RunStartError>;
     fn install_active_run(&self, run: ActiveRun) -> Result<(), RunStartError>;
     fn prepare_run(
         &self,
@@ -357,6 +363,10 @@ pub(crate) fn prepare_desktop_run(
             return Err(error);
         }
     };
+    if let Err(error) = boundaries.protect_prompt(&run_id, &prompt, tokens.subject.as_deref()) {
+        boundaries.clear_active_run(&run_id);
+        return Err(error);
+    }
     let attachments = match boundaries.project_attachments(&prepared.1) {
         Ok(attachments) => attachments,
         Err(error) => {
@@ -439,8 +449,8 @@ impl<R: tauri::Runtime> RunStartBoundaries for TauriRunStartBoundaries<R> {
 
     fn configure_run(
         &self,
-        run_id: &str,
-        prompt: &str,
+        _run_id: &str,
+        _prompt: &str,
         tokens: &TokenSet,
         requested_workspace: Option<&str>,
     ) -> Result<ChatGrant, RunStartError> {
@@ -451,9 +461,16 @@ impl<R: tauri::Runtime> RunStartBoundaries for TauriRunStartBoundaries<R> {
                 "The capability is not authorized.".into(),
             ));
         }
-        protect_prompt(run_id, prompt, tokens.subject.as_deref())
-            .map_err(RunStartError::Persistence)?;
         Ok(grant)
+    }
+
+    fn protect_prompt(
+        &self,
+        run_id: &str,
+        prompt: &str,
+        subject: Option<&str>,
+    ) -> Result<(), RunStartError> {
+        protect_prompt(run_id, prompt, subject).map_err(RunStartError::Persistence)
     }
 
     fn install_active_run(&self, run: ActiveRun) -> Result<(), RunStartError> {

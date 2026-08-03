@@ -1112,6 +1112,23 @@ impl RunJournal {
                 "thread belongs to another workspace".into(),
             ));
         }
+        let thread_profile: Option<String> = tx.query_row(
+            "SELECT json_extract(e.envelope_json,'$.provenance.attach_profile') \
+             FROM run_threads rt JOIN events e ON e.run_id=rt.run_id AND e.run_seq=1 \
+             WHERE rt.thread_id=?1 ORDER BY rt.thread_run_ordinal LIMIT 1",
+            [thread_id],
+            |row| row.get(0),
+        )?;
+        let requested_profile = event
+            .provenance
+            .extra
+            .get("attach_profile")
+            .and_then(serde_json::Value::as_str);
+        if thread_profile.as_deref() != requested_profile {
+            return Err(JournalError::InvalidEnvelope(
+                "thread belongs to another profile".into(),
+            ));
+        }
         let next_ordinal: u64 = tx.query_row(
             "SELECT COALESCE(MAX(thread_run_ordinal), 0) + 1 \
              FROM run_threads WHERE thread_id=?1",
