@@ -647,6 +647,248 @@ fn prompt_rejects_an_unknown_session_without_an_attach() {
 }
 
 #[cfg(target_os = "linux")]
+fn scripted_prompt_ending(event_type: &str, stream_resumable: Option<bool>) -> Vec<Value> {
+    use muniment_attach::{
+        authorized_with_client_credential, encode_frame, welcome, Event, EventName, Id, Protocol,
+        Response, Success,
+    };
+    use std::collections::BTreeMap;
+    use std::io::Read;
+    use std::os::unix::fs::PermissionsExt;
+    use std::os::unix::net::{UnixListener, UnixStream};
+    use std::thread;
+
+    fn read_frame(stream: &mut UnixStream) -> Value {
+        let mut prefix = [0; 4];
+        stream.read_exact(&mut prefix).unwrap();
+        let mut payload = vec![0; u32::from_be_bytes(prefix) as usize];
+        stream.read_exact(&mut payload).unwrap();
+        serde_json::from_slice(&payload).unwrap()
+    }
+
+    fn respond(stream: &mut UnixStream, request: &Value, body: Value) {
+        stream
+            .write_all(
+                &encode_frame(&Response {
+                    protocol: Protocol,
+                    request_id: Id::new(request["request_id"].as_str().unwrap()).unwrap(),
+                    ok: Success,
+                    body,
+                })
+                .unwrap(),
+            )
+            .unwrap();
+    }
+
+    let root = std::env::temp_dir().join(format!(
+        "muniment-acp-ending-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    let runtime = root.join("runtime");
+    let config = root.join("config");
+    let socket_directory = runtime.join("muniment");
+    let records = config.join("muniment/acp-sessions");
+    std::fs::create_dir_all(&socket_directory).unwrap();
+    std::fs::create_dir_all(&records).unwrap();
+    let session_id = "01900000-0000-7000-8000-000000000021";
+    let thread_id = "01900000-0000-7000-8000-000000000022";
+    let record = records.join(format!("{session_id}.json"));
+    std::fs::write(
+        &record,
+        serde_json::to_vec(&json!({
+            "version": 1,
+            "session_id": session_id,
+            "workspace_root": "/workspace",
+            "thread_id": thread_id,
+            "profile_id": "profile-id"
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    std::fs::set_permissions(&record, std::fs::Permissions::from_mode(0o600)).unwrap();
+    let listener = UnixListener::bind(socket_directory.join("attach-v1.sock")).unwrap();
+    let event_type = event_type.to_owned();
+    let server = thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let _hello = read_frame(&mut stream);
+        stream
+            .write_all(
+                &encode_frame(&welcome(1, "0.0.1", "11".repeat(16), "22".repeat(16))).unwrap(),
+            )
+            .unwrap();
+        stream
+            .write_all(
+                &encode_frame(&authorized_with_client_credential(
+                    "profile-id",
+                    "33".repeat(32),
+                    3600,
+                    900,
+                    BTreeMap::new(),
+                    "44".repeat(32),
+                ))
+                .unwrap(),
+            )
+            .unwrap();
+        let start = read_frame(&mut stream);
+        let run_id = "01900000-0000-7000-8000-000000000023";
+        respond(
+            &mut stream,
+            &start,
+            json!({
+                "run_id": run_id, "thread_id": thread_id, "committed_seq": 1,
+                "accepted_at": "2026-08-03T00:00:00Z"
+            }),
+        );
+        let subscribe = read_frame(&mut stream);
+        let first_subscription = "01900000-0000-7000-8000-000000000024";
+        respond(
+            &mut stream,
+            &subscribe,
+            json!({
+                "subscription_id": first_subscription, "run_id": run_id,
+                "first_available_run_seq": 2, "current_run_seq": 2,
+                "window": {"max_events": 16, "max_bytes": 1048576, "max_text_bytes": 262144}
+            }),
+        );
+
+        if let Some(resumable) = stream_resumable {
+            stream
+                .write_all(
+                    &encode_frame(&Event {
+                        protocol: Protocol,
+                        subscription_id: Id::new(first_subscription).unwrap(),
+                        event: EventName::StreamClosed,
+                        run_id: Some(Id::new(run_id).unwrap()),
+                        run_seq: Some(1),
+                        body: json!({"code": "closed", "resumable": resumable}),
+                    })
+                    .unwrap(),
+                )
+                .unwrap();
+            if resumable {
+                let resumed = read_frame(&mut stream);
+                assert_eq!(resumed["operation"], "run.stream");
+                assert_eq!(resumed["body"]["after_run_seq"], 1);
+                let resumed_subscription = "01900000-0000-7000-8000-000000000025";
+                respond(
+                    &mut stream,
+                    &resumed,
+                    json!({
+                        "subscription_id": resumed_subscription, "run_id": run_id,
+                        "first_available_run_seq": 2, "current_run_seq": 2,
+                        "window": {"max_events": 16, "max_bytes": 1048576, "max_text_bytes": 262144}
+                    }),
+                );
+                stream
+                    .write_all(
+                        &encode_frame(&Event {
+                            protocol: Protocol,
+                            subscription_id: Id::new(resumed_subscription).unwrap(),
+                            event: EventName::RunEvent,
+                            run_id: Some(Id::new(run_id).unwrap()),
+                            run_seq: Some(2),
+                            body: json!({
+                                "event_type": "run.completed", "event_version": 1,
+                                "recorded_at": "2026-08-03T00:00:01Z",
+                                "payload": {"withheld": true}
+                            }),
+                        })
+                        .unwrap(),
+                    )
+                    .unwrap();
+                let acknowledgement = read_frame(&mut stream);
+                assert_eq!(acknowledgement["operation"], "run.cursor_ack");
+                respond(
+                    &mut stream,
+                    &acknowledgement,
+                    json!({"subscription_id": resumed_subscription, "through_run_seq": 2}),
+                );
+            }
+        } else {
+            stream
+                .write_all(
+                    &encode_frame(&Event {
+                        protocol: Protocol,
+                        subscription_id: Id::new(first_subscription).unwrap(),
+                        event: EventName::RunEvent,
+                        run_id: Some(Id::new(run_id).unwrap()),
+                        run_seq: Some(2),
+                        body: json!({
+                            "event_type": event_type, "event_version": 1,
+                            "recorded_at": "2026-08-03T00:00:01Z",
+                            "payload": {"withheld": true}
+                        }),
+                    })
+                    .unwrap(),
+                )
+                .unwrap();
+            let acknowledgement = read_frame(&mut stream);
+            assert_eq!(acknowledgement["operation"], "run.cursor_ack");
+            respond(
+                &mut stream,
+                &acknowledgement,
+                json!({"subscription_id": first_subscription, "through_run_seq": 2}),
+            );
+        }
+    });
+
+    let mut command = Command::new(env!("CARGO_BIN_EXE_muniment-acp"));
+    command
+        .env("XDG_RUNTIME_DIR", &runtime)
+        .env("XDG_CONFIG_HOME", &config);
+    let responses = exchange_with_command(
+        command,
+        &[request(
+            1,
+            "session/prompt",
+            json!({
+                "sessionId": session_id,
+                "prompt": [{"type": "text", "text": "Continue."}]
+            }),
+        )],
+    );
+    server.join().unwrap();
+    std::fs::remove_dir_all(root).unwrap();
+    responses
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn prompt_ends_when_a_run_needs_attention() {
+    let responses = scripted_prompt_ending("run.needs_attention", None);
+    assert_eq!(responses.len(), 1);
+    assert_eq!(responses[0]["error"]["code"], -32603);
+    assert_eq!(
+        responses[0]["error"]["message"],
+        "Muniment run needs attention"
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn prompt_ends_when_a_run_stream_cannot_resume() {
+    let responses = scripted_prompt_ending("", Some(false));
+    assert_eq!(responses.len(), 1);
+    assert_eq!(responses[0]["error"]["code"], -32000);
+    assert_eq!(
+        responses[0]["error"]["message"],
+        "Muniment run stream closed"
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn prompt_resubscribes_when_a_run_stream_can_resume() {
+    let responses = scripted_prompt_ending("", Some(true));
+    assert_eq!(responses.len(), 1);
+    assert_eq!(responses[0]["result"]["stopReason"], "end_turn");
+}
+
+#[cfg(target_os = "linux")]
 #[test]
 fn new_session_reuses_authorization_and_rejects_invalid_parameters() {
     use muniment_attach::{
