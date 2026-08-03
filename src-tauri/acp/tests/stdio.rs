@@ -69,21 +69,30 @@ fn initializes_with_only_the_supported_capabilities() {
 
 #[test]
 fn session_requests_fail_without_an_authorized_attach() {
-    let responses = exchange(&[
-        initialize_request(),
-        request(2, "session/load", json!({})),
-        request(3, "session/prompt", json!({})),
-    ]);
+    let responses = exchange(&[initialize_request(), request(2, "session/load", json!({}))]);
 
     assert_eq!(responses[0]["result"]["protocolVersion"], 1);
-    for (response, id) in responses[1..].iter().zip(2..=3) {
-        assert_eq!(response["id"], id);
-        assert_eq!(response["error"]["code"], -32000);
-        assert_eq!(
-            response["error"]["message"],
-            "no authorized Muniment runtime attach exists"
-        );
-    }
+    assert_eq!(responses[1]["id"], 2);
+    assert_eq!(responses[1]["error"]["code"], -32000);
+    assert_eq!(
+        responses[1]["error"]["message"],
+        "no authorized Muniment runtime attach exists"
+    );
+}
+
+#[test]
+fn prompt_rejects_an_unknown_session_without_an_attach() {
+    let responses = exchange(&[request(
+        1,
+        "session/prompt",
+        json!({
+            "sessionId": "unknown",
+            "prompt": [{"type": "text", "text": "Do not run this."}]
+        }),
+    )]);
+
+    assert_eq!(responses[0]["error"]["code"], -32002);
+    assert_eq!(responses[0]["error"]["message"], "Resource not found");
 }
 
 #[cfg(target_os = "linux")]
@@ -229,6 +238,260 @@ fn new_session_reuses_authorization_and_rejects_invalid_parameters() {
     let failures = format!("{} {}", responses[1], responses[2]);
     assert!(!failures.contains(runtime.to_string_lossy().as_ref()));
     assert!(!failures.contains("secret-command"));
+    std::fs::remove_dir_all(runtime).unwrap();
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn prompt_streams_text_denies_permission_and_returns_the_terminal_result() {
+    use muniment_attach::{
+        authorized_with_client_credential, encode_frame, welcome, Event, EventName, Id, Protocol,
+        Response, Success,
+    };
+    use std::collections::BTreeMap;
+    use std::io::{BufRead, BufReader, Read};
+    use std::os::unix::net::{UnixListener, UnixStream};
+    use std::thread;
+
+    fn read_frame(stream: &mut UnixStream) -> Value {
+        let mut prefix = [0; 4];
+        stream.read_exact(&mut prefix).unwrap();
+        let mut payload = vec![0; u32::from_be_bytes(prefix) as usize];
+        stream.read_exact(&mut payload).unwrap();
+        serde_json::from_slice(&payload).unwrap()
+    }
+
+    fn respond(stream: &mut UnixStream, request: &Value, body: Value) {
+        stream
+            .write_all(
+                &encode_frame(&Response {
+                    protocol: Protocol,
+                    request_id: Id::new(request["request_id"].as_str().unwrap()).unwrap(),
+                    ok: Success,
+                    body,
+                })
+                .unwrap(),
+            )
+            .unwrap();
+    }
+
+    fn pair(stream: &mut UnixStream) {
+        let hello = read_frame(stream);
+        assert_eq!(hello["client"]["kind"], "acp-adapter");
+        stream
+            .write_all(
+                &encode_frame(&welcome(1, "0.0.1", "11".repeat(16), "22".repeat(16))).unwrap(),
+            )
+            .unwrap();
+        stream
+            .write_all(
+                &encode_frame(&authorized_with_client_credential(
+                    "33".repeat(32),
+                    3600,
+                    900,
+                    BTreeMap::new(),
+                    "44".repeat(32),
+                ))
+                .unwrap(),
+            )
+            .unwrap();
+    }
+
+    let runtime = std::env::temp_dir().join(format!(
+        "muniment-acp-prompt-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    let socket_directory = runtime.join("muniment");
+    let config = runtime.join("config");
+    let workspace = runtime.join("workspace");
+    std::fs::create_dir_all(&socket_directory).unwrap();
+    std::fs::create_dir(&workspace).unwrap();
+    let listener = UnixListener::bind(socket_directory.join("attach-v1.sock")).unwrap();
+    let expected_workspace = workspace.to_string_lossy().into_owned();
+    let server = thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        pair(&mut stream);
+        let onboard = read_frame(&mut stream);
+        assert_eq!(onboard["operation"], "workspace.onboard");
+        respond(
+            &mut stream,
+            &onboard,
+            json!({
+                "opened_directory": expected_workspace,
+                "memory_location": expected_workspace,
+                "instructions": null
+            }),
+        );
+
+        let (mut stream, _) = listener.accept().unwrap();
+        pair(&mut stream);
+        let start = read_frame(&mut stream);
+        assert_eq!(start["operation"], "run.start");
+        assert_eq!(start["body"]["workspace"], expected_workspace);
+        assert_eq!(start["body"]["text"], "Tell me more.");
+        let run_id = "01900000-0000-7000-8000-000000000001";
+        let subscription_id = "01900000-0000-7000-8000-000000000002";
+        respond(
+            &mut stream,
+            &start,
+            json!({
+                "run_id": run_id,
+                "committed_seq": 1,
+                "accepted_at": "2026-08-03T00:00:00Z"
+            }),
+        );
+        let subscribe = read_frame(&mut stream);
+        assert_eq!(subscribe["operation"], "run.stream");
+        assert_eq!(subscribe["body"]["after_run_seq"], 1);
+        respond(
+            &mut stream,
+            &subscribe,
+            json!({
+                "subscription_id": subscription_id,
+                "run_id": run_id,
+                "first_available_run_seq": 2,
+                "current_run_seq": 6,
+                "window": {"max_events": 16, "max_bytes": 1048576, "max_text_bytes": 262144}
+            }),
+        );
+
+        let events = [
+            (
+                EventName::RunEvent,
+                2,
+                json!({
+                    "event_type": "model.stream.delta", "event_version": 1,
+                    "recorded_at": "2026-08-03T00:00:01Z",
+                    "payload": {"withheld": false, "text": "First "}
+                }),
+            ),
+            (
+                EventName::PermissionPending,
+                3,
+                json!({
+                    "gate_id": "gate-1", "kind": "confirm", "title": "Allow access?"
+                }),
+            ),
+            (
+                EventName::RunEvent,
+                4,
+                json!({
+                    "event_type": "model.stream.delta", "event_version": 1,
+                    "recorded_at": "2026-08-03T00:00:02Z", "payload": {"withheld": true}
+                }),
+            ),
+            (
+                EventName::RunEvent,
+                5,
+                json!({
+                    "event_type": "model.stream.delta", "event_version": 1,
+                    "recorded_at": "2026-08-03T00:00:03Z", "payload": {"withheld": false, "text": "reply"}
+                }),
+            ),
+            (
+                EventName::RunEvent,
+                6,
+                json!({
+                    "event_type": "run.completed", "event_version": 1,
+                    "recorded_at": "2026-08-03T00:00:04Z", "payload": {"withheld": true}
+                }),
+            ),
+        ];
+        for (kind, sequence, body) in events {
+            stream
+                .write_all(
+                    &encode_frame(&Event {
+                        protocol: Protocol,
+                        subscription_id: Id::new(subscription_id).unwrap(),
+                        event: kind,
+                        run_id: Some(Id::new(run_id).unwrap()),
+                        run_seq: Some(sequence),
+                        body,
+                    })
+                    .unwrap(),
+                )
+                .unwrap();
+        }
+
+        for sequence in 2..=6 {
+            if sequence == 3 {
+                let answer = read_frame(&mut stream);
+                assert_eq!(answer["operation"], "permission.answer");
+                assert_eq!(answer["body"]["decision"], "deny");
+                respond(
+                    &mut stream,
+                    &answer,
+                    json!({
+                        "run_id": run_id, "gate_id": "gate-1", "decision": "deny",
+                        "committed_seq": 6, "accepted_at": "2026-08-03T00:00:04Z"
+                    }),
+                );
+            }
+            let acknowledgement = read_frame(&mut stream);
+            assert_eq!(acknowledgement["operation"], "run.cursor_ack");
+            assert_eq!(acknowledgement["body"]["through_run_seq"], sequence);
+            respond(
+                &mut stream,
+                &acknowledgement,
+                json!({"subscription_id": subscription_id, "through_run_seq": sequence}),
+            );
+        }
+    });
+
+    let mut child = Command::new(env!("CARGO_BIN_EXE_muniment-acp"))
+        .env("XDG_RUNTIME_DIR", &runtime)
+        .env("XDG_CONFIG_HOME", &config)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut input = child.stdin.take().unwrap();
+    let mut output = BufReader::new(child.stdout.take().unwrap());
+    serde_json::to_writer(
+        &mut input,
+        &request(
+            1,
+            "session/new",
+            json!({"cwd": workspace, "mcpServers": []}),
+        ),
+    )
+    .unwrap();
+    input.write_all(b"\n").unwrap();
+    input.flush().unwrap();
+    let mut line = String::new();
+    output.read_line(&mut line).unwrap();
+    let created: Value = serde_json::from_str(&line).unwrap();
+    let session_id = created["result"]["sessionId"].as_str().unwrap();
+    serde_json::to_writer(
+        &mut input,
+        &request(
+            2,
+            "session/prompt",
+            json!({"sessionId": session_id, "prompt": [{"type": "text", "text": "Tell me more."}]}),
+        ),
+    )
+    .unwrap();
+    input.write_all(b"\n").unwrap();
+    drop(input);
+    let responses: Vec<Value> = output
+        .lines()
+        .map(|line| serde_json::from_str(&line.unwrap()).unwrap())
+        .collect();
+    assert_eq!(responses.len(), 3);
+    assert_eq!(responses[0]["method"], "session/update");
+    assert_eq!(
+        responses[0]["params"]["update"]["content"]["text"],
+        "First "
+    );
+    assert_eq!(responses[1]["params"]["update"]["content"]["text"], "reply");
+    assert_eq!(responses[2]["id"], 2);
+    assert_eq!(responses[2]["result"]["stopReason"], "end_turn");
+    assert!(child.wait().unwrap().success());
+    server.join().unwrap();
     std::fs::remove_dir_all(runtime).unwrap();
 }
 
