@@ -466,6 +466,7 @@ fn fixture_bytes() -> io::Result<BTreeMap<String, Vec<u8>>> {
         &mut fixtures,
         "authorization-authorized.json",
         &crate::authorized(
+            "018f0000-0000-7000-8000-000000000098",
             "fixture-capability",
             3600,
             900,
@@ -489,6 +490,7 @@ fn fixture_bytes() -> io::Result<BTreeMap<String, Vec<u8>>> {
         ("artifact-fetch", Operation::ArtifactFetch),
         ("artifact-window", Operation::ArtifactWindow),
         ("request-cancel", Operation::RequestCancel),
+        ("thread-create", Operation::ThreadCreate),
     ];
     for (index, (name, operation)) in operations.into_iter().enumerate() {
         insert(
@@ -507,6 +509,16 @@ fn fixture_bytes() -> io::Result<BTreeMap<String, Vec<u8>>> {
             },
         )?;
     }
+    insert(
+        &mut fixtures,
+        "response-thread-create.json",
+        &Response {
+            protocol: Protocol,
+            request_id: id(113)?,
+            ok: Success,
+            body: json!({"thread_id": "00000000000000000000000000000192"}),
+        },
+    )?;
     insert(
         &mut fixtures,
         "response-run-start.json",
@@ -613,6 +625,7 @@ fn request_body(operation: Operation) -> serde_json::Value {
         Operation::ThreadOpen => {
             json!({"thread_id": "thread-1", "cursor": "message-cursor-1", "limit": 100})
         }
+        Operation::ThreadCreate => json!({}),
         Operation::RunOpen => json!({"run_id": "00000000000000000000000000000191"}),
         Operation::RunStart => {
             json!({"text": "Summarize the selected file.", "context": {"selected_file": "src/main.rs"}})
@@ -793,6 +806,7 @@ mod tests {
         let operations = [
             Operation::ThreadList,
             Operation::ThreadOpen,
+            Operation::ThreadCreate,
             Operation::RunOpen,
             Operation::RunStart,
             Operation::RunStream,
@@ -846,7 +860,7 @@ mod tests {
         }
         assert_eq!(
             fixtures.len(),
-            40,
+            42,
             "every canonical fixture must be inventoried"
         );
     }

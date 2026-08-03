@@ -244,6 +244,14 @@ pub(crate) trait RunStartBoundaries {
         request: ThreadOpenRequest,
     ) -> Result<ThreadOpenPage, ProtocolError>;
     #[cfg(target_os = "linux")]
+    fn create_thread(
+        &self,
+        _workspace: &str,
+        _provenance: Provenance,
+    ) -> Result<String, ProtocolError> {
+        Err(ProtocolError::unsupported_operation())
+    }
+    #[cfg(target_os = "linux")]
     fn stream_run(
         &self,
         workspace: &str,
@@ -449,6 +457,25 @@ impl<R: tauri::Runtime> RunStartBoundaries for TauriRunStartBoundaries<R> {
             .lock()
             .map_err(|_| ProtocolError::persistence_failed())?;
         ThreadListService::open_thread(&mut storage.journal, workspace, request)
+    }
+
+    #[cfg(target_os = "linux")]
+    fn create_thread(
+        &self,
+        workspace: &str,
+        provenance: Provenance,
+    ) -> Result<String, ProtocolError> {
+        self.state()
+            .storage
+            .lock()
+            .map_err(|_| ProtocolError::persistence_failed())?
+            .journal
+            .create_thread(
+                workspace,
+                &Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true),
+                provenance,
+            )
+            .map_err(|_| ProtocolError::persistence_failed())
     }
 
     #[cfg(target_os = "linux")]

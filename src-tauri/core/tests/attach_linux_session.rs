@@ -849,6 +849,7 @@ fn approval_after_hello_timeout_but_before_challenge_expiry_is_sent() {
     assert_eq!(result, Ok(()));
     let _: Welcome = read_frame(&mut client);
     let authorized: Authorized = read_frame(&mut client);
+    assert_eq!(authorized.profile_id, "profile-1");
     assert_eq!(authorized.capability, "02".repeat(32));
     assert_eq!(client.read(&mut [0]).unwrap(), 0);
 }
@@ -924,7 +925,8 @@ fn denial_and_expired_challenge_close_without_authorized() {
                 Ok(())
             }
         );
-        let _: Welcome = read_frame(&mut client);
+        let welcome: serde_json::Value = read_frame(&mut client);
+        assert!(welcome.get("profile_id").is_none());
         assert_eq!(client.read(&mut [0]).unwrap(), 0);
     }
 }
@@ -4635,6 +4637,32 @@ fn run_start_rejects_missing_scope_key_and_hostile_bodies_without_dispatch() {
         assert!(!encoded.contains("forged"));
         assert!(service.calls.is_empty());
     }
+}
+
+#[test]
+fn thread_create_without_run_write_scope_fails_closed() {
+    let (mut client, server) = UnixStream::pair().unwrap();
+    client.write_all(&hello(1, 1)).unwrap();
+    client
+        .write_all(&request_with_idempotency(
+            81,
+            Operation::ThreadCreate,
+            json!({}),
+        ))
+        .unwrap();
+    client.shutdown(Shutdown::Write).unwrap();
+    let mut service = StartService::default();
+
+    let _ = dispatch_session(
+        &mut client,
+        server,
+        TestClock(Rc::new(Cell::new(Duration::ZERO))),
+        &mut service,
+    );
+
+    let error: ErrorEnvelope = read_frame(&mut client);
+    assert_eq!(error.error.code(), ErrorCode::Unauthorized);
+    assert!(service.calls.is_empty());
 }
 
 #[test]

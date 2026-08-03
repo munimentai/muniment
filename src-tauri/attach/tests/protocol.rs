@@ -123,6 +123,27 @@ fn canonical_run_start_fixtures_match_client_contracts() {
 }
 
 #[test]
+fn canonical_thread_create_fixtures_match_client_contracts() {
+    let request: Envelope =
+        serde_json::from_value(canonical_fixture("request-thread-create.json")).unwrap();
+    let Envelope::Request(request) = request else {
+        panic!("expected request fixture");
+    };
+    assert_eq!(request.operation, Operation::ThreadCreate);
+    assert_eq!(request.body, json!({}));
+    assert!(request.idempotency_key.is_some());
+
+    let response: Envelope =
+        serde_json::from_value(canonical_fixture("response-thread-create.json")).unwrap();
+    let Envelope::Response(response) = response else {
+        panic!("expected response fixture");
+    };
+    assert_eq!(response.request_id, request.request_id);
+    #[cfg(feature = "client")]
+    serde_json::from_value::<muniment_attach::ThreadCreateAccepted>(response.body).unwrap();
+}
+
+#[test]
 fn canonical_cursor_ack_and_permission_fixtures_match_client_contracts() {
     let request: Envelope =
         serde_json::from_value(canonical_fixture("request-run-cursor-ack.json")).unwrap();
@@ -418,6 +439,7 @@ fn hello_welcome_and_version_overlap() {
 #[test]
 fn authorized_round_trips_and_ignores_future_optional_fields() {
     let message = authorized(
+        "profile-id",
         "connection-capability",
         3600,
         900,
@@ -443,7 +465,13 @@ fn authorized_round_trips_and_ignores_future_optional_fields() {
 #[test]
 fn handshake_wire_debug_redacts_secrets() {
     let welcome = welcome(1, "0.1.0", "server-nonce", "secret-challenge");
-    let authorized = authorized("secret-capability", 3600, 900, Default::default());
+    let authorized = authorized(
+        "profile-id",
+        "secret-capability",
+        3600,
+        900,
+        Default::default(),
+    );
     let request = Request {
         protocol: Protocol,
         request_id: id(1),

@@ -941,6 +941,7 @@ mod tests {
             server
                 .write_all(
                     &encode_frame(&authorized(
+                        "profile-id",
                         "deadcafe".repeat(8),
                         3600,
                         900,
@@ -1031,6 +1032,7 @@ mod tests {
             server
                 .write_all(
                     &encode_frame(&authorized(
+                        "profile-id",
                         "deadcafe".repeat(8),
                         3600,
                         900,
@@ -1269,6 +1271,7 @@ mod tests {
             server
                 .write_all(
                     &encode_frame(&authorized(
+                        "profile-id",
                         "deadcafe".repeat(8),
                         3600,
                         900,
@@ -1342,6 +1345,7 @@ mod tests {
             server
                 .write_all(
                     &encode_frame(&authorized(
+                        "profile-id",
                         "deadcafe".repeat(8),
                         3600,
                         900,
@@ -1442,6 +1446,7 @@ mod tests {
             server
                 .write_all(
                     &encode_frame(&authorized(
+                        "profile-id",
                         "deadcafe".repeat(8),
                         3600,
                         900,
