@@ -47,6 +47,7 @@ pub(crate) struct FakeRunStartBoundaries {
     pub(crate) launched_run: Mutex<Option<String>>,
     pub(crate) auth_error: Option<String>,
     pub(crate) configure_error: Option<String>,
+    pub(crate) protect_error: Option<String>,
     pub(crate) install_error: Option<String>,
     pub(crate) prepare_error: Option<String>,
     pub(crate) projection_error: Option<String>,
@@ -69,6 +70,7 @@ impl FakeRunStartBoundaries {
             launched_run: Mutex::new(None),
             auth_error: None,
             configure_error: None,
+            protect_error: None,
             install_error: None,
             prepare_error: None,
             projection_error: None,
@@ -139,7 +141,6 @@ impl RunStartBoundaries for FakeRunStartBoundaries {
                 "sensitive workspace detail".into(),
             ));
         }
-        self.prompt_protection_calls.fetch_add(1, Ordering::SeqCst);
         if let Some(error) = &self.configure_error {
             return Err(RunStartError::Persistence(error.clone()));
         }
@@ -169,30 +170,105 @@ impl RunStartBoundaries for FakeRunStartBoundaries {
     fn prepare_run(
         &self,
         run_id: &str,
-        _grant: &ChatGrant,
+        _prompt: &str,
+        grant: &ChatGrant,
         tokens: &TokenSet,
         _files: Vec<SelectedFile>,
         provenance: Option<Provenance>,
+        thread_id: Option<&str>,
     ) -> Result<(u64, ChatProjector), RunStartError> {
         self.prepare_calls.fetch_add(1, Ordering::SeqCst);
-        *self.prepared_provenance.lock().unwrap() = provenance;
+        *self.prepared_provenance.lock().unwrap() = provenance.clone();
         if let Some(error) = &self.prepare_error {
             return Err(RunStartError::Persistence(error.clone()));
         }
         let mut projector = ChatProjector::new();
-        let started = event_envelope(
+        let mut started = event_envelope(
             run_id,
             1,
             "run.started",
             json!({}),
             tokens.subject.as_deref(),
         );
+        if let Some(provenance) = provenance {
+            started.provenance = Provenance {
+                actor_id: provenance
+                    .actor_id
+                    .or_else(|| tokens.subject.as_deref().map(str::to_owned)),
+                ..provenance
+            };
+        }
         projector.apply(&started).unwrap();
+        let mut events = vec![started.clone()];
+        let mut committed_seq = 1;
+        #[cfg(target_os = "linux")]
+        if let Some(thread_id) = thread_id {
+            let mut journal = self
+                .journal
+                .lock()
+                .map_err(|_| RunStartError::Persistence(attachment_error()))?;
+            let protect = || {
+                self.prompt_protection_calls.fetch_add(1, Ordering::SeqCst);
+                self.protect_error
+                    .as_ref()
+                    .map_or(Ok(()), |error| Err(error.clone()))
+            };
+            let protection = journal
+                .append_new_run_in_thread_after_validation(
+                    &grant.workspace,
+                    thread_id,
+                    &started,
+                    protect,
+                )
+                .map_err(|error| {
+                    if matches!(
+                        error,
+                        muniment_core::journal::JournalError::InvalidEnvelope(_)
+                    ) {
+                        RunStartError::ThreadNotFound
+                    } else {
+                        RunStartError::Persistence(attachment_error())
+                    }
+                })?;
+            protection.map_err(RunStartError::Persistence)?;
+            let prompt = event_envelope(
+                run_id,
+                2,
+                "user.prompt.submitted",
+                json!({"prompt": "hello"}),
+                tokens.subject.as_deref(),
+            );
+            projector.apply(&prompt).unwrap();
+            journal
+                .append(1, &prompt)
+                .map_err(|_| RunStartError::Persistence(attachment_error()))?;
+            events.push(prompt);
+            committed_seq = 2;
+        } else {
+            self.prompt_protection_calls.fetch_add(1, Ordering::SeqCst);
+            if let Some(error) = &self.protect_error {
+                return Err(RunStartError::Persistence(error.clone()));
+            }
+        }
         self.journaled_events
             .lock()
             .unwrap()
-            .insert(run_id.to_owned(), vec![started]);
-        Ok((1, projector))
+            .insert(run_id.to_owned(), events);
+        Ok((committed_seq, projector))
+    }
+
+    fn run_thread_id(&self, run_id: &str) -> Result<String, RunStartError> {
+        #[cfg(target_os = "linux")]
+        if let Some(thread_id) = self
+            .journal
+            .lock()
+            .map_err(|_| RunStartError::Persistence(attachment_error()))?
+            .run_thread_id(run_id)
+            .map_err(|_| RunStartError::Persistence(attachment_error()))?
+        {
+            return Ok(thread_id);
+        }
+        Ok("0190a100-0000-7000-8000-000000000002".into())
     }
 
     fn project_attachments(
