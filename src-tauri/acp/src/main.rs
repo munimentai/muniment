@@ -1,13 +1,16 @@
 use agent_client_protocol::schema::{
     v1::{
         AgentCapabilities, ContentBlock, ContentChunk, InitializeRequest, InitializeResponse,
-        NewSessionRequest, NewSessionResponse, PromptRequest, PromptResponse, SessionNotification,
-        SessionUpdate, StopReason, TextContent,
+        NewSessionRequest, NewSessionResponse, PermissionOption, PermissionOptionKind,
+        PromptRequest, PromptResponse, RequestPermissionOutcome, RequestPermissionRequest,
+        RequestPermissionResponse, SessionNotification, SessionUpdate, StopReason, TextContent,
+        ToolCallContent, ToolCallUpdate, ToolCallUpdateFields,
     },
     ProtocolVersion,
 };
 use muniment_attach::{
-    handshake_as_with_credential, ClientError, Id, PermissionDecision, RunStreamMessage,
+    handshake_as_with_credential, AuthorizedClient, ClientError, Id, PermissionDecision,
+    RunStreamMessage,
 };
 use serde_json::{json, Value};
 use std::collections::{HashMap, VecDeque};
@@ -57,6 +60,7 @@ fn serve(input: impl BufRead + Send + 'static, mut output: impl Write) -> io::Re
     });
     let mut sessions = HashMap::new();
     let mut pending = VecDeque::new();
+    let mut next_request_id = 1_u64;
     let result = (|| {
         loop {
             let line = match pending.pop_front() {
@@ -74,9 +78,14 @@ fn serve(input: impl BufRead + Send + 'static, mut output: impl Write) -> io::Re
                 )?;
                 continue;
             };
-            if let Some(response) =
-                response(message, &mut sessions, &mut output, &receiver, &mut pending)
-            {
+            if let Some(response) = response(
+                message,
+                &mut sessions,
+                &mut output,
+                &receiver,
+                &mut pending,
+                &mut next_request_id,
+            ) {
                 write_message(&mut output, response)?;
             }
         }
@@ -94,6 +103,7 @@ fn response(
     output: &mut impl Write,
     input: &Receiver<io::Result<String>>,
     pending: &mut VecDeque<io::Result<String>>,
+    next_request_id: &mut u64,
 ) -> Option<Value> {
     let object = message.as_object()?;
     let method = object.get("method")?.as_str()?;
@@ -110,6 +120,7 @@ fn response(
             output,
             input,
             pending,
+            next_request_id,
         )),
         "session/load" => Some(json!({
             "jsonrpc": "2.0",
@@ -190,6 +201,7 @@ fn prompt(
     output: &mut impl Write,
     input: &Receiver<io::Result<String>>,
     pending: &mut VecDeque<io::Result<String>>,
+    next_request_id: &mut u64,
 ) -> Value {
     let Some(params) = params else {
         return invalid_params(id, "session/prompt parameters are invalid");
@@ -276,11 +288,57 @@ fn prompt(
                     (Some(event.run_seq), terminal)
                 }
                 RunStreamMessage::PermissionPending(permission) => {
-                    client.answer_permission(
+                    let request_id = *next_request_id;
+                    *next_request_id = next_request_id.wrapping_add(1);
+                    let content = permission
+                        .message
+                        .map(|message| {
+                            vec![ToolCallContent::from(ContentBlock::Text(TextContent::new(
+                                message,
+                            )))]
+                        })
+                        .unwrap_or_default();
+                    let tool_call = ToolCallUpdate::new(
+                        permission.gate_id.clone(),
+                        ToolCallUpdateFields::new()
+                            .title(permission.title)
+                            .content(content),
+                    );
+                    let request = RequestPermissionRequest::new(
+                        session_id.clone(),
+                        tool_call,
+                        vec![
+                            PermissionOption::new(
+                                "allow_once",
+                                "Allow once",
+                                PermissionOptionKind::AllowOnce,
+                            ),
+                            PermissionOption::new(
+                                "reject_once",
+                                "Reject once",
+                                PermissionOptionKind::RejectOnce,
+                            ),
+                        ],
+                    );
+                    write_message(
+                        output,
+                        json!({
+                            "jsonrpc": "2.0",
+                            "id": request_id,
+                            "method": "session/request_permission",
+                            "params": request
+                        }),
+                    )
+                    .map_err(|_| PromptFailure::Client(ClientError::ConnectionClosed))?;
+                    let decision = wait_for_permission_response(
+                        request_id,
+                        &session_id,
                         &accepted.run_id,
-                        &permission.gate_id,
-                        PermissionDecision::Deny,
-                    )?;
+                        &mut client,
+                        input,
+                        pending,
+                    );
+                    client.answer_permission(&accepted.run_id, &permission.gate_id, decision)?;
                     (Some(permission.run_seq), None)
                 }
                 RunStreamMessage::CaughtUp { .. } => (None, None),
@@ -329,6 +387,53 @@ fn prompt(
             "id": id,
             "error": {"code": -32000, "message": pairing_failure(error)}
         }),
+    }
+}
+
+fn wait_for_permission_response(
+    request_id: u64,
+    session_id: &str,
+    run_id: &str,
+    client: &mut AuthorizedClient,
+    input: &Receiver<io::Result<String>>,
+    pending: &mut VecDeque<io::Result<String>>,
+) -> PermissionDecision {
+    loop {
+        let Ok(line) = input.recv() else {
+            return PermissionDecision::Deny;
+        };
+        let Ok(line) = line else {
+            return PermissionDecision::Deny;
+        };
+        let Ok(message) = serde_json::from_str::<Value>(&line) else {
+            pending.push_back(Ok(line));
+            continue;
+        };
+        if message.get("id") == Some(&json!(request_id)) {
+            let response = message.get("result").cloned().and_then(|result| {
+                serde_json::from_value::<RequestPermissionResponse>(result).ok()
+            });
+            return match response.map(|response| response.outcome) {
+                Some(RequestPermissionOutcome::Selected(selected))
+                    if selected.option_id.0.as_ref() == "allow_once" =>
+                {
+                    PermissionDecision::Allow
+                }
+                _ => PermissionDecision::Deny,
+            };
+        }
+        let cancel = message.get("id").is_none()
+            && message.get("method").and_then(Value::as_str) == Some("session/cancel")
+            && message
+                .get("params")
+                .and_then(|params| params.get("sessionId"))
+                .and_then(Value::as_str)
+                == Some(session_id);
+        if cancel {
+            let _ = client.run_cancel(run_id);
+        } else {
+            pending.push_back(Ok(line));
+        }
     }
 }
 

@@ -424,12 +424,12 @@ fn consecutive_prompts_continue_one_thread() {
             if sequence == 3 {
                 let answer = read_frame(&mut stream);
                 assert_eq!(answer["operation"], "permission.answer");
-                assert_eq!(answer["body"]["decision"], "deny");
+                assert_eq!(answer["body"]["decision"], "allow");
                 respond(
                     &mut stream,
                     &answer,
                     json!({
-                        "run_id": run_id, "gate_id": "gate-1", "decision": "deny",
+                        "run_id": run_id, "gate_id": "gate-1", "decision": "allow",
                         "committed_seq": 6, "accepted_at": "2026-08-03T00:00:04Z"
                     }),
                 );
@@ -577,7 +577,36 @@ fn consecutive_prompts_continue_one_thread() {
     input.write_all(b"\n").unwrap();
     input.flush().unwrap();
     let mut responses: Vec<Value> = Vec::new();
-    for _ in 0..3 {
+    for _ in 0..2 {
+        let mut line = String::new();
+        output.read_line(&mut line).unwrap();
+        responses.push(serde_json::from_str(&line).unwrap());
+    }
+    let permission = &responses[1];
+    assert_eq!(permission["method"], "session/request_permission");
+    assert_eq!(permission["params"]["sessionId"], session_id);
+    assert_eq!(permission["params"]["toolCall"]["toolCallId"], "gate-1");
+    assert_eq!(permission["params"]["toolCall"]["title"], "Allow access?");
+    assert_eq!(permission["params"]["toolCall"]["content"], json!([]));
+    assert_eq!(
+        permission["params"]["options"],
+        json!([
+            {"optionId": "allow_once", "name": "Allow once", "kind": "allow_once"},
+            {"optionId": "reject_once", "name": "Reject once", "kind": "reject_once"}
+        ])
+    );
+    serde_json::to_writer(
+        &mut input,
+        &json!({
+            "jsonrpc": "2.0",
+            "id": permission["id"],
+            "result": {"outcome": {"outcome": "selected", "optionId": "allow_once"}}
+        }),
+    )
+    .unwrap();
+    input.write_all(b"\n").unwrap();
+    input.flush().unwrap();
+    for _ in 0..2 {
         let mut line = String::new();
         output.read_line(&mut line).unwrap();
         responses.push(serde_json::from_str(&line).unwrap());
@@ -612,19 +641,19 @@ fn consecutive_prompts_continue_one_thread() {
             .lines()
             .map(|line| serde_json::from_str(&line.unwrap()).unwrap()),
     );
-    assert_eq!(responses.len(), 5);
+    assert_eq!(responses.len(), 6);
     assert_eq!(responses[0]["method"], "session/update");
     assert_eq!(
         responses[0]["params"]["update"]["content"]["text"],
         "First "
     );
-    assert_eq!(responses[1]["params"]["update"]["content"]["text"], "reply");
-    assert_eq!(responses[2]["id"], 2);
-    assert_eq!(responses[2]["result"]["stopReason"], "end_turn");
-    assert_eq!(responses[3]["id"], 3);
+    assert_eq!(responses[2]["params"]["update"]["content"]["text"], "reply");
+    assert_eq!(responses[3]["id"], 2);
     assert_eq!(responses[3]["result"]["stopReason"], "end_turn");
-    assert_eq!(responses[4]["id"], 4);
-    assert_eq!(responses[4]["error"]["code"], -32000);
+    assert_eq!(responses[4]["id"], 3);
+    assert_eq!(responses[4]["result"]["stopReason"], "end_turn");
+    assert_eq!(responses[5]["id"], 4);
+    assert_eq!(responses[5]["error"]["code"], -32000);
     assert!(child.wait().unwrap().success());
     server.join().unwrap();
     std::fs::remove_dir_all(runtime).unwrap();
