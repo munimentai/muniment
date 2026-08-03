@@ -11,10 +11,12 @@ use muniment_attach::{
 };
 use serde_json::{json, Value};
 use std::collections::HashMap;
-use std::io::{self, BufRead, Read, Write};
+use std::io::{self, BufRead, BufReader, Read, Write};
 #[cfg(unix)]
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
+use std::sync::mpsc::{self, Receiver};
+use std::thread;
 
 const NO_ATTACH: &str = "no authorized Muniment runtime attach exists";
 const CLIENT_KIND: &str = "acp-adapter";
@@ -40,31 +42,47 @@ impl From<ClientError> for PromptFailure {
 fn main() -> io::Result<()> {
     let stdin = io::stdin();
     let stdout = io::stdout();
-    serve(stdin.lock(), stdout.lock())
+    serve(BufReader::new(stdin), stdout.lock())
 }
 
-fn serve(input: impl BufRead, mut output: impl Write) -> io::Result<()> {
-    let mut sessions = HashMap::new();
-    for line in input.lines() {
-        let line = line?;
-        let Ok(message) = serde_json::from_str::<Value>(&line) else {
-            write_message(
-                &mut output,
-                json!({"jsonrpc": "2.0", "id": null, "error": {"code": -32700, "message": "Parse error"}}),
-            )?;
-            continue;
-        };
-        if let Some(response) = response(message, &mut sessions, &mut output) {
-            write_message(&mut output, response)?;
+fn serve(input: impl BufRead + Send + 'static, mut output: impl Write) -> io::Result<()> {
+    let (sender, receiver) = mpsc::channel();
+    let reader = thread::spawn(move || {
+        for line in input.lines() {
+            let is_error = line.is_err();
+            if sender.send(line).is_err() || is_error {
+                break;
+            }
         }
-    }
-    Ok(())
+    });
+    let mut sessions = HashMap::new();
+    let result = (|| {
+        while let Ok(line) = receiver.recv() {
+            let line = line?;
+            let Ok(message) = serde_json::from_str::<Value>(&line) else {
+                write_message(
+                    &mut output,
+                    json!({"jsonrpc": "2.0", "id": null, "error": {"code": -32700, "message": "Parse error"}}),
+                )?;
+                continue;
+            };
+            if let Some(response) = response(message, &mut sessions, &mut output, &receiver) {
+                write_message(&mut output, response)?;
+            }
+        }
+        Ok(())
+    })();
+    reader
+        .join()
+        .map_err(|_| io::Error::other("stdin reader thread panicked"))?;
+    result
 }
 
 fn response(
     message: Value,
     sessions: &mut HashMap<String, Session>,
     output: &mut impl Write,
+    input: &Receiver<io::Result<String>>,
 ) -> Option<Value> {
     let object = message.as_object()?;
     let method = object.get("method")?.as_str()?;
@@ -74,7 +92,7 @@ fn response(
     match method {
         "initialize" => Some(initialize(id, object.get("params"))),
         "session/new" => Some(new_session(id, object.get("params"), sessions)),
-        "session/prompt" => Some(prompt(id, object.get("params"), sessions, output)),
+        "session/prompt" => Some(prompt(id, object.get("params"), sessions, output, input)),
         "session/load" => Some(json!({
             "jsonrpc": "2.0",
             "id": id,
@@ -152,6 +170,7 @@ fn prompt(
     params: Option<&Value>,
     sessions: &mut HashMap<String, Session>,
     output: &mut impl Write,
+    _input: &Receiver<io::Result<String>>,
 ) -> Value {
     let Some(params) = params else {
         return invalid_params(id, "session/prompt parameters are invalid");

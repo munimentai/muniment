@@ -630,6 +630,206 @@ fn consecutive_prompts_continue_one_thread() {
     std::fs::remove_dir_all(runtime).unwrap();
 }
 
+#[cfg(target_os = "linux")]
+#[test]
+fn serves_a_line_received_during_a_prompt_after_the_prompt_returns() {
+    use muniment_attach::{
+        authorized_with_client_credential, encode_frame, welcome, Event, EventName, Id, Protocol,
+        Response, Success,
+    };
+    use std::collections::BTreeMap;
+    use std::io::{BufRead, BufReader, Read};
+    use std::os::unix::net::{UnixListener, UnixStream};
+    use std::sync::mpsc;
+    use std::thread;
+
+    fn read_frame(stream: &mut UnixStream) -> Value {
+        let mut prefix = [0; 4];
+        stream.read_exact(&mut prefix).unwrap();
+        let mut payload = vec![0; u32::from_be_bytes(prefix) as usize];
+        stream.read_exact(&mut payload).unwrap();
+        serde_json::from_slice(&payload).unwrap()
+    }
+
+    fn respond(stream: &mut UnixStream, request: &Value, body: Value) {
+        stream
+            .write_all(
+                &encode_frame(&Response {
+                    protocol: Protocol,
+                    request_id: Id::new(request["request_id"].as_str().unwrap()).unwrap(),
+                    ok: Success,
+                    body,
+                })
+                .unwrap(),
+            )
+            .unwrap();
+    }
+
+    fn pair(stream: &mut UnixStream) {
+        read_frame(stream);
+        stream
+            .write_all(
+                &encode_frame(&welcome(1, "0.0.1", "11".repeat(16), "22".repeat(16))).unwrap(),
+            )
+            .unwrap();
+        stream
+            .write_all(
+                &encode_frame(&authorized_with_client_credential(
+                    "33".repeat(32),
+                    3600,
+                    900,
+                    BTreeMap::new(),
+                    "44".repeat(32),
+                ))
+                .unwrap(),
+            )
+            .unwrap();
+    }
+
+    let runtime = std::env::temp_dir().join(format!(
+        "muniment-acp-mid-prompt-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    let socket_directory = runtime.join("muniment");
+    let config = runtime.join("config");
+    let workspace = runtime.join("workspace");
+    std::fs::create_dir_all(&socket_directory).unwrap();
+    std::fs::create_dir(&workspace).unwrap();
+    let listener = UnixListener::bind(socket_directory.join("attach-v1.sock")).unwrap();
+    let expected_workspace = workspace.to_string_lossy().into_owned();
+    let (prompt_started_tx, prompt_started_rx) = mpsc::channel();
+    let (finish_prompt_tx, finish_prompt_rx) = mpsc::channel();
+    let server = thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        pair(&mut stream);
+        let onboard = read_frame(&mut stream);
+        respond(
+            &mut stream,
+            &onboard,
+            json!({
+                "opened_directory": expected_workspace,
+                "memory_location": expected_workspace,
+                "instructions": null
+            }),
+        );
+
+        let (mut stream, _) = listener.accept().unwrap();
+        pair(&mut stream);
+        let start = read_frame(&mut stream);
+        let run_id = "01900000-0000-7000-8000-000000000011";
+        let subscription_id = "01900000-0000-7000-8000-000000000012";
+        respond(
+            &mut stream,
+            &start,
+            json!({
+                "run_id": run_id,
+                "thread_id": "01900000-0000-7000-8000-000000000013",
+                "committed_seq": 1,
+                "accepted_at": "2026-08-03T00:00:00Z"
+            }),
+        );
+        let subscribe = read_frame(&mut stream);
+        respond(
+            &mut stream,
+            &subscribe,
+            json!({
+                "subscription_id": subscription_id,
+                "run_id": run_id,
+                "first_available_run_seq": 2,
+                "current_run_seq": 2,
+                "window": {"max_events": 16, "max_bytes": 1048576, "max_text_bytes": 262144}
+            }),
+        );
+        prompt_started_tx.send(()).unwrap();
+        finish_prompt_rx.recv().unwrap();
+        stream
+            .write_all(
+                &encode_frame(&Event {
+                    protocol: Protocol,
+                    subscription_id: Id::new(subscription_id).unwrap(),
+                    event: EventName::RunEvent,
+                    run_id: Some(Id::new(run_id).unwrap()),
+                    run_seq: Some(2),
+                    body: json!({
+                        "event_type": "run.completed",
+                        "event_version": 1,
+                        "recorded_at": "2026-08-03T00:00:01Z",
+                        "payload": {"withheld": true}
+                    }),
+                })
+                .unwrap(),
+            )
+            .unwrap();
+        let acknowledgement = read_frame(&mut stream);
+        respond(
+            &mut stream,
+            &acknowledgement,
+            json!({"subscription_id": subscription_id, "through_run_seq": 2}),
+        );
+    });
+
+    let mut child = Command::new(env!("CARGO_BIN_EXE_muniment-acp"))
+        .env("XDG_RUNTIME_DIR", &runtime)
+        .env("XDG_CONFIG_HOME", &config)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut input = child.stdin.take().unwrap();
+    let mut output = BufReader::new(child.stdout.take().unwrap());
+    serde_json::to_writer(
+        &mut input,
+        &request(
+            1,
+            "session/new",
+            json!({"cwd": workspace, "mcpServers": []}),
+        ),
+    )
+    .unwrap();
+    input.write_all(b"\n").unwrap();
+    input.flush().unwrap();
+    let mut line = String::new();
+    output.read_line(&mut line).unwrap();
+    let created: Value = serde_json::from_str(&line).unwrap();
+    serde_json::to_writer(
+        &mut input,
+        &request(
+            2,
+            "session/prompt",
+            json!({
+                "sessionId": created["result"]["sessionId"],
+                "prompt": [{"type": "text", "text": "Wait for another line."}]
+            }),
+        ),
+    )
+    .unwrap();
+    input.write_all(b"\n").unwrap();
+    input.flush().unwrap();
+    prompt_started_rx.recv().unwrap();
+    serde_json::to_writer(&mut input, &initialize_request()).unwrap();
+    input.write_all(b"\n").unwrap();
+    input.flush().unwrap();
+    finish_prompt_tx.send(()).unwrap();
+    drop(input);
+
+    let responses: Vec<Value> = output
+        .lines()
+        .map(|line| serde_json::from_str(&line.unwrap()).unwrap())
+        .collect();
+    assert_eq!(responses.len(), 2);
+    assert_eq!(responses[0]["id"], 2);
+    assert_eq!(responses[0]["result"]["stopReason"], "end_turn");
+    assert_eq!(responses[1]["id"], 1);
+    assert_eq!(responses[1]["result"]["protocolVersion"], 1);
+    assert!(child.wait().unwrap().success());
+    server.join().unwrap();
+    std::fs::remove_dir_all(runtime).unwrap();
+}
+
 #[test]
 fn cancel_and_unknown_notifications_have_no_effect() {
     let responses = exchange(&[
