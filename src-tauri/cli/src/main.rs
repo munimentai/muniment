@@ -1074,7 +1074,7 @@ mod tests {
                             "run_id": run_id,
                             "first_available_run_seq": 1,
                             "current_run_seq": 8,
-                            "window": {"max_events": 2, "max_bytes": 4096}
+                            "window": {"max_events": 2, "max_bytes": 4096, "max_text_bytes": 262144}
                         }),
                     })
                     .unwrap(),
