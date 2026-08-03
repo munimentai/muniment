@@ -710,6 +710,10 @@ fn prompt(
                     (Some(permission.run_seq), None)
                 }
                 RunStreamMessage::CaughtUp { .. } => (None, None),
+                RunStreamMessage::StreamClosed { .. }
+                | RunStreamMessage::CapabilityRevoked { .. } => {
+                    return Err(ClientError::UnexpectedMessage.into());
+                }
             };
             if let Some(run_seq) = run_seq {
                 client.acknowledge_run_cursor(run_seq)?;
