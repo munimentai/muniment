@@ -19,7 +19,7 @@ describe('installed nightly', () => {
     this.timeout(360000)
     const location = await $('[data-testid="onboarding-home-path"]')
     await location.waitForDisplayed()
-    const home = await location.getAttribute('textContent')
+    const home = await location.getProperty('textContent')
     expect(path.isAbsolute(home)).toBe(true)
     let homeExists = true
     try { await access(home) } catch { homeExists = false }
