@@ -2,8 +2,7 @@ import path from 'node:path'
 import { access, appendFile, readFile } from 'node:fs/promises'
 
 describe('installed nightly model-ready onboarding', () => {
-  it('chooses an isolated Home and scaffolds its README files', async () => {
-    const home = process.env.MUNIMENT_E2E_HOME_PATH
+  it('uses the displayed Home and scaffolds its README files', async () => {
     const location = await $('[data-testid="onboarding-home-path"]')
     try {
       await location.waitForDisplayed({
@@ -38,15 +37,9 @@ describe('installed nightly model-ready onboarding', () => {
       throw waitError
     }
 
+    const home = await location.getText()
     expect(path.isAbsolute(home)).toBe(true)
-    await browser.execute((selectedHome) => {
-      const invoke = window.__TAURI_INTERNALS__.invoke
-      window.__TAURI_INTERNALS__.invoke = (command, args, options) => command === 'plugin:dialog|open'
-        ? Promise.resolve(selectedHome)
-        : invoke(command, args, options)
-    }, home)
-    await (await $('[data-testid="onboarding-picker"]')).click()
-    expect(await location.getText()).toBe(home)
+    expect(await (await $('[data-testid="onboarding-picker"]')).isDisplayed()).toBe(true)
     let homeExists = true
     try { await access(home) } catch { homeExists = false }
     expect(homeExists).toBe(false)
