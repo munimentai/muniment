@@ -32,6 +32,8 @@ const SESSION_RECORD_VERSION: u32 = 1;
 enum PromptFailure {
     Client(ClientError),
     Run,
+    NeedsAttention,
+    StreamClosed,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -623,9 +625,13 @@ fn prompt(
                 .map_err(|_| PromptFailure::Client(ClientError::UnexpectedMessage))?;
         }
         client.subscribe_run(&accepted.run_id, accepted.committed_seq)?;
+        let mut last_processed_run_seq = accepted.committed_seq;
         loop {
             let (run_seq, terminal) = match client.read_run_stream_message()? {
                 RunStreamMessage::Event(event) => {
+                    if event.run_seq <= last_processed_run_seq {
+                        continue;
+                    }
                     if let Some(update) = live_tool_update(&event) {
                         let update = SessionNotification::new(session_id.clone(), update);
                         write_message(
@@ -651,11 +657,15 @@ fn prompt(
                         "run.completed" => Some(Ok(StopReason::EndTurn)),
                         "run.cancelled" => Some(Ok(StopReason::Cancelled)),
                         "run.failed" => Some(Err(PromptFailure::Run)),
+                        "run.needs_attention" => Some(Err(PromptFailure::NeedsAttention)),
                         _ => None,
                     };
                     (Some(event.run_seq), terminal)
                 }
                 RunStreamMessage::PermissionPending(permission) => {
+                    if permission.run_seq <= last_processed_run_seq {
+                        continue;
+                    }
                     let request_id = *next_request_id;
                     *next_request_id = next_request_id.wrapping_add(1);
                     let content = permission
@@ -710,13 +720,24 @@ fn prompt(
                     (Some(permission.run_seq), None)
                 }
                 RunStreamMessage::CaughtUp { .. } => (None, None),
-                RunStreamMessage::StreamClosed { .. }
-                | RunStreamMessage::CapabilityRevoked { .. } => {
+                RunStreamMessage::StreamClosed {
+                    resumable: true, ..
+                } => {
+                    client
+                        .subscribe_run(&accepted.run_id, last_processed_run_seq)
+                        .map_err(|_| PromptFailure::StreamClosed)?;
+                    (None, None)
+                }
+                RunStreamMessage::StreamClosed {
+                    resumable: false, ..
+                } => return Err(PromptFailure::StreamClosed),
+                RunStreamMessage::CapabilityRevoked { .. } => {
                     return Err(ClientError::UnexpectedMessage.into());
                 }
             };
             if let Some(run_seq) = run_seq {
                 client.acknowledge_run_cursor(run_seq)?;
+                last_processed_run_seq = last_processed_run_seq.max(run_seq);
             }
             if let Some(terminal) = terminal {
                 break terminal;
@@ -753,6 +774,16 @@ fn prompt(
             "jsonrpc": "2.0",
             "id": id,
             "error": {"code": -32603, "message": "Muniment run failed"}
+        }),
+        Err(PromptFailure::NeedsAttention) => json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "error": {"code": -32603, "message": "Muniment run needs attention"}
+        }),
+        Err(PromptFailure::StreamClosed) => json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "error": {"code": -32000, "message": "Muniment run stream closed"}
         }),
         Err(PromptFailure::Client(error)) => json!({
             "jsonrpc": "2.0",
