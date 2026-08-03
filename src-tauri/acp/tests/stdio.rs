@@ -632,10 +632,10 @@ fn consecutive_prompts_continue_one_thread() {
 
 #[cfg(target_os = "linux")]
 #[test]
-fn serves_a_line_received_during_a_prompt_after_the_prompt_returns() {
+fn cancel_during_a_prompt_targets_the_bound_run_and_drains_to_cancelled() {
     use muniment_attach::{
-        authorized_with_client_credential, encode_frame, welcome, Event, EventName, Id, Protocol,
-        Response, Success,
+        authorized_with_client_credential, encode_frame, welcome, ErrorEnvelope, Event, EventName,
+        Failure, Id, Protocol, ProtocolError, Response, Success,
     };
     use std::collections::BTreeMap;
     use std::io::{BufRead, BufReader, Read};
@@ -740,7 +740,7 @@ fn serves_a_line_received_during_a_prompt_after_the_prompt_returns() {
                 "subscription_id": subscription_id,
                 "run_id": run_id,
                 "first_available_run_seq": 2,
-                "current_run_seq": 2,
+                "current_run_seq": 3,
                 "window": {"max_events": 16, "max_bytes": 1048576, "max_text_bytes": 262144}
             }),
         );
@@ -755,9 +755,50 @@ fn serves_a_line_received_during_a_prompt_after_the_prompt_returns() {
                     run_id: Some(Id::new(run_id).unwrap()),
                     run_seq: Some(2),
                     body: json!({
-                        "event_type": "run.completed",
+                        "event_type": "model.stream.delta",
                         "event_version": 1,
                         "recorded_at": "2026-08-03T00:00:01Z",
+                        "payload": {"withheld": false, "text": "Stopping."}
+                    }),
+                })
+                .unwrap(),
+            )
+            .unwrap();
+        let acknowledgement = read_frame(&mut stream);
+        assert_eq!(acknowledgement["operation"], "run.cursor_ack");
+        respond(
+            &mut stream,
+            &acknowledgement,
+            json!({"subscription_id": subscription_id, "through_run_seq": 2}),
+        );
+        let failed_cancel = read_frame(&mut stream);
+        assert_eq!(failed_cancel["operation"], "run.cancel");
+        assert_eq!(failed_cancel["body"]["run_id"], run_id);
+        stream
+            .write_all(
+                &encode_frame(&ErrorEnvelope {
+                    protocol: Protocol,
+                    request_id: Some(
+                        Id::new(failed_cancel["request_id"].as_str().unwrap()).unwrap(),
+                    ),
+                    ok: Failure,
+                    error: ProtocolError::invalid_request(),
+                })
+                .unwrap(),
+            )
+            .unwrap();
+        stream
+            .write_all(
+                &encode_frame(&Event {
+                    protocol: Protocol,
+                    subscription_id: Id::new(subscription_id).unwrap(),
+                    event: EventName::RunEvent,
+                    run_id: Some(Id::new(run_id).unwrap()),
+                    run_seq: Some(3),
+                    body: json!({
+                        "event_type": "run.cancelled",
+                        "event_version": 1,
+                        "recorded_at": "2026-08-03T00:00:03Z",
                         "payload": {"withheld": true}
                     }),
                 })
@@ -765,10 +806,11 @@ fn serves_a_line_received_during_a_prompt_after_the_prompt_returns() {
             )
             .unwrap();
         let acknowledgement = read_frame(&mut stream);
+        assert_eq!(acknowledgement["operation"], "run.cursor_ack");
         respond(
             &mut stream,
             &acknowledgement,
-            json!({"subscription_id": subscription_id, "through_run_seq": 2}),
+            json!({"subscription_id": subscription_id, "through_run_seq": 3}),
         );
     });
 
@@ -809,10 +851,30 @@ fn serves_a_line_received_during_a_prompt_after_the_prompt_returns() {
     .unwrap();
     input.write_all(b"\n").unwrap();
     input.flush().unwrap();
-    prompt_started_rx.recv().unwrap();
+    serde_json::to_writer(
+        &mut input,
+        &json!({
+            "jsonrpc": "2.0",
+            "method": "session/cancel",
+            "params": {"sessionId": "another-session"}
+        }),
+    )
+    .unwrap();
+    input.write_all(b"\n").unwrap();
+    serde_json::to_writer(
+        &mut input,
+        &json!({
+            "jsonrpc": "2.0",
+            "method": "session/cancel",
+            "params": {"sessionId": created["result"]["sessionId"]}
+        }),
+    )
+    .unwrap();
+    input.write_all(b"\n").unwrap();
     serde_json::to_writer(&mut input, &initialize_request()).unwrap();
     input.write_all(b"\n").unwrap();
     input.flush().unwrap();
+    prompt_started_rx.recv().unwrap();
     finish_prompt_tx.send(()).unwrap();
     drop(input);
 
@@ -820,11 +882,19 @@ fn serves_a_line_received_during_a_prompt_after_the_prompt_returns() {
         .lines()
         .map(|line| serde_json::from_str(&line.unwrap()).unwrap())
         .collect();
-    assert_eq!(responses.len(), 2);
-    assert_eq!(responses[0]["id"], 2);
-    assert_eq!(responses[0]["result"]["stopReason"], "end_turn");
-    assert_eq!(responses[1]["id"], 1);
-    assert_eq!(responses[1]["result"]["protocolVersion"], 1);
+    assert_eq!(responses.len(), 3);
+    assert_eq!(responses[0]["method"], "session/update");
+    assert_eq!(
+        responses[0]["params"]["update"]["content"]["text"],
+        "Stopping."
+    );
+    assert_eq!(responses[1]["id"], 2);
+    assert_eq!(
+        responses[1]["result"]["stopReason"], "cancelled",
+        "{responses:?}"
+    );
+    assert_eq!(responses[2]["id"], 1);
+    assert_eq!(responses[2]["result"]["protocolVersion"], 1);
     assert!(child.wait().unwrap().success());
     server.join().unwrap();
     std::fs::remove_dir_all(runtime).unwrap();
