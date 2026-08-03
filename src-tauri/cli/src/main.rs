@@ -419,6 +419,10 @@ fn run_with(
                     (permission.run_seq, None)
                 }
                 RunStreamMessage::CaughtUp { .. } => continue,
+                RunStreamMessage::StreamClosed { .. }
+                | RunStreamMessage::CapabilityRevoked { .. } => {
+                    return Err(CliError::RunClient(ClientError::UnexpectedMessage));
+                }
             };
             client
                 .acknowledge_run_cursor(run_seq)
