@@ -43,7 +43,7 @@ runtime access.
 | Desktop | Starts and steers runs | Answers locally | Shows governed run records | May invoke granted runtime capabilities | Built |
 | CLI | Starts and steers runs through attach | Answers in the terminal | Prints run receipts | May invoke granted runtime capabilities | **Deferred indefinitely under the 2026-07-29 owner ruling ([ADR 0022](docs/decisions/0022-acp-agent-interop.md))** |
 | Editor extension | Starts and steers runs through attach | Answers in the editor | Shows run receipts | May invoke granted runtime capabilities | **Retired under the 2026-07-29 owner ruling ([ADR 0022](docs/decisions/0022-acp-agent-interop.md))** |
-| ACP adapter | Starts and steers runs through attach | An editor answer is input to a Muniment gate, not a grant | Shows runtime-owned receipts | No claimed local filesystem or terminal capability | **Not built ([ADR 0022](docs/decisions/0022-acp-agent-interop.md))** |
+| ACP adapter | Pairs over `muniment.attach/1`. Persists its identity and credential under `$XDG_CONFIG_HOME/muniment/`. Onboards the request `cwd` as its workspace. Starts runs. Streams released assistant text. Ignores `session/cancel`. | Denies every pending permission gate as an interim policy | Shows runtime-owned receipts | No claimed local filesystem or terminal capability | Built ([ADR 0022](docs/decisions/0022-acp-agent-interop.md)) |
 | Mobile companion | No local runtime | Planned remote answers for live desktop runs | Planned display | None | **Not built** |
 | Agent access | Planned server-side headless access | Not defined here | Server-owned, when designed | No local surface claim | **Not built** |
 
@@ -90,6 +90,3 @@ defines a model-context boundary.
 - **Agent access has no implementation here.**
   [ADR 0009](docs/decisions/0009-companion-attach-protocol.md) assigns
   automation to a server-side layer.
-- **The ACP adapter has no implementation here.** It depends on the ADR 0012
-  runtime service. [ADR 0022](docs/decisions/0022-acp-agent-interop.md) defines
-  that boundary.
