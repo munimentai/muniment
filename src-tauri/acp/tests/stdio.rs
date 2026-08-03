@@ -68,16 +68,500 @@ fn initializes_with_only_the_supported_capabilities() {
 }
 
 #[test]
-fn session_requests_fail_without_an_authorized_attach() {
-    let responses = exchange(&[initialize_request(), request(2, "session/load", json!({}))]);
+fn load_rejects_an_unknown_session_without_an_attach() {
+    let responses = exchange(&[
+        initialize_request(),
+        request(
+            2,
+            "session/load",
+            json!({
+                "sessionId": "01900000-0000-7000-8000-000000000099",
+                "cwd": "/workspace",
+                "mcpServers": []
+            }),
+        ),
+    ]);
 
     assert_eq!(responses[0]["result"]["protocolVersion"], 1);
     assert_eq!(responses[1]["id"], 2);
-    assert_eq!(responses[1]["error"]["code"], -32000);
-    assert_eq!(
-        responses[1]["error"]["message"],
-        "no authorized Muniment runtime attach exists"
+    assert_eq!(responses[1]["error"]["code"], -32002);
+    assert_eq!(responses[1]["error"]["message"], "Resource not found");
+    assert!(responses
+        .iter()
+        .all(|response| response.get("method").is_none()));
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn load_rejects_relative_cwd_without_updates() {
+    let root = std::env::temp_dir().join(format!(
+        "muniment-acp-invalid-load-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    let config = root.join("config");
+    let session_id = "01900000-0000-7000-8000-000000000012";
+    let records = config.join("muniment/acp-sessions");
+    std::fs::create_dir_all(&records).unwrap();
+    let mut command = Command::new(env!("CARGO_BIN_EXE_muniment-acp"));
+    command.env("XDG_CONFIG_HOME", &config);
+    let responses = exchange_with_command(
+        command,
+        &[request(
+            1,
+            "session/load",
+            json!({"sessionId": session_id, "cwd": "relative", "mcpServers": []}),
+        )],
     );
+
+    assert_eq!(responses.len(), 1);
+    assert_eq!(responses[0]["error"]["code"], -32602);
+    assert_eq!(
+        responses[0]["error"]["message"],
+        "session/load cwd must be absolute"
+    );
+    assert!(responses
+        .iter()
+        .all(|response| response.get("method").is_none()));
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[cfg(target_os = "linux")]
+fn rejected_record_load(record_contents: &[u8]) -> Vec<Value> {
+    use std::os::unix::fs::PermissionsExt;
+
+    let root = std::env::temp_dir().join(format!(
+        "muniment-acp-invalid-record-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    let config = root.join("config");
+    let session_id = "01900000-0000-7000-8000-000000000012";
+    let records = config.join("muniment/acp-sessions");
+    std::fs::create_dir_all(&records).unwrap();
+    let record = records.join(format!("{session_id}.json"));
+    std::fs::write(&record, record_contents).unwrap();
+    std::fs::set_permissions(&record, std::fs::Permissions::from_mode(0o600)).unwrap();
+
+    let mut command = Command::new(env!("CARGO_BIN_EXE_muniment-acp"));
+    command.env("XDG_CONFIG_HOME", &config);
+    let responses = exchange_with_command(
+        command,
+        &[request(
+            1,
+            "session/load",
+            json!({"sessionId": session_id, "cwd": "/workspace", "mcpServers": []}),
+        )],
+    );
+
+    std::fs::remove_dir_all(root).unwrap();
+    responses
+}
+
+#[cfg(target_os = "linux")]
+fn assert_record_load_not_found_without_updates(responses: &[Value]) {
+    assert_eq!(responses.len(), 1);
+    assert_eq!(responses[0]["error"]["code"], -32002);
+    assert_eq!(responses[0]["error"]["message"], "Resource not found");
+    assert!(responses
+        .iter()
+        .all(|response| response.get("method").is_none()));
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn load_rejects_a_malformed_record_without_updates() {
+    assert_record_load_not_found_without_updates(&rejected_record_load(b"not JSON"));
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn load_rejects_an_invalid_record_without_updates() {
+    assert_record_load_not_found_without_updates(&rejected_record_load(
+        br#"{
+            "version": 2,
+            "session_id": "01900000-0000-7000-8000-000000000012",
+            "workspace_root": "/workspace",
+            "thread_id": "01900000-0000-7000-8000-000000000013",
+            "profile_id": "profile-id"
+        }"#,
+    ));
+}
+
+#[cfg(target_os = "linux")]
+fn rejected_scripted_load(case: &str) -> Vec<Value> {
+    use muniment_attach::{
+        authorized_with_client_credential, encode_frame, welcome, Id, Protocol, Response, Success,
+    };
+    use std::collections::BTreeMap;
+    use std::io::Read;
+    use std::os::unix::fs::PermissionsExt;
+    use std::os::unix::net::{UnixListener, UnixStream};
+    use std::thread;
+
+    fn read_frame(stream: &mut UnixStream) -> Value {
+        let mut prefix = [0; 4];
+        stream.read_exact(&mut prefix).unwrap();
+        let mut payload = vec![0; u32::from_be_bytes(prefix) as usize];
+        stream.read_exact(&mut payload).unwrap();
+        serde_json::from_slice(&payload).unwrap()
+    }
+
+    fn respond(stream: &mut UnixStream, request: &Value, body: Value) {
+        stream
+            .write_all(
+                &encode_frame(&Response {
+                    protocol: Protocol,
+                    request_id: Id::new(request["request_id"].as_str().unwrap()).unwrap(),
+                    ok: Success,
+                    body,
+                })
+                .unwrap(),
+            )
+            .unwrap();
+    }
+
+    let root = std::env::temp_dir().join(format!(
+        "muniment-acp-rejected-load-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    let socket_directory = root.join("muniment");
+    let config = root.join("config");
+    let workspace = root.join("workspace");
+    std::fs::create_dir_all(&socket_directory).unwrap();
+    std::fs::create_dir(&workspace).unwrap();
+    let listener = UnixListener::bind(socket_directory.join("attach-v1.sock")).unwrap();
+    let session_id = "01900000-0000-7000-8000-000000000020";
+    let thread_id = "01900000-0000-7000-8000-000000000021";
+    let record_directory = config.join("muniment/acp-sessions");
+    std::fs::create_dir_all(&record_directory).unwrap();
+    let record_path = record_directory.join(format!("{session_id}.json"));
+    std::fs::write(
+        &record_path,
+        serde_json::to_vec(&json!({
+            "version": 1,
+            "session_id": session_id,
+            "workspace_root": workspace,
+            "thread_id": thread_id,
+            "profile_id": "profile-id"
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    std::fs::set_permissions(&record_path, std::fs::Permissions::from_mode(0o600)).unwrap();
+
+    let expected_workspace = workspace.to_string_lossy().into_owned();
+    let case = case.to_owned();
+    let server = thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let _hello = read_frame(&mut stream);
+        stream
+            .write_all(
+                &encode_frame(&welcome(1, "0.0.1", "11".repeat(16), "22".repeat(16))).unwrap(),
+            )
+            .unwrap();
+        let profile_id = if case == "profile" {
+            "other-profile"
+        } else {
+            "profile-id"
+        };
+        stream
+            .write_all(
+                &encode_frame(&authorized_with_client_credential(
+                    profile_id,
+                    "33".repeat(32),
+                    3600,
+                    900,
+                    BTreeMap::new(),
+                    "44".repeat(32),
+                ))
+                .unwrap(),
+            )
+            .unwrap();
+        let onboard = read_frame(&mut stream);
+        let opened_directory = if case == "workspace" {
+            format!("{expected_workspace}-other")
+        } else {
+            expected_workspace.clone()
+        };
+        respond(
+            &mut stream,
+            &onboard,
+            json!({
+                "opened_directory": opened_directory,
+                "memory_location": expected_workspace,
+                "instructions": null
+            }),
+        );
+        if case == "workspace" || case == "profile" {
+            return;
+        }
+        let open = read_frame(&mut stream);
+        if case == "page" {
+            return;
+        }
+        respond(
+            &mut stream,
+            &open,
+            json!({
+                "thread_id": thread_id,
+                "entries": [{"run_seq": 1, "kind": "tool_call", "text": "hidden"}]
+            }),
+        );
+    });
+
+    let mut command = Command::new(env!("CARGO_BIN_EXE_muniment-acp"));
+    command
+        .env("XDG_RUNTIME_DIR", &root)
+        .env("XDG_CONFIG_HOME", &config);
+    let responses = exchange_with_command(
+        command,
+        &[request(
+            1,
+            "session/load",
+            json!({"sessionId": session_id, "cwd": workspace, "mcpServers": []}),
+        )],
+    );
+    server.join().unwrap();
+    std::fs::remove_dir_all(root).unwrap();
+    responses
+}
+
+#[cfg(target_os = "linux")]
+fn assert_load_failed_without_updates(responses: &[Value], message: &str) {
+    assert_eq!(responses.len(), 1);
+    assert_eq!(responses[0]["error"]["code"], -32000);
+    assert_eq!(responses[0]["error"]["message"], message);
+    assert!(responses
+        .iter()
+        .all(|response| response.get("method").is_none()));
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn load_rejects_a_workspace_mismatch_without_updates() {
+    assert_load_failed_without_updates(
+        &rejected_scripted_load("workspace"),
+        "Muniment runtime sent an invalid pairing message",
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn load_rejects_a_profile_mismatch_without_updates() {
+    assert_load_failed_without_updates(
+        &rejected_scripted_load("profile"),
+        "Muniment runtime sent an invalid pairing message",
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn load_rejects_an_unknown_entry_kind_without_updates() {
+    assert_load_failed_without_updates(
+        &rejected_scripted_load("entry"),
+        "Muniment runtime sent an invalid pairing message",
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn load_rejects_a_page_failure_without_updates() {
+    assert_load_failed_without_updates(
+        &rejected_scripted_load("page"),
+        "Muniment runtime pairing was denied or closed",
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn load_replays_text_entries_across_pages_before_responding() {
+    use muniment_attach::{
+        authorized_with_client_credential, encode_frame, welcome, Id, Protocol, Response, Success,
+    };
+    use std::collections::BTreeMap;
+    use std::io::Read;
+    use std::os::unix::fs::PermissionsExt;
+    use std::os::unix::net::{UnixListener, UnixStream};
+    use std::thread;
+
+    fn read_frame(stream: &mut UnixStream) -> Value {
+        let mut prefix = [0; 4];
+        stream.read_exact(&mut prefix).unwrap();
+        let mut payload = vec![0; u32::from_be_bytes(prefix) as usize];
+        stream.read_exact(&mut payload).unwrap();
+        serde_json::from_slice(&payload).unwrap()
+    }
+
+    fn respond(stream: &mut UnixStream, request: &Value, body: Value) {
+        stream
+            .write_all(
+                &encode_frame(&Response {
+                    protocol: Protocol,
+                    request_id: Id::new(request["request_id"].as_str().unwrap()).unwrap(),
+                    ok: Success,
+                    body,
+                })
+                .unwrap(),
+            )
+            .unwrap();
+    }
+
+    let runtime = std::env::temp_dir().join(format!(
+        "muniment-acp-load-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    let socket_directory = runtime.join("muniment");
+    let config = runtime.join("config");
+    let workspace = runtime.join("workspace");
+    std::fs::create_dir_all(&socket_directory).unwrap();
+    std::fs::create_dir(&workspace).unwrap();
+    let listener = UnixListener::bind(socket_directory.join("attach-v1.sock")).unwrap();
+    let session_id = "01900000-0000-7000-8000-000000000010";
+    let thread_id = "01900000-0000-7000-8000-000000000011";
+    let record_directory = config.join("muniment/acp-sessions");
+    std::fs::create_dir_all(&record_directory).unwrap();
+    let record_path = record_directory.join(format!("{session_id}.json"));
+    std::fs::write(
+        &record_path,
+        serde_json::to_vec(&json!({
+            "version": 1,
+            "session_id": session_id,
+            "workspace_root": workspace,
+            "thread_id": thread_id,
+            "profile_id": "profile-id"
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    std::fs::set_permissions(&record_path, std::fs::Permissions::from_mode(0o600)).unwrap();
+
+    let expected_workspace = workspace.to_string_lossy().into_owned();
+    let server = thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let hello = read_frame(&mut stream);
+        assert_eq!(hello["client"]["kind"], "acp-adapter");
+        stream
+            .write_all(
+                &encode_frame(&welcome(1, "0.0.1", "11".repeat(16), "22".repeat(16))).unwrap(),
+            )
+            .unwrap();
+        stream
+            .write_all(
+                &encode_frame(&authorized_with_client_credential(
+                    "profile-id",
+                    "33".repeat(32),
+                    3600,
+                    900,
+                    BTreeMap::new(),
+                    "44".repeat(32),
+                ))
+                .unwrap(),
+            )
+            .unwrap();
+        let onboard = read_frame(&mut stream);
+        assert_eq!(onboard["operation"], "workspace.onboard");
+        respond(
+            &mut stream,
+            &onboard,
+            json!({
+                "opened_directory": expected_workspace,
+                "memory_location": expected_workspace,
+                "instructions": null
+            }),
+        );
+        let first = read_frame(&mut stream);
+        assert_eq!(first["operation"], "thread.open");
+        assert!(first["body"].get("cursor").is_none());
+        respond(
+            &mut stream,
+            &first,
+            json!({
+                "thread_id": thread_id,
+                "entries": [
+                    {"run_seq": 1, "kind": "user_message", "text": "Question"},
+                    {"run_seq": 2, "kind": "assistant_message", "text": "Answer"}
+                ],
+                "next_cursor": "page-2"
+            }),
+        );
+        let second = read_frame(&mut stream);
+        assert_eq!(second["body"]["cursor"], "page-2");
+        respond(
+            &mut stream,
+            &second,
+            json!({
+                "thread_id": thread_id,
+                "entries": [
+                    {"run_seq": 3, "kind": "attachment", "text": "report.txt"},
+                    {"run_seq": 4, "kind": "assistant_message"}
+                ]
+            }),
+        );
+    });
+
+    let mut command = Command::new(env!("CARGO_BIN_EXE_muniment-acp"));
+    command
+        .env("XDG_RUNTIME_DIR", &runtime)
+        .env("XDG_CONFIG_HOME", &config);
+    let responses = exchange_with_command(
+        command,
+        &[request(
+            1,
+            "session/load",
+            json!({"sessionId": session_id, "cwd": workspace, "mcpServers": []}),
+        )],
+    );
+    server.join().unwrap();
+
+    assert_eq!(responses.len(), 5);
+    assert_eq!(
+        responses[0]["params"]["update"],
+        json!({
+            "sessionUpdate": "user_message_chunk",
+            "content": {"type": "text", "text": "Question"}
+        })
+    );
+    assert_eq!(
+        responses[1]["params"]["update"],
+        json!({
+            "sessionUpdate": "agent_message_chunk",
+            "content": {"type": "text", "text": "Answer"}
+        })
+    );
+    assert_eq!(
+        responses[2]["params"]["update"],
+        json!({
+            "sessionUpdate": "user_message_chunk",
+            "content": {"type": "text", "text": "report.txt"}
+        })
+    );
+    assert_eq!(
+        responses[3]["params"]["update"],
+        json!({
+            "sessionUpdate": "agent_message_chunk",
+            "content": {"type": "text", "text": ""}
+        })
+    );
+    assert_eq!(responses[4]["result"], json!({}));
+    assert!(responses[..4]
+        .iter()
+        .all(|response| response["method"] == "session/update"));
+    std::fs::remove_dir_all(runtime).unwrap();
 }
 
 #[test]

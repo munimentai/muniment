@@ -1,10 +1,11 @@
 use agent_client_protocol::schema::{
     v1::{
         AgentCapabilities, ContentBlock, ContentChunk, InitializeRequest, InitializeResponse,
-        NewSessionRequest, NewSessionResponse, PermissionOption, PermissionOptionKind,
-        PromptRequest, PromptResponse, RequestPermissionOutcome, RequestPermissionRequest,
-        RequestPermissionResponse, SessionNotification, SessionUpdate, StopReason, TextContent,
-        ToolCallContent, ToolCallUpdate, ToolCallUpdateFields,
+        LoadSessionRequest, LoadSessionResponse, NewSessionRequest, NewSessionResponse,
+        PermissionOption, PermissionOptionKind, PromptRequest, PromptResponse,
+        RequestPermissionOutcome, RequestPermissionRequest, RequestPermissionResponse,
+        SessionNotification, SessionUpdate, StopReason, TextContent, ToolCallContent,
+        ToolCallUpdate, ToolCallUpdateFields,
     },
     ProtocolVersion,
 };
@@ -22,7 +23,6 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver};
 use std::thread;
 
-const NO_ATTACH: &str = "no authorized Muniment runtime attach exists";
 const CLIENT_KIND: &str = "acp-adapter";
 const CLIENT_ID_FILE: &str = "acp-client-id";
 const CLIENT_CREDENTIAL_FILE: &str = "acp-client-credential";
@@ -126,16 +126,273 @@ fn response(
             pending,
             next_request_id,
         )),
-        "session/load" => Some(json!({
-            "jsonrpc": "2.0",
-            "id": id,
-            "error": {"code": -32000, "message": NO_ATTACH}
-        })),
+        "session/load" => Some(load_session(id, object.get("params"), output)),
         _ => Some(json!({
             "jsonrpc": "2.0",
             "id": id,
             "error": {"code": -32601, "message": "Method not found"}
         })),
+    }
+}
+
+fn load_session(id: Value, params: Option<&Value>, output: &mut impl Write) -> Value {
+    let Some(params) = params else {
+        return invalid_params(id, "session/load parameters are invalid");
+    };
+    if params
+        .get("mcpServers")
+        .and_then(Value::as_array)
+        .is_some_and(|servers| !servers.is_empty())
+    {
+        return invalid_params(id, "session/load does not accept MCP servers");
+    }
+    let Ok(request) = serde_json::from_value::<LoadSessionRequest>(params.clone()) else {
+        return invalid_params(id, "session/load parameters are invalid");
+    };
+    if !request.cwd.is_absolute() {
+        return invalid_params(id, "session/load cwd must be absolute");
+    }
+    let session_id = request.session_id.0.to_string();
+    let Ok(record) = read_session_record(&session_id) else {
+        return json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "error": {"code": -32002, "message": "Resource not found"}
+        });
+    };
+
+    let result: Result<(), ClientError> = (|| {
+        let identity = authorized_client_identity().map_err(|_| ClientError::UnexpectedMessage)?;
+        let credential =
+            authorized_client_credential().map_err(|_| ClientError::UnexpectedMessage)?;
+        let mut client = handshake_as_with_credential(
+            env!("CARGO_PKG_VERSION"),
+            CLIENT_KIND,
+            &identity,
+            credential.as_deref(),
+            || {},
+        )?;
+        persist_authorized_client_credential(client.authorized_client_credential())
+            .map_err(|_| ClientError::UnexpectedMessage)?;
+        let workspace = request.cwd.to_string_lossy();
+        let onboarded = client.onboard_workspace(&workspace, &workspace)?;
+        if onboarded.opened_directory != record.workspace_root
+            || client.profile_id() != record.profile_id
+        {
+            return Err(ClientError::UnexpectedMessage);
+        }
+
+        let mut cursor = None;
+        let mut updates = Vec::new();
+        loop {
+            let page = client.open_thread(&record.thread_id, cursor.as_deref())?;
+            for entry in page.entries {
+                let content = ContentChunk::new(ContentBlock::Text(TextContent::new(
+                    entry.text.unwrap_or_default(),
+                )));
+                let update = match entry.kind.as_str() {
+                    "user_message" | "attachment" => SessionUpdate::UserMessageChunk(content),
+                    "assistant_message" => SessionUpdate::AgentMessageChunk(content),
+                    _ => return Err(ClientError::UnexpectedMessage),
+                };
+                updates.push(update);
+            }
+            cursor = page.next_cursor;
+            if cursor.is_none() {
+                break;
+            }
+        }
+        send_load_updates(output, &session_id, updates)?;
+        Ok(())
+    })();
+
+    load_session_response(id, result)
+}
+
+fn send_load_updates(
+    output: &mut impl Write,
+    session_id: &str,
+    updates: Vec<SessionUpdate>,
+) -> Result<(), ClientError> {
+    for update in updates {
+        let notification = SessionNotification::new(session_id.to_owned(), update);
+        write_message(
+            output,
+            json!({"jsonrpc": "2.0", "method": "session/update", "params": notification}),
+        )
+        .map_err(|_| ClientError::ConnectionClosed)?;
+    }
+    Ok(())
+}
+
+fn load_session_response(id: Value, result: Result<(), ClientError>) -> Value {
+    match result {
+        Ok(()) => json!({"jsonrpc": "2.0", "id": id, "result": LoadSessionResponse::new()}),
+        Err(error) => json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "error": {"code": -32000, "message": pairing_failure(error)}
+        }),
+    }
+}
+
+#[cfg(test)]
+mod load_tests {
+    use super::*;
+
+    struct FailedOutput;
+
+    impl Write for FailedOutput {
+        fn write(&mut self, _buffer: &[u8]) -> io::Result<usize> {
+            Err(io::Error::new(
+                io::ErrorKind::BrokenPipe,
+                "test output failed",
+            ))
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn load_rejects_a_notification_failure() {
+        use muniment_attach::{
+            authorized_with_client_credential, encode_frame, welcome, Id, Protocol, Response,
+            Success,
+        };
+        use std::collections::BTreeMap;
+        use std::os::unix::fs::PermissionsExt;
+        use std::os::unix::net::{UnixListener, UnixStream};
+
+        fn read_frame(stream: &mut UnixStream) -> Value {
+            let mut prefix = [0; 4];
+            stream.read_exact(&mut prefix).unwrap();
+            let mut payload = vec![0; u32::from_be_bytes(prefix) as usize];
+            stream.read_exact(&mut payload).unwrap();
+            serde_json::from_slice(&payload).unwrap()
+        }
+
+        fn respond(stream: &mut UnixStream, request: &Value, body: Value) {
+            stream
+                .write_all(
+                    &encode_frame(&Response {
+                        protocol: Protocol,
+                        request_id: Id::new(request["request_id"].as_str().unwrap()).unwrap(),
+                        ok: Success,
+                        body,
+                    })
+                    .unwrap(),
+                )
+                .unwrap();
+        }
+
+        let root = std::env::temp_dir().join(format!(
+            "muniment-acp-failed-load-output-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let socket_directory = root.join("muniment");
+        let config = root.join("config");
+        let workspace = root.join("workspace");
+        std::fs::create_dir_all(&socket_directory).unwrap();
+        std::fs::create_dir(&workspace).unwrap();
+        let listener = UnixListener::bind(socket_directory.join("attach-v1.sock")).unwrap();
+        let session_id = "01900000-0000-7000-8000-000000000030";
+        let thread_id = "01900000-0000-7000-8000-000000000031";
+        let record_directory = config.join("muniment/acp-sessions");
+        std::fs::create_dir_all(&record_directory).unwrap();
+        let record_path = record_directory.join(format!("{session_id}.json"));
+        std::fs::write(
+            &record_path,
+            serde_json::to_vec(&json!({
+                "version": 1,
+                "session_id": session_id,
+                "workspace_root": workspace,
+                "thread_id": thread_id,
+                "profile_id": "profile-id"
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        std::fs::set_permissions(&record_path, std::fs::Permissions::from_mode(0o600)).unwrap();
+
+        let opened_directory = workspace.to_string_lossy().into_owned();
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let _hello = read_frame(&mut stream);
+            stream
+                .write_all(
+                    &encode_frame(&welcome(1, "0.0.1", "11".repeat(16), "22".repeat(16))).unwrap(),
+                )
+                .unwrap();
+            stream
+                .write_all(
+                    &encode_frame(&authorized_with_client_credential(
+                        "profile-id",
+                        "33".repeat(32),
+                        3600,
+                        900,
+                        BTreeMap::new(),
+                        "44".repeat(32),
+                    ))
+                    .unwrap(),
+                )
+                .unwrap();
+            let onboard = read_frame(&mut stream);
+            assert_eq!(onboard["operation"], "workspace.onboard");
+            respond(
+                &mut stream,
+                &onboard,
+                json!({
+                    "opened_directory": opened_directory,
+                    "memory_location": opened_directory,
+                    "instructions": null
+                }),
+            );
+            let open = read_frame(&mut stream);
+            assert_eq!(open["operation"], "thread.open");
+            respond(
+                &mut stream,
+                &open,
+                json!({
+                    "thread_id": thread_id,
+                    "entries": [{"run_seq": 1, "kind": "user_message", "text": "Question"}]
+                }),
+            );
+        });
+
+        let previous_runtime = std::env::var_os("XDG_RUNTIME_DIR");
+        let previous_config = std::env::var_os("XDG_CONFIG_HOME");
+        std::env::set_var("XDG_RUNTIME_DIR", &root);
+        std::env::set_var("XDG_CONFIG_HOME", &config);
+        let response = load_session(
+            json!(1),
+            Some(&json!({"sessionId": session_id, "cwd": workspace, "mcpServers": []})),
+            &mut FailedOutput,
+        );
+        if let Some(value) = previous_runtime {
+            std::env::set_var("XDG_RUNTIME_DIR", value);
+        } else {
+            std::env::remove_var("XDG_RUNTIME_DIR");
+        }
+        if let Some(value) = previous_config {
+            std::env::set_var("XDG_CONFIG_HOME", value);
+        } else {
+            std::env::remove_var("XDG_CONFIG_HOME");
+        }
+        server.join().unwrap();
+        std::fs::remove_dir_all(root).unwrap();
+
+        assert_eq!(response["error"]["code"], -32000);
+        assert_eq!(
+            response["error"]["message"],
+            "Muniment runtime pairing was denied or closed"
+        );
     }
 }
 
