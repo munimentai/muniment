@@ -15,7 +15,8 @@ use muniment_core::attach::linux::{
     AttachAcceptError, AttachFilesystem, AttachTransport, CompanionProvenance,
     PermissionAnswerAccepted, PermissionAnswerRequest, PermissionDecision, RunCancelAccepted,
     RunCancelRequest, RunStartAccepted, RunStartRequest as AttachRunStartRequest, RunStreamPage,
-    ThreadListPage, ThreadListRequest, ThreadListService, ThreadOpenPage, ThreadOpenRequest,
+    ThreadCreateAccepted, ThreadListPage, ThreadListRequest, ThreadListService, ThreadOpenPage,
+    ThreadOpenRequest,
 };
 #[cfg(target_os = "linux")]
 use muniment_core::attach::{
@@ -398,6 +399,60 @@ impl<B: RunStartBoundaries, I: RunStartIdempotency> ThreadListService
         request: ThreadOpenRequest,
     ) -> Result<ThreadOpenPage, ProtocolError> {
         self.boundaries.open_thread(workspace, request)
+    }
+
+    fn create_thread(
+        &mut self,
+        workspace: &str,
+        request_id: &Id,
+        idempotency_key: &Id,
+        companion: CompanionProvenance,
+    ) -> Result<ThreadCreateAccepted, ProtocolError> {
+        let canonical_input = json!({"workspace": workspace});
+        let ledger_request = AttachRequest {
+            protocol: Protocol,
+            request_id: request_id.clone(),
+            operation: Operation::ThreadCreate,
+            capability: String::new(),
+            idempotency_key: Some(idempotency_key.clone()),
+            body: canonical_input.clone(),
+        };
+        let mut extra = BTreeMap::new();
+        extra.insert("attach_profile".into(), json!(&companion.profile));
+        extra.insert("companion_kind".into(), json!(companion.companion_kind));
+        extra.insert(
+            "companion_version".into(),
+            json!(companion.companion_version),
+        );
+        extra.insert("peer_uid".into(), json!(companion.peer_uid));
+        extra.insert("peer_pid".into(), json!(companion.peer_pid));
+        extra.insert("idempotency_key".into(), json!(idempotency_key.as_str()));
+        let provenance = Provenance {
+            source: "muniment-attach".into(),
+            source_version: env!("CARGO_PKG_VERSION").into(),
+            actor_id: None,
+            device_id: None,
+            rpc_request_id: Some(request_id.as_str().to_owned()),
+            capability_versions: None,
+            extra,
+        };
+        let outcome = self.idempotency.execute(
+            &companion.profile,
+            &ledger_request,
+            &canonical_input,
+            || Ok(()),
+            || {
+                let thread_id = self.boundaries.create_thread(workspace, provenance)?;
+                Ok(CommittedResult {
+                    body: json!({"thread_id": thread_id}),
+                    cursor: None,
+                })
+            },
+        )?;
+        let committed = match outcome {
+            IdempotencyOutcome::Committed(result) | IdempotencyOutcome::Replayed(result) => result,
+        };
+        serde_json::from_value(committed.body).map_err(|_| ProtocolError::persistence_failed())
     }
 
     fn start_run(
@@ -856,6 +911,95 @@ mod tests {
             },
         );
         (result, service)
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn attach_thread_create_replays_and_rejects_changed_workspace() {
+        let database_path = std::env::temp_dir().join(format!(
+            "muniment-attach-thread-create-{}.sqlite3",
+            Uuid::now_v7()
+        ));
+        let mut boundaries = FakeRunStartBoundaries::accepting();
+        boundaries.journal = Mutex::new(RunJournal::open(&database_path).unwrap());
+        let mut service = DesktopAttachService {
+            boundaries,
+            idempotency: IdempotencyStore::open(":memory:").unwrap(),
+            home: PathBuf::new(),
+            workspace_contexts: Arc::new(Mutex::new(HashMap::new())),
+            client_credentials: Arc::new(Mutex::new(HashMap::new())),
+            credential_path: None,
+            client_identity: Some("default".into()),
+        };
+        let key = Id::new("018f0000-0000-7000-8000-000000000002").unwrap();
+        let companion = CompanionProvenance {
+            profile: "default".into(),
+            companion_kind: "cli".into(),
+            companion_version: "1.2.3".into(),
+            peer_uid: 1000,
+            peer_pid: 42,
+        };
+
+        let first = service
+            .create_thread(
+                "workspace-a",
+                &Id::new("018f0000-0000-7000-8000-000000000001").unwrap(),
+                &key,
+                companion.clone(),
+            )
+            .unwrap();
+        let replay = service
+            .create_thread(
+                "workspace-a",
+                &Id::new("018f0000-0000-7000-8000-000000000003").unwrap(),
+                &key,
+                companion.clone(),
+            )
+            .unwrap();
+        let conflict = service
+            .create_thread(
+                "workspace-b",
+                &Id::new("018f0000-0000-7000-8000-000000000004").unwrap(),
+                &key,
+                companion,
+            )
+            .unwrap_err();
+
+        assert_eq!(replay.thread_id, first.thread_id);
+        assert_eq!(conflict.code(), ErrorCode::IdempotencyConflict);
+        let mut journal = service.boundaries.journal.lock().unwrap();
+        let event_count = rusqlite::Connection::open(&database_path)
+            .unwrap()
+            .query_row(
+                "SELECT COUNT(*) FROM thread_events WHERE event_type='thread.created'",
+                [],
+                |row| row.get::<_, u64>(0),
+            )
+            .unwrap();
+        assert_eq!(event_count, 1);
+        let page = ThreadListService::list_threads(
+            &mut *journal,
+            "workspace-a",
+            ThreadListRequest {
+                cursor: None,
+                limit: 50,
+            },
+        )
+        .unwrap();
+        assert!(page.threads.is_empty());
+        let other_page = ThreadListService::list_threads(
+            &mut *journal,
+            "workspace-b",
+            ThreadListRequest {
+                cursor: None,
+                limit: 50,
+            },
+        )
+        .unwrap();
+        assert!(other_page.threads.is_empty());
+        drop(journal);
+        drop(service);
+        std::fs::remove_file(database_path).unwrap();
     }
 
     #[cfg(target_os = "linux")]
