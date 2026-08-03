@@ -54,6 +54,8 @@ pub(crate) struct FakeRunStartBoundaries {
     pub(crate) prepared_provenance: Mutex<Option<Provenance>>,
     pub(crate) journaled_events: Mutex<BTreeMap<String, Vec<EventEnvelope>>>,
     pub(crate) clear_calls: AtomicUsize,
+    pub(crate) cancel_calls: AtomicUsize,
+    pub(crate) active_run: Mutex<Option<(String, String)>>,
     #[cfg(target_os = "linux")]
     pub(crate) journal: Mutex<RunJournal>,
 }
@@ -77,6 +79,8 @@ impl FakeRunStartBoundaries {
             prepared_provenance: Mutex::new(None),
             journaled_events: Mutex::new(BTreeMap::new()),
             clear_calls: AtomicUsize::new(0),
+            cancel_calls: AtomicUsize::new(0),
+            active_run: Mutex::new(None),
             #[cfg(target_os = "linux")]
             journal: Mutex::new(RunJournal::open(":memory:").unwrap()),
         }
@@ -160,10 +164,11 @@ impl RunStartBoundaries for FakeRunStartBoundaries {
         })
     }
 
-    fn install_active_run(&self, _run: ActiveRun) -> Result<(), RunStartError> {
+    fn install_active_run(&self, run: ActiveRun) -> Result<(), RunStartError> {
         if let Some(error) = &self.install_error {
             return Err(RunStartError::InvalidRequest(error.clone()));
         }
+        *self.active_run.lock().unwrap() = Some((run.id, run.workspace));
         Ok(())
     }
 
@@ -302,6 +307,20 @@ impl RunStartBoundaries for FakeRunStartBoundaries {
 
     fn clear_active_run(&self, _run_id: &str) {
         self.clear_calls.fetch_add(1, Ordering::SeqCst);
+    }
+
+    fn cancel_run(&self, workspace: &str, run_id: &str) -> Result<(), RunStartError> {
+        let active = self.active_run.lock().unwrap();
+        if active
+            .as_ref()
+            .is_none_or(|(id, active_workspace)| id != run_id || active_workspace != workspace)
+        {
+            return Err(RunStartError::InvalidRequest(
+                "That reply is no longer active.".into(),
+            ));
+        }
+        self.cancel_calls.fetch_add(1, Ordering::SeqCst);
+        Ok(())
     }
 
     fn launch(&self, launch: RunStartLaunch) {
