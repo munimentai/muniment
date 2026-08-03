@@ -409,18 +409,8 @@ fn wait_for_permission_response(
             pending.push_back(Ok(line));
             continue;
         };
-        if message.get("id") == Some(&json!(request_id)) {
-            let response = message.get("result").cloned().and_then(|result| {
-                serde_json::from_value::<RequestPermissionResponse>(result).ok()
-            });
-            return match response.map(|response| response.outcome) {
-                Some(RequestPermissionOutcome::Selected(selected))
-                    if selected.option_id.0.as_ref() == "allow_once" =>
-                {
-                    PermissionDecision::Allow
-                }
-                _ => PermissionDecision::Deny,
-            };
+        if let Some(decision) = permission_response_decision(&message, request_id) {
+            return decision;
         }
         let cancel = message.get("id").is_none()
             && message.get("method").and_then(Value::as_str) == Some("session/cancel")
@@ -434,6 +424,89 @@ fn wait_for_permission_response(
         } else {
             pending.push_back(Ok(line));
         }
+    }
+}
+
+fn permission_response_decision(message: &Value, request_id: u64) -> Option<PermissionDecision> {
+    let object = message.as_object()?;
+    if object.get("method").and_then(Value::as_str).is_some()
+        || object.get("id") != Some(&json!(request_id))
+    {
+        return None;
+    }
+    let valid_envelope = !object.contains_key("method")
+        && object.get("jsonrpc").and_then(Value::as_str) == Some("2.0")
+        && object.contains_key("result") != object.contains_key("error");
+    if !valid_envelope || object.contains_key("error") {
+        return Some(PermissionDecision::Deny);
+    }
+    let response = object
+        .get("result")
+        .cloned()
+        .and_then(|result| serde_json::from_value::<RequestPermissionResponse>(result).ok());
+    Some(match response.map(|response| response.outcome) {
+        Some(RequestPermissionOutcome::Selected(selected))
+            if selected.option_id.0.as_ref() == "allow_once" =>
+        {
+            PermissionDecision::Allow
+        }
+        _ => PermissionDecision::Deny,
+    })
+}
+
+#[cfg(test)]
+mod permission_response_tests {
+    use super::*;
+
+    fn decision(message: Value) -> Option<PermissionDecision> {
+        permission_response_decision(&message, 7)
+    }
+
+    fn selected(option_id: &str) -> Value {
+        json!({
+            "jsonrpc": "2.0",
+            "id": 7,
+            "result": {"outcome": {"outcome": "selected", "optionId": option_id}}
+        })
+    }
+
+    #[test]
+    fn maps_only_allow_once_to_allow() {
+        assert!(matches!(
+            decision(selected("allow_once")),
+            Some(PermissionDecision::Allow)
+        ));
+        for message in [
+            selected("reject_once"),
+            selected("unknown"),
+            json!({"jsonrpc": "2.0", "id": 7, "result": {"outcome": {"outcome": "cancelled"}}}),
+        ] {
+            assert!(matches!(decision(message), Some(PermissionDecision::Deny)));
+        }
+    }
+
+    #[test]
+    fn malformed_matching_responses_deny() {
+        for message in [
+            json!({"id": 7, "result": selected("allow_once")["result"]}),
+            json!({"jsonrpc": "1.0", "id": 7, "result": selected("allow_once")["result"]}),
+            json!({"jsonrpc": "2.0", "id": 7}),
+            json!({"jsonrpc": "2.0", "id": 7, "result": selected("allow_once")["result"], "error": {"code": -1, "message": "error"}}),
+            json!({"jsonrpc": "2.0", "id": 7, "method": null, "result": selected("allow_once")["result"]}),
+            json!({"jsonrpc": "2.0", "id": 7, "result": {}}),
+            json!({"jsonrpc": "2.0", "id": 7, "error": {"code": -1, "message": "error"}}),
+        ] {
+            assert!(matches!(decision(message), Some(PermissionDecision::Deny)));
+        }
+    }
+
+    #[test]
+    fn requests_and_other_responses_are_unrelated() {
+        assert!(decision(json!({
+            "jsonrpc": "2.0", "id": 7, "method": "initialize", "params": {}
+        }))
+        .is_none());
+        assert!(permission_response_decision(&selected("allow_once"), 8).is_none());
     }
 }
 

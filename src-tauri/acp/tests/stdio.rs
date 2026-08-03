@@ -376,7 +376,8 @@ fn consecutive_prompts_continue_one_thread() {
                 EventName::PermissionPending,
                 3,
                 json!({
-                    "gate_id": "gate-1", "kind": "confirm", "title": "Allow access?"
+                    "gate_id": "gate-1", "kind": "confirm", "title": "Allow access?",
+                    "message": "The command needs access."
                 }),
             ),
             (
@@ -422,6 +423,16 @@ fn consecutive_prompts_continue_one_thread() {
 
         for sequence in 2..=6 {
             if sequence == 3 {
+                let cancel = read_frame(&mut stream);
+                assert_eq!(cancel["operation"], "run.cancel");
+                assert_eq!(cancel["body"]["run_id"], run_id);
+                respond(
+                    &mut stream,
+                    &cancel,
+                    json!({
+                        "run_id": run_id, "accepted_at": "2026-08-03T00:00:03Z"
+                    }),
+                );
                 let answer = read_frame(&mut stream);
                 assert_eq!(answer["operation"], "permission.answer");
                 assert_eq!(answer["body"]["decision"], "allow");
@@ -523,11 +534,53 @@ fn consecutive_prompts_continue_one_thread() {
         let start = read_frame(&mut stream);
         assert_eq!(start["operation"], "run.start");
         assert_eq!(start["body"]["thread_id"], replacement_thread_id);
+        let run_id = "01900000-0000-7000-8000-000000000006";
+        let subscription_id = "01900000-0000-7000-8000-000000000007";
+        respond(
+            &mut stream,
+            &start,
+            json!({
+                "run_id": run_id,
+                "thread_id": replacement_thread_id,
+                "committed_seq": 1,
+                "accepted_at": "2026-08-03T00:02:00Z"
+            }),
+        );
+        let subscribe = read_frame(&mut stream);
+        respond(
+            &mut stream,
+            &subscribe,
+            json!({
+                "subscription_id": subscription_id,
+                "run_id": run_id,
+                "first_available_run_seq": 2,
+                "current_run_seq": 2,
+                "window": {"max_events": 16, "max_bytes": 1048576, "max_text_bytes": 262144}
+            }),
+        );
+        stream
+            .write_all(
+                &encode_frame(&Event {
+                    protocol: Protocol,
+                    subscription_id: Id::new(subscription_id).unwrap(),
+                    event: EventName::PermissionPending,
+                    run_id: Some(Id::new(run_id).unwrap()),
+                    run_seq: Some(2),
+                    body: json!({
+                        "gate_id": "gate-2", "kind": "confirm", "title": "Allow again?"
+                    }),
+                })
+                .unwrap(),
+            )
+            .unwrap();
+        let answer = read_frame(&mut stream);
+        assert_eq!(answer["operation"], "permission.answer");
+        assert_eq!(answer["body"]["decision"], "deny");
         stream
             .write_all(
                 &encode_frame(&ErrorEnvelope {
                     protocol: Protocol,
-                    request_id: Some(Id::new(start["request_id"].as_str().unwrap()).unwrap()),
+                    request_id: Some(Id::new(answer["request_id"].as_str().unwrap()).unwrap()),
                     ok: Failure,
                     error: ProtocolError::invalid_request(),
                 })
@@ -583,11 +636,15 @@ fn consecutive_prompts_continue_one_thread() {
         responses.push(serde_json::from_str(&line).unwrap());
     }
     let permission = &responses[1];
+    let permission_id = permission["id"].clone();
     assert_eq!(permission["method"], "session/request_permission");
     assert_eq!(permission["params"]["sessionId"], session_id);
     assert_eq!(permission["params"]["toolCall"]["toolCallId"], "gate-1");
     assert_eq!(permission["params"]["toolCall"]["title"], "Allow access?");
-    assert_eq!(permission["params"]["toolCall"]["content"], json!([]));
+    assert_eq!(
+        permission["params"]["toolCall"]["content"],
+        json!([{"type": "content", "content": {"type": "text", "text": "The command needs access."}}])
+    );
     assert_eq!(
         permission["params"]["options"],
         json!([
@@ -597,9 +654,29 @@ fn consecutive_prompts_continue_one_thread() {
     );
     serde_json::to_writer(
         &mut input,
+        &request(
+            permission_id.as_u64().unwrap(),
+            "colliding/editor/request",
+            json!({}),
+        ),
+    )
+    .unwrap();
+    input.write_all(b"\n").unwrap();
+    serde_json::to_writer(
+        &mut input,
         &json!({
             "jsonrpc": "2.0",
-            "id": permission["id"],
+            "method": "session/cancel",
+            "params": {"sessionId": session_id}
+        }),
+    )
+    .unwrap();
+    input.write_all(b"\n").unwrap();
+    serde_json::to_writer(
+        &mut input,
+        &json!({
+            "jsonrpc": "2.0",
+            "id": permission_id,
             "result": {"outcome": {"outcome": "selected", "optionId": "allow_once"}}
         }),
     )
@@ -625,6 +702,9 @@ fn consecutive_prompts_continue_one_thread() {
     let mut line = String::new();
     output.read_line(&mut line).unwrap();
     responses.push(serde_json::from_str(&line).unwrap());
+    let mut line = String::new();
+    output.read_line(&mut line).unwrap();
+    responses.push(serde_json::from_str(&line).unwrap());
     serde_json::to_writer(
         &mut input,
         &request(
@@ -635,13 +715,29 @@ fn consecutive_prompts_continue_one_thread() {
     )
     .unwrap();
     input.write_all(b"\n").unwrap();
+    input.flush().unwrap();
+    let mut line = String::new();
+    output.read_line(&mut line).unwrap();
+    let failed_permission: Value = serde_json::from_str(&line).unwrap();
+    assert_eq!(failed_permission["method"], "session/request_permission");
+    responses.push(failed_permission.clone());
+    serde_json::to_writer(
+        &mut input,
+        &json!({
+            "jsonrpc": "2.0",
+            "id": failed_permission["id"],
+            "result": {"outcome": {"outcome": "selected", "optionId": "reject_once"}}
+        }),
+    )
+    .unwrap();
+    input.write_all(b"\n").unwrap();
     drop(input);
     responses.extend(
         output
             .lines()
             .map(|line| serde_json::from_str(&line.unwrap()).unwrap()),
     );
-    assert_eq!(responses.len(), 6);
+    assert_eq!(responses.len(), 8);
     assert_eq!(responses[0]["method"], "session/update");
     assert_eq!(
         responses[0]["params"]["update"]["content"]["text"],
@@ -650,10 +746,13 @@ fn consecutive_prompts_continue_one_thread() {
     assert_eq!(responses[2]["params"]["update"]["content"]["text"], "reply");
     assert_eq!(responses[3]["id"], 2);
     assert_eq!(responses[3]["result"]["stopReason"], "end_turn");
-    assert_eq!(responses[4]["id"], 3);
-    assert_eq!(responses[4]["result"]["stopReason"], "end_turn");
-    assert_eq!(responses[5]["id"], 4);
-    assert_eq!(responses[5]["error"]["code"], -32000);
+    assert_eq!(responses[4]["id"], permission_id);
+    assert_eq!(responses[4]["error"]["code"], -32601);
+    assert_eq!(responses[5]["id"], 3);
+    assert_eq!(responses[5]["result"]["stopReason"], "end_turn");
+    assert_eq!(responses[6]["method"], "session/request_permission");
+    assert_eq!(responses[7]["id"], 4);
+    assert_eq!(responses[7]["error"]["code"], -32000);
     assert!(child.wait().unwrap().success());
     server.join().unwrap();
     std::fs::remove_dir_all(runtime).unwrap();
