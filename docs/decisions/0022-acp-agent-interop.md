@@ -268,3 +268,51 @@ as the planned first-party extension.
 - The implementation will pin `agent-client-protocol` 2.0.0 under ADR 0019.
 - The release claims Zed and JetBrains IDEs after release validation.
 - This decision adds no dependency or code.
+
+## Amendment — 2026-08-03: first `session/prompt` translation
+
+The adapter maps `run.completed` to a successful `session/prompt` response
+with `StopReason::EndTurn`. It maps `run.cancelled` to a successful response
+with `StopReason::Cancelled`. These are the pinned SDK's v1
+[`end_turn` and `cancelled` stop-reason values][sdk-stop-reason]. The adapter
+maps `run.failed` to an ACP `InternalError` response and includes only a
+redacted failure message. The SDK defines no failed stop reason. The rejected
+alternative was `StopReason::Refusal`, whose SDK meaning excludes the prompt
+from future context and misrepresents a runtime failure.
+
+Until the permission-gate bridge exists, the adapter answers every
+`PermissionPending` event with `deny` through the matching attach
+`permission.answer` operation. It acknowledges the event only after the
+runtime accepts that denial. This answer grants no one-time or durable
+authority under this ADR's gate rules. The rejected alternative was to wait
+for an editor answer, because no bridge could deliver or validate that answer.
+
+The adapter keeps a process-local table from each ACP session ID to its
+canonical paired workspace. `session/new` inserts the mapping only after the
+runtime authorizes and pairs that workspace. Each later session call must find
+the ID and use the same workspace. An unknown ID returns the SDK's ACP
+`ResourceNotFound` error and starts no run. The rejected alternative was to
+derive scope from each request, because an ACP session ID and client-supplied
+`cwd` grant no authority.
+
+The first slice does not translate `session/cancel` to attach `run.cancel`.
+The adapter ignores that notification, as ACP requires for an unsupported
+notification. Ignoring it does not cancel or detach the active prompt. The
+prompt keeps streaming until the runtime emits a terminal event. The rejected
+alternative was a partial cancellation bridge without the run binding and
+race handling needed to target one current run.
+
+For each streamed event with a `session/update` projection, the adapter sends
+that notification before it acknowledges the event with `run.cursor_ack`. A
+send failure leaves the event unacknowledged for replay. This follows ADR
+0009's rule that a consumer persists its cursor only after it processes the
+event. The rejected alternative was to acknowledge first, which could lose an
+update if the ACP connection failed between those actions.
+
+The first implementation slice is **ACP prompt translation**. It adds the
+process-local session table, starts a run for a bound prompt, translates its
+updates and terminal result, denies pending permissions, and acknowledges
+each event in the order above. It does not add cancellation or the permission
+gate bridge. This amendment changes no code.
+
+[sdk-stop-reason]: https://docs.rs/agent-client-protocol/2.0.0/agent_client_protocol/schema/v1/enum.StopReason.html
