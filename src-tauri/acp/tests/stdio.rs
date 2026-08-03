@@ -944,7 +944,7 @@ fn consecutive_prompts_continue_one_thread() {
                 "subscription_id": subscription_id,
                 "run_id": run_id,
                 "first_available_run_seq": 2,
-                "current_run_seq": 6,
+                "current_run_seq": 8,
                 "window": {"max_events": 16, "max_bytes": 1048576, "max_text_bytes": 262144}
             }),
         );
@@ -960,8 +960,26 @@ fn consecutive_prompts_continue_one_thread() {
                 }),
             ),
             (
-                EventName::PermissionPending,
+                EventName::RunEvent,
                 3,
+                json!({
+                    "event_type": "tool.effect.started", "event_version": 1,
+                    "recorded_at": "2026-08-03T00:00:02Z",
+                    "payload": {"withheld": false, "effect_id": "tool-1", "display_name": "Search"}
+                }),
+            ),
+            (
+                EventName::RunEvent,
+                4,
+                json!({
+                    "event_type": "tool.effect.completed", "event_version": 1,
+                    "recorded_at": "2026-08-03T00:00:03Z",
+                    "payload": {"withheld": false, "effect_id": "tool-1"}
+                }),
+            ),
+            (
+                EventName::PermissionPending,
+                5,
                 json!({
                     "gate_id": "gate-1", "kind": "confirm", "title": "Allow access?",
                     "message": "The command needs access."
@@ -969,7 +987,7 @@ fn consecutive_prompts_continue_one_thread() {
             ),
             (
                 EventName::RunEvent,
-                4,
+                6,
                 json!({
                     "event_type": "model.stream.delta", "event_version": 1,
                     "recorded_at": "2026-08-03T00:00:02Z", "payload": {"withheld": true}
@@ -977,7 +995,7 @@ fn consecutive_prompts_continue_one_thread() {
             ),
             (
                 EventName::RunEvent,
-                5,
+                7,
                 json!({
                     "event_type": "model.stream.delta", "event_version": 1,
                     "recorded_at": "2026-08-03T00:00:03Z", "payload": {"withheld": false, "text": "reply"}
@@ -985,7 +1003,7 @@ fn consecutive_prompts_continue_one_thread() {
             ),
             (
                 EventName::RunEvent,
-                6,
+                8,
                 json!({
                     "event_type": "run.completed", "event_version": 1,
                     "recorded_at": "2026-08-03T00:00:04Z", "payload": {"withheld": true}
@@ -1008,8 +1026,8 @@ fn consecutive_prompts_continue_one_thread() {
                 .unwrap();
         }
 
-        for sequence in 2..=6 {
-            if sequence == 3 {
+        for sequence in 2..=8 {
+            if sequence == 5 {
                 let cancel = read_frame(&mut stream);
                 assert_eq!(cancel["operation"], "run.cancel");
                 assert_eq!(cancel["body"]["run_id"], run_id);
@@ -1217,12 +1235,12 @@ fn consecutive_prompts_continue_one_thread() {
     input.write_all(b"\n").unwrap();
     input.flush().unwrap();
     let mut responses: Vec<Value> = Vec::new();
-    for _ in 0..2 {
+    for _ in 0..4 {
         let mut line = String::new();
         output.read_line(&mut line).unwrap();
         responses.push(serde_json::from_str(&line).unwrap());
     }
-    let permission = &responses[1];
+    let permission = &responses[3];
     let permission_id = permission["id"].clone();
     assert_eq!(permission["method"], "session/request_permission");
     assert_eq!(permission["params"]["sessionId"], session_id);
@@ -1324,22 +1342,34 @@ fn consecutive_prompts_continue_one_thread() {
             .lines()
             .map(|line| serde_json::from_str(&line.unwrap()).unwrap()),
     );
-    assert_eq!(responses.len(), 8);
+    assert_eq!(responses.len(), 10);
     assert_eq!(responses[0]["method"], "session/update");
     assert_eq!(
         responses[0]["params"]["update"]["content"]["text"],
         "First "
     );
-    assert_eq!(responses[2]["params"]["update"]["content"]["text"], "reply");
-    assert_eq!(responses[3]["id"], 2);
-    assert_eq!(responses[3]["result"]["stopReason"], "end_turn");
-    assert_eq!(responses[4]["id"], permission_id);
-    assert_eq!(responses[4]["error"]["code"], -32601);
-    assert_eq!(responses[5]["id"], 3);
+    assert_eq!(
+        responses[1]["params"]["update"],
+        json!({
+            "sessionUpdate": "tool_call", "toolCallId": "tool-1", "title": "Search"
+        })
+    );
+    assert_eq!(
+        responses[2]["params"]["update"],
+        json!({
+            "sessionUpdate": "tool_call_update", "toolCallId": "tool-1", "status": "completed"
+        })
+    );
+    assert_eq!(responses[4]["params"]["update"]["content"]["text"], "reply");
+    assert_eq!(responses[5]["id"], 2);
     assert_eq!(responses[5]["result"]["stopReason"], "end_turn");
-    assert_eq!(responses[6]["method"], "session/request_permission");
-    assert_eq!(responses[7]["id"], 4);
-    assert_eq!(responses[7]["error"]["code"], -32000);
+    assert_eq!(responses[6]["id"], permission_id);
+    assert_eq!(responses[6]["error"]["code"], -32601);
+    assert_eq!(responses[7]["id"], 3);
+    assert_eq!(responses[7]["result"]["stopReason"], "end_turn");
+    assert_eq!(responses[8]["method"], "session/request_permission");
+    assert_eq!(responses[9]["id"], 4);
+    assert_eq!(responses[9]["error"]["code"], -32000);
     assert!(child.wait().unwrap().success());
     server.join().unwrap();
     let record: Value = serde_json::from_slice(
