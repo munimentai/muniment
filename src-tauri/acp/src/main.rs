@@ -244,13 +244,11 @@ fn replayed_tool_update(
     text: Option<String>,
     status: ToolCallStatus,
 ) -> SessionUpdate {
-    SessionUpdate::ToolCallUpdate(ToolCallUpdate::new(
-        format!("{session_id}:{position}"),
-        ToolCallUpdateFields::new()
+    SessionUpdate::ToolCall(
+        ToolCall::new(format!("{session_id}:{position}"), text.unwrap_or_default())
             .status(status)
-            .title(text.unwrap_or_default())
             .content(Vec::new()),
-    ))
+    )
 }
 
 fn live_tool_update(event: &RedactedRunEvent) -> Option<SessionUpdate> {
