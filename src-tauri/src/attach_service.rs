@@ -914,6 +914,78 @@ mod tests {
     }
 
     #[cfg(target_os = "linux")]
+    #[test]
+    fn attach_thread_create_replays_and_rejects_changed_workspace() {
+        let mut service = DesktopAttachService {
+            boundaries: FakeRunStartBoundaries::accepting(),
+            idempotency: IdempotencyStore::open(":memory:").unwrap(),
+            home: PathBuf::new(),
+            workspace_contexts: Arc::new(Mutex::new(HashMap::new())),
+            client_credentials: Arc::new(Mutex::new(HashMap::new())),
+            credential_path: None,
+            client_identity: Some("default".into()),
+        };
+        let key = Id::new("018f0000-0000-7000-8000-000000000002").unwrap();
+        let companion = CompanionProvenance {
+            profile: "default".into(),
+            companion_kind: "cli".into(),
+            companion_version: "1.2.3".into(),
+            peer_uid: 1000,
+            peer_pid: 42,
+        };
+
+        let first = service
+            .create_thread(
+                "workspace-a",
+                &Id::new("018f0000-0000-7000-8000-000000000001").unwrap(),
+                &key,
+                companion.clone(),
+            )
+            .unwrap();
+        let replay = service
+            .create_thread(
+                "workspace-a",
+                &Id::new("018f0000-0000-7000-8000-000000000003").unwrap(),
+                &key,
+                companion.clone(),
+            )
+            .unwrap();
+        let conflict = service
+            .create_thread(
+                "workspace-b",
+                &Id::new("018f0000-0000-7000-8000-000000000004").unwrap(),
+                &key,
+                companion,
+            )
+            .unwrap_err();
+
+        assert_eq!(replay.thread_id, first.thread_id);
+        assert_eq!(conflict.code(), ErrorCode::IdempotencyConflict);
+        let mut journal = service.boundaries.journal.lock().unwrap();
+        assert_eq!(journal.last_thread_seq(&first.thread_id).unwrap(), 1);
+        let page = ThreadListService::list_threads(
+            &mut *journal,
+            "workspace-a",
+            ThreadListRequest {
+                cursor: None,
+                limit: 50,
+            },
+        )
+        .unwrap();
+        assert_eq!(page.threads.len(), 1);
+        let other_page = ThreadListService::list_threads(
+            &mut *journal,
+            "workspace-b",
+            ThreadListRequest {
+                cursor: None,
+                limit: 50,
+            },
+        )
+        .unwrap();
+        assert!(other_page.threads.is_empty());
+    }
+
+    #[cfg(target_os = "linux")]
     fn cancel_request(
         service: &mut DesktopAttachService<FakeRunStartBoundaries>,
         workspace: &str,

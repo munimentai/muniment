@@ -1501,6 +1501,10 @@ impl AuthorizedClient {
         Err(ClientError::UnsupportedPlatform)
     }
 
+    pub fn create_thread(&mut self) -> Result<ThreadCreateAccepted, ClientError> {
+        Err(ClientError::UnsupportedPlatform)
+    }
+
     pub fn open_thread(
         &mut self,
         _thread_id: &str,
