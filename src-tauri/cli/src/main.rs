@@ -841,6 +841,8 @@ mod tests {
             event_version: 1,
             recorded_at: "2026-07-18T15:50:00Z".into(),
             text: None,
+            effect_id: None,
+            display_name: None,
             receipt: None,
         };
         for (event_type, detail) in [
