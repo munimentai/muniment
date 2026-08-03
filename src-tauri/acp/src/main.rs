@@ -5,7 +5,7 @@ use agent_client_protocol::schema::{
         PermissionOption, PermissionOptionKind, PromptRequest, PromptResponse,
         RequestPermissionOutcome, RequestPermissionRequest, RequestPermissionResponse,
         SessionNotification, SessionUpdate, StopReason, TextContent, ToolCallContent,
-        ToolCallUpdate, ToolCallUpdateFields,
+        ToolCallStatus, ToolCallUpdate, ToolCallUpdateFields,
     },
     ProtocolVersion,
 };
@@ -187,12 +187,41 @@ fn load_session(id: Value, params: Option<&Value>, output: &mut impl Write) -> V
         loop {
             let page = client.open_thread(&record.thread_id, cursor.as_deref())?;
             for entry in page.entries {
+                let position = updates.len();
                 let content = ContentChunk::new(ContentBlock::Text(TextContent::new(
-                    entry.text.unwrap_or_default(),
+                    entry.text.clone().unwrap_or_default(),
                 )));
                 let update = match entry.kind.as_str() {
                     "user_message" | "attachment" => SessionUpdate::UserMessageChunk(content),
                     "assistant_message" => SessionUpdate::AgentMessageChunk(content),
+                    kind if kind.starts_with("tool_running:") => {
+                        let effect_id = &kind["tool_running:".len()..];
+                        Id::new(effect_id).map_err(|_| ClientError::UnexpectedMessage)?;
+                        replayed_tool_update(
+                            &session_id,
+                            position,
+                            entry.text,
+                            ToolCallStatus::Pending,
+                        )
+                    }
+                    "tool_completed" => replayed_tool_update(
+                        &session_id,
+                        position,
+                        entry.text,
+                        ToolCallStatus::Completed,
+                    ),
+                    "tool_failed" => replayed_tool_update(
+                        &session_id,
+                        position,
+                        entry.text,
+                        ToolCallStatus::Failed,
+                    ),
+                    "permission_pending" => replayed_tool_update(
+                        &session_id,
+                        position,
+                        entry.text,
+                        ToolCallStatus::Pending,
+                    ),
                     _ => return Err(ClientError::UnexpectedMessage),
                 };
                 updates.push(update);
@@ -207,6 +236,21 @@ fn load_session(id: Value, params: Option<&Value>, output: &mut impl Write) -> V
     })();
 
     load_session_response(id, result)
+}
+
+fn replayed_tool_update(
+    session_id: &str,
+    position: usize,
+    text: Option<String>,
+    status: ToolCallStatus,
+) -> SessionUpdate {
+    SessionUpdate::ToolCallUpdate(ToolCallUpdate::new(
+        format!("{session_id}:{position}"),
+        ToolCallUpdateFields::new()
+            .status(status)
+            .title(text.unwrap_or_default())
+            .content(Vec::new()),
+    ))
 }
 
 fn send_load_updates(
@@ -1019,7 +1063,7 @@ fn initialize(id: Value, params: Option<&Value>) -> Value {
         });
     }
 
-    let capabilities = AgentCapabilities::new().load_session(false);
+    let capabilities = AgentCapabilities::new().load_session(true);
     let result = InitializeResponse::new(ProtocolVersion::V1).agent_capabilities(capabilities);
     json!({"jsonrpc": "2.0", "id": id, "result": result})
 }

@@ -60,7 +60,7 @@ fn initializes_with_only_the_supported_capabilities() {
     assert_eq!(response["id"], 1);
     assert_eq!(response["result"]["protocolVersion"], 1);
     let capabilities = &response["result"]["agentCapabilities"];
-    assert_eq!(capabilities["loadSession"], false);
+    assert_eq!(capabilities["loadSession"], true);
     assert!(capabilities.get("modes").is_none());
     assert!(capabilities.get("configOptions").is_none());
     assert!(capabilities.get("fs").is_none());
@@ -315,7 +315,11 @@ fn rejected_scripted_load(case: &str) -> Vec<Value> {
             &open,
             json!({
                 "thread_id": thread_id,
-                "entries": [{"run_seq": 1, "kind": "tool_call", "text": "hidden"}]
+                "entries": [{
+                    "run_seq": 1,
+                    "kind": if case == "effect" { "tool_running:not-a-uuid" } else { "tool_call" },
+                    "text": "hidden"
+                }]
             }),
         );
     });
@@ -376,6 +380,15 @@ fn load_rejects_an_unknown_entry_kind_without_updates() {
 
 #[cfg(target_os = "linux")]
 #[test]
+fn load_rejects_an_invalid_tool_effect_id_without_updates() {
+    assert_load_failed_without_updates(
+        &rejected_scripted_load("effect"),
+        "Muniment runtime sent an invalid pairing message",
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
 fn load_rejects_a_page_failure_without_updates() {
     assert_load_failed_without_updates(
         &rejected_scripted_load("page"),
@@ -385,7 +398,7 @@ fn load_rejects_a_page_failure_without_updates() {
 
 #[cfg(target_os = "linux")]
 #[test]
-fn load_replays_text_entries_across_pages_before_responding() {
+fn load_replays_all_entry_kinds_across_pages_before_responding() {
     use muniment_attach::{
         authorized_with_client_credential, encode_frame, welcome, Id, Protocol, Response, Success,
     };
@@ -494,7 +507,9 @@ fn load_replays_text_entries_across_pages_before_responding() {
                 "thread_id": thread_id,
                 "entries": [
                     {"run_seq": 1, "kind": "user_message", "text": "Question"},
-                    {"run_seq": 2, "kind": "assistant_message", "text": "Answer"}
+                    {"run_seq": 2, "kind": "assistant_message", "text": "Answer"},
+                    {"run_seq": 3, "kind": "tool_running:01900000-0000-7000-8000-000000000040", "text": "Read file"},
+                    {"run_seq": 4, "kind": "tool_completed", "text": "Ran command"}
                 ],
                 "next_cursor": "page-2"
             }),
@@ -507,8 +522,10 @@ fn load_replays_text_entries_across_pages_before_responding() {
             json!({
                 "thread_id": thread_id,
                 "entries": [
-                    {"run_seq": 3, "kind": "attachment", "text": "report.txt"},
-                    {"run_seq": 4, "kind": "assistant_message"}
+                    {"run_seq": 5, "kind": "attachment", "text": "report.txt"},
+                    {"run_seq": 6, "kind": "tool_failed"},
+                    {"run_seq": 7, "kind": "permission_pending", "text": "Allow write"},
+                    {"run_seq": 8, "kind": "assistant_message"}
                 ]
             }),
         );
@@ -520,47 +537,97 @@ fn load_replays_text_entries_across_pages_before_responding() {
         .env("XDG_CONFIG_HOME", &config);
     let responses = exchange_with_command(
         command,
-        &[request(
-            1,
-            "session/load",
-            json!({"sessionId": session_id, "cwd": workspace, "mcpServers": []}),
-        )],
+        &[
+            initialize_request(),
+            request(
+                2,
+                "session/load",
+                json!({"sessionId": session_id, "cwd": workspace, "mcpServers": []}),
+            ),
+        ],
     );
     server.join().unwrap();
 
-    assert_eq!(responses.len(), 5);
+    assert_eq!(responses.len(), 10);
     assert_eq!(
-        responses[0]["params"]["update"],
+        responses[0]["result"]["agentCapabilities"]["loadSession"],
+        true
+    );
+    assert_eq!(
+        responses[1]["params"]["update"],
         json!({
             "sessionUpdate": "user_message_chunk",
             "content": {"type": "text", "text": "Question"}
         })
     );
     assert_eq!(
-        responses[1]["params"]["update"],
+        responses[2]["params"]["update"],
         json!({
             "sessionUpdate": "agent_message_chunk",
             "content": {"type": "text", "text": "Answer"}
         })
     );
     assert_eq!(
-        responses[2]["params"]["update"],
+        responses[3]["params"]["update"],
+        json!({
+            "sessionUpdate": "tool_call_update",
+            "toolCallId": format!("{session_id}:2"),
+            "status": "pending",
+            "title": "Read file",
+            "content": []
+        })
+    );
+    assert_eq!(
+        responses[4]["params"]["update"],
+        json!({
+            "sessionUpdate": "tool_call_update",
+            "toolCallId": format!("{session_id}:3"),
+            "status": "completed",
+            "title": "Ran command",
+            "content": []
+        })
+    );
+    assert_eq!(
+        responses[5]["params"]["update"],
         json!({
             "sessionUpdate": "user_message_chunk",
             "content": {"type": "text", "text": "report.txt"}
         })
     );
     assert_eq!(
-        responses[3]["params"]["update"],
+        responses[6]["params"]["update"],
+        json!({
+            "sessionUpdate": "tool_call_update",
+            "toolCallId": format!("{session_id}:5"),
+            "status": "failed",
+            "title": "",
+            "content": []
+        })
+    );
+    assert_eq!(
+        responses[7]["params"]["update"],
+        json!({
+            "sessionUpdate": "tool_call_update",
+            "toolCallId": format!("{session_id}:6"),
+            "status": "pending",
+            "title": "Allow write",
+            "content": []
+        })
+    );
+    assert_eq!(
+        responses[8]["params"]["update"],
         json!({
             "sessionUpdate": "agent_message_chunk",
             "content": {"type": "text", "text": ""}
         })
     );
-    assert_eq!(responses[4]["result"], json!({}));
-    assert!(responses[..4]
+    assert_eq!(responses[9]["result"], json!({}));
+    assert!(responses[1..9]
         .iter()
         .all(|response| response["method"] == "session/update"));
+    assert!(responses
+        .iter()
+        .all(|response| response["method"] != "session/request_permission"));
     std::fs::remove_dir_all(runtime).unwrap();
 }
 
