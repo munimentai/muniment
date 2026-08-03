@@ -26,6 +26,11 @@ enum PromptFailure {
     Run,
 }
 
+struct Session {
+    workspace: String,
+    thread_id: Option<String>,
+}
+
 impl From<ClientError> for PromptFailure {
     fn from(error: ClientError) -> Self {
         Self::Client(error)
@@ -58,7 +63,7 @@ fn serve(input: impl BufRead, mut output: impl Write) -> io::Result<()> {
 
 fn response(
     message: Value,
-    sessions: &mut HashMap<String, String>,
+    sessions: &mut HashMap<String, Session>,
     output: &mut impl Write,
 ) -> Option<Value> {
     let object = message.as_object()?;
@@ -83,7 +88,11 @@ fn response(
     }
 }
 
-fn new_session(id: Value, params: Option<&Value>, sessions: &mut HashMap<String, String>) -> Value {
+fn new_session(
+    id: Value,
+    params: Option<&Value>,
+    sessions: &mut HashMap<String, Session>,
+) -> Value {
     let Some(params) = params else {
         return invalid_params(id, "session/new requires an absolute cwd");
     };
@@ -120,7 +129,13 @@ fn new_session(id: Value, params: Option<&Value>, sessions: &mut HashMap<String,
     match result {
         Ok(onboarded) => {
             let session_id = uuid::Uuid::now_v7().to_string();
-            sessions.insert(session_id.clone(), onboarded.opened_directory);
+            sessions.insert(
+                session_id.clone(),
+                Session {
+                    workspace: onboarded.opened_directory,
+                    thread_id: None,
+                },
+            );
             let result = NewSessionResponse::new(session_id);
             json!({"jsonrpc": "2.0", "id": id, "result": result})
         }
@@ -135,7 +150,7 @@ fn new_session(id: Value, params: Option<&Value>, sessions: &mut HashMap<String,
 fn prompt(
     id: Value,
     params: Option<&Value>,
-    sessions: &HashMap<String, String>,
+    sessions: &mut HashMap<String, Session>,
     output: &mut impl Write,
 ) -> Value {
     let Some(params) = params else {
@@ -145,13 +160,15 @@ fn prompt(
         return invalid_params(id, "session/prompt parameters are invalid");
     };
     let session_id = request.session_id.0.to_string();
-    let Some(workspace) = sessions.get(&session_id) else {
+    let Some(session) = sessions.get(&session_id) else {
         return json!({
             "jsonrpc": "2.0",
             "id": id,
             "error": {"code": -32002, "message": "Resource not found"}
         });
     };
+    let workspace = session.workspace.clone();
+    let thread_id = session.thread_id.clone();
     let mut text = String::new();
     for block in request.prompt {
         match block {
@@ -176,7 +193,25 @@ fn prompt(
         )?;
         persist_authorized_client_credential(client.authorized_client_credential())
             .map_err(|_| ClientError::UnexpectedMessage)?;
-        let accepted = client.start_run_in_workspace(&text, None, Some(workspace))?;
+        let accepted = match client.start_run_in_workspace_thread(
+            &text,
+            None,
+            Some(&workspace),
+            thread_id.as_deref(),
+        ) {
+            Err(ClientError::ThreadNotFound) if thread_id.is_some() => {
+                sessions
+                    .get_mut(&session_id)
+                    .expect("session exists")
+                    .thread_id = None;
+                client.start_run_in_workspace_thread(&text, None, Some(&workspace), None)?
+            }
+            result => result?,
+        };
+        sessions
+            .get_mut(&session_id)
+            .expect("session exists")
+            .thread_id = Some(accepted.thread_id.clone());
         client.subscribe_run(&accepted.run_id, accepted.committed_seq)?;
         loop {
             let (run_seq, terminal) = match client.read_run_stream_message()? {
@@ -421,6 +456,7 @@ fn pairing_failure(error: ClientError) -> &'static str {
     match error {
         ClientError::UnsupportedPlatform => "Muniment runtime attach is unsupported",
         ClientError::AuthorizationExpired => "Muniment runtime attach authorization expired",
+        ClientError::ThreadNotFound => "Muniment runtime could not find the thread",
         ClientError::RequestRejected => "Muniment runtime rejected workspace registration",
         ClientError::DesktopFailed => "Muniment runtime failed workspace registration",
         ClientError::RuntimeDirectoryMissing => "Muniment runtime directory is unavailable",
