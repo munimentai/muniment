@@ -325,6 +325,7 @@ window.__TAURI__ = {
           approved_at: '2026-08-04T12:00:00Z',
         },
       ]
+      if (command === 'attach_revoke_companion') return null
       return null
     },
   },
