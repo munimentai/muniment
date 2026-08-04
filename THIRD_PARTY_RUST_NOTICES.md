@@ -101,7 +101,6 @@ Each entry gives the crate name, exact version, and license expression from `car
 - `darling_macro` 0.23.0 — MIT
 - `dasp_sample` 0.11.0 — MIT OR Apache-2.0
 - `dbus` 0.9.12 — Apache-2.0/MIT
-- `dbus-secret-service` 4.1.0 — MIT OR Apache-2.0
 - `der` 0.7.10 — Apache-2.0 OR MIT
 - `deranged` 0.5.8 — MIT OR Apache-2.0
 - `derive_arbitrary` 1.4.2 — MIT OR Apache-2.0
@@ -146,10 +145,8 @@ Each entry gives the crate name, exact version, and license expression from `car
 - `flate2` 1.1.9 — MIT OR Apache-2.0
 - `fnv` 1.0.7 — Apache-2.0 / MIT
 - `foldhash` 0.2.0 — Zlib
-- `foreign-types` 0.3.2 — MIT/Apache-2.0
 - `foreign-types` 0.5.0 — MIT/Apache-2.0
 - `foreign-types-macros` 0.2.3 — MIT/Apache-2.0
-- `foreign-types-shared` 0.1.1 — MIT/Apache-2.0
 - `foreign-types-shared` 0.3.1 — MIT/Apache-2.0
 - `form_urlencoded` 1.2.2 — MIT OR Apache-2.0
 - `fs-set-times` 0.20.3 — Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT
@@ -250,6 +247,7 @@ Each entry gives the crate name, exact version, and license expression from `car
 - `libloading` 0.7.4 — ISC
 - `libredox` 0.1.18 — MIT
 - `libsqlite3-sys` 0.30.1 — MIT
+- `linux-keyutils` 0.2.5 — Apache-2.0 OR MIT
 - `linux-raw-sys` 0.12.1 — Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT
 - `litemap` 0.8.2 — Unicode-3.0
 - `lock_api` 0.4.14 — MIT OR Apache-2.0
@@ -295,11 +293,7 @@ Each entry gives the crate name, exact version, and license expression from `car
 - `objc2-web-kit` 0.3.2 — Zlib OR Apache-2.0 OR MIT
 - `once_cell` 1.21.4 — MIT OR Apache-2.0
 - `open` 5.4.0 — MIT
-- `openssl` 0.10.81 — Apache-2.0
-- `openssl-macros` 0.1.1 — MIT/Apache-2.0
 - `openssl-probe` 0.1.6 — MIT/Apache-2.0
-- `openssl-src` 300.6.1+3.6.3 — MIT/Apache-2.0
-- `openssl-sys` 0.9.117 — MIT
 - `option-ext` 0.2.0 — MPL-2.0
 - `ordered-stream` 0.2.0 — MIT OR Apache-2.0
 - `pango` 0.18.3 — MIT
