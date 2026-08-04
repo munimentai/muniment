@@ -1,5 +1,28 @@
 import path from 'node:path'
-import { access, appendFile, readFile } from 'node:fs/promises'
+import { execFile } from 'node:child_process'
+import { promisify } from 'node:util'
+import { access, appendFile, mkdir, readFile } from 'node:fs/promises'
+
+const run = promisify(execFile)
+
+async function chooseFolder(home) {
+  const { stdout } = await run('timeout', [
+    '10', 'xdotool', 'search', '--sync', '--onlyvisible', '--name',
+    '(Select|Open|Choose|Pick).*([Ff]older|[Dd]irectory)',
+  ])
+  const window = stdout.trim().split('\n').at(-1)
+  await run('xdotool', ['windowfocus', '--sync', window])
+  await run('xdotool', ['key', '--window', window, '--clearmodifiers', 'ctrl+l'])
+  await run('xdotool', ['type', '--window', window, '--clearmodifiers', '--delay', '1', home])
+  await run('xdotool', ['key', '--window', window, '--clearmodifiers', 'Return'])
+  await new Promise((resolve) => setTimeout(resolve, 500))
+  try {
+    await run('xdotool', ['getwindowname', window])
+  } catch {
+    return
+  }
+  await run('xdotool', ['key', '--window', window, '--clearmodifiers', 'alt+s'])
+}
 
 describe('installed nightly model-ready onboarding', () => {
   it('chooses an isolated Home and scaffolds its README files', async () => {
@@ -43,23 +66,12 @@ describe('installed nightly model-ready onboarding', () => {
     try { await access(home) } catch { homeExists = false }
     expect(homeExists).toBe(false)
 
-    await browser.execute((selectedHome) => {
-      window.__MUNIMENT_E2E_DIALOG_INVOKE__ = window.__TAURI_INTERNALS__.invoke
-      window.__TAURI_INTERNALS__.invoke = (command, args, options) => command === 'plugin:dialog|open'
-        ? Promise.resolve(selectedHome)
-        : window.__MUNIMENT_E2E_DIALOG_INVOKE__(command, args, options)
-    }, home)
-    try {
-      await (await $('[data-testid="onboarding-picker"]')).click()
-      await browser.waitUntil(async () => await location.getText() === home, {
-        timeoutMsg: 'the Home picker did not select the isolated Home',
-      })
-    } finally {
-      await browser.execute(() => {
-        window.__TAURI_INTERNALS__.invoke = window.__MUNIMENT_E2E_DIALOG_INVOKE__
-        delete window.__MUNIMENT_E2E_DIALOG_INVOKE__
-      })
-    }
+    await mkdir(home, { recursive: true })
+    await (await $('[data-testid="onboarding-picker"]')).click()
+    await chooseFolder(home)
+    await browser.waitUntil(async () => await location.getText() === home, {
+      timeoutMsg: 'the Home picker did not select the isolated Home',
+    })
     expect(await location.getText()).toBe(home)
     await (await $('[data-testid="onboarding-confirm"]')).click()
     const skipImport = await $('button=Continue without importing')
