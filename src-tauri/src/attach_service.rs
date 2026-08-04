@@ -887,7 +887,6 @@ fn load_client_credentials(
                 .all(|byte| byte.is_ascii_hexdigit())
             || entry.claimed_kind != bounded_claim(&entry.claimed_kind)
             || entry.claimed_version != bounded_claim(&entry.claimed_version)
-            || (versioned && entry.approved_at.is_none())
             || entry.approved_at.as_ref().is_some_and(|approved_at| {
                 chrono::DateTime::parse_from_rfc3339(approved_at)
                     .map(|time| time.offset().local_minus_utc() != 0)
@@ -2226,6 +2225,8 @@ mod tests {
         let path = root.join("credentials.json");
         let identity = "018f0000-0000-7000-8000-000000000099";
         let credential = "ab".repeat(32);
+        let new_identity = "018f0000-0000-7000-8000-000000000100";
+        let new_credential = "cd".repeat(32);
         std::fs::create_dir_all(&root).unwrap();
         std::fs::write(
             &path,
@@ -2250,7 +2251,7 @@ mod tests {
             home: root.join("home"),
             workspace_contexts: state.workspace_contexts,
             client_credentials: state.client_credentials,
-            credential_path: Some(path),
+            credential_path: Some(path.clone()),
             client_identity: None,
         };
         assert_eq!(
@@ -2259,6 +2260,52 @@ mod tests {
                 .unwrap(),
             credential
         );
+        assert_eq!(
+            service
+                .authorize_client(new_identity, None, &new_credential, "desktop", "1.0.0")
+                .unwrap(),
+            new_credential
+        );
+        drop(service);
+
+        let state = AttachListenerState::load(&path).unwrap();
+        assert_eq!(
+            state.list_companions().unwrap(),
+            vec![
+                AuthorizedCompanion {
+                    identity: identity.into(),
+                    claimed_kind: "unknown".into(),
+                    claimed_version: "unknown".into(),
+                    approved_at: None,
+                },
+                AuthorizedCompanion {
+                    identity: new_identity.into(),
+                    claimed_kind: "desktop".into(),
+                    claimed_version: "1.0.0".into(),
+                    approved_at: Some(
+                        load_client_credentials(&path).unwrap()[new_identity]
+                            .approved_at
+                            .clone()
+                            .unwrap(),
+                    ),
+                },
+            ]
+        );
+        let mut restarted_service = DesktopAttachService {
+            boundaries: FakeRunStartBoundaries::accepting(),
+            idempotency: IdempotencyStore::open(":memory:").unwrap(),
+            home: root.join("home"),
+            workspace_contexts: state.workspace_contexts,
+            client_credentials: state.client_credentials,
+            credential_path: Some(path),
+            client_identity: None,
+        };
+        assert!(restarted_service
+            .authorize_client(identity, Some(&credential), "", "changed", "9.9.9")
+            .is_ok());
+        assert!(restarted_service
+            .authorize_client(new_identity, Some(&new_credential), "", "changed", "9.9.9",)
+            .is_ok());
         std::fs::remove_dir_all(root).unwrap();
     }
 
