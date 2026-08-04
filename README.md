@@ -7,6 +7,8 @@ implementation status.
 
 See [THREAT_MODEL.md](THREAT_MODEL.md) for the desktop runtime trust boundary.
 
+Configure the Linux ACP adapter in [Zed or JetBrains](docs/acp-editors.md).
+
 ## Build
 
 ```sh
