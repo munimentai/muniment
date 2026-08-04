@@ -2,6 +2,7 @@
   import { onMount, tick } from 'svelte'
 
   let { title, children, onDecision } = $props()
+  let dialogPanel
   let denyButton
   let pending = $state(false)
 
@@ -10,9 +11,28 @@
     void tick().then(() => denyButton?.focus())
 
     const onKeydown = (event) => {
-      if (event.key !== 'Escape' || pending) return
-      event.preventDefault()
-      void decide(false)
+      if (event.key === 'Escape' && !pending) {
+        event.preventDefault()
+        void decide(false)
+        return
+      }
+      if (event.key !== 'Tab') return
+
+      const controls = [...dialogPanel.querySelectorAll('button:not(:disabled)')]
+      if (controls.length === 0) {
+        event.preventDefault()
+        return
+      }
+
+      const first = controls[0]
+      const last = controls.at(-1)
+      if (event.shiftKey && (document.activeElement === first || !dialogPanel.contains(document.activeElement))) {
+        event.preventDefault()
+        last.focus()
+      } else if (!event.shiftKey && (document.activeElement === last || !dialogPanel.contains(document.activeElement))) {
+        event.preventDefault()
+        first.focus()
+      }
     }
     document.addEventListener('keydown', onKeydown)
 
@@ -30,7 +50,7 @@
 </script>
 
 <div class="dialog-backdrop">
-  <div class="dialog-panel" role="dialog" aria-modal="true" aria-labelledby="confirm-dialog-title">
+  <div bind:this={dialogPanel} class="dialog-panel" role="dialog" aria-modal="true" aria-labelledby="confirm-dialog-title">
     <h2 id="confirm-dialog-title">{title}</h2>
     <div class="dialog-copy">{@render children()}</div>
     <div class="dialog-actions">

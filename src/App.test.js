@@ -317,6 +317,24 @@ describe('pairing decisions', () => {
   })
 
   it.each([
+    ['forward', 'Allow', false, 'Deny'],
+    ['reverse', 'Deny', true, 'Allow'],
+  ])('keeps %s Tab movement inside the pairing dialog', async (_, start, shiftKey, destination) => {
+    render(App)
+    await waitFor(() => expect(pairingListener).toBeDefined())
+
+    pairingListener({ payload: { challenge: 'challenge-focus' } })
+    const dialog = await screen.findByRole('dialog')
+    await waitFor(() => expect(within(dialog).getByRole('button', { name: 'Deny' })).toHaveFocus())
+    const startButton = within(dialog).getByRole('button', { name: start })
+    startButton.focus()
+
+    await fireEvent.keyDown(document, { key: 'Tab', shiftKey })
+
+    expect(within(dialog).getByRole('button', { name: destination })).toHaveFocus()
+  })
+
+  it.each([
     ['missing', {}],
     ['empty', { claimed_kind: '', claimed_version: '   ' }],
     ['over-long', { claimed_kind: 'x'.repeat(81), claimed_version: '1.0.0' }],
