@@ -4258,6 +4258,7 @@ describe('signed-in access popover', () => {
       'appearance-heading',
       'entitlements-heading',
       'devices-heading',
+      'companions-heading',
       'voice-heading',
     ])
     expect(content.querySelector('.entitlements-section')).toHaveTextContent('Access is set by your admins.')

@@ -317,6 +317,8 @@ window.__TAURI__ = {
         }
       }
       if (command === 'auth_devices') return []
+      if (command === 'attach_companions') return [{ identity: 'probe-cli', claimed_kind: 'cli', claimed_version: '1.0.0', approved_at: '2026-08-04T12:00:00Z' }]
+      if (command === 'attach_revoke_companion') return null
       return null
     },
   },
