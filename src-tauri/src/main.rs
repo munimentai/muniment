@@ -30,6 +30,8 @@ fn main() {
             app.manage(chat::ChatState::new(app.handle())?);
             #[cfg(target_os = "linux")]
             attach_service::start_attach_listener(app.handle().clone());
+            #[cfg(not(target_os = "linux"))]
+            app.manage(attach_service::AttachCompanionState::default());
             let parakeet_root = app.path().app_data_dir()?.join("models").join("parakeet");
             app.manage(model_install::ParakeetInstallState::new(
                 parakeet_root.clone(),
@@ -57,6 +59,8 @@ fn main() {
             chat_threads::chat_delete_thread,
             chat_threads::chat_new_thread,
             attach_service::attach_pairing_decide,
+            attach_service::attach_companions,
+            attach_service::attach_revoke_companion,
             home::home_status,
             home::home_confirm,
             home::home_confirm_import,

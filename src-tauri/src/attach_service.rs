@@ -1,3 +1,4 @@
+use muniment_core::attach::ProtocolError;
 use std::collections::HashMap;
 #[cfg(target_os = "linux")]
 use std::collections::{BTreeMap, BTreeSet};
@@ -23,7 +24,7 @@ use muniment_core::attach::linux::{
 #[cfg(target_os = "linux")]
 use muniment_core::attach::{
     Approval, CommittedResult, Id, IdempotencyOutcome, IdempotencyStore, Operation, Protocol,
-    ProtocolError, Request as AttachRequest, WorkspaceOnboardRequest, WorkspaceOnboarded,
+    Request as AttachRequest, WorkspaceOnboardRequest, WorkspaceOnboarded,
 };
 #[cfg(target_os = "linux")]
 use muniment_core::journal::Provenance;
@@ -130,13 +131,60 @@ struct ClientCredentialStore {
     companions: HashMap<String, ClientCredential>,
 }
 
-#[cfg(target_os = "linux")]
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct AuthorizedCompanion {
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+pub struct AuthorizedCompanion {
     pub(crate) identity: String,
     pub(crate) claimed_kind: String,
     pub(crate) claimed_version: String,
     pub(crate) approved_at: Option<String>,
+}
+
+pub struct AttachCompanionState {
+    #[cfg(target_os = "linux")]
+    listener: Arc<AttachListenerState>,
+}
+
+#[cfg(target_os = "linux")]
+impl AttachCompanionState {
+    fn new(listener: Arc<AttachListenerState>) -> Self {
+        Self { listener }
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+impl Default for AttachCompanionState {
+    fn default() -> Self {
+        Self {}
+    }
+}
+
+#[tauri::command]
+pub fn attach_companions(
+    state: tauri::State<'_, AttachCompanionState>,
+) -> Result<Vec<AuthorizedCompanion>, ProtocolError> {
+    #[cfg(target_os = "linux")]
+    return state.listener.list_companions();
+
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = state;
+        Ok(Vec::new())
+    }
+}
+
+#[tauri::command]
+pub fn attach_revoke_companion(
+    state: tauri::State<'_, AttachCompanionState>,
+    client_identity: String,
+) -> Result<(), ProtocolError> {
+    #[cfg(target_os = "linux")]
+    return state.listener.revoke_companion(&client_identity);
+
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = (state, client_identity);
+        Err(ProtocolError::unsupported_operation())
+    }
 }
 
 #[cfg(target_os = "linux")]
@@ -293,6 +341,15 @@ fn should_retry_attach_accept(error: AttachAcceptError) -> bool {
 
 #[cfg(target_os = "linux")]
 pub fn start_attach_listener<R: tauri::Runtime>(app: tauri::AppHandle<R>) {
+    let credential_path = match app.path().app_data_dir() {
+        Ok(path) => path.join("attach-client-credentials.json"),
+        Err(_) => return,
+    };
+    let state = match AttachListenerState::load(&credential_path) {
+        Ok(state) => Arc::new(state),
+        Err(_) => return,
+    };
+    app.manage(AttachCompanionState::new(state.clone()));
     std::thread::spawn(move || {
         let Ok(filesystem) = AttachFilesystem::from_environment() else {
             return;
@@ -301,13 +358,6 @@ pub fn start_attach_listener<R: tauri::Runtime>(app: tauri::AppHandle<R>) {
             return;
         };
         let Ok(listener) = AttachTransport::bind(&filesystem) else {
-            return;
-        };
-        let credential_path = match app.path().app_data_dir() {
-            Ok(path) => path.join("attach-client-credentials.json"),
-            Err(_) => return,
-        };
-        let Ok(state) = AttachListenerState::load(&credential_path) else {
             return;
         };
         loop {
@@ -987,6 +1037,52 @@ mod tests {
         for (error, expected) in cases {
             assert_eq!(should_retry_attach_accept(error), expected, "{error:?}");
         }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn companion_commands_list_revoke_and_reject_unknown_identity() {
+        let root = std::env::temp_dir().join(format!(
+            "muniment-attach-companion-commands-{}",
+            Uuid::now_v7()
+        ));
+        let credential_path = root.join("credentials.json");
+        let identity = "018f0000-0000-7000-8000-000000000001";
+        let approved_at = "2026-08-04T12:00:00Z";
+        let credentials = HashMap::from([(
+            identity.into(),
+            ClientCredential {
+                credential: "ab".repeat(32),
+                claimed_kind: "cli".into(),
+                claimed_version: "1.2.3".into(),
+                approved_at: Some(approved_at.into()),
+            },
+        )]);
+        persist_client_credentials(&credential_path, &credentials).unwrap();
+
+        let app = tauri::test::mock_app();
+        let listener = Arc::new(AttachListenerState::load(&credential_path).unwrap());
+        app.manage(AttachCompanionState::new(listener));
+
+        assert_eq!(
+            attach_companions(app.state()).unwrap(),
+            vec![AuthorizedCompanion {
+                identity: identity.into(),
+                claimed_kind: "cli".into(),
+                claimed_version: "1.2.3".into(),
+                approved_at: Some(approved_at.into()),
+            }]
+        );
+        attach_revoke_companion(app.state(), identity.into()).unwrap();
+        assert!(attach_companions(app.state()).unwrap().is_empty());
+        assert_eq!(
+            attach_revoke_companion(app.state(), "unknown".into())
+                .unwrap_err()
+                .code(),
+            ErrorCode::Unauthorized
+        );
+
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[cfg(target_os = "linux")]
