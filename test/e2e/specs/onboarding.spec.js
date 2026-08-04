@@ -2,7 +2,7 @@ import path from 'node:path'
 import { access, appendFile, readFile } from 'node:fs/promises'
 
 describe('installed nightly model-ready onboarding', () => {
-  it('configures an isolated Home and scaffolds its README files', async () => {
+  it('chooses an isolated Home and scaffolds its README files', async () => {
     const home = process.env.MUNIMENT_E2E_HOME_PATH
     const location = await $('[data-testid="onboarding-home-path"]')
     try {
@@ -43,14 +43,21 @@ describe('installed nightly model-ready onboarding', () => {
     try { await access(home) } catch { homeExists = false }
     expect(homeExists).toBe(false)
 
-    expect(await (await $('[data-testid="onboarding-picker"]')).isDisplayed()).toBe(true)
-    expect(await (await $('[data-testid="onboarding-confirm"]')).isDisplayed()).toBe(true)
-    const status = await browser.execute(async (selectedHome) => (
-      window.__TAURI__.core.invoke('home_confirm', { homePath: selectedHome })
-    ), home)
-    expect(status).toEqual({ configured: true, homePath: home })
-
-    await browser.refresh()
+    const dialog = await browser.tauri.mock('plugin:dialog|open')
+    await dialog.mockResolvedValue(home)
+    try {
+      await (await $('[data-testid="onboarding-picker"]')).click()
+      await browser.waitUntil(async () => await location.getText() === home, {
+        timeoutMsg: 'the Home picker did not select the isolated Home',
+      })
+    } finally {
+      await dialog.mockRestore()
+    }
+    expect(await location.getText()).toBe(home)
+    await (await $('[data-testid="onboarding-confirm"]')).click()
+    const skipImport = await $('button=Continue without importing')
+    await skipImport.waitForDisplayed()
+    await skipImport.click()
     await (await $('button=Sign in')).waitForDisplayed()
 
     for (const directory of ['memory', 'agents', 'projects', 'sessions']) {
