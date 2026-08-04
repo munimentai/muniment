@@ -1,0 +1,8 @@
+[package]
+name = "muniment-runtime"
+version = "0.0.1"
+edition = "2021"
+
+[dependencies]
+muniment-attach = { path = "../attach" }
+muniment-core = { path = "../core" }

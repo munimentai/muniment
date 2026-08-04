@@ -61,7 +61,7 @@ jobs:
                 resident_model_adr=true
                 ;;
               *.md) ;;
-              src-tauri/cli/*|src-tauri/cli/**)
+              src-tauri/cli/*|src-tauri/cli/**|src-tauri/runtime/*|src-tauri/runtime/**)
                 docs_only=false
                 companion=true
                 ;;
@@ -198,6 +198,22 @@ jobs:
       - name: CLI dependency boundary
         if: steps.changes.outputs.companion == 'true'
         run: test/cli-dependency-boundary.sh
+
+      - name: Runtime formatting
+        if: steps.changes.outputs.companion == 'true'
+        run: cargo fmt --manifest-path src-tauri/Cargo.toml --package muniment-runtime --check
+
+      - name: Runtime lint
+        if: steps.changes.outputs.companion == 'true'
+        run: cargo clippy --manifest-path src-tauri/Cargo.toml --package muniment-runtime --all-targets --locked -- -D warnings
+
+      - name: Runtime unit tests
+        if: steps.changes.outputs.companion == 'true'
+        run: cargo test --manifest-path src-tauri/Cargo.toml --package muniment-runtime --locked
+
+      - name: Runtime dependency boundary
+        if: steps.changes.outputs.companion == 'true'
+        run: test/runtime-dependency-boundary.sh
 
   attach-fixtures-current:
     name: attach-fixtures-current

@@ -4,7 +4,7 @@ version = "0.0.1"
 edition = "2021"
 
 [workspace]
-members = [".", "core", "attach", "cli", "acp"]
+members = [".", "core", "attach", "cli", "acp", "runtime"]
 resolver = "2"
 
 [build-dependencies]
