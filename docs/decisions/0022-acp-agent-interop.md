@@ -477,6 +477,44 @@ prompt outcome and reconnect behavior. The implementation slice is
 
 This amendment changes no code.
 
+## Amendment — 2026-08-04: capability revocation
+
+This amendment supersedes the prompt-ending contract's reservation of the
+`capability.revoked` mapping. The runtime now emits that event through
+`send_revocation` after companion revocation removes the connection's
+credential. The event carries `{capability, reason:"companion_revoked"}` and
+uses the connection's `connection_event_id` as its `subscription_id`. The
+runtime writes and flushes the event before it closes the connection. It sends
+no `stream.closed` event for the cancelled subscriptions.
+
+When an active `session/prompt` receives `capability.revoked`, the adapter ends
+that prompt with JSON-RPC server error code `-32000` and the exact message
+`Muniment capability revoked`. It does not report a malformed pairing message,
+resubscribe to the run, or wait for the connection to close.
+
+The adapter removes `$XDG_CONFIG_HOME/muniment/acp-client-credential` after it
+receives the event. It retains `$XDG_CONFIG_HOME/muniment/acp-client-id`, which
+identifies the adapter but grants no authority. Removing the credential makes
+the next attach enter fresh visible approval with that identity. Approval
+creates a new credential. If removal fails, the adapter must not reuse the
+credential in that process. The runtime rejects every later authentication
+attempt with the revoked credential.
+
+A later `session/new` requires that fresh approval. After approval creates a
+new credential, `session/new` follows its existing workspace authorization and
+thread-creation rules. Without approval, it fails closed and creates no
+session.
+
+Revocation does not remove records under
+`$XDG_CONFIG_HOME/muniment/acp-sessions/`. A session record is a locator and
+grants no authority. A later `session/load` also requires fresh approval, then
+re-runs the existing profile, workspace, capability, and thread checks. It
+loads the stored session only if every check succeeds. Without approval or
+with any failed check, it fails closed and sends no session update.
+
+The implementation slice is **ACP capability-revocation mapping**. This
+amendment changes no code.
+
 ## Amendment — 2026-08-03: adapter distribution and editor configuration
 
 The Linux desktop package is the adapter's carrier. The bundle resource map
