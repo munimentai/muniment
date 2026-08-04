@@ -186,6 +186,7 @@ beforeEach(() => {
     if (command === 'chat_file_metadata') return { displayName: payload.path.split(/[\\/]/).pop(), byteLength: 1536 }
     if (command === 'auth_entitlement_snapshot') return snapshot()
     if (command === 'auth_devices') return []
+    if (command === 'attach_companions') return []
     throw new Error(`unexpected command: ${command}`)
   })
 })
@@ -4141,6 +4142,7 @@ describe('signed-in access popover', () => {
         ])
       }
       if (command === 'auth_devices') return []
+      if (command === 'attach_companions') return []
       throw new Error(`unexpected command: ${command}`)
     })
 
@@ -4293,6 +4295,7 @@ describe('signed-in access popover', () => {
         if (deviceCalls === 1) throw new Error('raw backend secret')
         return [device('recovered')]
       }
+      if (command === 'attach_companions') return []
       throw new Error(`unexpected command: ${command}`)
     })
     render(App)
@@ -4305,5 +4308,61 @@ describe('signed-in access popover', () => {
     await fireEvent.click(within(dialog).getByRole('button', { name: 'Try again' }))
     expect(await within(dialog).findByText('Active')).toBeInTheDocument()
     expect(invoke.mock.calls.filter(([command]) => command === 'auth_entitlement_snapshot')).toHaveLength(entitlementCalls)
+  })
+
+  it('shows connected programs while loading and renders claimed records with missing approval times', async () => {
+    const pendingCompanions = deferred()
+    const longKind = 'command-line-program-with-a-name-that-does-not-fit'
+    const longVersion = '2026.08.04-preview-with-a-version-that-does-not-fit'
+    invoke.mockImplementation(async (command) => {
+      if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
+      if (command === 'chat_thread_open') return []
+      if (command === 'auth_entitlement_snapshot') return snapshot()
+      if (command === 'auth_devices') return []
+      if (command === 'attach_companions') return pendingCompanions.promise
+      throw new Error(`unexpected command: ${command}`)
+    })
+    render(App)
+    await fireEvent.click(await screen.findByRole('button', { name: /Alice/i }))
+    const dialog = screen.getByRole('dialog', { name: 'Profile' })
+    expect(within(dialog).getByText('Loading connected programs…')).toBeInTheDocument()
+
+    pendingCompanions.resolve([{ identity: 'client-1', claimed_kind: longKind, claimed_version: longVersion, approved_at: null }])
+    const kind = await within(dialog).findByText(longKind)
+    expect(kind).toHaveAttribute('title', longKind)
+    expect(within(dialog).getByText('Claimed kind')).toBeInTheDocument()
+    expect(within(dialog).getByText(`Claimed version: ${longVersion}`)).toHaveAttribute('title', longVersion)
+    expect(within(dialog).getByText('Approval time unavailable')).toBeInTheDocument()
+    expect(dialog).not.toHaveTextContent('client-1')
+  })
+
+  it('renders an empty connected program response', async () => {
+    render(App)
+    await fireEvent.click(await screen.findByRole('button', { name: /Alice/i }))
+    expect(await screen.findByText('No connected programs found')).toBeInTheDocument()
+  })
+
+  it('retries only a failed connected program request', async () => {
+    let companionCalls = 0
+    invoke.mockImplementation(async (command) => {
+      if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
+      if (command === 'chat_thread_open') return []
+      if (command === 'auth_entitlement_snapshot') return snapshot()
+      if (command === 'auth_devices') return []
+      if (command === 'attach_companions') {
+        companionCalls += 1
+        if (companionCalls === 1) throw new Error('raw backend secret')
+        return [{ identity: 'client-2', claimed_kind: 'ACP adapter', claimed_version: '2.0.0', approved_at: '2026-08-04T12:00:00Z' }]
+      }
+      throw new Error(`unexpected command: ${command}`)
+    })
+    render(App)
+    await fireEvent.click(await screen.findByRole('button', { name: /Alice/i }))
+    const section = screen.getByRole('heading', { name: 'Connected programs' }).closest('section')
+    expect(await within(section).findByText('Connected programs could not be loaded.')).toBeInTheDocument()
+    expect(section).not.toHaveTextContent('raw backend secret')
+    await fireEvent.click(within(section).getByRole('button', { name: 'Try again' }))
+    expect(await within(section).findByText('ACP adapter')).toBeInTheDocument()
+    expect(companionCalls).toBe(2)
   })
 })

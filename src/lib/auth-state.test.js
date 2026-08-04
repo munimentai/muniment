@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { accessErrorState, accessLoadingState, accessReadyState, bootState, devicesErrorState, devicesLoadingState, devicesReadyState, errorState, platformDisplayName, statusState, waitingState } from './auth-state.js'
+import { accessErrorState, accessLoadingState, accessReadyState, bootState, companionsErrorState, companionsLoadingState, companionsReadyState, devicesErrorState, devicesLoadingState, devicesReadyState, errorState, platformDisplayName, statusState, waitingState } from './auth-state.js'
 
 describe('auth state transitions', () => {
   it('starts in boot and resolves status to signed out', () => {
@@ -59,5 +59,14 @@ describe('access snapshot state', () => {
   it('keeps loading and retryable failure local to access state', () => {
     expect(accessLoadingState()).toEqual({ name: 'loading' })
     expect(accessErrorState('offline')).toEqual({ name: 'error', message: 'offline' })
+  })
+})
+
+describe('connected program list state', () => {
+  it('keeps loading, ready, and error states separate', () => {
+    const records = [{ identity: 'client-1', claimed_kind: 'cli', claimed_version: '1.2.3', approved_at: null }]
+    expect(companionsLoadingState()).toEqual({ name: 'loading' })
+    expect(companionsReadyState(records)).toEqual({ name: 'ready', companions: records })
+    expect(companionsErrorState('backend secret')).toEqual({ name: 'error' })
   })
 })
