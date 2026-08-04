@@ -83,3 +83,17 @@ export function devicesReadyState(devices) {
 export function devicesErrorState() {
   return { name: 'error' }
 }
+
+export const companionsIdleState = { name: 'idle' }
+
+export function companionsLoadingState() {
+  return { name: 'loading' }
+}
+
+export function companionsReadyState(companions) {
+  return { name: 'ready', companions }
+}
+
+export function companionsErrorState() {
+  return { name: 'error' }
+}
