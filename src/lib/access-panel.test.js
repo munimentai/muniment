@@ -162,4 +162,20 @@ describe('access popover layout', () => {
     expect(screen.getByRole('button', { name: 'Cancel' })).toBeInTheDocument()
     expect(screen.getByRole('group', { name: 'Revoke cli?' })).toBeInTheDocument()
   })
+
+  it('keeps the confirm visible when Escape precedes a failed revoke', async () => {
+    let rejectRevoke
+    const pendingRevoke = new Promise((_, reject) => { rejectRevoke = reject })
+    renderPanel(companionInvoke(() => pendingRevoke))
+    await fireEvent.click(await screen.findByRole('button', { name: /Alice/ }))
+    await fireEvent.click(await screen.findByRole('button', { name: 'Revoke cli' }))
+    await fireEvent.click(screen.getByRole('button', { name: 'Revoke' }))
+
+    await fireEvent.keyDown(document, { key: 'Escape' })
+    expect(screen.getByRole('group', { name: 'Revoke cli?' })).toBeInTheDocument()
+    rejectRevoke(new Error('failed'))
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('The program could not be revoked.')
+    expect(screen.getByRole('group', { name: 'Revoke cli?' })).toBeInTheDocument()
+  })
 })

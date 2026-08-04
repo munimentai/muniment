@@ -85,6 +85,7 @@
   }
 
   function cancelRevokeCompanion() {
+    if (revokePending) return
     const identity = revokingIdentity
     revokingIdentity = null
     revokeError = ''
