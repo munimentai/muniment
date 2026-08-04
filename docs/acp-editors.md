@@ -10,6 +10,11 @@ connection shows one approval prompt in the desktop. The adapter stores its
 credential under `$XDG_CONFIG_HOME/muniment/`, so later launches reconnect
 without another prompt.
 
+## Revoked approval
+
+When Muniment revokes a program, the adapter drops its stored credential. The
+program needs a fresh visible approval before it can connect again.
+
 ## Zed
 
 Add a custom agent to Zed's `agent_servers` setting:
