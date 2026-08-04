@@ -150,9 +150,14 @@ measured 32.7µs per append against an in-memory database and 11.3µs with
 the journal opens WAL with `synchronous=FULL`. The commit fsync outweighs the
 parse by three orders of magnitude.
 
-OPEN — `apply_retention` (`src-tauri/core/src/journal/retention.rs:69`) loops
-over `run_ids()` and calls `journal.events(&run_id)` once per run, so 20,000
-historical runs cost 20,000 round trips. No production caller reaches it yet.
+SELECTED 2026-08-04 (this wave) — `apply_retention`
+(`src-tauri/core/src/journal/retention.rs:69`) loops over `run_ids()` and calls
+`journal.events(&run_id)` once per run, so 20,000 historical runs cost 20,000
+round trips and 20,000 full envelope parses. Only the newest `recorded_at` and the
+run's terminal event decide deletion. A cheap ordered pre-filter picks the
+candidates, and the existing `reduce` check still guards each deletion. The read
+adds no column, table, index, or migration. No production caller reaches retention
+yet, and the ADR 0012 runtime service will own it.
 
 OPEN — `chat_thread_open_page` projects each run through `project_history_entry`,
 which loads and reduces every envelope of that run. `thread_projection_entries`
@@ -257,16 +262,17 @@ holds the scanner, `assistant_text/ledger.rs` holds the envelope attribution
 ledger, and `assistant_text/projector.rs` is the stateful retained-suffix
 projector. `thread.open` and the attach run stream both read that one projector.
 
-**STALE — the reserved `capability.revoked` mapping.** The ADR 0022 prompt-ending
-amendment (`docs/decisions/0022-acp-agent-interop.md:442`) states that the runtime
-emits no `capability.revoked` event and reserves the ACP mapping. MUNIDESK-865
-made that statement false. `send_revocation`
-(`src-tauri/core/src/attach/linux.rs:1696`) writes the event and the owner closes
-the connection after the flush. The adapter answers the typed variant with
-`ClientError::UnexpectedMessage` (`src-tauri/acp/src/main.rs:734`), which it
-reports as a malformed pairing message, so a revoked editor session sees a
-misleading error. SELECTED 2026-08-04 (this wave) — the amendment that decides the
-mapping. The adapter implementation follows it.
+DONE 2026-08-04 — ADR 0022 carries the capability-revocation amendment
+(MUNIDESK-875). It supersedes the reservation in the prompt-ending amendment. A
+revoked prompt ends with JSON-RPC code `-32000` and the exact message `Muniment
+capability revoked`. The adapter removes `acp-client-credential`, keeps
+`acp-client-id`, and reaches fresh visible approval on its next attach.
+
+SELECTED 2026-08-04 (this wave) — the adapter half of that amendment. The adapter
+still answers the typed variant with `ClientError::UnexpectedMessage`
+(`src-tauri/acp/src/main.rs:734`), which it reports as a malformed pairing
+message, so a revoked editor session sees a misleading error. `send_revocation`
+(`src-tauri/core/src/attach/linux.rs:1696`) is the emitter it must answer.
 
 PARKED — ADR 0022 names plan updates in its method subset, and no code produces
 one, because the journal carries no plan or thought content. `agent_thought_chunk`
@@ -298,12 +304,20 @@ persists before it emits and restores authority when the write fails.
 `list_companions` (`:171`) reports each companion's identity, claimed kind,
 claimed version, and approval time, and the credential store records all three.
 
-SELECTED 2026-08-04 (this wave) — the desktop companion management slice that the
-amendment names. Nothing calls the owner API today. `start_attach_listener`
-(`src-tauri/src/attach_service.rs:295`) builds `AttachListenerState` inside its
-own thread at `:310`, so no Tauri command can reach it, and no command is
-registered. The batch is the command seam, the profile-popover list, and the
-revoke control, in that order. The `THREAT_MODEL.md` refresh rides beside them.
+DONE 2026-08-04 — the desktop management surface is built (MUNIDESK-874, 876,
+877). `attach_companions` and `attach_revoke_companion`
+(`src-tauri/src/attach_service.rs:164`, `:178`) are registered Tauri commands, and
+the profile popover carries a `Connected programs` section under Devices.
+
+REGRESSED 2026-08-04 (planner, read at 046d504 and rendered the built bundle) —
+the revoke control is gone from `main`. MUNIDESK-877 landed it in 51ccb84.
+MUNIDESK-876 landed the list in 046d504 from a branch that started before 877, so
+its merge overwrote `src/lib/AccessPanel.svelte`, `src/lib/access-panel.test.js`,
+`src/App.test.js`, and `test/probe/stub.js`. A render of the built bundle at
+1100x720 shows the list with no revoke control, and the registered
+`attach_revoke_companion` command has no caller. SELECTED 2026-08-04 (this wave) —
+the restoration. This is a silent loss from a stale merge base, so the open owner
+item under Desktop QA automation now carries a measured cost.
 
 ### ADR 0012 runtime-service extraction
 
@@ -325,13 +339,20 @@ format, lint, test, and dependency-boundary CI steps
 (`test/runtime-dependency-boundary.sh`). The scaffold opens no endpoint, journal,
 CAS, or Pi.
 
-SELECTED 2026-08-04 (this wave) — the approval coordinator, which the amendment
-names as the first component the later slices move. The amendment states that the
-presenting desktop reports an explicit user choice, cannot manufacture approval,
-and fails a connection closed when no desktop can present the challenge. That
-logic sits today inside one closure in `start_attach_listener`
-(`src-tauri/src/attach_service.rs:340`) beside `AttachApprovalState` (`:193`) and
-`attach_pairing_decide` (`:216`), and no test drives it directly.
+DONE 2026-08-04 — the approval coordinator moved into muniment-core
+(MUNIDESK-878). `src-tauri/core/src/attach/approval.rs` holds
+`ApprovalCoordinator` with presenter registration, the pending-decision map, the
+timeout denial, and six direct tests. The desktop registers the presenter and
+keeps the Tauri dialog. A shared core module is the extraction shape, and the
+`muniment-runtime` binary composes it at the cutover.
+
+SELECTED 2026-08-04 (this wave) — the first journal step of the same move.
+`reconcile_interrupted_runs` (`src-tauri/src/chat.rs:748`) and
+`event_types_are_terminal` (`:777`) use only `RunJournal`, `reduce`, and
+`event_envelope`, yet they sit in the desktop crate. Three desktop call sites
+reach them. The core function takes its caller's provenance, so the recorded
+`run.needs_attention` envelope does not change. The journal open, the CAS open,
+and the Pi child follow in later slices.
 
 SEQUENCED — the later extraction slices are the journal and Pi execution move,
 the shared device session, the desktop client conversion, and Linux user-unit
@@ -343,10 +364,16 @@ registration must not precede the cutover, because a service that takes the
 instance lock first would stop the desktop listener.
 
 OPEN — attach workspace namespaces diverge. Desktop runs stamp the cloud
-`grant.workspace` (`src-tauri/src/chat.rs:385`), while `desktop_attach_approval`
-approves the desktop process working directory. Rows list only when the two
-strings match. The alignment is a design call for this lane. Exposing workspace
-scope on the thread read commands waits on the same call.
+`grant.workspace` (`src-tauri/src/chat.rs:371`), while `desktop_attach_approval`
+(`src-tauri/src/attach_service.rs:318`) approves the desktop process working
+directory. `authorized_workspace` (`:525`) returns that canonical directory, so an
+approved companion lists no desktop thread and its own runs land in a workspace
+the desktop never lists. SELECTED 2026-08-04 (this wave) — the ADR 0009 amendment
+that decides the mapping. The ADR 0012 extraction amendment already names the
+signed `grant.workspace` value as the workspace authority and a working directory
+as a requested local execution root, so the attach protocol needs the matching
+rule. Exposing workspace scope on the thread read commands waits on that
+amendment.
 
 ### Build-composition guards
 
@@ -632,17 +659,22 @@ crates, the frontend suite, and the probe capture instead.
 
 OPEN OWNER ITEM — on 2026-08-02 two green branches merged into a build break,
 because each pull request built against its own stale base and the merge
-combination never rebuilt. Requiring an up-to-date branch before merge, or a merge
-queue, is a repository-settings change that sits with the owner.
+combination never rebuilt. On 2026-08-04 the same hazard cost a shipped feature:
+MUNIDESK-876 merged from a base older than MUNIDESK-877 and silently reverted the
+companion revoke control and its tests. Both pull requests stayed green, because
+the later merge removed the tests that guarded the earlier one. Requiring an
+up-to-date branch before merge, or a merge queue, is a repository-settings change
+that sits with the owner. The planner files no ticket for it.
 
 VERIFIED 2026-08-04 (this wave, from a clean clone) — one cargo invocation over
 `muniment-core`, `muniment-attach`, `muniment-cli`, `muniment-acp`, and
-`muniment-runtime` passed 829 tests across 64 suites with no failure. The frontend
-suite passed 820 tests with 25 skipped across 57 files, plus the three browser-mode
-tests. A render of the built bundle at 1100x720 opened the profile popover and
-measured its four sections in order over the fixed Sign out footer, with the
-content region the only scrolling element. Earlier waves recorded the same shape
-of verification, and this entry replaces that ledger.
+`muniment-runtime` passed 835 tests across 64 suites with no failure. The frontend
+suite passed 826 tests with 25 skipped across 57 files. A render of the built
+bundle at 1100x720 opened the profile popover and read its five sections in order,
+Appearance, Your access, Devices, Connected programs, and Voice shortcut, over the
+fixed Sign out footer. That render is how the wave found the missing revoke
+control. Earlier waves recorded the same shape of verification, and this entry
+replaces that ledger.
 
 ## Stable release and distribution
 
@@ -697,10 +729,10 @@ it. The ACP adapter row records the built surface. The attach approval prompt
 names the program that asked, with its claimed kind and version bounded, stripped
 of control characters, and marked as claimed rather than verified.
 
-SELECTED 2026-08-04 (this wave) — the `THREAT_MODEL.md` refresh that records
-companion revocation and the landed per-profile instance lock. The attach socket
-row (`THREAT_MODEL.md:61`) does not mention revocation, and the ADR 0012 runtime
-service row (`:64`) predates the lock and the `muniment-runtime` scaffold.
+DONE 2026-08-04 — `THREAT_MODEL.md` records companion revocation and the landed
+per-profile instance lock (MUNIDESK-879). The attach socket row names revocation,
+and the ADR 0012 runtime service row names the lock and the `muniment-runtime`
+scaffold.
 
 OPEN — the MUNIQA prompt-injection suite still follows ADR 0018's landed slices.
 
