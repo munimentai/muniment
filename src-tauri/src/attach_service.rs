@@ -9,14 +9,16 @@ use std::sync::Mutex;
 #[cfg(target_os = "linux")]
 use std::time::Duration;
 
+#[cfg(all(target_os = "linux", test))]
+use muniment_core::attach::linux::run_authenticated_session_with_service_and_approvals;
 #[cfg(target_os = "linux")]
 use muniment_core::attach::linux::{
-    approval_waiter_with_claims, run_authenticated_session_with_service_and_approvals,
+    approval_waiter_with_claims, run_authenticated_session_with_service_approvals_and_registry,
     AttachAcceptError, AttachFilesystem, AttachTransport, CompanionProvenance,
-    PermissionAnswerAccepted, PermissionAnswerRequest, PermissionDecision, RunCancelAccepted,
-    RunCancelRequest, RunStartAccepted, RunStartRequest as AttachRunStartRequest, RunStreamPage,
-    ThreadCreateAccepted, ThreadListPage, ThreadListRequest, ThreadListService, ThreadOpenPage,
-    ThreadOpenRequest,
+    LiveConnectionRegistry, PermissionAnswerAccepted, PermissionAnswerRequest, PermissionDecision,
+    RunCancelAccepted, RunCancelRequest, RunStartAccepted,
+    RunStartRequest as AttachRunStartRequest, RunStreamPage, ThreadCreateAccepted, ThreadListPage,
+    ThreadListRequest, ThreadListService, ThreadOpenPage, ThreadOpenRequest,
 };
 #[cfg(target_os = "linux")]
 use muniment_core::attach::{
@@ -97,6 +99,7 @@ pub struct DesktopAttachService<B, I = IdempotencyStore> {
 struct AttachListenerState {
     workspace_contexts: Arc<Mutex<HashMap<String, HashMap<PathBuf, Option<String>>>>>,
     client_credentials: Arc<Mutex<HashMap<String, String>>>,
+    live_connections: LiveConnectionRegistry,
 }
 
 #[cfg(target_os = "linux")]
@@ -105,6 +108,7 @@ impl AttachListenerState {
         Ok(Self {
             workspace_contexts: Arc::new(Mutex::new(HashMap::new())),
             client_credentials: Arc::new(Mutex::new(load_client_credentials(credential_path)?)),
+            live_connections: LiveConnectionRegistry::default(),
         })
     }
 }
@@ -241,6 +245,7 @@ pub fn start_attach_listener<R: tauri::Runtime>(app: tauri::AppHandle<R>) {
             let app = app.clone();
             let workspace_contexts = state.workspace_contexts.clone();
             let client_credentials = state.client_credentials.clone();
+            let live_connections = state.live_connections.clone();
             std::thread::spawn(move || {
                 let Ok(mut service) =
                     DesktopAttachService::new(app, workspace_contexts, client_credentials)
@@ -248,7 +253,7 @@ pub fn start_attach_listener<R: tauri::Runtime>(app: tauri::AppHandle<R>) {
                     return;
                 };
                 let approval_app = service.boundaries.app.clone();
-                let _ = run_authenticated_session_with_service_and_approvals(
+                let _ = run_authenticated_session_with_service_approvals_and_registry(
                     stream,
                     credentials,
                     env!("CARGO_PKG_VERSION"),
@@ -284,6 +289,7 @@ pub fn start_attach_listener<R: tauri::Runtime>(app: tauri::AppHandle<R>) {
                             ))
                         },
                     ),
+                    &live_connections,
                 );
             });
         }
