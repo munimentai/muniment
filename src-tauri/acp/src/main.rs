@@ -51,7 +51,12 @@ struct SessionRecord {
 
 impl From<ClientError> for PromptFailure {
     fn from(error: ClientError) -> Self {
-        Self::Client(error)
+        if error == ClientError::CapabilityRevoked {
+            drop_authorized_client_credential();
+            Self::CapabilityRevoked
+        } else {
+            Self::Client(error)
+        }
     }
 }
 
@@ -718,7 +723,7 @@ fn prompt(
                         &mut client,
                         input,
                         pending,
-                    );
+                    )?;
                     client.answer_permission(&accepted.run_id, &permission.gate_id, decision)?;
                     (Some(permission.run_seq), None)
                 }
@@ -728,7 +733,13 @@ fn prompt(
                 } => {
                     client
                         .subscribe_run(&accepted.run_id, last_processed_run_seq)
-                        .map_err(|_| PromptFailure::StreamClosed)?;
+                        .map_err(|error| {
+                            if error == ClientError::CapabilityRevoked {
+                                PromptFailure::from(error)
+                            } else {
+                                PromptFailure::StreamClosed
+                            }
+                        })?;
                     (None, None)
                 }
                 RunStreamMessage::StreamClosed {
@@ -760,7 +771,10 @@ fn prompt(
                     .then_some(())
                 });
                 if cancel.is_some() {
-                    let _ = client.run_cancel(&accepted.run_id);
+                    if let Err(ClientError::CapabilityRevoked) = client.run_cancel(&accepted.run_id)
+                    {
+                        return Err(PromptFailure::from(ClientError::CapabilityRevoked));
+                    }
                 } else {
                     pending.push_back(line);
                 }
@@ -809,20 +823,20 @@ fn wait_for_permission_response(
     client: &mut AuthorizedClient,
     input: &Receiver<io::Result<String>>,
     pending: &mut VecDeque<io::Result<String>>,
-) -> PermissionDecision {
+) -> Result<PermissionDecision, PromptFailure> {
     loop {
         let Ok(line) = input.recv() else {
-            return PermissionDecision::Deny;
+            return Ok(PermissionDecision::Deny);
         };
         let Ok(line) = line else {
-            return PermissionDecision::Deny;
+            return Ok(PermissionDecision::Deny);
         };
         let Ok(message) = serde_json::from_str::<Value>(&line) else {
             pending.push_back(Ok(line));
             continue;
         };
         if let Some(decision) = permission_response_decision(&message, request_id) {
-            return decision;
+            return Ok(decision);
         }
         let cancel = message.get("id").is_none()
             && message.get("method").and_then(Value::as_str) == Some("session/cancel")
@@ -832,7 +846,9 @@ fn wait_for_permission_response(
                 .and_then(Value::as_str)
                 == Some(session_id);
         if cancel {
-            let _ = client.run_cancel(run_id);
+            if let Err(ClientError::CapabilityRevoked) = client.run_cancel(run_id) {
+                return Err(PromptFailure::from(ClientError::CapabilityRevoked));
+            }
         } else {
             pending.push_back(Ok(line));
         }
@@ -1168,6 +1184,7 @@ fn pairing_failure(error: ClientError) -> &'static str {
         ClientError::MalformedFrame => "Muniment runtime sent a malformed attach message",
         ClientError::PayloadTooLarge => "Muniment runtime sent an oversized attach message",
         ClientError::UnexpectedMessage => "Muniment runtime sent an invalid pairing message",
+        ClientError::CapabilityRevoked => "Muniment capability revoked",
         ClientError::ProtocolIncompatible => "Muniment runtime attach protocol is incompatible",
         ClientError::RandomnessUnavailable => {
             "Muniment runtime pairing could not create an identity"

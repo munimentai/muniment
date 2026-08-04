@@ -16,6 +16,7 @@ pub enum ClientError {
     MalformedFrame,
     PayloadTooLarge,
     UnexpectedMessage,
+    CapabilityRevoked,
     ProtocolIncompatible,
     RandomnessUnavailable,
 }
@@ -36,6 +37,7 @@ impl fmt::Display for ClientError {
             Self::MalformedFrame => "the desktop sent a malformed attach message",
             Self::PayloadTooLarge => "the desktop sent an oversized attach message",
             Self::UnexpectedMessage => "the desktop sent an unexpected pairing message",
+            Self::CapabilityRevoked => "the desktop revoked the capability",
             Self::ProtocolIncompatible => "the desktop and CLI attach protocols are incompatible",
             Self::RandomnessUnavailable => "secure randomness is unavailable",
         })
@@ -444,6 +446,11 @@ mod linux {
                 Envelope::Error(error) if error.request_id.as_ref() == Some(request_id) => {
                     Err(map_protocol_error(error.error.code()))
                 }
+                Envelope::Event(event)
+                    if Self::validate_capability_revocation(&event)?.is_some() =>
+                {
+                    Err(ClientError::CapabilityRevoked)
+                }
                 _ => Err(ClientError::UnexpectedMessage),
             }
         }
@@ -484,6 +491,11 @@ mod linux {
                     Envelope::Response(response) if response.request_id == request_id => response,
                     Envelope::Error(error) if error.request_id.as_ref() == Some(&request_id) => {
                         return Err(map_protocol_error(error.error.code()));
+                    }
+                    Envelope::Event(event)
+                        if Self::validate_capability_revocation(&event)?.is_some() =>
+                    {
+                        return Err(ClientError::CapabilityRevoked);
                     }
                     _ => return Err(ClientError::UnexpectedMessage),
                 };
@@ -570,6 +582,11 @@ mod linux {
                     Envelope::Response(response) if response.request_id == request_id => response,
                     Envelope::Error(error) if error.request_id.as_ref() == Some(&request_id) => {
                         return Err(map_protocol_error(error.error.code()));
+                    }
+                    Envelope::Event(event)
+                        if Self::validate_capability_revocation(&event)?.is_some() =>
+                    {
+                        return Err(ClientError::CapabilityRevoked);
                     }
                     _ => return Err(ClientError::UnexpectedMessage),
                 };
@@ -672,6 +689,11 @@ mod linux {
                     Envelope::Error(error) if error.request_id.as_ref() == Some(&request_id) => {
                         return Err(map_protocol_error(error.error.code()));
                     }
+                    Envelope::Event(event)
+                        if Self::validate_capability_revocation(&event)?.is_some() =>
+                    {
+                        return Err(ClientError::CapabilityRevoked);
+                    }
                     _ => return Err(ClientError::UnexpectedMessage),
                 };
             let accepted: RunStartAccepted = serde_json::from_value(response.body)
@@ -729,6 +751,11 @@ mod linux {
                     Envelope::Error(error) if error.request_id.as_ref() == Some(&request_id) => {
                         return Err(map_protocol_error(error.error.code()));
                     }
+                    Envelope::Event(event)
+                        if Self::validate_capability_revocation(&event)?.is_some() =>
+                    {
+                        return Err(ClientError::CapabilityRevoked);
+                    }
                     _ => return Err(ClientError::UnexpectedMessage),
                 };
             let accepted: PermissionAnswerAccepted = serde_json::from_value(response.body)
@@ -776,6 +803,11 @@ mod linux {
                     Envelope::Response(response) if response.request_id == request_id => response,
                     Envelope::Error(error) if error.request_id.as_ref() == Some(&request_id) => {
                         return Err(map_protocol_error(error.error.code()));
+                    }
+                    Envelope::Event(event)
+                        if Self::validate_capability_revocation(&event)?.is_some() =>
+                    {
+                        return Err(ClientError::CapabilityRevoked);
                     }
                     _ => return Err(ClientError::UnexpectedMessage),
                 };
@@ -828,6 +860,11 @@ mod linux {
                     Envelope::Response(response) if response.request_id == request_id => response,
                     Envelope::Error(error) if error.request_id.as_ref() == Some(&request_id) => {
                         return Err(map_protocol_error(error.error.code()));
+                    }
+                    Envelope::Event(event)
+                        if Self::validate_capability_revocation(&event)?.is_some() =>
+                    {
+                        return Err(ClientError::CapabilityRevoked);
                     }
                     _ => return Err(ClientError::UnexpectedMessage),
                 };
@@ -905,6 +942,9 @@ mod linux {
                         return Err(map_protocol_error(error.error.code()));
                     }
                     Envelope::Event(event) => {
+                        if Self::validate_capability_revocation(&event)?.is_some() {
+                            return Err(ClientError::CapabilityRevoked);
+                        }
                         let message = self.validate_run_stream_event(event)?;
                         self.active_run_stream
                             .as_mut()
@@ -975,29 +1015,8 @@ mod linux {
             &mut self,
             event: crate::Event,
         ) -> Result<RunStreamMessage, ClientError> {
-            if event.event == EventName::CapabilityRevoked {
-                if event.run_id.is_some() || event.run_seq.is_some() {
-                    return Err(ClientError::UnexpectedMessage);
-                }
-                #[derive(serde::Deserialize)]
-                #[serde(deny_unknown_fields)]
-                struct Body {
-                    capability: String,
-                    reason: String,
-                }
-                let body: Body = serde_json::from_value(event.body)
-                    .map_err(|_| ClientError::UnexpectedMessage)?;
-                if body.capability.trim().is_empty()
-                    || body.capability.len() > MAX_TEXT_LENGTH
-                    || body.reason.trim().is_empty()
-                    || body.reason.len() > MAX_TEXT_LENGTH
-                {
-                    return Err(ClientError::UnexpectedMessage);
-                }
-                return Ok(RunStreamMessage::CapabilityRevoked {
-                    capability: body.capability,
-                    reason: body.reason,
-                });
+            if let Some(message) = Self::validate_capability_revocation(&event)? {
+                return Ok(message);
             }
             let active = self
                 .active_run_stream
@@ -1174,6 +1193,36 @@ mod linux {
                 }
                 _ => Err(ClientError::UnexpectedMessage),
             }
+        }
+
+        fn validate_capability_revocation(
+            event: &crate::Event,
+        ) -> Result<Option<RunStreamMessage>, ClientError> {
+            if event.event != EventName::CapabilityRevoked {
+                return Ok(None);
+            }
+            if event.run_id.is_some() || event.run_seq.is_some() {
+                return Err(ClientError::UnexpectedMessage);
+            }
+            #[derive(serde::Deserialize)]
+            #[serde(deny_unknown_fields)]
+            struct Body {
+                capability: String,
+                reason: String,
+            }
+            let body: Body = serde_json::from_value(event.body.clone())
+                .map_err(|_| ClientError::UnexpectedMessage)?;
+            if body.capability.trim().is_empty()
+                || body.capability.len() > MAX_TEXT_LENGTH
+                || body.reason.trim().is_empty()
+                || body.reason.len() > MAX_TEXT_LENGTH
+            {
+                return Err(ClientError::UnexpectedMessage);
+            }
+            Ok(Some(RunStreamMessage::CapabilityRevoked {
+                capability: body.capability,
+                reason: body.reason,
+            }))
         }
     }
 

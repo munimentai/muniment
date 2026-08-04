@@ -691,6 +691,25 @@ fn scripted_prompt_ending(
             .unwrap();
     }
 
+    fn send_capability_revoked(stream: &mut UnixStream) {
+        stream
+            .write_all(
+                &encode_frame(&Event {
+                    protocol: Protocol,
+                    subscription_id: Id::new("22".repeat(16)).unwrap(),
+                    event: EventName::CapabilityRevoked,
+                    run_id: None,
+                    run_seq: None,
+                    body: json!({
+                        "capability": "attach",
+                        "reason": "companion_revoked"
+                    }),
+                })
+                .unwrap(),
+            )
+            .unwrap();
+    }
+
     let root = std::env::temp_dir().join(format!(
         "muniment-acp-ending-{}-{}",
         std::process::id(),
@@ -722,7 +741,10 @@ fn scripted_prompt_ending(
     .unwrap();
     std::fs::set_permissions(&record, std::fs::Permissions::from_mode(0o600)).unwrap();
     let listener = UnixListener::bind(socket_directory.join("attach-v1.sock")).unwrap();
-    let capability_revoked = event_type == "capability.revoked";
+    let capability_revoked = event_type.starts_with("capability.revoked");
+    let revoke_before_cursor_ack = event_type == "capability.revoked.before_cursor_ack";
+    let revoke_before_resubscribe = event_type == "capability.revoked.before_resubscribe";
+    let stream_closes = stream_closed_body.is_some();
     let event_type = event_type.to_owned();
     let server_config = config.clone();
     let server = thread::spawn(move || {
@@ -768,7 +790,45 @@ fn scripted_prompt_ending(
             }),
         );
 
-        if let Some(stream_closed_body) = stream_closed_body {
+        if revoke_before_cursor_ack {
+            stream
+                .write_all(
+                    &encode_frame(&Event {
+                        protocol: Protocol,
+                        subscription_id: Id::new(first_subscription).unwrap(),
+                        event: EventName::RunEvent,
+                        run_id: Some(Id::new(run_id).unwrap()),
+                        run_seq: Some(2),
+                        body: json!({
+                            "event_type": "model.stream.delta", "event_version": 1,
+                            "recorded_at": "2026-08-03T00:00:01Z",
+                            "payload": {"withheld": false, "text": "Once"}
+                        }),
+                    })
+                    .unwrap(),
+                )
+                .unwrap();
+            let acknowledgement = read_frame(&mut stream);
+            assert_eq!(acknowledgement["operation"], "run.cursor_ack");
+            send_capability_revoked(&mut stream);
+        } else if revoke_before_resubscribe {
+            stream
+                .write_all(
+                    &encode_frame(&Event {
+                        protocol: Protocol,
+                        subscription_id: Id::new(first_subscription).unwrap(),
+                        event: EventName::StreamClosed,
+                        run_id: Some(Id::new(run_id).unwrap()),
+                        run_seq: Some(1),
+                        body: json!({"code": "closed", "resumable": true}),
+                    })
+                    .unwrap(),
+                )
+                .unwrap();
+            let resubscribe = read_frame(&mut stream);
+            assert_eq!(resubscribe["operation"], "run.stream");
+            send_capability_revoked(&mut stream);
+        } else if let Some(stream_closed_body) = stream_closed_body {
             let resumable = stream_closed_body["resumable"].as_bool().unwrap_or(false);
             if resumable {
                 stream
@@ -872,22 +932,9 @@ fn scripted_prompt_ending(
                 std::fs::create_dir(&credential).unwrap();
                 std::fs::write(credential.join("blocked"), b"blocked").unwrap();
             }
-            stream
-                .write_all(
-                    &encode_frame(&Event {
-                        protocol: Protocol,
-                        subscription_id: Id::new("22".repeat(16)).unwrap(),
-                        event: EventName::CapabilityRevoked,
-                        run_id: None,
-                        run_seq: None,
-                        body: json!({
-                            "capability": "attach",
-                            "reason": "companion_revoked"
-                        }),
-                    })
-                    .unwrap(),
-                )
-                .unwrap();
+            send_capability_revoked(&mut stream);
+        }
+        if capability_revoked {
             drop(stream);
             let (mut stream, _) = listener.accept().unwrap();
             let hello = read_frame(&mut stream);
@@ -898,7 +945,7 @@ fn scripted_prompt_ending(
                     .exists(),
                 credential_removal_fails
             );
-        } else {
+        } else if !stream_closes {
             stream
                 .write_all(
                     &encode_frame(&Event {
@@ -1048,6 +1095,30 @@ fn capability_revocation_suppresses_a_credential_that_cannot_be_removed() {
     );
     assert!(result.client_id_exists);
     assert!(result.credential_exists);
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn capability_revocation_ends_the_prompt_during_a_cursor_acknowledgement() {
+    let result = scripted_prompt_ending("capability.revoked.before_cursor_ack", None, false);
+    assert_eq!(result.responses[1]["error"]["code"], -32000);
+    assert_eq!(
+        result.responses[1]["error"]["message"],
+        "Muniment capability revoked"
+    );
+    assert!(!result.credential_exists);
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn capability_revocation_ends_the_prompt_during_resubscription() {
+    let result = scripted_prompt_ending("capability.revoked.before_resubscribe", None, false);
+    assert_eq!(result.responses[0]["error"]["code"], -32000);
+    assert_eq!(
+        result.responses[0]["error"]["message"],
+        "Muniment capability revoked"
+    );
+    assert!(!result.credential_exists);
 }
 
 #[cfg(target_os = "linux")]
