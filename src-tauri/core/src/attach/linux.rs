@@ -322,10 +322,20 @@ struct LiveConnection {
     state: Mutex<LiveConnectionState>,
 }
 
-#[derive(Default)]
 struct CredentialConnections {
     gate: Arc<Mutex<()>>,
+    state: LiveConnectionState,
     connections: HashMap<super::Id, Arc<LiveConnection>>,
+}
+
+impl Default for CredentialConnections {
+    fn default() -> Self {
+        Self {
+            gate: Arc::new(Mutex::new(())),
+            state: LiveConnectionState::Active,
+            connections: HashMap::new(),
+        }
+    }
 }
 
 type ConnectionsByCredential = HashMap<String, CredentialConnections>;
@@ -361,15 +371,14 @@ impl LiveConnectionRegistry {
     }
 
     fn set_state(&self, credential: &str, update: impl Fn(&mut LiveConnectionState)) -> usize {
-        let connections = self.connections.lock().expect("live connection registry");
-        let Some(entries) = connections.get(credential) else {
-            return 0;
-        };
+        let mut connections = self.connections.lock().expect("live connection registry");
+        let entries = connections.entry(credential.to_owned()).or_default();
         let gate = Arc::clone(&entries.gate);
         let _gate = gate.lock().expect("credential admission gate");
+        update(&mut entries.state);
         for connection in entries.connections.values() {
             let mut state = connection.state.lock().expect("live connection state");
-            update(&mut state);
+            *state = entries.state;
         }
         entries.connections.len()
     }
@@ -380,17 +389,19 @@ impl LiveConnectionRegistry {
         capability: String,
         connection_event_id: super::Id,
     ) -> RegisteredConnection {
-        let connection = Arc::new(LiveConnection {
-            capability,
-            connection_event_id: connection_event_id.clone(),
-            state: Mutex::new(LiveConnectionState::Active),
-        });
         let mut connections = self.connections.lock().expect("live connection registry");
         let entries = connections.entry(credential.clone()).or_default();
         let gate = Arc::clone(&entries.gate);
+        let _gate = gate.lock().expect("credential admission gate");
+        let connection = Arc::new(LiveConnection {
+            capability,
+            connection_event_id: connection_event_id.clone(),
+            state: Mutex::new(entries.state),
+        });
         entries
             .connections
             .insert(connection_event_id.clone(), Arc::clone(&connection));
+        drop(_gate);
         RegisteredConnection {
             registry: self.clone(),
             credential,
@@ -425,9 +436,6 @@ impl Drop for RegisteredConnection {
             .expect("live connection registry");
         if let Some(entries) = connections.get_mut(&self.credential) {
             entries.connections.remove(&self.connection_event_id);
-            if entries.connections.is_empty() {
-                connections.remove(&self.credential);
-            }
         }
     }
 }

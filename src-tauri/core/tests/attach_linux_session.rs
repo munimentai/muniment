@@ -712,6 +712,106 @@ fn live_registry_blocks_resumes_and_revokes_a_session() {
     assert_eq!(registry.revoke(&credential), 0);
 }
 
+#[test]
+fn registration_inherits_a_blocked_credential_state() {
+    let (mut client, server) = UnixStream::pair().unwrap();
+    let registry = LiveConnectionRegistry::default();
+    let credential = "09".repeat(32);
+    assert_eq!(registry.block(&credential), 0);
+    let session_registry = registry.clone();
+    let server_thread = thread::spawn(move || {
+        let mut service = |_: &str, _: ThreadListRequest| {
+            Ok(ThreadListPage {
+                threads: vec![],
+                next_cursor: None,
+            })
+        };
+        run_authenticated_session_with_authorization_and_registry(
+            server,
+            credentials(),
+            "0.1.0",
+            Duration::from_secs(1),
+            AuthorizationSessionDependencies {
+                fill_random: |bytes: &mut [u8]| {
+                    bytes.fill(9);
+                    Ok(())
+                },
+                clock: SessionTestClock(Instant::now()),
+                tokens: TestTokens(1),
+                approvals: |_: &muniment_core::attach::PairingChallenge, _: Duration| {
+                    Some(ApprovalDecision::Approve(approval()))
+                },
+            },
+            &mut service,
+            &session_registry,
+        )
+    });
+
+    client.write_all(&hello(1, 1)).unwrap();
+    let _: Welcome = read_frame(&mut client);
+    let authorized: Authorized = read_frame(&mut client);
+    assert_eq!(authorized.authorized_client_credential, credential);
+    client
+        .write_all(&request(1, Operation::ThreadList, json!({"limit": 1})))
+        .unwrap();
+    client
+        .set_read_timeout(Some(Duration::from_millis(150)))
+        .unwrap();
+    let error = client.read(&mut [0]).unwrap_err();
+    assert!(matches!(
+        error.kind(),
+        std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+    ));
+
+    assert_eq!(registry.resume(&credential), 1);
+    client.set_read_timeout(None).unwrap();
+    let response: Response = read_frame(&mut client);
+    assert_eq!(response.request_id, Id::new(format!("{:032x}", 1)).unwrap());
+    client.shutdown(Shutdown::Both).unwrap();
+    assert_eq!(server_thread.join().unwrap(), Ok(()));
+}
+
+#[test]
+fn registration_inherits_a_revoked_credential_state() {
+    let (mut client, server) = UnixStream::pair().unwrap();
+    let registry = LiveConnectionRegistry::default();
+    let credential = "09".repeat(32);
+    assert_eq!(registry.revoke(&credential), 0);
+    let session_registry = registry.clone();
+    let server_thread = thread::spawn(move || {
+        run_authenticated_session_with_authorization_and_registry(
+            server,
+            credentials(),
+            "0.1.0",
+            Duration::from_secs(1),
+            AuthorizationSessionDependencies {
+                fill_random: |bytes: &mut [u8]| {
+                    bytes.fill(9);
+                    Ok(())
+                },
+                clock: SessionTestClock(Instant::now()),
+                tokens: TestTokens(1),
+                approvals: |_: &muniment_core::attach::PairingChallenge, _: Duration| {
+                    Some(ApprovalDecision::Approve(approval()))
+                },
+            },
+            &mut unavailable_service,
+            &session_registry,
+        )
+    });
+
+    client.write_all(&hello(1, 1)).unwrap();
+    let _: Welcome = read_frame(&mut client);
+    let authorized: Authorized = read_frame(&mut client);
+    assert_eq!(authorized.authorized_client_credential, credential);
+    let event: Event = read_frame(&mut client);
+    assert_eq!(event.event, EventName::CapabilityRevoked);
+    assert_eq!(event.body["capability"], authorized.capability);
+    assert_eq!(event.body["reason"], "companion_revoked");
+    assert_eq!(client.read(&mut [0]).unwrap(), 0);
+    assert_eq!(server_thread.join().unwrap(), Ok(()));
+}
+
 #[derive(Clone)]
 struct SessionTestClock(Instant);
 
