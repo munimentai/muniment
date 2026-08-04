@@ -269,6 +269,15 @@ impl AttachListenerState {
         })
     }
 
+    fn approval(&self) -> Option<Approval> {
+        let workspace = self
+            .workspace
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()?;
+        Some(desktop_attach_approval(workspace))
+    }
+
     pub(crate) fn revoke_companion(&self, client_identity: &str) -> Result<(), ProtocolError> {
         let mut credentials = self
             .client_credentials
@@ -1204,7 +1213,7 @@ mod tests {
         };
 
         let app = tauri::test::mock_app();
-        assert!(initialize_attach_listener(&app, || None).is_none());
+        assert!(initialize_attach_listener(app.handle(), || None).is_none());
         assert_state_works(&app);
 
         let credential_path = std::env::temp_dir().join(format!(
@@ -1213,7 +1222,9 @@ mod tests {
         ));
         std::fs::write(&credential_path, "invalid").unwrap();
         let app = tauri::test::mock_app();
-        assert!(initialize_attach_listener(&app, || Some(credential_path.clone())).is_none());
+        assert!(
+            initialize_attach_listener(app.handle(), || Some(credential_path.clone())).is_none()
+        );
         assert_state_works(&app);
         std::fs::remove_file(credential_path).unwrap();
     }
