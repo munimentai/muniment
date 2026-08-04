@@ -476,3 +476,26 @@ prompt outcome and reconnect behavior. The implementation slice is
 **ACP capability-revocation mapping**.
 
 This amendment changes no code.
+
+## Amendment — 2026-08-03: adapter distribution and editor configuration
+
+The Linux desktop package is the adapter's carrier. The bundle resource map
+copies `target/release/muniment-acp` into the package as `muniment-acp`.
+`.github/build-linux.sh` builds that release binary before the Tauri bundle
+step. The package installs the adapter at
+`/usr/lib/muniment/muniment-acp`.
+
+`test/acp-bundle.test.js` guards the bundle resource map.
+`test/e2e/runner/linux.sh` checks that the installed adapter exists and is
+executable at `/usr/lib/muniment/muniment-acp`.
+
+An editor configures the absolute installed path
+`/usr/lib/muniment/muniment-acp` as its command and supplies no arguments. The
+adapter stores its identity files under `$XDG_CONFIG_HOME/muniment/`. This
+contract applies to the Zed and JetBrains configuration paths cited above.
+
+No adapter ships in the Windows or macOS desktop package while the attach
+stack remains Linux-only. A later amendment will define distribution and
+editor configuration for those platforms.
+
+This amendment changes no code.
