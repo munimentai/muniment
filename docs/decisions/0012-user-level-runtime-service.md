@@ -213,24 +213,43 @@ desktop reaches a safe handoff point. The service waits without opening the
 endpoint, journal, CAS, or Pi.
 
 The safe handoff point has no active run, pending permission gate, authentication
-operation, session refresh, or in-flight external effect. The desktop then
-pauses new requests, stops accepting connections, closes the listener and Pi,
-closes the journal, and releases the lock. The service must acquire that lock
-before it opens any moved state. It then opens the unchanged ADR 0009 endpoint,
-and the desktop reconnects as a client. Clients treat the gap as an ordinary
+operation, session refresh, or in-flight external effect. The waiting service
+connects to the desktop-owned ADR 0009 endpoint and sends a migration control
+request in an existing `muniment.attach/1` request envelope. The request asks
+the desktop to quiesce and carries a single-use handoff nonce and bounded
+deadline. This migration operation adds no endpoint or wire version.
+
+The desktop rejects the request and remains the owner when it cannot reach the
+safe handoff point. Otherwise, it pauses new requests and returns a prepared
+response on that connection. It then stops accepting connections, closes the
+listener and all moved state, and releases the lock. The prepared response is
+the service's only authority to attempt that handoff. The service must acquire
+the lock before it opens the journal, CAS, Pi, device session, or listener.
+
+After opening all moved state and the unchanged endpoint, the service returns
+the nonce in its `welcome` message. The desktop opens a probe connection and
+checks the nonce and service readiness. It closes that probe before it
+reconnects as an ordinary client. Other clients treat the gap as an ordinary
 bounded reconnect and resume from committed cursors.
 
 The desktop does not release ownership while a permission answer or an
 external effect has an unknown outcome. If the service misses its readiness
-deadline, the desktop may reclaim ownership only after it confirms that no
-process holds the lock and no live listener exists. A stale desktop that does
-not implement handoff keeps ownership until it exits. These rules allow a
-temporary interval with no owner, but never an interval with two owners.
+deadline, it closes any listener and moved state, releases the lock, and does
+not retry that handoff. The desktop restores ownership only by acquiring the
+same lock. It then reopens all moved state before it reopens the listener. A
+service failure response on the control connection cancels preparation before
+the desktop releases the lock. Desktop ownership then remains unchanged. A
+stale desktop that does not implement handoff keeps ownership until it exits.
+These rules allow a temporary interval with no owner, but never an interval
+with two owners.
 
 Implementation proceeds in reviewable slices. The first slice is **Linux
 runtime ownership scaffold**. It adds the workspace member, bounded manifest,
 Linux instance-lock acquisition, and mutual-exclusion tests. The scaffold does
 not open the attach endpoint, journal, CAS, or Pi. Later slices move the
-listener and approval coordinator, journal and Pi execution, shared device
-session, desktop client conversion, Linux user-unit registration, and Remote
-Control in that order. This amendment changes no runtime code.
+approval coordinator, journal and Pi execution, shared device session, desktop
+client conversion, and Linux user-unit registration behind dormant service
+entry points. The desktop remains the owner throughout those slices. The final
+cutover slice activates the listener, approval coordinator, journal, CAS, Pi,
+device session, credentials, authorization, and permission gates together.
+Remote Control follows the cutover. This amendment changes no runtime code.
