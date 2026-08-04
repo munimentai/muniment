@@ -297,6 +297,9 @@ pub fn start_attach_listener<R: tauri::Runtime>(app: tauri::AppHandle<R>) {
         let Ok(filesystem) = AttachFilesystem::from_environment() else {
             return;
         };
+        let Ok(_instance_lock) = filesystem.acquire_instance_lock() else {
+            return;
+        };
         let Ok(listener) = AttachTransport::bind(&filesystem) else {
             return;
         };
