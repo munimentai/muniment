@@ -173,3 +173,64 @@ reducing the later migration.
 - [ADR 0011 — companion surface repository strategy](0011-companion-surface-repo-strategy.md)
 - [Harness specification](../spec/harness-spec.md)
 - [Native authentication contract](../auth.md)
+
+## Amendment — 2026-08-04: runtime-service extraction sequence
+
+Extraction starts on Linux. The service is the `muniment-runtime` binary crate
+at `src-tauri/runtime/`, beside the existing `core`, `attach`, `cli`, and `acp`
+workspace members. Windows Scheduled Task registration and macOS `launchd`
+registration require a later amendment. Phase one does not claim that either
+platform can run the service.
+
+`muniment-runtime` may depend directly on `muniment-core`,
+`muniment-attach`, and the narrow platform and serialization crates needed to
+host them. It must not depend on `muniment-desktop`, Tauri, the frontend, the
+CLI, or the ACP adapter. It has its own format, lint, test, and dependency-tree
+CI steps. This follows ADR 0011's companion-crate shape while preserving the
+opposite dependency direction: clients depend only on `muniment-attach`, while
+the service may compose the governed core with the attach protocol.
+
+Phase one moves the Pi child and dispatcher, journal and CAS, device session,
+entitlement snapshot, credentials, workspace authorization, permission gates,
+and ADR 0009 listener into `muniment-runtime`. The desktop keeps Tauri windows,
+navigation, composer state, selected local paths, audio capture, shortcuts, and
+other presentation state. A workspace authority is the signed
+`grant.workspace` value. A surface working directory is only a requested local
+execution root. The service validates and records their mapping instead of
+treating the directory as workspace authority.
+
+During phase one, the running desktop presents the service-owned approval
+challenge. The desktop reports an explicit user choice and cannot manufacture
+approval, including approval of its own connection. If no desktop can present
+the challenge, a new connection fails closed. The service-mediated browser
+presenter in the base decision follows in a later slice. Existing approved
+connections and active runs do not require a desktop window.
+
+The service and the legacy desktop use ADR 0009's existing per-profile instance
+lock. They never use separate migration locks or endpoint names. A legacy
+desktop that already holds the lock keeps the listener until an updated
+desktop reaches a safe handoff point. The service waits without opening the
+endpoint, journal, CAS, or Pi.
+
+The safe handoff point has no active run, pending permission gate, authentication
+operation, session refresh, or in-flight external effect. The desktop then
+pauses new requests, stops accepting connections, closes the listener and Pi,
+closes the journal, and releases the lock. The service must acquire that lock
+before it opens any moved state. It then opens the unchanged ADR 0009 endpoint,
+and the desktop reconnects as a client. Clients treat the gap as an ordinary
+bounded reconnect and resume from committed cursors.
+
+The desktop does not release ownership while a permission answer or an
+external effect has an unknown outcome. If the service misses its readiness
+deadline, the desktop may reclaim ownership only after it confirms that no
+process holds the lock and no live listener exists. A stale desktop that does
+not implement handoff keeps ownership until it exits. These rules allow a
+temporary interval with no owner, but never an interval with two owners.
+
+Implementation proceeds in reviewable slices. The first slice is **Linux
+runtime ownership scaffold**. It adds the workspace member, bounded manifest,
+Linux instance-lock acquisition, and mutual-exclusion tests. The scaffold does
+not open the attach endpoint, journal, CAS, or Pi. Later slices move the
+listener and approval coordinator, journal and Pi execution, shared device
+session, desktop client conversion, Linux user-unit registration, and Remote
+Control in that order. This amendment changes no runtime code.
