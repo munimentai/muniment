@@ -27,7 +27,8 @@ let pairingListener
 let pairingUnlisten
 let pairingRegistrationError
 let dialogResult
-let confirmResult
+let windowFocused
+let requestUserAttention
 let dragDropListener
 let dragDropUnlisten
 let dragDropRegistrationError
@@ -44,9 +45,14 @@ vi.mock('@tauri-apps/plugin-global-shortcut', () => ({
   unregister: (...args) => unregisterGlobalShortcut(...args),
 }))
 
-vi.mock('@tauri-apps/plugin-dialog', () => ({
-  confirm: (...args) => confirmResult(...args),
-  open: () => Promise.resolve(dialogResult),
+vi.mock('@tauri-apps/plugin-dialog', () => ({ open: () => Promise.resolve(dialogResult) }))
+
+vi.mock('@tauri-apps/api/window', () => ({
+  UserAttentionType: { Informational: 2 },
+  getCurrentWindow: () => ({
+    isFocused: () => Promise.resolve(windowFocused),
+    requestUserAttention: (...args) => requestUserAttention(...args),
+  }),
 }))
 
 vi.mock('@tauri-apps/api/webview', () => ({
@@ -161,11 +167,12 @@ beforeEach(() => {
   pairingListener = undefined
   pairingUnlisten = vi.fn()
   pairingRegistrationError = undefined
+  windowFocused = true
+  requestUserAttention = vi.fn().mockResolvedValue(undefined)
   dragDropListener = undefined
   dragDropUnlisten = vi.fn()
   dragDropRegistrationError = undefined
   dialogResult = null
-  confirmResult = vi.fn().mockResolvedValue(false)
   globalShortcutHandler = undefined
   registeredShortcuts = new Set()
   registerGlobalShortcut = vi.fn(async (shortcut, handler) => {
@@ -248,14 +255,13 @@ describe('pairing decisions', () => {
   })
 
   it.each([
-    ['approves', true],
-    ['declines', false],
-  ])('%s a pairing request', async (_, approve) => {
-    confirmResult.mockResolvedValue(approve)
+    ['allows', 'Allow', true],
+    ['denies', 'Deny', false],
+  ])('%s a pairing request', async (_, button, approve) => {
     render(App)
     await waitFor(() => expect(pairingListener).toBeDefined())
 
-    await pairingListener({
+    pairingListener({
       payload: {
         challenge: 'challenge-1',
         claimed_kind: 'ACP adapter',
@@ -263,14 +269,15 @@ describe('pairing decisions', () => {
       },
     })
 
-    expect(confirmResult).toHaveBeenCalledWith(
-      'The connecting program supplied these claims: kind ACP adapter and version 2.4.1. Allow this program to connect to this Muniment desktop session?',
-      { title: 'Approve Muniment connection', kind: 'info' },
-    )
-    expect(invoke).toHaveBeenCalledWith('attach_pairing_decide', {
-      challenge: 'challenge-1',
-      approve,
-    })
+    const dialog = await screen.findByRole('dialog', { name: 'Approve Muniment connection' })
+    expect(dialog).toHaveTextContent('The connecting program supplied these claims: kind ACP adapter and version 2.4.1.')
+    await waitFor(() => expect(within(dialog).getByRole('button', { name: 'Deny' })).toHaveFocus())
+
+    await fireEvent.click(within(dialog).getByRole('button', { name: button }))
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('attach_pairing_decide', {
+      challenge: 'challenge-1', approve,
+    }))
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
   })
 
   it('handles a rejected pairing decision without exposing its details', async () => {
@@ -286,22 +293,27 @@ describe('pairing decisions', () => {
     render(App)
     await waitFor(() => expect(pairingListener).toBeDefined())
 
-    await expect(pairingListener({ payload: { challenge: 'challenge-2' } })).resolves.toBeUndefined()
+    pairingListener({ payload: { challenge: 'challenge-2' } })
+    await fireEvent.click(await screen.findByRole('button', { name: 'Allow' }))
 
-    expect(error).toHaveBeenCalledWith('Pairing decision failed.')
+    await waitFor(() => expect(error).toHaveBeenCalledWith('Pairing decision failed.'))
     expect(error).not.toHaveBeenCalledWith(expect.stringContaining('sensitive'))
   })
 
-  it('handles a rejected confirmation without sending a pairing decision', async () => {
-    confirmResult.mockRejectedValue(new Error('sensitive confirmation detail'))
-    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+  it('denies with Escape and restores focus', async () => {
     render(App)
+    const composer = await screen.findByRole('textbox', { name: 'Message' })
+    composer.focus()
     await waitFor(() => expect(pairingListener).toBeDefined())
 
-    await expect(pairingListener({ payload: { challenge: 'challenge-3' } })).resolves.toBeUndefined()
+    pairingListener({ payload: { challenge: 'challenge-3' } })
+    await screen.findByRole('dialog')
+    await fireEvent.keyDown(document, { key: 'Escape' })
 
-    expect(invoke).not.toHaveBeenCalledWith('attach_pairing_decide', expect.anything())
-    expect(error).toHaveBeenCalledWith('Pairing decision failed.')
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('attach_pairing_decide', {
+      challenge: 'challenge-3', approve: false,
+    }))
+    await waitFor(() => expect(composer).toHaveFocus())
   })
 
   it.each([
@@ -313,15 +325,34 @@ describe('pairing decisions', () => {
     render(App)
     await waitFor(() => expect(pairingListener).toBeDefined())
 
-    await expect(pairingListener({
+    pairingListener({
       payload: { challenge: 'challenge-hostile', ...claim },
-    })).resolves.toBeUndefined()
+    })
 
-    expect(confirmResult.mock.calls[0][0]).toContain('unknown')
-    expect(invoke).toHaveBeenCalledWith('attach_pairing_decide', {
+    expect(await screen.findByRole('dialog')).toHaveTextContent('unknown')
+    await fireEvent.click(screen.getByRole('button', { name: 'Deny' }))
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('attach_pairing_decide', {
       challenge: 'challenge-hostile',
       approve: false,
-    })
+    }))
+  })
+
+  it('queues a second request and requests attention for an unfocused window', async () => {
+    windowFocused = false
+    render(App)
+    await waitFor(() => expect(pairingListener).toBeDefined())
+
+    pairingListener({ payload: { challenge: 'first', claimed_kind: 'CLI', claimed_version: '1' } })
+    pairingListener({ payload: { challenge: 'second', claimed_kind: 'Editor', claimed_version: '2' } })
+
+    expect(await screen.findByRole('dialog')).toHaveTextContent('kind CLI and version 1')
+    await waitFor(() => expect(requestUserAttention).toHaveBeenCalledTimes(2))
+    await fireEvent.click(screen.getByRole('button', { name: 'Allow' }))
+    await waitFor(() => expect(screen.getByRole('dialog')).toHaveTextContent('kind Editor and version 2'))
+    await fireEvent.click(screen.getByRole('button', { name: 'Deny' }))
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('attach_pairing_decide', {
+      challenge: 'second', approve: false,
+    }))
   })
 })
 

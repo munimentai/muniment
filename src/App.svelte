@@ -1,11 +1,13 @@
 <script>
   import { onMount, tick, untrack } from 'svelte'
   import { getCurrentWebview } from '@tauri-apps/api/webview'
-  import { confirm, open } from '@tauri-apps/plugin-dialog'
+  import { getCurrentWindow, UserAttentionType } from '@tauri-apps/api/window'
+  import { open } from '@tauri-apps/plugin-dialog'
   import { register, unregister } from '@tauri-apps/plugin-global-shortcut'
 
   import AccessPanel from './lib/AccessPanel.svelte'
   import AssistantMarkdown from './lib/AssistantMarkdown.svelte'
+  import ConfirmDialog from './lib/ConfirmDialog.svelte'
   import Onboarding from './lib/Onboarding.svelte'
   import { ARTIFACT_RAIL_MAX_WIDTH, ARTIFACT_RAIL_MIN_WIDTH, artifactRailShortcut, createArtifactRailController, defaultArtifactRailWidth, isArtifactRailShortcut, shortcutDisplayLabel } from './lib/artifact-rail-state.js'
   import { bootState, errorState, statusState, waitingState } from './lib/auth-state.js'
@@ -112,6 +114,7 @@
   let artifactRailPointer = $state()
   let workspace = $state()
   let entitlementToastVisible = $state(false)
+  let pairingRequests = $state([])
   const artifactShortcut = artifactRailShortcut()
   let destroyed = false
   const sidebarWidth = 260
@@ -620,19 +623,16 @@
 
   onMount(() => {
     let pairingUnlisten
-    window.__TAURI__?.event?.listen('attach-pairing-requested', async ({ payload }) => {
-      try {
-        const challenge = payload?.challenge
-        const claimedKind = boundedAttachClaim(payload?.claimed_kind)
-        const claimedVersion = boundedAttachClaim(payload?.claimed_version)
-        const approve = await confirm(
-          `The connecting program supplied these claims: kind ${claimedKind} and version ${claimedVersion}. Allow this program to connect to this Muniment desktop session?`,
-          { title: 'Approve Muniment connection', kind: 'info' },
-        )
-        await tauri.invoke('attach_pairing_decide', { challenge, approve })
-      } catch {
-        console.error('Pairing decision failed.')
-      }
+    window.__TAURI__?.event?.listen('attach-pairing-requested', ({ payload }) => {
+      pairingRequests = [...pairingRequests, {
+        challenge: payload?.challenge,
+        claimedKind: boundedAttachClaim(payload?.claimed_kind),
+        claimedVersion: boundedAttachClaim(payload?.claimed_version),
+      }]
+      const appWindow = getCurrentWindow()
+      void appWindow.isFocused().then((focused) => {
+        if (!focused) return appWindow.requestUserAttention(UserAttentionType.Informational)
+      }).catch(() => console.error('Pairing attention request failed.'))
     }).then((stop) => {
       if (destroyed) stop()
       else pairingUnlisten = stop
@@ -719,6 +719,18 @@
       window.removeEventListener('resize', fitArtifactRail)
     }
   })
+
+  async function decidePairing(approve) {
+    const request = pairingRequests[0]
+    if (!request) return
+    try {
+      await tauri.invoke('attach_pairing_decide', { challenge: request.challenge, approve })
+    } catch {
+      console.error('Pairing decision failed.')
+    } finally {
+      pairingRequests = pairingRequests.slice(1)
+    }
+  }
 
   async function chooseFiles() {
     if (active) return
@@ -1089,6 +1101,14 @@
     {/if}
   {/if}
 </main>
+
+{#if pairingRequests[0]}
+  {#key pairingRequests[0]}
+    <ConfirmDialog title="Approve Muniment connection" onDecision={decidePairing}>
+      <p>The connecting program supplied these claims: kind {pairingRequests[0].claimedKind} and version {pairingRequests[0].claimedVersion}. Allow this program to connect to this Muniment desktop session?</p>
+    </ConfirmDialog>
+  {/key}
+{/if}
 
 <style>
   main {
