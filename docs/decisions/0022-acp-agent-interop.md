@@ -499,3 +499,18 @@ stack remains Linux-only. A later amendment will define distribution and
 editor configuration for those platforms.
 
 This amendment changes no code.
+
+## Amendment — 2026-08-03: `editor-extension/` disposition
+
+This amendment supersedes the follow-up-slices statement that reserves the
+disposition of `editor-extension/`. The repository removes that tree. Git
+history is its only archive.
+
+The root `protocol-fixtures/` tree stays in this repository as the canonical
+protocol fixture source. Removing `editor-extension/` does not remove or move
+those fixtures.
+
+The ACP adapter is the sole editor surface. The retired extension will never
+publish.
+
+This amendment changes no code.
