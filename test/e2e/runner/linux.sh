@@ -187,6 +187,7 @@ sudo apt-get install -y -qq webkit2gtk-driver xvfb chromium chromium-driver "$de
 npm ci --no-audit --no-fund >>"$installer_log" 2>&1 || { status=1; exit; }
 command -v tauri-driver >/dev/null || cargo install tauri-driver --version 2.0.5 --locked >>"$installer_log" 2>&1 || { status=1; exit; }
 app_binary=$(command -v muniment-desktop || command -v muniment) || { echo 'installed application binary is unavailable' >&2; status=1; exit; }
+[[ -x /usr/lib/muniment/muniment-acp ]] || { echo 'installed ACP adapter is unavailable or not executable' >&2; status=1; exit; }
 chromedriver --port=9515 --allowed-ips=127.0.0.1 >>"$raw/chromedriver.log" 2>&1 &
 export MUNIMENT_E2E_APP_BINARY="$app_binary" MUNIMENT_E2E_RAW_DIR="$raw"
 export MUNIMENT_E2E_EXTERNAL_DRIVER=1
