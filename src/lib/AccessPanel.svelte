@@ -124,10 +124,12 @@
   onMount(() => {
     loadAccess()
     const outside = (event) => {
-      if (accessOpen && !accessPopover?.contains(event.target) && !profileButton?.contains(event.target)) closeAccess()
+      const path = event.composedPath()
+      if (accessOpen && !path.includes(accessPopover) && !path.includes(profileButton)) closeAccess()
     }
     const escape = (event) => {
-      if (accessOpen && event.key === 'Escape' && !escapeBlocked()) {
+      if (!accessOpen || event.key !== 'Escape') return
+      if (!escapeBlocked()) {
         event.preventDefault()
         closeAccess()
       }

@@ -1,6 +1,10 @@
+// @vitest-environment jsdom
+
 import fs from 'node:fs'
 import path from 'node:path'
-import { describe, expect, it } from 'vitest'
+import { cleanup } from '@testing-library/svelte'
+import '@testing-library/jest-dom/vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const source = fs.readFileSync(path.join(process.cwd(), 'src/lib/AccessPanel.svelte'), 'utf8')
 const styles = source.match(/<style>([\s\S]*)<\/style>/)?.[1] ?? ''
@@ -8,6 +12,15 @@ const rules = new Map([...styles
   .replace(/\/\*[\s\S]*?\*\//g, '')
   .matchAll(/([^{}]+)\{([^{}]*)\}/g)]
   .map(([, selector, declarations]) => [selector.trim().replace(/\s+/g, ' '), declarations]))
+
+beforeEach(() => {
+  vi.stubGlobal('requestAnimationFrame', (callback) => callback())
+})
+
+afterEach(() => {
+  cleanup()
+  vi.unstubAllGlobals()
+})
 
 describe('access popover layout', () => {
   it('bounds the column while only its content region scrolls', () => {
