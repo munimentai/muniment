@@ -55,7 +55,7 @@ grep -Fq 'The desktop sends no classification metadata.' docs/spec/harness-spec.
 test -z "$(grep -rl --exclude='0003-resident-gemma-model.md' 'muniment-resident-gemma' docs/)"
 test -z "$(grep -ril 'resident local gemma' docs/)"
 # companion workspace and its path-scoped CI lane
-grep -Fq 'members = [".", "core", "attach", "cli", "acp"]' src-tauri/Cargo.toml
+grep -Fq 'members = [".", "core", "attach", "cli", "acp", "runtime"]' src-tauri/Cargo.toml
 grep -Fq 'resolver = "2"' src-tauri/Cargo.toml
 test -f src-tauri/attach/Cargo.toml
 test -f src-tauri/attach/src/lib.rs
@@ -71,6 +71,12 @@ grep -Fq 'cargo fmt --manifest-path src-tauri/Cargo.toml --package muniment-atta
 grep -Fq 'cargo clippy --manifest-path src-tauri/Cargo.toml --package muniment-attach --package muniment-cli --package muniment-acp --all-targets --locked -- -D warnings' "$ci"
 grep -Fq 'cargo test --manifest-path src-tauri/Cargo.toml --package muniment-attach --package muniment-cli --package muniment-acp --locked' "$ci"
 grep -Fq 'run: test/cli-dependency-boundary.sh' "$ci"
+test -f src-tauri/runtime/Cargo.toml
+test -f src-tauri/runtime/src/main.rs
+grep -Fq 'cargo fmt --manifest-path src-tauri/Cargo.toml --package muniment-runtime --check' "$ci"
+grep -Fq 'cargo clippy --manifest-path src-tauri/Cargo.toml --package muniment-runtime --all-targets --locked -- -D warnings' "$ci"
+grep -Fq 'cargo test --manifest-path src-tauri/Cargo.toml --package muniment-runtime --locked' "$ci"
+grep -Fq 'run: test/runtime-dependency-boundary.sh' "$ci"
 test -d protocol-fixtures/muniment.attach/1
 grep -Fq 'name: attach-fixtures-current' "$ci"
 grep -Fq 'run: cargo run -p muniment-attach --bin export-attach-fixtures -- ../protocol-fixtures --check' "$ci"
@@ -120,6 +126,12 @@ fi
 grep -Fq 'tauri' "$boundary_output"
 restore_dependency_probe
 trap - EXIT
+test -x test/runtime-dependency-boundary.sh
+test/runtime-dependency-boundary.sh muniment-runtime muniment-core muniment-attach
+for forbidden in muniment-desktop muniment-cli muniment-acp tauri tauri-plugin-dialog; do
+  ! test/runtime-dependency-boundary.sh muniment-runtime muniment-core "$forbidden" \
+    >/dev/null 2>&1
+done
 grep -Fq "needs.smoke.outputs.desktop == 'true'" "$ci"
 test -f src-tauri/tauri.machine.conf.json
 grep -Fq '"upgradeCode": "c75b4a56-7d8b-5b99-9fc7-61ef0aabe84b"' src-tauri/tauri.machine.conf.json
