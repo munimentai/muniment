@@ -2641,6 +2641,7 @@ dependencies = [
 name = "muniment-attach"
 version = "0.0.1"
 dependencies = [
+ "libc",
  "serde",
  "serde_json",
  "uuid",

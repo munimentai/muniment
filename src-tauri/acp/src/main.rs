@@ -23,6 +23,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver};
 use std::thread;
+use std::time::Duration;
 
 const CLIENT_KIND: &str = "acp-adapter";
 const CLIENT_ID_FILE: &str = "acp-client-id";
@@ -825,8 +826,14 @@ fn wait_for_permission_response(
     pending: &mut VecDeque<io::Result<String>>,
 ) -> Result<PermissionDecision, PromptFailure> {
     loop {
-        let Ok(line) = input.recv() else {
-            return Ok(PermissionDecision::Deny);
+        if client.read_capability_revocation_if_ready()? {
+            drop_authorized_client_credential();
+            return Err(PromptFailure::CapabilityRevoked);
+        }
+        let line = match input.recv_timeout(Duration::from_millis(10)) {
+            Ok(line) => line,
+            Err(mpsc::RecvTimeoutError::Timeout) => continue,
+            Err(mpsc::RecvTimeoutError::Disconnected) => return Ok(PermissionDecision::Deny),
         };
         let Ok(line) = line else {
             return Ok(PermissionDecision::Deny);

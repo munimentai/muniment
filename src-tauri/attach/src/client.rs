@@ -320,6 +320,7 @@ mod linux {
     use std::env;
     use std::fs::File;
     use std::io::{self, Read, Write};
+    use std::os::unix::io::AsRawFd;
     use std::os::unix::net::UnixStream;
     use std::path::PathBuf;
     use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -1009,6 +1010,53 @@ mod linux {
                     _ => return Err(ClientError::UnexpectedMessage),
                 };
             self.validate_run_stream_event(event)
+        }
+
+        pub fn read_capability_revocation_if_ready(&mut self) -> Result<bool, ClientError> {
+            let mut descriptor = libc::pollfd {
+                fd: self.stream.as_raw_fd(),
+                events: libc::POLLIN,
+                revents: 0,
+            };
+            // SAFETY: `descriptor` points to one valid pollfd for the duration of this call.
+            let ready = unsafe { libc::poll(&mut descriptor, 1, 0) };
+            if ready < 0 {
+                return Err(ClientError::DesktopUnavailable);
+            }
+            if ready == 0 {
+                return Ok(false);
+            }
+            let authorization_remaining = Duration::from_secs(self.summary.expires_in_seconds)
+                .saturating_sub(self.authorized_at.elapsed());
+            let wait =
+                authorization_remaining.min(Duration::from_secs(self.summary.idle_timeout_seconds));
+            if wait.is_zero() {
+                return Err(ClientError::AuthorizationExpired);
+            }
+            let value = read_value(&mut self.stream, deadline(wait))?;
+            if value
+                .get("protocol")
+                .and_then(Value::as_str)
+                .is_some_and(|protocol| protocol != PROTOCOL)
+            {
+                return Err(ClientError::ProtocolIncompatible);
+            }
+            let event =
+                match serde_json::from_value(value).map_err(|_| ClientError::UnexpectedMessage)? {
+                    Envelope::Event(event) => event,
+                    Envelope::Error(error) => return Err(map_protocol_error(error.error.code())),
+                    _ => return Err(ClientError::UnexpectedMessage),
+                };
+            if Self::validate_capability_revocation(&event)?.is_some() {
+                return Ok(true);
+            }
+            let message = self.validate_run_stream_event(event)?;
+            self.active_run_stream
+                .as_mut()
+                .ok_or(ClientError::UnexpectedMessage)?
+                .pending_messages
+                .push_back(message);
+            Ok(false)
         }
 
         fn validate_run_stream_event(
@@ -1719,6 +1767,10 @@ impl AuthorizedClient {
     }
 
     pub fn read_run_stream_message(&mut self) -> Result<RunStreamMessage, ClientError> {
+        Err(ClientError::UnsupportedPlatform)
+    }
+
+    pub fn read_capability_revocation_if_ready(&mut self) -> Result<bool, ClientError> {
         Err(ClientError::UnsupportedPlatform)
     }
 

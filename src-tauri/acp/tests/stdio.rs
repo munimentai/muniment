@@ -744,6 +744,8 @@ fn scripted_prompt_ending(
     let capability_revoked = event_type.starts_with("capability.revoked");
     let revoke_before_cursor_ack = event_type == "capability.revoked.before_cursor_ack";
     let revoke_before_resubscribe = event_type == "capability.revoked.before_resubscribe";
+    let revoke_while_permission_pending =
+        event_type == "capability.revoked.while_permission_pending";
     let stream_closes = stream_closed_body.is_some();
     let event_type = event_type.to_owned();
     let server_config = config.clone();
@@ -790,7 +792,25 @@ fn scripted_prompt_ending(
             }),
         );
 
-        if revoke_before_cursor_ack {
+        if revoke_while_permission_pending {
+            stream
+                .write_all(
+                    &encode_frame(&Event {
+                        protocol: Protocol,
+                        subscription_id: Id::new(first_subscription).unwrap(),
+                        event: EventName::PermissionPending,
+                        run_id: Some(Id::new(run_id).unwrap()),
+                        run_seq: Some(2),
+                        body: json!({
+                            "gate_id": "gate-1", "kind": "confirm",
+                            "title": "Allow write"
+                        }),
+                    })
+                    .unwrap(),
+                )
+                .unwrap();
+            send_capability_revoked(&mut stream);
+        } else if revoke_before_cursor_ack {
             stream
                 .write_all(
                     &encode_frame(&Event {
@@ -1116,6 +1136,19 @@ fn capability_revocation_ends_the_prompt_during_resubscription() {
     assert_eq!(result.responses[0]["error"]["code"], -32000);
     assert_eq!(
         result.responses[0]["error"]["message"],
+        "Muniment capability revoked"
+    );
+    assert!(!result.credential_exists);
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn capability_revocation_ends_the_prompt_while_permission_is_pending() {
+    let result = scripted_prompt_ending("capability.revoked.while_permission_pending", None, false);
+    assert_eq!(result.responses[0]["method"], "session/request_permission");
+    assert_eq!(result.responses[1]["error"]["code"], -32000);
+    assert_eq!(
+        result.responses[1]["error"]["message"],
         "Muniment capability revoked"
     );
     assert!(!result.credential_exists);
