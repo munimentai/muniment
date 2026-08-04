@@ -144,18 +144,37 @@ pub struct AuthorizedCompanion {
 
 pub struct AttachCompanionState {
     #[cfg(target_os = "linux")]
-    listener: Arc<AttachListenerState>,
+    listener: Mutex<Option<Arc<AttachListenerState>>>,
+    #[cfg(target_os = "linux")]
+    workspace: Arc<Mutex<Option<String>>>,
 }
 
 #[cfg(target_os = "linux")]
 impl AttachCompanionState {
     fn new(listener: Arc<AttachListenerState>) -> Self {
-        Self { listener }
+        Self {
+            workspace: listener.workspace.clone(),
+            listener: Mutex::new(Some(listener)),
+        }
+    }
+
+    fn set_listener(&self, listener: Arc<AttachListenerState>) {
+        *self
+            .listener
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(listener);
+    }
+
+    fn listener(&self) -> Result<Arc<AttachListenerState>, ProtocolError> {
+        self.listener
+            .lock()
+            .map_err(|_| ProtocolError::persistence_failed())?
+            .clone()
+            .ok_or_else(ProtocolError::persistence_failed)
     }
 
     pub(crate) fn record_workspace(&self, workspace: String) {
         *self
-            .listener
             .workspace
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(workspace);
@@ -163,26 +182,28 @@ impl AttachCompanionState {
 
     pub(crate) fn clear_workspace(&self) {
         *self
-            .listener
             .workspace
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
     }
 
     pub(crate) fn approval(&self) -> Option<Approval> {
-        self.listener.approval()
-    }
-}
-
-#[cfg(target_os = "linux")]
-impl AttachListenerState {
-    fn approval(&self) -> Option<Approval> {
         let workspace = self
             .workspace
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .clone()?;
         Some(desktop_attach_approval(workspace))
+    }
+}
+
+#[cfg(target_os = "linux")]
+impl Default for AttachCompanionState {
+    fn default() -> Self {
+        Self {
+            listener: Mutex::new(None),
+            workspace: Arc::new(Mutex::new(None)),
+        }
     }
 }
 
@@ -205,7 +226,7 @@ pub fn attach_companions(
     state: tauri::State<'_, AttachCompanionState>,
 ) -> Result<Vec<AuthorizedCompanion>, ProtocolError> {
     #[cfg(target_os = "linux")]
-    return state.listener.list_companions();
+    return state.listener()?.list_companions();
 
     #[cfg(not(target_os = "linux"))]
     {
@@ -220,7 +241,7 @@ pub fn attach_revoke_companion(
     client_identity: String,
 ) -> Result<(), ProtocolError> {
     #[cfg(target_os = "linux")]
-    return state.listener.revoke_companion(&client_identity);
+    return state.listener()?.revoke_companion(&client_identity);
 
     #[cfg(not(target_os = "linux"))]
     {
@@ -232,12 +253,19 @@ pub fn attach_revoke_companion(
 #[cfg(target_os = "linux")]
 impl AttachListenerState {
     fn load(credential_path: &std::path::Path) -> Result<Self, ProtocolError> {
+        Self::load_with_workspace(credential_path, Arc::new(Mutex::new(None)))
+    }
+
+    fn load_with_workspace(
+        credential_path: &std::path::Path,
+        workspace: Arc<Mutex<Option<String>>>,
+    ) -> Result<Self, ProtocolError> {
         Ok(Self {
             workspace_contexts: Arc::new(Mutex::new(HashMap::new())),
             client_credentials: Arc::new(Mutex::new(load_client_credentials(credential_path)?)),
             credential_path: credential_path.to_owned(),
             live_connections: LiveConnectionRegistry::default(),
-            workspace: Arc::new(Mutex::new(None)),
+            workspace,
         })
     }
 
@@ -376,16 +404,34 @@ fn should_retry_attach_accept(error: AttachAcceptError) -> bool {
 }
 
 #[cfg(target_os = "linux")]
+fn initialize_attach_listener<R, F>(
+    app: &tauri::AppHandle<R>,
+    credential_path: F,
+) -> Option<Arc<AttachListenerState>>
+where
+    R: tauri::Runtime,
+    F: FnOnce() -> Option<PathBuf>,
+{
+    app.manage(AttachCompanionState::default());
+    let credential_path = credential_path()?;
+    let workspace = app.state::<AttachCompanionState>().workspace.clone();
+    let state =
+        Arc::new(AttachListenerState::load_with_workspace(&credential_path, workspace).ok()?);
+    app.state::<AttachCompanionState>()
+        .set_listener(state.clone());
+    Some(state)
+}
+
+#[cfg(target_os = "linux")]
 pub fn start_attach_listener<R: tauri::Runtime>(app: tauri::AppHandle<R>) {
-    let credential_path = match app.path().app_data_dir() {
-        Ok(path) => path.join("attach-client-credentials.json"),
-        Err(_) => return,
+    let Some(state) = initialize_attach_listener(&app, || {
+        app.path()
+            .app_data_dir()
+            .ok()
+            .map(|path| path.join("attach-client-credentials.json"))
+    }) else {
+        return;
     };
-    let state = match AttachListenerState::load(&credential_path) {
-        Ok(state) => Arc::new(state),
-        Err(_) => return,
-    };
-    app.manage(AttachCompanionState::new(state.clone()));
     let approval_app = app.clone();
     app.state::<AttachApprovalState>()
         .register_presenter(move |request| {
@@ -1143,6 +1189,33 @@ mod tests {
         assert_eq!(state.approval().unwrap().workspace, "signed-workspace");
         state.clear_workspace();
         assert!(state.approval().is_none());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn workspace_state_survives_failed_listener_initialization() {
+        let assert_state_works = |app: &tauri::App<tauri::test::MockRuntime>| {
+            let state = app.state::<AttachCompanionState>();
+            assert!(state.approval().is_none());
+            state.record_workspace("signed-workspace".into());
+            assert_eq!(state.approval().unwrap().workspace, "signed-workspace");
+            state.clear_workspace();
+            assert!(state.approval().is_none());
+        };
+
+        let app = tauri::test::mock_app();
+        assert!(initialize_attach_listener(&app, || None).is_none());
+        assert_state_works(&app);
+
+        let credential_path = std::env::temp_dir().join(format!(
+            "muniment-invalid-attach-credentials-{}.json",
+            Uuid::now_v7()
+        ));
+        std::fs::write(&credential_path, "invalid").unwrap();
+        let app = tauri::test::mock_app();
+        assert!(initialize_attach_listener(&app, || Some(credential_path.clone())).is_none());
+        assert_state_works(&app);
+        std::fs::remove_file(credential_path).unwrap();
     }
 
     #[cfg(target_os = "linux")]
