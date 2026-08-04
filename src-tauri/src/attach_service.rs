@@ -110,7 +110,16 @@ pub(crate) struct ClientCredential {
     credential: String,
     claimed_kind: String,
     claimed_version: String,
+    #[serde(deserialize_with = "deserialize_approval_time")]
     approved_at: Option<String>,
+}
+
+#[cfg(target_os = "linux")]
+fn deserialize_approval_time<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    <Option<String> as serde::Deserialize>::deserialize(deserializer)
 }
 
 #[cfg(target_os = "linux")]
