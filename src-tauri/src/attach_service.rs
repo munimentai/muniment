@@ -2051,7 +2051,7 @@ mod tests {
     #[test]
     fn revoke_companion_persists_before_emitting_and_reconnect_fails_closed() {
         use muniment_attach::{decode_frame, handshake_stream_with_credential, ClientError};
-        use muniment_core::attach::linux::{ApprovalDecision, PeerCredentials};
+        use muniment_core::attach::linux::{ApprovalDecision, AttachSessionError, PeerCredentials};
         use std::io::Read;
 
         let root = std::env::temp_dir().join(format!("muniment-attach-revoke-{}", Uuid::now_v7()));
@@ -2138,8 +2138,11 @@ mod tests {
         assert!(worker.join().unwrap().is_ok());
 
         let (reconnect, _observer, worker) = connect(credential);
-        assert_eq!(reconnect.unwrap_err(), ClientError::AuthorizationExpired);
-        assert!(worker.join().unwrap().is_err());
+        assert_eq!(reconnect.unwrap_err(), ClientError::UnexpectedMessage);
+        assert_eq!(
+            worker.join().unwrap(),
+            Err(AttachSessionError::Authorization)
+        );
 
         let credential = "cd".repeat(32);
         state
@@ -2175,6 +2178,7 @@ mod tests {
         ));
         client.list_threads(None).unwrap();
         drop(client);
+        drop(observer);
         assert!(worker.join().unwrap().is_ok());
         std::fs::remove_dir_all(root).unwrap();
     }
