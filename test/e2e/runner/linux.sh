@@ -183,7 +183,7 @@ gh api -H 'Accept: application/octet-stream' "repos/${GITHUB_REPOSITORY}/release
 
 sudo apt-get update -qq >>"$installer_log" 2>&1 || { status=1; exit; }
 installed=1
-sudo apt-get install -y -qq webkit2gtk-driver xvfb chromium chromium-driver "$deb" >>"$installer_log" 2>&1 || { status=1; exit; }
+sudo apt-get install -y -qq webkit2gtk-driver xvfb xdotool chromium chromium-driver "$deb" >>"$installer_log" 2>&1 || { status=1; exit; }
 npm ci --no-audit --no-fund >>"$installer_log" 2>&1 || { status=1; exit; }
 command -v tauri-driver >/dev/null || cargo install tauri-driver --version 2.0.5 --locked >>"$installer_log" 2>&1 || { status=1; exit; }
 app_binary=$(command -v muniment-desktop || command -v muniment) || { echo 'installed application binary is unavailable' >&2; status=1; exit; }
