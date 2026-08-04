@@ -1,5 +1,5 @@
 //! Auth persistence backed by the platform keychain via the `keyring` crate:
-//! macOS Keychain, Windows Credential Manager, Secret Service on Linux.
+//! macOS Keychain, Windows Credential Manager, and the Linux kernel keyring.
 
 use keyring::Entry;
 use muniment_core::auth::{
