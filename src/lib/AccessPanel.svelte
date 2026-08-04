@@ -168,7 +168,14 @@
       if (accessOpen && !path.includes(accessPopover) && !path.includes(profileButton)) closeAccess()
     }
     const escape = (event) => {
-      if (accessOpen && event.key === 'Escape' && !escapeBlocked()) {
+      if (!accessOpen || event.key !== 'Escape') return
+      if (revokingIdentity) {
+        event.preventDefault()
+        event.stopPropagation()
+        cancelRevokeCompanion()
+        return
+      }
+      if (!escapeBlocked()) {
         event.preventDefault()
         closeAccess()
       }

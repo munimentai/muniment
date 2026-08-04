@@ -96,6 +96,24 @@ describe('access popover layout', () => {
     expect(screen.getByRole('dialog', { name: 'Profile' })).toBeInTheDocument()
   })
 
+  it('keeps the profile open when document receives Escape during a revoke', async () => {
+    const invoke = vi.fn(async (command) => {
+      if (command === 'auth_entitlement_snapshot') return snapshot
+      if (command === 'auth_devices') return []
+      if (command === 'attach_companions') return [companion]
+    })
+    renderPanel(invoke)
+    await fireEvent.click(await screen.findByRole('button', { name: /Alice/ }))
+    const revoke = await screen.findByRole('button', { name: 'Revoke cli' })
+
+    await fireEvent.click(revoke)
+    await fireEvent.keyDown(document, { key: 'Escape' })
+
+    const restored = await screen.findByRole('button', { name: 'Revoke cli' })
+    await waitFor(() => expect(restored).toHaveFocus())
+    expect(screen.getByRole('dialog', { name: 'Profile' })).toBeInTheDocument()
+  })
+
   it('reloads programs after a confirmed revoke', async () => {
     let programs = [companion]
     const invoke = vi.fn(async (command, args) => {
