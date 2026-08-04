@@ -666,6 +666,44 @@ idempotency, visibility, and contract tests. Third, **ACP session record** uses
 the disclosed profile identifier and created thread ID when `session/new`
 writes the record from ADR 0022. This amendment changes no code.
 
+## Amendment — 2026-08-04: companion revocation
+
+Companion revocation is a local decision by the attach owner. It removes the
+selected companion's persisted client credential from
+`attach-client-credentials.json`. The attach owner owns this decision and the
+credential store even after the ADR 0012 service extraction. The desktop only
+requests the decision through an owner API.
+
+The attach owner blocks request admission for the selected credential while it
+persists the removal. After success, it invalidates every connection capability
+authenticated with that credential before request admission resumes. No new
+request can cross that boundary. A request admitted before the boundary follows
+the existing journal recovery rules. The owner then cancels the affected
+subscriptions. If persistence fails, revocation fails, authority remains valid,
+request admission resumes, and the owner emits no revocation event.
+
+The owner emits exactly one `capability.revoked` event on each affected live
+connection. It emits the event only after it persists removal of the client
+credential that authenticated that connection. The event body is
+`{capability, reason:"companion_revoked"}`. It names that connection's current
+capability and discloses no companion, profile, workspace, or credential data.
+The owner queues the event after it stops accepting requests and before it
+closes the connection. It sends no `stream.closed` event for those cancelled
+subscriptions. A connection that is absent or already closed receives no
+event. Expiry, idle timeout, sign-out, lock, and profile switch do not emit the
+event. Entitlement revocation, session revocation, workspace grant change, and
+transport failure also do not emit it. These operations emit the event only if
+they also remove that connection's persisted client credential.
+
+Removing the credential makes every later authentication attempt with it fail
+closed. A revoked companion can reconnect only through a fresh visible
+approval that creates a new client credential and connection capability.
+
+Implementation follows in two slices. **Desktop companion management** adds
+the list-and-revoke surface backed by the attach owner API. **Attach companion
+revocation emitter** adds atomic live invalidation, event delivery, connection
+closure, and contract tests. This amendment changes no code.
+
 ## Rejected alternatives
 
 **TCP loopback alone.** Loopback limits network reach but supplies no portable
