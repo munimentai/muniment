@@ -449,13 +449,14 @@ pub async fn chat_thread_open(
 mod tests {
     use super::*;
     use crate::chat::{
-        chat_attachments, event_envelope, prepare_new_run, prepare_new_run_with_session_thread,
-        reconcile_interrupted_runs, ChatStorage, SelectedFile, SessionThreadStart,
+        chat_attachments, desktop_provenance, event_envelope, prepare_new_run,
+        prepare_new_run_with_session_thread, ChatStorage, SelectedFile, SessionThreadStart,
     };
     use crate::session_thread::OfferedThread;
     use crate::test_support::append_test_event;
     use chrono::{SecondsFormat, Utc};
     use muniment_core::cas::LocalCas;
+    use muniment_core::journal::reconciliation::reconcile_interrupted_runs;
     use muniment_core::journal::reducer::{project_chat, reduce, PermissionRequest, RunStatus};
     use muniment_core::journal::{EventPayload, Provenance};
     use serde_json::json;
@@ -1526,7 +1527,7 @@ mod tests {
 
         {
             let mut reopened = RunJournal::open(&path).unwrap();
-            reconcile_interrupted_runs(&mut reopened);
+            reconcile_interrupted_runs(&mut reopened, &desktop_provenance(None));
             let interrupted_events = reopened.events(&interrupted).unwrap();
             assert_eq!(interrupted_events.len(), 4);
             assert_eq!(interrupted_events[3].event_type, "run.needs_attention");
@@ -1536,7 +1537,7 @@ mod tests {
             assert_eq!(state.pi_session.unwrap().locator, "session.jsonl");
             assert_eq!(reopened.events(&completed).unwrap().len(), 2);
 
-            reconcile_interrupted_runs(&mut reopened);
+            reconcile_interrupted_runs(&mut reopened, &desktop_provenance(None));
             assert_eq!(reopened.events(&interrupted).unwrap().len(), 4);
             assert_eq!(reopened.events(&completed).unwrap().len(), 2);
         }
