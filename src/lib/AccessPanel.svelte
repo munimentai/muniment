@@ -1,5 +1,5 @@
 <script>
-  import { onMount } from 'svelte'
+  import { onMount, tick } from 'svelte'
 
   import { accessErrorState, accessIdleState, accessLoadingState, accessReadyState, devicesErrorState, devicesIdleState, devicesLoadingState, devicesReadyState } from './auth-state.js'
   import { shortcutFromKeyboardEvent } from './dictation-state.js'
@@ -8,6 +8,7 @@
   let { tauri, subject, onSignOut, escapeBlocked = () => false, voiceShortcut, voiceShortcutChanging, onVoiceShortcutChange, defaultVoiceShortcut } = $props()
   let access = $state(accessIdleState)
   let devices = $state(devicesIdleState)
+  let companions = $state({ name: 'idle', companions: [] })
   let profileSnapshot = $state(null)
   let accessOpen = $state(false)
   let expandedGroups = $state(new Set())
@@ -17,6 +18,9 @@
   let pendingShortcut = $state('')
   let shortcutStatus = $state('')
   let theme = $state(readTheme())
+  let revokingIdentity = $state(null)
+  let revokePending = $state(false)
+  let revokeError = $state('')
   let profileName = $derived(profileSnapshot?.user_display_name ?? subject ?? 'Signed in')
   let profileDetails = $derived(profileSnapshot ? `${profileSnapshot.organization_display_name ?? profileSnapshot.org_id} · ${profileSnapshot.role}` : 'Access unavailable')
 
@@ -54,6 +58,7 @@
   function openAccess() {
     loadAccess(true)
     loadDevices()
+    loadCompanions()
   }
 
   async function loadDevices() {
@@ -62,6 +67,50 @@
       devices = devicesReadyState(await tauri.invoke('auth_devices'))
     } catch (_) {
       devices = devicesErrorState()
+    }
+  }
+
+  async function loadCompanions() {
+    companions = { name: 'loading', companions: [] }
+    try {
+      companions = { name: 'ready', companions: await tauri.invoke('attach_companions') }
+    } catch (_) {
+      companions = { name: 'error', companions: [] }
+    }
+  }
+
+  function askToRevokeCompanion(identity) {
+    revokingIdentity = identity
+    revokeError = ''
+  }
+
+  function cancelRevokeCompanion() {
+    const identity = revokingIdentity
+    revokingIdentity = null
+    revokeError = ''
+    void tick().then(() => Array.from(accessPopover?.querySelectorAll('[data-revoke-companion]') ?? [])
+      .find((button) => button.dataset.revokeCompanion === identity)?.focus())
+  }
+
+  function revokeConfirmKeydown(event) {
+    if (event.key !== 'Escape') return
+    event.preventDefault()
+    event.stopPropagation()
+    cancelRevokeCompanion()
+  }
+
+  async function revokeCompanion(identity) {
+    if (revokePending) return
+    revokePending = true
+    revokeError = ''
+    try {
+      await tauri.invoke('attach_revoke_companion', { clientIdentity: identity })
+      revokingIdentity = null
+      await loadCompanions()
+    } catch (_) {
+      revokeError = 'The program could not be revoked.'
+    } finally {
+      revokePending = false
     }
   }
 
@@ -75,6 +124,8 @@
     capturingShortcut = false
     pendingShortcut = ''
     shortcutStatus = ''
+    revokingIdentity = null
+    revokeError = ''
     profileButton?.focus()
   }
 
@@ -113,7 +164,8 @@
   onMount(() => {
     loadAccess()
     const outside = (event) => {
-      if (accessOpen && !accessPopover?.contains(event.target) && !profileButton?.contains(event.target)) closeAccess()
+      const path = event.composedPath()
+      if (accessOpen && !path.includes(accessPopover) && !path.includes(profileButton)) closeAccess()
     }
     const escape = (event) => {
       if (accessOpen && event.key === 'Escape' && !escapeBlocked()) {
@@ -184,6 +236,35 @@
             </ul>
           {/if}
         </section>
+        <section class="companions-section" aria-labelledby="companions-heading">
+          <h3 id="companions-heading" class="access-label">Connected programs</h3>
+          {#if companions.name === 'loading'}
+            <p class="access-status" aria-live="polite">Loading connected programs…</p>
+          {:else if companions.name === 'error'}
+            <div class="access-status" role="status"><p>Connected programs could not be loaded.</p><button onclick={loadCompanions}>Retry connected programs</button></div>
+          {:else if companions.name === 'ready'}
+            {#if companions.companions.length === 0}<p class="empty-grant">No connected programs</p>{/if}
+            <ul class="companion-list">
+              {#each companions.companions as companion (companion.identity)}
+                <li class="companion-row">
+                  {#if revokingIdentity === companion.identity}
+                    <div class="companion-confirm" role="group" aria-label={`Revoke ${companion.claimed_kind}?`}>
+                      <p><strong>{companion.claimed_kind}</strong> must be approved again before it can reconnect.</p>
+                      {#if revokeError}<p class="revoke-error" role="alert">{revokeError}</p>{/if}
+                      <div class="companion-actions">
+                        <button type="button" disabled={revokePending} onclick={() => revokeCompanion(companion.identity)} onkeydown={revokeConfirmKeydown}>{revokeError ? 'Retry revoke' : 'Revoke'}</button>
+                        <button type="button" disabled={revokePending} onclick={cancelRevokeCompanion} onkeydown={revokeConfirmKeydown}>Cancel</button>
+                      </div>
+                    </div>
+                  {:else}
+                    <div class="companion-details"><strong>{companion.claimed_kind}</strong><span>{companion.claimed_version}</span></div>
+                    <button type="button" class="companion-revoke" data-revoke-companion={companion.identity} aria-label={`Revoke ${companion.claimed_kind}`} onclick={() => askToRevokeCompanion(companion.identity)}>Revoke</button>
+                  {/if}
+                </li>
+              {/each}
+            </ul>
+          {/if}
+        </section>
         <section class="voice-section" aria-labelledby="voice-heading">
           <h3 id="voice-heading" class="access-label">Voice shortcut</h3>
           <p class="shortcut-help">Hold this shortcut to dictate from anywhere.</p>
@@ -231,6 +312,7 @@
   .entitlements-section { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--border); }
   .access-note { margin: 10px 0 0; color: var(--muted); font-size: var(--text-12); }
   .devices-section { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--border); }
+  .companions-section { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--border); }
   .voice-section { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--border); }
   .theme-options { display: inline-flex; border: 1px solid var(--border); border-radius: var(--radius-control); }
   .theme-options button { position: relative; border: 0; border-radius: 0; background: transparent; color: var(--muted); padding: 5px 12px; }
@@ -256,6 +338,23 @@
   /* §6: the word, not the color, carries Active vs Revoked. */
   .device-state { margin-left: auto; color: var(--muted); font: var(--text-12) var(--font-mono); }
   .device-list time { display: block; margin-top: 3px; color: var(--muted); font: var(--text-12) var(--font-mono); }
+  .companion-list { margin: 0; padding: 0; list-style: none; }
+  .companion-row { position: relative; min-height: 34px; padding: 8px 2px; border-top: 1px solid var(--border); }
+  .companion-row:first-child { border-top: 0; }
+  .companion-details { display: flex; align-items: baseline; gap: 7px; padding-right: 62px; font: var(--text-12) var(--font-mono); }
+  .companion-details strong { font-weight: 600; }
+  .companion-details span { overflow: hidden; color: var(--muted); text-overflow: ellipsis; white-space: nowrap; }
+  .companion-revoke { position: absolute; top: 4px; right: 0; padding: 3px 6px; border-color: transparent; background: var(--surface); color: var(--muted); font: var(--text-12) var(--font-mono); opacity: 0; transition: opacity 120ms ease; }
+  .companion-row:hover .companion-revoke, .companion-row:focus-within .companion-revoke { opacity: 1; }
+  .companion-revoke:hover:not(:disabled) { border-color: transparent; background: var(--faint); color: var(--ink); }
+  .companion-revoke:focus-visible, .companion-confirm button:focus-visible { outline-color: var(--ink); }
+  .companion-confirm { color: var(--ink); font-size: var(--text-12); }
+  .companion-confirm p { margin: 0; }
+  .companion-confirm strong { font-weight: 600; }
+  .companion-actions { display: flex; justify-content: flex-end; gap: 5px; margin-top: 6px; }
+  .companion-actions button { padding: 3px 6px; border-color: transparent; background: transparent; color: var(--ink); font: var(--text-12) var(--font-mono); }
+  .companion-actions button:hover:not(:disabled) { background: var(--faint); }
+  .revoke-error { margin-top: 5px !important; color: var(--muted); }
   .access-footer { flex: none; padding: 9px 14px; border-top: 1px solid var(--border); }
   .sign-out { padding: 2px 0; color: var(--muted); }
   .quiet { background: transparent; border-color: transparent; }
