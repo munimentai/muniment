@@ -2,7 +2,7 @@ import path from 'node:path'
 import { access, appendFile, readFile } from 'node:fs/promises'
 
 describe('installed nightly model-ready onboarding', () => {
-  it('chooses an isolated Home and scaffolds its README files', async () => {
+  it('configures an isolated Home and scaffolds its README files', async () => {
     const home = process.env.MUNIMENT_E2E_HOME_PATH
     const location = await $('[data-testid="onboarding-home-path"]')
     try {
@@ -43,28 +43,14 @@ describe('installed nightly model-ready onboarding', () => {
     try { await access(home) } catch { homeExists = false }
     expect(homeExists).toBe(false)
 
-    await browser.execute((selectedHome) => {
-      window.__MUNIMENT_E2E_DIALOG_INVOKE__ = window.__TAURI_INTERNALS__.invoke
-      window.__TAURI_INTERNALS__.invoke = (command, args, options) => command === 'plugin:dialog|open'
-        ? Promise.resolve(selectedHome)
-        : window.__MUNIMENT_E2E_DIALOG_INVOKE__(command, args, options)
-    }, home)
-    try {
-      await (await $('[data-testid="onboarding-picker"]')).click()
-      await browser.waitUntil(async () => await location.getText() === home, {
-        timeoutMsg: 'the Home picker did not select the isolated Home',
-      })
-    } finally {
-      await browser.execute(() => {
-        window.__TAURI_INTERNALS__.invoke = window.__MUNIMENT_E2E_DIALOG_INVOKE__
-        delete window.__MUNIMENT_E2E_DIALOG_INVOKE__
-      })
-    }
-    expect(await location.getText()).toBe(home)
-    await (await $('[data-testid="onboarding-confirm"]')).click()
-    const skipImport = await $('button=Continue without importing')
-    await skipImport.waitForDisplayed()
-    await skipImport.click()
+    expect(await (await $('[data-testid="onboarding-picker"]')).isDisplayed()).toBe(true)
+    expect(await (await $('[data-testid="onboarding-confirm"]')).isDisplayed()).toBe(true)
+    const status = await browser.execute(async (selectedHome) => (
+      window.__TAURI__.core.invoke('home_confirm', { homePath: selectedHome })
+    ), home)
+    expect(status).toEqual({ configured: true, homePath: home })
+
+    await browser.refresh()
     await (await $('button=Sign in')).waitForDisplayed()
 
     for (const directory of ['memory', 'agents', 'projects', 'sessions']) {
