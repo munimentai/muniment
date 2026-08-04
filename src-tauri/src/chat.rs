@@ -13,13 +13,13 @@ use muniment_core::attach::ProtocolError;
 use muniment_core::attachment::{ingest_attachment, prepare_pi_images, AttachmentMetadata};
 use muniment_core::auth::TokenSet;
 use muniment_core::cas::LocalCas;
+use muniment_core::journal::reconciliation::reconcile_interrupted_runs;
 use muniment_core::journal::reducer::{
     project_chat, reduce, ChatProjector, PermissionGate, PermissionRequest, ProjectedAttachment,
     RunStatus,
 };
 use muniment_core::journal::{
-    EventEnvelope, EventPayload, JournalCommitHint, JournalError, Provenance, RunEventType,
-    RunJournal,
+    EventEnvelope, EventPayload, JournalCommitHint, JournalError, Provenance, RunJournal,
 };
 use muniment_core::sidecar::pi_chat::{
     cancel_command, ExtensionUiAnswer, PiChatEvent, PiImageContent, PiRunAdapter, PromptCommand,
@@ -700,7 +700,7 @@ impl ChatState {
         std::fs::create_dir_all(&directory)?;
         std::fs::create_dir_all(directory.join("pi-sessions"))?;
         let mut journal = RunJournal::open(directory.join("runs.sqlite3"))?;
-        reconcile_interrupted_runs(&mut journal);
+        reconcile_interrupted_runs(&mut journal, &desktop_provenance(None));
         Ok(Self {
             storage: Arc::new(Mutex::new(ChatStorage {
                 journal,
@@ -743,66 +743,6 @@ impl Drop for ResumeAttempt {
             let _ = result.send(Err("This reply could not be resumed. Try again.".into()));
         }
     }
-}
-
-pub(crate) fn reconcile_interrupted_runs(journal: &mut RunJournal) {
-    let Ok(event_types) = journal.run_event_types() else {
-        return;
-    };
-    for run in event_types.chunk_by(|left, right| left.run_id == right.run_id) {
-        if event_types_are_terminal(run) {
-            continue;
-        }
-        let run_id = &run[0].run_id;
-        let Ok(events) = journal.events(&run_id) else {
-            continue;
-        };
-        let Ok(state) = reduce(&events) else {
-            continue;
-        };
-        if state.is_terminal() {
-            continue;
-        }
-        let envelope = event_envelope(
-            &run_id,
-            state.last_seq + 1,
-            "run.needs_attention",
-            json!({"reason": "interrupted"}),
-            None,
-        );
-        let _ = journal.append(state.last_seq, &envelope);
-    }
-}
-
-fn event_types_are_terminal(events: &[RunEventType]) -> bool {
-    let mut terminal = false;
-    for (index, event) in events.iter().enumerate() {
-        if event.run_seq != index as u64 + 1 {
-            return false;
-        }
-        match event.event_type.as_str() {
-            "run.completed" | "run.cancelled" | "run.failed" | "run.needs_attention" => {
-                terminal = true;
-            }
-            "run.started"
-            | "run.resumed"
-            | "chat.attachment.ingested"
-            | "runtime.pi_session.bound"
-            | "model.prompt.accepted"
-            | "model.stream.delta"
-            | "permission.requested"
-            | "permission.resolved"
-            | "tool.effect.started"
-            | "tool.effect.completed"
-            | "tool.effect.failed" => terminal = false,
-            "user.prompt.submitted"
-            | "route.selected"
-            | "capability.used"
-            | "receipt.finalized" => {}
-            _ => return false,
-        }
-    }
-    terminal
 }
 
 pub(crate) const PROMPT_SERVICE: &str = "ai.muniment.desktop.chat";
@@ -1558,15 +1498,19 @@ pub(crate) fn event_envelope(
         payload: EventPayload::Inline {
             payload_json: payload,
         },
-        provenance: Provenance {
-            source: "muniment-desktop".into(),
-            source_version: env!("CARGO_PKG_VERSION").into(),
-            actor_id: subject.map(str::to_owned),
-            device_id: None,
-            rpc_request_id: None,
-            capability_versions: None,
-            extra: BTreeMap::new(),
-        },
+        provenance: desktop_provenance(subject),
+        extra: BTreeMap::new(),
+    }
+}
+
+pub(crate) fn desktop_provenance(subject: Option<&str>) -> Provenance {
+    Provenance {
+        source: "muniment-desktop".into(),
+        source_version: env!("CARGO_PKG_VERSION").into(),
+        actor_id: subject.map(str::to_owned),
+        device_id: None,
+        rpc_request_id: None,
+        capability_versions: None,
         extra: BTreeMap::new(),
     }
 }
@@ -3239,89 +3183,5 @@ mod tests {
         std::fs::remove_file(sessions.join(session_name)).unwrap();
         drop(shared);
         std::fs::remove_dir_all(directory).unwrap();
-    }
-
-    #[test]
-    fn event_type_classifier_matches_reducer_for_representative_sequences() {
-        let run_id = Uuid::now_v7().to_string();
-        let classify = |types: &[&str]| {
-            let events: Vec<_> = types
-                .iter()
-                .enumerate()
-                .map(|(index, event_type)| {
-                    event_envelope(
-                        &run_id,
-                        index as u64 + 1,
-                        event_type,
-                        match *event_type {
-                            "runtime.pi_session.bound" => {
-                                json!({"run_id": run_id, "locator": "session.jsonl"})
-                            }
-                            _ => json!({}),
-                        },
-                        None,
-                    )
-                })
-                .collect();
-            let event_types: Vec<_> = events
-                .iter()
-                .map(|event| RunEventType {
-                    run_id: event.run_id.clone(),
-                    run_seq: event.run_seq,
-                    event_type: event.event_type.clone(),
-                })
-                .collect();
-            assert_eq!(
-                event_types_are_terminal(&event_types),
-                reduce(&events).unwrap().is_terminal(),
-                "{types:?}"
-            );
-        };
-
-        for types in [
-            &["run.started"][..],
-            &["run.started", "run.completed"],
-            &["run.started", "run.cancelled"],
-            &["run.started", "run.failed"],
-            &["run.started", "run.needs_attention"],
-            &[
-                "run.started",
-                "run.completed",
-                "receipt.finalized",
-                "capability.used",
-            ],
-            &[
-                "run.started",
-                "runtime.pi_session.bound",
-                "run.needs_attention",
-                "run.resumed",
-                "model.prompt.accepted",
-            ],
-        ] {
-            classify(types);
-        }
-    }
-
-    #[test]
-    fn event_type_classifier_treats_unknown_types_as_candidates() {
-        let run_id = Uuid::now_v7().to_string();
-        let events = [
-            RunEventType {
-                run_id: run_id.clone(),
-                run_seq: 1,
-                event_type: "run.started".into(),
-            },
-            RunEventType {
-                run_id: run_id.clone(),
-                run_seq: 2,
-                event_type: "run.completed".into(),
-            },
-            RunEventType {
-                run_id,
-                run_seq: 3,
-                event_type: "run.future_terminal".into(),
-            },
-        ];
-        assert!(!event_types_are_terminal(&events));
     }
 }
