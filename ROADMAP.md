@@ -52,7 +52,7 @@ read, and `lookup_thread_permission_policy` (`mod.rs:871`) answers one
 `(request_kind, resource)` tuple.
 
 PARKED — the two ADR 0025 consumer slices wait on the Pi wire contract.
-`parse_extension_ui_request` (`src-tauri/core/src/sidecar/pi_chat.rs:287`) yields
+`parse_extension_ui_request` (`src-tauri/core/src/sidecar/pi_chat.rs:270`) yields
 display strings alone: title, message, options, placeholder, and prefill. ADR
 0025 gives display text no match authority, so no live gate maps to a canonical
 `(request_kind, resource)` tuple. Coordinate-loop auto-resolution and the
@@ -99,7 +99,7 @@ muniment-cloud deploy path, not to this repository.
 **HELD — the owner ruling this lane waits on.** The standing owner exclusion on
 self-initiated database migrations and the 2026-07-12 RULE above disagree about
 this repository's local journal. Migration steps 2, 3, and 4 all landed under
-that RULE. Fifteen waves have now passed with no answer, and the lane files
+that RULE. Sixteen waves have now passed with no answer, and the lane files
 nothing each time. Everything in the next three paragraphs waits behind it.
 
 HELD — the ADR 0002 launch-path amendment (MUNIDESK-720) names two
@@ -150,21 +150,23 @@ measured 32.7µs per append against an in-memory database and 11.3µs with
 the journal opens WAL with `synchronous=FULL`. The commit fsync outweighs the
 parse by three orders of magnitude.
 
-SELECTED 2026-08-04 (this wave) — `apply_retention`
+FILED 2026-08-04 — `apply_retention`
 (`src-tauri/core/src/journal/retention.rs:69`) loops over `run_ids()` and calls
 `journal.events(&run_id)` once per run, so 20,000 historical runs cost 20,000
 round trips and 20,000 full envelope parses. Only the newest `recorded_at` and the
 run's terminal event decide deletion. A cheap ordered pre-filter picks the
 candidates, and the existing `reduce` check still guards each deletion. The read
-adds no column, table, index, or migration. No production caller reaches retention
-yet, and the ADR 0012 runtime service will own it.
+adds no column, table, index, or migration. The ticket sits open in the backlog.
+No production caller reaches retention yet, and the ADR 0012 runtime service will
+own it.
 
 OPEN — `chat_thread_open_page` projects each run through `project_history_entry`,
 which loads and reduces every envelope of that run. `thread_projection_entries`
 already holds the assistant text, `receipt_projection` holds the receipt, and
 `permission_pending_projection` holds the gate, so only `tool_activity`,
 `attachments`, `phase`, and `resumable` still force the full load. Deciding which
-fields those projections own is a contract call rather than a query rewrite.
+fields those projections own is a contract call rather than a query rewrite, and
+carrying it out would add columns, so it waits behind the same owner ruling.
 
 ### Capability vocabulary and provenance
 
@@ -268,11 +270,12 @@ revoked prompt ends with JSON-RPC code `-32000` and the exact message `Muniment
 capability revoked`. The adapter removes `acp-client-credential`, keeps
 `acp-client-id`, and reaches fresh visible approval on its next attach.
 
-SELECTED 2026-08-04 (this wave) — the adapter half of that amendment. The adapter
-still answers the typed variant with `ClientError::UnexpectedMessage`
-(`src-tauri/acp/src/main.rs:734`), which it reports as a malformed pairing
-message, so a revoked editor session sees a misleading error. `send_revocation`
-(`src-tauri/core/src/attach/linux.rs:1696`) is the emitter it must answer.
+DONE 2026-08-04 — the adapter half of that amendment is built (MUNIDESK-882).
+`ClientError::CapabilityRevoked` (`src-tauri/acp/src/main.rs:40`) is its own typed
+variant, the run-stream loop drops the client credential and ends the prompt on
+`RunStreamMessage::CapabilityRevoked` (`:749`), a revoked `run.cancel` maps to the
+same failure (`:775`), and the prompt answers code `-32000` with the exact
+message (`:807`).
 
 PARKED — ADR 0022 names plan updates in its method subset, and no code produces
 one, because the journal carries no plan or thought content. `agent_thought_chunk`
@@ -304,20 +307,12 @@ persists before it emits and restores authority when the write fails.
 `list_companions` (`:171`) reports each companion's identity, claimed kind,
 claimed version, and approval time, and the credential store records all three.
 
-DONE 2026-08-04 — the desktop management surface is built (MUNIDESK-874, 876,
-877). `attach_companions` and `attach_revoke_companion`
+DONE 2026-08-04 — the desktop management surface is built and whole
+(MUNIDESK-874, 876, 877, 881). `attach_companions` and `attach_revoke_companion`
 (`src-tauri/src/attach_service.rs:164`, `:178`) are registered Tauri commands, and
-the profile popover carries a `Connected programs` section under Devices.
-
-REGRESSED 2026-08-04 (planner, read at 046d504 and rendered the built bundle) —
-the revoke control is gone from `main`. MUNIDESK-877 landed it in 51ccb84.
-MUNIDESK-876 landed the list in 046d504 from a branch that started before 877, so
-its merge overwrote `src/lib/AccessPanel.svelte`, `src/lib/access-panel.test.js`,
-`src/App.test.js`, and `test/probe/stub.js`. A render of the built bundle at
-1100x720 shows the list with no revoke control, and the registered
-`attach_revoke_companion` command has no caller. SELECTED 2026-08-04 (this wave) —
-the restoration. This is a silent loss from a stale merge base, so the open owner
-item under Desktop QA automation now carries a measured cost.
+the profile popover carries a `Connected programs` section under Devices. The
+MUNIDESK-876 merge overwrote the MUNIDESK-877 revoke control from a stale base,
+and MUNIDESK-881 restored the control and its tests.
 
 ### ADR 0012 runtime-service extraction
 
@@ -346,13 +341,27 @@ timeout denial, and six direct tests. The desktop registers the presenter and
 keeps the Tauri dialog. A shared core module is the extraction shape, and the
 `muniment-runtime` binary composes it at the cutover.
 
-SELECTED 2026-08-04 (this wave) — the first journal step of the same move.
-`reconcile_interrupted_runs` (`src-tauri/src/chat.rs:748`) and
-`event_types_are_terminal` (`:777`) use only `RunJournal`, `reduce`, and
-`event_envelope`, yet they sit in the desktop crate. Three desktop call sites
-reach them. The core function takes its caller's provenance, so the recorded
-`run.needs_attention` envelope does not change. The journal open, the CAS open,
-and the Pi child follow in later slices.
+DONE 2026-08-04 — interrupted-run reconciliation moved into muniment-core
+(MUNIDESK-884). `src-tauri/core/src/journal/reconciliation.rs` holds
+`reconcile_interrupted_runs` and its `event_types_are_terminal` classifier with
+six direct tests. The core function takes its caller's provenance, so the
+recorded `run.needs_attention` envelope did not change. Three desktop call sites
+import it.
+
+SELECTED 2026-08-04 (this wave) — three more core moves, each an independent
+slice on the same shape. First, the chat storage layout. `ChatState::new`
+(`src-tauri/src/chat.rs:698`) joins `runs.sqlite3`, `cas`, and `pi-sessions` onto
+the Tauri app data directory, and six other desktop sites re-derive `pi-sessions`
+by hand. `muniment-runtime` needs the same layout, so one core profile type owns
+it. Second, the companion credential store. `load_client_credentials`
+(`src-tauri/src/attach_service.rs:901`) and `persist_client_credentials` (`:966`)
+carry the `O_NOFOLLOW` open, the owner and mode check, the legacy unversioned
+read, and the 0600 temporary-file write, and none of it touches Tauri. Third, the
+Pi-to-journal event translation. `permission_journal_payload`
+(`src-tauri/src/chat_coordinate.rs:731`), `tool_journal_entry` (`:704`),
+`close_open_effects` (`:760`), and `model_stream_delta_payload` (`:647`) sit
+between `muniment_core::sidecar::pi_chat` and `muniment_core::journal::reducer`,
+so both ends already live in core.
 
 SEQUENCED — the later extraction slices are the journal and Pi execution move,
 the shared device session, the desktop client conversion, and Linux user-unit
@@ -363,17 +372,24 @@ permission gates together. Remote Control follows the cutover. User-unit
 registration must not precede the cutover, because a service that takes the
 instance lock first would stop the desktop listener.
 
-OPEN — attach workspace namespaces diverge. Desktop runs stamp the cloud
-`grant.workspace` (`src-tauri/src/chat.rs:371`), while `desktop_attach_approval`
-(`src-tauri/src/attach_service.rs:318`) approves the desktop process working
-directory. `authorized_workspace` (`:525`) returns that canonical directory, so an
-approved companion lists no desktop thread and its own runs land in a workspace
-the desktop never lists. SELECTED 2026-08-04 (this wave) — the ADR 0009 amendment
-that decides the mapping. The ADR 0012 extraction amendment already names the
-signed `grant.workspace` value as the workspace authority and a working directory
-as a requested local execution root, so the attach protocol needs the matching
-rule. Exposing workspace scope on the thread read commands waits on that
-amendment.
+DONE 2026-08-04 — ADR 0009 carries the attach workspace namespace amendment
+(MUNIDESK-883). The signed `grant.workspace` value is the only workspace
+authority for `thread.list`, `thread.open`, `thread.create`, and `run.start`. A
+companion-supplied directory is only a local execution root, and the attach owner
+canonicalizes and records it as a mapping under that authority. With no current
+cloud grant the approval and all four operations fail closed. The amendment names
+three implementation slices: grant workspace authorization, local execution-root
+mapping, and attach workspace enforcement.
+
+SELECTED 2026-08-04 (this wave) — slice one of that amendment.
+`desktop_attach_approval` (`src-tauri/src/attach_service.rs:318`) still sets
+`Approval.workspace` to the desktop process working directory, while desktop runs
+stamp the cloud `grant.workspace` (`src-tauri/src/chat.rs:371`). The session
+workspace reaches every `thread.*` and `run.start` call through
+`muniment_core::attach::linux` (`:1385`, `:1440`), so an approved companion today
+lists no desktop thread. Both approval paths already return `Option<Approval>`,
+so `None` is the existing fail-closed answer. The execution-root mapping and the
+per-operation enforcement follow in slices two and three.
 
 ### Build-composition guards
 
@@ -500,8 +516,8 @@ artifact rail layout, the adjustable rail, the collapsing sidebar, the measured
 streaming underline on the active line alone, the milled thinking ring, the
 provenance line, the receipt record grid, the per-message Copy row, inline tool
 cards, the composer with its ten-line cap, dictation controls, and the profile
-popover with its Appearance, Your access, Devices, and Voice shortcut sections
-over a fixed Sign out footer.
+popover with its Appearance, Your access, Devices, Connected programs, and Voice
+shortcut sections over a fixed Sign out footer.
 
 DONE — the design laws carry enforcing lints. `src/styles/signal-allowlist.test.js`
 guards §1.2's color law, `shape-scale.test.js` guards the radius and shadow
@@ -559,6 +575,17 @@ pages, so no thread renders twice. The sidebar accepts one staleness: a thread
 that the refresh pushes out of the newest page leaves the list until the next
 `Older threads` activation or the next launch. DONE (MUNIDESK-739).
 
+SELECTED 2026-08-04 (this wave, planner rendered the built bundle at 1100x720
+against `test/probe/editor.html`) — the multi-line permission gate names no
+commit chord. The card shows its title, a resizable field, `Deny`, and `Submit`.
+`permissionGateAction` (`src/lib/chat-state.js:7`) commits that field on `⌘⏎` on
+macOS and on `Ctrl ⏎` elsewhere, and no text on the card says so. Only the
+pointer path is discoverable. The composer carries a hint in the same position
+(`src/App.svelte:1007`) and names `⏎` while a reply streams, and
+`shortcutDisplayLabel` (`src/lib/artifact-rail-state.js:31`) already renders
+`⌘J` and `Ctrl J`. The single-line kind commits on a plain Enter and needs no
+hint.
+
 NOT FILED — the empty workspace reads `New thread` three times, in the titlebar,
 the sidebar action, and the sidebar current-thread record. The owner mockup sets
 both strings (`docs/mockups/desktop/Muniment Desktop App.dc.html:256`, `:561`,
@@ -589,10 +616,12 @@ linear, so the launch cost lives in the journal read. No windowing slice is
 selected.
 
 DO NOT RE-FILE — wide windows need no slice. The 760px thread column measured
-centered at 1920x1080 and at 1440x900.
+centered at 1920x1080 and at 1440x900. The choice gate also fits the 960x640
+minimum: six options and the refusal control render on one row with room to
+spare.
 
 DO NOT RE-FILE — asset weight is not worth a slice. The frontend emits one
-236,839-byte script, one 35,500-byte stylesheet, and 154,444 bytes of webfont.
+251,600-byte script, one 62,150-byte stylesheet, and 154,444 bytes of webfont.
 `marked` and DOMPurify account for roughly 55,000 bytes. Tauri serves those bytes
 from local disk, so a dynamic import would trade a few milliseconds of parse time
 for an async boundary in a synchronous component.
@@ -661,20 +690,22 @@ OPEN OWNER ITEM — on 2026-08-02 two green branches merged into a build break,
 because each pull request built against its own stale base and the merge
 combination never rebuilt. On 2026-08-04 the same hazard cost a shipped feature:
 MUNIDESK-876 merged from a base older than MUNIDESK-877 and silently reverted the
-companion revoke control and its tests. Both pull requests stayed green, because
-the later merge removed the tests that guarded the earlier one. Requiring an
-up-to-date branch before merge, or a merge queue, is a repository-settings change
-that sits with the owner. The planner files no ticket for it.
+companion revoke control and its tests. MUNIDESK-881 restored it. Both pull
+requests stayed green, because the later merge removed the tests that guarded the
+earlier one. Requiring an up-to-date branch before merge, or a merge queue, is a
+repository-settings change that sits with the owner. The planner files no ticket
+for it.
 
 VERIFIED 2026-08-04 (this wave, from a clean clone) — one cargo invocation over
 `muniment-core`, `muniment-attach`, `muniment-cli`, `muniment-acp`, and
-`muniment-runtime` passed 835 tests across 64 suites with no failure. The frontend
-suite passed 826 tests with 25 skipped across 57 files. A render of the built
-bundle at 1100x720 opened the profile popover and read its five sections in order,
-Appearance, Your access, Devices, Connected programs, and Voice shortcut, over the
-fixed Sign out footer. That render is how the wave found the missing revoke
-control. Earlier waves recorded the same shape of verification, and this entry
-replaces that ledger.
+`muniment-runtime` passed 846 tests across 64 suites with no failure, and
+`cargo clippy --all-targets` over the same five packages printed no warning. The
+frontend suite passed 832 tests with 25 skipped across 57 files, and the browser
+suite passed 3 more. Renders of the built bundle covered restored history, a
+Markdown reply, and the confirm, choice, and multi-line permission gates at
+1100x720, plus the choice and multi-line gates at the 960x640 minimum. That
+render set is how the wave found the missing commit-chord hint. Earlier waves
+recorded the same shape of verification, and this entry replaces that ledger.
 
 ## Stable release and distribution
 
@@ -738,7 +769,9 @@ OPEN — the MUNIQA prompt-injection suite still follows ADR 0018's landed slice
 
 PARKED — naming the requested workspace scopes in the approval prompt. Approval
 runs before `onboard_workspace`, so the desktop does not know the scope yet, and
-moving the order is a protocol change.
+moving the order is a protocol change. The ADR 0009 workspace namespace amendment
+makes the signed workspace known at approval time, so a later wave should re-read
+this once slice one lands.
 
 OPEN — the standing policy line for the agent system prompt stays a proposal
 inside ADR 0018. harness-spec §16.1 rule 4 gates prompt text on review and
