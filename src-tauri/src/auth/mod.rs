@@ -281,7 +281,11 @@ fn ensure_native_session(
 
 /// Clear the local native session while preserving the installation identity.
 #[tauri::command]
-pub async fn auth_sign_out(state: tauri::State<'_, AuthState>) -> Result<AuthStatus, String> {
+pub async fn auth_sign_out(
+    state: tauri::State<'_, AuthState>,
+    attach_state: tauri::State<'_, crate::attach_service::AttachCompanionState>,
+) -> Result<AuthStatus, String> {
+    attach_state.clear_workspace();
     let store = state.native_store.clone();
     let status = tauri::async_runtime::spawn_blocking(move || {
         auth::sign_out_native_session(

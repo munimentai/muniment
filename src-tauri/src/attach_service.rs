@@ -104,6 +104,7 @@ pub(crate) struct AttachListenerState {
     client_credentials: Arc<Mutex<HashMap<String, ClientCredential>>>,
     credential_path: PathBuf,
     live_connections: LiveConnectionRegistry,
+    workspace: Arc<Mutex<Option<String>>>,
 }
 
 #[cfg(target_os = "linux")]
@@ -151,6 +152,38 @@ impl AttachCompanionState {
     fn new(listener: Arc<AttachListenerState>) -> Self {
         Self { listener }
     }
+
+    pub(crate) fn record_workspace(&self, workspace: String) {
+        *self
+            .listener
+            .workspace
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(workspace);
+    }
+
+    pub(crate) fn clear_workspace(&self) {
+        *self
+            .listener
+            .workspace
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
+    }
+
+    pub(crate) fn approval(&self) -> Option<Approval> {
+        self.listener.approval()
+    }
+}
+
+#[cfg(target_os = "linux")]
+impl AttachListenerState {
+    fn approval(&self) -> Option<Approval> {
+        let workspace = self
+            .workspace
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()?;
+        Some(desktop_attach_approval(workspace))
+    }
 }
 
 #[cfg(not(target_os = "linux"))]
@@ -158,6 +191,13 @@ impl Default for AttachCompanionState {
     fn default() -> Self {
         Self {}
     }
+}
+
+#[cfg(not(target_os = "linux"))]
+impl AttachCompanionState {
+    pub(crate) fn record_workspace(&self, _workspace: String) {}
+
+    pub(crate) fn clear_workspace(&self) {}
 }
 
 #[tauri::command]
@@ -197,6 +237,7 @@ impl AttachListenerState {
             client_credentials: Arc::new(Mutex::new(load_client_credentials(credential_path)?)),
             credential_path: credential_path.to_owned(),
             live_connections: LiveConnectionRegistry::default(),
+            workspace: Arc::new(Mutex::new(None)),
         })
     }
 
@@ -315,13 +356,13 @@ impl<R: tauri::Runtime> DesktopAttachService<TauriRunStartBoundaries<R>> {
 }
 
 #[cfg(target_os = "linux")]
-fn desktop_attach_approval() -> Option<Approval> {
-    Some(Approval {
+fn desktop_attach_approval(workspace: String) -> Approval {
+    Approval {
         profile: "desktop-owner".into(),
-        workspace: std::env::current_dir().ok()?.to_string_lossy().into_owned(),
+        workspace,
         scopes: BTreeSet::from(["thread.read".into(), "run.write".into()]),
         lifetime: Duration::from_secs(60 * 60),
-    })
+    }
 }
 
 #[cfg(target_os = "linux")]
@@ -382,6 +423,7 @@ pub fn start_attach_listener<R: tauri::Runtime>(app: tauri::AppHandle<R>) {
             let workspace_contexts = state.workspace_contexts.clone();
             let client_credentials = state.client_credentials.clone();
             let live_connections = state.live_connections.clone();
+            let approval_state = state.clone();
             std::thread::spawn(move || {
                 let Ok(mut service) =
                     DesktopAttachService::new(app, workspace_contexts, client_credentials)
@@ -416,7 +458,7 @@ pub fn start_attach_listener<R: tauri::Runtime>(app: tauri::AppHandle<R>) {
                                 return Some(muniment_core::attach::linux::ApprovalDecision::Deny);
                             }
                             Some(muniment_core::attach::linux::ApprovalDecision::Approve(
-                                desktop_attach_approval()?,
+                                approval_state.approval()?,
                             ))
                         },
                     ),
@@ -436,7 +478,7 @@ impl<B: RunStartBoundaries, I: RunStartIdempotency> ThreadListService
     }
 
     fn reconnect_approval(&self) -> Option<Approval> {
-        desktop_attach_approval()
+        self.boundaries.attach_approval()
     }
 
     fn authorize_client(
@@ -1085,6 +1127,22 @@ mod tests {
         );
 
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn attach_approval_uses_recorded_workspace_and_fails_closed_without_one() {
+        let credential_path =
+            std::env::temp_dir().join(format!("muniment-attach-workspace-{}.json", Uuid::now_v7()));
+        let state = AttachCompanionState::new(Arc::new(
+            AttachListenerState::load(&credential_path).unwrap(),
+        ));
+
+        assert!(state.approval().is_none());
+        state.record_workspace("signed-workspace".into());
+        assert_eq!(state.approval().unwrap().workspace, "signed-workspace");
+        state.clear_workspace();
+        assert!(state.approval().is_none());
     }
 
     #[cfg(target_os = "linux")]
@@ -2472,9 +2530,9 @@ mod tests {
                     "0.0.1",
                     &mut service,
                     |_: &muniment_core::attach::PairingChallenge, _: Duration| {
-                        Some(ApprovalDecision::Approve(
-                            desktop_attach_approval().unwrap(),
-                        ))
+                        Some(ApprovalDecision::Approve(desktop_attach_approval(
+                            "workspace-a".into(),
+                        )))
                     },
                     &registry,
                 )
