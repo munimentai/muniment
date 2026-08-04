@@ -30,7 +30,6 @@ jobs:
       docs_only: ${{ steps.changes.outputs.docs_only }}
       companion: ${{ steps.changes.outputs.companion }}
       attach_fixtures: ${{ steps.changes.outputs.attach_fixtures }}
-      extension: ${{ steps.changes.outputs.extension }}
       desktop: ${{ steps.changes.outputs.desktop }}
     steps:
       - name: Checkout
@@ -48,7 +47,6 @@ jobs:
           docs_only=true
           companion=false
           attach_fixtures=false
-          extension=false
           desktop=false
           resident_model_adr=false
           while IFS= read -r path; do
@@ -67,22 +65,16 @@ jobs:
                 docs_only=false
                 companion=true
                 ;;
-              editor-extension/*|editor-extension/**)
-                docs_only=false
-                extension=true
-                ;;
               protocol-fixtures/*|protocol-fixtures/**)
                 docs_only=false
                 companion=true
                 attach_fixtures=true
-                extension=true
                 ;;
               src-tauri/attach/*|src-tauri/attach/**)
                 docs_only=false
                 companion=true
                 desktop=true
                 attach_fixtures=true
-                extension=true
                 ;;
               src-tauri/acp/*|src-tauri/acp/**)
                 docs_only=false
@@ -93,7 +85,6 @@ jobs:
                 companion=true
                 desktop=true
                 attach_fixtures=true
-                extension=true
                 ;;
               *)
                 docs_only=false
@@ -104,7 +95,6 @@ jobs:
           echo "docs_only=$docs_only" >> "$GITHUB_OUTPUT"
           echo "companion=$companion" >> "$GITHUB_OUTPUT"
           echo "attach_fixtures=$attach_fixtures" >> "$GITHUB_OUTPUT"
-          echo "extension=$extension" >> "$GITHUB_OUTPUT"
           echo "desktop=$desktop" >> "$GITHUB_OUTPUT"
           echo "resident_model_adr=$resident_model_adr" >> "$GITHUB_OUTPUT"
 
@@ -208,48 +198,6 @@ jobs:
       - name: CLI dependency boundary
         if: steps.changes.outputs.companion == 'true'
         run: test/cli-dependency-boundary.sh
-
-  extension-contract:
-    name: extension-contract
-    if: github.event_name == 'pull_request' && needs.smoke.outputs.extension == 'true'
-    needs: smoke
-    runs-on: self-hosted
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v7
-
-      - name: Node 24 (bootstrap if missing)
-        run: |
-          node_dir="$HOME/.local/node-24"
-          if { ! command -v node >/dev/null 2>&1 || [ "$(node -p 'process.versions.node.split(`.`)[0]' 2>/dev/null)" != 24 ]; } \
-              && [ ! -x "$node_dir/bin/node" ]; then
-            case "$(uname -m)" in
-              x86_64) node_arch=x64 ;;
-              aarch64|arm64) node_arch=arm64 ;;
-              *) printf 'unsupported Node architecture: %s\n' "$(uname -m)" >&2; exit 1 ;;
-            esac
-            mkdir -p "$node_dir"
-            curl --proto '=https' --tlsv1.2 -sSfL \
-              "https://nodejs.org/dist/v24.4.1/node-v24.4.1-linux-${node_arch}.tar.xz" \
-              | tar -xJ --strip-components=1 -C "$node_dir"
-          fi
-          echo "$HOME/.local/node-24/bin" >> "$GITHUB_PATH"
-
-      - name: Install extension dependencies
-        working-directory: editor-extension
-        run: npm ci --no-audit --no-fund
-
-      - name: Typecheck extension
-        working-directory: editor-extension
-        run: npm run typecheck
-
-      - name: Test extension contract
-        working-directory: editor-extension
-        run: npm test
-
-      - name: Package extension VSIX
-        working-directory: editor-extension
-        run: npm run package -- --out "$RUNNER_TEMP/muniment-editor.vsix"
 
   attach-fixtures-current:
     name: attach-fixtures-current

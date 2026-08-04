@@ -20,7 +20,6 @@ const excluded = (file) => file.split('/').some((segment) => [
   'dist',
 ].includes(segment))
   || file.startsWith('.git/')
-  || file.startsWith('editor-extension/')
   || file.startsWith('test/e2e/')
 const testFiles = (directory = '.') => fs.readdirSync(path.join(root, directory), { withFileTypes: true })
   .flatMap((entry) => {
