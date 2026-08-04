@@ -29,6 +29,11 @@ describe('installed onboarding spec contract', () => {
     expect(onboardingSpec).toContain("timeoutMsg: 'model-ready onboarding first render did not show the Home picker'")
     expect(onboardingSpec).toContain("'onboarding-first-render.log'")
   })
+
+  it('drives the Home dialog without a production mock transport', () => {
+    expect(onboardingSpec).not.toContain('browser.tauri.mock')
+    expect(onboardingSpec).toContain("run('xdotool'")
+  })
 })
 
 describe('installed production chat contract', () => {
