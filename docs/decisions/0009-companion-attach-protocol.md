@@ -687,13 +687,19 @@ connection. It emits the event only after it persists removal of the client
 credential that authenticated that connection. The event body is
 `{capability, reason:"companion_revoked"}`. It names that connection's current
 capability and discloses no companion, profile, workspace, or credential data.
-The owner queues the event after it stops accepting requests and before it
-closes the connection. It sends no `stream.closed` event for those cancelled
-subscriptions. A connection that is absent or already closed receives no
-event. Expiry, idle timeout, sign-out, lock, and profile switch do not emit the
-event. Entitlement revocation, session revocation, workspace grant change, and
-transport failure also do not emit it. These operations emit the event only if
-they also remove that connection's persisted client credential.
+At authorization, the owner assigns each connection a random UUID named its
+`connection_event_id`. The revocation event uses that UUID as its required
+`subscription_id`. The UUID stays fixed for the connection lifetime, does not
+identify a subscription, and is invalid as a `request.cancel` target.
+
+The owner delivers the complete framed event after it stops accepting requests.
+It closes the connection only after the transport write and flush complete.
+It sends no `stream.closed` event for the cancelled subscriptions. A connection
+that is absent or already closed receives no event. Expiry, idle timeout,
+sign-out, lock, and profile switch do not emit the event. Entitlement revocation,
+session revocation, workspace grant change, and transport failure also do not
+emit it. These operations emit the event only if they also remove that
+connection's persisted client credential.
 
 Removing the credential makes every later authentication attempt with it fail
 closed. A revoked companion can reconnect only through a fresh visible
