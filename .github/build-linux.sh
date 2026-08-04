@@ -35,4 +35,6 @@ fetch_tool \
   "https://raw.githubusercontent.com/tauri-apps/linuxdeploy-plugin-gstreamer/master/linuxdeploy-plugin-gstreamer.sh" \
   "$tauri_cache/linuxdeploy-plugin-gstreamer.sh"
 
+cargo build --manifest-path "$repo_root/src-tauri/Cargo.toml" --package muniment-acp --release --locked
+
 exec npm run tauri build "$@"
