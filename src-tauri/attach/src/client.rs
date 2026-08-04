@@ -325,6 +325,19 @@ mod linux {
     use std::path::PathBuf;
     use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+    #[repr(C)]
+    struct PollFd {
+        fd: i32,
+        events: i16,
+        revents: i16,
+    }
+
+    unsafe extern "C" {
+        fn poll(descriptors: *mut PollFd, count: usize, timeout: i32) -> i32;
+    }
+
+    const POLLIN: i16 = 0x001;
+
     const IO_TIMEOUT: Duration = Duration::from_secs(5);
     const APPROVAL_TIMEOUT: Duration = Duration::from_secs(120);
     const THREAD_LIST_LIMIT: u8 = 100;
@@ -1013,13 +1026,13 @@ mod linux {
         }
 
         pub fn read_capability_revocation_if_ready(&mut self) -> Result<bool, ClientError> {
-            let mut descriptor = libc::pollfd {
+            let mut descriptor = PollFd {
                 fd: self.stream.as_raw_fd(),
-                events: libc::POLLIN,
+                events: POLLIN,
                 revents: 0,
             };
             // SAFETY: `descriptor` points to one valid pollfd for the duration of this call.
-            let ready = unsafe { libc::poll(&mut descriptor, 1, 0) };
+            let ready = unsafe { poll(&mut descriptor, 1, 0) };
             if ready < 0 {
                 return Err(ClientError::DesktopUnavailable);
             }
