@@ -90,7 +90,7 @@ pub struct DesktopAttachService<B, I = IdempotencyStore> {
     idempotency: I,
     home: PathBuf,
     workspace_contexts: Arc<Mutex<HashMap<String, HashMap<PathBuf, Option<String>>>>>,
-    client_credentials: Arc<Mutex<HashMap<String, String>>>,
+    client_credentials: Arc<Mutex<HashMap<String, ClientCredential>>>,
     credential_path: Option<PathBuf>,
     client_identity: Option<String>,
 }
@@ -98,9 +98,45 @@ pub struct DesktopAttachService<B, I = IdempotencyStore> {
 #[cfg(target_os = "linux")]
 pub(crate) struct AttachListenerState {
     workspace_contexts: Arc<Mutex<HashMap<String, HashMap<PathBuf, Option<String>>>>>,
-    client_credentials: Arc<Mutex<HashMap<String, String>>>,
+    client_credentials: Arc<Mutex<HashMap<String, ClientCredential>>>,
     credential_path: PathBuf,
     live_connections: LiveConnectionRegistry,
+}
+
+#[cfg(target_os = "linux")]
+#[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ClientCredential {
+    credential: String,
+    claimed_kind: String,
+    claimed_version: String,
+    #[serde(deserialize_with = "deserialize_approval_time")]
+    approved_at: Option<String>,
+}
+
+#[cfg(target_os = "linux")]
+fn deserialize_approval_time<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    <Option<String> as serde::Deserialize>::deserialize(deserializer)
+}
+
+#[cfg(target_os = "linux")]
+#[derive(Debug, serde::Deserialize, serde::Serialize)]
+#[serde(deny_unknown_fields)]
+struct ClientCredentialStore {
+    version: u32,
+    companions: HashMap<String, ClientCredential>,
+}
+
+#[cfg(target_os = "linux")]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct AuthorizedCompanion {
+    pub(crate) identity: String,
+    pub(crate) claimed_kind: String,
+    pub(crate) claimed_version: String,
+    pub(crate) approved_at: Option<String>,
 }
 
 #[cfg(target_os = "linux")]
@@ -123,15 +159,33 @@ impl AttachListenerState {
             .get(client_identity)
             .cloned()
             .ok_or_else(ProtocolError::unauthorized)?;
-        self.live_connections.block(&credential);
+        self.live_connections.block(&credential.credential);
         credentials.remove(client_identity);
         if let Err(error) = persist_client_credentials(&self.credential_path, &credentials) {
             credentials.insert(client_identity.to_owned(), credential.clone());
-            self.live_connections.resume(&credential);
+            self.live_connections.resume(&credential.credential);
             return Err(error);
         }
-        self.live_connections.revoke(&credential);
+        self.live_connections.revoke(&credential.credential);
         Ok(())
+    }
+
+    pub(crate) fn list_companions(&self) -> Result<Vec<AuthorizedCompanion>, ProtocolError> {
+        let credentials = self
+            .client_credentials
+            .lock()
+            .map_err(|_| ProtocolError::persistence_failed())?;
+        let mut companions: Vec<_> = credentials
+            .iter()
+            .map(|(identity, entry)| AuthorizedCompanion {
+                identity: identity.clone(),
+                claimed_kind: entry.claimed_kind.clone(),
+                claimed_version: entry.claimed_version.clone(),
+                approved_at: entry.approved_at.clone(),
+            })
+            .collect();
+        companions.sort_by(|left, right| left.identity.cmp(&right.identity));
+        Ok(companions)
     }
 }
 
@@ -188,7 +242,7 @@ impl<R: tauri::Runtime> DesktopAttachService<TauriRunStartBoundaries<R>> {
     pub fn new(
         app: tauri::AppHandle<R>,
         workspace_contexts: Arc<Mutex<HashMap<String, HashMap<PathBuf, Option<String>>>>>,
-        client_credentials: Arc<Mutex<HashMap<String, String>>>,
+        client_credentials: Arc<Mutex<HashMap<String, ClientCredential>>>,
     ) -> Result<Self, ProtocolError> {
         let home = resolve_attach_home(app.path().document_dir().ok(), app.path().home_dir().ok())?;
         let idempotency = IdempotencyStore::open(
@@ -335,16 +389,30 @@ impl<B: RunStartBoundaries, I: RunStartIdempotency> ThreadListService
         client_identity: &str,
         presented_credential: Option<&str>,
         issued_credential: &str,
+        claimed_kind: &str,
+        claimed_version: &str,
     ) -> Result<String, ProtocolError> {
         let mut credentials = self
             .client_credentials
             .lock()
             .map_err(|_| ProtocolError::unauthorized())?;
         let credential = match credentials.get(client_identity) {
-            Some(expected) if presented_credential == Some(expected.as_str()) => expected.clone(),
+            Some(expected) if presented_credential == Some(expected.credential.as_str()) => {
+                expected.credential.clone()
+            }
             Some(_) => return Err(ProtocolError::unauthorized()),
             None if presented_credential.is_none() => {
-                credentials.insert(client_identity.to_owned(), issued_credential.to_owned());
+                credentials.insert(
+                    client_identity.to_owned(),
+                    ClientCredential {
+                        credential: issued_credential.to_owned(),
+                        claimed_kind: bounded_claim(claimed_kind),
+                        claimed_version: bounded_claim(claimed_version),
+                        approved_at: Some(
+                            chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::AutoSi, true),
+                        ),
+                    },
+                );
                 if let Some(path) = &self.credential_path {
                     if persist_client_credentials(path, &credentials).is_err() {
                         credentials.remove(client_identity);
@@ -777,7 +845,7 @@ impl<B: RunStartBoundaries, I: RunStartIdempotency> ThreadListService
 #[cfg(target_os = "linux")]
 fn load_client_credentials(
     path: &std::path::Path,
-) -> Result<HashMap<String, String>, ProtocolError> {
+) -> Result<HashMap<String, ClientCredential>, ProtocolError> {
     let mut options = std::fs::OpenOptions::new();
     options.read(true).custom_flags(libc::O_NOFOLLOW);
     let file = match options.open(path) {
@@ -791,12 +859,48 @@ fn load_client_credentials(
     if metadata.uid() != unsafe { libc::geteuid() } || metadata.mode() & 0o077 != 0 {
         return Err(ProtocolError::persistence_failed());
     }
-    let credentials: HashMap<String, String> =
+    let value: Value =
         serde_json::from_reader(file).map_err(|_| ProtocolError::persistence_failed())?;
-    if credentials.iter().any(|(identity, credential)| {
+    let versioned = value.get("version").is_some();
+    let credentials = if versioned {
+        let store: ClientCredentialStore =
+            serde_json::from_value(value).map_err(|_| ProtocolError::persistence_failed())?;
+        if store.version != 1 {
+            return Err(ProtocolError::persistence_failed());
+        }
+        store.companions
+    } else {
+        let legacy: HashMap<String, String> =
+            serde_json::from_value(value).map_err(|_| ProtocolError::persistence_failed())?;
+        legacy
+            .into_iter()
+            .map(|(identity, credential)| {
+                (
+                    identity,
+                    ClientCredential {
+                        credential,
+                        claimed_kind: "unknown".into(),
+                        claimed_version: "unknown".into(),
+                        approved_at: None,
+                    },
+                )
+            })
+            .collect()
+    };
+    if credentials.iter().any(|(identity, entry)| {
         Id::new(identity).is_err()
-            || credential.len() != 64
-            || !credential.bytes().all(|byte| byte.is_ascii_hexdigit())
+            || entry.credential.len() != 64
+            || !entry
+                .credential
+                .bytes()
+                .all(|byte| byte.is_ascii_hexdigit())
+            || entry.claimed_kind != bounded_claim(&entry.claimed_kind)
+            || entry.claimed_version != bounded_claim(&entry.claimed_version)
+            || entry.approved_at.as_ref().is_some_and(|approved_at| {
+                chrono::DateTime::parse_from_rfc3339(approved_at)
+                    .map(|time| time.offset().local_minus_utc() != 0)
+                    .unwrap_or(true)
+            })
     }) {
         return Err(ProtocolError::persistence_failed());
     }
@@ -806,7 +910,7 @@ fn load_client_credentials(
 #[cfg(target_os = "linux")]
 fn persist_client_credentials(
     path: &std::path::Path,
-    credentials: &HashMap<String, String>,
+    credentials: &HashMap<String, ClientCredential>,
 ) -> Result<(), ProtocolError> {
     let parent = path
         .parent()
@@ -823,8 +927,14 @@ fn persist_client_credentials(
         let file = options
             .open(&temporary)
             .map_err(|_| ProtocolError::persistence_failed())?;
-        serde_json::to_writer(&file, credentials)
-            .map_err(|_| ProtocolError::persistence_failed())?;
+        serde_json::to_writer(
+            &file,
+            &ClientCredentialStore {
+                version: 1,
+                companions: credentials.clone(),
+            },
+        )
+        .map_err(|_| ProtocolError::persistence_failed())?;
         file.sync_all()
             .map_err(|_| ProtocolError::persistence_failed())?;
         std::fs::rename(&temporary, path).map_err(|_| ProtocolError::persistence_failed())?;
@@ -843,6 +953,15 @@ mod tests {
     use muniment_core::attach::ErrorCode;
     use muniment_core::journal::reducer::reduce;
     use muniment_core::journal::RunJournal;
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn attach_claims_share_the_prompt_and_store_bounds() {
+        assert_eq!(bounded_claim(&"x".repeat(80)), "x".repeat(80));
+        for claim in ["", "   ", "cli\nspoof", &"x".repeat(81)] {
+            assert_eq!(bounded_claim(claim), "unknown");
+        }
+    }
     use std::sync::atomic::Ordering;
 
     #[cfg(target_os = "linux")]
@@ -1918,7 +2037,7 @@ mod tests {
         let mut client_a = make_service();
         assert_eq!(
             client_a
-                .authorize_client("client-a", None, &"aa".repeat(32))
+                .authorize_client("client-a", None, &"aa".repeat(32), "cli", "1.2.3")
                 .unwrap(),
             "aa".repeat(32)
         );
@@ -1945,7 +2064,13 @@ mod tests {
         for credential in [None, Some("cc".repeat(32))] {
             assert_eq!(
                 impersonator
-                    .authorize_client("client-a", credential.as_deref(), &"bb".repeat(32))
+                    .authorize_client(
+                        "client-a",
+                        credential.as_deref(),
+                        &"bb".repeat(32),
+                        "cli",
+                        "1.2.3",
+                    )
                     .unwrap_err()
                     .code(),
                 ErrorCode::Unauthorized
@@ -1962,7 +2087,13 @@ mod tests {
         let mut reconnect = make_service();
         assert_eq!(
             reconnect
-                .authorize_client("client-a", Some(&"aa".repeat(32)), &"dd".repeat(32))
+                .authorize_client(
+                    "client-a",
+                    Some(&"aa".repeat(32)),
+                    &"dd".repeat(32),
+                    "cli",
+                    "1.2.3",
+                )
                 .unwrap(),
             "aa".repeat(32)
         );
@@ -1996,7 +2127,7 @@ mod tests {
         let mut initial = make_service(HashMap::new());
         assert_eq!(
             initial
-                .authorize_client(identity, None, &credential)
+                .authorize_client(identity, None, &credential, "cli", "1.2.3")
                 .unwrap(),
             credential
         );
@@ -2004,11 +2135,39 @@ mod tests {
         assert_eq!(metadata.permissions().mode() & 0o777, 0o600);
         drop(initial);
 
+        let stored: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(stored["version"], 1);
+        assert_eq!(stored["companions"][identity]["credential"], credential);
+        assert_eq!(stored["companions"][identity]["claimed_kind"], "cli");
+        assert_eq!(stored["companions"][identity]["claimed_version"], "1.2.3");
+        let approved_at = stored["companions"][identity]["approved_at"]
+            .as_str()
+            .unwrap();
+        assert!(approved_at.ends_with('Z'));
+        assert!(chrono::DateTime::parse_from_rfc3339(approved_at).is_ok());
+
+        let state = AttachListenerState::load(&path).unwrap();
+        assert_eq!(
+            state.list_companions().unwrap(),
+            vec![AuthorizedCompanion {
+                identity: identity.into(),
+                claimed_kind: "cli".into(),
+                claimed_version: "1.2.3".into(),
+                approved_at: Some(approved_at.into()),
+            }]
+        );
+
         let loaded = load_client_credentials(&path).unwrap();
         let mut restarted = make_service(loaded);
         assert_eq!(
             restarted
-                .authorize_client(identity, Some(&credential), &"cd".repeat(32))
+                .authorize_client(
+                    identity,
+                    Some(&credential),
+                    &"cd".repeat(32),
+                    "changed",
+                    "9.9.9",
+                )
                 .unwrap(),
             credential
         );
@@ -2016,7 +2175,13 @@ mod tests {
             let mut rejected = make_service(load_client_credentials(&path).unwrap());
             assert_eq!(
                 rejected
-                    .authorize_client(identity, presented.as_deref(), &"ef".repeat(32))
+                    .authorize_client(
+                        identity,
+                        presented.as_deref(),
+                        &"ef".repeat(32),
+                        "cli",
+                        "1.2.3",
+                    )
                     .unwrap_err()
                     .code(),
                 ErrorCode::Unauthorized
@@ -2029,13 +2194,26 @@ mod tests {
                 .authorize_client(
                     "018f0000-0000-7000-8000-000000000100",
                     Some(&credential),
-                    &"ef".repeat(32)
+                    &"ef".repeat(32),
+                    "cli",
+                    "1.2.3",
                 )
                 .unwrap_err()
                 .code(),
             ErrorCode::Unauthorized
         );
 
+        let mut unsupported = stored.clone();
+        unsupported["version"] = json!(2);
+        std::fs::write(&path, serde_json::to_vec(&unsupported).unwrap()).unwrap();
+        assert!(load_client_credentials(&path).is_err());
+        let mut incomplete = stored;
+        incomplete["companions"][identity]
+            .as_object_mut()
+            .unwrap()
+            .remove("approved_at");
+        std::fs::write(&path, serde_json::to_vec(&incomplete).unwrap()).unwrap();
+        assert!(load_client_credentials(&path).is_err());
         std::fs::write(&path, b"not-json").unwrap();
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
         assert!(load_client_credentials(&path).is_err());
@@ -2044,6 +2222,99 @@ mod tests {
         std::fs::write(&target, b"{}").unwrap();
         symlink(&target, &path).unwrap();
         assert!(load_client_credentials(&path).is_err());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn legacy_attach_credentials_authenticate_with_unknown_claims() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = std::env::temp_dir().join(format!("muniment-attach-legacy-{}", Uuid::now_v7()));
+        let path = root.join("credentials.json");
+        let identity = "018f0000-0000-7000-8000-000000000099";
+        let credential = "ab".repeat(32);
+        let new_identity = "018f0000-0000-7000-8000-000000000100";
+        let new_credential = "cd".repeat(32);
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(
+            &path,
+            serde_json::to_vec(&HashMap::from([(identity, &credential)])).unwrap(),
+        )
+        .unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+
+        let state = AttachListenerState::load(&path).unwrap();
+        assert_eq!(
+            state.list_companions().unwrap(),
+            vec![AuthorizedCompanion {
+                identity: identity.into(),
+                claimed_kind: "unknown".into(),
+                claimed_version: "unknown".into(),
+                approved_at: None,
+            }]
+        );
+        let mut service = DesktopAttachService {
+            boundaries: FakeRunStartBoundaries::accepting(),
+            idempotency: IdempotencyStore::open(":memory:").unwrap(),
+            home: root.join("home"),
+            workspace_contexts: state.workspace_contexts,
+            client_credentials: state.client_credentials,
+            credential_path: Some(path.clone()),
+            client_identity: None,
+        };
+        assert_eq!(
+            service
+                .authorize_client(identity, Some(&credential), "", "changed", "9.9.9")
+                .unwrap(),
+            credential
+        );
+        assert_eq!(
+            service
+                .authorize_client(new_identity, None, &new_credential, "desktop", "1.0.0")
+                .unwrap(),
+            new_credential
+        );
+        drop(service);
+
+        let state = AttachListenerState::load(&path).unwrap();
+        assert_eq!(
+            state.list_companions().unwrap(),
+            vec![
+                AuthorizedCompanion {
+                    identity: identity.into(),
+                    claimed_kind: "unknown".into(),
+                    claimed_version: "unknown".into(),
+                    approved_at: None,
+                },
+                AuthorizedCompanion {
+                    identity: new_identity.into(),
+                    claimed_kind: "desktop".into(),
+                    claimed_version: "1.0.0".into(),
+                    approved_at: Some(
+                        load_client_credentials(&path).unwrap()[new_identity]
+                            .approved_at
+                            .clone()
+                            .unwrap(),
+                    ),
+                },
+            ]
+        );
+        let mut restarted_service = DesktopAttachService {
+            boundaries: FakeRunStartBoundaries::accepting(),
+            idempotency: IdempotencyStore::open(":memory:").unwrap(),
+            home: root.join("home"),
+            workspace_contexts: state.workspace_contexts,
+            client_credentials: state.client_credentials,
+            credential_path: Some(path),
+            client_identity: None,
+        };
+        assert!(restarted_service
+            .authorize_client(identity, Some(&credential), "", "changed", "9.9.9")
+            .is_ok());
+        assert!(restarted_service
+            .authorize_client(new_identity, Some(&new_credential), "", "changed", "9.9.9",)
+            .is_ok());
         std::fs::remove_dir_all(root).unwrap();
     }
 
@@ -2060,7 +2331,15 @@ mod tests {
         let credential = "ab".repeat(32);
         persist_client_credentials(
             &credential_path,
-            &HashMap::from([(identity.to_owned(), credential.clone())]),
+            &HashMap::from([(
+                identity.to_owned(),
+                ClientCredential {
+                    credential: credential.clone(),
+                    claimed_kind: "unknown".into(),
+                    claimed_version: "unknown".into(),
+                    approved_at: Some("2026-08-04T00:00:00Z".into()),
+                },
+            )]),
         )
         .unwrap();
         let mut state = AttachListenerState::load(&credential_path).unwrap();
@@ -2145,11 +2424,15 @@ mod tests {
         );
 
         let credential = "cd".repeat(32);
-        state
-            .client_credentials
-            .lock()
-            .unwrap()
-            .insert(identity.to_owned(), credential.clone());
+        state.client_credentials.lock().unwrap().insert(
+            identity.to_owned(),
+            ClientCredential {
+                credential: credential.clone(),
+                claimed_kind: "unknown".into(),
+                claimed_version: "unknown".into(),
+                approved_at: Some("2026-08-04T00:00:00Z".into()),
+            },
+        );
         persist_client_credentials(&credential_path, &state.client_credentials.lock().unwrap())
             .unwrap();
         let (client, mut observer, worker) = connect(credential.clone());
@@ -2162,7 +2445,12 @@ mod tests {
             ErrorCode::PersistenceFailed
         );
         assert_eq!(
-            state.client_credentials.lock().unwrap().get(identity),
+            state
+                .client_credentials
+                .lock()
+                .unwrap()
+                .get(identity)
+                .map(|entry| &entry.credential),
             Some(&credential)
         );
         observer
