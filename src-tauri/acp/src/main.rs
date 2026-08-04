@@ -20,20 +20,24 @@ use std::io::{self, BufRead, BufReader, Read, Write};
 #[cfg(unix)]
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver};
 use std::thread;
+use std::time::Duration;
 
 const CLIENT_KIND: &str = "acp-adapter";
 const CLIENT_ID_FILE: &str = "acp-client-id";
 const CLIENT_CREDENTIAL_FILE: &str = "acp-client-credential";
 const SESSION_DIRECTORY: &str = "acp-sessions";
 const SESSION_RECORD_VERSION: u32 = 1;
+static STORED_CREDENTIAL_SUPPRESSED: AtomicBool = AtomicBool::new(false);
 
 enum PromptFailure {
     Client(ClientError),
     Run,
     NeedsAttention,
     StreamClosed,
+    CapabilityRevoked,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -48,7 +52,12 @@ struct SessionRecord {
 
 impl From<ClientError> for PromptFailure {
     fn from(error: ClientError) -> Self {
-        Self::Client(error)
+        if error == ClientError::CapabilityRevoked {
+            drop_authorized_client_credential();
+            Self::CapabilityRevoked
+        } else {
+            Self::Client(error)
+        }
     }
 }
 
@@ -715,7 +724,7 @@ fn prompt(
                         &mut client,
                         input,
                         pending,
-                    );
+                    )?;
                     client.answer_permission(&accepted.run_id, &permission.gate_id, decision)?;
                     (Some(permission.run_seq), None)
                 }
@@ -725,14 +734,21 @@ fn prompt(
                 } => {
                     client
                         .subscribe_run(&accepted.run_id, last_processed_run_seq)
-                        .map_err(|_| PromptFailure::StreamClosed)?;
+                        .map_err(|error| {
+                            if error == ClientError::CapabilityRevoked {
+                                PromptFailure::from(error)
+                            } else {
+                                PromptFailure::StreamClosed
+                            }
+                        })?;
                     (None, None)
                 }
                 RunStreamMessage::StreamClosed {
                     resumable: false, ..
                 } => return Err(PromptFailure::StreamClosed),
                 RunStreamMessage::CapabilityRevoked { .. } => {
-                    return Err(ClientError::UnexpectedMessage.into());
+                    drop_authorized_client_credential();
+                    return Err(PromptFailure::CapabilityRevoked);
                 }
             };
             if let Some(run_seq) = run_seq {
@@ -756,7 +772,10 @@ fn prompt(
                     .then_some(())
                 });
                 if cancel.is_some() {
-                    let _ = client.run_cancel(&accepted.run_id);
+                    if let Err(ClientError::CapabilityRevoked) = client.run_cancel(&accepted.run_id)
+                    {
+                        return Err(PromptFailure::from(ClientError::CapabilityRevoked));
+                    }
                 } else {
                     pending.push_back(line);
                 }
@@ -785,6 +804,11 @@ fn prompt(
             "id": id,
             "error": {"code": -32000, "message": "Muniment run stream closed"}
         }),
+        Err(PromptFailure::CapabilityRevoked) => json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "error": {"code": -32000, "message": "Muniment capability revoked"}
+        }),
         Err(PromptFailure::Client(error)) => json!({
             "jsonrpc": "2.0",
             "id": id,
@@ -800,20 +824,26 @@ fn wait_for_permission_response(
     client: &mut AuthorizedClient,
     input: &Receiver<io::Result<String>>,
     pending: &mut VecDeque<io::Result<String>>,
-) -> PermissionDecision {
+) -> Result<PermissionDecision, PromptFailure> {
     loop {
-        let Ok(line) = input.recv() else {
-            return PermissionDecision::Deny;
+        if client.read_capability_revocation_if_ready()? {
+            drop_authorized_client_credential();
+            return Err(PromptFailure::CapabilityRevoked);
+        }
+        let line = match input.recv_timeout(Duration::from_millis(10)) {
+            Ok(line) => line,
+            Err(mpsc::RecvTimeoutError::Timeout) => continue,
+            Err(mpsc::RecvTimeoutError::Disconnected) => return Ok(PermissionDecision::Deny),
         };
         let Ok(line) = line else {
-            return PermissionDecision::Deny;
+            return Ok(PermissionDecision::Deny);
         };
         let Ok(message) = serde_json::from_str::<Value>(&line) else {
             pending.push_back(Ok(line));
             continue;
         };
         if let Some(decision) = permission_response_decision(&message, request_id) {
-            return decision;
+            return Ok(decision);
         }
         let cancel = message.get("id").is_none()
             && message.get("method").and_then(Value::as_str) == Some("session/cancel")
@@ -823,7 +853,9 @@ fn wait_for_permission_response(
                 .and_then(Value::as_str)
                 == Some(session_id);
         if cancel {
-            let _ = client.run_cancel(run_id);
+            if let Err(ClientError::CapabilityRevoked) = client.run_cancel(run_id) {
+                return Err(PromptFailure::from(ClientError::CapabilityRevoked));
+            }
         } else {
             pending.push_back(Ok(line));
         }
@@ -964,6 +996,9 @@ fn valid_identity(value: &str) -> io::Result<String> {
 }
 
 fn authorized_client_credential() -> io::Result<Option<String>> {
+    if STORED_CREDENTIAL_SUPPRESSED.load(Ordering::Relaxed) {
+        return Ok(None);
+    }
     let path = config_directory()?.join(CLIENT_CREDENTIAL_FILE);
     match read_private_file(&path) {
         Ok(value)
@@ -981,13 +1016,22 @@ fn authorized_client_credential() -> io::Result<Option<String>> {
     }
 }
 
+fn drop_authorized_client_credential() {
+    STORED_CREDENTIAL_SUPPRESSED.store(true, Ordering::Relaxed);
+    let _ = config_directory()
+        .map(|directory| directory.join(CLIENT_CREDENTIAL_FILE))
+        .and_then(std::fs::remove_file);
+}
+
 fn persist_authorized_client_credential(credential: &str) -> io::Result<()> {
     let directory = config_directory()?;
     std::fs::create_dir_all(&directory)?;
     atomic_write_private_file(
         &directory.join(CLIENT_CREDENTIAL_FILE),
         credential.as_bytes(),
-    )
+    )?;
+    STORED_CREDENTIAL_SUPPRESSED.store(false, Ordering::Relaxed);
+    Ok(())
 }
 
 fn session_record_path(session_id: &str) -> io::Result<PathBuf> {
@@ -1147,6 +1191,7 @@ fn pairing_failure(error: ClientError) -> &'static str {
         ClientError::MalformedFrame => "Muniment runtime sent a malformed attach message",
         ClientError::PayloadTooLarge => "Muniment runtime sent an oversized attach message",
         ClientError::UnexpectedMessage => "Muniment runtime sent an invalid pairing message",
+        ClientError::CapabilityRevoked => "Muniment capability revoked",
         ClientError::ProtocolIncompatible => "Muniment runtime attach protocol is incompatible",
         ClientError::RandomnessUnavailable => {
             "Muniment runtime pairing could not create an identity"
