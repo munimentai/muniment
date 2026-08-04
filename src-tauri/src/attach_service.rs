@@ -96,9 +96,10 @@ pub struct DesktopAttachService<B, I = IdempotencyStore> {
 }
 
 #[cfg(target_os = "linux")]
-struct AttachListenerState {
+pub(crate) struct AttachListenerState {
     workspace_contexts: Arc<Mutex<HashMap<String, HashMap<PathBuf, Option<String>>>>>,
     client_credentials: Arc<Mutex<HashMap<String, String>>>,
+    credential_path: PathBuf,
     live_connections: LiveConnectionRegistry,
 }
 
@@ -108,8 +109,29 @@ impl AttachListenerState {
         Ok(Self {
             workspace_contexts: Arc::new(Mutex::new(HashMap::new())),
             client_credentials: Arc::new(Mutex::new(load_client_credentials(credential_path)?)),
+            credential_path: credential_path.to_owned(),
             live_connections: LiveConnectionRegistry::default(),
         })
+    }
+
+    pub(crate) fn revoke_companion(&self, client_identity: &str) -> Result<(), ProtocolError> {
+        let mut credentials = self
+            .client_credentials
+            .lock()
+            .map_err(|_| ProtocolError::persistence_failed())?;
+        let credential = credentials
+            .get(client_identity)
+            .cloned()
+            .ok_or_else(ProtocolError::unauthorized)?;
+        self.live_connections.block(&credential);
+        credentials.remove(client_identity);
+        if let Err(error) = persist_client_credentials(&self.credential_path, &credentials) {
+            credentials.insert(client_identity.to_owned(), credential.clone());
+            self.live_connections.resume(&credential);
+            return Err(error);
+        }
+        self.live_connections.revoke(&credential);
+        Ok(())
     }
 }
 
@@ -2022,6 +2044,142 @@ mod tests {
         std::fs::write(&target, b"{}").unwrap();
         symlink(&target, &path).unwrap();
         assert!(load_client_credentials(&path).is_err());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn revoke_companion_persists_before_emitting_and_reconnect_fails_closed() {
+        use muniment_attach::{decode_frame, handshake_stream_with_credential, ClientError};
+        use muniment_core::attach::linux::{ApprovalDecision, AttachSessionError, PeerCredentials};
+        use std::io::Read;
+
+        let root = std::env::temp_dir().join(format!("muniment-attach-revoke-{}", Uuid::now_v7()));
+        let credential_path = root.join("credentials.json");
+        let identity = "018f0000-0000-7000-8000-000000000099";
+        let credential = "ab".repeat(32);
+        persist_client_credentials(
+            &credential_path,
+            &HashMap::from([(identity.to_owned(), credential.clone())]),
+        )
+        .unwrap();
+        let mut state = AttachListenerState::load(&credential_path).unwrap();
+        let client_credentials = state.client_credentials.clone();
+        let live_connections = state.live_connections.clone();
+
+        let connect = |presented: String| {
+            let (client_stream, server_stream) = std::os::unix::net::UnixStream::pair().unwrap();
+            let observer = client_stream.try_clone().unwrap();
+            let credentials = client_credentials.clone();
+            let registry = live_connections.clone();
+            let worker = std::thread::spawn(move || {
+                let mut service = DesktopAttachService {
+                    boundaries: FakeRunStartBoundaries::accepting(),
+                    idempotency: IdempotencyStore::open(":memory:").unwrap(),
+                    home: std::env::temp_dir(),
+                    workspace_contexts: Arc::new(Mutex::new(HashMap::new())),
+                    client_credentials: credentials,
+                    credential_path: None,
+                    client_identity: None,
+                };
+                run_authenticated_session_with_service_approvals_and_registry(
+                    server_stream,
+                    PeerCredentials {
+                        pid: std::process::id() as i32,
+                        uid: unsafe { libc::geteuid() },
+                        gid: unsafe { libc::getegid() },
+                    },
+                    "0.0.1",
+                    &mut service,
+                    |_: &muniment_core::attach::PairingChallenge, _: Duration| {
+                        Some(ApprovalDecision::Approve(
+                            desktop_attach_approval().unwrap(),
+                        ))
+                    },
+                    &registry,
+                )
+            });
+            let client = handshake_stream_with_credential(
+                client_stream,
+                "0.0.1",
+                identity,
+                Some(&presented),
+                Duration::from_secs(1),
+                Duration::from_secs(1),
+                || {},
+            );
+            (client, observer, worker)
+        };
+
+        let (client, mut observer, worker) = connect(credential.clone());
+        let client = client.unwrap();
+        state.revoke_companion(identity).unwrap();
+        assert!(!load_client_credentials(&credential_path)
+            .unwrap()
+            .contains_key(identity));
+
+        observer
+            .set_read_timeout(Some(Duration::from_secs(1)))
+            .unwrap();
+        let mut prefix = [0; 4];
+        observer.read_exact(&mut prefix).unwrap();
+        let mut frame = vec![0; 4 + u32::from_be_bytes(prefix) as usize];
+        frame[..4].copy_from_slice(&prefix);
+        observer.read_exact(&mut frame[4..]).unwrap();
+        let event: Value = decode_frame(&frame).unwrap().unwrap().0;
+        assert_eq!(event["event"], "capability.revoked");
+        assert!(event["body"]["capability"]
+            .as_str()
+            .is_some_and(|capability| !capability.is_empty()));
+        assert_eq!(event["body"]["reason"], "companion_revoked");
+        assert!(event["subscription_id"].as_str().is_some());
+        assert_eq!(observer.read(&mut [0]).unwrap(), 0);
+        drop(client);
+        assert!(worker.join().unwrap().is_ok());
+
+        let (reconnect, _observer, worker) = connect(credential);
+        assert_eq!(reconnect.unwrap_err(), ClientError::UnexpectedMessage);
+        assert_eq!(
+            worker.join().unwrap(),
+            Err(AttachSessionError::Authorization)
+        );
+
+        let credential = "cd".repeat(32);
+        state
+            .client_credentials
+            .lock()
+            .unwrap()
+            .insert(identity.to_owned(), credential.clone());
+        persist_client_credentials(&credential_path, &state.client_credentials.lock().unwrap())
+            .unwrap();
+        let (client, mut observer, worker) = connect(credential.clone());
+        let mut client = client.unwrap();
+        let blocker = root.join("not-a-directory");
+        std::fs::write(&blocker, b"blocked").unwrap();
+        state.credential_path = blocker.join("credentials.json");
+        assert_eq!(
+            state.revoke_companion(identity).unwrap_err().code(),
+            ErrorCode::PersistenceFailed
+        );
+        assert_eq!(
+            state.client_credentials.lock().unwrap().get(identity),
+            Some(&credential)
+        );
+        observer
+            .set_read_timeout(Some(Duration::from_millis(150)))
+            .unwrap();
+        assert!(matches!(
+            observer.read(&mut [0]),
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock
+                )
+        ));
+        client.list_threads(None).unwrap();
+        drop(client);
+        drop(observer);
+        assert!(worker.join().unwrap().is_ok());
         std::fs::remove_dir_all(root).unwrap();
     }
 
