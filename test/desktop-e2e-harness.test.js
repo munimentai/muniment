@@ -898,3 +898,14 @@ describe.skipIf(process.platform === 'win32')('cleanup failure accounting', () =
     if (['redact-artifacts', 'replace-artifacts', 'publish-artifacts'].includes(failed)) expect(invoked).toContain('suppress-artifacts')
   })
 })
+
+describe('installed ACP adapter contract', () => {
+  it('probes the installed adapter after its executability check', () => {
+    const runner = fs.readFileSync(path.join(root, 'test/e2e/runner/linux.sh'), 'utf8')
+    const executableCheck = '[[ -x /usr/lib/muniment/muniment-acp ]]'
+    const probe = 'node test/e2e/support/probe-installed-adapter.mjs /usr/lib/muniment/muniment-acp'
+    expect(runner).toContain(probe)
+    expect(runner.indexOf(executableCheck)).toBeLessThan(runner.indexOf(probe))
+    expect(runner).toContain("echo 'installed ACP adapter initialize probe failed' >&2")
+  })
+})
