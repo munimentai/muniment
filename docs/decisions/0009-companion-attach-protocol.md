@@ -710,6 +710,36 @@ the list-and-revoke surface backed by the attach owner API. **Attach companion
 revocation emitter** adds atomic live invalidation, event delivery, connection
 closure, and contract tests. This amendment changes no code.
 
+## Amendment — 2026-08-04: attach workspace namespace
+
+The signed `grant.workspace` value is the only workspace authority for
+`thread.list`, `thread.open`, `thread.create`, and `run.start`. Each operation
+uses the desktop's current cloud grant. A workspace string or directory from a
+companion cannot select, replace, or extend that authority.
+
+A companion-supplied directory is only a local execution root. The attach
+owner canonicalizes and records it as a mapping to the authorized workspace
+for that client identity. The directory is never workspace authority by
+itself. The owner checks the authorized workspace before it uses the mapping.
+
+If the desktop holds no current cloud grant, the attach owner cannot establish
+a workspace authority. Approval and all four workspace operations fail closed.
+The owner does not create a mapping or start a run from a companion-supplied
+directory in that state.
+
+This rule follows the workspace boundary in the [ADR 0012 extraction
+amendment](0012-user-level-runtime-service.md#amendment--2026-08-04-runtime-service-extraction-sequence).
+That amendment owns the later service extraction and handoff rules.
+
+Implementation follows in three slices. First, **grant workspace
+authorization** binds approval and request admission to the current signed
+workspace grant. Second, **local execution-root mapping** records each
+canonical companion directory under its authorized workspace and client
+identity. Third, **attach workspace enforcement** applies that authority and
+mapping to `thread.list`, `thread.open`, `thread.create`, and `run.start`, with
+contract tests for missing grants and mismatched directories. This amendment
+changes no code.
+
 ## Rejected alternatives
 
 **TCP loopback alone.** Loopback limits network reach but supplies no portable
