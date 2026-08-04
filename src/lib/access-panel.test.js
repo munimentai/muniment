@@ -31,4 +31,19 @@ describe('access popover layout', () => {
     expect(rules.get('.profile-button small')).toMatch(/white-space:\s*nowrap/)
     expect(source).toMatch(/class="profile-button" title=\{profileDetails\}/)
   })
+
+  it('renders every connected program state and a missing approval time', () => {
+    expect(source).toMatch(/Loading connected programs…/)
+    expect(source).toMatch(/Connected programs could not be loaded\./)
+    expect(source).toMatch(/No connected programs found/)
+    expect(source).toMatch(/Approval time unavailable/)
+    expect(source).toMatch(/onclick=\{loadCompanions\}>Try again/)
+  })
+
+  it('keeps claimed program text on one line with its full value available', () => {
+    expect(source).toMatch(/<strong title=\{companion\.claimed_kind\}>/)
+    expect(source).toMatch(/class="companion-version" title=\{companion\.claimed_version\}/)
+    expect(rules.get('.companion-heading strong, .companion-version')).toMatch(/text-overflow:\s*ellipsis/)
+    expect(rules.get('.companion-heading strong, .companion-version')).toMatch(/white-space:\s*nowrap/)
+  })
 })

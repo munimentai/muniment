@@ -317,6 +317,14 @@ window.__TAURI__ = {
         }
       }
       if (command === 'auth_devices') return []
+      if (command === 'attach_companions') return [
+        {
+          identity: '018f0000-0000-7000-8000-000000000001',
+          claimed_kind: 'CLI',
+          claimed_version: '1.2.3',
+          approved_at: '2026-08-04T12:00:00Z',
+        },
+      ]
       return null
     },
   },

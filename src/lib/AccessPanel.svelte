@@ -1,13 +1,14 @@
 <script>
   import { onMount } from 'svelte'
 
-  import { accessErrorState, accessIdleState, accessLoadingState, accessReadyState, devicesErrorState, devicesIdleState, devicesLoadingState, devicesReadyState } from './auth-state.js'
+  import { accessErrorState, accessIdleState, accessLoadingState, accessReadyState, companionsErrorState, companionsIdleState, companionsLoadingState, companionsReadyState, devicesErrorState, devicesIdleState, devicesLoadingState, devicesReadyState } from './auth-state.js'
   import { shortcutFromKeyboardEvent } from './dictation-state.js'
   import { THEME_STORAGE_KEY, parseTheme, serializeTheme } from './theme-state.js'
 
   let { tauri, subject, onSignOut, escapeBlocked = () => false, voiceShortcut, voiceShortcutChanging, onVoiceShortcutChange, defaultVoiceShortcut } = $props()
   let access = $state(accessIdleState)
   let devices = $state(devicesIdleState)
+  let companions = $state(companionsIdleState)
   let profileSnapshot = $state(null)
   let accessOpen = $state(false)
   let expandedGroups = $state(new Set())
@@ -54,6 +55,7 @@
   function openAccess() {
     loadAccess(true)
     loadDevices()
+    loadCompanions()
   }
 
   async function loadDevices() {
@@ -62,6 +64,15 @@
       devices = devicesReadyState(await tauri.invoke('auth_devices'))
     } catch (_) {
       devices = devicesErrorState()
+    }
+  }
+
+  async function loadCompanions() {
+    companions = companionsLoadingState()
+    try {
+      companions = companionsReadyState(await tauri.invoke('attach_companions'))
+    } catch (_) {
+      companions = companionsErrorState()
     }
   }
 
@@ -184,6 +195,25 @@
             </ul>
           {/if}
         </section>
+        <section class="companions-section" aria-labelledby="companions-heading">
+          <h3 id="companions-heading" class="access-label">Connected programs</h3>
+          {#if companions.name === 'loading'}
+            <p class="access-status" aria-live="polite">Loading connected programs…</p>
+          {:else if companions.name === 'error'}
+            <div class="access-status" role="alert"><p>Connected programs could not be loaded.</p><button onclick={loadCompanions}>Try again</button></div>
+          {:else if companions.name === 'ready'}
+            {#if companions.companions.length === 0}<p class="empty-grant">No connected programs found</p>{/if}
+            <ul class="companion-list">
+              {#each companions.companions as companion (companion.identity)}
+                <li>
+                  <div class="companion-heading"><strong title={companion.claimed_kind}>{companion.claimed_kind}</strong><span>Claimed kind</span></div>
+                  <p class="companion-version" title={companion.claimed_version}>Claimed version: {companion.claimed_version}</p>
+                  {#if companion.approved_at}<time datetime={companion.approved_at}>Approved {lastActive(companion.approved_at)}</time>{:else}<p class="companion-time">Approval time unavailable</p>{/if}
+                </li>
+              {/each}
+            </ul>
+          {/if}
+        </section>
         <section class="voice-section" aria-labelledby="voice-heading">
           <h3 id="voice-heading" class="access-label">Voice shortcut</h3>
           <p class="shortcut-help">Hold this shortcut to dictate from anywhere.</p>
@@ -231,6 +261,7 @@
   .entitlements-section { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--border); }
   .access-note { margin: 10px 0 0; color: var(--muted); font-size: var(--text-12); }
   .devices-section { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--border); }
+  .companions-section { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--border); }
   .voice-section { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--border); }
   .theme-options { display: inline-flex; border: 1px solid var(--border); border-radius: var(--radius-control); }
   .theme-options button { position: relative; border: 0; border-radius: 0; background: transparent; color: var(--muted); padding: 5px 12px; }
@@ -256,6 +287,14 @@
   /* §6: the word, not the color, carries Active vs Revoked. */
   .device-state { margin-left: auto; color: var(--muted); font: var(--text-12) var(--font-mono); }
   .device-list time { display: block; margin-top: 3px; color: var(--muted); font: var(--text-12) var(--font-mono); }
+  .companion-list { margin: 0; padding: 0; list-style: none; }
+  .companion-list li { min-width: 0; padding: 9px 2px; border-top: 1px solid var(--border); }
+  .companion-list li:first-child { border-top: 0; }
+  .companion-heading { display: flex; min-width: 0; align-items: center; gap: 7px; font-size: var(--text-12); }
+  .companion-heading strong, .companion-version { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .companion-heading strong { min-width: 0; font-weight: 600; }
+  .companion-heading span { flex: none; margin-left: auto; color: var(--muted); font: var(--text-12) var(--font-mono); }
+  .companion-version, .companion-time, .companion-list time { display: block; margin: 3px 0 0; color: var(--muted); font: var(--text-12) var(--font-mono); }
   .access-footer { flex: none; padding: 9px 14px; border-top: 1px solid var(--border); }
   .sign-out { padding: 2px 0; color: var(--muted); }
   .quiet { background: transparent; border-color: transparent; }
