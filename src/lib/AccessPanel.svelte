@@ -1,5 +1,5 @@
 <script>
-  import { onMount } from 'svelte'
+  import { onMount, tick } from 'svelte'
 
   import { accessErrorState, accessIdleState, accessLoadingState, accessReadyState, companionsErrorState, companionsIdleState, companionsLoadingState, companionsReadyState, devicesErrorState, devicesIdleState, devicesLoadingState, devicesReadyState } from './auth-state.js'
   import { shortcutFromKeyboardEvent } from './dictation-state.js'
@@ -18,6 +18,9 @@
   let pendingShortcut = $state('')
   let shortcutStatus = $state('')
   let theme = $state(readTheme())
+  let revokingIdentity = $state(null)
+  let revokePending = $state(false)
+  let revokeError = $state('')
   let profileName = $derived(profileSnapshot?.user_display_name ?? subject ?? 'Signed in')
   let profileDetails = $derived(profileSnapshot ? `${profileSnapshot.organization_display_name ?? profileSnapshot.org_id} · ${profileSnapshot.role}` : 'Access unavailable')
 
@@ -76,6 +79,41 @@
     }
   }
 
+  function askToRevokeCompanion(identity) {
+    revokingIdentity = identity
+    revokeError = ''
+  }
+
+  function cancelRevokeCompanion() {
+    const identity = revokingIdentity
+    revokingIdentity = null
+    revokeError = ''
+    void tick().then(() => Array.from(accessPopover?.querySelectorAll('[data-revoke-companion]') ?? [])
+      .find((button) => button.dataset.revokeCompanion === identity)?.focus())
+  }
+
+  function revokeConfirmKeydown(event) {
+    if (event.key !== 'Escape') return
+    event.preventDefault()
+    event.stopPropagation()
+    cancelRevokeCompanion()
+  }
+
+  async function revokeCompanion(identity) {
+    if (revokePending) return
+    revokePending = true
+    revokeError = ''
+    try {
+      await tauri.invoke('attach_revoke_companion', { clientIdentity: identity })
+      revokingIdentity = null
+      await loadCompanions()
+    } catch (_) {
+      revokeError = 'The program could not be revoked.'
+    } finally {
+      revokePending = false
+    }
+  }
+
   function lastActive(value) {
     return new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(value))
   }
@@ -86,6 +124,8 @@
     capturingShortcut = false
     pendingShortcut = ''
     shortcutStatus = ''
+    revokingIdentity = null
+    revokeError = ''
     profileButton?.focus()
   }
 
@@ -129,6 +169,12 @@
     }
     const escape = (event) => {
       if (!accessOpen || event.key !== 'Escape') return
+      if (revokingIdentity) {
+        event.preventDefault()
+        event.stopPropagation()
+        cancelRevokeCompanion()
+        return
+      }
       if (!escapeBlocked()) {
         event.preventDefault()
         closeAccess()
@@ -207,10 +253,22 @@
             {#if companions.companions.length === 0}<p class="empty-grant">No connected programs found</p>{/if}
             <ul class="companion-list">
               {#each companions.companions as companion (companion.identity)}
-                <li>
-                  <div class="companion-heading"><strong title={companion.claimed_kind}>{companion.claimed_kind}</strong><span>Claimed kind</span></div>
-                  <p class="companion-version" title={companion.claimed_version}>Claimed version: {companion.claimed_version}</p>
-                  {#if companion.approved_at}<time datetime={companion.approved_at}>Approved {lastActive(companion.approved_at)}</time>{:else}<p class="companion-time">Approval time unavailable</p>{/if}
+                <li class="companion-row">
+                  {#if revokingIdentity === companion.identity}
+                    <div class="companion-confirm" role="group" aria-label={`Revoke ${companion.claimed_kind}?`}>
+                      <p><strong>{companion.claimed_kind}</strong> must be approved again before it can reconnect.</p>
+                      {#if revokeError}<p class="revoke-error" role="alert">{revokeError}</p>{/if}
+                      <div class="companion-actions">
+                        <button type="button" disabled={revokePending} onclick={() => revokeCompanion(companion.identity)} onkeydown={revokeConfirmKeydown}>{revokeError ? 'Retry revoke' : 'Revoke'}</button>
+                        <button type="button" disabled={revokePending} onclick={cancelRevokeCompanion} onkeydown={revokeConfirmKeydown}>Cancel</button>
+                      </div>
+                    </div>
+                  {:else}
+                    <div class="companion-heading"><strong title={companion.claimed_kind}>{companion.claimed_kind}</strong><span>Claimed kind</span></div>
+                    <p class="companion-version" title={companion.claimed_version}>Claimed version: {companion.claimed_version}</p>
+                    {#if companion.approved_at}<time datetime={companion.approved_at}>Approved {lastActive(companion.approved_at)}</time>{:else}<p class="companion-time">Approval time unavailable</p>{/if}
+                    <button type="button" class="companion-revoke" data-revoke-companion={companion.identity} aria-label={`Revoke ${companion.claimed_kind}`} onclick={() => askToRevokeCompanion(companion.identity)}>Revoke</button>
+                  {/if}
                 </li>
               {/each}
             </ul>
@@ -292,11 +350,24 @@
   .companion-list { margin: 0; padding: 0; list-style: none; }
   .companion-list li { min-width: 0; padding: 9px 2px; border-top: 1px solid var(--border); }
   .companion-list li:first-child { border-top: 0; }
+  .companion-row { position: relative; }
   .companion-heading { display: flex; min-width: 0; align-items: center; gap: 7px; font-size: var(--text-12); }
   .companion-heading strong, .companion-version { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .companion-heading strong { min-width: 0; font-weight: 600; }
   .companion-heading span { flex: none; margin-left: auto; color: var(--muted); font: var(--text-12) var(--font-mono); }
   .companion-version, .companion-time, .companion-list time { display: block; margin: 3px 0 0; color: var(--muted); font: var(--text-12) var(--font-mono); }
+  .companion-revoke { position: absolute; top: 5px; right: 0; padding: 3px 6px; border-color: transparent; background: var(--paper); color: var(--muted); font: var(--text-12) var(--font-mono); opacity: 0; transition: opacity 120ms ease; }
+  .companion-row:hover .companion-revoke, .companion-row:focus-within .companion-revoke { opacity: 1; }
+  .companion-row:hover .companion-heading span, .companion-row:focus-within .companion-heading span { visibility: hidden; }
+  .companion-revoke:hover:not(:disabled) { border-color: transparent; background: var(--faint); color: var(--ink); }
+  .companion-revoke:focus-visible, .companion-confirm button:focus-visible { outline-color: var(--ink); }
+  .companion-confirm { color: var(--ink); font-size: var(--text-12); }
+  .companion-confirm p { margin: 0; }
+  .companion-confirm strong { font-weight: 600; }
+  .companion-actions { display: flex; justify-content: flex-end; gap: 5px; margin-top: 6px; }
+  .companion-actions button { padding: 3px 6px; border-color: transparent; background: transparent; color: var(--ink); font: var(--text-12) var(--font-mono); }
+  .companion-actions button:hover:not(:disabled) { background: var(--faint); }
+  .revoke-error { margin-top: 5px !important; color: var(--muted); }
   .access-footer { flex: none; padding: 9px 14px; border-top: 1px solid var(--border); }
   .sign-out { padding: 2px 0; color: var(--muted); }
   .quiet { background: transparent; border-color: transparent; }
