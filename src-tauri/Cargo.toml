@@ -30,13 +30,12 @@ tauri-plugin-window-state = "=2.4.1"
 windows-sys = { version = "0.61", features = ["Win32_Storage_FileSystem"] }
 
 # Platform keychains: macOS Keychain / Windows Credential Manager / Linux
-# Secret Service. `vendored` builds libdbus from source so the Linux build
-# VM needs no system packages beyond the C toolchain it already has; the
-# other two features are pure windows-sys / Security.framework bindings.
+# kernel keyring. The Linux backend works without a desktop Secret Service,
+# including installed headless sessions.
 [dependencies.keyring]
 version = "3"
 default-features = false
-features = ["apple-native", "windows-native", "sync-secret-service", "vendored"]
+features = ["apple-native", "windows-native", "linux-native"]
 
 [dev-dependencies]
 base64 = "0.22"

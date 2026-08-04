@@ -188,9 +188,8 @@ implementations:
 - **`KeyringTokenStore`** (`src-tauri/src/auth/keyring_store.rs`): one
   keychain entry (`service: ai.muniment.desktop`, `user: oidc-tokens`)
   holding the token set as JSON. Backends via the `keyring` crate: macOS
-  Keychain, Windows Credential Manager, Secret Service (D-Bus) on Linux.
-  libdbus is vendored (compiled from source) so Linux builds need no extra
-  system packages.
+  Keychain, Windows Credential Manager, and the Linux kernel keyring. The
+  Linux backend needs no desktop Secret Service or extra system package.
 - **`InMemoryTokenStore`** (in `muniment-core`): tests and ephemeral use.
 
 Invariants (harness-spec §3.1/§8): tokens are never logged and never touch
