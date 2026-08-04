@@ -975,6 +975,30 @@ mod linux {
             &mut self,
             event: crate::Event,
         ) -> Result<RunStreamMessage, ClientError> {
+            if event.event == EventName::CapabilityRevoked {
+                if event.run_id.is_some() || event.run_seq.is_some() {
+                    return Err(ClientError::UnexpectedMessage);
+                }
+                #[derive(serde::Deserialize)]
+                #[serde(deny_unknown_fields)]
+                struct Body {
+                    capability: String,
+                    reason: String,
+                }
+                let body: Body = serde_json::from_value(event.body)
+                    .map_err(|_| ClientError::UnexpectedMessage)?;
+                if body.capability.trim().is_empty()
+                    || body.capability.len() > MAX_TEXT_LENGTH
+                    || body.reason.trim().is_empty()
+                    || body.reason.len() > MAX_TEXT_LENGTH
+                {
+                    return Err(ClientError::UnexpectedMessage);
+                }
+                return Ok(RunStreamMessage::CapabilityRevoked {
+                    capability: body.capability,
+                    reason: body.reason,
+                });
+            }
             let active = self
                 .active_run_stream
                 .as_mut()
@@ -1146,27 +1170,6 @@ mod linux {
                     Ok(RunStreamMessage::StreamClosed {
                         code: body.code,
                         resumable: body.resumable.as_bool().unwrap_or(false),
-                    })
-                }
-                EventName::CapabilityRevoked => {
-                    #[derive(serde::Deserialize)]
-                    #[serde(deny_unknown_fields)]
-                    struct Body {
-                        capability: String,
-                        reason: String,
-                    }
-                    let body: Body = serde_json::from_value(event.body)
-                        .map_err(|_| ClientError::UnexpectedMessage)?;
-                    if body.capability.trim().is_empty()
-                        || body.capability.len() > MAX_TEXT_LENGTH
-                        || body.reason.trim().is_empty()
-                        || body.reason.len() > MAX_TEXT_LENGTH
-                    {
-                        return Err(ClientError::UnexpectedMessage);
-                    }
-                    Ok(RunStreamMessage::CapabilityRevoked {
-                        capability: body.capability,
-                        reason: body.reason,
                     })
                 }
                 _ => Err(ClientError::UnexpectedMessage),

@@ -647,7 +647,18 @@ fn prompt_rejects_an_unknown_session_without_an_attach() {
 }
 
 #[cfg(target_os = "linux")]
-fn scripted_prompt_ending(event_type: &str, stream_closed_body: Option<Value>) -> Vec<Value> {
+struct ScriptedPromptEnding {
+    responses: Vec<Value>,
+    client_id_exists: bool,
+    credential_exists: bool,
+}
+
+#[cfg(target_os = "linux")]
+fn scripted_prompt_ending(
+    event_type: &str,
+    stream_closed_body: Option<Value>,
+    credential_removal_fails: bool,
+) -> ScriptedPromptEnding {
     use muniment_attach::{
         authorized_with_client_credential, encode_frame, welcome, Event, EventName, Id, Protocol,
         Response, Success,
@@ -711,7 +722,9 @@ fn scripted_prompt_ending(event_type: &str, stream_closed_body: Option<Value>) -
     .unwrap();
     std::fs::set_permissions(&record, std::fs::Permissions::from_mode(0o600)).unwrap();
     let listener = UnixListener::bind(socket_directory.join("attach-v1.sock")).unwrap();
+    let capability_revoked = event_type == "capability.revoked";
     let event_type = event_type.to_owned();
+    let server_config = config.clone();
     let server = thread::spawn(move || {
         let (mut stream, _) = listener.accept().unwrap();
         let _hello = read_frame(&mut stream);
@@ -852,6 +865,39 @@ fn scripted_prompt_ending(event_type: &str, stream_closed_body: Option<Value>) -
                     json!({"subscription_id": resumed_subscription, "through_run_seq": 3}),
                 );
             }
+        } else if capability_revoked {
+            if credential_removal_fails {
+                let credential = server_config.join("muniment/acp-client-credential");
+                std::fs::remove_file(&credential).unwrap();
+                std::fs::create_dir(&credential).unwrap();
+                std::fs::write(credential.join("blocked"), b"blocked").unwrap();
+            }
+            stream
+                .write_all(
+                    &encode_frame(&Event {
+                        protocol: Protocol,
+                        subscription_id: Id::new("22".repeat(16)).unwrap(),
+                        event: EventName::CapabilityRevoked,
+                        run_id: None,
+                        run_seq: None,
+                        body: json!({
+                            "capability": "attach",
+                            "reason": "companion_revoked"
+                        }),
+                    })
+                    .unwrap(),
+                )
+                .unwrap();
+            drop(stream);
+            let (mut stream, _) = listener.accept().unwrap();
+            let hello = read_frame(&mut stream);
+            assert!(hello.get("authorized_client_credential").is_none());
+            assert_eq!(
+                server_config
+                    .join("muniment/acp-client-credential")
+                    .exists(),
+                credential_removal_fails
+            );
         } else {
             stream
                 .write_all(
@@ -884,26 +930,35 @@ fn scripted_prompt_ending(event_type: &str, stream_closed_body: Option<Value>) -
     command
         .env("XDG_RUNTIME_DIR", &runtime)
         .env("XDG_CONFIG_HOME", &config);
-    let responses = exchange_with_command(
-        command,
-        &[request(
-            1,
-            "session/prompt",
-            json!({
-                "sessionId": session_id,
-                "prompt": [{"type": "text", "text": "Continue."}]
-            }),
-        )],
+    let prompt = request(
+        1,
+        "session/prompt",
+        json!({
+            "sessionId": session_id,
+            "prompt": [{"type": "text", "text": "Continue."}]
+        }),
     );
+    let messages = if capability_revoked {
+        vec![prompt.clone(), prompt]
+    } else {
+        vec![prompt]
+    };
+    let responses = exchange_with_command(command, &messages);
     server.join().unwrap();
+    let client_files = config.join("muniment");
+    let result = ScriptedPromptEnding {
+        responses,
+        client_id_exists: client_files.join("acp-client-id").exists(),
+        credential_exists: client_files.join("acp-client-credential").exists(),
+    };
     std::fs::remove_dir_all(root).unwrap();
-    responses
+    result
 }
 
 #[cfg(target_os = "linux")]
 #[test]
 fn prompt_ends_when_a_run_needs_attention() {
-    let responses = scripted_prompt_ending("run.needs_attention", None);
+    let responses = scripted_prompt_ending("run.needs_attention", None, false).responses;
     assert_eq!(responses.len(), 1);
     assert_eq!(responses[0]["error"]["code"], -32603);
     assert_eq!(
@@ -915,7 +970,12 @@ fn prompt_ends_when_a_run_needs_attention() {
 #[cfg(target_os = "linux")]
 #[test]
 fn prompt_ends_when_a_run_stream_cannot_resume() {
-    let responses = scripted_prompt_ending("", Some(json!({"code": "closed", "resumable": false})));
+    let responses = scripted_prompt_ending(
+        "",
+        Some(json!({"code": "closed", "resumable": false})),
+        false,
+    )
+    .responses;
     assert_eq!(responses.len(), 1);
     assert_eq!(responses[0]["error"]["code"], -32000);
     assert_eq!(
@@ -927,7 +987,7 @@ fn prompt_ends_when_a_run_stream_cannot_resume() {
 #[cfg(target_os = "linux")]
 #[test]
 fn prompt_ends_when_a_run_stream_omits_resumable() {
-    let responses = scripted_prompt_ending("", Some(json!({"code": "closed"})));
+    let responses = scripted_prompt_ending("", Some(json!({"code": "closed"})), false).responses;
     assert_eq!(responses[0]["error"]["code"], -32000);
     assert_eq!(
         responses[0]["error"]["message"],
@@ -938,7 +998,12 @@ fn prompt_ends_when_a_run_stream_omits_resumable() {
 #[cfg(target_os = "linux")]
 #[test]
 fn prompt_ends_when_a_run_stream_has_a_non_boolean_resumable() {
-    let responses = scripted_prompt_ending("", Some(json!({"code": "closed", "resumable": "yes"})));
+    let responses = scripted_prompt_ending(
+        "",
+        Some(json!({"code": "closed", "resumable": "yes"})),
+        false,
+    )
+    .responses;
     assert_eq!(responses[0]["error"]["code"], -32000);
     assert_eq!(
         responses[0]["error"]["message"],
@@ -949,11 +1014,40 @@ fn prompt_ends_when_a_run_stream_has_a_non_boolean_resumable() {
 #[cfg(target_os = "linux")]
 #[test]
 fn prompt_resubscribes_when_a_run_stream_can_resume() {
-    let responses = scripted_prompt_ending("", Some(json!({"code": "closed", "resumable": true})));
+    let responses = scripted_prompt_ending(
+        "",
+        Some(json!({"code": "closed", "resumable": true})),
+        false,
+    )
+    .responses;
     assert_eq!(responses.len(), 2);
     assert_eq!(responses[0]["method"], "session/update");
     assert_eq!(responses[0]["params"]["update"]["content"]["text"], "Once");
     assert_eq!(responses[1]["result"]["stopReason"], "end_turn");
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn capability_revocation_ends_the_prompt_and_drops_the_credential() {
+    let result = scripted_prompt_ending("capability.revoked", None, false);
+    assert_eq!(result.responses[0]["error"]["code"], -32000);
+    assert_eq!(
+        result.responses[0]["error"]["message"],
+        "Muniment capability revoked"
+    );
+    assert!(result.client_id_exists);
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn capability_revocation_suppresses_a_credential_that_cannot_be_removed() {
+    let result = scripted_prompt_ending("capability.revoked", None, true);
+    assert_eq!(
+        result.responses[0]["error"]["message"],
+        "Muniment capability revoked"
+    );
+    assert!(result.client_id_exists);
+    assert!(result.credential_exists);
 }
 
 #[cfg(target_os = "linux")]

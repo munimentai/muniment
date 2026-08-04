@@ -20,6 +20,7 @@ use std::io::{self, BufRead, BufReader, Read, Write};
 #[cfg(unix)]
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver};
 use std::thread;
 
@@ -28,12 +29,14 @@ const CLIENT_ID_FILE: &str = "acp-client-id";
 const CLIENT_CREDENTIAL_FILE: &str = "acp-client-credential";
 const SESSION_DIRECTORY: &str = "acp-sessions";
 const SESSION_RECORD_VERSION: u32 = 1;
+static STORED_CREDENTIAL_SUPPRESSED: AtomicBool = AtomicBool::new(false);
 
 enum PromptFailure {
     Client(ClientError),
     Run,
     NeedsAttention,
     StreamClosed,
+    CapabilityRevoked,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -732,7 +735,8 @@ fn prompt(
                     resumable: false, ..
                 } => return Err(PromptFailure::StreamClosed),
                 RunStreamMessage::CapabilityRevoked { .. } => {
-                    return Err(ClientError::UnexpectedMessage.into());
+                    drop_authorized_client_credential();
+                    return Err(PromptFailure::CapabilityRevoked);
                 }
             };
             if let Some(run_seq) = run_seq {
@@ -784,6 +788,11 @@ fn prompt(
             "jsonrpc": "2.0",
             "id": id,
             "error": {"code": -32000, "message": "Muniment run stream closed"}
+        }),
+        Err(PromptFailure::CapabilityRevoked) => json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "error": {"code": -32000, "message": "Muniment capability revoked"}
         }),
         Err(PromptFailure::Client(error)) => json!({
             "jsonrpc": "2.0",
@@ -964,6 +973,9 @@ fn valid_identity(value: &str) -> io::Result<String> {
 }
 
 fn authorized_client_credential() -> io::Result<Option<String>> {
+    if STORED_CREDENTIAL_SUPPRESSED.load(Ordering::Relaxed) {
+        return Ok(None);
+    }
     let path = config_directory()?.join(CLIENT_CREDENTIAL_FILE);
     match read_private_file(&path) {
         Ok(value)
@@ -981,13 +993,22 @@ fn authorized_client_credential() -> io::Result<Option<String>> {
     }
 }
 
+fn drop_authorized_client_credential() {
+    STORED_CREDENTIAL_SUPPRESSED.store(true, Ordering::Relaxed);
+    let _ = config_directory()
+        .map(|directory| directory.join(CLIENT_CREDENTIAL_FILE))
+        .and_then(std::fs::remove_file);
+}
+
 fn persist_authorized_client_credential(credential: &str) -> io::Result<()> {
     let directory = config_directory()?;
     std::fs::create_dir_all(&directory)?;
     atomic_write_private_file(
         &directory.join(CLIENT_CREDENTIAL_FILE),
         credential.as_bytes(),
-    )
+    )?;
+    STORED_CREDENTIAL_SUPPRESSED.store(false, Ordering::Relaxed);
+    Ok(())
 }
 
 fn session_record_path(session_id: &str) -> io::Result<PathBuf> {
