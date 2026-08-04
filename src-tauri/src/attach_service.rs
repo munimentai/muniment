@@ -1,4 +1,6 @@
-use muniment_core::attach::ProtocolError;
+#[cfg(target_os = "linux")]
+use muniment_core::attach::ApprovalRequest;
+use muniment_core::attach::{ApprovalCoordinator, ProtocolError};
 use std::collections::HashMap;
 #[cfg(target_os = "linux")]
 use std::collections::{BTreeMap, BTreeSet};
@@ -237,10 +239,7 @@ impl AttachListenerState {
     }
 }
 
-#[derive(Default)]
-pub struct AttachApprovalState {
-    pending: Mutex<HashMap<String, std::sync::mpsc::SyncSender<bool>>>,
-}
+pub type AttachApprovalState = ApprovalCoordinator;
 
 #[cfg(target_os = "linux")]
 #[derive(serde::Serialize)]
@@ -269,11 +268,7 @@ pub fn attach_pairing_decide(
     challenge: String,
     approve: bool,
 ) {
-    if let Ok(mut pending) = state.pending.lock() {
-        if let Some(sender) = pending.remove(&challenge) {
-            let _ = sender.try_send(approve);
-        }
-    }
+    state.decide(&challenge, approve);
 }
 
 #[cfg(target_os = "linux")]
@@ -350,6 +345,18 @@ pub fn start_attach_listener<R: tauri::Runtime>(app: tauri::AppHandle<R>) {
         Err(_) => return,
     };
     app.manage(AttachCompanionState::new(state.clone()));
+    let approval_app = app.clone();
+    app.state::<AttachApprovalState>()
+        .register_presenter(move |request| {
+            let request = AttachPairingRequest {
+                challenge: request.challenge.clone(),
+                claimed_kind: request.claimed_kind.clone(),
+                claimed_version: request.claimed_version.clone(),
+            };
+            approval_app
+                .emit("attach-pairing-requested", &request)
+                .is_ok()
+        });
     std::thread::spawn(move || {
         let Ok(filesystem) = AttachFilesystem::from_environment() else {
             return;
@@ -381,7 +388,12 @@ pub fn start_attach_listener<R: tauri::Runtime>(app: tauri::AppHandle<R>) {
                 else {
                     return;
                 };
-                let approval_app = service.boundaries.app.clone();
+                let approvals = service
+                    .boundaries
+                    .app
+                    .state::<AttachApprovalState>()
+                    .inner()
+                    .clone();
                 let _ = run_authenticated_session_with_service_approvals_and_registry(
                     stream,
                     credentials,
@@ -392,24 +404,14 @@ pub fn start_attach_listener<R: tauri::Runtime>(app: tauri::AppHandle<R>) {
                               claimed_kind: &str,
                               claimed_version: &str,
                               remaining: Duration| {
-                            let challenge = challenge.as_str().to_owned();
-                            let (sender, receiver) = std::sync::mpsc::sync_channel(1);
-                            let state = approval_app.state::<AttachApprovalState>();
-                            state.pending.lock().ok()?.insert(challenge.clone(), sender);
-                            let request = AttachPairingRequest {
-                                challenge: challenge.clone(),
-                                claimed_kind: bounded_claim(claimed_kind),
-                                claimed_version: bounded_claim(claimed_version),
-                            };
-                            if approval_app
-                                .emit("attach-pairing-requested", &request)
-                                .is_err()
-                            {
-                                state.pending.lock().ok()?.remove(&challenge);
-                                return Some(muniment_core::attach::linux::ApprovalDecision::Deny);
-                            }
-                            let approved = receiver.recv_timeout(remaining).unwrap_or(false);
-                            state.pending.lock().ok()?.remove(&challenge);
+                            let approved = approvals.request(
+                                ApprovalRequest {
+                                    challenge: challenge.as_str().to_owned(),
+                                    claimed_kind: bounded_claim(claimed_kind),
+                                    claimed_version: bounded_claim(claimed_version),
+                                },
+                                remaining,
+                            );
                             if !approved {
                                 return Some(muniment_core::attach::linux::ApprovalDecision::Deny);
                             }
