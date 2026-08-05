@@ -13,6 +13,7 @@ use muniment_core::attach::ProtocolError;
 use muniment_core::attachment::{ingest_attachment, prepare_pi_images, AttachmentMetadata};
 use muniment_core::auth::TokenSet;
 use muniment_core::cas::LocalCas;
+use muniment_core::chat_profile::ChatProfile;
 use muniment_core::journal::reconciliation::reconcile_interrupted_runs;
 use muniment_core::journal::reducer::{
     project_chat, reduce, ChatProjector, PermissionGate, PermissionRequest, ProjectedAttachment,
@@ -711,14 +712,14 @@ impl<R: tauri::Runtime> RunStartBoundaries for TauriRunStartBoundaries<R> {
 impl ChatState {
     pub fn new(app: &tauri::AppHandle) -> Result<Self, Box<dyn std::error::Error>> {
         let directory = app.path().app_data_dir()?;
-        std::fs::create_dir_all(&directory)?;
-        std::fs::create_dir_all(directory.join("pi-sessions"))?;
-        let mut journal = RunJournal::open(directory.join("runs.sqlite3"))?;
+        let profile = ChatProfile::new(directory);
+        profile.create_directories()?;
+        let mut journal = RunJournal::open(profile.journal_path())?;
         reconcile_interrupted_runs(&mut journal, &desktop_provenance(None));
         Ok(Self {
             storage: Arc::new(Mutex::new(ChatStorage {
                 journal,
-                cas: LocalCas::open(&directory.join("cas"))?,
+                cas: LocalCas::open(&profile.cas_directory())?,
             })),
             active: Mutex::new(None),
             runtime: Arc::new(Mutex::new(None)),
@@ -778,7 +779,7 @@ fn protect_prompt(run_id: &str, prompt: &str, subject: Option<&str>) -> Result<(
 pub(crate) fn state_session_root(app: &tauri::AppHandle) -> Result<std::path::PathBuf, String> {
     app.path()
         .app_data_dir()
-        .map(|path| path.join("pi-sessions"))
+        .map(|path| ChatProfile::new(path).pi_session_root())
         .map_err(|_| "Conversation history is unavailable.".to_string())
 }
 
@@ -2437,7 +2438,7 @@ mod tests {
             // The coordinator refuses to create the session root itself
             // (ownership must be established by the install flow), so a fresh
             // machine needs it created here, exactly like the resume test.
-            let sessions = app.path().app_data_dir().unwrap().join("pi-sessions");
+            let sessions = ChatProfile::new(app.path().app_data_dir().unwrap()).pi_session_root();
             std::fs::create_dir_all(&sessions).unwrap();
             let directory =
                 std::env::temp_dir().join(format!("muniment-prompt-capture-{}", Uuid::now_v7()));
@@ -2889,7 +2890,7 @@ mod tests {
     #[test]
     fn resume_validation_fails_closed_for_every_unsafe_projection() {
         let directory = std::env::temp_dir().join(format!("muniment-resume-{}", Uuid::now_v7()));
-        let sessions = directory.join("pi-sessions");
+        let sessions = ChatProfile::new(&directory).pi_session_root();
         std::fs::create_dir_all(&sessions).unwrap();
         std::fs::write(sessions.join("session.jsonl"), "{}\n").unwrap();
         let run_id = Uuid::now_v7().to_string();
@@ -2996,7 +2997,7 @@ mod tests {
             Some("owner"),
         );
         let before = journal.events(&run_id).unwrap();
-        let sessions = directory.join("pi-sessions");
+        let sessions = ChatProfile::new(&directory).pi_session_root();
         std::fs::create_dir_all(&sessions).unwrap();
         std::fs::write(sessions.join("session.jsonl"), "{}\n").unwrap();
         let (locator, _) = validate_pi_session(&sessions, "session.jsonl").unwrap();
@@ -3055,7 +3056,7 @@ mod tests {
         let prompt_log = directory.join("prompt.txt");
         let request_log = directory.join("requests.jsonl");
         let session_name = format!("{}.jsonl", Uuid::now_v7());
-        let sessions = app.path().app_data_dir().unwrap().join("pi-sessions");
+        let sessions = ChatProfile::new(app.path().app_data_dir().unwrap()).pi_session_root();
         std::fs::create_dir_all(&sessions).unwrap();
         std::fs::write(sessions.join(&session_name), "persisted Pi data\n").unwrap();
 
