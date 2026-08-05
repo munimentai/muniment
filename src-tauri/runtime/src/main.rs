@@ -1,5 +1,5 @@
 #[cfg(target_os = "linux")]
-use muniment_core::attach::linux::{AttachFilesystem, InstanceLockError};
+use muniment_core::attach::linux::{AttachFilesystem, InstanceLockError, TerminationSignalWait};
 #[cfg(target_os = "linux")]
 use std::time::{Duration, Instant};
 
@@ -20,6 +20,7 @@ fn main() {
 
 #[cfg(target_os = "linux")]
 fn run() -> Result<(), String> {
+    let termination_signal = TerminationSignalWait::new().map_err(|error| error.to_string())?;
     let wait_timeout = test_wait_timeout()?;
     let filesystem = AttachFilesystem::from_environment().map_err(|error| error.to_string())?;
     let started = Instant::now();
@@ -40,9 +41,7 @@ fn run() -> Result<(), String> {
     if std::env::var_os(EXIT_AFTER_LOCK_ENV).is_some() {
         return Ok(());
     }
-    loop {
-        std::thread::park();
-    }
+    termination_signal.wait().map_err(|error| error.to_string())
 }
 
 #[cfg(target_os = "linux")]

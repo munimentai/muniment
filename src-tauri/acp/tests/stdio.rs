@@ -1,6 +1,11 @@
 use serde_json::{json, Value};
 use std::io::Write;
 use std::process::{Command, Stdio};
+#[cfg(target_os = "linux")]
+use std::sync::atomic::{AtomicU64, Ordering};
+
+#[cfg(target_os = "linux")]
+static NEXT_SCRIPTED_PROMPT: AtomicU64 = AtomicU64::new(0);
 
 fn exchange(messages: &[Value]) -> Vec<Value> {
     exchange_with_command(Command::new(env!("CARGO_BIN_EXE_muniment-acp")), messages)
@@ -710,13 +715,10 @@ fn scripted_prompt_ending(
             .unwrap();
     }
 
+    let sequence = NEXT_SCRIPTED_PROMPT.fetch_add(1, Ordering::Relaxed);
     let root = std::env::temp_dir().join(format!(
-        "muniment-acp-ending-{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
+        "muniment-acp-ending-{}-{sequence}",
+        std::process::id()
     ));
     let runtime = root.join("runtime");
     let config = root.join("config");
