@@ -1,4 +1,5 @@
 use chrono::{SecondsFormat, Utc};
+use muniment_core::chat_resume::resumable_locator;
 use muniment_core::journal::reducer::{project_chat_with_state, RunStatus};
 use muniment_core::journal::thread_summaries::ThreadSummary;
 use muniment_core::journal::{Provenance, RunJournal};
@@ -8,9 +9,8 @@ use std::collections::BTreeMap;
 
 use crate::auth;
 use crate::chat::{
-    chat_attachments, chat_pending_permission, chat_tool_activity, resumable_locator,
-    state_session_root, ChatAttachment, ChatPendingPermission, ChatState, ChatToolActivity,
-    SharedStorage,
+    chat_attachments, chat_pending_permission, chat_tool_activity, state_session_root,
+    ChatAttachment, ChatPendingPermission, ChatState, ChatToolActivity, SharedStorage,
 };
 use crate::session_thread::SessionThread;
 

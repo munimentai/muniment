@@ -18,10 +18,11 @@ use muniment_core::chat_grant::{
     FetchGrantError,
 };
 use muniment_core::chat_profile::ChatProfile;
+pub(crate) use muniment_core::chat_resume::ResumeContext;
+use muniment_core::chat_resume::{resumable_context as core_resumable_context, ChatResumeError};
 use muniment_core::journal::reconciliation::reconcile_interrupted_runs;
 use muniment_core::journal::reducer::{
-    project_chat, reduce, ChatProjector, PermissionGate, PermissionRequest, ProjectedAttachment,
-    RunStatus,
+    project_chat, ChatProjector, PermissionGate, PermissionRequest, ProjectedAttachment,
 };
 use muniment_core::journal::{
     EventEnvelope, EventPayload, JournalCommitHint, JournalError, Provenance, RunJournal,
@@ -29,9 +30,7 @@ use muniment_core::journal::{
 use muniment_core::sidecar::pi_chat::{
     cancel_command, ExtensionUiAnswer, PiChatEvent, PiImageContent, PiRunAdapter, PromptCommand,
 };
-use muniment_core::sidecar::{
-    validate_pi_session, PiRpcTransport, PiRpcWiring, PiSessionLocator, SidecarSupervisor,
-};
+use muniment_core::sidecar::{PiRpcTransport, PiRpcWiring, PiSessionLocator, SidecarSupervisor};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::path::PathBuf;
@@ -719,11 +718,6 @@ impl ChatState {
 const RESUME_PROMPT: &str =
     "Continue the interrupted response from the existing session. Do not repeat completed work.";
 
-pub(crate) struct ResumeContext {
-    pub(super) events: Vec<EventEnvelope>,
-    pub(super) locator: PiSessionLocator,
-}
-
 pub(super) struct ResumeAttempt {
     result: Option<std::sync::mpsc::Sender<Result<(), String>>>,
 }
@@ -776,41 +770,20 @@ pub(crate) fn resumable_context(
     subject: Option<&str>,
     session_root: &std::path::Path,
 ) -> Result<ResumeContext, String> {
-    let state = reduce(events).map_err(|_| "This reply cannot be resumed.".to_string())?;
-    let locator = resumable_locator(events.first(), &state, subject, session_root)?;
-    Ok(ResumeContext {
-        events: events.to_vec(),
-        locator,
-    })
+    core_resumable_context(events, subject, session_root).map_err(chat_resume_error_message)
 }
 
-pub(crate) fn resumable_locator(
-    first_event: Option<&EventEnvelope>,
-    state: &muniment_core::journal::reducer::RunState,
-    subject: Option<&str>,
-    session_root: &std::path::Path,
-) -> Result<PiSessionLocator, String> {
-    if first_event.is_none()
-        || matches!(
-            first_event.and_then(|event| event.provenance.actor_id.as_deref()),
-            Some(owner) if Some(owner) != subject
-        )
-    {
-        return Err("This reply cannot be resumed.".into());
+fn chat_resume_error_message(error: ChatResumeError) -> String {
+    match error {
+        ChatResumeError::InvalidEvents
+        | ChatResumeError::MissingFirstEvent
+        | ChatResumeError::SubjectMismatch
+        | ChatResumeError::StatusNotResumable
+        | ChatResumeError::PendingPermission
+        | ChatResumeError::RunningEffect
+        | ChatResumeError::MissingPiSession
+        | ChatResumeError::InvalidPiSession => "This reply cannot be resumed.".into(),
     }
-    if !matches!(&state.status, RunStatus::NeedsAttention(_))
-        || state.pending_permission.is_some()
-        || !state.running_effects.is_empty()
-    {
-        return Err("This reply cannot be resumed.".into());
-    }
-    let binding = state
-        .pi_session
-        .as_ref()
-        .ok_or_else(|| "This reply cannot be resumed.".to_string())?;
-    let (locator, _) = validate_pi_session(session_root, &binding.locator)
-        .map_err(|_| "This reply cannot be resumed.".to_string())?;
-    Ok(locator)
 }
 
 #[tauri::command]
@@ -1557,6 +1530,8 @@ mod tests {
     use super::*;
     use crate::test_support::{append_test_event, FakeRunStartBoundaries};
     use base64::{engine::general_purpose::STANDARD, Engine};
+    use muniment_core::journal::reducer::{reduce, RunStatus};
+    use muniment_core::sidecar::validate_pi_session;
     use std::sync::atomic::AtomicUsize;
 
     static PI_ENV_LOCK: Mutex<()> = Mutex::new(());
