@@ -1959,14 +1959,10 @@ mod tests {
             .unwrap();
         drop(first_connection);
 
-        // The fake coordinator grants exactly the workspace the gateway would
-        // hand back for this client -- here the canonical repository the run
-        // targets. A run requesting any other workspace is rejected by
-        // `configure_run`, mirroring the real capability check.
         let first_canonical = first.canonicalize().unwrap().to_string_lossy().into_owned();
         let mut second_connection = DesktopAttachService {
             boundaries: FakeRunStartBoundaries {
-                granted_workspaces: vec![first_canonical.clone()],
+                granted_workspaces: vec!["workspace-a".into()],
                 ..FakeRunStartBoundaries::accepting()
             },
             idempotency: IdempotencyStore::open(":memory:").unwrap(),
@@ -2082,6 +2078,17 @@ mod tests {
             "first instructions"
         );
         drop(provenance);
+        assert_eq!(
+            second_connection
+                .boundaries
+                .active_run
+                .lock()
+                .unwrap()
+                .as_ref()
+                .unwrap()
+                .1,
+            "workspace-a"
+        );
         let second_memory_canonical = second_memory
             .canonicalize()
             .unwrap()
@@ -2089,7 +2096,7 @@ mod tests {
             .into_owned();
         let mut third_connection = DesktopAttachService {
             boundaries: FakeRunStartBoundaries {
-                granted_workspaces: vec![second_memory_canonical.clone()],
+                granted_workspaces: vec!["workspace-b".into()],
                 ..FakeRunStartBoundaries::accepting()
             },
             idempotency: IdempotencyStore::open(":memory:").unwrap(),
@@ -2133,6 +2140,17 @@ mod tests {
                 .unwrap()
                 .extra["repository_instructions"],
             "second instructions"
+        );
+        assert_eq!(
+            third_connection
+                .boundaries
+                .active_run
+                .lock()
+                .unwrap()
+                .as_ref()
+                .unwrap()
+                .1,
+            "workspace-b"
         );
         assert!(!root.join("home").exists());
         second_connection.ensure_home().unwrap();
