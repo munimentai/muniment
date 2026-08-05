@@ -3,6 +3,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use muniment_core::chat_profile::ChatProfile;
 use muniment_core::journal::reducer::{
     ChatProjection, ChatProjector, PermissionGate, PermissionRequest,
 };
@@ -156,7 +157,7 @@ pub(super) fn coordinate<R: tauri::Runtime>(
             }
         };
         let session_root = match app.path().app_data_dir() {
-            Ok(path) => path.join("pi-sessions"),
+            Ok(path) => ChatProfile::new(path).pi_session_root(),
             Err(_) => {
                 fail_start(
                     &app,
@@ -370,7 +371,7 @@ pub(super) fn coordinate<R: tauri::Runtime>(
                 let session_root = app
                     .path()
                     .app_data_dir()
-                    .map(|path| path.join("pi-sessions"))
+                    .map(|path| ChatProfile::new(path).pi_session_root())
                     .map_err(|_| PreparedPromptError::SessionRoot)?;
                 let (locator, events) = adapter
                     .await_session_binding(&transport, &session_root, RPC_TIMEOUT)
