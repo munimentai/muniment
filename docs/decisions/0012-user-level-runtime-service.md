@@ -253,3 +253,19 @@ entry points. The desktop remains the owner throughout those slices. The final
 cutover slice activates the listener, approval coordinator, journal, CAS, Pi,
 device session, credentials, authorization, and permission gates together.
 Remote Control follows the cutover. This amendment changes no runtime code.
+
+## Amendment — 2026-08-05: migration control request authority
+
+Only the waiting runtime service may send the migration control request. An
+approved client credential grants no migration control authority. A claimed
+kind also grants no migration control authority.
+
+On Linux, the desktop reads the connection peer PID from `SO_PEERCRED`. It
+resolves that PID to its executable path and requires the installed
+`muniment-runtime` payload. It rejects the request when it cannot resolve the
+path or the path does not identify that payload. The desktop prepares at most
+one handoff at a time. It rejects a second request while a handoff is prepared.
+
+This rule excludes an approved companion from migration control authority. It
+does not defend against compromise by another process running as the current
+OS user. Windows and macOS need a later amendment for their own peer identity.
