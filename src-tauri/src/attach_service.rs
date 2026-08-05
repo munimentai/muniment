@@ -678,6 +678,7 @@ impl<B: RunStartBoundaries, I: RunStartIdempotency> ThreadListService
     fn start_run(
         &mut self,
         workspace: &str,
+        execution_root: &str,
         request: AttachRunStartRequest,
         request_id: &Id,
         idempotency_key: &Id,
@@ -688,6 +689,7 @@ impl<B: RunStartBoundaries, I: RunStartIdempotency> ThreadListService
         }
         let canonical_input = json!({
             "workspace": workspace,
+            "execution_root": execution_root,
             "text": &request.text,
             "context": &request.context,
             "thread_id": &request.thread_id,
@@ -722,8 +724,8 @@ impl<B: RunStartBoundaries, I: RunStartIdempotency> ThreadListService
             )
             .and_then(|workspaces| {
                 workspaces
-                    .values()
-                    .find_map(|contexts| contexts.get(&PathBuf::from(workspace)))
+                    .get(workspace)
+                    .and_then(|contexts| contexts.get(&PathBuf::from(execution_root)))
             })
             .cloned()
             .flatten();
@@ -1156,6 +1158,7 @@ mod tests {
             client_identity: Some("default".into()),
         };
         let result = service.start_run(
+            "workspace-a",
             "workspace-a",
             AttachRunStartRequest {
                 text: "hello".into(),
@@ -1639,6 +1642,7 @@ mod tests {
     ) -> Result<RunStartAccepted, ProtocolError> {
         service.start_run(
             "workspace-a",
+            "workspace-a",
             AttachRunStartRequest {
                 text: text.into(),
                 context: None,
@@ -1955,14 +1959,10 @@ mod tests {
             .unwrap();
         drop(first_connection);
 
-        // The fake coordinator grants exactly the workspace the gateway would
-        // hand back for this client -- here the canonical repository the run
-        // targets. A run requesting any other workspace is rejected by
-        // `configure_run`, mirroring the real capability check.
         let first_canonical = first.canonicalize().unwrap().to_string_lossy().into_owned();
         let mut second_connection = DesktopAttachService {
             boundaries: FakeRunStartBoundaries {
-                granted_workspaces: vec![first_canonical.clone()],
+                granted_workspaces: vec!["workspace-a".into()],
                 ..FakeRunStartBoundaries::accepting()
             },
             idempotency: IdempotencyStore::open(":memory:").unwrap(),
@@ -2049,6 +2049,7 @@ mod tests {
             .is_none());
         let run = second_connection
             .start_run(
+                "workspace-a",
                 &first_authorized,
                 AttachRunStartRequest {
                     text: "use repository context".into(),
@@ -2077,6 +2078,17 @@ mod tests {
             "first instructions"
         );
         drop(provenance);
+        assert_eq!(
+            second_connection
+                .boundaries
+                .active_run
+                .lock()
+                .unwrap()
+                .as_ref()
+                .unwrap()
+                .1,
+            "workspace-a"
+        );
         let second_memory_canonical = second_memory
             .canonicalize()
             .unwrap()
@@ -2084,7 +2096,7 @@ mod tests {
             .into_owned();
         let mut third_connection = DesktopAttachService {
             boundaries: FakeRunStartBoundaries {
-                granted_workspaces: vec![second_memory_canonical.clone()],
+                granted_workspaces: vec!["workspace-b".into()],
                 ..FakeRunStartBoundaries::accepting()
             },
             idempotency: IdempotencyStore::open(":memory:").unwrap(),
@@ -2100,6 +2112,7 @@ mod tests {
         assert_eq!(second_memory_authorized, second_memory_canonical);
         third_connection
             .start_run(
+                "workspace-b",
                 &second_memory_authorized,
                 AttachRunStartRequest {
                     text: "second context".into(),
@@ -2127,6 +2140,17 @@ mod tests {
                 .unwrap()
                 .extra["repository_instructions"],
             "second instructions"
+        );
+        assert_eq!(
+            third_connection
+                .boundaries
+                .active_run
+                .lock()
+                .unwrap()
+                .as_ref()
+                .unwrap()
+                .1,
+            "workspace-b"
         );
         assert!(!root.join("home").exists());
         second_connection.ensure_home().unwrap();
@@ -2998,6 +3022,7 @@ mod tests {
             };
             let result = service.start_run(
                 workspace,
+                workspace,
                 AttachRunStartRequest {
                     text: "hello".into(),
                     context: None,
@@ -3120,6 +3145,7 @@ mod tests {
         };
         let result = service.start_run(
             "workspace-b",
+            "workspace-b",
             AttachRunStartRequest {
                 text: "hello".into(),
                 context: None,
@@ -3189,6 +3215,7 @@ mod tests {
             client_identity: Some("default".into()),
         };
         let result = service.start_run(
+            "workspace-a",
             "workspace-a",
             AttachRunStartRequest {
                 text: "private prompt".into(),
