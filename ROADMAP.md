@@ -390,8 +390,8 @@ DONE 2026-08-05 — the session-thread selector moved into muniment-core
 (MUNIDESK-907). `src-tauri/core/src/session_thread.rs` decides which thread a
 run joins and carries nine direct tests.
 
-SELECTED 2026-08-05 (this wave) — the two moves that still sit in the desktop
-crate. First, the thread ownership check. `subject_owns_first_run`
+FILED 2026-08-05 — the two moves that still sit in the desktop crate. First,
+the thread ownership check. `subject_owns_first_run`
 (`src-tauri/src/chat_threads.rs:82`) reads the journal alone, and six call sites
 in that one file reach it. The summary paging above it follows in a later slice,
 because `newest_owned_workspace_thread` (`:103`) and `chat_thread_summaries_page`
@@ -399,7 +399,7 @@ because `newest_owned_workspace_thread` (`:103`) and `chat_thread_summaries_page
 step. `append_emit` (`src-tauri/src/chat_coordinate.rs:742`) is the journal half
 of the coordinate loop, and only its `chat-event` emit needs Tauri.
 
-SELECTED 2026-08-05 (this wave) — the entitlement snapshot tracker moves into
+FILED 2026-08-05 — the entitlement snapshot tracker moves into
 muniment-core. `snapshot_transition` and `observe_snapshot_version`
 (`src-tauri/src/auth/mod.rs:53`, `:60`) own the version transition rule, and
 `AuthState` holds the previous value. ADR 0012 phase one names the entitlement
@@ -410,14 +410,23 @@ DONE 2026-08-05 — `muniment-runtime` answers `--version`, `--help`, and `-h`,
 and rejects an unknown argument before it reaches the instance lock
 (MUNIDESK-908). The crate took no new dependency.
 
-SELECTED 2026-08-05 (this wave) — the companion workspace-context map moves into
+FILED 2026-08-05 — the companion workspace-context map moves into
 muniment-core. `WorkspaceContexts` (`src-tauri/src/attach_service.rs:57`) is a
 bare three-level `HashMap` behind an `Arc<Mutex<_>>`. `onboard_workspace`
 (`:580`) and `authorized_workspace` (`:622`) reach into that map directly, so the
 two-level lookup rule owns no type and carries no direct test. ADR 0012 phase one
 names workspace authorization as runtime-service state.
 
-MERGE HAZARD — three of those moves edit `src-tauri/src/chat.rs` or
+FILED 2026-08-05 — the selected-file open rule moves into muniment-core.
+`open_selected_files` (`src-tauri/src/chat.rs:991`) and `chat_file_metadata`
+(`:914`) carry one rule twice. Each opens the path, reads the metadata off the
+open handle, rejects anything that is not a file, and takes the display name from
+the last path segment. Reading the open handle rather than the path closes a
+replacement window, and no test guards that defense today. ADR 0012 phase one
+names CAS and attachment ingestion as runtime-service state, and
+`src-tauri/core/src/attachment.rs` already holds the ingestion half.
+
+MERGE HAZARD — three of those five slices edit `src-tauri/src/chat.rs` or
 `src-tauri/src/chat_threads.rs`. Each ticket tells the implementer to rebase on
 `main` before it opens the pull request. The 2026-08-04 silent revert came from a
 stale base.
@@ -776,21 +785,22 @@ earlier one. Requiring an up-to-date branch before merge, or a merge queue, is a
 repository-settings change that sits with the owner. The planner files no ticket
 for it.
 
-VERIFIED 2026-08-05 (this wave, from a clean clone) — one cargo invocation over
-`muniment-core`, `muniment-attach`, `muniment-cli`, `muniment-acp`, and
-`muniment-runtime` passed 881 tests with no failure. The frontend suite passed
-835 tests with 25 skipped across 57 files, and the browser suite passed 3. `npm
-run build` produced the bundle. The planner read every remaining ADR 0012
-extraction target in the desktop crate before it selected this wave's slices.
-Earlier waves recorded the same shape of verification, and this entry replaces
-that ledger.
+VERIFIED 2026-08-05 (this wave, from a clean clone) — the CI cargo commands
+passed with no failure. `muniment-core` passed 760 tests on its standalone
+manifest with `network-tests`. `muniment-attach`, `muniment-cli`, and
+`muniment-acp` passed 126 tests in one workspace invocation, and
+`muniment-runtime` passed 7. The frontend suite passed 835 tests with 25 skipped
+across 57 files, and the browser suite passed 3. `npm run build` produced the
+bundle. The planner read every remaining ADR 0012 extraction target in the
+desktop crate before it filed this wave's slices. Earlier waves recorded the same
+shape of verification, and this entry replaces that ledger.
 
-MEASURED 2026-08-05 — the probe capture ran again, so the previous wave's gap is
-closed. `python3 -m http.server` started in the planning container, and headless
-Chromium captured `test/probe/history.html` at 1280x800. The restored thread
-renders its sidebar, titlebar, transcript, two tool rows, provenance line,
-interrupted-reply record with its `Resume` control, and composer. The wave
-selected no design or layout slice, and the capture recorded no new defect.
+MEASURED 2026-08-05 — the probe capture ran again. `python3 -m http.server`
+started in the planning container, and headless Chromium captured
+`test/probe/history.html` at 1100x720. The restored thread renders its sidebar,
+titlebar, transcript, two tool rows, provenance line, interrupted-reply record
+with its `Resume` control, and composer. This is a roadmap-fulfilment wave, so it
+filed no design or layout slice, and the capture recorded no new defect.
 
 ## Stable release and distribution
 
