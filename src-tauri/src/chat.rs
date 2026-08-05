@@ -40,7 +40,7 @@ use uuid::Uuid;
 use crate::auth;
 use crate::chat_coordinate::{append_emit, coordinate};
 use crate::chat_threads::newest_owned_workspace_thread;
-use crate::session_thread::{OfferedThread, SessionThread};
+use muniment_core::session_thread::{OfferedThread, SessionThread};
 
 pub(super) const RPC_TIMEOUT: Duration = Duration::from_secs(30);
 const QUEUE_TIMEOUT: Duration = Duration::from_secs(2);
