@@ -379,21 +379,39 @@ DONE 2026-08-05 — the chat storage open path moved into muniment-core
 `ChatProfileError`. `ChatState::new` (`src-tauri/src/chat.rs:705`) is three lines
 now, and it opens neither store by hand.
 
-SELECTED 2026-08-05 (this wave) — the four remaining moves out of the desktop
-crate. First, the run-resume eligibility check. `resumable_locator`
-(`src-tauri/src/chat.rs:787`) and `resumable_context` (`:774`) read only core
-types and a session-root path, and `history_resumable`
-(`src-tauri/src/chat_threads.rs:195`) calls the same check for its history rows.
-`validate_pi_session` already lives in core
-(`src-tauri/core/src/sidecar/pi.rs:44`), so only the user-facing strings stay
-behind. Second, the session-thread selector. `src-tauri/src/session_thread.rs`
-names no Tauri item, and it decides which thread a run joins. Third, thread
-ownership and summary paging. `subject_owns_first_run`
-(`src-tauri/src/chat_threads.rs:82`), `newest_owned_workspace_thread` (`:103`),
-and `chat_thread_summaries_page` (`:126`) read the journal alone, and four more
-call sites reach the ownership check. Fourth, the run-event append and projection
+DONE 2026-08-05 — the run-resume eligibility check moved into muniment-core
+(MUNIDESK-904). `src-tauri/core/src/chat_resume.rs` holds `resumable_context`,
+`resumable_locator`, and the typed `ChatResumeError` with nine direct tests. The
+desktop keeps the user-facing strings in `chat_resume_error_message`
+(`src-tauri/src/chat.rs:776`), and `history_resumable`
+(`src-tauri/src/chat_threads.rs:195`) calls the core check for its history rows.
+
+SELECTED 2026-08-05 (this wave) — the three moves that still sit in the desktop
+crate. First, the session-thread selector. `src-tauri/src/session_thread.rs`
+names no Tauri item, it carries ten tests, and it decides which thread a run
+joins. Second, the thread ownership check. `subject_owns_first_run`
+(`src-tauri/src/chat_threads.rs:82`) reads the journal alone, and six call sites
+in that one file reach it. The summary paging above it follows in a later slice,
+because `newest_owned_workspace_thread` (`:103`) and `chat_thread_summaries_page`
+(`:126`) both call the same check. Third, the run-event append and projection
 step. `append_emit` (`src-tauri/src/chat_coordinate.rs:742`) is the journal half
 of the coordinate loop, and only its `chat-event` emit needs Tauri.
+
+SELECTED 2026-08-05 (this wave) — the entitlement snapshot tracker moves into
+muniment-core. `snapshot_transition` and `observe_snapshot_version`
+(`src-tauri/src/auth/mod.rs:53`, `:60`) own the version transition rule, and
+`AuthState` holds the previous value. ADR 0012 phase one names the entitlement
+snapshot as runtime-service state, and the desktop keeps the
+`entitlement-changed` emit.
+
+SELECTED 2026-08-05 (this wave) — `muniment-runtime` answers `--version`,
+`--help`, and `-h`, and it rejects an unknown argument before it reaches the
+instance lock. `run` (`src-tauri/runtime/src/main.rs:22`) reads no argument
+today. The ADR 0012 install path replaces the binary in place and then verifies
+readiness, so an installer and a user unit both need an identity probe. The CLI
+already answers the same three arguments (`src-tauri/cli/src/main.rs:65`). The
+crate may take no new dependency, because `test/runtime-dependency-boundary.sh`
+allows `muniment-core` and `muniment-attach` alone.
 
 SELECTED 2026-08-05 (this wave) — the companion workspace-context map moves into
 muniment-core. `WorkspaceContexts` (`src-tauri/src/attach_service.rs:57`) is a
@@ -763,16 +781,19 @@ for it.
 
 VERIFIED 2026-08-05 (this wave, from a clean clone) — one cargo invocation over
 `muniment-core`, `muniment-attach`, `muniment-cli`, `muniment-acp`, and
-`muniment-runtime` passed 872 tests with no failure. The frontend suite passed 835
-tests with 25 skipped across 57 files, and the browser suite passed 3. `npm run
-build` produced the bundle. The planner read every remaining ADR 0012 extraction
-target in the desktop crate before it selected this wave's slices. Earlier waves
-recorded the same shape of verification, and this entry replaces that ledger.
+`muniment-runtime` passed 881 tests with no failure. The frontend suite passed
+835 tests with 25 skipped across 57 files, and the browser suite passed 3. `npm
+run build` produced the bundle. The planner read every remaining ADR 0012
+extraction target in the desktop crate before it selected this wave's slices.
+Earlier waves recorded the same shape of verification, and this entry replaces
+that ledger.
 
-MEASUREMENT GAP 2026-08-05 — the probe capture did not run this wave. The
-planning container refused the static server the probe pages need, so no page
-rendered. The wave selected no design or layout slice, so nothing rested on the
-capture. A later wave that plans a visual change must capture first.
+MEASURED 2026-08-05 — the probe capture ran again, so the previous wave's gap is
+closed. `python3 -m http.server` started in the planning container, and headless
+Chromium captured `test/probe/history.html` at 1280x800. The restored thread
+renders its sidebar, titlebar, transcript, two tool rows, provenance line,
+interrupted-reply record with its `Resume` control, and composer. The wave
+selected no design or layout slice, and the capture recorded no new defect.
 
 ## Stable release and distribution
 
@@ -834,13 +855,12 @@ scaffold.
 
 OPEN — the MUNIQA prompt-injection suite still follows ADR 0018's landed slices.
 
-SELECTED 2026-08-05 (this wave) — `THREAT_MODEL.md` records the workspace
-namespace. All three slices of the ADR 0009 amendment are built, so the document
-can now state the landed rule. The signed `grant.workspace` value is the only
-workspace authority for `thread.list`, `thread.open`, `thread.create`, and
-`run.start`. A companion-supplied directory is only a local execution root, and
-it grants no scope. With no current cloud grant the approval and all four
-operations fail closed.
+DONE 2026-08-05 — `THREAT_MODEL.md` records the workspace namespace
+(MUNIDESK-905). The attach socket row states the landed rule. The signed
+`grant.workspace` value is the only workspace authority for `thread.list`,
+`thread.open`, `thread.create`, and `run.start`. A companion-supplied directory
+is only a local execution root, and it grants no scope. With no current cloud
+grant the approval and all four operations fail closed.
 
 OPEN — the standing policy line for the agent system prompt stays a proposal
 inside ADR 0018. harness-spec §16.1 rule 4 gates prompt text on review and
