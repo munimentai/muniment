@@ -150,15 +150,14 @@ measured 32.7µs per append against an in-memory database and 11.3µs with
 the journal opens WAL with `synchronous=FULL`. The commit fsync outweighs the
 parse by three orders of magnitude.
 
-FILED 2026-08-04 — `apply_retention`
-(`src-tauri/core/src/journal/retention.rs:69`) loops over `run_ids()` and calls
-`journal.events(&run_id)` once per run, so 20,000 historical runs cost 20,000
-round trips and 20,000 full envelope parses. Only the newest `recorded_at` and the
-run's terminal event decide deletion. A cheap ordered pre-filter picks the
-candidates, and the existing `reduce` check still guards each deletion. The read
-adds no column, table, index, or migration. The ticket sits open in the backlog.
-No production caller reaches retention yet, and the ADR 0012 runtime service will
-own it.
+DONE 2026-08-04 — retention picks its candidates before it loads them
+(MUNIDESK-885). `apply_retention` (`src-tauri/core/src/journal/retention.rs:55`)
+reads `run_event_types_with_newest_recorded_at`, groups the rows by run, and skips
+a run that carries no terminal event type or that is newer than the cutoff. Only a
+surviving candidate pays the full `journal.events` load, and the existing `reduce`
+check still guards each deletion. The read added no column, table, index, or
+migration. No production caller reaches retention yet, and the ADR 0012 runtime
+service will own it.
 
 OPEN — `chat_thread_open_page` projects each run through `project_history_entry`,
 which loads and reduces every envelope of that run. `thread_projection_entries`
@@ -348,20 +347,35 @@ six direct tests. The core function takes its caller's provenance, so the
 recorded `run.needs_attention` envelope did not change. Three desktop call sites
 import it.
 
-SELECTED 2026-08-04 (this wave) — three more core moves, each an independent
-slice on the same shape. First, the chat storage layout. `ChatState::new`
-(`src-tauri/src/chat.rs:698`) joins `runs.sqlite3`, `cas`, and `pi-sessions` onto
-the Tauri app data directory, and six other desktop sites re-derive `pi-sessions`
-by hand. `muniment-runtime` needs the same layout, so one core profile type owns
-it. Second, the companion credential store. `load_client_credentials`
-(`src-tauri/src/attach_service.rs:901`) and `persist_client_credentials` (`:966`)
-carry the `O_NOFOLLOW` open, the owner and mode check, the legacy unversioned
-read, and the 0600 temporary-file write, and none of it touches Tauri. Third, the
-Pi-to-journal event translation. `permission_journal_payload`
-(`src-tauri/src/chat_coordinate.rs:731`), `tool_journal_entry` (`:704`),
-`close_open_effects` (`:760`), and `model_stream_delta_payload` (`:647`) sit
+DONE 2026-08-04 — two of the three selected core moves landed. The chat storage
+layout moved first (MUNIDESK-888). `src-tauri/core/src/chat_profile.rs` holds
+`ChatProfile`, which owns `runs.sqlite3`, `cas`, and `pi-sessions` under one
+profile directory, and `ChatState::new` (`src-tauri/src/chat.rs:713`) composes it.
+The companion credential store followed (MUNIDESK-889).
+`src-tauri/core/src/attach/credential.rs` carries the `O_NOFOLLOW` open, the owner
+and mode check, the legacy unversioned read, and the 0600 temporary-file write.
+
+SELECTED 2026-08-04 (this wave) — the third move plus three more on the same
+shape. First, the Pi-to-journal event translation. `permission_journal_payload`
+(`src-tauri/src/chat_coordinate.rs:732`), `tool_journal_entry` (`:705`),
+`close_open_effects` (`:761`), and `model_stream_delta_payload` (`:648`) sit
 between `muniment_core::sidecar::pi_chat` and `muniment_core::journal::reducer`,
-so both ends already live in core.
+so both ends already live in core. Second, the cloud chat grant snapshot.
+`ChatGrant` (`src-tauri/src/chat.rs:48`), `fetch_grant` (`:1566`),
+`validate_grant` (`:1583`), and `fetch_receipt` (`:1594`) are the desktop crate's
+only `ureq` call sites, and core already carries `ureq` behind its `tls` feature.
+Third, the chat storage open path. `ChatState::new` still opens the journal and
+the CAS by hand, so `ChatProfile` should return the opened pair. Fourth, the
+run-resume eligibility check. `resumable_locator` (`:799`) and `resumable_context`
+(`:786`) read only core types and a session-root path, and `chat_threads.rs` calls
+the same function for its history rows.
+
+SELECTED 2026-08-04 (this wave) — `muniment-runtime` exits cleanly on a signal.
+`run` (`src-tauri/runtime/src/main.rs:43`) parks forever after it takes the
+instance lock, so only `SIGKILL` stops it. A Linux user unit sends `SIGTERM` on
+stop, and a service that ignores it holds the per-profile lock until the kill
+timeout elapses. The desktop listener cannot take the lock during that window.
+User-unit registration comes later, and this slice is a prerequisite for it.
 
 SEQUENCED — the later extraction slices are the journal and Pi execution move,
 the shared device session, the desktop client conversion, and Linux user-unit
@@ -381,15 +395,24 @@ cloud grant the approval and all four operations fail closed. The amendment name
 three implementation slices: grant workspace authorization, local execution-root
 mapping, and attach workspace enforcement.
 
-SELECTED 2026-08-04 (this wave) — slice one of that amendment.
-`desktop_attach_approval` (`src-tauri/src/attach_service.rs:318`) still sets
-`Approval.workspace` to the desktop process working directory, while desktop runs
-stamp the cloud `grant.workspace` (`src-tauri/src/chat.rs:371`). The session
+DONE 2026-08-04 — slice one of that amendment landed (MUNIDESK-887).
+`AttachCompanionState` (`src-tauri/src/attach_service.rs:121`) holds the current
+signed workspace, `record_workspace` and `clear_workspace` track it, and
+`approval` (`:166`) returns `None` when no grant workspace exists. The session
 workspace reaches every `thread.*` and `run.start` call through
-`muniment_core::attach::linux` (`:1385`, `:1440`), so an approved companion today
-lists no desktop thread. Both approval paths already return `Option<Approval>`,
-so `None` is the existing fail-closed answer. The execution-root mapping and the
-per-operation enforcement follow in slices two and three.
+`muniment_core::attach::linux` (`:1385`, `:1440`).
+
+SELECTED 2026-08-04 (this wave) — slice two of that amendment, the local
+execution-root mapping. `onboard_workspace` (`src-tauri/src/attach_service.rs:545`)
+records each canonical companion directory under the client identity alone, and
+`authorized_workspace` (`:585`) reads that same identity-only map. Neither one
+knows which workspace authority admitted the request. A companion onboarded under
+one signed workspace can therefore reuse its directory under another. The
+`ThreadListService` trait (`src-tauri/core/src/attach/linux.rs:712`, `:723`) is
+where the session workspace enters. Slice three then applies the authority to
+`thread.list`, `thread.open`, `thread.create`, and `run.start`, where
+`dispatch_request` (`:2148`) still lets a companion directory replace the run's
+workspace.
 
 ### Build-composition guards
 
@@ -575,16 +598,10 @@ pages, so no thread renders twice. The sidebar accepts one staleness: a thread
 that the refresh pushes out of the newest page leaves the list until the next
 `Older threads` activation or the next launch. DONE (MUNIDESK-739).
 
-SELECTED 2026-08-04 (this wave, planner rendered the built bundle at 1100x720
-against `test/probe/editor.html`) — the multi-line permission gate names no
-commit chord. The card shows its title, a resizable field, `Deny`, and `Submit`.
-`permissionGateAction` (`src/lib/chat-state.js:7`) commits that field on `⌘⏎` on
-macOS and on `Ctrl ⏎` elsewhere, and no text on the card says so. Only the
-pointer path is discoverable. The composer carries a hint in the same position
-(`src/App.svelte:1007`) and names `⏎` while a reply streams, and
-`shortcutDisplayLabel` (`src/lib/artifact-rail-state.js:31`) already renders
-`⌘J` and `Ctrl J`. The single-line kind commits on a plain Enter and needs no
-hint.
+DONE 2026-08-04 — the multi-line permission gate names its commit chord
+(MUNIDESK-890). The card carries a hint under the field, and it renders `⌘⏎` on
+macOS and `Ctrl ⏎` elsewhere. The single-line kind commits on a plain Enter and
+needs no hint.
 
 NOT FILED — the empty workspace reads `New thread` three times, in the titlebar,
 the sidebar action, and the sidebar current-thread record. The owner mockup sets
@@ -698,14 +715,11 @@ for it.
 
 VERIFIED 2026-08-04 (this wave, from a clean clone) — one cargo invocation over
 `muniment-core`, `muniment-attach`, `muniment-cli`, `muniment-acp`, and
-`muniment-runtime` passed 846 tests across 64 suites with no failure, and
-`cargo clippy --all-targets` over the same five packages printed no warning. The
-frontend suite passed 832 tests with 25 skipped across 57 files, and the browser
-suite passed 3 more. Renders of the built bundle covered restored history, a
-Markdown reply, and the confirm, choice, and multi-line permission gates at
-1100x720, plus the choice and multi-line gates at the 960x640 minimum. That
-render set is how the wave found the missing commit-chord hint. Earlier waves
-recorded the same shape of verification, and this entry replaces that ledger.
+`muniment-runtime` passed 857 tests with no failure. The frontend suite passed 833
+tests with 25 skipped across 57 files. The planner read every call site of the
+four ADR 0012 extraction targets and both ADR 0009 workspace-mapping sites before
+it selected this wave's slices. Earlier waves recorded the same shape of
+verification, and this entry replaces that ledger.
 
 ## Stable release and distribution
 
