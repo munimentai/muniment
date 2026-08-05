@@ -10,12 +10,53 @@ const WAIT_TIMEOUT_ENV: &str = "MUNIMENT_RUNTIME_TEST_WAIT_TIMEOUT_MS";
 #[cfg(target_os = "linux")]
 const EXIT_AFTER_LOCK_ENV: &str = "MUNIMENT_RUNTIME_TEST_EXIT_AFTER_LOCK";
 
-#[cfg(target_os = "linux")]
+const HELP: &str = "\
+Usage: muniment-runtime [OPTIONS]
+
+Options:
+  -h, --help  Print help
+  --version   Print version";
+
 fn main() {
+    match handle_arguments() {
+        Ok(true) => return,
+        Ok(false) => {}
+        Err(error) => {
+            eprintln!("muniment-runtime: {error}");
+            std::process::exit(1);
+        }
+    }
+
+    #[cfg(target_os = "linux")]
     if let Err(error) = run() {
         eprintln!("muniment-runtime: {error}");
         std::process::exit(1);
     }
+
+    #[cfg(not(target_os = "linux"))]
+    {
+        eprintln!("muniment-runtime: Linux is the only supported platform");
+        std::process::exit(1);
+    }
+}
+
+fn handle_arguments() -> Result<bool, String> {
+    let mut args = std::env::args_os().skip(1);
+    let Some(argument) = args.next() else {
+        return Ok(false);
+    };
+    if argument != "-h" && argument != "--help" && argument != "--version" {
+        return Err(format!("unknown argument: {}", argument.to_string_lossy()));
+    }
+    if let Some(extra) = args.next() {
+        return Err(format!("unknown argument: {}", extra.to_string_lossy()));
+    }
+    if argument == "-h" || argument == "--help" {
+        println!("{HELP}");
+        return Ok(true);
+    }
+    println!("{}", env!("CARGO_PKG_VERSION"));
+    Ok(true)
 }
 
 #[cfg(target_os = "linux")]
@@ -56,10 +97,4 @@ fn test_wait_timeout() -> Result<Option<Duration>, String> {
         .parse::<u64>()
         .map_err(|_| format!("{WAIT_TIMEOUT_ENV} must be an unsigned integer"))?;
     Ok(Some(Duration::from_millis(milliseconds)))
-}
-
-#[cfg(not(target_os = "linux"))]
-fn main() {
-    eprintln!("muniment-runtime: Linux is the only supported platform");
-    std::process::exit(1);
 }
