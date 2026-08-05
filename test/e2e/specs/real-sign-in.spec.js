@@ -31,8 +31,20 @@ describe('installed nightly', () => {
 
     const signedOut = await $('button=Sign in')
     await signedOut.waitForDisplayed()
-    for (const directory of ['memory', 'agents', 'projects', 'sessions']) {
-      expect(await readFile(path.join(home, directory, 'README.md'), 'utf8')).toContain(`# ${directory[0].toUpperCase()}${directory.slice(1)}`)
+    const readmes = ['memory', 'agents', 'projects', 'sessions'].map((directory) => ({
+      directory,
+      path: path.join(home, directory, 'README.md'),
+    }))
+    await browser.waitUntil(async () => {
+      try {
+        await Promise.all(readmes.map(({ path: readme }) => readFile(readme, 'utf8')))
+        return true
+      } catch {
+        return false
+      }
+    }, { timeoutMsg: 'Home README files were not created' })
+    for (const { directory, path: readme } of readmes) {
+      expect(await readFile(readme, 'utf8')).toContain(`# ${directory[0].toUpperCase()}${directory.slice(1)}`)
     }
 
     await browser.saveScreenshot(path.join(rawDir, '01-signed-out.png'))
