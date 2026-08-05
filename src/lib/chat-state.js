@@ -1,7 +1,15 @@
+import { shortcutDisplayLabel } from './artifact-rail-state.js'
+
 export function composerAction(event, text, active) {
   if (event.key !== 'Enter' || event.shiftKey || event.isComposing || !text.trim()) return null
   if (!active) return 'submit'
   return active.id === 'pending' ? null : 'steer'
+}
+
+export function permissionGateCommitHint(kind, platform = navigator.platform) {
+  if (kind !== 'editor') return null
+  const shortcut = platform.startsWith('Mac') ? 'Meta+⏎' : 'Control+⏎'
+  return `${shortcutDisplayLabel(shortcut)} submits`
 }
 
 export function permissionGateAction(event, kind, platform = navigator.platform) {
