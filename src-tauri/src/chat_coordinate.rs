@@ -9,6 +9,7 @@ use muniment_core::journal::pi_translation::{
     close_open_effects, model_stream_delta_payload, permission_journal_payload, tool_journal_entry,
 };
 use muniment_core::journal::reducer::{ChatProjection, ChatProjector};
+use muniment_core::journal::run_append::append_run_event;
 use muniment_core::journal::split_model_stream_delta;
 use muniment_core::sidecar::pi_chat::{
     cancel_command, ExtensionUiAnswer, ExtensionUiRequest, ExtensionUiResponse, PiChatEvent,
@@ -751,17 +752,12 @@ pub(super) fn append_emit<R: tauri::Runtime>(
 ) -> Result<(), ()> {
     *seq += 1;
     let envelope = event_envelope(run_id, *seq, kind, payload, subject);
-    let mut next_projector = projector.clone();
-    next_projector.apply(&envelope).map_err(|_| ())?;
-    let projection = next_projector.projection().map_err(|_| ())?;
-    {
-        let mut storage = journal.lock().map_err(|_| ())?;
-        storage
-            .journal
-            .append(*seq - 1, &envelope)
-            .map_err(|_| ())?;
-    }
-    *projector = next_projector;
+    let projection = append_run_event(
+        &mut journal.lock().map_err(|_| ())?.journal,
+        projector,
+        &envelope,
+    )
+    .map_err(|_| ())?;
     app.emit("chat-event", chat_event(run_id, projection))
         .map_err(|_| ())
 }
