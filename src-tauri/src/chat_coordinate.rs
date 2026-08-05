@@ -3,6 +3,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use muniment_core::chat_grant::{fetch_receipt, ChatGrant};
 use muniment_core::chat_profile::ChatProfile;
 use muniment_core::journal::pi_translation::{
     close_open_effects, model_stream_delta_payload, permission_journal_payload, tool_journal_entry,
@@ -22,9 +23,8 @@ use tauri::{Emitter, Manager};
 
 use crate::chat::{
     chat_attachments, chat_pending_permission, chat_tool_activity, coordinate_prepared_prompt,
-    event_envelope, fetch_receipt, prepared_pi_prompt, ChatEvent, ChatGrant,
-    PendingPermissionAnswer, PiRuntime, PreparedPromptError, ResumeAttempt, ResumeContext,
-    SharedStorage, RPC_TIMEOUT,
+    event_envelope, prepared_pi_prompt, ChatEvent, PendingPermissionAnswer, PiRuntime,
+    PreparedPromptError, ResumeAttempt, ResumeContext, SharedStorage, RPC_TIMEOUT,
 };
 use crate::chat_threads::projection_phase;
 

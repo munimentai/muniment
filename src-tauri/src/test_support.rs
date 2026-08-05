@@ -10,6 +10,7 @@ use muniment_core::attach::linux::{
 #[cfg(target_os = "linux")]
 use muniment_core::attach::ProtocolError;
 use muniment_core::auth::TokenSet;
+use muniment_core::chat_grant::ChatGrant;
 use muniment_core::journal::reducer::ChatProjector;
 #[cfg(target_os = "linux")]
 use muniment_core::journal::RunJournal;
@@ -18,7 +19,7 @@ use serde_json::json;
 use serde_json::Value;
 
 use crate::chat::{
-    attachment_error, chat_attachments, event_envelope, ActiveRun, ChatAttachment, ChatGrant,
+    attachment_error, chat_attachments, event_envelope, ActiveRun, ChatAttachment,
     ChatPermissionAnswer, RunStartBoundaries, RunStartError, RunStartLaunch, SelectedFile,
 };
 
