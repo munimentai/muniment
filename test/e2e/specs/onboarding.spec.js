@@ -8,7 +8,7 @@ const run = promisify(execFile)
 async function chooseFolder(home) {
   const { stdout } = await run('timeout', [
     '10', 'xdotool', 'search', '--sync', '--onlyvisible', '--name',
-    '(Select|Open|Choose|Pick).*([Ff]older|[Dd]irectory)',
+    '(Select|Open|Choose|Pick).*([Ff]older|[Dd]irectory|[Ff]ile)',
   ])
   const window = stdout.trim().split('\n').at(-1)
   await run('xdotool', ['windowfocus', '--sync', window])
