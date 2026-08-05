@@ -280,6 +280,10 @@ pub(crate) trait RunStartBoundaries {
         tokens: &TokenSet,
         requested_workspace: Option<&str>,
     ) -> Result<ChatGrant, RunStartError>;
+    #[cfg(target_os = "linux")]
+    fn attach_approval(&self) -> Option<muniment_core::attach::Approval> {
+        None
+    }
     fn install_active_run(&self, run: ActiveRun) -> Result<(), RunStartError>;
     fn prepare_run(
         &self,
@@ -565,12 +569,22 @@ impl<R: tauri::Runtime> RunStartBoundaries for TauriRunStartBoundaries<R> {
     ) -> Result<ChatGrant, RunStartError> {
         let grant = fetch_grant(&tokens.access_token).map_err(map_fetch_grant_error)?;
         validate_grant(&grant).map_err(RunStartError::Persistence)?;
+        self.app
+            .state::<crate::attach_service::AttachCompanionState>()
+            .record_workspace(grant.workspace.clone());
         if requested_workspace.is_some_and(|workspace| workspace != grant.workspace) {
             return Err(RunStartError::Unauthorized(
                 "The capability is not authorized.".into(),
             ));
         }
         Ok(grant)
+    }
+
+    #[cfg(target_os = "linux")]
+    fn attach_approval(&self) -> Option<muniment_core::attach::Approval> {
+        self.app
+            .state::<crate::attach_service::AttachCompanionState>()
+            .approval()
     }
 
     fn install_active_run(&self, run: ActiveRun) -> Result<(), RunStartError> {
@@ -874,6 +888,8 @@ pub async fn chat_resume(
     })
     .await
     .map_err(|_| "Chat configuration is temporarily unavailable.".to_string())??;
+    app.state::<crate::attach_service::AttachCompanionState>()
+        .record_workspace(grant.workspace.clone());
     let cancelled = Arc::new(AtomicBool::new(false));
     let transport = Arc::new(Mutex::new(None));
     let adapter = Arc::new(Mutex::new(None));
