@@ -1,5 +1,10 @@
 #[cfg(target_os = "linux")]
 use muniment_core::attach::ApprovalRequest;
+#[cfg(target_os = "linux")]
+use muniment_core::attach::{
+    bounded_claim, load_client_credentials, save_client_credentials as persist_client_credentials,
+    ClientCredential,
+};
 use muniment_core::attach::{ApprovalCoordinator, ProtocolError};
 use std::collections::HashMap;
 #[cfg(target_os = "linux")]
@@ -32,8 +37,6 @@ use muniment_core::attach::{
 use muniment_core::journal::Provenance;
 #[cfg(target_os = "linux")]
 use serde_json::{json, Value};
-#[cfg(target_os = "linux")]
-use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 #[cfg(target_os = "linux")]
 use tauri::{Emitter, Manager};
 #[cfg(target_os = "linux")]
@@ -105,33 +108,6 @@ pub(crate) struct AttachListenerState {
     credential_path: PathBuf,
     live_connections: LiveConnectionRegistry,
     workspace: Arc<Mutex<Option<String>>>,
-}
-
-#[cfg(target_os = "linux")]
-#[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct ClientCredential {
-    credential: String,
-    claimed_kind: String,
-    claimed_version: String,
-    #[serde(deserialize_with = "deserialize_approval_time")]
-    approved_at: Option<String>,
-}
-
-#[cfg(target_os = "linux")]
-fn deserialize_approval_time<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    <Option<String> as serde::Deserialize>::deserialize(deserializer)
-}
-
-#[cfg(target_os = "linux")]
-#[derive(Debug, serde::Deserialize, serde::Serialize)]
-#[serde(deny_unknown_fields)]
-struct ClientCredentialStore {
-    version: u32,
-    companions: HashMap<String, ClientCredential>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
@@ -325,19 +301,6 @@ struct AttachPairingRequest {
     challenge: String,
     claimed_kind: String,
     claimed_version: String,
-}
-
-#[cfg(target_os = "linux")]
-fn bounded_claim(claim: &str) -> String {
-    const MAX_CLAIM_LENGTH: usize = 80;
-    if claim.chars().any(char::is_control)
-        || claim.trim().is_empty()
-        || claim.chars().take(MAX_CLAIM_LENGTH + 1).count() > MAX_CLAIM_LENGTH
-    {
-        "unknown".into()
-    } else {
-        claim.into()
-    }
 }
 
 #[tauri::command]
@@ -992,110 +955,6 @@ impl<B: RunStartBoundaries, I: RunStartIdempotency> ThreadListService
     > {
         self.boundaries.subscribe_run_commits(run_id).map(Some)
     }
-}
-
-#[cfg(target_os = "linux")]
-fn load_client_credentials(
-    path: &std::path::Path,
-) -> Result<HashMap<String, ClientCredential>, ProtocolError> {
-    let mut options = std::fs::OpenOptions::new();
-    options.read(true).custom_flags(libc::O_NOFOLLOW);
-    let file = match options.open(path) {
-        Ok(file) => file,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(HashMap::new()),
-        Err(_) => return Err(ProtocolError::persistence_failed()),
-    };
-    let metadata = file
-        .metadata()
-        .map_err(|_| ProtocolError::persistence_failed())?;
-    if metadata.uid() != unsafe { libc::geteuid() } || metadata.mode() & 0o077 != 0 {
-        return Err(ProtocolError::persistence_failed());
-    }
-    let value: Value =
-        serde_json::from_reader(file).map_err(|_| ProtocolError::persistence_failed())?;
-    let versioned = value.get("version").is_some();
-    let credentials = if versioned {
-        let store: ClientCredentialStore =
-            serde_json::from_value(value).map_err(|_| ProtocolError::persistence_failed())?;
-        if store.version != 1 {
-            return Err(ProtocolError::persistence_failed());
-        }
-        store.companions
-    } else {
-        let legacy: HashMap<String, String> =
-            serde_json::from_value(value).map_err(|_| ProtocolError::persistence_failed())?;
-        legacy
-            .into_iter()
-            .map(|(identity, credential)| {
-                (
-                    identity,
-                    ClientCredential {
-                        credential,
-                        claimed_kind: "unknown".into(),
-                        claimed_version: "unknown".into(),
-                        approved_at: None,
-                    },
-                )
-            })
-            .collect()
-    };
-    if credentials.iter().any(|(identity, entry)| {
-        Id::new(identity).is_err()
-            || entry.credential.len() != 64
-            || !entry
-                .credential
-                .bytes()
-                .all(|byte| byte.is_ascii_hexdigit())
-            || entry.claimed_kind != bounded_claim(&entry.claimed_kind)
-            || entry.claimed_version != bounded_claim(&entry.claimed_version)
-            || entry.approved_at.as_ref().is_some_and(|approved_at| {
-                chrono::DateTime::parse_from_rfc3339(approved_at)
-                    .map(|time| time.offset().local_minus_utc() != 0)
-                    .unwrap_or(true)
-            })
-    }) {
-        return Err(ProtocolError::persistence_failed());
-    }
-    Ok(credentials)
-}
-
-#[cfg(target_os = "linux")]
-fn persist_client_credentials(
-    path: &std::path::Path,
-    credentials: &HashMap<String, ClientCredential>,
-) -> Result<(), ProtocolError> {
-    let parent = path
-        .parent()
-        .ok_or_else(ProtocolError::persistence_failed)?;
-    std::fs::create_dir_all(parent).map_err(|_| ProtocolError::persistence_failed())?;
-    let temporary = parent.join(format!(".attach-client-credentials-{}.tmp", Uuid::now_v7()));
-    let result = (|| {
-        let mut options = std::fs::OpenOptions::new();
-        options
-            .write(true)
-            .create_new(true)
-            .mode(0o600)
-            .custom_flags(libc::O_NOFOLLOW);
-        let file = options
-            .open(&temporary)
-            .map_err(|_| ProtocolError::persistence_failed())?;
-        serde_json::to_writer(
-            &file,
-            &ClientCredentialStore {
-                version: 1,
-                companions: credentials.clone(),
-            },
-        )
-        .map_err(|_| ProtocolError::persistence_failed())?;
-        file.sync_all()
-            .map_err(|_| ProtocolError::persistence_failed())?;
-        std::fs::rename(&temporary, path).map_err(|_| ProtocolError::persistence_failed())?;
-        Ok(())
-    })();
-    if result.is_err() {
-        let _ = std::fs::remove_file(&temporary);
-    }
-    result
 }
 
 #[cfg(test)]
