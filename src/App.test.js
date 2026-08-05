@@ -267,11 +267,14 @@ describe('pairing decisions', () => {
         challenge: 'challenge-1',
         claimed_kind: 'ACP adapter',
         claimed_version: '2.4.1',
+        workspace: 'Legal matters',
+        scopes: ['run.write', 'thread.read'],
       },
     })
 
     const dialog = await screen.findByRole('dialog', { name: 'Approve Muniment connection' })
     expect(dialog).toHaveTextContent('The connecting program supplied these claims: kind ACP adapter and version 2.4.1.')
+    expect(dialog).toHaveTextContent('Allow this program to access workspace Legal matters with the scopes run.write and thread.read?')
     await waitFor(() => expect(within(dialog).getByRole('button', { name: 'Deny' })).toHaveFocus())
 
     await fireEvent.click(within(dialog).getByRole('button', { name: button }))
@@ -279,6 +282,24 @@ describe('pairing decisions', () => {
       challenge: 'challenge-1', approve,
     }))
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+  })
+
+  it.each([
+    ['strips control characters from', 'Legal\u0000 matters', 'workspace Legal matters'],
+    ['bounds', `Legal matters${'x'.repeat(80)}`, 'workspace unknown'],
+  ])('%s the workspace', async (_, workspace, copy) => {
+    render(App)
+    await waitFor(() => expect(pairingListener).toBeDefined())
+
+    pairingListener({
+      payload: {
+        challenge: 'challenge-workspace',
+        workspace,
+        scopes: ['thread.read', 'run.write'],
+      },
+    })
+
+    expect(await screen.findByRole('dialog')).toHaveTextContent(copy)
   })
 
   it('handles a rejected pairing decision without exposing its details', async () => {

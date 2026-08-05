@@ -305,6 +305,8 @@ struct AttachPairingRequest {
     challenge: String,
     claimed_kind: String,
     claimed_version: String,
+    workspace: String,
+    scopes: BTreeSet<String>,
 }
 
 #[tauri::command]
@@ -370,6 +372,35 @@ fn desktop_attach_approval(workspace: String) -> Approval {
 }
 
 #[cfg(target_os = "linux")]
+fn request_attach_pairing_approval(
+    approval_state: &AttachListenerState,
+    approvals: &AttachApprovalState,
+    challenge: &str,
+    claimed_kind: &str,
+    claimed_version: &str,
+    remaining: Duration,
+) -> muniment_core::attach::linux::ApprovalDecision {
+    let Some(approval) = approval_state.approval() else {
+        return muniment_core::attach::linux::ApprovalDecision::Deny;
+    };
+    let approved = approvals.request(
+        ApprovalRequest {
+            challenge: challenge.to_owned(),
+            claimed_kind: bounded_claim(claimed_kind),
+            claimed_version: bounded_claim(claimed_version),
+            workspace: approval.workspace.clone(),
+            scopes: approval.scopes.clone(),
+        },
+        remaining,
+    );
+    if approved {
+        muniment_core::attach::linux::ApprovalDecision::Approve(approval)
+    } else {
+        muniment_core::attach::linux::ApprovalDecision::Deny
+    }
+}
+
+#[cfg(target_os = "linux")]
 fn should_retry_attach_accept(error: AttachAcceptError) -> bool {
     matches!(
         error,
@@ -415,6 +446,8 @@ pub fn start_attach_listener<R: tauri::Runtime>(app: tauri::AppHandle<R>) {
                 challenge: request.challenge.clone(),
                 claimed_kind: request.claimed_kind.clone(),
                 claimed_version: request.claimed_version.clone(),
+                workspace: request.workspace.clone(),
+                scopes: request.scopes.clone(),
             };
             approval_app
                 .emit("attach-pairing-requested", &request)
@@ -468,19 +501,13 @@ pub fn start_attach_listener<R: tauri::Runtime>(app: tauri::AppHandle<R>) {
                               claimed_kind: &str,
                               claimed_version: &str,
                               remaining: Duration| {
-                            let approved = approvals.request(
-                                ApprovalRequest {
-                                    challenge: challenge.as_str().to_owned(),
-                                    claimed_kind: bounded_claim(claimed_kind),
-                                    claimed_version: bounded_claim(claimed_version),
-                                },
+                            Some(request_attach_pairing_approval(
+                                &approval_state,
+                                &approvals,
+                                challenge.as_str(),
+                                claimed_kind,
+                                claimed_version,
                                 remaining,
-                            );
-                            if !approved {
-                                return Some(muniment_core::attach::linux::ApprovalDecision::Deny);
-                            }
-                            Some(muniment_core::attach::linux::ApprovalDecision::Approve(
-                                approval_state.approval()?,
                             ))
                         },
                     ),
@@ -1072,6 +1099,36 @@ mod tests {
         assert_eq!(state.approval().unwrap().workspace, "signed-workspace");
         state.clear_workspace();
         assert!(state.approval().is_none());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn attach_pairing_denies_without_a_grant_and_does_not_present() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let credential_path =
+            std::env::temp_dir().join(format!("muniment-attach-no-grant-{}.json", Uuid::now_v7()));
+        let state = AttachListenerState::load(&credential_path).unwrap();
+        let approvals = AttachApprovalState::default();
+        let presentations = Arc::new(AtomicUsize::new(0));
+        let presenter_count = presentations.clone();
+        approvals.register_presenter(move |_| {
+            presenter_count.fetch_add(1, Ordering::SeqCst);
+            true
+        });
+
+        assert!(matches!(
+            request_attach_pairing_approval(
+                &state,
+                &approvals,
+                "challenge",
+                "cli",
+                "1.0.0",
+                Duration::from_secs(1),
+            ),
+            muniment_core::attach::linux::ApprovalDecision::Deny
+        ));
+        assert_eq!(presentations.load(Ordering::SeqCst), 0);
     }
 
     #[cfg(target_os = "linux")]
