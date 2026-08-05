@@ -3,6 +3,7 @@ use muniment_core::chat_resume::resumable_locator;
 use muniment_core::journal::reducer::{project_chat_with_state, RunStatus};
 use muniment_core::journal::thread_summaries::ThreadSummary;
 use muniment_core::journal::{Provenance, RunJournal};
+use muniment_core::thread_ownership::{subject_owns_first_run, ThreadOwnershipError};
 use serde::Serialize;
 use serde_json::Value;
 use std::collections::BTreeMap;
@@ -79,25 +80,8 @@ pub(crate) fn projection_phase(status: &Option<RunStatus>) -> &'static str {
     }
 }
 
-fn subject_owns_first_run(
-    journal: &mut RunJournal,
-    thread_id: &str,
-    subject: Option<&str>,
-) -> Result<bool, String> {
-    let first_run = journal
-        .thread_run_ids(thread_id, 1, None)
-        .map_err(|_| "Conversation history is unavailable.".to_string())?
-        .run_ids
-        .into_iter()
-        .next()
-        .ok_or_else(|| "Conversation history is unavailable.".to_string())?;
-    let first = journal
-        .first_envelope(&first_run)
-        .map_err(|_| "Conversation history is unavailable.".to_string())?;
-    Ok(!matches!(
-        first.provenance.actor_id.as_deref(),
-        Some(owner) if Some(owner) != subject
-    ))
+fn thread_ownership_error_message(_error: ThreadOwnershipError) -> String {
+    "Conversation history is unavailable.".into()
 }
 
 pub(crate) fn newest_owned_workspace_thread(
@@ -111,7 +95,9 @@ pub(crate) fn newest_owned_workspace_thread(
             .workspace_thread_summaries(workspace, 100, cursor.as_deref())
             .map_err(|_| "Conversation history is unavailable.".to_string())?;
         for summary in page.summaries {
-            if subject_owns_first_run(journal, &summary.thread_id, subject)? {
+            if subject_owns_first_run(journal, &summary.thread_id, subject)
+                .map_err(thread_ownership_error_message)?
+            {
                 return Ok(Some(summary.thread_id));
             }
         }
@@ -139,7 +125,9 @@ pub(crate) fn chat_thread_summaries_page(
             .thread_summaries(limit - summaries.len(), next_cursor.as_deref())
             .map_err(|_| "Conversation history is unavailable.".to_string())?;
         for summary in page.summaries {
-            if subject_owns_first_run(journal, &summary.thread_id, subject)? {
+            if subject_owns_first_run(journal, &summary.thread_id, subject)
+                .map_err(thread_ownership_error_message)?
+            {
                 summaries.push(summary);
             }
         }
@@ -209,7 +197,9 @@ pub(crate) fn chat_thread_open_page(
     limit: usize,
     cursor: Option<&str>,
 ) -> Result<ChatThreadOpenPage, String> {
-    if !subject_owns_first_run(journal, thread_id, subject)? {
+    if !subject_owns_first_run(journal, thread_id, subject)
+        .map_err(thread_ownership_error_message)?
+    {
         return Err("Conversation history is unavailable.".into());
     }
     let page = journal
@@ -232,7 +222,9 @@ pub(crate) fn select_session_thread(
     subject: Option<&str>,
     thread_id: &str,
 ) -> Result<(), String> {
-    if !subject_owns_first_run(journal, thread_id, subject)? {
+    if !subject_owns_first_run(journal, thread_id, subject)
+        .map_err(thread_ownership_error_message)?
+    {
         return Err("Conversation history is unavailable.".into());
     }
     tracker.select(thread_id.to_owned(), subject);
@@ -245,7 +237,9 @@ pub(crate) fn rename_thread(
     thread_id: &str,
     title: &str,
 ) -> Result<(), String> {
-    if !subject_owns_first_run(journal, thread_id, subject)? {
+    if !subject_owns_first_run(journal, thread_id, subject)
+        .map_err(thread_ownership_error_message)?
+    {
         return Err("Conversation history is unavailable.".into());
     }
     let last_thread_seq = journal
@@ -276,7 +270,9 @@ pub(crate) fn delete_thread(
     subject: Option<&str>,
     thread_id: &str,
 ) -> Result<(), String> {
-    if !subject_owns_first_run(journal, thread_id, subject)? {
+    if !subject_owns_first_run(journal, thread_id, subject)
+        .map_err(thread_ownership_error_message)?
+    {
         return Err("Conversation history is unavailable.".into());
     }
     let last_thread_seq = journal
