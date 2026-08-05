@@ -82,12 +82,7 @@ mod tests {
         std::env::temp_dir().join(format!("muniment-owned-threads-{}.sqlite3", Uuid::new_v4()))
     }
 
-    fn append_thread(
-        journal: &mut RunJournal,
-        run_id: &str,
-        actor_id: &str,
-        recorded_at: String,
-    ) {
+    fn append_thread(journal: &mut RunJournal, run_id: &str, actor_id: &str, recorded_at: String) {
         let event = EventEnvelope {
             event_id: Uuid::now_v7().to_string(),
             run_id: run_id.into(),
