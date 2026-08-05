@@ -12,7 +12,7 @@ use crate::chat::{
     chat_attachments, chat_pending_permission, chat_tool_activity, state_session_root,
     ChatAttachment, ChatPendingPermission, ChatState, ChatToolActivity, SharedStorage,
 };
-use crate::session_thread::SessionThread;
+use muniment_core::session_thread::SessionThread;
 
 const MAX_THREAD_SUMMARY_CORE_PAGES: usize = 100;
 
@@ -452,13 +452,13 @@ mod tests {
         chat_attachments, desktop_provenance, event_envelope, prepare_new_run,
         prepare_new_run_with_session_thread, ChatStorage, SelectedFile, SessionThreadStart,
     };
-    use crate::session_thread::OfferedThread;
     use crate::test_support::append_test_event;
     use chrono::{SecondsFormat, Utc};
     use muniment_core::cas::LocalCas;
     use muniment_core::journal::reconciliation::reconcile_interrupted_runs;
     use muniment_core::journal::reducer::{project_chat, reduce, PermissionRequest, RunStatus};
     use muniment_core::journal::{EventPayload, Provenance};
+    use muniment_core::session_thread::OfferedThread;
     use serde_json::json;
     use std::collections::{BTreeMap, BTreeSet};
     use std::sync::{Arc, Mutex};

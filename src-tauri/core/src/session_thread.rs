@@ -16,19 +16,19 @@ enum ThreadChoice {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum OfferedThread {
+pub enum OfferedThread {
     AdoptNewest,
     Selected(String),
     Fresh,
 }
 
 #[derive(Debug, Default)]
-pub(crate) struct SessionThread {
+pub struct SessionThread {
     choice: Mutex<ThreadChoice>,
 }
 
 impl SessionThread {
-    pub(crate) fn current(&self, subject: Option<&str>) -> Option<String> {
+    pub fn current(&self, subject: Option<&str>) -> Option<String> {
         match &*self
             .choice
             .lock()
@@ -41,7 +41,7 @@ impl SessionThread {
         }
     }
 
-    pub(crate) fn offered(&self, workspace: &str, subject: Option<&str>) -> OfferedThread {
+    pub fn offered(&self, workspace: &str, subject: Option<&str>) -> OfferedThread {
         match &*self
             .choice
             .lock()
@@ -64,7 +64,7 @@ impl SessionThread {
         }
     }
 
-    pub(crate) fn select(&self, thread_id: String, subject: Option<&str>) {
+    pub fn select(&self, thread_id: String, subject: Option<&str>) {
         *self
             .choice
             .lock()
@@ -76,7 +76,7 @@ impl SessionThread {
             });
     }
 
-    pub(crate) fn fresh(&self, subject: Option<&str>) {
+    pub fn fresh(&self, subject: Option<&str>) {
         *self
             .choice
             .lock()
@@ -84,7 +84,7 @@ impl SessionThread {
             ThreadChoice::Fresh(subject.map(str::to_owned));
     }
 
-    pub(crate) fn fresh_if_current(&self, thread_id: &str, subject: Option<&str>) {
+    pub fn fresh_if_current(&self, thread_id: &str, subject: Option<&str>) {
         let mut choice = self
             .choice
             .lock()
@@ -98,7 +98,7 @@ impl SessionThread {
         }
     }
 
-    pub(crate) fn record(&self, thread_id: String, workspace: &str, subject: Option<&str>) {
+    pub fn record(&self, thread_id: String, workspace: &str, subject: Option<&str>) {
         *self
             .choice
             .lock()
