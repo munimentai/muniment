@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { applyBufferedChatEvents, applyChatEvent, composerAction, historyMessages, permissionGateAction, receiptLabel, receiptRows, receiptSummary, runAnnouncement, toolName, toolStatus } from './chat-state.js'
+import { applyBufferedChatEvents, applyChatEvent, composerAction, historyMessages, permissionGateAction, permissionGateCommitHint, receiptLabel, receiptRows, receiptSummary, runAnnouncement, toolName, toolStatus } from './chat-state.js'
 
 describe('chat composer and projection', () => {
   it('chooses submit or steer from the active run', () => {
@@ -19,6 +19,14 @@ describe('chat composer and projection', () => {
     expect(permissionGateAction({ key: 'Enter' }, 'input', 'Linux x86_64')).toBe('commit')
     expect(permissionGateAction({ key: 'Enter', metaKey: true }, 'editor', 'MacIntel')).toBe('commit')
     expect(permissionGateAction({ key: 'Enter', ctrlKey: true }, 'editor', 'Linux x86_64')).toBe('commit')
+  })
+
+  it('names the editor commit chord only for editor requests', () => {
+    expect(permissionGateCommitHint('editor', 'MacIntel')).toBe('⌘⏎ submits')
+    expect(permissionGateCommitHint('editor', 'Linux x86_64')).toBe('Ctrl ⏎ submits')
+    expect(permissionGateCommitHint('confirm', 'MacIntel')).toBeNull()
+    expect(permissionGateCommitHint('select', 'MacIntel')).toBeNull()
+    expect(permissionGateCommitHint('input', 'MacIntel')).toBeNull()
   })
 
   it('ignores permission field keys that do not commit', () => {

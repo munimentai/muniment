@@ -3080,6 +3080,9 @@ describe('permission gates', () => {
       prefill: 'rm old.csv',
     })
     const field = await screen.findByRole('textbox', { name: 'Change the request' })
+    const hint = screen.getByText(navigator.platform.startsWith('Mac') ? '⌘⏎ submits' : 'Ctrl ⏎ submits')
+    expect(hint).toHaveClass('permission-editor-hint')
+    expect(field).toHaveAttribute('aria-describedby', hint.id)
     await fireEvent.input(field, { target: { value: 'archive old.csv' } })
     const enter = new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true })
     field.dispatchEvent(enter)

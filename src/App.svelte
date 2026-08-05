@@ -12,7 +12,7 @@
   import { ARTIFACT_RAIL_MAX_WIDTH, ARTIFACT_RAIL_MIN_WIDTH, artifactRailShortcut, createArtifactRailController, defaultArtifactRailWidth, isArtifactRailShortcut, shortcutDisplayLabel } from './lib/artifact-rail-state.js'
   import { bootState, errorState, statusState, waitingState } from './lib/auth-state.js'
   import { ringPath, solidMilledRingPath } from './lib/mark.js'
-  import { composerAction, formatByteSize, permissionGateAction, receiptLabel, receiptRows, receiptSummary, runAnnouncement, toolName, toolStatus } from './lib/chat-state.js'
+  import { composerAction, formatByteSize, permissionGateAction, permissionGateCommitHint, receiptLabel, receiptRows, receiptSummary, runAnnouncement, toolName, toolStatus } from './lib/chat-state.js'
   import { createChatController } from './lib/chat-controller.js'
   import { composerHeight } from './lib/composer-size.js'
   import { createDictationController } from './lib/dictation-controller.js'
@@ -910,14 +910,17 @@
                       onkeydown={(event) => permissionKeydown(event, message.run)}
                     >
                   {:else if gate.kind === 'editor'}
+                    {@const hintId = `permission-editor-hint-${message.run.id}`}
                     <textarea
                       class="permission-field permission-editor"
                       aria-label={gate.title}
+                      aria-describedby={hintId}
                       value={permissionValue(message.run)}
                       disabled={answerState?.pending}
                       oninput={(event) => setPermissionValue(message.run, event.currentTarget.value)}
                       onkeydown={(event) => permissionKeydown(event, message.run)}
                     ></textarea>
+                    <p id={hintId} class="permission-editor-hint">{permissionGateCommitHint(gate.kind)}</p>
                   {/if}
                   <div class="permission-actions">
                     <button disabled={answerState?.pending} onclick={() => answerPermission(message.run, { type: 'cancelled' })}>Deny</button>
@@ -1312,6 +1315,7 @@
   .permission-field:focus { border-color: var(--muted); }
   .permission-field::placeholder { color: var(--muted); }
   .permission-editor { min-height: 84px; resize: vertical; }
+  .permission-editor-hint { color: var(--muted); font: var(--text-12) var(--font-mono); }
   .permission-actions, .permission-approve-actions { display: flex; flex-wrap: wrap; gap: 6px; }
   .permission-actions { align-items: flex-start; margin-top: 8px; }
   .permission-approve-actions { justify-content: flex-end; margin-left: auto; }
