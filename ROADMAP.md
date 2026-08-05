@@ -388,7 +388,7 @@ desktop keeps the user-facing strings in `chat_resume_error_message`
 
 SELECTED 2026-08-05 (this wave) — the three moves that still sit in the desktop
 crate. First, the session-thread selector. `src-tauri/src/session_thread.rs`
-names no Tauri item, it carries ten tests, and it decides which thread a run
+names no Tauri item, it carries nine tests, and it decides which thread a run
 joins. Second, the thread ownership check. `subject_owns_first_run`
 (`src-tauri/src/chat_threads.rs:82`) reads the journal alone, and six call sites
 in that one file reach it. The summary paging above it follows in a later slice,
