@@ -386,14 +386,16 @@ desktop keeps the user-facing strings in `chat_resume_error_message`
 (`src-tauri/src/chat.rs:776`), and `history_resumable`
 (`src-tauri/src/chat_threads.rs:195`) calls the core check for its history rows.
 
-SELECTED 2026-08-05 (this wave) — the three moves that still sit in the desktop
-crate. First, the session-thread selector. `src-tauri/src/session_thread.rs`
-names no Tauri item, it carries nine tests, and it decides which thread a run
-joins. Second, the thread ownership check. `subject_owns_first_run`
+DONE 2026-08-05 — the session-thread selector moved into muniment-core
+(MUNIDESK-907). `src-tauri/core/src/session_thread.rs` decides which thread a
+run joins and carries nine direct tests.
+
+SELECTED 2026-08-05 (this wave) — the two moves that still sit in the desktop
+crate. First, the thread ownership check. `subject_owns_first_run`
 (`src-tauri/src/chat_threads.rs:82`) reads the journal alone, and six call sites
 in that one file reach it. The summary paging above it follows in a later slice,
 because `newest_owned_workspace_thread` (`:103`) and `chat_thread_summaries_page`
-(`:126`) both call the same check. Third, the run-event append and projection
+(`:126`) both call the same check. Second, the run-event append and projection
 step. `append_emit` (`src-tauri/src/chat_coordinate.rs:742`) is the journal half
 of the coordinate loop, and only its `chat-event` emit needs Tauri.
 
@@ -404,14 +406,9 @@ muniment-core. `snapshot_transition` and `observe_snapshot_version`
 snapshot as runtime-service state, and the desktop keeps the
 `entitlement-changed` emit.
 
-SELECTED 2026-08-05 (this wave) — `muniment-runtime` answers `--version`,
-`--help`, and `-h`, and it rejects an unknown argument before it reaches the
-instance lock. `run` (`src-tauri/runtime/src/main.rs:22`) reads no argument
-today. The ADR 0012 install path replaces the binary in place and then verifies
-readiness, so an installer and a user unit both need an identity probe. The CLI
-already answers the same three arguments (`src-tauri/cli/src/main.rs:65`). The
-crate may take no new dependency, because `test/runtime-dependency-boundary.sh`
-allows `muniment-core` and `muniment-attach` alone.
+DONE 2026-08-05 — `muniment-runtime` answers `--version`, `--help`, and `-h`,
+and rejects an unknown argument before it reaches the instance lock
+(MUNIDESK-908). The crate took no new dependency.
 
 SELECTED 2026-08-05 (this wave) — the companion workspace-context map moves into
 muniment-core. `WorkspaceContexts` (`src-tauri/src/attach_service.rs:57`) is a
