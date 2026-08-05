@@ -678,6 +678,7 @@ impl<B: RunStartBoundaries, I: RunStartIdempotency> ThreadListService
     fn start_run(
         &mut self,
         workspace: &str,
+        execution_root: &str,
         request: AttachRunStartRequest,
         request_id: &Id,
         idempotency_key: &Id,
@@ -688,6 +689,7 @@ impl<B: RunStartBoundaries, I: RunStartIdempotency> ThreadListService
         }
         let canonical_input = json!({
             "workspace": workspace,
+            "execution_root": execution_root,
             "text": &request.text,
             "context": &request.context,
             "thread_id": &request.thread_id,
@@ -722,8 +724,8 @@ impl<B: RunStartBoundaries, I: RunStartIdempotency> ThreadListService
             )
             .and_then(|workspaces| {
                 workspaces
-                    .values()
-                    .find_map(|contexts| contexts.get(&PathBuf::from(workspace)))
+                    .get(workspace)
+                    .and_then(|contexts| contexts.get(&PathBuf::from(execution_root)))
             })
             .cloned()
             .flatten();
@@ -1156,6 +1158,7 @@ mod tests {
             client_identity: Some("default".into()),
         };
         let result = service.start_run(
+            "workspace-a",
             "workspace-a",
             AttachRunStartRequest {
                 text: "hello".into(),
@@ -1639,6 +1642,7 @@ mod tests {
     ) -> Result<RunStartAccepted, ProtocolError> {
         service.start_run(
             "workspace-a",
+            "workspace-a",
             AttachRunStartRequest {
                 text: text.into(),
                 context: None,
@@ -2049,6 +2053,7 @@ mod tests {
             .is_none());
         let run = second_connection
             .start_run(
+                "workspace-a",
                 &first_authorized,
                 AttachRunStartRequest {
                     text: "use repository context".into(),
@@ -2100,6 +2105,7 @@ mod tests {
         assert_eq!(second_memory_authorized, second_memory_canonical);
         third_connection
             .start_run(
+                "workspace-b",
                 &second_memory_authorized,
                 AttachRunStartRequest {
                     text: "second context".into(),
@@ -2998,6 +3004,7 @@ mod tests {
             };
             let result = service.start_run(
                 workspace,
+                workspace,
                 AttachRunStartRequest {
                     text: "hello".into(),
                     context: None,
@@ -3120,6 +3127,7 @@ mod tests {
         };
         let result = service.start_run(
             "workspace-b",
+            "workspace-b",
             AttachRunStartRequest {
                 text: "hello".into(),
                 context: None,
@@ -3189,6 +3197,7 @@ mod tests {
             client_identity: Some("default".into()),
         };
         let result = service.start_run(
+            "workspace-a",
             "workspace-a",
             AttachRunStartRequest {
                 text: "private prompt".into(),
