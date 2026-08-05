@@ -53,6 +53,10 @@ const PERMISSION_COMMIT_TIMEOUT: Duration = Duration::from_secs(2);
 #[cfg(all(target_os = "linux", test))]
 const PERMISSION_COMMIT_TIMEOUT: Duration = Duration::from_millis(50);
 
+#[cfg(target_os = "linux")]
+type WorkspaceContexts =
+    Arc<Mutex<HashMap<String, HashMap<String, HashMap<PathBuf, Option<String>>>>>>;
+
 /// Production adapter from the authorized Linux attach seam into the desktop
 /// coordinator. The listener lifecycle will own this service in a later slice.
 #[cfg(target_os = "linux")]
@@ -95,7 +99,7 @@ pub struct DesktopAttachService<B, I = IdempotencyStore> {
     boundaries: B,
     idempotency: I,
     home: PathBuf,
-    workspace_contexts: Arc<Mutex<HashMap<String, HashMap<PathBuf, Option<String>>>>>,
+    workspace_contexts: WorkspaceContexts,
     client_credentials: Arc<Mutex<HashMap<String, ClientCredential>>>,
     credential_path: Option<PathBuf>,
     client_identity: Option<String>,
@@ -103,7 +107,7 @@ pub struct DesktopAttachService<B, I = IdempotencyStore> {
 
 #[cfg(target_os = "linux")]
 pub(crate) struct AttachListenerState {
-    workspace_contexts: Arc<Mutex<HashMap<String, HashMap<PathBuf, Option<String>>>>>,
+    workspace_contexts: WorkspaceContexts,
     client_credentials: Arc<Mutex<HashMap<String, ClientCredential>>>,
     credential_path: PathBuf,
     live_connections: LiveConnectionRegistry,
@@ -325,7 +329,7 @@ fn resolve_attach_home(
 impl<R: tauri::Runtime> DesktopAttachService<TauriRunStartBoundaries<R>> {
     pub fn new(
         app: tauri::AppHandle<R>,
-        workspace_contexts: Arc<Mutex<HashMap<String, HashMap<PathBuf, Option<String>>>>>,
+        workspace_contexts: WorkspaceContexts,
         client_credentials: Arc<Mutex<HashMap<String, ClientCredential>>>,
     ) -> Result<Self, ProtocolError> {
         let home = resolve_attach_home(app.path().document_dir().ok(), app.path().home_dir().ok())?;
@@ -544,6 +548,7 @@ impl<B: RunStartBoundaries, I: RunStartIdempotency> ThreadListService
 
     fn onboard_workspace(
         &mut self,
+        workspace: &str,
         request: WorkspaceOnboardRequest,
     ) -> Result<WorkspaceOnboarded, ProtocolError> {
         let opened = PathBuf::from(&request.opened_directory);
@@ -568,6 +573,7 @@ impl<B: RunStartBoundaries, I: RunStartIdempotency> ThreadListService
             .as_ref()
             .ok_or_else(ProtocolError::unauthorized)?;
         let contexts = contexts.entry(identity.clone()).or_default();
+        let contexts = contexts.entry(workspace.to_owned()).or_default();
         contexts.insert(opened_canonical, instructions.clone());
         contexts.insert(memory_canonical, instructions.clone());
         Ok(WorkspaceOnboarded {
@@ -582,17 +588,20 @@ impl<B: RunStartBoundaries, I: RunStartIdempotency> ThreadListService
             .map_err(|_| ProtocolError::persistence_failed())
     }
 
-    fn authorized_workspace(&self, workspace: &str) -> Option<String> {
+    fn authorized_workspace(&self, session_workspace: &str, workspace: &str) -> Option<String> {
         let Some(identity) = &self.client_identity else {
             return None;
         };
         let canonical = PathBuf::from(workspace).canonicalize().ok()?;
         self.workspace_contexts.lock().ok().and_then(|contexts| {
-            contexts.get(identity).and_then(|workspaces| {
-                workspaces
-                    .contains_key(&canonical)
-                    .then(|| canonical.to_string_lossy().into_owned())
-            })
+            contexts
+                .get(identity)
+                .and_then(|workspaces| workspaces.get(session_workspace))
+                .and_then(|workspaces| {
+                    workspaces
+                        .contains_key(&canonical)
+                        .then(|| canonical.to_string_lossy().into_owned())
+                })
         })
     }
 
@@ -711,7 +720,11 @@ impl<B: RunStartBoundaries, I: RunStartIdempotency> ThreadListService
                     .as_ref()
                     .ok_or_else(ProtocolError::unauthorized)?,
             )
-            .and_then(|contexts| contexts.get(&PathBuf::from(workspace)))
+            .and_then(|workspaces| {
+                workspaces
+                    .values()
+                    .find_map(|contexts| contexts.get(&PathBuf::from(workspace)))
+            })
             .cloned()
             .flatten();
         if let Some(instructions) = instructions {
@@ -1932,10 +1945,13 @@ mod tests {
             client_identity: Some("default".into()),
         };
         first_connection
-            .onboard_workspace(WorkspaceOnboardRequest {
-                opened_directory: first.to_string_lossy().into_owned(),
-                memory_location: first_memory.to_string_lossy().into_owned(),
-            })
+            .onboard_workspace(
+                "workspace-a",
+                WorkspaceOnboardRequest {
+                    opened_directory: first.to_string_lossy().into_owned(),
+                    memory_location: first_memory.to_string_lossy().into_owned(),
+                },
+            )
             .unwrap();
         drop(first_connection);
 
@@ -1957,14 +1973,17 @@ mod tests {
             client_identity: Some("default".into()),
         };
         second_connection
-            .onboard_workspace(WorkspaceOnboardRequest {
-                opened_directory: second.to_string_lossy().into_owned(),
-                memory_location: second_memory.to_string_lossy().into_owned(),
-            })
+            .onboard_workspace(
+                "workspace-b",
+                WorkspaceOnboardRequest {
+                    opened_directory: second.to_string_lossy().into_owned(),
+                    memory_location: second_memory.to_string_lossy().into_owned(),
+                },
+            )
             .unwrap();
 
         let guard = contexts.lock().unwrap();
-        let stored = guard.get("default").unwrap();
+        let stored = guard.get("default").unwrap().get("workspace-a").unwrap();
         assert_eq!(
             stored
                 .get(&first.canonicalize().unwrap())
@@ -1973,7 +1992,11 @@ mod tests {
             Some("first instructions")
         );
         assert_eq!(
-            stored
+            guard
+                .get("default")
+                .unwrap()
+                .get("workspace-b")
+                .unwrap()
                 .get(&second.canonicalize().unwrap())
                 .unwrap()
                 .as_deref(),
@@ -2006,7 +2029,7 @@ mod tests {
         // resolves nothing for client-b even though the contexts are shared.
         for workspace in [&first, &first_memory] {
             assert!(client_b
-                .authorized_workspace(&workspace.to_string_lossy())
+                .authorized_workspace("workspace-a", &workspace.to_string_lossy())
                 .is_none());
         }
         assert!(client_b
@@ -2018,9 +2041,12 @@ mod tests {
         // The onboarding client resolves its own repository through the same
         // gate (canonicalizing the request) before starting the run.
         let first_authorized = second_connection
-            .authorized_workspace(&first.to_string_lossy())
+            .authorized_workspace("workspace-a", &first.to_string_lossy())
             .unwrap();
         assert_eq!(first_authorized, first_canonical);
+        assert!(second_connection
+            .authorized_workspace("workspace-b", &first.to_string_lossy())
+            .is_none());
         let run = second_connection
             .start_run(
                 &first_authorized,
@@ -2069,7 +2095,7 @@ mod tests {
             client_identity: Some("default".into()),
         };
         let second_memory_authorized = third_connection
-            .authorized_workspace(&second_memory.to_string_lossy())
+            .authorized_workspace("workspace-b", &second_memory.to_string_lossy())
             .unwrap();
         assert_eq!(second_memory_authorized, second_memory_canonical);
         third_connection
@@ -2144,22 +2170,25 @@ mod tests {
             "aa".repeat(32)
         );
         client_a
-            .onboard_workspace(WorkspaceOnboardRequest {
-                opened_directory: alias.to_string_lossy().into_owned(),
-                memory_location: memory.to_string_lossy().into_owned(),
-            })
+            .onboard_workspace(
+                "workspace-a",
+                WorkspaceOnboardRequest {
+                    opened_directory: alias.to_string_lossy().into_owned(),
+                    memory_location: memory.to_string_lossy().into_owned(),
+                },
+            )
             .unwrap();
         assert_eq!(
-            client_a.authorized_workspace(&alias.to_string_lossy()),
+            client_a.authorized_workspace("workspace-a", &alias.to_string_lossy()),
             Some(first.to_string_lossy().into_owned())
         );
         assert!(client_a
-            .authorized_workspace(&root.join("missing").to_string_lossy())
+            .authorized_workspace("workspace-a", &root.join("missing").to_string_lossy())
             .is_none());
         std::fs::remove_file(&alias).unwrap();
         symlink(&second, &alias).unwrap();
         assert!(client_a
-            .authorized_workspace(&alias.to_string_lossy())
+            .authorized_workspace("workspace-a", &alias.to_string_lossy())
             .is_none());
 
         let mut impersonator = make_service();
@@ -2200,7 +2229,7 @@ mod tests {
             "aa".repeat(32)
         );
         assert_eq!(
-            reconnect.authorized_workspace(&first.to_string_lossy()),
+            reconnect.authorized_workspace("workspace-a", &first.to_string_lossy()),
             Some(first.to_string_lossy().into_owned())
         );
         std::fs::remove_dir_all(root).unwrap();
