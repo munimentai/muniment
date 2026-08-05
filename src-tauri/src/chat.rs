@@ -1531,6 +1531,7 @@ mod tests {
     use crate::test_support::{append_test_event, FakeRunStartBoundaries};
     use base64::{engine::general_purpose::STANDARD, Engine};
     use muniment_core::journal::reducer::{reduce, RunStatus};
+    use muniment_core::sidecar::validate_pi_session;
     use std::sync::atomic::AtomicUsize;
 
     static PI_ENV_LOCK: Mutex<()> = Mutex::new(());
