@@ -401,11 +401,15 @@ muniment-core (MUNIDESK-912). `src-tauri/core/src/journal/run_append.rs` holds
 keeps only its `chat-event` emit.
 
 NOTE 2026-08-05 — the entitlement snapshot tracker, companion workspace-context
-map, and selected-file open rule reached the backlog on 2026-08-04 and again on
-2026-08-05. The queue drained without them twice, so the planner filed them a
-third time. Owned thread paging reached the preceding roadmap wave, drained
-once, and returned here for a second filing. The planner read the desktop crate
-again this wave and confirmed the other three remain unbuilt.
+map, and selected-file open rule have now reached the backlog three times, and
+the queue drained without them each time. The planner read the desktop crate
+again this wave and confirmed all three remain unbuilt. `snapshot_transition`
+still sits at `src-tauri/src/auth/mod.rs:53`, `WorkspaceContexts` is still a bare
+type alias at `src-tauri/src/attach_service.rs:57`, and `open_selected_files`
+still repeats `chat_file_metadata` at `src-tauri/src/chat.rs:991`. The planner
+filed all three a fourth time with exact target module paths, exact function
+names, and the test cases each must carry. A fifth drain needs an owner look at
+why this lane keeps dropping them.
 
 DONE 2026-08-05 — the owned thread paging moved into muniment-core
 (MUNIDESK-915).
@@ -474,10 +478,21 @@ installed runtime executable (MUNIDESK-917). It reuses the `LinuxProcReader`
 boundary that `src-tauri/core/src/browser_control/linux_identity.rs:103` already
 publishes.
 
-OPEN — the safe handoff point has no code. Nothing weighs an active run, a
-pending permission gate, an authentication operation, a session refresh, or an
-in-flight external effect against the quiesce rule. Nothing tracks the one
-prepared handoff. Both slices follow the two landed above.
+FILED 2026-08-05 — the next two migration control slices are the quiesce rule
+and the prepared-handoff slot. Neither carries code today. Nothing weighs an
+active run, a pending permission gate, an authentication operation, a session
+refresh, or an in-flight external effect against the quiesce rule, and nothing
+tracks the one prepared handoff. Each slice lands as a muniment-core module with
+direct tests and no call site, which is the shape MUNIDESK-917 already used. The
+dispatcher branch that answers `migration.control` follows both slices, and it
+also composes the peer check that landed.
+
+FILED 2026-08-05 — the attach welcome reserves an optional handoff nonce. ADR
+0012 has the service return the nonce in its `welcome` message, and the desktop
+probe reads it before the desktop reconnects as an ordinary client. `Welcome`
+(`src-tauri/attach/src/negotiation.rs:97`) carries five fields and no nonce. This
+is the MUNIDESK-916 shape: a vocabulary addition with its canonical fixture and
+no dispatcher behavior.
 
 DONE 2026-08-04 — ADR 0009 carries the attach workspace namespace amendment
 (MUNIDESK-883). The signed `grant.workspace` value is the only workspace
@@ -817,20 +832,22 @@ for it.
 
 VERIFIED 2026-08-05 (this wave, from a clean clone) — the CI cargo commands
 passed with no failure. `muniment-core` ran on its standalone manifest with
-`network-tests`. `muniment-attach`, `muniment-cli`, and `muniment-acp` ran in one
-workspace invocation, and `muniment-runtime` ran on its own. The frontend suite
-passed 835 tests with 25 skipped across 57 files, and the browser suite passed 3.
-`npm run build` produced a 252,280-byte script and a 62,240-byte stylesheet. The
-planner read every remaining ADR 0012 extraction target in the desktop crate
-before it filed this wave's slices. Earlier waves recorded the same shape of
-verification, and this entry replaces that ledger.
+`network-tests`. `muniment-attach`, `muniment-cli`, `muniment-acp`, and
+`muniment-runtime` ran in one workspace invocation. Sixty-six test binaries
+reported `ok`. The frontend suite passed 835 tests with 25 skipped across 57
+files, and the browser suite passed 3. `npm run build` produced a 252,278-byte
+script and a 62,244-byte stylesheet. The planner read every remaining ADR 0012
+extraction target in the desktop crate before it filed this wave's slices.
+Earlier waves recorded the same shape of verification, and this entry replaces
+that ledger.
 
 MEASURED 2026-08-05 — the probe capture ran again after this wave's build.
-`python3 -m http.server` served the bundle, and headless Chromium captured
-`test/probe/history.html` at 1100x720. The restored thread renders its sidebar,
-titlebar, transcript, two tool rows, provenance line, interrupted-reply record
-with its `Resume` control, and composer. This is a roadmap-fulfilment wave, so it
-filed no design or layout slice, and the capture recorded no new defect.
+`python3 -m http.server` served the repository root on port 4173, and headless
+Chromium captured `test/probe/history.html` at 1100x720. The restored thread
+renders its sidebar, titlebar, transcript, two tool rows, provenance line,
+interrupted-reply record with its `Resume` control, and composer. This is a
+roadmap-fulfilment wave, so it filed no design or layout slice, and the capture
+recorded no new defect.
 
 NOTE 2026-08-05 — `npx vitest run` with no arguments loads the browser tests into
 the jsdom environment and reports three failures. `npm test` is the correct
