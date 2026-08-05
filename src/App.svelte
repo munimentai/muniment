@@ -45,6 +45,15 @@
       : 'unknown'
   }
 
+  function boundedAttachWorkspace(value) {
+    const workspace = typeof value === 'string'
+      ? [...value].filter((character) => !/[\p{Cc}\p{Cf}]/u.test(character)).join('')
+      : ''
+    return [...workspace].length > 0 && [...workspace].length <= 80 && workspace.trim()
+      ? workspace
+      : 'unknown'
+  }
+
   function fullDateTime(timestamp) {
     const date = new Date(timestamp)
     return Number.isNaN(date.getTime()) ? '' : date.toLocaleString()
@@ -628,6 +637,8 @@
         challenge: payload?.challenge,
         claimedKind: boundedAttachClaim(payload?.claimed_kind),
         claimedVersion: boundedAttachClaim(payload?.claimed_version),
+        workspace: boundedAttachWorkspace(payload?.workspace),
+        scopes: Array.isArray(payload?.scopes) ? payload.scopes : [],
       }]
       const appWindow = getCurrentWindow()
       void appWindow.isFocused().then((focused) => {
@@ -1108,7 +1119,7 @@
 {#if pairingRequests[0]}
   {#key pairingRequests[0]}
     <ConfirmDialog title="Approve Muniment connection" onDecision={decidePairing}>
-      <p>The connecting program supplied these claims: kind {pairingRequests[0].claimedKind} and version {pairingRequests[0].claimedVersion}. Allow this program to connect to this Muniment desktop session?</p>
+      <p>The connecting program supplied these claims: kind {pairingRequests[0].claimedKind} and version {pairingRequests[0].claimedVersion}. Allow this program to access workspace {pairingRequests[0].workspace} with the scopes {pairingRequests[0].scopes.join(' and ')}?</p>
     </ConfirmDialog>
   {/key}
 {/if}
