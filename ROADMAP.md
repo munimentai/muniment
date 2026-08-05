@@ -395,22 +395,25 @@ DONE 2026-08-05 — the thread ownership check moved into muniment-core
 `subject_owns_first_run` with its typed `ThreadOwnershipError`, and six call
 sites in `src-tauri/src/chat_threads.rs` import it.
 
-FILED 2026-08-05 — the owned thread paging follows that move.
-`newest_owned_workspace_thread` (`src-tauri/src/chat_threads.rs:87`) and
-`chat_thread_summaries_page` (`:109`) each page journal summaries and keep the
-threads the core check accepts. Both carry the same 100-page cap. The desktop
-keeps thin wrappers, so `src-tauri/src/chat.rs:1143` and the Tauri commands do
-not change.
+DONE 2026-08-05 — the run-event append and projection step moved into
+muniment-core (MUNIDESK-912). `src-tauri/core/src/journal/run_append.rs` holds
+`append_run_event`, and `append_emit` (`src-tauri/src/chat_coordinate.rs:742`)
+keeps only its `chat-event` emit.
 
-FILED 2026-08-05 — the run-event append and projection step. `append_emit`
-(`src-tauri/src/chat_coordinate.rs:742`) is the journal half of the coordinate
-loop, and only its `chat-event` emit needs Tauri.
+NOTE 2026-08-05 — the entitlement snapshot tracker, companion workspace-context
+map, and selected-file open rule reached the backlog on 2026-08-04 and again on
+2026-08-05. The queue drained without them twice, so the planner filed them a
+third time. Owned thread paging reached the preceding roadmap wave, drained
+once, and returned here for a second filing. The planner read the desktop crate
+again this wave and confirmed the other three remain unbuilt.
 
-NOTE 2026-08-05 — the append step, the entitlement snapshot tracker, the
-companion workspace-context map, and the selected-file open rule reached the
-backlog on 2026-08-04 and did not land. The queue drained without them. The
-planner read the desktop crate again this wave, confirmed each one is still
-unbuilt, and filed it again.
+DONE 2026-08-05 — the owned thread paging moved into muniment-core
+(MUNIDESK-915).
+`src-tauri/core/src/owned_threads.rs` holds
+`newest_owned_workspace_thread` and `chat_thread_summaries_page`. They page
+journal summaries and keep the threads the core check accepts. Both carry the
+same 100-page cap and four direct tests. The desktop keeps thin wrappers in
+`src-tauri/src/chat_threads.rs`, so the callers do not change.
 
 FILED 2026-08-05 — the entitlement snapshot tracker moves into
 muniment-core. `snapshot_transition` and `observe_snapshot_version`
@@ -454,19 +457,27 @@ permission gates together. Remote Control follows the cutover. User-unit
 registration must not precede the cutover, because a service that takes the
 instance lock first would stop the desktop listener.
 
-OPEN — the ADR 0012 migration control request has no code. The amendment gives
-the waiting service one `muniment.attach/1` request that asks the desktop to
-quiesce, carrying a single-use handoff nonce and a bounded deadline. No
-`Operation` variant covers it (`src-tauri/attach/src/envelope.rs:241`), and no
-code evaluates the safe handoff point. Any approved companion could send the same
-request, so the desktop needs a rule for who may ask.
+DONE 2026-08-05 — ADR 0012 carries the migration control authority amendment
+(MUNIDESK-913). Only the waiting runtime service may send the request. An
+approved client credential grants no authority, and a claimed kind grants none
+either. On Linux the desktop resolves the `SO_PEERCRED` peer PID to its
+executable path and requires the installed `muniment-runtime` payload. The
+desktop prepares at most one handoff at a time. The rule does not defend against
+same-user compromise, which `THREAT_MODEL.md` defers.
 
-FILED 2026-08-05 — an ADR 0012 amendment names that rule. The desktop identifies
-the peer behind the connection instead of trusting a client credential or a
-claimed kind. On Linux it resolves the `SO_PEERCRED` peer PID to its executable
-path and requires the installed runtime payload. The rule excludes an approved
-companion, and it does not defend against same-user compromise, which
-`THREAT_MODEL.md` defers. The first code slice follows the amendment.
+DONE 2026-08-05 — the first two code slices of that request landed. The wire
+slice reserves `migration.control` as an `Operation` variant with its canonical
+fixture, and the dispatcher keeps answering `unsupported_operation` until the
+handler lands (`src-tauri/attach/src/envelope.rs:241`) (MUNIDESK-916). The
+authority slice adds the core peer check that resolves a peer PID to the
+installed runtime executable (MUNIDESK-917). It reuses the `LinuxProcReader`
+boundary that `src-tauri/core/src/browser_control/linux_identity.rs:103` already
+publishes.
+
+OPEN — the safe handoff point has no code. Nothing weighs an active run, a
+pending permission gate, an authentication operation, a session refresh, or an
+in-flight external effect against the quiesce rule. Nothing tracks the one
+prepared handoff. Both slices follow the two landed above.
 
 DONE 2026-08-04 — ADR 0009 carries the attach workspace namespace amendment
 (MUNIDESK-883). The signed `grant.workspace` value is the only workspace
@@ -809,10 +820,10 @@ passed with no failure. `muniment-core` ran on its standalone manifest with
 `network-tests`. `muniment-attach`, `muniment-cli`, and `muniment-acp` ran in one
 workspace invocation, and `muniment-runtime` ran on its own. The frontend suite
 passed 835 tests with 25 skipped across 57 files, and the browser suite passed 3.
-`npm run build` produced the bundle. The planner read every remaining ADR 0012
-extraction target in the desktop crate before it filed this wave's slices.
-Earlier waves recorded the same shape of verification, and this entry replaces
-that ledger.
+`npm run build` produced a 252,280-byte script and a 62,240-byte stylesheet. The
+planner read every remaining ADR 0012 extraction target in the desktop crate
+before it filed this wave's slices. Earlier waves recorded the same shape of
+verification, and this entry replaces that ledger.
 
 MEASURED 2026-08-05 — the probe capture ran again after this wave's build.
 `python3 -m http.server` served the bundle, and headless Chromium captured
@@ -820,6 +831,12 @@ MEASURED 2026-08-05 — the probe capture ran again after this wave's build.
 titlebar, transcript, two tool rows, provenance line, interrupted-reply record
 with its `Resume` control, and composer. This is a roadmap-fulfilment wave, so it
 filed no design or layout slice, and the capture recorded no new defect.
+
+NOTE 2026-08-05 — `npx vitest run` with no arguments loads the browser tests into
+the jsdom environment and reports three failures. `npm test` is the correct
+command. It excludes `**/*.browser.test.js` and then runs `npm run test:browser`
+against the browser config. A planner or an implementer that runs the bare
+command reads a false failure.
 
 ## Stable release and distribution
 
