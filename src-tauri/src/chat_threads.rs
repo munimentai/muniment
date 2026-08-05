@@ -3,6 +3,12 @@ use muniment_core::chat_resume::resumable_locator;
 use muniment_core::journal::reducer::{project_chat_with_state, RunStatus};
 use muniment_core::journal::thread_summaries::ThreadSummary;
 use muniment_core::journal::{Provenance, RunJournal};
+#[cfg(test)]
+use muniment_core::owned_threads::MAX_THREAD_SUMMARY_CORE_PAGES;
+use muniment_core::owned_threads::{
+    chat_thread_summaries_page as core_chat_thread_summaries_page,
+    newest_owned_workspace_thread as core_newest_owned_workspace_thread, OwnedThreadsError,
+};
 use muniment_core::thread_ownership::{subject_owns_first_run, ThreadOwnershipError};
 use serde::Serialize;
 use serde_json::Value;
@@ -14,8 +20,6 @@ use crate::chat::{
     ChatAttachment, ChatPendingPermission, ChatState, ChatToolActivity, SharedStorage,
 };
 use muniment_core::session_thread::SessionThread;
-
-const MAX_THREAD_SUMMARY_CORE_PAGES: usize = 100;
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -89,24 +93,8 @@ pub(crate) fn newest_owned_workspace_thread(
     workspace: &str,
     subject: Option<&str>,
 ) -> Result<Option<String>, String> {
-    let mut cursor = None;
-    for _ in 0..MAX_THREAD_SUMMARY_CORE_PAGES {
-        let page = journal
-            .workspace_thread_summaries(workspace, 100, cursor.as_deref())
-            .map_err(|_| "Conversation history is unavailable.".to_string())?;
-        for summary in page.summaries {
-            if subject_owns_first_run(journal, &summary.thread_id, subject)
-                .map_err(thread_ownership_error_message)?
-            {
-                return Ok(Some(summary.thread_id));
-            }
-        }
-        match page.next_cursor {
-            Some(next_cursor) => cursor = Some(next_cursor),
-            None => return Ok(None),
-        }
-    }
-    Ok(None)
+    core_newest_owned_workspace_thread(journal, workspace, subject)
+        .map_err(owned_threads_error_message)
 }
 
 pub(crate) fn chat_thread_summaries_page(
@@ -115,29 +103,11 @@ pub(crate) fn chat_thread_summaries_page(
     limit: usize,
     cursor: Option<&str>,
 ) -> Result<ChatThreadSummaryPage, String> {
-    if !(1..=100).contains(&limit) {
-        return Err("Conversation history is unavailable.".into());
-    }
-    let mut summaries = Vec::with_capacity(limit);
-    let mut next_cursor = cursor.map(str::to_owned);
-    for _ in 0..MAX_THREAD_SUMMARY_CORE_PAGES {
-        let page = journal
-            .thread_summaries(limit - summaries.len(), next_cursor.as_deref())
-            .map_err(|_| "Conversation history is unavailable.".to_string())?;
-        for summary in page.summaries {
-            if subject_owns_first_run(journal, &summary.thread_id, subject)
-                .map_err(thread_ownership_error_message)?
-            {
-                summaries.push(summary);
-            }
-        }
-        next_cursor = page.next_cursor;
-        if summaries.len() == limit || next_cursor.is_none() {
-            break;
-        }
-    }
+    let page = core_chat_thread_summaries_page(journal, subject, limit, cursor)
+        .map_err(owned_threads_error_message)?;
     Ok(ChatThreadSummaryPage {
-        summaries: summaries
+        summaries: page
+            .summaries
             .into_iter()
             .map(
                 |ThreadSummary {
@@ -151,8 +121,12 @@ pub(crate) fn chat_thread_summaries_page(
                 },
             )
             .collect(),
-        next_cursor,
+        next_cursor: page.next_cursor,
     })
+}
+
+fn owned_threads_error_message(_error: OwnedThreadsError) -> String {
+    "Conversation history is unavailable.".into()
 }
 
 fn project_history_entry(
