@@ -13,6 +13,10 @@ use muniment_core::attach::ProtocolError;
 use muniment_core::attachment::{ingest_attachment, prepare_pi_images, AttachmentMetadata};
 use muniment_core::auth::TokenSet;
 use muniment_core::cas::LocalCas;
+use muniment_core::chat_grant::{
+    fetch_grant as core_fetch_grant, validate_grant as core_validate_grant, ChatGrant,
+    FetchGrantError,
+};
 use muniment_core::chat_profile::ChatProfile;
 use muniment_core::journal::reconciliation::reconcile_interrupted_runs;
 use muniment_core::journal::reducer::{
@@ -24,7 +28,6 @@ use muniment_core::journal::{
 };
 use muniment_core::sidecar::pi_chat::{
     cancel_command, ExtensionUiAnswer, PiChatEvent, PiImageContent, PiRunAdapter, PromptCommand,
-    Receipt,
 };
 use muniment_core::sidecar::{
     validate_pi_session, PiRpcTransport, PiRpcWiring, PiSessionLocator, SidecarSupervisor,
@@ -42,17 +45,6 @@ use crate::session_thread::{OfferedThread, SessionThread};
 
 pub(super) const RPC_TIMEOUT: Duration = Duration::from_secs(30);
 const QUEUE_TIMEOUT: Duration = Duration::from_secs(2);
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(crate) struct ChatGrant {
-    pub(crate) workspace: String,
-    pub(crate) gateway_url: String,
-    pub(crate) virtual_key: String,
-    #[serde(default)]
-    pub(crate) model: Option<String>,
-    pub(crate) receipt_url: String,
-}
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -883,7 +875,7 @@ pub async fn chat_resume(
     );
     let access_token = tokens.access_token.clone();
     let grant = tauri::async_runtime::spawn_blocking(move || {
-        let grant = fetch_grant(&access_token).map_err(FetchGrantError::into_message)?;
+        let grant = fetch_grant(&access_token).map_err(fetch_grant_error_message)?;
         validate_grant(&grant)?;
         Ok::<_, String>(grant)
     })
@@ -1532,17 +1524,11 @@ pub(crate) fn desktop_provenance(subject: Option<&str>) -> Provenance {
     }
 }
 
-enum FetchGrantError {
-    Unauthorized,
-    Internal(String),
-}
-
-impl FetchGrantError {
-    fn into_message(self) -> String {
-        match self {
-            Self::Unauthorized => "The capability is not authorized.".into(),
-            Self::Internal(message) => message,
-        }
+fn fetch_grant_error_message(error: FetchGrantError) -> String {
+    match error {
+        FetchGrantError::Unauthorized => "The capability is not authorized.".into(),
+        FetchGrantError::Unavailable => "Chat configuration is temporarily unavailable.".into(),
+        FetchGrantError::InvalidResponse => "The chat configuration response was invalid.".into(),
     }
 }
 
@@ -1551,53 +1537,23 @@ fn map_fetch_grant_error(error: FetchGrantError) -> RunStartError {
         FetchGrantError::Unauthorized => {
             RunStartError::Unauthorized("The capability is not authorized.".into())
         }
-        FetchGrantError::Internal(message) => RunStartError::Persistence(message),
-    }
-}
-
-fn grant_status_error(status: u16) -> FetchGrantError {
-    if matches!(status, 401 | 403) {
-        FetchGrantError::Unauthorized
-    } else {
-        FetchGrantError::Internal("Chat configuration is temporarily unavailable.".into())
+        FetchGrantError::Unavailable => {
+            RunStartError::Persistence("Chat configuration is temporarily unavailable.".into())
+        }
+        FetchGrantError::InvalidResponse => {
+            RunStartError::Persistence("The chat configuration response was invalid.".into())
+        }
     }
 }
 
 fn fetch_grant(access_token: &str) -> Result<ChatGrant, FetchGrantError> {
     let issuer =
         std::env::var("MUNIMENT_ISSUER").unwrap_or_else(|_| "https://api.muniment.ai".into());
-    ureq::post(&format!(
-        "{}/v1/desktop/chat/config",
-        issuer.trim_end_matches('/')
-    ))
-    .set("Authorization", &format!("Bearer {access_token}"))
-    .call()
-    .map_err(|error| match error {
-        ureq::Error::Status(status, _) => grant_status_error(status),
-        _ => FetchGrantError::Internal("Chat configuration is temporarily unavailable.".into()),
-    })?
-    .into_json()
-    .map_err(|_| FetchGrantError::Internal("The chat configuration response was invalid.".into()))
+    core_fetch_grant(&issuer, access_token)
 }
 
 fn validate_grant(grant: &ChatGrant) -> Result<(), String> {
-    if !grant.gateway_url.starts_with("https://")
-        || !grant.receipt_url.starts_with("https://")
-        || grant.virtual_key.trim().is_empty()
-        || grant.workspace.trim().is_empty()
-    {
-        return Err("The chat configuration response was invalid.".into());
-    }
-    Ok(())
-}
-
-pub(super) fn fetch_receipt(url: &str, access_token: &str, run_id: &str) -> Result<Receipt, ()> {
-    ureq::post(url)
-        .set("Authorization", &format!("Bearer {access_token}"))
-        .send_json(json!({"runId": run_id}))
-        .map_err(|_| ())?
-        .into_json()
-        .map_err(|_| ())
+    core_validate_grant(grant).map_err(fetch_grant_error_message)
 }
 
 #[cfg(test)]
@@ -1660,17 +1616,15 @@ mod tests {
 
     #[cfg(target_os = "linux")]
     #[test]
-    fn grant_http_authentication_statuses_are_unauthorized_and_redacted() {
-        for status in [401, 403] {
-            let error = map_fetch_grant_error(grant_status_error(status)).protocol_error();
-            let encoded = serde_json::to_string(&error).unwrap();
-            assert!(encoded.contains("unauthorized"), "{encoded}");
-            for secret in ["private-prompt", "secret-token", "/private/work", "sidecar"] {
-                assert!(!encoded.contains(secret), "leaked {secret}: {encoded}");
-            }
+    fn grant_errors_are_mapped_and_redacted() {
+        let error = map_fetch_grant_error(FetchGrantError::Unauthorized).protocol_error();
+        let encoded = serde_json::to_string(&error).unwrap();
+        assert!(encoded.contains("unauthorized"), "{encoded}");
+        for secret in ["private-prompt", "secret-token", "/private/work", "sidecar"] {
+            assert!(!encoded.contains(secret), "leaked {secret}: {encoded}");
         }
 
-        let internal = map_fetch_grant_error(grant_status_error(500)).protocol_error();
+        let internal = map_fetch_grant_error(FetchGrantError::Unavailable).protocol_error();
         assert_eq!(
             serde_json::to_value(internal).unwrap()["code"],
             "persistence_failed"
