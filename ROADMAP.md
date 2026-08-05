@@ -400,10 +400,12 @@ muniment-core (MUNIDESK-912). `src-tauri/core/src/journal/run_append.rs` holds
 `append_run_event`, and `append_emit` (`src-tauri/src/chat_coordinate.rs:742`)
 keeps only its `chat-event` emit.
 
-NOTE 2026-08-05 — four core moves reached the backlog on 2026-08-04 and again on
-2026-08-05, and none of the four landed. The queue drained without them twice.
-The planner read the desktop crate again this wave, confirmed each one is still
-unbuilt, and filed it a third time.
+NOTE 2026-08-05 — the entitlement snapshot tracker, companion workspace-context
+map, and selected-file open rule reached the backlog on 2026-08-04 and again on
+2026-08-05. The queue drained without them twice, so the planner filed them a
+third time. Owned thread paging reached the preceding roadmap wave, drained
+once, and returned here for a second filing. The planner read the desktop crate
+again this wave and confirmed all four remain unbuilt.
 
 FILED 2026-08-05 — the owned thread paging.
 `newest_owned_workspace_thread` (`src-tauri/src/chat_threads.rs:87`) and
