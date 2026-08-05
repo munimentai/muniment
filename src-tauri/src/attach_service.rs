@@ -393,10 +393,14 @@ fn request_attach_pairing_approval(
         },
         remaining,
     );
-    if approved {
-        muniment_core::attach::linux::ApprovalDecision::Approve(approval)
-    } else {
-        muniment_core::attach::linux::ApprovalDecision::Deny
+    if !approved {
+        return muniment_core::attach::linux::ApprovalDecision::Deny;
+    }
+    match approval_state.approval() {
+        Some(current) if current.workspace == approval.workspace => {
+            muniment_core::attach::linux::ApprovalDecision::Approve(current)
+        }
+        _ => muniment_core::attach::linux::ApprovalDecision::Deny,
     }
 }
 
@@ -1129,6 +1133,64 @@ mod tests {
             muniment_core::attach::linux::ApprovalDecision::Deny
         ));
         assert_eq!(presentations.load(Ordering::SeqCst), 0);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn attach_pairing_denies_when_grant_clears_during_approval() {
+        let credential_path = std::env::temp_dir().join(format!(
+            "muniment-attach-cleared-grant-{}.json",
+            Uuid::now_v7()
+        ));
+        let state = AttachListenerState::load(&credential_path).unwrap();
+        *state.workspace.lock().unwrap() = Some("workspace-a".into());
+        let workspace = state.workspace.clone();
+        let approvals = AttachApprovalState::default();
+        approvals.register_presenter(move |_| {
+            *workspace.lock().unwrap() = None;
+            true
+        });
+
+        assert!(matches!(
+            request_attach_pairing_approval(
+                &state,
+                &approvals,
+                "challenge",
+                "cli",
+                "1.0.0",
+                Duration::from_secs(1),
+            ),
+            muniment_core::attach::linux::ApprovalDecision::Deny
+        ));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn attach_pairing_denies_when_grant_changes_during_approval() {
+        let credential_path = std::env::temp_dir().join(format!(
+            "muniment-attach-changed-grant-{}.json",
+            Uuid::now_v7()
+        ));
+        let state = AttachListenerState::load(&credential_path).unwrap();
+        *state.workspace.lock().unwrap() = Some("workspace-a".into());
+        let workspace = state.workspace.clone();
+        let approvals = AttachApprovalState::default();
+        approvals.register_presenter(move |_| {
+            *workspace.lock().unwrap() = Some("workspace-b".into());
+            true
+        });
+
+        assert!(matches!(
+            request_attach_pairing_approval(
+                &state,
+                &approvals,
+                "challenge",
+                "cli",
+                "1.0.0",
+                Duration::from_secs(1),
+            ),
+            muniment_core::attach::linux::ApprovalDecision::Deny
+        ));
     }
 
     #[cfg(target_os = "linux")]
