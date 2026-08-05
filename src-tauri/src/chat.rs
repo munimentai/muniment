@@ -705,14 +705,10 @@ impl ChatState {
     pub fn new(app: &tauri::AppHandle) -> Result<Self, Box<dyn std::error::Error>> {
         let directory = app.path().app_data_dir()?;
         let profile = ChatProfile::new(directory);
-        profile.create_directories()?;
-        let mut journal = RunJournal::open(profile.journal_path())?;
+        let (mut journal, cas) = profile.open_storage()?;
         reconcile_interrupted_runs(&mut journal, &desktop_provenance(None));
         Ok(Self {
-            storage: Arc::new(Mutex::new(ChatStorage {
-                journal,
-                cas: LocalCas::open(&profile.cas_directory())?,
-            })),
+            storage: Arc::new(Mutex::new(ChatStorage { journal, cas })),
             active: Mutex::new(None),
             runtime: Arc::new(Mutex::new(None)),
             session_thread: SessionThread::default(),
