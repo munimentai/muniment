@@ -25,6 +25,25 @@ and revocation flows, live entitlement projection, access-device states, and
 server-unreachable recovery. The production contract is `/v1/auth/native/*`.
 Generic OIDC remains test groundwork and is not the production handshake.
 
+DONE 2026-08-05 — first-run registration retries a rate-limited device
+registration (MUNIDESK-927). `NativeRegistrationError::RateLimited`
+(`src-tauri/core/src/auth/native_registration.rs`) carries the server delay, the
+transport reads `Retry-After` as seconds or as an RFC 2822 date, and one sign-in
+attempt waits at most 300 seconds across its retries.
+
+SPEC LANDED 2026-08-05 — the org capability catalog joins the Your access view
+(MUNIDESK-926). `docs/spec/02-desktop-app.md` adds an `Available in your org`
+list under the entitlement peek. Each entry names the capability, its subunit
+type, the approved one-line description, and either a `granted` chip or a
+`Request access` button.
+
+GATED — no implementation slice for that catalog is fileable yet.
+`EntitlementSnapshotView` (`src-tauri/core/src/auth/native_session.rs:70`)
+carries the viewer's own groups alone, so the desktop has no source for the
+published org library. The listing endpoint and the `CreateAccessRequest`
+contract both live in muniment-cloud. The lane selects the first slice after
+that contract publishes.
+
 ### 9. Pi sidecar and cloud chat
 
 DONE — verified Pi runtime acquisition and supervision, signed-in streamed chat,
@@ -400,14 +419,12 @@ muniment-core (MUNIDESK-912). `src-tauri/core/src/journal/run_append.rs` holds
 `append_run_event`, and `append_emit` (`src-tauri/src/chat_coordinate.rs:742`)
 keeps only its `chat-event` emit.
 
-NOTE 2026-08-05 — the entitlement snapshot tracker landed on its fourth filing.
-The companion workspace-context map and the selected-file open rule drained a
-fourth time. `WorkspaceContexts` is still a bare type alias at
-`src-tauri/src/attach_service.rs:57`, and `open_selected_files` still repeats
-`chat_file_metadata` at `src-tauri/src/chat.rs:991`. The planner filed both a
-fifth time with the target module path, the exact function names, and the test
-cases each must carry. A sixth drain needs an owner look at why this lane keeps
-dropping these two.
+NOTE 2026-08-05 — the companion workspace-context map landed on its fifth filing
+(MUNIDESK-924). The selected-file open rule drained a fifth time.
+`open_selected_files` (`src-tauri/src/chat.rs:991`) still repeats
+`chat_file_metadata` (`:914`). The planner filed it a sixth time with the target
+module path, the function names, and the test cases it must carry. A seventh
+drain needs an owner look at why this lane keeps dropping it.
 
 DONE 2026-08-05 — the owned thread paging moved into muniment-core
 (MUNIDESK-915).
@@ -427,26 +444,26 @@ DONE 2026-08-05 — `muniment-runtime` answers `--version`, `--help`, and `-h`,
 and rejects an unknown argument before it reaches the instance lock
 (MUNIDESK-908). The crate took no new dependency.
 
-RE-FILED 2026-08-05 (fifth filing) — the companion workspace-context map moves
-into muniment-core. `WorkspaceContexts` (`src-tauri/src/attach_service.rs:57`)
-is a bare three-level `HashMap` behind an `Arc<Mutex<_>>`. `onboard_workspace`
-(`:580`) and `authorized_workspace` (`:622`) reach into that map directly, so the
-two-level lookup rule owns no type and carries no direct test. ADR 0012 phase one
-names workspace authorization as runtime-service state.
+DONE 2026-08-05 — the companion workspace-context map moved into muniment-core
+(MUNIDESK-924). `src-tauri/core/src/attach/workspace_context.rs` holds
+`WorkspaceContextMap` with `record`, `authorized_directory`, and `instructions`.
+`onboard_workspace` (`src-tauri/src/attach_service.rs:579`) and
+`authorized_workspace` (`:619`) read that type instead of a bare three-level
+`HashMap`.
 
-RE-FILED 2026-08-05 (fifth filing) — the selected-file open rule moves into
-muniment-core.
-`open_selected_files` (`src-tauri/src/chat.rs:991`) and `chat_file_metadata`
-(`:914`) carry one rule twice. Each opens the path, reads the metadata off the
-open handle, rejects anything that is not a file, and takes the display name from
-the last path segment. Reading the open handle rather than the path closes a
-replacement window, and no test guards that defense today. ADR 0012 phase one
-names CAS and attachment ingestion as runtime-service state, and
-`src-tauri/core/src/attachment.rs` already holds the ingestion half.
+RE-FILED 2026-08-05 (sixth filing) — the selected-file open rule moves into
+muniment-core. `open_selected_files` (`src-tauri/src/chat.rs:991`) and
+`chat_file_metadata` (`:914`) carry one rule twice. Each opens the path, reads
+the metadata off the open handle, rejects anything that is not a file, and takes
+the display name from the last path segment. Reading the open handle rather than
+the path closes a replacement window, and no test guards that defense today. The
+two copies also disagree, because `chat_file_metadata` rejects a path with no
+usable final segment and `open_selected_files` does not. The target is
+`src-tauri/core/src/selected_file.rs` with its own test binary.
 
 MERGE HAZARD — the open slices edit `src-tauri/src/chat.rs`,
-`src-tauri/src/chat_threads.rs`, `src-tauri/src/chat_coordinate.rs`,
-`src-tauri/src/attach_service.rs`, and `src-tauri/src/auth/mod.rs`. Each ticket
+`src-tauri/src/chat_threads.rs`, `src-tauri/src/auth/mod.rs`,
+`src-tauri/Cargo.toml`, and `src-tauri/core/src/attach/linux.rs`. Each ticket
 tells the implementer to rebase on `main` before it opens the pull request. The
 2026-08-04 silent revert came from a stale base.
 
@@ -486,35 +503,48 @@ bytes, bounds the deadline at 60,000 milliseconds, refuses a second preparation
 while one is live, and matches a nonce only before the deadline. Neither module
 has a call site yet.
 
-FILED 2026-08-05 — the dispatcher branch that answers `migration.control` is the
-next migration control slice. `dispatch_request`
-(`src-tauri/core/src/attach/linux.rs:2023`) still falls through to the
-`ThreadList` check and answers `unsupported_operation`. The slice adds the
-branch, bounds the request body against the same limits the prepared slot
-carries, and puts the decision behind one new `ThreadListService` method whose
-default answers `unsupported_operation`. The desktop implementation composes the
-landed peer check, quiesce rule, and prepared slot in a later slice.
+RE-FILED 2026-08-05 — the dispatcher branch that answers `migration.control` is
+the next migration control slice, and the first filing drained.
+`dispatch_request` (`src-tauri/core/src/attach/linux.rs:2023`) still falls
+through to the `ThreadList` check at `:2447` and answers
+`unsupported_operation`. The slice adds the branch, bounds the request body
+against the same limits the prepared slot carries, and puts the decision behind
+one new `ThreadListService` method whose default answers
+`unsupported_operation`. The desktop implementation composes the landed peer
+check, quiesce rule, and prepared slot in a later slice.
 
-RE-FILED 2026-08-05 — the attach welcome reserves an optional handoff nonce, and
-the first filing drained. ADR 0012 has the service return the nonce in its
-`welcome` message, and the desktop probe reads it before the desktop reconnects
-as an ordinary client. `Welcome` (`src-tauri/attach/src/negotiation.rs:97`)
-carries five fields and no nonce. This is the MUNIDESK-916 shape: a vocabulary
-addition with its canonical fixture and no dispatcher behavior.
+DONE 2026-08-05 — the attach welcome reserves an optional handoff nonce
+(MUNIDESK-923). `Welcome` (`src-tauri/attach/src/negotiation.rs:96`) carries an
+optional `handoff_nonce`, `with_handoff_nonce` sets it, and the deserializer
+accepts an absent field.
+`protocol-fixtures/muniment.attach/1/negotiation-welcome-handoff.json` is the
+canonical fixture. No listener sets the value yet.
 
-FILED 2026-08-05 — the Linux package must ship `muniment-runtime`. The landed
-migration control authority check requires the installed runtime payload, and no
-package installs one today. `.github/build-linux.sh:38` builds `muniment-acp`
-alone, and `src-tauri/tauri.linux.conf.json` maps that one binary into the
-bundle. The slice copies the `muniment-acp` pattern for `muniment-runtime` and
-adds an installed-lane check beside the adapter check in
-`test/e2e/runner/linux.sh:190`.
+RE-FILED 2026-08-05 — the Linux package must ship `muniment-runtime`, and the
+first filing drained. The landed migration control authority check requires the
+installed runtime payload, and no package installs one today.
+`.github/build-linux.sh:38` builds `muniment-acp` alone, and
+`src-tauri/tauri.linux.conf.json` maps that one binary into the bundle. The
+slice copies the `muniment-acp` pattern, adds a bundle guard beside
+`test/acp-bundle.test.js`, and adds an installed-lane check beside the adapter
+check in `test/e2e/runner/linux.sh:190`.
 
-FILED 2026-08-05 — the thread rename and delete appends move into muniment-core.
-`rename_thread` and `delete_thread` (`src-tauri/src/chat_threads.rs:208`, `:241`)
-carry one rule twice: check ownership, read the last thread sequence, and append
-the `thread.*` event. ADR 0012 phase one names the journal as runtime-service
-state.
+RE-FILED 2026-08-05 — the thread rename and delete appends move into
+muniment-core, and the first filing drained. `rename_thread` and `delete_thread`
+(`src-tauri/src/chat_threads.rs:208`, `:241`) carry one rule twice: check
+ownership, read the last thread sequence, and append the `thread.*` event. ADR
+0012 phase one names the journal as runtime-service state. The target is
+`src-tauri/core/src/journal/thread_mutation.rs`.
+
+FILED 2026-08-05 — the platform keychain credential store moves into
+muniment-core. `src-tauri/src/auth/keyring_store.rs` holds `PlatformKeychain`
+and `KeyringNativeCredentialStore`, and both wrap
+`CoherentNativeCredentialStore` from core. ADR 0012 phase one names credentials
+and the device session as runtime-service state, and `muniment-runtime` cannot
+reach the keychain today. The move follows the `tls` pattern, so core takes
+`keyring` behind a new optional feature and the desktop crate turns it on. The
+same file holds the unused `KeyringTokenStore`, which belongs to the superseded
+generic OIDC path and goes with the move.
 
 DONE 2026-08-04 — ADR 0009 carries the attach workspace namespace amendment
 (MUNIDESK-883). The signed `grant.workspace` value is the only workspace
@@ -852,25 +882,32 @@ earlier one. Requiring an up-to-date branch before merge, or a merge queue, is a
 repository-settings change that sits with the owner. The planner files no ticket
 for it.
 
-VERIFIED 2026-08-05 (this wave, from a clean clone) — the CI cargo commands
-passed with no failure. `muniment-core` ran on its standalone manifest with
-`network-tests` and reported 57 binaries `ok`. `muniment-attach`,
-`muniment-cli`, `muniment-acp`, `muniment-core`, and `muniment-runtime` ran in
-one workspace invocation. The frontend suite passed 835 tests with 25 skipped
-across 57 files, and the browser suite passed 3. `npm run build` produced a
-252,278-byte script and a 62,244-byte stylesheet. The planner read every
-remaining ADR 0012 extraction target in the desktop crate, plus the attach
-negotiation, dispatcher, and Linux packaging paths, before it filed this wave's
-slices. Earlier waves recorded the same shape of verification, and this entry
-replaces that ledger.
+VERIFIED 2026-08-05 (this wave, from a clean clone) — every suite the planning
+container can run passed. `cargo test` on the standalone `muniment-core`
+manifest reported `ok` for every test binary with no failure. `cargo test` for
+`muniment-attach`, `muniment-cli`, `muniment-acp`, and `muniment-runtime`
+reported the same. `cargo check` over those four crates plus `muniment-core`
+finished clean on the locked manifest. `npm test` passed 838 tests with 25
+skipped across 57 files, and the browser suite passed 3. `npm run build`
+produced a 252,667-byte script and a 62,244-byte stylesheet. The planner read
+the dispatcher, the negotiation welcome, the Linux packaging, and every
+remaining ADR 0012 extraction target in the desktop crate before it filed this
+wave's slices. Earlier waves recorded the same shape of verification, and this
+entry replaces that ledger.
 
 MEASURED 2026-08-05 — the probe capture ran again after this wave's build.
-`python3 -m http.server` served the repository root on port 4173, and headless
-Chromium captured `test/probe/history.html` at 1100x720. The restored thread
-renders its sidebar, titlebar, transcript, two tool rows, provenance line,
-interrupted-reply record with its `Resume` control, and composer. This is a
-roadmap-fulfilment wave, so it filed no design or layout slice, and the capture
-recorded no new defect.
+`python3 -m http.server` served the repository root, and headless Chromium
+captured `test/probe/history.html` at 1100x720. The restored thread renders its
+sidebar, titlebar, transcript, two tool rows, provenance line, interrupted-reply
+record with its `Resume` control, and composer. This is a roadmap-fulfilment
+wave, so it filed no design or layout slice, and the capture recorded no new
+defect.
+
+NOTE 2026-08-05 — a capture must pass `--wait-for-selector "[data-probe-ready]"`
+to playwright. The fixture loads the built bundle asynchronously, so a capture
+without that flag shoots a blank page. Serve the repository root with
+`--directory`, because a stray server started from another directory answers
+404 and the wait then hangs until the timeout.
 
 NOTE 2026-08-05 — `npx vitest run` with no arguments loads the browser tests into
 the jsdom environment and reports three failures. `npm test` is the correct
