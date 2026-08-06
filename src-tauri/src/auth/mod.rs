@@ -11,13 +11,13 @@ mod keyring_store;
 
 use std::process::Command;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use muniment_core::auth::{
-    self, AuthStatus, BrowserOpenError, NativeCredentialStore, UreqAuthorizationTransport,
-    UreqNativeDeviceListTransport, UreqRegistrationTransport, UreqRevocationTransport,
-    UreqSessionTransport, UreqTokenTransport,
+    self, AuthStatus, BrowserOpenError, EntitlementSnapshotTracker, NativeCredentialStore,
+    UreqAuthorizationTransport, UreqNativeDeviceListTransport, UreqRegistrationTransport,
+    UreqRevocationTransport, UreqSessionTransport, UreqTokenTransport,
 };
 use serde::Serialize;
 use tauri::Emitter;
@@ -42,37 +42,12 @@ fn api_base_url() -> String {
 pub struct AuthState {
     native_store: Arc<KeyringNativeCredentialStore>,
     sign_in_running: Arc<AtomicBool>,
-    snapshot_version: Mutex<Option<u64>>,
+    entitlement_snapshot_tracker: EntitlementSnapshotTracker,
 }
 
 #[derive(Clone, Copy, Serialize)]
 struct EntitlementChanged {
     snapshot_version: u64,
-}
-
-fn snapshot_transition(previous: Option<u64>, next: Option<u64>) -> Option<u64> {
-    match (previous, next) {
-        (Some(previous), Some(next)) if previous != next => Some(next),
-        _ => None,
-    }
-}
-
-fn observe_snapshot_version(
-    snapshot_version: &Mutex<Option<u64>>,
-    next: Option<u64>,
-    emit: impl FnOnce(u64) -> Result<(), String>,
-) -> Result<(), String> {
-    let mut previous = snapshot_version
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    let changed = snapshot_transition(*previous, next);
-    *previous = next;
-    drop(previous);
-
-    if let Some(snapshot_version) = changed {
-        emit(snapshot_version)?;
-    }
-    Ok(())
 }
 
 fn observe_snapshot<R: tauri::Runtime>(
@@ -84,20 +59,14 @@ fn observe_snapshot<R: tauri::Runtime>(
         .entitlement_snapshot
         .as_ref()
         .map(|snapshot| snapshot.snapshot_version);
-    observe_snapshot_version(&state.snapshot_version, next, |snapshot_version| {
+    if let Some(snapshot_version) = state.entitlement_snapshot_tracker.observe(next) {
         app.emit(
             "entitlement-changed",
             EntitlementChanged { snapshot_version },
         )
-        .map_err(|error| format!("entitlement event failed: {error}"))
-    })
-}
-
-fn clear_snapshot_version(state: &AuthState) {
-    *state
-        .snapshot_version
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
+        .map_err(|error| format!("entitlement event failed: {error}"))?;
+    }
+    Ok(())
 }
 
 pub(crate) fn fresh_tokens<R: tauri::Runtime>(
@@ -133,7 +102,7 @@ impl AuthState {
         AuthState {
             native_store: Arc::new(KeyringNativeCredentialStore::new()),
             sign_in_running: Arc::new(AtomicBool::new(false)),
-            snapshot_version: Mutex::new(None),
+            entitlement_snapshot_tracker: EntitlementSnapshotTracker::new(),
         }
     }
 }
@@ -152,7 +121,7 @@ pub async fn auth_sign_in(state: tauri::State<'_, AuthState>) -> Result<AuthStat
     .await
     .map_err(|e| format!("sign-in task failed: {e}"))?;
     let status = outcome.map_err(|e| e.to_string())?;
-    clear_snapshot_version(&state);
+    state.entitlement_snapshot_tracker.clear();
     Ok(status)
 }
 
@@ -299,7 +268,7 @@ pub async fn auth_sign_out(
     .await
     .map_err(|e| format!("sign-out task failed: {e}"))?
     .map_err(|e| e.to_string())?;
-    clear_snapshot_version(&state);
+    state.entitlement_snapshot_tracker.clear();
     Ok(status)
 }
 
@@ -351,44 +320,6 @@ mod tests {
         assert!(SignInPermit::acquire(running.clone()).is_none());
         drop(first);
         assert!(SignInPermit::acquire(running).is_some());
-    }
-
-    #[test]
-    fn first_snapshot_is_not_a_change() {
-        assert_eq!(snapshot_transition(None, Some(1)), None);
-    }
-
-    #[test]
-    fn unchanged_snapshot_is_not_a_change() {
-        assert_eq!(snapshot_transition(Some(1), Some(1)), None);
-    }
-
-    #[test]
-    fn changed_snapshot_reports_the_new_version_once() {
-        assert_eq!(snapshot_transition(Some(1), Some(2)), Some(2));
-        assert_eq!(snapshot_transition(Some(2), Some(2)), None);
-    }
-
-    #[test]
-    fn snapshot_observation_emits_changes_once_and_reset_suppresses_next_account() {
-        let state = AuthState::new();
-        let emitted = Mutex::new(Vec::new());
-        let observe = |version| {
-            observe_snapshot_version(&state.snapshot_version, Some(version), |changed| {
-                emitted.lock().unwrap().push(changed);
-                Ok(())
-            })
-        };
-
-        observe(1).unwrap();
-        observe(1).unwrap();
-        observe(2).unwrap();
-        observe(2).unwrap();
-        assert_eq!(*emitted.lock().unwrap(), vec![2]);
-
-        clear_snapshot_version(&state);
-        observe(7).unwrap();
-        assert_eq!(*emitted.lock().unwrap(), vec![2]);
     }
 
     #[test]
