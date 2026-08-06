@@ -1,28 +1,9 @@
 import path from 'node:path'
-import { execFile } from 'node:child_process'
-import { promisify } from 'node:util'
 import { access, appendFile, mkdir, readFile } from 'node:fs/promises'
+import { chooseFolder } from '../support/folder-dialog.mjs'
 
-const run = promisify(execFile)
-
-async function chooseFolder(home) {
-  const { stdout } = await run('timeout', [
-    '10', 'xdotool', 'search', '--sync', '--onlyvisible', '--name',
-    '(Select|Open|Choose|Pick).*([Ff]older|[Dd]irectory|[Ff]ile)',
-  ])
-  const window = stdout.trim().split('\n').at(-1)
-  await run('xdotool', ['windowfocus', '--sync', window])
-  await run('xdotool', ['key', '--window', window, '--clearmodifiers', 'ctrl+l'])
-  await run('xdotool', ['type', '--window', window, '--clearmodifiers', '--delay', '1', home])
-  await run('xdotool', ['key', '--window', window, '--clearmodifiers', 'Return'])
-  await new Promise((resolve) => setTimeout(resolve, 500))
-  try {
-    await run('xdotool', ['getwindowname', window])
-  } catch {
-    return
-  }
-  await run('xdotool', ['key', '--window', window, '--clearmodifiers', 'alt+s'])
-}
+const FOLDER_DIALOG_WAIT_SECONDS = 30
+const FOLDER_DIALOG_TITLE = '(Select|Open|Choose|Pick).*([Ff]older|[Dd]irectory|[Ff]ile)'
 
 describe('installed nightly model-ready onboarding', () => {
   it('chooses an isolated Home and scaffolds its README files', async () => {
@@ -68,7 +49,12 @@ describe('installed nightly model-ready onboarding', () => {
 
     await mkdir(home, { recursive: true })
     await (await $('[data-testid="onboarding-picker"]')).click()
-    await chooseFolder(home)
+    await chooseFolder(
+      home,
+      FOLDER_DIALOG_WAIT_SECONDS,
+      FOLDER_DIALOG_TITLE,
+      process.env.MUNIMENT_E2E_RAW_DIR,
+    )
     await browser.waitUntil(async () => await location.getText() === home, {
       timeoutMsg: 'the Home picker did not select the isolated Home',
     })
