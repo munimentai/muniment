@@ -40,6 +40,7 @@ $handlerKey = "HKCU:\Software\Classes\muniment-e2e-https"
 $httpsKey = "HKCU:\Software\Classes\https"
 $testRegistration = $null
 $testProcess = $null
+$redactor = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot "../support/redact.mjs"))
 
 function Invoke-BoundedProcess([string]$File, [string]$Arguments, [int]$TimeoutSeconds, [string]$Log) {
   $errorLog = $Log + ".err"
@@ -57,13 +58,22 @@ function Invoke-BoundedProcess([string]$File, [string]$Arguments, [int]$TimeoutS
   if ($process.ExitCode -notin @(0, 3010)) { throw "$File failed with exit code $($process.ExitCode)" }
 }
 
+function Resolve-NativeCommand([string]$File, [string]$FailureMessage) {
+  try {
+    return (Get-Command $File -CommandType Application -ErrorAction Stop).Source
+  } catch {
+    throw "$FailureMessage`: could not resolve $File`: $($_.Exception.Message)"
+  }
+}
+
 function Invoke-NativeCommand([string]$File, [string]$Arguments, [string]$Log, [string]$FailureMessage, [string]$InputText = $null, [string]$ErrorLog = $null) {
+  $resolvedFile = Resolve-NativeCommand $File $FailureMessage
   $startInfo = New-Object Diagnostics.ProcessStartInfo
-  if ([IO.Path]::GetExtension($File) -eq ".cmd") {
+  if ([IO.Path]::GetExtension($resolvedFile) -eq ".cmd") {
     $startInfo.FileName = $env:ComSpec
-    $startInfo.Arguments = "/d /s /c `"`"$File`" $Arguments`""
+    $startInfo.Arguments = "/d /s /c `"`"$resolvedFile`" $Arguments`""
   } else {
-    $startInfo.FileName = $File
+    $startInfo.FileName = $resolvedFile
     $startInfo.Arguments = $Arguments
   }
   $startInfo.UseShellExecute = $false
@@ -194,7 +204,7 @@ function Finalize-Run {
   Invoke-Cleanup "redact-artifacts" {
     if (-not $raw -or -not (Test-Path $raw)) { throw "raw staging is unavailable" }
     try {
-      Invoke-NativeCommand "node" "test/e2e/support/redact.mjs `"$raw`" `"$safe`" `"$redactionReport`"" $cleanupLog "artifact redaction failed"
+      Invoke-NativeCommand "node" "`"$redactor`" `"$raw`" `"$safe`" `"$redactionReport`"" $cleanupLog "artifact redaction failed"
     } catch {
       $script:redacted = $false
       throw
@@ -255,6 +265,11 @@ try {
   }
   if ($env:MUNIMENT_E2E_NATIVE_COMMAND_TEST_INVOCATION_ERROR -eq "1") {
     Invoke-NativeCommand "muniment-command-that-does-not-exist" "" $installerLog "native command test failed"
+    return
+  }
+  if ($env:MUNIMENT_E2E_NATIVE_COMMAND_TEST_RESOLUTION -eq "1") {
+    $resolvedNpm = Resolve-NativeCommand "npm.cmd" "native command test failed"
+    Add-Content -LiteralPath $installerLog -Value $resolvedNpm
     return
   }
   if ($env:MUNIMENT_E2E_FINALIZER_TEST_MODE -eq "1") {
