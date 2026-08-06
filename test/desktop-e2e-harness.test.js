@@ -1000,6 +1000,12 @@ describe('folder dialog diagnostics', () => {
 })
 
 describe('Windows native command contract', () => {
+  it('routes native commands through the process helpers', () => {
+    const runner = fs.readFileSync(path.join(root, 'test/e2e/runner/windows.ps1'), 'utf8')
+    expect(runner).not.toMatch(/&\s+(?!\$Action\b)[^;\r\n|}]*\s\*>>/)
+    expect(runner).not.toMatch(/&\s+(?:npm(?:\.cmd)?|node(?:\.exe)?|gh(?:\.exe)?|cargo(?:\.exe)?|git(?:\.exe)?)(?=\s|$)/im)
+  })
+
   it.skipIf(process.platform !== 'win32').each([
     ['0', 0],
     ['7', 1],
