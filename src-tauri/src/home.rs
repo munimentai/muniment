@@ -374,7 +374,7 @@ mod tests {
         let date = NaiveDate::from_ymd_opt(2026, 7, 24).unwrap();
 
         let error = confirm_import_with_hook(&config, &home, &[entry()], date, || {
-            fs::remove_dir(home.join("projects")).unwrap();
+            fs::remove_dir_all(home.join("projects")).unwrap();
             fs::write(home.join("projects"), b"not a directory").unwrap();
         })
         .unwrap_err();
