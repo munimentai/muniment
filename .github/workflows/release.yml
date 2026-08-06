@@ -34,13 +34,9 @@ jobs:
           work=$(mktemp -d "$RUNNER_TEMP/muniment-release-guard.XXXXXX")
           trap 'rm -rf -- "$work"' EXIT
           gh release download nightly --pattern "nightly-${SOURCE_SHA}-*" --dir "$work/assets"
-          mkdir "$work/extracted"
           for artifact in "$work"/assets/*; do
-            destination="$work/extracted/$(basename "$artifact")"
-            mkdir "$destination"
-            7z x -y "-o$destination" "$artifact" >/dev/null
+            bash test/e2e/support/webdriver-artifact-guard.sh absent "$artifact"
           done
-          node test/e2e/support/webdriver-release-guard.mjs absent "$work/extracted"
           node test/e2e/support/webdriver-capability-guard.mjs
       - name: Promote finalized nightly bytes
         env:

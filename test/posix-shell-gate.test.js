@@ -9,7 +9,8 @@ const ALLOWED = {
   'test/desktop-e2e-harness.test.js:648:20': "describe.skipIf(process.platform === 'win32')('desktop-ci payload extraction')",
   'test/desktop-e2e-harness.test.js:814:20': "describe.skipIf(process.platform === 'win32')('cleanup failure accounting')",
   'test/desktop-e2e-harness.test.js:830:20': "describe.skipIf(process.platform === 'win32')('cleanup failure accounting')",
-  'test/desktop-e2e-harness.test.js:861:24': "describe.skipIf(process.platform === 'win32')('cleanup failure accounting')",
+  'test/desktop-e2e-harness.test.js:856:19': "describe.skipIf(process.platform === 'win32')('cleanup failure accounting')",
+  'test/desktop-e2e-harness.test.js:883:24': "describe.skipIf(process.platform === 'win32')('cleanup failure accounting')",
   'test/nightly-workflow.test.js:12:18': "it.skipIf(process.platform === 'win32') on every runReportFallback caller",
 }
 

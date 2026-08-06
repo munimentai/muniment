@@ -207,10 +207,12 @@ sudo apt-get install -y -qq webkit2gtk-driver xvfb xdotool xdg-desktop-portal xd
 npm ci --no-audit --no-fund >>"$installer_log" 2>&1 || { status=1; exit; }
 release_binary=$(command -v muniment-desktop || command -v muniment) || { echo 'installed application binary is unavailable' >&2; status=1; exit; }
 node test/e2e/support/webdriver-release-guard.mjs absent "$release_binary" || { status=1; exit; }
-npm run tauri build -- --no-bundle --features e2e-webdriver --config src-tauri/tauri.e2e.conf.json >>"$installer_log" 2>&1 || { status=1; exit; }
+npm run tauri build -- --bundles deb --features e2e-webdriver --config src-tauri/tauri.e2e.conf.json >>"$installer_log" 2>&1 || { status=1; exit; }
 app_binary="$PWD/src-tauri/target/release/muniment-desktop"
 [[ -x $app_binary ]] || { echo 'E2E application binary is unavailable' >&2; status=1; exit; }
-node test/e2e/support/webdriver-release-guard.mjs present "$app_binary" || { status=1; exit; }
+e2e_deb=$(find "$PWD/src-tauri/target/release/bundle/deb" -maxdepth 1 -type f -name '*.deb' -print -quit)
+[[ -n $e2e_deb ]] || { echo 'E2E DEB is unavailable' >&2; status=1; exit; }
+bash test/e2e/support/webdriver-artifact-guard.sh present "$e2e_deb" || { status=1; exit; }
 [[ -x /usr/lib/muniment/muniment-acp ]] || { echo 'installed ACP adapter is unavailable or not executable' >&2; status=1; exit; }
 node test/e2e/support/probe-installed-adapter.mjs /usr/lib/muniment/muniment-acp || { echo 'installed ACP adapter initialize probe failed' >&2; status=1; exit; }
 [[ -x /usr/lib/muniment/muniment-runtime ]] || { echo 'installed runtime is unavailable or not executable' >&2; status=1; exit; }

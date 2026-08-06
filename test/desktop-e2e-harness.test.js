@@ -832,7 +832,29 @@ describe.skipIf(process.platform === 'win32')('cleanup failure accounting', () =
   }
   it('checks the installed release before selecting the feature build', () => {
     expect(runner).toContain('release_binary=$(command -v muniment-desktop || command -v muniment)')
-    expect(runner.indexOf('webdriver-release-guard.mjs absent')).toBeLessThan(runner.indexOf('webdriver-release-guard.mjs present'))
+    expect(runner.indexOf('webdriver-release-guard.mjs absent')).toBeLessThan(runner.indexOf('webdriver-artifact-guard.sh present'))
+  })
+  it('finds a WebDriver marker inside a compressed DEB payload', () => {
+    const fixture = temp()
+    const payload = path.join(fixture, 'payload')
+    const packageRoot = path.join(fixture, 'package')
+    fs.mkdirSync(path.join(payload, 'usr', 'bin'), { recursive: true })
+    fs.mkdirSync(packageRoot)
+    fs.writeFileSync(path.join(payload, 'usr', 'bin', 'muniment-desktop'), 'TAURI_WEBDRIVER_PORT')
+    fs.writeFileSync(path.join(packageRoot, 'debian-binary'), '2.0\n')
+    const data = spawnSync('tar', ['-czf', path.join(packageRoot, 'data.tar.gz'), '-C', payload, '.'], { encoding: 'utf8' })
+    expect(data.status, data.stderr).toBe(0)
+    const controlRoot = path.join(fixture, 'control')
+    fs.mkdirSync(controlRoot)
+    fs.writeFileSync(path.join(controlRoot, 'control'), 'Package: muniment\nVersion: 1.0.0\nArchitecture: amd64\n')
+    const control = spawnSync('tar', ['-czf', path.join(packageRoot, 'control.tar.gz'), '-C', controlRoot, '.'], { encoding: 'utf8' })
+    expect(control.status, control.stderr).toBe(0)
+    const deb = path.join(fixture, 'muniment.deb')
+    const archive = spawnSync('ar', ['r', deb, 'debian-binary', 'control.tar.gz', 'data.tar.gz'], { cwd: packageRoot, encoding: 'utf8' })
+    expect(archive.status, archive.stderr).toBe(0)
+
+    const guard = spawnSync('bash', [path.join(root, 'test/e2e/support/webdriver-artifact-guard.sh'), 'present', deb], { cwd: root, encoding: 'utf8' })
+    expect(guard.status, guard.stderr).toBe(0)
   })
   it.each([
     ['successful run', {}, 0],
