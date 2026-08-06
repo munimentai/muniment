@@ -151,12 +151,12 @@ describe('nightly macOS E2E workflow', () => {
     expect(macosE2e).toContain('--collect-artifacts --screendump')
   })
 
-  it('validates the pinned SHA and sends no sign-in fixture credentials', () => {
+  it('validates the pinned SHA and sends the sign-in fixture credentials', () => {
     expect(macosE2e).toContain('^[0-9a-f]{40}$')
-    expect(macosE2e).not.toContain('DESKTOP_E2E_USERNAME')
-    expect(macosE2e).not.toContain('DESKTOP_E2E_PASSWORD')
-    expect(macosE2e).not.toContain('MUNIMENT_E2E_USERNAME')
-    expect(macosE2e).not.toContain('MUNIMENT_E2E_PASSWORD')
+    expect(macosE2e).toContain('DESKTOP_E2E_USERNAME')
+    expect(macosE2e).toContain('DESKTOP_E2E_PASSWORD')
+    expect(macosE2e).toContain('MUNIMENT_E2E_USERNAME')
+    expect(macosE2e).toContain('MUNIMENT_E2E_PASSWORD')
   })
 
   it('publishes diagnostics and a stable JUnit report with the required retention', () => {

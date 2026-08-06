@@ -40,7 +40,7 @@ index_failure_artifacts() {
 }
 
 run_e2e() {
-  local wdio_log=$1 driver_log=$2 run_timeout=${3:-0} run_status=0 portal_log="$raw/xdg-desktop-portal.log"
+  local wdio_log=$1 run_timeout=${2:-0} run_status=0 portal_log="$raw/xdg-desktop-portal.log"
   local -a session=(dbus-run-session -- xvfb-run -a bash -c '
     portal=$(command -v xdg-desktop-portal || true)
     if [[ -z $portal ]]; then
@@ -51,19 +51,16 @@ run_e2e() {
     [[ -n $portal ]] || { echo "xdg-desktop-portal is unavailable" >&2; exit 1; }
     "$portal" >>"$1" 2>&1 &
     portal_pid=$!
-    tauri-driver --port 4444 >"$2" 2>&1 &
-    driver_pid=$!
     cleanup_session() {
-      kill "$driver_pid" "$portal_pid" 2>/dev/null || true
-      wait "$driver_pid" "$portal_pid" 2>/dev/null || true
+      kill "$portal_pid" 2>/dev/null || true
+      wait "$portal_pid" 2>/dev/null || true
     }
     trap cleanup_session EXIT
     timeout 30 gdbus wait --session --activate org.freedesktop.portal.Documents org.freedesktop.portal.Documents || { echo "xdg-document-portal did not start" >&2; exit 1; }
     timeout 30 gdbus wait --session org.freedesktop.portal.Desktop || exit 1
-    timeout 30 bash -c '\''until (: >/dev/tcp/127.0.0.1/4444) 2>/dev/null; do sleep 0.2; done'\'' || exit 1
-    shift 2
+    shift
     "$@"
-  ' bash "$portal_log" "$driver_log" npm run test:e2e)
+  ' bash "$portal_log" npm run test:e2e)
   if (( run_timeout > 0 )); then
     timeout "$run_timeout" "${session[@]}" >"$wdio_log" 2>&1 || run_status=$?
   else
@@ -73,12 +70,11 @@ run_e2e() {
     echo 'xdg-document-portal failed to initialize FUSE' >&2
     run_status=1
   fi
-  stop_matching '[t]auri-driver' || run_status=1
   return "$run_status"
 }
 
 run_cleanup_e2e() {
-  MUNIMENT_E2E_CLEANUP_ONLY=1 run_e2e "$raw/wdio-cleanup.log" "$raw/driver-cleanup.log" 45
+  MUNIMENT_E2E_CLEANUP_ONLY=1 run_e2e "$raw/wdio-cleanup.log" 45
 }
 
 emit_artifacts() {
@@ -133,16 +129,14 @@ finalize() {
   # Clear stale automation before opening the bounded recovery session, while
   # retaining the app, browser driver, and state that recovery needs.
   cleanup_step stop-wdio stop_matching '[w]dio.*test/e2e/wdio.conf.js'
-  cleanup_step stop-driver stop_matching '[t]auri-driver'
-  # Launch a fresh external-driver session against the same app state. This is
+  # Launch a fresh embedded-driver session against the same app state. This is
   # bounded and idempotent, and still runs if the main WDIO process crashed.
   if (( ready )); then cleanup_step revoke-session run_cleanup_e2e; fi
-  cleanup_step stop-browser-driver stop_matching '[c]hromedriver.*9515'
   cleanup_step stop-app bash -c "pkill -f '(^|/)muniment-desktop( |$)' 2>/dev/null || true; pkill -x muniment 2>/dev/null || true; ! pgrep -f '(^|/)muniment-desktop( |$)' >/dev/null && ! pgrep -x muniment >/dev/null"
   if (( installed )); then cleanup_step remove-package sudo apt-get remove -y muniment; fi
   cleanup_step remove-state rm -rf -- "$state_root"
   cleanup_step package-gone package_absent
-  cleanup_step processes-gone bash -c "! pgrep -f '(^|/)muniment-desktop( |$)' && ! pgrep -x muniment && ! pgrep -f '[t]auri-driver' && ! pgrep -f '[c]hromedriver.*9515' && ! pgrep -f '[w]dio.*test/e2e/wdio.conf.js'"
+  cleanup_step processes-gone bash -c "! pgrep -f '(^|/)muniment-desktop( |$)' && ! pgrep -x muniment && ! pgrep -f '[w]dio.*test/e2e/wdio.conf.js'"
   cleanup_step state-gone cleanup_absent "$state_root"
 
   cleanup_step stage-cleanup-log cp "$cleanup_log" "$raw/cleanup.log"
@@ -208,28 +202,32 @@ gh api -H 'Accept: application/octet-stream' "repos/${GITHUB_REPOSITORY}/release
 
 sudo apt-get update -qq >>"$installer_log" 2>&1 || { status=1; exit; }
 installed=1
-sudo apt-get install -y -qq webkit2gtk-driver xvfb xdotool chromium chromium-driver xdg-desktop-portal xdg-desktop-portal-gtk fuse3 libglib2.0-bin "$deb" >>"$installer_log" 2>&1 || { status=1; exit; }
+sudo apt-get install -y -qq webkit2gtk-driver xvfb xdotool xdg-desktop-portal xdg-desktop-portal-gtk fuse3 libglib2.0-bin "$deb" >>"$installer_log" 2>&1 || { status=1; exit; }
 [[ -c /dev/fuse && -r /dev/fuse && -w /dev/fuse ]] || { echo 'FUSE device is unavailable to the runner user' >&2; status=1; exit; }
 npm ci --no-audit --no-fund >>"$installer_log" 2>&1 || { status=1; exit; }
-command -v tauri-driver >/dev/null || cargo install tauri-driver --version 2.0.5 --locked >>"$installer_log" 2>&1 || { status=1; exit; }
-app_binary=$(command -v muniment-desktop || command -v muniment) || { echo 'installed application binary is unavailable' >&2; status=1; exit; }
+release_binary=$(command -v muniment-desktop || command -v muniment) || { echo 'installed application binary is unavailable' >&2; status=1; exit; }
+node test/e2e/support/webdriver-release-guard.mjs absent "$release_binary" || { status=1; exit; }
+npm run tauri build -- --bundles deb --features e2e-webdriver --config src-tauri/tauri.e2e.conf.json >>"$installer_log" 2>&1 || { status=1; exit; }
+app_binary="$PWD/src-tauri/target/release/muniment-desktop"
+[[ -x $app_binary ]] || { echo 'E2E application binary is unavailable' >&2; status=1; exit; }
+e2e_deb=$(find "$PWD/src-tauri/target/release/bundle/deb" -maxdepth 1 -type f -name '*.deb' -print -quit)
+[[ -n $e2e_deb ]] || { echo 'E2E DEB is unavailable' >&2; status=1; exit; }
+bash test/e2e/support/webdriver-artifact-guard.sh present "$e2e_deb" || { status=1; exit; }
 [[ -x /usr/lib/muniment/muniment-acp ]] || { echo 'installed ACP adapter is unavailable or not executable' >&2; status=1; exit; }
 node test/e2e/support/probe-installed-adapter.mjs /usr/lib/muniment/muniment-acp || { echo 'installed ACP adapter initialize probe failed' >&2; status=1; exit; }
 [[ -x /usr/lib/muniment/muniment-runtime ]] || { echo 'installed runtime is unavailable or not executable' >&2; status=1; exit; }
 runtime_version=$(/usr/lib/muniment/muniment-runtime --version) || { echo 'installed runtime version probe failed' >&2; status=1; exit; }
 [[ -n $runtime_version ]] || { echo 'installed runtime version probe returned no version' >&2; status=1; exit; }
-chromedriver --port=9515 --allowed-ips=127.0.0.1 >>"$raw/chromedriver.log" 2>&1 &
 export MUNIMENT_E2E_APP_BINARY="$app_binary" MUNIMENT_E2E_RAW_DIR="$raw"
-export MUNIMENT_E2E_EXTERNAL_DRIVER=1
 export MUNIMENT_E2E_AUTH_URL_FILE="$auth_url_file" BROWSER="$PWD/test/e2e/support/browser-launcher.sh"
 export MUNIMENT_E2E_IMAGE_PATH="$image_fixture"
 ready=1
 # The per-phase XDG roots and MUNIMENT_E2E_ONBOARDING_ONLY separate the two phases.
 export XDG_DATA_HOME="$state_root/ready/data" XDG_CONFIG_HOME="$state_root/ready/config" XDG_CACHE_HOME="$state_root/ready/cache"
 export MUNIMENT_E2E_ONBOARDING_ONLY=1 MUNIMENT_E2E_HOME_PATH="$state_root/ready-home"
-run_e2e "$raw/wdio-onboarding.log" "$raw/driver-onboarding.log" || status=1
+run_e2e "$raw/wdio-onboarding.log" || status=1
 unset MUNIMENT_E2E_ONBOARDING_ONLY
 export XDG_DATA_HOME="$state_root/degraded/data" XDG_CONFIG_HOME="$state_root/degraded/config" XDG_CACHE_HOME="$state_root/degraded/cache"
 export MUNIMENT_E2E_HOME_PATH="$state_root/degraded-home"
-run_e2e "$raw/wdio.log" "$raw/driver-app.log" || status=1
+run_e2e "$raw/wdio.log" || status=1
 exit

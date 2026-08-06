@@ -3,7 +3,6 @@ import { execFileSync, spawn, spawnSync } from 'node:child_process'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { startWebDriver } from '@wdio/utils'
 
 const root = process.cwd()
 const temporary = []
@@ -147,41 +146,32 @@ describe('WDIO Tauri driver contract', () => {
     await expect(import('@wdio/tauri-service')).resolves.toBeDefined()
   }, 15_000)
 
-  it('keeps WebdriverIO in remote mode at the external Tauri driver endpoint', async () => {
+  it('uses the embedded WebDriver provider', async () => {
     const previousBinary = process.env.MUNIMENT_E2E_APP_BINARY
     const previousArtifacts = process.env.MUNIMENT_E2E_RAW_DIR
-    const previousExternalDriver = process.env.MUNIMENT_E2E_EXTERNAL_DRIVER
     process.env.MUNIMENT_E2E_APP_BINARY = path.join(root, 'muniment-test-binary')
     process.env.MUNIMENT_E2E_RAW_DIR = temp()
-    process.env.MUNIMENT_E2E_EXTERNAL_DRIVER = '1'
     try {
       const { config } = await import('./e2e/wdio.conf.js?endpoint-contract')
-      expect(config.capabilities).toEqual([{
-        'tauri:options': { application: process.env.MUNIMENT_E2E_APP_BINARY },
-      }])
-      expect(config.hostname).toBe('127.0.0.1')
-      expect(config.port).toBe(4444)
-      await expect(startWebDriver(config)).resolves.toBeUndefined()
-      expect(config.services).toEqual([])
+      expect(config.capabilities).toEqual([{ browserName: 'tauri' }])
+      expect(config.services[0][1]).toMatchObject({
+        appBinaryPath: process.env.MUNIMENT_E2E_APP_BINARY,
+        driverProvider: 'embedded',
+      })
     } finally {
       if (previousBinary === undefined) delete process.env.MUNIMENT_E2E_APP_BINARY
       else process.env.MUNIMENT_E2E_APP_BINARY = previousBinary
       if (previousArtifacts === undefined) delete process.env.MUNIMENT_E2E_RAW_DIR
       else process.env.MUNIMENT_E2E_RAW_DIR = previousArtifacts
-      if (previousExternalDriver === undefined) delete process.env.MUNIMENT_E2E_EXTERNAL_DRIVER
-      else process.env.MUNIMENT_E2E_EXTERNAL_DRIVER = previousExternalDriver
     }
   })
 
-  it('starts and waits for the external Tauri driver around every Linux WDIO run', () => {
+  it('runs every Linux phase without an external Tauri driver', () => {
     const runner = fs.readFileSync(path.join(root, 'test/e2e/runner/linux.sh'), 'utf8')
     const runE2e = runner.slice(runner.indexOf('run_e2e()'), runner.indexOf('\nemit_artifacts()'))
-    expect(runE2e).toMatch(/dbus-run-session[\s\S]+xdg-desktop-portal[\s\S]+tauri-driver --port 4444 >"\$2" 2>&1 &[\s\S]+npm run test:e2e/)
-    expect(runE2e).toContain('/dev/tcp/127.0.0.1/4444')
-    expect(runE2e.indexOf('/dev/tcp/127.0.0.1/4444')).toBeLessThan(runE2e.indexOf('npm run test:e2e'))
-    expect(runE2e).toContain("stop_matching '[t]auri-driver'")
-    expect(runner).toContain('export MUNIMENT_E2E_EXTERNAL_DRIVER=1')
-    expect(runner.match(/run_e2e .*driver-(?:onboarding|app|cleanup)\.log/g)).toHaveLength(3)
+    expect(runE2e).toMatch(/dbus-run-session[\s\S]+xdg-desktop-portal[\s\S]+npm run test:e2e/)
+    expect(runner).not.toMatch(/tauri-driver|4444|MUNIMENT_E2E_EXTERNAL_DRIVER/)
+    expect(runner.match(/run_e2e "\$raw\/wdio-(?:onboarding|cleanup)\.log"|run_e2e "\$raw\/wdio\.log"/g)).toHaveLength(3)
   })
 })
 
@@ -386,7 +376,7 @@ describe('Windows finalizer contract', { timeout: 30_000 }, () => { // A PowerSh
     expect(finalizer).toMatch(/registration-gone[^\n]+Get-ProductRegistration/)
     expect(finalizer).toMatch(/installed-files-gone[^\n]+Test-Path -LiteralPath \$installDirectory/)
     expect(finalizer).toMatch(/processes-gone[\s\S]+Get-HarnessProcesses/)
-    expect(runner).toMatch(/function Get-HarnessProcesses[\s\S]+Get-Process muniment, tauri-driver, msedgedriver/)
+    expect(runner).toMatch(/function Get-HarnessProcesses[\s\S]+Get-Process muniment/)
     expect(finalizer).toMatch(/publicationStatus = \$cleanupStatus[\s\S]+cleanupStatus -ne \$publicationStatus[\s\S]+suppress-artifacts/)
   })
 
@@ -813,7 +803,7 @@ describe.skipIf(process.platform === 'win32')('desktop-ci payload extraction', (
 // This block runs a POSIX shell script, and Windows has no shell for it.
 describe.skipIf(process.platform === 'win32')('cleanup failure accounting', () => {
   const runner = fs.readFileSync(path.join(root, 'test/e2e/runner/linux.sh'), 'utf8')
-  const phases = ['stop-wdio', 'stop-driver', 'revoke-session', 'stop-browser-driver', 'stop-app', 'remove-package', 'remove-state', 'package-gone', 'processes-gone', 'state-gone', 'stage-cleanup-log', 'redact-artifacts', 'remove-raw', 'remove-package-file', 'remove-auth-url', 'replace-artifacts', 'publish-artifacts', 'suppress-artifacts', 'remove-safe', 'raw-gone', 'package-file-gone', 'auth-url-gone', 'safe-gone', 'remove-cleanup-log']
+  const phases = ['stop-wdio', 'revoke-session', 'stop-app', 'remove-package', 'remove-state', 'package-gone', 'processes-gone', 'state-gone', 'stage-cleanup-log', 'redact-artifacts', 'remove-raw', 'remove-package-file', 'remove-auth-url', 'replace-artifacts', 'publish-artifacts', 'suppress-artifacts', 'remove-safe', 'raw-gone', 'package-file-gone', 'auth-url-gone', 'safe-gone', 'remove-cleanup-log']
   const runFinalizer = (failed = '', extraEnv = {}) => {
     const dir = temp(); const ledger = path.join(dir, 'ledger'); const statusLedger = path.join(dir, 'status-ledger'); const artifacts = path.join(dir, 'artifacts')
     fs.mkdirSync(artifacts)
@@ -840,8 +830,31 @@ describe.skipIf(process.platform === 'win32')('cleanup failure accounting', () =
     const result = spawnSync('bash', [path.join(root, 'test/e2e/support/extract-artifacts.sh'), output, extracted], { encoding: 'utf8' })
     return { result, extracted }
   }
-  it('prefers the packaged binary name and retains the legacy fallback', () => {
-    expect(runner).toContain('app_binary=$(command -v muniment-desktop || command -v muniment)')
+  it('checks the installed release before selecting the feature build', () => {
+    expect(runner).toContain('release_binary=$(command -v muniment-desktop || command -v muniment)')
+    expect(runner.indexOf('webdriver-release-guard.mjs absent')).toBeLessThan(runner.indexOf('webdriver-artifact-guard.sh present'))
+  })
+  it('finds a WebDriver marker inside a compressed DEB payload', () => {
+    const fixture = temp()
+    const payload = path.join(fixture, 'payload')
+    const packageRoot = path.join(fixture, 'package')
+    fs.mkdirSync(path.join(payload, 'usr', 'bin'), { recursive: true })
+    fs.mkdirSync(packageRoot)
+    fs.writeFileSync(path.join(payload, 'usr', 'bin', 'muniment-desktop'), 'TAURI_WEBDRIVER_PORT')
+    fs.writeFileSync(path.join(packageRoot, 'debian-binary'), '2.0\n')
+    const data = spawnSync('tar', ['-czf', path.join(packageRoot, 'data.tar.gz'), '-C', payload, '.'], { encoding: 'utf8' })
+    expect(data.status, data.stderr).toBe(0)
+    const controlRoot = path.join(fixture, 'control')
+    fs.mkdirSync(controlRoot)
+    fs.writeFileSync(path.join(controlRoot, 'control'), 'Package: muniment\nVersion: 1.0.0\nArchitecture: amd64\n')
+    const control = spawnSync('tar', ['-czf', path.join(packageRoot, 'control.tar.gz'), '-C', controlRoot, '.'], { encoding: 'utf8' })
+    expect(control.status, control.stderr).toBe(0)
+    const deb = path.join(fixture, 'muniment.deb')
+    const archive = spawnSync('ar', ['r', deb, 'debian-binary', 'control.tar.gz', 'data.tar.gz'], { cwd: packageRoot, encoding: 'utf8' })
+    expect(archive.status, archive.stderr).toBe(0)
+
+    const guard = spawnSync('bash', [path.join(root, 'test/e2e/support/webdriver-artifact-guard.sh'), 'present', deb], { cwd: root, encoding: 'utf8' })
+    expect(guard.status, guard.stderr).toBe(0)
   })
   it.each([
     ['successful run', {}, 0],
@@ -903,15 +916,13 @@ describe.skipIf(process.platform === 'win32')('cleanup failure accounting', () =
     const { result, entries, invoked } = runFinalizer()
     const command = commands(entries)
     expect(result.status).toBe(0)
-    expect(invoked.slice(0, 5)).toEqual(['stop-wdio', 'stop-driver', 'revoke-session', 'stop-browser-driver', 'stop-app'])
+    expect(invoked.slice(0, 5)).toEqual(['stop-wdio', 'revoke-session', 'stop-app', 'remove-package', 'remove-state'])
     expect(command['stop-wdio']).toBe("stop_matching \\[w\\]dio.\\\*test/e2e/wdio.conf.js ")
-    expect(command['stop-driver']).toBe("stop_matching \\[t\\]auri-driver ")
     expect(command['revoke-session']).toBe('run_cleanup_e2e ')
-    expect(command['stop-browser-driver']).toBe("stop_matching \\[c\\]hromedriver.\\\*9515 ")
     expect(command['stop-app']).toBe("bash -c pkill\\ -f\\ \\\'\\(\\^\\|/\\)muniment-desktop\\(\\ \\|\\\$\\)\\\'\\ 2\\\>/dev/null\\ \\|\\|\\ true\\\;\\ pkill\\ -x\\ muniment\\ 2\\\>/dev/null\\ \\|\\|\\ true\\\;\\ \\!\\ pgrep\\ -f\\ \\\'\\(\\^\\|/\\)muniment-desktop\\(\\ \\|\\\$\\)\\\'\\ \\>/dev/null\\ \\&\\&\\ \\!\\ pgrep\\ -x\\ muniment\\ \\>/dev/null ")
     expect(command['remove-package']).toBe('sudo apt-get remove -y muniment ')
     expect(command['package-gone']).toBe('package_absent ')
-    expect(command['processes-gone']).toBe("bash -c \\!\\ pgrep\\ -f\\ \\\'\\(\\^\\|/\\)muniment-desktop\\(\\ \\|\\\$\\)\\\'\\ \\&\\&\\ \\!\\ pgrep\\ -x\\ muniment\\ \\&\\&\\ \\!\\ pgrep\\ -f\\ \\\'\\\[t\\\]auri-driver\\\'\\ \\&\\&\\ \\!\\ pgrep\\ -f\\ \\\'\\\[c\\\]hromedriver.\\\*9515\\\'\\ \\&\\&\\ \\!\\ pgrep\\ -f\\ \\\'\\\[w\\\]dio.\\\*test/e2e/wdio.conf.js\\\' ")
+    expect(command['processes-gone']).toBe("bash -c \\!\\ pgrep\\ -f\\ \\\'\\(\\^\\|/\\)muniment-desktop\\(\\ \\|\\\$\\)\\\'\\ \\&\\&\\ \\!\\ pgrep\\ -x\\ muniment\\ \\&\\&\\ \\!\\ pgrep\\ -f\\ \\\'\\\[w\\\]dio.\\\*test/e2e/wdio.conf.js\\\' ")
 
     const target = (label, operation) => {
       const match = command[label].match(new RegExp(`^${operation} ((?:/tmp/[^ ]+)) $`))
