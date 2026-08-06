@@ -13,11 +13,13 @@ mod onboarding_import;
 mod test_support;
 mod voice_capture;
 
+use muniment_core::attach::RuntimeActivityRegistry;
 use std::sync::Arc;
 use tauri::Manager;
 
 fn main() {
-    let builder = tauri::Builder::default();
+    let runtime_activity = RuntimeActivityRegistry::new();
+    let builder = tauri::Builder::default().manage(runtime_activity.clone());
     #[cfg(feature = "e2e-webdriver")]
     let builder = builder.plugin(tauri_plugin_wdio_webdriver::init());
 
@@ -29,8 +31,11 @@ fn main() {
         .manage(auth::AuthState::new())
         .manage(Arc::new(voice_capture::VoiceCaptureState::new()))
         .manage(attach_service::AttachApprovalState::default())
-        .setup(|app| {
-            app.manage(chat::ChatState::new(app.handle())?);
+        .setup(move |app| {
+            app.manage(chat::ChatState::new(
+                app.handle(),
+                runtime_activity.clone(),
+            )?);
             #[cfg(target_os = "linux")]
             attach_service::start_attach_listener(app.handle().clone());
             #[cfg(not(target_os = "linux"))]

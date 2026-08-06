@@ -10,6 +10,7 @@ use muniment_core::attach::linux::{
 };
 #[cfg(target_os = "linux")]
 use muniment_core::attach::ProtocolError;
+use muniment_core::attach::{RuntimeActivityGuard, RuntimeActivityRegistry};
 use muniment_core::attachment::{ingest_attachment, prepare_pi_images, AttachmentMetadata};
 use muniment_core::auth::TokenSet;
 use muniment_core::cas::LocalCas;
@@ -143,6 +144,7 @@ pub(crate) struct ActiveRun {
     pub(crate) transport: Arc<Mutex<Option<Arc<PiRpcTransport>>>>,
     pub(crate) adapter: Arc<Mutex<Option<Arc<PiRunAdapter>>>>,
     permission_answers: Arc<Mutex<VecDeque<PendingPermissionAnswer>>>,
+    _activity: RuntimeActivityGuard,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -200,6 +202,7 @@ pub struct ChatState {
     active: Mutex<Option<ActiveRun>>,
     runtime: Arc<Mutex<Option<PiRuntime>>>,
     pub(crate) session_thread: SessionThread,
+    runtime_activity: RuntimeActivityRegistry,
 }
 
 pub(crate) struct RunStartRequest {
@@ -223,6 +226,8 @@ pub(crate) struct RunStartLaunch {
 }
 
 pub(crate) trait RunStartBoundaries {
+    fn mark_active_run(&self) -> RuntimeActivityGuard;
+
     #[cfg(target_os = "linux")]
     fn list_threads(
         &self,
@@ -369,6 +374,7 @@ pub(crate) fn prepare_desktop_run(
         transport: Arc::clone(&transport),
         adapter: Arc::clone(&adapter),
         permission_answers: Arc::clone(&permission_answers),
+        _activity: boundaries.mark_active_run(),
     }) {
         boundaries.clear_active_run(&run_id);
         return Err(error);
@@ -427,6 +433,10 @@ impl<R: tauri::Runtime> TauriRunStartBoundaries<R> {
 }
 
 impl<R: tauri::Runtime> RunStartBoundaries for TauriRunStartBoundaries<R> {
+    fn mark_active_run(&self) -> RuntimeActivityGuard {
+        self.state().runtime_activity.mark_active_run()
+    }
+
     #[cfg(target_os = "linux")]
     fn list_threads(
         &self,
@@ -701,7 +711,10 @@ impl<R: tauri::Runtime> RunStartBoundaries for TauriRunStartBoundaries<R> {
 }
 
 impl ChatState {
-    pub fn new(app: &tauri::AppHandle) -> Result<Self, Box<dyn std::error::Error>> {
+    pub fn new(
+        app: &tauri::AppHandle,
+        runtime_activity: RuntimeActivityRegistry,
+    ) -> Result<Self, Box<dyn std::error::Error>> {
         let directory = app.path().app_data_dir()?;
         let profile = ChatProfile::new(directory);
         let (mut journal, cas) = profile.open_storage()?;
@@ -711,6 +724,7 @@ impl ChatState {
             active: Mutex::new(None),
             runtime: Arc::new(Mutex::new(None)),
             session_thread: SessionThread::default(),
+            runtime_activity,
         })
     }
 }
@@ -865,6 +879,7 @@ pub async fn chat_resume(
             transport: Arc::clone(&transport),
             adapter: Arc::clone(&adapter),
             permission_answers: Arc::clone(&permission_answers),
+            _activity: state.runtime_activity.mark_active_run(),
         },
     )?;
     let storage = Arc::clone(&state.storage);
@@ -1686,7 +1701,7 @@ mod tests {
         }
     }
 
-    fn inactive_transport_run(id: &str) -> ActiveRun {
+    fn inactive_transport_run(id: &str, runtime_activity: &RuntimeActivityRegistry) -> ActiveRun {
         ActiveRun {
             id: id.into(),
             workspace: "workspace-a".into(),
@@ -1694,6 +1709,7 @@ mod tests {
             transport: Arc::new(Mutex::new(None)),
             adapter: Arc::new(Mutex::new(None)),
             permission_answers: Arc::new(Mutex::new(VecDeque::new())),
+            _activity: runtime_activity.mark_active_run(),
         }
     }
 
@@ -2699,7 +2715,8 @@ mod tests {
 
     #[test]
     fn queue_rejects_mismatched_and_not_ready_runs_safely() {
-        let active = Mutex::new(Some(inactive_transport_run("run-1")));
+        let runtime_activity = RuntimeActivityRegistry::new();
+        let active = Mutex::new(Some(inactive_transport_run("run-1", &runtime_activity)));
         let request = |run_id: &str| ChatQueueRequest {
             run_id: run_id.into(),
             delivery: ChatDelivery::Steer,
@@ -2717,7 +2734,8 @@ mod tests {
 
     #[test]
     fn permission_answer_handoff_rejects_stale_runs_and_queues_typed_answers() {
-        let active = Mutex::new(Some(inactive_transport_run("run-1")));
+        let runtime_activity = RuntimeActivityRegistry::new();
+        let active = Mutex::new(Some(inactive_transport_run("run-1", &runtime_activity)));
         assert_eq!(
             queue_permission_answer(
                 &active,
@@ -2769,16 +2787,48 @@ mod tests {
     }
 
     #[test]
+    fn active_run_marks_runtime_activity_for_its_lifetime() {
+        let runtime_activity = RuntimeActivityRegistry::new();
+        let active = Mutex::new(None);
+        assert!(!runtime_activity.snapshot().active_run);
+
+        install_active_run(&active, inactive_transport_run("run-1", &runtime_activity)).unwrap();
+        assert!(runtime_activity.snapshot().active_run);
+
+        clear_active_run(&active, "run-1");
+        assert!(!runtime_activity.snapshot().active_run);
+    }
+
+    #[test]
+    fn sequential_active_runs_clear_runtime_activity() {
+        let runtime_activity = RuntimeActivityRegistry::new();
+        let active = Mutex::new(None);
+
+        for run_id in ["run-1", "run-2"] {
+            install_active_run(&active, inactive_transport_run(run_id, &runtime_activity)).unwrap();
+            assert!(runtime_activity.snapshot().active_run);
+            clear_active_run(&active, run_id);
+        }
+
+        assert!(!runtime_activity.snapshot().active_run);
+    }
+
+    #[test]
     fn concurrent_active_run_installs_allow_exactly_one_run() {
         let active = Arc::new(Mutex::new(None));
+        let runtime_activity = RuntimeActivityRegistry::new();
         let barrier = Arc::new(std::sync::Barrier::new(2));
         let handles: Vec<_> = (0..2)
             .map(|index| {
                 let active = Arc::clone(&active);
+                let runtime_activity = runtime_activity.clone();
                 let barrier = Arc::clone(&barrier);
                 std::thread::spawn(move || {
                     barrier.wait();
-                    install_active_run(&active, inactive_transport_run(&format!("run-{index}")))
+                    install_active_run(
+                        &active,
+                        inactive_transport_run(&format!("run-{index}"), &runtime_activity),
+                    )
                 })
             })
             .collect();
