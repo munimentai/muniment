@@ -3,7 +3,7 @@
 use muniment_core::attach::linux::AttachFilesystem;
 use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
-use std::process::{Child, Command, Output};
+use std::process::{Child, Command, Output, Stdio};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 const WAIT_TIMEOUT_ENV: &str = "MUNIMENT_RUNTIME_TEST_WAIT_TIMEOUT_MS";
@@ -61,7 +61,8 @@ fn waits_for_the_instance_lock_then_acquires_it_after_release() {
     let runtime = RuntimeDirectory::new();
     let filesystem = AttachFilesystem::from_runtime_directory(&runtime.0).unwrap();
     let lock = filesystem.acquire_instance_lock().unwrap();
-    let mut child = runtime.exit_after_lock_command(2_000).spawn().unwrap();
+    let mut command = runtime.exit_after_lock_command(2_000);
+    let mut child = command.stderr(Stdio::piped()).spawn().unwrap();
 
     std::thread::sleep(Duration::from_millis(150));
     assert!(child.try_wait().unwrap().is_none());
@@ -69,6 +70,10 @@ fn waits_for_the_instance_lock_then_acquires_it_after_release() {
 
     let output = wait_for_exit(child, Duration::from_secs(3));
     assert!(output.status.success());
+    assert_eq!(
+        String::from_utf8(output.stderr).unwrap(),
+        "muniment-runtime: waiting for the instance lock\n"
+    );
 }
 
 #[test]
