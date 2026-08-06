@@ -899,7 +899,6 @@ items as labeled data fields:
 - organization working-context blurb
 - granted capabilities, one line each
 - hard policy constraints
-- memory index
 
 The organization working-context blurb is **org-admin-editable** and
 length-capped. It is the organization-scope sibling of user memory and
@@ -917,3 +916,48 @@ audit trail.
   prose.
 - Aesthetic preferences, domain guidance, and task-specific context remain in
   the lazily loaded `AGENTS.md`, memory, and skill layers.
+
+## 17. Memory index and retrieval
+
+The Muniment Home remains human-readable while the runtime can find relevant
+facts without loading the Home into every request. These rules are binding.
+
+1. **Files are the source of truth.** The index is a rebuildable cache.
+   Deleting it loses no memory, and no hidden directory may become the primary
+   store.
+2. **Retrieved memory enters the model only through a tool result.** The
+   runtime declares one memory-search tool. The agent calls it when it needs a
+   fact. Memory never enters the system prompt.
+3. **The tool set stays fixed during a conversation.** The runtime declares
+   the memory-search tool when the session opens. It never adds or removes a
+   tool during that conversation because either change discards the cached
+   prefix.
+4. **Every retrieval is capped.** The defaults are five items, a character
+   budget equal to the model capability record's
+   `minimum_cacheable_prefix_characters` value, and a 250 ms timeout. A request
+   may lower any cap but may not exceed the configured limits.
+5. **Selection stays stable within a thread.** The same query in the same
+   thread returns the same set until an underlying file changes. Ranking does
+   not churn between turns.
+6. **The model capability record sets the character budget.** The runtime
+   reads `minimum_cacheable_prefix_characters` for the selected model. It never
+   uses a fixed fallback. Cacheable-prefix limits differ by model, do not
+   shrink monotonically across generations, and follow the customer-selected
+   model under BYOK.
+7. **Every memory write filters secrets.** A component that writes a memory
+   record rejects credentials, API keys, and tokens before it changes a file.
+   This applies to imports, agent writes, and every later write path.
+8. **Every recall has a receipt.** The receipt records the returned file paths,
+   item cap, character budget, timeout, query, thread, and source-file state.
+   Each returned fact therefore traces to a visible file.
+
+### Deliberately not doing
+
+- **No local model answers.** Classification and generation remain on their
+  current paths.
+- **No graph memory.** It needs a model call during each write and hides
+  provenance.
+- **No automatic Markdown rewriting.** It spends customer tokens under BYOK
+  and silently changes human-editable truth.
+- **No Muniment-built sync.** The Home uses the user's existing sync.
+- **No embeddings in phase one.** Phase one uses lexical search only.
