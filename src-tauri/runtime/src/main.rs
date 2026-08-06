@@ -6,6 +6,7 @@ use std::time::{Duration, Instant};
 #[cfg(target_os = "linux")]
 const INITIAL_WAIT_INTERVAL: Duration = Duration::from_millis(25);
 // Limit lock polling to one wakeup every two seconds during long waits.
+#[cfg(target_os = "linux")]
 const MAX_WAIT_INTERVAL: Duration = Duration::from_secs(2);
 #[cfg(target_os = "linux")]
 const WAIT_TIMEOUT_ENV: &str = "MUNIMENT_RUNTIME_TEST_WAIT_TIMEOUT_MS";
