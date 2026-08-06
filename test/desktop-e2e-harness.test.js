@@ -3,7 +3,6 @@ import { execFileSync, spawn, spawnSync } from 'node:child_process'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { startWebDriver } from '@wdio/utils'
 
 const root = process.cwd()
 const temporary = []
@@ -32,7 +31,7 @@ describe('installed onboarding spec contract', () => {
 
   it('drives the Home dialog without a production mock transport', () => {
     expect(onboardingSpec).not.toContain('browser.tauri.mock')
-    expect(onboardingSpec).toContain("run('xdotool'")
+    expect(onboardingSpec).toContain('chooseFolder(')
   })
 })
 
@@ -147,41 +146,32 @@ describe('WDIO Tauri driver contract', () => {
     await expect(import('@wdio/tauri-service')).resolves.toBeDefined()
   }, 15_000)
 
-  it('keeps WebdriverIO in remote mode at the external Tauri driver endpoint', async () => {
+  it('uses the embedded WebDriver provider', async () => {
     const previousBinary = process.env.MUNIMENT_E2E_APP_BINARY
     const previousArtifacts = process.env.MUNIMENT_E2E_RAW_DIR
-    const previousExternalDriver = process.env.MUNIMENT_E2E_EXTERNAL_DRIVER
     process.env.MUNIMENT_E2E_APP_BINARY = path.join(root, 'muniment-test-binary')
     process.env.MUNIMENT_E2E_RAW_DIR = temp()
-    process.env.MUNIMENT_E2E_EXTERNAL_DRIVER = '1'
     try {
       const { config } = await import('./e2e/wdio.conf.js?endpoint-contract')
-      expect(config.capabilities).toEqual([{
-        'tauri:options': { application: process.env.MUNIMENT_E2E_APP_BINARY },
-      }])
-      expect(config.hostname).toBe('127.0.0.1')
-      expect(config.port).toBe(4444)
-      await expect(startWebDriver(config)).resolves.toBeUndefined()
-      expect(config.services).toEqual([])
+      expect(config.capabilities).toEqual([{ browserName: 'tauri' }])
+      expect(config.services[0][1]).toMatchObject({
+        appBinaryPath: process.env.MUNIMENT_E2E_APP_BINARY,
+        driverProvider: 'embedded',
+      })
     } finally {
       if (previousBinary === undefined) delete process.env.MUNIMENT_E2E_APP_BINARY
       else process.env.MUNIMENT_E2E_APP_BINARY = previousBinary
       if (previousArtifacts === undefined) delete process.env.MUNIMENT_E2E_RAW_DIR
       else process.env.MUNIMENT_E2E_RAW_DIR = previousArtifacts
-      if (previousExternalDriver === undefined) delete process.env.MUNIMENT_E2E_EXTERNAL_DRIVER
-      else process.env.MUNIMENT_E2E_EXTERNAL_DRIVER = previousExternalDriver
     }
   })
 
-  it('starts and waits for the external Tauri driver around every Linux WDIO run', () => {
+  it('runs every Linux phase without an external Tauri driver', () => {
     const runner = fs.readFileSync(path.join(root, 'test/e2e/runner/linux.sh'), 'utf8')
     const runE2e = runner.slice(runner.indexOf('run_e2e()'), runner.indexOf('\nemit_artifacts()'))
-    expect(runE2e).toContain('tauri-driver --port 4444 >"$driver_log" 2>&1 &')
-    expect(runE2e).toContain('/dev/tcp/127.0.0.1/4444')
-    expect(runE2e.indexOf('/dev/tcp/127.0.0.1/4444')).toBeLessThan(runE2e.indexOf('npm run test:e2e'))
-    expect(runE2e).toContain("stop_matching '[t]auri-driver'")
-    expect(runner).toContain('export MUNIMENT_E2E_EXTERNAL_DRIVER=1')
-    expect(runner.match(/run_e2e .*driver-(?:onboarding|app|cleanup)\.log/g)).toHaveLength(3)
+    expect(runE2e).toMatch(/dbus-run-session[\s\S]+xdg-desktop-portal[\s\S]+npm run test:e2e/)
+    expect(runner).not.toMatch(/tauri-driver|4444|MUNIMENT_E2E_EXTERNAL_DRIVER/)
+    expect(runner.match(/run_e2e "\$raw\/wdio-(?:onboarding|cleanup)\.log"|run_e2e "\$raw\/wdio\.log"/g)).toHaveLength(3)
   })
 })
 
@@ -227,7 +217,7 @@ describe('nightly asset identity', () => {
   })
 })
 
-describe('Windows auth URL capture seam', () => {
+describe('Windows auth URL capture seam', { timeout: 30_000 }, () => { // A PowerShell spawn costs about 3.5 seconds, and the slowest observed test took 6993ms.
   const capture = (candidate, initial = undefined) => {
     const directory = temp(); const destination = path.join(directory, 'auth-url')
     if (initial !== undefined) fs.writeFileSync(destination, initial)
@@ -371,10 +361,11 @@ describe.skipIf(process.platform === 'win32')('macOS installed launch harness', 
   })
 })
 
-describe('Windows finalizer contract', () => {
+describe('Windows finalizer contract', { timeout: 30_000 }, () => { // A PowerShell spawn costs about 3.5 seconds, and the slowest observed test took 6993ms.
   const runnerPath = path.join(root, 'test/e2e/runner/windows.ps1')
   const runner = fs.readFileSync(runnerPath, 'utf8')
-  const finalizer = runner.slice(runner.indexOf('function Finalize-Run'), runner.indexOf('\ntry {'))
+  const bodyBoundary = runner.indexOf('\ntry {\n  # desktop-ci')
+  const finalizer = runner.slice(runner.indexOf('function Finalize-Run'), bodyBoundary)
   const phases = [...finalizer.matchAll(/Invoke-Cleanup "([^"]+)"/g)].map((match) => match[1])
   const injectablePhases = [...new Set(phases)].filter((phase) => phase !== 'suppress-artifacts')
 
@@ -385,7 +376,7 @@ describe('Windows finalizer contract', () => {
     expect(finalizer).toMatch(/registration-gone[^\n]+Get-ProductRegistration/)
     expect(finalizer).toMatch(/installed-files-gone[^\n]+Test-Path -LiteralPath \$installDirectory/)
     expect(finalizer).toMatch(/processes-gone[\s\S]+Get-HarnessProcesses/)
-    expect(runner).toMatch(/function Get-HarnessProcesses[\s\S]+Get-Process muniment, tauri-driver, msedgedriver/)
+    expect(runner).toMatch(/function Get-HarnessProcesses[\s\S]+Get-Process muniment/)
     expect(finalizer).toMatch(/publicationStatus = \$cleanupStatus[\s\S]+cleanupStatus -ne \$publicationStatus[\s\S]+suppress-artifacts/)
   })
 
@@ -394,11 +385,15 @@ describe('Windows finalizer contract', () => {
     expect(runner).not.toContain('C:\\dci-artifacts')
   })
 
-  it('establishes try/finally before directory and cleanup-log creation', () => {
-    const boundary = runner.indexOf('\ntry {')
+  it('starts diagnostics before the guarded body creates staging directories', () => {
+    const boundary = bodyBoundary
+    expect(runner.indexOf('New-Item -ItemType Directory -Force $artifacts')).toBeLessThan(runner.indexOf('Start-Transcript'))
+    expect(runner.indexOf('Start-Transcript')).toBeLessThan(runner.indexOf('$ErrorActionPreference'))
+    expect(runner.indexOf('New-Item -ItemType Directory -Force $artifacts')).toBeLessThan(runner.indexOf('$ErrorActionPreference'))
     expect(runner.indexOf('New-Item -ItemType Directory -Force $raw, $stateRoot')).toBeGreaterThan(boundary)
     expect(runner.indexOf('New-Item -ItemType File -Force $cleanupLog')).toBeGreaterThan(boundary)
-    expect(runner).toMatch(/finally \{\s*Finalize-Run\s*\}/)
+    expect(runner).toContain('$diagnosticFile = Join-Path $artifacts "runner-failure.txt"')
+    expect(runner).toMatch(/catch \{[\s\S]+message:[\s\S]+category:[\s\S]+line:[\s\S]+Set-Content -LiteralPath \$diagnosticFile[\s\S]+Write-Output[\s\S]+finally \{/)
   })
 
   const runWindowsFinalizer = (failed = '', setupFail = '', extraEnv = {}) => {
@@ -414,6 +409,32 @@ describe('Windows finalizer contract', () => {
   }
 
   const runWindowsAbsenceFailure = (variable) => runWindowsFinalizer('', '', { [variable]: '1' })
+
+  it.skipIf(process.platform !== 'win32')('writes stdout when artifact directory creation fails', () => {
+    const directory = temp()
+    const blockedPath = path.join(directory, 'not-a-directory')
+    fs.writeFileSync(blockedPath, 'blocked')
+    const result = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', runnerPath], {
+      encoding: 'utf8',
+      env: { ...process.env, TEMP: directory, TMP: directory, DCI_ARTIFACTS_DIR: blockedPath },
+    })
+    expect(result.status).not.toBe(0)
+    expect(result.stdout).toContain('message:')
+    expect(result.stdout).toContain('category:')
+    expect(result.stdout).toMatch(/line: [1-9]\d*/)
+  })
+
+  it.skipIf(process.platform !== 'win32')('writes a diagnostic artifact and stdout when transcript startup fails', () => {
+    const directory = temp()
+    const artifacts = path.join(directory, 'artifacts')
+    const result = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', runnerPath], {
+      encoding: 'utf8',
+      env: { ...process.env, TEMP: directory, TMP: directory, DCI_ARTIFACTS_DIR: artifacts, MUNIMENT_E2E_BOOTSTRAP_TEST_FAIL: 'start-transcript' },
+    })
+    expect(result.status).not.toBe(0)
+    expect(result.stdout).toContain('message: injected Start-Transcript failure')
+    expect(fs.readFileSync(path.join(artifacts, 'runner-failure.txt'), 'utf8')).toContain('message: injected Start-Transcript failure')
+  })
 
   it.skipIf(process.platform !== 'win32')('passes all lifecycle absence actions after fixture uninstall', () => {
     const { result, statuses } = runWindowsFinalizer()
@@ -456,8 +477,14 @@ describe('Windows finalizer contract', () => {
   })
 
   it.skipIf(process.platform !== 'win32')('finalizes a failure during partial setup', () => {
-    const { result, invoked } = runWindowsFinalizer('', 'before-directories')
+    const { result, invoked, artifacts } = runWindowsFinalizer('', 'before-directories')
     expect(result.status).not.toBe(0)
+    expect(result.stdout).toContain('message: injected setup failure')
+    expect(result.stdout).toContain('dci: Windows runner transcript tail')
+    const diagnostic = fs.readFileSync(path.join(artifacts, 'runner-failure.txt'), 'utf8')
+    expect(diagnostic).toContain('message: injected setup failure')
+    expect(diagnostic).toMatch(/category: \w+/)
+    expect(diagnostic).toMatch(/line: [1-9]\d*/)
     expect(invoked).toContain('redact-artifacts')
     expect(invoked).toContain('suppress-artifacts')
     expect(invoked.at(-1)).toBe('suppress-artifacts')
@@ -474,11 +501,24 @@ describe('Windows finalizer contract', () => {
     expect(fs.readdirSync(directory).filter((name) => name.startsWith('muniment-e2e-'))).toEqual([])
   })
 
-  it.skipIf(process.platform !== 'win32')('destroys raw and safe staging after publication failure', () => {
+  it.skipIf(process.platform !== 'win32')('blocks a transcript that contains an injected secret', () => {
+    const plantedSecret = 'windows-planted-secret'
+    const { result, artifacts } = runWindowsFinalizer('', '', {
+      MUNIMENT_E2E_PASSWORD: plantedSecret,
+      MUNIMENT_E2E_FINALIZER_TEST_TRANSCRIPT_TEXT: plantedSecret,
+    })
+    expect(result.status).not.toBe(0)
+    expect(fs.readdirSync(artifacts).sort()).toEqual(['cleanup-status.log', 'envelope-reason.txt', 'redaction-failure.txt'])
+    expect(fs.readFileSync(path.join(artifacts, 'redaction-failure.txt'), 'utf8')).toContain('file: "runner-transcript.log"')
+    expect(fs.readFileSync(path.join(artifacts, 'redaction-failure.txt'), 'utf8')).not.toContain(plantedSecret)
+  })
+
+  it.skipIf(process.platform !== 'win32')('destroys staging and prints the transcript after publication failure', () => {
     const { result, artifacts, directory, invoked } = runWindowsFinalizer('publish-artifacts')
     expect(result.status).not.toBe(0)
     expect(invoked).toContain('suppress-artifacts')
-    expect(fs.existsSync(artifacts)).toBe(false)
+    expect(result.stdout).toContain('dci: Windows runner transcript tail')
+    expect(fs.readdirSync(artifacts)).toEqual([])
     expect(fs.readdirSync(directory).filter((name) => name.startsWith('muniment-e2e-'))).toEqual([])
   })
 })
@@ -503,12 +543,26 @@ describe('Windows nightly workflow gate', () => {
     expect(evaluate({ eventName: 'workflow_dispatch', platform: 'linux' })).toBe(false)
   })
 
+  it('runs a Windows-only dispatch when Linux skips', () => {
+    expect(evaluate({ eventName: 'workflow_dispatch', platform: 'windows', linux: 'skipped' })).toBe(true)
+  })
+
   it.each([
-    ['workflow_dispatch', 'windows', 'success', 'skipped'],
     ['schedule', undefined, 'failure', 'success'],
     ['schedule', undefined, 'success', 'skipped'],
   ])('does not run without the full serialized prerequisites', (eventName, platform, prepare, linux) => {
     expect(evaluate({ eventName, platform, prepare, linux })).toBe(false)
+  })
+})
+
+describe('JUnit infrastructure fallback', () => {
+  it.skipIf(process.platform === 'win32')('includes and escapes the captured runner reason', () => {
+    const artifacts = temp()
+    fs.writeFileSync(path.join(artifacts, 'runner-failure.txt'), 'message: setup <failed> & stopped\ncategory: InvalidOperation\nline: 42\n')
+    const result = spawnSync('bash', [path.join(root, 'test/e2e/support/ensure-junit-report.sh'), artifacts, 'installed-windows', '1', '1'], { encoding: 'utf8' })
+    expect(result.status, result.stderr).toBe(0)
+    const report = fs.readFileSync(path.join(artifacts, 'junit-infrastructure.xml'), 'utf8')
+    expect(report).toContain('desktop-ci did not return a valid artifact envelope: message: setup &lt;failed&gt; &amp; stopped category: InvalidOperation line: 42')
   })
 })
 
@@ -749,7 +803,7 @@ describe.skipIf(process.platform === 'win32')('desktop-ci payload extraction', (
 // This block runs a POSIX shell script, and Windows has no shell for it.
 describe.skipIf(process.platform === 'win32')('cleanup failure accounting', () => {
   const runner = fs.readFileSync(path.join(root, 'test/e2e/runner/linux.sh'), 'utf8')
-  const phases = ['stop-wdio', 'stop-driver', 'revoke-session', 'stop-browser-driver', 'stop-app', 'remove-package', 'remove-state', 'package-gone', 'processes-gone', 'state-gone', 'stage-cleanup-log', 'redact-artifacts', 'remove-raw', 'remove-package-file', 'remove-auth-url', 'replace-artifacts', 'publish-artifacts', 'suppress-artifacts', 'remove-safe', 'raw-gone', 'package-file-gone', 'auth-url-gone', 'safe-gone', 'remove-cleanup-log']
+  const phases = ['stop-wdio', 'revoke-session', 'stop-app', 'remove-package', 'remove-state', 'package-gone', 'processes-gone', 'state-gone', 'stage-cleanup-log', 'redact-artifacts', 'remove-raw', 'remove-package-file', 'remove-auth-url', 'replace-artifacts', 'publish-artifacts', 'suppress-artifacts', 'remove-safe', 'raw-gone', 'package-file-gone', 'auth-url-gone', 'safe-gone', 'remove-cleanup-log']
   const runFinalizer = (failed = '', extraEnv = {}) => {
     const dir = temp(); const ledger = path.join(dir, 'ledger'); const statusLedger = path.join(dir, 'status-ledger'); const artifacts = path.join(dir, 'artifacts')
     fs.mkdirSync(artifacts)
@@ -776,8 +830,31 @@ describe.skipIf(process.platform === 'win32')('cleanup failure accounting', () =
     const result = spawnSync('bash', [path.join(root, 'test/e2e/support/extract-artifacts.sh'), output, extracted], { encoding: 'utf8' })
     return { result, extracted }
   }
-  it('prefers the packaged binary name and retains the legacy fallback', () => {
-    expect(runner).toContain('app_binary=$(command -v muniment-desktop || command -v muniment)')
+  it('checks the installed release before selecting the feature build', () => {
+    expect(runner).toContain('release_binary=$(command -v muniment-desktop || command -v muniment)')
+    expect(runner.indexOf('webdriver-release-guard.mjs absent')).toBeLessThan(runner.indexOf('webdriver-artifact-guard.sh present'))
+  })
+  it('finds a WebDriver marker inside a compressed DEB payload', () => {
+    const fixture = temp()
+    const payload = path.join(fixture, 'payload')
+    const packageRoot = path.join(fixture, 'package')
+    fs.mkdirSync(path.join(payload, 'usr', 'bin'), { recursive: true })
+    fs.mkdirSync(packageRoot)
+    fs.writeFileSync(path.join(payload, 'usr', 'bin', 'muniment-desktop'), 'TAURI_WEBDRIVER_PORT')
+    fs.writeFileSync(path.join(packageRoot, 'debian-binary'), '2.0\n')
+    const data = spawnSync('tar', ['-czf', path.join(packageRoot, 'data.tar.gz'), '-C', payload, '.'], { encoding: 'utf8' })
+    expect(data.status, data.stderr).toBe(0)
+    const controlRoot = path.join(fixture, 'control')
+    fs.mkdirSync(controlRoot)
+    fs.writeFileSync(path.join(controlRoot, 'control'), 'Package: muniment\nVersion: 1.0.0\nArchitecture: amd64\n')
+    const control = spawnSync('tar', ['-czf', path.join(packageRoot, 'control.tar.gz'), '-C', controlRoot, '.'], { encoding: 'utf8' })
+    expect(control.status, control.stderr).toBe(0)
+    const deb = path.join(fixture, 'muniment.deb')
+    const archive = spawnSync('ar', ['r', deb, 'debian-binary', 'control.tar.gz', 'data.tar.gz'], { cwd: packageRoot, encoding: 'utf8' })
+    expect(archive.status, archive.stderr).toBe(0)
+
+    const guard = spawnSync('bash', [path.join(root, 'test/e2e/support/webdriver-artifact-guard.sh'), 'present', deb], { cwd: root, encoding: 'utf8' })
+    expect(guard.status, guard.stderr).toBe(0)
   })
   it.each([
     ['successful run', {}, 0],
@@ -839,15 +916,13 @@ describe.skipIf(process.platform === 'win32')('cleanup failure accounting', () =
     const { result, entries, invoked } = runFinalizer()
     const command = commands(entries)
     expect(result.status).toBe(0)
-    expect(invoked.slice(0, 5)).toEqual(['stop-wdio', 'stop-driver', 'revoke-session', 'stop-browser-driver', 'stop-app'])
+    expect(invoked.slice(0, 5)).toEqual(['stop-wdio', 'revoke-session', 'stop-app', 'remove-package', 'remove-state'])
     expect(command['stop-wdio']).toBe("stop_matching \\[w\\]dio.\\\*test/e2e/wdio.conf.js ")
-    expect(command['stop-driver']).toBe("stop_matching \\[t\\]auri-driver ")
     expect(command['revoke-session']).toBe('run_cleanup_e2e ')
-    expect(command['stop-browser-driver']).toBe("stop_matching \\[c\\]hromedriver.\\\*9515 ")
     expect(command['stop-app']).toBe("bash -c pkill\\ -f\\ \\\'\\(\\^\\|/\\)muniment-desktop\\(\\ \\|\\\$\\)\\\'\\ 2\\\>/dev/null\\ \\|\\|\\ true\\\;\\ pkill\\ -x\\ muniment\\ 2\\\>/dev/null\\ \\|\\|\\ true\\\;\\ \\!\\ pgrep\\ -f\\ \\\'\\(\\^\\|/\\)muniment-desktop\\(\\ \\|\\\$\\)\\\'\\ \\>/dev/null\\ \\&\\&\\ \\!\\ pgrep\\ -x\\ muniment\\ \\>/dev/null ")
     expect(command['remove-package']).toBe('sudo apt-get remove -y muniment ')
     expect(command['package-gone']).toBe('package_absent ')
-    expect(command['processes-gone']).toBe("bash -c \\!\\ pgrep\\ -f\\ \\\'\\(\\^\\|/\\)muniment-desktop\\(\\ \\|\\\$\\)\\\'\\ \\&\\&\\ \\!\\ pgrep\\ -x\\ muniment\\ \\&\\&\\ \\!\\ pgrep\\ -f\\ \\\'\\\[t\\\]auri-driver\\\'\\ \\&\\&\\ \\!\\ pgrep\\ -f\\ \\\'\\\[c\\\]hromedriver.\\\*9515\\\'\\ \\&\\&\\ \\!\\ pgrep\\ -f\\ \\\'\\\[w\\\]dio.\\\*test/e2e/wdio.conf.js\\\' ")
+    expect(command['processes-gone']).toBe("bash -c \\!\\ pgrep\\ -f\\ \\\'\\(\\^\\|/\\)muniment-desktop\\(\\ \\|\\\$\\)\\\'\\ \\&\\&\\ \\!\\ pgrep\\ -x\\ muniment\\ \\&\\&\\ \\!\\ pgrep\\ -f\\ \\\'\\\[w\\\]dio.\\\*test/e2e/wdio.conf.js\\\' ")
 
     const target = (label, operation) => {
       const match = command[label].match(new RegExp(`^${operation} ((?:/tmp/[^ ]+)) $`))
@@ -912,5 +987,102 @@ describe('installed ACP adapter contract', () => {
     expect(runner).toContain(probe)
     expect(runner.indexOf(executableCheck)).toBeLessThan(runner.indexOf(probe))
     expect(runner).toContain("echo 'installed ACP adapter initialize probe failed' >&2")
+  })
+})
+
+describe('folder dialog diagnostics', () => {
+  it('records the searched title and visible windows after a timeout', async () => {
+    const raw = temp()
+    const title = '(Choose).*([Ff]older)'
+    const timeoutError = Object.assign(new Error('dialog wait timed out'), { code: 124 })
+    const execute = async (command, args) => {
+      if (command === 'timeout') throw timeoutError
+      if (args[0] === 'search') return { stdout: '101\n202\n' }
+      if (args.at(-1) === '101') return { stdout: 'Muniment\n' }
+      return { stdout: 'Choose a Folder\n' }
+    }
+    const { chooseFolder } = await import('./e2e/support/folder-dialog.mjs')
+    await expect(chooseFolder('/tmp/home', 30, title, raw, execute)).rejects.toBe(timeoutError)
+    expect(fs.readFileSync(path.join(raw, 'folder-picker-timeout.log'), 'utf8')).toBe([
+      `searched title: ${title}`,
+      'visible window titles:',
+      '101: Muniment',
+      '202: Choose a Folder',
+      '',
+    ].join('\n'))
+  })
+})
+
+describe('Windows native command contract', { timeout: 30_000 }, () => { // A PowerShell spawn costs about 3.5 seconds, and the slowest observed test took 6993ms.
+  it('routes native commands through the process helpers', () => {
+    const runner = fs.readFileSync(path.join(root, 'test/e2e/runner/windows.ps1'), 'utf8')
+    expect(runner).not.toMatch(/&\s+(?!\$Action\b)[^;\r\n|}]*\s\*>>/)
+    expect(runner).not.toMatch(/&\s+(?:npm(?:\.cmd)?|node(?:\.exe)?|gh(?:\.exe)?|cargo(?:\.exe)?|git(?:\.exe)?)(?=\s|$)/im)
+  })
+
+  it.skipIf(process.platform !== 'win32').each([
+    ['0', 0],
+    ['7', 1],
+  ])('gates a stderr-writing command on exit code %s', (exitCode, expectedStatus) => {
+    const directory = temp()
+    const artifacts = path.join(directory, 'artifacts')
+    const runner = path.join(root, 'test/e2e/runner/windows.ps1')
+    const result = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', runner], {
+      encoding: 'utf8',
+      env: { ...process.env, TEMP: directory, TMP: directory, DCI_ARTIFACTS_DIR: artifacts, MUNIMENT_E2E_NATIVE_COMMAND_TEST_EXIT_CODE: exitCode },
+    })
+    expect(result.status).toBe(expectedStatus)
+    expect(fs.readFileSync(path.join(artifacts, 'installer.log'), 'utf8')).toContain('native warning')
+  })
+
+  it.skipIf(process.platform !== 'win32')('fails when PowerShell cannot invoke the command', () => {
+    const directory = temp()
+    const artifacts = path.join(directory, 'artifacts')
+    const runner = path.join(root, 'test/e2e/runner/windows.ps1')
+    const result = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', runner], {
+      encoding: 'utf8',
+      env: { ...process.env, TEMP: directory, TMP: directory, DCI_ARTIFACTS_DIR: artifacts, MUNIMENT_E2E_NATIVE_COMMAND_TEST_INVOCATION_ERROR: '1' },
+    })
+    expect(result.status).toBe(1)
+    expect(fs.readFileSync(path.join(artifacts, 'installer.log'), 'utf8')).toContain('muniment-command-that-does-not-exist')
+  })
+
+  it.skipIf(process.platform !== 'win32')('does not resolve a command from the working directory', () => {
+    const directory = temp()
+    const artifacts = path.join(directory, 'artifacts')
+    const decoy = path.join(directory, 'npm.cmd')
+    const runner = path.join(root, 'test/e2e/runner/windows.ps1')
+    fs.writeFileSync(decoy, '@echo decoy\r\n')
+    const result = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', runner], {
+      cwd: directory,
+      encoding: 'utf8',
+      env: { ...process.env, TEMP: directory, TMP: directory, DCI_ARTIFACTS_DIR: artifacts, MUNIMENT_E2E_NATIVE_COMMAND_TEST_RESOLUTION: '1' },
+    })
+    expect(result.status).toBe(0)
+    const resolved = fs.readFileSync(path.join(artifacts, 'installer.log'), 'utf8').trim()
+    expect(path.isAbsolute(resolved)).toBe(true)
+    expect(path.resolve(resolved).toLowerCase()).not.toBe(path.resolve(decoy).toLowerCase())
+  })
+})
+
+describe('onboarding Home path assertion', () => {
+  it('accepts a matching DOM path when rendered text is empty', async () => {
+    const { homePathMatches } = await import('./e2e/support/home-path.mjs')
+    const location = {
+      getProperty: async () => '/tmp/isolated-home',
+      getText: async () => '',
+    }
+
+    expect(await homePathMatches(location, '/tmp/isolated-home')).toBe(true)
+  })
+
+  it('rejects a wrong DOM path', async () => {
+    const { homePathMatches } = await import('./e2e/support/home-path.mjs')
+    const location = {
+      getProperty: async () => '/tmp/wrong-home',
+      getText: async () => '/tmp/isolated-home',
+    }
+
+    expect(await homePathMatches(location, '/tmp/isolated-home')).toBe(false)
   })
 })

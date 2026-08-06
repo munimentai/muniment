@@ -14,6 +14,20 @@ const runReportFallback = (directory, suite, runStatus, extractStatus, createSuc
 }
 const publish = workflow.slice(workflow.indexOf('  publish:'), workflow.indexOf('  linux-e2e:'))
 const linuxE2e = workflow.slice(workflow.indexOf('  linux-e2e:'), workflow.indexOf('  windows-e2e:'))
+const job = (name, nextName) => workflow.slice(
+  workflow.indexOf(`  ${name}:`),
+  nextName ? workflow.indexOf(`  ${nextName}:`) : workflow.length,
+)
+const conditionFor = (jobText) => jobText.match(/    if: >-\n((?:      .+\n)+)/)[1].trim().replace(/\n\s*/g, ' ')
+const evaluateCondition = (condition, { eventName, platform, prepare = 'success', previous = {} }) => Function(
+  `"use strict"; return (${condition
+    .replace('always()', 'true')
+    .replaceAll('needs.prepare.result', JSON.stringify(prepare))
+    .replaceAll('needs.linux-e2e.result', JSON.stringify(previous.linux))
+    .replaceAll('needs.windows-e2e.result', JSON.stringify(previous.windows))
+    .replaceAll('github.event_name', JSON.stringify(eventName))
+    .replaceAll('github.event.inputs.platform', JSON.stringify(platform))})`,
+)()
 const jobCondition = linuxE2e.match(/    if: >-\n((?:      .+\n)+)/)[1].trim().replace(/\n\s*/g, ' ')
 const conditionResult = ({ eventName, platform, build, publish }) => {
   const expression = jobCondition
@@ -137,12 +151,12 @@ describe('nightly macOS E2E workflow', () => {
     expect(macosE2e).toContain('--collect-artifacts --screendump')
   })
 
-  it('validates the pinned SHA and sends no sign-in fixture credentials', () => {
+  it('validates the pinned SHA and sends the sign-in fixture credentials', () => {
     expect(macosE2e).toContain('^[0-9a-f]{40}$')
-    expect(macosE2e).not.toContain('DESKTOP_E2E_USERNAME')
-    expect(macosE2e).not.toContain('DESKTOP_E2E_PASSWORD')
-    expect(macosE2e).not.toContain('MUNIMENT_E2E_USERNAME')
-    expect(macosE2e).not.toContain('MUNIMENT_E2E_PASSWORD')
+    expect(macosE2e).toContain('DESKTOP_E2E_USERNAME')
+    expect(macosE2e).toContain('DESKTOP_E2E_PASSWORD')
+    expect(macosE2e).toContain('MUNIMENT_E2E_USERNAME')
+    expect(macosE2e).toContain('MUNIMENT_E2E_PASSWORD')
   })
 
   it('publishes diagnostics and a stable JUnit report with the required retention', () => {
@@ -152,6 +166,60 @@ describe('nightly macOS E2E workflow', () => {
     expect(macosE2e).toContain('ensure-junit-report.sh')
     expect(macosE2e).toContain('name: macos-e2e-report')
     expect(macosE2e).toContain('path: ${{ runner.temp }}/muniment-macos-e2e-artifacts/junit-*.xml')
+  })
+})
+
+describe('nightly targeted E2E dispatch', () => {
+  const lanes = [
+    ['linux', job('linux-e2e', 'windows-e2e')],
+    ['windows', job('windows-e2e', 'macos-e2e')],
+    ['macos', job('macos-e2e', 'verify-requested-e2e')],
+  ]
+
+  it.each(lanes)('accepts the %s platform in its job condition', (platform, lane) => {
+    expect(conditionFor(lane)).toContain(`github.event.inputs.platform == '${platform}'`)
+  })
+
+  it('runs targeted Windows and macOS jobs after earlier jobs skip', () => {
+    expect(evaluateCondition(conditionFor(lanes[1][1]), {
+      eventName: 'workflow_dispatch', platform: 'windows', previous: { linux: 'skipped' },
+    })).toBe(true)
+    expect(evaluateCondition(conditionFor(lanes[2][1]), {
+      eventName: 'workflow_dispatch', platform: 'macos', previous: { windows: 'skipped' },
+    })).toBe(true)
+  })
+
+  it('keeps all-platform jobs ordered through their dependencies and skip checks', () => {
+    const windows = lanes[1][1]
+    const macos = lanes[2][1]
+    expect(windows).toContain('needs: [prepare, linux-e2e]')
+    expect(conditionFor(windows)).toContain("github.event.inputs.platform == 'all'")
+    expect(conditionFor(windows)).toContain("needs.linux-e2e.result != 'skipped'")
+    expect(macos).toContain('needs: [prepare, windows-e2e]')
+    expect(conditionFor(macos)).toContain("github.event.inputs.platform == 'all'")
+    expect(conditionFor(macos)).toContain("needs.windows-e2e.result != 'skipped'")
+    expect(evaluateCondition(conditionFor(windows), {
+      eventName: 'workflow_dispatch', platform: 'all', previous: { linux: 'success' },
+    })).toBe(true)
+    expect(evaluateCondition(conditionFor(windows), {
+      eventName: 'workflow_dispatch', platform: 'all', previous: { linux: 'skipped' },
+    })).toBe(false)
+    expect(evaluateCondition(conditionFor(macos), {
+      eventName: 'workflow_dispatch', platform: 'all', previous: { windows: 'success' },
+    })).toBe(true)
+    expect(evaluateCondition(conditionFor(macos), {
+      eventName: 'workflow_dispatch', platform: 'all', previous: { windows: 'skipped' },
+    })).toBe(false)
+  })
+
+  it('fails a targeted dispatch when its requested E2E job was skipped', () => {
+    const verification = job('verify-requested-e2e', 'report-e2e-failure')
+    expect(verification).toContain('needs: [linux-e2e, windows-e2e, macos-e2e]')
+    expect(verification).toContain("if: always() && github.event_name == 'workflow_dispatch' && github.event.inputs.platform != 'all'")
+    expect(verification).toContain('if [ "$result" = "skipped" ]')
+    for (const platform of ['linux', 'windows', 'macos']) {
+      expect(verification).toContain(`${platform}) result="$${platform.toUpperCase()}_RESULT"`)
+    }
   })
 })
 

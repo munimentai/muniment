@@ -1,10 +1,24 @@
 param()
 
+try {
+  $artifacts = if ($env:DCI_ARTIFACTS_DIR) { $env:DCI_ARTIFACTS_DIR } else { Join-Path $env:TEMP "dci-artifacts" }
+  New-Item -ItemType Directory -Force $artifacts -ErrorAction Stop | Out-Null
+  $diagnosticFile = Join-Path $artifacts "runner-failure.txt"
+  $transcriptPath = Join-Path $env:TEMP "dci-windows-transcript.log"
+  if ($env:MUNIMENT_E2E_BOOTSTRAP_TEST_FAIL -eq "start-transcript") { throw "injected Start-Transcript failure" }
+  Start-Transcript -LiteralPath $transcriptPath -Force -ErrorAction SilentlyContinue | Out-Null
+} catch {
+  $bootstrapDiagnostic = "message: $($_.Exception.Message)`ncategory: $($_.CategoryInfo.Category)`nline: $($_.InvocationInfo.ScriptLineNumber)"
+  Write-Output $bootstrapDiagnostic
+  if ($diagnosticFile) { Set-Content -LiteralPath $diagnosticFile -Value $bootstrapDiagnostic -ErrorAction SilentlyContinue }
+  exit 1
+}
+$diagnostic = $null
+
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
 $ProgressPreference = "SilentlyContinue"
 
-$artifacts = $null
 $runRoot = $null
 $raw = $null
 $safe = $null
@@ -26,14 +40,67 @@ $handlerKey = "HKCU:\Software\Classes\muniment-e2e-https"
 $httpsKey = "HKCU:\Software\Classes\https"
 $testRegistration = $null
 $testProcess = $null
+$redactor = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot "../support/redact.mjs"))
 
 function Invoke-BoundedProcess([string]$File, [string]$Arguments, [int]$TimeoutSeconds, [string]$Log) {
-  $process = Start-Process $File -ArgumentList $Arguments -PassThru -RedirectStandardOutput $Log -RedirectStandardError ($Log + ".err")
-  if (-not $process.WaitForExit($TimeoutSeconds * 1000)) {
+  $errorLog = $Log + ".err"
+  $process = Start-Process $File -ArgumentList $Arguments -PassThru -RedirectStandardOutput $Log -RedirectStandardError $errorLog
+  $timedOut = -not $process.WaitForExit($TimeoutSeconds * 1000)
+  if ($timedOut) {
     Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
-    throw "$File timed out"
   }
+  $stopped = $process.WaitForExit(10000)
+  if (Test-Path -LiteralPath $errorLog) {
+    Get-Content -LiteralPath $errorLog | Add-Content -LiteralPath $Log
+    Remove-Item -LiteralPath $errorLog -Force
+  }
+  if ($timedOut -or -not $stopped) { throw "$File timed out" }
   if ($process.ExitCode -notin @(0, 3010)) { throw "$File failed with exit code $($process.ExitCode)" }
+}
+
+function Resolve-NativeCommand([string]$File, [string]$FailureMessage) {
+  try {
+    return (Get-Command $File -CommandType Application -ErrorAction Stop).Source
+  } catch {
+    throw "$FailureMessage`: could not resolve $File`: $($_.Exception.Message)"
+  }
+}
+
+function Invoke-NativeCommand([string]$File, [string]$Arguments, [string]$Log, [string]$FailureMessage, [string]$InputText = $null, [string]$ErrorLog = $null) {
+  $resolvedFile = Resolve-NativeCommand $File $FailureMessage
+  $startInfo = New-Object Diagnostics.ProcessStartInfo
+  if ([IO.Path]::GetExtension($resolvedFile) -eq ".cmd") {
+    $startInfo.FileName = $env:ComSpec
+    $startInfo.Arguments = "/d /s /c `"`"$resolvedFile`" $Arguments`""
+  } else {
+    $startInfo.FileName = $resolvedFile
+    $startInfo.Arguments = $Arguments
+  }
+  $startInfo.UseShellExecute = $false
+  $startInfo.CreateNoWindow = $true
+  $startInfo.RedirectStandardOutput = $true
+  $startInfo.RedirectStandardError = $true
+  $startInfo.RedirectStandardInput = $null -ne $InputText
+  $process = New-Object Diagnostics.Process
+  $process.StartInfo = $startInfo
+  try {
+    if (-not $process.Start()) { throw "the process did not start" }
+  } catch {
+    throw "$FailureMessage`: could not start $File`: $($_.Exception.Message)"
+  }
+  $stdoutTask = $process.StandardOutput.ReadToEndAsync()
+  $stderrTask = $process.StandardError.ReadToEndAsync()
+  if ($null -ne $InputText) {
+    $process.StandardInput.Write($InputText)
+    $process.StandardInput.Close()
+  }
+  $process.WaitForExit()
+  $stdout = $stdoutTask.Result
+  $stderr = $stderrTask.Result
+  if ($stdout) { Add-Content -LiteralPath $Log -Value $stdout -NoNewline }
+  if ($stderr) { Add-Content -LiteralPath $(if ($ErrorLog) { $ErrorLog } else { $Log }) -Value $stderr -NoNewline }
+  if ($process.ExitCode -ne 0) { throw "$FailureMessage (exit code $($process.ExitCode))" }
+  return $stdout
 }
 
 function Get-UninstallEntries {
@@ -62,7 +129,7 @@ function Get-HarnessProcesses {
     if ($testProcess -and (Test-Path -LiteralPath $testProcess)) { return @([pscustomobject]@{ ProcessName = "muniment" }) }
     return @()
   }
-  return @(Get-Process muniment, tauri-driver, msedgedriver -ErrorAction SilentlyContinue)
+  return @(Get-Process muniment -ErrorAction SilentlyContinue)
 }
 
 function Invoke-Cleanup([string]$Name, [scriptblock]$Action) {
@@ -104,7 +171,6 @@ function Remove-AuthHandler {
 
 function Finalize-Run {
   Invoke-Cleanup "stop-wdio" { Get-CimInstance Win32_Process | Where-Object CommandLine -Like '*wdio.conf.js*' | ForEach-Object { Stop-Process -Id $_.ProcessId -Force } }
-  Invoke-Cleanup "stop-drivers" { Get-Process tauri-driver, msedgedriver -ErrorAction SilentlyContinue | Stop-Process -Force }
   if ($ready) {
     Invoke-Cleanup "revoke-session" { $env:MUNIMENT_E2E_CLEANUP_ONLY = "1"; Invoke-BoundedProcess "npm.cmd" "run test:e2e" 45 (Join-Path $raw "cleanup-wdio.log") }
   }
@@ -136,8 +202,12 @@ function Finalize-Run {
   }
   Invoke-Cleanup "redact-artifacts" {
     if (-not $raw -or -not (Test-Path $raw)) { throw "raw staging is unavailable" }
-    & node test/e2e/support/redact.mjs $raw $safe $redactionReport
-    if ($LASTEXITCODE -ne 0) { $script:redacted = $false; throw "artifact redaction failed" }
+    try {
+      Invoke-NativeCommand "node" "`"$redactor`" `"$raw`" `"$safe`" `"$redactionReport`"" $cleanupLog "artifact redaction failed"
+    } catch {
+      $script:redacted = $false
+      throw
+    }
   }
   Invoke-Cleanup "remove-raw" { if ($raw) { Remove-Item $raw -Recurse -Force -ErrorAction SilentlyContinue } }
   Invoke-Cleanup "remove-msi" { if ($msi) { Remove-Item $msi -Force -ErrorAction SilentlyContinue } }
@@ -167,14 +237,13 @@ function Finalize-Run {
   }
   if ($cleanupLog) { Remove-Item $cleanupLog -Force -ErrorAction SilentlyContinue }
   if ($runRoot) { Remove-Item $runRoot -Recurse -Force -ErrorAction SilentlyContinue }
-  if ($status -ne 0 -or $cleanupStatus -ne 0 -or -not $script:redacted) { exit 1 }
+  if ($cleanupStatus -ne 0 -or -not $script:redacted) { $script:status = 1 }
 }
 
 try {
   # desktop-ci collects %TEMP%\dci-artifacts on Windows and DCI_ARTIFACTS_DIR is
   # not injected by the nightly, so any other default silently sends the lane
   # down the driver's DCI-NO-ARTIFACTS path with no report at all.
-  $artifacts = if ($env:DCI_ARTIFACTS_DIR) { $env:DCI_ARTIFACTS_DIR } else { Join-Path $env:TEMP "dci-artifacts" }
   $runRoot = Join-Path $env:TEMP ("muniment-e2e-" + [guid]::NewGuid().ToString("N"))
   $raw = Join-Path $runRoot "raw"
   $safe = Join-Path $runRoot "safe"
@@ -188,7 +257,22 @@ try {
   if ($env:MUNIMENT_E2E_FINALIZER_TEST_SETUP_FAIL -eq "before-directories") { throw "injected setup failure" }
   New-Item -ItemType Directory -Force $raw, $stateRoot | Out-Null
   New-Item -ItemType File -Force $cleanupLog | Out-Null
+  if ($env:MUNIMENT_E2E_NATIVE_COMMAND_TEST_EXIT_CODE) {
+    $nativeTestExitCode = [int]$env:MUNIMENT_E2E_NATIVE_COMMAND_TEST_EXIT_CODE
+    Invoke-NativeCommand "cmd.exe" "/d /c `"echo native warning 1>&2 & exit /b $nativeTestExitCode`"" $installerLog "native command test failed"
+    return
+  }
+  if ($env:MUNIMENT_E2E_NATIVE_COMMAND_TEST_INVOCATION_ERROR -eq "1") {
+    Invoke-NativeCommand "muniment-command-that-does-not-exist" "" $installerLog "native command test failed"
+    return
+  }
+  if ($env:MUNIMENT_E2E_NATIVE_COMMAND_TEST_RESOLUTION -eq "1") {
+    $resolvedNpm = Resolve-NativeCommand "npm.cmd" "native command test failed"
+    Add-Content -LiteralPath $installerLog -Value $resolvedNpm
+    return
+  }
   if ($env:MUNIMENT_E2E_FINALIZER_TEST_MODE -eq "1") {
+    if ($env:MUNIMENT_E2E_FINALIZER_TEST_TRANSCRIPT_TEXT) { Write-Output $env:MUNIMENT_E2E_FINALIZER_TEST_TRANSCRIPT_TEXT }
     $installDirectory = Join-Path $runRoot "installed"
     $testRegistration = Join-Path $runRoot "registration"
     $testProcess = Join-Path $runRoot "process"
@@ -205,10 +289,8 @@ try {
   $imageBase64 = (Get-Content -LiteralPath "test/e2e/fixtures/image-token.png.base64" -Raw) -replace '\s', ''
   [IO.File]::WriteAllBytes($imageFixture, [Convert]::FromBase64String($imageBase64))
 
-  & npm.cmd ci --no-audit --no-fund *>> $installerLog
-  if ($LASTEXITCODE -ne 0) { throw "npm dependency installation failed" }
-  & npm.cmd test *>> $installerLog
-  if ($LASTEXITCODE -ne 0) { throw "Windows contract tests failed" }
+  Invoke-NativeCommand "npm.cmd" "ci --no-audit --no-fund" $installerLog "npm dependency installation failed"
+  Invoke-NativeCommand "npm.cmd" "test" $installerLog "Windows contract tests failed"
 
   $sha = $env:MUNIMENT_E2E_SOURCE_SHA
   if ($sha -notmatch '^[0-9a-f]{40}$') { throw "invalid source SHA" }
@@ -217,10 +299,9 @@ try {
   }
 
   # Resolve all identity checks before mutating installer or per-user state.
-  $release = & gh api "repos/$($env:GITHUB_REPOSITORY)/releases/tags/nightly" | Out-String
-  if ($LASTEXITCODE -ne 0) { throw "nightly release lookup failed" }
-  $assetId = $release | & node test/e2e/support/asset-identity.mjs $sha windows
-  if ($LASTEXITCODE -ne 0 -or $assetId -notmatch '^[1-9][0-9]*$') { throw "Windows artifact identity validation failed" }
+  $release = Invoke-NativeCommand "gh" "api repos/$($env:GITHUB_REPOSITORY)/releases/tags/nightly" $installerLog "nightly release lookup failed"
+  $assetId = Invoke-NativeCommand "node" "test/e2e/support/asset-identity.mjs $sha windows" $installerLog "Windows artifact identity validation failed" $release
+  if ($assetId -notmatch '^[1-9][0-9]*$') { throw "Windows artifact identity validation failed" }
   Invoke-WebRequest -UseBasicParsing -Headers @{ Accept = "application/octet-stream"; Authorization = "Bearer $($env:GH_TOKEN)" } `
     -Uri "https://api.github.com/repos/$($env:GITHUB_REPOSITORY)/releases/assets/$assetId" -OutFile $msi
 
@@ -253,10 +334,11 @@ try {
   }
   if (-not $installDirectory) { $installDirectory = Split-Path $appBinary -Parent }
 
-  if (-not (Get-Command tauri-driver.exe -ErrorAction SilentlyContinue)) {
-    & cargo install tauri-driver --version 2.0.5 --locked *>> $installerLog
-    if ($LASTEXITCODE -ne 0) { throw "tauri-driver installation failed" }
-  }
+  Invoke-NativeCommand "node" "test/e2e/support/webdriver-release-guard.mjs absent `"$appBinary`"" $installerLog "release WebDriver guard failed"
+  Invoke-NativeCommand "npm.cmd" "run tauri -- build --no-bundle --features e2e-webdriver --config src-tauri/tauri.e2e.conf.json" $installerLog "E2E application build failed"
+  $appBinary = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot "../../../src-tauri/target/release/muniment.exe"))
+  if (-not (Test-Path -LiteralPath $appBinary -PathType Leaf)) { throw "E2E application binary is unavailable" }
+  Invoke-NativeCommand "node" "test/e2e/support/webdriver-release-guard.mjs present `"$appBinary`"" $installerLog "E2E WebDriver guard failed"
 
   New-Item -Path $handlerKey -Force | Out-Null
   Set-ItemProperty $handlerKey -Name '(default)' -Value 'URL:muniment-e2e-https'
@@ -276,17 +358,47 @@ try {
   $env:MUNIMENT_E2E_APP_BINARY = $appBinary
   $env:MUNIMENT_E2E_RAW_DIR = $raw
   $env:MUNIMENT_E2E_AUTH_URL_FILE = $authUrlFile
-  $env:MUNIMENT_E2E_HOME_PATH = Join-Path $stateRoot 'home-override'
   $env:MUNIMENT_E2E_IMAGE_PATH = $imageFixture
   $ready = $true
+  $env:APPDATA = Join-Path $stateRoot "Ready\Roaming"
+  $env:LOCALAPPDATA = Join-Path $stateRoot "Ready\Local"
+  $env:MUNIMENT_E2E_HOME_PATH = Join-Path $stateRoot 'ready-home'
+  $env:MUNIMENT_E2E_ONBOARDING_ONLY = "1"
+  try {
+    Invoke-NativeCommand "npm.cmd" "run test:e2e" (Join-Path $raw "wdio-onboarding.log") "Windows onboarding tests failed"
+  } catch {
+    $status = 1
+  }
+  Remove-Item Env:MUNIMENT_E2E_ONBOARDING_ONLY -ErrorAction SilentlyContinue
+  $env:APPDATA = Join-Path $stateRoot "Degraded\Roaming"
+  $env:LOCALAPPDATA = Join-Path $stateRoot "Degraded\Local"
+  $env:MUNIMENT_E2E_HOME_PATH = Join-Path $stateRoot 'degraded-home'
   $wdioLog = Join-Path $raw "wdio.log"
   $driverAppLog = Join-Path $raw "driver-app.log"
-  & npm.cmd run test:e2e 1> $wdioLog 2> $driverAppLog
-  if ($LASTEXITCODE -ne 0) { $status = 1 }
+  try {
+    Invoke-NativeCommand "npm.cmd" "run test:e2e" $wdioLog "Windows end-to-end tests failed" $null $driverAppLog
+  } catch {
+    $status = 1
+  }
 } catch {
+  $diagnostic = "message: $($_.Exception.Message)`ncategory: $($_.CategoryInfo.Category)`nline: $($_.InvocationInfo.ScriptLineNumber)"
+  Set-Content -LiteralPath $diagnosticFile -Value $diagnostic -ErrorAction SilentlyContinue
+  Write-Output $diagnostic
   if ($env:MUNIMENT_E2E_FINALIZER_TEST_SETUP_FAIL) { $script:redacted = $false }
   if ($installerLog) { Add-Content $installerLog "runner failed: $($_.Exception.Message)" -ErrorAction SilentlyContinue }
   $status = 1
 } finally {
+  Stop-Transcript -ErrorAction SilentlyContinue | Out-Null
+  if ($raw -and (Test-Path -LiteralPath $raw)) {
+    Copy-Item -LiteralPath $transcriptPath -Destination (Join-Path $raw "runner-transcript.log") -Force -ErrorAction SilentlyContinue
+  }
   Finalize-Run
+  New-Item -ItemType Directory -Force $artifacts -ErrorAction SilentlyContinue | Out-Null
+  if ($diagnostic) { Set-Content -LiteralPath $diagnosticFile -Value $diagnostic -ErrorAction SilentlyContinue }
+  if ($status -ne 0) {
+    Write-Output "dci: Windows runner transcript tail"
+    Get-Content -LiteralPath $transcriptPath -Tail 200 -ErrorAction SilentlyContinue | Write-Output
+  }
+  Remove-Item -LiteralPath $transcriptPath -Force -ErrorAction SilentlyContinue
+  exit $status
 }
