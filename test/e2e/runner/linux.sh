@@ -38,27 +38,32 @@ index_failure_artifacts() {
 
 run_e2e() {
   local wdio_log=$1 driver_log=$2 run_timeout=${3:-0} run_status=0 portal_log="$raw/xdg-desktop-portal.log"
-  tauri-driver --port 4444 >"$driver_log" 2>&1 &
-  if ! timeout 30 bash -c 'until (: >/dev/tcp/127.0.0.1/4444) 2>/dev/null; do sleep 0.2; done'; then
-    stop_matching '[t]auri-driver'
-    return 1
-  fi
+  local -a session=(dbus-run-session -- xvfb-run -a bash -c '
+    portal=$(command -v xdg-desktop-portal || true)
+    if [[ -z $portal ]]; then
+      for candidate in /usr/libexec/xdg-desktop-portal /usr/lib/xdg-desktop-portal/xdg-desktop-portal; do
+        if [[ -x $candidate ]]; then portal=$candidate; break; fi
+      done
+    fi
+    [[ -n $portal ]] || { echo "xdg-desktop-portal is unavailable" >&2; exit 1; }
+    "$portal" >>"$1" 2>&1 &
+    portal_pid=$!
+    tauri-driver --port 4444 >"$2" 2>&1 &
+    driver_pid=$!
+    cleanup_session() {
+      kill "$driver_pid" "$portal_pid" 2>/dev/null || true
+      wait "$driver_pid" "$portal_pid" 2>/dev/null || true
+    }
+    trap cleanup_session EXIT
+    timeout 30 gdbus wait --session org.freedesktop.portal.Desktop || exit 1
+    timeout 30 bash -c '\''until (: >/dev/tcp/127.0.0.1/4444) 2>/dev/null; do sleep 0.2; done'\'' || exit 1
+    shift 2
+    "$@"
+  ' bash "$portal_log" "$driver_log" npm run test:e2e)
   if (( run_timeout > 0 )); then
-    timeout "$run_timeout" dbus-run-session -- xvfb-run -a bash -c '
-      /usr/libexec/xdg-desktop-portal >>"$1" 2>&1 &
-      portal_pid=$!
-      trap '\''kill "$portal_pid" 2>/dev/null || true; wait "$portal_pid" 2>/dev/null || true'\'' EXIT
-      shift
-      "$@"
-    ' bash "$portal_log" npm run test:e2e >"$wdio_log" 2>&1 || run_status=$?
+    timeout "$run_timeout" "${session[@]}" >"$wdio_log" 2>&1 || run_status=$?
   else
-    dbus-run-session -- xvfb-run -a bash -c '
-      /usr/libexec/xdg-desktop-portal >>"$1" 2>&1 &
-      portal_pid=$!
-      trap '\''kill "$portal_pid" 2>/dev/null || true; wait "$portal_pid" 2>/dev/null || true'\'' EXIT
-      shift
-      "$@"
-    ' bash "$portal_log" npm run test:e2e >"$wdio_log" 2>&1 || run_status=$?
+    "${session[@]}" >"$wdio_log" 2>&1 || run_status=$?
   fi
   stop_matching '[t]auri-driver' || run_status=1
   return "$run_status"
