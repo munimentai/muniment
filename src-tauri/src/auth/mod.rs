@@ -15,7 +15,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use muniment_core::auth::{
     self, AuthStatus, BrowserOpenError, EntitlementSnapshotTracker, KeyringNativeCredentialStore,
     NativeCredentialStore, UreqAuthorizationTransport, UreqNativeDeviceListTransport,
-    UreqRegistrationTransport, UreqRevocationTransport, UreqSessionTransport, UreqTokenTransport,
+    UreqRegistrationTransport, UreqRevocationTransport, UreqTokenTransport,
 };
 use serde::Serialize;
 use tauri::Emitter;
@@ -25,9 +25,6 @@ const DEFAULT_ISSUER: &str = "https://api.muniment.ai";
 /// How long the loopback listener waits for the user to finish in the
 /// browser before the sign-in attempt is abandoned.
 const SIGN_IN_TIMEOUT: Duration = Duration::from_secs(300);
-/// Renew shortly before expiry so callers do not receive a nearly-dead token.
-const REFRESH_SKEW: Duration = Duration::from_secs(60);
-
 fn api_base_url() -> String {
     std::env::var("MUNIMENT_API_BASE_URL")
         .or_else(|_| std::env::var("MUNIMENT_ISSUER"))
@@ -250,16 +247,8 @@ fn device_list_error() -> String {
 fn ensure_native_session(
     store: &KeyringNativeCredentialStore,
 ) -> Result<auth::FreshNativeSession, String> {
-    let timeout = Duration::from_secs(30);
-    auth::ensure_fresh_native_session(
-        store,
-        &UreqTokenTransport::new(timeout),
-        &UreqSessionTransport::new(timeout),
-        &api_base_url(),
-        unix_time(),
-        REFRESH_SKEW,
-    )
-    .map_err(|error| error.to_string())
+    auth::ensure_native_session(store, &api_base_url(), unix_time())
+        .map_err(|error| error.to_string())
 }
 
 /// Clear the local native session while preserving the installation identity.
