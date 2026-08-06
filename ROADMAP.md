@@ -474,13 +474,17 @@ the persist step, the restore on a failed write, and the sorted listing.
 and `list_companions` (`:269`) are thin wrappers, and the desktop keeps its two
 Tauri commands and its own serialized row type.
 
-RE-FILED 2026-08-06 (third filing) — the permission gate coordination rules
+STILL SELECTED 2026-08-06 — the permission gate coordination rules
 move into muniment-core. `coordinate_extension_ui_request`
 (`src-tauri/src/chat_coordinate.rs:650`) and `coordinate_permission_answer`
 (`:663`) already take closures and touch no Tauri type. ADR 0012 phase one names
 permission gates as runtime-service state. `ChatPermissionAnswer`
 (`src-tauri/src/chat.rs:158`) and `PendingPermissionAnswer` (`:179`) move with
-them, and every remaining call site changes only its import path.
+them, and every remaining call site changes only its import path. The third
+filing drained without a pull request. The wave of 2026-08-06 spent its six
+slices on the handoff rules, the auth marks, the prompt store, and the two
+memory slices, so this move waits one wave rather than taking a fourth filing
+beside work that edits the same run lane.
 
 DONE 2026-08-06 — `muniment-runtime` bounds the instance-lock wait and reports
 it once (MUNIDESK-954). The wait backs off instead of polling every 25
@@ -549,14 +553,21 @@ weighs (MUNIDESK-957). `src-tauri/core/src/attach/runtime_activity.rs` holds
 returns the `RuntimeActivity` value `evaluate_quiesce` reads. The registry has
 no call site yet, which is the shape `quiesce.rs` and `handoff.rs` landed in.
 
-SELECTED 2026-08-06 — the desktop composes that registry, and the run lane marks
-it first. Nothing in the desktop crate reaches a `RuntimeActivityRegistry`
-today, so the quiesce rule has no live input. The first slice makes the registry
-one Tauri-managed value and gives `ActiveRun` (`src-tauri/src/chat.rs:139`) a
-guard, so `snapshot().active_run` is true for exactly the life of a run. The
-auth marks, the permission-gate mark, the external-effect mark, and the desktop
-`control_migration` answer each follow that one shared handle and are sequenced
-behind it.
+DONE 2026-08-06 — the desktop composes that registry, and the run lane marks it
+(MUNIDESK-961). `main` (`src-tauri/src/main.rs:21`) creates one
+`RuntimeActivityRegistry` and manages it, `ChatState::new` takes it, and
+`ActiveRun` (`src-tauri/src/chat.rs:139`) holds a guard for exactly the life of
+a run.
+
+SELECTED 2026-08-06 — the auth lane marks that registry next. A sign-in, a
+sign-out, and a session refresh each run while no run is active, so they are the
+two quiesce inputs the active-run mark does not cover. `AuthState::new`
+(`src-tauri/src/auth/mod.rs:96`) takes no registry today, and every
+`ensure_native_session` call site (`:72`, `:86`, `:201`, `:218`) is a refresh.
+The permission-gate mark and the external-effect mark both live inside the
+coordinate loop, which runs only while `active_run` is already true, so they
+follow the auth marks rather than lead them. The desktop `control_migration`
+answer comes after all four marks.
 
 SELECTED 2026-08-06 — muniment-core mints the single-use handoff nonce. The
 runtime service must send one with its migration control request, and
@@ -752,6 +763,32 @@ carries `Back to archive review` beside `Save Home and finish`.
 RATIFIED 2026-08-06 — memory retrieval has two phases. Phase one builds a
 lexical index with zero new dependencies. Phase two adds vector search and a
 pinned embedding artifact.
+
+DONE 2026-08-06 — ADR 0026 and harness-spec §17 carry the binding rules
+(MUNIDESK-959). Files stay the source of truth and the index stays a rebuildable
+cache. Retrieved memory reaches the model only through one memory-search tool.
+The tool set stays fixed for a conversation. Every retrieval is capped, and the
+character budget comes from the selected model capability record. Every write
+filters secrets, and every recall carries a receipt.
+
+SELECTED 2026-08-06 — the first two phase-one slices carry no store. The Home
+document scan reads the four scaffold directories under bounded limits and
+returns the records an index would hold, following the `import_preview.rs`
+traversal pattern. The memory-write secret filter reads the four `secret.*`
+rules that `src-tauri/core/src/assistant_text.rs` already scans and rejects a
+record that carries one. Both land as pure core modules with direct tests and no
+new dependency, which is the shape `quiesce.rs` and `handoff.rs` landed in.
+
+OWNER QUESTION 2026-08-06 — the phase-one FTS5 index needs an owner ruling
+before the lane files it. That index is a new disposable SQLite cache inside the
+user profile, and it is neither the run journal nor a cloud database. The
+standing exclusion on self-initiated schema work does not say whether a fresh
+cache file sits inside it. The lane files no store slice until the owner
+answers.
+
+DEFERRED — the retrieval cap rule, the memory-search tool declaration, the
+recall receipt, and phase two embeddings follow those two slices and that
+ruling.
 
 DONE 2026-07-29 — first-run folder setup fails open (MUNIDESK-660, 661, 684).
 `choose_default_home` returns `<home>/Documents/Muniment` when that parent exists
@@ -976,15 +1013,15 @@ for it.
 
 VERIFIED 2026-08-06 (this wave, from a clean clone) — every suite the planning
 container can run passed. `cargo test` on the standalone `muniment-core`
-manifest reported `ok` for every test binary with no failure, and `cargo test`
-for `muniment-attach` and `muniment-runtime` reported the same. `npm test`
-passed 864 tests with 31 skipped across 59 files, and the browser suite passed
-3. `npm run build` produced a 252,670-byte script and a 62,240-byte stylesheet.
-The planner read the landed companion registry, the landed runtime activity
-registry, the unlanded selected-file target, and every remaining ADR 0012
-extraction target in the desktop crate before it filed this wave's slices.
-Earlier waves recorded the same shape of verification, and this entry replaces
-that ledger.
+manifest exited zero and reported `ok` for all 61 test binaries, and
+`muniment-attach` and `muniment-runtime` reported the same. `npm ci` then `npm
+test` passed 864 tests with 31 skipped across 59 files, and the browser suite
+passed 3. `npm run build` produced a 252,670-byte script and a 62,240-byte
+stylesheet. The planner read the landed runtime activity composition, the
+unbuilt nonce and probe rules, the auth command lane, the protected prompt
+store, and the new memory keystone before it filed this wave's slices. Earlier
+waves recorded the same shape of verification, and this entry replaces that
+ledger.
 
 NOTE 2026-08-06 — the planning clone ships no `node_modules`. Run `npm ci`
 before `npm test`. Without it the run dies with `vitest: not found`, which reads
