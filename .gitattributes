@@ -1,1 +1,14 @@
+* text=auto eol=lf
 protocol-fixtures/**/*.json text eol=lf
+
+*.png binary
+*.woff2 binary
+*.otf binary
+*.ttf binary
+*.ico binary
+*.icns binary
+*.dll binary
+*.dylib binary
+*.so binary
+*.lib binary
+*.onnx binary
