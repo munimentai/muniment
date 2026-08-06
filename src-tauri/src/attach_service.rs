@@ -3,7 +3,7 @@ use muniment_core::attach::ApprovalRequest;
 #[cfg(target_os = "linux")]
 use muniment_core::attach::{
     bounded_claim, load_client_credentials, save_client_credentials as persist_client_credentials,
-    ClientCredential, WorkspaceContextMap,
+    ClientCredential, CompanionRegistry, WorkspaceContextMap,
 };
 use muniment_core::attach::{ApprovalCoordinator, ProtocolError};
 use std::collections::HashMap;
@@ -108,8 +108,7 @@ pub struct DesktopAttachService<B, I = IdempotencyStore> {
 pub(crate) struct AttachListenerState {
     workspace_contexts: WorkspaceContexts,
     client_credentials: Arc<Mutex<HashMap<String, ClientCredential>>>,
-    credential_path: PathBuf,
-    live_connections: LiveConnectionRegistry,
+    companion_registry: CompanionRegistry,
     workspace: Arc<Mutex<Option<String>>>,
 }
 
@@ -239,11 +238,16 @@ impl AttachListenerState {
         credential_path: &std::path::Path,
         workspace: Arc<Mutex<Option<String>>>,
     ) -> Result<Self, ProtocolError> {
+        let client_credentials = Arc::new(Mutex::new(load_client_credentials(credential_path)?));
+        let companion_registry = CompanionRegistry::new(
+            client_credentials.clone(),
+            credential_path,
+            LiveConnectionRegistry::default(),
+        );
         Ok(Self {
             workspace_contexts: Arc::new(Mutex::new(WorkspaceContextMap::default())),
-            client_credentials: Arc::new(Mutex::new(load_client_credentials(credential_path)?)),
-            credential_path: credential_path.to_owned(),
-            live_connections: LiveConnectionRegistry::default(),
+            client_credentials,
+            companion_registry,
             workspace,
         })
     }
@@ -258,41 +262,21 @@ impl AttachListenerState {
     }
 
     pub(crate) fn revoke_companion(&self, client_identity: &str) -> Result<(), ProtocolError> {
-        let mut credentials = self
-            .client_credentials
-            .lock()
-            .map_err(|_| ProtocolError::persistence_failed())?;
-        let credential = credentials
-            .get(client_identity)
-            .cloned()
-            .ok_or_else(ProtocolError::unauthorized)?;
-        self.live_connections.block(&credential.credential);
-        credentials.remove(client_identity);
-        if let Err(error) = persist_client_credentials(&self.credential_path, &credentials) {
-            credentials.insert(client_identity.to_owned(), credential.clone());
-            self.live_connections.resume(&credential.credential);
-            return Err(error);
-        }
-        self.live_connections.revoke(&credential.credential);
-        Ok(())
+        self.companion_registry.revoke(client_identity)
     }
 
     pub(crate) fn list_companions(&self) -> Result<Vec<AuthorizedCompanion>, ProtocolError> {
-        let credentials = self
-            .client_credentials
-            .lock()
-            .map_err(|_| ProtocolError::persistence_failed())?;
-        let mut companions: Vec<_> = credentials
-            .iter()
-            .map(|(identity, entry)| AuthorizedCompanion {
-                identity: identity.clone(),
-                claimed_kind: entry.claimed_kind.clone(),
-                claimed_version: entry.claimed_version.clone(),
-                approved_at: entry.approved_at.clone(),
-            })
-            .collect();
-        companions.sort_by(|left, right| left.identity.cmp(&right.identity));
-        Ok(companions)
+        self.companion_registry.list().map(|companions| {
+            companions
+                .into_iter()
+                .map(|companion| AuthorizedCompanion {
+                    identity: companion.identity,
+                    claimed_kind: companion.claimed_kind,
+                    claimed_version: companion.claimed_version,
+                    approved_at: companion.approved_at,
+                })
+                .collect()
+        })
     }
 }
 
@@ -480,7 +464,7 @@ pub fn start_attach_listener<R: tauri::Runtime>(app: tauri::AppHandle<R>) {
             let app = app.clone();
             let workspace_contexts = state.workspace_contexts.clone();
             let client_credentials = state.client_credentials.clone();
-            let live_connections = state.live_connections.clone();
+            let live_connections = state.companion_registry.live_connections();
             let approval_state = state.clone();
             std::thread::spawn(move || {
                 let Ok(mut service) =
@@ -2596,7 +2580,7 @@ mod tests {
         .unwrap();
         let mut state = AttachListenerState::load(&credential_path).unwrap();
         let client_credentials = state.client_credentials.clone();
-        let live_connections = state.live_connections.clone();
+        let live_connections = state.companion_registry.live_connections();
 
         let connect = |presented: String| {
             let (client_stream, server_stream) = std::os::unix::net::UnixStream::pair().unwrap();
@@ -2691,7 +2675,11 @@ mod tests {
         let mut client = client.unwrap();
         let blocker = root.join("not-a-directory");
         std::fs::write(&blocker, b"blocked").unwrap();
-        state.credential_path = blocker.join("credentials.json");
+        state.companion_registry = CompanionRegistry::new(
+            state.client_credentials.clone(),
+            blocker.join("credentials.json"),
+            live_connections,
+        );
         assert_eq!(
             state.revoke_companion(identity).unwrap_err().code(),
             ErrorCode::PersistenceFailed
