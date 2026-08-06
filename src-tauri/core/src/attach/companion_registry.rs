@@ -9,6 +9,9 @@ use std::{
     sync::{Arc, Mutex},
 };
 
+type PersistCredentials =
+    dyn Fn(&Path, &HashMap<String, ClientCredential>) -> Result<(), ProtocolError> + Send + Sync;
+
 /// A companion row that excludes its secret credential.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CompanionRecord {
@@ -24,6 +27,7 @@ pub struct CompanionRegistry {
     credentials: Arc<Mutex<HashMap<String, ClientCredential>>>,
     credential_path: PathBuf,
     live_connections: LiveConnectionRegistry,
+    persist: Arc<PersistCredentials>,
 }
 
 impl CompanionRegistry {
@@ -36,6 +40,26 @@ impl CompanionRegistry {
             credentials,
             credential_path: credential_path.as_ref().to_owned(),
             live_connections,
+            persist: Arc::new(save_client_credentials),
+        }
+    }
+
+    /// Constructs a registry with a controlled persistence operation for tests.
+    #[doc(hidden)]
+    pub fn new_with_persistence(
+        credentials: Arc<Mutex<HashMap<String, ClientCredential>>>,
+        credential_path: impl AsRef<Path>,
+        live_connections: LiveConnectionRegistry,
+        persist: impl Fn(&Path, &HashMap<String, ClientCredential>) -> Result<(), ProtocolError>
+            + Send
+            + Sync
+            + 'static,
+    ) -> Self {
+        Self {
+            credentials,
+            credential_path: credential_path.as_ref().to_owned(),
+            live_connections,
+            persist: Arc::new(persist),
         }
     }
 
@@ -52,7 +76,7 @@ impl CompanionRegistry {
 
         self.live_connections.block(&credential.credential);
         credentials.remove(identity);
-        if let Err(error) = save_client_credentials(&self.credential_path, &credentials) {
+        if let Err(error) = (self.persist)(&self.credential_path, &credentials) {
             credentials.insert(identity.to_owned(), credential.clone());
             self.live_connections.resume(&credential.credential);
             return Err(error);
