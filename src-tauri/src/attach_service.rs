@@ -3,7 +3,7 @@ use muniment_core::attach::ApprovalRequest;
 #[cfg(target_os = "linux")]
 use muniment_core::attach::{
     bounded_claim, load_client_credentials, save_client_credentials as persist_client_credentials,
-    ClientCredential,
+    ClientCredential, WorkspaceContextMap,
 };
 use muniment_core::attach::{ApprovalCoordinator, ProtocolError};
 use std::collections::HashMap;
@@ -54,8 +54,7 @@ const PERMISSION_COMMIT_TIMEOUT: Duration = Duration::from_secs(2);
 const PERMISSION_COMMIT_TIMEOUT: Duration = Duration::from_millis(50);
 
 #[cfg(target_os = "linux")]
-type WorkspaceContexts =
-    Arc<Mutex<HashMap<String, HashMap<String, HashMap<PathBuf, Option<String>>>>>>;
+type WorkspaceContexts = Arc<Mutex<WorkspaceContextMap>>;
 
 /// Production adapter from the authorized Linux attach seam into the desktop
 /// coordinator. The listener lifecycle will own this service in a later slice.
@@ -241,7 +240,7 @@ impl AttachListenerState {
         workspace: Arc<Mutex<Option<String>>>,
     ) -> Result<Self, ProtocolError> {
         Ok(Self {
-            workspace_contexts: Arc::new(Mutex::new(HashMap::new())),
+            workspace_contexts: Arc::new(Mutex::new(WorkspaceContextMap::default())),
             client_credentials: Arc::new(Mutex::new(load_client_credentials(credential_path)?)),
             credential_path: credential_path.to_owned(),
             live_connections: LiveConnectionRegistry::default(),
@@ -603,10 +602,8 @@ impl<B: RunStartBoundaries, I: RunStartIdempotency> ThreadListService
             .client_identity
             .as_ref()
             .ok_or_else(ProtocolError::unauthorized)?;
-        let contexts = contexts.entry(identity.clone()).or_default();
-        let contexts = contexts.entry(workspace.to_owned()).or_default();
-        contexts.insert(opened_canonical, instructions.clone());
-        contexts.insert(memory_canonical, instructions.clone());
+        contexts.record(identity, workspace, opened_canonical, instructions.clone());
+        contexts.record(identity, workspace, memory_canonical, instructions.clone());
         Ok(WorkspaceOnboarded {
             opened_directory: opened.to_string_lossy().into_owned(),
             memory_location: memory.to_string_lossy().into_owned(),
@@ -624,16 +621,11 @@ impl<B: RunStartBoundaries, I: RunStartIdempotency> ThreadListService
             return None;
         };
         let canonical = PathBuf::from(workspace).canonicalize().ok()?;
-        self.workspace_contexts.lock().ok().and_then(|contexts| {
-            contexts
-                .get(identity)
-                .and_then(|workspaces| workspaces.get(session_workspace))
-                .and_then(|workspaces| {
-                    workspaces
-                        .contains_key(&canonical)
-                        .then(|| canonical.to_string_lossy().into_owned())
-                })
-        })
+        self.workspace_contexts
+            .lock()
+            .ok()?
+            .authorized_directory(identity, session_workspace, &canonical)
+            .map(|directory| directory.to_string_lossy().into_owned())
     }
 
     fn list_threads(
@@ -748,18 +740,14 @@ impl<B: RunStartBoundaries, I: RunStartIdempotency> ThreadListService
             .workspace_contexts
             .lock()
             .map_err(|_| ProtocolError::persistence_failed())?
-            .get(
+            .instructions(
                 self.client_identity
                     .as_ref()
                     .ok_or_else(ProtocolError::unauthorized)?,
+                workspace,
+                &PathBuf::from(execution_root),
             )
-            .and_then(|workspaces| {
-                workspaces
-                    .get(workspace)
-                    .and_then(|contexts| contexts.get(&PathBuf::from(execution_root)))
-            })
-            .cloned()
-            .flatten();
+            .map(str::to_owned);
         if let Some(instructions) = instructions {
             extra.insert("repository_instructions".into(), json!(instructions));
         }
@@ -1271,7 +1259,7 @@ mod tests {
             boundaries,
             idempotency: IdempotencyStore::open(":memory:").unwrap(),
             home: PathBuf::new(),
-            workspace_contexts: Arc::new(Mutex::new(HashMap::new())),
+            workspace_contexts: Arc::new(Mutex::new(WorkspaceContextMap::default())),
             client_credentials: Arc::new(Mutex::new(HashMap::new())),
             credential_path: None,
             client_identity: Some("default".into()),
@@ -1310,7 +1298,7 @@ mod tests {
             boundaries,
             idempotency: IdempotencyStore::open(":memory:").unwrap(),
             home: PathBuf::new(),
-            workspace_contexts: Arc::new(Mutex::new(HashMap::new())),
+            workspace_contexts: Arc::new(Mutex::new(WorkspaceContextMap::default())),
             client_credentials: Arc::new(Mutex::new(HashMap::new())),
             credential_path: None,
             client_identity: Some("default".into()),
@@ -1443,7 +1431,7 @@ mod tests {
             boundaries,
             idempotency: IdempotencyStore::open(":memory:").unwrap(),
             home: PathBuf::new(),
-            workspace_contexts: Arc::new(Mutex::new(HashMap::new())),
+            workspace_contexts: Arc::new(Mutex::new(WorkspaceContextMap::default())),
             client_credentials: Arc::new(Mutex::new(HashMap::new())),
             credential_path: None,
             client_identity: Some("default".into()),
@@ -1687,7 +1675,7 @@ mod tests {
             boundaries,
             idempotency: IdempotencyStore::open(":memory:").unwrap(),
             home: PathBuf::new(),
-            workspace_contexts: Arc::new(Mutex::new(HashMap::new())),
+            workspace_contexts: Arc::new(Mutex::new(WorkspaceContextMap::default())),
             client_credentials: Arc::new(Mutex::new(HashMap::new())),
             credential_path: None,
             client_identity: Some("default".into()),
@@ -1734,7 +1722,7 @@ mod tests {
                 boundaries,
                 idempotency: IdempotencyStore::open(":memory:").unwrap(),
                 home: PathBuf::new(),
-                workspace_contexts: Arc::new(Mutex::new(HashMap::new())),
+                workspace_contexts: Arc::new(Mutex::new(WorkspaceContextMap::default())),
                 client_credentials: Arc::new(Mutex::new(HashMap::new())),
                 credential_path: None,
                 client_identity: Some("default".into()),
@@ -1806,7 +1794,7 @@ mod tests {
                 boundaries,
                 idempotency: IdempotencyStore::open(":memory:").unwrap(),
                 home: PathBuf::new(),
-                workspace_contexts: Arc::new(Mutex::new(HashMap::new())),
+                workspace_contexts: Arc::new(Mutex::new(WorkspaceContextMap::default())),
                 client_credentials: Arc::new(Mutex::new(HashMap::new())),
                 credential_path: None,
                 client_identity: Some("default".into()),
@@ -1931,7 +1919,7 @@ mod tests {
             boundaries,
             idempotency: IdempotencyStore::open(":memory:").unwrap(),
             home: PathBuf::new(),
-            workspace_contexts: Arc::new(Mutex::new(HashMap::new())),
+            workspace_contexts: Arc::new(Mutex::new(WorkspaceContextMap::default())),
             client_credentials: Arc::new(Mutex::new(HashMap::new())),
             credential_path: None,
             client_identity: Some("default".into()),
@@ -2057,7 +2045,7 @@ mod tests {
         std::fs::create_dir_all(&second).unwrap();
         std::fs::write(first.join("AGENTS.md"), "first instructions").unwrap();
         std::fs::write(second.join("AGENTS.md"), "second instructions").unwrap();
-        let contexts = Arc::new(Mutex::new(HashMap::new()));
+        let contexts = Arc::new(Mutex::new(WorkspaceContextMap::default()));
         let mut first_connection = DesktopAttachService {
             boundaries: FakeRunStartBoundaries::accepting(),
             idempotency: IdempotencyStore::open(":memory:").unwrap(),
@@ -2102,30 +2090,20 @@ mod tests {
             .unwrap();
 
         let guard = contexts.lock().unwrap();
-        let stored = guard.get("default").unwrap().get("workspace-a").unwrap();
         assert_eq!(
-            stored
-                .get(&first.canonicalize().unwrap())
-                .unwrap()
-                .as_deref(),
+            guard.instructions("default", "workspace-a", &first.canonicalize().unwrap()),
             Some("first instructions")
         );
         assert_eq!(
-            guard
-                .get("default")
-                .unwrap()
-                .get("workspace-b")
-                .unwrap()
-                .get(&second.canonicalize().unwrap())
-                .unwrap()
-                .as_deref(),
+            guard.instructions("default", "workspace-b", &second.canonicalize().unwrap()),
             Some("second instructions")
         );
         assert_eq!(
-            stored
-                .get(&first_memory.canonicalize().unwrap())
-                .unwrap()
-                .as_deref(),
+            guard.instructions(
+                "default",
+                "workspace-a",
+                &first_memory.canonicalize().unwrap()
+            ),
             Some("first instructions")
         );
         // Release the shared `contexts` lock before the client-b/second/third
@@ -2392,7 +2370,7 @@ mod tests {
             boundaries: FakeRunStartBoundaries::accepting(),
             idempotency: IdempotencyStore::open(":memory:").unwrap(),
             home: root.join("home"),
-            workspace_contexts: Arc::new(Mutex::new(HashMap::new())),
+            workspace_contexts: Arc::new(Mutex::new(WorkspaceContextMap::default())),
             client_credentials: Arc::new(Mutex::new(credentials)),
             credential_path: Some(path.clone()),
             client_identity: None,
@@ -2630,7 +2608,7 @@ mod tests {
                     boundaries: FakeRunStartBoundaries::accepting(),
                     idempotency: IdempotencyStore::open(":memory:").unwrap(),
                     home: std::env::temp_dir(),
-                    workspace_contexts: Arc::new(Mutex::new(HashMap::new())),
+                    workspace_contexts: Arc::new(Mutex::new(WorkspaceContextMap::default())),
                     client_credentials: credentials,
                     credential_path: None,
                     client_identity: None,
@@ -2762,7 +2740,7 @@ mod tests {
         std::fs::create_dir_all(&other).unwrap();
         std::fs::write(opened.join("AGENTS.md"), "private client A context").unwrap();
         symlink(&opened, &alias).unwrap();
-        let contexts = Arc::new(Mutex::new(HashMap::new()));
+        let contexts = Arc::new(Mutex::new(WorkspaceContextMap::default()));
         let credentials = Arc::new(Mutex::new(HashMap::new()));
         let identity_a = "018f0000-0000-7000-8000-0000000000a1";
         let identity_b = "018f0000-0000-7000-8000-0000000000b1";
@@ -3257,7 +3235,7 @@ mod tests {
             boundaries: FakeRunStartBoundaries::accepting(),
             idempotency: IdempotencyStore::open(":memory:").unwrap(),
             home: PathBuf::new(),
-            workspace_contexts: Arc::new(Mutex::new(HashMap::new())),
+            workspace_contexts: Arc::new(Mutex::new(WorkspaceContextMap::default())),
             client_credentials: Arc::new(Mutex::new(HashMap::new())),
             credential_path: None,
             client_identity: Some("default".into()),
@@ -3328,7 +3306,7 @@ mod tests {
             boundaries: FakeRunStartBoundaries::accepting(),
             idempotency: FailingFinalization,
             home: PathBuf::new(),
-            workspace_contexts: Arc::new(Mutex::new(HashMap::new())),
+            workspace_contexts: Arc::new(Mutex::new(WorkspaceContextMap::default())),
             client_credentials: Arc::new(Mutex::new(HashMap::new())),
             credential_path: None,
             client_identity: Some("default".into()),
