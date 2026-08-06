@@ -1033,3 +1033,25 @@ describe('Windows native command contract', () => {
     expect(fs.readFileSync(path.join(artifacts, 'installer.log'), 'utf8')).toContain('muniment-command-that-does-not-exist')
   })
 })
+
+describe('onboarding Home path assertion', () => {
+  it('accepts a matching DOM path when rendered text is empty', async () => {
+    const { homePathMatches } = await import('./e2e/support/home-path.mjs')
+    const location = {
+      getProperty: async () => '/tmp/isolated-home',
+      getText: async () => '',
+    }
+
+    expect(await homePathMatches(location, '/tmp/isolated-home')).toBe(true)
+  })
+
+  it('rejects a wrong DOM path', async () => {
+    const { homePathMatches } = await import('./e2e/support/home-path.mjs')
+    const location = {
+      getProperty: async () => '/tmp/wrong-home',
+      getText: async () => '/tmp/isolated-home',
+    }
+
+    expect(await homePathMatches(location, '/tmp/isolated-home')).toBe(false)
+  })
+})

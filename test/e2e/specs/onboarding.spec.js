@@ -1,6 +1,7 @@
 import path from 'node:path'
 import { access, appendFile, mkdir, readFile } from 'node:fs/promises'
 import { chooseFolder } from '../support/folder-dialog.mjs'
+import { homePathMatches } from '../support/home-path.mjs'
 
 const FOLDER_DIALOG_WAIT_SECONDS = 30
 const FOLDER_DIALOG_TITLE = '(Select|Open|Choose|Pick).*([Ff]older|[Dd]irectory|[Ff]ile)'
@@ -55,10 +56,12 @@ describe('installed nightly model-ready onboarding', () => {
       FOLDER_DIALOG_TITLE,
       process.env.MUNIMENT_E2E_RAW_DIR,
     )
-    await browser.waitUntil(async () => await location.getText() === home, {
-      timeoutMsg: 'the Home picker did not select the isolated Home',
+    // After the native dialog closes under Xvfb, WebDriver considers this element
+    // unrendered and returns empty rendered text even when textContent is correct.
+    await browser.waitUntil(async () => await homePathMatches(location, home), {
+      timeoutMsg: 'the Home picker DOM value did not match the isolated Home',
     })
-    expect(await location.getText()).toBe(home)
+    expect(await location.getProperty('textContent')).toBe(home)
     await (await $('[data-testid="onboarding-confirm"]')).click()
     const skipImport = await $('button=Continue without importing')
     await skipImport.waitForDisplayed()
