@@ -1,6 +1,7 @@
 use chrono::{SecondsFormat, Utc};
 use muniment_core::chat_resume::resumable_locator;
 use muniment_core::journal::reducer::{project_chat_with_state, RunStatus};
+use muniment_core::journal::thread_mutation::{append_thread_delete, append_thread_rename};
 use muniment_core::journal::thread_summaries::ThreadSummary;
 use muniment_core::journal::{Provenance, RunJournal};
 #[cfg(test)]
@@ -211,31 +212,23 @@ pub(crate) fn rename_thread(
     thread_id: &str,
     title: &str,
 ) -> Result<(), String> {
-    if !subject_owns_first_run(journal, thread_id, subject)
-        .map_err(thread_ownership_error_message)?
-    {
-        return Err("Conversation history is unavailable.".into());
-    }
-    let last_thread_seq = journal
-        .last_thread_seq(thread_id)
-        .map_err(|_| "Conversation history is unavailable.".to_string())?;
-    journal
-        .append_thread_title_renamed(
-            last_thread_seq,
-            thread_id,
-            title,
-            &Utc::now().to_rfc3339_opts(SecondsFormat::AutoSi, true),
-            &Provenance {
-                source: "muniment-desktop".into(),
-                source_version: env!("CARGO_PKG_VERSION").into(),
-                actor_id: subject.map(str::to_owned),
-                device_id: None,
-                rpc_request_id: None,
-                capability_versions: None,
-                extra: BTreeMap::new(),
-            },
-        )
-        .map_err(|_| "Conversation history is unavailable.".to_string())
+    append_thread_rename(
+        journal,
+        subject,
+        thread_id,
+        title,
+        &Utc::now().to_rfc3339_opts(SecondsFormat::AutoSi, true),
+        &Provenance {
+            source: "muniment-desktop".into(),
+            source_version: env!("CARGO_PKG_VERSION").into(),
+            actor_id: subject.map(str::to_owned),
+            device_id: None,
+            rpc_request_id: None,
+            capability_versions: None,
+            extra: BTreeMap::new(),
+        },
+    )
+    .map_err(|_| "Conversation history is unavailable.".to_string())
 }
 
 pub(crate) fn delete_thread(
@@ -244,30 +237,22 @@ pub(crate) fn delete_thread(
     subject: Option<&str>,
     thread_id: &str,
 ) -> Result<(), String> {
-    if !subject_owns_first_run(journal, thread_id, subject)
-        .map_err(thread_ownership_error_message)?
-    {
-        return Err("Conversation history is unavailable.".into());
-    }
-    let last_thread_seq = journal
-        .last_thread_seq(thread_id)
-        .map_err(|_| "Conversation history is unavailable.".to_string())?;
-    journal
-        .append_thread_deleted(
-            last_thread_seq,
-            thread_id,
-            &Utc::now().to_rfc3339_opts(SecondsFormat::AutoSi, true),
-            &Provenance {
-                source: "muniment-desktop".into(),
-                source_version: env!("CARGO_PKG_VERSION").into(),
-                actor_id: subject.map(str::to_owned),
-                device_id: None,
-                rpc_request_id: None,
-                capability_versions: None,
-                extra: BTreeMap::new(),
-            },
-        )
-        .map_err(|_| "Conversation history is unavailable.".to_string())?;
+    append_thread_delete(
+        journal,
+        subject,
+        thread_id,
+        &Utc::now().to_rfc3339_opts(SecondsFormat::AutoSi, true),
+        &Provenance {
+            source: "muniment-desktop".into(),
+            source_version: env!("CARGO_PKG_VERSION").into(),
+            actor_id: subject.map(str::to_owned),
+            device_id: None,
+            rpc_request_id: None,
+            capability_versions: None,
+            extra: BTreeMap::new(),
+        },
+    )
+    .map_err(|_| "Conversation history is unavailable.".to_string())?;
     tracker.fresh_if_current(thread_id, subject);
     Ok(())
 }
