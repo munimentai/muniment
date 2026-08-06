@@ -334,8 +334,10 @@ jobs:
     # The shared real-auth fixture is exclusive: Windows starts only after the
     # Linux case has completely finished, including its finalizer.
     if: >-
-      always() && needs.prepare.result == 'success' && needs.linux-e2e.result != 'skipped' &&
-      (github.event_name != 'workflow_dispatch' || github.event.inputs.platform == 'all')
+      always() && needs.prepare.result == 'success' &&
+      (github.event_name != 'workflow_dispatch' || github.event.inputs.platform == 'all' ||
+      github.event.inputs.platform == 'windows') &&
+      (github.event.inputs.platform == 'windows' || needs.linux-e2e.result != 'skipped')
     runs-on: self-hosted
     timeout-minutes: 45
     env:
@@ -429,8 +431,10 @@ jobs:
     # pve01 permits one desktop VM at a time. macOS starts only after the
     # Windows case has completely finished, including its finalizer.
     if: >-
-      always() && needs.prepare.result == 'success' && needs.windows-e2e.result != 'skipped' &&
-      (github.event_name != 'workflow_dispatch' || github.event.inputs.platform == 'all')
+      always() && needs.prepare.result == 'success' &&
+      (github.event_name != 'workflow_dispatch' || github.event.inputs.platform == 'all' ||
+      github.event.inputs.platform == 'macos') &&
+      (github.event.inputs.platform == 'macos' || needs.windows-e2e.result != 'skipped')
     runs-on: self-hosted
     timeout-minutes: 45
     env:
@@ -514,6 +518,29 @@ jobs:
         env:
           E2E_STATUS: ${{ steps.e2e.outputs.status }}
         run: test "$E2E_STATUS" = 0
+
+  verify-requested-e2e:
+    needs: [linux-e2e, windows-e2e, macos-e2e]
+    if: always() && github.event_name == 'workflow_dispatch' && github.event.inputs.platform != 'all'
+    runs-on: self-hosted
+    env:
+      REQUESTED_PLATFORM: ${{ github.event.inputs.platform }}
+      LINUX_RESULT: ${{ needs.linux-e2e.result }}
+      WINDOWS_RESULT: ${{ needs.windows-e2e.result }}
+      MACOS_RESULT: ${{ needs.macos-e2e.result }}
+    steps:
+      - name: Reject a skipped requested E2E job
+        run: |
+          case "$REQUESTED_PLATFORM" in
+            linux) result="$LINUX_RESULT" ;;
+            windows) result="$WINDOWS_RESULT" ;;
+            macos) result="$MACOS_RESULT" ;;
+            *) echo "unsupported requested platform: $REQUESTED_PLATFORM" >&2; exit 1 ;;
+          esac
+          if [ "$result" = "skipped" ]; then
+            echo "requested $REQUESTED_PLATFORM E2E job was skipped" >&2
+            exit 1
+          fi
 
   report-e2e-failure:
     needs: [prepare, linux-e2e, windows-e2e, macos-e2e]
