@@ -10,7 +10,7 @@
   import ConfirmDialog from './lib/ConfirmDialog.svelte'
   import Onboarding from './lib/Onboarding.svelte'
   import { ARTIFACT_RAIL_MAX_WIDTH, ARTIFACT_RAIL_MIN_WIDTH, artifactRailShortcut, createArtifactRailController, defaultArtifactRailWidth, isArtifactRailShortcut, shortcutDisplayLabel } from './lib/artifact-rail-state.js'
-  import { bootState, errorState, statusState, waitingState } from './lib/auth-state.js'
+  import { bootState, errorState, registrationRetryState, statusState, waitingState } from './lib/auth-state.js'
   import { ringPath, solidMilledRingPath } from './lib/mark.js'
   import { composerAction, formatByteSize, permissionGateAction, permissionGateCommitHint, receiptLabel, receiptRows, receiptSummary, runAnnouncement, toolName, toolStatus } from './lib/chat-state.js'
   import { createChatController } from './lib/chat-controller.js'
@@ -632,6 +632,16 @@
 
   onMount(() => {
     let pairingUnlisten
+    let registrationRetryUnlisten
+    window.__TAURI__?.event?.listen('auth-registration-retry', ({ payload }) => {
+      if (auth.name === 'signing-in') auth = registrationRetryState(payload?.delay_seconds)
+    }).then((stop) => {
+      if (destroyed) stop()
+      else registrationRetryUnlisten = stop
+    }).catch(() => {
+      registrationRetryUnlisten = undefined
+      console.error('Registration retry status failed.')
+    })
     window.__TAURI__?.event?.listen('attach-pairing-requested', ({ payload }) => {
       pairingRequests = [...pairingRequests, {
         challenge: payload?.challenge,
@@ -722,6 +732,7 @@
       chatController.cleanup()
       entitlementToast.cleanup()
       pairingUnlisten?.()
+      registrationRetryUnlisten?.()
       voiceGesture.cleanup()
       transcriptController.cleanup()
       stopDragDrop?.()
@@ -812,7 +823,7 @@
     {#if onboarding.name === 'complete'}
       {#if auth.name === 'signed-out' || auth.name === 'signing-in'}
       <section class="auth-state">
-        <p class="support" aria-live="polite">{auth.name === 'signing-in' ? 'Waiting for the browser sign-in…' : 'Sign in to continue to your workspace.'}</p>
+        <p class="support" aria-live="polite">{auth.name === 'signing-in' ? auth.message : 'Sign in to continue to your workspace.'}</p>
         <button class="primary" class:inactive={auth.name === 'signing-in'} aria-disabled={auth.name === 'signing-in' ? 'true' : undefined} onclick={signIn}>Sign in</button>
       </section>
     {:else if auth.name === 'signed-in'}

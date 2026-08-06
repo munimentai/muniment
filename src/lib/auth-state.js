@@ -1,7 +1,12 @@
 export const bootState = { name: 'boot' }
 
-export function waitingState() {
-  return { name: 'signing-in' }
+export function waitingState(message = 'Waiting for the browser sign-in…') {
+  return { name: 'signing-in', message }
+}
+
+export function registrationRetryState(seconds) {
+  const delay = Math.max(1, Math.min(300, Math.trunc(Number(seconds)) || 30))
+  return waitingState(`Server busy — retrying in ${delay} s`)
 }
 
 export function statusState(status) {

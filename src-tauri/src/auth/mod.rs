@@ -110,13 +110,16 @@ impl AuthState {
 /// Run the browser sign-in flow, persist the tokens, and report the new
 /// status. Concurrent invocations are rejected while one is in flight.
 #[tauri::command]
-pub async fn auth_sign_in(state: tauri::State<'_, AuthState>) -> Result<AuthStatus, String> {
+pub async fn auth_sign_in(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, AuthState>,
+) -> Result<AuthStatus, String> {
     let permit = SignInPermit::acquire(state.sign_in_running.clone())
         .ok_or_else(|| "a sign-in is already in progress".to_string())?;
     let store = state.native_store.clone();
     let outcome = tauri::async_runtime::spawn_blocking(move || {
         let _permit = permit;
-        sign_in_blocking(store.as_ref())
+        sign_in_blocking(store.as_ref(), &app)
     })
     .await
     .map_err(|e| format!("sign-in task failed: {e}"))?;
@@ -144,6 +147,7 @@ impl Drop for SignInPermit {
 
 fn sign_in_blocking(
     store: &KeyringNativeCredentialStore,
+    app: &tauri::AppHandle,
 ) -> Result<AuthStatus, auth::NativeSignInError> {
     let network_timeout = Duration::from_secs(30);
     auth::run_native_sign_in(
@@ -155,7 +159,21 @@ fn sign_in_blocking(
         &api_base_url(),
         &unix_time,
         SIGN_IN_TIMEOUT,
+        &|delay| {
+            let _ = app.emit(
+                "auth-registration-retry",
+                RegistrationRetryStatus {
+                    delay_seconds: delay.as_secs(),
+                },
+            );
+            std::thread::sleep(delay);
+        },
     )
+}
+
+#[derive(Clone, Copy, Serialize)]
+struct RegistrationRetryStatus {
+    delay_seconds: u64,
 }
 
 fn unix_time() -> u64 {
