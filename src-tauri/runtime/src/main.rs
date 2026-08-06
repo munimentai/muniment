@@ -4,7 +4,9 @@ use muniment_core::attach::linux::{AttachFilesystem, InstanceLockError, Terminat
 use std::time::{Duration, Instant};
 
 #[cfg(target_os = "linux")]
-const WAIT_INTERVAL: Duration = Duration::from_millis(25);
+const INITIAL_WAIT_INTERVAL: Duration = Duration::from_millis(25);
+// Limit lock polling to one wakeup every two seconds during long waits.
+const MAX_WAIT_INTERVAL: Duration = Duration::from_secs(2);
 #[cfg(target_os = "linux")]
 const WAIT_TIMEOUT_ENV: &str = "MUNIMENT_RUNTIME_TEST_WAIT_TIMEOUT_MS";
 #[cfg(target_os = "linux")]
@@ -65,15 +67,26 @@ fn run() -> Result<(), String> {
     let wait_timeout = test_wait_timeout()?;
     let filesystem = AttachFilesystem::from_environment().map_err(|error| error.to_string())?;
     let started = Instant::now();
+    let mut wait_interval = INITIAL_WAIT_INTERVAL;
+    let mut reported_wait = false;
 
     let _instance_lock = loop {
         match filesystem.acquire_instance_lock() {
             Ok(lock) => break lock,
             Err(InstanceLockError::AlreadyHeld) => {
-                if wait_timeout.is_some_and(|timeout| started.elapsed() >= timeout) {
-                    return Err("instance lock wait timed out".to_owned());
+                if !reported_wait {
+                    eprintln!("muniment-runtime: waiting for the instance lock");
+                    reported_wait = true;
                 }
-                std::thread::sleep(WAIT_INTERVAL);
+                let sleep_duration = match wait_timeout {
+                    Some(timeout) => timeout
+                        .checked_sub(started.elapsed())
+                        .map(|remaining| wait_interval.min(remaining))
+                        .ok_or_else(|| "instance lock wait timed out".to_owned())?,
+                    None => wait_interval,
+                };
+                std::thread::sleep(sleep_duration);
+                wait_interval = (wait_interval * 2).min(MAX_WAIT_INTERVAL);
             }
             Err(error) => return Err(error.to_string()),
         }
