@@ -8,7 +8,8 @@
       "../THIRD_PARTY_RUST_NOTICES.md": "third-party-notices/THIRD_PARTY_RUST_NOTICES.md",
       "../src/fonts/SchibstedGrotesk-OFL.txt": "third-party-notices/SchibstedGrotesk-OFL.txt",
       "../src/fonts/CommitMono-LICENSE.txt": "third-party-notices/CommitMono-LICENSE.txt",
-      "target/release/muniment-acp": "muniment-acp"
+      "target/release/muniment-acp": "muniment-acp",
+      "target/release/muniment-runtime": "muniment-runtime"
     }
   }
 }
