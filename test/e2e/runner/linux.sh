@@ -9,6 +9,9 @@ safe=$(mktemp -d /tmp/muniment-e2e-safe.XXXXXX)
 deb=$(mktemp /tmp/muniment-nightly.XXXXXX.deb)
 auth_url_file=$(mktemp /tmp/muniment-e2e-auth-url.XXXXXX)
 state_root=$(mktemp -d /tmp/muniment-e2e-state.XXXXXX)
+runtime_dir="$state_root/runtime"
+install -d -m 0700 "$runtime_dir" || exit 1
+export XDG_RUNTIME_DIR="$runtime_dir"
 image_fixture="$state_root/image-token.png"
 cleanup_log=$(mktemp /tmp/muniment-e2e-cleanup.XXXXXX.log)
 cleanup_status_ledger=$(mktemp /tmp/muniment-e2e-cleanup-status.XXXXXX.log)
@@ -55,6 +58,7 @@ run_e2e() {
       wait "$driver_pid" "$portal_pid" 2>/dev/null || true
     }
     trap cleanup_session EXIT
+    timeout 30 gdbus wait --session --activate org.freedesktop.portal.Documents org.freedesktop.portal.Documents || { echo "xdg-document-portal did not start" >&2; exit 1; }
     timeout 30 gdbus wait --session org.freedesktop.portal.Desktop || exit 1
     timeout 30 bash -c '\''until (: >/dev/tcp/127.0.0.1/4444) 2>/dev/null; do sleep 0.2; done'\'' || exit 1
     shift 2
@@ -64,6 +68,10 @@ run_e2e() {
     timeout "$run_timeout" "${session[@]}" >"$wdio_log" 2>&1 || run_status=$?
   else
     "${session[@]}" >"$wdio_log" 2>&1 || run_status=$?
+  fi
+  if grep -Fq 'fuse init failed' "$portal_log" "$wdio_log"; then
+    echo 'xdg-document-portal failed to initialize FUSE' >&2
+    run_status=1
   fi
   stop_matching '[t]auri-driver' || run_status=1
   return "$run_status"
@@ -200,7 +208,8 @@ gh api -H 'Accept: application/octet-stream' "repos/${GITHUB_REPOSITORY}/release
 
 sudo apt-get update -qq >>"$installer_log" 2>&1 || { status=1; exit; }
 installed=1
-sudo apt-get install -y -qq webkit2gtk-driver xvfb xdotool chromium chromium-driver xdg-desktop-portal xdg-desktop-portal-gtk "$deb" >>"$installer_log" 2>&1 || { status=1; exit; }
+sudo apt-get install -y -qq webkit2gtk-driver xvfb xdotool chromium chromium-driver xdg-desktop-portal xdg-desktop-portal-gtk fuse3 libglib2.0-bin "$deb" >>"$installer_log" 2>&1 || { status=1; exit; }
+[[ -c /dev/fuse && -r /dev/fuse && -w /dev/fuse ]] || { echo 'FUSE device is unavailable to the runner user' >&2; status=1; exit; }
 npm ci --no-audit --no-fund >>"$installer_log" 2>&1 || { status=1; exit; }
 command -v tauri-driver >/dev/null || cargo install tauri-driver --version 2.0.5 --locked >>"$installer_log" 2>&1 || { status=1; exit; }
 app_binary=$(command -v muniment-desktop || command -v muniment) || { echo 'installed application binary is unavailable' >&2; status=1; exit; }
