@@ -22,7 +22,25 @@ Expanded by default (260px), state remembered; collapse (`⌘\`) animates 180ms 
 
 Top→bottom: **New thread** (`⌘N`) · **Search** (`⌘F` global) · **Threads** (recents; title + relative time, no content previews; context menu: rename, share to project…, delete) · **Projects** (section renders only if the user belongs to ≥1 project; solo users never see the concept) · **Inbox** (only if the user owns workflows or belongs to a project) · **Profile block**.
 
-**Profile block:** no avatar. `mikey · dnsfilter · owner` — name grotesque, org+role mono muted. Click → popover: appearance (System/Light/Dark), **Your access** (entitlement peek: groups list; each expands to models, connections, and capabilities granted, read-only, mono; footer "Access is set by your admins"), keyboard shortcuts, sign out.
+**Profile block:** no avatar. `mikey · dnsfilter · owner` — name grotesque, org+role mono muted. Click → popover: appearance (System/Light/Dark), **Your access**, keyboard shortcuts, sign out.
+
+#### Your access
+
+The entitlement peek lists the viewer's groups. Each group expands to its granted models, connections, and capabilities in read-only mono text.
+
+##### Available in your org
+
+The popover also lists every capability that the org library has published, whether the viewer holds a grant or not. Only admin-published entries appear. Capabilities that are still in review never appear.
+
+Each entry shows the capability `name@version`, subunit type (`skill`, `extension`, or `workflow`), approved one-line description, and connection logos. The description matches the text that the admin reviewed.
+
+Each entry has exactly one state: a mono `granted` chip, or a **Request access** button when an on-request entry lacks a viewer grant.
+
+**Request access** opens an ask flow and submits `CreateAccessRequest` from muniment-cloud's `docs/spec/access-requests-v1.md` contract. The request uses resource type `capability` and action `use`. Justification is required and must contain 1–1000 characters after trimming. Requested duration must fall between 300 seconds and 30 days. An `access_request_already_open` reply renders as `requested · waiting`, never as an error.
+
+An API denial with the contract's `request_access` affordance opens the same ask flow with the denial's request fields prefilled.
+
+The list is otherwise read-only, and admins continue to set grants. The existing footer remains: "Access is set by your admins".
 
 ### 2.2 Command palette (`⌘K`)
 
