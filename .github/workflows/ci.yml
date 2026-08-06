@@ -301,7 +301,7 @@ jobs:
             cmd='sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends libasound2-dev -o DPkg::Lock::Timeout=300 && cargo build --manifest-path src-tauri/Cargo.toml --package muniment-acp --release --locked && cargo check --manifest-path src-tauri/Cargo.toml --locked --all-targets'
           fi
           if [ "$PLATFORM" = "windows" ]; then
-            cmd='cargo test --manifest-path src-tauri/core/Cargo.toml --locked --test browser_control_windows_transport && cargo check --manifest-path src-tauri/Cargo.toml --locked --all-targets'
+            cmd='npm ci --no-audit --no-fund && npx vitest run --root . test/desktop-e2e-harness.test.js && cargo test --manifest-path src-tauri/core/Cargo.toml --locked --test browser_control_windows_transport && cargo check --manifest-path src-tauri/Cargo.toml --locked --all-targets'
           fi
           # macOS ships a universal app — preflight the arm64 cross slice too.
           if [ "$PLATFORM" = "macos" ]; then
