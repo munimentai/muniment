@@ -32,7 +32,7 @@ describe('installed onboarding spec contract', () => {
 
   it('drives the Home dialog without a production mock transport', () => {
     expect(onboardingSpec).not.toContain('browser.tauri.mock')
-    expect(onboardingSpec).toContain("run('xdotool'")
+    expect(onboardingSpec).toContain('chooseFolder(')
   })
 })
 
@@ -176,7 +176,7 @@ describe('WDIO Tauri driver contract', () => {
   it('starts and waits for the external Tauri driver around every Linux WDIO run', () => {
     const runner = fs.readFileSync(path.join(root, 'test/e2e/runner/linux.sh'), 'utf8')
     const runE2e = runner.slice(runner.indexOf('run_e2e()'), runner.indexOf('\nemit_artifacts()'))
-    expect(runE2e).toContain('tauri-driver --port 4444 >"$driver_log" 2>&1 &')
+    expect(runE2e).toMatch(/dbus-run-session[\s\S]+xdg-desktop-portal[\s\S]+tauri-driver --port 4444 >"\$2" 2>&1 &[\s\S]+npm run test:e2e/)
     expect(runE2e).toContain('/dev/tcp/127.0.0.1/4444')
     expect(runE2e.indexOf('/dev/tcp/127.0.0.1/4444')).toBeLessThan(runE2e.indexOf('npm run test:e2e'))
     expect(runE2e).toContain("stop_matching '[t]auri-driver'")
@@ -912,5 +912,28 @@ describe('installed ACP adapter contract', () => {
     expect(runner).toContain(probe)
     expect(runner.indexOf(executableCheck)).toBeLessThan(runner.indexOf(probe))
     expect(runner).toContain("echo 'installed ACP adapter initialize probe failed' >&2")
+  })
+})
+
+describe('folder dialog diagnostics', () => {
+  it('records the searched title and visible windows after a timeout', async () => {
+    const raw = temp()
+    const title = '(Choose).*([Ff]older)'
+    const timeoutError = Object.assign(new Error('dialog wait timed out'), { code: 124 })
+    const execute = async (command, args) => {
+      if (command === 'timeout') throw timeoutError
+      if (args[0] === 'search') return { stdout: '101\n202\n' }
+      if (args.at(-1) === '101') return { stdout: 'Muniment\n' }
+      return { stdout: 'Choose a Folder\n' }
+    }
+    const { chooseFolder } = await import('./e2e/support/folder-dialog.mjs')
+    await expect(chooseFolder('/tmp/home', 30, title, raw, execute)).rejects.toBe(timeoutError)
+    expect(fs.readFileSync(path.join(raw, 'folder-picker-timeout.log'), 'utf8')).toBe([
+      `searched title: ${title}`,
+      'visible window titles:',
+      '101: Muniment',
+      '202: Choose a Folder',
+      '',
+    ].join('\n'))
   })
 })
