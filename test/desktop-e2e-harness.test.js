@@ -1014,4 +1014,16 @@ describe('Windows native command contract', () => {
     expect(result.status).toBe(expectedStatus)
     expect(fs.readFileSync(path.join(artifacts, 'installer.log'), 'utf8')).toContain('native warning')
   })
+
+  it.skipIf(process.platform !== 'win32')('fails when PowerShell cannot invoke the command', () => {
+    const directory = temp()
+    const artifacts = path.join(directory, 'artifacts')
+    const runner = path.join(root, 'test/e2e/runner/windows.ps1')
+    const result = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', runner], {
+      encoding: 'utf8',
+      env: { ...process.env, TEMP: directory, TMP: directory, DCI_ARTIFACTS_DIR: artifacts, MUNIMENT_E2E_NATIVE_COMMAND_TEST_INVOCATION_ERROR: '1' },
+    })
+    expect(result.status).toBe(1)
+    expect(fs.readFileSync(path.join(artifacts, 'installer.log'), 'utf8')).toContain('muniment-command-that-does-not-exist')
+  })
 })

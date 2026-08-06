@@ -58,13 +58,18 @@ function Invoke-BoundedProcess([string]$File, [string]$Arguments, [int]$TimeoutS
 }
 
 function Invoke-NativeCommand([scriptblock]$Command, [string]$FailureMessage) {
-  $previousErrorActionPreference = $ErrorActionPreference
+  $nativeErrorPreferenceSupported = Test-Path Variable:\PSNativeCommandUseErrorActionPreference
+  $previousNativeErrorActionPreference = if ($nativeErrorPreferenceSupported) { $PSNativeCommandUseErrorActionPreference } else { $null }
   try {
-    $ErrorActionPreference = "Continue"
+    $PSNativeCommandUseErrorActionPreference = $false
     $output = & $Command
     $exitCode = $LASTEXITCODE
   } finally {
-    $ErrorActionPreference = $previousErrorActionPreference
+    if ($nativeErrorPreferenceSupported) {
+      $PSNativeCommandUseErrorActionPreference = $previousNativeErrorActionPreference
+    } else {
+      Remove-Variable PSNativeCommandUseErrorActionPreference
+    }
   }
   if ($exitCode -ne 0) { throw "$FailureMessage (exit code $exitCode)" }
   return $output
@@ -228,6 +233,10 @@ try {
   if ($env:MUNIMENT_E2E_NATIVE_COMMAND_TEST_EXIT_CODE) {
     $nativeTestExitCode = [int]$env:MUNIMENT_E2E_NATIVE_COMMAND_TEST_EXIT_CODE
     Invoke-NativeCommand { & cmd.exe /d /c "echo native warning 1>&2 & exit /b $nativeTestExitCode" *>> $installerLog } "native command test failed"
+    return
+  }
+  if ($env:MUNIMENT_E2E_NATIVE_COMMAND_TEST_INVOCATION_ERROR -eq "1") {
+    Invoke-NativeCommand { & muniment-command-that-does-not-exist *>> $installerLog } "native command test failed"
     return
   }
   if ($env:MUNIMENT_E2E_FINALIZER_TEST_MODE -eq "1") {
