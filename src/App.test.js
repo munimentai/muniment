@@ -22,6 +22,7 @@ let invoke
 let chatListener
 let dictationListener
 let entitlementListener
+let registrationRetryListener
 let eventUnlisten
 let pairingListener
 let pairingUnlisten
@@ -141,6 +142,7 @@ beforeAll(async () => {
       if (event === 'chat-event') chatListener = listener
       if (event === 'dictation-event') dictationListener = listener
       if (event === 'entitlement-changed') entitlementListener = listener
+      if (event === 'auth-registration-retry') registrationRetryListener = listener
       if (event === 'attach-pairing-requested') pairingListener = listener
       if (event === 'attach-pairing-requested' && pairingRegistrationError) {
         return Promise.reject(pairingRegistrationError)
@@ -163,6 +165,7 @@ beforeEach(() => {
   chatListener = undefined
   dictationListener = undefined
   entitlementListener = undefined
+  registrationRetryListener = undefined
   eventUnlisten = vi.fn()
   pairingListener = undefined
   pairingUnlisten = vi.fn()
@@ -485,6 +488,45 @@ describe('workspace composer entry', () => {
 
     await fireEvent.click(signIn)
     expect(invoke.mock.calls.filter(([command]) => command === 'auth_sign_in')).toHaveLength(1)
+  })
+
+  it('shows the registration wait and completes without another user action', async () => {
+    const signInRequest = deferred()
+    invoke.mockImplementation(async (command) => {
+      if (command === 'auth_status') return { signed_in: false, subject: null }
+      if (command === 'auth_sign_in') return signInRequest.promise
+      if (command === 'chat_thread_open') return []
+      if (command === 'auth_entitlement_snapshot') return snapshot()
+      if (command === 'auth_devices') return []
+      throw new Error(`unexpected command: ${command}`)
+    })
+    render(App)
+    await fireEvent.click(await screen.findByRole('button', { name: 'Sign in' }))
+    await waitFor(() => expect(registrationRetryListener).toBeDefined())
+
+    registrationRetryListener({ payload: { delay_seconds: 30 } })
+
+    expect(await screen.findByText('Server busy — retrying in 30 s')).toBeInTheDocument()
+    expect(screen.queryByText(/Sign-in not completed/)).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Try again' })).not.toBeInTheDocument()
+
+    signInRequest.resolve({ signed_in: true, subject: 'user-a' })
+    expect(await screen.findByPlaceholderText('Ask anything')).toBeInTheDocument()
+    expect(invoke.mock.calls.filter(([command]) => command === 'auth_sign_in')).toHaveLength(1)
+  })
+
+  it('shows the terminal screen for a non-retryable registration error', async () => {
+    invoke.mockImplementation(async (command) => {
+      if (command === 'auth_status') return { signed_in: false, subject: null }
+      if (command === 'auth_sign_in') throw new Error('native installation registration failed')
+      throw new Error(`unexpected command: ${command}`)
+    })
+    render(App)
+
+    await fireEvent.click(await screen.findByRole('button', { name: 'Sign in' }))
+
+    expect(await screen.findByText(/Sign-in not completed — Error: native installation registration failed/)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Try again' })).toBeInTheDocument()
   })
 
   it('does not focus a composer in the auth-error state', async () => {
@@ -2535,7 +2577,7 @@ describe('voice dictation', () => {
     const voice = screen.getByRole('button', { name: 'Voice' })
     await fireEvent.click(voice)
     view.unmount()
-    expect(eventUnlisten).toHaveBeenCalledTimes(3)
+    expect(eventUnlisten).toHaveBeenCalledTimes(4)
     expect(pairingUnlisten).toHaveBeenCalledTimes(1)
     await new Promise((resolve) => setTimeout(resolve, 130))
     expect(invoke).not.toHaveBeenCalledWith('dictation_status')

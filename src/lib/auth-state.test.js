@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { accessErrorState, accessLoadingState, accessReadyState, bootState, companionsErrorState, companionsLoadingState, companionsReadyState, devicesErrorState, devicesLoadingState, devicesReadyState, errorState, platformDisplayName, statusState, waitingState } from './auth-state.js'
+import { accessErrorState, accessLoadingState, accessReadyState, bootState, companionsErrorState, companionsLoadingState, companionsReadyState, devicesErrorState, devicesLoadingState, devicesReadyState, errorState, platformDisplayName, registrationRetryState, statusState, waitingState } from './auth-state.js'
 
 describe('auth state transitions', () => {
   it('starts in boot and resolves status to signed out', () => {
@@ -9,11 +9,17 @@ describe('auth state transitions', () => {
   })
 
   it('moves through waiting to a signed-in profile', () => {
-    expect(waitingState()).toEqual({ name: 'signing-in' })
+    expect(waitingState()).toEqual({ name: 'signing-in', message: 'Waiting for the browser sign-in…' })
     expect(statusState({ signed_in: true, subject: 'mikey@example.com' })).toEqual({
       name: 'signed-in',
       subject: 'mikey@example.com',
     })
+  })
+
+  it('bounds the registration retry status delay', () => {
+    expect(registrationRetryState(7).message).toBe('Server busy — retrying in 7 s')
+    expect(registrationRetryState('invalid').message).toBe('Server busy — retrying in 30 s')
+    expect(registrationRetryState(999).message).toBe('Server busy — retrying in 300 s')
   })
 
   it('keeps the failed action available for retry', () => {
