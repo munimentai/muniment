@@ -6,7 +6,7 @@ try {
   $diagnosticFile = Join-Path $artifacts "runner-failure.txt"
   $transcriptPath = Join-Path $env:TEMP "dci-windows-transcript.log"
   if ($env:MUNIMENT_E2E_BOOTSTRAP_TEST_FAIL -eq "start-transcript") { throw "injected Start-Transcript failure" }
-  Start-Transcript -LiteralPath $transcriptPath -Force -ErrorAction Stop | Out-Null
+  Start-Transcript -LiteralPath $transcriptPath -Force -ErrorAction SilentlyContinue | Out-Null
 } catch {
   $bootstrapDiagnostic = "message: $($_.Exception.Message)`ncategory: $($_.CategoryInfo.Category)`nline: $($_.InvocationInfo.ScriptLineNumber)"
   Write-Output $bootstrapDiagnostic
