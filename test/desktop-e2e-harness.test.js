@@ -553,8 +553,11 @@ describe('Windows nightly workflow gate', () => {
     expect(evaluate({ eventName: 'workflow_dispatch', platform: 'linux' })).toBe(false)
   })
 
+  it('runs a Windows-only dispatch when Linux skips', () => {
+    expect(evaluate({ eventName: 'workflow_dispatch', platform: 'windows', linux: 'skipped' })).toBe(true)
+  })
+
   it.each([
-    ['workflow_dispatch', 'windows', 'success', 'skipped'],
     ['schedule', undefined, 'failure', 'success'],
     ['schedule', undefined, 'success', 'skipped'],
   ])('does not run without the full serialized prerequisites', (eventName, platform, prepare, linux) => {
