@@ -749,6 +749,10 @@ nothing else. The `approved-review` screen is headed `Save approved files` and
 carries `Back to archive review` beside `Save Home and finish`.
 `test/probe/approved-files.html` drives the built bundle to it.
 
+RATIFIED 2026-08-06 — memory retrieval has two phases. Phase one builds a
+lexical index with zero new dependencies. Phase two adds vector search and a
+pinned embedding artifact.
+
 DONE 2026-07-29 — first-run folder setup fails open (MUNIDESK-660, 661, 684).
 `choose_default_home` returns `<home>/Documents/Muniment` when that parent exists
 and `<home>/Muniment` otherwise. The onboarding `load-error` branch carries
