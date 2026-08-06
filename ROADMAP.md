@@ -982,6 +982,9 @@ DONE 2026-08-05 — `THREAT_MODEL.md` records the workspace namespace
 is only a local execution root, and it grants no scope. With no current cloud
 grant the approval and all four operations fail closed.
 
+OPEN — the ADR 0012 runtime service row in `THREAT_MODEL.md` must record the
+landed migration control authority check and its same-user limitation.
+
 OPEN — the standing policy line for the agent system prompt stays a proposal
 inside ADR 0018. harness-spec §16.1 rule 4 gates prompt text on review and
 evaluation, and §16.2 records base v0 as owner-accepted verbatim. The
