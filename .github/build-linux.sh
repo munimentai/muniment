@@ -36,5 +36,6 @@ fetch_tool \
   "$tauri_cache/linuxdeploy-plugin-gstreamer.sh"
 
 cargo build --manifest-path "$repo_root/src-tauri/Cargo.toml" --package muniment-acp --release --locked
+cargo build --manifest-path "$repo_root/src-tauri/Cargo.toml" --package muniment-runtime --release --locked
 
 exec npm run tauri build "$@"
