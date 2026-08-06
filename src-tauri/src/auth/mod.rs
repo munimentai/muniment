@@ -7,22 +7,18 @@
 //! an `AuthStatus` (signed-in flag, subject, expiry) and error strings that
 //! `muniment_core::auth::AuthError` guarantees are token-free.
 
-mod keyring_store;
-
 use std::process::Command;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use muniment_core::auth::{
-    self, AuthStatus, BrowserOpenError, EntitlementSnapshotTracker, NativeCredentialStore,
-    UreqAuthorizationTransport, UreqNativeDeviceListTransport, UreqRegistrationTransport,
-    UreqRevocationTransport, UreqSessionTransport, UreqTokenTransport,
+    self, AuthStatus, BrowserOpenError, EntitlementSnapshotTracker, KeyringNativeCredentialStore,
+    NativeCredentialStore, UreqAuthorizationTransport, UreqNativeDeviceListTransport,
+    UreqRegistrationTransport, UreqRevocationTransport, UreqSessionTransport, UreqTokenTransport,
 };
 use serde::Serialize;
 use tauri::Emitter;
-
-use keyring_store::KeyringNativeCredentialStore;
 
 /// Default OIDC issuer: the muniment-cloud control plane.
 const DEFAULT_ISSUER: &str = "https://api.muniment.ai";
