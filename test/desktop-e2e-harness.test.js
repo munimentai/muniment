@@ -374,7 +374,8 @@ describe.skipIf(process.platform === 'win32')('macOS installed launch harness', 
 describe('Windows finalizer contract', () => {
   const runnerPath = path.join(root, 'test/e2e/runner/windows.ps1')
   const runner = fs.readFileSync(runnerPath, 'utf8')
-  const finalizer = runner.slice(runner.indexOf('function Finalize-Run'), runner.indexOf('\ntry {'))
+  const bodyBoundary = runner.indexOf('\ntry {\n  # desktop-ci')
+  const finalizer = runner.slice(runner.indexOf('function Finalize-Run'), bodyBoundary)
   const phases = [...finalizer.matchAll(/Invoke-Cleanup "([^"]+)"/g)].map((match) => match[1])
   const injectablePhases = [...new Set(phases)].filter((phase) => phase !== 'suppress-artifacts')
 
@@ -394,11 +395,15 @@ describe('Windows finalizer contract', () => {
     expect(runner).not.toContain('C:\\dci-artifacts')
   })
 
-  it('establishes try/finally before directory and cleanup-log creation', () => {
-    const boundary = runner.indexOf('\ntry {')
+  it('starts diagnostics before the guarded body creates staging directories', () => {
+    const boundary = bodyBoundary
+    expect(runner.indexOf('New-Item -ItemType Directory -Force $artifacts')).toBeLessThan(runner.indexOf('Start-Transcript'))
+    expect(runner.indexOf('Start-Transcript')).toBeLessThan(runner.indexOf('$ErrorActionPreference'))
+    expect(runner.indexOf('New-Item -ItemType Directory -Force $artifacts')).toBeLessThan(runner.indexOf('$ErrorActionPreference'))
     expect(runner.indexOf('New-Item -ItemType Directory -Force $raw, $stateRoot')).toBeGreaterThan(boundary)
     expect(runner.indexOf('New-Item -ItemType File -Force $cleanupLog')).toBeGreaterThan(boundary)
-    expect(runner).toMatch(/finally \{\s*Finalize-Run\s*\}/)
+    expect(runner).toContain('$diagnosticFile = Join-Path $artifacts "runner-failure.txt"')
+    expect(runner).toMatch(/catch \{[\s\S]+message:[\s\S]+category:[\s\S]+line:[\s\S]+Set-Content -LiteralPath \$diagnosticFile[\s\S]+Write-Output[\s\S]+finally \{/)
   })
 
   const runWindowsFinalizer = (failed = '', setupFail = '', extraEnv = {}) => {
@@ -414,6 +419,32 @@ describe('Windows finalizer contract', () => {
   }
 
   const runWindowsAbsenceFailure = (variable) => runWindowsFinalizer('', '', { [variable]: '1' })
+
+  it.skipIf(process.platform !== 'win32')('writes stdout when artifact directory creation fails', () => {
+    const directory = temp()
+    const blockedPath = path.join(directory, 'not-a-directory')
+    fs.writeFileSync(blockedPath, 'blocked')
+    const result = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', runnerPath], {
+      encoding: 'utf8',
+      env: { ...process.env, TEMP: directory, TMP: directory, DCI_ARTIFACTS_DIR: blockedPath },
+    })
+    expect(result.status).not.toBe(0)
+    expect(result.stdout).toContain('message:')
+    expect(result.stdout).toContain('category:')
+    expect(result.stdout).toMatch(/line: [1-9]\d*/)
+  })
+
+  it.skipIf(process.platform !== 'win32')('writes a diagnostic artifact and stdout when transcript startup fails', () => {
+    const directory = temp()
+    const artifacts = path.join(directory, 'artifacts')
+    const result = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', runnerPath], {
+      encoding: 'utf8',
+      env: { ...process.env, TEMP: directory, TMP: directory, DCI_ARTIFACTS_DIR: artifacts, MUNIMENT_E2E_BOOTSTRAP_TEST_FAIL: 'start-transcript' },
+    })
+    expect(result.status).not.toBe(0)
+    expect(result.stdout).toContain('message: injected Start-Transcript failure')
+    expect(fs.readFileSync(path.join(artifacts, 'runner-failure.txt'), 'utf8')).toContain('message: injected Start-Transcript failure')
+  })
 
   it.skipIf(process.platform !== 'win32')('passes all lifecycle absence actions after fixture uninstall', () => {
     const { result, statuses } = runWindowsFinalizer()
@@ -456,8 +487,14 @@ describe('Windows finalizer contract', () => {
   })
 
   it.skipIf(process.platform !== 'win32')('finalizes a failure during partial setup', () => {
-    const { result, invoked } = runWindowsFinalizer('', 'before-directories')
+    const { result, invoked, artifacts } = runWindowsFinalizer('', 'before-directories')
     expect(result.status).not.toBe(0)
+    expect(result.stdout).toContain('message: injected setup failure')
+    expect(result.stdout).toContain('dci: Windows runner transcript tail')
+    const diagnostic = fs.readFileSync(path.join(artifacts, 'runner-failure.txt'), 'utf8')
+    expect(diagnostic).toContain('message: injected setup failure')
+    expect(diagnostic).toMatch(/category: \w+/)
+    expect(diagnostic).toMatch(/line: [1-9]\d*/)
     expect(invoked).toContain('redact-artifacts')
     expect(invoked).toContain('suppress-artifacts')
     expect(invoked.at(-1)).toBe('suppress-artifacts')
@@ -474,11 +511,24 @@ describe('Windows finalizer contract', () => {
     expect(fs.readdirSync(directory).filter((name) => name.startsWith('muniment-e2e-'))).toEqual([])
   })
 
-  it.skipIf(process.platform !== 'win32')('destroys raw and safe staging after publication failure', () => {
+  it.skipIf(process.platform !== 'win32')('blocks a transcript that contains an injected secret', () => {
+    const plantedSecret = 'windows-planted-secret'
+    const { result, artifacts } = runWindowsFinalizer('', '', {
+      MUNIMENT_E2E_PASSWORD: plantedSecret,
+      MUNIMENT_E2E_FINALIZER_TEST_TRANSCRIPT_TEXT: plantedSecret,
+    })
+    expect(result.status).not.toBe(0)
+    expect(fs.readdirSync(artifacts).sort()).toEqual(['cleanup-status.log', 'envelope-reason.txt', 'redaction-failure.txt'])
+    expect(fs.readFileSync(path.join(artifacts, 'redaction-failure.txt'), 'utf8')).toContain('file: "runner-transcript.log"')
+    expect(fs.readFileSync(path.join(artifacts, 'redaction-failure.txt'), 'utf8')).not.toContain(plantedSecret)
+  })
+
+  it.skipIf(process.platform !== 'win32')('destroys staging and prints the transcript after publication failure', () => {
     const { result, artifacts, directory, invoked } = runWindowsFinalizer('publish-artifacts')
     expect(result.status).not.toBe(0)
     expect(invoked).toContain('suppress-artifacts')
-    expect(fs.existsSync(artifacts)).toBe(false)
+    expect(result.stdout).toContain('dci: Windows runner transcript tail')
+    expect(fs.readdirSync(artifacts)).toEqual([])
     expect(fs.readdirSync(directory).filter((name) => name.startsWith('muniment-e2e-'))).toEqual([])
   })
 })
@@ -509,6 +559,17 @@ describe('Windows nightly workflow gate', () => {
     ['schedule', undefined, 'success', 'skipped'],
   ])('does not run without the full serialized prerequisites', (eventName, platform, prepare, linux) => {
     expect(evaluate({ eventName, platform, prepare, linux })).toBe(false)
+  })
+})
+
+describe('JUnit infrastructure fallback', () => {
+  it.skipIf(process.platform === 'win32')('includes and escapes the captured runner reason', () => {
+    const artifacts = temp()
+    fs.writeFileSync(path.join(artifacts, 'runner-failure.txt'), 'message: setup <failed> & stopped\ncategory: InvalidOperation\nline: 42\n')
+    const result = spawnSync('bash', [path.join(root, 'test/e2e/support/ensure-junit-report.sh'), artifacts, 'installed-windows', '1', '1'], { encoding: 'utf8' })
+    expect(result.status, result.stderr).toBe(0)
+    const report = fs.readFileSync(path.join(artifacts, 'junit-infrastructure.xml'), 'utf8')
+    expect(report).toContain('desktop-ci did not return a valid artifact envelope: message: setup &lt;failed&gt; &amp; stopped category: InvalidOperation line: 42')
   })
 })
 
