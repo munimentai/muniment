@@ -40,6 +40,7 @@ $handlerKey = "HKCU:\Software\Classes\muniment-e2e-https"
 $httpsKey = "HKCU:\Software\Classes\https"
 $testRegistration = $null
 $testProcess = $null
+$redactor = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot "../support/redact.mjs"))
 
 function Invoke-BoundedProcess([string]$File, [string]$Arguments, [int]$TimeoutSeconds, [string]$Log) {
   $errorLog = $Log + ".err"
@@ -203,7 +204,7 @@ function Finalize-Run {
   Invoke-Cleanup "redact-artifacts" {
     if (-not $raw -or -not (Test-Path $raw)) { throw "raw staging is unavailable" }
     try {
-      Invoke-NativeCommand "node" "test/e2e/support/redact.mjs `"$raw`" `"$safe`" `"$redactionReport`"" $cleanupLog "artifact redaction failed"
+      Invoke-NativeCommand "node" "`"$redactor`" `"$raw`" `"$safe`" `"$redactionReport`"" $cleanupLog "artifact redaction failed"
     } catch {
       $script:redacted = $false
       throw
