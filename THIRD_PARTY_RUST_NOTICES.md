@@ -35,6 +35,8 @@ Each entry gives the crate name, exact version, and license expression from `car
 - `atk-sys` 0.18.2 — MIT
 - `atomic-waker` 1.1.2 — Apache-2.0 OR MIT
 - `autocfg` 1.5.1 — Apache-2.0 OR MIT
+- `axum` 0.8.9 — MIT
+- `axum-core` 0.5.6 — MIT
 - `base64` 0.21.7 — MIT OR Apache-2.0
 - `base64` 0.22.1 — MIT OR Apache-2.0
 - `base64ct` 1.8.3 — Apache-2.0 OR MIT
@@ -68,6 +70,7 @@ Each entry gives the crate name, exact version, and license expression from `car
 - `cesu8` 1.1.0 — Apache-2.0/MIT
 - `cfb` 0.7.3 — MIT
 - `cfg-expr` 0.15.8 — MIT OR Apache-2.0
+- `cfg-expr` 0.20.8 — MIT OR Apache-2.0
 - `cfg-if` 1.0.4 — MIT OR Apache-2.0
 - `chrono` 0.4.45 — MIT OR Apache-2.0
 - `cipher` 0.4.4 — MIT OR Apache-2.0
@@ -177,12 +180,17 @@ Each entry gives the crate name, exact version, and license expression from `car
 - `gif` 0.14.2 — MIT OR Apache-2.0
 - `gio` 0.18.4 — MIT
 - `gio-sys` 0.18.1 — MIT
+- `gio-sys` 0.21.5 — MIT
 - `glib` 0.18.5 — MIT
+- `glib` 0.21.5 — MIT
 - `glib-macros` 0.18.5 — MIT
+- `glib-macros` 0.21.5 — MIT
 - `glib-sys` 0.18.1 — MIT
+- `glib-sys` 0.21.5 — MIT
 - `glob` 0.3.3 — MIT OR Apache-2.0
 - `global-hotkey` 0.8.0 — Apache-2.0 OR MIT
 - `gobject-sys` 0.18.0 — MIT
+- `gobject-sys` 0.21.5 — MIT
 - `gtk` 0.18.2 — MIT
 - `gtk-sys` 0.18.2 — MIT
 - `gtk3-macros` 0.18.2 — MIT
@@ -201,6 +209,7 @@ Each entry gives the crate name, exact version, and license expression from `car
 - `http-body` 1.1.0 — MIT
 - `http-body-util` 0.1.4 — MIT
 - `httparse` 1.10.1 — MIT OR Apache-2.0
+- `httpdate` 1.0.3 — MIT OR Apache-2.0
 - `hyper` 1.10.1 — MIT
 - `hyper-util` 0.1.20 — MIT
 - `iana-time-zone` 0.1.65 — MIT OR Apache-2.0
@@ -254,6 +263,7 @@ Each entry gives the crate name, exact version, and license expression from `car
 - `log` 0.4.33 — MIT OR Apache-2.0
 - `mach2` 0.4.3 — BSD-2-Clause OR MIT OR Apache-2.0
 - `markup5ever` 0.38.0 — MIT OR Apache-2.0
+- `matchit` 0.8.4 — MIT AND BSD-3-Clause
 - `maybe-owned` 0.3.4 — MIT OR Apache-2.0
 - `memchr` 2.8.3 — Unlicense OR MIT
 - `memoffset` 0.9.1 — MIT
@@ -283,11 +293,14 @@ Each entry gives the crate name, exact version, and license expression from `car
 - `objc2-core-image` 0.3.2 — Zlib OR Apache-2.0 OR MIT
 - `objc2-core-location` 0.3.2 — Zlib OR Apache-2.0 OR MIT
 - `objc2-core-text` 0.3.2 — Zlib OR Apache-2.0 OR MIT
+- `objc2-core-video` 0.3.2 — Zlib OR Apache-2.0 OR MIT
 - `objc2-encode` 4.1.0 — MIT
 - `objc2-exception-helper` 0.1.1 — Zlib OR Apache-2.0 OR MIT
 - `objc2-foundation` 0.3.2 — MIT
 - `objc2-io-surface` 0.3.2 — Zlib OR Apache-2.0 OR MIT
+- `objc2-javascript-core` 0.3.2 — Zlib OR Apache-2.0 OR MIT
 - `objc2-quartz-core` 0.3.2 — Zlib OR Apache-2.0 OR MIT
+- `objc2-security` 0.3.2 — Zlib OR Apache-2.0 OR MIT
 - `objc2-ui-kit` 0.3.2 — Zlib OR Apache-2.0 OR MIT
 - `objc2-user-notifications` 0.3.2 — Zlib OR Apache-2.0 OR MIT
 - `objc2-web-kit` 0.3.2 — Zlib OR Apache-2.0 OR MIT
@@ -356,6 +369,7 @@ Each entry gives the crate name, exact version, and license expression from `car
 - `rustls-pki-types` 1.15.0 — MIT OR Apache-2.0
 - `rustls-webpki` 0.103.13 — ISC
 - `rustversion` 1.0.23 — MIT OR Apache-2.0
+- `ryu` 1.0.23 — Apache-2.0 OR BSL-1.0
 - `same-file` 1.0.6 — Unlicense/MIT
 - `schannel` 0.1.29 — MIT
 - `schemars` 0.8.22 — MIT
@@ -374,9 +388,11 @@ Each entry gives the crate name, exact version, and license expression from `car
 - `serde_derive` 1.0.228 — MIT OR Apache-2.0
 - `serde_derive_internals` 0.29.1 — MIT OR Apache-2.0
 - `serde_json` 1.0.150 — MIT OR Apache-2.0
+- `serde_path_to_error` 0.1.20 — MIT OR Apache-2.0
 - `serde_repr` 0.1.20 — MIT OR Apache-2.0
 - `serde_spanned` 0.6.9 — MIT OR Apache-2.0
 - `serde_spanned` 1.1.1 — MIT OR Apache-2.0
+- `serde_urlencoded` 0.7.1 — MIT/Apache-2.0
 - `serde_with` 3.21.0 — MIT OR Apache-2.0
 - `serde_with_macros` 3.21.0 — MIT OR Apache-2.0
 - `serde-untagged` 0.1.9 — MIT OR Apache-2.0
@@ -414,10 +430,12 @@ Each entry gives the crate name, exact version, and license expression from `car
 - `sync_wrapper` 1.0.2 — Apache-2.0
 - `synstructure` 0.13.2 — MIT
 - `system-deps` 6.2.2 — MIT OR Apache-2.0
+- `system-deps` 7.0.8 — MIT OR Apache-2.0
 - `tao` 0.35.3 — Apache-2.0
 - `tao-macros` 0.1.3 — MIT OR Apache-2.0
 - `tar` 0.4.46 — MIT OR Apache-2.0
 - `target-lexicon` 0.12.16 — Apache-2.0 WITH LLVM-exception
+- `target-lexicon` 0.13.5 — Apache-2.0 WITH LLVM-exception
 - `tauri` 2.11.5 — Apache-2.0 OR MIT
 - `tauri-build` 2.6.3 — Apache-2.0 OR MIT
 - `tauri-codegen` 2.6.3 — Apache-2.0 OR MIT
@@ -427,6 +445,7 @@ Each entry gives the crate name, exact version, and license expression from `car
 - `tauri-plugin-fs` 2.5.1 — Apache-2.0 OR MIT
 - `tauri-plugin-global-shortcut` 2.3.2 — Apache-2.0 OR MIT
 - `tauri-plugin-opener` 2.5.4 — Apache-2.0 OR MIT
+- `tauri-plugin-wdio-webdriver` 1.3.0 — MIT
 - `tauri-plugin-window-state` 2.4.1 — Apache-2.0 OR MIT
 - `tauri-runtime` 2.11.3 — Apache-2.0 OR MIT
 - `tauri-runtime-wry` 2.11.4 — Apache-2.0 OR MIT
@@ -445,6 +464,7 @@ Each entry gives the crate name, exact version, and license expression from `car
 - `tinyvec` 1.12.0 — Zlib OR Apache-2.0 OR MIT
 - `tinyvec_macros` 0.1.1 — MIT OR Apache-2.0 OR Zlib
 - `tokio` 1.52.3 — MIT
+- `tokio-macros` 2.7.2 — MIT
 - `tokio-util` 0.7.18 — MIT
 - `toml` 0.8.2 — MIT OR Apache-2.0
 - `toml` 0.9.12+spec-1.1.0 — MIT OR Apache-2.0

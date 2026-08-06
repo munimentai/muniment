@@ -334,8 +334,10 @@ jobs:
     # The shared real-auth fixture is exclusive: Windows starts only after the
     # Linux case has completely finished, including its finalizer.
     if: >-
-      always() && needs.prepare.result == 'success' && needs.linux-e2e.result != 'skipped' &&
-      (github.event_name != 'workflow_dispatch' || github.event.inputs.platform == 'all')
+      always() && needs.prepare.result == 'success' &&
+      (github.event_name != 'workflow_dispatch' || github.event.inputs.platform == 'all' ||
+      github.event.inputs.platform == 'windows') &&
+      (github.event.inputs.platform == 'windows' || needs.linux-e2e.result != 'skipped')
     runs-on: self-hosted
     timeout-minutes: 45
     env:
@@ -429,14 +431,18 @@ jobs:
     # pve01 permits one desktop VM at a time. macOS starts only after the
     # Windows case has completely finished, including its finalizer.
     if: >-
-      always() && needs.prepare.result == 'success' && needs.windows-e2e.result != 'skipped' &&
-      (github.event_name != 'workflow_dispatch' || github.event.inputs.platform == 'all')
+      always() && needs.prepare.result == 'success' &&
+      (github.event_name != 'workflow_dispatch' || github.event.inputs.platform == 'all' ||
+      github.event.inputs.platform == 'macos') &&
+      (github.event.inputs.platform == 'macos' || needs.windows-e2e.result != 'skipped')
     runs-on: self-hosted
     timeout-minutes: 45
     env:
       SOURCE_SHA: ${{ needs.prepare.outputs.source_sha }}
       REPOSITORY: ${{ github.repository }}
       RELEASE_TOKEN: ${{ github.token }}
+      FIXTURE_USERNAME: ${{ secrets.DESKTOP_E2E_USERNAME }}
+      FIXTURE_PASSWORD: ${{ secrets.DESKTOP_E2E_PASSWORD }}
     steps:
       - name: Check out E2E harness
         uses: actions/checkout@v7
@@ -447,7 +453,7 @@ jobs:
         run: |
           [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo 'source_sha must be exactly 40 lowercase hex characters' >&2; exit 1; }
 
-      - name: Run installed macOS launch smoke via desktop-ci
+      - name: Run macOS release smoke and embedded E2E via desktop-ci
         id: e2e
         run: |
           set -uo pipefail
@@ -458,13 +464,15 @@ jobs:
           printf '%s' "$DESKTOP_CI_SSH_KEY" >"$key"
           trap 'rm -f "$key" "$output"' EXIT
 
-          cmd='bash test/e2e/runner/macos.sh'
+          cmd='bash test/e2e/runner/macos.sh >/tmp/muniment-macos-smoke-artifacts && bash test/e2e/runner/macos-wdio.sh'
           remote="sudo desktop-ci macos --repo 'https://github.com/${REPOSITORY}.git' --ref '$SOURCE_SHA' --cmd '$cmd' --env-stdin --memory 8192 --build-timeout 2400 --collect-artifacts --screendump"
           set +e
           printf '%s\n' \
             "GH_TOKEN=$RELEASE_TOKEN" \
             "GITHUB_REPOSITORY=$REPOSITORY" \
             "MUNIMENT_E2E_SOURCE_SHA=$SOURCE_SHA" \
+            "MUNIMENT_E2E_USERNAME=$FIXTURE_USERNAME" \
+            "MUNIMENT_E2E_PASSWORD=$FIXTURE_PASSWORD" \
           | ssh -i "$key" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
               -o BatchMode=yes -o ServerAliveInterval=30 -o ServerAliveCountMax=8 \
               desktopci@10.1.10.10 "$remote" >"$output" 2>&1
@@ -478,7 +486,7 @@ jobs:
             tail -n 200 "$output"
           fi
           bash test/e2e/support/ensure-junit-report.sh \
-            "$RUNNER_TEMP/muniment-macos-e2e-artifacts" installed-macos "$run_status" "$extract_status" 1
+            "$RUNNER_TEMP/muniment-macos-e2e-artifacts" installed-macos "$run_status" "$extract_status"
           if (( run_status != 0 || extract_status != 0 )); then final_status=1; else final_status=0; fi
           printf 'status=%s\n' "$final_status" >>"$GITHUB_OUTPUT"
 
@@ -514,6 +522,29 @@ jobs:
         env:
           E2E_STATUS: ${{ steps.e2e.outputs.status }}
         run: test "$E2E_STATUS" = 0
+
+  verify-requested-e2e:
+    needs: [linux-e2e, windows-e2e, macos-e2e]
+    if: always() && github.event_name == 'workflow_dispatch' && github.event.inputs.platform != 'all'
+    runs-on: self-hosted
+    env:
+      REQUESTED_PLATFORM: ${{ github.event.inputs.platform }}
+      LINUX_RESULT: ${{ needs.linux-e2e.result }}
+      WINDOWS_RESULT: ${{ needs.windows-e2e.result }}
+      MACOS_RESULT: ${{ needs.macos-e2e.result }}
+    steps:
+      - name: Reject a skipped requested E2E job
+        run: |
+          case "$REQUESTED_PLATFORM" in
+            linux) result="$LINUX_RESULT" ;;
+            windows) result="$WINDOWS_RESULT" ;;
+            macos) result="$MACOS_RESULT" ;;
+            *) echo "unsupported requested platform: $REQUESTED_PLATFORM" >&2; exit 1 ;;
+          esac
+          if [ "$result" = "skipped" ]; then
+            echo "requested $REQUESTED_PLATFORM E2E job was skipped" >&2
+            exit 1
+          fi
 
   report-e2e-failure:
     needs: [prepare, linux-e2e, windows-e2e, macos-e2e]
