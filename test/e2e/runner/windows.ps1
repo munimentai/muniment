@@ -1,10 +1,16 @@
 param()
 
+Start-Transcript -LiteralPath "$env:TEMP\dci-windows-transcript.log" -Force | Out-Null
+$transcriptPath = "$env:TEMP\dci-windows-transcript.log"
+$artifacts = if ($env:DCI_ARTIFACTS_DIR) { $env:DCI_ARTIFACTS_DIR } else { Join-Path $env:TEMP "dci-artifacts" }
+New-Item -ItemType Directory -Force $artifacts | Out-Null
+$diagnosticFile = Join-Path $artifacts "runner-failure.txt"
+$diagnostic = $null
+
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
 $ProgressPreference = "SilentlyContinue"
 
-$artifacts = $null
 $runRoot = $null
 $raw = $null
 $safe = $null
@@ -167,14 +173,13 @@ function Finalize-Run {
   }
   if ($cleanupLog) { Remove-Item $cleanupLog -Force -ErrorAction SilentlyContinue }
   if ($runRoot) { Remove-Item $runRoot -Recurse -Force -ErrorAction SilentlyContinue }
-  if ($status -ne 0 -or $cleanupStatus -ne 0 -or -not $script:redacted) { exit 1 }
+  if ($cleanupStatus -ne 0 -or -not $script:redacted) { $script:status = 1 }
 }
 
 try {
   # desktop-ci collects %TEMP%\dci-artifacts on Windows and DCI_ARTIFACTS_DIR is
   # not injected by the nightly, so any other default silently sends the lane
   # down the driver's DCI-NO-ARTIFACTS path with no report at all.
-  $artifacts = if ($env:DCI_ARTIFACTS_DIR) { $env:DCI_ARTIFACTS_DIR } else { Join-Path $env:TEMP "dci-artifacts" }
   $runRoot = Join-Path $env:TEMP ("muniment-e2e-" + [guid]::NewGuid().ToString("N"))
   $raw = Join-Path $runRoot "raw"
   $safe = Join-Path $runRoot "safe"
@@ -284,9 +289,22 @@ try {
   & npm.cmd run test:e2e 1> $wdioLog 2> $driverAppLog
   if ($LASTEXITCODE -ne 0) { $status = 1 }
 } catch {
+  $diagnostic = "message: $($_.Exception.Message)`ncategory: $($_.CategoryInfo.Category)`nline: $($_.InvocationInfo.ScriptLineNumber)"
+  Set-Content -LiteralPath $diagnosticFile -Value $diagnostic -ErrorAction SilentlyContinue
+  Write-Output $diagnostic
   if ($env:MUNIMENT_E2E_FINALIZER_TEST_SETUP_FAIL) { $script:redacted = $false }
   if ($installerLog) { Add-Content $installerLog "runner failed: $($_.Exception.Message)" -ErrorAction SilentlyContinue }
   $status = 1
 } finally {
   Finalize-Run
+  Stop-Transcript -ErrorAction SilentlyContinue | Out-Null
+  New-Item -ItemType Directory -Force $artifacts -ErrorAction SilentlyContinue | Out-Null
+  if ($diagnostic) { Set-Content -LiteralPath $diagnosticFile -Value $diagnostic -ErrorAction SilentlyContinue }
+  Copy-Item -LiteralPath $transcriptPath -Destination (Join-Path $artifacts "runner-transcript.log") -Force -ErrorAction SilentlyContinue
+  if ($status -ne 0) {
+    Write-Output "dci: Windows runner transcript tail"
+    Get-Content -LiteralPath $transcriptPath -Tail 200 -ErrorAction SilentlyContinue | Write-Output
+  }
+  Remove-Item -LiteralPath $transcriptPath -Force -ErrorAction SilentlyContinue
+  exit $status
 }

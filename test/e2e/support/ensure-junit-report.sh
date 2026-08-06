@@ -32,6 +32,22 @@ else
   failure_message='desktop-ci failed before producing a JUnit report'
 fi
 
+reason_file=
+for candidate in runner-failure.txt envelope-reason.txt desktop-ci-harness.log; do
+  if [[ -s "$artifacts_dir/$candidate" ]]; then
+    reason_file="$artifacts_dir/$candidate"
+    break
+  fi
+done
+if [[ -n $reason_file ]]; then
+  captured_reason=$(tail -n 20 "$reason_file" | tr '\r\n' '  ' | sed 's/[[:space:]][[:space:]]*/ /g; s/^ //; s/ $//')
+  if [[ -n $captured_reason ]]; then
+    failure_message="$failure_message: $captured_reason"
+  fi
+fi
+
+failure_message=$(printf '%s' "$failure_message" | sed 's/\&/\&amp;/g; s/</\&lt;/g; s/>/\&gt;/g; s/"/\&quot;/g; s/'"'"'/\&apos;/g')
+
 printf '%s\n' \
   '<?xml version="1.0" encoding="UTF-8"?>' \
   "<testsuites tests=\"1\" failures=\"1\"><testsuite name=\"$suite_name\" tests=\"1\" failures=\"1\"><testcase name=\"desktop-ci infrastructure\"><failure message=\"$failure_message\"/></testcase></testsuite></testsuites>" \
