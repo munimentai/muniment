@@ -998,3 +998,38 @@ describe('folder dialog diagnostics', () => {
     ].join('\n'))
   })
 })
+
+describe('Windows native command contract', () => {
+  it('routes native commands through the process helpers', () => {
+    const runner = fs.readFileSync(path.join(root, 'test/e2e/runner/windows.ps1'), 'utf8')
+    expect(runner).not.toMatch(/&\s+(?!\$Action\b)[^;\r\n|}]*\s\*>>/)
+    expect(runner).not.toMatch(/&\s+(?:npm(?:\.cmd)?|node(?:\.exe)?|gh(?:\.exe)?|cargo(?:\.exe)?|git(?:\.exe)?)(?=\s|$)/im)
+  })
+
+  it.skipIf(process.platform !== 'win32').each([
+    ['0', 0],
+    ['7', 1],
+  ])('gates a stderr-writing command on exit code %s', (exitCode, expectedStatus) => {
+    const directory = temp()
+    const artifacts = path.join(directory, 'artifacts')
+    const runner = path.join(root, 'test/e2e/runner/windows.ps1')
+    const result = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', runner], {
+      encoding: 'utf8',
+      env: { ...process.env, TEMP: directory, TMP: directory, DCI_ARTIFACTS_DIR: artifacts, MUNIMENT_E2E_NATIVE_COMMAND_TEST_EXIT_CODE: exitCode },
+    })
+    expect(result.status).toBe(expectedStatus)
+    expect(fs.readFileSync(path.join(artifacts, 'installer.log'), 'utf8')).toContain('native warning')
+  })
+
+  it.skipIf(process.platform !== 'win32')('fails when PowerShell cannot invoke the command', () => {
+    const directory = temp()
+    const artifacts = path.join(directory, 'artifacts')
+    const runner = path.join(root, 'test/e2e/runner/windows.ps1')
+    const result = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', runner], {
+      encoding: 'utf8',
+      env: { ...process.env, TEMP: directory, TMP: directory, DCI_ARTIFACTS_DIR: artifacts, MUNIMENT_E2E_NATIVE_COMMAND_TEST_INVOCATION_ERROR: '1' },
+    })
+    expect(result.status).toBe(1)
+    expect(fs.readFileSync(path.join(artifacts, 'installer.log'), 'utf8')).toContain('muniment-command-that-does-not-exist')
+  })
+})
