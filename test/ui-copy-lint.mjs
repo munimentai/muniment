@@ -1,9 +1,8 @@
-#!/usr/bin/env node
-
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
+// Nightly 31109203906 confirmed that Node rejects a CRLF shebang on Windows.
 const FORBIDDEN = /\b(?:ai|magic|supercharg(?:e|es|ed|ing)|unlock(?:s|ed|ing)?|sovereignty)\b/giu
 
 export function forbiddenUiCopy(source, file = '<fixture>') {

@@ -4,7 +4,8 @@ import os from 'node:os'
 import path from 'node:path'
 import { spawnSync } from 'node:child_process'
 
-const workflow = fs.readFileSync('.github/workflows/nightly.yml', 'utf8')
+// Nightly 31109203906 confirmed that Git checks out this file with CRLF on Windows.
+const workflow = fs.readFileSync('.github/workflows/nightly.yml', 'utf8').replaceAll('\r\n', '\n')
 const ensureJunitReport = 'test/e2e/support/ensure-junit-report.sh'
 
 // This helper needs a POSIX shell, and Windows has none.

@@ -265,7 +265,7 @@ describe('Windows auth URL capture seam', () => {
       encoding: 'utf8', env: { ...process.env, MUNIMENT_E2E_AUTH_URL_FILE: '' },
     })
     expect(missingDestination.status).not.toBe(0)
-  })
+  }, 20_000) // Nightly 31109203906 measured 14.251 seconds for four PowerShell starts.
 })
 
 // This block runs a POSIX shell script, and Windows has no shell for it.
@@ -432,7 +432,7 @@ describe('Windows finalizer contract', () => {
     expect(result.stdout).toContain('message:')
     expect(result.stdout).toContain('category:')
     expect(result.stdout).toMatch(/line: [1-9]\d*/)
-  })
+  }, 20_000) // Nightly 31109203906 measured 11.872 seconds.
 
   it.skipIf(process.platform !== 'win32')('writes a diagnostic artifact and stdout when transcript startup fails', () => {
     const directory = temp()
@@ -464,7 +464,7 @@ describe('Windows finalizer contract', () => {
     expect(statuses[phase]).toBe('1')
     expect(invoked.indexOf('redact-artifacts')).toBeGreaterThan(invoked.indexOf(phase))
     expect(invoked).toContain('publish-artifacts')
-  })
+  }, 10_000) // Nightly 31109203906 measured 5.676 seconds at most.
 
   it.skipIf(process.platform !== 'win32')('ignores a remaining unrelated uninstall registration', () => {
     const { result, statuses } = runWindowsFinalizer('', '', {
@@ -534,7 +534,7 @@ describe('Windows finalizer contract', () => {
 })
 
 describe('Windows nightly workflow gate', () => {
-  const workflow = fs.readFileSync(path.join(root, '.github/workflows/nightly.yml'), 'utf8')
+  const workflow = fs.readFileSync(path.join(root, '.github/workflows/nightly.yml'), 'utf8').replaceAll('\r\n', '\n')
   const job = workflow.slice(workflow.indexOf('\n  windows-e2e:'), workflow.indexOf('\n    runs-on:', workflow.indexOf('\n  windows-e2e:')))
   const condition = job.match(/\n    if: >-\n([\s\S]+)$/)?.[1].trim().replace(/\n\s*/g, ' ')
   const evaluate = ({ eventName, platform, prepare = 'success', linux = 'success' }) => Function(
@@ -1034,7 +1034,7 @@ describe('Windows native command contract', () => {
     })
     expect(result.status).toBe(1)
     expect(fs.readFileSync(path.join(artifacts, 'installer.log'), 'utf8')).toContain('muniment-command-that-does-not-exist')
-  })
+  }, 10_000) // Nightly 31109203906 measured 6.993 seconds.
 
   it.skipIf(process.platform !== 'win32')('does not resolve a command from the working directory', () => {
     const directory = temp()

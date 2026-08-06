@@ -17,7 +17,8 @@ const requiredResources = {
 }
 
 const cargoPackages = (lockfile) => [...lockfile.matchAll(
-  /\[\[package\]\]\nname = "([^"]+)"\nversion = "([^"]+)"\nsource = /g,
+  // Nightly 31109203906 confirmed that Git checks out the lockfile with CRLF on Windows.
+  /\[\[package\]\]\r?\nname = "([^"]+)"\r?\nversion = "([^"]+)"\r?\nsource = /g,
 )].map(([, name, version]) => `${name}\t${version}`).sort()
 
 const recordedCargoPackages = (notices) => [...notices.matchAll(
