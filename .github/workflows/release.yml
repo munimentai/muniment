@@ -23,6 +23,21 @@ jobs:
     runs-on: self-hosted
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.source_sha }}
+      - name: Assert WebDriver marker and capability absence from release artifacts
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_SHA: ${{ inputs.source_sha }}
+        run: |
+          set -euo pipefail
+          work=$(mktemp -d "$RUNNER_TEMP/muniment-release-guard.XXXXXX")
+          trap 'rm -rf -- "$work"' EXIT
+          gh release download nightly --pattern "nightly-${SOURCE_SHA}-*" --dir "$work/assets"
+          for artifact in "$work"/assets/*; do
+            bash test/e2e/support/webdriver-artifact-guard.sh absent "$artifact"
+          done
+          node test/e2e/support/webdriver-capability-guard.mjs
       - name: Promote finalized nightly bytes
         env:
           GH_TOKEN: ${{ github.token }}

@@ -129,7 +129,7 @@ function Get-HarnessProcesses {
     if ($testProcess -and (Test-Path -LiteralPath $testProcess)) { return @([pscustomobject]@{ ProcessName = "muniment" }) }
     return @()
   }
-  return @(Get-Process muniment, tauri-driver, msedgedriver -ErrorAction SilentlyContinue)
+  return @(Get-Process muniment -ErrorAction SilentlyContinue)
 }
 
 function Invoke-Cleanup([string]$Name, [scriptblock]$Action) {
@@ -171,7 +171,6 @@ function Remove-AuthHandler {
 
 function Finalize-Run {
   Invoke-Cleanup "stop-wdio" { Get-CimInstance Win32_Process | Where-Object CommandLine -Like '*wdio.conf.js*' | ForEach-Object { Stop-Process -Id $_.ProcessId -Force } }
-  Invoke-Cleanup "stop-drivers" { Get-Process tauri-driver, msedgedriver -ErrorAction SilentlyContinue | Stop-Process -Force }
   if ($ready) {
     Invoke-Cleanup "revoke-session" { $env:MUNIMENT_E2E_CLEANUP_ONLY = "1"; Invoke-BoundedProcess "npm.cmd" "run test:e2e" 45 (Join-Path $raw "cleanup-wdio.log") }
   }
@@ -335,9 +334,11 @@ try {
   }
   if (-not $installDirectory) { $installDirectory = Split-Path $appBinary -Parent }
 
-  if (-not (Get-Command tauri-driver.exe -ErrorAction SilentlyContinue)) {
-    Invoke-NativeCommand "cargo" "install tauri-driver --version 2.0.5 --locked" $installerLog "tauri-driver installation failed"
-  }
+  Invoke-NativeCommand "node" "test/e2e/support/webdriver-release-guard.mjs absent `"$appBinary`"" $installerLog "release WebDriver guard failed"
+  Invoke-NativeCommand "npm.cmd" "run tauri -- build --no-bundle --features e2e-webdriver --config src-tauri/tauri.e2e.conf.json" $installerLog "E2E application build failed"
+  $appBinary = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot "../../../src-tauri/target/release/muniment.exe"))
+  if (-not (Test-Path -LiteralPath $appBinary -PathType Leaf)) { throw "E2E application binary is unavailable" }
+  Invoke-NativeCommand "node" "test/e2e/support/webdriver-release-guard.mjs present `"$appBinary`"" $installerLog "E2E WebDriver guard failed"
 
   New-Item -Path $handlerKey -Force | Out-Null
   Set-ItemProperty $handlerKey -Name '(default)' -Value 'URL:muniment-e2e-https'
@@ -357,9 +358,21 @@ try {
   $env:MUNIMENT_E2E_APP_BINARY = $appBinary
   $env:MUNIMENT_E2E_RAW_DIR = $raw
   $env:MUNIMENT_E2E_AUTH_URL_FILE = $authUrlFile
-  $env:MUNIMENT_E2E_HOME_PATH = Join-Path $stateRoot 'home-override'
   $env:MUNIMENT_E2E_IMAGE_PATH = $imageFixture
   $ready = $true
+  $env:APPDATA = Join-Path $stateRoot "Ready\Roaming"
+  $env:LOCALAPPDATA = Join-Path $stateRoot "Ready\Local"
+  $env:MUNIMENT_E2E_HOME_PATH = Join-Path $stateRoot 'ready-home'
+  $env:MUNIMENT_E2E_ONBOARDING_ONLY = "1"
+  try {
+    Invoke-NativeCommand "npm.cmd" "run test:e2e" (Join-Path $raw "wdio-onboarding.log") "Windows onboarding tests failed"
+  } catch {
+    $status = 1
+  }
+  Remove-Item Env:MUNIMENT_E2E_ONBOARDING_ONLY -ErrorAction SilentlyContinue
+  $env:APPDATA = Join-Path $stateRoot "Degraded\Roaming"
+  $env:LOCALAPPDATA = Join-Path $stateRoot "Degraded\Local"
+  $env:MUNIMENT_E2E_HOME_PATH = Join-Path $stateRoot 'degraded-home'
   $wdioLog = Join-Path $raw "wdio.log"
   $driverAppLog = Join-Path $raw "driver-app.log"
   try {
