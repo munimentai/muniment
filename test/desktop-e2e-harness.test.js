@@ -998,3 +998,20 @@ describe('folder dialog diagnostics', () => {
     ].join('\n'))
   })
 })
+
+describe('Windows native command contract', () => {
+  it.skipIf(process.platform !== 'win32').each([
+    ['0', 0],
+    ['7', 1],
+  ])('gates a stderr-writing command on exit code %s', (exitCode, expectedStatus) => {
+    const directory = temp()
+    const artifacts = path.join(directory, 'artifacts')
+    const runner = path.join(root, 'test/e2e/runner/windows.ps1')
+    const result = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', runner], {
+      encoding: 'utf8',
+      env: { ...process.env, TEMP: directory, TMP: directory, DCI_ARTIFACTS_DIR: artifacts, MUNIMENT_E2E_NATIVE_COMMAND_TEST_EXIT_CODE: exitCode },
+    })
+    expect(result.status).toBe(expectedStatus)
+    expect(fs.readFileSync(path.join(artifacts, 'installer.log'), 'utf8')).toContain('native warning')
+  })
+})
