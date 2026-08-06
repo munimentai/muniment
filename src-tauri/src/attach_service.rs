@@ -740,18 +740,14 @@ impl<B: RunStartBoundaries, I: RunStartIdempotency> ThreadListService
             .workspace_contexts
             .lock()
             .map_err(|_| ProtocolError::persistence_failed())?
-            .get(
+            .instructions(
                 self.client_identity
                     .as_ref()
                     .ok_or_else(ProtocolError::unauthorized)?,
+                workspace,
+                &PathBuf::from(execution_root),
             )
-            .and_then(|workspaces| {
-                workspaces
-                    .get(workspace)
-                    .and_then(|contexts| contexts.get(&PathBuf::from(execution_root)))
-            })
-            .cloned()
-            .flatten();
+            .map(str::to_owned);
         if let Some(instructions) = instructions {
             extra.insert("repository_instructions".into(), json!(instructions));
         }
@@ -2094,30 +2090,20 @@ mod tests {
             .unwrap();
 
         let guard = contexts.lock().unwrap();
-        let stored = guard.get("default").unwrap().get("workspace-a").unwrap();
         assert_eq!(
-            stored
-                .get(&first.canonicalize().unwrap())
-                .unwrap()
-                .as_deref(),
+            guard.instructions("default", "workspace-a", &first.canonicalize().unwrap()),
             Some("first instructions")
         );
         assert_eq!(
-            guard
-                .get("default")
-                .unwrap()
-                .get("workspace-b")
-                .unwrap()
-                .get(&second.canonicalize().unwrap())
-                .unwrap()
-                .as_deref(),
+            guard.instructions("default", "workspace-b", &second.canonicalize().unwrap()),
             Some("second instructions")
         );
         assert_eq!(
-            stored
-                .get(&first_memory.canonicalize().unwrap())
-                .unwrap()
-                .as_deref(),
+            guard.instructions(
+                "default",
+                "workspace-a",
+                &first_memory.canonicalize().unwrap()
+            ),
             Some("first instructions")
         );
         // Release the shared `contexts` lock before the client-b/second/third

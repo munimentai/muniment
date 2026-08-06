@@ -41,4 +41,18 @@ impl WorkspaceContextMap {
             .contains_key(canonical_directory)
             .then(|| canonical_directory.to_owned())
     }
+
+    /// Returns instructions recorded for the matching client, session, and directory.
+    pub fn instructions(
+        &self,
+        client_identity: &str,
+        session_workspace: &str,
+        canonical_directory: &Path,
+    ) -> Option<&str> {
+        self.contexts
+            .get(client_identity)?
+            .get(session_workspace)?
+            .get(canonical_directory)?
+            .as_deref()
+    }
 }
