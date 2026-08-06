@@ -400,16 +400,14 @@ muniment-core (MUNIDESK-912). `src-tauri/core/src/journal/run_append.rs` holds
 `append_run_event`, and `append_emit` (`src-tauri/src/chat_coordinate.rs:742`)
 keeps only its `chat-event` emit.
 
-NOTE 2026-08-05 — the entitlement snapshot tracker, companion workspace-context
-map, and selected-file open rule have now reached the backlog three times, and
-the queue drained without them each time. The planner read the desktop crate
-again this wave and confirmed all three remain unbuilt. `snapshot_transition`
-still sits at `src-tauri/src/auth/mod.rs:53`, `WorkspaceContexts` is still a bare
-type alias at `src-tauri/src/attach_service.rs:57`, and `open_selected_files`
-still repeats `chat_file_metadata` at `src-tauri/src/chat.rs:991`. The planner
-filed all three a fourth time with exact target module paths, exact function
-names, and the test cases each must carry. A fifth drain needs an owner look at
-why this lane keeps dropping them.
+NOTE 2026-08-05 — the entitlement snapshot tracker landed on its fourth filing.
+The companion workspace-context map and the selected-file open rule drained a
+fourth time. `WorkspaceContexts` is still a bare type alias at
+`src-tauri/src/attach_service.rs:57`, and `open_selected_files` still repeats
+`chat_file_metadata` at `src-tauri/src/chat.rs:991`. The planner filed both a
+fifth time with the target module path, the exact function names, and the test
+cases each must carry. A sixth drain needs an owner look at why this lane keeps
+dropping these two.
 
 DONE 2026-08-05 — the owned thread paging moved into muniment-core
 (MUNIDESK-915).
@@ -419,25 +417,25 @@ journal summaries and keep the threads the core check accepts. Both carry the
 same 100-page cap and four direct tests. The desktop keeps thin wrappers in
 `src-tauri/src/chat_threads.rs`, so the callers do not change.
 
-FILED 2026-08-05 — the entitlement snapshot tracker moves into
-muniment-core. `snapshot_transition` and `observe_snapshot_version`
-(`src-tauri/src/auth/mod.rs:53`, `:60`) own the version transition rule, and
-`AuthState` holds the previous value. ADR 0012 phase one names the entitlement
-snapshot as runtime-service state, and the desktop keeps the
-`entitlement-changed` emit.
+DONE 2026-08-05 — the entitlement snapshot tracker moved into muniment-core
+(MUNIDESK-921). `src-tauri/core/src/auth/entitlement_snapshot.rs` holds
+`EntitlementSnapshotTracker` and its version transition rule. `AuthState`
+(`src-tauri/src/auth/mod.rs:45`) holds the tracker, and `observe_snapshot`
+(`:53`) keeps the desktop `entitlement-changed` emit.
 
 DONE 2026-08-05 — `muniment-runtime` answers `--version`, `--help`, and `-h`,
 and rejects an unknown argument before it reaches the instance lock
 (MUNIDESK-908). The crate took no new dependency.
 
-FILED 2026-08-05 — the companion workspace-context map moves into
-muniment-core. `WorkspaceContexts` (`src-tauri/src/attach_service.rs:57`) is a
-bare three-level `HashMap` behind an `Arc<Mutex<_>>`. `onboard_workspace`
+RE-FILED 2026-08-05 (fifth filing) — the companion workspace-context map moves
+into muniment-core. `WorkspaceContexts` (`src-tauri/src/attach_service.rs:57`)
+is a bare three-level `HashMap` behind an `Arc<Mutex<_>>`. `onboard_workspace`
 (`:580`) and `authorized_workspace` (`:622`) reach into that map directly, so the
 two-level lookup rule owns no type and carries no direct test. ADR 0012 phase one
 names workspace authorization as runtime-service state.
 
-FILED 2026-08-05 — the selected-file open rule moves into muniment-core.
+RE-FILED 2026-08-05 (fifth filing) — the selected-file open rule moves into
+muniment-core.
 `open_selected_files` (`src-tauri/src/chat.rs:991`) and `chat_file_metadata`
 (`:914`) carry one rule twice. Each opens the path, reads the metadata off the
 open handle, rejects anything that is not a file, and takes the display name from
@@ -478,21 +476,45 @@ installed runtime executable (MUNIDESK-917). It reuses the `LinuxProcReader`
 boundary that `src-tauri/core/src/browser_control/linux_identity.rs:103` already
 publishes.
 
-FILED 2026-08-05 — the next two migration control slices are the quiesce rule
-and the prepared-handoff slot. Neither carries code today. Nothing weighs an
-active run, a pending permission gate, an authentication operation, a session
-refresh, or an in-flight external effect against the quiesce rule, and nothing
-tracks the one prepared handoff. Each slice lands as a muniment-core module with
-direct tests and no call site, which is the shape MUNIDESK-917 already used. The
-dispatcher branch that answers `migration.control` follows both slices, and it
-also composes the peer check that landed.
+DONE 2026-08-05 — the quiesce rule and the prepared-handoff slot landed
+(MUNIDESK-919, 920). `src-tauri/core/src/attach/quiesce.rs` holds
+`evaluate_quiesce`, which weighs an active run, a pending permission gate, an
+authentication operation, a session refresh, and an in-flight external effect in
+that order and names the first blocker. `src-tauri/core/src/attach/handoff.rs`
+holds `PreparedHandoffSlot`, which bounds the nonce at 128 printable ASCII
+bytes, bounds the deadline at 60,000 milliseconds, refuses a second preparation
+while one is live, and matches a nonce only before the deadline. Neither module
+has a call site yet.
 
-FILED 2026-08-05 — the attach welcome reserves an optional handoff nonce. ADR
-0012 has the service return the nonce in its `welcome` message, and the desktop
-probe reads it before the desktop reconnects as an ordinary client. `Welcome`
-(`src-tauri/attach/src/negotiation.rs:97`) carries five fields and no nonce. This
-is the MUNIDESK-916 shape: a vocabulary addition with its canonical fixture and
-no dispatcher behavior.
+FILED 2026-08-05 — the dispatcher branch that answers `migration.control` is the
+next migration control slice. `dispatch_request`
+(`src-tauri/core/src/attach/linux.rs:2023`) still falls through to the
+`ThreadList` check and answers `unsupported_operation`. The slice adds the
+branch, bounds the request body against the same limits the prepared slot
+carries, and puts the decision behind one new `ThreadListService` method whose
+default answers `unsupported_operation`. The desktop implementation composes the
+landed peer check, quiesce rule, and prepared slot in a later slice.
+
+RE-FILED 2026-08-05 — the attach welcome reserves an optional handoff nonce, and
+the first filing drained. ADR 0012 has the service return the nonce in its
+`welcome` message, and the desktop probe reads it before the desktop reconnects
+as an ordinary client. `Welcome` (`src-tauri/attach/src/negotiation.rs:97`)
+carries five fields and no nonce. This is the MUNIDESK-916 shape: a vocabulary
+addition with its canonical fixture and no dispatcher behavior.
+
+FILED 2026-08-05 — the Linux package must ship `muniment-runtime`. The landed
+migration control authority check requires the installed runtime payload, and no
+package installs one today. `.github/build-linux.sh:38` builds `muniment-acp`
+alone, and `src-tauri/tauri.linux.conf.json` maps that one binary into the
+bundle. The slice copies the `muniment-acp` pattern for `muniment-runtime` and
+adds an installed-lane check beside the adapter check in
+`test/e2e/runner/linux.sh:190`.
+
+FILED 2026-08-05 — the thread rename and delete appends move into muniment-core.
+`rename_thread` and `delete_thread` (`src-tauri/src/chat_threads.rs:208`, `:241`)
+carry one rule twice: check ownership, read the last thread sequence, and append
+the `thread.*` event. ADR 0012 phase one names the journal as runtime-service
+state.
 
 DONE 2026-08-04 — ADR 0009 carries the attach workspace namespace amendment
 (MUNIDESK-883). The signed `grant.workspace` value is the only workspace
@@ -832,14 +854,15 @@ for it.
 
 VERIFIED 2026-08-05 (this wave, from a clean clone) — the CI cargo commands
 passed with no failure. `muniment-core` ran on its standalone manifest with
-`network-tests`. `muniment-attach`, `muniment-cli`, `muniment-acp`, and
-`muniment-runtime` ran in one workspace invocation. Sixty-six test binaries
-reported `ok`. The frontend suite passed 835 tests with 25 skipped across 57
-files, and the browser suite passed 3. `npm run build` produced a 252,278-byte
-script and a 62,244-byte stylesheet. The planner read every remaining ADR 0012
-extraction target in the desktop crate before it filed this wave's slices.
-Earlier waves recorded the same shape of verification, and this entry replaces
-that ledger.
+`network-tests` and reported 57 binaries `ok`. `muniment-attach`,
+`muniment-cli`, `muniment-acp`, `muniment-core`, and `muniment-runtime` ran in
+one workspace invocation. The frontend suite passed 835 tests with 25 skipped
+across 57 files, and the browser suite passed 3. `npm run build` produced a
+252,278-byte script and a 62,244-byte stylesheet. The planner read every
+remaining ADR 0012 extraction target in the desktop crate, plus the attach
+negotiation, dispatcher, and Linux packaging paths, before it filed this wave's
+slices. Earlier waves recorded the same shape of verification, and this entry
+replaces that ledger.
 
 MEASURED 2026-08-05 — the probe capture ran again after this wave's build.
 `python3 -m http.server` served the repository root on port 4173, and headless
