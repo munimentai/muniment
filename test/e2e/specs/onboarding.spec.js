@@ -56,8 +56,8 @@ describe('installed nightly model-ready onboarding', () => {
       FOLDER_DIALOG_TITLE,
       process.env.MUNIMENT_E2E_RAW_DIR,
     )
-    // After the native dialog closes under Xvfb, WebDriver considers this element
-    // unrendered and returns empty rendered text even when textContent is correct.
+    // WebDriver's getElementText is unreliable for this element here.
+    // textContent provides a stable read.
     await browser.waitUntil(async () => await homePathMatches(location, home), {
       timeoutMsg: 'the Home picker DOM value did not match the isolated Home',
     })
