@@ -227,7 +227,7 @@ describe('nightly asset identity', () => {
   })
 })
 
-describe('Windows auth URL capture seam', () => {
+describe('Windows auth URL capture seam', { timeout: 30_000 }, () => { // A PowerShell spawn costs about 3.5 seconds, and the slowest observed test took 6993ms.
   const capture = (candidate, initial = undefined) => {
     const directory = temp(); const destination = path.join(directory, 'auth-url')
     if (initial !== undefined) fs.writeFileSync(destination, initial)
@@ -371,7 +371,7 @@ describe.skipIf(process.platform === 'win32')('macOS installed launch harness', 
   })
 })
 
-describe('Windows finalizer contract', () => {
+describe('Windows finalizer contract', { timeout: 30_000 }, () => { // A PowerShell spawn costs about 3.5 seconds, and the slowest observed test took 6993ms.
   const runnerPath = path.join(root, 'test/e2e/runner/windows.ps1')
   const runner = fs.readFileSync(runnerPath, 'utf8')
   const bodyBoundary = runner.indexOf('\ntry {\n  # desktop-ci')
@@ -1002,7 +1002,7 @@ describe('folder dialog diagnostics', () => {
   })
 })
 
-describe('Windows native command contract', () => {
+describe('Windows native command contract', { timeout: 30_000 }, () => { // A PowerShell spawn costs about 3.5 seconds, and the slowest observed test took 6993ms.
   it('routes native commands through the process helpers', () => {
     const runner = fs.readFileSync(path.join(root, 'test/e2e/runner/windows.ps1'), 'utf8')
     expect(runner).not.toMatch(/&\s+(?!\$Action\b)[^;\r\n|}]*\s\*>>/)
