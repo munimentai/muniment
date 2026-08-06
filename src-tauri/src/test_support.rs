@@ -9,6 +9,7 @@ use muniment_core::attach::linux::{
 };
 #[cfg(target_os = "linux")]
 use muniment_core::attach::ProtocolError;
+use muniment_core::attach::{RuntimeActivityGuard, RuntimeActivityRegistry};
 use muniment_core::auth::TokenSet;
 use muniment_core::chat_grant::ChatGrant;
 use muniment_core::journal::reducer::ChatProjector;
@@ -58,6 +59,7 @@ pub(crate) struct FakeRunStartBoundaries {
     pub(crate) clear_calls: AtomicUsize,
     pub(crate) cancel_calls: AtomicUsize,
     pub(crate) active_run: Mutex<Option<(String, String)>>,
+    runtime_activity: RuntimeActivityRegistry,
     #[cfg(target_os = "linux")]
     pub(crate) queued_permission_answers: Mutex<Vec<(String, ChatPermissionAnswer)>>,
     #[cfg(target_os = "linux")]
@@ -95,6 +97,7 @@ impl FakeRunStartBoundaries {
             clear_calls: AtomicUsize::new(0),
             cancel_calls: AtomicUsize::new(0),
             active_run: Mutex::new(None),
+            runtime_activity: RuntimeActivityRegistry::new(),
             #[cfg(target_os = "linux")]
             queued_permission_answers: Mutex::new(Vec::new()),
             #[cfg(target_os = "linux")]
@@ -112,6 +115,10 @@ impl FakeRunStartBoundaries {
 }
 
 impl RunStartBoundaries for FakeRunStartBoundaries {
+    fn mark_active_run(&self) -> RuntimeActivityGuard {
+        self.runtime_activity.mark_active_run()
+    }
+
     #[cfg(target_os = "linux")]
     fn list_threads(
         &self,
