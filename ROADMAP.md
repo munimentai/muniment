@@ -451,31 +451,30 @@ DONE 2026-08-05 — the companion workspace-context map moved into muniment-core
 `authorized_workspace` (`:619`) read that type instead of a bare three-level
 `HashMap`.
 
-RE-FILED 2026-08-06 (eighth filing) — seven filings of the selected-file open
-rule drained. The seventh already carried the core half alone, so ticket size is
-not the cause. This wave files that same core half again.
-`src-tauri/core/src/selected_file.rs` gains the one rule with its own test
-binary, and `src-tauri/src/chat.rs` does not change. A later slice moves
-`open_selected_files` (`src-tauri/src/chat.rs:991`) and `chat_file_metadata`
-(`:914`) onto it. Each copy opens the path, reads the metadata off the open
-handle, rejects anything that is not a file, and takes the display name from the
-last path segment. Reading the open handle rather than the path closes a
-replacement window, and no test guards that defense today. The two copies also
+HELD 2026-08-06 (eighth drain) — the selected-file open rule drained again, and
+the planner has stopped re-filing it. `src-tauri/core/src/selected_file.rs` does
+not exist. The eighth filing carried the core half alone, with the target module
+path, the function names, and the test cases, so ticket size is not the cause.
+Eight identical filings that never reach a pull request are an orchestration
+question, and a ninth filing would only repeat the measurement. The work itself
+still stands. `open_selected_files` (`src-tauri/src/chat.rs:991`) repeats
+`chat_file_metadata` (`:915`). Each copy opens the path, reads the metadata off
+the open handle, rejects anything that is not a file, and takes the display name
+from the last path segment. Reading the open handle rather than the path closes
+a replacement window, and no test guards that defense. The two copies also
 disagree, because `chat_file_metadata` rejects a path with no usable final
-segment and `open_selected_files` does not. A ninth drain is an orchestration
-question rather than a sizing question, and the planner has asked the owner to
-look at it.
+segment and `open_selected_files` does not. The lane waits for an owner look at
+why this one ticket never dispatches.
 
-RE-FILED 2026-08-06 (second filing) — the companion credential registry moves
-into muniment-core. `AttachListenerState::revoke_companion`
-(`src-tauri/src/attach_service.rs:260`) and `list_companions` (`:280`) hold the
-credential map, the `LiveConnectionRegistry` block, the persist step, the
-restore on a failed write, and the sorted listing. ADR 0012 phase one names
-credentials as runtime-service state. The target is
-`src-tauri/core/src/attach/companion_registry.rs`, and the desktop keeps the two
+DONE 2026-08-06 — the companion credential registry moved into muniment-core
+(MUNIDESK-956). `src-tauri/core/src/attach/companion_registry.rs` holds
+`CompanionRegistry` with the credential map, the `LiveConnectionRegistry` block,
+the persist step, the restore on a failed write, and the sorted listing.
+`AttachListenerState::revoke_companion` (`src-tauri/src/attach_service.rs:265`)
+and `list_companions` (`:269`) are thin wrappers, and the desktop keeps its two
 Tauri commands and its own serialized row type.
 
-RE-FILED 2026-08-06 (second filing) — the permission gate coordination rules
+RE-FILED 2026-08-06 (third filing) — the permission gate coordination rules
 move into muniment-core. `coordinate_extension_ui_request`
 (`src-tauri/src/chat_coordinate.rs:650`) and `coordinate_permission_answer`
 (`:663`) already take closures and touch no Tauri type. ADR 0012 phase one names
@@ -543,16 +542,33 @@ DONE 2026-08-06 — that seam carries the peer identity (MUNIDESK-952).
 hands it the connection's own provenance. The default seam still answers
 `unsupported_operation`, so no desktop implementation runs yet.
 
-SELECTED 2026-08-06 — the desktop answer needs an activity source before it can
-run the quiesce rule. `evaluate_quiesce` weighs five activities. `ChatState`
-(`src-tauri/src/chat.rs:198`) holds the active run and `AuthState`
-(`src-tauri/src/auth/mod.rs:38`) holds the sign-in flag, so two of the five have
-a home. Nothing tracks a pending permission gate, a session refresh, or an
-in-flight external effect outside the coordinate loop. This wave files the core
-registry that each subsystem marks. It carries guards and a snapshot and no call
-site, which is the shape `quiesce.rs` and `handoff.rs` already landed in. The
-desktop composition of the peer check, the quiesce rule, and the prepared slot
-follows it.
+DONE 2026-08-06 — muniment-core tracks the runtime activity the quiesce rule
+weighs (MUNIDESK-957). `src-tauri/core/src/attach/runtime_activity.rs` holds
+`RuntimeActivityRegistry` with one mark method per activity, a
+`RuntimeActivityGuard` that clears its mark on drop, and a `snapshot` that
+returns the `RuntimeActivity` value `evaluate_quiesce` reads. The registry has
+no call site yet, which is the shape `quiesce.rs` and `handoff.rs` landed in.
+
+SELECTED 2026-08-06 — the desktop composes that registry, and the run lane marks
+it first. Nothing in the desktop crate reaches a `RuntimeActivityRegistry`
+today, so the quiesce rule has no live input. The first slice makes the registry
+one Tauri-managed value and gives `ActiveRun` (`src-tauri/src/chat.rs:139`) a
+guard, so `snapshot().active_run` is true for exactly the life of a run. The
+auth marks, the permission-gate mark, the external-effect mark, and the desktop
+`control_migration` answer each follow that one shared handle and are sequenced
+behind it.
+
+SELECTED 2026-08-06 — muniment-core mints the single-use handoff nonce. The
+runtime service must send one with its migration control request, and
+`PreparedHandoffSlot::prepare` (`src-tauri/core/src/attach/handoff.rs:59`) bounds
+a nonce that nothing produces. Core already depends on `getrandom`, so the
+minting step takes no new dependency.
+
+SELECTED 2026-08-06 — muniment-core decides whether a probe `welcome` confirms a
+handoff. ADR 0012 has the desktop open a probe connection after it releases the
+lock, then check the returned nonce and the readiness deadline. `Welcome`
+(`src-tauri/attach/src/negotiation.rs:96`) already carries the optional
+`handoff_nonce`. The rule lands as a pure core module with no call site.
 
 SELECTED 2026-08-06 — the native device session composition moves into
 muniment-core. `ensure_native_session` (`src-tauri/src/auth/mod.rs:250`) builds
@@ -956,13 +972,13 @@ for it.
 
 VERIFIED 2026-08-06 (this wave, from a clean clone) — every suite the planning
 container can run passed. `cargo test` on the standalone `muniment-core`
-manifest reported `ok` for all 59 test binaries with no failure. `cargo test`
-for `muniment-attach`, `muniment-cli`, `muniment-acp`, and `muniment-runtime`
-reported the same. `npm test` passed 864 tests with 31 skipped across 59 files,
-and the browser suite passed 3. `npm run build` produced a 252,667-byte script
-and a 62,244-byte stylesheet. The planner read the landed peer-identity seam,
-the landed keychain move, the landed runtime lock wait, and every remaining ADR
-0012 extraction target in the desktop crate before it filed this wave's slices.
+manifest reported `ok` for every test binary with no failure, and `cargo test`
+for `muniment-attach` and `muniment-runtime` reported the same. `npm test`
+passed 864 tests with 31 skipped across 59 files, and the browser suite passed
+3. `npm run build` produced a 252,670-byte script and a 62,240-byte stylesheet.
+The planner read the landed companion registry, the landed runtime activity
+registry, the unlanded selected-file target, and every remaining ADR 0012
+extraction target in the desktop crate before it filed this wave's slices.
 Earlier waves recorded the same shape of verification, and this entry replaces
 that ledger.
 
@@ -971,12 +987,12 @@ before `npm test`. Without it the run dies with `vitest: not found`, which reads
 as a broken harness.
 
 MEASURED 2026-08-06 — the probe capture ran again after this wave's build.
-`python3 -m http.server` served the repository root, and headless Chromium
-captured `test/probe/history.html` at 1100x720. The restored thread renders its
-sidebar, titlebar, transcript, two tool rows, provenance line, interrupted-reply
-record with its `Resume` control, and composer. This is a roadmap-fulfilment
-wave, so it filed no design or layout slice, and the capture recorded no new
-defect.
+`python3 -m http.server --directory .` served the repository root, and headless
+Chromium captured `test/probe/history.html` at 1100x720. The restored thread
+renders its sidebar, titlebar, transcript, two tool rows, provenance line,
+interrupted-reply record with its `Resume` control, and composer. This is a
+roadmap-fulfilment wave, so it filed no design or layout slice, and the capture
+recorded no new defect.
 
 NOTE 2026-08-05 — a capture must pass `--wait-for-selector "[data-probe-ready]"`
 to playwright. The fixture loads the built bundle asynchronously, so a capture
