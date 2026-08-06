@@ -1035,6 +1035,23 @@ describe('Windows native command contract', () => {
     expect(result.status).toBe(1)
     expect(fs.readFileSync(path.join(artifacts, 'installer.log'), 'utf8')).toContain('muniment-command-that-does-not-exist')
   })
+
+  it.skipIf(process.platform !== 'win32')('does not resolve a command from the working directory', () => {
+    const directory = temp()
+    const artifacts = path.join(directory, 'artifacts')
+    const decoy = path.join(directory, 'npm.cmd')
+    const runner = path.join(root, 'test/e2e/runner/windows.ps1')
+    fs.writeFileSync(decoy, '@echo decoy\r\n')
+    const result = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', runner], {
+      cwd: directory,
+      encoding: 'utf8',
+      env: { ...process.env, TEMP: directory, TMP: directory, DCI_ARTIFACTS_DIR: artifacts, MUNIMENT_E2E_NATIVE_COMMAND_TEST_RESOLUTION: '1' },
+    })
+    expect(result.status).toBe(0)
+    const resolved = fs.readFileSync(path.join(artifacts, 'installer.log'), 'utf8').trim()
+    expect(path.isAbsolute(resolved)).toBe(true)
+    expect(path.resolve(resolved).toLowerCase()).not.toBe(path.resolve(decoy).toLowerCase())
+  })
 })
 
 describe('onboarding Home path assertion', () => {
