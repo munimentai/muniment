@@ -36,6 +36,8 @@ use muniment_core::attach::{
 #[cfg(target_os = "linux")]
 use muniment_core::journal::Provenance;
 #[cfg(target_os = "linux")]
+use muniment_core::permission_gate::ChatPermissionAnswer;
+#[cfg(target_os = "linux")]
 use serde_json::{json, Value};
 #[cfg(target_os = "linux")]
 use tauri::{Emitter, Manager};
@@ -44,8 +46,7 @@ use uuid::Uuid;
 
 #[cfg(target_os = "linux")]
 use crate::chat::{
-    prepare_desktop_run, ChatPermissionAnswer, RunStartBoundaries, RunStartRequest,
-    TauriRunStartBoundaries,
+    prepare_desktop_run, RunStartBoundaries, RunStartRequest, TauriRunStartBoundaries,
 };
 
 #[cfg(all(target_os = "linux", not(test)))]
