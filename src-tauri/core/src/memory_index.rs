@@ -313,7 +313,10 @@ impl MemoryIndex {
         connection.progress_handler(100, Some(move || Instant::now() >= deadline));
         connection
             .execute_batch(
-                "CREATE TABLE IF NOT EXISTS memory_files (
+                "PRAGMA journal_mode = OFF;
+             PRAGMA synchronous = OFF;
+             PRAGMA temp_store = MEMORY;
+             CREATE TABLE IF NOT EXISTS memory_files (
                 path TEXT PRIMARY KEY NOT NULL,
                 content_hash TEXT NOT NULL
              );
@@ -389,7 +392,14 @@ fn scan_home(
     home: &Path,
     deadline: Instant,
 ) -> Result<BTreeMap<String, Document>, MemoryIndexError> {
-    scan_home_with_hook(home, deadline, || {})
+    let home = home.to_owned();
+    let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+    std::thread::spawn(move || {
+        let _ = sender.send(scan_home_with_hook(&home, deadline, || {}));
+    });
+    receiver
+        .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+        .map_err(|_| MemoryIndexError::TimedOut)?
 }
 
 fn scan_home_with_hook(
@@ -424,7 +434,7 @@ fn scan_home_with_hook(
         if !metadata.file_type().is_file() || metadata.len() > MAX_FILE_BYTES {
             continue;
         }
-        let bytes = read_utf8_bytes(file, metadata.len() as usize, deadline)?;
+        let bytes = read_utf8_bytes_blocking(file, metadata.len() as usize, deadline)?;
         let Ok(content) = String::from_utf8(bytes) else {
             continue;
         };
@@ -464,45 +474,52 @@ fn open_relative_file(home: &Dir, relative: &Path) -> io::Result<fs::File> {
         .map(|file| file.into_std())
 }
 
+#[cfg(test)]
 fn read_utf8_bytes(
-    mut reader: impl Read + Send + 'static,
+    reader: impl Read + Send + 'static,
     capacity: usize,
     deadline: Instant,
 ) -> Result<Vec<u8>, MemoryIndexError> {
     check_deadline(deadline)?;
     let (sender, receiver) = std::sync::mpsc::sync_channel(1);
     std::thread::spawn(move || {
-        let result = (|| -> io::Result<Vec<u8>> {
-            let mut bytes = Vec::with_capacity(capacity.min(MAX_FILE_BYTES as usize));
-            let mut chunk = [0_u8; 64 * 1024];
-            loop {
-                let remaining = (MAX_FILE_BYTES as usize + 1).saturating_sub(bytes.len());
-                if remaining == 0 {
-                    return Err(io::Error::new(
-                        io::ErrorKind::InvalidData,
-                        "memory file exceeds the size limit",
-                    ));
-                }
-                let amount = chunk.len().min(remaining);
-                let read = reader.read(&mut chunk[..amount])?;
-                if read == 0 {
-                    return Ok(bytes);
-                }
-                bytes.extend_from_slice(&chunk[..read]);
-                if bytes.len() > MAX_FILE_BYTES as usize {
-                    return Err(io::Error::new(
-                        io::ErrorKind::InvalidData,
-                        "memory file exceeds the size limit",
-                    ));
-                }
-            }
-        })();
+        let result = read_utf8_bytes_blocking(reader, capacity, deadline);
         let _ = sender.send(result);
     });
     receiver
         .recv_timeout(deadline.saturating_duration_since(Instant::now()))
         .map_err(|_| MemoryIndexError::TimedOut)?
-        .map_err(MemoryIndexError::Io)
+}
+
+fn read_utf8_bytes_blocking(
+    mut reader: impl Read,
+    capacity: usize,
+    deadline: Instant,
+) -> Result<Vec<u8>, MemoryIndexError> {
+    let mut bytes = Vec::with_capacity(capacity.min(MAX_FILE_BYTES as usize));
+    let mut chunk = [0_u8; 64 * 1024];
+    loop {
+        check_deadline(deadline)?;
+        let remaining = (MAX_FILE_BYTES as usize + 1).saturating_sub(bytes.len());
+        if remaining == 0 {
+            return Err(MemoryIndexError::Io(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "memory file exceeds the size limit",
+            )));
+        }
+        let amount = chunk.len().min(remaining);
+        let read = reader.read(&mut chunk[..amount])?;
+        if read == 0 {
+            return Ok(bytes);
+        }
+        bytes.extend_from_slice(&chunk[..read]);
+        if bytes.len() > MAX_FILE_BYTES as usize {
+            return Err(MemoryIndexError::Io(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "memory file exceeds the size limit",
+            )));
+        }
+    }
 }
 
 fn collect_markdown(

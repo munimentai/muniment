@@ -444,9 +444,9 @@ impl RunStartBoundaries for FakeRunStartBoundaries {
         _thread_id: &str,
         _minimum_cacheable_prefix_characters: usize,
     ) -> Result<(), RunStartError> {
-        self.memory_error
-            .as_ref()
-            .map_or(Ok(()), |error| Err(RunStartError::Persistence(error.clone())))
+        self.memory_error.as_ref().map_or(Ok(()), |error| {
+            Err(RunStartError::Persistence(error.clone()))
+        })
     }
 
     fn close_memory_session(&self, _run_id: &str) {}

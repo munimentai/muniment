@@ -689,15 +689,12 @@ fn coordinate_memory_search<R: tauri::Runtime>(
     if title != "muniment:memory-search" {
         return false;
     }
-    let result = prefill
-        .as_deref()
-        .ok_or(())
-        .and_then(|arguments| {
-            app.try_state::<crate::memory::ApplicationMemoryRuntime>()
-                .ok_or(())?
-                .dispatch_tool_call(run_id, "memory-search", arguments.as_bytes())
-                .map_err(|_| ())
-        });
+    let result = prefill.as_deref().ok_or(()).and_then(|arguments| {
+        app.try_state::<crate::memory::ApplicationMemoryRuntime>()
+            .ok_or(())?
+            .dispatch_tool_call(run_id, "memory-search", arguments.as_bytes())
+            .map_err(|_| ())
+    });
     let answer = match result {
         Ok(result) => {
             if append_emit(
@@ -904,15 +901,9 @@ mod tests {
         let root = std::env::temp_dir().join(format!("muniment-memory-chat-{}", Uuid::now_v7()));
         let home = root.join("home");
         std::fs::create_dir_all(home.join("memory")).unwrap();
-        std::fs::write(
-            home.join("memory/fact.md"),
-            "saffron belongs in the pantry",
-        )
-        .unwrap();
-        let runtime = crate::memory::ApplicationMemoryRuntime::new(
-            root.join("config"),
-            root.join("cache"),
-        );
+        std::fs::write(home.join("memory/fact.md"), "saffron belongs in the pantry").unwrap();
+        let runtime =
+            crate::memory::ApplicationMemoryRuntime::new(root.join("config"), root.join("cache"));
         let run_id = Uuid::now_v7().to_string();
         runtime.open_session_for_home(
             &run_id,
@@ -962,14 +953,11 @@ mod tests {
         ];
         config.health_interval = Duration::from_secs(60);
         let wiring = PiRpcWiring::new();
-        let mut supervisor = SidecarSupervisor::spawn(
-            config,
-            wiring.readiness_probe(Duration::from_millis(100)),
-        )
-        .unwrap();
+        let mut supervisor =
+            SidecarSupervisor::spawn(config, wiring.readiness_probe(Duration::from_millis(100)))
+                .unwrap();
         let deadline = std::time::Instant::now() + Duration::from_secs(2);
-        while supervisor.status() != SidecarStatus::Healthy
-            && std::time::Instant::now() < deadline
+        while supervisor.status() != SidecarStatus::Healthy && std::time::Instant::now() < deadline
         {
             std::thread::sleep(Duration::from_millis(5));
         }
