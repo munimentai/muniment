@@ -53,6 +53,8 @@ pub(crate) struct FakeRunStartBoundaries {
     pub(crate) protect_error: Option<String>,
     pub(crate) install_error: Option<String>,
     pub(crate) prepare_error: Option<String>,
+    pub(crate) thread_id_error: Option<String>,
+    pub(crate) memory_error: Option<String>,
     pub(crate) projection_error: Option<String>,
     pub(crate) prepared_provenance: Mutex<Option<Provenance>>,
     pub(crate) journaled_events: Mutex<BTreeMap<String, Vec<EventEnvelope>>>,
@@ -91,6 +93,8 @@ impl FakeRunStartBoundaries {
             protect_error: None,
             install_error: None,
             prepare_error: None,
+            thread_id_error: None,
+            memory_error: None,
             projection_error: None,
             prepared_provenance: Mutex::new(None),
             journaled_events: Mutex::new(BTreeMap::new()),
@@ -314,6 +318,7 @@ impl RunStartBoundaries for FakeRunStartBoundaries {
             gateway_url: "https://gateway.invalid".into(),
             virtual_key: "virtual-key".into(),
             model: None,
+            minimum_cacheable_prefix_characters: 8_192,
             receipt_url: "https://receipt.invalid".into(),
         })
     }
@@ -417,6 +422,9 @@ impl RunStartBoundaries for FakeRunStartBoundaries {
     }
 
     fn run_thread_id(&self, run_id: &str) -> Result<String, RunStartError> {
+        if let Some(error) = &self.thread_id_error {
+            return Err(RunStartError::Persistence(error.clone()));
+        }
         #[cfg(target_os = "linux")]
         if let Some(thread_id) = self
             .journal
@@ -429,6 +437,19 @@ impl RunStartBoundaries for FakeRunStartBoundaries {
         }
         Ok("0190a100-0000-7000-8000-000000000002".into())
     }
+
+    fn open_memory_session(
+        &self,
+        _run_id: &str,
+        _thread_id: &str,
+        _minimum_cacheable_prefix_characters: usize,
+    ) -> Result<(), RunStartError> {
+        self.memory_error.as_ref().map_or(Ok(()), |error| {
+            Err(RunStartError::Persistence(error.clone()))
+        })
+    }
+
+    fn close_memory_session(&self, _run_id: &str) {}
 
     fn project_attachments(
         &self,

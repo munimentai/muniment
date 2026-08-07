@@ -28,6 +28,7 @@ use muniment_core::journal::reducer::{
 use muniment_core::journal::{
     EventEnvelope, EventPayload, JournalCommitHint, JournalError, Provenance, RunJournal,
 };
+use muniment_core::memory_index::ModelMemoryCapability;
 use muniment_core::sidecar::pi_chat::{
     cancel_command, ExtensionUiAnswer, PiChatEvent, PiImageContent, PiRunAdapter, PromptCommand,
 };
@@ -297,6 +298,13 @@ pub(crate) trait RunStartBoundaries {
         projector: &ChatProjector,
     ) -> Result<Vec<ChatAttachment>, RunStartError>;
     fn run_thread_id(&self, run_id: &str) -> Result<String, RunStartError>;
+    fn open_memory_session(
+        &self,
+        run_id: &str,
+        thread_id: &str,
+        minimum_cacheable_prefix_characters: usize,
+    ) -> Result<(), RunStartError>;
+    fn close_memory_session(&self, run_id: &str);
     fn fail_prepared_run(&self, launch: &RunStartLaunch) -> Result<(), RunStartError>;
     fn cancel_run(&self, workspace: &str, run_id: &str) -> Result<(), RunStartError>;
     fn clear_active_run(&self, run_id: &str);
@@ -394,9 +402,49 @@ pub(crate) fn prepare_desktop_run(
             return Err(error);
         }
     };
+    let thread_id = match boundaries.run_thread_id(&run_id) {
+        Ok(thread_id) => thread_id,
+        Err(error) => {
+            let failed_launch = RunStartLaunch {
+                run_id: run_id.clone(),
+                prompt,
+                tokens,
+                grant,
+                cancelled,
+                transport,
+                adapter,
+                permission_answers,
+                prepared,
+            };
+            let _ = boundaries.fail_prepared_run(&failed_launch);
+            boundaries.clear_active_run(&run_id);
+            return Err(error);
+        }
+    };
+    if let Err(error) = boundaries.open_memory_session(
+        &run_id,
+        &thread_id,
+        grant.minimum_cacheable_prefix_characters,
+    ) {
+        let failed_launch = RunStartLaunch {
+            run_id: run_id.clone(),
+            prompt,
+            tokens,
+            grant,
+            cancelled,
+            transport,
+            adapter,
+            permission_answers,
+            prepared,
+        };
+        let _ = boundaries.fail_prepared_run(&failed_launch);
+        boundaries.clear_active_run(&run_id);
+        return Err(error);
+    }
     let attachments = match boundaries.project_attachments(&prepared.1) {
         Ok(attachments) => attachments,
         Err(error) => {
+            boundaries.close_memory_session(&run_id);
             boundaries.clear_active_run(&run_id);
             return Err(error);
         }
@@ -659,6 +707,30 @@ impl<R: tauri::Runtime> RunStartBoundaries for TauriRunStartBoundaries<R> {
             .ok_or_else(|| RunStartError::Persistence(attachment_error()))
     }
 
+    fn open_memory_session(
+        &self,
+        run_id: &str,
+        thread_id: &str,
+        minimum_cacheable_prefix_characters: usize,
+    ) -> Result<(), RunStartError> {
+        self.app
+            .state::<crate::memory::ApplicationMemoryRuntime>()
+            .open_session(
+                run_id,
+                thread_id,
+                ModelMemoryCapability {
+                    minimum_cacheable_prefix_characters,
+                },
+            )
+            .map_err(|_| RunStartError::Persistence(attachment_error()))
+    }
+
+    fn close_memory_session(&self, run_id: &str) {
+        self.app
+            .state::<crate::memory::ApplicationMemoryRuntime>()
+            .close_session(run_id);
+    }
+
     fn fail_prepared_run(&self, launch: &RunStartLaunch) -> Result<(), RunStartError> {
         let failed = event_envelope(
             &launch.run_id,
@@ -704,6 +776,8 @@ impl<R: tauri::Runtime> RunStartBoundaries for TauriRunStartBoundaries<R> {
                 Some(launch.prepared),
             );
             if let Some(state) = app.try_state::<ChatState>() {
+                app.state::<crate::memory::ApplicationMemoryRuntime>()
+                    .close_session(&launch.run_id);
                 clear_active_run(&state.active, &launch.run_id);
             }
         });
@@ -1600,6 +1674,62 @@ mod tests {
         assert!(boundaries.launched_run.lock().unwrap().is_none());
     }
 
+    #[test]
+    fn memory_session_failure_marks_the_prepared_run_failed() {
+        let boundaries = FakeRunStartBoundaries {
+            memory_error: Some("memory unavailable".into()),
+            ..FakeRunStartBoundaries::accepting()
+        };
+
+        let error = start_desktop_run(
+            &boundaries,
+            RunStartRequest {
+                prompt: "hello".into(),
+                files: Vec::new(),
+                workspace: None,
+                provenance: None,
+                thread_id: None,
+            },
+        )
+        .err()
+        .unwrap();
+
+        assert_eq!(error.into_message(), "memory unavailable");
+        let events = boundaries.journaled_events.lock().unwrap();
+        let events = events.values().next().unwrap();
+        assert_eq!(events.last().unwrap().event_type, "run.failed");
+        assert_eq!(boundaries.clear_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(boundaries.launch_calls.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn thread_id_failure_marks_the_prepared_run_failed() {
+        let boundaries = FakeRunStartBoundaries {
+            thread_id_error: Some("thread lookup unavailable".into()),
+            ..FakeRunStartBoundaries::accepting()
+        };
+
+        let error = start_desktop_run(
+            &boundaries,
+            RunStartRequest {
+                prompt: "hello".into(),
+                files: Vec::new(),
+                workspace: None,
+                provenance: None,
+                thread_id: None,
+            },
+        )
+        .err()
+        .unwrap();
+
+        assert_eq!(error.into_message(), "thread lookup unavailable");
+        let events = boundaries.journaled_events.lock().unwrap();
+        let events = events.values().next().unwrap();
+        assert_eq!(events.last().unwrap().event_type, "run.failed");
+        assert_eq!(boundaries.clear_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(boundaries.launch_calls.load(Ordering::SeqCst), 0);
+    }
+
     #[cfg(target_os = "linux")]
     #[test]
     fn grant_errors_are_mapped_and_redacted() {
@@ -2475,6 +2605,7 @@ mod tests {
                     gateway_url: "https://gateway.invalid".into(),
                     virtual_key: "virtual-key".into(),
                     model: None,
+                    minimum_cacheable_prefix_characters: 8_192,
                     receipt_url,
                 },
                 Arc::new(AtomicBool::new(false)),
@@ -2650,6 +2781,7 @@ mod tests {
                     gateway_url: "https://gateway.invalid".into(),
                     virtual_key: "virtual-key".into(),
                     model: None,
+                    minimum_cacheable_prefix_characters: 8_192,
                     receipt_url,
                 },
                 Arc::new(AtomicBool::new(false)),
@@ -2996,6 +3128,7 @@ mod tests {
                 gateway_url: "https://gateway.invalid".into(),
                 virtual_key: "virtual-key".into(),
                 model: None,
+                minimum_cacheable_prefix_characters: 8_192,
                 receipt_url: "https://receipt.invalid".into(),
             },
             Arc::new(AtomicBool::new(false)),
@@ -3117,6 +3250,7 @@ mod tests {
                 gateway_url: "https://gateway.invalid".into(),
                 virtual_key: "virtual-key".into(),
                 model: None,
+                minimum_cacheable_prefix_characters: 8_192,
                 receipt_url,
             },
             Arc::new(AtomicBool::new(false)),
