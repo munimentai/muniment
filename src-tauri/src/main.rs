@@ -29,7 +29,7 @@ fn main() {
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_window_state::Builder::default().build())
-        .manage(auth::AuthState::new())
+        .manage(auth::AuthState::new(runtime_activity.clone()))
         .manage(Arc::new(voice_capture::VoiceCaptureState::new()))
         .manage(attach_service::AttachApprovalState::default())
         .setup(move |app| {
