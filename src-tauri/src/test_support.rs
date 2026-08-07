@@ -16,12 +16,13 @@ use muniment_core::journal::reducer::ChatProjector;
 #[cfg(target_os = "linux")]
 use muniment_core::journal::RunJournal;
 use muniment_core::journal::{EventEnvelope, JournalCommitHint, Provenance};
+use muniment_core::permission_gate::ChatPermissionAnswer;
 use serde_json::json;
 use serde_json::Value;
 
 use crate::chat::{
     attachment_error, chat_attachments, event_envelope, ActiveRun, ChatAttachment,
-    ChatPermissionAnswer, RunStartBoundaries, RunStartError, RunStartLaunch, SelectedFile,
+    RunStartBoundaries, RunStartError, RunStartLaunch, SelectedFile,
 };
 
 pub(crate) fn append_test_event(

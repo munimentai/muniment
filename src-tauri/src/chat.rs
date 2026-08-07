@@ -29,8 +29,9 @@ use muniment_core::journal::{
     EventEnvelope, EventPayload, JournalCommitHint, JournalError, Provenance, RunJournal,
 };
 use muniment_core::memory_index::ModelMemoryCapability;
+use muniment_core::permission_gate::{ChatPermissionAnswer, PendingPermissionAnswer};
 use muniment_core::sidecar::pi_chat::{
-    cancel_command, ExtensionUiAnswer, PiChatEvent, PiImageContent, PiRunAdapter, PromptCommand,
+    cancel_command, PiChatEvent, PiImageContent, PiRunAdapter, PromptCommand,
 };
 use muniment_core::sidecar::{PiRpcTransport, PiRpcWiring, PiSessionLocator, SidecarSupervisor};
 use serde::{Deserialize, Serialize};
@@ -146,44 +147,6 @@ pub(crate) struct ActiveRun {
     pub(crate) adapter: Arc<Mutex<Option<Arc<PiRunAdapter>>>>,
     permission_answers: Arc<Mutex<VecDeque<PendingPermissionAnswer>>>,
     _activity: RuntimeActivityGuard,
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-#[serde(
-    tag = "type",
-    content = "value",
-    rename_all = "camelCase",
-    deny_unknown_fields
-)]
-pub enum ChatPermissionAnswer {
-    Select(String),
-    Confirm(bool),
-    Input(String),
-    Editor(String),
-    Cancelled,
-}
-
-impl ChatPermissionAnswer {
-    pub(super) fn pi_answer(&self) -> ExtensionUiAnswer {
-        match self {
-            Self::Select(value) => ExtensionUiAnswer::Selection(value.clone()),
-            Self::Confirm(value) => ExtensionUiAnswer::Confirmation(*value),
-            Self::Input(value) => ExtensionUiAnswer::Input(value.clone()),
-            Self::Editor(value) => ExtensionUiAnswer::Editor(value.clone()),
-            Self::Cancelled => ExtensionUiAnswer::Cancelled,
-        }
-    }
-
-    pub(super) fn decision(&self) -> Value {
-        serde_json::to_value(self).expect("permission answers serialize")
-    }
-}
-
-#[derive(Clone, Debug)]
-pub(super) struct PendingPermissionAnswer {
-    pub(super) gate_id: String,
-    pub(super) answer: ChatPermissionAnswer,
-    pub(super) resolved: Option<std::sync::mpsc::SyncSender<Option<u64>>>,
 }
 
 pub(super) struct PiRuntime {
