@@ -7,6 +7,7 @@ mod chat_coordinate;
 mod chat_threads;
 mod dictation;
 mod home;
+mod memory;
 mod model_install;
 mod onboarding_import;
 #[cfg(test)]
@@ -32,6 +33,12 @@ fn main() {
         .manage(Arc::new(voice_capture::VoiceCaptureState::new()))
         .manage(attach_service::AttachApprovalState::default())
         .setup(move |app| {
+            let app_data = app.path().app_data_dir()?;
+            let app_config = app.path().app_config_dir()?;
+            app.manage(memory::ApplicationMemoryRuntime::new(
+                app_config,
+                app_data.join("memory"),
+            ));
             app.manage(chat::ChatState::new(
                 app.handle(),
                 runtime_activity.clone(),
