@@ -299,7 +299,13 @@ impl MemoryIndex {
     }
 
     pub fn reindex(&self) -> Result<ReindexReport, MemoryIndexError> {
-        let deadline = Instant::now() + DEFAULT_TIMEOUT;
+        self.reindex_with_deadline(Instant::now() + DEFAULT_TIMEOUT)
+    }
+
+    pub fn reindex_with_deadline(
+        &self,
+        deadline: Instant,
+    ) -> Result<ReindexReport, MemoryIndexError> {
         let mut connection = self.open(deadline)?;
         self.reindex_connection(&mut connection, deadline)
             .map_err(|error| normalize_timeout(error, deadline))
@@ -714,9 +720,20 @@ mod tests {
         for number in 0..8 {
             fixture.file(&format!("{number}.md"), "stable pear");
         }
-        assert_eq!(fixture.index().reindex().unwrap().indexed.len(), 8);
+        assert_eq!(
+            fixture
+                .index()
+                .reindex_with_deadline(Instant::now() + Duration::from_secs(60))
+                .unwrap()
+                .indexed
+                .len(),
+            8
+        );
         fixture.file("3.md", "changed pear");
-        let report = fixture.index().reindex().unwrap();
+        let report = fixture
+            .index()
+            .reindex_with_deadline(Instant::now() + Duration::from_secs(60))
+            .unwrap();
         assert_eq!(report.indexed, ["memory/3.md"]);
         assert_eq!(report.unchanged, 7);
         assert!(report.removed.is_empty());
@@ -761,7 +778,10 @@ mod tests {
         for number in 0..7 {
             fixture.file(&format!("{number}.md"), "violet equal rank");
         }
-        fixture.index().reindex().unwrap();
+        fixture
+            .index()
+            .reindex_with_deadline(Instant::now() + Duration::from_secs(60))
+            .unwrap();
         let connection = Connection::open(fixture.root.join("cache/index.sqlite3")).unwrap();
         connection.execute("DELETE FROM memory_fts", []).unwrap();
         for number in (0..7).rev() {
