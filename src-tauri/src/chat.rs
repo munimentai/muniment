@@ -830,19 +830,8 @@ impl Drop for ResumeAttempt {
     }
 }
 
-pub(crate) const PROMPT_SERVICE: &str = "ai.muniment.desktop.chat";
-const PROMPT_USER: &str = "protected-prompts";
-
-pub(crate) fn prompt_user(subject: Option<&str>, run_id: &str) -> String {
-    subject.filter(|value| !value.is_empty()).map_or_else(
-        || format!("{PROMPT_USER}:{run_id}"),
-        |value| format!("{PROMPT_USER}:{value}:{run_id}"),
-    )
-}
-
 fn protect_prompt(run_id: &str, prompt: &str, subject: Option<&str>) -> Result<(), String> {
-    keyring::Entry::new(PROMPT_SERVICE, &prompt_user(subject, run_id))
-        .and_then(|entry| entry.set_password(prompt))
+    muniment_core::chat_prompt::store_prompt(run_id, prompt, subject)
         .map_err(|_| "Conversation history is unavailable.".to_string())
 }
 
