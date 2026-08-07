@@ -880,6 +880,67 @@ fn close_resume_memory_session<R: tauri::Runtime>(app: &tauri::AppHandle<R>, run
     }
 }
 
+/// Installs the resumed run and opens its memory session. A failed open leaves
+/// no active run behind.
+fn install_resume_run<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    active: &Mutex<Option<ActiveRun>>,
+    run: ActiveRun,
+    thread_id: &str,
+    minimum_cacheable_prefix_characters: usize,
+) -> Result<(), String> {
+    let run_id = run.id.clone();
+    install_active_run(active, run)?;
+    if let Err(error) =
+        open_resume_memory_session(app, &run_id, thread_id, minimum_cacheable_prefix_characters)
+    {
+        clear_active_run(active, &run_id);
+        return Err(error);
+    }
+    Ok(())
+}
+
+struct ResumeLaunch<R: tauri::Runtime> {
+    app: tauri::AppHandle<R>,
+    storage: SharedStorage,
+    runtime: Arc<Mutex<Option<PiRuntime>>>,
+    run_id: String,
+    tokens: TokenSet,
+    grant: ChatGrant,
+    cancelled: Arc<AtomicBool>,
+    transport: Arc<Mutex<Option<Arc<PiRpcTransport>>>>,
+    adapter: Arc<Mutex<Option<Arc<PiRunAdapter>>>>,
+    permission_answers: Arc<Mutex<VecDeque<PendingPermissionAnswer>>>,
+    resume: ResumeContext,
+    attempt: std::sync::mpsc::Sender<Result<(), String>>,
+}
+
+/// Completes the resumed run. The memory session closes and the active run
+/// clears on both the normal and the failed path.
+fn run_resume<R: tauri::Runtime>(launch: ResumeLaunch<R>) {
+    coordinate(
+        launch.app.clone(),
+        launch.storage,
+        launch.runtime,
+        launch.run_id.clone(),
+        RESUME_PROMPT.into(),
+        launch.tokens.access_token,
+        launch.tokens.subject,
+        launch.grant,
+        launch.cancelled,
+        launch.transport,
+        launch.adapter,
+        launch.permission_answers,
+        Some(launch.resume),
+        Some(launch.attempt),
+        None,
+    );
+    close_resume_memory_session(&launch.app, &launch.run_id);
+    if let Some(state) = launch.app.try_state::<ChatState>() {
+        clear_active_run(&state.active, &launch.run_id);
+    }
+}
+
 #[tauri::command]
 pub async fn chat_resume(
     app: tauri::AppHandle,
@@ -927,7 +988,10 @@ pub async fn chat_resume(
     let transport = Arc::new(Mutex::new(None));
     let adapter = Arc::new(Mutex::new(None));
     let permission_answers = Arc::new(Mutex::new(VecDeque::new()));
-    install_active_run(
+    // A resumed run owns its own memory session. Open it before the coordinator
+    // starts so the declared memory-search tool can answer every call.
+    install_resume_run(
+        &app,
         &state.active,
         ActiveRun {
             id: run_id.clone(),
@@ -938,51 +1002,26 @@ pub async fn chat_resume(
             permission_answers: Arc::clone(&permission_answers),
             _activity: state.runtime_activity.mark_active_run(),
         },
-    )?;
-    // A resumed run owns its own memory session. Open it before the coordinator
-    // starts so the declared memory-search tool can answer every call.
-    if let Err(error) = open_resume_memory_session(
-        &app,
-        &run_id,
         &thread_id,
         grant.minimum_cacheable_prefix_characters,
-    ) {
-        clear_active_run(&state.active, &run_id);
-        return Err(error);
-    }
-    let storage = Arc::clone(&state.storage);
-    let runtime = Arc::clone(&state.runtime);
+    )?;
     let result_id = run_id.clone();
     let (attempt_sender, attempt_receiver) = std::sync::mpsc::channel();
-    tauri::async_runtime::spawn_blocking(move || {
-        coordinate(
-            app.clone(),
-            storage,
-            runtime,
-            run_id.clone(),
-            RESUME_PROMPT.into(),
-            tokens.access_token,
-            tokens.subject,
-            grant,
-            cancelled,
-            transport,
-            adapter,
-            permission_answers,
-            Some(resume),
-            Some(attempt_sender),
-            None,
-        );
-        close_resume_memory_session(&app, &run_id);
-        if let Some(state) = app.try_state::<ChatState>() {
-            let mut active = state
-                .active
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            if active.as_ref().is_some_and(|current| current.id == run_id) {
-                *active = None;
-            }
-        }
-    });
+    let launch = ResumeLaunch {
+        app,
+        storage: Arc::clone(&state.storage),
+        runtime: Arc::clone(&state.runtime),
+        run_id,
+        tokens,
+        grant,
+        cancelled,
+        transport,
+        adapter,
+        permission_answers,
+        resume,
+        attempt: attempt_sender,
+    };
+    tauri::async_runtime::spawn_blocking(move || run_resume(launch));
     tauri::async_runtime::spawn_blocking(move || attempt_receiver.recv())
         .await
         .map_err(|_| "This reply could not be resumed. Try again.".to_string())?
@@ -3307,7 +3346,7 @@ mod tests {
     }
 
     #[test]
-    fn resume_memory_session_failure_reports_the_existing_resume_copy() {
+    fn resume_memory_session_failure_reports_the_resume_copy_and_leaves_no_active_run() {
         let app = tauri::test::mock_app();
         let root = std::env::temp_dir().join(format!("muniment-resume-memory-{}", Uuid::now_v7()));
         // The test records no Muniment Home, so the memory session cannot open.
@@ -3316,10 +3355,21 @@ mod tests {
             root.join("cache"),
         ));
 
-        let error =
-            open_resume_memory_session(app.handle(), "run-1", "thread-1", 8_192).unwrap_err();
+        let runtime_activity = RuntimeActivityRegistry::new();
+        let active = Mutex::new(None);
+
+        let error = install_resume_run(
+            app.handle(),
+            &active,
+            inactive_transport_run("run-1", &runtime_activity),
+            "thread-1",
+            8_192,
+        )
+        .unwrap_err();
 
         assert_eq!(error, "This reply cannot be resumed.");
+        assert!(active.lock().unwrap().is_none());
+        assert!(!runtime_activity.snapshot().active_run);
         assert!(app
             .state::<crate::memory::ApplicationMemoryRuntime>()
             .dispatch_tool_call("run-1", "memory-search", br#"{"query":"saffron"}"#)
@@ -3415,20 +3465,44 @@ mod tests {
             cas: LocalCas::open(&directory.join("cas")).unwrap(),
         }));
 
-        open_resume_memory_session(app.handle(), &run_id, &thread_id, 8_192).unwrap();
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let transport = Arc::new(Mutex::new(None));
+        let adapter = Arc::new(Mutex::new(None));
+        let permission_answers = Arc::new(Mutex::new(VecDeque::new()));
+        let runtime_activity = RuntimeActivityRegistry::new();
+        let active = Mutex::new(None);
+        install_resume_run(
+            app.handle(),
+            &active,
+            ActiveRun {
+                id: run_id.clone(),
+                workspace: "workspace-a".into(),
+                cancelled: Arc::clone(&cancelled),
+                transport: Arc::clone(&transport),
+                adapter: Arc::clone(&adapter),
+                permission_answers: Arc::clone(&permission_answers),
+                _activity: runtime_activity.mark_active_run(),
+            },
+            &thread_id,
+            8_192,
+        )
+        .unwrap();
         std::env::set_var("MUNIMENT_PI_ROOT", &directory);
         std::env::set_var("MUNIMENT_PI_TEST_EXECUTABLE", &stub);
         std::env::set_var("PI_RESUME_STUB_MEMORY_QUERY", "saffron");
         let (sender, receiver) = std::sync::mpsc::channel();
-        coordinate(
-            app.handle().clone(),
-            Arc::clone(&shared),
-            Arc::new(Mutex::new(None)),
-            run_id.clone(),
-            RESUME_PROMPT.into(),
-            "token".into(),
-            Some("owner".into()),
-            ChatGrant {
+        run_resume(ResumeLaunch {
+            app: app.handle().clone(),
+            storage: Arc::clone(&shared),
+            runtime: Arc::new(Mutex::new(None)),
+            run_id: run_id.clone(),
+            tokens: TokenSet {
+                access_token: "token".into(),
+                refresh_token: None,
+                expires_at: None,
+                subject: Some("owner".into()),
+            },
+            grant: ChatGrant {
                 workspace: "workspace-a".into(),
                 gateway_url: "https://gateway.invalid".into(),
                 virtual_key: "virtual-key".into(),
@@ -3436,20 +3510,18 @@ mod tests {
                 minimum_cacheable_prefix_characters: 8_192,
                 receipt_url,
             },
-            Arc::new(AtomicBool::new(false)),
-            Arc::new(Mutex::new(None)),
-            Arc::new(Mutex::new(None)),
-            Arc::new(Mutex::new(VecDeque::new())),
-            Some(ResumeContext {
+            cancelled,
+            transport,
+            adapter,
+            permission_answers,
+            resume: ResumeContext {
                 events: existing,
                 locator,
-            }),
-            Some(sender),
-            None,
-        );
+            },
+            attempt: sender,
+        });
         assert_eq!(receiver.recv().unwrap(), Ok(()));
         receipt_server.join().unwrap();
-        close_resume_memory_session(app.handle(), &run_id);
         for key in [
             "MUNIMENT_PI_ROOT",
             "MUNIMENT_PI_TEST_EXECUTABLE",
