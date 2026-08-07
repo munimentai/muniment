@@ -85,6 +85,15 @@ export function onboardingImportErrorState(state, error) {
       error: 'That Home already contains an item at the proposed destination. Choose a different Home folder and try again.',
     }
   }
+  if (error?.kind === 'secretRejected') {
+    return {
+      ...state,
+      name: 'approved-review',
+      errorKind: 'secretRejected',
+      conflictPath: undefined,
+      error: 'An approved file contains a credential, so Muniment imported nothing. Return to archive review and leave out the file that holds it.',
+    }
+  }
   return {
     ...state,
     name: 'approved-review',
