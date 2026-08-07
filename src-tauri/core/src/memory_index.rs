@@ -6,7 +6,7 @@ use serde_json::json;
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::fs;
-use std::io;
+use std::io::{self, Read};
 use std::path::{Component, Path, PathBuf};
 use std::time::{Duration, Instant};
 
@@ -85,6 +85,7 @@ pub enum MemoryIndexError {
     TimedOut,
     SecretRejected,
     InvalidPath,
+    InvalidToolArguments,
 }
 
 impl From<io::Error> for MemoryIndexError {
@@ -102,6 +103,86 @@ impl From<rusqlite::Error> for MemoryIndexError {
 /// One conversation-scoped declaration. Its serialized bytes never depend on a turn.
 pub struct MemorySearchSession {
     tool_definition: Vec<u8>,
+    declaration_count: usize,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ModelMemoryCapability {
+    pub minimum_cacheable_prefix_characters: usize,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct MemorySearchCall {
+    pub query: String,
+    pub item_count: Option<usize>,
+    pub character_budget: Option<usize>,
+    pub timeout_milliseconds: Option<u64>,
+}
+
+/// Owns the selected Home, model limit, tool declaration, and recall receipts.
+pub struct MemoryRuntimeSession {
+    index: MemoryIndex,
+    thread: String,
+    configured: RetrievalLimits,
+    declaration: MemorySearchSession,
+    recalls: Vec<RecallRecord>,
+}
+
+impl MemoryRuntimeSession {
+    pub fn open(
+        home: impl Into<PathBuf>,
+        database: impl Into<PathBuf>,
+        thread: impl Into<String>,
+        capability: ModelMemoryCapability,
+    ) -> Self {
+        Self {
+            index: MemoryIndex::new(home, database),
+            thread: thread.into(),
+            configured: RetrievalLimits::defaults(capability.minimum_cacheable_prefix_characters),
+            declaration: MemorySearchSession::default(),
+            recalls: Vec::new(),
+        }
+    }
+
+    pub fn tool_definition_for_turn(&self) -> &[u8] {
+        self.declaration.tool_definition_for_turn()
+    }
+
+    pub fn tool_declaration_count(&self) -> usize {
+        self.declaration.declaration_count()
+    }
+
+    pub fn call(&mut self, arguments: &[u8]) -> Result<MemorySearchResult, MemoryIndexError> {
+        let call: MemorySearchCall = serde_json::from_slice(arguments)
+            .map_err(|_| MemoryIndexError::InvalidToolArguments)?;
+        let requested = if call.item_count.is_none()
+            && call.character_budget.is_none()
+            && call.timeout_milliseconds.is_none()
+        {
+            None
+        } else {
+            Some(RetrievalLimits {
+                item_cap: call.item_count.unwrap_or(self.configured.item_cap),
+                character_budget: call
+                    .character_budget
+                    .unwrap_or(self.configured.character_budget),
+                timeout: Duration::from_millis(
+                    call.timeout_milliseconds
+                        .unwrap_or(self.configured.timeout.as_millis() as u64),
+                ),
+            })
+        };
+        let result = self
+            .index
+            .search(&self.thread, &call.query, self.configured, requested)?;
+        self.recalls.push(result.recall.clone());
+        Ok(result)
+    }
+
+    pub fn recall_records(&self) -> &[RecallRecord] {
+        &self.recalls
+    }
 }
 
 impl Default for MemorySearchSession {
@@ -123,6 +204,7 @@ impl Default for MemorySearchSession {
         });
         Self {
             tool_definition: serde_json::to_vec(&definition).expect("static tool definition"),
+            declaration_count: 1,
         }
     }
 }
@@ -130,6 +212,10 @@ impl Default for MemorySearchSession {
 impl MemorySearchSession {
     pub fn tool_definition_for_turn(&self) -> &[u8] {
         &self.tool_definition
+    }
+
+    pub fn declaration_count(&self) -> usize {
+        self.declaration_count
     }
 }
 
@@ -158,19 +244,22 @@ impl MemoryIndex {
             return Err(MemoryIndexError::TimedOut);
         }
         let deadline = Instant::now() + limits.timeout;
-        let mut connection = self.open()?;
-        self.reindex_connection(&mut connection, deadline)?;
+        let mut connection = self.open(deadline)?;
+        self.reindex_connection(&mut connection, deadline)
+            .map_err(|error| normalize_timeout(error, deadline))?;
         check_deadline(deadline)?;
 
-        let state = source_state(&connection)?;
+        let state = source_state(&connection).map_err(|error| sqlite_error(error, deadline))?;
         let mut items = Vec::new();
         if limits.item_cap > 0 && limits.character_budget > 0 && !query.trim().is_empty() {
             let expression = match_expression(query);
             if !expression.is_empty() {
-                let mut statement = connection.prepare(
-                    "SELECT path, content FROM memory_fts WHERE memory_fts MATCH ?1 \
+                let mut statement = connection
+                    .prepare(
+                        "SELECT path, content FROM memory_fts WHERE memory_fts MATCH ?1 \
                      ORDER BY bm25(memory_fts), path LIMIT ?2",
-                )?;
+                    )
+                    .map_err(|error| sqlite_error(error, deadline))?;
                 let rows =
                     statement.query_map(params![expression, limits.item_cap as i64], |row| {
                         Ok(MemoryItem {
@@ -181,7 +270,7 @@ impl MemoryIndex {
                 let mut used = 0;
                 for row in rows {
                     check_deadline(deadline)?;
-                    let mut item = row?;
+                    let mut item = row.map_err(|error| sqlite_error(error, deadline))?;
                     let remaining = limits.character_budget.saturating_sub(used);
                     if remaining == 0 {
                         break;
@@ -208,22 +297,27 @@ impl MemoryIndex {
     }
 
     pub fn reindex(&self) -> Result<ReindexReport, MemoryIndexError> {
-        let mut connection = self.open()?;
-        self.reindex_connection(&mut connection, Instant::now() + DEFAULT_TIMEOUT)
+        let deadline = Instant::now() + DEFAULT_TIMEOUT;
+        let mut connection = self.open(deadline)?;
+        self.reindex_connection(&mut connection, deadline)
+            .map_err(|error| normalize_timeout(error, deadline))
     }
 
-    fn open(&self) -> Result<Connection, MemoryIndexError> {
+    fn open(&self, deadline: Instant) -> Result<Connection, MemoryIndexError> {
         if let Some(parent) = self.database.parent() {
             fs::create_dir_all(parent)?
         }
         let connection = Connection::open(&self.database)?;
-        connection.execute_batch(
-            "CREATE TABLE IF NOT EXISTS memory_files (
+        connection.progress_handler(100, Some(move || Instant::now() >= deadline));
+        connection
+            .execute_batch(
+                "CREATE TABLE IF NOT EXISTS memory_files (
                 path TEXT PRIMARY KEY NOT NULL,
                 content_hash TEXT NOT NULL
              );
              CREATE VIRTUAL TABLE IF NOT EXISTS memory_fts USING fts5(path UNINDEXED, content);",
-        )?;
+            )
+            .map_err(|error| sqlite_error(error, deadline))?;
         Ok(connection)
     }
 
@@ -268,6 +362,22 @@ impl MemoryIndex {
     }
 }
 
+fn sqlite_error(error: rusqlite::Error, deadline: Instant) -> MemoryIndexError {
+    if Instant::now() >= deadline {
+        MemoryIndexError::TimedOut
+    } else {
+        MemoryIndexError::Sqlite(error)
+    }
+}
+
+fn normalize_timeout(error: MemoryIndexError, deadline: Instant) -> MemoryIndexError {
+    if Instant::now() >= deadline {
+        MemoryIndexError::TimedOut
+    } else {
+        error
+    }
+}
+
 struct Document {
     content: String,
     hash: String,
@@ -290,7 +400,8 @@ fn scan_home(
         if !metadata.file_type().is_file() || metadata.len() > MAX_FILE_BYTES {
             continue;
         }
-        let bytes = fs::read(&path)?;
+        let file = fs::File::open(&path)?;
+        let bytes = read_utf8_bytes(file, metadata.len() as usize, deadline)?;
         let Ok(content) = String::from_utf8(bytes) else {
             continue;
         };
@@ -302,6 +413,33 @@ fn scan_home(
         documents.insert(relative, Document { content, hash });
     }
     Ok(documents)
+}
+
+fn read_utf8_bytes(
+    mut reader: impl Read + Send + 'static,
+    capacity: usize,
+    deadline: Instant,
+) -> Result<Vec<u8>, MemoryIndexError> {
+    check_deadline(deadline)?;
+    let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+    std::thread::spawn(move || {
+        let result = (|| -> io::Result<Vec<u8>> {
+            let mut bytes = Vec::with_capacity(capacity);
+            let mut chunk = [0_u8; 64 * 1024];
+            loop {
+                let read = reader.read(&mut chunk)?;
+                if read == 0 {
+                    return Ok(bytes);
+                }
+                bytes.extend_from_slice(&chunk[..read]);
+            }
+        })();
+        let _ = sender.send(result);
+    });
+    receiver
+        .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+        .map_err(|_| MemoryIndexError::TimedOut)?
+        .map_err(MemoryIndexError::Io)
 }
 
 fn collect_markdown(
@@ -403,10 +541,7 @@ pub fn write_memory_record(
     relative: &Path,
     content: &str,
 ) -> Result<(), MemoryIndexError> {
-    if !crate::assistant_text::scan(content, true)
-        .matches
-        .is_empty()
-    {
+    if crate::home::memory_record_contains_secret(content) {
         return Err(MemoryIndexError::SecretRejected);
     }
     if relative.is_absolute()
@@ -422,12 +557,21 @@ pub fn write_memory_record(
     {
         return Err(MemoryIndexError::InvalidPath);
     }
-    let path = home.join(relative);
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)?
-    }
-    fs::write(path, content)?;
-    Ok(())
+    let plan = crate::home::OnboardingHomeWritePlan {
+        writes: vec![crate::home::HomeWrite {
+            relative_path: relative.to_string_lossy().replace('\\', "/"),
+            contents: content.to_owned(),
+        }],
+    };
+    crate::home::persist_onboarding_home_write_plan(home, &plan).map_err(|error| match error {
+        crate::home::OnboardingHomePersistenceError::SecretRejected => {
+            MemoryIndexError::SecretRejected
+        }
+        crate::home::OnboardingHomePersistenceError::InvalidHome
+        | crate::home::OnboardingHomePersistenceError::InvalidPlan => MemoryIndexError::InvalidPath,
+        crate::home::OnboardingHomePersistenceError::Io(error) => MemoryIndexError::Io(error),
+        other => MemoryIndexError::Io(io::Error::other(other.to_string())),
+    })
 }
 
 #[cfg(test)]
@@ -542,6 +686,17 @@ mod tests {
         for number in 0..7 {
             fixture.file(&format!("{number}.md"), "violet equal rank");
         }
+        fixture.index().reindex().unwrap();
+        let connection = Connection::open(fixture.root.join("cache/index.sqlite3")).unwrap();
+        connection.execute("DELETE FROM memory_fts", []).unwrap();
+        for number in (0..7).rev() {
+            connection
+                .execute(
+                    "INSERT INTO memory_fts(path, content) VALUES (?1, ?2)",
+                    params![format!("memory/{number}.md"), "violet equal rank"],
+                )
+                .unwrap();
+        }
         let first = fixture
             .index()
             .search("same-thread", "violet", Fixture::limits(5, 1000), None)
@@ -552,6 +707,20 @@ mod tests {
             .unwrap();
         assert_eq!(first.items, second.items);
         assert_eq!(first.items.len(), 5);
+        assert_eq!(
+            first
+                .items
+                .iter()
+                .map(|item| item.path.as_str())
+                .collect::<Vec<_>>(),
+            [
+                "memory/0.md",
+                "memory/1.md",
+                "memory/2.md",
+                "memory/3.md",
+                "memory/4.md"
+            ]
+        );
     }
 
     #[test]
@@ -561,6 +730,31 @@ mod tests {
         let second = session.tool_definition_for_turn().to_vec();
         assert_eq!(first, second);
         assert!(!first.is_empty());
+        assert_eq!(session.declaration_count(), 1);
+    }
+
+    #[test]
+    fn runtime_session_declares_once_and_records_real_searches_across_turns() {
+        let fixture = Fixture::new();
+        let mut session = MemoryRuntimeSession::open(
+            &fixture.root,
+            fixture.root.join("cache/runtime.sqlite3"),
+            "thread-runtime",
+            ModelMemoryCapability {
+                minimum_cacheable_prefix_characters: 30,
+            },
+        );
+        let first_definition = session.tool_definition_for_turn().as_ptr();
+        let first = session.call(br#"{"query":"saffron"}"#).unwrap();
+        let second_definition = session.tool_definition_for_turn().as_ptr();
+        let second = session.call(br#"{"query":"saffron"}"#).unwrap();
+
+        assert_eq!(first_definition, second_definition);
+        assert_eq!(session.tool_declaration_count(), 1);
+        assert_eq!(first.items, second.items);
+        assert!(first.items.is_empty());
+        assert_eq!(session.recall_records(), &[first.recall, second.recall]);
+        assert_eq!(session.recall_records()[0].character_budget, 30);
     }
 
     #[test]
@@ -574,6 +768,27 @@ mod tests {
         );
         assert!(matches!(result, Err(MemoryIndexError::SecretRejected)));
         assert!(!fixture.root.join(path).exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn write_cannot_follow_replaced_parent_outside_home() {
+        use std::os::unix::fs::symlink;
+
+        let fixture = Fixture::new();
+        let outside = Fixture::new();
+        symlink(
+            outside.root.join("memory"),
+            fixture.root.join("memory/link"),
+        )
+        .unwrap();
+        let result = write_memory_record(
+            &fixture.root,
+            Path::new("memory/link/escaped.md"),
+            "safe text",
+        );
+        assert!(result.is_err());
+        assert!(!outside.root.join("memory/escaped.md").exists());
     }
 
     #[test]
@@ -616,5 +831,20 @@ mod tests {
             ),
             Err(MemoryIndexError::TimedOut)
         ));
+    }
+
+    #[test]
+    fn file_read_uses_the_search_deadline() {
+        struct SlowReader;
+        impl Read for SlowReader {
+            fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+                std::thread::sleep(Duration::from_millis(5));
+                buffer[0] = b'x';
+                Ok(1)
+            }
+        }
+
+        let result = read_utf8_bytes(SlowReader, 1, Instant::now() + Duration::from_millis(1));
+        assert!(matches!(result, Err(MemoryIndexError::TimedOut)));
     }
 }
