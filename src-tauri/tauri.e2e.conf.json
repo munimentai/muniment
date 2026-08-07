@@ -3,8 +3,13 @@
   "app": {
     "security": {
       "capabilities": [
-        "capabilities/default.json",
-        "e2e/capability.json"
+        "default",
+        {
+          "identifier": "e2e-webdriver",
+          "description": "Embedded WebDriver access for E2E builds.",
+          "windows": ["main"],
+          "permissions": ["wdio-webdriver:default"]
+        }
       ]
     }
   }
