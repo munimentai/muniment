@@ -61,16 +61,8 @@ pub struct ChatThreadOpenPage {
 }
 
 fn load_prompt(run_id: &str, subject: Option<&str>) -> Result<Option<String>, String> {
-    let entry = keyring::Entry::new(
-        crate::chat::PROMPT_SERVICE,
-        &crate::chat::prompt_user(subject, run_id),
-    )
-    .map_err(|_| "Conversation history is unavailable.".to_string())?;
-    match entry.get_password() {
-        Ok(value) => Ok(Some(value)),
-        Err(keyring::Error::NoEntry) => Ok(None),
-        Err(_) => Err("Conversation history is unavailable.".to_string()),
-    }
+    muniment_core::chat_prompt::load_prompt(run_id, subject)
+        .map_err(|_| "Conversation history is unavailable.".to_string())
 }
 
 pub(crate) fn projection_phase(status: &Option<RunStatus>) -> &'static str {
