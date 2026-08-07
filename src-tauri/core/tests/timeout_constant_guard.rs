@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 
 // Each entry must name the test and constant, for example
 // ("deadline_uses_the_production_contract", "REQUEST_TIMEOUT").
-const DELIBERATE_EXCEPTIONS: &[(&str, &str)] = &[];
+const DELIBERATE_EXCEPTIONS: &[(&str, &str)] = &[("allowed_reference", "DEFAULT_TIMEOUT")];
 
 #[test]
 fn test_modules_do_not_inherit_production_timeout_constants() {
@@ -25,6 +25,37 @@ fn guard_fixture_detects_a_production_timeout_reference() {
     assert_eq!(violations.len(), 1, "{violations:#?}");
     assert!(violations[0].contains("DEFAULT_TIMEOUT"));
     assert!(violations[0].contains("inherits_the_timeout"));
+}
+
+#[test]
+fn guard_checks_references_after_an_allowed_reference() {
+    let fixture = fixture("allowed_then_forbidden.rs");
+    let violations = scan_file(&fixture);
+    assert_eq!(violations.len(), 1, "{violations:#?}");
+    assert!(violations[0].contains("forbidden_reference"));
+}
+
+#[test]
+fn guard_finds_constants_declared_after_a_test_module() {
+    let fixture = fixture("constant_after_test_module.rs");
+    let violations = scan_file(&fixture);
+    assert_eq!(violations.len(), 1, "{violations:#?}");
+    assert!(violations[0].contains("LATE_TIMEOUT"));
+}
+
+#[test]
+fn guard_checks_each_test_module() {
+    let fixture = fixture("multiple_test_modules.rs");
+    let violations = scan_file(&fixture);
+    assert_eq!(violations.len(), 2, "{violations:#?}");
+    assert!(violations[0].contains("first_reference"));
+    assert!(violations[1].contains("second_reference"));
+}
+
+fn fixture(name: &str) -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/timeout_guard")
+        .join(name)
 }
 
 fn scan_tree(root: &Path) -> Vec<String> {
@@ -68,45 +99,41 @@ fn scan_source(path: &Path, source: &str, constants: &BTreeSet<String>) -> Vec<S
         return Vec::new();
     }
 
-    test_modules(source)
-        .into_iter()
-        .flat_map(|(module_line, module)| {
-            constants.iter().filter_map(move |constant| {
-                let reference_line = module
-                    .lines()
-                    .position(|line| contains_identifier(line, constant))?;
-                let test = enclosing_test_name(module, reference_line).unwrap_or("unknown_test");
-                if DELIBERATE_EXCEPTIONS.contains(&(test, constant.as_str())) {
-                    return None;
+    let lines: Vec<_> = source.lines().collect();
+    let mut violations = Vec::new();
+    for (start, end) in test_modules(&lines) {
+        for constant in constants {
+            for (offset, line) in lines[start..end].iter().enumerate() {
+                let reference_line = start + offset;
+                let test =
+                    enclosing_test_name(&lines, start, reference_line).unwrap_or("unknown_test");
+                for _ in identifier_occurrences(line, constant) {
+                    if !DELIBERATE_EXCEPTIONS.contains(&(test, constant.as_str())) {
+                        violations.push(format!(
+                            "{}:{}: {test} references {constant}",
+                            path.display(),
+                            reference_line + 1
+                        ));
+                    }
                 }
-                Some(format!(
-                    "{}:{}: {test} references {constant}",
-                    path.display(),
-                    module_line + reference_line
-                ))
-            })
-        })
-        .collect()
+            }
+        }
+    }
+    violations
 }
 
 fn production_timeout_constants(source: &str) -> BTreeSet<String> {
-    let mut test_cfg = false;
-    source
-        .lines()
-        .take_while(|line| {
-            let trimmed = line.trim();
-            if trimmed == "#[cfg(test)]" {
-                test_cfg = true;
-                return true;
-            }
-            if test_cfg && trimmed.starts_with("mod ") {
-                return false;
-            }
-            if !trimmed.is_empty() && test_cfg {
-                test_cfg = false;
-            }
-            true
+    let lines: Vec<_> = source.lines().collect();
+    let test_modules = test_modules(&lines);
+    lines
+        .iter()
+        .enumerate()
+        .filter(|(line, _)| {
+            !test_modules
+                .iter()
+                .any(|(start, end)| start <= line && line < end)
         })
+        .map(|(_, line)| *line)
         .filter_map(|line| {
             let line = line.trim_start();
             let declaration = line
@@ -119,8 +146,7 @@ fn production_timeout_constants(source: &str) -> BTreeSet<String> {
         .collect()
 }
 
-fn test_modules(source: &str) -> Vec<(usize, &str)> {
-    let lines: Vec<&str> = source.lines().collect();
+fn test_modules(lines: &[&str]) -> Vec<(usize, usize)> {
     let mut modules = Vec::new();
     let mut line = 0;
     while line < lines.len() {
@@ -131,27 +157,47 @@ fn test_modules(source: &str) -> Vec<(usize, &str)> {
         let Some(module_line) =
             (line + 1..lines.len()).find(|index| !lines[*index].trim().is_empty())
         else {
-            break;
+            return modules;
         };
         if !lines[module_line].trim_start().starts_with("mod ") {
             line = module_line + 1;
             continue;
         }
-        let start = lines[..=module_line]
-            .iter()
-            .map(|item| item.len() + 1)
-            .sum();
-        modules.push((module_line + 2, &source[start..]));
-        break;
+        let mut depth = 0_i32;
+        let mut saw_open = false;
+        let mut end = module_line;
+        for (index, source_line) in lines.iter().enumerate().skip(module_line) {
+            let change = brace_depth_change(source_line);
+            saw_open |= source_line.contains('{');
+            depth += change;
+            end = index + 1;
+            if saw_open && depth == 0 {
+                break;
+            }
+        }
+        modules.push((module_line, end));
+        line = end;
     }
     modules
 }
 
-fn contains_identifier(line: &str, identifier: &str) -> bool {
-    line.match_indices(identifier).any(|(start, _)| {
+fn brace_depth_change(line: &str) -> i32 {
+    line.chars().fold(0, |depth, character| match character {
+        '{' => depth + 1,
+        '}' => depth - 1,
+        _ => depth,
+    })
+}
+
+fn identifier_occurrences<'a>(
+    line: &'a str,
+    identifier: &'a str,
+) -> impl Iterator<Item = usize> + 'a {
+    line.match_indices(identifier).filter_map(|(start, _)| {
         let before = line[..start].chars().next_back();
         let after = line[start + identifier.len()..].chars().next();
-        !before.is_some_and(is_identifier_char) && !after.is_some_and(is_identifier_char)
+        (!before.is_some_and(is_identifier_char) && !after.is_some_and(is_identifier_char))
+            .then_some(start)
     })
 }
 
@@ -159,9 +205,12 @@ fn is_identifier_char(character: char) -> bool {
     character == '_' || character.is_ascii_alphanumeric()
 }
 
-fn enclosing_test_name(module: &str, reference_line: usize) -> Option<&str> {
-    let lines: Vec<_> = module.lines().take(reference_line + 1).collect();
-    lines.into_iter().rev().find_map(|line| {
+fn enclosing_test_name<'a>(
+    lines: &'a [&str],
+    start: usize,
+    reference_line: usize,
+) -> Option<&'a str> {
+    lines[start..=reference_line].iter().rev().find_map(|line| {
         let rest = line.trim_start().strip_prefix("fn ")?;
         rest.split('(').next()
     })
