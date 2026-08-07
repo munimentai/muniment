@@ -894,6 +894,29 @@ pub async fn chat_submit(
     .map_err(|_| "Chat configuration is temporarily unavailable.".to_string())?
 }
 
+fn open_resume_memory_session<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    run_id: &str,
+    thread_id: &str,
+    minimum_cacheable_prefix_characters: usize,
+) -> Result<(), String> {
+    app.state::<crate::memory::ApplicationMemoryRuntime>()
+        .open_session(
+            run_id,
+            thread_id,
+            ModelMemoryCapability {
+                minimum_cacheable_prefix_characters,
+            },
+        )
+        .map_err(|_| "This reply cannot be resumed.".to_string())
+}
+
+fn close_resume_memory_session<R: tauri::Runtime>(app: &tauri::AppHandle<R>, run_id: &str) {
+    if let Some(memory) = app.try_state::<crate::memory::ApplicationMemoryRuntime>() {
+        memory.close_session(run_id);
+    }
+}
+
 #[tauri::command]
 pub async fn chat_resume(
     app: tauri::AppHandle,
@@ -903,7 +926,7 @@ pub async fn chat_resume(
 ) -> Result<SubmitResult, String> {
     let tokens = auth::fresh_tokens_async(&auth_state, &app).await?;
     let session_root = state_session_root(&app)?;
-    let resume = {
+    let (resume, thread_id) = {
         let mut storage = state
             .storage
             .lock()
@@ -912,7 +935,15 @@ pub async fn chat_resume(
             .journal
             .events(&run_id)
             .map_err(|_| "This reply cannot be resumed.".to_string())?;
-        resumable_context(&events, tokens.subject.as_deref(), &session_root)?
+        let thread_id = storage
+            .journal
+            .run_thread_id(&run_id)
+            .map_err(|_| "This reply cannot be resumed.".to_string())?
+            .ok_or_else(|| "This reply cannot be resumed.".to_string())?;
+        (
+            resumable_context(&events, tokens.subject.as_deref(), &session_root)?,
+            thread_id,
+        )
     };
     let attachments = chat_attachments(
         &project_chat(&resume.events)
@@ -945,6 +976,17 @@ pub async fn chat_resume(
             _activity: state.runtime_activity.mark_active_run(),
         },
     )?;
+    // A resumed run owns its own memory session. Open it before the coordinator
+    // starts so the declared memory-search tool can answer every call.
+    if let Err(error) = open_resume_memory_session(
+        &app,
+        &run_id,
+        &thread_id,
+        grant.minimum_cacheable_prefix_characters,
+    ) {
+        clear_active_run(&state.active, &run_id);
+        return Err(error);
+    }
     let storage = Arc::clone(&state.storage);
     let runtime = Arc::clone(&state.runtime);
     let result_id = run_id.clone();
@@ -967,6 +1009,7 @@ pub async fn chat_resume(
             Some(attempt_sender),
             None,
         );
+        close_resume_memory_session(&app, &run_id);
         if let Some(state) = app.try_state::<ChatState>() {
             let mut active = state
                 .active
@@ -3294,6 +3337,184 @@ mod tests {
         let request: serde_json::Value =
             serde_json::from_str(std::fs::read_to_string(request_log).unwrap().trim()).unwrap();
         assert!(request.get("images").is_none());
+
+        std::fs::remove_file(sessions.join(session_name)).unwrap();
+        drop(shared);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn resume_memory_session_failure_reports_the_existing_resume_copy() {
+        let app = tauri::test::mock_app();
+        let root = std::env::temp_dir().join(format!("muniment-resume-memory-{}", Uuid::now_v7()));
+        // The test records no Muniment Home, so the memory session cannot open.
+        app.manage(crate::memory::ApplicationMemoryRuntime::new(
+            root.join("config"),
+            root.join("cache"),
+        ));
+
+        let error =
+            open_resume_memory_session(app.handle(), "run-1", "thread-1", 8_192).unwrap_err();
+
+        assert_eq!(error, "This reply cannot be resumed.");
+        assert!(app
+            .state::<crate::memory::ApplicationMemoryRuntime>()
+            .dispatch_tool_call("run-1", "memory-search", br#"{"query":"saffron"}"#)
+            .is_err());
+        assert!(!root.exists());
+    }
+
+    #[test]
+    fn resumed_run_answers_a_memory_search_and_ends_without_a_session() {
+        let _environment = lock_pi_environment();
+        let app = tauri::test::mock_app();
+        let directory =
+            std::env::temp_dir().join(format!("muniment-resume-memory-{}", Uuid::now_v7()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let config = directory.join("config");
+        let home = directory.join("home");
+        muniment_core::home::confirm_home(&config, &home).unwrap();
+        std::fs::write(home.join("memory/fact.md"), "saffron belongs in the pantry").unwrap();
+        app.manage(crate::memory::ApplicationMemoryRuntime::new(
+            config,
+            directory.join("cache"),
+        ));
+
+        let session_name = format!("{}.jsonl", Uuid::now_v7());
+        let sessions = ChatProfile::new(app.path().app_data_dir().unwrap()).pi_session_root();
+        std::fs::create_dir_all(&sessions).unwrap();
+        std::fs::write(sessions.join(&session_name), "persisted Pi data\n").unwrap();
+
+        let executable_name = if cfg!(windows) {
+            "sidecar-test-stub.exe"
+        } else {
+            "sidecar-test-stub"
+        };
+        let test_executable = std::env::current_exe().unwrap();
+        let stub = test_executable
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .join("examples")
+            .join(executable_name);
+        assert!(stub.is_file(), "sidecar test stub was not built");
+
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let receipt_url = format!("http://{}/receipt", listener.local_addr().unwrap());
+        let receipt_server = std::thread::spawn(move || {
+            use std::io::{Read, Write};
+            let mut stream = accept_receipt_request(listener);
+            stream
+                .set_read_timeout(Some(Duration::from_secs(2)))
+                .unwrap();
+            let mut request = [0; 4096];
+            let _ = stream.read(&mut request).unwrap();
+            let body = r#"{"route":"resume-stub","model":"test"}"#;
+            write!(
+                stream,
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            )
+            .unwrap();
+        });
+
+        let run_id = Uuid::now_v7().to_string();
+        let mut journal = RunJournal::open(directory.join("runs.sqlite3")).unwrap();
+        journal
+            .append_new_run(
+                "workspace-a",
+                &event_envelope(&run_id, 1, "run.started", json!({}), Some("owner")),
+            )
+            .unwrap();
+        append_test_event(
+            &mut journal,
+            &run_id,
+            2,
+            "runtime.pi_session.bound",
+            json!({"run_id":run_id, "locator":session_name}),
+            Some("owner"),
+        );
+        append_test_event(
+            &mut journal,
+            &run_id,
+            3,
+            "run.needs_attention",
+            json!({"reason":"interrupted"}),
+            Some("owner"),
+        );
+        let thread_id = journal.run_thread_id(&run_id).unwrap().unwrap();
+        let existing = journal.events(&run_id).unwrap();
+        let (locator, _) = validate_pi_session(&sessions, &session_name).unwrap();
+        let shared = Arc::new(Mutex::new(ChatStorage {
+            journal,
+            cas: LocalCas::open(&directory.join("cas")).unwrap(),
+        }));
+
+        open_resume_memory_session(app.handle(), &run_id, &thread_id, 8_192).unwrap();
+        std::env::set_var("MUNIMENT_PI_ROOT", &directory);
+        std::env::set_var("MUNIMENT_PI_TEST_EXECUTABLE", &stub);
+        std::env::set_var("PI_RESUME_STUB_MEMORY_QUERY", "saffron");
+        let (sender, receiver) = std::sync::mpsc::channel();
+        coordinate(
+            app.handle().clone(),
+            Arc::clone(&shared),
+            Arc::new(Mutex::new(None)),
+            run_id.clone(),
+            RESUME_PROMPT.into(),
+            "token".into(),
+            Some("owner".into()),
+            ChatGrant {
+                workspace: "workspace-a".into(),
+                gateway_url: "https://gateway.invalid".into(),
+                virtual_key: "virtual-key".into(),
+                model: None,
+                minimum_cacheable_prefix_characters: 8_192,
+                receipt_url,
+            },
+            Arc::new(AtomicBool::new(false)),
+            Arc::new(Mutex::new(None)),
+            Arc::new(Mutex::new(None)),
+            Arc::new(Mutex::new(VecDeque::new())),
+            Some(ResumeContext {
+                events: existing,
+                locator,
+            }),
+            Some(sender),
+            None,
+        );
+        assert_eq!(receiver.recv().unwrap(), Ok(()));
+        receipt_server.join().unwrap();
+        close_resume_memory_session(app.handle(), &run_id);
+        for key in [
+            "MUNIMENT_PI_ROOT",
+            "MUNIMENT_PI_TEST_EXECUTABLE",
+            "PI_RESUME_STUB_MEMORY_QUERY",
+        ] {
+            std::env::remove_var(key);
+        }
+
+        let events = shared.lock().unwrap().journal.events(&run_id).unwrap();
+        assert_eq!(events.last().unwrap().event_type, "run.completed");
+        let recalls: Vec<_> = events
+            .iter()
+            .filter(|event| event.event_type == "memory.recalled")
+            .collect();
+        assert_eq!(recalls.len(), 1);
+        let EventPayload::Inline { payload_json } = &recalls[0].payload else {
+            panic!("memory recall must use an inline payload");
+        };
+        assert!(payload_json["files"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("memory/fact.md")));
+        assert_eq!(payload_json["thread"], json!(thread_id));
+        assert_eq!(payload_json["character_budget"], json!(8_192));
+        assert!(app
+            .state::<crate::memory::ApplicationMemoryRuntime>()
+            .dispatch_tool_call(&run_id, "memory-search", br#"{"query":"saffron"}"#)
+            .is_err());
 
         std::fs::remove_file(sessions.join(session_name)).unwrap();
         drop(shared);
