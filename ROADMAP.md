@@ -4,11 +4,11 @@ Phases mirror harness-spec §9. Muniment-cloud Phase 1 native auth and the cloud
 prerequisites for desktop chat went live on 2026-07-11. Client work that uses
 them must exercise the real contracts. It must add no mocked production path.
 
-> **Compacted 2026-08-04.** This document reached 265 KB and no longer fit in one
-> read. Every landed slice used to carry its own paragraph. Those paragraphs are
-> now per-lane summaries with their ticket ranges. Every open item, parked item,
-> held item, gated item, and do-not-re-file measurement is preserved below. Git
-> history holds the full slice-by-slice record.
+> **Compacted 2026-08-04, again 2026-08-07.** This document reached 265 KB and no
+> longer fit in one read. Every landed slice used to carry its own paragraph.
+> Those paragraphs are now per-lane summaries with their ticket ranges. Every
+> open item, parked item, held item, gated item, and do-not-re-file measurement
+> is preserved below. Git history holds the full slice-by-slice record.
 
 ## M0 — Scaffold (done 2026-07-09)
 
@@ -118,8 +118,11 @@ muniment-cloud deploy path, not to this repository.
 **HELD — the owner ruling this lane waits on.** The standing owner exclusion on
 self-initiated database migrations and the 2026-07-12 RULE above disagree about
 this repository's local journal. Migration steps 2, 3, and 4 all landed under
-that RULE. Seventeen waves have now passed with no answer, and the lane files
-nothing each time. Everything in the next three paragraphs waits behind it.
+that RULE. Eighteen waves have now passed with no answer, and the lane files
+nothing each time. The memory lane read the same exclusion as covering durable
+stores alone, and it filed its disposable cache without a ruling. This lane keeps
+waiting, because its work alters the durable journal schema rather than a
+rebuildable file. Everything in the next three paragraphs waits behind it.
 
 HELD — the ADR 0002 launch-path amendment (MUNIDESK-720) names two
 implementation slices, and both need a schema step first. On open the desktop is
@@ -327,10 +330,10 @@ claimed version, and approval time, and the credential store records all three.
 
 DONE 2026-08-04 — the desktop management surface is built and whole
 (MUNIDESK-874, 876, 877, 881). `attach_companions` and `attach_revoke_companion`
-(`src-tauri/src/attach_service.rs:164`, `:178`) are registered Tauri commands, and
-the profile popover carries a `Connected programs` section under Devices. The
-MUNIDESK-876 merge overwrote the MUNIDESK-877 revoke control from a stale base,
-and MUNIDESK-881 restored the control and its tests.
+are registered Tauri commands, and the profile popover carries a
+`Connected programs` section under Devices. The MUNIDESK-876 merge overwrote the
+MUNIDESK-877 revoke control from a stale base, and MUNIDESK-881 restored the
+control and its tests.
 
 ### ADR 0012 runtime-service extraction
 
@@ -352,104 +355,85 @@ format, lint, test, and dependency-boundary CI steps
 (`test/runtime-dependency-boundary.sh`). The scaffold opens no endpoint, journal,
 CAS, or Pi.
 
-DONE 2026-08-04 — the approval coordinator moved into muniment-core
-(MUNIDESK-878). `src-tauri/core/src/attach/approval.rs` holds
-`ApprovalCoordinator` with presenter registration, the pending-decision map, the
-timeout denial, and six direct tests. The desktop registers the presenter and
-keeps the Tauri dialog. A shared core module is the extraction shape, and the
-`muniment-runtime` binary composes it at the cutover.
+DONE — nineteen core moves landed one slice at a time (MUNIDESK-878, 884, 888,
+889, 892, 897, 902, 904, 907, 910, 912, 915, 921, 924, 930, 953, 956, 962, 965).
+muniment-core now owns the approval coordinator, interrupted-run reconciliation,
+the chat profile layout and its storage open path, the companion credential store
+and its registry, Pi-to-journal event translation, the cloud chat grant snapshot,
+run-resume eligibility, the session-thread selector, the thread ownership check,
+the run-event append, owned-thread paging, the entitlement snapshot tracker, the
+companion workspace-context map, the thread rename and delete appends, the
+platform keychain credential store, the native device session composition, and
+the protected prompt store. Each desktop call site keeps a thin wrapper, so no
+caller changed shape.
 
-DONE 2026-08-04 — interrupted-run reconciliation moved into muniment-core
-(MUNIDESK-884). `src-tauri/core/src/journal/reconciliation.rs` holds
-`reconcile_interrupted_runs` and its `event_types_are_terminal` classifier with
-six direct tests. The core function takes its caller's provenance, so the
-recorded `run.needs_attention` envelope did not change. Three desktop call sites
-import it.
+DONE — `muniment-runtime` is a well-behaved Linux program. It answers
+`--version`, `--help`, and `-h` and rejects an unknown argument before it reaches
+the instance lock (MUNIDESK-908). It releases the lock on `SIGTERM` and `SIGINT`
+(MUNIDESK-894). It backs off instead of polling every 25 milliseconds and prints
+one line naming the wait (MUNIDESK-954). The Linux package builds and ships the
+binary beside `muniment-acp`, and the installed nightly reads its `--version`
+(MUNIDESK-929). The crate took no new dependency for any of it.
 
-DONE 2026-08-04 — two of the three selected core moves landed. The chat storage
-layout moved first (MUNIDESK-888). `src-tauri/core/src/chat_profile.rs` holds
-`ChatProfile`, which owns `runs.sqlite3`, `cas`, and `pi-sessions` under one
-profile directory, and `ChatState::new` (`src-tauri/src/chat.rs:705`) composes it.
-The companion credential store followed (MUNIDESK-889).
-`src-tauri/core/src/attach/credential.rs` carries the `O_NOFOLLOW` open, the owner
-and mode check, the legacy unversioned read, and the 0600 temporary-file write.
+DONE — the migration control request is wired from the wire to the desktop seam
+(MUNIDESK-913, 916, 917, 919, 920, 923, 928, 931, 952). ADR 0012 carries the
+control-authority amendment. Only the waiting runtime service may send the
+request, an approved client credential grants no authority, and on Linux the
+desktop resolves the `SO_PEERCRED` peer PID to the installed `muniment-runtime`
+payload. `migration.control` is an `Operation` variant with its canonical
+fixture. `evaluate_quiesce` (`src-tauri/core/src/attach/quiesce.rs`) names the
+first blocker in field order. `PreparedHandoffSlot`
+(`src-tauri/core/src/attach/handoff.rs`) bounds the nonce at 128 printable ASCII
+bytes and the deadline at 60,000 milliseconds and refuses a second preparation.
+The dispatcher branch (`src-tauri/core/src/attach/linux.rs:2091`) bounds both
+values, hands `control_migration` the connection's own `CompanionProvenance`, and
+echoes the nonce. The default seam still answers `unsupported_operation`, so no
+desktop implementation runs yet. `THREAT_MODEL.md` records the rule and the
+same-user limitation.
 
-DONE 2026-08-05 — the Pi-to-journal event translation moved into muniment-core
-(MUNIDESK-892). `src-tauri/core/src/journal/pi_translation.rs` holds the
-permission payload, the tool entry, the open-effect close, and the model stream
-delta. `src-tauri/src/chat_coordinate.rs` lost 270 lines and imports them now.
+DONE — one of the five quiesce inputs is wired. `evaluate_quiesce` weighs five
+inputs in field order. They are an active run, a pending permission gate, an
+authentication operation, a session refresh, and an in-flight external effect.
+`RuntimeActivityRegistry` (`src-tauri/core/src/attach/runtime_activity.rs`)
+carries one mark method per activity and a guard that clears its mark on drop
+(MUNIDESK-957). `main` (`src-tauri/src/main.rs:21`) creates one registry and
+manages it, and `ActiveRun` (`src-tauri/src/chat.rs:141`) holds a guard for
+exactly the life of a run (MUNIDESK-961). The other four mark methods have no
+production call site yet.
 
-DONE 2026-08-05 — `muniment-runtime` releases the instance lock on a signal
-(MUNIDESK-894). `TerminationSignalWait` is the core primitive, and `run`
-(`src-tauri/runtime/src/main.rs:43`) waits on it instead of parking forever.
-`SIGTERM` and `SIGINT` both end the process, so a Linux user unit stops it
-without the kill timeout. User-unit registration still comes after the cutover.
+DONE — the handoff nonce is separate work from the quiesce marks.
+`mint_handoff_nonce` (`src-tauri/core/src/attach/handoff.rs:22`) mints a
+single-use nonce from `getrandom` and took no new dependency (MUNIDESK-964). The
+attach `welcome` reserves the optional `handoff_nonce` field with its canonical
+fixture (MUNIDESK-923), and no listener sets the value yet.
 
-DONE 2026-08-05 — the cloud chat grant snapshot moved into muniment-core
-(MUNIDESK-897). `src-tauri/core/src/chat_grant.rs` holds `ChatGrant`,
-`fetch_grant`, `validate_grant`, `fetch_receipt`, and the typed
-`FetchGrantError`. The desktop crate dropped its own `ureq` dependency, and core
-carries the call behind its `tls` feature.
+SELECTED 2026-08-07 — the auth lane marks that registry next. A sign-in, a
+sign-out, and a session refresh each run while no run is active, so they are the
+two quiesce inputs the active-run mark does not cover. `AuthState::new`
+(`src-tauri/src/auth/mod.rs:94`) takes no registry today, and every
+`ensure_native_session` call site (`:69`, `:83`, `:198`, `:215`) is a refresh.
+The permission-gate mark and the external-effect mark both live inside the
+coordinate loop, which runs only while `active_run` is already true, so they
+follow the auth marks rather than lead them. The desktop `control_migration`
+answer comes after all four marks.
 
-DONE 2026-08-05 — the chat storage open path moved into muniment-core
-(MUNIDESK-902). `ChatProfile::open_storage`
-(`src-tauri/core/src/chat_profile.rs:38`) creates the profile directories, opens
-`runs.sqlite3`, opens the CAS, and returns the pair behind the typed
-`ChatProfileError`. `ChatState::new` (`src-tauri/src/chat.rs:705`) is three lines
-now, and it opens neither store by hand.
+SELECTED 2026-08-07 — muniment-core decides whether a probe `welcome` confirms a
+handoff. ADR 0012 has the desktop open a probe connection after it releases the
+lock, then check the returned nonce and the readiness deadline. `Welcome`
+(`src-tauri/attach/src/negotiation.rs:97`) already carries the optional
+`handoff_nonce`. The rule lands as a pure core module with no call site, which is
+the shape `quiesce.rs` and `handoff.rs` landed in.
 
-DONE 2026-08-05 — the run-resume eligibility check moved into muniment-core
-(MUNIDESK-904). `src-tauri/core/src/chat_resume.rs` holds `resumable_context`,
-`resumable_locator`, and the typed `ChatResumeError` with nine direct tests. The
-desktop keeps the user-facing strings in `chat_resume_error_message`
-(`src-tauri/src/chat.rs:776`), and `history_resumable`
-(`src-tauri/src/chat_threads.rs:195`) calls the core check for its history rows.
-
-DONE 2026-08-05 — the session-thread selector moved into muniment-core
-(MUNIDESK-907). `src-tauri/core/src/session_thread.rs` decides which thread a
-run joins and carries nine direct tests.
-
-DONE 2026-08-05 — the thread ownership check moved into muniment-core
-(MUNIDESK-910). `src-tauri/core/src/thread_ownership.rs` holds
-`subject_owns_first_run` with its typed `ThreadOwnershipError`, and six call
-sites in `src-tauri/src/chat_threads.rs` import it.
-
-DONE 2026-08-05 — the run-event append and projection step moved into
-muniment-core (MUNIDESK-912). `src-tauri/core/src/journal/run_append.rs` holds
-`append_run_event`, and `append_emit` (`src-tauri/src/chat_coordinate.rs:742`)
-keeps only its `chat-event` emit.
-
-NOTE 2026-08-05 — the companion workspace-context map landed on its fifth filing
-(MUNIDESK-924). The selected-file open rule drained a fifth time.
-`open_selected_files` (`src-tauri/src/chat.rs:991`) still repeats
-`chat_file_metadata` (`:914`). The planner filed it a sixth time with the target
-module path, the function names, and the test cases it must carry. A seventh
-drain needs an owner look at why this lane keeps dropping it.
-
-DONE 2026-08-05 — the owned thread paging moved into muniment-core
-(MUNIDESK-915).
-`src-tauri/core/src/owned_threads.rs` holds
-`newest_owned_workspace_thread` and `chat_thread_summaries_page`. They page
-journal summaries and keep the threads the core check accepts. Both carry the
-same 100-page cap and four direct tests. The desktop keeps thin wrappers in
-`src-tauri/src/chat_threads.rs`, so the callers do not change.
-
-DONE 2026-08-05 — the entitlement snapshot tracker moved into muniment-core
-(MUNIDESK-921). `src-tauri/core/src/auth/entitlement_snapshot.rs` holds
-`EntitlementSnapshotTracker` and its version transition rule. `AuthState`
-(`src-tauri/src/auth/mod.rs:45`) holds the tracker, and `observe_snapshot`
-(`:53`) keeps the desktop `entitlement-changed` emit.
-
-DONE 2026-08-05 — `muniment-runtime` answers `--version`, `--help`, and `-h`,
-and rejects an unknown argument before it reaches the instance lock
-(MUNIDESK-908). The crate took no new dependency.
-
-DONE 2026-08-05 — the companion workspace-context map moved into muniment-core
-(MUNIDESK-924). `src-tauri/core/src/attach/workspace_context.rs` holds
-`WorkspaceContextMap` with `record`, `authorized_directory`, and `instructions`.
-`onboard_workspace` (`src-tauri/src/attach_service.rs:579`) and
-`authorized_workspace` (`:619`) read that type instead of a bare three-level
-`HashMap`.
+SELECTED 2026-08-07 (fourth filing) — the permission gate coordination rules move
+into muniment-core. `coordinate_extension_ui_request`
+(`src-tauri/src/chat_coordinate.rs:726`) and `coordinate_permission_answer`
+(`:739`) already take closures and touch no Tauri type. ADR 0012 phase one names
+permission gates as runtime-service state. `ChatPermissionAnswer`
+(`src-tauri/src/chat.rs:158`) and `PendingPermissionAnswer` (`:183`) move with
+them, and every remaining call site changes only its import path. Three earlier
+filings drained without a pull request, so this one names the target module
+`src-tauri/core/src/permission_gate.rs`, the four items, the five call sites, and
+the four unit tests to move.
 
 HELD 2026-08-06 (eighth drain) — the selected-file open rule drained again, and
 the planner has stopped re-filing it. `src-tauri/core/src/selected_file.rs` does
@@ -457,8 +441,8 @@ not exist. The eighth filing carried the core half alone, with the target module
 path, the function names, and the test cases, so ticket size is not the cause.
 Eight identical filings that never reach a pull request are an orchestration
 question, and a ninth filing would only repeat the measurement. The work itself
-still stands. `open_selected_files` (`src-tauri/src/chat.rs:991`) repeats
-`chat_file_metadata` (`:915`). Each copy opens the path, reads the metadata off
+still stands. `open_selected_files` (`src-tauri/src/chat.rs:1069`) repeats
+`chat_file_metadata` (`:993`). Each copy opens the path, reads the metadata off
 the open handle, rejects anything that is not a file, and takes the display name
 from the last path segment. Reading the open handle rather than the path closes
 a replacement window, and no test guards that defense. The two copies also
@@ -466,191 +450,40 @@ disagree, because `chat_file_metadata` rejects a path with no usable final
 segment and `open_selected_files` does not. The lane waits for an owner look at
 why this one ticket never dispatches.
 
-DONE 2026-08-06 — the companion credential registry moved into muniment-core
-(MUNIDESK-956). `src-tauri/core/src/attach/companion_registry.rs` holds
-`CompanionRegistry` with the credential map, the `LiveConnectionRegistry` block,
-the persist step, the restore on a failed write, and the sorted listing.
-`AttachListenerState::revoke_companion` (`src-tauri/src/attach_service.rs:265`)
-and `list_companions` (`:269`) are thin wrappers, and the desktop keeps its two
-Tauri commands and its own serialized row type.
-
-STILL SELECTED 2026-08-06 — the permission gate coordination rules
-move into muniment-core. `coordinate_extension_ui_request`
-(`src-tauri/src/chat_coordinate.rs:650`) and `coordinate_permission_answer`
-(`:663`) already take closures and touch no Tauri type. ADR 0012 phase one names
-permission gates as runtime-service state. `ChatPermissionAnswer`
-(`src-tauri/src/chat.rs:158`) and `PendingPermissionAnswer` (`:179`) move with
-them, and every remaining call site changes only its import path. The third
-filing drained without a pull request. The wave of 2026-08-06 spent its six
-slices on the handoff rules, the auth marks, the prompt store, and the two
-memory slices, so this move waits one wave rather than taking a fourth filing
-beside work that edits the same run lane.
-
-DONE 2026-08-06 — `muniment-runtime` bounds the instance-lock wait and reports
-it once (MUNIDESK-954). The wait backs off instead of polling every 25
-milliseconds, and the service prints one line naming the wait rather than
-staying silent. ADR 0012 asks each platform manager for bounded backoff and
-redacted diagnostics, and the crate took no new dependency.
-
 MERGE HAZARD — the open slices edit `src-tauri/src/chat.rs`,
-`src-tauri/src/chat_threads.rs`, `src-tauri/src/auth/mod.rs`,
-`src-tauri/Cargo.toml`, and `src-tauri/core/src/attach/linux.rs`. Each ticket
-tells the implementer to rebase on `main` before it opens the pull request. The
-2026-08-04 silent revert came from a stale base.
+`src-tauri/src/chat_coordinate.rs`, `src-tauri/src/auth/mod.rs`,
+`src-tauri/core/src/attach/handoff.rs`, and `src-tauri/core/src/home.rs`. Each
+ticket tells the implementer to rebase on `main` before it opens the pull
+request. The 2026-08-04 silent revert came from a stale base.
 
 SEQUENCED — the later extraction slices are the remaining Pi execution move, the
-shared device session, the desktop client conversion, and Linux user-unit
-registration, each behind a dormant service entry point. The desktop stays the
-owner throughout. The final cutover slice activates the listener, approval
-coordinator, journal, CAS, Pi, device session, credentials, authorization, and
-permission gates together. Remote Control follows the cutover. User-unit
-registration must not precede the cutover, because a service that takes the
-instance lock first would stop the desktop listener.
+desktop client conversion, and Linux user-unit registration, each behind a
+dormant service entry point. The desktop stays the owner throughout. The final
+cutover slice activates the listener, approval coordinator, journal, CAS, Pi,
+device session, credentials, authorization, and permission gates together. Remote
+Control follows the cutover. User-unit registration must not precede the cutover,
+because a service that takes the instance lock first would stop the desktop
+listener.
 
-DONE 2026-08-05 — ADR 0012 carries the migration control authority amendment
-(MUNIDESK-913). Only the waiting runtime service may send the request. An
-approved client credential grants no authority, and a claimed kind grants none
-either. On Linux the desktop resolves the `SO_PEERCRED` peer PID to its
-executable path and requires the installed `muniment-runtime` payload. The
-desktop prepares at most one handoff at a time. The rule does not defend against
-same-user compromise, which `THREAT_MODEL.md` defers.
-
-DONE 2026-08-05 — the first two code slices of that request landed. The wire
-slice reserves `migration.control` as an `Operation` variant with its canonical
-fixture, and the dispatcher keeps answering `unsupported_operation` until the
-handler lands (`src-tauri/attach/src/envelope.rs:241`) (MUNIDESK-916). The
-authority slice adds the core peer check that resolves a peer PID to the
-installed runtime executable (MUNIDESK-917). It reuses the `LinuxProcReader`
-boundary that `src-tauri/core/src/browser_control/linux_identity.rs:103` already
-publishes.
-
-DONE 2026-08-05 — the quiesce rule and the prepared-handoff slot landed
-(MUNIDESK-919, 920). `src-tauri/core/src/attach/quiesce.rs` holds
-`evaluate_quiesce`, which weighs an active run, a pending permission gate, an
-authentication operation, a session refresh, and an in-flight external effect in
-that order and names the first blocker. `src-tauri/core/src/attach/handoff.rs`
-holds `PreparedHandoffSlot`, which bounds the nonce at 128 printable ASCII
-bytes, bounds the deadline at 60,000 milliseconds, refuses a second preparation
-while one is live, and matches a nonce only before the deadline. Neither module
-has a call site yet.
-
-DONE 2026-08-06 — the dispatcher answers `migration.control` (MUNIDESK-928).
-The branch in `dispatch_request` (`src-tauri/core/src/attach/linux.rs:2091`)
-bounds the nonce and the deadline against the limits the prepared slot carries,
-calls the new `ThreadListService::control_migration` seam, and echoes the
-nonce. The default seam still answers `unsupported_operation`.
-
-DONE 2026-08-06 — that seam carries the peer identity (MUNIDESK-952).
-`control_migration` (`src-tauri/core/src/attach/linux.rs:767`) takes
-`CompanionProvenance` beside the request, and the dispatcher branch (`:2112`)
-hands it the connection's own provenance. The default seam still answers
-`unsupported_operation`, so no desktop implementation runs yet.
-
-DONE 2026-08-06 — muniment-core tracks the runtime activity the quiesce rule
-weighs (MUNIDESK-957). `src-tauri/core/src/attach/runtime_activity.rs` holds
-`RuntimeActivityRegistry` with one mark method per activity, a
-`RuntimeActivityGuard` that clears its mark on drop, and a `snapshot` that
-returns the `RuntimeActivity` value `evaluate_quiesce` reads. The registry has
-no call site yet, which is the shape `quiesce.rs` and `handoff.rs` landed in.
-
-DONE 2026-08-06 — the desktop composes that registry, and the run lane marks it
-(MUNIDESK-961). `main` (`src-tauri/src/main.rs:21`) creates one
-`RuntimeActivityRegistry` and manages it, `ChatState::new` takes it, and
-`ActiveRun` (`src-tauri/src/chat.rs:139`) holds a guard for exactly the life of
-a run.
-
-SELECTED 2026-08-06 — the auth lane marks that registry next. A sign-in, a
-sign-out, and a session refresh each run while no run is active, so they are the
-two quiesce inputs the active-run mark does not cover. `AuthState::new`
-(`src-tauri/src/auth/mod.rs:96`) takes no registry today, and every
-`ensure_native_session` call site (`:72`, `:86`, `:201`, `:218`) is a refresh.
-The permission-gate mark and the external-effect mark both live inside the
-coordinate loop, which runs only while `active_run` is already true, so they
-follow the auth marks rather than lead them. The desktop `control_migration`
-answer comes after all four marks.
-
-SELECTED 2026-08-06 — muniment-core mints the single-use handoff nonce. The
-runtime service must send one with its migration control request, and
-`PreparedHandoffSlot::prepare` (`src-tauri/core/src/attach/handoff.rs:59`) bounds
-a nonce that nothing produces. Core already depends on `getrandom`, so the
-minting step takes no new dependency.
-
-SELECTED 2026-08-06 — muniment-core decides whether a probe `welcome` confirms a
-handoff. ADR 0012 has the desktop open a probe connection after it releases the
-lock, then check the returned nonce and the readiness deadline. `Welcome`
-(`src-tauri/attach/src/negotiation.rs:96`) already carries the optional
-`handoff_nonce`. The rule lands as a pure core module with no call site.
-
-SELECTED 2026-08-06 — the native device session composition moves into
-muniment-core. `ensure_native_session` (`src-tauri/src/auth/mod.rs:250`) builds
-two `ureq` transports, reads the base URL, reads the clock, and passes the
-60-second refresh skew on every call. ADR 0012 phase one names the device
-session as runtime-service state, and `muniment-runtime` cannot refresh a
-session today. Core owns the credential store already, so the composition is the
-last desktop-only piece.
-
-SELECTED 2026-08-06 — the protected prompt store moves into muniment-core.
-`protect_prompt` (`src-tauri/src/chat.rs:755`) and `load_prompt`
-(`src-tauri/src/chat_threads.rs:63`) each open a `keyring::Entry` under
-`PROMPT_SERVICE` and repeat the same key rule. Core now carries `keyring` behind
-its own feature, so the pair belongs beside the credential store. The desktop
-crate then declares `keyring` for its mock credential builder alone.
-
-DONE 2026-08-05 — the attach welcome reserves an optional handoff nonce
-(MUNIDESK-923). `Welcome` (`src-tauri/attach/src/negotiation.rs:96`) carries an
-optional `handoff_nonce`, `with_handoff_nonce` sets it, and the deserializer
-accepts an absent field.
-`protocol-fixtures/muniment.attach/1/negotiation-welcome-handoff.json` is the
-canonical fixture. No listener sets the value yet.
-
-DONE 2026-08-06 — the Linux package ships `muniment-runtime` (MUNIDESK-929).
-`.github/build-linux.sh:39` builds the crate, `src-tauri/tauri.linux.conf.json`
-maps it into the bundle beside `muniment-acp`, `test/acp-bundle.test.js` guards
-both binaries, and `test/e2e/runner/linux.sh:218` checks the installed payload
-and reads its `--version`.
-
-DONE 2026-08-06 — the thread rename and delete appends moved into muniment-core
-(MUNIDESK-930). `src-tauri/core/src/journal/thread_mutation.rs` holds the one
-rule that both commands repeated, and
-`src-tauri/core/tests/journal_thread_mutation.rs` covers it.
-
-DONE 2026-08-06 — the platform keychain credential store moved into
-muniment-core (MUNIDESK-953). `src-tauri/core/src/auth/keychain.rs` holds
-`PlatformKeychain` and `KeyringNativeCredentialStore`, core takes `keyring`
-behind a new optional feature, and the desktop crate turns that feature on
-beside `tls` (`src-tauri/Cargo.toml:21`). `src-tauri/src/auth/keyring_store.rs`
-is gone. The desktop crate still declares `keyring` itself, because
-`load_prompt` (`src-tauri/src/chat_threads.rs:63`) stores run prompts under a
-different service name.
-
-DONE 2026-08-04 — ADR 0009 carries the attach workspace namespace amendment
-(MUNIDESK-883). The signed `grant.workspace` value is the only workspace
-authority for `thread.list`, `thread.open`, `thread.create`, and `run.start`. A
-companion-supplied directory is only a local execution root, and the attach owner
-canonicalizes and records it as a mapping under that authority. With no current
-cloud grant the approval and all four operations fail closed. The amendment names
-three implementation slices: grant workspace authorization, local execution-root
-mapping, and attach workspace enforcement.
-
-DONE 2026-08-04 — slice one of that amendment landed (MUNIDESK-887).
-`AttachCompanionState` (`src-tauri/src/attach_service.rs:121`) holds the current
-signed workspace, `record_workspace` and `clear_workspace` track it, and
-`approval` (`:166`) returns `None` when no grant workspace exists. The session
-workspace reaches every `thread.*` and `run.start` call through
-`muniment_core::attach::linux` (`:1385`, `:1440`).
-
-DONE 2026-08-05 — slice two of that amendment landed (MUNIDESK-893).
-`onboard_workspace` (`src-tauri/src/attach_service.rs:579`) records each canonical
-companion directory under the session workspace and the client identity, and
-`authorized_workspace` (`:622`) reads the same two-level map.
-
-DONE 2026-08-05 — slice three of that amendment landed (MUNIDESK-896). The
-`RunStart` branch of `dispatch_request`
-(`src-tauri/core/src/attach/linux.rs:2149`) resolves a companion directory through
-`authorized_workspace` and passes it to `start_run` as a separate execution root.
-The signed workspace stays the run's authority, and `configure_run`
+DONE — all three slices of the ADR 0009 attach workspace namespace amendment are
+built (MUNIDESK-883, 887, 893, 896, 905). The signed `grant.workspace` value is
+the only workspace authority for `thread.list`, `thread.open`, `thread.create`,
+and `run.start`. `AttachCompanionState` (`src-tauri/src/attach_service.rs:123`)
+holds the current signed workspace and returns no approval without one.
+`onboard_workspace` (`:563`) records each canonical companion directory under
+that workspace and the client identity, and `authorized_workspace` (`:603`) reads
+it back. The `RunStart` branch of `dispatch_request`
+(`src-tauri/core/src/attach/linux.rs:2149`) passes the resolved directory to
+`start_run` as a separate execution root, and `configure_run`
 (`src-tauri/src/chat.rs:556`) still rejects a requested workspace that differs
-from `grant.workspace`. All three slices of the amendment are built.
+from `grant.workspace`. With no current cloud grant the approval and all four
+operations fail closed. `THREAT_MODEL.md` records the rule.
+
+DONE 2026-08-05 — the companion approval prompt names the authority it grants
+(MUNIDESK-898). The dialog reports the signed workspace beside the claimed kind
+and version, and it names the two scopes `thread.read` and `run.write`. The
+listener resolves the approval before it prompts, so a connection with no cloud
+grant fails closed without asking the user.
 
 ### Build-composition guards
 
@@ -664,6 +497,11 @@ DONE 2026-07-31 — `src-tauri/core/src/attach/mod.rs:12` names each `cursor` ex
 instead of re-exporting the module, so `muniment_core::attach::RunStreamWindow`
 resolves to one type whatever packages share the invocation (MUNIDESK-727). CI
 runs `cargo clippy` over the same package pair with `-D warnings`.
+
+DONE 2026-08-06 — a test module never inherits a production timeout constant
+(MUNIDESK-972). A test deadline is an argument.
+`src-tauri/core/tests/timeout_constant_guard.rs` fails when a test module
+references one.
 
 ## Cross-surface contracts (owner ideas 2026-07-29)
 
@@ -754,41 +592,11 @@ invalid-input, destination-conflict, and save-failure results.
 
 DONE 2026-07-30 — the import ends by saving the approved verbatim originals
 (MUNIDESK-682, 692). `compile_onboarding_home_write_plan`
-(`src-tauri/core/src/home.rs:471`) emits one
+(`src-tauri/core/src/home.rs:482`) emits one
 `memory/imports/<date>-<name>-<digest>.md` document per approved entry and
 nothing else. The `approved-review` screen is headed `Save approved files` and
 carries `Back to archive review` beside `Save Home and finish`.
 `test/probe/approved-files.html` drives the built bundle to it.
-
-RATIFIED 2026-08-06 — memory retrieval has two phases. Phase one builds a
-lexical index with zero new dependencies. Phase two adds vector search and a
-pinned embedding artifact.
-
-DONE 2026-08-06 — ADR 0026 and harness-spec §17 carry the binding rules
-(MUNIDESK-959). Files stay the source of truth and the index stays a rebuildable
-cache. Retrieved memory reaches the model only through one memory-search tool.
-The tool set stays fixed for a conversation. Every retrieval is capped, and the
-character budget comes from the selected model capability record. Every write
-filters secrets, and every recall carries a receipt.
-
-SELECTED 2026-08-06 — the first two phase-one slices carry no store. The Home
-document scan reads the four scaffold directories under bounded limits and
-returns the records an index would hold, following the `import_preview.rs`
-traversal pattern. The memory-write secret filter reads the four `secret.*`
-rules that `src-tauri/core/src/assistant_text.rs` already scans and rejects a
-record that carries one. Both land as pure core modules with direct tests and no
-new dependency, which is the shape `quiesce.rs` and `handoff.rs` landed in.
-
-OWNER QUESTION 2026-08-06 — the phase-one FTS5 index needs an owner ruling
-before the lane files it. That index is a new disposable SQLite cache inside the
-user profile, and it is neither the run journal nor a cloud database. The
-standing exclusion on self-initiated schema work does not say whether a fresh
-cache file sits inside it. The lane files no store slice until the owner
-answers.
-
-DEFERRED — the retrieval cap rule, the memory-search tool declaration, the
-recall receipt, and phase two embeddings follow those two slices and that
-ruling.
 
 DONE 2026-07-29 — first-run folder setup fails open (MUNIDESK-660, 661, 684).
 `choose_default_home` returns `<home>/Documents/Muniment` when that parent exists
@@ -805,6 +613,60 @@ reaches the sign-in screen (MUNIDESK-944). The completion path skipped the
 scaffold, so a new user finished onboarding with an empty folder.
 `src-tauri/core/src/home.rs` carries the fix and
 `src-tauri/core/tests/home_scaffold.rs` guards it.
+
+### Memory index and retrieval (§17)
+
+RATIFIED 2026-08-06 — memory retrieval has two phases. Phase one builds a lexical
+index with zero new dependencies. Phase two adds vector search and a pinned
+embedding artifact.
+
+DONE 2026-08-06 — ADR 0026 and harness-spec §17 carry the binding rules
+(MUNIDESK-959). Files stay the source of truth and the index stays a rebuildable
+cache. Retrieved memory reaches the model only through one memory-search tool.
+The tool set stays fixed for a conversation. Every retrieval is capped, and the
+character budget comes from the selected model capability record. Every write
+filters secrets, and every recall carries a receipt.
+
+DONE 2026-08-07 — phase one is built end to end (MUNIDESK-960, 966, 967).
+`src-tauri/core/src/memory_scan.rs` reads the four scaffold directories under
+bounded limits. `src-tauri/core/src/memory_secret.rs` rejects a record that
+carries one of the four `secret.*` rules. `src-tauri/core/src/memory_index.rs`
+holds the rebuildable SQLite FTS5 cache, the `RetrievalLimits` rule that lowers
+but never raises a cap, the static `memory-search` tool declaration, and the
+`RecallRecord` receipt. `src-tauri/src/memory.rs` composes one session per run,
+writes the Pi agent extension that registers the tool, and dispatches each call.
+`coordinate_memory_search` (`src-tauri/src/chat_coordinate.rs:672`) appends a
+`memory.recalled` event for every recall.
+
+ANSWERED IN PRACTICE 2026-08-07 — the memory lane filed the phase-one store slice
+without the owner ruling it had promised to wait for. MUNIDESK-960 landed the
+cache, so the 2026-08-06 owner question no longer blocks this lane. The lane reads
+the standing exclusion on self-initiated database work as covering durable stores
+alone. The memory index is a new disposable file that any run deletes and rebuilds
+from the Markdown sources. The journal migration alters the schema of the durable
+store that holds the only copy of run history. That reading releases the cache and
+leaves the journal migration held.
+
+SELECTED 2026-08-07 — `reject_memory_secret` has no production call site, so
+§17 rule 7 is written but unenforced. The onboarding import is the product's only
+memory write path today, and `compile_onboarding_home_write_plan` is its one
+compile step. That is the first slice.
+
+SELECTED 2026-08-07 — `chat_resume` (`src-tauri/src/chat.rs:898`) opens no memory
+session. `start_run` (`:424`) opens one and `launch` (`:778`) closes it, and the
+companion attach path reaches the same code, but the resume path calls
+`coordinate` directly. `coordinate` still registers the memory extension whenever
+the written extension file exists, so a resumed run declares the tool and then
+fails every call. That is the second slice.
+
+MEASURED 2026-08-07 — nothing renders a recall. The `memory.recalled` event
+reaches the frontend through the ordinary `chat-event` emit, and no component
+reads it. §17 rule 8 asks for a receipt and the journal holds one, so this is a
+product surface question rather than a correctness gap. A later wave should weigh
+a transcript record against the existing receipt grid, and it should read the
+owner mockup first.
+
+DEFERRED — phase two embeddings follow phase one and a pinned artifact decision.
 
 ### The signed-in shell
 
@@ -876,12 +738,6 @@ DONE 2026-08-04 — the multi-line permission gate names its commit chord
 (MUNIDESK-890). The card carries a hint under the field, and it renders `⌘⏎` on
 macOS and `Ctrl ⏎` elsewhere. The single-line kind commits on a plain Enter and
 needs no hint.
-
-DONE 2026-08-05 — the companion approval prompt names the authority it grants
-(MUNIDESK-898). The dialog reports the signed workspace beside the claimed kind
-and version, and it names the two scopes `thread.read` and `run.write`. The
-listener resolves the approval before it prompts, so a connection with no cloud
-grant fails closed without asking the user.
 
 NOT FILED — the empty workspace reads `New thread` three times, in the titlebar,
 the sidebar action, and the sidebar current-thread record. The owner mockup sets
@@ -990,6 +846,13 @@ warning on stderr, resolves `npm` without `ComSpec`, and gives a PowerShell
 spawn more than the 5000ms default. A targeted nightly dispatch no longer
 reports success while skipping the job it was asked to run.
 
+DONE 2026-08-07 — a second repair wave followed (MUNIDESK-970, 973, 974, 976,
+977, 978). The Linux in-VM build installs `libasound2-dev` and builds
+`muniment-acp` and `muniment-runtime` before the Tauri bundle, and the e2e Tauri
+config resolves its capabilities file. The Windows lane launches the nested
+browser suite through `npx` and declares `@vitest/browser-playwright`. The macOS
+probe counts windows with CoreGraphics, so it needs no privacy permission.
+
 DONE 2026-08-06 — the Windows-only tests run before they merge (MUNIDESK-946).
 Pull request CI never ran the 14 of them, and 12 failed inside the Windows lane.
 `test/windows-pr-gate.test.js` now guards the gate. MUNIDESK-950 pinned the
@@ -1011,29 +874,25 @@ earlier one. Requiring an up-to-date branch before merge, or a merge queue, is a
 repository-settings change that sits with the owner. The planner files no ticket
 for it.
 
-VERIFIED 2026-08-06 (this wave, from a clean clone) — every suite the planning
-container can run passed. `cargo test` on the standalone `muniment-core`
-manifest exited zero and reported `ok` for all 61 test binaries, and
-`muniment-attach` and `muniment-runtime` reported the same. `npm ci` then `npm
-test` passed 864 tests with 31 skipped across 59 files, and the browser suite
-passed 3. `npm run build` produced a 252,670-byte script and a 62,240-byte
-stylesheet. The planner read the landed runtime activity composition, the
-unbuilt nonce and probe rules, the auth command lane, the protected prompt
-store, and the new memory keystone before it filed this wave's slices. Earlier
-waves recorded the same shape of verification, and this entry replaces that
-ledger.
+VERIFIED 2026-08-07 (this wave, from a clean clone) — every suite the planning
+container can run passed. `cargo test` on the standalone `muniment-core` manifest
+exited zero, and `muniment-attach` and `muniment-runtime` reported the same. `npm
+ci` then `npm test` passed 866 tests with 31 skipped across 59 files, and the
+browser suite passed 3. The planner then read the memory index, the desktop memory
+runtime, the coordinate loop, the runtime activity call sites, the handoff module,
+and the auth command lane before it filed this wave's slices. Earlier waves
+recorded the same shape of verification, and this entry replaces that ledger.
 
 NOTE 2026-08-06 — the planning clone ships no `node_modules`. Run `npm ci`
 before `npm test`. Without it the run dies with `vitest: not found`, which reads
 as a broken harness.
 
-MEASURED 2026-08-06 — the probe capture ran again after this wave's build.
-`python3 -m http.server --directory .` served the repository root, and headless
-Chromium captured `test/probe/history.html` at 1100x720. The restored thread
-renders its sidebar, titlebar, transcript, two tool rows, provenance line,
-interrupted-reply record with its `Resume` control, and composer. This is a
-roadmap-fulfilment wave, so it filed no design or layout slice, and the capture
-recorded no new defect.
+MEASURED 2026-08-06 — the probe capture ran after the 2026-08-06 wave's build, and
+the 2026-08-07 wave did not repeat it. `python3 -m http.server --directory .`
+served the repository root, and headless Chromium captured
+`test/probe/history.html` at 1100x720. The restored thread renders its sidebar,
+titlebar, transcript, two tool rows, provenance line, interrupted-reply record
+with its `Resume` control, and composer. The capture recorded no new defect.
 
 NOTE 2026-08-05 — a capture must pass `--wait-for-selector "[data-probe-ready]"`
 to playwright. The fixture loads the built bundle asynchronously, so a capture
@@ -1093,31 +952,19 @@ lane is now the model-context boundary: the desktop sends the user prompt throug
 `PromptCommand` and Pi assembles its own context.
 
 DONE — `THREAT_MODEL.md` is the runtime half of the trust boundary
-(MUNIDESK-615, 688, 691, 819, 840, 847, 857). It states the boundary once, tables
-roles by capability over harness-spec §3, matrixes the per-surface capabilities,
-and answers for each loopback what identity it trusts and why a user cannot mint
-it. The ACP adapter row records the built surface. The attach approval prompt
-names the program that asked, with its claimed kind and version bounded, stripped
-of control characters, and marked as claimed rather than verified.
-
-DONE 2026-08-04 — `THREAT_MODEL.md` records companion revocation and the landed
-per-profile instance lock (MUNIDESK-879). The attach socket row names revocation,
-and the ADR 0012 runtime service row names the lock and the `muniment-runtime`
-scaffold.
+(MUNIDESK-615, 688, 691, 819, 840, 847, 857, 879, 905, 931). It states the
+boundary once, tables roles by capability over harness-spec §3, matrixes the
+per-surface capabilities, and answers for each loopback what identity it trusts
+and why a user cannot mint it. The ACP adapter row records the built surface. The
+attach approval prompt names the program that asked, with its claimed kind and
+version bounded, stripped of control characters, and marked as claimed rather
+than verified. The attach socket row records companion revocation and the
+workspace namespace. The ADR 0012 runtime service row records the per-profile
+instance lock, the `muniment-runtime` scaffold, the migration control peer check,
+the one prepared handoff, the unimplemented desktop answer, and the same-user
+limitation.
 
 OPEN — the MUNIQA prompt-injection suite still follows ADR 0018's landed slices.
-
-DONE 2026-08-05 — `THREAT_MODEL.md` records the workspace namespace
-(MUNIDESK-905). The attach socket row states the landed rule. The signed
-`grant.workspace` value is the only workspace authority for `thread.list`,
-`thread.open`, `thread.create`, and `run.start`. A companion-supplied directory
-is only a local execution root, and it grants no scope. With no current cloud
-grant the approval and all four operations fail closed.
-
-DONE 2026-08-06 — `THREAT_MODEL.md` records the migration control authority
-rule (MUNIDESK-931). The ADR 0012 runtime service row names the peer check, the
-one prepared handoff, the unimplemented desktop answer, and the same-user
-limitation.
 
 OPEN — the standing policy line for the agent system prompt stays a proposal
 inside ADR 0018. harness-spec §16.1 rule 4 gates prompt text on review and
