@@ -1691,7 +1691,8 @@ mod tests {
                 thread_id: None,
             },
         )
-        .unwrap_err();
+        .err()
+        .unwrap();
 
         assert_eq!(error.into_message(), "memory unavailable");
         let events = boundaries.journaled_events.lock().unwrap();
@@ -1718,7 +1719,8 @@ mod tests {
                 thread_id: None,
             },
         )
-        .unwrap_err();
+        .err()
+        .unwrap();
 
         assert_eq!(error.into_message(), "thread lookup unavailable");
         let events = boundaries.journaled_events.lock().unwrap();
