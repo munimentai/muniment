@@ -68,9 +68,7 @@ pub(crate) fn fresh_tokens<R: tauri::Runtime>(
     state: &AuthState,
     app: &tauri::AppHandle<R>,
 ) -> Result<muniment_core::auth::TokenSet, String> {
-    let result = while_marked(state.mark_session_refresh(), || {
-        ensure_native_session(state.native_store.as_ref())
-    })?;
+    let result = state.marked_refresh_blocking(state.native_store.as_ref())?;
     observe_snapshot(state, app, &result)?;
     result
         .into_credentials()
@@ -82,12 +80,10 @@ pub(crate) async fn fresh_tokens_async<R: tauri::Runtime>(
     state: &AuthState,
     app: &tauri::AppHandle<R>,
 ) -> Result<muniment_core::auth::TokenSet, String> {
-    let store = state.native_store.clone();
-    let result = marked_blocking(state.mark_session_refresh(), move || {
-        ensure_native_session(store.as_ref())
-    })
-    .await
-    .map_err(|_| "Sign in before sending a message.".to_string())??;
+    let result = state
+        .marked_refresh(state.native_store.clone())
+        .await
+        .map_err(|_| "Sign in before sending a message.".to_string())??;
     observe_snapshot(state, app, &result)?;
     result
         .into_credentials()
@@ -114,6 +110,27 @@ impl AuthState {
     fn mark_session_refresh(&self) -> RuntimeActivityGuard {
         self.runtime_activity.mark_session_refresh()
     }
+
+    /// Refreshes the native session on the blocking pool. The mark covers the
+    /// whole call, so every async refresh call site goes through here.
+    async fn marked_refresh(
+        &self,
+        store: Arc<dyn NativeCredentialStore>,
+    ) -> Result<Result<auth::FreshNativeSession, String>, tauri::Error> {
+        marked_blocking(self.mark_session_refresh(), move || {
+            ensure_native_session(store.as_ref())
+        })
+        .await
+    }
+
+    /// The blocking twin of [`AuthState::marked_refresh`], for the one call
+    /// site that already runs on the blocking pool.
+    fn marked_refresh_blocking(
+        &self,
+        store: &dyn NativeCredentialStore,
+    ) -> Result<auth::FreshNativeSession, String> {
+        while_marked(self.mark_session_refresh(), || ensure_native_session(store))
+    }
 }
 
 /// Runs `step` while `mark` holds its runtime activity blocker, so
@@ -139,12 +156,21 @@ pub async fn auth_sign_in(
     app: tauri::AppHandle,
     state: tauri::State<'_, AuthState>,
 ) -> Result<AuthStatus, String> {
+    let store = state.native_store.clone();
+    sign_in_marked(&state, move || sign_in_blocking(store.as_ref(), &app)).await
+}
+
+/// Takes the sign-in permit, then runs `step` under an authentication-operation
+/// mark that covers the whole blocking call.
+async fn sign_in_marked(
+    state: &AuthState,
+    step: impl FnOnce() -> Result<AuthStatus, auth::NativeSignInError> + Send + 'static,
+) -> Result<AuthStatus, String> {
     let permit = SignInPermit::acquire(state.sign_in_running.clone())
         .ok_or_else(|| "a sign-in is already in progress".to_string())?;
-    let store = state.native_store.clone();
     let outcome = marked_blocking(state.mark_authentication_operation(), move || {
         let _permit = permit;
-        sign_in_blocking(store.as_ref(), &app)
+        step()
     })
     .await
     .map_err(|e| format!("sign-in task failed: {e}"))?;
@@ -225,12 +251,10 @@ pub async fn auth_entitlement_snapshot(
     app: tauri::AppHandle,
     state: tauri::State<'_, AuthState>,
 ) -> Result<auth::EntitlementSnapshotView, String> {
-    let store = state.native_store.clone();
-    let result = marked_blocking(state.mark_session_refresh(), move || {
-        ensure_native_session(store.as_ref())
-    })
-    .await
-    .map_err(|e| format!("access task failed: {e}"))??;
+    let result = state
+        .marked_refresh(state.native_store.clone())
+        .await
+        .map_err(|e| format!("access task failed: {e}"))??;
     observe_snapshot(&state, &app, &result)?;
     result
         .entitlement_snapshot
@@ -243,13 +267,11 @@ pub async fn auth_devices(
     app: tauri::AppHandle,
     state: tauri::State<'_, AuthState>,
 ) -> Result<Vec<auth::NativeDevice>, String> {
-    let store = state.native_store.clone();
-    let session = marked_blocking(state.mark_session_refresh(), move || {
-        ensure_native_session(store.as_ref())
-    })
-    .await
-    .map_err(|_| device_list_error())?
-    .map_err(|_| device_list_error())?;
+    let session = state
+        .marked_refresh(state.native_store.clone())
+        .await
+        .map_err(|_| device_list_error())?
+        .map_err(|_| device_list_error())?;
     observe_snapshot(&state, &app, &session).map_err(|_| device_list_error())?;
     let credentials = session.into_credentials().ok_or_else(device_list_error)?;
     tauri::async_runtime::spawn_blocking(move || {
@@ -291,20 +313,35 @@ pub async fn auth_sign_out(
     state: tauri::State<'_, AuthState>,
     attach_state: tauri::State<'_, crate::attach_service::AttachCompanionState>,
 ) -> Result<AuthStatus, String> {
-    attach_state.clear_workspace();
     let store = state.native_store.clone();
-    let status = marked_blocking(state.mark_authentication_operation(), move || {
-        auth::sign_out_native_session(
-            store.as_ref(),
-            &UreqRevocationTransport::new(Duration::from_secs(2)),
-            &api_base_url(),
-        )
-        .map_err(|error| error.to_string())?;
-        auth::native_status(store.as_ref(), unix_time()).map_err(|error| error.to_string())
-    })
+    sign_out_marked(
+        &state,
+        || attach_state.clear_workspace(),
+        move || {
+            auth::sign_out_native_session(
+                store.as_ref(),
+                &UreqRevocationTransport::new(Duration::from_secs(2)),
+                &api_base_url(),
+            )
+            .map_err(|error| error.to_string())?;
+            auth::native_status(store.as_ref(), unix_time()).map_err(|error| error.to_string())
+        },
+    )
     .await
-    .map_err(|e| format!("sign-out task failed: {e}"))?
-    .map_err(|e| e.to_string())?;
+}
+
+/// Takes the authentication-operation mark before `clear_workspace` mutates
+/// any state, and holds it until the whole sign-out returns.
+async fn sign_out_marked(
+    state: &AuthState,
+    clear_workspace: impl FnOnce(),
+    step: impl FnOnce() -> Result<AuthStatus, String> + Send + 'static,
+) -> Result<AuthStatus, String> {
+    let _mark = state.mark_authentication_operation();
+    clear_workspace();
+    let status = tauri::async_runtime::spawn_blocking(step)
+        .await
+        .map_err(|e| format!("sign-out task failed: {e}"))??;
     state.entitlement_snapshot_tracker.clear();
     Ok(status)
 }
@@ -404,36 +441,91 @@ mod tests {
         assert!(SignInPermit::acquire(running).is_some());
     }
 
-    // `auth_sign_in` and `auth_sign_out` run their blocking step through
-    // `marked_blocking`, which the probe below stands in for.
+    fn signed_out_status() -> AuthStatus {
+        AuthStatus {
+            signed_in: false,
+            subject: None,
+            expires_at: None,
+        }
+    }
+
+    /// Records the authentication mark the registry reports when it runs.
+    fn record_authentication_mark(
+        runtime_activity: &RuntimeActivityRegistry,
+        recorder: &Arc<AtomicBool>,
+    ) -> impl FnOnce() + Send + 'static {
+        let runtime_activity = runtime_activity.clone();
+        let recorder = recorder.clone();
+        move || {
+            recorder.store(
+                runtime_activity.snapshot().authentication_operation,
+                Ordering::SeqCst,
+            )
+        }
+    }
+
     #[test]
     fn a_sign_in_marks_the_authentication_operation_until_it_returns() {
         let runtime_activity = RuntimeActivityRegistry::new();
         let state = AuthState::new(runtime_activity.clone());
-        let observed = runtime_activity.clone();
+        let marked_during_sign_in = Arc::new(AtomicBool::new(false));
+        let observe = record_authentication_mark(&runtime_activity, &marked_during_sign_in);
 
-        let marked = tauri::async_runtime::block_on(marked_blocking(
-            state.mark_authentication_operation(),
-            move || observed.snapshot().authentication_operation,
-        ))
+        let status = tauri::async_runtime::block_on(sign_in_marked(&state, move || {
+            observe();
+            Ok(signed_out_status())
+        }))
         .unwrap();
 
-        assert!(marked);
+        assert!(!status.signed_in);
+        assert!(marked_during_sign_in.load(Ordering::SeqCst));
         assert!(!runtime_activity.snapshot().authentication_operation);
     }
 
-    // Every `ensure_native_session` call site takes the same mark first, so
-    // this runs the real refresh and reads the mark from inside the store.
+    #[test]
+    fn a_sign_out_marks_the_authentication_operation_before_it_clears_the_workspace() {
+        let runtime_activity = RuntimeActivityRegistry::new();
+        let state = AuthState::new(runtime_activity.clone());
+        let marked_at_clear = Arc::new(AtomicBool::new(false));
+        let marked_during_sign_out = Arc::new(AtomicBool::new(false));
+        let observe_clear = record_authentication_mark(&runtime_activity, &marked_at_clear);
+        let observe_step = record_authentication_mark(&runtime_activity, &marked_during_sign_out);
+
+        let status =
+            tauri::async_runtime::block_on(sign_out_marked(&state, observe_clear, move || {
+                observe_step();
+                Ok(signed_out_status())
+            }))
+            .unwrap();
+
+        assert!(!status.signed_in);
+        assert!(marked_at_clear.load(Ordering::SeqCst));
+        assert!(marked_during_sign_out.load(Ordering::SeqCst));
+        assert!(!runtime_activity.snapshot().authentication_operation);
+    }
+
     #[test]
     fn a_session_refresh_marks_the_refresh_until_it_returns() {
         let runtime_activity = RuntimeActivityRegistry::new();
         let state = AuthState::new(runtime_activity.clone());
+        let store = Arc::new(ObservingCredentialStore::new(runtime_activity.clone()));
+
+        let session = tauri::async_runtime::block_on(state.marked_refresh(store.clone()))
+            .unwrap()
+            .unwrap();
+
+        assert!(!session.status.signed_in);
+        assert!(store.marked_during_load.load(Ordering::SeqCst));
+        assert!(!runtime_activity.snapshot().session_refresh);
+    }
+
+    #[test]
+    fn a_blocking_session_refresh_marks_the_refresh_until_it_returns() {
+        let runtime_activity = RuntimeActivityRegistry::new();
+        let state = AuthState::new(runtime_activity.clone());
         let store = ObservingCredentialStore::new(runtime_activity.clone());
 
-        let session = while_marked(state.mark_session_refresh(), || {
-            ensure_native_session(&store)
-        })
-        .unwrap();
+        let session = state.marked_refresh_blocking(&store).unwrap();
 
         assert!(!session.status.signed_in);
         assert!(store.marked_during_load.load(Ordering::SeqCst));
@@ -445,11 +537,9 @@ mod tests {
         let runtime_activity = RuntimeActivityRegistry::new();
         let state = AuthState::new(runtime_activity.clone());
 
-        let outcome: Result<(), String> = tauri::async_runtime::block_on(marked_blocking(
-            state.mark_authentication_operation(),
-            || Err("sign-in failed".into()),
-        ))
-        .unwrap();
+        let outcome = tauri::async_runtime::block_on(sign_in_marked(&state, || {
+            Err(auth::NativeSignInError::TokenExchange)
+        }));
 
         assert!(outcome.is_err());
         assert!(!runtime_activity.snapshot().authentication_operation);
