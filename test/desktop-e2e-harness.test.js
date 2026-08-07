@@ -302,9 +302,35 @@ describe.skipIf(process.platform === 'win32')('macOS installed launch harness', 
     expect(runner).toContain('window_wait_seconds=120')
     expect(runner).toContain('window_deadline=$((SECONDS + window_wait_seconds))')
     expect(runner).toContain('>"$raw/first-window-timeout.log"')
-    expect(runner).toContain('with timeout of 2 seconds')
-    expect(runner).toContain('whose visible is true')
+    expect(runner).toContain("printf 'last_visible_window_count=%s\\n' \"${window_count:-unavailable}\"")
     expect(runner).toContain('screendump=requested-by-desktop-ci')
+  })
+
+  it('probes windows through CoreGraphics, which needs no privacy grant', () => {
+    const probe = fs.readFileSync(path.join(root, 'test/e2e/support/macos-window-count.c'), 'utf8')
+    expect(runner).not.toMatch(/osascript|System Events/)
+    expect(runner).toContain('window_count=$("$window_probe" "$app_pid"')
+    expect(probe).toContain('CGWindowListCopyWindowInfo(')
+    expect(probe).toContain('kCGWindowListOptionOnScreenOnly | kCGWindowListExcludeDesktopElements')
+    // The gate matches the owning pid. A second process with the same name must
+    // not satisfy it, and reading a window name would need Screen Recording.
+    expect(probe).toContain('read_number(window, kCGWindowOwnerPID, &owner) || owner != pid')
+    expect(probe).not.toContain('kCGWindowName')
+    expect(probe).not.toContain('CGWindowListCreateImage')
+    // The AppleScript probe bounded each call at two seconds; the helper keeps
+    // that bound so one read cannot stall the 120-second loop.
+    expect(probe).toContain('#define WINDOW_LIST_TIMEOUT_SECONDS 2')
+    expect(probe).toContain('alarm(WINDOW_LIST_TIMEOUT_SECONDS)')
+  })
+
+  it('builds the window probe before launch and fails the job when it does not compile', () => {
+    const build = runner.slice(runner.indexOf('clang '), runner.indexOf('window_ready=0'))
+    expect(build).toContain('-framework CoreFoundation -framework CoreGraphics')
+    expect(build).toContain('-o "$window_probe" test/e2e/support/macos-window-count.c')
+    expect(build).toMatch(/\|\| \{\n\s*echo 'window probe did not compile' >&2; status=1; exit;\n\}/)
+    expect(runner.indexOf('clang ')).toBeLessThan(runner.indexOf('app_pid=$!'))
+    expect(finalizerPhases).toContain('remove-window-probe')
+    expect(finalizerPhases).toContain('window-probe-gone')
   })
 
   it('contains no sign-in or WebDriver automation', () => {

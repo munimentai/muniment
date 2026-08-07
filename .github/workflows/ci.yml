@@ -304,8 +304,11 @@ jobs:
             cmd='npm ci --no-audit --no-fund && npx vitest run --root . test/desktop-e2e-harness.test.js && cargo test --manifest-path src-tauri/core/Cargo.toml --locked --test browser_control_windows_transport && cargo check --manifest-path src-tauri/Cargo.toml --locked --all-targets'
           fi
           # macOS ships a universal app — preflight the arm64 cross slice too.
+          # The E2E window probe is C that only the macOS SDK can build, and the
+          # nightly compiles it on the test VM, so build it here as well. A
+          # broken helper then fails this PR instead of the nightly smoke gate.
           if [ "$PLATFORM" = "macos" ]; then
-            cmd='rustup target add aarch64-apple-darwin && cargo check --manifest-path src-tauri/Cargo.toml --locked --all-targets --target aarch64-apple-darwin'
+            cmd='rustup target add aarch64-apple-darwin && cargo check --manifest-path src-tauri/Cargo.toml --locked --all-targets --target aarch64-apple-darwin && clang -std=gnu17 -O2 -Wall -Wno-deprecated-declarations -framework CoreFoundation -framework CoreGraphics -o /tmp/macos-window-count test/e2e/support/macos-window-count.c'
           fi
           repo_url="https://x-access-token:${REPO_TOKEN}@github.com/${REPOSITORY}"
 
