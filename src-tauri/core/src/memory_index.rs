@@ -138,10 +138,23 @@ impl MemoryRuntimeSession {
         thread: impl Into<String>,
         capability: ModelMemoryCapability,
     ) -> Self {
+        Self::open_with_timeout(home, database, thread, capability, DEFAULT_TIMEOUT)
+    }
+
+    pub fn open_with_timeout(
+        home: impl Into<PathBuf>,
+        database: impl Into<PathBuf>,
+        thread: impl Into<String>,
+        capability: ModelMemoryCapability,
+        timeout: Duration,
+    ) -> Self {
+        let mut configured =
+            RetrievalLimits::defaults(capability.minimum_cacheable_prefix_characters);
+        configured.timeout = timeout;
         Self {
             index: MemoryIndex::new(home, database),
             thread: thread.into(),
-            configured: RetrievalLimits::defaults(capability.minimum_cacheable_prefix_characters),
+            configured,
             declaration: MemorySearchSession::default(),
             recalls: Vec::new(),
         }
@@ -831,13 +844,14 @@ mod tests {
     #[test]
     fn runtime_session_declares_once_and_records_real_searches_across_turns() {
         let fixture = Fixture::new();
-        let mut session = MemoryRuntimeSession::open(
+        let mut session = MemoryRuntimeSession::open_with_timeout(
             &fixture.root,
             fixture.root.join("cache/runtime.sqlite3"),
             "thread-runtime",
             ModelMemoryCapability {
                 minimum_cacheable_prefix_characters: 30,
             },
+            Duration::from_secs(60),
         );
         let first_definition = session.tool_definition_for_turn().as_ptr();
         let first = session.call(br#"{"query":"saffron"}"#).unwrap();
