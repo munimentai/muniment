@@ -6,14 +6,16 @@ use std::time::Duration;
 use muniment_core::chat_grant::{fetch_receipt, ChatGrant};
 use muniment_core::chat_profile::ChatProfile;
 use muniment_core::journal::pi_translation::{
-    close_open_effects, model_stream_delta_payload, permission_journal_payload, tool_journal_entry,
+    close_open_effects, model_stream_delta_payload, tool_journal_entry,
 };
 use muniment_core::journal::reducer::{ChatProjection, ChatProjector};
 use muniment_core::journal::run_append::append_run_event;
 use muniment_core::journal::split_model_stream_delta;
+use muniment_core::permission_gate::{
+    coordinate_extension_ui_request, coordinate_permission_answer, PendingPermissionAnswer,
+};
 use muniment_core::sidecar::pi_chat::{
-    cancel_command, ExtensionUiAnswer, ExtensionUiDialog, ExtensionUiRequest, ExtensionUiResponse,
-    PiChatEvent, PiRunAdapter,
+    cancel_command, ExtensionUiAnswer, ExtensionUiDialog, PiChatEvent, PiRunAdapter,
 };
 use muniment_core::sidecar::pi_install::resolve_current;
 use muniment_core::sidecar::{
@@ -24,8 +26,8 @@ use tauri::{Emitter, Manager};
 
 use crate::chat::{
     chat_attachments, chat_pending_permission, chat_tool_activity, coordinate_prepared_prompt,
-    event_envelope, prepared_pi_prompt, ChatEvent, PendingPermissionAnswer, PiRuntime,
-    PreparedPromptError, ResumeAttempt, ResumeContext, SharedStorage, RPC_TIMEOUT,
+    event_envelope, prepared_pi_prompt, ChatEvent, PiRuntime, PreparedPromptError, ResumeAttempt,
+    ResumeContext, SharedStorage, RPC_TIMEOUT,
 };
 use crate::chat_threads::projection_phase;
 
@@ -723,59 +725,6 @@ fn coordinate_memory_search<R: tauri::Runtime>(
     true
 }
 
-fn coordinate_extension_ui_request(
-    event: PiChatEvent,
-    pending: &mut Option<ExtensionUiRequest>,
-    append: impl FnOnce(&str, Value) -> Result<(), ()>,
-) -> Result<(), ()> {
-    let PiChatEvent::ExtensionUiRequest(request) = event else {
-        return Ok(());
-    };
-    append("permission.requested", permission_journal_payload(&request))?;
-    *pending = Some(request);
-    Ok(())
-}
-
-fn coordinate_permission_answer(
-    pending: &mut Option<ExtensionUiRequest>,
-    queued: PendingPermissionAnswer,
-    send: impl FnOnce(&ExtensionUiRequest, ExtensionUiAnswer) -> Result<(), String>,
-    append: impl FnOnce(&str, Value) -> Result<u64, ()>,
-) -> Result<(), ()> {
-    let resolved = queued.resolved;
-    let Some(request) = pending
-        .as_ref()
-        .filter(|request| request.id == queued.gate_id)
-    else {
-        if let Some(resolved) = resolved {
-            let _ = resolved.send(None);
-        }
-        return Ok(());
-    };
-    let answer = queued.answer.pi_answer();
-    if ExtensionUiResponse::new(request, answer.clone()).is_err() {
-        if let Some(resolved) = resolved {
-            let _ = resolved.send(None);
-        }
-        return Ok(());
-    }
-    if send(request, answer).is_err() {
-        if let Some(resolved) = resolved {
-            let _ = resolved.send(None);
-        }
-        return Ok(());
-    }
-    let committed_seq = append(
-        "permission.resolved",
-        json!({"gate_id": queued.gate_id, "decision": queued.answer.decision()}),
-    )?;
-    if let Some(resolved) = resolved {
-        let _ = resolved.send(Some(committed_seq));
-    }
-    *pending = None;
-    Ok(())
-}
-
 fn append_terminal<R: tauri::Runtime>(
     app: &tauri::AppHandle<R>,
     journal: &SharedStorage,
@@ -890,10 +839,9 @@ fn fail_start<R: tauri::Runtime>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::chat::ChatPermissionAnswer;
     use crate::test_support::append_test_event;
     use muniment_core::journal::RunJournal;
-    use muniment_core::sidecar::pi_chat::ExtensionUiDialog;
+    use muniment_core::sidecar::pi_chat::{ExtensionUiDialog, ExtensionUiRequest};
     use uuid::Uuid;
 
     #[test]
@@ -1035,192 +983,5 @@ mod tests {
         );
         supervisor.shutdown().unwrap();
         std::fs::remove_dir_all(root).unwrap();
-    }
-
-    #[test]
-    fn coordinator_journals_extension_ui_before_projecting_and_stops_on_failure() {
-        let directory = std::env::temp_dir().join(format!("muniment-chat-{}", Uuid::now_v7()));
-        std::fs::create_dir_all(&directory).unwrap();
-        let mut journal = RunJournal::open(directory.join("runs.sqlite3")).unwrap();
-        let run_id = Uuid::now_v7().to_string();
-        append_test_event(&mut journal, &run_id, 1, "run.started", json!({}), None);
-        let mut projector = ChatProjector::new();
-        projector
-            .apply(&journal.events(&run_id).unwrap()[0])
-            .unwrap();
-        let mut emitted = Vec::new();
-        let mut pending = None;
-
-        coordinate_extension_ui_request(
-            PiChatEvent::ExtensionUiRequest(ExtensionUiRequest {
-                id: "pi-request-1".into(),
-                dialog: ExtensionUiDialog::Confirm {
-                    title: "Allow?".into(),
-                    message: "Proceed?".into(),
-                },
-                timeout: Some(5_000),
-            }),
-            &mut pending,
-            |kind, payload| {
-                let envelope = event_envelope(&run_id, 2, kind, payload, None);
-                journal.append(1, &envelope).map_err(|_| ())?;
-                assert_eq!(journal.events(&run_id).unwrap().len(), 2);
-                projector.apply(&envelope).map_err(|_| ())?;
-                emitted.push(chat_event(&run_id, projector.projection().map_err(|_| ())?));
-                Ok(())
-            },
-        )
-        .unwrap();
-
-        assert_eq!(
-            journal.events(&run_id).unwrap()[1].event_type,
-            "permission.requested"
-        );
-        let projection = emitted.pop().unwrap();
-        assert_eq!(projection.phase, "pending-permission");
-        assert_eq!(
-            projection.pending_permission.unwrap().gate_id,
-            "pi-request-1"
-        );
-
-        let mut append_attempts = 0;
-        assert!(coordinate_extension_ui_request(
-            PiChatEvent::ExtensionUiRequest(ExtensionUiRequest {
-                id: "pi-request-2".into(),
-                dialog: ExtensionUiDialog::Input {
-                    title: "Secret".into(),
-                    placeholder: None,
-                },
-                timeout: None,
-            }),
-            &mut pending,
-            |_kind, _payload| {
-                append_attempts += 1;
-                Err(())
-            },
-        )
-        .is_err());
-        assert_eq!(append_attempts, 1);
-
-        let mut emitted_after_projection_failure = false;
-        assert!(coordinate_extension_ui_request(
-            PiChatEvent::ExtensionUiRequest(ExtensionUiRequest {
-                id: "pi-request-3".into(),
-                dialog: ExtensionUiDialog::Select {
-                    title: "Choose".into(),
-                    options: vec!["A".into(), "B".into()],
-                },
-                timeout: None,
-            }),
-            &mut pending,
-            |kind, payload| {
-                let envelope = event_envelope(&run_id, 3, kind, payload, None);
-                let mut next_projector = projector.clone();
-                next_projector.apply(&envelope).map_err(|_| ())?;
-                next_projector.projection().map_err(|_| ())?;
-                journal.append(2, &envelope).map_err(|_| ())?;
-                emitted_after_projection_failure = true;
-                Ok(())
-            },
-        )
-        .is_err());
-        assert!(!emitted_after_projection_failure);
-        // The coordinator handler has no response transport and therefore cannot
-        // synthesize an allow/deny (or any other Pi extension-UI response).
-        let events = journal.events(&run_id).unwrap();
-        assert_eq!(events.len(), 2);
-        assert_eq!(events[0].event_type, "run.started");
-        assert_eq!(events[1].event_type, "permission.requested");
-        let replayed = muniment_core::journal::reducer::project_chat(&events).unwrap();
-        assert_eq!(replayed.pending_permission.unwrap().gate_id, "pi-request-1");
-
-        drop(journal);
-        std::fs::remove_dir_all(directory).unwrap();
-    }
-
-    #[test]
-    fn coordinator_resolves_only_matching_valid_permission_answers() {
-        let request = ExtensionUiRequest {
-            id: "gate-1".into(),
-            dialog: ExtensionUiDialog::Select {
-                title: "Choose".into(),
-                options: vec!["A".into(), "B".into()],
-            },
-            timeout: None,
-        };
-        let mut pending = Some(request.clone());
-        let mut sent = Vec::new();
-        let mut appended = Vec::new();
-        coordinate_permission_answer(
-            &mut pending,
-            PendingPermissionAnswer {
-                gate_id: "other-gate".into(),
-                answer: ChatPermissionAnswer::Select("A".into()),
-                resolved: None,
-            },
-            |_, answer| {
-                sent.push(answer);
-                Ok(())
-            },
-            |kind, payload| {
-                appended.push((kind.to_string(), payload));
-                Ok(1)
-            },
-        )
-        .unwrap();
-        assert!(sent.is_empty());
-        assert!(appended.is_empty());
-        assert_eq!(pending, Some(request.clone()));
-
-        coordinate_permission_answer(
-            &mut pending,
-            PendingPermissionAnswer {
-                gate_id: "gate-1".into(),
-                answer: ChatPermissionAnswer::Select("C".into()),
-                resolved: None,
-            },
-            |_, answer| {
-                sent.push(answer);
-                Ok(())
-            },
-            |kind, payload| {
-                appended.push((kind.to_string(), payload));
-                Ok(1)
-            },
-        )
-        .unwrap();
-        assert!(sent.is_empty());
-        assert!(appended.is_empty());
-        assert_eq!(pending, Some(request));
-
-        coordinate_permission_answer(
-            &mut pending,
-            PendingPermissionAnswer {
-                gate_id: "gate-1".into(),
-                answer: ChatPermissionAnswer::Select("B".into()),
-                resolved: None,
-            },
-            |_, answer| {
-                sent.push(answer);
-                Ok(())
-            },
-            |kind, payload| {
-                appended.push((kind.to_string(), payload));
-                Ok(1)
-            },
-        )
-        .unwrap();
-        assert_eq!(sent, [ExtensionUiAnswer::Selection("B".into())]);
-        assert_eq!(
-            appended,
-            [(
-                "permission.resolved".into(),
-                json!({
-                    "gate_id": "gate-1",
-                    "decision": {"type": "select", "value": "B"}
-                }),
-            )]
-        );
-        assert!(pending.is_none());
     }
 }
