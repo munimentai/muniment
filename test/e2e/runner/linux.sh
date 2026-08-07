@@ -207,6 +207,9 @@ sudo apt-get install -y -qq webkit2gtk-driver xvfb xdotool xdg-desktop-portal xd
 npm ci --no-audit --no-fund >>"$installer_log" 2>&1 || { status=1; exit; }
 release_binary=$(command -v muniment-desktop || command -v muniment) || { echo 'installed application binary is unavailable' >&2; status=1; exit; }
 node test/e2e/support/webdriver-release-guard.mjs absent "$release_binary" || { status=1; exit; }
+# Build both bundle resources declared in tauri.linux.conf.json before the Tauri bundle.
+cargo build --manifest-path src-tauri/Cargo.toml --package muniment-acp --release --locked >>"$installer_log" 2>&1 || { echo 'muniment-acp build failed' >&2; status=1; exit; }
+cargo build --manifest-path src-tauri/Cargo.toml --package muniment-runtime --release --locked >>"$installer_log" 2>&1 || { echo 'muniment-runtime build failed' >&2; status=1; exit; }
 npm run tauri build -- --bundles deb --features e2e-webdriver --config src-tauri/tauri.e2e.conf.json >>"$installer_log" 2>&1 || { status=1; exit; }
 app_binary="$PWD/src-tauri/target/release/muniment-desktop"
 [[ -x $app_binary ]] || { echo 'E2E application binary is unavailable' >&2; status=1; exit; }
