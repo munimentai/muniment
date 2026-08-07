@@ -59,7 +59,7 @@ pub(crate) struct FakeRunStartBoundaries {
     pub(crate) clear_calls: AtomicUsize,
     pub(crate) cancel_calls: AtomicUsize,
     pub(crate) active_run: Mutex<Option<(String, String)>>,
-    runtime_activity: RuntimeActivityRegistry,
+    pub(crate) runtime_activity: RuntimeActivityRegistry,
     #[cfg(target_os = "linux")]
     pub(crate) queued_permission_answers: Mutex<Vec<(String, ChatPermissionAnswer)>>,
     #[cfg(target_os = "linux")]
