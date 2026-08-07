@@ -12,8 +12,8 @@ use muniment_core::journal::reducer::{ChatProjection, ChatProjector};
 use muniment_core::journal::run_append::append_run_event;
 use muniment_core::journal::split_model_stream_delta;
 use muniment_core::sidecar::pi_chat::{
-    cancel_command, ExtensionUiAnswer, ExtensionUiRequest, ExtensionUiResponse, PiChatEvent,
-    PiRunAdapter,
+    cancel_command, ExtensionUiAnswer, ExtensionUiDialog, ExtensionUiRequest, ExtensionUiResponse,
+    PiChatEvent, PiRunAdapter,
 };
 use muniment_core::sidecar::pi_install::resolve_current;
 use muniment_core::sidecar::{
@@ -204,6 +204,15 @@ pub(super) fn coordinate<R: tauri::Runtime>(
             .insert("OPENAI_BASE_URL".into(), grant.gateway_url.clone());
         if let Some(model) = &grant.model {
             config.env.insert("PI_DEFAULT_MODEL".into(), model.clone());
+        }
+        if let Some(memory) = app.try_state::<crate::memory::ApplicationMemoryRuntime>() {
+            let memory_extension = memory.agent_extension_path();
+            if memory_extension.is_file() {
+                config.args.extend([
+                    "--extension".into(),
+                    memory_extension.to_string_lossy().into_owned(),
+                ]);
+            }
         }
         let wiring = PiRpcWiring::new();
         let supervisor =
@@ -590,6 +599,19 @@ pub(super) fn coordinate<R: tauri::Runtime>(
                 }
             }
             Ok(event @ PiChatEvent::ExtensionUiRequest(_)) => {
+                if coordinate_memory_search(
+                    &app,
+                    &journal,
+                    &mut projector,
+                    &adapter,
+                    &transport,
+                    &run_id,
+                    &mut seq,
+                    subject.as_deref(),
+                    &event,
+                ) {
+                    continue;
+                }
                 if coordinate_extension_ui_request(
                     event,
                     &mut pending_permission,
@@ -645,6 +667,63 @@ pub(super) fn coordinate<R: tauri::Runtime>(
             }
         }
     }
+}
+
+fn coordinate_memory_search<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    journal: &SharedStorage,
+    projector: &mut ChatProjector,
+    adapter: &PiRunAdapter,
+    transport: &PiRpcTransport,
+    run_id: &str,
+    seq: &mut u64,
+    subject: Option<&str>,
+    event: &PiChatEvent,
+) -> bool {
+    let PiChatEvent::ExtensionUiRequest(request) = event else {
+        return false;
+    };
+    let ExtensionUiDialog::Editor { title, prefill } = &request.dialog else {
+        return false;
+    };
+    if title != "muniment:memory-search" {
+        return false;
+    }
+    let result = prefill
+        .as_deref()
+        .ok_or(())
+        .and_then(|arguments| {
+            app.try_state::<crate::memory::ApplicationMemoryRuntime>()
+                .ok_or(())?
+                .dispatch_tool_call(run_id, "memory-search", arguments.as_bytes())
+                .map_err(|_| ())
+        });
+    let answer = match result {
+        Ok(result) => {
+            if append_emit(
+                app,
+                journal,
+                projector,
+                run_id,
+                seq,
+                "memory.recalled",
+                serde_json::to_value(&result.recall).unwrap_or_else(|_| json!({})),
+                subject,
+            )
+            .is_err()
+            {
+                ExtensionUiAnswer::Cancelled
+            } else {
+                match serde_json::to_string(&result) {
+                    Ok(result) => ExtensionUiAnswer::Editor(result),
+                    Err(_) => ExtensionUiAnswer::Cancelled,
+                }
+            }
+        }
+        Err(()) => ExtensionUiAnswer::Cancelled,
+    };
+    let _ = adapter.answer_extension_ui(transport, request, answer);
+    true
 }
 
 fn coordinate_extension_ui_request(
@@ -819,6 +898,156 @@ mod tests {
     use muniment_core::journal::RunJournal;
     use muniment_core::sidecar::pi_chat::ExtensionUiDialog;
     use uuid::Uuid;
+
+    #[test]
+    fn application_chat_session_dispatches_two_memory_turns_and_persists_recalls() {
+        let root = std::env::temp_dir().join(format!("muniment-memory-chat-{}", Uuid::now_v7()));
+        let home = root.join("home");
+        std::fs::create_dir_all(home.join("memory")).unwrap();
+        std::fs::write(
+            home.join("memory/fact.md"),
+            "saffron belongs in the pantry",
+        )
+        .unwrap();
+        let runtime = crate::memory::ApplicationMemoryRuntime::new(
+            root.join("config"),
+            root.join("cache"),
+        );
+        let run_id = Uuid::now_v7().to_string();
+        runtime.open_session_for_home(
+            &run_id,
+            "thread-1",
+            muniment_core::memory_index::ModelMemoryCapability {
+                minimum_cacheable_prefix_characters: 100,
+            },
+            &home,
+            root.join("cache/index.sqlite3"),
+        );
+        let first_definition = runtime.tool_definition_for_turn(&run_id).unwrap();
+        let second_definition = runtime.tool_definition_for_turn(&run_id).unwrap();
+        assert_eq!(first_definition, second_definition);
+
+        let app = tauri::test::mock_app();
+        app.manage(runtime);
+        let mut journal = RunJournal::open(root.join("runs.sqlite3")).unwrap();
+        append_test_event(&mut journal, &run_id, 1, "run.started", json!({}), None);
+        let mut projector = ChatProjector::new();
+        projector
+            .apply(&journal.events(&run_id).unwrap()[0])
+            .unwrap();
+        let shared = Arc::new(Mutex::new(crate::chat::ChatStorage {
+            journal,
+            cas: muniment_core::cas::LocalCas::open(&root.join("cas")).unwrap(),
+        }));
+
+        let executable_name = if cfg!(windows) {
+            "sidecar-test-stub.exe"
+        } else {
+            "sidecar-test-stub"
+        };
+        let test_executable = std::env::current_exe().unwrap();
+        let stub = test_executable
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .join("examples")
+            .join(executable_name);
+        assert!(stub.is_file(), "sidecar test stub was not built");
+        let capture = root.join("answers.jsonl");
+        let mut config = muniment_core::sidecar::SidecarConfig::new(stub.to_string_lossy());
+        config.args = vec![
+            "pi-chat-extension-ui".into(),
+            capture.to_string_lossy().into_owned(),
+        ];
+        config.health_interval = Duration::from_secs(60);
+        let wiring = PiRpcWiring::new();
+        let mut supervisor = SidecarSupervisor::spawn(
+            config,
+            wiring.readiness_probe(Duration::from_millis(100)),
+        )
+        .unwrap();
+        let deadline = std::time::Instant::now() + Duration::from_secs(2);
+        while supervisor.status() != SidecarStatus::Healthy
+            && std::time::Instant::now() < deadline
+        {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        let transport = wiring.transport().unwrap();
+        let (adapter, _) =
+            PiRunAdapter::start(&run_id, &transport, "start", Duration::from_secs(1)).unwrap();
+        let mut seq = 1;
+        for turn in 1..=2 {
+            let event = PiChatEvent::ExtensionUiRequest(ExtensionUiRequest {
+                id: format!("memory-{turn}"),
+                dialog: ExtensionUiDialog::Editor {
+                    title: "muniment:memory-search".into(),
+                    prefill: Some(r#"{"query":"saffron"}"#.into()),
+                },
+                timeout: None,
+            });
+            assert!(coordinate_memory_search(
+                app.handle(),
+                &shared,
+                &mut projector,
+                &adapter,
+                &transport,
+                &run_id,
+                &mut seq,
+                None,
+                &event,
+            ));
+        }
+
+        let deadline = std::time::Instant::now() + Duration::from_secs(1);
+        let answers = loop {
+            let answers: Vec<serde_json::Value> = std::fs::read_to_string(&capture)
+                .unwrap_or_default()
+                .lines()
+                .map(|line| serde_json::from_str(line).unwrap())
+                .collect();
+            if answers.len() == 2 || std::time::Instant::now() >= deadline {
+                break answers;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        };
+        assert_eq!(answers.len(), 2);
+        for answer in answers {
+            let result: serde_json::Value =
+                serde_json::from_str(answer["value"].as_str().unwrap()).unwrap();
+            assert_eq!(result["items"][0]["path"], "memory/fact.md");
+        }
+
+        let events = shared.lock().unwrap().journal.events(&run_id).unwrap();
+        let recalls: Vec<_> = events
+            .iter()
+            .filter(|event| event.event_type == "memory.recalled")
+            .collect();
+        assert_eq!(recalls.len(), 2);
+        for recall in recalls {
+            let muniment_core::journal::EventPayload::Inline { payload_json } = &recall.payload
+            else {
+                panic!("memory recall must use an inline payload");
+            };
+            assert_eq!(payload_json["files"], json!(["memory/fact.md"]));
+        }
+        app.state::<crate::memory::ApplicationMemoryRuntime>()
+            .close_session(&run_id);
+        assert_eq!(
+            shared
+                .lock()
+                .unwrap()
+                .journal
+                .events(&run_id)
+                .unwrap()
+                .iter()
+                .filter(|event| event.event_type == "memory.recalled")
+                .count(),
+            2
+        );
+        supervisor.shutdown().unwrap();
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn coordinator_journals_extension_ui_before_projecting_and_stops_on_failure() {

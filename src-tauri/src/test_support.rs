@@ -53,6 +53,7 @@ pub(crate) struct FakeRunStartBoundaries {
     pub(crate) protect_error: Option<String>,
     pub(crate) install_error: Option<String>,
     pub(crate) prepare_error: Option<String>,
+    pub(crate) memory_error: Option<String>,
     pub(crate) projection_error: Option<String>,
     pub(crate) prepared_provenance: Mutex<Option<Provenance>>,
     pub(crate) journaled_events: Mutex<BTreeMap<String, Vec<EventEnvelope>>>,
@@ -91,6 +92,7 @@ impl FakeRunStartBoundaries {
             protect_error: None,
             install_error: None,
             prepare_error: None,
+            memory_error: None,
             projection_error: None,
             prepared_provenance: Mutex::new(None),
             journaled_events: Mutex::new(BTreeMap::new()),
@@ -437,7 +439,9 @@ impl RunStartBoundaries for FakeRunStartBoundaries {
         _thread_id: &str,
         _minimum_cacheable_prefix_characters: usize,
     ) -> Result<(), RunStartError> {
-        Ok(())
+        self.memory_error
+            .as_ref()
+            .map_or(Ok(()), |error| Err(RunStartError::Persistence(error.clone())))
     }
 
     fn close_memory_session(&self, _run_id: &str) {}

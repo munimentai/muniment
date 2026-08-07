@@ -66,8 +66,6 @@ fn main() {
             chat::chat_cancel,
             chat::chat_answer_permission,
             chat::chat_queue,
-            memory::memory_tools,
-            memory::memory_tool_call,
             chat_threads::chat_current_thread,
             chat_threads::chat_thread_summaries,
             chat_threads::chat_thread_open,

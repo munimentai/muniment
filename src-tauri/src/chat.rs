@@ -414,6 +414,18 @@ pub(crate) fn prepare_desktop_run(
         &thread_id,
         grant.minimum_cacheable_prefix_characters,
     ) {
+        let failed_launch = RunStartLaunch {
+            run_id: run_id.clone(),
+            prompt,
+            tokens,
+            grant,
+            cancelled,
+            transport,
+            adapter,
+            permission_answers,
+            prepared,
+        };
+        let _ = boundaries.fail_prepared_run(&failed_launch);
         boundaries.clear_active_run(&run_id);
         return Err(error);
     }
@@ -1648,6 +1660,33 @@ mod tests {
         assert_eq!(error.into_message(), "A reply is already in progress.");
         assert_eq!(boundaries.auth_calls.load(Ordering::SeqCst), 0);
         assert!(boundaries.launched_run.lock().unwrap().is_none());
+    }
+
+    #[test]
+    fn memory_session_failure_marks_the_prepared_run_failed() {
+        let boundaries = FakeRunStartBoundaries {
+            memory_error: Some("memory unavailable".into()),
+            ..FakeRunStartBoundaries::accepting()
+        };
+
+        let error = start_desktop_run(
+            &boundaries,
+            RunStartRequest {
+                prompt: "hello".into(),
+                files: Vec::new(),
+                workspace: None,
+                provenance: None,
+                thread_id: None,
+            },
+        )
+        .unwrap_err();
+
+        assert_eq!(error.into_message(), "memory unavailable");
+        let events = boundaries.journaled_events.lock().unwrap();
+        let events = events.values().next().unwrap();
+        assert_eq!(events.last().unwrap().event_type, "run.failed");
+        assert_eq!(boundaries.clear_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(boundaries.launch_calls.load(Ordering::SeqCst), 0);
     }
 
     #[cfg(target_os = "linux")]
