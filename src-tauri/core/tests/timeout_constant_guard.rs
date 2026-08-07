@@ -52,6 +52,14 @@ fn guard_checks_each_test_module() {
     assert!(violations[1].contains("second_reference"));
 }
 
+#[test]
+fn guard_ignores_braces_inside_strings() {
+    let fixture = fixture("string_brace_before_reference.rs");
+    let violations = scan_file(&fixture);
+    assert_eq!(violations.len(), 1, "{violations:#?}");
+    assert!(violations[0].contains("reference_after_string_brace"));
+}
+
 fn fixture(name: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests/fixtures/timeout_guard")
@@ -147,6 +155,7 @@ fn production_timeout_constants(source: &str) -> BTreeSet<String> {
 }
 
 fn test_modules(lines: &[&str]) -> Vec<(usize, usize)> {
+    let brace_changes = code_brace_changes(lines);
     let mut modules = Vec::new();
     let mut line = 0;
     while line < lines.len() {
@@ -166,9 +175,8 @@ fn test_modules(lines: &[&str]) -> Vec<(usize, usize)> {
         let mut depth = 0_i32;
         let mut saw_open = false;
         let mut end = module_line;
-        for (index, source_line) in lines.iter().enumerate().skip(module_line) {
-            let change = brace_depth_change(source_line);
-            saw_open |= source_line.contains('{');
+        for (index, (change, has_open)) in brace_changes.iter().enumerate().skip(module_line) {
+            saw_open |= has_open;
             depth += change;
             end = index + 1;
             if saw_open && depth == 0 {
@@ -181,12 +189,144 @@ fn test_modules(lines: &[&str]) -> Vec<(usize, usize)> {
     modules
 }
 
-fn brace_depth_change(line: &str) -> i32 {
-    line.chars().fold(0, |depth, character| match character {
-        '{' => depth + 1,
-        '}' => depth - 1,
-        _ => depth,
-    })
+#[derive(Clone, Copy)]
+enum LexState {
+    Code,
+    String,
+    Character,
+    RawString(usize),
+    BlockComment(usize),
+}
+
+fn code_brace_changes(lines: &[&str]) -> Vec<(i32, bool)> {
+    let mut state = LexState::Code;
+    lines
+        .iter()
+        .map(|line| code_brace_change(line.as_bytes(), &mut state))
+        .collect()
+}
+
+fn code_brace_change(line: &[u8], state: &mut LexState) -> (i32, bool) {
+    let mut depth = 0;
+    let mut has_open = false;
+    let mut index = 0;
+    while index < line.len() {
+        match *state {
+            LexState::Code => match line[index] {
+                b'/' if line.get(index + 1) == Some(&b'/') => break,
+                b'/' if line.get(index + 1) == Some(&b'*') => {
+                    *state = LexState::BlockComment(1);
+                    index += 2;
+                }
+                b'b' if line.get(index + 1) == Some(&b'"') => {
+                    *state = LexState::String;
+                    index += 2;
+                }
+                b'b' if line.get(index + 1) == Some(&b'\'') => {
+                    *state = LexState::Character;
+                    index += 2;
+                }
+                b'r' | b'b' => {
+                    if let Some((hashes, content_start)) = raw_string_start(line, index) {
+                        *state = LexState::RawString(hashes);
+                        index = content_start;
+                    } else {
+                        index += 1;
+                    }
+                }
+                b'"' => {
+                    *state = LexState::String;
+                    index += 1;
+                }
+                b'\'' if character_literal_end(line, index).is_some() => {
+                    *state = LexState::Character;
+                    index += 1;
+                }
+                b'{' => {
+                    depth += 1;
+                    has_open = true;
+                    index += 1;
+                }
+                b'}' => {
+                    depth -= 1;
+                    index += 1;
+                }
+                _ => index += 1,
+            },
+            LexState::String | LexState::Character => {
+                let delimiter = if matches!(*state, LexState::String) {
+                    b'"'
+                } else {
+                    b'\''
+                };
+                match line[index] {
+                    b'\\' => index += 2,
+                    byte if byte == delimiter => {
+                        *state = LexState::Code;
+                        index += 1;
+                    }
+                    _ => index += 1,
+                }
+            }
+            LexState::RawString(hashes) => {
+                if raw_string_ends_at(line, index, hashes) {
+                    *state = LexState::Code;
+                    index += hashes + 1;
+                } else {
+                    index += 1;
+                }
+            }
+            LexState::BlockComment(nesting) => {
+                if line.get(index..index + 2) == Some(b"/*") {
+                    *state = LexState::BlockComment(nesting + 1);
+                    index += 2;
+                } else if line.get(index..index + 2) == Some(b"*/") {
+                    *state = if nesting == 1 {
+                        LexState::Code
+                    } else {
+                        LexState::BlockComment(nesting - 1)
+                    };
+                    index += 2;
+                } else {
+                    index += 1;
+                }
+            }
+        }
+    }
+    (depth, has_open)
+}
+
+fn raw_string_start(line: &[u8], start: usize) -> Option<(usize, usize)> {
+    let mut index = start;
+    if line.get(index) == Some(&b'b') {
+        index += 1;
+    }
+    if line.get(index) != Some(&b'r') {
+        return None;
+    }
+    index += 1;
+    let hash_start = index;
+    while line.get(index) == Some(&b'#') {
+        index += 1;
+    }
+    (line.get(index) == Some(&b'"')).then_some((index - hash_start, index + 1))
+}
+
+fn raw_string_ends_at(line: &[u8], start: usize, hashes: usize) -> bool {
+    line.get(start) == Some(&b'"')
+        && line
+            .get(start + 1..start + hashes + 1)
+            .is_some_and(|suffix| suffix.iter().all(|byte| *byte == b'#'))
+}
+
+fn character_literal_end(line: &[u8], start: usize) -> Option<usize> {
+    let mut index = start + 1;
+    if line.get(index) == Some(&b'\\') {
+        index += 2;
+    } else {
+        index += 1;
+    }
+    (line.get(index) == Some(&b'\'')).then_some(index)
 }
 
 fn identifier_occurrences<'a>(
