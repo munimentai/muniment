@@ -1,5 +1,7 @@
 //! Rebuildable lexical search over the visible Muniment Home.
 
+use cap_fs_ext::{DirExt, FollowSymlinks, OpenOptionsFollowExt};
+use cap_std::{ambient_authority, fs::Dir};
 use rusqlite::{params, Connection, Transaction};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -387,32 +389,79 @@ fn scan_home(
     home: &Path,
     deadline: Instant,
 ) -> Result<BTreeMap<String, Document>, MemoryIndexError> {
+    scan_home_with_hook(home, deadline, || {})
+}
+
+fn scan_home_with_hook(
+    home: &Path,
+    deadline: Instant,
+    after_collection: impl FnOnce(),
+) -> Result<BTreeMap<String, Document>, MemoryIndexError> {
+    let home_directory = open_home_directory(home)?;
     let mut files = Vec::new();
     for directory in HOME_DIRECTORIES {
-        collect_markdown(home, &home.join(directory), &mut files, 0, deadline)?;
+        let Ok(open_directory) = home_directory.open_dir_nofollow(directory) else {
+            continue;
+        };
+        collect_markdown(
+            &open_directory,
+            Path::new(directory),
+            &mut files,
+            0,
+            deadline,
+        )?;
     }
     files.sort();
     files.truncate(MAX_FILES);
+    after_collection();
     let mut documents = BTreeMap::new();
     for path in files {
         check_deadline(deadline)?;
-        let metadata = fs::symlink_metadata(&path)?;
+        let Ok(file) = open_relative_file(&home_directory, &path) else {
+            continue;
+        };
+        let metadata = file.metadata()?;
         if !metadata.file_type().is_file() || metadata.len() > MAX_FILE_BYTES {
             continue;
         }
-        let file = fs::File::open(&path)?;
         let bytes = read_utf8_bytes(file, metadata.len() as usize, deadline)?;
         let Ok(content) = String::from_utf8(bytes) else {
             continue;
         };
-        let relative = path
-            .strip_prefix(home)
-            .map_err(|_| MemoryIndexError::InvalidPath)?;
-        let relative = relative.to_string_lossy().replace('\\', "/");
+        let relative = path.to_string_lossy().replace('\\', "/");
         let hash = format!("{:x}", Sha256::digest(content.as_bytes()));
         documents.insert(relative, Document { content, hash });
     }
     Ok(documents)
+}
+
+fn open_home_directory(home: &Path) -> Result<Dir, MemoryIndexError> {
+    let parent = home.parent().ok_or(MemoryIndexError::InvalidPath)?;
+    let name = home.file_name().ok_or(MemoryIndexError::InvalidPath)?;
+    let parent = Dir::open_ambient_dir(parent, ambient_authority())?;
+    parent.open_dir_nofollow(name).map_err(MemoryIndexError::Io)
+}
+
+fn open_relative_file(home: &Dir, relative: &Path) -> io::Result<fs::File> {
+    let parent = relative.parent().unwrap_or_else(|| Path::new(""));
+    let name = relative
+        .file_name()
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "invalid memory path"))?;
+    let mut directory = home.try_clone()?;
+    for component in parent.components() {
+        let Component::Normal(component) = component else {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "invalid memory path",
+            ));
+        };
+        directory = directory.open_dir_nofollow(component)?;
+    }
+    let mut options = cap_std::fs::OpenOptions::new();
+    options.read(true).follow(FollowSymlinks::No);
+    directory
+        .open_with(name, &options)
+        .map(|file| file.into_std())
 }
 
 fn read_utf8_bytes(
@@ -424,14 +473,28 @@ fn read_utf8_bytes(
     let (sender, receiver) = std::sync::mpsc::sync_channel(1);
     std::thread::spawn(move || {
         let result = (|| -> io::Result<Vec<u8>> {
-            let mut bytes = Vec::with_capacity(capacity);
+            let mut bytes = Vec::with_capacity(capacity.min(MAX_FILE_BYTES as usize));
             let mut chunk = [0_u8; 64 * 1024];
             loop {
-                let read = reader.read(&mut chunk)?;
+                let remaining = (MAX_FILE_BYTES as usize + 1).saturating_sub(bytes.len());
+                if remaining == 0 {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "memory file exceeds the size limit",
+                    ));
+                }
+                let amount = chunk.len().min(remaining);
+                let read = reader.read(&mut chunk[..amount])?;
                 if read == 0 {
                     return Ok(bytes);
                 }
                 bytes.extend_from_slice(&chunk[..read]);
+                if bytes.len() > MAX_FILE_BYTES as usize {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "memory file exceeds the size limit",
+                    ));
+                }
             }
         })();
         let _ = sender.send(result);
@@ -443,8 +506,8 @@ fn read_utf8_bytes(
 }
 
 fn collect_markdown(
-    home: &Path,
-    directory: &Path,
+    directory: &Dir,
+    relative_directory: &Path,
     files: &mut Vec<PathBuf>,
     depth: usize,
     deadline: Instant,
@@ -453,12 +516,7 @@ fn collect_markdown(
     if depth > MAX_DIRECTORY_DEPTH {
         return Ok(());
     }
-    let read = match fs::read_dir(directory) {
-        Ok(read) => read,
-        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
-        Err(error) => return Err(error.into()),
-    };
-    let mut entries = read.collect::<Result<Vec<_>, _>>()?;
+    let mut entries = directory.entries()?.collect::<Result<Vec<_>, _>>()?;
     entries.sort_by_key(|entry| entry.file_name());
     for entry in entries {
         check_deadline(deadline)?;
@@ -466,18 +524,18 @@ fn collect_markdown(
             break;
         }
         let kind = entry.file_type()?;
-        let path = entry.path();
+        let path = relative_directory.join(entry.file_name());
         if kind.is_symlink() {
             continue;
         }
         if kind.is_dir() {
-            collect_markdown(home, &path, files, depth + 1, deadline)?;
+            let child = directory.open_dir_nofollow(entry.file_name())?;
+            collect_markdown(&child, &path, files, depth + 1, deadline)?;
         } else if kind.is_file()
             && path
                 .extension()
                 .and_then(|value| value.to_str())
                 .is_some_and(|value| value.eq_ignore_ascii_case("md"))
-            && path.strip_prefix(home).is_ok()
         {
             files.push(path);
         }
@@ -846,5 +904,31 @@ mod tests {
 
         let result = read_utf8_bytes(SlowReader, 1, Instant::now() + Duration::from_millis(1));
         assert!(matches!(result, Err(MemoryIndexError::TimedOut)));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn replacement_during_scan_cannot_index_outside_content() {
+        use std::os::unix::fs::symlink;
+
+        let fixture = Fixture::new();
+        let outside = Fixture::new();
+        fixture.file("replace.md", "inside marigold");
+        outside.file("secret.md", "outside marigold credential");
+        let selected = fixture.root.join("memory/replace.md");
+        let result = scan_home_with_hook(
+            &fixture.root,
+            Instant::now() + Duration::from_secs(5),
+            || {
+                fs::remove_file(&selected).unwrap();
+                symlink(outside.root.join("memory/secret.md"), &selected).unwrap();
+            },
+        )
+        .unwrap();
+
+        assert!(!result.contains_key("memory/replace.md"));
+        assert!(result
+            .values()
+            .all(|document| !document.content.contains("outside marigold credential")));
     }
 }

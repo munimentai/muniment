@@ -314,6 +314,7 @@ impl RunStartBoundaries for FakeRunStartBoundaries {
             gateway_url: "https://gateway.invalid".into(),
             virtual_key: "virtual-key".into(),
             model: None,
+            minimum_cacheable_prefix_characters: 8_192,
             receipt_url: "https://receipt.invalid".into(),
         })
     }
@@ -429,6 +430,17 @@ impl RunStartBoundaries for FakeRunStartBoundaries {
         }
         Ok("0190a100-0000-7000-8000-000000000002".into())
     }
+
+    fn open_memory_session(
+        &self,
+        _run_id: &str,
+        _thread_id: &str,
+        _minimum_cacheable_prefix_characters: usize,
+    ) -> Result<(), RunStartError> {
+        Ok(())
+    }
+
+    fn close_memory_session(&self, _run_id: &str) {}
 
     fn project_attachments(
         &self,
