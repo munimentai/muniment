@@ -3,7 +3,7 @@ use muniment_core::{
     home::{
         compile_onboarding_home_write_plan, confirm_home, persist_onboarding_home_write_plan,
         scaffold_home, validate_home_selection, HomeError, HomeErrorKind,
-        OnboardingHomePersistenceError,
+        OnboardingHomePersistenceError, OnboardingHomeWritePlanError,
     },
     import_preview::ExtractedEntry,
 };
@@ -30,6 +30,7 @@ pub struct HomeImportSuccess {
 pub enum HomeImportErrorKind {
     InvalidInput,
     DestinationConflict,
+    SecretRejected,
     SaveFailed,
 }
 
@@ -47,6 +48,15 @@ impl HomeImportError {
         Self {
             kind: HomeImportErrorKind::InvalidInput,
             message: "The confirmed Home import input is invalid.",
+            relative_path: None,
+        }
+    }
+
+    /// The message names no matched text, so no secret leaves the core.
+    fn secret_rejected() -> Self {
+        Self {
+            kind: HomeImportErrorKind::SecretRejected,
+            message: "An approved Home import file contains a secret.",
             relative_path: None,
         }
     }
@@ -154,8 +164,13 @@ fn confirm_import_with_hook(
     import_date: NaiveDate,
     before_confirm: impl FnOnce(),
 ) -> Result<HomeImportSuccess, HomeImportError> {
-    let plan = compile_onboarding_home_write_plan(approved_entries, import_date)
-        .map_err(|_| HomeImportError::invalid_input())?;
+    let plan =
+        compile_onboarding_home_write_plan(approved_entries, import_date).map_err(|error| {
+            match error {
+                OnboardingHomeWritePlanError::SecretRejected => HomeImportError::secret_rejected(),
+                _ => HomeImportError::invalid_input(),
+            }
+        })?;
     let imported_file_count = plan.writes().len();
 
     validate_home_selection(config, home).map_err(map_home_error)?;
@@ -166,6 +181,7 @@ fn confirm_import_with_hook(
             message: "A Home import destination already exists.",
             relative_path: Some(relative_path),
         },
+        OnboardingHomePersistenceError::SecretRejected => HomeImportError::secret_rejected(),
         OnboardingHomePersistenceError::InvalidHome => HomeImportError::invalid_input(),
         _ => HomeImportError::save_failed(),
     })?;
@@ -320,6 +336,32 @@ mod tests {
         for write in &plan.writes()[1..] {
             assert!(!home.join(write.relative_path()).exists());
         }
+        assert_eq!(configured_home(&config).unwrap(), None);
+    }
+
+    #[test]
+    fn an_approved_entry_holding_a_secret_serializes_as_secret_rejected() {
+        let root = TempRoot::new("secret-entry");
+        let config = root.0.join("config");
+        let home = root.0.join("home");
+        let date = NaiveDate::from_ymd_opt(2026, 7, 24).unwrap();
+        // The segments repeat one character each, so no scanner reads this file as a secret.
+        let token = format!("{}.{}.{}", "A".repeat(20), "B".repeat(18), "C".repeat(22));
+        let carrier = ExtractedEntry {
+            text: format!("{token}\n"),
+            ..entry()
+        };
+
+        let error = confirm_import(&config, &home, &[carrier], date).unwrap_err();
+
+        assert_eq!(
+            serde_json::to_value(error).unwrap(),
+            serde_json::json!({
+                "kind": "secretRejected",
+                "message": "An approved Home import file contains a secret."
+            })
+        );
+        assert!(!home.exists());
         assert_eq!(configured_home(&config).unwrap(), None);
     }
 
