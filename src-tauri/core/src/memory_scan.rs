@@ -2,6 +2,7 @@
 
 use cap_fs_ext::{DirExt, FollowSymlinks, OpenOptionsFollowExt};
 use cap_std::{ambient_authority, fs::Dir};
+use std::collections::BinaryHeap;
 use std::fs;
 use std::io::{self, Read};
 use std::path::{Component, Path, PathBuf};
@@ -19,7 +20,7 @@ pub const MAX_DIRECTORY_DEPTH: usize = 32;
 /// Metadata for one indexable Markdown document.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct HomeDocument {
-    pub path: String,
+    pub path: PathBuf,
     pub byte_length: u64,
     pub modified_at: SystemTime,
 }
@@ -36,7 +37,7 @@ pub enum ScanSkipReason {
 /// One entry omitted from the scan result.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ScanSkip {
-    pub path: String,
+    pub path: PathBuf,
     pub reason: ScanSkipReason,
 }
 
@@ -45,19 +46,22 @@ pub struct ScanSkip {
 pub struct HomeDocumentScan {
     pub documents: Vec<HomeDocument>,
     pub skipped: Vec<ScanSkip>,
+    /// Total Markdown files omitted by the file-count cap.
+    pub file_count_dropped: usize,
 }
 
 impl HomeDocumentScan {
     /// Returns true when a file-count, file-size, or directory-depth cap omitted an entry.
     pub fn cap_dropped_entries(&self) -> bool {
-        self.skipped.iter().any(|skip| {
-            matches!(
-                skip.reason,
-                ScanSkipReason::FileCountLimit
-                    | ScanSkipReason::FileTooLarge
-                    | ScanSkipReason::DirectoryDepthLimit
-            )
-        })
+        self.file_count_dropped > 0
+            || self.skipped.iter().any(|skip| {
+                matches!(
+                    skip.reason,
+                    ScanSkipReason::FileCountLimit
+                        | ScanSkipReason::FileTooLarge
+                        | ScanSkipReason::DirectoryDepthLimit
+                )
+            })
     }
 }
 
@@ -82,8 +86,9 @@ impl std::error::Error for MemoryScanErrorKind {}
 /// Scans only the four scaffold directories without following symbolic links.
 pub fn scan_home_documents(home: &Path) -> Result<HomeDocumentScan, MemoryScanErrorKind> {
     let home = open_home(home)?;
-    let mut candidates = Vec::new();
+    let mut candidates = BinaryHeap::new();
     let mut skipped = Vec::new();
+    let mut file_count_dropped = 0;
 
     for name in HOME_DIRECTORIES {
         let metadata = match home.symlink_metadata(name) {
@@ -105,21 +110,11 @@ pub fn scan_home_documents(home: &Path) -> Result<HomeDocumentScan, MemoryScanEr
             0,
             &mut candidates,
             &mut skipped,
+            &mut file_count_dropped,
         )?;
     }
 
-    candidates.sort();
-    if candidates.len() > MAX_DOCUMENT_COUNT {
-        skipped.extend(
-            candidates[MAX_DOCUMENT_COUNT..]
-                .iter()
-                .map(|path| ScanSkip {
-                    path: display_path(path),
-                    reason: ScanSkipReason::FileCountLimit,
-                }),
-        );
-        candidates.truncate(MAX_DOCUMENT_COUNT);
-    }
+    let candidates = candidates.into_sorted_vec();
 
     let mut documents = Vec::new();
     for path in candidates {
@@ -134,7 +129,7 @@ pub fn scan_home_documents(home: &Path) -> Result<HomeDocumentScan, MemoryScanEr
         }
         if metadata.len() > MAX_DOCUMENT_BYTES {
             skipped.push(ScanSkip {
-                path: display_path(&path),
+                path: path.clone(),
                 reason: ScanSkipReason::FileTooLarge,
             });
             continue;
@@ -145,26 +140,30 @@ pub fn scan_home_documents(home: &Path) -> Result<HomeDocumentScan, MemoryScanEr
             .map_err(|_| MemoryScanErrorKind::Io)?;
         if bytes.len() as u64 > MAX_DOCUMENT_BYTES {
             skipped.push(ScanSkip {
-                path: display_path(&path),
+                path: path.clone(),
                 reason: ScanSkipReason::FileTooLarge,
             });
             continue;
         }
         if std::str::from_utf8(&bytes).is_err() {
             skipped.push(ScanSkip {
-                path: display_path(&path),
+                path: path.clone(),
                 reason: ScanSkipReason::InvalidUtf8,
             });
             continue;
         }
         documents.push(HomeDocument {
-            path: display_path(&path),
+            path,
             byte_length: bytes.len() as u64,
             modified_at: metadata.modified().map_err(|_| MemoryScanErrorKind::Io)?,
         });
     }
     skipped.sort_by(|left, right| left.path.cmp(&right.path));
-    Ok(HomeDocumentScan { documents, skipped })
+    Ok(HomeDocumentScan {
+        documents,
+        skipped,
+        file_count_dropped,
+    })
 }
 
 fn open_home(home: &Path) -> Result<Dir, MemoryScanErrorKind> {
@@ -185,16 +184,13 @@ fn collect_markdown(
     directory: &Dir,
     relative: &Path,
     depth: usize,
-    files: &mut Vec<PathBuf>,
+    files: &mut BinaryHeap<PathBuf>,
     skipped: &mut Vec<ScanSkip>,
+    file_count_dropped: &mut usize,
 ) -> Result<(), MemoryScanErrorKind> {
-    let mut entries = directory
-        .entries()
-        .map_err(|_| MemoryScanErrorKind::Io)?
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|_| MemoryScanErrorKind::Io)?;
-    entries.sort_by_key(|entry| entry.file_name());
+    let entries = directory.entries().map_err(|_| MemoryScanErrorKind::Io)?;
     for entry in entries {
+        let entry = entry.map_err(|_| MemoryScanErrorKind::Io)?;
         let kind = entry.file_type().map_err(|_| MemoryScanErrorKind::Io)?;
         let path = relative.join(entry.file_name());
         if kind.is_symlink() {
@@ -203,7 +199,7 @@ fn collect_markdown(
         if kind.is_dir() {
             if depth == MAX_DIRECTORY_DEPTH {
                 skipped.push(ScanSkip {
-                    path: display_path(&path),
+                    path,
                     reason: ScanSkipReason::DirectoryDepthLimit,
                 });
                 continue;
@@ -213,9 +209,17 @@ fn collect_markdown(
                 Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
                 Err(_) => return Err(MemoryScanErrorKind::Io),
             };
-            collect_markdown(&child, &path, depth + 1, files, skipped)?;
+            collect_markdown(&child, &path, depth + 1, files, skipped, file_count_dropped)?;
         } else if kind.is_file() && path.extension().is_some_and(|extension| extension == "md") {
-            files.push(path);
+            if files.len() < MAX_DOCUMENT_COUNT {
+                files.push(path);
+            } else {
+                *file_count_dropped = file_count_dropped.saturating_add(1);
+                if files.peek().is_some_and(|largest| path < *largest) {
+                    files.pop();
+                    files.push(path);
+                }
+            }
         }
     }
     Ok(())
@@ -241,8 +245,4 @@ fn open_file(home: &Dir, relative: &Path) -> io::Result<fs::File> {
     directory
         .open_with(name, &options)
         .map(|file| file.into_std())
-}
-
-fn display_path(path: &Path) -> String {
-    path.to_string_lossy().replace('\\', "/")
 }

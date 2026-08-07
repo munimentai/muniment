@@ -51,7 +51,7 @@ fn returns_only_scaffold_markdown_in_sorted_order() {
     assert_eq!(
         scan.documents
             .iter()
-            .map(|document| document.path.as_str())
+            .map(|document| document.path.to_str().unwrap())
             .collect::<Vec<_>>(),
         ["agents/a.md", "memory/nested/b.md", "sessions/z.md"]
     );
@@ -64,15 +64,20 @@ fn returns_only_scaffold_markdown_in_sorted_order() {
 #[test]
 fn reports_the_file_count_cap() {
     let home = TempHome::new("count");
-    for number in 0..=MAX_DOCUMENT_COUNT {
+    let excess_count = 1_001;
+    for number in (0..MAX_DOCUMENT_COUNT + excess_count).rev() {
         home.write(format!("memory/{number:05}.md"), b"x");
     }
 
     let scan = scan_home_documents(&home.0).unwrap();
 
     assert_eq!(scan.documents.len(), MAX_DOCUMENT_COUNT);
-    assert_eq!(scan.skipped.len(), 1);
-    assert_eq!(scan.skipped[0].reason, ScanSkipReason::FileCountLimit);
+    assert_eq!(
+        scan.documents.last().unwrap().path,
+        Path::new("memory/09999.md")
+    );
+    assert!(scan.skipped.is_empty());
+    assert_eq!(scan.file_count_dropped, excess_count);
     assert!(scan.cap_dropped_entries());
 }
 
@@ -89,11 +94,11 @@ fn reports_the_file_byte_cap_and_invalid_utf8() {
     let scan = scan_home_documents(&home.0).unwrap();
 
     assert_eq!(scan.documents.len(), 1);
-    assert_eq!(scan.documents[0].path, "memory/exact.md");
+    assert_eq!(scan.documents[0].path, Path::new("memory/exact.md"));
     assert_eq!(
         scan.skipped
             .iter()
-            .map(|skip| (&*skip.path, skip.reason))
+            .map(|skip| (skip.path.to_str().unwrap(), skip.reason))
             .collect::<Vec<_>>(),
         [
             ("memory/invalid.md", ScanSkipReason::InvalidUtf8),
@@ -139,7 +144,7 @@ fn refuses_file_and_directory_symlinks() {
     let scan = scan_home_documents(&home.0).unwrap();
 
     assert_eq!(scan.documents.len(), 1);
-    assert_eq!(scan.documents[0].path, "memory/visible.md");
+    assert_eq!(scan.documents[0].path, Path::new("memory/visible.md"));
 }
 
 #[cfg(unix)]
@@ -156,4 +161,24 @@ fn refuses_a_scaffold_directory_symlink() {
     let scan = scan_home_documents(&home.0).unwrap();
 
     assert!(scan.documents.is_empty());
+}
+
+#[cfg(unix)]
+#[test]
+fn preserves_distinct_non_utf8_paths() {
+    use std::ffi::OsString;
+    use std::os::unix::ffi::OsStringExt;
+
+    let home = TempHome::new("non-utf8-paths");
+    let first = PathBuf::from("memory").join(OsString::from_vec(b"note-\x80.md".to_vec()));
+    let second = PathBuf::from("memory").join(OsString::from_vec(b"note-\x81.md".to_vec()));
+    home.write(&first, b"first");
+    home.write(&second, b"second");
+
+    let scan = scan_home_documents(&home.0).unwrap();
+
+    assert_eq!(scan.documents.len(), 2);
+    assert_eq!(scan.documents[0].path, first);
+    assert_eq!(scan.documents[1].path, second);
+    assert_ne!(scan.documents[0].path, scan.documents[1].path);
 }
