@@ -202,7 +202,7 @@ gh api -H 'Accept: application/octet-stream' "repos/${GITHUB_REPOSITORY}/release
 
 sudo apt-get update -qq >>"$installer_log" 2>&1 || { status=1; exit; }
 installed=1
-sudo apt-get install -y -qq webkit2gtk-driver xvfb xdotool xdg-desktop-portal xdg-desktop-portal-gtk fuse3 libglib2.0-bin "$deb" >>"$installer_log" 2>&1 || { status=1; exit; }
+sudo apt-get install -y -qq webkit2gtk-driver xvfb xdotool xdg-desktop-portal xdg-desktop-portal-gtk fuse3 libglib2.0-bin libasound2-dev "$deb" >>"$installer_log" 2>&1 || { status=1; exit; }
 [[ -c /dev/fuse && -r /dev/fuse && -w /dev/fuse ]] || { echo 'FUSE device is unavailable to the runner user' >&2; status=1; exit; }
 npm ci --no-audit --no-fund >>"$installer_log" 2>&1 || { status=1; exit; }
 release_binary=$(command -v muniment-desktop || command -v muniment) || { echo 'installed application binary is unavailable' >&2; status=1; exit; }
