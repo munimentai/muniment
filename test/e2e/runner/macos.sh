@@ -13,6 +13,7 @@ state_root="$run_root/state"
 cleanup_log="$run_root/cleanup.log"
 cleanup_status_ledger="$run_root/cleanup-status.log"
 redaction_report="$run_root/redaction-failure.txt"
+window_probe="$run_root/window-count"
 installed_bundle=/Applications/muniment.app
 status=0
 cleanup_status=0
@@ -58,6 +59,7 @@ finalize() {
   cleanup_step remove-raw rm -rf -- "$raw"
   cleanup_step remove-archive rm -f -- "$archive"
   cleanup_step remove-expanded rm -rf -- "$expanded"
+  cleanup_step remove-window-probe rm -f -- "$window_probe"
   if (( redaction_status == 0 )); then
     cleanup_step replace-artifacts rm -rf -- "$artifacts"
     collection_status=$cleanup_last_status
@@ -82,6 +84,7 @@ finalize() {
   cleanup_step raw-gone cleanup_absent "$raw"
   cleanup_step archive-gone cleanup_absent "$archive"
   cleanup_step expanded-gone cleanup_absent "$expanded"
+  cleanup_step window-probe-gone cleanup_absent "$window_probe"
   cleanup_step safe-gone cleanup_absent "$safe"
   cleanup_step remove-cleanup-log rm -f -- "$cleanup_log"
   rm -f -- "$cleanup_status_ledger" "$redaction_report"
@@ -137,6 +140,16 @@ process_name=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$plist" 2
 installed=1
 ditto "$source_bundle" "$installed_bundle" >>"$raw/install.log" 2>&1 || { status=1; exit; }
 mkdir -p "$state_root/home" "$state_root/tmp"
+
+# The window probe reads CoreGraphics window metadata, which macOS grants with
+# no privacy consent. The build runs before the launch, so a broken toolchain
+# fails the job here and never reads as "the app opened no window yet".
+clang -std=gnu17 -O2 -Wall -Wno-deprecated-declarations \
+  -framework CoreFoundation -framework CoreGraphics \
+  -o "$window_probe" test/e2e/support/macos-window-count.c >>"$raw/window-probe-build.log" 2>&1 || {
+  echo 'window probe did not compile' >&2; status=1; exit;
+}
+
 HOME="$state_root/home" TMPDIR="$state_root/tmp" "$installed_bundle/Contents/MacOS/$process_name" >"$raw/app.log" 2>&1 &
 app_pid=$!
 
@@ -145,7 +158,7 @@ window_wait_seconds=120
 window_deadline=$((SECONDS + window_wait_seconds))
 while (( SECONDS < window_deadline )); do
   kill -0 "$app_pid" 2>/dev/null || { echo 'application exited before opening a window' >&2; status=1; break; }
-  window_count=$(osascript -e 'with timeout of 2 seconds' -e "tell application \"System Events\" to count (windows of process \"$process_name\" whose visible is true)" -e 'end timeout' 2>>"$raw/window.log" || true)
+  window_count=$("$window_probe" "$app_pid" 2>>"$raw/window.log" || true)
   if [[ $window_count =~ ^[1-9][0-9]*$ ]]; then window_ready=1; break; fi
   sleep 1
 done
