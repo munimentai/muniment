@@ -119,7 +119,10 @@ muniment-cloud deploy path, not to this repository.
 self-initiated database migrations and the 2026-07-12 RULE above disagree about
 this repository's local journal. Migration steps 2, 3, and 4 all landed under
 that RULE. Eighteen waves have now passed with no answer, and the lane files
-nothing each time. Everything in the next three paragraphs waits behind it.
+nothing each time. The memory lane read the same exclusion as covering durable
+stores alone, and it filed its disposable cache without a ruling. This lane keeps
+waiting, because its work alters the durable journal schema rather than a
+rebuildable file. Everything in the next three paragraphs waits behind it.
 
 HELD — the ADR 0002 launch-path amendment (MUNIDESK-720) names two
 implementation slices, and both need a schema step first. On open the desktop is
@@ -388,22 +391,27 @@ echoes the nonce. The default seam still answers `unsupported_operation`, so no
 desktop implementation runs yet. `THREAT_MODEL.md` records the rule and the
 same-user limitation.
 
-DONE — two of the four quiesce inputs are wired. `RuntimeActivityRegistry`
-(`src-tauri/core/src/attach/runtime_activity.rs`) carries one mark method per
-activity and a guard that clears its mark on drop (MUNIDESK-957). `main`
-(`src-tauri/src/main.rs:21`) creates one registry and manages it, and `ActiveRun`
-(`src-tauri/src/chat.rs:139`) holds a guard for exactly the life of a run
-(MUNIDESK-961). `mint_handoff_nonce`
-(`src-tauri/core/src/attach/handoff.rs:22`) mints a single-use nonce from
-`getrandom` and took no new dependency (MUNIDESK-964). The attach `welcome`
-reserves the optional `handoff_nonce` field with its canonical fixture
-(MUNIDESK-923), and no listener sets the value yet.
+DONE — one of the five quiesce inputs is wired. `evaluate_quiesce` weighs five
+inputs in field order. They are an active run, a pending permission gate, an
+authentication operation, a session refresh, and an in-flight external effect.
+`RuntimeActivityRegistry` (`src-tauri/core/src/attach/runtime_activity.rs`)
+carries one mark method per activity and a guard that clears its mark on drop
+(MUNIDESK-957). `main` (`src-tauri/src/main.rs:21`) creates one registry and
+manages it, and `ActiveRun` (`src-tauri/src/chat.rs:141`) holds a guard for
+exactly the life of a run (MUNIDESK-961). The other four mark methods have no
+production call site yet.
+
+DONE — the handoff nonce is separate work from the quiesce marks.
+`mint_handoff_nonce` (`src-tauri/core/src/attach/handoff.rs:22`) mints a
+single-use nonce from `getrandom` and took no new dependency (MUNIDESK-964). The
+attach `welcome` reserves the optional `handoff_nonce` field with its canonical
+fixture (MUNIDESK-923), and no listener sets the value yet.
 
 SELECTED 2026-08-07 — the auth lane marks that registry next. A sign-in, a
 sign-out, and a session refresh each run while no run is active, so they are the
 two quiesce inputs the active-run mark does not cover. `AuthState::new`
-(`src-tauri/src/auth/mod.rs:96`) takes no registry today, and every
-`ensure_native_session` call site (`:69`, `:83`, `:198`, `:218`) is a refresh.
+(`src-tauri/src/auth/mod.rs:94`) takes no registry today, and every
+`ensure_native_session` call site (`:69`, `:83`, `:198`, `:215`) is a refresh.
 The permission-gate mark and the external-effect mark both live inside the
 coordinate loop, which runs only while `active_run` is already true, so they
 follow the auth marks rather than lead them. The desktop `control_migration`
@@ -412,7 +420,7 @@ answer comes after all four marks.
 SELECTED 2026-08-07 — muniment-core decides whether a probe `welcome` confirms a
 handoff. ADR 0012 has the desktop open a probe connection after it releases the
 lock, then check the returned nonce and the readiness deadline. `Welcome`
-(`src-tauri/attach/src/negotiation.rs:96`) already carries the optional
+(`src-tauri/attach/src/negotiation.rs:97`) already carries the optional
 `handoff_nonce`. The rule lands as a pure core module with no call site, which is
 the shape `quiesce.rs` and `handoff.rs` landed in.
 
@@ -421,7 +429,7 @@ into muniment-core. `coordinate_extension_ui_request`
 (`src-tauri/src/chat_coordinate.rs:726`) and `coordinate_permission_answer`
 (`:739`) already take closures and touch no Tauri type. ADR 0012 phase one names
 permission gates as runtime-service state. `ChatPermissionAnswer`
-(`src-tauri/src/chat.rs:158`) and `PendingPermissionAnswer` (`:179`) move with
+(`src-tauri/src/chat.rs:158`) and `PendingPermissionAnswer` (`:183`) move with
 them, and every remaining call site changes only its import path. Three earlier
 filings drained without a pull request, so this one names the target module
 `src-tauri/core/src/permission_gate.rs`, the four items, the five call sites, and
@@ -443,10 +451,10 @@ segment and `open_selected_files` does not. The lane waits for an owner look at
 why this one ticket never dispatches.
 
 MERGE HAZARD — the open slices edit `src-tauri/src/chat.rs`,
-`src-tauri/src/chat_coordinate.rs`, `src-tauri/src/auth/mod.rs`, and
-`src-tauri/core/src/attach/handoff.rs`. Each ticket tells the implementer to
-rebase on `main` before it opens the pull request. The 2026-08-04 silent revert
-came from a stale base.
+`src-tauri/src/chat_coordinate.rs`, `src-tauri/src/auth/mod.rs`,
+`src-tauri/core/src/attach/handoff.rs`, and `src-tauri/core/src/home.rs`. Each
+ticket tells the implementer to rebase on `main` before it opens the pull
+request. The 2026-08-04 silent revert came from a stale base.
 
 SEQUENCED — the later extraction slices are the remaining Pi execution move, the
 desktop client conversion, and Linux user-unit registration, each behind a
@@ -460,10 +468,10 @@ listener.
 DONE — all three slices of the ADR 0009 attach workspace namespace amendment are
 built (MUNIDESK-883, 887, 893, 896, 905). The signed `grant.workspace` value is
 the only workspace authority for `thread.list`, `thread.open`, `thread.create`,
-and `run.start`. `AttachCompanionState` (`src-tauri/src/attach_service.rs:121`)
+and `run.start`. `AttachCompanionState` (`src-tauri/src/attach_service.rs:123`)
 holds the current signed workspace and returns no approval without one.
-`onboard_workspace` (`:579`) records each canonical companion directory under
-that workspace and the client identity, and `authorized_workspace` (`:619`) reads
+`onboard_workspace` (`:563`) records each canonical companion directory under
+that workspace and the client identity, and `authorized_workspace` (`:603`) reads
 it back. The `RunStart` branch of `dispatch_request`
 (`src-tauri/core/src/attach/linux.rs:2149`) passes the resolved directory to
 `start_run` as a separate execution root, and `configure_run`
@@ -630,10 +638,14 @@ writes the Pi agent extension that registers the tool, and dispatches each call.
 `coordinate_memory_search` (`src-tauri/src/chat_coordinate.rs:672`) appends a
 `memory.recalled` event for every recall.
 
-ANSWERED IN PRACTICE 2026-08-07 — the 2026-08-06 owner question about the phase-one
-index no longer blocks the lane. MUNIDESK-960 landed the cache, which is a
-disposable SQLite file inside the user profile and is neither the run journal nor
-a cloud database. The standing exclusion on the run journal stands unchanged.
+ANSWERED IN PRACTICE 2026-08-07 — the memory lane filed the phase-one store slice
+without the owner ruling it had promised to wait for. MUNIDESK-960 landed the
+cache, so the 2026-08-06 owner question no longer blocks this lane. The lane reads
+the standing exclusion on self-initiated database work as covering durable stores
+alone. The memory index is a new disposable file that any run deletes and rebuilds
+from the Markdown sources. The journal migration alters the schema of the durable
+store that holds the only copy of run history. That reading releases the cache and
+leaves the journal migration held.
 
 SELECTED 2026-08-07 — `reject_memory_secret` has no production call site, so
 §17 rule 7 is written but unenforced. The onboarding import is the product's only
@@ -875,12 +887,12 @@ NOTE 2026-08-06 — the planning clone ships no `node_modules`. Run `npm ci`
 before `npm test`. Without it the run dies with `vitest: not found`, which reads
 as a broken harness.
 
-MEASURED 2026-08-06 — the probe capture ran again after a build.
-`python3 -m http.server --directory .` served the repository root, and headless
-Chromium captured `test/probe/history.html` at 1100x720. The restored thread
-renders its sidebar, titlebar, transcript, two tool rows, provenance line,
-interrupted-reply record with its `Resume` control, and composer. The capture
-recorded no new defect.
+MEASURED 2026-08-06 — the probe capture ran after the 2026-08-06 wave's build, and
+the 2026-08-07 wave did not repeat it. `python3 -m http.server --directory .`
+served the repository root, and headless Chromium captured
+`test/probe/history.html` at 1100x720. The restored thread renders its sidebar,
+titlebar, transcript, two tool rows, provenance line, interrupted-reply record
+with its `Resume` control, and composer. The capture recorded no new defect.
 
 NOTE 2026-08-05 — a capture must pass `--wait-for-selector "[data-probe-ready]"`
 to playwright. The fixture loads the built bundle asynchronously, so a capture
