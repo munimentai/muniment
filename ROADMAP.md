@@ -446,15 +446,33 @@ first, then the returned nonce, and returns `ConfirmedHandoff` or one of three
 bounded reasons. The module has no call site yet, which is the shape `quiesce.rs`
 and `handoff.rs` landed in.
 
-SELECTED 2026-08-08 (fourth wave) — the desktop answers the migration control
-request. `DesktopAttachService` (`src-tauri/src/attach_service.rs:98`) still
-inherits the trait default, so `control_migration` answers
-`unsupported_operation`. The answer verifies the peer through
-`verify_migration_control_peer` against the packaged `muniment-runtime`
-resource, evaluates the shared `RuntimeActivityRegistry` snapshot through
-`evaluate_quiesce`, and prepares one `PreparedHandoffSlot`. A blocker answers
-`migration_not_ready`. Releasing the lock, closing the listener, and opening the
-readiness probe are later slices again.
+DONE 2026-08-08 — the desktop answers the migration control request
+(MUNIDESK-993). `control_desktop_migration`
+(`src-tauri/src/attach_service.rs:65`) resolves the packaged `muniment-runtime`
+resource, verifies the peer through `verify_migration_control_peer`, reads the
+shared `RuntimeActivityRegistry` snapshot through `evaluate_quiesce`, and
+prepares one `PreparedHandoffSlot`. A peer failure answers `unauthorized`, and a
+quiesce blocker answers `migration_not_ready`.
+
+SELECTED 2026-08-08 (fifth wave) — the two primitives the release step needs.
+The desktop cannot stop its listener today. `start_attach_listener`
+(`src-tauri/src/attach_service.rs:465`) blocks in `AttachTransport::accept`
+forever and holds the instance lock inside that thread, and `shutdown` consumes
+the transport the loop owns. The first slice gives the transport a stop handle
+that another thread may hold, so a blocked accept returns `Closed`. The second
+slice gives muniment-core the readiness probe client that `confirm_handoff_probe`
+still has no caller for. The probe connects to the endpoint, sends one `hello`,
+reads the `welcome`, and closes before the authorization step. Wiring the two
+into the handoff is the slice after them.
+
+MEASURED 2026-08-08 (fifth wave, planner, read all three start paths) — a failed
+attach listener start says nothing. `start_attach_listener`
+(`src-tauri/src/attach_service.rs:488`) returns silently when
+`AttachFilesystem::from_environment`, `acquire_instance_lock`, or
+`AttachTransport::bind` fails. Every companion surface then stops working with no
+diagnostic, and `Connected programs` reads as an empty list rather than a broken
+listener. `muniment-runtime` already prints one line for the same class of wait.
+SELECTED 2026-08-08 (fifth wave).
 
 DONE 2026-08-07 — the permission gate coordination rules moved into
 muniment-core on the fourth filing (MUNIDESK-982).
@@ -486,13 +504,21 @@ MERGE HAZARD — the open slices edit `src-tauri/src/attach_service.rs`,
 `src/App.svelte`. Each ticket tells the implementer to rebase on `main` before it
 opens the pull request. The 2026-08-04 silent revert came from a stale base.
 
-SELECTED 2026-08-08 (fourth wave) — the memory runtime is the next core move.
-`ApplicationMemoryRuntime` (`src-tauri/src/memory.rs:9`) composes one
+DONE 2026-08-08 — the memory runtime is the twentieth core move
+(MUNIDESK-995). `src-tauri/core/src/memory_runtime.rs` composes one
 `MemoryRuntimeSession` per run, writes the Pi agent extension, and dispatches
-each tool call. It names no Tauri type, and muniment-core already carries every
-dependency it uses, including `windows-sys` with `Win32_Storage_FileSystem` for
-the atomic replace. The move is the twentieth in the one-slice-at-a-time
-sequence, and the desktop keeps a thin wrapper so no call site changes shape.
+each tool call. `src-tauri/src/memory.rs` is now the one-line wrapper.
+
+SELECTED 2026-08-08 (fifth wave) — the chat view types are the twenty-first
+move. `SelectedFile`, `ChatAttachment`, `ChatToolActivity`,
+`ChatPendingPermission`, `chat_attachments` (`src-tauri/src/chat.rs:123`),
+`chat_pending_permission` (`:134`), `chat_tool_activity` (`:1581`), and
+`projection_phase` (`src-tauri/src/chat_threads.rs:69`) name no Tauri type. They
+move first because the run-start coordinator is the slice behind them.
+`start_desktop_run` (`src-tauri/src/chat.rs:317`) and its `RunStartBoundaries`
+trait name those types in their signatures, and that trait already abstracts
+every side effect, which is the shape MUNIDESK-982 moved the permission gate
+in.
 
 SEQUENCED — the later extraction slices are the remaining Pi execution move, the
 desktop client conversion, and Linux user-unit registration, each behind a
@@ -717,23 +743,29 @@ DONE 2026-08-08 — the index build left the retrieval deadline (MUNIDESK-990).
 `MemoryRuntimeSession::build_with_timeout` (`:172`) owns the build under its own
 deadline, and `ApplicationMemoryRuntime::open_session` runs it once per run.
 
-MEASURED 2026-08-08 (planner, scratch `cargo test` over a Home of 2,000 Markdown
-files) — the recall receipt now costs more than the search. `MemoryIndex::search`
-averages 16.2ms per call, and `source_state`
-(`src-tauri/core/src/memory_index.rs:696`) accounts for 9.5ms of it. That
-function reads every `memory_files` row and SHA-256 hashes the whole set on every
-call, only to stamp `RecallRecord::source_file_state`. The FTS5 query itself
-costs about 6.6ms. All sessions share `memory-index.sqlite3`, so a digest cached
-inside one `MemoryIndex` can become stale when another session reindexes. Store
-the digest with a cache generation in SQLite. Update both in the same reindex
-transaction as `memory_files` and FTS5, and read them in the same snapshot as
-the search results. Cache a digest only while its generation matches the
-database generation. Cache removal and rebuild must replace both values. Add a
-concurrency test where one session reindexes before an earlier session searches.
-The earlier session must return the updated rows and their matching
-`source_file_state`. This removes the scan without a durable-store migration,
-because the database remains a disposable cache. SELECTED 2026-08-08 (fourth
-wave).
+MEASURED 2026-08-08, corrected on the fifth wave (planner, scratch `cargo test`
+over a Home of 2,000 Markdown files) — the recall receipt reads every indexed
+row. `source_state` (`src-tauri/core/src/memory_index.rs:696`) reads every
+`memory_files` row and SHA-256 hashes the whole set on every search, only to
+stamp `RecallRecord::source_file_state`. The fourth wave measured 9.5ms of a
+16.2ms search and called the receipt dearer than the search. That run used a
+debug build. A release build measures 5.4ms per search, with 0.9ms for the cache
+open plus the digest, so the earlier reading overstated the cost. The scan is
+still linear in the indexed file count, and the index caps at 10,000 files. All
+sessions share `memory-index.sqlite3`, so a digest cached inside one
+`MemoryIndex` can go stale when another session reindexes. Store the digest with
+a cache generation in SQLite. Write both in the same reindex transaction as
+`memory_files` and FTS5, and read them in the same snapshot as the search
+results. Cache removal and rebuild must replace both values. Add a concurrency
+test where one session reindexes before an earlier session searches. The earlier
+session must return the updated rows and their matching `source_file_state`.
+This removes the scan without a durable-store migration, because the database
+remains a disposable cache. SELECTED 2026-08-08 (fifth wave).
+
+DO NOT RE-FILE — the per-run index build is not a defect. On the same 2,000-file
+Home a release-build reindex costs 30ms once the cache holds the current hashes,
+and the first build costs about 600ms. `ApplicationMemoryRuntime::open_session`
+runs one build per run start, so a warm run start pays 30ms.
 
 MEASURED 2026-08-07 — nothing renders a recall. The reducer drops
 `memory.recalled`, so `ChatProjection`
@@ -744,14 +776,20 @@ rather than in a new transcript element. The owner mockups name no memory
 surface, and design-spec §2.2 already promises the expanded receipt names the
 connections a reply touched. A running search also already renders as an
 ordinary `Memory search` tool card, because Pi reports the registered tool.
-SELECTED 2026-08-07, still open — the projection carries the recall first, and
-the shell renders it in the slice after that. `ChatProjector::apply`
-(`src-tauri/core/src/journal/reducer.rs:539`) and `project_chat_fragment`
-(`:484`) are the two arms to add, because `project_chat_with_state` (`:472`)
-runs the projector. `chat_event` (`src-tauri/src/chat_coordinate.rs:878`) and
-`project_history_entry` (`src-tauri/src/chat_threads.rs:125`) are the two
-webview payload sites. `RunEventProjection` (`journal/mod.rs:230`) is a strict
-field allowlist, so a companion keeps receiving no recall payload.
+DONE 2026-08-08 — the chat projection carries the recall (MUNIDESK-994).
+`ChatProjection::recalls` (`src-tauri/core/src/journal/reducer.rs:443`) holds one
+`ProjectedRecall` per `memory.recalled` event with its query and its files. Both
+webview payload sites carry the list, `chat_event`
+(`src-tauri/src/chat_coordinate.rs:878`) and `project_history_entry`
+(`src-tauri/src/chat_threads.rs:126`). `RunEventProjection` (`journal/mod.rs:230`)
+stayed a strict field allowlist, so a companion still receives no recall payload.
+
+SELECTED 2026-08-08 (fifth wave) — the shell renders that recall. The payload
+reaches the webview and nothing reads it. `applyChatEvent` and `historyMessages`
+(`src/lib/chat-state.js:117`, `:133`) both drop the field, so no run object
+carries a recall, and `receiptRows` (`:62`) builds the expanded record from the
+route, model, cost, time, and capability fields alone. The recall row joins that
+record, and DESIGN.md states that it renders there and nowhere else.
 
 DEFERRED — phase two embeddings follow phase one and a pinned artifact decision.
 
@@ -826,19 +864,12 @@ DONE 2026-08-04 — the multi-line permission gate names its commit chord
 macOS and `Ctrl ⏎` elsewhere. The single-line kind commits on a plain Enter and
 needs no hint.
 
-MEASURED 2026-08-08 (planner, probe capture at 1100x720) — the receipt discloses
-nothing about itself. `test/probe/history.html` renders the provenance line
-`analysis/high → pi-2 · $0.014 · 6.2s · files@2`, and `test/probe/markdown.html`
-renders the static `Receipt unavailable` in the same mono register, the same
-size, and the same `--muted` color. The interactive line is a `<button>` with
-`aria-expanded` (`src/App.svelte:990`), and `.provenance` (`:1355`) strips its
-border and background and adds no marker. A pointer user sees an expandable
-control and a dead caption as the same object, and the color shift on hover is
-the only sign either way. Design-spec §2.2 promises the expanded receipt names
-the connections a reply touched, and the ADR 0026 recall lands in that same
-record, so the affordance carries more weight each wave. SELECTED 2026-08-08
-(fourth wave) — a disclosure marker joins the summary and DESIGN.md states the
-law.
+DONE 2026-08-08 — the receipt summary shows that it expands (MUNIDESK-996). The
+expandable line carries a rotating marker (`src/App.svelte:990`, `.receipt-marker`
+at `:1357`), and the static `Receipt unavailable` caption carries none. A
+`prefers-reduced-motion` reader gets the same two states with no rotation. The
+planner captured `test/probe/history.html` at 1100x720 on 2026-08-08 and read the
+marker beside the provenance line.
 
 NOT FILED — the empty workspace reads `New thread` three times, in the titlebar,
 the sidebar action, and the sidebar current-thread record. The owner mockup sets
@@ -976,17 +1007,16 @@ earlier one. Requiring an up-to-date branch before merge, or a merge queue, is a
 repository-settings change that sits with the owner. The planner files no ticket
 for it.
 
-VERIFIED 2026-08-08 (fourth wave, from a clean clone) — `npm ci` then `npm test`
-passed 867 tests with 31 skipped across 59 files, and the browser suite passed
-3. `cargo test` over `muniment-core` and `muniment-attach` passed with no
-failure. The planner then read the handoff, probe, quiesce, and
-migration-authority modules, the attach dispatcher branch and the desktop attach
-service, the memory index and its desktop composition, the coordinate loop, and
-the chat reducer. It rebuilt the bundle and captured the index, history,
-markdown, select, approved-files, and signed-out probe fixtures at 1100x720. A
-scratch `cargo test` measured the memory search over a Home of 2,000 files.
-Earlier waves recorded the same shape of verification, and this entry replaces
-that ledger.
+VERIFIED 2026-08-08 (fifth wave, from a clean clone) — `npm ci` then `npm test`
+passed the whole frontend suite, and the browser suite passed 3. `cargo test`
+over `muniment-core` and `muniment-attach` passed with no failure. The planner
+then read the attach transport and its accept loop, the desktop attach service
+and its migration answer, the handoff and probe modules, the memory index and
+its runtime composition, the chat reducer, and the receipt markup. It rebuilt
+the bundle and captured the index, history, and markdown probe fixtures at
+1100x720. A scratch release-build `cargo test` measured the memory search and
+both reindex paths over a Home of 2,000 files. Earlier waves recorded the same
+shape of verification, and this entry replaces that ledger.
 
 NOTE 2026-08-06 — the planning clone ships no `node_modules`. Run `npm ci`
 before `npm test`. Without it the run dies with `vitest: not found`, which reads
