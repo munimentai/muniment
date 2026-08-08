@@ -77,6 +77,7 @@ fn main() {
             chat_threads::chat_new_thread,
             attach_service::attach_pairing_decide,
             attach_service::attach_companions,
+            attach_service::attach_listener_status,
             attach_service::attach_revoke_companion,
             home::home_status,
             home::home_confirm,

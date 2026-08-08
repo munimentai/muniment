@@ -42,6 +42,7 @@ function companionInvoke(revoke = async () => {}) {
     if (command === 'auth_entitlement_snapshot') return snapshot
     if (command === 'auth_devices') return []
     if (command === 'attach_companions') return [companion]
+    if (command === 'attach_listener_status') return { started: true, failure: null }
     if (command === 'attach_revoke_companion') return revoke(args)
     throw new Error(`unexpected command: ${command}`)
   })
@@ -83,6 +84,11 @@ describe('access popover layout', () => {
     expect(source).toMatch(/Loading connected programs…/)
     expect(source).toMatch(/Connected programs could not be loaded\./)
     expect(source).toMatch(/No connected programs found/)
+    expect(source).toMatch(/The connected programs folder is unavailable\./)
+    expect(source).toMatch(/Connected programs are available in another Muniment window\./)
+    expect(source).toMatch(/The connected programs connection could not start\./)
+    expect(source).toMatch(/Restart Muniment/)
+    expect(source).toMatch(/Use the first window/)
     expect(source).toMatch(/Approval time unavailable/)
     expect(source).toMatch(/onclick=\{loadCompanions\}>Try again/)
   })
@@ -133,6 +139,7 @@ describe('access popover layout', () => {
       if (command === 'auth_entitlement_snapshot') return snapshot
       if (command === 'auth_devices') return []
       if (command === 'attach_companions') return programs
+      if (command === 'attach_listener_status') return { started: true, failure: null }
       if (command === 'attach_revoke_companion') {
         expect(args).toEqual({ clientIdentity: companion.identity })
         programs = []
@@ -148,6 +155,42 @@ describe('access popover layout', () => {
     expect(await screen.findByText('No connected programs found')).toBeInTheDocument()
     expect(invoke).toHaveBeenCalledWith('attach_revoke_companion', { clientIdentity: companion.identity })
     expect(invoke.mock.calls.filter(([command]) => command === 'attach_companions')).toHaveLength(2)
+  })
+
+  for (const [failure, message, recovery] of [
+    ['filesystem', 'The connected programs folder is unavailable.', 'Restart Muniment'],
+    ['instance_lock', 'Connected programs are available in another Muniment window.', 'Use the first window'],
+    ['bind', 'The connected programs connection could not start.', 'Restart Muniment'],
+  ]) {
+    it(`renders the ${failure} listener failure and its recovery`, async () => {
+      const invoke = vi.fn(async (command) => {
+        if (command === 'auth_entitlement_snapshot') return snapshot
+        if (command === 'auth_devices') return []
+        if (command === 'attach_companions') return []
+        if (command === 'attach_listener_status') return { started: false, failure }
+        throw new Error(`unexpected command: ${command}`)
+      })
+      renderPanel(invoke)
+      await fireEvent.click(await screen.findByRole('button', { name: /Alice/ }))
+
+      expect(await screen.findByText(message)).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: recovery })).toBeInTheDocument()
+      expect(screen.queryByText('No connected programs found')).not.toBeInTheDocument()
+    })
+  }
+
+  it('renders the empty list when the listener started', async () => {
+    const invoke = vi.fn(async (command) => {
+      if (command === 'auth_entitlement_snapshot') return snapshot
+      if (command === 'auth_devices') return []
+      if (command === 'attach_companions') return []
+      if (command === 'attach_listener_status') return { started: true, failure: null }
+      throw new Error(`unexpected command: ${command}`)
+    })
+    renderPanel(invoke)
+    await fireEvent.click(await screen.findByRole('button', { name: /Alice/ }))
+
+    expect(await screen.findByText('No connected programs found')).toBeInTheDocument()
   })
 
   it('keeps a failed revoke in its row', async () => {

@@ -9,6 +9,7 @@
   let access = $state(accessIdleState)
   let devices = $state(devicesIdleState)
   let companions = $state(companionsIdleState)
+  let attachListener = $state({ started: true, failure: null })
   let profileSnapshot = $state(null)
   let accessOpen = $state(false)
   let expandedGroups = $state(new Set())
@@ -73,7 +74,12 @@
   async function loadCompanions() {
     companions = companionsLoadingState()
     try {
-      companions = companionsReadyState(await tauri.invoke('attach_companions'))
+      const [programs, listener] = await Promise.all([
+        tauri.invoke('attach_companions'),
+        tauri.invoke('attach_listener_status'),
+      ])
+      attachListener = listener
+      companions = companionsReadyState(programs)
     } catch (_) {
       companions = companionsErrorState()
     }
@@ -251,7 +257,13 @@
           {:else if companions.name === 'error'}
             <div class="access-status" role="alert"><p>Connected programs could not be loaded.</p><button onclick={loadCompanions}>Try again</button></div>
           {:else if companions.name === 'ready'}
-            {#if companions.companions.length === 0}<p class="empty-grant">No connected programs found</p>{/if}
+            {#if !attachListener.started && attachListener.failure === 'filesystem'}
+              <div class="access-status" role="alert"><p>The connected programs folder is unavailable.</p><button onclick={loadCompanions}>Restart Muniment</button></div>
+            {:else if !attachListener.started && attachListener.failure === 'instance_lock'}
+              <div class="access-status" role="status"><p>Connected programs are available in another Muniment window.</p><button onclick={loadCompanions}>Use the first window</button></div>
+            {:else if !attachListener.started && attachListener.failure === 'bind'}
+              <div class="access-status" role="alert"><p>The connected programs connection could not start.</p><button onclick={loadCompanions}>Restart Muniment</button></div>
+            {:else if companions.companions.length === 0}<p class="empty-grant">No connected programs found</p>{/if}
             <ul class="companion-list">
               {#each companions.companions as companion (companion.identity)}
                 <li class="companion-row">

@@ -171,6 +171,14 @@ pub struct AttachCompanionState {
     listener: Mutex<Option<Arc<AttachListenerState>>>,
     #[cfg(target_os = "linux")]
     workspace: Arc<Mutex<Option<String>>>,
+    #[cfg(target_os = "linux")]
+    listener_start: Mutex<(bool, Option<AttachListenerStartFailure>)>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+pub struct AttachListenerStatus {
+    started: bool,
+    failure: Option<&'static str>,
 }
 
 #[cfg(target_os = "linux")]
@@ -179,6 +187,7 @@ impl AttachCompanionState {
         Self {
             workspace: listener.workspace.clone(),
             listener: Mutex::new(Some(listener)),
+            listener_start: Mutex::new((true, None)),
         }
     }
 
@@ -195,6 +204,35 @@ impl AttachCompanionState {
             .map_err(|_| ProtocolError::persistence_failed())?
             .clone()
             .ok_or_else(ProtocolError::persistence_failed)
+    }
+
+    fn record_listener_started(&self) {
+        *self
+            .listener_start
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = (true, None);
+    }
+
+    fn record_listener_start_failure(&self, failure: AttachListenerStartFailure) {
+        *self
+            .listener_start
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = (false, Some(failure));
+    }
+
+    fn listener_status(&self) -> AttachListenerStatus {
+        let (started, failure) = *self
+            .listener_start
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        AttachListenerStatus {
+            started,
+            failure: failure.map(|failure| match failure {
+                AttachListenerStartFailure::Filesystem => "filesystem",
+                AttachListenerStartFailure::InstanceLock => "instance_lock",
+                AttachListenerStartFailure::Bind => "bind",
+            }),
+        }
     }
 
     pub(crate) fn record_workspace(&self, workspace: String) {
@@ -227,6 +265,7 @@ impl Default for AttachCompanionState {
         Self {
             listener: Mutex::new(None),
             workspace: Arc::new(Mutex::new(None)),
+            listener_start: Mutex::new((false, None)),
         }
     }
 }
@@ -256,6 +295,23 @@ pub fn attach_companions(
     {
         let _ = state;
         Ok(Vec::new())
+    }
+}
+
+#[tauri::command]
+pub fn attach_listener_status(
+    state: tauri::State<'_, AttachCompanionState>,
+) -> AttachListenerStatus {
+    #[cfg(target_os = "linux")]
+    return state.listener_status();
+
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = state;
+        AttachListenerStatus {
+            started: true,
+            failure: None,
+        }
     }
 }
 
@@ -488,6 +544,8 @@ pub fn start_attach_listener<R: tauri::Runtime>(app: tauri::AppHandle<R>) {
         });
     std::thread::spawn(move || {
         let Ok(filesystem) = AttachFilesystem::from_environment() else {
+            app.state::<AttachCompanionState>()
+                .record_listener_start_failure(AttachListenerStartFailure::Filesystem);
             eprintln!(
                 "{}",
                 attach_listener_start_diagnostic(AttachListenerStartFailure::Filesystem)
@@ -495,6 +553,8 @@ pub fn start_attach_listener<R: tauri::Runtime>(app: tauri::AppHandle<R>) {
             return;
         };
         let Ok(_instance_lock) = filesystem.acquire_instance_lock() else {
+            app.state::<AttachCompanionState>()
+                .record_listener_start_failure(AttachListenerStartFailure::InstanceLock);
             eprintln!(
                 "{}",
                 attach_listener_start_diagnostic(AttachListenerStartFailure::InstanceLock)
@@ -502,12 +562,16 @@ pub fn start_attach_listener<R: tauri::Runtime>(app: tauri::AppHandle<R>) {
             return;
         };
         let Ok(listener) = AttachTransport::bind(&filesystem) else {
+            app.state::<AttachCompanionState>()
+                .record_listener_start_failure(AttachListenerStartFailure::Bind);
             eprintln!(
                 "{}",
                 attach_listener_start_diagnostic(AttachListenerStartFailure::Bind)
             );
             return;
         };
+        app.state::<AttachCompanionState>()
+            .record_listener_started();
         loop {
             let (stream, credentials) = match listener.accept() {
                 Ok(accepted) => accepted,
@@ -1210,6 +1274,36 @@ mod tests {
         );
 
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn attach_listener_status_reports_started_and_each_start_failure() {
+        let state = AttachCompanionState::default();
+
+        for (failure, name) in [
+            (AttachListenerStartFailure::Filesystem, "filesystem"),
+            (AttachListenerStartFailure::InstanceLock, "instance_lock"),
+            (AttachListenerStartFailure::Bind, "bind"),
+        ] {
+            state.record_listener_start_failure(failure);
+            assert_eq!(
+                state.listener_status(),
+                AttachListenerStatus {
+                    started: false,
+                    failure: Some(name),
+                }
+            );
+        }
+
+        state.record_listener_started();
+        assert_eq!(
+            state.listener_status(),
+            AttachListenerStatus {
+                started: true,
+                failure: None,
+            }
+        );
     }
 
     #[cfg(target_os = "linux")]
