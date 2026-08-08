@@ -25,7 +25,7 @@ Conversation, tool, permission, and receipt state is rebuilt from the
 append-only local run journal (ADR 0002). Reopen reduces committed events;
 snapshots are disposable, and uncertain external effects require explicit
 attention rather than silent replay.
-A memory recall renders inside the expanded receipt and nowhere else.
+A memory recall renders as one row with its query inside the expanded receipt and nowhere else.
 
 The signed-in shell has one workspace `h1`, a headed thread list, and a transcript region named for the open thread.
 An error message names the failure, and the control beside it names the recovery.

@@ -991,7 +991,7 @@
                   {#if expanded}
                     <dl class="receipt-record">
                       {#each rows as row}
-                        <div><dt>{row.label}</dt><dd class:route-value={row.route}>{row.value}</dd></div>
+                        <div><dt>{row.label}</dt><dd class:route-value={row.route}>{row.value}{#each row.files ?? [] as file}<span class="recall-file">{file}</span>{/each}</dd></div>
                       {/each}
                     </dl>
                   {/if}
@@ -1358,9 +1358,10 @@
   .receipt-marker.expanded { transform: rotate(45deg); }
   /* §1.2 permits --signal on the route segment only. */
   .provenance .route-segment { color: var(--signal); }
-  .receipt-record { width: fit-content; min-width: 240px; margin: 8px 0 0; padding: 8px 12px; border: 1px solid var(--border); border-radius: var(--radius-control); color: var(--muted); font: var(--text-12) var(--font-mono); }
+  .receipt-record { box-sizing: border-box; width: 329px; max-width: 100%; margin: 8px 0 0; padding: 8px 12px; border: 1px solid var(--border); border-radius: var(--radius-control); color: var(--muted); font: var(--text-12) var(--font-mono); }
   .receipt-record div { display: grid; grid-template-columns: 88px minmax(0, 1fr); gap: 12px; }
   .receipt-record dd { margin: 0; font-family: var(--font-mono); font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+  .receipt-record .recall-file { display: block; }
   .receipt-record .route-value { color: var(--signal); }
   /* §3.2: hover or focus reveals the row. Only opacity carries the reveal. The row
      always holds its space, so nothing reflows and nothing is ever obscured, and the

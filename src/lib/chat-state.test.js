@@ -174,8 +174,8 @@ describe('chat composer and projection', () => {
       { label: 'Model', value: 'glm-5.2', route: false },
       { label: 'Cost', value: '$0.04', route: false },
       { label: 'Time', value: '1.8s', route: false },
-      { label: 'Memory', value: '/Documents/Muniment/lease.pdf, /Documents/Muniment/notes.md', route: false },
-      { label: 'Memory', value: 'no files', route: false },
+      { label: 'Memory', value: 'lease · 2 files', files: ['/Documents/Muniment/lease.pdf', '/Documents/Muniment/notes.md'], route: false },
+      { label: 'Memory', value: 'missing clause · 0 files', files: [], route: false },
       { label: 'Capability', value: 'files@1', route: false },
     ])
   })
