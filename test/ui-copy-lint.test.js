@@ -52,4 +52,20 @@ describe('UI copy lint', () => {
       fs.rmSync(root, { recursive: true, force: true })
     }
   })
+
+  it('rejects an em dash in an owner upload', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'muniment-copy-lint-'))
+    const uploads = path.join(root, 'docs', 'mockups', 'mobile', 'uploads')
+    fs.mkdirSync(uploads, { recursive: true })
+    const fixture = path.join(uploads, 'owner.html')
+    fs.writeFileSync(fixture, `First clause${String.fromCodePoint(0x2014)}second clause.`)
+
+    try {
+      expect(lintEmDashes([root])).toEqual([
+        { file: fixture, line: 1, word: String.fromCodePoint(0x2014) },
+      ])
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
 })
