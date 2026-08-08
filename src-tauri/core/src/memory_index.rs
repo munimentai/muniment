@@ -271,9 +271,15 @@ impl MemoryIndex {
         let (items, state) = self
             .read_cache(deadline, |connection| {
                 check_deadline(deadline)?;
-                let state =
-                    source_state(connection).map_err(|error| sqlite_error(error, deadline))?;
-                let items = matching_items(connection, query, limits, deadline)?;
+                let transaction = connection
+                    .unchecked_transaction()
+                    .map_err(|error| sqlite_error(error, deadline))?;
+                let state = stored_source_state(&transaction)
+                    .map_err(|error| sqlite_error(error, deadline))?;
+                let items = matching_items(&transaction, query, limits, deadline)?;
+                transaction
+                    .commit()
+                    .map_err(|error| sqlite_error(error, deadline))?;
                 Ok((items, state))
             })
             .map_err(|error| normalize_timeout(error, deadline))?;
@@ -378,6 +384,13 @@ impl MemoryIndex {
                 path TEXT PRIMARY KEY NOT NULL,
                 content_hash TEXT NOT NULL
              );
+             CREATE TABLE IF NOT EXISTS memory_cache_state (
+                singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+                source_digest TEXT NOT NULL,
+                cache_generation INTEGER NOT NULL
+             );
+             INSERT OR IGNORE INTO memory_cache_state(singleton, source_digest, cache_generation)
+                VALUES (1, 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855', 0);
              CREATE VIRTUAL TABLE IF NOT EXISTS memory_fts USING fts5(path UNINDEXED, content);",
             )
             .map_err(|error| sqlite_error(error, deadline))?;
@@ -430,6 +443,13 @@ impl MemoryIndex {
             transaction.execute("DELETE FROM memory_files WHERE path = ?1", [path])?;
             report.removed.push(path.clone());
         }
+        let source_digest = compute_source_state(&transaction)?;
+        transaction.execute(
+            "UPDATE memory_cache_state
+             SET source_digest = ?1, cache_generation = cache_generation + 1
+             WHERE singleton = 1",
+            [source_digest],
+        )?;
         transaction.commit()?;
         Ok(report)
     }
@@ -693,7 +713,7 @@ fn existing_hashes(
     hashes
 }
 
-fn source_state(connection: &Connection) -> Result<String, rusqlite::Error> {
+fn compute_source_state(connection: &Connection) -> Result<String, rusqlite::Error> {
     let mut statement =
         connection.prepare("SELECT path, content_hash FROM memory_files ORDER BY path")?;
     let rows = statement.query_map([], |row| {
@@ -707,6 +727,18 @@ fn source_state(connection: &Connection) -> Result<String, rusqlite::Error> {
         digest.update(hash.as_bytes());
     }
     Ok(format!("{:x}", digest.finalize()))
+}
+
+fn stored_source_state(connection: &Connection) -> Result<String, rusqlite::Error> {
+    connection.query_row(
+        "SELECT source_digest, cache_generation FROM memory_cache_state WHERE singleton = 1",
+        [],
+        |row| {
+            let digest = row.get(0)?;
+            let _: i64 = row.get(1)?;
+            Ok(digest)
+        },
+    )
 }
 
 fn match_expression(query: &str) -> String {
@@ -992,6 +1024,82 @@ mod tests {
         assert_eq!(report.indexed, ["memory/3.md"]);
         assert_eq!(report.unchanged, 7);
         assert!(report.removed.is_empty());
+    }
+
+    #[test]
+    fn earlier_index_reads_rows_and_digest_from_a_later_reindex() {
+        let fixture = Fixture::new();
+        fixture.file("one.md", "old topaz fact");
+        let earlier = fixture.index();
+        earlier.reindex().unwrap();
+        let old = earlier
+            .search("thread", "topaz", Fixture::limits(5, 1_000), None)
+            .unwrap();
+
+        fixture.file("one.md", "new topaz fact");
+        fixture.file("two.md", "second topaz fact");
+        fixture.index().reindex().unwrap();
+        let updated = earlier
+            .search("thread", "topaz", Fixture::limits(5, 1_000), None)
+            .unwrap();
+
+        assert_eq!(updated.items.len(), 2);
+        assert!(updated
+            .items
+            .iter()
+            .any(|item| item.content == "new topaz fact"));
+        assert_ne!(
+            updated.recall.source_file_state,
+            old.recall.source_file_state
+        );
+        let current = fixture
+            .index()
+            .search("thread", "topaz", Fixture::limits(5, 1_000), None)
+            .unwrap();
+        assert_eq!(
+            updated.recall.source_file_state,
+            current.recall.source_file_state
+        );
+    }
+
+    #[test]
+    fn source_digest_holds_when_reindex_finds_no_changes() {
+        let fixture = Fixture::new();
+        fixture.file("one.md", "stable quartz fact");
+        let index = fixture.index();
+        index.reindex().unwrap();
+        let before = index
+            .search("thread", "quartz", Fixture::limits(5, 1_000), None)
+            .unwrap();
+        let database = fixture.root.join("cache/index.sqlite3");
+        let generation_before: i64 = Connection::open(&database)
+            .unwrap()
+            .query_row(
+                "SELECT cache_generation FROM memory_cache_state WHERE singleton = 1",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+
+        let report = index.reindex().unwrap();
+        let after = index
+            .search("thread", "quartz", Fixture::limits(5, 1_000), None)
+            .unwrap();
+        let generation_after: i64 = Connection::open(database)
+            .unwrap()
+            .query_row(
+                "SELECT cache_generation FROM memory_cache_state WHERE singleton = 1",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+
+        assert_eq!(report.unchanged, 1);
+        assert_eq!(generation_after, generation_before + 1);
+        assert_eq!(
+            before.recall.source_file_state,
+            after.recall.source_file_state
+        );
     }
 
     #[test]
