@@ -1,13 +1,14 @@
 # muniment-desktop — SPEC
 
-The muniment desktop client: Tauri v2 shell + Pi sidecar + local model
-sidecar + on-device voice. Thin client to the muniment cloud — **no
-serverless/solo mode exists** (harness-spec non-goal). Closed source.
+The muniment desktop client: Tauri v2 shell + Pi sidecar + on-device voice.
+Thin client to the muniment cloud — **no serverless/solo mode exists**
+(harness-spec non-goal). Closed source.
 
 **The canonical spec is vendored, verbatim, in [docs/spec/](docs/spec/):**
 
 - [harness-spec.md](docs/spec/harness-spec.md) §6 (desktop client — THE spec
-  for this repo), §5 (routing: the local model classifies, it never routes),
+  for this repo), §5 (routing: the cloud classifies at ingress, and the
+  desktop classifies nothing),
   §2 (architecture), §9 (build order this repo follows).
 - [02-desktop-app.md](docs/spec/02-desktop-app.md) +
   [design-spec.md](docs/spec/design-spec.md) §2 (layout, thread grammar,
@@ -68,6 +69,19 @@ reference implementation: [docs/design-reference/ring/](docs/design-reference/ri
     monetization content (owner-only). The reviewer blocks a PR that changes a
     public surface without updating evidence. Merged evidence changes are
     picked up automatically by the site lane — do not file site tickets by hand.
+13. **One mode, and the desktop classifies nothing.** The desktop runs a single
+    mode, **the thread surface** (harness-spec §6.1). No mode switcher exists.
+    This SPEC and the ROADMAP name that mode identically, and never as a chat.
+    No desktop source computes a routing tier, a routing label, or a
+    classification, and no desktop request carries one. A desktop request
+    reaches the cloud with server-supplied grant values alone. The cloud
+    classifies every request at ingress with the pinned embedding classifier
+    (harness-spec §5.1, ratified by MUNICLOUD-968).
+    [docs/desktop-single-mode.md](docs/desktop-single-mode.md) records the mode
+    name and the cloud routing-surface name it maps to. Enforcers:
+    `test/smoke.sh`, plus `the_grant_request_carries_no_client_classification`
+    and `the_receipt_request_carries_only_the_run_id` in
+    `src-tauri/core/src/chat_grant.rs`.
 
 ## Production-ready gates (release gate)
 
