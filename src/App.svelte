@@ -504,8 +504,8 @@
   // §4: the input grows with the draft to a ten-line cap, then scrolls.
   // Measuring needs the textarea collapsed first, and every step of that
   // resizes the thread, which lets the browser clamp its scrollTop. Put the
-  // transcript back where it was — at the bottom while it is pinned, otherwise
-  // exactly where the reader left it — so growing the composer never scrolls it.
+  // transcript back where it was. Keep it at the bottom while pinned. Otherwise,
+  // keep it where the reader left it so composer growth never scrolls it.
   // `reveal` is set by the draft path only: new text should be brought into
   // view, but a mere relayout must leave the reader wherever they were.
   function syncComposerHeight(reveal = false) {
@@ -524,8 +524,8 @@
     } else {
       composer.style.height = `${height}px`
       composer.style.overflowY = capped ? 'auto' : 'hidden'
-      // Past the cap a programmatic write — a streamed transcript, a transform
-      // result — lands below the fold and the user watches their words vanish.
+      // Past the cap, a streamed transcript or transform result lands below the
+      // fold after a programmatic write. The user then watches their words vanish.
       // Typed input needs no help: the browser keeps the caret in view.
       if (reveal && capped) composer.scrollTop = composer.scrollHeight
     }
@@ -542,7 +542,7 @@
   // resizes too: streamed dictation transcripts, the polish and transform
   // results, the Esc restore in stopDictation(true), the Try again retry, and
   // send()/queue() clearing the draft back to the resting height. Untracked so
-  // the follow state it reads cannot re-enter — resizing must answer to the
+  // the follow state it reads cannot re-enter. Resizing must answer to the
   // draft alone, never to a scroll already in flight.
   $effect(() => {
     draft
@@ -565,7 +565,7 @@
   // the layout rather than the window. The action row is the box to observe:
   // it spans the same width as the input but is the one part of the composer
   // whose size we never set ourselves, so the callback cannot resize its own
-  // target — observing the textarea makes Chromium report "ResizeObserver loop
+  // target. Observing the textarea makes Chromium report "ResizeObserver loop
   // completed with undelivered notifications" all through a rail drag.
   $effect(() => {
     if (!composerRow || typeof ResizeObserver === 'undefined') return
@@ -1158,7 +1158,7 @@
     padding: 24px;
   }
 
-  /* Lockup (§1.8): mark at rest — static, ink — beside the wordmark,
+  /* Lockup (§1.8): static ink mark at rest beside the wordmark,
      Schibsted 600, lowercase, −1% tracking. */
   .lockup {
     display: flex;
@@ -1362,7 +1362,7 @@
   .receipt-record div { display: grid; grid-template-columns: 88px minmax(0, 1fr); gap: 12px; }
   .receipt-record dd { margin: 0; font-family: var(--font-mono); font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
   .receipt-record .route-value { color: var(--signal); }
-  /* §3.2: hover or focus reveals the row. Only opacity carries the reveal — the row
+  /* §3.2: hover or focus reveals the row. Only opacity carries the reveal. The row
      always holds its space, so nothing reflows and nothing is ever obscured, and the
      button keeps its place in the tab order. `visibility: hidden` would strip it from
      that order exactly as `display: none` does, which would make focus unreachable
@@ -1392,7 +1392,7 @@
      scrollHeight is pure text and the overlay lands on the same grid. */
   textarea { display: block; width: 100%; resize: none; padding: 0; border: 0; outline: 0; background: transparent; color: var(--ink); font: inherit; }
   /* The input no longer keeps a spare empty row once it grows, so the action
-     row carries the gap itself — the owner mockup's 8px .comprow rhythm. */
+     row carries the gap itself, matching the owner mockup's 8px .comprow rhythm. */
   .composer-row { display: flex; justify-content: space-between; align-items: center; margin-top: 8px; color: var(--muted); font-size: var(--text-12); }
   .composer-actions { display: flex; align-items: center; gap: 6px; }
   .capture-status { display: flex; align-items: center; gap: 8px; font-family: var(--font-mono); }
