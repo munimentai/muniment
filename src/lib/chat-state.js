@@ -65,7 +65,9 @@ export function receiptRows(receipt = {}, recalls = []) {
     if (receipt[field] !== undefined && receipt[field] !== null) rows.push({ label, value: receipt[field], route: field === 'route' })
   }
   for (const recall of recalls ?? []) {
-    rows.push({ label: 'Memory', value: recall?.files?.length ? recall.files.join(', ') : 'no files', route: false })
+    const files = recall?.files ?? []
+    const count = files.length
+    rows.push({ label: 'Memory', value: `${recall?.query ?? ''} · ${count} ${count === 1 ? 'file' : 'files'}`, files, route: false })
   }
   for (const capability of receipt.capabilities ?? []) {
     if (capability?.name !== undefined && capability?.name !== null && capability?.version !== undefined && capability?.version !== null) {
