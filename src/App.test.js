@@ -3890,11 +3890,11 @@ describe('provenance line', () => {
     expect(marker).not.toHaveClass('expanded')
   })
 
-  it('names recalled files inside the expanded receipt', async () => {
+  it('names each recall and puts each recalled file on its own line', async () => {
     restore(
       { route: 'analysis/high', model: 'glm-5.2', cost: '$0.0089', time: '6.2s' },
       [
-        { query: 'lease', files: ['/Documents/Muniment/lease.pdf'] },
+        { query: 'lease', files: ['Documents/Muniment/lease.pdf', 'Documents/Muniment/notes.md'] },
         { query: 'missing clause', files: [] },
       ],
     )
@@ -3902,7 +3902,11 @@ describe('provenance line', () => {
     await fireEvent.click(await screen.findByRole('button', { name: /^Expand receipt:/ }))
 
     const record = document.querySelector('.receipt-record')
-    expect(record.textContent).toBe('Routeanalysis/highModelglm-5.2Cost$0.0089Time6.2sMemory/Documents/Muniment/lease.pdfMemoryno files')
+    expect(record.textContent).toBe('Routeanalysis/highModelglm-5.2Cost$0.0089Time6.2sMemorylease · 2 filesDocuments/Muniment/lease.pdfDocuments/Muniment/notes.mdMemorymissing clause · 0 files')
+    expect([...record.querySelectorAll('.recall-file')].map((file) => file.textContent)).toEqual([
+      'Documents/Muniment/lease.pdf',
+      'Documents/Muniment/notes.md',
+    ])
   })
 
   it('renders a provenance line when a reply has an empty receipt', async () => {
