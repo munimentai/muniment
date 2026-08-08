@@ -1,6 +1,10 @@
 use chrono::{SecondsFormat, Utc};
 use muniment_core::chat_resume::resumable_locator;
-use muniment_core::journal::reducer::{project_chat_with_state, RunStatus};
+use muniment_core::chat_view::{
+    chat_attachments, chat_pending_permission, chat_tool_activity, projection_phase,
+    ChatAttachment, ChatPendingPermission, ChatToolActivity,
+};
+use muniment_core::journal::reducer::project_chat_with_state;
 use muniment_core::journal::thread_mutation::{append_thread_delete, append_thread_rename};
 use muniment_core::journal::thread_summaries::ThreadSummary;
 use muniment_core::journal::{Provenance, RunJournal};
@@ -16,10 +20,7 @@ use serde_json::Value;
 use std::collections::BTreeMap;
 
 use crate::auth;
-use crate::chat::{
-    chat_attachments, chat_pending_permission, chat_tool_activity, state_session_root,
-    ChatAttachment, ChatPendingPermission, ChatState, ChatToolActivity, SharedStorage,
-};
+use crate::chat::{state_session_root, ChatState, SharedStorage};
 use muniment_core::session_thread::SessionThread;
 
 #[derive(Serialize)]
@@ -64,18 +65,6 @@ pub struct ChatThreadOpenPage {
 fn load_prompt(run_id: &str, subject: Option<&str>) -> Result<Option<String>, String> {
     muniment_core::chat_prompt::load_prompt(run_id, subject)
         .map_err(|_| "Conversation history is unavailable.".to_string())
-}
-
-pub(crate) fn projection_phase(status: &Option<RunStatus>) -> &'static str {
-    match status {
-        Some(RunStatus::Streaming) => "streaming",
-        Some(RunStatus::Completed) => "complete",
-        Some(RunStatus::Cancelled) => "cancelled",
-        Some(RunStatus::Failed { .. }) => "failed",
-        Some(RunStatus::NeedsAttention(_)) => "interrupted",
-        Some(RunStatus::PendingPermission(_)) => "pending-permission",
-        _ => "thinking",
-    }
 }
 
 fn thread_ownership_error_message(_error: ThreadOwnershipError) -> String {
@@ -398,12 +387,13 @@ pub async fn chat_thread_open(
 mod tests {
     use super::*;
     use crate::chat::{
-        chat_attachments, desktop_provenance, event_envelope, prepare_new_run,
-        prepare_new_run_with_session_thread, ChatStorage, SelectedFile, SessionThreadStart,
+        desktop_provenance, event_envelope, prepare_new_run, prepare_new_run_with_session_thread,
+        ChatStorage, SessionThreadStart,
     };
     use crate::test_support::append_test_event;
     use chrono::{SecondsFormat, Utc};
     use muniment_core::cas::LocalCas;
+    use muniment_core::chat_view::SelectedFile;
     use muniment_core::journal::reconciliation::reconcile_interrupted_runs;
     use muniment_core::journal::reducer::{project_chat, reduce, PermissionRequest, RunStatus};
     use muniment_core::journal::{EventPayload, Provenance};
