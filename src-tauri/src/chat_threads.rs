@@ -1,10 +1,5 @@
 use chrono::{SecondsFormat, Utc};
-use muniment_core::chat_resume::resumable_locator;
-use muniment_core::chat_view::{
-    chat_attachments, chat_pending_permission, chat_tool_activity, projection_phase,
-    ChatAttachment, ChatPendingPermission, ChatToolActivity,
-};
-use muniment_core::journal::reducer::project_chat_with_state;
+use muniment_core::chat_view::chat_attachments;
 use muniment_core::journal::thread_mutation::{append_thread_delete, append_thread_rename};
 use muniment_core::journal::thread_summaries::ThreadSummary;
 use muniment_core::journal::{Provenance, RunJournal};
@@ -14,31 +9,16 @@ use muniment_core::owned_threads::{
     chat_thread_summaries_page as core_chat_thread_summaries_page,
     newest_owned_workspace_thread as core_newest_owned_workspace_thread, OwnedThreadsError,
 };
+use muniment_core::thread_history::{
+    chat_thread_open_page as core_chat_thread_open_page, ChatThreadOpenPage, ThreadHistoryError,
+};
 use muniment_core::thread_ownership::{subject_owns_first_run, ThreadOwnershipError};
 use serde::Serialize;
-use serde_json::Value;
 use std::collections::BTreeMap;
 
 use crate::auth;
 use crate::chat::{state_session_root, ChatState, SharedStorage};
 use muniment_core::session_thread::SessionThread;
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct HistoryEntry {
-    pub(crate) run_id: String,
-    pub(crate) prompt: Option<String>,
-    pub(crate) phase: String,
-    pub(crate) text: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) receipt: Option<Value>,
-    pub(crate) tool_activity: Vec<ChatToolActivity>,
-    pub(crate) attachments: Vec<ChatAttachment>,
-    pub(crate) recalls: Vec<muniment_core::journal::reducer::ProjectedRecall>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) pending_permission: Option<ChatPendingPermission>,
-    pub(crate) resumable: bool,
-}
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -53,18 +33,6 @@ pub struct ChatThreadSummary {
 pub struct ChatThreadSummaryPage {
     pub(crate) summaries: Vec<ChatThreadSummary>,
     pub(crate) next_cursor: Option<String>,
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ChatThreadOpenPage {
-    pub(crate) entries: Vec<HistoryEntry>,
-    pub(crate) next_cursor: Option<String>,
-}
-
-fn load_prompt(run_id: &str, subject: Option<&str>) -> Result<Option<String>, String> {
-    muniment_core::chat_prompt::load_prompt(run_id, subject)
-        .map_err(|_| "Conversation history is unavailable.".to_string())
 }
 
 fn thread_ownership_error_message(_error: ThreadOwnershipError) -> String {
@@ -112,41 +80,6 @@ fn owned_threads_error_message(_error: OwnedThreadsError) -> String {
     "Conversation history is unavailable.".into()
 }
 
-fn project_history_entry(
-    journal: &mut RunJournal,
-    run_id: String,
-    subject: Option<&str>,
-    session_root: &std::path::Path,
-) -> Result<HistoryEntry, String> {
-    let events = journal
-        .events(&run_id)
-        .map_err(|_| "Conversation history is unavailable.".to_string())?;
-    let (projection, state) = project_chat_with_state(&events)
-        .map_err(|_| "Conversation history is unavailable.".to_string())?;
-    let resumable = history_resumable(&events, &state, subject, session_root);
-    Ok(HistoryEntry {
-        prompt: load_prompt(&run_id, subject)?,
-        phase: projection_phase(&projection.status).into(),
-        text: projection.text,
-        receipt: projection.receipt,
-        tool_activity: chat_tool_activity(&projection.tool_activity),
-        attachments: chat_attachments(&projection.attachments),
-        recalls: projection.recalls,
-        pending_permission: chat_pending_permission(projection.pending_permission),
-        resumable,
-        run_id,
-    })
-}
-
-fn history_resumable(
-    events: &[muniment_core::journal::EventEnvelope],
-    state: &muniment_core::journal::reducer::RunState,
-    subject: Option<&str>,
-    session_root: &std::path::Path,
-) -> bool {
-    resumable_locator(events.first(), state, subject, session_root).is_ok()
-}
-
 pub(crate) fn chat_thread_open_page(
     journal: &mut RunJournal,
     subject: Option<&str>,
@@ -155,23 +88,12 @@ pub(crate) fn chat_thread_open_page(
     limit: usize,
     cursor: Option<&str>,
 ) -> Result<ChatThreadOpenPage, String> {
-    if !subject_owns_first_run(journal, thread_id, subject)
-        .map_err(thread_ownership_error_message)?
-    {
-        return Err("Conversation history is unavailable.".into());
-    }
-    let page = journal
-        .thread_run_ids(thread_id, limit, cursor)
-        .map_err(|_| "Conversation history is unavailable.".to_string())?;
-    let entries = page
-        .run_ids
-        .into_iter()
-        .map(|run_id| project_history_entry(journal, run_id, subject, session_root))
-        .collect::<Result<Vec<_>, _>>()?;
-    Ok(ChatThreadOpenPage {
-        entries,
-        next_cursor: page.next_cursor,
-    })
+    core_chat_thread_open_page(journal, subject, session_root, thread_id, limit, cursor)
+        .map_err(thread_history_error_message)
+}
+
+fn thread_history_error_message(_error: ThreadHistoryError) -> String {
+    "Conversation history is unavailable.".into()
 }
 
 pub(crate) fn select_session_thread(
@@ -393,12 +315,16 @@ mod tests {
     use crate::test_support::append_test_event;
     use chrono::{SecondsFormat, Utc};
     use muniment_core::cas::LocalCas;
+    use muniment_core::chat_view::projection_phase;
     use muniment_core::chat_view::SelectedFile;
     use muniment_core::journal::reconciliation::reconcile_interrupted_runs;
-    use muniment_core::journal::reducer::{project_chat, reduce, PermissionRequest, RunStatus};
+    use muniment_core::journal::reducer::{
+        project_chat, project_chat_with_state, reduce, PermissionRequest, RunStatus,
+    };
     use muniment_core::journal::{EventPayload, Provenance};
     use muniment_core::session_thread::OfferedThread;
-    use serde_json::json;
+    use muniment_core::thread_history::history_resumable;
+    use serde_json::{json, Value};
     use std::collections::{BTreeMap, BTreeSet};
     use std::sync::{Arc, Mutex};
     use std::time::Duration;
