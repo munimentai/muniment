@@ -190,6 +190,7 @@ beforeEach(() => {
     if (command === 'auth_entitlement_snapshot') return snapshot()
     if (command === 'auth_devices') return []
     if (command === 'attach_companions') return []
+    if (command === 'attach_listener_status') return { started: true, failure: null }
     throw new Error(`unexpected command: ${command}`)
   })
 })
@@ -4245,6 +4246,7 @@ describe('signed-in access popover', () => {
       }
       if (command === 'auth_devices') return []
       if (command === 'attach_companions') return []
+      if (command === 'attach_listener_status') return { started: true, failure: null }
       throw new Error(`unexpected command: ${command}`)
     })
 
@@ -4398,6 +4400,7 @@ describe('signed-in access popover', () => {
         return [device('recovered')]
       }
       if (command === 'attach_companions') return []
+      if (command === 'attach_listener_status') return { started: true, failure: null }
       throw new Error(`unexpected command: ${command}`)
     })
     render(App)
@@ -4422,6 +4425,7 @@ describe('signed-in access popover', () => {
       if (command === 'auth_entitlement_snapshot') return snapshot()
       if (command === 'auth_devices') return []
       if (command === 'attach_companions') return pendingCompanions.promise
+      if (command === 'attach_listener_status') return { started: true, failure: null }
       throw new Error(`unexpected command: ${command}`)
     })
     render(App)
@@ -4456,6 +4460,7 @@ describe('signed-in access popover', () => {
         if (companionCalls === 1) throw new Error('raw backend secret')
         return [{ identity: 'client-2', claimed_kind: 'ACP adapter', claimed_version: '2.0.0', approved_at: '2026-08-04T12:00:00Z' }]
       }
+      if (command === 'attach_listener_status') return { started: true, failure: null }
       throw new Error(`unexpected command: ${command}`)
     })
     render(App)

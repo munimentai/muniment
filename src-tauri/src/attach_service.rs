@@ -171,6 +171,15 @@ pub struct AttachCompanionState {
     listener: Mutex<Option<Arc<AttachListenerState>>>,
     #[cfg(target_os = "linux")]
     workspace: Arc<Mutex<Option<String>>>,
+    #[cfg(target_os = "linux")]
+    listener_start: Mutex<(bool, Option<AttachListenerStartFailure>)>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+pub struct AttachListenerStatus {
+    started: bool,
+    failure: Option<&'static str>,
+    pending: bool,
 }
 
 #[cfg(target_os = "linux")]
@@ -179,6 +188,7 @@ impl AttachCompanionState {
         Self {
             workspace: listener.workspace.clone(),
             listener: Mutex::new(Some(listener)),
+            listener_start: Mutex::new((true, None)),
         }
     }
 
@@ -195,6 +205,36 @@ impl AttachCompanionState {
             .map_err(|_| ProtocolError::persistence_failed())?
             .clone()
             .ok_or_else(ProtocolError::persistence_failed)
+    }
+
+    fn record_listener_started(&self) {
+        *self
+            .listener_start
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = (true, None);
+    }
+
+    fn record_listener_start_failure(&self, failure: AttachListenerStartFailure) {
+        *self
+            .listener_start
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = (false, Some(failure));
+    }
+
+    fn listener_status(&self) -> AttachListenerStatus {
+        let (started, failure) = *self
+            .listener_start
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        AttachListenerStatus {
+            started,
+            failure: failure.map(|failure| match failure {
+                AttachListenerStartFailure::Filesystem => "filesystem",
+                AttachListenerStartFailure::InstanceLock => "instance_lock",
+                AttachListenerStartFailure::Bind => "bind",
+            }),
+            pending: !started && failure.is_none(),
+        }
     }
 
     pub(crate) fn record_workspace(&self, workspace: String) {
@@ -227,6 +267,7 @@ impl Default for AttachCompanionState {
         Self {
             listener: Mutex::new(None),
             workspace: Arc::new(Mutex::new(None)),
+            listener_start: Mutex::new((false, None)),
         }
     }
 }
@@ -256,6 +297,24 @@ pub fn attach_companions(
     {
         let _ = state;
         Ok(Vec::new())
+    }
+}
+
+#[tauri::command]
+pub fn attach_listener_status(
+    state: tauri::State<'_, AttachCompanionState>,
+) -> AttachListenerStatus {
+    #[cfg(target_os = "linux")]
+    return state.listener_status();
+
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = state;
+        AttachListenerStatus {
+            started: true,
+            failure: None,
+            pending: false,
+        }
     }
 }
 
@@ -453,10 +512,18 @@ where
     F: FnOnce() -> Option<PathBuf>,
 {
     app.manage(AttachCompanionState::default());
-    let credential_path = credential_path()?;
+    let Some(credential_path) = credential_path() else {
+        app.state::<AttachCompanionState>()
+            .record_listener_start_failure(AttachListenerStartFailure::Filesystem);
+        return None;
+    };
     let workspace = app.state::<AttachCompanionState>().workspace.clone();
-    let state =
-        Arc::new(AttachListenerState::load_with_workspace(&credential_path, workspace).ok()?);
+    let Ok(state) = AttachListenerState::load_with_workspace(&credential_path, workspace) else {
+        app.state::<AttachCompanionState>()
+            .record_listener_start_failure(AttachListenerStartFailure::Filesystem);
+        return None;
+    };
+    let state = Arc::new(state);
     app.state::<AttachCompanionState>()
         .set_listener(state.clone());
     Some(state)
@@ -488,6 +555,8 @@ pub fn start_attach_listener<R: tauri::Runtime>(app: tauri::AppHandle<R>) {
         });
     std::thread::spawn(move || {
         let Ok(filesystem) = AttachFilesystem::from_environment() else {
+            app.state::<AttachCompanionState>()
+                .record_listener_start_failure(AttachListenerStartFailure::Filesystem);
             eprintln!(
                 "{}",
                 attach_listener_start_diagnostic(AttachListenerStartFailure::Filesystem)
@@ -495,6 +564,8 @@ pub fn start_attach_listener<R: tauri::Runtime>(app: tauri::AppHandle<R>) {
             return;
         };
         let Ok(_instance_lock) = filesystem.acquire_instance_lock() else {
+            app.state::<AttachCompanionState>()
+                .record_listener_start_failure(AttachListenerStartFailure::InstanceLock);
             eprintln!(
                 "{}",
                 attach_listener_start_diagnostic(AttachListenerStartFailure::InstanceLock)
@@ -502,12 +573,16 @@ pub fn start_attach_listener<R: tauri::Runtime>(app: tauri::AppHandle<R>) {
             return;
         };
         let Ok(listener) = AttachTransport::bind(&filesystem) else {
+            app.state::<AttachCompanionState>()
+                .record_listener_start_failure(AttachListenerStartFailure::Bind);
             eprintln!(
                 "{}",
                 attach_listener_start_diagnostic(AttachListenerStartFailure::Bind)
             );
             return;
         };
+        app.state::<AttachCompanionState>()
+            .record_listener_started();
         loop {
             let (stream, credentials) = match listener.accept() {
                 Ok(accepted) => accepted,
@@ -1214,6 +1289,48 @@ mod tests {
 
     #[cfg(target_os = "linux")]
     #[test]
+    fn attach_listener_status_reports_started_and_each_start_failure() {
+        let state = AttachCompanionState::default();
+
+        for (failure, name) in [
+            (AttachListenerStartFailure::Filesystem, "filesystem"),
+            (AttachListenerStartFailure::InstanceLock, "instance_lock"),
+            (AttachListenerStartFailure::Bind, "bind"),
+        ] {
+            state.record_listener_start_failure(failure);
+            assert_eq!(
+                state.listener_status(),
+                AttachListenerStatus {
+                    started: false,
+                    failure: Some(name),
+                    pending: false,
+                }
+            );
+        }
+
+        state.record_listener_started();
+        assert_eq!(
+            state.listener_status(),
+            AttachListenerStatus {
+                started: true,
+                failure: None,
+                pending: false,
+            }
+        );
+
+        let pending = AttachCompanionState::default().listener_status();
+        assert_eq!(
+            pending,
+            AttachListenerStatus {
+                started: false,
+                failure: None,
+                pending: true,
+            }
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
     fn attach_approval_uses_recorded_workspace_and_fails_closed_without_one() {
         let credential_path =
             std::env::temp_dir().join(format!("muniment-attach-workspace-{}.json", Uuid::now_v7()));
@@ -1330,6 +1447,14 @@ mod tests {
 
         let app = tauri::test::mock_app();
         assert!(initialize_attach_listener(app.handle(), || None).is_none());
+        assert_eq!(
+            app.state::<AttachCompanionState>().listener_status(),
+            AttachListenerStatus {
+                started: false,
+                failure: Some("filesystem"),
+                pending: false,
+            }
+        );
         assert_state_works(&app);
 
         let credential_path = std::env::temp_dir().join(format!(
@@ -1340,6 +1465,14 @@ mod tests {
         let app = tauri::test::mock_app();
         assert!(
             initialize_attach_listener(app.handle(), || Some(credential_path.clone())).is_none()
+        );
+        assert_eq!(
+            app.state::<AttachCompanionState>().listener_status(),
+            AttachListenerStatus {
+                started: false,
+                failure: Some("filesystem"),
+                pending: false,
+            }
         );
         assert_state_works(&app);
         std::fs::remove_file(credential_path).unwrap();
