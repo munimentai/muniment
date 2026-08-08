@@ -21,8 +21,9 @@ use std::time::{Duration, Instant};
 use muniment_core::attach::linux::run_authenticated_session_with_service_and_approvals;
 #[cfg(target_os = "linux")]
 use muniment_core::attach::linux::{
-    approval_waiter_with_claims, run_authenticated_session_with_service_approvals_and_registry,
-    AttachAcceptError, AttachFilesystem, AttachTransport, CompanionProvenance,
+    approval_waiter_with_claims, attach_listener_start_diagnostic,
+    run_authenticated_session_with_service_approvals_and_registry, AttachAcceptError,
+    AttachFilesystem, AttachListenerStartFailure, AttachTransport, CompanionProvenance,
     LiveConnectionRegistry, PermissionAnswerAccepted, PermissionAnswerRequest, PermissionDecision,
     RunCancelAccepted, RunCancelRequest, RunStartAccepted,
     RunStartRequest as AttachRunStartRequest, RunStreamPage, ThreadCreateAccepted, ThreadListPage,
@@ -487,12 +488,24 @@ pub fn start_attach_listener<R: tauri::Runtime>(app: tauri::AppHandle<R>) {
         });
     std::thread::spawn(move || {
         let Ok(filesystem) = AttachFilesystem::from_environment() else {
+            eprintln!(
+                "{}",
+                attach_listener_start_diagnostic(AttachListenerStartFailure::Filesystem)
+            );
             return;
         };
         let Ok(_instance_lock) = filesystem.acquire_instance_lock() else {
+            eprintln!(
+                "{}",
+                attach_listener_start_diagnostic(AttachListenerStartFailure::InstanceLock)
+            );
             return;
         };
         let Ok(listener) = AttachTransport::bind(&filesystem) else {
+            eprintln!(
+                "{}",
+                attach_listener_start_diagnostic(AttachListenerStartFailure::Bind)
+            );
             return;
         };
         loop {

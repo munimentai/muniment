@@ -24,8 +24,9 @@ grep -Fq "cmd='cargo check --manifest-path src-tauri/Cargo.toml --locked --all-t
 test "$(grep -Fc 'apt-get install -y -qq --no-install-recommends libasound2-dev' "$ci")" -eq 2
 # Shared-host and guest setup failures can close SSH before desktop-ci returns
 # infrastructure status 3; keep the all-platform one-time retry covering 255.
-grep -Fq '{ [ "$status" -ne 3 ] && [ "$status" -ne 255 ]; }' "$ci"
+grep -Fq '[ "$status" -ne 3 ] && [ "$status" -ne 255 ]' "$ci"
 test "$(grep -Fc '[ "$PLATFORM" != "windows" ]' "$ci")" -eq 0
+test/desktop-build-retry.sh
 test -f src-tauri/Cargo.lock
 # installed-nightly E2E architecture remains accepted and platform-bounded
 e2e_adr=docs/decisions/0013-desktop-e2e-harness.md
