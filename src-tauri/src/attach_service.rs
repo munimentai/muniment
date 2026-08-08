@@ -15,7 +15,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Mutex;
 #[cfg(target_os = "linux")]
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 #[cfg(all(target_os = "linux", test))]
 use muniment_core::attach::linux::run_authenticated_session_with_service_and_approvals;
@@ -30,8 +30,10 @@ use muniment_core::attach::linux::{
 };
 #[cfg(target_os = "linux")]
 use muniment_core::attach::{
-    Approval, CommittedResult, Id, IdempotencyOutcome, IdempotencyStore, Operation, Protocol,
-    Request as AttachRequest, WorkspaceOnboardRequest, WorkspaceOnboarded,
+    evaluate_quiesce, verify_migration_control_peer, Approval, CommittedResult, Id,
+    IdempotencyOutcome, IdempotencyStore, MigrationAuthorityError, Operation, PreparedHandoffSlot,
+    Protocol, Request as AttachRequest, RuntimeActivity, RuntimeActivityRegistry,
+    WorkspaceOnboardRequest, WorkspaceOnboarded,
 };
 #[cfg(target_os = "linux")]
 use muniment_core::journal::Provenance;
@@ -43,6 +45,48 @@ use serde_json::{json, Value};
 use tauri::{Emitter, Manager};
 #[cfg(target_os = "linux")]
 use uuid::Uuid;
+
+#[cfg(target_os = "linux")]
+fn decide_migration_control(
+    peer_result: Result<(), MigrationAuthorityError>,
+    activity: RuntimeActivity,
+    slot: &mut PreparedHandoffSlot,
+    nonce: String,
+    deadline_ms: u64,
+    now: Instant,
+) -> Result<(), ProtocolError> {
+    peer_result.map_err(|_| ProtocolError::unauthorized())?;
+    evaluate_quiesce(activity).map_err(|_| ProtocolError::migration_not_ready())?;
+    slot.prepare(nonce, deadline_ms, now)
+        .map_err(|_| ProtocolError::migration_not_ready())
+}
+
+#[cfg(target_os = "linux")]
+pub(crate) fn control_desktop_migration<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    request: muniment_core::attach::linux::MigrationControlRequest,
+    peer_pid: u32,
+) -> Result<(), ProtocolError> {
+    let expected_executable = app
+        .path()
+        .resource_dir()
+        .map_err(|_| ProtocolError::unauthorized())?
+        .join("muniment-runtime");
+    let peer_result = verify_migration_control_peer(peer_pid, &expected_executable).map(|_| ());
+    let activity = app.state::<RuntimeActivityRegistry>().snapshot();
+    let handoff_state = app.state::<Mutex<PreparedHandoffSlot>>();
+    let mut slot = handoff_state
+        .lock()
+        .map_err(|_| ProtocolError::migration_not_ready())?;
+    decide_migration_control(
+        peer_result,
+        activity,
+        &mut slot,
+        request.handoff_nonce,
+        request.deadline_ms,
+        Instant::now(),
+    )
+}
 
 #[cfg(target_os = "linux")]
 use crate::chat::{
@@ -601,6 +645,15 @@ impl<B: RunStartBoundaries, I: RunStartIdempotency> ThreadListService
             .map_err(|_| ProtocolError::persistence_failed())
     }
 
+    fn control_migration(
+        &mut self,
+        request: muniment_core::attach::linux::MigrationControlRequest,
+        provenance: CompanionProvenance,
+    ) -> Result<(), ProtocolError> {
+        self.boundaries
+            .control_migration(request, provenance.peer_pid)
+    }
+
     fn authorized_workspace(&self, session_workspace: &str, workspace: &str) -> Option<String> {
         let Some(identity) = &self.client_identity else {
             return None;
@@ -983,6 +1036,90 @@ mod tests {
     use muniment_core::attach::ErrorCode;
     use muniment_core::journal::reducer::reduce;
     use muniment_core::journal::RunJournal;
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn migration_control_prepares_a_handoff() {
+        let now = Instant::now();
+        let mut slot = PreparedHandoffSlot::new();
+
+        decide_migration_control(
+            Ok(()),
+            RuntimeActivity::default(),
+            &mut slot,
+            "nonce-a".into(),
+            1_000,
+            now,
+        )
+        .unwrap();
+
+        assert!(slot.matches("nonce-a", now));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn migration_control_rejects_a_quiesce_blocker() {
+        let error = decide_migration_control(
+            Ok(()),
+            RuntimeActivity {
+                active_run: true,
+                ..RuntimeActivity::default()
+            },
+            &mut PreparedHandoffSlot::new(),
+            "nonce-a".into(),
+            1_000,
+            Instant::now(),
+        )
+        .unwrap_err();
+
+        assert_eq!(error.code(), ErrorCode::MigrationNotReady);
+        assert!(error.retryable());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn migration_control_rejects_an_unverified_peer() {
+        let error = decide_migration_control(
+            Err(MigrationAuthorityError::ExecutableMismatch),
+            RuntimeActivity::default(),
+            &mut PreparedHandoffSlot::new(),
+            "nonce-a".into(),
+            1_000,
+            Instant::now(),
+        )
+        .unwrap_err();
+
+        assert_eq!(error.code(), ErrorCode::Unauthorized);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn migration_control_rejects_a_second_live_preparation() {
+        let now = Instant::now();
+        let mut slot = PreparedHandoffSlot::new();
+        decide_migration_control(
+            Ok(()),
+            RuntimeActivity::default(),
+            &mut slot,
+            "nonce-a".into(),
+            1_000,
+            now,
+        )
+        .unwrap();
+
+        let error = decide_migration_control(
+            Ok(()),
+            RuntimeActivity::default(),
+            &mut slot,
+            "nonce-b".into(),
+            1_000,
+            now,
+        )
+        .unwrap_err();
+
+        assert_eq!(error.code(), ErrorCode::MigrationNotReady);
+        assert!(slot.matches("nonce-a", now));
+    }
 
     #[cfg(target_os = "linux")]
     #[test]
