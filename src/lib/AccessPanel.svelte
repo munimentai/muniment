@@ -1,5 +1,6 @@
 <script>
   import { onMount, tick } from 'svelte'
+  import { getCurrentWindow } from '@tauri-apps/api/window'
 
   import { accessErrorState, accessIdleState, accessLoadingState, accessReadyState, companionsErrorState, companionsIdleState, companionsLoadingState, companionsReadyState, devicesErrorState, devicesIdleState, devicesLoadingState, devicesReadyState } from './auth-state.js'
   import { shortcutFromKeyboardEvent } from './dictation-state.js'
@@ -9,7 +10,7 @@
   let access = $state(accessIdleState)
   let devices = $state(devicesIdleState)
   let companions = $state(companionsIdleState)
-  let attachListener = $state({ started: true, failure: null })
+  let attachListener = $state({ started: false, failure: null, pending: true })
   let profileSnapshot = $state(null)
   let accessOpen = $state(false)
   let expandedGroups = $state(new Set())
@@ -74,15 +75,30 @@
   async function loadCompanions() {
     companions = companionsLoadingState()
     try {
-      const [programs, listener] = await Promise.all([
+      const [programs] = await Promise.all([
         tauri.invoke('attach_companions'),
-        tauri.invoke('attach_listener_status'),
+        waitForAttachListener(),
       ])
-      attachListener = listener
       companions = companionsReadyState(programs)
     } catch (_) {
       companions = companionsErrorState()
     }
+  }
+
+  async function waitForAttachListener() {
+    while (true) {
+      attachListener = await tauri.invoke('attach_listener_status')
+      if (!attachListener.pending) return
+      await new Promise((resolve) => setTimeout(resolve, 50))
+    }
+  }
+
+  function restartMuniment() {
+    return tauri.invoke('restart_muniment')
+  }
+
+  function closeWindow() {
+    return getCurrentWindow().close()
   }
 
   function askToRevokeCompanion(identity) {
@@ -258,11 +274,11 @@
             <div class="access-status" role="alert"><p>Connected programs could not be loaded.</p><button onclick={loadCompanions}>Try again</button></div>
           {:else if companions.name === 'ready'}
             {#if !attachListener.started && attachListener.failure === 'filesystem'}
-              <div class="access-status" role="alert"><p>The connected programs folder is unavailable.</p><button onclick={loadCompanions}>Restart Muniment</button></div>
+              <div class="access-status" role="alert"><p>The connected programs folder is unavailable.</p><button onclick={restartMuniment}>Restart Muniment</button></div>
             {:else if !attachListener.started && attachListener.failure === 'instance_lock'}
-              <div class="access-status" role="status"><p>Connected programs are available in another Muniment window.</p><button onclick={loadCompanions}>Use the first window</button></div>
+              <div class="access-status" role="status"><p>Connected programs are available in another Muniment window.</p><button onclick={closeWindow}>Close this window</button></div>
             {:else if !attachListener.started && attachListener.failure === 'bind'}
-              <div class="access-status" role="alert"><p>The connected programs connection could not start.</p><button onclick={loadCompanions}>Restart Muniment</button></div>
+              <div class="access-status" role="alert"><p>The connected programs connection could not start.</p><button onclick={restartMuniment}>Restart Muniment</button></div>
             {:else if companions.companions.length === 0}<p class="empty-grant">No connected programs found</p>{/if}
             <ul class="companion-list">
               {#each companions.companions as companion (companion.identity)}

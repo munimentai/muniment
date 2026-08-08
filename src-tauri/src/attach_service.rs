@@ -179,6 +179,7 @@ pub struct AttachCompanionState {
 pub struct AttachListenerStatus {
     started: bool,
     failure: Option<&'static str>,
+    pending: bool,
 }
 
 #[cfg(target_os = "linux")]
@@ -232,6 +233,7 @@ impl AttachCompanionState {
                 AttachListenerStartFailure::InstanceLock => "instance_lock",
                 AttachListenerStartFailure::Bind => "bind",
             }),
+            pending: !started && failure.is_none(),
         }
     }
 
@@ -311,6 +313,7 @@ pub fn attach_listener_status(
         AttachListenerStatus {
             started: true,
             failure: None,
+            pending: false,
         }
     }
 }
@@ -1292,6 +1295,7 @@ mod tests {
                 AttachListenerStatus {
                     started: false,
                     failure: Some(name),
+                    pending: false,
                 }
             );
         }
@@ -1302,6 +1306,17 @@ mod tests {
             AttachListenerStatus {
                 started: true,
                 failure: None,
+                pending: false,
+            }
+        );
+
+        let pending = AttachCompanionState::default().listener_status();
+        assert_eq!(
+            pending,
+            AttachListenerStatus {
+                started: false,
+                failure: None,
+                pending: true,
             }
         );
     }

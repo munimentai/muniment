@@ -8,6 +8,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import AccessPanel from './AccessPanel.svelte'
 
+let closeWindow
+
+vi.mock('@tauri-apps/api/window', () => ({
+  getCurrentWindow: () => ({ close: (...args) => closeWindow(...args) }),
+}))
+
 const source = fs.readFileSync(path.join(process.cwd(), 'src/lib/AccessPanel.svelte'), 'utf8')
 const styles = source.match(/<style>([\s\S]*)<\/style>/)?.[1] ?? ''
 const rules = new Map([...styles
@@ -50,6 +56,7 @@ function companionInvoke(revoke = async () => {}) {
 
 beforeEach(() => {
   vi.stubGlobal('requestAnimationFrame', (callback) => callback())
+  closeWindow = vi.fn()
 })
 
 afterEach(() => {
@@ -88,7 +95,7 @@ describe('access popover layout', () => {
     expect(source).toMatch(/Connected programs are available in another Muniment window\./)
     expect(source).toMatch(/The connected programs connection could not start\./)
     expect(source).toMatch(/Restart Muniment/)
-    expect(source).toMatch(/Use the first window/)
+    expect(source).toMatch(/Close this window/)
     expect(source).toMatch(/Approval time unavailable/)
     expect(source).toMatch(/onclick=\{loadCompanions\}>Try again/)
   })
@@ -159,7 +166,7 @@ describe('access popover layout', () => {
 
   for (const [failure, message, recovery] of [
     ['filesystem', 'The connected programs folder is unavailable.', 'Restart Muniment'],
-    ['instance_lock', 'Connected programs are available in another Muniment window.', 'Use the first window'],
+    ['instance_lock', 'Connected programs are available in another Muniment window.', 'Close this window'],
     ['bind', 'The connected programs connection could not start.', 'Restart Muniment'],
   ]) {
     it(`renders the ${failure} listener failure and its recovery`, async () => {
@@ -168,16 +175,41 @@ describe('access popover layout', () => {
         if (command === 'auth_devices') return []
         if (command === 'attach_companions') return []
         if (command === 'attach_listener_status') return { started: false, failure }
+        if (command === 'restart_muniment') return
         throw new Error(`unexpected command: ${command}`)
       })
       renderPanel(invoke)
       await fireEvent.click(await screen.findByRole('button', { name: /Alice/ }))
 
       expect(await screen.findByText(message)).toBeInTheDocument()
-      expect(screen.getByRole('button', { name: recovery })).toBeInTheDocument()
+      await fireEvent.click(screen.getByRole('button', { name: recovery }))
+      if (failure === 'instance_lock') expect(closeWindow).toHaveBeenCalledOnce()
+      else expect(invoke).toHaveBeenCalledWith('restart_muniment')
       expect(screen.queryByText('No connected programs found')).not.toBeInTheDocument()
     })
   }
+
+  it('keeps loading while listener startup is pending', async () => {
+    let statusCalls = 0
+    const invoke = vi.fn(async (command) => {
+      if (command === 'auth_entitlement_snapshot') return snapshot
+      if (command === 'auth_devices') return []
+      if (command === 'attach_companions') return []
+      if (command === 'attach_listener_status') {
+        statusCalls += 1
+        return statusCalls === 1
+          ? { started: false, failure: null, pending: true }
+          : { started: true, failure: null, pending: false }
+      }
+      throw new Error(`unexpected command: ${command}`)
+    })
+    renderPanel(invoke)
+    await fireEvent.click(await screen.findByRole('button', { name: /Alice/ }))
+
+    expect(await screen.findByText('Loading connected programs…')).toBeInTheDocument()
+    expect(screen.queryByText('No connected programs found')).not.toBeInTheDocument()
+    expect(await screen.findByText('No connected programs found')).toBeInTheDocument()
+  })
 
   it('renders the empty list when the listener started', async () => {
     const invoke = vi.fn(async (command) => {

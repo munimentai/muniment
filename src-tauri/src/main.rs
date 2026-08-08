@@ -18,6 +18,11 @@ use muniment_core::attach::{PreparedHandoffSlot, RuntimeActivityRegistry};
 use std::sync::{Arc, Mutex};
 use tauri::Manager;
 
+#[tauri::command]
+fn restart_muniment(app: tauri::AppHandle) {
+    app.restart();
+}
+
 fn main() {
     let runtime_activity = RuntimeActivityRegistry::new();
     let builder = tauri::Builder::default()
@@ -79,6 +84,7 @@ fn main() {
             attach_service::attach_companions,
             attach_service::attach_listener_status,
             attach_service::attach_revoke_companion,
+            restart_muniment,
             home::home_status,
             home::home_confirm,
             home::home_confirm_import,
