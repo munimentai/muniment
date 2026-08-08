@@ -259,43 +259,15 @@ impl MemoryIndex {
             return Err(MemoryIndexError::TimedOut);
         }
         let deadline = Instant::now() + limits.timeout;
-        let (connection, _) = self
-            .refreshed_connection(deadline)
+        let (items, state) = self
+            .refreshed_cache(deadline, |connection, _| {
+                check_deadline(deadline)?;
+                let state =
+                    source_state(connection).map_err(|error| sqlite_error(error, deadline))?;
+                let items = matching_items(connection, query, limits, deadline)?;
+                Ok((items, state))
+            })
             .map_err(|error| normalize_timeout(error, deadline))?;
-        check_deadline(deadline)?;
-
-        let state = source_state(&connection).map_err(|error| sqlite_error(error, deadline))?;
-        let mut items = Vec::new();
-        if limits.item_cap > 0 && limits.character_budget > 0 && !query.trim().is_empty() {
-            let expression = match_expression(query);
-            if !expression.is_empty() {
-                let mut statement = connection
-                    .prepare(
-                        "SELECT path, content FROM memory_fts WHERE memory_fts MATCH ?1 \
-                     ORDER BY bm25(memory_fts), path LIMIT ?2",
-                    )
-                    .map_err(|error| sqlite_error(error, deadline))?;
-                let rows =
-                    statement.query_map(params![expression, limits.item_cap as i64], |row| {
-                        Ok(MemoryItem {
-                            path: row.get(0)?,
-                            content: row.get(1)?,
-                        })
-                    })?;
-                let mut used = 0;
-                for row in rows {
-                    check_deadline(deadline)?;
-                    let mut item = row.map_err(|error| sqlite_error(error, deadline))?;
-                    let remaining = limits.character_budget.saturating_sub(used);
-                    if remaining == 0 {
-                        break;
-                    }
-                    item.content = take_characters(&item.content, remaining);
-                    used += item.content.chars().count();
-                    items.push(item);
-                }
-            }
-        }
         let files = items.iter().map(|item| item.path.clone()).collect();
         Ok(MemorySearchResult {
             items,
@@ -319,38 +291,41 @@ impl MemoryIndex {
         &self,
         deadline: Instant,
     ) -> Result<ReindexReport, MemoryIndexError> {
-        self.refreshed_connection(deadline)
-            .map(|(_, report)| report)
+        self.refreshed_cache(deadline, |_, report| Ok(report))
             .map_err(|error| normalize_timeout(error, deadline))
     }
 
-    /// Opens the cache and reindexes it. The Markdown files are the source of
-    /// truth, so this deletes a cache SQLite reports as damaged and rebuilds it
-    /// once.
-    fn refreshed_connection(
+    /// Opens the cache, reindexes it, then runs `read` over the fresh rows. The
+    /// Markdown files are the source of truth, so this deletes a cache SQLite
+    /// reports as damaged and rebuilds it once. The read belongs inside the
+    /// retry, because damage confined to the fts5 shadow tables leaves every
+    /// hash unchanged and so surfaces on the query alone.
+    fn refreshed_cache<T>(
         &self,
         deadline: Instant,
-    ) -> Result<(Connection, ReindexReport), MemoryIndexError> {
-        match self.open_and_reindex(deadline) {
+        read: impl Fn(&Connection, ReindexReport) -> Result<T, MemoryIndexError>,
+    ) -> Result<T, MemoryIndexError> {
+        match self.open_reindex_and_read(deadline, &read) {
             Err(error) if damaged_cache(&error) => {
                 match fs::remove_file(&self.database) {
                     Ok(()) => {}
                     Err(error) if error.kind() == io::ErrorKind::NotFound => {}
                     Err(error) => return Err(MemoryIndexError::Io(error)),
                 }
-                self.open_and_reindex(deadline)
+                self.open_reindex_and_read(deadline, &read)
             }
             result => result,
         }
     }
 
-    fn open_and_reindex(
+    fn open_reindex_and_read<T>(
         &self,
         deadline: Instant,
-    ) -> Result<(Connection, ReindexReport), MemoryIndexError> {
+        read: impl Fn(&Connection, ReindexReport) -> Result<T, MemoryIndexError>,
+    ) -> Result<T, MemoryIndexError> {
         let mut connection = self.open(deadline)?;
         let report = self.reindex_connection(&mut connection, deadline)?;
-        Ok((connection, report))
+        read(&connection, report)
     }
 
     fn open(&self, deadline: Instant) -> Result<Connection, MemoryIndexError> {
@@ -362,7 +337,8 @@ impl MemoryIndex {
         // MEMORY keeps the rollback journal in RAM rather than discarding it. A
         // reindex that stops at its deadline then rolls back instead of leaving
         // half of its rows behind. A crash can still damage the file, and
-        // `refreshed_connection` rebuilds the cache when it does.
+        // `refreshed_cache` rebuilds the cache when either the reindex or the
+        // read reports damage.
         connection
             .execute_batch(
                 "PRAGMA journal_mode = MEMORY;
@@ -427,6 +403,50 @@ impl MemoryIndex {
         transaction.commit()?;
         Ok(report)
     }
+}
+
+/// Reads the ranked matches under both caps. This runs on the same connection
+/// the reindex just wrote, so a damaged fts5 index fails here and reaches the
+/// rebuild.
+fn matching_items(
+    connection: &Connection,
+    query: &str,
+    limits: RetrievalLimits,
+    deadline: Instant,
+) -> Result<Vec<MemoryItem>, MemoryIndexError> {
+    if limits.item_cap == 0 || limits.character_budget == 0 || query.trim().is_empty() {
+        return Ok(Vec::new());
+    }
+    let expression = match_expression(query);
+    if expression.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut statement = connection
+        .prepare(
+            "SELECT path, content FROM memory_fts WHERE memory_fts MATCH ?1 \
+             ORDER BY bm25(memory_fts), path LIMIT ?2",
+        )
+        .map_err(|error| sqlite_error(error, deadline))?;
+    let rows = statement.query_map(params![expression, limits.item_cap as i64], |row| {
+        Ok(MemoryItem {
+            path: row.get(0)?,
+            content: row.get(1)?,
+        })
+    })?;
+    let mut items = Vec::new();
+    let mut used = 0;
+    for row in rows {
+        check_deadline(deadline)?;
+        let mut item = row.map_err(|error| sqlite_error(error, deadline))?;
+        let remaining = limits.character_budget.saturating_sub(used);
+        if remaining == 0 {
+            break;
+        }
+        item.content = take_characters(&item.content, remaining);
+        used += item.content.chars().count();
+        items.push(item);
+    }
+    Ok(items)
 }
 
 /// Reports whether SQLite refused the cache file itself. Every statement this
@@ -852,7 +872,9 @@ mod tests {
             .open(Instant::now() + Duration::from_secs(60))
             .unwrap();
         // A small page cache spills the pending rows to the file within the short
-        // deadline. A Home of a few thousand files spills the same way.
+        // deadline. A Home of a few thousand files spills the same way. The whole
+        // write takes about 1.07 seconds in a debug build, so 25 ms clears the
+        // stop by about 40 times.
         connection.pragma_update(None, "cache_size", 16).unwrap();
         let stopped = MemoryIndex::write_documents(
             &mut connection,
@@ -900,6 +922,40 @@ mod tests {
                 .collect::<Vec<_>>(),
             ["memory/one.md"]
         );
+        assert!(database.exists());
+    }
+
+    #[test]
+    fn damaged_search_index_rebuilds_on_the_next_search() {
+        let fixture = Fixture::new();
+        fixture.file("one.md", "juniper fact");
+        let database = fixture.root.join("cache/index.sqlite3");
+        fixture
+            .index()
+            .search("thread", "juniper", Fixture::limits(5, 1_000), None)
+            .unwrap();
+        // A crash can damage the fts5 shadow tables alone. Every hash then still
+        // matches, so the reindex writes nothing and only the query fails.
+        let connection = Connection::open(&database).unwrap();
+        connection
+            .execute("DELETE FROM memory_fts_data", [])
+            .unwrap();
+        drop(connection);
+
+        let result = fixture
+            .index()
+            .search("thread", "juniper", Fixture::limits(5, 1_000), None)
+            .unwrap();
+
+        assert_eq!(
+            result
+                .items
+                .iter()
+                .map(|item| item.path.as_str())
+                .collect::<Vec<_>>(),
+            ["memory/one.md"]
+        );
+        assert_eq!(result.recall.files, ["memory/one.md"]);
         assert!(database.exists());
     }
 
