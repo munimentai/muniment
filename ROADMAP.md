@@ -199,6 +199,26 @@ route, model, cost, time, and capability provenance.
 SUPERSEDED 2026-07-29 — cloud ingress classification replaces the completed local
 classifier contract.
 
+DONE 2026-08-07 — the desktop runs one mode, **the thread surface**, and SPEC
+law 13 states it (MUNIDESK-969). No desktop source computes a routing tier, a
+routing label, or a classification. Every model call rides server-supplied grant
+values alone. `chat_coordinate.rs:203` passes the scoped virtual key, the
+gateway URL, and the optional pinned model into the sidecar environment.
+`the_grant_request_carries_no_client_classification` and
+`the_receipt_request_carries_only_the_run_id`
+(`src-tauri/core/src/chat_grant.rs:257`) read both cloud-bound requests off the
+wire and reject any tier, label, or classification field. `test/smoke.sh` holds
+the mode name and the no-classification rule. MUNICLOUD-968 ratified the
+mandated classification path on 2026-08-07.
+
+OPEN — the cloud `RoutingSurface` enum still reads `desktop_thread_chat`
+(`api/src/routing-policy-resolver.ts:5` in muniment-cloud). That value names a
+mode the desktop does not have. The desktop asks MUNICLOUD for `desktop_thread`
+and renames no cloud contract on its own.
+[docs/desktop-single-mode.md](docs/desktop-single-mode.md) carries the ask, its
+evidence, and its ratification status. No MUNICLOUD ticket has ruled on the name
+yet, so this lane files no rename slice.
+
 DONE — the voice direction is Parakeet verbatim capture with Kokoro read-aloud
 and global hotkeys. Pinned Parakeet and Silero acquisition and publication,
 sherpa-onnx packaging and bindings, fixed-capacity microphone capture, bounded

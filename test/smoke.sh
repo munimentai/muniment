@@ -49,6 +49,28 @@ test -z "$(grep -RilE \
 grep -Fq -- '- Status: superseded by the 2026-07-29 cloud ingress ruling' \
   docs/decisions/0017-resident-model-artifact-pin.md
 grep -Fq 'The desktop sends no classification metadata.' docs/spec/harness-spec.md
+# SPEC law 13: the desktop has one mode, the thread surface, and it classifies
+# nothing. No source may compute a routing tier, a routing label, or a
+# classification, because the cloud classifies every request at ingress.
+# `chat_grant.rs` is the one exception. It names these fields inside the two
+# tests below, which read both cloud-bound requests off the wire and reject any
+# request that carries one. Those tests are asserted present.
+test -z "$(grep -RilE \
+  --exclude='chat_grant.rs' \
+  'routing_?label|routing_?tier|task_?tier|signals_?version|keyword-code-v1' \
+  src src-tauri/src src-tauri/core/src test/probe 2>/dev/null)"
+grep -Fq 'fn the_grant_request_carries_no_client_classification' \
+  src-tauri/core/src/chat_grant.rs
+grep -Fq 'fn the_receipt_request_carries_only_the_run_id' \
+  src-tauri/core/src/chat_grant.rs
+# SPEC and ROADMAP name that one mode identically, and neither names it a chat.
+grep -Fq 'the thread surface' SPEC.md
+grep -Fq 'the thread surface' ROADMAP.md
+test -z "$(grep -ril 'chat mode' SPEC.md ROADMAP.md)"
+# The committed note carries the routing-surface name raised with MUNICLOUD.
+grep -Fq 'desktop_thread_chat' docs/desktop-single-mode.md
+grep -Fq 'Ratifying MUNICLOUD ticket' docs/desktop-single-mode.md
+grep -Fq 'docs/desktop-single-mode.md' SPEC.md
 # no current document may name the retired Gemma alias; ADR 0003 preserves the
 # historical decision it records. No document may call the resident model Gemma.
 # (`! grep` would be exempt from errexit, so assert on empty output instead)
