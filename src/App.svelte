@@ -987,7 +987,7 @@
                 {#if summary.route !== null || summary.detail}
                   {@const expanded = expandedReceipts.has(message.run.id)}
                   {@const rows = receiptRows(message.run.receipt)}
-                  <button class="provenance" aria-expanded={expanded} aria-label={`${expanded ? 'Collapse' : 'Expand'} receipt: ${receiptLabel(message.run.receipt)}`} onclick={() => toggleReceipt(message.run.id)}>{#if summary.route !== null}<span class="route-segment">{summary.route}</span>{/if}{summary.separator}{summary.detail}</button>
+                  <button class="provenance" aria-expanded={expanded} aria-label={`${expanded ? 'Collapse' : 'Expand'} receipt: ${receiptLabel(message.run.receipt)}`} onclick={() => toggleReceipt(message.run.id)}><span class:expanded class="receipt-marker" aria-hidden="true"></span>{#if summary.route !== null}<span class="route-segment">{summary.route}</span>{/if}{summary.separator}{summary.detail}</button>
                   {#if expanded}
                     <dl class="receipt-record">
                       {#each rows as row}
@@ -1354,6 +1354,8 @@
      font-variant-numeric, so tabular-nums follows it. */
   .provenance { display: block; margin-top: 10px; padding: 0; border: 0; background: transparent; color: var(--muted); font: var(--text-provenance)/1.45 var(--font-mono); font-variant-numeric: tabular-nums; text-align: left; overflow-wrap: anywhere; }
   .provenance:hover:not(:disabled) { color: var(--ink); }
+  .receipt-marker { display: inline-block; width: 5px; height: 5px; margin-right: 7px; border-right: 1px solid currentColor; border-bottom: 1px solid currentColor; transform: rotate(-45deg); transition: transform 120ms ease; vertical-align: 1px; }
+  .receipt-marker.expanded { transform: rotate(45deg); }
   /* §1.2 permits --signal on the route segment only. */
   .provenance .route-segment { color: var(--signal); }
   .receipt-record { width: fit-content; min-width: 240px; margin: 8px 0 0; padding: 8px 12px; border: 1px solid var(--border); border-radius: var(--radius-control); color: var(--muted); font: var(--text-12) var(--font-mono); }
@@ -1426,5 +1428,6 @@
        at its full-height resting state instead of the keyframe's 55% endpoint. */
     .capture-meter i { animation: none; }
     .thinking path { animation: none; }
+    .receipt-marker { transition: none; }
   }
 </style>

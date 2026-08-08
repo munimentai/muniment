@@ -884,6 +884,7 @@ fn chat_event(run_id: &str, projection: ChatProjection) -> ChatEvent {
         receipt: projection.receipt,
         tool_activity: chat_tool_activity(&projection.tool_activity),
         attachments,
+        recalls: projection.recalls,
         pending_permission: chat_pending_permission(projection.pending_permission),
     }
 }
@@ -928,9 +929,29 @@ fn fail_start<R: tauri::Runtime>(
 mod tests {
     use super::*;
     use crate::test_support::append_test_event;
+    use muniment_core::journal::reducer::ProjectedRecall;
     use muniment_core::journal::RunJournal;
     use muniment_core::permission_gate::ChatPermissionAnswer;
     use uuid::Uuid;
+
+    #[test]
+    fn live_chat_event_carries_projected_recalls() {
+        let event = chat_event(
+            "run-1",
+            ChatProjection {
+                recalls: vec![ProjectedRecall {
+                    query: "lease terms".into(),
+                    files: vec!["memory/lease.md".into()],
+                }],
+                ..ChatProjection::default()
+            },
+        );
+
+        assert_eq!(
+            serde_json::to_value(event).unwrap()["recalls"],
+            json!([{"query": "lease terms", "files": ["memory/lease.md"]}])
+        );
+    }
 
     fn confirm_request(gate_id: &str) -> ExtensionUiRequest {
         ExtensionUiRequest {
