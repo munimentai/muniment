@@ -986,7 +986,7 @@
                 {@const summary = receiptSummary(message.run.receipt)}
                 {#if summary.route !== null || summary.detail}
                   {@const expanded = expandedReceipts.has(message.run.id)}
-                  {@const rows = receiptRows(message.run.receipt)}
+                  {@const rows = receiptRows(message.run.receipt, message.run.recalls)}
                   <button class="provenance" aria-expanded={expanded} aria-label={`${expanded ? 'Collapse' : 'Expand'} receipt: ${receiptLabel(message.run.receipt)}`} onclick={() => toggleReceipt(message.run.id)}><span class:expanded class="receipt-marker" aria-hidden="true"></span>{#if summary.route !== null}<span class="route-segment">{summary.route}</span>{/if}{summary.separator}{summary.detail}</button>
                   {#if expanded}
                     <dl class="receipt-record">

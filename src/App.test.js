@@ -3833,10 +3833,10 @@ describe('message action row', () => {
 })
 
 describe('provenance line', () => {
-  function restore(receipt) {
+  function restore(receipt, recalls = []) {
     invoke.mockImplementation(async (command) => {
       if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
-      if (command === 'chat_thread_open') return [{ runId: 'run-receipt', phase: 'complete', text: 'A routed answer', prompt: 'A question', receipt, toolActivity: [] }]
+      if (command === 'chat_thread_open') return [{ runId: 'run-receipt', phase: 'complete', text: 'A routed answer', prompt: 'A question', receipt, recalls, toolActivity: [] }]
       if (command === 'auth_entitlement_snapshot') return snapshot()
       if (command === 'auth_devices') return []
       throw new Error(`unexpected command: ${command}`)
@@ -3887,6 +3887,21 @@ describe('provenance line', () => {
     await fireEvent.click(line)
     await waitFor(() => expect(document.querySelector('.receipt-record')).toBeNull())
     expect(marker).not.toHaveClass('expanded')
+  })
+
+  it('names recalled files inside the expanded receipt', async () => {
+    restore(
+      { route: 'analysis/high', model: 'glm-5.2', cost: '$0.0089', time: '6.2s' },
+      [
+        { query: 'lease', files: ['/Documents/Muniment/lease.pdf'] },
+        { query: 'missing clause', files: [] },
+      ],
+    )
+
+    await fireEvent.click(await screen.findByRole('button', { name: /^Expand receipt:/ }))
+
+    const record = document.querySelector('.receipt-record')
+    expect(record.textContent).toBe('Routeanalysis/highModelglm-5.2Cost$0.0089Time6.2sMemory/Documents/Muniment/lease.pdfMemoryno files')
   })
 
   it('renders a provenance line when a reply has an empty receipt', async () => {
