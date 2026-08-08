@@ -5,9 +5,9 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const FORBIDDEN = /\b(?:ai|magic|supercharg(?:e|es|ed|ing)|unlock(?:s|ed|ing)?|sovereignty)\b/giu
-const EM_DASH = /\u{2014}|&(?:mdash|#0*8212|#x0*2014);/giu
+const EM_DASH = /\u{2014}|\\u(?:2014|\{0*2014\})|&(?:mdash|#0*8212|#x0*2014);/giu
 const TEXT_SOURCE = /\.(?:css|html|js|json|jsx|md|mjs|rs|svelte|svg|toml|ts|tsx|txt|wxs|xml|yaml|yml)$/
-const EXCLUDED_DIRECTORIES = new Set(['node_modules', 'target', 'third-party'])
+const EXCLUDED_DIRECTORIES = new Set(['node_modules', 'target', 'third-party', '_ds', 'uploads'])
 
 export function forbiddenUiCopy(source, file = '<fixture>') {
   return [...source.matchAll(FORBIDDEN)].map((match) => ({

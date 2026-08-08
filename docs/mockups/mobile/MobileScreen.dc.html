@@ -162,7 +162,7 @@ a{color:var(--ink)}a:hover{color:var(--muted)}
 <div class="ltrow"><h1 class="lth">Threads</h1><sc-if value="{{ ios }}" hint-placeholder-val="{{ true }}"><span class="hbtn" onClick="{{ openComposer }}"><x-import component-from-global-scope="MunimentDesignSystem_42af51.Icon" name="plus" size="23" hint-size="23px,23px"></x-import></span></sc-if><span class="pav" onClick="{{ openAccess }}">m</span></div>
 <div class="srch"><x-import component-from-global-scope="MunimentDesignSystem_42af51.Icon" name="search" size="16" hint-size="16px,16px"></x-import>Search threads</div>
 <div class="list">
-<div class="trow" onClick="{{ openThread }}"><span class="tdot pulse"></span><span class="tt">Churn analysis — Q2</span><span class="tw">now</span></div>
+<div class="trow" onClick="{{ openThread }}"><span class="tdot pulse"></span><span class="tt">Churn analysis: Q2</span><span class="tw">now</span></div>
 <div class="trow" onClick="{{ openThread }}"><span class="tdot no"></span><span class="tt">Q3 cloud spend variance</span><span class="tw">3h</span></div>
 <sc-if value="{{ notDeleted }}" hint-placeholder-val="{{ true }}"><div class="swipe"><div class="sact"><div class="sa share" onClick="{{ shareThread }}"><x-import component-from-global-scope="MunimentDesignSystem_42af51.Icon" name="folder-input" size="18" hint-size="18px,18px"></x-import>Share</div><div class="sa del" onClick="{{ delThread }}"><x-import component-from-global-scope="MunimentDesignSystem_42af51.Icon" name="trash-2" size="18" hint-size="18px,18px"></x-import>Delete</div></div><div class="trow swrow"><span class="tdot no"></span><span class="tt">Vendor contract review</span><span class="tw">1d</span></div></div></sc-if>
 <div class="trow" onClick="{{ openThread }}"><span class="tdot no"></span><span class="tt">Incident 4471 timeline</span><span class="tw">2d</span></div>
@@ -170,7 +170,7 @@ a{color:var(--ink)}a:hover{color:var(--muted)}
 </div>
 </sc-if>
 <sc-if value="{{ sThread }}" hint-placeholder-val="{{ false }}">
-<div class="chd"><span class="iconb" onClick="{{ backThreads }}"><x-import component-from-global-scope="MunimentDesignSystem_42af51.Icon" name="chevron-left" size="24" hint-size="24px,24px"></x-import></span><span class="chdt"><span class="chtt">Churn analysis — Q2</span><span class="chid">thread 7c2e</span></span><span class="iconb"><x-import component-from-global-scope="MunimentDesignSystem_42af51.Icon" name="ellipsis" size="20" hint-size="20px,20px"></x-import></span></div>
+<div class="chd"><span class="iconb" onClick="{{ backThreads }}"><x-import component-from-global-scope="MunimentDesignSystem_42af51.Icon" name="chevron-left" size="24" hint-size="24px,24px"></x-import></span><span class="chdt"><span class="chtt">Churn analysis: Q2</span><span class="chid">thread 7c2e</span></span><span class="iconb"><x-import component-from-global-scope="MunimentDesignSystem_42af51.Icon" name="ellipsis" size="20" hint-size="20px,20px"></x-import></span></div>
 <div class="conv">
 <div class="ubw"><div class="ub">Pull Q2 churn by plan cohort and flag anything above 3%.</div></div>
 <div>
@@ -179,7 +179,7 @@ a{color:var(--ink)}a:hover{color:var(--muted)}
 <div class="prov" onClick="{{ openReceipt }}"><span class="sig">analysis/high</span><span>· $0.0074</span><x-import component-from-global-scope="MunimentDesignSystem_42af51.Icon" name="chevron-down" size="13" hint-size="13px,13px"></x-import></div>
 </div>
 <div class="ubw"><div class="ub">Which accounts drive the starter-monthly number?</div></div>
-<div class="resp"><span class="stream">Eleven accounts closed in June drive most of it — eight were on fewer than five seats, and three churned within 60 days of a support escalation</span><span class="caret"></span></div>
+<div class="resp"><span class="stream">Eleven accounts closed in June drive most of it. Eight were on fewer than five seats, and three churned within 60 days of a support escalation</span><span class="caret"></span></div>
 </div>
 </sc-if>
 <sc-if value="{{ sComposer }}" hint-placeholder-val="{{ false }}">
@@ -216,14 +216,14 @@ a{color:var(--ink)}a:hover{color:var(--muted)}
 <div class="pdhd"><div class="pdins">Route platform work at analysis/high. Prefer warehouse connections; publish artifacts to group:platform.<sc-if value="{{ insOpen }}" hint-placeholder-val="{{ false }}"> New threads started here inherit this scope. Shared threads stay read-only until forked.</sc-if></div><div class="pdmore" onClick="{{ toggleIns }}"><sc-if value="{{ insClosed }}" hint-placeholder-val="{{ true }}">more</sc-if><sc-if value="{{ insOpen }}" hint-placeholder-val="{{ false }}">less</sc-if><x-import component-from-global-scope="MunimentDesignSystem_42af51.Icon" name="chevron-down" size="12" hint-size="12px,12px"></x-import></div></div>
 <div class="segw"><div class="seg segfull"><span class="segb on">Threads</span><span class="segb">Shared</span><span class="segb">Artifacts</span><span class="segb">Inbox</span></div></div>
 <div class="list">
-<div class="trow" onClick="{{ openThread }}"><span class="tdot pulse"></span><span class="tt">Churn analysis — Q2</span><span class="tw">now</span></div>
+<div class="trow" onClick="{{ openThread }}"><span class="tdot pulse"></span><span class="tt">Churn analysis: Q2</span><span class="tw">now</span></div>
 <div class="trow" onClick="{{ openThread }}"><span class="tdot no"></span><span class="tt">Object storage tiering plan</span><span class="tw">5h</span></div>
 <div class="trow" onClick="{{ openThread }}"><span class="tdot no"></span><span class="tt">Incident 4471 timeline</span><span class="tw">2d</span></div>
 </div>
 <div class="pdfoot">Connections are managed on desktop or by admins.</div>
 </sc-if>
 <sc-if value="{{ sShared }}" hint-placeholder-val="{{ false }}">
-<div class="chd"><span class="iconb" onClick="{{ backProject }}"><x-import component-from-global-scope="MunimentDesignSystem_42af51.Icon" name="chevron-left" size="24" hint-size="24px,24px"></x-import></span><span class="chdt"><span class="chtt">Forecast reconciliation — Q3</span><span class="chid">shared thread</span></span><x-import component-from-global-scope="MunimentDesignSystem_42af51.Button" size="sm" onClick="{{ forkShared }}" hint-size="auto,32px">Fork</x-import></div>
+<div class="chd"><span class="iconb" onClick="{{ backProject }}"><x-import component-from-global-scope="MunimentDesignSystem_42af51.Icon" name="chevron-left" size="24" hint-size="24px,24px"></x-import></span><span class="chdt"><span class="chtt">Forecast reconciliation: Q3</span><span class="chid">shared thread</span></span><x-import component-from-global-scope="MunimentDesignSystem_42af51.Button" size="sm" onClick="{{ forkShared }}" hint-size="auto,32px">Fork</x-import></div>
 <div class="shbn"><x-import component-from-global-scope="MunimentDesignSystem_42af51.Icon" name="eye" size="14" hint-size="14px,14px"></x-import>Shared by dana · view only</div>
 <div class="conv">
 <div class="ubw"><div class="ub">Reconcile Q3 actuals against the committed forecast.</div></div>
@@ -239,10 +239,10 @@ a{color:var(--ink)}a:hover{color:var(--muted)}
 <div class="ltrow"><h1 class="lth">Inbox</h1></div>
 <div class="fchips"><span class="{{ fc0 }}" onClick="{{ setF0 }}">all</span><span class="{{ fc1 }}" onClick="{{ setF1 }}">mine</span><span class="{{ fc2 }}" onClick="{{ setF2 }}">Platform</span><span class="{{ fc3 }}" onClick="{{ setF3 }}">Finance</span></div>
 <div class="list">
-<div class="ibrow"><span class="tdot pulse"></span><span class="ibwf">forecast-reconcile</span><span class="ibm">running</span><span class="ibm">—</span><span class="ibm">41s</span></div>
+<div class="ibrow"><span class="tdot pulse"></span><span class="ibwf">forecast-reconcile</span><span class="ibm">running</span><span class="ibm">·</span><span class="ibm">41s</span></div>
 <div class="ibrow"><span class="tdot done"></span><span class="ibwf">nightly-cost-report</span><span class="ibm">complete</span><span class="ibm">1 artifact</span><span class="ibm">2h</span></div>
 <div class="ibrow"><span class="tdot done"></span><span class="ibwf">contract-scan</span><span class="ibm">complete</span><span class="ibm">3 artifacts</span><span class="ibm">6h</span></div>
-<div class="ibrow"><span class="tdot fail"></span><span class="ibwf">churn-cohort-refresh</span><span class="ibm ox">failed</span><span class="ibm">—</span><span class="ibm">1d</span></div>
+<div class="ibrow"><span class="tdot fail"></span><span class="ibwf">churn-cohort-refresh</span><span class="ibm ox">failed</span><span class="ibm">·</span><span class="ibm">1d</span></div>
 <div class="ibrow"><span class="tdot done"></span><span class="ibwf">policy-drift-scan</span><span class="ibm">complete</span><span class="ibm">2 artifacts</span><span class="ibm">2026-07-01</span></div>
 </div>
 </sc-if>
