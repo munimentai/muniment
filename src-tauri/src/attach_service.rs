@@ -90,9 +90,9 @@ pub(crate) fn control_desktop_migration<R: tauri::Runtime>(
 }
 
 #[cfg(target_os = "linux")]
-use crate::chat::{
-    prepare_desktop_run, RunStartBoundaries, RunStartRequest, TauriRunStartBoundaries,
-};
+use crate::chat::TauriRunStartBoundaries;
+#[cfg(target_os = "linux")]
+use muniment_core::run_start::{prepare_desktop_run, RunStartBoundaries, RunStartRequest};
 
 #[cfg(all(target_os = "linux", not(test)))]
 const PERMISSION_COMMIT_TIMEOUT: Duration = Duration::from_secs(2);
