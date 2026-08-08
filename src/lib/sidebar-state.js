@@ -42,8 +42,7 @@ export function threadRowShortcutPosition(event, platform = navigator.platform) 
   return Number(match[1])
 }
 
-// Anything but an explicit collapsed marker — missing, malformed, or written
-// by an older shell — restores the documented default.
+// A missing, malformed, or older value restores the documented default.
 export function parseSidebarCollapsed(stored) {
   return stored === SIDEBAR_COLLAPSED
 }

@@ -17,15 +17,15 @@ describe('auth state transitions', () => {
   })
 
   it('bounds the registration retry status delay', () => {
-    expect(registrationRetryState(7).message).toBe('Server busy — retrying in 7 s')
-    expect(registrationRetryState('invalid').message).toBe('Server busy — retrying in 30 s')
-    expect(registrationRetryState(999).message).toBe('Server busy — retrying in 300 s')
+    expect(registrationRetryState(7).message).toBe('Server busy. Retrying in 7 s')
+    expect(registrationRetryState('invalid').message).toBe('Server busy. Retrying in 30 s')
+    expect(registrationRetryState(999).message).toBe('Server busy. Retrying in 300 s')
   })
 
   it('keeps the failed action available for retry', () => {
     expect(errorState('sign-in', 'the browser session was cancelled')).toEqual({
       name: 'error',
-      message: 'Sign-in not completed — the browser session was cancelled.',
+      message: 'Sign-in not completed: the browser session was cancelled.',
       retry: 'sign-in',
     })
   })

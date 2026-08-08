@@ -67,7 +67,7 @@ const invalidFocusRules = (source, exceptions = {}) => focusOutlineRules(source)
   .filter(({ selector, declarations }) => !(selector in exceptions) && declarations.some((declaration) => !validFocusDeclaration(declaration)))
   .map(({ selector }) => selector)
 
-// Everything outside the style block — where an inline style: or style="" would
+// Everything outside the style block, where an inline style: or style="" would
 // route around the allowlist. Comments come out here too, for the same reason.
 const markup = (source) => source.replace(styleBlock, '')
   .replace(/<!--[\s\S]*?-->|\/\*[\s\S]*?\*\//g, '')

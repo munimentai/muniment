@@ -1,7 +1,7 @@
 const APP_TITLE = 'muniment'
 
 export function formatWindowTitle(threadTitle) {
-  return threadTitle ? `${threadTitle} — ${APP_TITLE}` : APP_TITLE
+  return threadTitle ? `${threadTitle} | ${APP_TITLE}` : APP_TITLE
 }
 
 export function createWindowTitle(windowApi) {

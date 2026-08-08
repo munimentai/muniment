@@ -6,7 +6,7 @@ export function waitingState(message = 'Waiting for the browser sign-in…') {
 
 export function registrationRetryState(seconds) {
   const delay = Math.max(1, Math.min(300, Math.trunc(Number(seconds)) || 30))
-  return waitingState(`Server busy — retrying in ${delay} s`)
+  return waitingState(`Server busy. Retrying in ${delay} s`)
 }
 
 export function statusState(status) {
@@ -24,7 +24,7 @@ export function errorState(action, error) {
 
   return {
     name: 'error',
-    message: `${labels[action]} — ${String(error)}.`,
+    message: `${labels[action]}: ${String(error)}.`,
     retry: action,
   }
 }
