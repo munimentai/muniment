@@ -2,7 +2,7 @@
 
 use cap_fs_ext::{DirExt, FollowSymlinks, OpenOptionsFollowExt};
 use cap_std::{ambient_authority, fs::Dir};
-use rusqlite::{params, Connection, Transaction};
+use rusqlite::{params, Connection, ErrorCode, Transaction};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use sha2::{Digest, Sha256};
@@ -259,8 +259,8 @@ impl MemoryIndex {
             return Err(MemoryIndexError::TimedOut);
         }
         let deadline = Instant::now() + limits.timeout;
-        let mut connection = self.open(deadline)?;
-        self.reindex_connection(&mut connection, deadline)
+        let (connection, _) = self
+            .refreshed_connection(deadline)
             .map_err(|error| normalize_timeout(error, deadline))?;
         check_deadline(deadline)?;
 
@@ -319,9 +319,38 @@ impl MemoryIndex {
         &self,
         deadline: Instant,
     ) -> Result<ReindexReport, MemoryIndexError> {
-        let mut connection = self.open(deadline)?;
-        self.reindex_connection(&mut connection, deadline)
+        self.refreshed_connection(deadline)
+            .map(|(_, report)| report)
             .map_err(|error| normalize_timeout(error, deadline))
+    }
+
+    /// Opens the cache and reindexes it. The Markdown files are the source of
+    /// truth, so this deletes a cache SQLite reports as damaged and rebuilds it
+    /// once.
+    fn refreshed_connection(
+        &self,
+        deadline: Instant,
+    ) -> Result<(Connection, ReindexReport), MemoryIndexError> {
+        match self.open_and_reindex(deadline) {
+            Err(error) if damaged_cache(&error) => {
+                match fs::remove_file(&self.database) {
+                    Ok(()) => {}
+                    Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+                    Err(error) => return Err(MemoryIndexError::Io(error)),
+                }
+                self.open_and_reindex(deadline)
+            }
+            result => result,
+        }
+    }
+
+    fn open_and_reindex(
+        &self,
+        deadline: Instant,
+    ) -> Result<(Connection, ReindexReport), MemoryIndexError> {
+        let mut connection = self.open(deadline)?;
+        let report = self.reindex_connection(&mut connection, deadline)?;
+        Ok((connection, report))
     }
 
     fn open(&self, deadline: Instant) -> Result<Connection, MemoryIndexError> {
@@ -330,9 +359,13 @@ impl MemoryIndex {
         }
         let connection = Connection::open(&self.database)?;
         connection.progress_handler(100, Some(move || Instant::now() >= deadline));
+        // MEMORY keeps the rollback journal in RAM rather than discarding it. A
+        // reindex that stops at its deadline then rolls back instead of leaving
+        // half of its rows behind. A crash can still damage the file, and
+        // `refreshed_connection` rebuilds the cache when it does.
         connection
             .execute_batch(
-                "PRAGMA journal_mode = OFF;
+                "PRAGMA journal_mode = MEMORY;
              PRAGMA synchronous = OFF;
              PRAGMA temp_store = MEMORY;
              CREATE TABLE IF NOT EXISTS memory_files (
@@ -351,10 +384,20 @@ impl MemoryIndex {
         deadline: Instant,
     ) -> Result<ReindexReport, MemoryIndexError> {
         let documents = scan_home(&self.home, deadline)?;
+        Self::write_documents(connection, &documents, deadline)
+    }
+
+    /// Writes one whole scan inside a transaction. A stop at the deadline rolls
+    /// the transaction back, so the cache keeps the rows the last build committed.
+    fn write_documents(
+        connection: &mut Connection,
+        documents: &BTreeMap<String, Document>,
+        deadline: Instant,
+    ) -> Result<ReindexReport, MemoryIndexError> {
         let transaction = connection.transaction()?;
         let existing = existing_hashes(&transaction)?;
         let mut report = ReindexReport::default();
-        for (path, document) in &documents {
+        for (path, document) in documents {
             check_deadline(deadline)?;
             if existing.get(path) == Some(&document.hash) {
                 report.unchanged += 1;
@@ -384,6 +427,19 @@ impl MemoryIndex {
         transaction.commit()?;
         Ok(report)
     }
+}
+
+/// Reports whether SQLite refused the cache file itself. Every statement this
+/// module runs resolves its own conflicts. A constraint failure therefore means
+/// the stored rows disagree with their index.
+fn damaged_cache(error: &MemoryIndexError) -> bool {
+    let MemoryIndexError::Sqlite(error) = error else {
+        return false;
+    };
+    matches!(
+        error.sqlite_error_code(),
+        Some(ErrorCode::DatabaseCorrupt | ErrorCode::NotADatabase | ErrorCode::ConstraintViolation)
+    )
 }
 
 fn sqlite_error(error: rusqlite::Error, deadline: Instant) -> MemoryIndexError {
@@ -725,6 +781,126 @@ mod tests {
             .unwrap();
         assert_eq!(before, after);
         assert_eq!(after.items.len(), 2);
+    }
+
+    #[test]
+    fn timed_out_build_leaves_a_cache_that_still_answers() {
+        let fixture = Fixture::new();
+        fixture.file("first.md", "lantern beacon");
+        fixture
+            .index()
+            .reindex_with_deadline(Instant::now() + Duration::from_secs(60))
+            .unwrap();
+        for number in 0..1_200 {
+            fixture.file(
+                &format!("bulk-{number}.md"),
+                &format!("lantern {}", "filler ".repeat(280)),
+            );
+        }
+
+        let mut timeout = Duration::from_millis(1);
+        let mut timeouts = 0;
+        let result = loop {
+            let limits = RetrievalLimits {
+                timeout,
+                ..Fixture::limits(5, 1_000)
+            };
+            match fixture
+                .index()
+                .search("thread", "lantern beacon", limits, None)
+            {
+                Ok(result) => break result,
+                Err(MemoryIndexError::TimedOut) => {
+                    timeouts += 1;
+                    assert!(timeouts < 15, "the index never built within the ratchet");
+                    timeout *= 2;
+                }
+                Err(other) => panic!("a timed-out build broke later searches: {other:?}"),
+            }
+        };
+
+        assert!(timeouts > 0, "the first build never reached its deadline");
+        assert_eq!(
+            result
+                .items
+                .iter()
+                .map(|item| item.path.as_str())
+                .collect::<Vec<_>>(),
+            ["memory/first.md"]
+        );
+        assert_eq!(result.recall.files, ["memory/first.md"]);
+    }
+
+    #[test]
+    fn build_stopped_at_its_deadline_commits_nothing() {
+        let fixture = Fixture::new();
+        fixture.file("first.md", "lantern beacon");
+        let index = fixture.index();
+        index
+            .reindex_with_deadline(Instant::now() + Duration::from_secs(60))
+            .unwrap();
+        for number in 0..1_200 {
+            fixture.file(
+                &format!("bulk-{number}.md"),
+                &format!("lantern {}", "filler ".repeat(280)),
+            );
+        }
+
+        // The scan runs first, so the short deadline can only land inside the write.
+        let documents = scan_home(&fixture.root, Instant::now() + Duration::from_secs(60)).unwrap();
+        let mut connection = index
+            .open(Instant::now() + Duration::from_secs(60))
+            .unwrap();
+        // A small page cache spills the pending rows to the file within the short
+        // deadline. A Home of a few thousand files spills the same way.
+        connection.pragma_update(None, "cache_size", 16).unwrap();
+        let stopped = MemoryIndex::write_documents(
+            &mut connection,
+            &documents,
+            Instant::now() + Duration::from_millis(25),
+        );
+        drop(connection);
+        assert!(matches!(stopped, Err(MemoryIndexError::TimedOut)));
+
+        let rows: i64 = Connection::open(fixture.root.join("cache/index.sqlite3"))
+            .unwrap()
+            .query_row("SELECT count(*) FROM memory_files", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(rows, 1, "the stopped build committed part of its work");
+
+        let report = index
+            .reindex_with_deadline(Instant::now() + Duration::from_secs(60))
+            .unwrap();
+        assert_eq!(report.unchanged, 1);
+        assert_eq!(report.indexed.len(), 1_200);
+        assert!(report.removed.is_empty());
+    }
+
+    #[test]
+    fn damaged_cache_rebuilds_on_the_next_search() {
+        let fixture = Fixture::new();
+        fixture.file("one.md", "cinnabar fact");
+        let database = fixture.root.join("cache/index.sqlite3");
+        fixture
+            .index()
+            .search("thread", "cinnabar", Fixture::limits(5, 1_000), None)
+            .unwrap();
+        fs::write(&database, b"this file is not a database").unwrap();
+
+        let result = fixture
+            .index()
+            .search("thread", "cinnabar", Fixture::limits(5, 1_000), None)
+            .unwrap();
+
+        assert_eq!(
+            result
+                .items
+                .iter()
+                .map(|item| item.path.as_str())
+                .collect::<Vec<_>>(),
+            ["memory/one.md"]
+        );
+        assert!(database.exists());
     }
 
     #[test]
