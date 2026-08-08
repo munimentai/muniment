@@ -38,6 +38,23 @@ impl ApplicationMemoryRuntime {
         Ok(())
     }
 
+    fn build_session(&self, session: &str) {
+        self.build_session_with_timeout(
+            session,
+            muniment_core::memory_index::DEFAULT_BUILD_TIMEOUT,
+        );
+    }
+
+    fn build_session_with_timeout(&self, session: &str, timeout: std::time::Duration) {
+        let sessions = self
+            .sessions
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(session) = sessions.get(session) {
+            let _ = session.build_with_timeout(timeout);
+        }
+    }
+
     fn write_agent_extension(&self, session: &str) -> Result<(), MemoryIndexError> {
         let definition = self
             .tool_definition_for_turn(session)
@@ -58,6 +75,18 @@ impl ApplicationMemoryRuntime {
     }
 
     pub(crate) fn open_session_for_home(
+        &self,
+        session: &str,
+        thread: &str,
+        capability: ModelMemoryCapability,
+        home: &Path,
+        database: PathBuf,
+    ) {
+        self.insert_session(session, thread, capability, home, database);
+        self.build_session(session);
+    }
+
+    fn insert_session(
         &self,
         session: &str,
         thread: &str,
@@ -133,6 +162,30 @@ mod tests {
         let source = fs::read_to_string(runtime.agent_extension_path()).unwrap();
         assert!(source.contains("pi.registerTool"));
         assert!(source.contains("memory-search"));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn a_timed_out_session_build_does_not_block_the_extension() {
+        let root = std::env::temp_dir().join(format!("muniment-app-memory-{}", Uuid::now_v7()));
+        let home = root.join("home");
+        fs::create_dir_all(home.join("memory")).unwrap();
+        fs::write(home.join("memory/fact.md"), "saffron belongs in the pantry").unwrap();
+        let runtime = ApplicationMemoryRuntime::new(root.join("config"), root.join("cache"));
+        runtime.insert_session(
+            "session-1",
+            "thread-1",
+            ModelMemoryCapability {
+                minimum_cacheable_prefix_characters: 100,
+            },
+            &home,
+            root.join("cache/index.sqlite3"),
+        );
+
+        runtime.build_session_with_timeout("session-1", std::time::Duration::ZERO);
+        runtime.write_agent_extension("session-1").unwrap();
+
+        assert!(runtime.agent_extension_path().exists());
         fs::remove_dir_all(root).unwrap();
     }
 }
