@@ -16,6 +16,7 @@ const historyFixtures = {
         time: '6.2s',
         capabilities: [{ name: 'files', version: '2' }],
       },
+      recalls: [{ query: 'renewal terms', files: ['/Documents/Muniment/lease.pdf'] }],
       toolActivity: [
         { effectId: 'probe-search', displayName: 'Search files', status: 'completed' },
         { effectId: 'probe-read', displayName: 'Read lease.pdf', status: 'completed' },
