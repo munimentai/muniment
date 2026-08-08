@@ -29,3 +29,4 @@ attention rather than silent replay.
 The signed-in shell has one workspace `h1`, a headed thread list, and a transcript region named for the open thread.
 An error message names the failure, and the control beside it names the recovery.
 A surface that renders model or user text wraps an unbreakable string.
+A control renders as a control at rest.
