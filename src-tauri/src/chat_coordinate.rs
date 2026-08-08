@@ -3,6 +3,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use muniment_core::attach::{RuntimeActivityGuard, RuntimeActivityRegistry};
 use muniment_core::chat_grant::{fetch_receipt, ChatGrant};
 use muniment_core::chat_profile::ChatProfile;
 use muniment_core::journal::pi_translation::{
@@ -15,7 +16,8 @@ use muniment_core::permission_gate::{
     coordinate_extension_ui_request, coordinate_permission_answer, PendingPermissionAnswer,
 };
 use muniment_core::sidecar::pi_chat::{
-    cancel_command, ExtensionUiAnswer, ExtensionUiDialog, PiChatEvent, PiRunAdapter,
+    cancel_command, ExtensionUiAnswer, ExtensionUiDialog, ExtensionUiRequest, PiChatEvent,
+    PiRunAdapter,
 };
 use muniment_core::sidecar::pi_install::resolve_current;
 use muniment_core::sidecar::{
@@ -26,10 +28,89 @@ use tauri::{Emitter, Manager};
 
 use crate::chat::{
     chat_attachments, chat_pending_permission, chat_tool_activity, coordinate_prepared_prompt,
-    event_envelope, prepared_pi_prompt, ChatEvent, PiRuntime, PreparedPromptError, ResumeAttempt,
-    ResumeContext, SharedStorage, RPC_TIMEOUT,
+    event_envelope, prepared_pi_prompt, ChatEvent, ChatState, PiRuntime, PreparedPromptError,
+    ResumeAttempt, ResumeContext, SharedStorage, RPC_TIMEOUT,
 };
 use crate::chat_threads::projection_phase;
+
+/// Pairs one coordinate-loop state value with the runtime activity mark that
+/// follows it. Every mutation runs through `with`, so the mark cannot drift
+/// from the value. The mark is a drop guard, so a break out of the loop, an
+/// early return, or a panic clears it.
+struct MarkedState<T> {
+    value: T,
+    registry: Option<RuntimeActivityRegistry>,
+    mark: Option<RuntimeActivityGuard>,
+    marked: fn(&T) -> bool,
+    start_mark: fn(&RuntimeActivityRegistry) -> RuntimeActivityGuard,
+}
+
+type MarkedEffects = MarkedState<BTreeSet<String>>;
+type MarkedGate = MarkedState<Option<ExtensionUiRequest>>;
+
+impl<T> MarkedState<T> {
+    fn new(
+        value: T,
+        registry: Option<RuntimeActivityRegistry>,
+        marked: fn(&T) -> bool,
+        start_mark: fn(&RuntimeActivityRegistry) -> RuntimeActivityGuard,
+    ) -> Self {
+        let mut state = Self {
+            value,
+            registry,
+            mark: None,
+            marked,
+            start_mark,
+        };
+        state.follow_value();
+        state
+    }
+
+    fn with<O>(&mut self, step: impl FnOnce(&mut T) -> O) -> O {
+        let outcome = step(&mut self.value);
+        self.follow_value();
+        outcome
+    }
+
+    fn follow_value(&mut self) {
+        if !(self.marked)(&self.value) {
+            self.mark = None;
+        } else if self.mark.is_none() {
+            self.mark = self.registry.as_ref().map(self.start_mark);
+        }
+    }
+}
+
+impl MarkedEffects {
+    fn open_effects(registry: Option<RuntimeActivityRegistry>) -> Self {
+        Self::new(
+            BTreeSet::new(),
+            registry,
+            |open_effects| !open_effects.is_empty(),
+            RuntimeActivityRegistry::mark_in_flight_external_effect,
+        )
+    }
+}
+
+impl MarkedGate {
+    fn pending_permission(registry: Option<RuntimeActivityRegistry>) -> Self {
+        Self::new(
+            None,
+            registry,
+            |pending| pending.is_some(),
+            RuntimeActivityRegistry::mark_pending_permission_gate,
+        )
+    }
+}
+
+/// Reads the shared registry the desktop already manages. The coordinate loop
+/// never creates a second one.
+fn runtime_activity<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+) -> Option<RuntimeActivityRegistry> {
+    app.try_state::<ChatState>()
+        .map(|state| state.runtime_activity.clone())
+}
 
 pub(super) fn coordinate<R: tauri::Runtime>(
     app: tauri::AppHandle<R>,
@@ -451,8 +532,9 @@ pub(super) fn coordinate<R: tauri::Runtime>(
     };
     let mut buffered_events = buffered_events.into_iter();
     let mut aborting = false;
-    let mut open_effects = BTreeSet::new();
-    let mut pending_permission = None;
+    let registry = runtime_activity(&app);
+    let mut open_effects = MarkedEffects::open_effects(registry.clone());
+    let mut pending_permission = MarkedGate::pending_permission(registry);
     'coordinate: loop {
         if cancelled.swap(false, Ordering::SeqCst) {
             aborting = true;
@@ -464,25 +546,28 @@ pub(super) fn coordinate<R: tauri::Runtime>(
             .drain(..)
             .collect();
         for answer in answers {
-            if coordinate_permission_answer(
-                &mut pending_permission,
-                answer,
-                |request, answer| adapter.answer_extension_ui(&transport, request, answer),
-                |kind, payload| {
-                    append_emit(
-                        &app,
-                        &journal,
-                        &mut projector,
-                        &run_id,
-                        &mut seq,
-                        kind,
-                        payload,
-                        subject.as_deref(),
-                    )?;
-                    Ok(seq)
-                },
-            )
-            .is_err()
+            if pending_permission
+                .with(|pending| {
+                    coordinate_permission_answer(
+                        pending,
+                        answer,
+                        |request, answer| adapter.answer_extension_ui(&transport, request, answer),
+                        |kind, payload| {
+                            append_emit(
+                                &app,
+                                &journal,
+                                &mut projector,
+                                &run_id,
+                                &mut seq,
+                                kind,
+                                payload,
+                                subject.as_deref(),
+                            )?;
+                            Ok(seq)
+                        },
+                    )
+                })
+                .is_err()
             {
                 break 'coordinate;
             }
@@ -583,7 +668,9 @@ pub(super) fn coordinate<R: tauri::Runtime>(
                 break;
             }
             Ok(event @ (PiChatEvent::ToolStarted { .. } | PiChatEvent::ToolFinished { .. })) => {
-                if let Some((kind, payload)) = tool_journal_entry(&event, &mut open_effects) {
+                if let Some((kind, payload)) =
+                    open_effects.with(|open_effects| tool_journal_entry(&event, open_effects))
+                {
                     if append_emit(
                         &app,
                         &journal,
@@ -614,23 +701,22 @@ pub(super) fn coordinate<R: tauri::Runtime>(
                 ) {
                     continue;
                 }
-                if coordinate_extension_ui_request(
-                    event,
-                    &mut pending_permission,
-                    |kind, payload| {
-                        append_emit(
-                            &app,
-                            &journal,
-                            &mut projector,
-                            &run_id,
-                            &mut seq,
-                            kind,
-                            payload,
-                            subject.as_deref(),
-                        )
-                    },
-                )
-                .is_err()
+                if pending_permission
+                    .with(|pending| {
+                        coordinate_extension_ui_request(event, pending, |kind, payload| {
+                            append_emit(
+                                &app,
+                                &journal,
+                                &mut projector,
+                                &run_id,
+                                &mut seq,
+                                kind,
+                                payload,
+                                subject.as_deref(),
+                            )
+                        })
+                    })
+                    .is_err()
                 {
                     break;
                 }
@@ -731,13 +817,15 @@ fn append_terminal<R: tauri::Runtime>(
     projector: &mut ChatProjector,
     run_id: &str,
     seq: &mut u64,
-    open_effects: &mut BTreeSet<String>,
+    open_effects: &mut MarkedEffects,
     kind: &str,
     payload: Value,
     subject: Option<&str>,
 ) -> Result<(), ()> {
-    close_open_effects(open_effects, |kind, payload| {
-        append_emit(app, journal, projector, run_id, seq, kind, payload, subject)
+    open_effects.with(|open_effects| {
+        close_open_effects(open_effects, |kind, payload| {
+            append_emit(app, journal, projector, run_id, seq, kind, payload, subject)
+        })
     })?;
     append_emit(app, journal, projector, run_id, seq, kind, payload, subject)
 }
@@ -748,7 +836,7 @@ fn fail_with_open_effects<R: tauri::Runtime>(
     projector: &mut ChatProjector,
     run_id: &str,
     seq: &mut u64,
-    open_effects: &mut BTreeSet<String>,
+    open_effects: &mut MarkedEffects,
     reason: &str,
     subject: Option<&str>,
 ) {
@@ -841,8 +929,148 @@ mod tests {
     use super::*;
     use crate::test_support::append_test_event;
     use muniment_core::journal::RunJournal;
-    use muniment_core::sidecar::pi_chat::{ExtensionUiDialog, ExtensionUiRequest};
+    use muniment_core::permission_gate::ChatPermissionAnswer;
     use uuid::Uuid;
+
+    fn confirm_request(gate_id: &str) -> ExtensionUiRequest {
+        ExtensionUiRequest {
+            id: gate_id.into(),
+            dialog: ExtensionUiDialog::Confirm {
+                title: "Run the command?".into(),
+                message: "The agent wants to run a command.".into(),
+            },
+            timeout: None,
+        }
+    }
+
+    fn open_gate(gate: &mut MarkedGate, gate_id: &str) {
+        gate.with(|pending| {
+            coordinate_extension_ui_request(
+                PiChatEvent::ExtensionUiRequest(confirm_request(gate_id)),
+                pending,
+                |_, _| Ok(()),
+            )
+        })
+        .unwrap();
+    }
+
+    fn answer_gate(gate: &mut MarkedGate, gate_id: &str) {
+        gate.with(|pending| {
+            coordinate_permission_answer(
+                pending,
+                PendingPermissionAnswer {
+                    gate_id: gate_id.into(),
+                    answer: ChatPermissionAnswer::Confirm(true),
+                    resolved: None,
+                },
+                |_, _| Ok(()),
+                |_, _| Ok(7),
+            )
+        })
+        .unwrap();
+    }
+
+    fn start_effect(effects: &mut MarkedEffects, effect_id: &str) {
+        let started = PiChatEvent::ToolStarted {
+            tool_call_id: effect_id.into(),
+            tool_name: "Read file".into(),
+        };
+        assert!(effects
+            .with(|open_effects| tool_journal_entry(&started, open_effects))
+            .is_some());
+    }
+
+    #[test]
+    fn an_open_permission_gate_marks_runtime_activity_until_the_answer_lands() {
+        let registry = RuntimeActivityRegistry::new();
+        let mut gate = MarkedGate::pending_permission(Some(registry.clone()));
+        assert!(!registry.snapshot().pending_permission_gate);
+
+        open_gate(&mut gate, "gate-1");
+        assert!(registry.snapshot().pending_permission_gate);
+
+        answer_gate(&mut gate, "gate-1");
+        assert!(!registry.snapshot().pending_permission_gate);
+    }
+
+    #[test]
+    fn an_answer_for_another_gate_leaves_the_permission_mark_set() {
+        let registry = RuntimeActivityRegistry::new();
+        let mut gate = MarkedGate::pending_permission(Some(registry.clone()));
+        open_gate(&mut gate, "gate-1");
+        assert!(registry.snapshot().pending_permission_gate);
+
+        answer_gate(&mut gate, "gate-2");
+        assert!(registry.snapshot().pending_permission_gate);
+    }
+
+    #[test]
+    fn an_open_external_effect_marks_runtime_activity_until_the_last_one_closes() {
+        let registry = RuntimeActivityRegistry::new();
+        let mut effects = MarkedEffects::open_effects(Some(registry.clone()));
+        assert!(!registry.snapshot().in_flight_external_effect);
+
+        start_effect(&mut effects, "effect-1");
+        assert!(registry.snapshot().in_flight_external_effect);
+        start_effect(&mut effects, "effect-2");
+        assert!(registry.snapshot().in_flight_external_effect);
+
+        let finished = PiChatEvent::ToolFinished {
+            tool_call_id: "effect-1".into(),
+            failed: false,
+        };
+        assert!(effects
+            .with(|open_effects| tool_journal_entry(&finished, open_effects))
+            .is_some());
+        assert!(registry.snapshot().in_flight_external_effect);
+
+        let finished = PiChatEvent::ToolFinished {
+            tool_call_id: "effect-2".into(),
+            failed: false,
+        };
+        assert!(effects
+            .with(|open_effects| tool_journal_entry(&finished, open_effects))
+            .is_some());
+        assert!(!registry.snapshot().in_flight_external_effect);
+    }
+
+    #[test]
+    fn closing_the_open_effects_at_a_terminal_event_clears_the_effect_mark() {
+        let registry = RuntimeActivityRegistry::new();
+        let mut effects = MarkedEffects::open_effects(Some(registry.clone()));
+        start_effect(&mut effects, "effect-1");
+        start_effect(&mut effects, "effect-2");
+        assert!(registry.snapshot().in_flight_external_effect);
+
+        let mut closed = Vec::new();
+        effects
+            .with(|open_effects| {
+                close_open_effects(open_effects, |kind, payload| {
+                    closed.push((kind.to_owned(), payload));
+                    Ok::<(), ()>(())
+                })
+            })
+            .unwrap();
+        assert_eq!(closed.len(), 2);
+        assert!(!registry.snapshot().in_flight_external_effect);
+    }
+
+    #[test]
+    fn a_run_that_ends_with_an_open_gate_and_an_open_effect_clears_both_marks() {
+        let registry = RuntimeActivityRegistry::new();
+        {
+            let mut gate = MarkedGate::pending_permission(Some(registry.clone()));
+            let mut effects = MarkedEffects::open_effects(Some(registry.clone()));
+            open_gate(&mut gate, "gate-1");
+            start_effect(&mut effects, "effect-1");
+            assert!(registry.snapshot().pending_permission_gate);
+            assert!(registry.snapshot().in_flight_external_effect);
+        }
+        // The coordinate loop drops both values when it returns, whether the run
+        // failed or ended.
+        assert!(!registry.snapshot().pending_permission_gate);
+        assert!(!registry.snapshot().in_flight_external_effect);
+    }
 
     #[test]
     fn application_chat_session_dispatches_two_memory_turns_and_persists_recalls() {
