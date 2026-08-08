@@ -169,10 +169,7 @@ impl MemoryRuntimeSession {
         self.build_with_timeout(DEFAULT_BUILD_TIMEOUT)
     }
 
-    pub fn build_with_timeout(
-        &self,
-        timeout: Duration,
-    ) -> Result<ReindexReport, MemoryIndexError> {
+    pub fn build_with_timeout(&self, timeout: Duration) -> Result<ReindexReport, MemoryIndexError> {
         self.index.reindex_with_deadline(Instant::now() + timeout)
     }
 
@@ -853,15 +850,12 @@ mod tests {
                 .index()
                 .reindex_with_deadline(Instant::now() + timeout)
             {
-                Ok(_) => break fixture
-                    .index()
-                    .search(
-                        "thread",
-                        "lantern beacon",
-                        Fixture::limits(5, 1_000),
-                        None,
-                    )
-                    .unwrap(),
+                Ok(_) => {
+                    break fixture
+                        .index()
+                        .search("thread", "lantern beacon", Fixture::limits(5, 1_000), None)
+                        .unwrap()
+                }
                 Err(MemoryIndexError::TimedOut) => {
                     timeouts += 1;
                     assert!(timeouts < 15, "the index never built within the ratchet");
@@ -922,12 +916,7 @@ mod tests {
             .unwrap();
         assert_eq!(rows, 1, "the stopped build committed part of its work");
         let result = index
-            .search(
-                "thread",
-                "lantern beacon",
-                Fixture::limits(5, 1_000),
-                None,
-            )
+            .search("thread", "lantern beacon", Fixture::limits(5, 1_000), None)
             .unwrap();
         assert_eq!(result.recall.files, ["memory/first.md"]);
 
