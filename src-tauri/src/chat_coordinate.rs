@@ -6,6 +6,9 @@ use std::time::Duration;
 use muniment_core::attach::{RuntimeActivityGuard, RuntimeActivityRegistry};
 use muniment_core::chat_grant::{fetch_receipt, ChatGrant};
 use muniment_core::chat_profile::ChatProfile;
+use muniment_core::chat_view::{
+    chat_attachments, chat_pending_permission, chat_tool_activity, projection_phase,
+};
 use muniment_core::journal::pi_translation::{
     close_open_effects, model_stream_delta_payload, tool_journal_entry,
 };
@@ -27,11 +30,9 @@ use serde_json::{json, Value};
 use tauri::{Emitter, Manager};
 
 use crate::chat::{
-    chat_attachments, chat_pending_permission, chat_tool_activity, coordinate_prepared_prompt,
-    event_envelope, prepared_pi_prompt, ChatEvent, ChatState, PiRuntime, PreparedPromptError,
-    ResumeAttempt, ResumeContext, SharedStorage, RPC_TIMEOUT,
+    coordinate_prepared_prompt, event_envelope, prepared_pi_prompt, ChatEvent, ChatState,
+    PiRuntime, PreparedPromptError, ResumeAttempt, ResumeContext, SharedStorage, RPC_TIMEOUT,
 };
-use crate::chat_threads::projection_phase;
 
 /// Pairs one coordinate-loop state value with the runtime activity mark that
 /// follows it. Every mutation runs through `with`, so the mark cannot drift

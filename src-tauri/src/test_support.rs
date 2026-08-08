@@ -12,6 +12,7 @@ use muniment_core::attach::ProtocolError;
 use muniment_core::attach::{RuntimeActivityGuard, RuntimeActivityRegistry};
 use muniment_core::auth::TokenSet;
 use muniment_core::chat_grant::ChatGrant;
+use muniment_core::chat_view::{chat_attachments, ChatAttachment, SelectedFile};
 use muniment_core::journal::reducer::ChatProjector;
 #[cfg(target_os = "linux")]
 use muniment_core::journal::RunJournal;
@@ -21,8 +22,7 @@ use serde_json::json;
 use serde_json::Value;
 
 use crate::chat::{
-    attachment_error, chat_attachments, event_envelope, ActiveRun, ChatAttachment,
-    RunStartBoundaries, RunStartError, RunStartLaunch, SelectedFile,
+    attachment_error, event_envelope, ActiveRun, RunStartBoundaries, RunStartError, RunStartLaunch,
 };
 
 pub(crate) fn append_test_event(

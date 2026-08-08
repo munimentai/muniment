@@ -21,10 +21,11 @@ use muniment_core::chat_grant::{
 use muniment_core::chat_profile::ChatProfile;
 pub(crate) use muniment_core::chat_resume::ResumeContext;
 use muniment_core::chat_resume::{resumable_context as core_resumable_context, ChatResumeError};
-use muniment_core::journal::reconciliation::reconcile_interrupted_runs;
-use muniment_core::journal::reducer::{
-    project_chat, ChatProjector, PermissionGate, PermissionRequest, ProjectedAttachment,
+use muniment_core::chat_view::{
+    chat_attachments, ChatAttachment, ChatPendingPermission, ChatToolActivity, SelectedFile,
 };
+use muniment_core::journal::reconciliation::reconcile_interrupted_runs;
+use muniment_core::journal::reducer::{project_chat, ChatProjector};
 use muniment_core::journal::{
     EventEnvelope, EventPayload, JournalCommitHint, JournalError, Provenance, RunJournal,
 };
@@ -59,12 +60,6 @@ pub struct SubmitResult {
     pub(crate) accepted_at: String,
 }
 
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct SelectedFile {
-    pub(crate) path: PathBuf,
-}
-
 #[derive(Clone, Copy, Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum ChatDelivery {
@@ -82,14 +77,6 @@ pub struct ChatQueueRequest {
 
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub(crate) struct ChatToolActivity {
-    pub(crate) effect_id: String,
-    pub(crate) display_name: Option<String>,
-    pub(crate) status: String,
-}
-
-#[derive(Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
 pub(super) struct ChatEvent {
     pub(super) run_id: String,
     pub(super) phase: String,
@@ -101,43 +88,6 @@ pub(super) struct ChatEvent {
     pub(super) recalls: Vec<muniment_core::journal::reducer::ProjectedRecall>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) pending_permission: Option<ChatPendingPermission>,
-}
-
-#[derive(Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct ChatPendingPermission {
-    pub(crate) gate_id: String,
-    #[serde(flatten)]
-    pub(crate) request: PermissionRequest,
-}
-
-#[derive(Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ChatAttachment {
-    pub(crate) display_name: String,
-    pub(crate) byte_length: u64,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) media_type: Option<String>,
-}
-
-pub(crate) fn chat_attachments(attachments: &[ProjectedAttachment]) -> Vec<ChatAttachment> {
-    attachments
-        .iter()
-        .map(|attachment| ChatAttachment {
-            display_name: attachment.display_name.clone(),
-            byte_length: attachment.byte_length,
-            media_type: attachment.media_type.clone(),
-        })
-        .collect()
-}
-
-pub(crate) fn chat_pending_permission(
-    gate: Option<PermissionGate>,
-) -> Option<ChatPendingPermission> {
-    gate.map(|gate| ChatPendingPermission {
-        gate_id: gate.gate_id,
-        request: gate.request,
-    })
 }
 
 pub(crate) struct ActiveRun {
@@ -1578,24 +1528,6 @@ fn queue_permission_answer(
     Ok(())
 }
 
-pub(crate) fn chat_tool_activity(
-    activity: &[muniment_core::journal::reducer::ToolActivity],
-) -> Vec<ChatToolActivity> {
-    activity
-        .iter()
-        .map(|activity| ChatToolActivity {
-            effect_id: activity.effect_id.clone(),
-            display_name: activity.display_name.clone(),
-            status: match activity.status {
-                muniment_core::journal::reducer::ToolActivityStatus::Running => "running",
-                muniment_core::journal::reducer::ToolActivityStatus::Completed => "completed",
-                muniment_core::journal::reducer::ToolActivityStatus::Failed => "failed",
-            }
-            .into(),
-        })
-        .collect()
-}
-
 pub(crate) fn event_envelope(
     run_id: &str,
     run_seq: u64,
@@ -1671,7 +1603,7 @@ mod tests {
     use super::*;
     use crate::test_support::{append_test_event, FakeRunStartBoundaries};
     use base64::{engine::general_purpose::STANDARD, Engine};
-    use muniment_core::journal::reducer::{reduce, RunStatus};
+    use muniment_core::journal::reducer::reduce;
     use muniment_core::sidecar::validate_pi_session;
     use std::sync::atomic::AtomicUsize;
 
