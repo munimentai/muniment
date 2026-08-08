@@ -33,6 +33,7 @@ pub struct HistoryEntry {
     pub(crate) receipt: Option<Value>,
     pub(crate) tool_activity: Vec<ChatToolActivity>,
     pub(crate) attachments: Vec<ChatAttachment>,
+    pub(crate) recalls: Vec<muniment_core::journal::reducer::ProjectedRecall>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) pending_permission: Option<ChatPendingPermission>,
     pub(crate) resumable: bool,
@@ -141,6 +142,7 @@ fn project_history_entry(
         receipt: projection.receipt,
         tool_activity: chat_tool_activity(&projection.tool_activity),
         attachments: chat_attachments(&projection.attachments),
+        recalls: projection.recalls,
         pending_permission: chat_pending_permission(projection.pending_permission),
         resumable,
         run_id,

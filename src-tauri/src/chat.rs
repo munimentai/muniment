@@ -98,6 +98,7 @@ pub(super) struct ChatEvent {
     pub(super) receipt: Option<Value>,
     pub(super) tool_activity: Vec<ChatToolActivity>,
     pub(super) attachments: Vec<ChatAttachment>,
+    pub(super) recalls: Vec<muniment_core::journal::reducer::ProjectedRecall>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) pending_permission: Option<ChatPendingPermission>,
 }
