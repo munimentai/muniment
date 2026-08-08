@@ -432,26 +432,29 @@ single-use nonce from `getrandom` and took no new dependency (MUNIDESK-964). The
 attach `welcome` reserves the optional `handoff_nonce` field with its canonical
 fixture (MUNIDESK-923), and no listener sets the value yet.
 
-SELECTED 2026-08-07 (third wave) — the desktop answers the migration control
-request, and the wire catalog needs one new error code first.
-`DesktopAttachService` (`src-tauri/src/attach_service.rs:98`) inherits the trait
-default, so `control_migration` answers `unsupported_operation`. ADR 0012 reads
-that answer as a stale desktop that never hands off, so a temporary quiesce
-blocker must not reuse it. The `muniment.attach/1` catalog carries no code for a
-desktop that cannot hand off yet. The first slice adds `migration_not_ready`
-with its canonical fixture. The desktop answer is the slice after it. That
-answer verifies the peer through `verify_migration_control_peer`, evaluates the
-registry snapshot through `evaluate_quiesce`, and prepares
-`PreparedHandoffSlot`. Releasing the lock and closing the listener is a later
-slice again.
+DONE 2026-08-08 — the wire catalog carries the error the desktop answer needs
+(MUNIDESK-989). `ErrorCode::MigrationNotReady`
+(`src-tauri/attach/src/envelope.rs:238`) is retryable and reads `The desktop
+cannot hand off ownership yet.`, and `fixtures.rs` carries its canonical record.
+ADR 0012 reads `unsupported_operation` as a stale desktop that never hands off,
+so a temporary quiesce blocker takes the new code instead.
 
-SELECTED 2026-08-07, still open — muniment-core decides whether a probe
-`welcome` confirms a handoff. ADR 0012 has the desktop open a probe connection
-after it releases the lock, then check the returned nonce and the readiness
-deadline. `Welcome` (`src-tauri/attach/src/negotiation.rs:97`) already carries
-the optional `handoff_nonce`, and `src-tauri/core/src/attach/` holds no probe
-module. The rule lands as a pure core module with no call site, which is the
-shape `quiesce.rs` and `handoff.rs` landed in.
+DONE 2026-08-08 — muniment-core decides whether a probe `welcome` confirms a
+handoff (MUNIDESK-988). `confirm_handoff_probe`
+(`src-tauri/core/src/attach/handoff_probe.rs:32`) checks the readiness deadline
+first, then the returned nonce, and returns `ConfirmedHandoff` or one of three
+bounded reasons. The module has no call site yet, which is the shape `quiesce.rs`
+and `handoff.rs` landed in.
+
+SELECTED 2026-08-08 (fourth wave) — the desktop answers the migration control
+request. `DesktopAttachService` (`src-tauri/src/attach_service.rs:98`) still
+inherits the trait default, so `control_migration` answers
+`unsupported_operation`. The answer verifies the peer through
+`verify_migration_control_peer` against the packaged `muniment-runtime`
+resource, evaluates the shared `RuntimeActivityRegistry` snapshot through
+`evaluate_quiesce`, and prepares one `PreparedHandoffSlot`. A blocker answers
+`migration_not_ready`. Releasing the lock, closing the listener, and opening the
+readiness probe are later slices again.
 
 DONE 2026-08-07 — the permission gate coordination rules moved into
 muniment-core on the fourth filing (MUNIDESK-982).
@@ -476,12 +479,20 @@ disagree, because `chat_file_metadata` rejects a path with no usable final
 segment and `open_selected_files` does not. The lane waits for an owner look at
 why this one ticket never dispatches.
 
-MERGE HAZARD — the open slices edit `src-tauri/core/src/attach/`,
-`src-tauri/attach/src/envelope.rs`, `src-tauri/core/src/memory_index.rs`,
-`src-tauri/core/src/journal/reducer.rs`, `src-tauri/src/memory.rs`, and
-`src-tauri/src/chat_coordinate.rs`. Each ticket tells the implementer to rebase
-on `main` before it opens the pull request. The 2026-08-04 silent revert came
-from a stale base.
+MERGE HAZARD — the open slices edit `src-tauri/src/attach_service.rs`,
+`src-tauri/src/main.rs`, `src-tauri/core/src/memory_index.rs`,
+`src-tauri/core/src/journal/reducer.rs`, `src-tauri/src/memory.rs`,
+`src-tauri/src/chat_coordinate.rs`, `src-tauri/src/chat_threads.rs`, and
+`src/App.svelte`. Each ticket tells the implementer to rebase on `main` before it
+opens the pull request. The 2026-08-04 silent revert came from a stale base.
+
+SELECTED 2026-08-08 (fourth wave) — the memory runtime is the next core move.
+`ApplicationMemoryRuntime` (`src-tauri/src/memory.rs:9`) composes one
+`MemoryRuntimeSession` per run, writes the Pi agent extension, and dispatches
+each tool call. It names no Tauri type, and muniment-core already carries every
+dependency it uses, including `windows-sys` with `Win32_Storage_FileSystem` for
+the atomic replace. The move is the twentieth in the one-slice-at-a-time
+sequence, and the desktop keeps a thin wrapper so no call site changes shape.
 
 SEQUENCED — the later extraction slices are the remaining Pi execution move, the
 desktop client conversion, and Linux user-unit registration, each behind a
@@ -684,15 +695,12 @@ DONE 2026-08-07 — a resumed run opens its memory session (MUNIDESK-981).
 the active run when the open fails, so a resumed run never declares a tool it
 cannot serve.
 
-MEASURED 2026-08-08 (planner, read every call site) — two runs that start at
-once can race over the Pi agent extension file. `write_agent_extension`
-(`src-tauri/src/memory.rs:53`) calls `std::fs::write` on the fixed path
-`<cache>/memory-search-extension.js` at every session open, and `std::fs::write`
-truncates before it writes. The coordinate loop reads the same path and passes
-it to Pi as `--extension` (`src-tauri/src/chat_coordinate.rs:291`). A companion
-`run.start` or an ACP prompt that lands during a desktop run start can therefore
-hand Pi a truncated file. The declaration is static, so writing once through a
-temporary file and a rename closes the window. SELECTED.
+DONE 2026-08-08 — the Pi agent extension file is written atomically
+(MUNIDESK-991). `write_agent_extension` (`src-tauri/src/memory.rs:57`) writes a
+uniquely named temporary file and replaces the fixed path through `rename` on
+POSIX and `MoveFileExW` on Windows. Two runs that start at once no longer hand
+Pi a truncated `--extension` file. The planner had measured the race by reading
+every call site.
 
 DONE 2026-08-07 — a timed-out first index build no longer breaks memory search
 for good (MUNIDESK-984). `MemoryIndex::open`
@@ -703,11 +711,29 @@ reports as damaged. The planner measured the original defect on a Home of 2,000
 Markdown files, where the first build took 1.14 seconds and every later search
 then failed with SQLite constraint error 1555 on `memory_files`.
 
-SELECTED 2026-08-07 (third wave) — the index build leaves the retrieval
-deadline. `MemoryIndex::search` (`:250`) still calls `refreshed_cache`, so every
-search rescans and rehashes the whole Home before it reads one row. The build
-moves to the session open under its own deadline, and the search then reads the
-cache alone.
+DONE 2026-08-08 — the index build left the retrieval deadline (MUNIDESK-990).
+`MemoryIndex::search` (`src-tauri/core/src/memory_index.rs:259`) calls
+`read_cache`, which opens the cache and reads it without scanning the Home.
+`MemoryRuntimeSession::build_with_timeout` (`:172`) owns the build under its own
+deadline, and `ApplicationMemoryRuntime::open_session` runs it once per run.
+
+MEASURED 2026-08-08 (planner, scratch `cargo test` over a Home of 2,000 Markdown
+files) — the recall receipt now costs more than the search. `MemoryIndex::search`
+averages 16.2ms per call, and `source_state`
+(`src-tauri/core/src/memory_index.rs:696`) accounts for 9.5ms of it. That
+function reads every `memory_files` row and SHA-256 hashes the whole set on every
+call, only to stamp `RecallRecord::source_file_state`. The FTS5 query itself
+costs about 6.6ms. All sessions share `memory-index.sqlite3`, so a digest cached
+inside one `MemoryIndex` can become stale when another session reindexes. Store
+the digest with a cache generation in SQLite. Update both in the same reindex
+transaction as `memory_files` and FTS5, and read them in the same snapshot as
+the search results. Cache a digest only while its generation matches the
+database generation. Cache removal and rebuild must replace both values. Add a
+concurrency test where one session reindexes before an earlier session searches.
+The earlier session must return the updated rows and their matching
+`source_file_state`. This removes the scan without a durable-store migration,
+because the database remains a disposable cache. SELECTED 2026-08-08 (fourth
+wave).
 
 MEASURED 2026-08-07 — nothing renders a recall. The reducer drops
 `memory.recalled`, so `ChatProjection`
@@ -718,7 +744,7 @@ rather than in a new transcript element. The owner mockups name no memory
 surface, and design-spec §2.2 already promises the expanded receipt names the
 connections a reply touched. A running search also already renders as an
 ordinary `Memory search` tool card, because Pi reports the registered tool.
-SELECTED 2026-08-07 (third wave) — the projection carries the recall first, and
+SELECTED 2026-08-07, still open — the projection carries the recall first, and
 the shell renders it in the slice after that. `ChatProjector::apply`
 (`src-tauri/core/src/journal/reducer.rs:539`) and `project_chat_fragment`
 (`:484`) are the two arms to add, because `project_chat_with_state` (`:472`)
@@ -799,6 +825,20 @@ DONE 2026-08-04 — the multi-line permission gate names its commit chord
 (MUNIDESK-890). The card carries a hint under the field, and it renders `⌘⏎` on
 macOS and `Ctrl ⏎` elsewhere. The single-line kind commits on a plain Enter and
 needs no hint.
+
+MEASURED 2026-08-08 (planner, probe capture at 1100x720) — the receipt discloses
+nothing about itself. `test/probe/history.html` renders the provenance line
+`analysis/high → pi-2 · $0.014 · 6.2s · files@2`, and `test/probe/markdown.html`
+renders the static `Receipt unavailable` in the same mono register, the same
+size, and the same `--muted` color. The interactive line is a `<button>` with
+`aria-expanded` (`src/App.svelte:990`), and `.provenance` (`:1355`) strips its
+border and background and adds no marker. A pointer user sees an expandable
+control and a dead caption as the same object, and the color shift on hover is
+the only sign either way. Design-spec §2.2 promises the expanded receipt names
+the connections a reply touched, and the ADR 0026 recall lands in that same
+record, so the affordance carries more weight each wave. SELECTED 2026-08-08
+(fourth wave) — a disclosure marker joins the summary and DESIGN.md states the
+law.
 
 NOT FILED — the empty workspace reads `New thread` three times, in the titlebar,
 the sidebar action, and the sidebar current-thread record. The owner mockup sets
@@ -936,14 +976,17 @@ earlier one. Requiring an up-to-date branch before merge, or a merge queue, is a
 repository-settings change that sits with the owner. The planner files no ticket
 for it.
 
-VERIFIED 2026-08-08 (third wave, from a clean clone) — `npm ci` then `npm test`
+VERIFIED 2026-08-08 (fourth wave, from a clean clone) — `npm ci` then `npm test`
 passed 867 tests with 31 skipped across 59 files, and the browser suite passed
-3. The planner then read the handoff, quiesce, and migration-authority modules,
-every runtime activity call site, the memory index and its desktop composition,
-the coordinate loop, the chat reducer, and the companion run-event projection.
-It rebuilt the bundle and captured the history, permission, markdown, and
-onboarding probe fixtures at 1100x720. Earlier waves recorded the same shape of
-verification, and this entry replaces that ledger.
+3. `cargo test` over `muniment-core` and `muniment-attach` passed with no
+failure. The planner then read the handoff, probe, quiesce, and
+migration-authority modules, the attach dispatcher branch and the desktop attach
+service, the memory index and its desktop composition, the coordinate loop, and
+the chat reducer. It rebuilt the bundle and captured the index, history,
+markdown, select, approved-files, and signed-out probe fixtures at 1100x720. A
+scratch `cargo test` measured the memory search over a Home of 2,000 files.
+Earlier waves recorded the same shape of verification, and this entry replaces
+that ledger.
 
 NOTE 2026-08-06 — the planning clone ships no `node_modules`. Run `npm ci`
 before `npm test`. Without it the run dies with `vitest: not found`, which reads
