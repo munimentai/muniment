@@ -245,6 +245,14 @@ pub(crate) trait RunStartBoundaries {
     fn attach_approval(&self) -> Option<muniment_core::attach::Approval> {
         None
     }
+    #[cfg(target_os = "linux")]
+    fn control_migration(
+        &self,
+        _request: muniment_core::attach::linux::MigrationControlRequest,
+        _peer_pid: u32,
+    ) -> Result<(), ProtocolError> {
+        Err(ProtocolError::unsupported_operation())
+    }
     fn install_active_run(&self, run: ActiveRun) -> Result<(), RunStartError>;
     fn prepare_run(
         &self,
@@ -446,6 +454,15 @@ impl<R: tauri::Runtime> TauriRunStartBoundaries<R> {
 impl<R: tauri::Runtime> RunStartBoundaries for TauriRunStartBoundaries<R> {
     fn mark_active_run(&self) -> RuntimeActivityGuard {
         self.state().runtime_activity.mark_active_run()
+    }
+
+    #[cfg(target_os = "linux")]
+    fn control_migration(
+        &self,
+        request: muniment_core::attach::linux::MigrationControlRequest,
+        peer_pid: u32,
+    ) -> Result<(), ProtocolError> {
+        crate::attach_service::control_desktop_migration(&self.app, request, peer_pid)
     }
 
     #[cfg(target_os = "linux")]
