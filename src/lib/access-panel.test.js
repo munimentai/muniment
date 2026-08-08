@@ -211,6 +211,29 @@ describe('access popover layout', () => {
     expect(await screen.findByText('No connected programs found')).toBeInTheDocument()
   })
 
+  it('stops polling when listener initialization fails', async () => {
+    let statusCalls = 0
+    const invoke = vi.fn(async (command) => {
+      if (command === 'auth_entitlement_snapshot') return snapshot
+      if (command === 'auth_devices') return []
+      if (command === 'attach_companions') return []
+      if (command === 'attach_listener_status') {
+        statusCalls += 1
+        return statusCalls === 1
+          ? { started: false, failure: null, pending: true }
+          : { started: false, failure: 'filesystem', pending: false }
+      }
+      throw new Error(`unexpected command: ${command}`)
+    })
+    renderPanel(invoke)
+    await fireEvent.click(await screen.findByRole('button', { name: /Alice/ }))
+
+    expect(await screen.findByText('Loading connected programs…')).toBeInTheDocument()
+    expect(await screen.findByText('The connected programs folder is unavailable.')).toBeInTheDocument()
+    expect(statusCalls).toBe(2)
+    expect(screen.queryByText('No connected programs found')).not.toBeInTheDocument()
+  })
+
   it('renders the empty list when the listener started', async () => {
     const invoke = vi.fn(async (command) => {
       if (command === 'auth_entitlement_snapshot') return snapshot

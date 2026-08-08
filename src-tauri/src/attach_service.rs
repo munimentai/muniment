@@ -512,10 +512,18 @@ where
     F: FnOnce() -> Option<PathBuf>,
 {
     app.manage(AttachCompanionState::default());
-    let credential_path = credential_path()?;
+    let Some(credential_path) = credential_path() else {
+        app.state::<AttachCompanionState>()
+            .record_listener_start_failure(AttachListenerStartFailure::Filesystem);
+        return None;
+    };
     let workspace = app.state::<AttachCompanionState>().workspace.clone();
-    let state =
-        Arc::new(AttachListenerState::load_with_workspace(&credential_path, workspace).ok()?);
+    let Ok(state) = AttachListenerState::load_with_workspace(&credential_path, workspace) else {
+        app.state::<AttachCompanionState>()
+            .record_listener_start_failure(AttachListenerStartFailure::Filesystem);
+        return None;
+    };
+    let state = Arc::new(state);
     app.state::<AttachCompanionState>()
         .set_listener(state.clone());
     Some(state)
@@ -1439,6 +1447,14 @@ mod tests {
 
         let app = tauri::test::mock_app();
         assert!(initialize_attach_listener(app.handle(), || None).is_none());
+        assert_eq!(
+            app.state::<AttachCompanionState>().listener_status(),
+            AttachListenerStatus {
+                started: false,
+                failure: Some("filesystem"),
+                pending: false,
+            }
+        );
         assert_state_works(&app);
 
         let credential_path = std::env::temp_dir().join(format!(
@@ -1449,6 +1465,14 @@ mod tests {
         let app = tauri::test::mock_app();
         assert!(
             initialize_attach_listener(app.handle(), || Some(credential_path.clone())).is_none()
+        );
+        assert_eq!(
+            app.state::<AttachCompanionState>().listener_status(),
+            AttachListenerStatus {
+                started: false,
+                failure: Some("filesystem"),
+                pending: false,
+            }
         );
         assert_state_works(&app);
         std::fs::remove_file(credential_path).unwrap();
