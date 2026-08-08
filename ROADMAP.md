@@ -391,14 +391,17 @@ echoes the nonce. The default seam still answers `unsupported_operation`, so no
 desktop implementation runs yet. `THREAT_MODEL.md` records the rule and the
 same-user limitation.
 
-DONE — one of the five quiesce inputs is wired. `evaluate_quiesce` weighs five
-inputs in field order. They are an active run, a pending permission gate, an
-authentication operation, a session refresh, and an in-flight external effect.
-`RuntimeActivityRegistry` (`src-tauri/core/src/attach/runtime_activity.rs`)
-carries one mark method per activity and a guard that clears its mark on drop
-(MUNIDESK-957). `main` (`src-tauri/src/main.rs:21`) creates one registry and
-manages it, and `ActiveRun` (`src-tauri/src/chat.rs:141`) holds a guard for
-exactly the life of a run (MUNIDESK-961). The other four mark methods have no
+DONE — three of the five quiesce inputs are wired. `evaluate_quiesce` weighs
+five inputs in field order. They are an active run, a pending permission gate,
+an authentication operation, a session refresh, and an in-flight external
+effect. `RuntimeActivityRegistry`
+(`src-tauri/core/src/attach/runtime_activity.rs`) carries one mark method per
+activity and a guard that clears its mark on drop (MUNIDESK-957). `main`
+(`src-tauri/src/main.rs:22`) creates one registry and manages it, and
+`ActiveRun` (`src-tauri/src/chat.rs:141`) holds a guard for exactly the life of
+a run (MUNIDESK-961). `AuthState` (`src-tauri/src/auth/mod.rs:95`) takes the
+registry and marks both the authentication operation and the session refresh
+(MUNIDESK-979). The permission-gate mark and the external-effect mark have no
 production call site yet.
 
 DONE — the handoff nonce is separate work from the quiesce marks.
@@ -407,15 +410,15 @@ single-use nonce from `getrandom` and took no new dependency (MUNIDESK-964). The
 attach `welcome` reserves the optional `handoff_nonce` field with its canonical
 fixture (MUNIDESK-923), and no listener sets the value yet.
 
-SELECTED 2026-08-07 — the auth lane marks that registry next. A sign-in, a
-sign-out, and a session refresh each run while no run is active, so they are the
-two quiesce inputs the active-run mark does not cover. `AuthState::new`
-(`src-tauri/src/auth/mod.rs:94`) takes no registry today, and every
-`ensure_native_session` call site (`:69`, `:83`, `:198`, `:215`) is a refresh.
-The permission-gate mark and the external-effect mark both live inside the
-coordinate loop, which runs only while `active_run` is already true, so they
-follow the auth marks rather than lead them. The desktop `control_migration`
-answer comes after all four marks.
+SELECTED 2026-08-07 (second wave) — the coordinate loop marks the last two
+quiesce inputs. `mark_pending_permission_gate` and
+`mark_in_flight_external_effect` still have no caller. The loop already tracks
+both states, because `pending_permission` (`src-tauri/src/chat_coordinate.rs:455`)
+holds the open gate and `open_effects` (`:454`) holds the in-flight effect ids.
+One slice carries both marks, because one file holds both states and the
+2026-08-04 stale-base revert makes two pull requests over that file a hazard.
+The desktop `control_migration` answer follows this slice. A handoff that
+ignored an open gate would break the ADR 0012 rule.
 
 SELECTED 2026-08-07 — muniment-core decides whether a probe `welcome` confirms a
 handoff. ADR 0012 has the desktop open a probe connection after it releases the
@@ -424,16 +427,13 @@ lock, then check the returned nonce and the readiness deadline. `Welcome`
 `handoff_nonce`. The rule lands as a pure core module with no call site, which is
 the shape `quiesce.rs` and `handoff.rs` landed in.
 
-SELECTED 2026-08-07 (fourth filing) — the permission gate coordination rules move
-into muniment-core. `coordinate_extension_ui_request`
-(`src-tauri/src/chat_coordinate.rs:726`) and `coordinate_permission_answer`
-(`:739`) already take closures and touch no Tauri type. ADR 0012 phase one names
-permission gates as runtime-service state. `ChatPermissionAnswer`
-(`src-tauri/src/chat.rs:158`) and `PendingPermissionAnswer` (`:183`) move with
-them, and every remaining call site changes only its import path. Three earlier
-filings drained without a pull request, so this one names the target module
-`src-tauri/core/src/permission_gate.rs`, the four items, the five call sites, and
-the four unit tests to move.
+DONE 2026-08-07 — the permission gate coordination rules moved into
+muniment-core on the fourth filing (MUNIDESK-982).
+`src-tauri/core/src/permission_gate.rs` holds
+`coordinate_extension_ui_request`, `coordinate_permission_answer`,
+`ChatPermissionAnswer`, and `PendingPermissionAnswer`. Every call site changed
+only its import path. Naming the target module, the four items, the call sites,
+and the tests to move is what carried the fourth filing to a merge.
 
 HELD 2026-08-06 (eighth drain) — the selected-file open rule drained again, and
 the planner has stopped re-filing it. `src-tauri/core/src/selected_file.rs` does
@@ -647,24 +647,44 @@ from the Markdown sources. The journal migration alters the schema of the durabl
 store that holds the only copy of run history. That reading releases the cache and
 leaves the journal migration held.
 
-SELECTED 2026-08-07 — `reject_memory_secret` has no production call site, so
-§17 rule 7 is written but unenforced. The onboarding import is the product's only
-memory write path today, and `compile_onboarding_home_write_plan` is its one
-compile step. That is the first slice.
+DONE 2026-08-07 — §17 rule 7 reaches production (MUNIDESK-980). The onboarding
+import is the product's only memory write path, and
+`compile_onboarding_home_write_plan` now rejects an approved file that carries a
+secret.
 
-SELECTED 2026-08-07 — `chat_resume` (`src-tauri/src/chat.rs:898`) opens no memory
-session. `start_run` (`:424`) opens one and `launch` (`:778`) closes it, and the
-companion attach path reaches the same code, but the resume path calls
-`coordinate` directly. `coordinate` still registers the memory extension whenever
-the written extension file exists, so a resumed run declares the tool and then
-fails every call. That is the second slice.
+DONE 2026-08-07 — a resumed run opens its memory session (MUNIDESK-981).
+`install_resume_run` (`src-tauri/src/chat.rs:885`) opens the session and clears
+the active run when the open fails, so a resumed run never declares a tool it
+cannot serve.
 
-MEASURED 2026-08-07 — nothing renders a recall. The `memory.recalled` event
-reaches the frontend through the ordinary `chat-event` emit, and no component
-reads it. §17 rule 8 asks for a receipt and the journal holds one, so this is a
-product surface question rather than a correctness gap. A later wave should weigh
-a transcript record against the existing receipt grid, and it should read the
-owner mockup first.
+MEASURED 2026-08-07 (planner, release build, planning container) — a timed-out
+first index build breaks memory search for good. `MemoryIndex::open`
+(`src-tauri/core/src/memory_index.rs:334`) sets `PRAGMA journal_mode = OFF`,
+which disables rollback, and `MemoryIndex::search` (`:263`) runs the whole
+reindex inside the §17 retrieval deadline. A Home of 2,000 Markdown files of
+about 2 KB each took 1.14 seconds to index the first time. Under the 250 ms
+default the first search returned `TimedOut` after 250 ms. Every later search on
+that same database then failed with SQLite constraint error 1555 on
+`memory_files`, so the index never recovered. The threshold sits near 1,100
+files on this machine, `MAX_FILES` allows 10,000, and `sessions/` is one of the
+four scanned directories, so a working Home reaches it. SELECTED as the next
+§17 slice.
+
+SELECTED 2026-08-07 — moving the index build out of the retrieval deadline is
+the slice after that repair. It edits the same file, so it waits rather than
+races.
+
+MEASURED 2026-08-07 — nothing renders a recall. The reducer drops
+`memory.recalled`, so `ChatProjection`
+(`src-tauri/core/src/journal/reducer.rs:434`) carries no recall and the frontend
+receives none. DESIGN CALL 2026-08-07 — a recall belongs in the expanded receipt
+record under the provenance line, beside the route, model, cost, and time rows,
+rather than in a new transcript element. The owner mockups name no memory
+surface, and design-spec §2.2 already promises the expanded receipt names the
+connections a reply touched. A running search also already renders as an
+ordinary `Memory search` tool card, because Pi reports the registered tool.
+SELECTED — the projection carries the recall first, and the shell renders it in
+the next slice.
 
 DEFERRED — phase two embeddings follow phase one and a pinned artifact decision.
 
@@ -750,11 +770,15 @@ composer hint explains routing again. `docs/spec/01-design-system.md:139` asks a
 empty state for one sentence. The sentence is owner ground truth in the mockup
 and in two specs, so rewording it is an owner call. The planner asks for one.
 
-NOT SELECTED — every tool row carries `role="status"`, so a run with several tools
-inserts several polite live regions beside the one coarse per-phase announcement.
-MUNIDESK-704 added those roles deliberately, so the card rests. A later wave should
-weigh a real list against a live region and should measure the announcement count
-first.
+MEASURED 2026-08-07 — the announcement count is one live region per tool. Every
+sequential tool card carries `role="status"` (`src/App.svelte:975`), every row
+inside the parallel group carries it too (`:968`), and each row's `aria-label`
+changes from `running` to `completed`. A run with four sequential tools and
+three parallel tools mounts seven polite live regions beside the one coarse
+per-phase announcement (`:1008`), and each region speaks twice. SELECTED — the
+rows become a named list, and the coarse announcement stays the only live
+region. MUNIDESK-704 added those roles deliberately, and this measurement is the
+evidence that wave asked for.
 
 WITHDRAWN 2026-07-31 — the claim that the open thread's row exposes no `current`
 state does not survive its own check. This Chromium build reports no `current`
@@ -874,25 +898,27 @@ earlier one. Requiring an up-to-date branch before merge, or a merge queue, is a
 repository-settings change that sits with the owner. The planner files no ticket
 for it.
 
-VERIFIED 2026-08-07 (this wave, from a clean clone) — every suite the planning
-container can run passed. `cargo test` on the standalone `muniment-core` manifest
-exited zero, and `muniment-attach` and `muniment-runtime` reported the same. `npm
-ci` then `npm test` passed 866 tests with 31 skipped across 59 files, and the
-browser suite passed 3. The planner then read the memory index, the desktop memory
-runtime, the coordinate loop, the runtime activity call sites, the handoff module,
-and the auth command lane before it filed this wave's slices. Earlier waves
-recorded the same shape of verification, and this entry replaces that ledger.
+VERIFIED 2026-08-07 (second wave, from a clean clone) — every suite the planning
+container can run passed. `cargo test` on the standalone `muniment-core`
+manifest exited zero, and `muniment-attach` and `muniment-runtime` reported the
+same. `npm ci` then `npm test` passed 866 tests with 31 skipped across 59 files,
+and the browser suite passed 3. The planner then read the handoff and quiesce
+modules, the runtime activity call sites, the memory index, the coordinate loop,
+and the transcript markup, and it benchmarked the memory index against generated
+Homes of 100 to 2,000 files. Earlier waves recorded the same shape of
+verification, and this entry replaces that ledger.
 
 NOTE 2026-08-06 — the planning clone ships no `node_modules`. Run `npm ci`
 before `npm test`. Without it the run dies with `vitest: not found`, which reads
 as a broken harness.
 
-MEASURED 2026-08-06 — the probe capture ran after the 2026-08-06 wave's build, and
-the 2026-08-07 wave did not repeat it. `python3 -m http.server --directory .`
-served the repository root, and headless Chromium captured
-`test/probe/history.html` at 1100x720. The restored thread renders its sidebar,
-titlebar, transcript, two tool rows, provenance line, interrupted-reply record
-with its `Resume` control, and composer. The capture recorded no new defect.
+MEASURED 2026-08-07 — the probe capture ran again after `npm run build`.
+`python3 -m http.server --directory .` served the repository root, and headless
+Chromium captured `test/probe/history.html` at 1100x720. The restored thread
+renders its sidebar, titlebar, transcript, two tool rows, provenance line,
+interrupted-reply record with its `Resume` control, and composer. The capture
+recorded no new visual defect. The live-region count above came from the markup
+behind that capture rather than from the image.
 
 NOTE 2026-08-05 — a capture must pass `--wait-for-selector "[data-probe-ready]"`
 to playwright. The fixture loads the built bundle asynchronously, so a capture
