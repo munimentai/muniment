@@ -3456,7 +3456,7 @@ describe('thread announcements', () => {
 
     chatListener({ payload: { runId: 'run-old', phase: 'complete', text: 'Restored answer', receipt: {}, toolActivity: [{ effectId: 'tool-1', displayName: 'Read file', status: 'completed' }] } })
 
-    expect(await screen.findByRole('status', { name: 'Read file completed' })).toBeInTheDocument()
+    expect(await screen.findByRole('listitem', { name: 'Read file completed' })).toBeInTheDocument()
     expect(drain()).toEqual([])
     expect(region.textContent).toBe('')
   })
@@ -3539,14 +3539,26 @@ describe('tool activity cards', () => {
   it.each(statuses)('matches visible and accessible %s status text in a single card', async (status, label) => {
     restore([{ effectId: 'tool-1', displayName: 'Search files', status }])
 
-    const row = await screen.findByRole('status', { name: `Search files ${label}` })
+    const row = await screen.findByRole('listitem', { name: `Search files ${label}` })
     const visibleText = [...row.querySelectorAll('.tool-name, .tool-status')].map((part) => part.textContent).join(' ')
     expect(visibleText).toBe(row.getAttribute('aria-label'))
   })
 
+  it('renders three sequential tools as one named list without status roles', async () => {
+    restore([
+      { effectId: 'tool-1', displayName: 'Search files', status: 'completed' },
+      { effectId: 'tool-2', displayName: 'Read file', status: 'completed' },
+      { effectId: 'tool-3', displayName: 'Summarize file', status: 'completed' },
+    ])
+
+    const list = await screen.findByRole('list', { name: 'Tool activity' })
+    expect(within(list).getAllByRole('listitem')).toHaveLength(3)
+    expect(document.querySelectorAll('[role="status"]')).toHaveLength(0)
+  })
+
   it('updates a live running card to completed', async () => {
     restore([{ effectId: 'tool-1', displayName: 'Read file', status: 'running' }], 'streaming')
-    expect(await screen.findByRole('status', { name: 'Read file running' })).toBeInTheDocument()
+    expect(await screen.findByRole('listitem', { name: 'Read file running' })).toBeInTheDocument()
     await waitFor(() => expect(chatListener).toBeTypeOf('function'))
 
     chatListener({ payload: {
@@ -3554,14 +3566,14 @@ describe('tool activity cards', () => {
       toolActivity: [{ effectId: 'tool-1', displayName: 'Read file', status: 'completed' }],
     } })
 
-    expect(await screen.findByRole('status', { name: 'Read file completed' })).toBeInTheDocument()
-    expect(screen.queryByRole('status', { name: 'Read file running' })).not.toBeInTheDocument()
+    expect(await screen.findByRole('listitem', { name: 'Read file completed' })).toBeInTheDocument()
+    expect(screen.queryByRole('listitem', { name: 'Read file running' })).not.toBeInTheDocument()
   })
 
   it('labels failed activity with text and supplies a neutral missing name', async () => {
     restore([{ effectId: 'tool-1', displayName: null, status: 'failed' }])
 
-    const card = await screen.findByRole('status', { name: 'Tool activity failed' })
+    const card = await screen.findByRole('listitem', { name: 'Tool activity failed' })
     expect(card).toHaveTextContent('Tool activity')
     expect(card).toHaveTextContent('failed')
   })
@@ -3592,7 +3604,7 @@ describe('tool activity cards', () => {
 
     const group = await screen.findByRole('group', { name: `Parallel tool activity: Search files ${label}, Read file ${label}` })
     for (const name of ['Search files', 'Read file']) {
-      const row = within(group).getByRole('status', { name: `${name} ${label}` })
+      const row = within(group).getByRole('listitem', { name: `${name} ${label}` })
       const visibleText = [...row.querySelectorAll('.tool-name, .tool-status')].map((part) => part.textContent).join(' ')
       expect(visibleText).toBe(row.getAttribute('aria-label'))
     }
@@ -3605,8 +3617,8 @@ describe('tool activity cards', () => {
     ], 'streaming')
 
     const group = await screen.findByRole('group', { name: /Parallel tool activity: Search files running, Read file running/ })
-    expect(within(group).getByRole('status', { name: 'Search files running' })).toBeInTheDocument()
-    expect(within(group).getByRole('status', { name: 'Read file running' })).toBeInTheDocument()
+    expect(within(group).getByRole('listitem', { name: 'Search files running' })).toBeInTheDocument()
+    expect(within(group).getByRole('listitem', { name: 'Read file running' })).toBeInTheDocument()
     await waitFor(() => expect(chatListener).toBeTypeOf('function'))
 
     chatListener({ payload: {
@@ -3618,8 +3630,8 @@ describe('tool activity cards', () => {
     } })
 
     const settled = await screen.findByRole('group', { name: /Search files completed, Read file failed/ })
-    expect(within(settled).getByRole('status', { name: 'Search files completed' })).toBeInTheDocument()
-    expect(within(settled).getByRole('status', { name: 'Read file failed' })).toBeInTheDocument()
+    expect(within(settled).getByRole('listitem', { name: 'Search files completed' })).toBeInTheDocument()
+    expect(within(settled).getByRole('listitem', { name: 'Read file failed' })).toBeInTheDocument()
   })
 
   it('clears stale parallel grouping when history is reloaded', async () => {
@@ -3657,7 +3669,7 @@ describe('tool activity cards', () => {
     await fireEvent.click(await screen.findByRole('button', { name: 'Sign out' }))
     await fireEvent.click(await screen.findByRole('button', { name: 'Sign in' }))
 
-    expect(await screen.findByRole('status', { name: 'Search files completed' })).toBeInTheDocument()
+    expect(await screen.findByRole('listitem', { name: 'Search files completed' })).toBeInTheDocument()
     expect(screen.queryByRole('group', { name: /Parallel tool activity/ })).not.toBeInTheDocument()
   })
 })

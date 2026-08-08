@@ -964,18 +964,24 @@
               {#if groupedTools.length}
                 <div class="tool-card tool-group" role="group" aria-label={`Parallel tool activity: ${groupedTools.map((tool) => `${toolName(tool)} ${toolStatus(tool)}`).join(', ')}`}>
                   <div class="tool-group-title">Parallel tool activity</div>
-                  {#each groupedTools as tool}
-                    <div class:tool-running={toolStatus(tool) === 'running'} class:tool-failed={toolStatus(tool) === 'failed'} class="tool-row" role="status" aria-label={`${toolName(tool)} ${toolStatus(tool)}`}>
-                      <span class="tool-dot" aria-hidden="true"></span><span class="tool-name">{toolName(tool)}</span><span class="tool-status">{toolStatus(tool)}</span>
-                    </div>
-                  {/each}
+                  <ul class="tool-list">
+                    {#each groupedTools as tool}
+                      <li class:tool-running={toolStatus(tool) === 'running'} class:tool-failed={toolStatus(tool) === 'failed'} class="tool-row" aria-label={`${toolName(tool)} ${toolStatus(tool)}`}>
+                        <span class="tool-dot" aria-hidden="true"></span><span class="tool-name">{toolName(tool)}</span><span class="tool-status">{toolStatus(tool)}</span>
+                      </li>
+                    {/each}
+                  </ul>
                 </div>
               {/if}
-              {#each singleTools as tool}
-                <div class:tool-running={toolStatus(tool) === 'running'} class:tool-failed={toolStatus(tool) === 'failed'} class="tool-card tool-row" role="status" aria-label={`${toolName(tool)} ${toolStatus(tool)}`}>
-                  <span class="tool-dot" aria-hidden="true"></span><span class="tool-name">{toolName(tool)}</span><span class="tool-status">{toolStatus(tool)}</span>
-                </div>
-              {/each}
+              {#if singleTools.length}
+                <ul class="tool-list" aria-label="Tool activity">
+                  {#each singleTools as tool}
+                    <li class:tool-running={toolStatus(tool) === 'running'} class:tool-failed={toolStatus(tool) === 'failed'} class="tool-card tool-row" aria-label={`${toolName(tool)} ${toolStatus(tool)}`}>
+                      <span class="tool-dot" aria-hidden="true"></span><span class="tool-name">{toolName(tool)}</span><span class="tool-status">{toolStatus(tool)}</span>
+                    </li>
+                  {/each}
+                </ul>
+              {/if}
               {#if message.run.phase === 'complete'}
                 {@const summary = receiptSummary(message.run.receipt)}
                 {#if summary.route !== null || summary.detail}
@@ -1321,6 +1327,7 @@
   .thinking { display: flex; align-items: center; gap: 9px; color: var(--muted); font: var(--text-12) var(--font-mono); }
   .thinking path { fill: var(--signal); animation: breathe 1.8s ease-in-out infinite; }
   .tool-card { margin-top: 8px; padding: 8px 12px; border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--surface); color: var(--muted); font: var(--text-13) var(--font-mono); }
+  .tool-list { margin: 0; padding: 0; list-style: none; }
   .tool-row { display: flex; align-items: center; gap: 8px; min-height: 20px; }
   .tool-group-title { margin-bottom: 4px; color: var(--muted); }
   .tool-group .tool-row + .tool-row { margin-top: 4px; }
