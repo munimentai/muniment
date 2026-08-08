@@ -460,30 +460,33 @@ another thread may hold it. `AttachTransport::accept` (`:412`) polls the listene
 beside the stop eventfd and returns `Closed` once `stop` fires, so a blocked
 accept no longer runs forever.
 
-SELECTED 2026-08-08 (sixth wave) — two release-step slices remain, and neither
-depends on the other. The first gives muniment-core the readiness probe client
-that `confirm_handoff_probe`
-(`src-tauri/core/src/attach/handoff_probe.rs:32`) still has no caller for. The
-probe connects to the endpoint, sends one `hello`, reads the `welcome`, and
-closes before the authorization step. The second publishes the stop handle to
-the desktop. `start_attach_listener` (`src-tauri/src/attach_service.rs:466`)
-binds inside its own thread and drops the handle, so no other thread can stop
-the listener. Wiring both into the handoff is the slice after them.
+DONE 2026-08-08 — muniment-core holds the readiness probe client
+(MUNIDESK-1004). `read_handoff_probe_welcome`
+(`src-tauri/core/src/attach/handoff_probe.rs:62`) connects to the endpoint,
+sends one `hello`, reads the `welcome`, and closes before the authorization
+step. `src-tauri/core/tests/attach_handoff_probe.rs` drives it against a fake
+listener.
+
+SELECTED 2026-08-08 (seventh wave) — two release-step slices remain, and neither
+depends on the other. The first publishes the transport stop handle to the
+desktop. `start_attach_listener` (`src-tauri/src/attach_service.rs:533`) binds
+inside its own thread and holds the instance lock in a local binding, so no
+other thread can stop the listener or observe the release. The second composes
+the probe client with `confirm_handoff_probe` (`handoff_probe.rs:185`) under one
+bounded readiness deadline. The service binds its endpoint only after it takes
+the lock, so the first probe meets a refused connection and the composition must
+retry. Wiring both into the release step is the slice after them.
 
 DONE 2026-08-08 — a failed attach listener start now says why (MUNIDESK-1001).
 `attach_listener_start_diagnostic` (`src-tauri/core/src/attach/linux.rs:58`)
 names the filesystem, instance-lock, and bind failures, and
 `start_attach_listener` prints one line for each.
 
-MEASURED 2026-08-08 (sixth wave, planner, read the start path and the panel) —
-the diagnostic reaches stderr alone, so the user still reads a broken listener as
-an empty list. `initialize_attach_listener`
-(`src-tauri/src/attach_service.rs:447`) manages `AttachCompanionState` before the
-accept thread starts, so `attach_companions` (`:249`) answers with the empty
-credential list whatever the thread does next. `AccessPanel.svelte:254` then
-renders `No connected programs found` under `Connected programs`. DESIGN.md says
-an error message names the failure and the control beside it names the recovery.
-SELECTED 2026-08-08 (sixth wave).
+DONE 2026-08-08 — `Connected programs` says the listener did not start
+(MUNIDESK-1007). `AttachCompanionState` records the start outcome,
+`attach_listener_status` reports it, and the panel waits for that outcome before
+it reads the companion list. The planner had measured a broken listener
+rendering as an empty list.
 
 DONE 2026-08-07 — the permission gate coordination rules moved into
 muniment-core on the fourth filing (MUNIDESK-982).
@@ -509,13 +512,12 @@ segment and `open_selected_files` does not. The lane waits for an owner look at
 why this one ticket never dispatches.
 
 MERGE HAZARD — the open slices edit `src-tauri/src/attach_service.rs`,
-`src-tauri/src/chat.rs`, `src-tauri/src/test_support.rs`,
-`src-tauri/core/src/attach/handoff_probe.rs`,
-`src-tauri/core/src/memory_index.rs`, `src/lib/AccessPanel.svelte`,
-`src/lib/chat-state.js`, and `src/App.svelte`. Two open slices edit
-`attach_service.rs`, and two edit the receipt row. Each ticket tells the
-implementer to rebase on `main` before it opens the pull request. The 2026-08-04
-silent revert came from a stale base.
+`src-tauri/core/src/attach/handoff_probe.rs`, `src-tauri/src/chat_threads.rs`,
+`src-tauri/core/src/home.rs`, `src-tauri/src/home.rs`,
+`src/lib/onboarding-state.js`, and `test/probe/stub.js`. One open slice edits
+each of those files this wave. Each ticket tells the implementer to rebase on
+`main` before it opens the pull request. The 2026-08-04 silent revert came from a
+stale base.
 
 DONE 2026-08-08 — the memory runtime is the twentieth core move
 (MUNIDESK-995). `src-tauri/core/src/memory_runtime.rs` composes one
@@ -527,17 +529,20 @@ DONE 2026-08-08 — the chat view types are the twenty-first move
 `ChatAttachment`, `ChatToolActivity`, `ChatPendingPermission`,
 `chat_attachments`, and `chat_pending_permission`.
 
-SELECTED 2026-08-08 (sixth wave) — the run-start coordinator is the
-twenty-second move. `RunStartRequest` (`src-tauri/src/chat.rs:123`),
-`RunStartLaunch` (`:131`), the `RunStartBoundaries` trait (`:143`),
-`RunStartError` (`:237`), `ActiveRun` (`:93`), `start_desktop_run` (`:267`), and
-`prepare_desktop_run` (`:276`) name muniment-core types alone. `TokenSet`,
-`ChatGrant`, `ChatProjector`, `PiRpcTransport`, `PiRunAdapter`,
-`PendingPermissionAnswer`, `RuntimeActivityGuard`, `ProtocolError`, and the
-`attach::linux` request and page types all live in the core crate already, so
-the move needs no trait split. `TauriRunStartBoundaries` (`:394`) and
-`FakeRunStartBoundaries` (`src-tauri/src/test_support.rs:44`) stay in the
-desktop as the two implementations.
+DONE 2026-08-08 — the run-start coordinator is the twenty-second move
+(MUNIDESK-1005). `src-tauri/core/src/run_start.rs` holds `RunStartRequest`,
+`RunStartLaunch`, the `RunStartBoundaries` trait, `RunStartError`, `ActiveRun`,
+`start_desktop_run`, and `prepare_desktop_run`. `TauriRunStartBoundaries` and
+`FakeRunStartBoundaries` stayed in the desktop as the two implementations.
+
+SELECTED 2026-08-08 (seventh wave) — the thread history projection is the
+twenty-third move. `HistoryEntry` (`src-tauri/src/chat_threads.rs:28`),
+`ChatThreadOpenPage` (`:57`), `load_prompt` (`:64`), `project_history_entry`
+(`:115`), `history_resumable` (`:140`), and `chat_thread_open_page` (`:150`)
+name core types alone. `chat_view`, `chat_prompt`, `chat_resume`, the journal
+reducer, and `thread_ownership` all live in the core crate already. The core
+half returns a typed error, and the desktop wrapper keeps the sentence
+`Conversation history is unavailable.`, which is the `owned_threads` shape.
 
 SEQUENCED — the later extraction slices are the remaining Pi execution move, the
 desktop client conversion, and Linux user-unit registration, each behind a
@@ -734,6 +739,17 @@ DONE 2026-08-07 — §17 rule 7 reaches production (MUNIDESK-980). The onboardin
 import is the product's only memory write path, and
 `compile_onboarding_home_write_plan` now rejects an approved file that carries a
 secret.
+MEASURED 2026-08-08 (seventh wave, planner, read the three layers of the import
+failure path) — the secret rejection names no file.
+`OnboardingHomeWritePlanError::SecretRejected` (`src-tauri/core/src/home.rs:119`)
+carries no entry, the command error carries none (`src-tauri/src/home.rs:58`),
+and the screen asks the user to leave out the file that holds the credential
+without naming it (`src/lib/onboarding-state.js:94`). The approved-review screen
+lists many files, so the user removes files by trial.
+`DestinationConflict { relative_path }` is the precedent for a typed error that
+names its item, and the source name is already bounded by
+`reject_unsafe_metadata`. DESIGN.md takes the rule. SELECTED 2026-08-08 (seventh
+wave).
 
 DONE 2026-08-07 — a resumed run opens its memory session (MUNIDESK-981).
 `install_resume_run` (`src-tauri/src/chat.rs:885`) opens the session and clears
@@ -779,8 +795,9 @@ results. Cache removal and rebuild must replace both values. Add a concurrency
 test where one session reindexes before an earlier session searches. The earlier
 session must return the updated rows and their matching `source_file_state`.
 This removes the scan without a durable-store migration, because the database
-remains a disposable cache. SELECTED 2026-08-08 (fifth wave), still open on the
-sixth.
+remains a disposable cache. DONE 2026-08-08 (MUNIDESK-1006). The
+`memory_cache_state` table stores the digest beside a cache generation, and one
+reindex transaction writes both.
 
 DO NOT RE-FILE — the per-run index build is not a defect. On the same 2,000-file
 Home a release-build reindex costs 30ms once the cache holds the current hashes,
@@ -820,7 +837,8 @@ Home-relative paths in one value widened the record card from 329px to the full
 760px thread column, so one receipt in a thread renders at a different width
 from its neighbours. Two recalls in one run produce two `Memory` terms that name
 nothing that tells them apart. A recall that matched no file renders the prose
-`no files` where every other value is data. SELECTED 2026-08-08 (sixth wave).
+`no files` where every other value is data. DONE 2026-08-08
+(MUNIDESK-1008).
 
 DEFERRED — phase two embeddings follow phase one and a pinned artifact decision.
 
@@ -988,6 +1006,14 @@ rendered text with whitespace removed, and `markProbeReady` awaits
 `document.fonts.ready` before it sets `data-probe-ready`, so a capture never shoots
 the fallback type. `test/probe-harness.test.js` guards the single ready-marker
 write.
+MEASURED 2026-08-08 (seventh wave, planner, opened the profile popover on the
+built bundle) — the probe stub hides the `Connected programs` section.
+`AccessPanel.svelte:88` waits on `attach_listener_status`, and
+`test/probe/stub.js` answers an unknown command with `null` (`:329`). The panel
+then takes its error branch and renders `Connected programs could not be
+loaded.` MUNIDESK-1007 added the command, and the stub never learned it. An
+unknown command must fail loudly, because the silent answer is what let the gap
+through. SELECTED 2026-08-08 (seventh wave).
 
 DONE — the suite runs on Windows. Three slices gated every block that spawns a
 POSIX shell, and `test/posix-shell-gate.test.js` fails when a new `bash` call site
@@ -1038,17 +1064,16 @@ earlier one. Requiring an up-to-date branch before merge, or a merge queue, is a
 repository-settings change that sits with the owner. The planner files no ticket
 for it.
 
-VERIFIED 2026-08-08 (sixth wave, from a clean clone) — `npm ci` then `npm test`
-passed 878 frontend tests across 59 files, and the browser suite passed 3.
-`cargo test -p muniment-core -p muniment-attach` passed with no failure. The
-planner then read the attach transport with its new stop handle, the desktop
-attach service and its listener start path, the handoff and probe modules, the
-memory index and its search and reindex paths, the run-start coordinator and its
-boundaries trait, the chat reducer, and the receipt markup. It rebuilt the bundle
-and drove `test/probe/history.html` in headless Chromium at 1100x760, expanded
-the receipt, and measured the record card against a one-file recall and a
-three-file recall. Earlier waves recorded the same shape of verification, and
-this entry replaces that ledger.
+VERIFIED 2026-08-08 (seventh wave, from a clean clone) — `npm ci` then
+`npm test` passed 884 frontend tests across 59 files, and the browser suite
+passed 3. `cargo test -p muniment-core -p muniment-attach` passed with no
+failure. The planner then read the handoff, probe, and quiesce modules, the
+desktop attach service with its listener start path and its migration-control
+answer, the thread history projection, the onboarding import write plan, and the
+memory index cache state. It rebuilt the bundle, captured six probe fixtures in
+headless Chromium at 1100x760, and drove the profile popover open on
+`test/probe/index.html`. Earlier waves recorded the same shape of verification,
+and this entry replaces that ledger.
 
 NOTE 2026-08-06 — the planning clone ships no `node_modules`. Run `npm ci`
 before `npm test`. Without it the run dies with `vitest: not found`, which reads
