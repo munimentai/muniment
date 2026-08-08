@@ -3872,30 +3872,39 @@ describe('provenance line', () => {
     restore({ route: 'analysis/high', model: 'glm-5.2', cost: '$0.0089', time: '6.2s', capabilities: [{ name: 'search', version: '2' }] })
 
     const line = await screen.findByRole('button', { name: /^Expand receipt:/ })
+    const marker = line.querySelector('.receipt-marker')
     expect(line.textContent).toBe('analysis/high → glm-5.2 · $0.0089 · 6.2s · search@2')
+    expect(marker).toHaveAttribute('aria-hidden', 'true')
+    expect(marker).not.toHaveClass('expanded')
     await fireEvent.click(line)
 
     const record = document.querySelector('.receipt-record')
     expect(record.textContent).toBe('Routeanalysis/highModelglm-5.2Cost$0.0089Time6.2sCapabilitysearch@2')
     expect(record.querySelectorAll('.route-value')).toHaveLength(1)
     expect(await screen.findByRole('button', { name: 'Collapse receipt: Routed via analysis/high to model glm-5.2, $0.0089, 6.2s, search@2' })).toBe(line)
+    expect(marker).toHaveClass('expanded')
 
     await fireEvent.click(line)
     await waitFor(() => expect(document.querySelector('.receipt-record')).toBeNull())
+    expect(marker).not.toHaveClass('expanded')
   })
 
   it('renders a provenance line when a reply has an empty receipt', async () => {
     restore({})
 
     expect(await screen.findByText('A routed answer')).toBeInTheDocument()
-    expect(screen.getByText('Receipt unavailable')).toHaveClass('provenance')
+    const line = screen.getByText('Receipt unavailable')
+    expect(line).toHaveClass('provenance')
+    expect(line.querySelector('.receipt-marker')).toBeNull()
   })
 
   it('renders a provenance line when a reply has no receipt', async () => {
     restore(null)
 
     expect(await screen.findByText('A routed answer')).toBeInTheDocument()
-    expect(screen.getByText('Receipt unavailable')).toHaveClass('provenance')
+    const line = screen.getByText('Receipt unavailable')
+    expect(line).toHaveClass('provenance')
+    expect(line.querySelector('.receipt-marker')).toBeNull()
   })
 })
 
