@@ -723,10 +723,16 @@ averages 16.2ms per call, and `source_state`
 (`src-tauri/core/src/memory_index.rs:696`) accounts for 9.5ms of it. That
 function reads every `memory_files` row and SHA-256 hashes the whole set on every
 call, only to stamp `RecallRecord::source_file_state`. The FTS5 query itself
-costs about 6.6ms. The build no longer runs during a search, so the cache cannot
-change between two searches in one session. Caching the digest inside
-`MemoryIndex` behind the existing `remove_cache` and reindex paths removes the
-scan and needs no new table, column, or migration. SELECTED 2026-08-08 (fourth
+costs about 6.6ms. All sessions share `memory-index.sqlite3`, so a digest cached
+inside one `MemoryIndex` can become stale when another session reindexes. Store
+the digest with a cache generation in SQLite. Update both in the same reindex
+transaction as `memory_files` and FTS5, and read them in the same snapshot as
+the search results. Cache a digest only while its generation matches the
+database generation. Cache removal and rebuild must replace both values. Add a
+concurrency test where one session reindexes before an earlier session searches.
+The earlier session must return the updated rows and their matching
+`source_file_state`. This removes the scan without a durable-store migration,
+because the database remains a disposable cache. SELECTED 2026-08-08 (fourth
 wave).
 
 MEASURED 2026-08-07 — nothing renders a recall. The reducer drops
