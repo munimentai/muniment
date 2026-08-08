@@ -59,10 +59,13 @@ export function receiptLabel(receipt = {}) {
   return [relation, ...receiptTrailing(receipt)].filter(recorded).join(', ')
 }
 
-export function receiptRows(receipt = {}) {
+export function receiptRows(receipt = {}, recalls = []) {
   const rows = []
   for (const [field, label] of [['route', 'Route'], ['model', 'Model'], ['cost', 'Cost'], ['time', 'Time']]) {
     if (receipt[field] !== undefined && receipt[field] !== null) rows.push({ label, value: receipt[field], route: field === 'route' })
+  }
+  for (const recall of recalls ?? []) {
+    rows.push({ label: 'Memory', value: recall?.files?.length ? recall.files.join(', ') : 'no files', route: false })
   }
   for (const capability of receipt.capabilities ?? []) {
     if (capability?.name !== undefined && capability?.name !== null && capability?.version !== undefined && capability?.version !== null) {
@@ -117,10 +120,10 @@ export function formatByteSize(bytes) {
 export function applyChatEvent(run, event) {
   if (!run || event.runId !== run.id) return run
   const pendingPermission = event.pendingPermission ?? null
-  if (event.phase) return { ...run, phase: event.phase, text: event.text ?? '', receipt: event.receipt ?? null, toolActivity: event.toolActivity ?? [], attachments: event.attachments ?? run.attachments ?? [], pendingPermission }
+  if (event.phase) return { ...run, phase: event.phase, text: event.text ?? '', receipt: event.receipt ?? null, recalls: event.recalls ?? [], toolActivity: event.toolActivity ?? [], attachments: event.attachments ?? run.attachments ?? [], pendingPermission }
   if (event.type === 'prompt-accepted') return { ...run, accepted: true, pendingPermission }
   if (event.type === 'text-delta') return { ...run, phase: 'streaming', text: run.text + event.text, pendingPermission }
-  if (event.type === 'completed') return { ...run, phase: 'complete', receipt: event.receipt ?? {}, pendingPermission }
+  if (event.type === 'completed') return { ...run, phase: 'complete', receipt: event.receipt ?? {}, recalls: event.recalls ?? [], pendingPermission }
   if (event.type === 'cancelled') return { ...run, phase: 'cancelled', pendingPermission }
   if (event.type === 'failed') return { ...run, phase: 'failed', pendingPermission }
   return run
@@ -133,6 +136,6 @@ export function applyBufferedChatEvents(run, events) {
 export function historyMessages(history) {
   return history.flatMap((entry) => [
     ...(entry.prompt || entry.attachments?.length ? [{ role: 'user', text: entry.prompt ?? '', attachments: entry.attachments ?? [] }] : []),
-    { role: 'assistant', run: { id: entry.runId, phase: entry.phase, text: entry.text, receipt: entry.receipt ?? null, prompt: entry.prompt ?? '', toolActivity: entry.toolActivity ?? [], pendingPermission: entry.pendingPermission ?? null, resumable: entry.resumable === true } },
+    { role: 'assistant', run: { id: entry.runId, phase: entry.phase, text: entry.text, receipt: entry.receipt ?? null, recalls: entry.recalls ?? [], prompt: entry.prompt ?? '', toolActivity: entry.toolActivity ?? [], pendingPermission: entry.pendingPermission ?? null, resumable: entry.resumable === true } },
   ])
 }

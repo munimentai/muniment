@@ -162,6 +162,24 @@ describe('chat composer and projection', () => {
     ])
   })
 
+  it('projects one memory row per recall before capabilities', () => {
+    expect(receiptRows(
+      { route: 'fast', model: 'glm-5.2', cost: '$0.04', time: '1.8s', capabilities: [{ name: 'files', version: '1' }] },
+      [
+        { query: 'lease', files: ['/Documents/Muniment/lease.pdf', '/Documents/Muniment/notes.md'] },
+        { query: 'missing clause', files: [] },
+      ],
+    )).toEqual([
+      { label: 'Route', value: 'fast', route: true },
+      { label: 'Model', value: 'glm-5.2', route: false },
+      { label: 'Cost', value: '$0.04', route: false },
+      { label: 'Time', value: '1.8s', route: false },
+      { label: 'Memory', value: '/Documents/Muniment/lease.pdf, /Documents/Muniment/notes.md', route: false },
+      { label: 'Memory', value: 'no files', route: false },
+      { label: 'Capability', value: 'files@1', route: false },
+    ])
+  })
+
   it('omits absent receipt fields', () => {
     expect(receiptRows({ model: 'glm-5.2', time: '1.8s' })).toEqual([
       { label: 'Model', value: 'glm-5.2', route: false },
@@ -176,6 +194,20 @@ describe('chat composer and projection', () => {
 
   it('projects no rows from an empty receipt', () => {
     expect(receiptRows({})).toEqual([])
+  })
+
+  it('carries recalls from live events and restored history', () => {
+    const recalls = [{ query: 'lease', files: ['/Documents/Muniment/lease.pdf'] }]
+    expect(applyChatEvent(
+      { id: 'r', phase: 'thinking', text: '' },
+      { runId: 'r', phase: 'complete', text: 'Done', recalls },
+    ).recalls).toEqual(recalls)
+    expect(applyChatEvent(
+      { id: 'r', phase: 'thinking', text: '' },
+      { runId: 'r', phase: 'complete', text: 'Done' },
+    ).recalls).toEqual([])
+    expect(historyMessages([{ runId: 'r', phase: 'complete', text: 'Done', recalls }])[0].run.recalls).toEqual(recalls)
+    expect(historyMessages([{ runId: 'r', phase: 'complete', text: 'Done' }])[0].run.recalls).toEqual([])
   })
 
   it('announces one coarse in-progress state for a whole generation', () => {
