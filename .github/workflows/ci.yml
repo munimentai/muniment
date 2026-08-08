@@ -400,12 +400,15 @@ jobs:
           attempt=1
           while true; do
             attempt_log="$RUNNER_TEMP/desktop-ci-$PLATFORM-$attempt.log"
-            ssh -i "$key" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
-                 -o BatchMode=yes -o ServerAliveInterval=30 -o ServerAliveCountMax=8 \
-                 desktopci@10.1.10.10 \
-                 "sudo desktop-ci $PLATFORM --repo '$repo_url' --ref '$REF' --cmd '$cmd'" \
-                 2>&1 | tee "$attempt_log"
-            status="${PIPESTATUS[0]}"
+            if ssh -i "$key" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+                   -o BatchMode=yes -o ServerAliveInterval=30 -o ServerAliveCountMax=8 \
+                   desktopci@10.1.10.10 \
+                   "sudo desktop-ci $PLATFORM --repo '$repo_url' --ref '$REF' --cmd '$cmd'" \
+                   2>&1 | tee "$attempt_log"; then
+              status=0
+            else
+              status="${PIPESTATUS[0]}"
+            fi
             retry_wix_download=false
             if [ "$PLATFORM" = "windows" ] && [ "$status" -eq 1 ] && \
                grep -Fq 'failed to bundle project: `Peer disconnected`' "$attempt_log"; then
