@@ -166,7 +166,7 @@ pub struct ChatState {
     active: Mutex<Option<ActiveRun>>,
     runtime: Arc<Mutex<Option<PiRuntime>>>,
     pub(crate) session_thread: SessionThread,
-    runtime_activity: RuntimeActivityRegistry,
+    pub(crate) runtime_activity: RuntimeActivityRegistry,
 }
 
 pub(crate) struct RunStartRequest {
