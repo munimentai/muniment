@@ -506,7 +506,7 @@ describe('workspace composer entry', () => {
 
     registrationRetryListener({ payload: { delay_seconds: 30 } })
 
-    expect(await screen.findByText('Server busy — retrying in 30 s')).toBeInTheDocument()
+    expect(await screen.findByText('Server busy. Retrying in 30 s')).toBeInTheDocument()
     expect(screen.queryByText(/Sign-in not completed/)).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Try again' })).not.toBeInTheDocument()
 
@@ -525,7 +525,7 @@ describe('workspace composer entry', () => {
 
     await fireEvent.click(await screen.findByRole('button', { name: 'Sign in' }))
 
-    expect(await screen.findByText(/Sign-in not completed — Error: native installation registration failed/)).toBeInTheDocument()
+    expect(await screen.findByText(/Sign-in not completed: Error: native installation registration failed/)).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Try again' })).toBeInTheDocument()
   })
 
@@ -4010,8 +4010,8 @@ describe('composer auto-grow', () => {
   const resting = `${2 * row}px`
   const cap = `${10 * row}px`
   const lines = (count) => Array.from({ length: count }, (_, index) => `line ${index + 1}`).join('\n')
-  // Rendered line count for a draft — a narrower composer soft-wraps the same
-  // text onto more lines, which the resize test models by replacing this.
+  // A narrower composer soft-wraps the same draft onto more rendered lines.
+  // The resize test models that behavior by replacing this.
   let rendered
 
   beforeEach(() => {

@@ -1,4 +1,4 @@
-# Muniment Desktop App — Design Document
+# Muniment Desktop App Design Document
 
 **Doc 2 of 5** · Tokens, laws, identity, components: see 01-design-system.md
 **Runtime:** Tauri v2 · **Status:** v1 for handoff · July 2026
@@ -22,7 +22,7 @@ Expanded by default (260px), state remembered; collapse (`⌘\`) animates 180ms 
 
 Top→bottom: **New thread** (`⌘N`) · **Search** (`⌘F` global) · **Threads** (recents; title + relative time, no content previews; context menu: rename, share to project…, delete) · **Projects** (section renders only if the user belongs to ≥1 project; solo users never see the concept) · **Inbox** (only if the user owns workflows or belongs to a project) · **Profile block**.
 
-**Profile block:** no avatar. `mikey · dnsfilter · owner` — name grotesque, org+role mono muted. Click → popover: appearance (System/Light/Dark), **Your access** (entitlement peek: groups list; each expands to models, connections, packages, capabilities granted, read-only, mono; footer "Access is set by your admins"), keyboard shortcuts, sign out.
+**Profile block:** no avatar. `mikey · dnsfilter · owner`. The name uses grotesque. The organization and role use muted mono. Click → popover: appearance (System/Light/Dark), **Your access** (entitlement peek: groups list; each expands to models, connections, packages, capabilities granted, read-only, mono; footer "Access is set by your admins"), keyboard shortcuts, sign out.
 
 ### 2.2 Command palette (`⌘K`)
 
@@ -35,7 +35,7 @@ One mode. No mode switcher exists anywhere, including menus and settings.
 ### 3.1 Message grammar
 
 - **User message:** right-aligned, `faint` bubble, radius 10, max-width 78%. Attachments as chips inside the bubble.
-- **Response:** left-aligned plain text on `paper` — no bubble, no avatar. The model writes onto the org's page.
+- **Response:** left-aligned plain text on `paper`, with no bubble or avatar. The model writes onto the org's page.
 - **Pre-first-token:** the milled ring (thinking state, 17px) + mono status: `Routing · analysis/high`. Ring and streaming underline never animate at once; the ring resolves when the first token lands.
 - **Streaming:** active line carries the 2px signal underline + signal caret. Color leaves at completion.
 - **Tool activity:** inline tool cards per design-system §6. Sequential tools stack; parallel tools render as a grouped card with per-tool status rows.
@@ -44,7 +44,7 @@ One mode. No mode switcher exists anywhere, including menus and settings.
 
 ### 3.2 Message actions
 
-Hover (or focus) reveals a quiet action row: copy, fork from here, share…, retry (responses only). Retry re-routes; the new provenance line shows the change. Edits to user messages create a visible branch marker, not silent history rewriting — ledger honesty.
+Hover (or focus) reveals a quiet action row: copy, fork from here, share…, retry (responses only). Retry re-routes; the new provenance line shows the change. Edits to user messages create a visible branch marker, not silent history rewriting. This preserves ledger honesty.
 
 ## 4. Composer
 
@@ -57,7 +57,7 @@ Hover (or focus) reveals a quiet action row: copy, fork from here, share…, ret
 Global hold-to-talk `⌥Space` (macOS) / `Alt+Space` alternative binding on Windows if the system menu conflicts (settle in build; expose rebinding in settings). Click-and-hold the voice button does the same; double-tap toggles hands-free until `Esc`.
 
 1. **Capturing:** hint line becomes a 5-bar level meter (muted bars). Verbatim transcript streams into the input in muted text.
-2. **Polishing (on release):** transcript flashes the signal underline while the local model strips fillers and applies self-corrections — the only signal ever inside the composer, because computation is happening — then settles to ink. Transform chips (key points · formal · short · long) appear for 6s; `⌥1–4` applies.
+2. **Polishing (on release):** transcript flashes the signal underline while the local model strips fillers and applies self-corrections. This is the only signal inside the composer because computation occurs. The transcript then settles to ink. Transform chips (key points · formal · short · long) appear for 6s; `⌥1–4` applies.
 3. `Esc` cancels and restores prior input. Read-aloud: response context menu → "Read aloud" (Kokoro); a quiet stop control appears in the titlebar row while speaking.
 
 All voice processing is on-device; settings state this plainly.
@@ -71,7 +71,7 @@ All voice processing is on-device; settings state this plainly.
 A project = shared workspace root + files + artifacts + connections + instructions. Opening one swaps the titlebar to project tabs: **Threads · Shared · Artifacts · Inbox · Connections**.
 
 - **Threads:** your threads inside the project scope. New threads here inherit project instructions + workspace root + connection set.
-- **Shared:** live read-only views of threads members shared in. **Redaction rule:** tool-output produced via a connection the viewer lacks renders as a struck mono record — `output withheld · connection not granted` — header visible, body withheld; surrounding reasoning text remains. You can see that something happened and why you can't see it.
+- **Shared:** live read-only views of threads members shared in. **Redaction rule:** tool-output from a connection the viewer lacks renders as a struck mono record: `output withheld · connection not granted`. The header stays visible, the body stays hidden, and surrounding reasoning text remains. You can see that something happened and why you can't see it.
 - **Fork** (primary action on shared threads): continues as the viewer's own thread under their own key/entitlements. Lineage recorded in provenance.
 - **Artifacts:** the project library; group-permission chips (mono) on each; publish flow if entitled.
 - **Inbox:** workflow results as ledger rows (workflow · run time · status · artifacts). Running rows carry the signal pulse. Personal inbox aggregates across projects + personal workflows.
@@ -89,7 +89,7 @@ Default mode: workspace-scoped. First out-of-scope file/command triggers an inli
 
 ## 10. States
 
-- **First run:** empty thread, one line — "Ask anything. Your org's routing decides which model answers." Composer focused. No tour.
+- **First run:** empty thread with one line: "Ask anything. Your org's routing decides which model answers." Composer focused. No tour.
 - **Server unreachable:** full-surface mono notice: cause, retry countdown, "Copy diagnostics". No fake offline mode.
 - **Entitlement change:** toast "Your access changed. Some models or connections may differ."
 - **Model/provider failure:** inline mono record: `provider timeout · retried on fallback` with the provenance line showing the actual route taken.
