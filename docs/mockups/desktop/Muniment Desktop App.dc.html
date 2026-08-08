@@ -246,7 +246,7 @@ a{color:var(--ink)}a:hover{border-color:var(--muted)}
 <button class="tbtn" onClick="{{ toggleTheme }}" title="Appearance"><x-import component-from-global-scope="MunimentDesignSystem_42af51.Icon" name="{{ themeIcon }}" size="16" hint-size="16px,16px"></x-import></button>
 <button class="tbtn" onClick="{{ togglePlatform }}" title="Platform chrome">{{ platformLabel }}</button>
 <button class="tbtn" onClick="{{ toggleRail }}" title="Artifact rail"><x-import component-from-global-scope="MunimentDesignSystem_42af51.Icon" name="panel-right" size="16" hint-size="16px,16px"></x-import><span class="mn">{{ modKey }}J</span></button>
-<sc-if value="{{ isWin }}" hint-placeholder-val="{{ false }}"><div class="wctl"><span class="wbtn">—</span><span class="wbtn">▢</span><span class="wbtn cls">✕</span></div></sc-if>
+<sc-if value="{{ isWin }}" hint-placeholder-val="{{ false }}"><div class="wctl"><span class="wbtn">−</span><span class="wbtn">▢</span><span class="wbtn cls">✕</span></div></sc-if>
 </div>
 <div class="bodyrow">
 <div class="{{ sideClass }}" style="{{ sideStyle }}">
@@ -342,7 +342,7 @@ a{color:var(--ink)}a:hover{border-color:var(--muted)}
 <sc-if value="{{ openSharedObj }}" hint-placeholder-val="{{ false }}">
 <button class="askb deny" onClick="{{ closeShared }}" style="margin-bottom:14px"><x-import component-from-global-scope="MunimentDesignSystem_42af51.Icon" name="chevron-left" size="15" hint-size="15px,15px"></x-import> Shared</button>
 <h1 class="seth">{{ sharedTitle }}</h1><div class="setsub">shared by {{ sharedBy }} · read-only</div>
-<div style="margin-top:20px" class="turn"><div class="tmark"><x-import component-from-global-scope="MunimentDesignSystem_42af51.Mark" size="22" state="rest" hint-size="22px,22px"></x-import></div><div class="tbody"><div class="records"><div class="redact">output withheld · connection not granted</div></div><div class="resp">The reasoning stays visible — you can see a reconciliation ran and why the outlier was flagged. The connection output itself is withheld because you don't hold <span class="mn">vault:acme/finance</span>.</div><div class="provrow"><span class="mn mut" style="font-size:11.5px"><span class="sig">analysis/high</span> → glm-5.2 · $0.0089 · 6.2s</span></div></div></div>
+<div style="margin-top:20px" class="turn"><div class="tmark"><x-import component-from-global-scope="MunimentDesignSystem_42af51.Mark" size="22" state="rest" hint-size="22px,22px"></x-import></div><div class="tbody"><div class="records"><div class="redact">output withheld · connection not granted</div></div><div class="resp">The reasoning stays visible. You can see a reconciliation ran and why the outlier was flagged. The connection output itself is withheld because you do not hold <span class="mn">vault:acme/finance</span>.</div><div class="provrow"><span class="mn mut" style="font-size:11.5px"><span class="sig">analysis/high</span> → glm-5.2 · $0.0089 · 6.2s</span></div></div></div>
 <div style="margin-top:8px"><x-import component-from-global-scope="MunimentDesignSystem_42af51.Button" onClick="{{ forkSharedOpen }}" hint-size="auto,36px">Fork thread</x-import><span class="setsub" style="margin-left:12px">Continues under your own key and entitlements. Lineage recorded.</span></div>
 </sc-if>
 <sc-if value="{{ notOpenShared }}" hint-placeholder-val="{{ true }}">
@@ -433,7 +433,7 @@ class Component extends DCLogic {
             { status:'complete', verb:'Read', object:'vault:acme/finance', body:'3 files · 2,140 tokens\nmatched: q3-actuals.csv, forecast-2026.xlsx' },
             { status:'complete', verb:'Computed', object:'variance by service', body:'7 services · 1 over threshold' }
           ],
-          text:'Q3 cloud spend was $248,120 against a committed forecast of $232,000 — a 6.9% overrun in aggregate. One service crosses your 8% flag: object storage, at 14.2% over. Everything else lands within tolerance.',
+          text:'Q3 cloud spend was $248,120 against a committed forecast of $232,000, a 6.9% overrun in aggregate. One service crosses your 8% flag: object storage, at 14.2% over. Everything else lands within tolerance.',
           route:'analysis/high', model:'glm-5.2', cost:'$0.0089', duration:'6.2s',
           receipt:{ rule:'rule 7: analysis/high → glm-5.2, fallback opus-4.8', tokens:'2,140 in · 512 out', connections:'vault:acme/finance', lineage:'thread 8f2a' },
           artifactId:'a1' }
@@ -442,9 +442,9 @@ class Component extends DCLogic {
         { id:'u0', role:'user', text:'Summarize the renewal terms in this contract and flag anything unusual.', attachments:['msa-2026.pdf · 214 KB'] },
         { id:'m0', role:'model', phase:'done',
           tools:[{ status:'complete', verb:'Extracted', object:'msa-2026.pdf', body:'extracted 18 pages' }],
-          text:'The renewal auto-extends for 24 months unless cancelled 90 days out — longer than your standard 30. Price protection caps increases at 7% annually. One unusual clause: a most-favored-customer term that could obligate retroactive credits.',
+          text:'The renewal auto-extends for 24 months unless canceled 90 days out, longer than your standard 30. Price protection caps increases at 7% annually. One unusual clause: a most-favored-customer term that could obligate retroactive credits.',
           route:'analysis/standard', model:'glm-5.2-mini', cost:'$0.0031', duration:'3.4s',
-          receipt:{ rule:'rule 4: analysis/standard → glm-5.2-mini', tokens:'6,020 in · 380 out', connections:'—', lineage:'thread 3b1c' } }
+          receipt:{ rule:'rule 4: analysis/standard → glm-5.2-mini', tokens:'6,020 in · 380 out', connections:'none', lineage:'thread 3b1c' } }
       ],
       t3: [
         { id:'u0', role:'user', text:'Build a timeline of incident 4471 from the on-call logs.' },
@@ -482,10 +482,10 @@ class Component extends DCLogic {
           '# Q3 cloud spend variance\n\n- Aggregate overrun: 6.9% ($248,120 vs $232,000)\n- Flagged: object storage +14.2%\n- Within tolerance: compute, network, db, cache, cdn, logs',
           '# Q3 cloud spend variance\n\n- Aggregate overrun: 6.9% ($248,120 vs $232,000)\n- Flagged: object storage +14.2%\n- Recommended: move cold buckets to infrequent-access tier\n- Within tolerance: compute, network, db, cache, cdn, logs'
         ], updated:['4h ago','2h ago'] },
-        a2:{ title:'Note to platform team', versions:['# Note: object storage overrun\n\nTeam —\n\nQ3 object storage ran **14.2% over** forecast, the only service past our 8% flag. Two asks for this week:\n\n- A tiering plan to move cold buckets to infrequent-access.\n- A lifecycle policy on logs older than 30 days.\n\nNumbers and receipt attached.'], updated:['just now'] }
+        a2:{ title:'Note to platform team', versions:['# Note: object storage overrun\n\nTeam:\n\nQ3 object storage ran **14.2% over** forecast, the only service past our 8% flag. Two asks for this week:\n\n- A tiering plan to move cold buckets to infrequent-access.\n- A lifecycle policy on logs older than 30 days.\n\nNumbers and receipt attached.'], updated:['just now'] }
       },
       shared:[
-        { id:'s1', by:'dana', when:'2h', title:'Forecast reconciliation — Q3', preview:'Reconciled the actuals against the committed forecast; object storage is the only outlier.', redacted:true },
+        { id:'s1', by:'dana', when:'2h', title:'Forecast reconciliation: Q3', preview:'Reconciled the actuals against the committed forecast; object storage is the only outlier.', redacted:true },
         { id:'s2', by:'priya', when:'1d', title:'Vendor risk memo', preview:'Summary of the MFC clause exposure and recommended redline.', redacted:false }
       ],
       openShared:null,
@@ -497,7 +497,7 @@ class Component extends DCLogic {
       inbox:[
         { wf:'nightly-cost-report', when:'2h ago', status:'complete', arts:'1 artifact' },
         { wf:'contract-scan', when:'6h ago', status:'complete', arts:'3 artifacts' },
-        { wf:'forecast-reconcile', when:'running', status:'running', arts:'—' }
+        { wf:'forecast-reconcile', when:'running', status:'running', arts:'none' }
       ],
       connections:[
         { name:'vault:acme/finance', via:'via group:data-team', kind:'mcp' },
@@ -594,11 +594,11 @@ class Component extends DCLogic {
         { status:'complete', verb:'Read', object:'vault:acme/finance', body:'2 files · 1,180 tokens' },
         { status:'complete', verb:'Drafted', object:'note', body:'1 artifact created' }
       ],
-      text:"Here's a short note you can send as-is. It states the number, the threshold it crossed, and asks the platform team for the two things they can act on this week — a tiering plan for cold buckets and a lifecycle policy on logs.",
+      text:"Here is a short note you can send as-is. It states the number, the threshold it crossed, and asks the platform team for the two things they can act on this week: a tiering plan for cold buckets and a lifecycle policy on logs.",
       route:'drafting/standard', model:'glm-5.2-mini', cost:'$0.0012', duration:'2.1s',
       receipt:{ rule:'rule 2: drafting/standard → glm-5.2-mini', tokens:'1,180 in · 240 out', connections:'vault:acme/finance', lineage:'forked from turn m0' },
       artifactId:'a2',
-      artifact:{ title:'Note to platform team', versions:['# Note: object storage overrun\n\nTeam —\n\nQ3 object storage ran **14.2% over** forecast, the only service past our 8% flag. Two asks for this week:\n\n1. A tiering plan to move cold buckets to infrequent-access.\n2. A lifecycle policy on logs older than 30 days.\n\nNumbers and receipt attached.'], updated:['just now'] }
+      artifact:{ title:'Note to platform team', versions:['# Note: object storage overrun\n\nTeam:\n\nQ3 object storage ran **14.2% over** forecast, the only service past our 8% flag. Two asks for this week:\n\n1. A tiering plan to move cold buckets to infrequent-access.\n2. A lifecycle policy on logs older than 30 days.\n\nNumbers and receipt attached.'], updated:['just now'] }
     };
   }
 
@@ -644,7 +644,7 @@ class Component extends DCLogic {
   }
 
   copyTurn=()=> this.toast('Copied to clipboard');
-  forkTurn=()=>{ this.newThread(); this.toast('Forked to a new thread — lineage recorded'); };
+  forkTurn=()=>{ this.newThread(); this.toast('Forked to a new thread. Lineage recorded'); };
   shareTurn=()=> this.toast('Share link created (read-only)');
   retryTurn=(tid,mid)=>{
     this.patchTurn(tid,mid,{ phase:'routing', tools:[], displayText:'', text:'' });
@@ -707,9 +707,9 @@ class Component extends DCLogic {
 
   openShared=(id)=> this.setState({openShared:id});
   closeShared=()=> this.setState({openShared:null});
-  forkShared=(id)=>{ const nid='t'+Date.now(); this.setState(s=>({ threads:[{id:nid,title:'Fork · '+(s.shared.find(x=>x.id===id)||{}).title, when:'now'}, ...s.threads], turnsById:{...s.turnsById,[nid]:[{id:'u0',role:'user',text:'(forked — continuing under your own key and entitlements)'}]}, activeId:nid, inProject:false, view:'thread', openShared:null })); this.toast('Forked to your own thread — lineage recorded in provenance'); };
+  forkShared=(id)=>{ const nid='t'+Date.now(); this.setState(s=>({ threads:[{id:nid,title:'Fork · '+(s.shared.find(x=>x.id===id)||{}).title, when:'now'}, ...s.threads], turnsById:{...s.turnsById,[nid]:[{id:'u0',role:'user',text:'(forked, continuing under your own key and entitlements)'}]}, activeId:nid, inProject:false, view:'thread', openShared:null })); this.toast('Forked to your own thread. Lineage recorded in provenance'); };
   publishArtifact=(name)=> this.toast('Published '+name+' to the project library');
-  adminDeepLink=()=> this.toast('Opening admin — connection management');
+  adminDeepLink=()=> this.toast('Opening connection management in admin');
 
   inlineMd(t){ return t.split(/(\*\*[^*]+\*\*)/g).map((p,i)=> p.startsWith('**')&&p.endsWith('**') ? React.createElement('strong',{key:i}, p.slice(2,-2)) : p); }
   renderMd(src){
@@ -789,7 +789,7 @@ class Component extends DCLogic {
 
     const accessGroups=[
       { id:'group:data-team', name:'group:data-team', icon:'users', detail:'models: glm-5.2, opus-4.8, glm-5.2-mini\nconnections: vault:acme/finance, pagerduty\npackages: finance-tools\ncapabilities: router.override, project.publish' },
-      { id:'group:everyone', name:'group:everyone', icon:'users', detail:'models: glm-5.2-mini\nconnections: —\ncapabilities: —' }
+      { id:'group:everyone', name:'group:everyone', icon:'users', detail:'models: glm-5.2-mini\nconnections: none\ncapabilities: none' }
     ].map(g=>({ ...g, open:s.accessOpen===g.id, toggle:()=>this.toggleAccess(g.id) }));
 
     const projectTabs=['Threads','Shared','Artifacts','Inbox','Connections'].map(l=>{ const key=l.toLowerCase(); return { label:l, cls:'ptab'+(s.projectTab===key?' on':''), select:()=>this.setProjectTab(key) }; });

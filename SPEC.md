@@ -43,6 +43,7 @@ reference implementation: [docs/design-reference/ring/](docs/design-reference/ri
 5. **Forbidden vocabulary in all UI copy:** no "AI", no "magic"/
    "supercharge"/"unlock", no "sovereignty". Errors state what happened +
    next step, never apologize (§1.7).
+   user-facing text contains no em dash, in any form.
 6. **The provenance line ships in v1 and is never optional** (§2.2) — under
    every response, with an expandable receipt defined as
    `route · model · cost · time · capability@version[, ...]`.

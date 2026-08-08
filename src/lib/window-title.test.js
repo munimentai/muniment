@@ -11,7 +11,7 @@ describe('window title', () => {
   it('joins the bounded thread title to the app name', () => {
     const title = threadTitle([{ role: 'user', text: '😀'.repeat(81) }])
 
-    expect(formatWindowTitle(title)).toBe(`${'😀'.repeat(79)}… — muniment`)
+    expect(formatWindowTitle(title)).toBe(`${'😀'.repeat(79)}… | muniment`)
   })
 
   it('does nothing when the window API is missing', async () => {
@@ -28,7 +28,7 @@ describe('window title', () => {
 
     await expect(createWindowTitle(windowApi).set('Lease renewal')).resolves.toBeUndefined()
 
-    expect(windowApi.setTitle).toHaveBeenCalledWith('Lease renewal — muniment')
+    expect(windowApi.setTitle).toHaveBeenCalledWith('Lease renewal | muniment')
     expect(error).not.toHaveBeenCalled()
   })
 })

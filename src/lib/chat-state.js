@@ -33,7 +33,7 @@ function receiptTrailing(receipt) {
   return trailing
 }
 
-// The provenance summary — `route → model · cost · time` (design-spec §2.2).
+// The provenance summary is `route → model · cost · time` (design-spec §2.2).
 // Route stays a named field rather than the head of a flat array: §1.2 permits
 // --signal on the route segment only, so a receipt without a route must never
 // paint whatever follows green.
