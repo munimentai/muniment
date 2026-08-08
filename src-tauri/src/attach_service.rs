@@ -11,9 +11,9 @@ use std::collections::HashMap;
 use std::collections::{BTreeMap, BTreeSet};
 #[cfg(target_os = "linux")]
 use std::path::PathBuf;
-#[cfg(target_os = "linux")]
-use std::sync::Arc;
 use std::sync::Mutex;
+#[cfg(target_os = "linux")]
+use std::sync::{Arc, Condvar};
 #[cfg(target_os = "linux")]
 use std::time::{Duration, Instant};
 
@@ -23,9 +23,9 @@ use muniment_core::attach::linux::run_authenticated_session_with_service_and_app
 use muniment_core::attach::linux::{
     approval_waiter_with_claims, attach_listener_start_diagnostic,
     run_authenticated_session_with_service_approvals_and_registry, AttachAcceptError,
-    AttachFilesystem, AttachListenerStartFailure, AttachTransport, CompanionProvenance,
-    LiveConnectionRegistry, PermissionAnswerAccepted, PermissionAnswerRequest, PermissionDecision,
-    RunCancelAccepted, RunCancelRequest, RunStartAccepted,
+    AttachFilesystem, AttachListenerStartFailure, AttachStopHandle, AttachTransport,
+    CompanionProvenance, LiveConnectionRegistry, PermissionAnswerAccepted, PermissionAnswerRequest,
+    PermissionDecision, RunCancelAccepted, RunCancelRequest, RunStartAccepted,
     RunStartRequest as AttachRunStartRequest, RunStreamPage, ThreadCreateAccepted, ThreadListPage,
     ThreadListRequest, ThreadListService, ThreadOpenPage, ThreadOpenRequest,
 };
@@ -173,6 +173,10 @@ pub struct AttachCompanionState {
     workspace: Arc<Mutex<Option<String>>>,
     #[cfg(target_os = "linux")]
     listener_start: Mutex<(bool, Option<AttachListenerStartFailure>)>,
+    #[cfg(target_os = "linux")]
+    listener_stop: Mutex<Option<AttachStopHandle>>,
+    #[cfg(target_os = "linux")]
+    listener_stopped: Condvar,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
@@ -189,6 +193,8 @@ impl AttachCompanionState {
             workspace: listener.workspace.clone(),
             listener: Mutex::new(Some(listener)),
             listener_start: Mutex::new((true, None)),
+            listener_stop: Mutex::new(None),
+            listener_stopped: Condvar::new(),
         }
     }
 
@@ -219,6 +225,38 @@ impl AttachCompanionState {
             .listener_start
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner) = (false, Some(failure));
+    }
+
+    fn publish_listener_stop(&self, stop: AttachStopHandle) {
+        *self
+            .listener_stop
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(stop);
+    }
+
+    fn record_listener_stopped(&self) {
+        *self
+            .listener_stop
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
+        self.listener_stopped.notify_all();
+    }
+
+    fn stop_listener(&self) {
+        let mut stop = self
+            .listener_stop
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let Some(handle) = stop.as_ref().cloned() else {
+            return;
+        };
+        handle.stop();
+        while stop.is_some() {
+            stop = self
+                .listener_stopped
+                .wait(stop)
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+        }
     }
 
     fn listener_status(&self) -> AttachListenerStatus {
@@ -268,6 +306,8 @@ impl Default for AttachCompanionState {
             listener: Mutex::new(None),
             workspace: Arc::new(Mutex::new(None)),
             listener_start: Mutex::new((false, None)),
+            listener_stop: Mutex::new(None),
+            listener_stopped: Condvar::new(),
         }
     }
 }
@@ -563,79 +603,97 @@ pub fn start_attach_listener<R: tauri::Runtime>(app: tauri::AppHandle<R>) {
             );
             return;
         };
-        let Ok(_instance_lock) = filesystem.acquire_instance_lock() else {
-            app.state::<AttachCompanionState>()
-                .record_listener_start_failure(AttachListenerStartFailure::InstanceLock);
-            eprintln!(
-                "{}",
-                attach_listener_start_diagnostic(AttachListenerStartFailure::InstanceLock)
-            );
-            return;
-        };
-        let Ok(listener) = AttachTransport::bind(&filesystem) else {
-            app.state::<AttachCompanionState>()
-                .record_listener_start_failure(AttachListenerStartFailure::Bind);
-            eprintln!(
-                "{}",
-                attach_listener_start_diagnostic(AttachListenerStartFailure::Bind)
-            );
-            return;
-        };
-        app.state::<AttachCompanionState>()
-            .record_listener_started();
-        loop {
-            let (stream, credentials) = match listener.accept() {
-                Ok(accepted) => accepted,
-                Err(error) if should_retry_attach_accept(error) => {
-                    if error == AttachAcceptError::Accept {
-                        std::thread::sleep(Duration::from_millis(50));
-                    }
-                    continue;
-                }
-                Err(_) => break,
-            };
-            let app = app.clone();
-            let workspace_contexts = state.workspace_contexts.clone();
-            let client_credentials = state.client_credentials.clone();
-            let live_connections = state.companion_registry.live_connections();
-            let approval_state = state.clone();
-            std::thread::spawn(move || {
-                let Ok(mut service) =
-                    DesktopAttachService::new(app, workspace_contexts, client_credentials)
-                else {
-                    return;
-                };
-                let approvals = service
-                    .boundaries
-                    .app
-                    .state::<AttachApprovalState>()
-                    .inner()
-                    .clone();
-                let _ = run_authenticated_session_with_service_approvals_and_registry(
-                    stream,
-                    credentials,
-                    env!("CARGO_PKG_VERSION"),
-                    &mut service,
-                    approval_waiter_with_claims(
-                        move |challenge: &muniment_core::attach::PairingChallenge,
-                              claimed_kind: &str,
-                              claimed_version: &str,
-                              remaining: Duration| {
-                            Some(request_attach_pairing_approval(
-                                &approval_state,
-                                &approvals,
-                                challenge.as_str(),
-                                claimed_kind,
-                                claimed_version,
-                                remaining,
-                            ))
-                        },
-                    ),
-                    &live_connections,
-                );
-            });
-        }
+        run_attach_listener(app, state, filesystem);
     });
+}
+
+#[cfg(target_os = "linux")]
+fn run_attach_listener<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+    state: Arc<AttachListenerState>,
+    filesystem: AttachFilesystem,
+) {
+    let Ok(instance_lock) = filesystem.acquire_instance_lock() else {
+        app.state::<AttachCompanionState>()
+            .record_listener_start_failure(AttachListenerStartFailure::InstanceLock);
+        eprintln!(
+            "{}",
+            attach_listener_start_diagnostic(AttachListenerStartFailure::InstanceLock)
+        );
+        return;
+    };
+    let Ok(listener) = AttachTransport::bind(&filesystem) else {
+        app.state::<AttachCompanionState>()
+            .record_listener_start_failure(AttachListenerStartFailure::Bind);
+        eprintln!(
+            "{}",
+            attach_listener_start_diagnostic(AttachListenerStartFailure::Bind)
+        );
+        return;
+    };
+    let companion_state = app.state::<AttachCompanionState>();
+    companion_state.publish_listener_stop(listener.stop_handle());
+    companion_state.record_listener_started();
+    loop {
+        let (stream, credentials) = match listener.accept() {
+            Ok(accepted) => accepted,
+            Err(error) if should_retry_attach_accept(error) => {
+                if error == AttachAcceptError::Accept {
+                    std::thread::sleep(Duration::from_millis(50));
+                }
+                continue;
+            }
+            Err(_) => break,
+        };
+        let app = app.clone();
+        let workspace_contexts = state.workspace_contexts.clone();
+        let client_credentials = state.client_credentials.clone();
+        let live_connections = state.companion_registry.live_connections();
+        let approval_state = state.clone();
+        std::thread::spawn(move || {
+            let Ok(mut service) =
+                DesktopAttachService::new(app, workspace_contexts, client_credentials)
+            else {
+                return;
+            };
+            let approvals = service
+                .boundaries
+                .app
+                .state::<AttachApprovalState>()
+                .inner()
+                .clone();
+            let _ = run_authenticated_session_with_service_approvals_and_registry(
+                stream,
+                credentials,
+                env!("CARGO_PKG_VERSION"),
+                &mut service,
+                approval_waiter_with_claims(
+                    move |challenge: &muniment_core::attach::PairingChallenge,
+                          claimed_kind: &str,
+                          claimed_version: &str,
+                          remaining: Duration| {
+                        Some(request_attach_pairing_approval(
+                            &approval_state,
+                            &approvals,
+                            challenge.as_str(),
+                            claimed_kind,
+                            claimed_version,
+                            remaining,
+                        ))
+                    },
+                ),
+                &live_connections,
+            );
+        });
+    }
+    drop(listener);
+    drop(instance_lock);
+    companion_state.record_listener_stopped();
+}
+
+#[cfg(target_os = "linux")]
+pub fn stop_attach_listener<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
+    app.state::<AttachCompanionState>().stop_listener();
 }
 
 #[cfg(target_os = "linux")]
@@ -1239,6 +1297,55 @@ mod tests {
         for (error, expected) in cases {
             assert_eq!(should_retry_attach_accept(error), expected, "{error:?}");
         }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn listener_stop_releases_transport_and_instance_lock() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let runtime = std::env::temp_dir().join(format!("mt-stop-{}", Uuid::now_v7().simple()));
+        std::fs::create_dir(&runtime).unwrap();
+        std::fs::set_permissions(&runtime, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let filesystem = AttachFilesystem::from_runtime_directory(&runtime).unwrap();
+        let listener = Arc::new(
+            AttachListenerState::load(&runtime.join("attach-client-credentials.json")).unwrap(),
+        );
+        let app = tauri::test::mock_app();
+        app.manage(AttachCompanionState::default());
+        app.state::<AttachCompanionState>()
+            .set_listener(listener.clone());
+
+        stop_attach_listener(app.handle());
+        let listener_app = app.handle().clone();
+        let worker = std::thread::spawn(move || {
+            run_attach_listener(listener_app, listener, filesystem);
+        });
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while !app
+            .state::<AttachCompanionState>()
+            .listener_status()
+            .started
+        {
+            assert!(Instant::now() < deadline, "attach listener did not start");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+
+        stop_attach_listener(app.handle());
+        worker.join().unwrap();
+        stop_attach_listener(app.handle());
+
+        let filesystem = AttachFilesystem::from_runtime_directory(&runtime).unwrap();
+        assert!(!filesystem.endpoint_path().exists());
+        let _instance_lock = filesystem.acquire_instance_lock().unwrap();
+        assert_eq!(
+            app.state::<AttachCompanionState>()
+                .listener_status()
+                .failure,
+            None
+        );
+        drop(_instance_lock);
+        std::fs::remove_dir_all(runtime).unwrap();
     }
 
     #[cfg(target_os = "linux")]
