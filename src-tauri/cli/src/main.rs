@@ -8,6 +8,8 @@ use std::io::{self, BufRead, IsTerminal, Read, Write};
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
 
+pub mod code_diff_render;
+
 const HELP: &str = "\
 Usage: muniment [--workspace <directory>] <command>
 
