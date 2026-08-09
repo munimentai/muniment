@@ -1353,9 +1353,9 @@
   .permission-approve-actions { justify-content: flex-end; margin-left: auto; }
   .permission-actions button { padding: 4px 8px; font: inherit; }
   .permission-card .run-error { margin-top: 6px; }
+  .provenance { display: flex; align-items: center; min-width: 24px; min-height: 24px; margin-top: 10px; padding: 0; border: 0; background: transparent; color: var(--muted); font: var(--text-provenance)/1.45 var(--font-mono); font-variant-numeric: tabular-nums; text-align: left; overflow-wrap: anywhere; }
   /* §2.2 mono 11.5px; §1.4 records line up their figures. The shorthand resets
      font-variant-numeric, so tabular-nums follows it. */
-  .provenance { display: block; margin-top: 10px; padding: 0; border: 0; background: transparent; color: var(--muted); font: var(--text-provenance)/1.45 var(--font-mono); font-variant-numeric: tabular-nums; text-align: left; overflow-wrap: anywhere; }
   .provenance:hover:not(:disabled) { color: var(--ink); }
   .receipt-marker { display: inline-block; width: 5px; height: 5px; margin-right: 7px; border-right: 1px solid currentColor; border-bottom: 1px solid currentColor; transform: rotate(-45deg); transition: transform 120ms ease; vertical-align: 1px; }
   .receipt-marker.expanded { transform: rotate(45deg); }
