@@ -6,18 +6,16 @@ use std::time::Duration;
 use muniment_core::attach::{RuntimeActivityGuard, RuntimeActivityRegistry};
 use muniment_core::chat_grant::{fetch_receipt, ChatGrant};
 use muniment_core::chat_profile::ChatProfile;
-use muniment_core::chat_view::{
-    chat_attachments, chat_pending_permission, chat_tool_activity, projection_phase,
-};
-use muniment_core::journal::pi_translation::{
-    close_open_effects, model_stream_delta_payload, tool_journal_entry,
-};
-use muniment_core::journal::reducer::{ChatProjection, ChatProjector};
-use muniment_core::journal::run_append::append_run_event;
+use muniment_core::journal::pi_translation::{model_stream_delta_payload, tool_journal_entry};
+use muniment_core::journal::reducer::ChatProjector;
 use muniment_core::journal::split_model_stream_delta;
 use muniment_core::memory_failure::{MemoryFailure, MemoryFailureAnswer};
 use muniment_core::permission_gate::{
     coordinate_extension_ui_request, coordinate_permission_answer, PendingPermissionAnswer,
+};
+use muniment_core::run_events::{
+    append_emit, append_terminal as core_append_terminal, fail, fail_start,
+    fail_with_open_effects as core_fail_with_open_effects, ChatEventSink, SharedStorage,
 };
 use muniment_core::sidecar::pi_chat::{
     cancel_command, ExtensionUiAnswer, ExtensionUiDialog, ExtensionUiRequest, PiChatEvent,
@@ -28,11 +26,11 @@ use muniment_core::sidecar::{
     pi_sidecar_config, PiRpcTransport, PiRpcWiring, SidecarStatus, SidecarSupervisor,
 };
 use serde_json::{json, Value};
-use tauri::{Emitter, Manager};
+use tauri::Manager;
 
 use crate::chat::{
-    coordinate_prepared_prompt, event_envelope, prepared_pi_prompt, ChatEvent, ChatState,
-    PiRuntime, PreparedPromptError, ResumeAttempt, ResumeContext, SharedStorage, RPC_TIMEOUT,
+    coordinate_prepared_prompt, prepared_pi_prompt, ChatState, PiRuntime, PreparedPromptError,
+    ResumeAttempt, ResumeContext, TauriChatEventSink, RPC_TIMEOUT,
 };
 
 /// Pairs one coordinate-loop state value with the runtime activity mark that
@@ -131,6 +129,7 @@ pub(super) fn coordinate<R: tauri::Runtime>(
     resume_result: Option<std::sync::mpsc::Sender<Result<(), String>>>,
     prepared: Option<(u64, ChatProjector)>,
 ) {
+    let app = TauriChatEventSink(app);
     let mut resume_attempt = ResumeAttempt::new(resume_result);
     let (mut seq, mut projector) = prepared.unwrap_or_else(|| {
         (
@@ -809,6 +808,7 @@ fn coordinate_memory_search_with<R: tauri::Runtime>(
     ) -> Result<muniment_core::memory_index::MemorySearchResult, MemoryFailure>,
     respond: impl FnOnce(&ExtensionUiRequest, ExtensionUiAnswer),
 ) -> bool {
+    let sink = TauriChatEventSink(app.clone());
     let PiChatEvent::ExtensionUiRequest(request) = event else {
         return false;
     };
@@ -825,7 +825,7 @@ fn coordinate_memory_search_with<R: tauri::Runtime>(
     let answer = match result {
         Ok(result) => {
             if append_emit(
-                app,
+                &sink,
                 journal,
                 projector,
                 run_id,
@@ -852,8 +852,9 @@ fn coordinate_memory_search_with<R: tauri::Runtime>(
     true
 }
 
-fn append_terminal<R: tauri::Runtime>(
-    app: &tauri::AppHandle<R>,
+#[allow(clippy::result_unit_err, clippy::too_many_arguments)]
+fn append_terminal(
+    sink: &impl ChatEventSink,
     journal: &SharedStorage,
     projector: &mut ChatProjector,
     run_id: &str,
@@ -864,15 +865,23 @@ fn append_terminal<R: tauri::Runtime>(
     subject: Option<&str>,
 ) -> Result<(), ()> {
     open_effects.with(|open_effects| {
-        close_open_effects(open_effects, |kind, payload| {
-            append_emit(app, journal, projector, run_id, seq, kind, payload, subject)
-        })
-    })?;
-    append_emit(app, journal, projector, run_id, seq, kind, payload, subject)
+        core_append_terminal(
+            sink,
+            journal,
+            projector,
+            run_id,
+            seq,
+            open_effects,
+            kind,
+            payload,
+            subject,
+        )
+    })
 }
 
-fn fail_with_open_effects<R: tauri::Runtime>(
-    app: &tauri::AppHandle<R>,
+#[allow(clippy::too_many_arguments)]
+fn fail_with_open_effects(
+    sink: &impl ChatEventSink,
     journal: &SharedStorage,
     projector: &mut ChatProjector,
     run_id: &str,
@@ -881,95 +890,26 @@ fn fail_with_open_effects<R: tauri::Runtime>(
     reason: &str,
     subject: Option<&str>,
 ) {
-    let _ = append_terminal(
-        app,
-        journal,
-        projector,
-        run_id,
-        seq,
-        open_effects,
-        "run.failed",
-        json!({"reason": reason}),
-        subject,
-    );
-}
-
-pub(super) fn append_emit<R: tauri::Runtime>(
-    app: &tauri::AppHandle<R>,
-    journal: &SharedStorage,
-    projector: &mut ChatProjector,
-    run_id: &str,
-    seq: &mut u64,
-    kind: &str,
-    payload: Value,
-    subject: Option<&str>,
-) -> Result<(), ()> {
-    *seq += 1;
-    let envelope = event_envelope(run_id, *seq, kind, payload, subject);
-    let projection = append_run_event(
-        &mut journal.lock().map_err(|_| ())?.journal,
-        projector,
-        &envelope,
-    )
-    .map_err(|_| ())?;
-    app.emit("chat-event", chat_event(run_id, projection))
-        .map_err(|_| ())
-}
-
-fn chat_event(run_id: &str, projection: ChatProjection) -> ChatEvent {
-    let attachments = chat_attachments(&projection.attachments);
-    ChatEvent {
-        run_id: run_id.into(),
-        phase: projection_phase(&projection.status).into(),
-        text: projection.text,
-        receipt: projection.receipt,
-        tool_activity: chat_tool_activity(&projection.tool_activity),
-        attachments,
-        recalls: projection.recalls,
-        pending_permission: chat_pending_permission(projection.pending_permission),
-    }
-}
-
-fn fail<R: tauri::Runtime>(
-    app: &tauri::AppHandle<R>,
-    journal: &SharedStorage,
-    projector: &mut ChatProjector,
-    run_id: &str,
-    seq: &mut u64,
-    reason: &str,
-    subject: Option<&str>,
-) {
-    let _ = append_emit(
-        app,
-        journal,
-        projector,
-        run_id,
-        seq,
-        "run.failed",
-        json!({"reason": reason}),
-        subject,
-    );
-}
-
-fn fail_start<R: tauri::Runtime>(
-    app: &tauri::AppHandle<R>,
-    journal: &SharedStorage,
-    projector: &mut ChatProjector,
-    run_id: &str,
-    seq: &mut u64,
-    reason: &str,
-    subject: Option<&str>,
-    resuming: bool,
-) {
-    if !resuming {
-        fail(app, journal, projector, run_id, seq, reason, subject);
-    }
+    open_effects.with(|open_effects| {
+        core_fail_with_open_effects(
+            sink,
+            journal,
+            projector,
+            run_id,
+            seq,
+            open_effects,
+            reason,
+            subject,
+        )
+    });
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::test_support::append_test_event;
+    use muniment_core::journal::pi_translation::close_open_effects;
+    use muniment_core::journal::reducer::ChatProjection;
     use muniment_core::journal::reducer::ProjectedRecall;
     use muniment_core::journal::RunJournal;
     use muniment_core::memory_index::MemoryIndexError;
@@ -985,7 +925,7 @@ mod tests {
         let root = std::env::temp_dir().join(format!("muniment-memory-failure-{}", Uuid::now_v7()));
         std::fs::create_dir_all(&root).unwrap();
         let app = tauri::test::mock_app();
-        let shared = Arc::new(Mutex::new(crate::chat::ChatStorage {
+        let shared = Arc::new(Mutex::new(muniment_core::run_events::ChatStorage {
             journal: RunJournal::open(root.join("runs.sqlite3")).unwrap(),
             cas: muniment_core::cas::LocalCas::open(&root.join("cas")).unwrap(),
         }));
@@ -1105,7 +1045,7 @@ mod tests {
 
     #[test]
     fn live_chat_event_carries_projected_recalls() {
-        let event = chat_event(
+        let event = muniment_core::run_events::chat_event(
             "run-1",
             ChatProjection {
                 recalls: vec![ProjectedRecall {
@@ -1292,7 +1232,7 @@ mod tests {
         projector
             .apply(&journal.events(&run_id).unwrap()[0])
             .unwrap();
-        let shared = Arc::new(Mutex::new(crate::chat::ChatStorage {
+        let shared = Arc::new(Mutex::new(muniment_core::run_events::ChatStorage {
             journal,
             cas: muniment_core::cas::LocalCas::open(&root.join("cas")).unwrap(),
         }));
