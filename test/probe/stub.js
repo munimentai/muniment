@@ -318,6 +318,7 @@ window.__TAURI__ = {
         }
       }
       if (command === 'auth_devices') return []
+      if (command === 'attach_listener_status') return { started: true, failure: null }
       if (command === 'attach_companions') return [
         {
           identity: '018f0000-0000-7000-8000-000000000001',
@@ -327,7 +328,7 @@ window.__TAURI__ = {
         },
       ]
       if (command === 'attach_revoke_companion') return null
-      return null
+      throw new Error(`Unknown probe command: ${command}`)
     },
   },
   event: {

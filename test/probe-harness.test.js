@@ -10,4 +10,12 @@ describe('probe harness', () => {
     expect(source).toMatch(/async function markProbeReady\(\) \{\s*await document\.fonts\.ready\s*document\.body\.dataset\.probeReady = ''\s*\}/)
     expect(source.split(readyMarker)).toHaveLength(2)
   })
+
+  it('reports a started attachment listener', () => {
+    expect(source).toMatch(/if \(command === 'attach_listener_status'\) return \{ started: true, failure: null \}/)
+  })
+
+  it('rejects an unknown core command with its name', () => {
+    expect(source).toMatch(/throw new Error\(`Unknown probe command: \$\{command\}`\)/)
+  })
 })
