@@ -217,6 +217,28 @@ jobs:
               prerelease: true,
             });
 
+      - name: Update Homebrew cask
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_SHA: ${{ needs.prepare.outputs.source_sha }}
+        run: |
+          set -euo pipefail
+          git clone --depth 1 "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" "$RUNNER_TEMP/muniment-homebrew-tap"
+          cd "$RUNNER_TEMP/muniment-homebrew-tap"
+          asset="nightly-${SOURCE_SHA}-macos-muniment.app.zip"
+          gh release download nightly --pattern "$asset" --dir "$RUNNER_TEMP/muniment-homebrew-asset"
+          digest=$(shasum -a 256 "$RUNNER_TEMP/muniment-homebrew-asset/$asset" | awk '{print $1}')
+          node .github/bump-homebrew-cask.mjs Casks/muniment-nightly.rb "$SOURCE_SHA" "$digest"
+          if git diff --quiet -- Casks/muniment-nightly.rb; then
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Casks/muniment-nightly.rb
+          git commit -m "Update Homebrew cask for nightly ${SOURCE_SHA}"
+          git pull --rebase origin main
+          git push origin HEAD:main
+
   linux-e2e:
     # Publishing is distribution and must never gate testing.
     needs: [prepare, build, publish]
