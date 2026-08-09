@@ -30,6 +30,7 @@ jobs:
       docs_only: ${{ steps.changes.outputs.docs_only }}
       companion: ${{ steps.changes.outputs.companion }}
       attach_fixtures: ${{ steps.changes.outputs.attach_fixtures }}
+      code_diff_fixtures: ${{ steps.changes.outputs.code_diff_fixtures }}
       desktop: ${{ steps.changes.outputs.desktop }}
     steps:
       - name: Checkout
@@ -47,6 +48,7 @@ jobs:
           docs_only=true
           companion=false
           attach_fixtures=false
+          code_diff_fixtures=false
           desktop=false
           resident_model_adr=false
           while IFS= read -r path; do
@@ -65,6 +67,12 @@ jobs:
                 docs_only=false
                 companion=true
                 ;;
+              protocol-fixtures/code-diff/*|protocol-fixtures/code-diff/**)
+                docs_only=false
+                companion=true
+                desktop=true
+                code_diff_fixtures=true
+                ;;
               protocol-fixtures/*|protocol-fixtures/**)
                 docs_only=false
                 companion=true
@@ -76,6 +84,12 @@ jobs:
                 desktop=true
                 attach_fixtures=true
                 ;;
+              src-tauri/code-diff/*|src-tauri/code-diff/**)
+                docs_only=false
+                companion=true
+                desktop=true
+                code_diff_fixtures=true
+                ;;
               src-tauri/acp/*|src-tauri/acp/**)
                 docs_only=false
                 companion=true
@@ -85,6 +99,7 @@ jobs:
                 companion=true
                 desktop=true
                 attach_fixtures=true
+                code_diff_fixtures=true
                 ;;
               *)
                 docs_only=false
@@ -95,6 +110,7 @@ jobs:
           echo "docs_only=$docs_only" >> "$GITHUB_OUTPUT"
           echo "companion=$companion" >> "$GITHUB_OUTPUT"
           echo "attach_fixtures=$attach_fixtures" >> "$GITHUB_OUTPUT"
+          echo "code_diff_fixtures=$code_diff_fixtures" >> "$GITHUB_OUTPUT"
           echo "desktop=$desktop" >> "$GITHUB_OUTPUT"
           echo "resident_model_adr=$resident_model_adr" >> "$GITHUB_OUTPUT"
 
@@ -185,15 +201,15 @@ jobs:
 
       - name: Companion formatting
         if: steps.changes.outputs.companion == 'true'
-        run: cargo fmt --manifest-path src-tauri/Cargo.toml --package muniment-attach --package muniment-cli --package muniment-acp --check
+        run: cargo fmt --manifest-path src-tauri/Cargo.toml --package muniment-attach --package muniment-code-diff --package muniment-cli --package muniment-acp --check
 
       - name: Companion lint
         if: steps.changes.outputs.companion == 'true'
-        run: cargo clippy --manifest-path src-tauri/Cargo.toml --package muniment-attach --package muniment-cli --package muniment-acp --all-targets --locked -- -D warnings
+        run: cargo clippy --manifest-path src-tauri/Cargo.toml --package muniment-attach --package muniment-code-diff --package muniment-cli --package muniment-acp --all-targets --locked -- -D warnings
 
       - name: Companion unit tests
         if: steps.changes.outputs.companion == 'true'
-        run: cargo test --manifest-path src-tauri/Cargo.toml --package muniment-attach --package muniment-cli --package muniment-acp --locked
+        run: cargo test --manifest-path src-tauri/Cargo.toml --package muniment-attach --package muniment-code-diff --package muniment-cli --package muniment-acp --locked
 
       - name: CLI dependency boundary
         if: steps.changes.outputs.companion == 'true'
@@ -264,6 +280,30 @@ jobs:
               -o BatchMode=yes -o ServerAliveInterval=30 -o ServerAliveCountMax=8 \
               desktopci@10.1.10.10 \
               "sudo desktop-ci windows --repo '$repo_url' --ref '$REF' --cmd '$cmd'"
+
+  code-diff-fixtures-current:
+    name: code-diff-fixtures-current
+    if: github.event_name == 'pull_request' && needs.smoke.outputs.code_diff_fixtures == 'true'
+    needs: smoke
+    runs-on: self-hosted
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Rust toolchain (bootstrap if missing)
+        run: |
+          if ! command -v cargo >/dev/null 2>&1 && [ ! -x "$HOME/.cargo/bin/cargo" ]; then
+            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+              | sh -s -- -y --profile minimal --default-toolchain stable
+          fi
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+
+      - name: Rust contract tests
+        run: cargo test --manifest-path src-tauri/Cargo.toml --package muniment-code-diff --locked
+
+      - name: Check canonical fixtures
+        working-directory: src-tauri
+        run: cargo run -p muniment-code-diff --bin export-code-diff-fixtures -- ../protocol-fixtures --check
 
   desktop-compile:
     name: Desktop compile preflight (${{ matrix.platform }})

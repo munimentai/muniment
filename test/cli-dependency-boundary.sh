@@ -10,7 +10,7 @@ else
 fi
 
 unexpected=$(printf '%s\n' "$packages" | grep -Ev \
-  '^(muniment-cli|muniment-attach|serde|serde_core|serde_derive|serde_json|uuid|itoa|memchr|proc-macro2|quote|syn|unicode-ident|zmij)$' || true)
+  '^(muniment-cli|muniment-attach|muniment-code-diff|serde|serde_core|serde_derive|serde_json|uuid|itoa|memchr|proc-macro2|quote|syn|unicode-ident|zmij)$' || true)
 if [ -n "$unexpected" ]; then
   printf 'muniment-cli includes dependencies outside the protocol boundary:\n%s\n' \
     "$unexpected" >&2
