@@ -39,6 +39,15 @@ const conditionResult = ({ eventName, platform, build, publish }) => {
   return Function(`"use strict"; return (${expression})`)()
 }
 
+describe('nightly macOS package build', () => {
+  it('builds and publishes the package while signing stays disabled', () => {
+    expect(workflow).toContain('node .github/build-macos-app.mjs')
+    expect(workflow).toContain('[".pkg"]')
+    expect(workflow).toContain("MACOS_SIGNING_ENABLED: ${{ vars.MACOS_SIGNING_ENABLED || 'false' }}")
+    expect(workflow).toContain('macOS artifacts are unsigned pending Apple enrollment Y5DUNHQA74.')
+  })
+})
+
 describe('nightly Linux E2E workflow', () => {
   it('finalizes with contents write without moving the rolling tag', () => {
     expect(publish).toContain('permissions:\n      contents: write')

@@ -20,8 +20,9 @@ export const expectedNightlyAssets = (assets, sha) => {
     ["Windows machine MSI", (n) => n.startsWith(`${prefix}windows-`) && n.endsWith("-machine.msi")],
     ["Windows NSIS", (n) => n.startsWith(`${prefix}windows-`) && n.endsWith("-nsis.exe")],
     ["macOS app", (n) => n.startsWith(`${prefix}macos-`) && n.endsWith(".app.zip")],
+    ["macOS package", (n) => n.startsWith(`${prefix}macos-`) && n.endsWith(".pkg")],
   ];
-  if (assets.length !== specs.length) throw new Error(`nightly release must contain exactly six assets; found ${assets.length}`);
+  if (assets.length !== specs.length) throw new Error(`nightly release must contain exactly seven assets; found ${assets.length}`);
   for (const [label, matches] of specs) if (assets.filter((asset) => matches(asset.name)).length !== 1) throw new Error(`expected exactly one ${label} asset`);
   return assets;
 };

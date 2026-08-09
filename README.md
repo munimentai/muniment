@@ -40,7 +40,7 @@ pinned-artifact lifecycle for later implementation.
 it through `src-tauri/tauri.conf.json`. The owner updates it before the nightly
 build, then manually runs **Promote stable desktop release** with that nightly's
 exact 40-character SHA and matching `vMAJOR.MINOR.PATCH`. Promotion requires
-green CI and the finalized six-asset nightly, and copies those bytes without
+green CI and the finalized seven-asset nightly, and copies those bytes without
 rebuilding or changing `nightly`.
 
 The owner assigns SemVer and promotes when a tested nightly is ready. Patches are
@@ -50,6 +50,8 @@ package-manager publication, mark it yanked in the release title/body, and
 promote a new patch. Delete a tag/release only when nothing was distributed and
 the owner confirms it was accidental. Homebrew, WinGet, and other package-manager
 manifests are published only after stable promotion succeeds.
+
+See [macOS packages](docs/macos-packages.md) for `.pkg` deployment and current signing status.
 
 ### macOS CI note (2026-07-09)
 

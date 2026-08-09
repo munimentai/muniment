@@ -3,8 +3,11 @@ import {
   SIGNING_VARIABLES,
   codesignArguments,
   notarytoolSubmitArguments,
+  parseInstallerIdentity,
   parseSigningIdentity,
+  productbuildArguments,
   resolveSigningConfiguration,
+  signingEnabled,
   stapleArguments,
 } from "./macos-signing.mjs";
 
@@ -18,6 +21,14 @@ const completeEnvironment = {
 };
 
 describe("macOS signing configuration", () => {
+  it("requires an explicit true flag", () => {
+    for (const value of [undefined, "", "false"]) {
+      expect(signingEnabled({ MACOS_SIGNING_ENABLED: value })).toBe(false);
+    }
+    expect(signingEnabled({ MACOS_SIGNING_ENABLED: "true" })).toBe(true);
+    expect(() => signingEnabled({ MACOS_SIGNING_ENABLED: "TRUE" })).toThrow("must be true or false");
+  });
+
   it("supports an unsigned build when no credentials are configured", () => {
     expect(resolveSigningConfiguration({})).toBeNull();
   });
@@ -79,9 +90,28 @@ describe("Signing identity discovery", () => {
       '  1) A1B2C3D4E5F60718293A4B5C6D7E8F90A1B2C3D4 "Apple Development: Someone (TEAMID1234)"',
     )).toBeNull();
   });
+
+  it("extracts the Developer ID Installer identity", () => {
+    const output = '  2) B1B2C3D4E5F60718293A4B5C6D7E8F90A1B2C3D4 "Developer ID Installer: Muniment (Y5DUNHQA74)"';
+    expect(parseInstallerIdentity(output)).toEqual({
+      hash: "B1B2C3D4E5F60718293A4B5C6D7E8F90A1B2C3D4",
+      name: "Developer ID Installer: Muniment (Y5DUNHQA74)",
+    });
+    expect(parseInstallerIdentity("0 valid identities found")).toBeNull();
+  });
 });
 
 describe("Signing, notarization, and stapling commands", () => {
+  it("builds unsigned and signed component package arguments", () => {
+    expect(productbuildArguments("muniment.app", "muniment.pkg")).toEqual([
+      "--component", "muniment.app", "/Applications", "muniment.pkg",
+    ]);
+    expect(productbuildArguments("muniment.app", "muniment.pkg", "B1B2", "/tmp/keychain")).toEqual([
+      "--component", "muniment.app", "/Applications",
+      "--sign", "B1B2", "--keychain", "/tmp/keychain", "muniment.pkg",
+    ]);
+  });
+
   it("codesigns with the hardened runtime and a secure timestamp", () => {
     expect(codesignArguments("A1B2C3D4", "muniment.app")).toEqual([
       "--force", "--options", "runtime", "--timestamp", "--sign", "A1B2C3D4", "muniment.app",
