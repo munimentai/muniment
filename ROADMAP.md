@@ -122,34 +122,13 @@ puts every shared attachment behind the cloud file store, and ADR 0019 makes
 muniment-cloud the source of that contract. No published artifact describes the
 upload, so this lane waits exactly as the code-diff producer waits.
 
-MEASURED 2026-08-08 (ninth wave, planner, read every attachment call site and
-captured the transcript chips) — the chip row repeats one rule instead of
-describing its own file. `src/App.svelte:898` prints `Saved locally · supported
-images sent with first prompt` inside every `<li>`, so three attachments print
-that sentence three times. It also tells a PDF what it tells a PNG.
-`ChatAttachment::media_type` (`src-tauri/core/src/chat_view.rs:40`) reaches the
-webview already, and both production call sites pass `media_type: None`
-(`src-tauri/src/chat.rs:733`, `:992`), so the record carries no type to render.
-`ingest_attachment` already wraps its reader in `CountingReader`
-(`attachment.rs:335`), so capturing the leading bytes costs one buffer. No probe
-fixture renders an attachment either, because `test/probe/stub.js:305` answers an
-empty list. MUNIDESK-469 replaced the older blanket claim `Saved locally · not
-sent to model`, and `src/App.test.js:2764` still guards that string, so the
-replacement must be per file rather than a third blanket sentence. SELECTED
-2026-08-08 (ninth wave).
+DONE 2026-08-09 — each saved attachment chip states its own file kind, and the
+delivery rule renders once for the whole row (MUNIDESK-1023). The ninth wave had
+measured one blanket sentence repeated inside every chip.
 
-MEASURED 2026-08-08 (ninth wave, planner, read the delivery path) — an image
-limit reports the wrong failure. `prepare_pi_images` returns one
-`AttachmentDeliveryError::ImageLimit` (`attachment.rs:27`) for a single image
-over 10 MB, for the eleventh image, and for a set over 20 MB, and it names no
-file. `prepared_pi_images` (`src-tauri/src/chat.rs:761`) maps every variant to
-`attachment_error` (`:757`), so the user reads `One or more selected files could
-not be added. Check the files and try again.` The files were added. CAS holds
-them and the journal records them, and the run then fails at
-`src-tauri/src/chat_coordinate.rs:181`. Checking the files and trying again
-fails the same way. DESIGN.md already says an error names its failure and an
-error that rejects one item from a set names that item. SELECTED 2026-08-08
-(ninth wave).
+DONE 2026-08-09 — an image-limit failure names the file and the limit it
+crossed (MUNIDESK-1022). The ninth wave had measured every limit variant
+collapsing to one sentence that blamed files the run had already saved.
 
 ### Durable local run journal
 
@@ -533,24 +512,25 @@ holds the handle behind a mutex and a condvar. `run_attach_listener` publishes
 the handle before it accepts, and `stop_attach_listener` stops the transport and
 waits for the accept loop to drop the listener and the instance lock.
 
-SELECTED 2026-08-08 (eighth wave) — one release-step slice remains. It composes
-the probe client with `confirm_handoff_probe`
-(`src-tauri/core/src/attach/handoff_probe.rs:180`) under one bounded readiness
-deadline. The runtime service binds its endpoint only after it takes the
-instance lock, so the first probe meets a refused connection and the composition
-must retry until the deadline. Wiring the stop handle, the prepared nonce, and
-that composition into one release step is the slice after it.
+DONE 2026-08-09 — the bounded readiness probe composition is built
+(MUNIDESK-1017). `probe_handoff` (`src-tauri/core/src/attach/handoff_probe.rs:68`)
+retries a refused connection under one readiness deadline and confirms the
+returned nonce through `confirm_handoff_probe`.
 
-MEASURED 2026-08-08 (eighth wave, planner, read the listener status and stop
-paths after MUNIDESK-1010) — the stop path leaves the reported status wrong, and
-a stop that arrives early is dropped. `record_listener_stopped`
-(`src-tauri/src/attach_service.rs:237`) clears the handle and never touches
-`listener_start`, so `listener_status` (`:262`) still answers `started: true`
-after the accept loop ends. `stop_listener` (`:245`) returns at once when no
-handle is published yet, so a stop requested during the bind window neither
-persists nor blocks, and the listener then accepts connections anyway. ADR 0012
-forbids an interval with two owners, so the release step needs both repairs.
-SELECTED 2026-08-08 (eighth wave).
+SELECTED 2026-08-09 (tenth wave) — the release step is the next slice. After
+the desktop answers `migration.control` with success, one release step stops
+the attach listener through `AttachCompanionState::stop_listener`, probes the
+endpoint with the prepared nonce through `probe_handoff` until the request
+deadline, and prints one line naming the outcome. A confirmed handoff leaves
+the runtime service the owner. A failed probe cancels the prepared slot and
+restarts the listener, because ADR 0012 permits a temporary interval with no
+owner and never an interval with two.
+
+DONE 2026-08-08 — the listener stop is reported truthfully, and a stop that
+arrives during the bind window is kept (MUNIDESK-1015). `AttachListenerStopState`
+(`src-tauri/src/attach_service.rs:191`) carries the pending, listening, and
+stopped states, `listener_status` reports `stopped`, and `stop_listener` waits
+for the accept loop to drop the listener and the instance lock.
 
 DONE 2026-08-08 — a failed attach listener start now says why (MUNIDESK-1001).
 `attach_listener_start_diagnostic` (`src-tauri/core/src/attach/linux.rs:58`)
@@ -587,15 +567,12 @@ segment and `open_selected_files` does not. The lane waits for an owner look at
 why this one ticket never dispatches.
 
 MERGE HAZARD — the open slices edit `src-tauri/src/attach_service.rs`,
-`src-tauri/core/src/attach/handoff_probe.rs`,
-`src-tauri/core/src/memory_runtime.rs`, `src-tauri/src/chat.rs`,
-`src-tauri/core/src/memory_scan.rs`, `src-tauri/core/src/attachment.rs`,
-`src/lib/chat-controller.js`, `.github/lib/release-promotion.mjs`, and
-`src/App.svelte`. Two open slices edit `src-tauri/src/chat.rs`,
-`src-tauri/core/src/attachment.rs`, and `src/App.svelte` this wave. One open
-slice edits each other file. Each ticket tells the implementer to rebase on
-`main` before it opens the pull request. The 2026-08-04 silent revert came from
-a stale base.
+`src-tauri/core/src/attach/handoff.rs`,
+`src-tauri/core/src/attach/handoff_probe.rs`, `src-tauri/src/chat.rs`,
+`src-tauri/src/chat_coordinate.rs`, and `src/App.svelte`. The release step and
+the nonce dedup both touch the handoff modules this wave. Each ticket tells
+the implementer to rebase on `main` before it opens the pull request. The
+2026-08-04 silent revert came from a stale base.
 
 DONE 2026-08-08 — the memory runtime is the twentieth core move
 (MUNIDESK-995). `src-tauri/core/src/memory_runtime.rs` composes one
@@ -619,15 +596,20 @@ DONE 2026-08-08 — the thread history projection is the twenty-third move
 `history_resumable`, and `chat_thread_open_page`. `src-tauri/src/chat_threads.rs`
 is now the command layer and its error sentences.
 
-SELECTED 2026-08-08 (eighth wave) — the active-run message queue is the
-twenty-fourth move. `queue_message` (`src-tauri/src/chat.rs:1095`),
-`cancel_active_run` (`:1181`), and `queue_permission_answer` (`:1219`) all take
-`&Mutex<Option<ActiveRun>>` and touch no Tauri type. `ActiveRun`
-(`src-tauri/core/src/run_start.rs:34`), `PiRunAdapter`, `PiRpcTransport`,
-`cancel_command`, and `ChatPermissionAnswer` already live in the core crate, so
-the move needs no new dependency. `ChatDelivery`, `ChatQueueRequest`, and the
-`QUEUE_TIMEOUT` constant travel with them, and each command keeps a thin
+DONE 2026-08-08 — the active-run message queue is the twenty-fourth move
+(MUNIDESK-1018). `src-tauri/core/src/active_run.rs` holds `queue_message`,
+`cancel_active_run`, `queue_permission_answer`, `ChatDelivery`,
+`ChatQueueRequest`, and the queue timeout, and each command keeps a thin
 wrapper.
+
+SELECTED 2026-08-09 (tenth wave) — the twenty-fifth move starts the Pi
+execution extraction at its emit seam. `append_emit`
+(`src-tauri/src/chat_coordinate.rs:897`) reaches the webview through
+`app.emit` alone, so a `ChatEventSink` trait in muniment-core takes that seam,
+and `ChatEvent`, `ChatStorage`, `chat_event`, `append_emit`, `append_terminal`,
+`fail`, `fail_start`, and `fail_with_open_effects` move behind it. The
+coordinate loop itself moves later, because it also reads the session root,
+the memory runtime, and the activity registry off the app handle.
 
 SEQUENCED — the later extraction slices are the remaining Pi execution move, the
 desktop client conversion, and Linux user-unit registration, each behind a
@@ -719,6 +701,13 @@ slice follows the renderer. Slice 4, the produced diff inside the permission
 gate, and slice 5, the receipt replay of an applied diff, both wait behind the
 producer. ADR 0019 keeps every E0 cloud contract, and the cloud lane publishes no
 `code-diff` artifact.
+
+DONE 2026-08-09 — ADR 0020 carries the desktop-owned local contract
+amendment (MUNIDESK-1029). SELECTED 2026-08-09 (tenth wave) — the codec crate
+is the next slice. `src-tauri/code-diff/` holds the `muniment-code-diff`
+package with the model, its validation, and a fixture exporter, and
+`protocol-fixtures/code-diff/1/` holds the golden examples behind a CI drift
+check, following the `muniment.attach/1` pattern.
 
 DECLINED 2026-08-08 (ninth wave) — the planner returned the CLI ANSI renderer
 idea. ADR 0020 gave the CLI a hand-written terminal renderer, and the 2026-07-29
@@ -909,66 +898,24 @@ Home a release-build reindex costs 30ms once the cache holds the current hashes,
 and the first build costs about 600ms. `ApplicationMemoryRuntime::open_session`
 runs one build per run start, so a warm run start pays 30ms.
 
-MEASURED 2026-08-08 (eighth wave, planner, read every lock site in
-`memory_runtime.rs`) — one mutex serializes every session in the process.
-`ApplicationMemoryRuntime` (`src-tauri/core/src/memory_runtime.rs:10`) holds one
-`Mutex<BTreeMap<String, MemoryRuntimeSession>>`. `build_session_with_timeout`
-(`:50`) holds that mutex for the whole index build, which runs up to the
-5-second `DEFAULT_BUILD_TIMEOUT`. `dispatch_tool_call` (`:127`) holds the same
-mutex for the whole search, because `MemoryRuntimeSession::call` takes `&mut
-self`. A search is budgeted at 250ms, and the wait for the mutex sits outside
-that budget. `prepare_desktop_run` opens the session on the `chat_submit` path,
-so a second run start can also block a message submit. Give each session its own
-`Arc<Mutex<MemoryRuntimeSession>>` and hold the map lock for the lookup alone.
-SELECTED 2026-08-08 (eighth wave).
+DONE 2026-08-08 — one session's index build no longer blocks another
+session's search (MUNIDESK-1016). Each session holds its own lock, and the map
+lock covers the lookup alone.
 
-MEASURED 2026-08-08 (eighth wave, planner, read both Home walkers) — the tested
-Home scanner is dead and the live one is a second copy.
-The index carries its own private `collect_markdown`
-(`src-tauri/core/src/memory_index.rs:696`) with `MAX_FILES`, `MAX_FILE_BYTES`,
-and `MAX_DIRECTORY_DEPTH` constants. The live walker is deadline-aware, so the
-dead module goes. SELECTED 2026-08-08 (eighth wave).
+DONE 2026-08-08 — the dead Home scanner is removed, and the deadline-aware
+index walker is the one copy (MUNIDESK-1019).
 
-MEASURED 2026-08-08 (ninth wave, planner, scratch release `cargo test` over a
-Home of 200 Markdown files) — the memory-search query carries no bound.
-`match_expression` (`src-tauri/core/src/memory_index.rs:770`) splits the query on
-whitespace and joins every token with `AND` into one FTS5 expression. A
-1,000-term query cost 14.3ms, a 5,000-term query cost 85.8ms, and a 20,000-term
-query ran 695.0ms before it failed with `TimedOut`. The retrieval budget is
-250ms, so one oversized call overran it by 2.8 times. `MAX_FILES`,
-`MAX_FILE_BYTES`, `MAX_DIRECTORY_DEPTH`, the item cap, the character budget, and
-the timeout are all bounded. The model-supplied query is the one input that is
-not. `RecallRecord::query` also keeps all 188,890 characters, which reach the
-`memory.recalled` journal event and the expanded receipt. A bound adds no
-column, table, or migration. SELECTED 2026-08-08 (ninth wave).
+DONE 2026-08-08 — a memory-search query accepts at most 1,024 Unicode scalar
+values and at most 64 whitespace-delimited terms (MUNIDESK-1025).
+`MemoryIndex::search` checks both limits before it opens the cache, and an
+oversized query returns `query_too_long` instead of overrunning the 250ms
+retrieval budget.
 
-DECIDED 2026-08-08 (ninth wave) — a memory-search query accepts at most 1,024
-Unicode scalar values and at most 64 whitespace-delimited terms.
-`MemoryIndex::search` checks both limits before it lowers requested retrieval
-limits or opens the cache. A query that exceeds either limit returns
-`MemoryIndexError::QueryTooLong`, and the tool response names `error.kind` as
-`query_too_long`. The boundary values are valid.
-
-MEASURED 2026-08-08 (ninth wave, planner, read the recall dispatch path) — a
-failed memory search tells the model nothing. `coordinate_memory_search`
-(`src-tauri/src/chat_coordinate.rs:781`) maps every `MemoryIndexError` through
-`.map_err(|_| ())` and answers `ExtensionUiAnswer::Cancelled`. Invalid tool
-arguments, a raised limit, a timed-out search, a rejected secret, an invalid
-path, and a damaged cache all reach the model as a cancelled request rather than
-a failed tool. The model cannot shorten a rejected query or lower a raised
-limit, and the reply then omits memory with no stated reason. SELECTED
-2026-08-08 (ninth wave).
-
-DECIDED 2026-08-08 (ninth wave) — every failed memory search answers the editor
-request with `{"error":{"kind":"<name>","message":"<text>"}}` instead of
-cancelling it. `error.kind` is the error name. Invalid tool arguments map to
-`invalid_tool_arguments`, a raised limit maps to `limit_raised`, an oversized
-query maps to `query_too_long`, and a deadline maps to `timed_out`. Secret
-rejection maps to `secret_rejected`, an invalid path maps to `invalid_path`, a
-SQLite failure maps to `sqlite`, and an I/O failure maps to `io`. A missing
-editor prefill maps to `missing_prefill`, and an unavailable runtime maps to
-`runtime_unavailable`. Each response carries the matching stable message, so
-the model can change its next call.
+DONE 2026-08-09 — every failed memory search answers the model with a named
+reason instead of a cancelled request (MUNIDESK-1026). The response carries
+`error.kind` and a stable message, from `invalid_tool_arguments` through
+`runtime_unavailable`, so the model can shorten a rejected query or lower a
+raised limit.
 
 MEASURED 2026-08-07 — nothing renders a recall. The reducer drops
 `memory.recalled`, so `ChatProjection`
@@ -1079,39 +1026,21 @@ DONE 2026-08-04 — the multi-line permission gate names its commit chord
 macOS and `Ctrl ⏎` elsewhere. The single-line kind commits on a plain Enter and
 needs no hint.
 
-MEASURED 2026-08-08 (eighth wave, planner, built the bundle and read every
-button rect on `test/probe/history.html` at 1100x760) — three shell controls
-render under the WCAG 2.2 target-size floor. The sidebar `Delete` control
-(`.thread-delete`, `src/App.svelte:1278`) measures 56x21 CSS pixels, and it sits
-absolutely positioned inside the 239x36 thread row, which is itself a control.
-The two controls overlap, so the SC 2.5.8 spacing exception cannot rescue
-either. The `.thread-delete-confirm` buttons take the same `padding: 3px 6px`.
-The run-record `Resume` and `Try again` controls (`src/App.svelte:917`) measure
-62x21. WCAG 2.2 SC 2.5.8 sets the floor at 24 by 24 CSS pixels, and the 36-pixel
-row leaves room for it. DESIGN.md takes the law and a test guards it. SELECTED
-2026-08-08 (eighth wave).
+DONE 2026-08-08 — the sidebar delete, the delete confirm, and the run-record
+controls meet the 24 pixel floor, DESIGN.md states the law, and
+`src/styles/target-size.test.js` guards the three selectors (MUNIDESK-1020).
 
-MEASURED 2026-08-08 (ninth wave, planner, same capture at 1100x760) — a fourth
-control sits under that floor. The receipt summary is a button
-(`.provenance`, `src/App.svelte:990`) and it measures 334x17 CSS pixels. It
-renders on its own line rather than inside a sentence, so the SC 2.5.8 inline
-exception does not cover it. The open target-size slice writes the law, so that
-slice states whether this control is in scope. The planner files no second
-slice.
+MEASURED 2026-08-09 (tenth wave, planner, measured the built bundle at
+1100x760) — the receipt summary still sits under the floor. The `.provenance`
+button (`src/App.svelte:1358`) measures 334 by 17 CSS pixels with `padding: 0`.
+MUNIDESK-1020 neither raised it nor recorded an exception, and the DESIGN.md
+law admits none. The control renders on its own line, so the SC 2.5.8 inline
+exception does not cover it. SELECTED 2026-08-09 (tenth wave).
 
-MEASURED 2026-08-09 (ninth wave, planner, read every `onHistoryError` call site
-against the banner control) — the transcript error banner offers a recovery it
-does not perform. `src/App.svelte:888` renders one `Try again` control, and that
-control always calls `chatController.loadHistory()`. Seven failures share the
-banner. Four of them name an action the control never repeats. They are
-`A new thread could not be started.`, `The thread name could not be changed.`,
-`The thread could not be deleted.`, and `Older threads could not be loaded.`
-A user who fails a delete presses `Try again`, the newest history page reloads,
-the message clears, and the thread survives. `loadHistory` also resets
-`threadPageCount` to 1, so a failed older-page read loses the retained pages.
-Every failing call site holds its own arguments, so the controller can pass the
-action that repeats it. DESIGN.md already states that the control beside an error
-names the recovery. SELECTED 2026-08-09 (ninth wave).
+DONE 2026-08-09 — the transcript error banner offers the recovery that
+repeats the failed action (MUNIDESK-1030). Each failing call site passes the
+action that repeats it, and a failed older-page read no longer resets the
+retained pages.
 
 DONE 2026-08-08 — the receipt summary shows that it expands (MUNIDESK-996). The
 expandable line carries a rotating marker (`src/App.svelte:990`, `.receipt-marker`
@@ -1248,6 +1177,10 @@ config resolves its capabilities file. The Windows lane launches the nested
 browser suite through `npx` and declares `@vitest/browser-playwright`. The macOS
 probe counts windows with CoreGraphics, so it needs no privacy permission.
 
+DONE 2026-08-09 — a third pair followed (MUNIDESK-1033, 1034). The JUnit
+report step and the shell gate accept the current harness layout, and the
+installed Linux run resolves `libsherpa-onnx-c-api.so` beside the binary.
+
 DONE 2026-08-06 — the Windows-only tests run before they merge (MUNIDESK-946).
 Pull request CI never ran the 14 of them, and 12 failed inside the Windows lane.
 `test/windows-pr-gate.test.js` now guards the gate. MUNIDESK-950 pinned the
@@ -1269,16 +1202,17 @@ earlier one. Requiring an up-to-date branch before merge, or a merge queue, is a
 repository-settings change that sits with the owner. The planner files no ticket
 for it.
 
-VERIFIED 2026-08-09 (ninth wave, from a clean clone) — `npm ci` then `npm test`
-passed 890 frontend tests across 59 files, with 31 skipped, and the browser suite
-passed 3. `cargo test -p muniment-core -p muniment-attach -p muniment-cli` passed
-with no failure. The planner then read the macOS packaging and release-promotion
-modules with the nightly workflow, the four ADRs behind the code-diff lane, the
-frontend code-diff adapter, the CLI run-stream loop and its guidance table, and
-every `onHistoryError` call site. It rebuilt the bundle and captured the
-signed-out, onboarding, approved-files, empty-workspace, and Markdown probe
-fixtures in headless Chromium at 1100x760. Earlier waves recorded the same shape
-of verification, and this entry replaces that ledger.
+VERIFIED 2026-08-09 (tenth wave, from a clean clone) — `npm ci` then `npm
+test` passed 902 frontend tests across 61 files, with 31 skipped, and the
+browser suite passed 3. `cargo test -p muniment-core -p muniment-attach -p
+muniment-cli` passed with no failure. The planner then read the handoff probe,
+the prepared handoff slot, the migration control answer, the listener stop
+path, the ADR 0020 amendment of 2026-08-09, the frontend code-diff adapter,
+and the coordinate loop's app-handle seams. It rebuilt the bundle and measured
+every visible control on the four permission-gate fixtures at 1100x760 in
+headless Chromium. Every gate control measures at least 24 CSS pixels tall,
+and the receipt summary measures 334 by 17. Earlier waves recorded the same
+shape of verification, and this entry replaces that ledger.
 
 NOTE 2026-08-06 — the planning clone ships no `node_modules`. Run `npm ci`
 before `npm test`. Without it the run dies with `vitest: not found`, which reads
@@ -1324,15 +1258,15 @@ installs `muniment.app` into `/Applications`, `signingEnabled` (`:21`) reads the
 staples the package beside the app. The nightly now carries seven assets, and
 `docs/macos-packages.md` is the deployment page.
 
-MEASURED 2026-08-09 (ninth wave, planner, read the promotion body beside the
-nightly body) — a stable release will lie about macOS signing. `releaseBody`
-(`.github/lib/release-promotion.mjs:30`) is a fixed string that always reads
-`macOS artifacts are unsigned pending Apple credentials.` The nightly finalize
-step already writes the true state, and `promoteRelease` (`:67`) already reads
-the nightly body for the Windows sentence. On the day enrollment Y5DUNHQA74
-clears, every stable release will call a signed, notarized package unsigned. The
-owner ruling labels unsigned macOS rather than blocking it, so the repair reports
-the state and never blocks a promotion. SELECTED 2026-08-09 (ninth wave).
+DONE 2026-08-08 — the repository carries a Homebrew cask for the nightly
+(MUNIDESK-115). `Casks/muniment-nightly.rb` holds the cask, the nightly
+workflow bumps its version and hashes, `docs/homebrew.md` is the setup page,
+and `test/homebrew-cask.test.js` guards the cask shape.
+
+DONE 2026-08-09 — stable promotion states the true macOS signing state
+(MUNIDESK-1031). `promoteRelease` reads the macOS sentence from the nightly
+body instead of a fixed string, so a promotion after the enrollment clears
+reports the signed, notarized package.
 
 DONE — the shipped package carries its notices (MUNIDESK-716, 726, 801).
 `THIRD_PARTY_NOTICES.md` names every bundled frontend package at its resolved
@@ -1341,7 +1275,7 @@ non-workspace crate with its version and license expression. All three platform
 bundle configs ship both records beside the two webfont license texts, and
 `test/third-party-notices.test.js` fails when an entry is missing or wrong.
 
-OWNER-GATED — fork and token setup, WinGet publication, Homebrew, Apple
+OWNER-GATED — fork and token setup, WinGet publication, Homebrew tap publication, Apple
 enrollment Y5DUNHQA74, public download and install docs, distribution accounts,
 marketplace and store publishing, production launch, and publicity. Switching
 macOS signing on is secrets-only. No monetization or promotional surface is
