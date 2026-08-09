@@ -302,7 +302,13 @@ window.__TAURI__ = {
             entry.listener({ payload: { runId, type: 'completed', receipt: null } })
           }
         })
-        return { runId, attachments: [] }
+        return {
+          runId,
+          attachments: [
+            { displayName: 'site-photo.png', byteLength: 18432, mediaType: 'image/png' },
+            { displayName: 'lease.pdf', byteLength: 219136 },
+          ],
+        }
       }
       if (command === 'chat_thread_open') return { entries: structuredClone(history), nextCursor: null }
       if (command === 'auth_entitlement_snapshot') {

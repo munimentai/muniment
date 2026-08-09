@@ -895,9 +895,10 @@
                   {#if message.attachments?.length}
                     <ul class="message-attachments" aria-label="Saved attachments">
                       {#each message.attachments as attachment}
-                        <li><span>{attachment.displayName}</span><span>{formatByteSize(attachment.byteLength)}</span><strong>Saved locally · supported images sent with first prompt</strong></li>
+                        <li><span>{attachment.displayName}</span><span>{formatByteSize(attachment.byteLength)}</span>{#if attachment.mediaType}<strong>{attachment.mediaType}</strong>{/if}</li>
                       {/each}
                     </ul>
+                    <p class="attachment-delivery-rule">Supported images are sent with the first prompt.</p>
                   {/if}
                 </div>
               </div>
@@ -1319,6 +1320,7 @@
   .message-attachments { display: grid; justify-items: end; gap: 4px; margin: 8px 0 0; padding: 0; list-style: none; }
   .message-attachments li { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 5px 8px; max-width: 100%; padding: 5px 8px; border: 1px solid var(--border); border-radius: var(--radius-chip); color: var(--muted); font: var(--text-12) var(--font-mono); }
   .message-attachments strong { flex-basis: 100%; color: var(--muted); font-weight: 400; font-size: var(--text-12); }
+  .attachment-delivery-rule { margin: 4px 0 0; color: var(--muted); font: var(--text-12) var(--font-mono); }
   .response { margin: 0 0 34px; }
   .response-prose { max-width: 92%; white-space: pre-wrap; overflow-wrap: anywhere; }
   .streaming { position: relative; }
