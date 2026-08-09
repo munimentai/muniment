@@ -29,7 +29,7 @@ A memory recall renders as one row with its query inside the expanded receipt an
 Each saved attachment shows its media type when the record provides one. The image delivery rule appears once under the attachment list.
 
 The signed-in shell has one workspace `h1`, a headed thread list, and a transcript region named for the open thread.
-An error message names the failure, and the control beside it names the recovery.
+An error message names the failure. The control beside it names and repeats the action that failed.
 An error that rejects one item from a set names that item.
 A surface that renders model or user text wraps an unbreakable string.
 A control renders as a control at rest.

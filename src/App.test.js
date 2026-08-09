@@ -875,10 +875,12 @@ describe('thread name', () => {
 
   it('keeps the row and reports a failed delete', async () => {
     threadSummaryResult = [{ threadId: 'thread-1', title: 'Lease renewal', updatedAt: '' }]
+    let deleteAttempts = 0
     invoke.mockImplementation(async (command) => {
       if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
       if (command === 'chat_thread_open') return []
-      if (command === 'chat_delete_thread') throw new Error('offline')
+      if (command === 'chat_delete_thread' && deleteAttempts++ === 0) throw new Error('offline')
+      if (command === 'chat_delete_thread') return undefined
       if (command === 'auth_entitlement_snapshot') return snapshot()
       if (command === 'auth_devices') return []
       throw new Error(`unexpected command: ${command}`)
@@ -888,8 +890,14 @@ describe('thread name', () => {
     await fireEvent.click(screen.getByRole('button', { name: 'Delete' }))
 
     expect(await screen.findByRole('alert')).toHaveTextContent('The thread could not be deleted.')
+    const repeatDelete = screen.getByRole('button', { name: 'Delete thread' })
     expect(screen.getByRole('button', { name: 'Delete Lease renewal' })).toBeInTheDocument()
     expect(screen.queryByLabelText('Delete Lease renewal?')).not.toBeInTheDocument()
+
+    await fireEvent.click(repeatDelete)
+
+    await waitFor(() => expect(screen.queryByText('The thread could not be deleted.')).not.toBeInTheDocument())
+    expect(invoke.mock.calls.filter(([command]) => command === 'chat_delete_thread')).toHaveLength(2)
   })
 
   it('uses the stored title and renames it from the keyboard', async () => {

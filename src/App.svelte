@@ -73,6 +73,7 @@
   let cancelError = $state('')
   let queueError = $state('')
   let historyError = $state('')
+  let historyErrorAction = $state(null)
   let threadSummaries = $state([])
   let moreThreads = $state(false)
   let loadingOlderThreads = $state(false)
@@ -189,7 +190,7 @@
     onSubmitError: (next) => { submitError = next },
     onCancelError: (next) => { cancelError = next },
     onQueueError: (next) => { queueError = next },
-    onHistoryError: (next) => { historyError = next },
+    onHistoryError: (next, action) => { historyError = next; historyErrorAction = action },
     onThreadSummaries: (next) => { threadSummaries = next },
     onMoreThreads: (next) => { moreThreads = next },
     onThreadSelected: (next) => { currentThreadId = next },
@@ -885,7 +886,7 @@
         </aside>
         <div class="thread-shell">
         <div class="thread" role="region" aria-label={`Transcript: ${currentThreadTitle}`} bind:this={thread} onscroll={handleThreadScroll}>
-          {#if historyError}<p class="history-error" role="alert">{historyError} <button onclick={() => chatController.loadHistory()}>Try again</button></p>{/if}
+          {#if historyError}<p class="history-error" role="alert">{historyError} {#if historyErrorAction}<button onclick={historyErrorAction.run}>{historyErrorAction.label}</button>{/if}</p>{/if}
           {#if messages.length === 0}<p class="empty">Ask anything. Your org's routing decides which model answers.</p>{/if}
           {#each messages as message}
             {#if message.role === 'user'}
