@@ -20,15 +20,17 @@ export const expectedNightlyAssets = (assets, sha) => {
     ["Windows machine MSI", (n) => n.startsWith(`${prefix}windows-`) && n.endsWith("-machine.msi")],
     ["Windows NSIS", (n) => n.startsWith(`${prefix}windows-`) && n.endsWith("-nsis.exe")],
     ["macOS app", (n) => n.startsWith(`${prefix}macos-`) && n.endsWith(".app.zip")],
+    ["macOS package", (n) => n.startsWith(`${prefix}macos-`) && n.endsWith(".pkg")],
   ];
-  if (assets.length !== specs.length) throw new Error(`nightly release must contain exactly six assets; found ${assets.length}`);
+  if (assets.length !== specs.length) throw new Error(`nightly release must contain exactly seven assets; found ${assets.length}`);
   for (const [label, matches] of specs) if (assets.filter((asset) => matches(asset.name)).length !== 1) throw new Error(`expected exactly one ${label} asset`);
   return assets;
 };
 
-export const releaseBody = (sha) => `Stable desktop release promoted from nightly source \`${sha}\`.\n\nWindows installers are signed. macOS artifacts are unsigned pending Apple credentials. Model weights are not included.`;
+export const releaseBody = (sha, macosSigned) => `Stable desktop release promoted from nightly source \`${sha}\`.\n\nWindows installers are signed. ${macosSigned ? macosSigningProvenance(sha) : "macOS artifacts are unsigned pending Apple enrollment Y5DUNHQA74."} Model weights are not included.`;
 
 export const windowsSigningProvenance = (sha) => `Windows installers for \`${sha}\` were signed by the nightly workflow.`;
+export const macosSigningProvenance = (sha) => `macOS artifacts for \`${sha}\` were signed and notarized by the nightly workflow.`;
 
 export const assertGreenCi = (checkRuns, sha) => {
   // The currently-running promotion job can itself be attached to the selected
@@ -64,10 +66,11 @@ export async function promoteRelease({ token, repository, sha, version, fetchImp
   const nightly = await (await request(fetchImpl, token, `${repoApi}/releases/tags/nightly`)).json();
   if (nightly.draft || !nightly.prerelease || !nightly.body?.includes(sha)) throw new Error(`nightly release is not finalized at ${sha}`);
   if (!nightly.body.includes(windowsSigningProvenance(sha))) throw new Error(`nightly Windows installers are not verified as signed for ${sha}`);
+  const macosSigned = nightly.body.includes(macosSigningProvenance(sha));
   const assets = expectedNightlyAssets(nightly.assets, sha);
   let created;
   try {
-    created = await (await request(fetchImpl, token, `${repoApi}/releases`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ tag_name: version, target_commitish: sha, name: version, body: releaseBody(sha), draft: true, prerelease: false }) })).json();
+    created = await (await request(fetchImpl, token, `${repoApi}/releases`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ tag_name: version, target_commitish: sha, name: version, body: releaseBody(sha, macosSigned), draft: true, prerelease: false }) })).json();
     for (const asset of assets) {
       const source = await request(fetchImpl, token, asset.url, { headers: { Accept: "application/octet-stream" } });
       await request(fetchImpl, token, `https://uploads.github.com/repos/${repository}/releases/${created.id}/assets?name=${encodeURIComponent(asset.name)}`, { method: "POST", headers: { "Content-Type": asset.content_type || "application/octet-stream" }, body: await source.arrayBuffer() });

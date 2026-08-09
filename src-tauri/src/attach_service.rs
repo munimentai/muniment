@@ -172,9 +172,9 @@ pub struct AttachCompanionState {
     #[cfg(target_os = "linux")]
     workspace: Arc<Mutex<Option<String>>>,
     #[cfg(target_os = "linux")]
-    listener_start: Mutex<(bool, Option<AttachListenerStartFailure>)>,
+    listener_start: Mutex<(bool, Option<AttachListenerStartFailure>, bool)>,
     #[cfg(target_os = "linux")]
-    listener_stop: Mutex<Option<AttachStopHandle>>,
+    listener_stop: Mutex<AttachListenerStopState>,
     #[cfg(target_os = "linux")]
     listener_stopped: Condvar,
 }
@@ -184,6 +184,14 @@ pub struct AttachListenerStatus {
     started: bool,
     failure: Option<&'static str>,
     pending: bool,
+    stopped: bool,
+}
+
+#[cfg(target_os = "linux")]
+enum AttachListenerStopState {
+    Pending { stop_requested: bool },
+    Listening(AttachStopHandle),
+    Stopped,
 }
 
 #[cfg(target_os = "linux")]
@@ -192,8 +200,10 @@ impl AttachCompanionState {
         Self {
             workspace: listener.workspace.clone(),
             listener: Mutex::new(Some(listener)),
-            listener_start: Mutex::new((true, None)),
-            listener_stop: Mutex::new(None),
+            listener_start: Mutex::new((true, None, false)),
+            listener_stop: Mutex::new(AttachListenerStopState::Pending {
+                stop_requested: false,
+            }),
             listener_stopped: Condvar::new(),
         }
     }
@@ -217,28 +227,47 @@ impl AttachCompanionState {
         *self
             .listener_start
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = (true, None);
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = (true, None, false);
     }
 
     fn record_listener_start_failure(&self, failure: AttachListenerStartFailure) {
         *self
             .listener_start
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = (false, Some(failure));
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = (false, Some(failure), false);
+        self.record_listener_finished();
     }
 
     fn publish_listener_stop(&self, stop: AttachStopHandle) {
-        *self
+        let mut listener_stop = self
             .listener_stop
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(stop);
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if matches!(
+            *listener_stop,
+            AttachListenerStopState::Pending {
+                stop_requested: true
+            }
+        ) {
+            stop.stop();
+        }
+        *listener_stop = AttachListenerStopState::Listening(stop);
     }
 
     fn record_listener_stopped(&self) {
         *self
+            .listener_start
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = (false, None, true);
+        self.record_listener_finished();
+    }
+
+    fn record_listener_finished(&self) {
+        *self
             .listener_stop
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
+            .unwrap_or_else(std::sync::PoisonError::into_inner) =
+            AttachListenerStopState::Stopped;
         self.listener_stopped.notify_all();
     }
 
@@ -247,11 +276,12 @@ impl AttachCompanionState {
             .listener_stop
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let Some(handle) = stop.as_ref().cloned() else {
-            return;
-        };
-        handle.stop();
-        while stop.is_some() {
+        match &mut *stop {
+            AttachListenerStopState::Pending { stop_requested } => *stop_requested = true,
+            AttachListenerStopState::Listening(handle) => handle.stop(),
+            AttachListenerStopState::Stopped => return,
+        }
+        while !matches!(*stop, AttachListenerStopState::Stopped) {
             stop = self
                 .listener_stopped
                 .wait(stop)
@@ -260,7 +290,7 @@ impl AttachCompanionState {
     }
 
     fn listener_status(&self) -> AttachListenerStatus {
-        let (started, failure) = *self
+        let (started, failure, stopped) = *self
             .listener_start
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -271,7 +301,8 @@ impl AttachCompanionState {
                 AttachListenerStartFailure::InstanceLock => "instance_lock",
                 AttachListenerStartFailure::Bind => "bind",
             }),
-            pending: !started && failure.is_none(),
+            pending: !started && failure.is_none() && !stopped,
+            stopped,
         }
     }
 
@@ -305,8 +336,10 @@ impl Default for AttachCompanionState {
         Self {
             listener: Mutex::new(None),
             workspace: Arc::new(Mutex::new(None)),
-            listener_start: Mutex::new((false, None)),
-            listener_stop: Mutex::new(None),
+            listener_start: Mutex::new((false, None, false)),
+            listener_stop: Mutex::new(AttachListenerStopState::Pending {
+                stop_requested: false,
+            }),
             listener_stopped: Condvar::new(),
         }
     }
@@ -354,6 +387,7 @@ pub fn attach_listener_status(
             started: true,
             failure: None,
             pending: false,
+            stopped: false,
         }
     }
 }
@@ -613,6 +647,17 @@ fn run_attach_listener<R: tauri::Runtime>(
     state: Arc<AttachListenerState>,
     filesystem: AttachFilesystem,
 ) {
+    run_attach_listener_with_hooks(app, state, filesystem, || {}, || {});
+}
+
+#[cfg(target_os = "linux")]
+fn run_attach_listener_with_hooks<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+    state: Arc<AttachListenerState>,
+    filesystem: AttachFilesystem,
+    after_lock: impl FnOnce(),
+    after_bind_failure: impl FnOnce(),
+) {
     let Ok(instance_lock) = filesystem.acquire_instance_lock() else {
         app.state::<AttachCompanionState>()
             .record_listener_start_failure(AttachListenerStartFailure::InstanceLock);
@@ -622,13 +667,16 @@ fn run_attach_listener<R: tauri::Runtime>(
         );
         return;
     };
+    after_lock();
     let Ok(listener) = AttachTransport::bind(&filesystem) else {
+        drop(instance_lock);
         app.state::<AttachCompanionState>()
             .record_listener_start_failure(AttachListenerStartFailure::Bind);
         eprintln!(
             "{}",
             attach_listener_start_diagnostic(AttachListenerStartFailure::Bind)
         );
+        after_bind_failure();
         return;
     };
     let companion_state = app.state::<AttachCompanionState>();
@@ -1316,7 +1364,6 @@ mod tests {
         app.state::<AttachCompanionState>()
             .set_listener(listener.clone());
 
-        stop_attach_listener(app.handle());
         let listener_app = app.handle().clone();
         let worker = std::thread::spawn(move || {
             run_attach_listener(listener_app, listener, filesystem);
@@ -1345,6 +1392,124 @@ mod tests {
             None
         );
         drop(_instance_lock);
+        std::fs::remove_dir_all(runtime).unwrap();
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn listener_stop_requested_before_publication_closes_listener_and_waits_for_release() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let runtime = std::env::temp_dir().join(format!("mt-early-stop-{}", Uuid::now_v7()));
+        std::fs::create_dir(&runtime).unwrap();
+        std::fs::set_permissions(&runtime, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let filesystem = AttachFilesystem::from_runtime_directory(&runtime).unwrap();
+        let instance_lock = filesystem.acquire_instance_lock().unwrap();
+        let listener = AttachTransport::bind(&filesystem).unwrap();
+        let state = Arc::new(AttachCompanionState::default());
+        let stop_state = state.clone();
+        let stopper = std::thread::spawn(move || stop_state.stop_listener());
+
+        let deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            let requested = matches!(
+                *state
+                    .listener_stop
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner),
+                AttachListenerStopState::Pending {
+                    stop_requested: true
+                }
+            );
+            if requested {
+                break;
+            }
+            assert!(Instant::now() < deadline, "early stop was not recorded");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(!stopper.is_finished());
+
+        state.publish_listener_stop(listener.stop_handle());
+        assert_eq!(listener.accept().unwrap_err(), AttachAcceptError::Closed);
+        assert!(!stopper.is_finished());
+        drop(listener);
+        drop(instance_lock);
+        state.record_listener_stopped();
+        stopper.join().unwrap();
+
+        let filesystem = AttachFilesystem::from_runtime_directory(&runtime).unwrap();
+        assert!(!filesystem.endpoint_path().exists());
+        let _instance_lock = filesystem.acquire_instance_lock().unwrap();
+        std::fs::remove_dir_all(runtime).unwrap();
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn listener_bind_failure_releases_instance_lock_before_stopper_returns() {
+        use std::os::unix::fs::PermissionsExt;
+        use std::sync::mpsc;
+
+        let runtime = std::env::temp_dir().join(format!("mt-bind-stop-{}", Uuid::now_v7()));
+        std::fs::create_dir(&runtime).unwrap();
+        std::fs::set_permissions(&runtime, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let filesystem = AttachFilesystem::from_runtime_directory(&runtime).unwrap();
+        std::fs::write(filesystem.endpoint_path(), "not a socket").unwrap();
+        let listener = Arc::new(
+            AttachListenerState::load(&runtime.join("attach-client-credentials.json")).unwrap(),
+        );
+        let app = tauri::test::mock_app();
+        app.manage(AttachCompanionState::default());
+        app.state::<AttachCompanionState>()
+            .set_listener(listener.clone());
+
+        let (locked_tx, locked_rx) = mpsc::channel();
+        let (bind_tx, bind_rx) = mpsc::channel();
+        let (failed_tx, failed_rx) = mpsc::channel();
+        let (finish_tx, finish_rx) = mpsc::channel();
+        let listener_app = app.handle().clone();
+        let worker = std::thread::spawn(move || {
+            run_attach_listener_with_hooks(
+                listener_app,
+                listener,
+                filesystem,
+                || {
+                    locked_tx.send(()).unwrap();
+                    bind_rx.recv().unwrap();
+                },
+                || {
+                    failed_tx.send(()).unwrap();
+                    finish_rx.recv().unwrap();
+                },
+            );
+        });
+        locked_rx.recv().unwrap();
+
+        let stop_app = app.handle().clone();
+        let stopper = std::thread::spawn(move || stop_attach_listener(&stop_app));
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while !matches!(
+            *app.state::<AttachCompanionState>()
+                .listener_stop
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
+            AttachListenerStopState::Pending {
+                stop_requested: true
+            }
+        ) {
+            assert!(Instant::now() < deadline, "early stop was not recorded");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+
+        bind_tx.send(()).unwrap();
+        failed_rx.recv().unwrap();
+        stopper.join().unwrap();
+        let filesystem = AttachFilesystem::from_runtime_directory(&runtime).unwrap();
+        let _instance_lock = filesystem.acquire_instance_lock().unwrap();
+        finish_tx.send(()).unwrap();
+        worker.join().unwrap();
+
+        drop(_instance_lock);
+        std::fs::remove_file(filesystem.endpoint_path()).unwrap();
         std::fs::remove_dir_all(runtime).unwrap();
     }
 
@@ -1411,6 +1576,7 @@ mod tests {
                     started: false,
                     failure: Some(name),
                     pending: false,
+                    stopped: false,
                 }
             );
         }
@@ -1422,6 +1588,7 @@ mod tests {
                 started: true,
                 failure: None,
                 pending: false,
+                stopped: false,
             }
         );
 
@@ -1432,6 +1599,18 @@ mod tests {
                 started: false,
                 failure: None,
                 pending: true,
+                stopped: false,
+            }
+        );
+
+        state.record_listener_stopped();
+        assert_eq!(
+            state.listener_status(),
+            AttachListenerStatus {
+                started: false,
+                failure: None,
+                pending: false,
+                stopped: true,
             }
         );
     }
@@ -1560,6 +1739,7 @@ mod tests {
                 started: false,
                 failure: Some("filesystem"),
                 pending: false,
+                stopped: false,
             }
         );
         assert_state_works(&app);
@@ -1579,6 +1759,7 @@ mod tests {
                 started: false,
                 failure: Some("filesystem"),
                 pending: false,
+                stopped: false,
             }
         );
         assert_state_works(&app);

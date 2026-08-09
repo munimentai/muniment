@@ -10,7 +10,7 @@
   let access = $state(accessIdleState)
   let devices = $state(devicesIdleState)
   let companions = $state(companionsIdleState)
-  let attachListener = $state({ started: false, failure: null, pending: true })
+  let attachListener = $state({ started: false, failure: null, pending: true, stopped: false })
   let profileSnapshot = $state(null)
   let accessOpen = $state(false)
   let expandedGroups = $state(new Set())
@@ -279,6 +279,8 @@
               <div class="access-status" role="status"><p>Connected programs are available in another Muniment window.</p><button onclick={closeWindow}>Close this window</button></div>
             {:else if !attachListener.started && attachListener.failure === 'bind'}
               <div class="access-status" role="alert"><p>The connected programs connection could not start.</p><button onclick={restartMuniment}>Restart Muniment</button></div>
+            {:else if attachListener.stopped}
+              <div class="access-status" role="status"><p>The connected programs listener stopped.</p><button onclick={restartMuniment}>Restart Muniment</button></div>
             {:else if companions.companions.length === 0}<p class="empty-grant">No connected programs found</p>{/if}
             <ul class="companion-list">
               {#each companions.companions as companion (companion.identity)}

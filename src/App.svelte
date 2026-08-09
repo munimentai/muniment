@@ -73,6 +73,7 @@
   let cancelError = $state('')
   let queueError = $state('')
   let historyError = $state('')
+  let historyErrorAction = $state(null)
   let threadSummaries = $state([])
   let moreThreads = $state(false)
   let loadingOlderThreads = $state(false)
@@ -189,7 +190,7 @@
     onSubmitError: (next) => { submitError = next },
     onCancelError: (next) => { cancelError = next },
     onQueueError: (next) => { queueError = next },
-    onHistoryError: (next) => { historyError = next },
+    onHistoryError: (next, action) => { historyError = next; historyErrorAction = action },
     onThreadSummaries: (next) => { threadSummaries = next },
     onMoreThreads: (next) => { moreThreads = next },
     onThreadSelected: (next) => { currentThreadId = next },
@@ -885,7 +886,7 @@
         </aside>
         <div class="thread-shell">
         <div class="thread" role="region" aria-label={`Transcript: ${currentThreadTitle}`} bind:this={thread} onscroll={handleThreadScroll}>
-          {#if historyError}<p class="history-error" role="alert">{historyError} <button onclick={() => chatController.loadHistory()}>Try again</button></p>{/if}
+          {#if historyError}<p class="history-error" role="alert">{historyError} {#if historyErrorAction}<button onclick={historyErrorAction.run}>{historyErrorAction.label}</button>{/if}</p>{/if}
           {#if messages.length === 0}<p class="empty">Ask anything. Your org's routing decides which model answers.</p>{/if}
           {#each messages as message}
             {#if message.role === 'user'}
@@ -895,9 +896,10 @@
                   {#if message.attachments?.length}
                     <ul class="message-attachments" aria-label="Saved attachments">
                       {#each message.attachments as attachment}
-                        <li><span>{attachment.displayName}</span><span>{formatByteSize(attachment.byteLength)}</span><strong>Saved locally · supported images sent with first prompt</strong></li>
+                        <li><span>{attachment.displayName}</span><span>{formatByteSize(attachment.byteLength)}</span>{#if attachment.mediaType}<strong>{attachment.mediaType}</strong>{/if}</li>
                       {/each}
                     </ul>
+                    <p class="attachment-delivery-rule">Supported images are sent with the first prompt.</p>
                   {/if}
                 </div>
               </div>
@@ -1275,13 +1277,13 @@
   .thread-row time { margin-left: auto; color: var(--muted); font: var(--text-provenance) var(--font-mono); }
   .thread-row > span { flex: 0 0 5px; }
   .thread-row-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .thread-delete { position: absolute; top: 4px; right: 5px; padding: 3px 6px; border-color: transparent; background: var(--surface); color: var(--muted); font: var(--text-12) var(--font-mono); opacity: 0; transition: opacity 120ms ease; }
+  .thread-delete { position: absolute; top: 4px; right: 5px; min-width: 24px; min-height: 24px; padding: 3px 6px; border-color: transparent; background: transparent; color: var(--muted); font: var(--text-12) var(--font-mono); opacity: 0; transition: opacity 120ms ease; }
   .thread-record:hover .thread-delete, .thread-record:focus-within .thread-delete { opacity: 1; }
   .thread-delete:hover:not(:disabled) { border-color: transparent; background: var(--faint); color: var(--ink); }
   .thread-delete:focus-visible, .thread-delete-confirm button:focus-visible { outline-color: var(--ink); }
   .thread-delete-confirm { position: absolute; inset: 0; display: flex; align-items: center; justify-content: flex-end; gap: 5px; min-width: 0; padding: 5px 7px; border-radius: var(--radius-control); background: var(--surface); color: var(--ink); font: var(--text-12) var(--font-mono); }
   .thread-delete-confirm > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .thread-delete-confirm button { flex: none; padding: 3px 6px; border-color: transparent; background: transparent; color: var(--ink); font: inherit; }
+  .thread-delete-confirm button { flex: none; min-width: 24px; min-height: 24px; padding: 3px 6px; border-color: transparent; background: transparent; color: var(--ink); font: inherit; }
   .thread-delete-confirm button:hover:not(:disabled) { background: var(--faint); }
   .side-action span { flex: 1; }
   .new-thread kbd { margin-left: auto; }
@@ -1319,6 +1321,7 @@
   .message-attachments { display: grid; justify-items: end; gap: 4px; margin: 8px 0 0; padding: 0; list-style: none; }
   .message-attachments li { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 5px 8px; max-width: 100%; padding: 5px 8px; border: 1px solid var(--border); border-radius: var(--radius-chip); color: var(--muted); font: var(--text-12) var(--font-mono); }
   .message-attachments strong { flex-basis: 100%; color: var(--muted); font-weight: 400; font-size: var(--text-12); }
+  .attachment-delivery-rule { margin: 4px 0 0; color: var(--muted); font: var(--text-12) var(--font-mono); }
   .response { margin: 0 0 34px; }
   .response-prose { max-width: 92%; white-space: pre-wrap; overflow-wrap: anywhere; }
   .streaming { position: relative; }
@@ -1381,7 +1384,7 @@
   .copy-failure { margin-top: 4px; }
   .run-error { color: var(--muted); font: var(--text-12) var(--font-mono); }
   .cancel-error, .history-error { margin: 0 0 8px; color: var(--muted); font: var(--text-12) var(--font-mono); }
-  .run-error button { padding: 2px 6px; }
+  .run-error button { min-width: 24px; min-height: 24px; padding: 2px 6px; background: transparent; font: inherit; }
   .composer { grid-area: composer; width: min(760px, calc(100% - 48px)); margin: 0 auto 24px; padding: 12px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-panel); }
   .composer:focus-within { border-color: var(--muted); }
   .attachments { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 8px; padding: 0; list-style: none; }

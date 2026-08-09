@@ -105,7 +105,7 @@ export function createChatController({
         return !destroyed
       } catch (_) {
         registrationFailed = true
-        if (!destroyed) onHistoryError('Live replies cannot arrive.')
+        if (!destroyed) onHistoryError('Live replies cannot arrive.', { label: 'Reconnect', run: loadHistory })
         return false
       } finally {
         registration = undefined
@@ -115,7 +115,6 @@ export function createChatController({
   }
 
   async function loadHistory() {
-    onHistoryError('')
     if (registrationFailed && !await start()) return
     onHistoryStart()
     onAnnounce(null)
@@ -127,6 +126,7 @@ export function createChatController({
       onThreadSummaries(summaries)
       onMoreThreads(nextThreadCursor != null)
       if (!summaries.length) {
+        onHistoryError('')
         publishMessages([])
         onThreadSelected(null)
         onFreshThread(true)
@@ -136,14 +136,13 @@ export function createChatController({
       }
       await openThread(summaries[0].threadId, switchBlocked)
     } catch (_) {
-      if (!destroyed) onHistoryError('Conversation history could not be restored.')
+      if (!destroyed) onHistoryError('Conversation history could not be restored.', { label: 'Restore history', run: loadHistory })
     }
   }
 
   async function loadOlderThreads() {
     if (destroyed || loadingOlderThreads || nextThreadCursor == null) return null
     loadingOlderThreads = true
-    onHistoryError('')
     const cursor = nextThreadCursor
     const sequence = threadRefreshSequence
     try {
@@ -154,9 +153,10 @@ export function createChatController({
       threadPageCount += 1
       nextThreadCursor = result.nextCursor
       onMoreThreads(nextThreadCursor != null)
+      onHistoryError('')
       return firstThreadId
     } catch (_) {
-      if (!destroyed && sequence === threadRefreshSequence) onHistoryError('Older threads could not be loaded.')
+      if (!destroyed && sequence === threadRefreshSequence) onHistoryError('Older threads could not be loaded.', { label: 'Load older threads', run: loadOlderThreads })
       return null
     } finally {
       loadingOlderThreads = false
@@ -168,7 +168,6 @@ export function createChatController({
     threadRefreshSequence += 1
     switchingThread = true
     onThreadSwitch(true)
-    onHistoryError('')
     const previousThreadId = readThreadId()
     const wasBlocked = switchBlocked
     let selected = false
@@ -196,6 +195,7 @@ export function createChatController({
       publishMessages(historyMessages(history))
       onHistoryLoaded()
       onFollow()
+      onHistoryError('')
       switchBlocked = false
     } catch (_) {
       if (!destroyed) {
@@ -213,7 +213,7 @@ export function createChatController({
             }
           }
         }
-        onHistoryError('Conversation history could not be restored.')
+        onHistoryError('Conversation history could not be restored.', { label: 'Restore history', run: loadHistory })
       }
     } finally {
       switchingThread = false
@@ -226,7 +226,6 @@ export function createChatController({
     threadRefreshSequence += 1
     switchingThread = true
     onThreadSwitch(true)
-    onHistoryError('')
     try {
       await invoke('chat_new_thread')
       if (destroyed) return
@@ -238,32 +237,35 @@ export function createChatController({
       onHistoryLoaded()
       onFollow()
       onFocus()
+      onHistoryError('')
     } catch (_) {
-      if (!destroyed) onHistoryError('A new thread could not be started.')
+      if (!destroyed) onHistoryError('A new thread could not be started.', { label: 'Start new thread', run: newThread })
     } finally {
       switchingThread = false
       if (!destroyed) onThreadSwitch(switchBlocked)
     }
   }
 
-  async function renameThread(title, previousTitle) {
-    const threadId = readThreadId()
+  async function renameThread(title, previousTitle, threadId = readThreadId()) {
     const trimmed = title.trim()
     if (!threadId || !trimmed || trimmed === previousTitle) return false
     const previousRename = renameQueues.get(threadId) ?? Promise.resolve()
     const rename = previousRename.then(async () => {
       if (destroyed) return false
-      onHistoryError('')
       try {
         await invoke('chat_rename_thread', { threadId, title: trimmed })
         if (destroyed) return false
         onThreadSummaries(readThreadSummaries().map((summary) => (
           summary.threadId === threadId ? { ...summary, title: trimmed } : summary
         )))
+        onHistoryError('')
         return true
       } catch (_) {
         if (!destroyed) {
-          onHistoryError('The thread name could not be changed.')
+          onHistoryError('The thread name could not be changed.', {
+            label: 'Rename thread again',
+            run: () => renameThread(trimmed, previousTitle, threadId),
+          })
         }
         return false
       }
@@ -282,7 +284,6 @@ export function createChatController({
     threadRefreshSequence += 1
     switchingThread = true
     onThreadSwitch(true)
-    onHistoryError('')
     try {
       await invoke('chat_delete_thread', { threadId })
       if (destroyed) return false
@@ -297,9 +298,10 @@ export function createChatController({
         onFollow()
         onFocus()
       }
+      onHistoryError('')
       return true
     } catch (_) {
-      if (!destroyed) onHistoryError('The thread could not be deleted.')
+      if (!destroyed) onHistoryError('The thread could not be deleted.', { label: 'Delete thread', run: () => deleteThread(threadId) })
       return false
     } finally {
       switchingThread = false

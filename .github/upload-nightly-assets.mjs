@@ -10,7 +10,7 @@ if (!token || !repository || !/^[0-9a-f]{40}$/.test(sha) || !platform) {
 const specs = {
   linux: [["deb", ".deb"], ["appimage", ".AppImage"]],
   windows: [["msi", ".msi", "-machine.msi"], ["msi", "-machine.msi"], ["nsis", "-setup.exe"]],
-  macos: [["macos", ".app.zip"]],
+  macos: [["macos", ".app.zip"], ["pkg", ".pkg"]],
 };
 if (!specs[platform]) throw new Error(`unsupported platform: ${platform}`);
 

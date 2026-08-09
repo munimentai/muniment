@@ -4,13 +4,13 @@ use muniment_core::memory_index::{
 };
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use uuid::Uuid;
 
 pub struct ApplicationMemoryRuntime {
     config: PathBuf,
     database_root: PathBuf,
-    sessions: Mutex<BTreeMap<String, MemoryRuntimeSession>>,
+    sessions: Mutex<BTreeMap<String, Arc<Mutex<MemoryRuntimeSession>>>>,
 }
 
 impl ApplicationMemoryRuntime {
@@ -48,11 +48,10 @@ impl ApplicationMemoryRuntime {
     }
 
     fn build_session_with_timeout(&self, session: &str, timeout: std::time::Duration) {
-        let sessions = self
-            .sessions
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if let Some(session) = sessions.get(session) {
+        if let Some(session) = self.session(session) {
+            let session = session
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             let _ = session.build_with_timeout(timeout);
         }
     }
@@ -66,7 +65,7 @@ impl ApplicationMemoryRuntime {
         )
         .map_err(|_| MemoryIndexError::InvalidToolArguments)?;
         let source = format!(
-            "const definition = JSON.parse({encoded});\nexport default function (pi) {{\n  pi.registerTool({{\n    name: definition.name,\n    label: \"Memory search\",\n    description: definition.description,\n    parameters: definition.inputSchema,\n    async execute(_id, arguments, _signal, _update, context) {{\n      const value = await context.ui.editor(\"muniment:memory-search\", JSON.stringify(arguments));\n      if (value === undefined) throw new Error(\"The memory search failed.\");\n      const result = JSON.parse(value);\n      if (result.error) throw new Error(\"The memory search failed.\");\n      return {{ content: [{{ type: \"text\", text: JSON.stringify(result) }}], details: result.recall }};\n    }}\n  }});\n}}\n"
+            "const definition = JSON.parse({encoded});\nexport default function (pi) {{\n  pi.registerTool({{\n    name: definition.name,\n    label: \"Memory search\",\n    description: definition.description,\n    parameters: definition.inputSchema,\n    async execute(_id, arguments, _signal, _update, context) {{\n      const value = await context.ui.editor(\"muniment:memory-search\", JSON.stringify(arguments));\n      if (value === undefined) throw new Error(\"The memory search failed.\");\n      const result = JSON.parse(value);\n      return {{ content: [{{ type: \"text\", text: JSON.stringify(result) }}], details: result.recall }};\n    }}\n  }});\n}}\n"
         );
         std::fs::create_dir_all(&self.database_root).map_err(MemoryIndexError::Io)?;
         let temporary = self
@@ -112,16 +111,20 @@ impl ApplicationMemoryRuntime {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .insert(
                 session.to_owned(),
-                MemoryRuntimeSession::open(home, database, thread, capability),
+                Arc::new(Mutex::new(MemoryRuntimeSession::open(
+                    home, database, thread, capability,
+                ))),
             );
     }
 
     pub fn tool_definition_for_turn(&self, session: &str) -> Option<Vec<u8>> {
-        self.sessions
+        let session = self.session(session)?;
+        let definition = session
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .get(session)
-            .map(|session| session.tool_definition_for_turn().to_vec())
+            .tool_definition_for_turn()
+            .to_vec();
+        Some(definition)
     }
 
     pub fn dispatch_tool_call(
@@ -133,12 +136,14 @@ impl ApplicationMemoryRuntime {
         if name != "memory-search" {
             return Err(MemoryIndexError::InvalidToolArguments);
         }
-        self.sessions
+        let session = self
+            .session(session)
+            .ok_or(MemoryIndexError::InvalidToolArguments)?;
+        let result = session
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .get_mut(session)
-            .ok_or(MemoryIndexError::InvalidToolArguments)?
-            .call(arguments)
+            .call(arguments);
+        result
     }
 
     pub fn close_session(&self, session: &str) {
@@ -146,6 +151,14 @@ impl ApplicationMemoryRuntime {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .remove(session);
+    }
+
+    fn session(&self, session: &str) -> Option<Arc<Mutex<MemoryRuntimeSession>>> {
+        self.sessions
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get(session)
+            .cloned()
     }
 }
 
@@ -188,7 +201,7 @@ mod tests {
     use super::*;
     use std::fs;
     use std::sync::atomic::{AtomicUsize, Ordering};
-    use std::sync::{Arc, Barrier};
+    use std::sync::{mpsc, Arc, Barrier};
 
     #[test]
     fn agent_extension_contains_the_session_scoped_declaration() {
@@ -210,6 +223,8 @@ mod tests {
         let source = fs::read_to_string(runtime.agent_extension_path()).unwrap();
         assert!(source.contains("pi.registerTool"));
         assert!(source.contains("memory-search"));
+        assert!(source.contains("text: JSON.stringify(result)"));
+        assert!(!source.contains("if (result.error)"));
         fs::remove_dir_all(root).unwrap();
     }
 
@@ -234,6 +249,89 @@ mod tests {
         runtime.write_agent_extension("session-1").unwrap();
 
         assert!(runtime.agent_extension_path().exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn a_slow_build_in_one_session_does_not_block_another_session_search() {
+        let root = std::env::temp_dir().join(format!("muniment-app-memory-{}", Uuid::now_v7()));
+        let home = root.join("home");
+        fs::create_dir_all(home.join("memory")).unwrap();
+        fs::write(home.join("memory/fact.md"), "saffron belongs in the pantry").unwrap();
+        let runtime = Arc::new(ApplicationMemoryRuntime::new(
+            root.join("config"),
+            root.join("cache"),
+        ));
+        for session in ["slow-build", "search"] {
+            runtime.insert_session(
+                session,
+                session,
+                ModelMemoryCapability {
+                    minimum_cacheable_prefix_characters: 100,
+                },
+                &home,
+                root.join(format!("cache/{session}.sqlite3")),
+            );
+        }
+        runtime.build_session("search");
+
+        let slow_session = runtime.session("slow-build").unwrap();
+        let slow_session_guard = slow_session.lock().unwrap();
+        let (build_started, wait_for_build) = mpsc::channel();
+        let (build_finished, check_build) = mpsc::channel();
+        let build_runtime = Arc::clone(&runtime);
+        let build = std::thread::spawn(move || {
+            build_started.send(()).unwrap();
+            build_runtime.build_session("slow-build");
+            build_finished.send(()).unwrap();
+        });
+        wait_for_build.recv().unwrap();
+
+        let (search_finished, wait_for_search) = mpsc::channel();
+        let search_runtime = Arc::clone(&runtime);
+        let search = std::thread::spawn(move || {
+            search_finished
+                .send(search_runtime.dispatch_tool_call(
+                    "search",
+                    "memory-search",
+                    br#"{"query":"saffron"}"#,
+                ))
+                .unwrap();
+        });
+        let result = wait_for_search.recv_timeout(std::time::Duration::from_secs(1));
+        assert!(matches!(
+            check_build.try_recv(),
+            Err(mpsc::TryRecvError::Empty)
+        ));
+        drop(slow_session_guard);
+        build.join().unwrap();
+        search.join().unwrap();
+
+        assert_eq!(result.unwrap().unwrap().items.len(), 1);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn dispatch_for_a_closed_session_returns_invalid_tool_arguments() {
+        let root = std::env::temp_dir().join(format!("muniment-app-memory-{}", Uuid::now_v7()));
+        fs::create_dir_all(&root).unwrap();
+        let runtime = ApplicationMemoryRuntime::new(root.join("config"), root.join("cache"));
+        runtime.insert_session(
+            "closed",
+            "thread",
+            ModelMemoryCapability {
+                minimum_cacheable_prefix_characters: 100,
+            },
+            &root.join("home"),
+            root.join("cache/index.sqlite3"),
+        );
+        runtime.close_session("closed");
+
+        let error = runtime
+            .dispatch_tool_call("closed", "memory-search", br#"{"query":"saffron"}"#)
+            .unwrap_err();
+
+        assert!(matches!(error, MemoryIndexError::InvalidToolArguments));
         fs::remove_dir_all(root).unwrap();
     }
 

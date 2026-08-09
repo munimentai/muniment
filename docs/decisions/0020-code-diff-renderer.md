@@ -215,14 +215,37 @@ validated value in CAS and binds approval to its `id` and exact CAS hash.
 Truncated and binary values remain display-only. This decision's
 presentation adapter continues to accept only a validated value.
 
+## Amendment — 2026-08-09: desktop-owned local contract
+
+This repository owns `code-diff/1`. The contract crosses no cloud boundary.
+ADR 0024 makes the Tauri core its sole trusted producer. The desktop shell,
+the CLI, and the ACP adapter are its three local consumers. No cloud endpoint
+carries the value, so `code-diff/1` is outside ADR 0019's E0 publication rule.
+
+The Rust types, codecs, and fixture export live in `src-tauri/code-diff/` under
+the `muniment-code-diff` package. Golden wire examples live in
+`protocol-fixtures/code-diff/1/`. This layout follows the desktop-owned
+`muniment.attach/1` precedent: its Rust implementation exports fixtures, and
+another language tests its decoder against those examples.
+
+As a workspace crate, `muniment-code-diff` joins the
+`test/cli-dependency-boundary.sh` allowlist. The hand-written terminal renderer
+adds no third-party crate.
+
+Implementation proceeds in this order: the codec crate first, the CLI ANSI
+renderer second, and the ADR 0024 producer slice third. This amendment replaces
+the cloud schema, generated artifact, publication, and dependency-pin
+requirements above for `code-diff/1`.
+
 ## Consequences
 
 - All three surfaces display one versioned diff value.
 - Desktop rendering adds `diff2html` and a curated syntax highlighter.
 - The editor extension uses VS Code's native diff editor.
-- The CLI renderer adds no dependency and leaves its dependency check unchanged.
+- The CLI renderer adds no third-party crate. The local codec joins its
+  workspace-crate allowlist.
 - Approval binds to the displayed diff identifier.
 - Large, binary, empty, and truncated diffs have explicit behavior.
 - None of the evaluated web renderers can serve as a React Native renderer unchanged.
-- Later contract work publishes the shared model before renderer implementation.
+- The local codec and golden fixtures land before renderer implementation.
 - This decision adds no dependency, generated file, renderer, or runtime code.

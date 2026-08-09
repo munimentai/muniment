@@ -33,7 +33,7 @@ else
 fi
 
 reason_file=
-for candidate in runner-failure.txt envelope-reason.txt desktop-ci-harness.log; do
+for candidate in runner-failure.txt envelope-reason.txt; do
   if [[ -s "$artifacts_dir/$candidate" ]]; then
     reason_file="$artifacts_dir/$candidate"
     break

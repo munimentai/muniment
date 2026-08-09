@@ -6,14 +6,19 @@ import { spawnSync } from "node:child_process";
 import {
   codesignArguments,
   notarytoolSubmitArguments,
+  parseInstallerIdentity,
   parseSigningIdentity,
+  productbuildArguments,
   resolveSigningConfiguration,
+  signingEnabled,
   stapleArguments,
 } from "./lib/macos-signing.mjs";
 
 const bundleDir = join("src-tauri", "target", "universal-apple-darwin", "release", "bundle", "macos");
 const app = join(bundleDir, "muniment.app");
 const appZip = `${app}.zip`;
+const pkgDir = join(bundleDir, "..", "pkg");
+const pkg = join(pkgDir, "muniment.pkg");
 
 const tauri = (...args) => {
   const cli = join("node_modules", "@tauri-apps", "cli", "tauri.js");
@@ -41,9 +46,8 @@ const packageApp = () =>
 // Apple Developer ID credentials arrive as a file the desktop-ci driver writes
 // into the VM over the SSH data channel (never on argv) — the SAME env-injection
 // seam Windows signing uses. Load them so the signing config below can resolve.
-// When the file or any variable is absent the build proceeds UNSIGNED — the
-// nightly keeps shipping and signing turns on the moment the six repo secrets
-// exist (enrollment Y5DUNHQA74 is still in review).
+// The config flag controls signing. The nightly keeps shipping unsigned while
+// enrollment Y5DUNHQA74 remains in review.
 const credFile = join(tmpdir(), "dci_env");
 if (existsSync(credFile)) {
   for (const line of readFileSync(credFile, "utf8").split(/\r?\n/)) {
@@ -51,19 +55,24 @@ if (existsSync(credFile)) {
     if (eq > 0) process.env[line.slice(0, eq).trim()] = line.slice(eq + 1);
   }
 }
-// null when no APPLE_* creds are present (unsigned build), or a resolved config
-// (throws if the set is partial), from the unit-tested macos-signing module.
-const signingConfig = resolveSigningConfiguration(process.env);
-const signing = signingConfig !== null;
+// Resolve credentials only when the flag enables signing.
+const signing = signingEnabled(process.env);
+const signingConfig = signing ? resolveSigningConfiguration(process.env) : null;
+if (signing && signingConfig === null) {
+  throw new Error("MACOS_SIGNING_ENABLED is true but Apple credentials are absent");
+}
 
 // Always build the universal .app first; signing (when enabled) operates on the
 // finished bundle so the unsigned and signed paths build identical bits.
 tauri("build", "--target", "universal-apple-darwin", "--bundles", "app");
 
 if (!signing) {
-  console.log("macOS signing SKIPPED: Apple credentials absent (unsigned build)");
+  console.log("macOS signing SKIPPED: MACOS_SIGNING_ENABLED is false (unsigned build)");
   packageApp();
+  mustRun("make package directory", "mkdir", ["-p", pkgDir]);
+  mustRun("build installer", "productbuild", productbuildArguments(app, pkg));
   console.log(`kept ${appZip} (unsigned)`);
+  console.log(`kept ${pkg} (unsigned)`);
   process.exit(0);
 }
 
@@ -98,8 +107,14 @@ mustRun("register keychain", "security",
 
 const found = spawnSync("security", ["find-identity", "-v", "-p", "codesigning", keychain], { encoding: "utf8" });
 const identity = parseSigningIdentity(found.stdout || "");
+const installerIdentities = spawnSync("security", ["find-identity", "-v", keychain], { encoding: "utf8" });
+const installerIdentity = parseInstallerIdentity(installerIdentities.stdout || "");
 if (!identity) {
   console.error("no Developer ID Application identity found in the imported certificate");
+  process.exit(1);
+}
+if (!installerIdentity) {
+  console.error("no Developer ID Installer identity found in the imported certificate");
   process.exit(1);
 }
 console.log(`signing identity: ${identity.name}`);
@@ -132,4 +147,11 @@ mustRun("staple", "xcrun", stapleArguments(app));
 mustRun("validate staple", "xcrun", ["stapler", "validate", app]);
 
 packageApp();
+mustRun("make package directory", "mkdir", ["-p", pkgDir]);
+mustRun("build signed installer", "productbuild",
+  productbuildArguments(app, pkg, installerIdentity.hash, keychain));
+mustRun("notarize installer", "xcrun", notarytoolSubmitArguments(signingConfig, pkg, keyPath));
+mustRun("staple installer", "xcrun", stapleArguments(pkg));
+mustRun("validate installer staple", "xcrun", ["stapler", "validate", pkg]);
 console.log(`kept ${appZip} (signed + notarized + stapled)`);
+console.log(`kept ${pkg} (signed + notarized + stapled)`);
