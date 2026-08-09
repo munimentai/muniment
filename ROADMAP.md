@@ -471,6 +471,10 @@ single-use nonce from `getrandom` and took no new dependency (MUNIDESK-964). The
 attach `welcome` reserves the optional `handoff_nonce` field with its canonical
 fixture (MUNIDESK-923), and no listener sets the value yet.
 
+DONE 2026-08-09 — one hex-nonce mint serves the prepared slot and the probe
+(MUNIDESK-1039). The slot and the readiness probe read the same value, so the
+two sides can no longer disagree about the nonce alphabet.
+
 DONE 2026-08-08 — the wire catalog carries the error the desktop answer needs
 (MUNIDESK-989). `ErrorCode::MigrationNotReady`
 (`src-tauri/attach/src/envelope.rs:238`) is retryable and reads `The desktop
@@ -517,14 +521,26 @@ DONE 2026-08-09 — the bounded readiness probe composition is built
 retries a refused connection under one readiness deadline and confirms the
 returned nonce through `confirm_handoff_probe`.
 
-SELECTED 2026-08-09 (tenth wave) — the release step is the next slice. After
-the desktop answers `migration.control` with success, one release step stops
-the attach listener through `AttachCompanionState::stop_listener`, probes the
+DONE 2026-08-09 — the desktop releases listener ownership after a prepared
+handoff (MUNIDESK-1035). `release_prepared_handoff`
+(`src-tauri/src/attach_service.rs:119`) stops the attach listener, probes the
 endpoint with the prepared nonce through `probe_handoff` until the request
 deadline, and prints one line naming the outcome. A confirmed handoff leaves
-the runtime service the owner. A failed probe cancels the prepared slot and
-restarts the listener, because ADR 0012 permits a temporary interval with no
-owner and never an interval with two.
+the runtime service the owner. `cancel_handoff_and_restart` (`:140`) cancels
+the prepared slot and restarts the listener on a failed probe, because ADR
+0012 permits a temporary interval with no owner and never an interval with
+two.
+
+GATED — the runtime-service half of the handoff has no fileable slice yet.
+`probe_handoff` expects a `welcome` that carries `handoff_nonce`, and
+`Welcome::with_handoff_nonce` (`src-tauri/attach/src/negotiation.rs:108`)
+exists, but no listener sets the value. Only `muniment-runtime` should set it,
+and that binary opens no endpoint. `migration.control` also rides inside an
+authenticated session, because `dispatch_request`
+(`src-tauri/core/src/attach/linux.rs:2237`) runs after the authorization check.
+So the runtime service must first become an admitted client, and ADR 0012 names
+no approval path for it. The lane asks the owner or the ADR author to decide
+how the runtime service authenticates before the acquire side is filed.
 
 DONE 2026-08-08 — the listener stop is reported truthfully, and a stop that
 arrives during the bind window is kept (MUNIDESK-1015). `AttachListenerStopState`
@@ -567,12 +583,12 @@ segment and `open_selected_files` does not. The lane waits for an owner look at
 why this one ticket never dispatches.
 
 MERGE HAZARD — the open slices edit `src-tauri/src/attach_service.rs`,
-`src-tauri/core/src/attach/handoff.rs`,
-`src-tauri/core/src/attach/handoff_probe.rs`, `src-tauri/src/chat.rs`,
-`src-tauri/src/chat_coordinate.rs`, and `src/App.svelte`. The release step and
-the nonce dedup both touch the handoff modules this wave. Each ticket tells
-the implementer to rebase on `main` before it opens the pull request. The
-2026-08-04 silent revert came from a stale base.
+`src-tauri/src/chat_coordinate.rs`, `src-tauri/core/src/lib.rs`,
+`src-tauri/code-diff/src/lib.rs`, `src-tauri/cli/src/main.rs`, and
+`src-tauri/Cargo.lock`. Three eleventh-wave slices change a manifest or the
+lockfile, so a stale base rewrites it. Each ticket tells the implementer to
+rebase on `main` before it opens the pull request. The 2026-08-04 silent revert
+came from a stale base.
 
 DONE 2026-08-08 — the memory runtime is the twentieth core move
 (MUNIDESK-995). `src-tauri/core/src/memory_runtime.rs` composes one
@@ -602,14 +618,28 @@ DONE 2026-08-08 — the active-run message queue is the twenty-fourth move
 `ChatQueueRequest`, and the queue timeout, and each command keeps a thin
 wrapper.
 
-SELECTED 2026-08-09 (tenth wave) — the twenty-fifth move starts the Pi
-execution extraction at its emit seam. `append_emit`
-(`src-tauri/src/chat_coordinate.rs:897`) reaches the webview through
-`app.emit` alone, so a `ChatEventSink` trait in muniment-core takes that seam,
-and `ChatEvent`, `ChatStorage`, `chat_event`, `append_emit`, `append_terminal`,
-`fail`, `fail_start`, and `fail_with_open_effects` move behind it. The
-coordinate loop itself moves later, because it also reads the session root,
-the memory runtime, and the activity registry off the app handle.
+DONE 2026-08-09 — the twenty-fifth move started the Pi execution extraction at
+its emit seam (MUNIDESK-1037). `src-tauri/core/src/run_events.rs` holds the
+`ChatEventSink` trait, `ChatEvent`, `ChatStorage`, `chat_event`, `append_emit`,
+`append_terminal`, `fail`, `fail_start`, and `fail_with_open_effects`.
+`TauriChatEventSink` is the desktop implementation.
+
+SELECTED 2026-08-09 (eleventh wave) — the twenty-sixth move takes the Pi launch
+configuration. The launch block (`src-tauri/src/chat_coordinate.rs:205`) still
+reads the session root through `app.path()` and the memory extension through
+`app.try_state`, so a `PiLaunchEnvironment` trait in muniment-core supplies
+both, and the executable resolution, the `pi_sidecar_config` call, the grant
+environment variables, and the `--extension` argument move behind it.
+
+SELECTED 2026-08-09 (eleventh wave) — the twenty-seventh move takes the attach
+listener lifecycle. `AttachCompanionState`
+(`src-tauri/src/attach_service.rs:234`) keeps the start outcome in a
+`(bool, Option<AttachListenerStartFailure>, bool)` tuple beside a stop state and
+a condvar. That state machine depends on no Tauri type, so it moves into
+muniment-core, and a named enum replaces the tuple.
+
+SEQUENCED — the coordinate loop itself moves after both, because it still reads
+the memory runtime and the activity registry off the app handle.
 
 SEQUENCED — the later extraction slices are the remaining Pi execution move, the
 desktop client conversion, and Linux user-unit registration, each behind a
@@ -703,11 +733,35 @@ producer. ADR 0019 keeps every E0 cloud contract, and the cloud lane publishes n
 `code-diff` artifact.
 
 DONE 2026-08-09 — ADR 0020 carries the desktop-owned local contract
-amendment (MUNIDESK-1029). SELECTED 2026-08-09 (tenth wave) — the codec crate
-is the next slice. `src-tauri/code-diff/` holds the `muniment-code-diff`
-package with the model, its validation, and a fixture exporter, and
-`protocol-fixtures/code-diff/1/` holds the golden examples behind a CI drift
-check, following the `muniment.attach/1` pattern.
+amendment (MUNIDESK-1029). DONE 2026-08-09 — the codec crate followed
+(MUNIDESK-1036). `src-tauri/code-diff/` holds the `muniment-code-diff` package
+with the model, its validation, and a fixture exporter.
+`protocol-fixtures/code-diff/1/` holds five golden examples behind the
+`code-diff-fixtures-current` CI job, and `src/lib/code-diff.fixtures.test.js`
+reads the same files from the frontend.
+
+SELECTED 2026-08-09 (eleventh wave) — the CLI ANSI renderer is the next slice.
+ADR 0020 already fixes its whole output policy, so the slice adds a pure
+`CodeDiff`-to-text module under `src-tauri/cli/src/` and wires it into no
+command. `muniment-code-diff` already sits in the
+`test/cli-dependency-boundary.sh` allowlist.
+
+SELECTED 2026-08-09 (eleventh wave) — the codec's file-status rules are the
+second slice. `CodeDiff::validate`
+(`src-tauri/code-diff/src/lib.rs:109`) checks the schema version, binary hunks,
+line numbers on a missing side, and hunk counts. It accepts an `added` file
+that still carries `oldPath`, a `deleted` file that carries `newPath`, and a
+`renamed` file whose two paths match. ADR 0020 says a path or a mode is absent
+when that side does not exist, and ADR 0024 binds approval to a validated
+value, so a contradictory path set must not reach a renderer. The fixture set
+also has no `added` and no `deleted` example, so no consumer tests an absent
+path side.
+
+SELECTED 2026-08-09 (eleventh wave) — the ADR 0024 producer starts at its pure
+half. One muniment-core function computes a validated `CodeDiff` from a current
+tree and a staged tree held in memory. It touches no Pi message, no journal, no
+CAS, and no filesystem. Intra-line word segments, rename detection, and the ADR
+0024 limits follow as separate slices.
 
 DECLINED 2026-08-08 (ninth wave) — the planner returned the CLI ANSI renderer
 idea. ADR 0020 gave the CLI a hand-written terminal renderer, and the 2026-07-29
@@ -1030,12 +1084,15 @@ DONE 2026-08-08 — the sidebar delete, the delete confirm, and the run-record
 controls meet the 24 pixel floor, DESIGN.md states the law, and
 `src/styles/target-size.test.js` guards the three selectors (MUNIDESK-1020).
 
-MEASURED 2026-08-09 (tenth wave, planner, measured the built bundle at
-1100x760) — the receipt summary still sits under the floor. The `.provenance`
-button (`src/App.svelte:1358`) measures 334 by 17 CSS pixels with `padding: 0`.
-MUNIDESK-1020 neither raised it nor recorded an exception, and the DESIGN.md
-law admits none. The control renders on its own line, so the SC 2.5.8 inline
-exception does not cover it. SELECTED 2026-08-09 (tenth wave).
+DONE 2026-08-09 — the receipt summary meets the 24 pixel target-size floor
+(MUNIDESK-1038). The tenth wave had measured the `.provenance` button at 334 by
+17 CSS pixels with `padding: 0`, and the DESIGN.md law admits no exception for a
+control on its own line.
+
+DO NOT RE-POLISH — the receipt summary has taken three consecutive waves.
+MUNIDESK-996 added the expand marker, MUNIDESK-1008 fixed the memory row, and
+MUNIDESK-1038 raised the target size. A later wave needs a new measurement
+before it touches that element again.
 
 DONE 2026-08-09 — the transcript error banner offers the recovery that
 repeats the failed action (MUNIDESK-1030). Each failing call site passes the
@@ -1202,17 +1259,18 @@ earlier one. Requiring an up-to-date branch before merge, or a merge queue, is a
 repository-settings change that sits with the owner. The planner files no ticket
 for it.
 
-VERIFIED 2026-08-09 (tenth wave, from a clean clone) — `npm ci` then `npm
-test` passed 902 frontend tests across 61 files, with 31 skipped, and the
+VERIFIED 2026-08-09 (eleventh wave, from a clean clone) — `npm ci` then `npm
+test` passed 910 frontend tests across 62 files, with 31 skipped, and the
 browser suite passed 3. `cargo test -p muniment-core -p muniment-attach -p
-muniment-cli` passed with no failure. The planner then read the handoff probe,
-the prepared handoff slot, the migration control answer, the listener stop
-path, the ADR 0020 amendment of 2026-08-09, the frontend code-diff adapter,
-and the coordinate loop's app-handle seams. It rebuilt the bundle and measured
-every visible control on the four permission-gate fixtures at 1100x760 in
-headless Chromium. Every gate control measures at least 24 CSS pixels tall,
-and the receipt summary measures 334 by 17. Earlier waves recorded the same
-shape of verification, and this entry replaces that ledger.
+muniment-cli -p muniment-code-diff` passed with no failure. The planner then
+read the landed codec crate and its five golden fixtures, the CLI source, the
+handoff release step, the migration control dispatcher and its authorization
+gate, the listener lifecycle state, and the coordinate loop's remaining
+app-handle seams. It rebuilt the bundle and captured the empty workspace and
+the restored thread at 1100x760 in headless Chromium. The receipt summary now
+renders its expand marker on a control that clears the 24 pixel floor. Earlier
+waves recorded the same shape of verification, and this entry replaces that
+ledger.
 
 NOTE 2026-08-06 — the planning clone ships no `node_modules`. Run `npm ci`
 before `npm test`. Without it the run dies with `vitest: not found`, which reads
