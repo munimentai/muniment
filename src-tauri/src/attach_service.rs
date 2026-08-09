@@ -31,10 +31,10 @@ use muniment_core::attach::linux::{
 };
 #[cfg(target_os = "linux")]
 use muniment_core::attach::{
-    evaluate_quiesce, verify_migration_control_peer, Approval, CommittedResult, Id,
-    IdempotencyOutcome, IdempotencyStore, MigrationAuthorityError, Operation, PreparedHandoffSlot,
-    Protocol, Request as AttachRequest, RuntimeActivity, RuntimeActivityRegistry,
-    WorkspaceOnboardRequest, WorkspaceOnboarded,
+    evaluate_quiesce, probe_handoff, verify_migration_control_peer, Approval, CommittedResult,
+    ConfirmedHandoff, HandoffProbeError, Id, IdempotencyOutcome, IdempotencyStore,
+    MigrationAuthorityError, Operation, PreparedHandoffSlot, Protocol, Request as AttachRequest,
+    RuntimeActivity, RuntimeActivityRegistry, WorkspaceOnboardRequest, WorkspaceOnboarded,
 };
 #[cfg(target_os = "linux")]
 use muniment_core::journal::Provenance;
@@ -68,6 +68,9 @@ pub(crate) fn control_desktop_migration<R: tauri::Runtime>(
     request: muniment_core::attach::linux::MigrationControlRequest,
     peer_pid: u32,
 ) -> Result<(), ProtocolError> {
+    let nonce = request.handoff_nonce;
+    let deadline_ms = request.deadline_ms;
+    let prepared_at = Instant::now();
     let expected_executable = app
         .path()
         .resource_dir()
@@ -83,10 +86,72 @@ pub(crate) fn control_desktop_migration<R: tauri::Runtime>(
         peer_result,
         activity,
         &mut slot,
-        request.handoff_nonce,
-        request.deadline_ms,
-        Instant::now(),
-    )
+        nonce.clone(),
+        deadline_ms,
+        prepared_at,
+    )?;
+    drop(slot);
+
+    let handoff_app = app.clone();
+    std::thread::spawn(move || {
+        let Ok(filesystem) = AttachFilesystem::from_environment() else {
+            stop_attach_listener(&handoff_app);
+            cancel_handoff_and_restart(
+                &handoff_app,
+                &nonce,
+                "runtime service readiness filesystem lookup failed",
+                || start_attach_listener(handoff_app.clone()),
+            );
+            return;
+        };
+        let _ = release_prepared_handoff(
+            &handoff_app,
+            filesystem.endpoint_path(),
+            &nonce,
+            prepared_at + Duration::from_millis(deadline_ms),
+            || start_attach_listener(handoff_app.clone()),
+        );
+    });
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+fn release_prepared_handoff<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    endpoint: &std::path::Path,
+    nonce: &str,
+    deadline: Instant,
+    restart: impl FnOnce(),
+) -> Result<ConfirmedHandoff, HandoffProbeError> {
+    stop_attach_listener(app);
+    match probe_handoff(endpoint, nonce, deadline) {
+        Ok(confirmed) => {
+            eprintln!("runtime service handoff confirmed");
+            Ok(confirmed)
+        }
+        Err(error) => {
+            cancel_handoff_and_restart(app, nonce, &error.to_string(), restart);
+            Err(error)
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn cancel_handoff_and_restart<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    nonce: &str,
+    reason: &str,
+    restart: impl FnOnce(),
+) {
+    let cancelled = app
+        .state::<Mutex<PreparedHandoffSlot>>()
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .cancel_if_matches(nonce);
+    if cancelled {
+        restart();
+    }
+    eprintln!("runtime service handoff failed: {reason}");
 }
 
 #[cfg(target_os = "linux")]
@@ -230,6 +295,20 @@ impl AttachCompanionState {
             .unwrap_or_else(std::sync::PoisonError::into_inner) = (true, None, false);
     }
 
+    fn record_listener_pending(&self) {
+        *self
+            .listener_start
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = (false, None, false);
+        *self
+            .listener_stop
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) =
+            AttachListenerStopState::Pending {
+                stop_requested: false,
+            };
+    }
+
     fn record_listener_start_failure(&self, failure: AttachListenerStartFailure) {
         *self
             .listener_start
@@ -266,8 +345,7 @@ impl AttachCompanionState {
         *self
             .listener_stop
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) =
-            AttachListenerStopState::Stopped;
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = AttachListenerStopState::Stopped;
         self.listener_stopped.notify_all();
     }
 
@@ -605,6 +683,10 @@ where
 
 #[cfg(target_os = "linux")]
 pub fn start_attach_listener<R: tauri::Runtime>(app: tauri::AppHandle<R>) {
+    if app.try_state::<AttachCompanionState>().is_some() {
+        app.state::<AttachCompanionState>()
+            .record_listener_pending();
+    }
     let Some(state) = initialize_attach_listener(&app, || {
         app.path()
             .app_data_dir()
@@ -1227,9 +1309,49 @@ impl<B: RunStartBoundaries, I: RunStartIdempotency> ThreadListService
 mod tests {
     use super::*;
     use crate::test_support::{append_test_event, FakeRunStartBoundaries};
-    use muniment_core::attach::ErrorCode;
+    use muniment_core::attach::{decode_frame, encode_frame, Authorization, ErrorCode, Welcome};
     use muniment_core::journal::reducer::reduce;
     use muniment_core::journal::RunJournal;
+
+    #[cfg(target_os = "linux")]
+    fn handoff_test_runtime(name: &str) -> PathBuf {
+        use std::os::unix::fs::PermissionsExt;
+
+        let runtime = std::env::temp_dir().join(format!("mt-{name}-{}", Uuid::now_v7().simple()));
+        std::fs::create_dir(&runtime).unwrap();
+        std::fs::set_permissions(&runtime, std::fs::Permissions::from_mode(0o700)).unwrap();
+        runtime
+    }
+
+    #[cfg(target_os = "linux")]
+    fn wait_for_listener(state: &AttachCompanionState) {
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while !state.listener_status().started {
+            assert!(Instant::now() < deadline, "attach listener did not start");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    fn answer_handoff_probe(stream: &mut std::os::unix::net::UnixStream, nonce: &str) {
+        use std::io::{Read, Write};
+
+        let mut prefix = [0_u8; 4];
+        stream.read_exact(&mut prefix).unwrap();
+        let mut frame = vec![0_u8; 4 + u32::from_be_bytes(prefix) as usize];
+        frame[..4].copy_from_slice(&prefix);
+        stream.read_exact(&mut frame[4..]).unwrap();
+        let _: muniment_core::attach::Hello = decode_frame(&frame).unwrap().unwrap().0;
+        let welcome = Welcome {
+            selected: 1,
+            desktop_version: "1.0.0".into(),
+            server_nonce: "server-nonce".into(),
+            authorization: Authorization::Authorized,
+            approval_challenge: "challenge".into(),
+            handoff_nonce: Some(nonce.into()),
+        };
+        stream.write_all(&encode_frame(&welcome).unwrap()).unwrap();
+    }
 
     #[cfg(target_os = "linux")]
     #[test]
@@ -1313,6 +1435,138 @@ mod tests {
 
         assert_eq!(error.code(), ErrorCode::MigrationNotReady);
         assert!(slot.matches("nonce-a", now));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn release_step_confirms_a_runtime_listener_after_desktop_release() {
+        use std::os::unix::net::UnixListener;
+
+        let runtime = handoff_test_runtime("handoff-confirmed");
+        let filesystem = AttachFilesystem::from_runtime_directory(&runtime).unwrap();
+        let endpoint = filesystem.endpoint_path().to_owned();
+        let listener = Arc::new(
+            AttachListenerState::load(&runtime.join("attach-client-credentials.json")).unwrap(),
+        );
+        let app = tauri::test::mock_app();
+        app.manage(AttachCompanionState::default());
+        app.manage(Mutex::new(PreparedHandoffSlot::new()));
+        app.state::<AttachCompanionState>()
+            .set_listener(listener.clone());
+        app.state::<Mutex<PreparedHandoffSlot>>()
+            .lock()
+            .unwrap()
+            .prepare("handoff-nonce", 2_000, Instant::now())
+            .unwrap();
+
+        let listener_app = app.handle().clone();
+        let desktop = std::thread::spawn(move || {
+            run_attach_listener(listener_app, listener, filesystem);
+        });
+        wait_for_listener(&app.state::<AttachCompanionState>());
+
+        let runtime_endpoint = endpoint.clone();
+        let runtime_service = std::thread::spawn(move || {
+            while runtime_endpoint.exists() {
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            let listener = UnixListener::bind(runtime_endpoint).unwrap();
+            let (mut stream, _) = listener.accept().unwrap();
+            answer_handoff_probe(&mut stream, "handoff-nonce");
+        });
+
+        assert!(release_prepared_handoff(
+            app.handle(),
+            &endpoint,
+            "handoff-nonce",
+            Instant::now() + Duration::from_secs(2),
+            || panic!("a confirmed handoff must not restart the desktop listener"),
+        )
+        .is_ok());
+        desktop.join().unwrap();
+        runtime_service.join().unwrap();
+        assert_eq!(
+            app.state::<AttachCompanionState>().listener_status(),
+            AttachListenerStatus {
+                started: false,
+                failure: None,
+                pending: false,
+                stopped: true,
+            }
+        );
+        std::fs::remove_dir_all(runtime).unwrap();
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn release_step_reacquires_listener_and_instance_lock_after_probe_failure() {
+        use std::os::unix::net::UnixStream;
+        use std::sync::mpsc;
+
+        let runtime = handoff_test_runtime("handoff-restart");
+        let filesystem = AttachFilesystem::from_runtime_directory(&runtime).unwrap();
+        let endpoint = filesystem.endpoint_path().to_owned();
+        let listener = Arc::new(
+            AttachListenerState::load(&runtime.join("attach-client-credentials.json")).unwrap(),
+        );
+        let app = tauri::test::mock_app();
+        app.manage(AttachCompanionState::default());
+        app.manage(Mutex::new(PreparedHandoffSlot::new()));
+        app.state::<AttachCompanionState>()
+            .set_listener(listener.clone());
+        app.state::<Mutex<PreparedHandoffSlot>>()
+            .lock()
+            .unwrap()
+            .prepare("handoff-nonce", 50, Instant::now())
+            .unwrap();
+
+        let listener_app = app.handle().clone();
+        let desktop = std::thread::spawn(move || {
+            run_attach_listener(listener_app, listener.clone(), filesystem);
+            listener
+        });
+        wait_for_listener(&app.state::<AttachCompanionState>());
+        let (restart_tx, restart_rx) = mpsc::channel();
+        let restart_app = app.handle().clone();
+        let restart_runtime = runtime.clone();
+        assert_eq!(
+            release_prepared_handoff(
+                app.handle(),
+                &endpoint,
+                "handoff-nonce",
+                Instant::now() + Duration::from_millis(50),
+                move || {
+                    let listener = desktop.join().unwrap();
+                    restart_app
+                        .state::<AttachCompanionState>()
+                        .record_listener_pending();
+                    let filesystem =
+                        AttachFilesystem::from_runtime_directory(&restart_runtime).unwrap();
+                    let worker_app = restart_app.clone();
+                    restart_tx
+                        .send(std::thread::spawn(move || {
+                            run_attach_listener(worker_app, listener, filesystem)
+                        }))
+                        .unwrap();
+                },
+            ),
+            Err(HandoffProbeError::ReadinessDeadlineReached)
+        );
+
+        wait_for_listener(&app.state::<AttachCompanionState>());
+        assert!(UnixStream::connect(&endpoint).is_ok());
+        assert!(AttachFilesystem::from_runtime_directory(&runtime)
+            .unwrap()
+            .acquire_instance_lock()
+            .is_err());
+        assert!(!app
+            .state::<Mutex<PreparedHandoffSlot>>()
+            .lock()
+            .unwrap()
+            .matches("handoff-nonce", Instant::now()));
+        stop_attach_listener(app.handle());
+        restart_rx.recv().unwrap().join().unwrap();
+        std::fs::remove_dir_all(runtime).unwrap();
     }
 
     #[cfg(target_os = "linux")]
