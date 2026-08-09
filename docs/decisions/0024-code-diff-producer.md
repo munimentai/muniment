@@ -177,6 +177,12 @@ in `src-tauri/core/Cargo.toml` and `src-tauri/Cargo.lock`.
 This slice starts only after the Rust artifact from ADR 0019 publishes. It does
 not add a local contract copy while that artifact is unavailable.
 
+## Correction — 2026-08-09: local codec prerequisite
+
+The producer slice waits for the local `muniment-code-diff` crate defined by
+ADR 0020, not a published artifact. The codec crate lands first, the CLI ANSI
+renderer lands second, and this producer slice lands third.
+
 ## Alternatives considered
 
 **Pi produces `CodeDiff`.** Pi controls proposed input and cannot attest to the
@@ -189,7 +195,7 @@ filesystem truth or authorize a native write.
 line endings, and binary content. It cannot define the approved write.
 
 **The journal stores a handwritten diff payload.** That copy would violate ADR
-0019 and could drift from every renderer's generated contract.
+0020 and could drift from the local `muniment-code-diff` contract.
 
 ## Consequences
 
@@ -198,5 +204,4 @@ line endings, and binary content. It cannot define the approved write.
 - Workspace changes invalidate approval before an effect starts.
 - Journal replay displays the original validated bytes.
 - Truncated and binary diffs cannot authorize writes.
-- Producer work waits for structured Pi operations and the generated Rust
-  artifact.
+- Producer work waits for structured Pi operations and the local Rust codec.
