@@ -14,7 +14,9 @@ use muniment_core::attach::linux::{
 #[cfg(target_os = "linux")]
 use muniment_core::attach::ProtocolError;
 use muniment_core::attach::{RuntimeActivityGuard, RuntimeActivityRegistry};
-use muniment_core::attachment::{ingest_attachment, prepare_pi_images, AttachmentMetadata};
+use muniment_core::attachment::{
+    ingest_attachment, prepare_pi_images, AttachmentDeliveryError, AttachmentMetadata,
+};
 use muniment_core::auth::TokenSet;
 use muniment_core::cas::LocalCas;
 use muniment_core::chat_grant::{
@@ -743,6 +745,26 @@ pub(crate) fn attachment_error() -> String {
     "One or more selected files could not be added. Check the files and try again.".into()
 }
 
+fn attachment_delivery_error(error: AttachmentDeliveryError) -> String {
+    match error {
+        AttachmentDeliveryError::ImageSizeLimit { display_name } => format!(
+            "{display_name} exceeds the 10 MB image limit. Choose a smaller image before sending again."
+        ),
+        AttachmentDeliveryError::ImageCountLimit { display_name } => format!(
+            "{display_name} crosses the 10-image limit. Remove an image before sending again."
+        ),
+        AttachmentDeliveryError::ImageTotalSizeLimit { display_name } => format!(
+            "{display_name} crosses the 20 MB total image limit. Remove images or choose smaller images before sending again."
+        ),
+        AttachmentDeliveryError::AmbiguousFormat { display_name } => format!(
+            "{display_name} has an image format Muniment cannot verify. Choose a PNG, JPEG, GIF, or WebP image before sending again."
+        ),
+        AttachmentDeliveryError::Storage(_) | AttachmentDeliveryError::InvalidStoredLength => {
+            attachment_error()
+        }
+    }
+}
+
 fn prepared_pi_images(
     storage: &SharedStorage,
     run_id: &str,
@@ -753,7 +775,7 @@ fn prepared_pi_images(
         .events(run_id)
         .map_err(|_| attachment_error())?;
     prepare_pi_images(&storage.cas, &events)
-        .map_err(|_| attachment_error())
+        .map_err(attachment_delivery_error)
         .map(|images| {
             images
                 .into_iter()
@@ -2287,7 +2309,20 @@ mod tests {
             let events = storage.lock().unwrap().journal.events(&run_id).unwrap();
             assert_eq!(events.last().unwrap().event_type, "run.failed");
             let public_error = serde_json::to_string(events.last().unwrap()).unwrap();
-            assert!(public_error.contains(&attachment_error()));
+            let expected_error = match name {
+                "private-large.jpg" => {
+                    attachment_delivery_error(AttachmentDeliveryError::ImageSizeLimit {
+                        display_name: name.into(),
+                    })
+                }
+                "private-malformed.jpg" => {
+                    attachment_delivery_error(AttachmentDeliveryError::AmbiguousFormat {
+                        display_name: name.into(),
+                    })
+                }
+                _ => attachment_error(),
+            };
+            assert!(public_error.contains(&expected_error));
             for secret in [
                 path.to_string_lossy().as_ref(),
                 attachment_hash.as_str(),
@@ -2306,6 +2341,48 @@ mod tests {
         STANDARD
             .decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=")
             .unwrap()
+    }
+
+    #[test]
+    fn delivery_errors_name_the_limit_and_recovery() {
+        assert_eq!(
+            attachment_delivery_error(AttachmentDeliveryError::ImageSizeLimit {
+                display_name: "photo.jpg".into(),
+            }),
+            "photo.jpg exceeds the 10 MB image limit. Choose a smaller image before sending again."
+        );
+        assert_eq!(
+            attachment_delivery_error(AttachmentDeliveryError::ImageCountLimit {
+                display_name: "eleventh.png".into(),
+            }),
+            "eleventh.png crosses the 10-image limit. Remove an image before sending again."
+        );
+        assert_eq!(
+            attachment_delivery_error(AttachmentDeliveryError::ImageTotalSizeLimit {
+                display_name: "last.gif".into(),
+            }),
+            "last.gif crosses the 20 MB total image limit. Remove images or choose smaller images before sending again."
+        );
+        assert_eq!(
+            attachment_delivery_error(AttachmentDeliveryError::AmbiguousFormat {
+                display_name: "unclear.webp".into(),
+            }),
+            "unclear.webp has an image format Muniment cannot verify. Choose a PNG, JPEG, GIF, or WebP image before sending again."
+        );
+    }
+
+    #[test]
+    fn storage_and_stored_length_errors_keep_the_generic_message() {
+        assert_eq!(
+            attachment_delivery_error(AttachmentDeliveryError::Storage(
+                muniment_core::cas::CasError::InvalidHash("invalid".into()),
+            )),
+            attachment_error()
+        );
+        assert_eq!(
+            attachment_delivery_error(AttachmentDeliveryError::InvalidStoredLength),
+            attachment_error()
+        );
     }
 
     #[test]
