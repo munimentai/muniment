@@ -640,6 +640,13 @@ inside the permission gate, and no producer can exist before the published
 contract crate. The lane waits on the cloud repository. Slice 5, the receipt
 replay of an applied diff, waits behind slice 4.
 
+DECLINED 2026-08-08 (ninth wave) — the planner returned the CLI ANSI renderer
+idea. ADR 0020 gave the CLI a hand-written terminal renderer, and the 2026-07-29
+owner ruling then deferred the CLI surface indefinitely. `src-tauri/` also holds
+no Rust diff model, because the desktop half renders through
+`src/lib/code-diff.js`. A terminal renderer has nothing to render over until the
+ADR 0019 contract crate publishes.
+
 CLOSED 2026-07-30 — ADR 0021 landed as a superseded record rather than an
 on-device classifier store design, because the cloud ingress ruling arrived
 first. The mobile store is void under the same ruling, and harness-spec §§12.1
@@ -845,6 +852,29 @@ its own `MAX_FILES`, `MAX_FILE_BYTES`, and `MAX_DIRECTORY_DEPTH` constants that
 repeat the scanner's three. The live walker is the deadline-aware one, so the
 dead module goes. SELECTED 2026-08-08 (eighth wave).
 
+MEASURED 2026-08-08 (ninth wave, planner, scratch release `cargo test` over a
+Home of 200 Markdown files) — the memory-search query carries no bound.
+`match_expression` (`src-tauri/core/src/memory_index.rs:770`) splits the query on
+whitespace and joins every token with `AND` into one FTS5 expression. A
+1,000-term query cost 14.3ms, a 5,000-term query cost 85.8ms, and a 20,000-term
+query ran 695.0ms before it failed with `TimedOut`. The retrieval budget is
+250ms, so one oversized call overran it by 2.8 times. `MAX_FILES`,
+`MAX_FILE_BYTES`, `MAX_DIRECTORY_DEPTH`, the item cap, the character budget, and
+the timeout are all bounded. The model-supplied query is the one input that is
+not. `RecallRecord::query` also keeps all 188,890 characters, which reach the
+`memory.recalled` journal event and the expanded receipt. A bound adds no
+column, table, or migration. SELECTED 2026-08-08 (ninth wave).
+
+MEASURED 2026-08-08 (ninth wave, planner, read the recall dispatch path) — a
+failed memory search tells the model nothing. `coordinate_memory_search`
+(`src-tauri/src/chat_coordinate.rs:781`) maps every `MemoryIndexError` through
+`.map_err(|_| ())` and answers `ExtensionUiAnswer::Cancelled`. Invalid tool
+arguments, a raised limit, a timed-out search, a rejected secret, an invalid
+path, and a damaged cache all reach the model as a cancelled request rather than
+a failed tool. The model cannot shorten a rejected query or lower a raised
+limit, and the reply then omits memory with no stated reason. SELECTED
+2026-08-08 (ninth wave).
+
 MEASURED 2026-08-07 — nothing renders a recall. The reducer drops
 `memory.recalled`, so `ChatProjection`
 (`src-tauri/core/src/journal/reducer.rs:434`) carries no recall and the frontend
@@ -966,6 +996,14 @@ The run-record `Resume` and `Try again` controls (`src/App.svelte:917`) measure
 row leaves room for it. DESIGN.md takes the law and a test guards it. SELECTED
 2026-08-08 (eighth wave).
 
+MEASURED 2026-08-08 (ninth wave, planner, same capture at 1100x760) — a fourth
+control sits under that floor. The receipt summary is a button
+(`.provenance`, `src/App.svelte:990`) and it measures 334x17 CSS pixels. It
+renders on its own line rather than inside a sentence, so the SC 2.5.8 inline
+exception does not cover it. The open target-size slice writes the law, so that
+slice states whether this control is in scope. The planner files no second
+slice.
+
 DONE 2026-08-08 — the receipt summary shows that it expands (MUNIDESK-996). The
 expandable line carries a rotating marker (`src/App.svelte:990`, `.receipt-marker`
 at `:1357`), and the static `Receipt unavailable` caption carries none. A
@@ -1007,6 +1045,15 @@ DO NOT RE-FILE — wide windows need no slice. The 760px thread column measured
 centered at 1920x1080 and at 1440x900. The choice gate also fits the 960x640
 minimum: six options and the refusal control render on one row with room to
 spare.
+
+DO NOT RE-FILE — the artifact rail at the minimum window is a designed trade-off
+rather than a defect. The planner opened the rail on `test/probe/history.html`
+at 960x640 and measured a 260px sidebar, a 380px rail, and a 320px thread
+region whose text column is 272px after its padding.
+`availableArtifactRailWidth` (`src/App.svelte:291`) already subtracts a
+`minimumThreadWidth` of 320 before it clamps, and design-spec §2 pins the rail
+between 380 and 560. The layout meets its own floor, and the empty rail is the
+Phase 4 placeholder.
 
 DO NOT RE-FILE — asset weight is not worth a slice. The frontend emits one
 252,280-byte script, one 62,240-byte stylesheet, and 154,444 bytes of webfont.
@@ -1113,16 +1160,15 @@ earlier one. Requiring an up-to-date branch before merge, or a merge queue, is a
 repository-settings change that sits with the owner. The planner files no ticket
 for it.
 
-VERIFIED 2026-08-08 (eighth wave, from a clean clone) — `npm ci` then `npm test`
+VERIFIED 2026-08-08 (ninth wave, from a clean clone) — `npm ci` then `npm test`
 passed 886 frontend tests across 59 files, and the browser suite passed 3.
 `cargo test -p muniment-core -p muniment-attach` passed with no failure. The
-planner then read the handoff, probe, quiesce, and runtime-activity modules, the
-desktop attach service with its listener status, stop, and migration-control
-paths, the memory runtime and index, both Home walkers, and the active-run queue
-and cancel functions. It rebuilt the bundle, captured six probe fixtures in
-headless Chromium at 1100x760, and measured every button rect on the restored
-history fixture. Earlier waves recorded the same shape of verification, and this
-entry replaces that ledger.
+planner then read the memory index, the memory runtime, the recall dispatch
+path, the artifact rail controller, and the shell command error handling. It
+rebuilt the bundle, captured eight probe fixtures in headless Chromium at
+1100x760 and at 960x640, measured every control rect on each, and ran a scratch
+release `cargo test` for the query bound recorded above. Earlier waves recorded
+the same shape of verification, and this entry replaces that ledger.
 
 NOTE 2026-08-06 — the planning clone ships no `node_modules`. Run `npm ci`
 before `npm test`. Without it the run dies with `vitest: not found`, which reads
