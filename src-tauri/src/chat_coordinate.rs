@@ -770,6 +770,45 @@ fn coordinate_memory_search<R: tauri::Runtime>(
     subject: Option<&str>,
     event: &PiChatEvent,
 ) -> bool {
+    coordinate_memory_search_with(
+        app,
+        journal,
+        projector,
+        run_id,
+        seq,
+        subject,
+        event,
+        |arguments| dispatch_memory_search(app, run_id, arguments),
+        |request, answer| {
+            let _ = adapter.answer_extension_ui(transport, request, answer);
+        },
+    )
+}
+
+fn dispatch_memory_search<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    run_id: &str,
+    arguments: &str,
+) -> Result<muniment_core::memory_index::MemorySearchResult, MemoryFailure> {
+    app.try_state::<crate::memory::ApplicationMemoryRuntime>()
+        .ok_or_else(MemoryFailure::runtime_unavailable)?
+        .dispatch_tool_call(run_id, "memory-search", arguments.as_bytes())
+        .map_err(MemoryFailure::from_index_error)
+}
+
+fn coordinate_memory_search_with<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    journal: &SharedStorage,
+    projector: &mut ChatProjector,
+    run_id: &str,
+    seq: &mut u64,
+    subject: Option<&str>,
+    event: &PiChatEvent,
+    dispatch: impl FnOnce(
+        &str,
+    ) -> Result<muniment_core::memory_index::MemorySearchResult, MemoryFailure>,
+    respond: impl FnOnce(&ExtensionUiRequest, ExtensionUiAnswer),
+) -> bool {
     let PiChatEvent::ExtensionUiRequest(request) = event else {
         return false;
     };
@@ -782,12 +821,7 @@ fn coordinate_memory_search<R: tauri::Runtime>(
     let result = prefill
         .as_deref()
         .ok_or_else(MemoryFailure::missing_prefill)
-        .and_then(|arguments| {
-            app.try_state::<crate::memory::ApplicationMemoryRuntime>()
-                .ok_or_else(MemoryFailure::runtime_unavailable)?
-                .dispatch_tool_call(run_id, "memory-search", arguments.as_bytes())
-                .map_err(MemoryFailure::from_index_error)
-        });
+        .and_then(dispatch);
     let answer = match result {
         Ok(result) => {
             if append_emit(
@@ -814,7 +848,7 @@ fn coordinate_memory_search<R: tauri::Runtime>(
                 .expect("memory search failure serializes"),
         ),
     };
-    let _ = adapter.answer_extension_ui(transport, request, answer);
+    respond(request, answer);
     true
 }
 
@@ -938,8 +972,136 @@ mod tests {
     use crate::test_support::append_test_event;
     use muniment_core::journal::reducer::ProjectedRecall;
     use muniment_core::journal::RunJournal;
+    use muniment_core::memory_index::MemoryIndexError;
     use muniment_core::permission_gate::ChatPermissionAnswer;
+    use std::cell::RefCell;
+    use std::io;
     use uuid::Uuid;
+
+    fn failed_memory_search_answer(
+        prefill: Option<&str>,
+        failure: Option<MemoryFailure>,
+    ) -> ExtensionUiAnswer {
+        let root = std::env::temp_dir().join(format!("muniment-memory-failure-{}", Uuid::now_v7()));
+        std::fs::create_dir_all(&root).unwrap();
+        let app = tauri::test::mock_app();
+        let shared = Arc::new(Mutex::new(crate::chat::ChatStorage {
+            journal: RunJournal::open(root.join("runs.sqlite3")).unwrap(),
+            cas: muniment_core::cas::LocalCas::open(&root.join("cas")).unwrap(),
+        }));
+        let event = PiChatEvent::ExtensionUiRequest(ExtensionUiRequest {
+            id: "memory-failure".into(),
+            dialog: ExtensionUiDialog::Editor {
+                title: "muniment:memory-search".into(),
+                prefill: prefill.map(str::to_owned),
+            },
+            timeout: None,
+        });
+        let captured = RefCell::new(None);
+
+        assert!(coordinate_memory_search_with(
+            app.handle(),
+            &shared,
+            &mut ChatProjector::new(),
+            "run-1",
+            &mut 0,
+            None,
+            &event,
+            |arguments| match failure {
+                Some(failure) => Err(failure),
+                None => dispatch_memory_search(app.handle(), "run-1", arguments),
+            },
+            |_, answer| *captured.borrow_mut() = Some(answer),
+        ));
+
+        captured.into_inner().unwrap()
+    }
+
+    #[test]
+    fn failed_memory_search_calls_answer_with_each_typed_error() {
+        let cases = [
+            (
+                MemoryIndexError::InvalidToolArguments,
+                "invalid_tool_arguments",
+                "The memory search arguments are invalid.",
+            ),
+            (
+                MemoryIndexError::LimitRaised,
+                "limit_raised",
+                "The memory search requested a limit above the configured limit.",
+            ),
+            (
+                MemoryIndexError::QueryTooLong,
+                "query_too_long",
+                "The memory search query is too long.",
+            ),
+            (
+                MemoryIndexError::TimedOut,
+                "timed_out",
+                "The memory search timed out.",
+            ),
+            (
+                MemoryIndexError::SecretRejected,
+                "secret_rejected",
+                "The memory search rejected content that contains a secret.",
+            ),
+            (
+                MemoryIndexError::InvalidPath,
+                "invalid_path",
+                "The memory search found an invalid path.",
+            ),
+            (
+                MemoryIndexError::Sqlite(rusqlite::Error::InvalidQuery),
+                "sqlite",
+                "The memory search database failed.",
+            ),
+            (
+                MemoryIndexError::Io(io::Error::other("test")),
+                "io",
+                "The memory search input or output operation failed.",
+            ),
+        ];
+
+        for (error, kind, message) in cases {
+            assert_eq!(
+                failed_memory_search_answer(
+                    Some(r#"{"query":"records"}"#),
+                    Some(MemoryFailure::from_index_error(error)),
+                ),
+                ExtensionUiAnswer::Editor(
+                    json!({"error": {"kind": kind, "message": message}}).to_string()
+                ),
+            );
+        }
+    }
+
+    #[test]
+    fn failed_memory_search_calls_answer_for_missing_inputs_and_runtime() {
+        assert_eq!(
+            failed_memory_search_answer(None, None),
+            ExtensionUiAnswer::Editor(
+                json!({
+                    "error": {
+                        "kind": "missing_prefill",
+                        "message": "The memory search arguments are missing."
+                    }
+                })
+                .to_string()
+            ),
+        );
+        assert_eq!(
+            failed_memory_search_answer(Some(r#"{"query":"records"}"#), None),
+            ExtensionUiAnswer::Editor(
+                json!({
+                    "error": {
+                        "kind": "runtime_unavailable",
+                        "message": "The memory search runtime is unavailable."
+                    }
+                })
+                .to_string()
+            ),
+        );
+    }
 
     #[test]
     fn live_chat_event_carries_projected_recalls() {
