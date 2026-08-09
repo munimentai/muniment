@@ -195,7 +195,7 @@ filesystem truth or authorize a native write.
 line endings, and binary content. It cannot define the approved write.
 
 **The journal stores a handwritten diff payload.** That copy would violate ADR
-0019 and could drift from every renderer's generated contract.
+0020 and could drift from the local `muniment-code-diff` contract.
 
 ## Consequences
 
