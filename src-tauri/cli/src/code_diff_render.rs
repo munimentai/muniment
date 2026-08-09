@@ -131,7 +131,9 @@ mod tests {
 
     fn expected(name: &str) -> &'static str {
         match name {
+            "added.json" => "--- /dev/null\n+++ new.txt\n",
             "binary.json" => "--- assets/icon.png\n+++ assets/icon.png\nBinary file changed\n",
+            "deleted.json" => "--- old.txt\n+++ /dev/null\n",
             "empty.json" => "No changes.\n",
             "modified.json" => concat!(
                 "--- src/message.txt\n",
