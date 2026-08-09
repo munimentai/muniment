@@ -8,7 +8,7 @@ default = []
 e2e-webdriver = ["dep:tauri-plugin-wdio-webdriver"]
 
 [workspace]
-members = [".", "core", "attach", "cli", "acp", "runtime"]
+members = [".", "core", "attach", "code-diff", "cli", "acp", "runtime"]
 resolver = "2"
 
 [build-dependencies]
