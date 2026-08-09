@@ -217,6 +217,40 @@ jobs:
               prerelease: true,
             });
 
+      - name: Update Homebrew cask
+        env:
+          SOURCE_TOKEN: ${{ github.token }}
+          TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          TAP_REPOSITORY: mikeydiamonds/homebrew-muniment
+          SOURCE_SHA: ${{ needs.prepare.outputs.source_sha }}
+        run: |
+          set -euo pipefail
+          if [ -z "$TAP_TOKEN" ]; then
+            echo 'HOMEBREW_TAP_TOKEN must grant write access to the public Homebrew tap.' >&2
+            exit 1
+          fi
+          asset="nightly-${SOURCE_SHA}-macos-muniment.app.zip"
+          mkdir -p "$RUNNER_TEMP/muniment-homebrew-asset"
+          GH_TOKEN="$SOURCE_TOKEN" gh release download nightly --repo "$GITHUB_REPOSITORY" --pattern "$asset" --dir "$RUNNER_TEMP/muniment-homebrew-asset"
+          digest=$(shasum -a 256 "$RUNNER_TEMP/muniment-homebrew-asset/$asset" | awk '{print $1}')
+
+          git clone --depth 1 "https://x-access-token:${TAP_TOKEN}@github.com/${TAP_REPOSITORY}.git" "$RUNNER_TEMP/muniment-homebrew-tap"
+          cd "$RUNNER_TEMP/muniment-homebrew-tap"
+          if ! GH_TOKEN="$TAP_TOKEN" gh release view nightly --repo "$TAP_REPOSITORY" >/dev/null 2>&1; then
+            GH_TOKEN="$TAP_TOKEN" gh release create nightly --repo "$TAP_REPOSITORY" --target main --title "Muniment nightly" --notes "Public macOS archives for the Homebrew cask." --prerelease
+          fi
+          GH_TOKEN="$TAP_TOKEN" gh release upload nightly "$RUNNER_TEMP/muniment-homebrew-asset/$asset" --repo "$TAP_REPOSITORY" --clobber
+          node "$GITHUB_WORKSPACE/.github/bump-homebrew-cask.mjs" Casks/muniment-nightly.rb "$SOURCE_SHA" "$digest"
+          if git diff --quiet -- Casks/muniment-nightly.rb; then
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Casks/muniment-nightly.rb
+          git commit -m "Update Homebrew cask for nightly ${SOURCE_SHA}"
+          git pull --rebase origin main
+          git push origin HEAD:main
+
   linux-e2e:
     # Publishing is distribution and must never gate testing.
     needs: [prepare, build, publish]
