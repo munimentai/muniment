@@ -1,10 +1,9 @@
 // The env contract for macOS Developer ID signing + notarization. These arrive
 // through the SAME desktop-ci env-injection seam Windows signing uses (secrets
-// injected at deploy from the vault, never committed). Absent every value => the
-// build is unsigned, exactly as it ships today. Enrollment Y5DUNHQA74 is in
-// review; the day it clears, only these six vault keys need filling.
+// injected at deploy from the vault, never committed). The config flag stays
+// false while enrollment Y5DUNHQA74 remains in review.
 //
-//   APPLE_CERTIFICATE           base64 of the Developer ID Application .p12
+//   APPLE_CERTIFICATE           base64 of a .p12 with Application and Installer identities
 //   APPLE_CERTIFICATE_PASSWORD  password protecting that .p12
 //   APPLE_TEAM_ID               10-character Apple Developer Team ID
 //   APPLE_API_KEY               base64 of the App Store Connect .p8 key
@@ -18,6 +17,13 @@ export const SIGNING_VARIABLES = [
   "APPLE_API_KEY_ID",
   "APPLE_API_ISSUER",
 ];
+
+export const signingEnabled = (env) => {
+  const value = env.MACOS_SIGNING_ENABLED;
+  if (value === undefined || value === "" || value === "false") return false;
+  if (value === "true") return true;
+  throw new Error("MACOS_SIGNING_ENABLED must be true or false");
+};
 
 // null when no credentials are present (unsigned build); a resolved config when
 // all are present; throws naming only the MISSING variables when the set is
@@ -49,6 +55,17 @@ export const resolveSigningConfiguration = (env) => {
 export const parseSigningIdentity = (findIdentityOutput) => {
   const match = findIdentityOutput.match(/\b([0-9A-F]{40})\b\s+"(Developer ID Application:[^"]*)"/);
   return match ? { hash: match[1], name: match[2] } : null;
+};
+
+export const parseInstallerIdentity = (findIdentityOutput) => {
+  const match = findIdentityOutput.match(/\b([0-9A-F]{40})\b\s+"(Developer ID Installer:[^"]*)"/);
+  return match ? { hash: match[1], name: match[2] } : null;
+};
+
+export const productbuildArguments = (application, output, identityHash, keychain) => {
+  const args = ["--component", application, "/Applications"];
+  if (identityHash) args.push("--sign", identityHash, "--keychain", keychain);
+  return [...args, output];
 };
 
 // Deep-sign a bundle (or a lone binary) with the hardened runtime and a secure
