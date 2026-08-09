@@ -78,7 +78,7 @@ grep -Fq 'docs/desktop-single-mode.md' SPEC.md
 test -z "$(grep -rl --exclude='0003-resident-gemma-model.md' 'muniment-resident-gemma' docs/)"
 test -z "$(grep -ril 'resident local gemma' docs/)"
 # companion workspace and its path-scoped CI lane
-grep -Fq 'members = [".", "core", "attach", "cli", "acp", "runtime"]' src-tauri/Cargo.toml
+grep -Fq 'members = [".", "core", "attach", "code-diff", "cli", "acp", "runtime"]' src-tauri/Cargo.toml
 grep -Fq 'resolver = "2"' src-tauri/Cargo.toml
 test -f src-tauri/attach/Cargo.toml
 test -f src-tauri/attach/src/lib.rs
@@ -90,9 +90,9 @@ grep -Fq 'src-tauri/attach/*|src-tauri/attach/**)' "$ci"
 grep -Fq 'protocol-fixtures/*|protocol-fixtures/**)' "$ci"
 grep -Fq 'echo "companion=$companion" >> "$GITHUB_OUTPUT"' "$ci"
 grep -Fq "if: steps.changes.outputs.companion == 'true'" "$ci"
-grep -Fq 'cargo fmt --manifest-path src-tauri/Cargo.toml --package muniment-attach --package muniment-cli --package muniment-acp --check' "$ci"
-grep -Fq 'cargo clippy --manifest-path src-tauri/Cargo.toml --package muniment-attach --package muniment-cli --package muniment-acp --all-targets --locked -- -D warnings' "$ci"
-grep -Fq 'cargo test --manifest-path src-tauri/Cargo.toml --package muniment-attach --package muniment-cli --package muniment-acp --locked' "$ci"
+grep -Fq 'cargo fmt --manifest-path src-tauri/Cargo.toml --package muniment-attach --package muniment-code-diff --package muniment-cli --package muniment-acp --check' "$ci"
+grep -Fq 'cargo clippy --manifest-path src-tauri/Cargo.toml --package muniment-attach --package muniment-code-diff --package muniment-cli --package muniment-acp --all-targets --locked -- -D warnings' "$ci"
+grep -Fq 'cargo test --manifest-path src-tauri/Cargo.toml --package muniment-attach --package muniment-code-diff --package muniment-cli --package muniment-acp --locked' "$ci"
 grep -Fq 'run: test/cli-dependency-boundary.sh' "$ci"
 test -f src-tauri/runtime/Cargo.toml
 test -f src-tauri/runtime/src/main.rs
@@ -104,6 +104,11 @@ test -d protocol-fixtures/muniment.attach/1
 grep -Fq 'name: attach-fixtures-current' "$ci"
 grep -Fq 'run: cargo run -p muniment-attach --bin export-attach-fixtures -- ../protocol-fixtures --check' "$ci"
 grep -Fq 'attach-fixtures-current:' "$ci"
+test -f src-tauri/code-diff/Cargo.toml
+test -f src-tauri/code-diff/src/lib.rs
+test -d protocol-fixtures/code-diff/1
+grep -Fq 'name: code-diff-fixtures-current' "$ci"
+grep -Fq 'run: cargo run -p muniment-code-diff --bin export-code-diff-fixtures -- ../protocol-fixtures --check' "$ci"
 test -f protocol-fixtures/muniment.attach/1/negotiation-hello.json
 test -x test/cli-dependency-boundary.sh
 grep -Fq -- '--locked --target all --prefix none' test/cli-dependency-boundary.sh
