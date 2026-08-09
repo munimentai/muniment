@@ -1123,3 +1123,11 @@ describe('onboarding Home path assertion', () => {
     expect(await homePathMatches(location, '/tmp/isolated-home')).toBe(false)
   })
 })
+
+describe('Linux E2E shared-library contract', () => {
+  it('loads the checked-in ASR runtime for the raw binary', () => {
+    const runner = fs.readFileSync(path.join(root, 'test/e2e/runner/linux.sh'), 'utf8')
+    expect(runner).toContain('asr_runtime="$PWD/src-tauri/third-party/sherpa-onnx-v1.13.2/link"')
+    expect(runner).toContain('export LD_LIBRARY_PATH="$asr_runtime${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"')
+  })
+})
