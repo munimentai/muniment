@@ -17,7 +17,8 @@ use serde::Serialize;
 use std::collections::BTreeMap;
 
 use crate::auth;
-use crate::chat::{state_session_root, ChatState, SharedStorage};
+use crate::chat::{state_session_root, ChatState};
+use muniment_core::run_events::SharedStorage;
 use muniment_core::session_thread::SessionThread;
 
 #[derive(Serialize)]
@@ -310,7 +311,7 @@ mod tests {
     use super::*;
     use crate::chat::{
         desktop_provenance, event_envelope, prepare_new_run, prepare_new_run_with_session_thread,
-        ChatStorage, SessionThreadStart,
+        SessionThreadStart,
     };
     use crate::test_support::append_test_event;
     use chrono::{SecondsFormat, Utc};
@@ -322,6 +323,7 @@ mod tests {
         project_chat, project_chat_with_state, reduce, PermissionRequest, RunStatus,
     };
     use muniment_core::journal::{EventPayload, Provenance};
+    use muniment_core::run_events::ChatStorage;
     use muniment_core::session_thread::OfferedThread;
     use muniment_core::thread_history::history_resumable;
     use serde_json::{json, Value};
