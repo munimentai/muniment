@@ -3,6 +3,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { spawnSync } from 'node:child_process'
+import { macosSigningProvenance } from '../.github/lib/release-promotion.mjs'
 
 const workflow = fs.readFileSync('.github/workflows/nightly.yml', 'utf8')
 const ensureJunitReport = 'test/e2e/support/ensure-junit-report.sh'
@@ -44,6 +45,7 @@ describe('nightly macOS package build', () => {
     expect(workflow).toContain('node .github/build-macos-app.mjs')
     expect(workflow).toContain('[".pkg"]')
     expect(workflow).toContain("MACOS_SIGNING_ENABLED: ${{ vars.MACOS_SIGNING_ENABLED || 'false' }}")
+    expect(workflow).toContain(macosSigningProvenance('${sha}').replaceAll('`', '\\`'))
     expect(workflow).toContain('macOS artifacts are unsigned pending Apple enrollment Y5DUNHQA74.')
   })
 })

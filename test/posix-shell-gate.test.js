@@ -12,7 +12,7 @@ const ALLOWED = {
   'test/desktop-e2e-harness.test.js:867:20': "describe.skipIf(process.platform === 'win32')('cleanup failure accounting')",
   'test/desktop-e2e-harness.test.js:893:19': "describe.skipIf(process.platform === 'win32')('cleanup failure accounting')",
   'test/desktop-e2e-harness.test.js:920:24': "describe.skipIf(process.platform === 'win32')('cleanup failure accounting')",
-  'test/nightly-workflow.test.js:12:18': "it.skipIf(process.platform === 'win32') on every runReportFallback caller",
+  'test/nightly-workflow.test.js:13:18': "it.skipIf(process.platform === 'win32') on every runReportFallback caller",
 }
 
 const root = process.cwd()
