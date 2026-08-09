@@ -100,7 +100,7 @@ describe('chat controller', () => {
     })
 
     await expect(controller.start()).resolves.toBe(false)
-    expect(onHistoryError).toHaveBeenLastCalledWith('Live replies cannot arrive.')
+    expect(onHistoryError).toHaveBeenLastCalledWith('Live replies cannot arrive.', expect.objectContaining({ label: 'Reconnect' }))
 
     await controller.loadHistory()
 
@@ -189,7 +189,7 @@ describe('chat controller', () => {
 
     context.setMessages(previous)
     const failedController = createChatController({
-      invoke: vi.fn().mockRejectedValue(new Error('offline')),
+      invoke: vi.fn().mockRejectedValueOnce(new Error('offline')).mockResolvedValue(undefined),
       listen: vi.fn(),
       readMessages: context.messages,
       readActive: context.active,
@@ -211,7 +211,9 @@ describe('chat controller', () => {
     })
     await expect(failedController.deleteThread('thread-1')).resolves.toBe(false)
     expect(context.messages()).toBe(previous)
-    expect(onHistoryError).toHaveBeenLastCalledWith('The thread could not be deleted.')
+    const deleteAction = onHistoryError.mock.lastCall[1]
+    expect(deleteAction.label).toBe('Delete thread')
+    await expect(deleteAction.run()).resolves.toBe(true)
   })
 
   it('renames the selected thread and publishes its new title', async () => {
@@ -384,7 +386,7 @@ describe('chat controller', () => {
     const onThreadSummaries = vi.fn()
     const onHistoryError = vi.fn()
     const controller = createChatController({
-      invoke: vi.fn().mockRejectedValue(new Error('offline')),
+      invoke: vi.fn().mockRejectedValueOnce(new Error('offline')).mockResolvedValue(undefined),
       listen: vi.fn(),
       readMessages: () => [],
       readActive: () => null,
@@ -408,7 +410,10 @@ describe('chat controller', () => {
     await expect(controller.renameThread('New name', 'Old name')).resolves.toBe(false)
 
     expect(onThreadSummaries).not.toHaveBeenCalled()
-    expect(onHistoryError).toHaveBeenLastCalledWith('The thread name could not be changed.')
+    const renameAction = onHistoryError.mock.lastCall[1]
+    expect(renameAction.label).toBe('Rename thread again')
+    await expect(renameAction.run()).resolves.toBe(true)
+    expect(onThreadSummaries).toHaveBeenLastCalledWith([{ threadId: 'thread-1', title: 'New name' }])
   })
 
   it('starts a fresh thread only after the command succeeds', async () => {
@@ -460,7 +465,7 @@ describe('chat controller', () => {
     const context = setup(vi.fn().mockRejectedValue(new Error('offline')))
     context.setMessages(previous)
     const controller = createChatController({
-      invoke: vi.fn().mockRejectedValue(new Error('offline')),
+      invoke: vi.fn().mockRejectedValueOnce(new Error('offline')).mockResolvedValue(undefined),
       listen: vi.fn(),
       readMessages: context.messages,
       readActive: context.active,
@@ -483,7 +488,10 @@ describe('chat controller', () => {
 
     expect(context.messages()).toBe(previous)
     expect(onThreadSelected).not.toHaveBeenCalled()
-    expect(onHistoryError).toHaveBeenLastCalledWith('A new thread could not be started.')
+    const newThreadAction = onHistoryError.mock.lastCall[1]
+    expect(newThreadAction.label).toBe('Start new thread')
+    await newThreadAction.run()
+    expect(context.messages()).toEqual([])
   })
 
   it('blocks a fresh thread during a run or thread switch', async () => {
@@ -561,6 +569,7 @@ describe('chat controller', () => {
       .mockResolvedValueOnce({ summaries, nextCursor: 'page-2' })
       .mockResolvedValueOnce({ entries: [], nextCursor: null })
       .mockRejectedValueOnce(new Error('offline'))
+      .mockResolvedValueOnce({ summaries: [{ threadId: 'thread-2' }], nextCursor: null })
     const controller = createChatController({
       invoke, listen: vi.fn(), readMessages: () => [], readActive: () => null,
       readAnnounced: () => null, readDraft: () => '', readFiles: () => [],
@@ -574,7 +583,10 @@ describe('chat controller', () => {
     await expect(controller.loadOlderThreads()).resolves.toBeNull()
 
     expect(onThreadSummaries).not.toHaveBeenCalled()
-    expect(onHistoryError).toHaveBeenLastCalledWith('Older threads could not be loaded.')
+    const olderThreadsAction = onHistoryError.mock.lastCall[1]
+    expect(olderThreadsAction.label).toBe('Load older threads')
+    await expect(olderThreadsAction.run()).resolves.toBe('thread-2')
+    expect(invoke).toHaveBeenLastCalledWith('chat_thread_summaries', { limit: 20, cursor: 'page-2' })
   })
 
   it('refreshes only the newest page and removes its threads from retained pages', async () => {
@@ -753,7 +765,7 @@ describe('chat controller', () => {
     await controller.openThread('thread-2')
 
     expect(context.messages()).toBe(previous)
-    expect(onHistoryError).toHaveBeenLastCalledWith('Conversation history could not be restored.')
+    expect(onHistoryError).toHaveBeenLastCalledWith('Conversation history could not be restored.', expect.objectContaining({ label: 'Restore history' }))
   })
 
   it('restores the previous backend thread when the selected thread fails to load', async () => {
@@ -989,7 +1001,7 @@ describe('chat controller', () => {
     })
     await controller.loadHistory()
 
-    expect(onHistoryError).toHaveBeenLastCalledWith('Conversation history could not be restored.')
+    expect(onHistoryError).toHaveBeenLastCalledWith('Conversation history could not be restored.', expect.objectContaining({ label: 'Restore history' }))
   })
 
   it('replays events buffered before a submitted run id is known', async () => {
