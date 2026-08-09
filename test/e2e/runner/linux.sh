@@ -213,6 +213,8 @@ cargo build --manifest-path src-tauri/Cargo.toml --package muniment-runtime --re
 npm run tauri build -- --bundles deb --features e2e-webdriver --config src-tauri/tauri.e2e.conf.json >>"$installer_log" 2>&1 || { status=1; exit; }
 app_binary="$PWD/src-tauri/target/release/muniment-desktop"
 [[ -x $app_binary ]] || { echo 'E2E application binary is unavailable' >&2; status=1; exit; }
+asr_runtime="$PWD/src-tauri/third-party/sherpa-onnx-v1.13.2/link"
+export LD_LIBRARY_PATH="$asr_runtime${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 e2e_deb=$(find "$PWD/src-tauri/target/release/bundle/deb" -maxdepth 1 -type f -name '*.deb' -print -quit)
 [[ -n $e2e_deb ]] || { echo 'E2E DEB is unavailable' >&2; status=1; exit; }
 bash test/e2e/support/webdriver-artifact-guard.sh present "$e2e_deb" || { status=1; exit; }
