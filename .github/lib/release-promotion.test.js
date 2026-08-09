@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { assertGreenCi, expectedNightlyAssets, promoteRelease, releaseBody, validatePromotionInputs, windowsSigningProvenance } from "./release-promotion.mjs";
+import { assertGreenCi, expectedNightlyAssets, macosSigningProvenance, promoteRelease, releaseBody, validatePromotionInputs, windowsSigningProvenance } from "./release-promotion.mjs";
 
 const sha = "a".repeat(40);
 const version = "v0.0.1";
@@ -34,7 +34,7 @@ const promotionFetch = (overrides = {}) => {
     if (url.includes("/check-runs")) return response({ check_runs: [smoke] });
     if (url.endsWith("/releases/tags/nightly")) return response({
       id: 1, draft: false, prerelease: true, target_commitish: overrides.targetCommitish ?? "stale-branch-value",
-      body: `Automated desktop build from ${sha}.\n\n${windowsSigningProvenance(sha)}`, assets,
+      body: `Automated desktop build from ${sha}.\n\n${windowsSigningProvenance(sha)}${overrides.macosSigned ? `\n\n${macosSigningProvenance(sha)}` : "\n\nmacOS artifacts are unsigned pending Apple enrollment Y5DUNHQA74."}`, assets,
     });
     if (url.endsWith("/releases") && method === "POST") return response({ id: 42 });
     if (url.startsWith("https://api.github.test/assets/")) return response("asset bytes");
@@ -69,11 +69,15 @@ describe("stable release promotion", () => {
     expect(() => assertGreenCi([smoke, { name: "security", status: "completed", conclusion: "failure" }], sha)).toThrow("CI is not green");
   });
 
-  it("publishes the required provenance and signing disclosures", () => {
-    const body = releaseBody(sha);
+  it.each([
+    [true, macosSigningProvenance(sha)],
+    [false, "macOS artifacts are unsigned pending Apple enrollment Y5DUNHQA74."],
+  ])("publishes the required provenance when macOS signed is %s", (macosSigned, macosProvenance) => {
+    const body = releaseBody(sha, macosSigned);
     expect(body).toContain(sha);
     expect(body).toContain("Windows installers are signed");
-    expect(body).toContain("macOS artifacts are unsigned pending Apple credentials");
+    expect(body).toContain(macosProvenance);
+    expect(body).not.toContain(macosSigned ? "macOS artifacts are unsigned" : "signed and notarized");
     expect(body).toContain("Model weights are not included");
   });
 
@@ -105,6 +109,18 @@ describe("stable release promotion", () => {
     expect(calls.some(({ url, options }) => url.includes("/releases/1") && options.method)).toBe(false);
     const publish = calls.find(({ url, options }) => url.endsWith("/releases/42") && options.method === "PATCH");
     expect(JSON.parse(publish.options.body)).toEqual({ draft: false, prerelease: false });
+  });
+
+  it.each([
+    [true, macosSigningProvenance(sha)],
+    [false, "macOS artifacts are unsigned pending Apple enrollment Y5DUNHQA74."],
+  ])("copies the macOS signing state when signed is %s", async (macosSigned, macosProvenance) => {
+    const { calls, fetchImpl } = promotionFetch({ macosSigned });
+    await promote(fetchImpl);
+    const create = calls.find(({ url, options }) => url.endsWith("/releases") && options.method === "POST");
+    const body = JSON.parse(create.options.body).body;
+    expect(body).toContain(macosProvenance);
+    expect(body).not.toContain(macosSigned ? "macOS artifacts are unsigned" : "signed and notarized");
   });
 
   it("fails closed when finalized nightly signing provenance is absent", async () => {
