@@ -126,6 +126,13 @@ desktop over `muniment.attach/1`. Generated cloud imports do not let either
 surface open the journal, own credentials, spawn a runtime, or bypass attach
 authorization.
 
+## Correction — 2026-08-09: local code-diff contract
+
+This decision governs every E0 cloud contract. It does not govern
+`code-diff/1`, which crosses no cloud boundary. ADR 0020 keeps that contract,
+its Rust codec, and its golden fixtures in the desktop repository, following
+the existing `muniment.attach/1` ownership model.
+
 ### Alternatives considered
 
 **Protobuf with `prost` and `protobuf-es`.** It gives strong native generation
