@@ -720,6 +720,13 @@ gate, and slice 5, the receipt replay of an applied diff, both wait behind the
 producer. ADR 0019 keeps every E0 cloud contract, and the cloud lane publishes no
 `code-diff` artifact.
 
+DECLINED 2026-08-08 (ninth wave) — the planner returned the CLI ANSI renderer
+idea. ADR 0020 gave the CLI a hand-written terminal renderer, and the 2026-07-29
+owner ruling then deferred the CLI surface indefinitely. `src-tauri/` also holds
+no Rust diff model, because the desktop half renders through
+`src/lib/code-diff.js`. A terminal renderer has nothing to render over until the
+ADR 0019 contract crate publishes.
+
 CLOSED 2026-07-30 — ADR 0021 landed as a superseded record rather than an
 on-device classifier store design, because the cloud ingress ruling arrived
 first. The mobile store is void under the same ruling, and harness-spec §§12.1
@@ -922,6 +929,47 @@ The index carries its own private `collect_markdown`
 and `MAX_DIRECTORY_DEPTH` constants. The live walker is deadline-aware, so the
 dead module goes. SELECTED 2026-08-08 (eighth wave).
 
+MEASURED 2026-08-08 (ninth wave, planner, scratch release `cargo test` over a
+Home of 200 Markdown files) — the memory-search query carries no bound.
+`match_expression` (`src-tauri/core/src/memory_index.rs:770`) splits the query on
+whitespace and joins every token with `AND` into one FTS5 expression. A
+1,000-term query cost 14.3ms, a 5,000-term query cost 85.8ms, and a 20,000-term
+query ran 695.0ms before it failed with `TimedOut`. The retrieval budget is
+250ms, so one oversized call overran it by 2.8 times. `MAX_FILES`,
+`MAX_FILE_BYTES`, `MAX_DIRECTORY_DEPTH`, the item cap, the character budget, and
+the timeout are all bounded. The model-supplied query is the one input that is
+not. `RecallRecord::query` also keeps all 188,890 characters, which reach the
+`memory.recalled` journal event and the expanded receipt. A bound adds no
+column, table, or migration. SELECTED 2026-08-08 (ninth wave).
+
+DECIDED 2026-08-08 (ninth wave) — a memory-search query accepts at most 1,024
+Unicode scalar values and at most 64 whitespace-delimited terms.
+`MemoryIndex::search` checks both limits before it lowers requested retrieval
+limits or opens the cache. A query that exceeds either limit returns
+`MemoryIndexError::QueryTooLong`, and the tool response names `error.kind` as
+`query_too_long`. The boundary values are valid.
+
+MEASURED 2026-08-08 (ninth wave, planner, read the recall dispatch path) — a
+failed memory search tells the model nothing. `coordinate_memory_search`
+(`src-tauri/src/chat_coordinate.rs:781`) maps every `MemoryIndexError` through
+`.map_err(|_| ())` and answers `ExtensionUiAnswer::Cancelled`. Invalid tool
+arguments, a raised limit, a timed-out search, a rejected secret, an invalid
+path, and a damaged cache all reach the model as a cancelled request rather than
+a failed tool. The model cannot shorten a rejected query or lower a raised
+limit, and the reply then omits memory with no stated reason. SELECTED
+2026-08-08 (ninth wave).
+
+DECIDED 2026-08-08 (ninth wave) — every failed memory search answers the editor
+request with `{"error":{"kind":"<name>","message":"<text>"}}` instead of
+cancelling it. `error.kind` is the error name. Invalid tool arguments map to
+`invalid_tool_arguments`, a raised limit maps to `limit_raised`, an oversized
+query maps to `query_too_long`, and a deadline maps to `timed_out`. Secret
+rejection maps to `secret_rejected`, an invalid path maps to `invalid_path`, a
+SQLite failure maps to `sqlite`, and an I/O failure maps to `io`. A missing
+editor prefill maps to `missing_prefill`, and an unavailable runtime maps to
+`runtime_unavailable`. Each response carries the matching stable message, so
+the model can change its next call.
+
 MEASURED 2026-08-07 — nothing renders a recall. The reducer drops
 `memory.recalled`, so `ChatProjection`
 (`src-tauri/core/src/journal/reducer.rs:434`) carries no recall and the frontend
@@ -1043,6 +1091,14 @@ The run-record `Resume` and `Try again` controls (`src/App.svelte:917`) measure
 row leaves room for it. DESIGN.md takes the law and a test guards it. SELECTED
 2026-08-08 (eighth wave).
 
+MEASURED 2026-08-08 (ninth wave, planner, same capture at 1100x760) — a fourth
+control sits under that floor. The receipt summary is a button
+(`.provenance`, `src/App.svelte:990`) and it measures 334x17 CSS pixels. It
+renders on its own line rather than inside a sentence, so the SC 2.5.8 inline
+exception does not cover it. The open target-size slice writes the law, so that
+slice states whether this control is in scope. The planner files no second
+slice.
+
 MEASURED 2026-08-09 (ninth wave, planner, read every `onHistoryError` call site
 against the banner control) — the transcript error banner offers a recovery it
 does not perform. `src/App.svelte:888` renders one `Try again` control, and that
@@ -1098,6 +1154,15 @@ DO NOT RE-FILE — wide windows need no slice. The 760px thread column measured
 centered at 1920x1080 and at 1440x900. The choice gate also fits the 960x640
 minimum: six options and the refusal control render on one row with room to
 spare.
+
+DO NOT RE-FILE — the artifact rail at the minimum window is a designed trade-off
+rather than a defect. The planner opened the rail on `test/probe/history.html`
+at 960x640 and measured a 260px sidebar, a 380px rail, and a 320px thread
+region whose text column is 272px after its padding.
+`availableArtifactRailWidth` (`src/App.svelte:291`) already subtracts a
+`minimumThreadWidth` of 320 before it clamps, and design-spec §2 pins the rail
+between 380 and 560. The layout meets its own floor, and the empty rail is the
+Phase 4 placeholder.
 
 DO NOT RE-FILE — asset weight is not worth a slice. The frontend emits one
 252,280-byte script, one 62,240-byte stylesheet, and 154,444 bytes of webfont.
