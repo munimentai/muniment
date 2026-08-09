@@ -94,6 +94,7 @@ describe('access popover layout', () => {
     expect(source).toMatch(/The connected programs folder is unavailable\./)
     expect(source).toMatch(/Connected programs are available in another Muniment window\./)
     expect(source).toMatch(/The connected programs connection could not start\./)
+    expect(source).toMatch(/The connected programs listener stopped\./)
     expect(source).toMatch(/Restart Muniment/)
     expect(source).toMatch(/Close this window/)
     expect(source).toMatch(/Approval time unavailable/)
@@ -188,6 +189,24 @@ describe('access popover layout', () => {
       expect(screen.queryByText('No connected programs found')).not.toBeInTheDocument()
     })
   }
+
+  it('renders the stopped listener and its recovery', async () => {
+    const invoke = vi.fn(async (command) => {
+      if (command === 'auth_entitlement_snapshot') return snapshot
+      if (command === 'auth_devices') return []
+      if (command === 'attach_companions') return []
+      if (command === 'attach_listener_status') return { started: false, failure: null, pending: false, stopped: true }
+      if (command === 'restart_muniment') return
+      throw new Error(`unexpected command: ${command}`)
+    })
+    renderPanel(invoke)
+    await fireEvent.click(await screen.findByRole('button', { name: /Alice/ }))
+
+    expect(await screen.findByText('The connected programs listener stopped.')).toBeInTheDocument()
+    await fireEvent.click(screen.getByRole('button', { name: 'Restart Muniment' }))
+    expect(invoke).toHaveBeenCalledWith('restart_muniment')
+    expect(screen.queryByText('No connected programs found')).not.toBeInTheDocument()
+  })
 
   it('keeps loading while listener startup is pending', async () => {
     let statusCalls = 0
