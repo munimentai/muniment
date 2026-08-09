@@ -81,11 +81,26 @@ pub fn probe_handoff(
                 )
             }
             Err(HandoffProbeError::ConnectionRefused) => {
-                thread::sleep(remaining(readiness_deadline)?.min(HANDOFF_PROBE_RETRY_INTERVAL));
+                wait_before_retry(readiness_deadline, Instant::now, thread::sleep)?;
             }
             Err(error) => return Err(error),
         }
     }
+}
+
+#[cfg(target_os = "linux")]
+fn wait_before_retry(
+    deadline: Instant,
+    now: impl FnOnce() -> Instant,
+    sleep: impl FnOnce(Duration),
+) -> Result<(), HandoffProbeError> {
+    let delay = deadline
+        .checked_duration_since(now())
+        .filter(|remaining| !remaining.is_zero())
+        .ok_or(HandoffProbeError::ReadinessDeadlineReached)?
+        .min(HANDOFF_PROBE_RETRY_INTERVAL);
+    sleep(delay);
+    Ok(())
 }
 
 /// Opens the endpoint, exchanges one readiness handshake, and closes it.
@@ -249,6 +264,44 @@ mod tests {
             approval_challenge: "challenge".into(),
             handoff_nonce: handoff_nonce.map(str::to_owned),
         }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn bounds_each_retry_wait() {
+        let now = Instant::now();
+        let mut waits = Vec::new();
+
+        wait_before_retry(
+            now + Duration::from_secs(1),
+            || now,
+            |delay| waits.push(delay),
+        )
+        .unwrap();
+        wait_before_retry(
+            now + Duration::from_millis(15),
+            || now + Duration::from_millis(12),
+            |delay| waits.push(delay),
+        )
+        .unwrap();
+
+        assert_eq!(
+            waits,
+            [HANDOFF_PROBE_RETRY_INTERVAL, Duration::from_millis(3)]
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn does_not_wait_after_the_deadline() {
+        let now = Instant::now();
+        let mut slept = false;
+
+        assert_eq!(
+            wait_before_retry(now, || now, |_| slept = true),
+            Err(HandoffProbeError::ReadinessDeadlineReached)
+        );
+        assert!(!slept);
     }
 
     #[test]

@@ -184,7 +184,9 @@ fn stops_retrying_when_an_endpoint_never_binds() {
         probe_handoff(&socket.0, "handoff-nonce", deadline),
         Err(HandoffProbeError::ReadinessDeadlineReached)
     );
-    assert!(started.elapsed() < Duration::from_millis(55));
+    let elapsed = started.elapsed();
+    assert!(elapsed >= Duration::from_millis(35));
+    assert!(elapsed < Duration::from_secs(1));
 }
 
 #[test]
