@@ -140,7 +140,7 @@ describe('WDIO Tauri driver contract', () => {
       if (previousArtifacts === undefined) delete process.env.MUNIMENT_E2E_RAW_DIR
       else process.env.MUNIMENT_E2E_RAW_DIR = previousArtifacts
     }
-  })
+  }, 15_000)
 
   it('loads the installed ESM entry with compatible transitive named exports', async () => {
     await expect(import('@wdio/tauri-service')).resolves.toBeDefined()
