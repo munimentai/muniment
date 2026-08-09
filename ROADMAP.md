@@ -325,9 +325,18 @@ has the same missing upstream. Both wait on the Pi wire contract.
 OWNER WORK — in-editor release validation for the Zed and JetBrains claims needs
 real editor installs.
 
-OPEN — the CLI treats `capability.revoked` and every `stream.closed` as
-`UnexpectedMessage` (`src-tauri/cli/src/main.rs:423`). The CLI is deferred
-indefinitely, so no slice is filed.
+MEASURED 2026-08-09 (ninth wave, planner, read the CLI run-stream loop and its
+guidance table) — the CLI treats `capability.revoked` and every `stream.closed`
+as `UnexpectedMessage` (`src-tauri/cli/src/main.rs:423`). `client_guidance`
+(`:566`) answers that variant from its catch-all arm, so a revoked companion
+prints `the desktop pairing response was invalid; update Muniment and try again`.
+The user revoked the CLI in the desktop `Connected programs` panel, and the line
+sends them to an update instead. The ACP adapter already carries the honest
+shape, because `ClientError::CapabilityRevoked` is its own typed variant with the
+exact message `Muniment capability revoked`. OWNER QUESTION — the 2026-07-29
+ruling defers the CLI surface indefinitely, and the 2026-08-09 grooming promoted
+one CLI ticket. The planner files no slice until the owner says how wide that
+promotion runs.
 
 ### Companion revocation and management
 
@@ -529,10 +538,11 @@ why this one ticket never dispatches.
 MERGE HAZARD — the open slices edit `src-tauri/src/attach_service.rs`,
 `src-tauri/core/src/attach/handoff_probe.rs`,
 `src-tauri/core/src/memory_runtime.rs`, `src-tauri/src/chat.rs`,
-`src-tauri/core/src/memory_scan.rs`, and `src/App.svelte`. One open slice edits
-each of those files this wave. Each ticket tells the implementer to rebase on
-`main` before it opens the pull request. The 2026-08-04 silent revert came from a
-stale base.
+`src-tauri/core/src/memory_scan.rs`, `src/lib/chat-controller.js`,
+`.github/lib/release-promotion.mjs`, and `src/App.svelte`. Two open slices edit
+`src/App.svelte`, and one open slice edits each other file. Each ticket tells the
+implementer to rebase on `main` before it opens the pull request. The 2026-08-04
+silent revert came from a stale base.
 
 DONE 2026-08-08 — the memory runtime is the twentieth core move
 (MUNIDESK-995). `src-tauri/core/src/memory_runtime.rs` composes one
@@ -635,10 +645,27 @@ and empty states (MUNIDESK-779). ADR 0024 makes the desktop core the sole truste
 gates its first implementation slice on the published ADR 0019 Rust artifact
 (MUNIDESK-775).
 
-GATED — no further code-diff slice is fileable. Slice 4 renders a produced diff
-inside the permission gate, and no producer can exist before the published
-contract crate. The lane waits on the cloud repository. Slice 5, the receipt
-replay of an applied diff, waits behind slice 4.
+DIRECTION CHANGE 2026-08-09 (ninth wave, planner, after the owner's 2026-08-09
+grooming promoted the CLI diff renderer) — `code-diff/1` becomes a desktop-owned
+local contract. The lane waited on the cloud repository from 2026-07-29 and the
+artifact never published. `code-diff/1` also crosses no cloud boundary. ADR 0024
+makes the desktop core the sole trusted producer, and the desktop shell, the
+CLI, and the ACP adapter are its three consumers. No endpoint carries the value.
+That is the `muniment.attach/1` shape, which ADR 0009 and ADR 0011 already keep
+in this repository with golden fixtures. The planner verified on 2026-08-09 that
+no Rust `CodeDiff` type exists, that `src-tauri/cli/Cargo.toml` depends on
+`muniment-attach` alone, and that `src/lib/code-diff.js` is the only
+implementation of the model. The ADR amendment is the first slice, and it names
+`src-tauri/code-diff/` as the crate directory, `muniment-code-diff` as the
+package, and `protocol-fixtures/code-diff/1/` as the fixture directory.
+
+SEQUENCED — the codec crate follows the amendment. The CLI ANSI renderer follows
+the crate, and it reads the fixtures as a pure function over a `CodeDiff` value,
+exactly as the desktop adapter shipped before its wiring. The ADR 0024 producer
+slice follows the renderer. Slice 4, the produced diff inside the permission
+gate, and slice 5, the receipt replay of an applied diff, both wait behind the
+producer. ADR 0019 keeps every E0 cloud contract, and the cloud lane publishes no
+`code-diff` artifact.
 
 CLOSED 2026-07-30 — ADR 0021 landed as a superseded record rather than an
 on-device classifier store design, because the cloud ingress ruling arrived
@@ -966,6 +993,20 @@ The run-record `Resume` and `Try again` controls (`src/App.svelte:917`) measure
 row leaves room for it. DESIGN.md takes the law and a test guards it. SELECTED
 2026-08-08 (eighth wave).
 
+MEASURED 2026-08-09 (ninth wave, planner, read every `onHistoryError` call site
+against the banner control) — the transcript error banner offers a recovery it
+does not perform. `src/App.svelte:888` renders one `Try again` control, and that
+control always calls `chatController.loadHistory()`. Seven failures share the
+banner. Four of them name an action the control never repeats. They are
+`A new thread could not be started.`, `The thread name could not be changed.`,
+`The thread could not be deleted.`, and `Older threads could not be loaded.`
+A user who fails a delete presses `Try again`, the newest history page reloads,
+the message clears, and the thread survives. `loadHistory` also resets
+`threadPageCount` to 1, so a failed older-page read loses the retained pages.
+Every failing call site holds its own arguments, so the controller can pass the
+action that repeats it. DESIGN.md already states that the control beside an error
+names the recovery. SELECTED 2026-08-09 (ninth wave).
+
 DONE 2026-08-08 — the receipt summary shows that it expands (MUNIDESK-996). The
 expandable line carries a rotating marker (`src/App.svelte:990`, `.receipt-marker`
 at `:1357`), and the static `Receipt unavailable` caption carries none. A
@@ -1113,16 +1154,16 @@ earlier one. Requiring an up-to-date branch before merge, or a merge queue, is a
 repository-settings change that sits with the owner. The planner files no ticket
 for it.
 
-VERIFIED 2026-08-08 (eighth wave, from a clean clone) — `npm ci` then `npm test`
-passed 886 frontend tests across 59 files, and the browser suite passed 3.
-`cargo test -p muniment-core -p muniment-attach` passed with no failure. The
-planner then read the handoff, probe, quiesce, and runtime-activity modules, the
-desktop attach service with its listener status, stop, and migration-control
-paths, the memory runtime and index, both Home walkers, and the active-run queue
-and cancel functions. It rebuilt the bundle, captured six probe fixtures in
-headless Chromium at 1100x760, and measured every button rect on the restored
-history fixture. Earlier waves recorded the same shape of verification, and this
-entry replaces that ledger.
+VERIFIED 2026-08-09 (ninth wave, from a clean clone) — `npm ci` then `npm test`
+passed 890 frontend tests across 59 files, with 31 skipped, and the browser suite
+passed 3. `cargo test -p muniment-core -p muniment-attach -p muniment-cli` passed
+with no failure. The planner then read the macOS packaging and release-promotion
+modules with the nightly workflow, the four ADRs behind the code-diff lane, the
+frontend code-diff adapter, the CLI run-stream loop and its guidance table, and
+every `onHistoryError` call site. It rebuilt the bundle and captured the
+signed-out, onboarding, approved-files, empty-workspace, and Markdown probe
+fixtures in headless Chromium at 1100x760. Earlier waves recorded the same shape
+of verification, and this entry replaces that ledger.
 
 NOTE 2026-08-06 — the planning clone ships no `node_modules`. Run `npm ci`
 before `npm test`. Without it the run dies with `vitest: not found`, which reads
@@ -1160,6 +1201,23 @@ pre-staged behind the same environment-injection seam Windows signing uses. With
 no Apple credentials the build stays a clean unsigned no-op. A partial credential
 set fails fast and names only the missing variables. `docs/macos-signing.md`
 records the six vault keys and the verification checklist.
+
+DONE 2026-08-08 — the nightly builds an MDM-consumable macOS package
+(MUNIDESK-113). `productbuildArguments` (`.github/lib/macos-signing.mjs:65`)
+installs `muniment.app` into `/Applications`, `signingEnabled` (`:21`) reads the
+`MACOS_SIGNING_ENABLED` repository variable, and the signed path notarizes and
+staples the package beside the app. The nightly now carries seven assets, and
+`docs/macos-packages.md` is the deployment page.
+
+MEASURED 2026-08-09 (ninth wave, planner, read the promotion body beside the
+nightly body) — a stable release will lie about macOS signing. `releaseBody`
+(`.github/lib/release-promotion.mjs:30`) is a fixed string that always reads
+`macOS artifacts are unsigned pending Apple credentials.` The nightly finalize
+step already writes the true state, and `promoteRelease` (`:67`) already reads
+the nightly body for the Windows sentence. On the day enrollment Y5DUNHQA74
+clears, every stable release will call a signed, notarized package unsigned. The
+owner ruling labels unsigned macOS rather than blocking it, so the repair reports
+the state and never blocks a promotion. SELECTED 2026-08-09 (ninth wave).
 
 DONE — the shipped package carries its notices (MUNIDESK-716, 726, 801).
 `THIRD_PARTY_NOTICES.md` names every bundled frontend package at its resolved
