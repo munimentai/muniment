@@ -112,10 +112,11 @@ describe('Home onboarding state', () => {
     const saveFailed = onboardingImportErrorState(saving, { kind: 'saveFailed', message: 'disk secret' })
     expect(saveFailed).toMatchObject({ name: 'approved-review', errorKind: 'saveFailed', extractedEntries: confirmed.extractedEntries })
     expect(saveFailed.error).not.toContain('secret')
-    const secret = onboardingImportErrorState(saving, { kind: 'secretRejected', message: 'ghp_leaked' })
+    const secret = onboardingImportErrorState(saving, { kind: 'secretRejected', sourceName: 'profile.json', message: 'ghp_leaked' })
     expect(secret).toMatchObject({ name: 'approved-review', errorKind: 'secretRejected', conflictPath: undefined, extractedEntries: confirmed.extractedEntries })
     expect(secret.error).toContain('credential')
     expect(secret.error).toContain('archive review')
+    expect(secret.error).toContain('profile.json')
     expect(secret.error).not.toContain('ghp_')
 
     const invalid = onboardingImportErrorState(saving, { kind: 'invalidInput', message: 'parser secret' })

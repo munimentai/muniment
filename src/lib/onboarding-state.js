@@ -86,12 +86,15 @@ export function onboardingImportErrorState(state, error) {
     }
   }
   if (error?.kind === 'secretRejected') {
+    const sourceName = typeof error.sourceName === 'string' && error.sourceName ? error.sourceName : undefined
     return {
       ...state,
       name: 'approved-review',
       errorKind: 'secretRejected',
       conflictPath: undefined,
-      error: 'An approved file contains a credential, so Muniment imported nothing. Return to archive review and leave out the file that holds it.',
+      error: sourceName
+        ? `The approved file “${sourceName}” contains a credential, so Muniment imported nothing. Return to archive review and leave out that file.`
+        : 'An approved file contains a credential, so Muniment imported nothing. Return to archive review and leave out the file that holds it.',
     }
   }
   return {

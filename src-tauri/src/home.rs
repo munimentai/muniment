@@ -41,6 +41,8 @@ pub struct HomeImportError {
     message: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
     relative_path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    source_name: Option<String>,
 }
 
 impl HomeImportError {
@@ -49,15 +51,17 @@ impl HomeImportError {
             kind: HomeImportErrorKind::InvalidInput,
             message: "The confirmed Home import input is invalid.",
             relative_path: None,
+            source_name: None,
         }
     }
 
     /// The message names no matched text, so no secret leaves the core.
-    fn secret_rejected() -> Self {
+    fn secret_rejected(source_name: Option<String>) -> Self {
         Self {
             kind: HomeImportErrorKind::SecretRejected,
             message: "An approved Home import file contains a secret.",
             relative_path: None,
+            source_name,
         }
     }
 
@@ -66,6 +70,7 @@ impl HomeImportError {
             kind: HomeImportErrorKind::SaveFailed,
             message: "The confirmed Home import could not be saved.",
             relative_path: None,
+            source_name: None,
         }
     }
 }
@@ -167,7 +172,9 @@ fn confirm_import_with_hook(
     let plan =
         compile_onboarding_home_write_plan(approved_entries, import_date).map_err(|error| {
             match error {
-                OnboardingHomeWritePlanError::SecretRejected => HomeImportError::secret_rejected(),
+                OnboardingHomeWritePlanError::SecretRejected { source_name } => {
+                    HomeImportError::secret_rejected(Some(source_name))
+                }
                 _ => HomeImportError::invalid_input(),
             }
         })?;
@@ -180,8 +187,9 @@ fn confirm_import_with_hook(
             kind: HomeImportErrorKind::DestinationConflict,
             message: "A Home import destination already exists.",
             relative_path: Some(relative_path),
+            source_name: None,
         },
-        OnboardingHomePersistenceError::SecretRejected => HomeImportError::secret_rejected(),
+        OnboardingHomePersistenceError::SecretRejected => HomeImportError::secret_rejected(None),
         OnboardingHomePersistenceError::InvalidHome => HomeImportError::invalid_input(),
         _ => HomeImportError::save_failed(),
     })?;
@@ -327,6 +335,7 @@ mod tests {
                 kind: HomeImportErrorKind::DestinationConflict,
                 message: "A Home import destination already exists.",
                 relative_path: Some(collision.relative_path.clone()),
+                source_name: None,
             }
         );
         assert_eq!(
@@ -358,7 +367,8 @@ mod tests {
             serde_json::to_value(error).unwrap(),
             serde_json::json!({
                 "kind": "secretRejected",
-                "message": "An approved Home import file contains a secret."
+                "message": "An approved Home import file contains a secret.",
+                "sourceName": "notes.md"
             })
         );
         assert!(!home.exists());
