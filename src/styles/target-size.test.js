@@ -8,6 +8,7 @@ const selectors = [
   '.thread-delete',
   '.thread-delete-confirm button',
   '.run-error button',
+  '.provenance',
 ]
 
 const ruleBody = (source, selector) => [
