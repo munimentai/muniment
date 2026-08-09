@@ -15,6 +15,7 @@ use muniment_core::journal::pi_translation::{
 use muniment_core::journal::reducer::{ChatProjection, ChatProjector};
 use muniment_core::journal::run_append::append_run_event;
 use muniment_core::journal::split_model_stream_delta;
+use muniment_core::memory_failure::{MemoryFailure, MemoryFailureAnswer};
 use muniment_core::permission_gate::{
     coordinate_extension_ui_request, coordinate_permission_answer, PendingPermissionAnswer,
 };
@@ -778,12 +779,15 @@ fn coordinate_memory_search<R: tauri::Runtime>(
     if title != "muniment:memory-search" {
         return false;
     }
-    let result = prefill.as_deref().ok_or(()).and_then(|arguments| {
-        app.try_state::<crate::memory::ApplicationMemoryRuntime>()
-            .ok_or(())?
-            .dispatch_tool_call(run_id, "memory-search", arguments.as_bytes())
-            .map_err(|_| ())
-    });
+    let result = prefill
+        .as_deref()
+        .ok_or_else(MemoryFailure::missing_prefill)
+        .and_then(|arguments| {
+            app.try_state::<crate::memory::ApplicationMemoryRuntime>()
+                .ok_or_else(MemoryFailure::runtime_unavailable)?
+                .dispatch_tool_call(run_id, "memory-search", arguments.as_bytes())
+                .map_err(MemoryFailure::from_index_error)
+        });
     let answer = match result {
         Ok(result) => {
             if append_emit(
@@ -800,13 +804,15 @@ fn coordinate_memory_search<R: tauri::Runtime>(
             {
                 ExtensionUiAnswer::Cancelled
             } else {
-                match serde_json::to_string(&result) {
-                    Ok(result) => ExtensionUiAnswer::Editor(result),
-                    Err(_) => ExtensionUiAnswer::Cancelled,
-                }
+                ExtensionUiAnswer::Editor(
+                    serde_json::to_string(&result).expect("memory search result serializes"),
+                )
             }
         }
-        Err(()) => ExtensionUiAnswer::Cancelled,
+        Err(error) => ExtensionUiAnswer::Editor(
+            serde_json::to_string(&MemoryFailureAnswer::from(error))
+                .expect("memory search failure serializes"),
+        ),
     };
     let _ = adapter.answer_extension_ui(transport, request, answer);
     true
