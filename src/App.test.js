@@ -2735,7 +2735,7 @@ describe('local file selection', () => {
       if (command === 'chat_submit') return new Promise((resolve) => { resolveSubmit = resolve })
       throw new Error(`unexpected command: ${command}`)
     })
-    dialogResult = ['/private/contracts/lease.pdf', '/private/notes.txt']
+    dialogResult = ['/private/contracts/lease.png', '/private/notes.txt']
     render(App)
     await fireEvent.click(await screen.findByRole('button', { name: 'Add files' }))
     const composer = screen.getByPlaceholderText('Ask anything')
@@ -2745,22 +2745,26 @@ describe('local file selection', () => {
     expect(invoke).toHaveBeenCalledWith('chat_submit', {
       prompt: 'Review these',
       files: [
-        { path: '/private/contracts/lease.pdf' },
+        { path: '/private/contracts/lease.png' },
         { path: '/private/notes.txt' },
       ],
     })
     expect(composer).toHaveValue('Review these')
-    expect(screen.getByText('lease.pdf')).toBeInTheDocument()
+    expect(screen.getByText('lease.png')).toBeInTheDocument()
     expect(screen.getByText('notes.txt')).toBeInTheDocument()
 
     resolveSubmit({ runId: 'run-with-files', attachments: [
-      { displayName: 'lease.pdf', byteLength: 1024 },
+      { displayName: 'lease.png', byteLength: 1024, mediaType: 'image/png' },
       { displayName: 'notes.txt', byteLength: 1024 },
     ] })
     await waitFor(() => expect(composer).toHaveValue(''))
     expect(screen.queryByRole('list', { name: 'Selected files' })).not.toBeInTheDocument()
     const saved = screen.getByRole('list', { name: 'Saved attachments' })
-    expect(saved).toHaveTextContent('lease.pdf1.0 KBSaved locally · supported images sent with first prompt')
+    const chips = within(saved).getAllByRole('listitem')
+    expect(chips[0]).toHaveTextContent('lease.png1.0 KBimage/png')
+    expect(chips[1]).toHaveTextContent('notes.txt1.0 KB')
+    expect(chips[1]).not.toHaveTextContent('image/')
+    expect(screen.getAllByText('Supported images are sent with the first prompt.')).toHaveLength(1)
     expect(saved).not.toHaveTextContent(/not sent to (?:the )?model/i)
     expect(document.body).not.toHaveTextContent('/private/contracts')
   })
@@ -2780,7 +2784,9 @@ it('hydrates safe durable attachment chips without paths or hashes', async () =>
   })
   render(App)
   const saved = await screen.findByRole('list', { name: 'Saved attachments' })
-  expect(saved).toHaveTextContent('contract.pdf214 KBSaved locally · supported images sent with first prompt')
+  expect(saved).toHaveTextContent('contract.pdf214 KB')
+  expect(within(saved).queryByText(/image\//)).not.toBeInTheDocument()
+  expect(screen.getAllByText('Supported images are sent with the first prompt.')).toHaveLength(1)
   expect(saved).not.toHaveTextContent(/not sent to (?:the )?model/i)
   expect(document.body).not.toHaveTextContent('/private/contract.pdf')
   expect(document.body).not.toHaveTextContent('sha256')
@@ -2801,7 +2807,8 @@ it('hydrates durable attachment chips when the prompt is unavailable', async () 
   render(App)
 
   const saved = await screen.findByRole('list', { name: 'Saved attachments' })
-  expect(saved).toHaveTextContent('evidence.txt1.5 KBSaved locally · supported images sent with first prompt')
+  expect(saved).toHaveTextContent('evidence.txt1.5 KB')
+  expect(within(saved).queryByText(/image\//)).not.toBeInTheDocument()
   expect(saved).not.toHaveTextContent(/not sent to (?:the )?model/i)
   expect(screen.getByText('Prompt unavailable')).toBeInTheDocument()
   expect(saved.closest('.user-message')).not.toBeNull()
