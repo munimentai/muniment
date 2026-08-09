@@ -538,7 +538,7 @@ why this one ticket never dispatches.
 MERGE HAZARD — the open slices edit `src-tauri/src/attach_service.rs`,
 `src-tauri/core/src/attach/handoff_probe.rs`,
 `src-tauri/core/src/memory_runtime.rs`, `src-tauri/src/chat.rs`,
-`src-tauri/core/src/memory_scan.rs`, `src/lib/chat-controller.js`,
+`src/lib/chat-controller.js`,
 `.github/lib/release-promotion.mjs`, and `src/App.svelte`. Two open slices edit
 `src/App.svelte`, and one open slice edits each other file. Each ticket tells the
 implementer to rebase on `main` before it opens the pull request. The 2026-08-04
@@ -766,8 +766,7 @@ filters secrets, and every recall carries a receipt.
 
 DONE 2026-08-07 — phase one is built end to end (MUNIDESK-960, 966, 967).
 `collect_markdown` (`src-tauri/core/src/memory_index.rs:696`) reads the four
-scaffold directories under bounded limits, and the earlier
-`src-tauri/core/src/memory_scan.rs` never gained a caller.
+scaffold directories under bounded limits.
 `src-tauri/core/src/memory_secret.rs` rejects a record that
 carries one of the four `secret.*` rules. `src-tauri/core/src/memory_index.rs`
 holds the rebuildable SQLite FTS5 cache, the `RetrievalLimits` rule that lowers
@@ -865,11 +864,9 @@ SELECTED 2026-08-08 (eighth wave).
 
 MEASURED 2026-08-08 (eighth wave, planner, read both Home walkers) — the tested
 Home scanner is dead and the live one is a second copy.
-`src-tauri/core/src/memory_scan.rs` exports `scan_home_documents`, and
-`src-tauri/core/tests/memory_scan.rs` is its only caller. The index carries its
-own private `collect_markdown` (`src-tauri/core/src/memory_index.rs:696`) with
-its own `MAX_FILES`, `MAX_FILE_BYTES`, and `MAX_DIRECTORY_DEPTH` constants that
-repeat the scanner's three. The live walker is the deadline-aware one, so the
+The index carries its own private `collect_markdown`
+(`src-tauri/core/src/memory_index.rs:696`) with `MAX_FILES`, `MAX_FILE_BYTES`,
+and `MAX_DIRECTORY_DEPTH` constants. The live walker is deadline-aware, so the
 dead module goes. SELECTED 2026-08-08 (eighth wave).
 
 MEASURED 2026-08-07 — nothing renders a recall. The reducer drops
