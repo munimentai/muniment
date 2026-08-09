@@ -467,15 +467,30 @@ sends one `hello`, reads the `welcome`, and closes before the authorization
 step. `src-tauri/core/tests/attach_handoff_probe.rs` drives it against a fake
 listener.
 
-SELECTED 2026-08-08 (seventh wave) — two release-step slices remain, and neither
-depends on the other. The first publishes the transport stop handle to the
-desktop. `start_attach_listener` (`src-tauri/src/attach_service.rs:533`) binds
-inside its own thread and holds the instance lock in a local binding, so no
-other thread can stop the listener or observe the release. The second composes
-the probe client with `confirm_handoff_probe` (`handoff_probe.rs:185`) under one
-bounded readiness deadline. The service binds its endpoint only after it takes
-the lock, so the first probe meets a refused connection and the composition must
-retry. Wiring both into the release step is the slice after them.
+DONE 2026-08-08 — the desktop publishes its listener stop handle
+(MUNIDESK-1010). `AttachCompanionState` (`src-tauri/src/attach_service.rs:169`)
+holds the handle behind a mutex and a condvar. `run_attach_listener` publishes
+the handle before it accepts, and `stop_attach_listener` stops the transport and
+waits for the accept loop to drop the listener and the instance lock.
+
+SELECTED 2026-08-08 (eighth wave) — one release-step slice remains. It composes
+the probe client with `confirm_handoff_probe`
+(`src-tauri/core/src/attach/handoff_probe.rs:180`) under one bounded readiness
+deadline. The runtime service binds its endpoint only after it takes the
+instance lock, so the first probe meets a refused connection and the composition
+must retry until the deadline. Wiring the stop handle, the prepared nonce, and
+that composition into one release step is the slice after it.
+
+MEASURED 2026-08-08 (eighth wave, planner, read the listener status and stop
+paths after MUNIDESK-1010) — the stop path leaves the reported status wrong, and
+a stop that arrives early is dropped. `record_listener_stopped`
+(`src-tauri/src/attach_service.rs:237`) clears the handle and never touches
+`listener_start`, so `listener_status` (`:262`) still answers `started: true`
+after the accept loop ends. `stop_listener` (`:245`) returns at once when no
+handle is published yet, so a stop requested during the bind window neither
+persists nor blocks, and the listener then accepts connections anyway. ADR 0012
+forbids an interval with two owners, so the release step needs both repairs.
+SELECTED 2026-08-08 (eighth wave).
 
 DONE 2026-08-08 — a failed attach listener start now says why (MUNIDESK-1001).
 `attach_listener_start_diagnostic` (`src-tauri/core/src/attach/linux.rs:58`)
@@ -512,9 +527,9 @@ segment and `open_selected_files` does not. The lane waits for an owner look at
 why this one ticket never dispatches.
 
 MERGE HAZARD — the open slices edit `src-tauri/src/attach_service.rs`,
-`src-tauri/core/src/attach/handoff_probe.rs`, `src-tauri/src/chat_threads.rs`,
-`src-tauri/core/src/home.rs`, `src-tauri/src/home.rs`,
-`src/lib/onboarding-state.js`, and `test/probe/stub.js`. One open slice edits
+`src-tauri/core/src/attach/handoff_probe.rs`,
+`src-tauri/core/src/memory_runtime.rs`, `src-tauri/src/chat.rs`,
+`src-tauri/core/src/memory_scan.rs`, and `src/App.svelte`. One open slice edits
 each of those files this wave. Each ticket tells the implementer to rebase on
 `main` before it opens the pull request. The 2026-08-04 silent revert came from a
 stale base.
@@ -535,14 +550,21 @@ DONE 2026-08-08 — the run-start coordinator is the twenty-second move
 `start_desktop_run`, and `prepare_desktop_run`. `TauriRunStartBoundaries` and
 `FakeRunStartBoundaries` stayed in the desktop as the two implementations.
 
-SELECTED 2026-08-08 (seventh wave) — the thread history projection is the
-twenty-third move. `HistoryEntry` (`src-tauri/src/chat_threads.rs:28`),
-`ChatThreadOpenPage` (`:57`), `load_prompt` (`:64`), `project_history_entry`
-(`:115`), `history_resumable` (`:140`), and `chat_thread_open_page` (`:150`)
-name core types alone. `chat_view`, `chat_prompt`, `chat_resume`, the journal
-reducer, and `thread_ownership` all live in the core crate already. The core
-half returns a typed error, and the desktop wrapper keeps the sentence
-`Conversation history is unavailable.`, which is the `owned_threads` shape.
+DONE 2026-08-08 — the thread history projection is the twenty-third move
+(MUNIDESK-1011). `src-tauri/core/src/thread_history.rs` holds `HistoryEntry`,
+`ChatThreadOpenPage`, `load_prompt`, `project_history_entry`,
+`history_resumable`, and `chat_thread_open_page`. `src-tauri/src/chat_threads.rs`
+is now the command layer and its error sentences.
+
+SELECTED 2026-08-08 (eighth wave) — the active-run message queue is the
+twenty-fourth move. `queue_message` (`src-tauri/src/chat.rs:1095`),
+`cancel_active_run` (`:1181`), and `queue_permission_answer` (`:1219`) all take
+`&Mutex<Option<ActiveRun>>` and touch no Tauri type. `ActiveRun`
+(`src-tauri/core/src/run_start.rs:34`), `PiRunAdapter`, `PiRpcTransport`,
+`cancel_command`, and `ChatPermissionAnswer` already live in the core crate, so
+the move needs no new dependency. `ChatDelivery`, `ChatQueueRequest`, and the
+`QUEUE_TIMEOUT` constant travel with them, and each command keeps a thin
+wrapper.
 
 SEQUENCED — the later extraction slices are the remaining Pi execution move, the
 desktop client conversion, and Linux user-unit registration, each behind a
@@ -716,8 +738,10 @@ character budget comes from the selected model capability record. Every write
 filters secrets, and every recall carries a receipt.
 
 DONE 2026-08-07 — phase one is built end to end (MUNIDESK-960, 966, 967).
-`src-tauri/core/src/memory_scan.rs` reads the four scaffold directories under
-bounded limits. `src-tauri/core/src/memory_secret.rs` rejects a record that
+`collect_markdown` (`src-tauri/core/src/memory_index.rs:696`) reads the four
+scaffold directories under bounded limits, and the earlier
+`src-tauri/core/src/memory_scan.rs` never gained a caller.
+`src-tauri/core/src/memory_secret.rs` rejects a record that
 carries one of the four `secret.*` rules. `src-tauri/core/src/memory_index.rs`
 holds the rebuildable SQLite FTS5 cache, the `RetrievalLimits` rule that lowers
 but never raises a cap, the static `memory-search` tool declaration, and the
@@ -739,17 +763,12 @@ DONE 2026-08-07 — §17 rule 7 reaches production (MUNIDESK-980). The onboardin
 import is the product's only memory write path, and
 `compile_onboarding_home_write_plan` now rejects an approved file that carries a
 secret.
-MEASURED 2026-08-08 (seventh wave, planner, read the three layers of the import
-failure path) — the secret rejection names no file.
-`OnboardingHomeWritePlanError::SecretRejected` (`src-tauri/core/src/home.rs:119`)
-carries no entry, the command error carries none (`src-tauri/src/home.rs:58`),
-and the screen asks the user to leave out the file that holds the credential
-without naming it (`src/lib/onboarding-state.js:94`). The approved-review screen
-lists many files, so the user removes files by trial.
-`DestinationConflict { relative_path }` is the precedent for a typed error that
-names its item, and the source name is already bounded by
-`reject_unsafe_metadata`. DESIGN.md takes the rule. SELECTED 2026-08-08 (seventh
-wave).
+DONE 2026-08-08 — the secret rejection names the approved file that carries the
+credential (MUNIDESK-1012). `OnboardingHomeWritePlanError::SecretRejected` now
+carries the offending entry's `source_name`, the command error carries it, and
+the screen names the file. The loop returns the first offending entry, and
+`reject_unsafe_metadata` already bounds the name. DESIGN.md carries the rule
+that an error rejecting one item from a set names that item.
 
 DONE 2026-08-07 — a resumed run opens its memory session (MUNIDESK-981).
 `install_resume_run` (`src-tauri/src/chat.rs:885`) opens the session and clears
@@ -803,6 +822,28 @@ DO NOT RE-FILE — the per-run index build is not a defect. On the same 2,000-fi
 Home a release-build reindex costs 30ms once the cache holds the current hashes,
 and the first build costs about 600ms. `ApplicationMemoryRuntime::open_session`
 runs one build per run start, so a warm run start pays 30ms.
+
+MEASURED 2026-08-08 (eighth wave, planner, read every lock site in
+`memory_runtime.rs`) — one mutex serializes every session in the process.
+`ApplicationMemoryRuntime` (`src-tauri/core/src/memory_runtime.rs:10`) holds one
+`Mutex<BTreeMap<String, MemoryRuntimeSession>>`. `build_session_with_timeout`
+(`:50`) holds that mutex for the whole index build, which runs up to the
+5-second `DEFAULT_BUILD_TIMEOUT`. `dispatch_tool_call` (`:127`) holds the same
+mutex for the whole search, because `MemoryRuntimeSession::call` takes `&mut
+self`. A search is budgeted at 250ms, and the wait for the mutex sits outside
+that budget. `prepare_desktop_run` opens the session on the `chat_submit` path,
+so a second run start can also block a message submit. Give each session its own
+`Arc<Mutex<MemoryRuntimeSession>>` and hold the map lock for the lookup alone.
+SELECTED 2026-08-08 (eighth wave).
+
+MEASURED 2026-08-08 (eighth wave, planner, read both Home walkers) — the tested
+Home scanner is dead and the live one is a second copy.
+`src-tauri/core/src/memory_scan.rs` exports `scan_home_documents`, and
+`src-tauri/core/tests/memory_scan.rs` is its only caller. The index carries its
+own private `collect_markdown` (`src-tauri/core/src/memory_index.rs:696`) with
+its own `MAX_FILES`, `MAX_FILE_BYTES`, and `MAX_DIRECTORY_DEPTH` constants that
+repeat the scanner's three. The live walker is the deadline-aware one, so the
+dead module goes. SELECTED 2026-08-08 (eighth wave).
 
 MEASURED 2026-08-07 — nothing renders a recall. The reducer drops
 `memory.recalled`, so `ChatProjection`
@@ -913,6 +954,18 @@ DONE 2026-08-04 — the multi-line permission gate names its commit chord
 macOS and `Ctrl ⏎` elsewhere. The single-line kind commits on a plain Enter and
 needs no hint.
 
+MEASURED 2026-08-08 (eighth wave, planner, built the bundle and read every
+button rect on `test/probe/history.html` at 1100x760) — three shell controls
+render under the WCAG 2.2 target-size floor. The sidebar `Delete` control
+(`.thread-delete`, `src/App.svelte:1278`) measures 56x21 CSS pixels, and it sits
+absolutely positioned inside the 239x36 thread row, which is itself a control.
+The two controls overlap, so the SC 2.5.8 spacing exception cannot rescue
+either. The `.thread-delete-confirm` buttons take the same `padding: 3px 6px`.
+The run-record `Resume` and `Try again` controls (`src/App.svelte:917`) measure
+62x21. WCAG 2.2 SC 2.5.8 sets the floor at 24 by 24 CSS pixels, and the 36-pixel
+row leaves room for it. DESIGN.md takes the law and a test guards it. SELECTED
+2026-08-08 (eighth wave).
+
 DONE 2026-08-08 — the receipt summary shows that it expands (MUNIDESK-996). The
 expandable line carries a rotating marker (`src/App.svelte:990`, `.receipt-marker`
 at `:1357`), and the static `Receipt unavailable` caption carries none. A
@@ -1006,14 +1059,10 @@ rendered text with whitespace removed, and `markProbeReady` awaits
 `document.fonts.ready` before it sets `data-probe-ready`, so a capture never shoots
 the fallback type. `test/probe-harness.test.js` guards the single ready-marker
 write.
-MEASURED 2026-08-08 (seventh wave, planner, opened the profile popover on the
-built bundle) — the probe stub hides the `Connected programs` section.
-`AccessPanel.svelte:88` waits on `attach_listener_status`, and
-`test/probe/stub.js` answers an unknown command with `null` (`:329`). The panel
-then takes its error branch and renders `Connected programs could not be
-loaded.` MUNIDESK-1007 added the command, and the stub never learned it. An
-unknown command must fail loudly, because the silent answer is what let the gap
-through. SELECTED 2026-08-08 (seventh wave).
+DONE 2026-08-08 — the probe stub answers the listener-status command, and an
+unknown command fails loudly (MUNIDESK-1013). `test/probe/stub.js` no longer
+answers `null` to a command it does not know, so the next missing command breaks
+a fixture instead of hiding a panel.
 
 DONE — the suite runs on Windows. Three slices gated every block that spawns a
 POSIX shell, and `test/posix-shell-gate.test.js` fails when a new `bash` call site
@@ -1064,16 +1113,16 @@ earlier one. Requiring an up-to-date branch before merge, or a merge queue, is a
 repository-settings change that sits with the owner. The planner files no ticket
 for it.
 
-VERIFIED 2026-08-08 (seventh wave, from a clean clone) — `npm ci` then
-`npm test` passed 884 frontend tests across 59 files, and the browser suite
-passed 3. `cargo test -p muniment-core -p muniment-attach` passed with no
-failure. The planner then read the handoff, probe, and quiesce modules, the
-desktop attach service with its listener start path and its migration-control
-answer, the thread history projection, the onboarding import write plan, and the
-memory index cache state. It rebuilt the bundle, captured six probe fixtures in
-headless Chromium at 1100x760, and drove the profile popover open on
-`test/probe/index.html`. Earlier waves recorded the same shape of verification,
-and this entry replaces that ledger.
+VERIFIED 2026-08-08 (eighth wave, from a clean clone) — `npm ci` then `npm test`
+passed 886 frontend tests across 59 files, and the browser suite passed 3.
+`cargo test -p muniment-core -p muniment-attach` passed with no failure. The
+planner then read the handoff, probe, quiesce, and runtime-activity modules, the
+desktop attach service with its listener status, stop, and migration-control
+paths, the memory runtime and index, both Home walkers, and the active-run queue
+and cancel functions. It rebuilt the bundle, captured six probe fixtures in
+headless Chromium at 1100x760, and measured every button rect on the restored
+history fixture. Earlier waves recorded the same shape of verification, and this
+entry replaces that ledger.
 
 NOTE 2026-08-06 — the planning clone ships no `node_modules`. Run `npm ci`
 before `npm test`. Without it the run dies with `vitest: not found`, which reads
