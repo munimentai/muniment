@@ -303,6 +303,154 @@ mod tests {
     }
 
     #[test]
+    fn fail_appends_and_delivers_the_failed_event() {
+        let sink = RecordingSink::default();
+        let storage = storage();
+        let mut projector = ChatProjector::new();
+        let mut seq = 0;
+        let run_id = Uuid::now_v7().to_string();
+
+        append_emit(
+            &sink,
+            &storage,
+            &mut projector,
+            &run_id,
+            &mut seq,
+            "run.started",
+            json!({}),
+            None,
+        )
+        .unwrap();
+        fail(
+            &sink,
+            &storage,
+            &mut projector,
+            &run_id,
+            &mut seq,
+            "failed",
+            None,
+        );
+
+        assert_eq!(seq, 2);
+        let stored = storage.lock().unwrap().journal.events(&run_id).unwrap();
+        let kinds: Vec<_> = stored
+            .iter()
+            .map(|event| event.event_type.as_str())
+            .collect();
+        assert_eq!(kinds, ["run.started", "run.failed"]);
+        let events = sink.events.lock().unwrap();
+        let phases: Vec<_> = events.iter().map(|event| event.phase.as_str()).collect();
+        assert_eq!(phases, ["thinking", "failed"]);
+    }
+
+    #[test]
+    fn fail_with_open_effects_closes_effects_before_failure() {
+        let sink = RecordingSink::default();
+        let storage = storage();
+        let mut projector = ChatProjector::new();
+        let mut seq = 0;
+        let run_id = Uuid::now_v7().to_string();
+        let mut open_effects = BTreeSet::from(["tool-1".to_owned()]);
+
+        append_emit(
+            &sink,
+            &storage,
+            &mut projector,
+            &run_id,
+            &mut seq,
+            "run.started",
+            json!({}),
+            None,
+        )
+        .unwrap();
+        append_emit(
+            &sink,
+            &storage,
+            &mut projector,
+            &run_id,
+            &mut seq,
+            "tool.effect.started",
+            json!({"effect_id": "tool-1", "display_name": "Read file"}),
+            None,
+        )
+        .unwrap();
+
+        fail_with_open_effects(
+            &sink,
+            &storage,
+            &mut projector,
+            &run_id,
+            &mut seq,
+            &mut open_effects,
+            "failed",
+            None,
+        );
+
+        assert_eq!(seq, 4);
+        assert!(open_effects.is_empty());
+        let stored = storage.lock().unwrap().journal.events(&run_id).unwrap();
+        let kinds: Vec<_> = stored
+            .iter()
+            .map(|event| event.event_type.as_str())
+            .collect();
+        assert_eq!(
+            kinds,
+            [
+                "run.started",
+                "tool.effect.started",
+                "tool.effect.failed",
+                "run.failed"
+            ]
+        );
+        let events = sink.events.lock().unwrap();
+        let phases: Vec<_> = events.iter().map(|event| event.phase.as_str()).collect();
+        assert_eq!(phases, ["thinking", "interrupted", "thinking", "failed"]);
+        assert_eq!(events[2].tool_activity[0].status, "failed");
+    }
+
+    #[test]
+    fn fail_start_fails_new_runs() {
+        let sink = RecordingSink::default();
+        let storage = storage();
+        let mut projector = ChatProjector::new();
+        let mut seq = 0;
+        let run_id = Uuid::now_v7().to_string();
+
+        append_emit(
+            &sink,
+            &storage,
+            &mut projector,
+            &run_id,
+            &mut seq,
+            "run.started",
+            json!({}),
+            None,
+        )
+        .unwrap();
+        fail_start(
+            &sink,
+            &storage,
+            &mut projector,
+            &run_id,
+            &mut seq,
+            "failed",
+            None,
+            false,
+        );
+
+        assert_eq!(seq, 2);
+        let stored = storage.lock().unwrap().journal.events(&run_id).unwrap();
+        let kinds: Vec<_> = stored
+            .iter()
+            .map(|event| event.event_type.as_str())
+            .collect();
+        assert_eq!(kinds, ["run.started", "run.failed"]);
+        let events = sink.events.lock().unwrap();
+        let phases: Vec<_> = events.iter().map(|event| event.phase.as_str()).collect();
+        assert_eq!(phases, ["thinking", "failed"]);
+    }
+
+    #[test]
     fn fail_start_skips_resumed_runs() {
         let sink = RecordingSink::default();
         let storage = storage();
