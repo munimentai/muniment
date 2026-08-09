@@ -4,6 +4,7 @@
 //! here run on the shared CI runner, which has no display stack. The Pi
 //! sidecar process manager and its RPC transport build on these pieces.
 
+pub mod active_run;
 pub mod asr;
 pub mod assistant_text;
 pub mod attach;
@@ -22,9 +23,9 @@ pub mod home;
 pub mod import_preview;
 pub mod journal;
 pub mod kokoro;
+pub mod memory_failure;
 pub mod memory_index;
 pub mod memory_runtime;
-pub mod memory_scan;
 pub mod memory_secret;
 pub mod model_acquisition_transport;
 pub mod model_install;

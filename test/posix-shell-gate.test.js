@@ -6,12 +6,13 @@ const ALLOWED = {
   'test/desktop-e2e-harness.test.js:278:28': "describe.skipIf(process.platform === 'win32')('macOS installed launch harness')",
   'test/desktop-e2e-harness.test.js:283:19': "describe.skipIf(process.platform === 'win32')('macOS installed launch harness')",
   'test/desktop-e2e-harness.test.js:588:20': "it.skipIf(process.platform === 'win32')('includes and escapes the captured runner reason')",
-  'test/desktop-e2e-harness.test.js:674:20': "describe.skipIf(process.platform === 'win32')('desktop-ci payload extraction')",
-  'test/desktop-e2e-harness.test.js:840:20': "describe.skipIf(process.platform === 'win32')('cleanup failure accounting')",
-  'test/desktop-e2e-harness.test.js:856:20': "describe.skipIf(process.platform === 'win32')('cleanup failure accounting')",
-  'test/desktop-e2e-harness.test.js:882:19': "describe.skipIf(process.platform === 'win32')('cleanup failure accounting')",
-  'test/desktop-e2e-harness.test.js:909:24': "describe.skipIf(process.platform === 'win32')('cleanup failure accounting')",
-  'test/nightly-workflow.test.js:12:18': "it.skipIf(process.platform === 'win32') on every runReportFallback caller",
+  'test/desktop-e2e-harness.test.js:598:20': "it.skipIf(process.platform === 'win32')('does not copy the desktop-ci transcript into JUnit')",
+  'test/desktop-e2e-harness.test.js:685:20': "describe.skipIf(process.platform === 'win32')('desktop-ci payload extraction')",
+  'test/desktop-e2e-harness.test.js:851:20': "describe.skipIf(process.platform === 'win32')('cleanup failure accounting')",
+  'test/desktop-e2e-harness.test.js:867:20': "describe.skipIf(process.platform === 'win32')('cleanup failure accounting')",
+  'test/desktop-e2e-harness.test.js:893:19': "describe.skipIf(process.platform === 'win32')('cleanup failure accounting')",
+  'test/desktop-e2e-harness.test.js:920:24': "describe.skipIf(process.platform === 'win32')('cleanup failure accounting')",
+  'test/nightly-workflow.test.js:13:18': "it.skipIf(process.platform === 'win32') on every runReportFallback caller",
 }
 
 const root = process.cwd()

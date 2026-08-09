@@ -4,6 +4,9 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use chrono::{SecondsFormat, Utc};
+use muniment_core::active_run::{
+    cancel_active_run, queue_message, queue_permission_answer, ChatDelivery, ChatQueueRequest,
+};
 #[cfg(target_os = "linux")]
 use muniment_core::attach::linux::{
     ThreadListPage, ThreadListRequest, ThreadListService, ThreadOpenPage, ThreadOpenRequest,
@@ -11,7 +14,9 @@ use muniment_core::attach::linux::{
 #[cfg(target_os = "linux")]
 use muniment_core::attach::ProtocolError;
 use muniment_core::attach::{RuntimeActivityGuard, RuntimeActivityRegistry};
-use muniment_core::attachment::{ingest_attachment, prepare_pi_images, AttachmentMetadata};
+use muniment_core::attachment::{
+    ingest_attachment, prepare_pi_images, AttachmentDeliveryError, AttachmentMetadata,
+};
 use muniment_core::auth::TokenSet;
 use muniment_core::cas::LocalCas;
 use muniment_core::chat_grant::{
@@ -35,11 +40,9 @@ use muniment_core::run_start::{
     start_desktop_run, ActiveRun, RunStartBoundaries, RunStartError, RunStartLaunch,
     RunStartRequest, SubmitResult,
 };
-use muniment_core::sidecar::pi_chat::{
-    cancel_command, PiChatEvent, PiImageContent, PiRunAdapter, PromptCommand,
-};
+use muniment_core::sidecar::pi_chat::{PiChatEvent, PiImageContent, PiRunAdapter, PromptCommand};
 use muniment_core::sidecar::{PiRpcTransport, PiRpcWiring, PiSessionLocator, SidecarSupervisor};
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use serde_json::{json, Value};
 use std::path::PathBuf;
 use tauri::Manager;
@@ -51,22 +54,6 @@ use crate::chat_threads::newest_owned_workspace_thread;
 use muniment_core::session_thread::{OfferedThread, SessionThread};
 
 pub(super) const RPC_TIMEOUT: Duration = Duration::from_secs(30);
-const QUEUE_TIMEOUT: Duration = Duration::from_secs(2);
-
-#[derive(Clone, Copy, Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub enum ChatDelivery {
-    Steer,
-    FollowUp,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct ChatQueueRequest {
-    run_id: String,
-    delivery: ChatDelivery,
-    message: String,
-}
 
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -758,6 +745,26 @@ pub(crate) fn attachment_error() -> String {
     "One or more selected files could not be added. Check the files and try again.".into()
 }
 
+fn attachment_delivery_error(error: AttachmentDeliveryError) -> String {
+    match error {
+        AttachmentDeliveryError::ImageSizeLimit { display_name } => format!(
+            "{display_name} exceeds the 10 MB image limit. Choose a smaller image before sending again."
+        ),
+        AttachmentDeliveryError::ImageCountLimit { display_name } => format!(
+            "{display_name} crosses the 10-image limit. Remove an image before sending again."
+        ),
+        AttachmentDeliveryError::ImageTotalSizeLimit { display_name } => format!(
+            "{display_name} crosses the 20 MB total image limit. Remove images or choose smaller images before sending again."
+        ),
+        AttachmentDeliveryError::AmbiguousFormat { display_name } => format!(
+            "{display_name} has an image format Muniment cannot verify. Choose a PNG, JPEG, GIF, or WebP image before sending again."
+        ),
+        AttachmentDeliveryError::Storage(_) | AttachmentDeliveryError::InvalidStoredLength => {
+            attachment_error()
+        }
+    }
+}
+
 fn prepared_pi_images(
     storage: &SharedStorage,
     run_id: &str,
@@ -768,7 +775,7 @@ fn prepared_pi_images(
         .events(run_id)
         .map_err(|_| attachment_error())?;
     prepare_pi_images(&storage.cas, &events)
-        .map_err(|_| attachment_error())
+        .map_err(attachment_delivery_error)
         .map(|images| {
             images
                 .into_iter()
@@ -1092,44 +1099,6 @@ pub async fn chat_queue(
     )
 }
 
-fn queue_message(
-    active: &Mutex<Option<ActiveRun>>,
-    request: ChatQueueRequest,
-) -> Result<(), String> {
-    let active = active
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    let run = active
-        .as_ref()
-        .filter(|run| run.id == request.run_id)
-        .ok_or_else(|| "That reply is no longer active.".to_string())?;
-    let transport = run
-        .transport
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .clone();
-    let adapter = run
-        .adapter
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .clone();
-    drop(active);
-    let (transport, adapter) = transport
-        .zip(adapter)
-        .ok_or_else(|| "The reply is not ready for messages yet.".to_string())?;
-    let result = match request.delivery {
-        ChatDelivery::Steer => adapter.steer(&transport, &request.message, QUEUE_TIMEOUT),
-        ChatDelivery::FollowUp => adapter.follow_up(&transport, &request.message, QUEUE_TIMEOUT),
-    };
-    result.map_err(|error| {
-        if error == "Pi queued message must not be empty" {
-            "Enter a message before sending.".to_string()
-        } else {
-            "The message could not be queued. Try again.".to_string()
-        }
-    })
-}
-
 #[derive(Debug)]
 pub(super) enum PreparedPromptError {
     Start,
@@ -1178,34 +1147,6 @@ pub async fn chat_cancel(state: tauri::State<'_, ChatState>, run_id: String) -> 
     cancel_active_run(&state.active, &run_id, None)
 }
 
-fn cancel_active_run(
-    active_runs: &Mutex<Option<ActiveRun>>,
-    run_id: &str,
-    workspace: Option<&str>,
-) -> Result<(), String> {
-    let active = active_runs
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    let run = active
-        .as_ref()
-        .filter(|run| run.id == run_id && workspace.is_none_or(|value| value == run.workspace))
-        .ok_or_else(|| "That reply is no longer active.".to_string())?;
-    let cancelled = Arc::clone(&run.cancelled);
-    let transport = run
-        .transport
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .clone();
-    drop(active);
-    cancelled.store(true, Ordering::SeqCst);
-    if let Some(transport) = transport {
-        transport
-            .call(cancel_command(), Duration::from_secs(2))
-            .map_err(|_| "The reply could not be stopped yet. Try again.".to_string())?;
-    }
-    Ok(())
-}
-
 #[tauri::command]
 pub async fn chat_answer_permission(
     state: tauri::State<'_, ChatState>,
@@ -1214,30 +1155,6 @@ pub async fn chat_answer_permission(
     answer: ChatPermissionAnswer,
 ) -> Result<(), String> {
     queue_permission_answer(&state.active, run_id, gate_id, answer)
-}
-
-fn queue_permission_answer(
-    active: &Mutex<Option<ActiveRun>>,
-    run_id: String,
-    gate_id: String,
-    answer: ChatPermissionAnswer,
-) -> Result<(), String> {
-    let active = active
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    let run = active
-        .as_ref()
-        .filter(|run| run.id == run_id)
-        .ok_or_else(|| "That reply is no longer active.".to_string())?;
-    run.permission_answers
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .push_back(PendingPermissionAnswer {
-            gate_id,
-            answer,
-            resolved: None,
-        });
-    Ok(())
 }
 
 pub(crate) fn event_envelope(
@@ -1313,7 +1230,7 @@ fn validate_grant(grant: &ChatGrant) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::{append_test_event, FakeRunStartBoundaries};
+    use crate::test_support::append_test_event;
     use base64::{engine::general_purpose::STANDARD, Engine};
     use muniment_core::journal::reducer::reduce;
     use muniment_core::sidecar::validate_pi_session;
@@ -2392,7 +2309,20 @@ mod tests {
             let events = storage.lock().unwrap().journal.events(&run_id).unwrap();
             assert_eq!(events.last().unwrap().event_type, "run.failed");
             let public_error = serde_json::to_string(events.last().unwrap()).unwrap();
-            assert!(public_error.contains(&attachment_error()));
+            let expected_error = match name {
+                "private-large.jpg" => {
+                    attachment_delivery_error(AttachmentDeliveryError::ImageSizeLimit {
+                        display_name: name.into(),
+                    })
+                }
+                "private-malformed.jpg" => {
+                    attachment_delivery_error(AttachmentDeliveryError::AmbiguousFormat {
+                        display_name: name.into(),
+                    })
+                }
+                _ => attachment_error(),
+            };
+            assert!(public_error.contains(&expected_error));
             for secret in [
                 path.to_string_lossy().as_ref(),
                 attachment_hash.as_str(),
@@ -2414,17 +2344,45 @@ mod tests {
     }
 
     #[test]
-    fn queue_request_is_closed_and_typed() {
-        for value in [
-            json!({"runId":"run-1", "delivery":"later", "message":"hello"}),
-            json!({"runId":"run-1", "delivery":"steer", "message":"hello", "extra":true}),
-        ] {
-            assert!(serde_json::from_value::<ChatQueueRequest>(value).is_err());
-        }
-        assert!(serde_json::from_value::<ChatQueueRequest>(json!({
-            "runId":"run-1", "delivery":"followUp", "message":"hello"
-        }))
-        .is_ok());
+    fn delivery_errors_name_the_limit_and_recovery() {
+        assert_eq!(
+            attachment_delivery_error(AttachmentDeliveryError::ImageSizeLimit {
+                display_name: "photo.jpg".into(),
+            }),
+            "photo.jpg exceeds the 10 MB image limit. Choose a smaller image before sending again."
+        );
+        assert_eq!(
+            attachment_delivery_error(AttachmentDeliveryError::ImageCountLimit {
+                display_name: "eleventh.png".into(),
+            }),
+            "eleventh.png crosses the 10-image limit. Remove an image before sending again."
+        );
+        assert_eq!(
+            attachment_delivery_error(AttachmentDeliveryError::ImageTotalSizeLimit {
+                display_name: "last.gif".into(),
+            }),
+            "last.gif crosses the 20 MB total image limit. Remove images or choose smaller images before sending again."
+        );
+        assert_eq!(
+            attachment_delivery_error(AttachmentDeliveryError::AmbiguousFormat {
+                display_name: "unclear.webp".into(),
+            }),
+            "unclear.webp has an image format Muniment cannot verify. Choose a PNG, JPEG, GIF, or WebP image before sending again."
+        );
+    }
+
+    #[test]
+    fn storage_and_stored_length_errors_keep_the_generic_message() {
+        assert_eq!(
+            attachment_delivery_error(AttachmentDeliveryError::Storage(
+                muniment_core::cas::CasError::InvalidHash("invalid".into()),
+            )),
+            attachment_error()
+        );
+        assert_eq!(
+            attachment_delivery_error(AttachmentDeliveryError::InvalidStoredLength),
+            attachment_error()
+        );
     }
 
     #[test]
@@ -2434,59 +2392,6 @@ mod tests {
 
         let unowned = event_envelope("run-2", 1, "run.started", json!({}), None);
         assert_eq!(unowned.provenance.actor_id, None);
-    }
-
-    #[test]
-    fn queue_rejects_mismatched_and_not_ready_runs_safely() {
-        let runtime_activity = RuntimeActivityRegistry::new();
-        let active = Mutex::new(Some(inactive_transport_run("run-1", &runtime_activity)));
-        let request = |run_id: &str| ChatQueueRequest {
-            run_id: run_id.into(),
-            delivery: ChatDelivery::Steer,
-            message: "hello".into(),
-        };
-        assert_eq!(
-            queue_message(&active, request("stale-run")).unwrap_err(),
-            "That reply is no longer active."
-        );
-        assert_eq!(
-            queue_message(&active, request("run-1")).unwrap_err(),
-            "The reply is not ready for messages yet."
-        );
-    }
-
-    #[test]
-    fn permission_answer_handoff_rejects_stale_runs_and_queues_typed_answers() {
-        let runtime_activity = RuntimeActivityRegistry::new();
-        let active = Mutex::new(Some(inactive_transport_run("run-1", &runtime_activity)));
-        assert_eq!(
-            queue_permission_answer(
-                &active,
-                "stale-run".into(),
-                "gate-1".into(),
-                ChatPermissionAnswer::Confirm(true),
-            )
-            .unwrap_err(),
-            "That reply is no longer active."
-        );
-        queue_permission_answer(
-            &active,
-            "run-1".into(),
-            "gate-1".into(),
-            ChatPermissionAnswer::Select("A".into()),
-        )
-        .unwrap();
-        let active = active.lock().unwrap();
-        let queued = active
-            .as_ref()
-            .unwrap()
-            .permission_answers
-            .lock()
-            .unwrap()
-            .pop_front()
-            .unwrap();
-        assert_eq!(queued.gate_id, "gate-1");
-        assert!(matches!(queued.answer, ChatPermissionAnswer::Select(value) if value == "A"));
     }
 
     #[test]

@@ -13,6 +13,8 @@ pub const ATTACHMENT_EVENT_VERSION: u32 = 1;
 pub const MAX_PI_IMAGE_BYTES: u64 = 10 * 1024 * 1024;
 pub const MAX_PI_IMAGE_COUNT: usize = 10;
 pub const MAX_PI_IMAGE_TOTAL_BYTES: u64 = 20 * 1024 * 1024;
+pub const MAX_DELIVERY_DISPLAY_NAME_CHARS: usize = 80;
+const ATTACHMENT_SNIFF_BYTES: usize = 16;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PiAttachmentImage {
@@ -24,8 +26,10 @@ pub struct PiAttachmentImage {
 pub enum AttachmentDeliveryError {
     Storage(CasError),
     InvalidStoredLength,
-    ImageLimit,
-    AmbiguousFormat,
+    ImageSizeLimit { display_name: String },
+    ImageCountLimit { display_name: String },
+    ImageTotalSizeLimit { display_name: String },
+    AmbiguousFormat { display_name: String },
 }
 
 /// Resolves durable attachment events in journal order without exposing their
@@ -43,24 +47,41 @@ pub fn prepare_pi_images(
         let bytes = cas
             .get_verified(attachment.sha256())
             .map_err(AttachmentDeliveryError::Storage)?;
+        let display_name = || bounded_delivery_display_name(attachment.display_name());
         let byte_length =
-            u64::try_from(bytes.len()).map_err(|_| AttachmentDeliveryError::ImageLimit)?;
+            u64::try_from(bytes.len()).map_err(|_| AttachmentDeliveryError::ImageSizeLimit {
+                display_name: display_name(),
+            })?;
         if byte_length != attachment.byte_length() {
             return Err(AttachmentDeliveryError::InvalidStoredLength);
         }
         let Some(format) = supported_image_format(&bytes) else {
             continue;
         };
-        if byte_length > MAX_PI_IMAGE_BYTES || decoded.len() == MAX_PI_IMAGE_COUNT {
-            return Err(AttachmentDeliveryError::ImageLimit);
+        if byte_length > MAX_PI_IMAGE_BYTES {
+            return Err(AttachmentDeliveryError::ImageSizeLimit {
+                display_name: display_name(),
+            });
         }
-        let mime_type =
-            validated_image_type(&bytes, format).ok_or(AttachmentDeliveryError::AmbiguousFormat)?;
-        total = total
-            .checked_add(byte_length)
-            .ok_or(AttachmentDeliveryError::ImageLimit)?;
+        if decoded.len() == MAX_PI_IMAGE_COUNT {
+            return Err(AttachmentDeliveryError::ImageCountLimit {
+                display_name: display_name(),
+            });
+        }
+        let mime_type = validated_image_type(&bytes, format).ok_or_else(|| {
+            AttachmentDeliveryError::AmbiguousFormat {
+                display_name: display_name(),
+            }
+        })?;
+        total = total.checked_add(byte_length).ok_or_else(|| {
+            AttachmentDeliveryError::ImageTotalSizeLimit {
+                display_name: display_name(),
+            }
+        })?;
         if total > MAX_PI_IMAGE_TOTAL_BYTES {
-            return Err(AttachmentDeliveryError::ImageLimit);
+            return Err(AttachmentDeliveryError::ImageTotalSizeLimit {
+                display_name: display_name(),
+            });
         }
         decoded.push((bytes, mime_type));
     }
@@ -74,6 +95,19 @@ pub fn prepare_pi_images(
         .collect())
 }
 
+fn bounded_delivery_display_name(display_name: &str) -> String {
+    let mut characters = display_name.chars();
+    let mut bounded: String = characters
+        .by_ref()
+        .take(MAX_DELIVERY_DISPLAY_NAME_CHARS)
+        .collect();
+    if characters.next().is_some() {
+        bounded.pop();
+        bounded.push('…');
+    }
+    bounded
+}
+
 fn supported_image_format(bytes: &[u8]) -> Option<ImageFormat> {
     match image::guess_format(bytes).ok()? {
         format @ (ImageFormat::Png | ImageFormat::Jpeg | ImageFormat::Gif | ImageFormat::WebP) => {
@@ -81,6 +115,19 @@ fn supported_image_format(bytes: &[u8]) -> Option<ImageFormat> {
         }
         _ => None,
     }
+}
+
+fn supported_image_media_type(bytes: &[u8]) -> Option<String> {
+    Some(
+        match supported_image_format(bytes)? {
+            ImageFormat::Png => "image/png",
+            ImageFormat::Jpeg => "image/jpeg",
+            ImageFormat::Gif => "image/gif",
+            ImageFormat::WebP => "image/webp",
+            _ => return None,
+        }
+        .into(),
+    )
 }
 
 fn validated_image_type(bytes: &[u8], format: ImageFormat) -> Option<&'static str> {
@@ -267,6 +314,7 @@ where
     let mut counted = CountingReader {
         inner: reader,
         count: 0,
+        leading_bytes: Vec::with_capacity(ATTACHMENT_SNIFF_BYTES),
     };
     let hash = cas
         .put_reader(&mut counted)
@@ -282,7 +330,7 @@ where
         sha256: hash,
         display_name,
         byte_length: counted.count,
-        media_type,
+        media_type: media_type.or_else(|| supported_image_media_type(&counted.leading_bytes)),
     };
     let mut event = event_with_attachment(attachment.clone());
     event.event_type = ATTACHMENT_EVENT_TYPE.into();
@@ -335,11 +383,15 @@ fn validate_media_type(value: &str) -> Result<String, AttachmentValidationError>
 struct CountingReader<'a, R> {
     inner: &'a mut R,
     count: u64,
+    leading_bytes: Vec<u8>,
 }
 
 impl<R: Read> Read for CountingReader<'_, R> {
     fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
         let count = self.inner.read(buffer)?;
+        let remaining = ATTACHMENT_SNIFF_BYTES.saturating_sub(self.leading_bytes.len());
+        self.leading_bytes
+            .extend_from_slice(&buffer[..count.min(remaining)]);
         self.count = self.count.checked_add(count as u64).ok_or_else(|| {
             std::io::Error::new(
                 std::io::ErrorKind::InvalidData,

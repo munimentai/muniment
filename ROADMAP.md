@@ -51,6 +51,15 @@ steering and follow-up, durable tool effects, provenance and receipts, inline
 tool cards, extension UI, permission-gate replay and answers, and safe
 interrupted-session resume.
 
+DO NOT RE-FILE — explicit resume from a bound Pi session is built.
+`src-tauri/core/src/chat_resume.rs` holds `ResumeContext` and
+`resumable_context`, the `chat_resume` command (`src-tauri/src/chat.rs:625`)
+refreshes auth, reopens the journal-bound session, and continues the same
+`run_id`, `RESUME_PROMPT` (`:449`) sends one continuation request instead of the
+protected original prompt, and `install_resume_run` (`:565`) opens the resumed
+run's memory session. The transcript offers `Resume` beside `Try again`
+(`src/App.svelte:917`) and shows `Resume` only for a resumable interrupted run.
+
 DONE — the permission gate reaches the user end to end (MUNIDESK-577, 582, 587,
 594, 605, 766). The core seam validates an answer against its request. The
 coordinate loop drains a typed answer queue and appends `permission.resolved`.
@@ -97,8 +106,50 @@ classifier golden fixture. ADR 0018 and ADR 0021 carry superseded status.
 
 DONE groundwork — pure-Rust content-addressed local store with atomic
 deduplication, constant-memory input and output, verification, stale-temp
-cleanup, journal reference accounting, retention, export, and compaction. The
-cloud file flow follows items 8d and 9.
+cleanup, journal reference accounting, retention, export, and compaction.
+
+DONE — the local half of item 11 is built end to end. The composer selects
+files, `open_selected_files` (`src-tauri/src/chat.rs:794`) validates each open
+handle, `ingest_attachment` (`src-tauri/core/src/attachment.rs:246`) streams the
+bytes into CAS and appends one `chat.attachment.ingested` event, and
+`prepare_pi_images` (`attachment.rs:33`) sends the supported images with the
+first prompt. `chat_attachments` (`src-tauri/core/src/chat_view.rs:42`) projects
+each attachment without its path or its hash, and the transcript renders a chip
+row per file.
+
+GATED — the control-plane file store client is not fileable. harness-spec §7
+puts every shared attachment behind the cloud file store, and ADR 0019 makes
+muniment-cloud the source of that contract. No published artifact describes the
+upload, so this lane waits exactly as the code-diff producer waits.
+
+MEASURED 2026-08-08 (ninth wave, planner, read every attachment call site and
+captured the transcript chips) — the chip row repeats one rule instead of
+describing its own file. `src/App.svelte:898` prints `Saved locally · supported
+images sent with first prompt` inside every `<li>`, so three attachments print
+that sentence three times. It also tells a PDF what it tells a PNG.
+`ChatAttachment::media_type` (`src-tauri/core/src/chat_view.rs:40`) reaches the
+webview already, and both production call sites pass `media_type: None`
+(`src-tauri/src/chat.rs:733`, `:992`), so the record carries no type to render.
+`ingest_attachment` already wraps its reader in `CountingReader`
+(`attachment.rs:335`), so capturing the leading bytes costs one buffer. No probe
+fixture renders an attachment either, because `test/probe/stub.js:305` answers an
+empty list. MUNIDESK-469 replaced the older blanket claim `Saved locally · not
+sent to model`, and `src/App.test.js:2764` still guards that string, so the
+replacement must be per file rather than a third blanket sentence. SELECTED
+2026-08-08 (ninth wave).
+
+MEASURED 2026-08-08 (ninth wave, planner, read the delivery path) — an image
+limit reports the wrong failure. `prepare_pi_images` returns one
+`AttachmentDeliveryError::ImageLimit` (`attachment.rs:27`) for a single image
+over 10 MB, for the eleventh image, and for a set over 20 MB, and it names no
+file. `prepared_pi_images` (`src-tauri/src/chat.rs:761`) maps every variant to
+`attachment_error` (`:757`), so the user reads `One or more selected files could
+not be added. Check the files and try again.` The files were added. CAS holds
+them and the journal records them, and the run then fails at
+`src-tauri/src/chat_coordinate.rs:181`. Checking the files and trying again
+fails the same way. DESIGN.md already says an error names its failure and an
+error that rejects one item from a set names that item. SELECTED 2026-08-08
+(ninth wave).
 
 ### Durable local run journal
 
@@ -325,9 +376,18 @@ has the same missing upstream. Both wait on the Pi wire contract.
 OWNER WORK — in-editor release validation for the Zed and JetBrains claims needs
 real editor installs.
 
-OPEN — the CLI treats `capability.revoked` and every `stream.closed` as
-`UnexpectedMessage` (`src-tauri/cli/src/main.rs:423`). The CLI is deferred
-indefinitely, so no slice is filed.
+MEASURED 2026-08-09 (ninth wave, planner, read the CLI run-stream loop and its
+guidance table) — the CLI treats `capability.revoked` and every `stream.closed`
+as `UnexpectedMessage` (`src-tauri/cli/src/main.rs:423`). `client_guidance`
+(`:566`) answers that variant from its catch-all arm, so a revoked companion
+prints `the desktop pairing response was invalid; update Muniment and try again`.
+The user revoked the CLI in the desktop `Connected programs` panel, and the line
+sends them to an update instead. The ACP adapter already carries the honest
+shape, because `ClientError::CapabilityRevoked` is its own typed variant with the
+exact message `Muniment capability revoked`. OWNER QUESTION — the 2026-07-29
+ruling defers the CLI surface indefinitely, and the 2026-08-09 grooming promoted
+one CLI ticket. The planner files no slice until the owner says how wide that
+promotion runs.
 
 ### Companion revocation and management
 
@@ -529,10 +589,13 @@ why this one ticket never dispatches.
 MERGE HAZARD — the open slices edit `src-tauri/src/attach_service.rs`,
 `src-tauri/core/src/attach/handoff_probe.rs`,
 `src-tauri/core/src/memory_runtime.rs`, `src-tauri/src/chat.rs`,
-`src-tauri/core/src/memory_scan.rs`, and `src/App.svelte`. One open slice edits
-each of those files this wave. Each ticket tells the implementer to rebase on
-`main` before it opens the pull request. The 2026-08-04 silent revert came from a
-stale base.
+`src-tauri/core/src/memory_scan.rs`, `src-tauri/core/src/attachment.rs`,
+`src/lib/chat-controller.js`, `.github/lib/release-promotion.mjs`, and
+`src/App.svelte`. Two open slices edit `src-tauri/src/chat.rs`,
+`src-tauri/core/src/attachment.rs`, and `src/App.svelte` this wave. One open
+slice edits each other file. Each ticket tells the implementer to rebase on
+`main` before it opens the pull request. The 2026-08-04 silent revert came from
+a stale base.
 
 DONE 2026-08-08 — the memory runtime is the twentieth core move
 (MUNIDESK-995). `src-tauri/core/src/memory_runtime.rs` composes one
@@ -635,10 +698,27 @@ and empty states (MUNIDESK-779). ADR 0024 makes the desktop core the sole truste
 gates its first implementation slice on the published ADR 0019 Rust artifact
 (MUNIDESK-775).
 
-GATED — no further code-diff slice is fileable. Slice 4 renders a produced diff
-inside the permission gate, and no producer can exist before the published
-contract crate. The lane waits on the cloud repository. Slice 5, the receipt
-replay of an applied diff, waits behind slice 4.
+DIRECTION CHANGE 2026-08-09 (ninth wave, planner, after the owner's 2026-08-09
+grooming promoted the CLI diff renderer) — `code-diff/1` becomes a desktop-owned
+local contract. The lane waited on the cloud repository from 2026-07-29 and the
+artifact never published. `code-diff/1` also crosses no cloud boundary. ADR 0024
+makes the desktop core the sole trusted producer, and the desktop shell, the
+CLI, and the ACP adapter are its three consumers. No endpoint carries the value.
+That is the `muniment.attach/1` shape, which ADR 0009 and ADR 0011 already keep
+in this repository with golden fixtures. The planner verified on 2026-08-09 that
+no Rust `CodeDiff` type exists, that `src-tauri/cli/Cargo.toml` depends on
+`muniment-attach` alone, and that `src/lib/code-diff.js` is the only
+implementation of the model. The ADR amendment is the first slice, and it names
+`src-tauri/code-diff/` as the crate directory, `muniment-code-diff` as the
+package, and `protocol-fixtures/code-diff/1/` as the fixture directory.
+
+SEQUENCED — the codec crate follows the amendment. The CLI ANSI renderer follows
+the crate, and it reads the fixtures as a pure function over a `CodeDiff` value,
+exactly as the desktop adapter shipped before its wiring. The ADR 0024 producer
+slice follows the renderer. Slice 4, the produced diff inside the permission
+gate, and slice 5, the receipt replay of an applied diff, both wait behind the
+producer. ADR 0019 keeps every E0 cloud contract, and the cloud lane publishes no
+`code-diff` artifact.
 
 DECLINED 2026-08-08 (ninth wave) — the planner returned the CLI ANSI renderer
 idea. ADR 0020 gave the CLI a hand-written terminal renderer, and the 2026-07-29
@@ -746,8 +826,7 @@ filters secrets, and every recall carries a receipt.
 
 DONE 2026-08-07 — phase one is built end to end (MUNIDESK-960, 966, 967).
 `collect_markdown` (`src-tauri/core/src/memory_index.rs:696`) reads the four
-scaffold directories under bounded limits, and the earlier
-`src-tauri/core/src/memory_scan.rs` never gained a caller.
+scaffold directories under bounded limits.
 `src-tauri/core/src/memory_secret.rs` rejects a record that
 carries one of the four `secret.*` rules. `src-tauri/core/src/memory_index.rs`
 holds the rebuildable SQLite FTS5 cache, the `RetrievalLimits` rule that lowers
@@ -845,11 +924,9 @@ SELECTED 2026-08-08 (eighth wave).
 
 MEASURED 2026-08-08 (eighth wave, planner, read both Home walkers) — the tested
 Home scanner is dead and the live one is a second copy.
-`src-tauri/core/src/memory_scan.rs` exports `scan_home_documents`, and
-`src-tauri/core/tests/memory_scan.rs` is its only caller. The index carries its
-own private `collect_markdown` (`src-tauri/core/src/memory_index.rs:696`) with
-its own `MAX_FILES`, `MAX_FILE_BYTES`, and `MAX_DIRECTORY_DEPTH` constants that
-repeat the scanner's three. The live walker is the deadline-aware one, so the
+The index carries its own private `collect_markdown`
+(`src-tauri/core/src/memory_index.rs:696`) with `MAX_FILES`, `MAX_FILE_BYTES`,
+and `MAX_DIRECTORY_DEPTH` constants. The live walker is deadline-aware, so the
 dead module goes. SELECTED 2026-08-08 (eighth wave).
 
 MEASURED 2026-08-08 (ninth wave, planner, scratch release `cargo test` over a
@@ -865,6 +942,13 @@ not. `RecallRecord::query` also keeps all 188,890 characters, which reach the
 `memory.recalled` journal event and the expanded receipt. A bound adds no
 column, table, or migration. SELECTED 2026-08-08 (ninth wave).
 
+DECIDED 2026-08-08 (ninth wave) — a memory-search query accepts at most 1,024
+Unicode scalar values and at most 64 whitespace-delimited terms.
+`MemoryIndex::search` checks both limits before it lowers requested retrieval
+limits or opens the cache. A query that exceeds either limit returns
+`MemoryIndexError::QueryTooLong`, and the tool response names `error.kind` as
+`query_too_long`. The boundary values are valid.
+
 MEASURED 2026-08-08 (ninth wave, planner, read the recall dispatch path) — a
 failed memory search tells the model nothing. `coordinate_memory_search`
 (`src-tauri/src/chat_coordinate.rs:781`) maps every `MemoryIndexError` through
@@ -874,6 +958,17 @@ path, and a damaged cache all reach the model as a cancelled request rather than
 a failed tool. The model cannot shorten a rejected query or lower a raised
 limit, and the reply then omits memory with no stated reason. SELECTED
 2026-08-08 (ninth wave).
+
+DECIDED 2026-08-08 (ninth wave) — every failed memory search answers the editor
+request with `{"error":{"kind":"<name>","message":"<text>"}}` instead of
+cancelling it. `error.kind` is the error name. Invalid tool arguments map to
+`invalid_tool_arguments`, a raised limit maps to `limit_raised`, an oversized
+query maps to `query_too_long`, and a deadline maps to `timed_out`. Secret
+rejection maps to `secret_rejected`, an invalid path maps to `invalid_path`, a
+SQLite failure maps to `sqlite`, and an I/O failure maps to `io`. A missing
+editor prefill maps to `missing_prefill`, and an unavailable runtime maps to
+`runtime_unavailable`. Each response carries the matching stable message, so
+the model can change its next call.
 
 MEASURED 2026-08-07 — nothing renders a recall. The reducer drops
 `memory.recalled`, so `ChatProjection`
@@ -1003,6 +1098,20 @@ renders on its own line rather than inside a sentence, so the SC 2.5.8 inline
 exception does not cover it. The open target-size slice writes the law, so that
 slice states whether this control is in scope. The planner files no second
 slice.
+
+MEASURED 2026-08-09 (ninth wave, planner, read every `onHistoryError` call site
+against the banner control) — the transcript error banner offers a recovery it
+does not perform. `src/App.svelte:888` renders one `Try again` control, and that
+control always calls `chatController.loadHistory()`. Seven failures share the
+banner. Four of them name an action the control never repeats. They are
+`A new thread could not be started.`, `The thread name could not be changed.`,
+`The thread could not be deleted.`, and `Older threads could not be loaded.`
+A user who fails a delete presses `Try again`, the newest history page reloads,
+the message clears, and the thread survives. `loadHistory` also resets
+`threadPageCount` to 1, so a failed older-page read loses the retained pages.
+Every failing call site holds its own arguments, so the controller can pass the
+action that repeats it. DESIGN.md already states that the control beside an error
+names the recovery. SELECTED 2026-08-09 (ninth wave).
 
 DONE 2026-08-08 — the receipt summary shows that it expands (MUNIDESK-996). The
 expandable line carries a rotating marker (`src/App.svelte:990`, `.receipt-marker`
@@ -1160,15 +1269,16 @@ earlier one. Requiring an up-to-date branch before merge, or a merge queue, is a
 repository-settings change that sits with the owner. The planner files no ticket
 for it.
 
-VERIFIED 2026-08-08 (ninth wave, from a clean clone) — `npm ci` then `npm test`
-passed 886 frontend tests across 59 files, and the browser suite passed 3.
-`cargo test -p muniment-core -p muniment-attach` passed with no failure. The
-planner then read the memory index, the memory runtime, the recall dispatch
-path, the artifact rail controller, and the shell command error handling. It
-rebuilt the bundle, captured eight probe fixtures in headless Chromium at
-1100x760 and at 960x640, measured every control rect on each, and ran a scratch
-release `cargo test` for the query bound recorded above. Earlier waves recorded
-the same shape of verification, and this entry replaces that ledger.
+VERIFIED 2026-08-09 (ninth wave, from a clean clone) — `npm ci` then `npm test`
+passed 890 frontend tests across 59 files, with 31 skipped, and the browser suite
+passed 3. `cargo test -p muniment-core -p muniment-attach -p muniment-cli` passed
+with no failure. The planner then read the macOS packaging and release-promotion
+modules with the nightly workflow, the four ADRs behind the code-diff lane, the
+frontend code-diff adapter, the CLI run-stream loop and its guidance table, and
+every `onHistoryError` call site. It rebuilt the bundle and captured the
+signed-out, onboarding, approved-files, empty-workspace, and Markdown probe
+fixtures in headless Chromium at 1100x760. Earlier waves recorded the same shape
+of verification, and this entry replaces that ledger.
 
 NOTE 2026-08-06 — the planning clone ships no `node_modules`. Run `npm ci`
 before `npm test`. Without it the run dies with `vitest: not found`, which reads
@@ -1206,6 +1316,23 @@ pre-staged behind the same environment-injection seam Windows signing uses. With
 no Apple credentials the build stays a clean unsigned no-op. A partial credential
 set fails fast and names only the missing variables. `docs/macos-signing.md`
 records the six vault keys and the verification checklist.
+
+DONE 2026-08-08 — the nightly builds an MDM-consumable macOS package
+(MUNIDESK-113). `productbuildArguments` (`.github/lib/macos-signing.mjs:65`)
+installs `muniment.app` into `/Applications`, `signingEnabled` (`:21`) reads the
+`MACOS_SIGNING_ENABLED` repository variable, and the signed path notarizes and
+staples the package beside the app. The nightly now carries seven assets, and
+`docs/macos-packages.md` is the deployment page.
+
+MEASURED 2026-08-09 (ninth wave, planner, read the promotion body beside the
+nightly body) — a stable release will lie about macOS signing. `releaseBody`
+(`.github/lib/release-promotion.mjs:30`) is a fixed string that always reads
+`macOS artifacts are unsigned pending Apple credentials.` The nightly finalize
+step already writes the true state, and `promoteRelease` (`:67`) already reads
+the nightly body for the Windows sentence. On the day enrollment Y5DUNHQA74
+clears, every stable release will call a signed, notarized package unsigned. The
+owner ruling labels unsigned macOS rather than blocking it, so the repair reports
+the state and never blocks a promotion. SELECTED 2026-08-09 (ninth wave).
 
 DONE — the shipped package carries its notices (MUNIDESK-716, 726, 801).
 `THIRD_PARTY_NOTICES.md` names every bundled frontend package at its resolved
