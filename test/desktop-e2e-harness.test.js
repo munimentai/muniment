@@ -590,6 +590,17 @@ describe('JUnit infrastructure fallback', () => {
     const report = fs.readFileSync(path.join(artifacts, 'junit-infrastructure.xml'), 'utf8')
     expect(report).toContain('desktop-ci did not return a valid artifact envelope: message: setup &lt;failed&gt; &amp; stopped category: InvalidOperation line: 42')
   })
+
+  it.skipIf(process.platform === 'win32')('does not copy the desktop-ci transcript into JUnit', () => {
+    const artifacts = temp()
+    const transcript = '-----DESKTOP-CI-ARTIFACTS-BEGIN-----\nc2Vuc2l0aXZl\n-----DESKTOP-CI-ARTIFACTS-END-----\n'
+    fs.writeFileSync(path.join(artifacts, 'desktop-ci-harness.log'), transcript)
+    const result = spawnSync('bash', [path.join(root, 'test/e2e/support/ensure-junit-report.sh'), artifacts, 'installed-linux', '1', '0'], { encoding: 'utf8' })
+    expect(result.status, result.stderr).toBe(0)
+    const report = fs.readFileSync(path.join(artifacts, 'junit-infrastructure.xml'), 'utf8')
+    expect(report).toContain('<failure message="desktop-ci failed before producing a JUnit report"/>')
+    expect(report).not.toContain('c2Vuc2l0aXZl')
+  })
 })
 
 describe('artifact redaction boundary', () => {
