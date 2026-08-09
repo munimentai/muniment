@@ -10,6 +10,7 @@ const assetNames = [
   `nightly-${sha}-windows-muniment-machine.msi`,
   `nightly-${sha}-windows-muniment-nsis.exe`,
   `nightly-${sha}-macos-muniment.app.zip`,
+  `nightly-${sha}-macos-muniment.pkg`,
 ];
 const assets = assetNames.map((name, id) => ({ id, name, url: `https://api.github.test/assets/${id}`, content_type: "application/octet-stream" }));
 const smoke = { name: "smoke", status: "completed", conclusion: "success" };
@@ -56,8 +57,8 @@ describe("stable release promotion", () => {
 
   it("requires exactly one of each finalized nightly artifact", () => {
     expect(expectedNightlyAssets(assets, sha)).toEqual(assets);
-    expect(() => expectedNightlyAssets(assets.slice(1), sha)).toThrow("exactly six");
-    expect(() => expectedNightlyAssets([...assets.slice(0, 5), assets[0]], sha)).toThrow("Linux deb");
+    expect(() => expectedNightlyAssets(assets.slice(1), sha)).toThrow("exactly seven");
+    expect(() => expectedNightlyAssets([...assets.slice(0, 6), assets[0]], sha)).toThrow("Linux deb");
   });
 
   it("requires smoke and rejects pending or otherwise-named failed checks", () => {
@@ -93,13 +94,13 @@ describe("stable release promotion", () => {
     await expect(promote(fetchImpl)).rejects.toThrow("CI is not green");
   });
 
-  it("uses the nightly tag despite stale target_commitish and copies exactly six assets without mutating nightly", async () => {
+  it("uses the nightly tag despite stale target_commitish and copies exactly seven assets without mutating nightly", async () => {
     const { calls, fetchImpl } = promotionFetch();
     await promote(fetchImpl);
     const create = calls.find(({ url, options }) => url.endsWith("/releases") && options.method === "POST");
     expect(JSON.parse(create.options.body)).toMatchObject({ tag_name: version, target_commitish: sha, draft: true, prerelease: false });
-    expect(calls.filter(({ url }) => url.startsWith("https://api.github.test/assets/"))).toHaveLength(6);
-    expect(calls.filter(({ url }) => url.startsWith("https://uploads.github.com/"))).toHaveLength(6);
+    expect(calls.filter(({ url }) => url.startsWith("https://api.github.test/assets/"))).toHaveLength(7);
+    expect(calls.filter(({ url }) => url.startsWith("https://uploads.github.com/"))).toHaveLength(7);
     expect(calls.some(({ url }) => url.endsWith("/git/ref/tags/nightly"))).toBe(false);
     expect(calls.some(({ url, options }) => url.includes("/releases/1") && options.method)).toBe(false);
     const publish = calls.find(({ url, options }) => url.endsWith("/releases/42") && options.method === "PATCH");
