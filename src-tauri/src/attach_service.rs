@@ -647,6 +647,17 @@ fn run_attach_listener<R: tauri::Runtime>(
     state: Arc<AttachListenerState>,
     filesystem: AttachFilesystem,
 ) {
+    run_attach_listener_with_hooks(app, state, filesystem, || {}, || {});
+}
+
+#[cfg(target_os = "linux")]
+fn run_attach_listener_with_hooks<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+    state: Arc<AttachListenerState>,
+    filesystem: AttachFilesystem,
+    after_lock: impl FnOnce(),
+    after_bind_failure: impl FnOnce(),
+) {
     let Ok(instance_lock) = filesystem.acquire_instance_lock() else {
         app.state::<AttachCompanionState>()
             .record_listener_start_failure(AttachListenerStartFailure::InstanceLock);
@@ -656,13 +667,16 @@ fn run_attach_listener<R: tauri::Runtime>(
         );
         return;
     };
+    after_lock();
     let Ok(listener) = AttachTransport::bind(&filesystem) else {
+        drop(instance_lock);
         app.state::<AttachCompanionState>()
             .record_listener_start_failure(AttachListenerStartFailure::Bind);
         eprintln!(
             "{}",
             attach_listener_start_diagnostic(AttachListenerStartFailure::Bind)
         );
+        after_bind_failure();
         return;
     };
     let companion_state = app.state::<AttachCompanionState>();
@@ -1426,6 +1440,76 @@ mod tests {
         let filesystem = AttachFilesystem::from_runtime_directory(&runtime).unwrap();
         assert!(!filesystem.endpoint_path().exists());
         let _instance_lock = filesystem.acquire_instance_lock().unwrap();
+        std::fs::remove_dir_all(runtime).unwrap();
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn listener_bind_failure_releases_instance_lock_before_stopper_returns() {
+        use std::os::unix::fs::PermissionsExt;
+        use std::sync::mpsc;
+
+        let runtime = std::env::temp_dir().join(format!("mt-bind-stop-{}", Uuid::now_v7()));
+        std::fs::create_dir(&runtime).unwrap();
+        std::fs::set_permissions(&runtime, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let filesystem = AttachFilesystem::from_runtime_directory(&runtime).unwrap();
+        std::fs::write(filesystem.endpoint_path(), "not a socket").unwrap();
+        let listener = Arc::new(
+            AttachListenerState::load(&runtime.join("attach-client-credentials.json")).unwrap(),
+        );
+        let app = tauri::test::mock_app();
+        app.manage(AttachCompanionState::default());
+        app.state::<AttachCompanionState>()
+            .set_listener(listener.clone());
+
+        let (locked_tx, locked_rx) = mpsc::channel();
+        let (bind_tx, bind_rx) = mpsc::channel();
+        let (failed_tx, failed_rx) = mpsc::channel();
+        let (finish_tx, finish_rx) = mpsc::channel();
+        let listener_app = app.handle().clone();
+        let worker = std::thread::spawn(move || {
+            run_attach_listener_with_hooks(
+                listener_app,
+                listener,
+                filesystem,
+                || {
+                    locked_tx.send(()).unwrap();
+                    bind_rx.recv().unwrap();
+                },
+                || {
+                    failed_tx.send(()).unwrap();
+                    finish_rx.recv().unwrap();
+                },
+            );
+        });
+        locked_rx.recv().unwrap();
+
+        let stop_app = app.handle().clone();
+        let stopper = std::thread::spawn(move || stop_attach_listener(&stop_app));
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while !matches!(
+            *app.state::<AttachCompanionState>()
+                .listener_stop
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
+            AttachListenerStopState::Pending {
+                stop_requested: true
+            }
+        ) {
+            assert!(Instant::now() < deadline, "early stop was not recorded");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+
+        bind_tx.send(()).unwrap();
+        failed_rx.recv().unwrap();
+        stopper.join().unwrap();
+        let filesystem = AttachFilesystem::from_runtime_directory(&runtime).unwrap();
+        let _instance_lock = filesystem.acquire_instance_lock().unwrap();
+        finish_tx.send(()).unwrap();
+        worker.join().unwrap();
+
+        drop(_instance_lock);
+        std::fs::remove_file(filesystem.endpoint_path()).unwrap();
         std::fs::remove_dir_all(runtime).unwrap();
     }
 
