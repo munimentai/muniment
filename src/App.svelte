@@ -1275,13 +1275,13 @@
   .thread-row time { margin-left: auto; color: var(--muted); font: var(--text-provenance) var(--font-mono); }
   .thread-row > span { flex: 0 0 5px; }
   .thread-row-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .thread-delete { position: absolute; top: 4px; right: 5px; padding: 3px 6px; border-color: transparent; background: var(--surface); color: var(--muted); font: var(--text-12) var(--font-mono); opacity: 0; transition: opacity 120ms ease; }
+  .thread-delete { position: absolute; top: 4px; right: 5px; min-width: 24px; min-height: 24px; padding: 3px 6px; border-color: transparent; background: var(--surface); color: var(--muted); font: var(--text-12) var(--font-mono); opacity: 0; transition: opacity 120ms ease; }
   .thread-record:hover .thread-delete, .thread-record:focus-within .thread-delete { opacity: 1; }
   .thread-delete:hover:not(:disabled) { border-color: transparent; background: var(--faint); color: var(--ink); }
   .thread-delete:focus-visible, .thread-delete-confirm button:focus-visible { outline-color: var(--ink); }
   .thread-delete-confirm { position: absolute; inset: 0; display: flex; align-items: center; justify-content: flex-end; gap: 5px; min-width: 0; padding: 5px 7px; border-radius: var(--radius-control); background: var(--surface); color: var(--ink); font: var(--text-12) var(--font-mono); }
   .thread-delete-confirm > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .thread-delete-confirm button { flex: none; padding: 3px 6px; border-color: transparent; background: transparent; color: var(--ink); font: inherit; }
+  .thread-delete-confirm button { flex: none; min-width: 24px; min-height: 24px; padding: 3px 6px; border-color: transparent; background: transparent; color: var(--ink); font: inherit; }
   .thread-delete-confirm button:hover:not(:disabled) { background: var(--faint); }
   .side-action span { flex: 1; }
   .new-thread kbd { margin-left: auto; }
@@ -1381,7 +1381,7 @@
   .copy-failure { margin-top: 4px; }
   .run-error { color: var(--muted); font: var(--text-12) var(--font-mono); }
   .cancel-error, .history-error { margin: 0 0 8px; color: var(--muted); font: var(--text-12) var(--font-mono); }
-  .run-error button { padding: 2px 6px; }
+  .run-error button { min-width: 24px; min-height: 24px; padding: 2px 6px; font: inherit; }
   .composer { grid-area: composer; width: min(760px, calc(100% - 48px)); margin: 0 auto 24px; padding: 12px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-panel); }
   .composer:focus-within { border-color: var(--muted); }
   .attachments { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 8px; padding: 0; list-style: none; }
