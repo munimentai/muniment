@@ -12,10 +12,16 @@ use std::io::{self, Read, Write};
 use std::os::unix::net::UnixStream;
 #[cfg(target_os = "linux")]
 use std::path::Path;
+#[cfg(target_os = "linux")]
+use std::thread;
+#[cfg(target_os = "linux")]
+use std::time::Duration;
 use std::time::Instant;
 
 #[cfg(target_os = "linux")]
 const PROBE_CLIENT_ID: &str = "018f0000-0000-7000-8000-000000000001";
+#[cfg(target_os = "linux")]
+const HANDOFF_PROBE_RETRY_INTERVAL: Duration = Duration::from_millis(10);
 
 /// Proof that the runtime service completed a migration handoff.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -56,6 +62,31 @@ impl fmt::Display for HandoffProbeError {
 }
 
 impl std::error::Error for HandoffProbeError {}
+
+/// Probes until the runtime service confirms the handoff or the deadline passes.
+#[cfg(target_os = "linux")]
+pub fn probe_handoff(
+    endpoint: impl AsRef<Path>,
+    expected_nonce: &str,
+    readiness_deadline: Instant,
+) -> Result<ConfirmedHandoff, HandoffProbeError> {
+    loop {
+        match read_handoff_probe_welcome(endpoint.as_ref(), readiness_deadline) {
+            Ok(welcome) => {
+                return confirm_handoff_probe(
+                    &welcome,
+                    expected_nonce,
+                    readiness_deadline,
+                    Instant::now(),
+                )
+            }
+            Err(HandoffProbeError::ConnectionRefused) => {
+                thread::sleep(remaining(readiness_deadline)?.min(HANDOFF_PROBE_RETRY_INTERVAL));
+            }
+            Err(error) => return Err(error),
+        }
+    }
+}
 
 /// Opens the endpoint, exchanges one readiness handshake, and closes it.
 #[cfg(target_os = "linux")]
