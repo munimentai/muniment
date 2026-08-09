@@ -32,3 +32,4 @@ An error message names the failure, and the control beside it names the recovery
 An error that rejects one item from a set names that item.
 A surface that renders model or user text wraps an unbreakable string.
 A control renders as a control at rest.
+A control presents a hit area of at least 24 by 24 CSS pixels.
