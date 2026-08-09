@@ -26,9 +26,7 @@ use muniment_core::chat_grant::{
 use muniment_core::chat_profile::ChatProfile;
 pub(crate) use muniment_core::chat_resume::ResumeContext;
 use muniment_core::chat_resume::{resumable_context as core_resumable_context, ChatResumeError};
-use muniment_core::chat_view::{
-    chat_attachments, ChatAttachment, ChatPendingPermission, ChatToolActivity, SelectedFile,
-};
+use muniment_core::chat_view::{chat_attachments, ChatAttachment, SelectedFile};
 use muniment_core::journal::reconciliation::reconcile_interrupted_runs;
 use muniment_core::journal::reducer::{project_chat, ChatProjector};
 use muniment_core::journal::{
@@ -36,51 +34,46 @@ use muniment_core::journal::{
 };
 use muniment_core::memory_index::ModelMemoryCapability;
 use muniment_core::permission_gate::{ChatPermissionAnswer, PendingPermissionAnswer};
+use muniment_core::run_events::{append_emit, ChatEvent, ChatEventSink};
+pub(crate) use muniment_core::run_events::{ChatStorage, SharedStorage};
 use muniment_core::run_start::{
     start_desktop_run, ActiveRun, RunStartBoundaries, RunStartError, RunStartLaunch,
     RunStartRequest, SubmitResult,
 };
 use muniment_core::sidecar::pi_chat::{PiChatEvent, PiImageContent, PiRunAdapter, PromptCommand};
 use muniment_core::sidecar::{PiRpcTransport, PiRpcWiring, PiSessionLocator, SidecarSupervisor};
-use serde::Serialize;
 use serde_json::{json, Value};
 use std::path::PathBuf;
-use tauri::Manager;
+use tauri::{Emitter, Manager};
 use uuid::Uuid;
 
 use crate::auth;
-use crate::chat_coordinate::{append_emit, coordinate};
+use crate::chat_coordinate::coordinate;
 use crate::chat_threads::newest_owned_workspace_thread;
 use muniment_core::session_thread::{OfferedThread, SessionThread};
 
 pub(super) const RPC_TIMEOUT: Duration = Duration::from_secs(30);
-
-#[derive(Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub(super) struct ChatEvent {
-    pub(super) run_id: String,
-    pub(super) phase: String,
-    pub(super) text: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub(super) receipt: Option<Value>,
-    pub(super) tool_activity: Vec<ChatToolActivity>,
-    pub(super) attachments: Vec<ChatAttachment>,
-    pub(super) recalls: Vec<muniment_core::journal::reducer::ProjectedRecall>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub(super) pending_permission: Option<ChatPendingPermission>,
-}
 
 pub(super) struct PiRuntime {
     pub(super) supervisor: SidecarSupervisor,
     pub(super) wiring: PiRpcWiring,
 }
 
-pub(crate) struct ChatStorage {
-    pub(crate) journal: RunJournal,
-    pub(crate) cas: LocalCas,
+pub(crate) struct TauriChatEventSink<R: tauri::Runtime>(pub(crate) tauri::AppHandle<R>);
+
+impl<R: tauri::Runtime> std::ops::Deref for TauriChatEventSink<R> {
+    type Target = tauri::AppHandle<R>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
 }
 
-pub(crate) type SharedStorage = Arc<Mutex<ChatStorage>>;
+impl<R: tauri::Runtime> ChatEventSink for TauriChatEventSink<R> {
+    fn deliver(&self, event: ChatEvent) -> Result<(), ()> {
+        self.0.emit("chat-event", event).map_err(|_| ())
+    }
+}
 
 pub struct ChatState {
     pub(crate) storage: SharedStorage,
@@ -1117,8 +1110,9 @@ pub(super) fn coordinate_prepared_prompt<R: tauri::Runtime, T>(
     submit: impl FnOnce() -> Result<(T, PiSessionLocator, Vec<PiChatEvent>), PreparedPromptError>,
 ) -> Result<(T, Vec<PiChatEvent>), PreparedPromptError> {
     let (handle, locator, buffered_events) = submit()?;
+    let sink = TauriChatEventSink(app.clone());
     append_emit(
-        app,
+        &sink,
         journal,
         projector,
         run_id,
@@ -1129,7 +1123,7 @@ pub(super) fn coordinate_prepared_prompt<R: tauri::Runtime, T>(
     )
     .map_err(|_| PreparedPromptError::Journal)?;
     append_emit(
-        app,
+        &sink,
         journal,
         projector,
         run_id,
