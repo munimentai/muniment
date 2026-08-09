@@ -51,6 +51,15 @@ steering and follow-up, durable tool effects, provenance and receipts, inline
 tool cards, extension UI, permission-gate replay and answers, and safe
 interrupted-session resume.
 
+DO NOT RE-FILE — explicit resume from a bound Pi session is built.
+`src-tauri/core/src/chat_resume.rs` holds `ResumeContext` and
+`resumable_context`, the `chat_resume` command (`src-tauri/src/chat.rs:625`)
+refreshes auth, reopens the journal-bound session, and continues the same
+`run_id`, `RESUME_PROMPT` (`:449`) sends one continuation request instead of the
+protected original prompt, and `install_resume_run` (`:565`) opens the resumed
+run's memory session. The transcript offers `Resume` beside `Try again`
+(`src/App.svelte:917`) and shows `Resume` only for a resumable interrupted run.
+
 DONE — the permission gate reaches the user end to end (MUNIDESK-577, 582, 587,
 594, 605, 766). The core seam validates an answer against its request. The
 coordinate loop drains a typed answer queue and appends `permission.resolved`.
@@ -97,8 +106,50 @@ classifier golden fixture. ADR 0018 and ADR 0021 carry superseded status.
 
 DONE groundwork — pure-Rust content-addressed local store with atomic
 deduplication, constant-memory input and output, verification, stale-temp
-cleanup, journal reference accounting, retention, export, and compaction. The
-cloud file flow follows items 8d and 9.
+cleanup, journal reference accounting, retention, export, and compaction.
+
+DONE — the local half of item 11 is built end to end. The composer selects
+files, `open_selected_files` (`src-tauri/src/chat.rs:794`) validates each open
+handle, `ingest_attachment` (`src-tauri/core/src/attachment.rs:246`) streams the
+bytes into CAS and appends one `chat.attachment.ingested` event, and
+`prepare_pi_images` (`attachment.rs:33`) sends the supported images with the
+first prompt. `chat_attachments` (`src-tauri/core/src/chat_view.rs:42`) projects
+each attachment without its path or its hash, and the transcript renders a chip
+row per file.
+
+GATED — the control-plane file store client is not fileable. harness-spec §7
+puts every shared attachment behind the cloud file store, and ADR 0019 makes
+muniment-cloud the source of that contract. No published artifact describes the
+upload, so this lane waits exactly as the code-diff producer waits.
+
+MEASURED 2026-08-08 (ninth wave, planner, read every attachment call site and
+captured the transcript chips) — the chip row repeats one rule instead of
+describing its own file. `src/App.svelte:898` prints `Saved locally · supported
+images sent with first prompt` inside every `<li>`, so three attachments print
+that sentence three times. It also tells a PDF what it tells a PNG.
+`ChatAttachment::media_type` (`src-tauri/core/src/chat_view.rs:40`) reaches the
+webview already, and both production call sites pass `media_type: None`
+(`src-tauri/src/chat.rs:733`, `:992`), so the record carries no type to render.
+`ingest_attachment` already wraps its reader in `CountingReader`
+(`attachment.rs:335`), so capturing the leading bytes costs one buffer. No probe
+fixture renders an attachment either, because `test/probe/stub.js:305` answers an
+empty list. MUNIDESK-469 replaced the older blanket claim `Saved locally · not
+sent to model`, and `src/App.test.js:2764` still guards that string, so the
+replacement must be per file rather than a third blanket sentence. SELECTED
+2026-08-08 (ninth wave).
+
+MEASURED 2026-08-08 (ninth wave, planner, read the delivery path) — an image
+limit reports the wrong failure. `prepare_pi_images` returns one
+`AttachmentDeliveryError::ImageLimit` (`attachment.rs:27`) for a single image
+over 10 MB, for the eleventh image, and for a set over 20 MB, and it names no
+file. `prepared_pi_images` (`src-tauri/src/chat.rs:761`) maps every variant to
+`attachment_error` (`:757`), so the user reads `One or more selected files could
+not be added. Check the files and try again.` The files were added. CAS holds
+them and the journal records them, and the run then fails at
+`src-tauri/src/chat_coordinate.rs:181`. Checking the files and trying again
+fails the same way. DESIGN.md already says an error names its failure and an
+error that rejects one item from a set names that item. SELECTED 2026-08-08
+(ninth wave).
 
 ### Durable local run journal
 
@@ -538,11 +589,13 @@ why this one ticket never dispatches.
 MERGE HAZARD — the open slices edit `src-tauri/src/attach_service.rs`,
 `src-tauri/core/src/attach/handoff_probe.rs`,
 `src-tauri/core/src/memory_runtime.rs`, `src-tauri/src/chat.rs`,
-`src/lib/chat-controller.js`,
-`.github/lib/release-promotion.mjs`, and `src/App.svelte`. Two open slices edit
-`src/App.svelte`, and one open slice edits each other file. Each ticket tells the
-implementer to rebase on `main` before it opens the pull request. The 2026-08-04
-silent revert came from a stale base.
+`src-tauri/core/src/memory_scan.rs`, `src-tauri/core/src/attachment.rs`,
+`src/lib/chat-controller.js`, `.github/lib/release-promotion.mjs`, and
+`src/App.svelte`. Two open slices edit `src-tauri/src/chat.rs`,
+`src-tauri/core/src/attachment.rs`, and `src/App.svelte` this wave. One open
+slice edits each other file. Each ticket tells the implementer to rebase on
+`main` before it opens the pull request. The 2026-08-04 silent revert came from
+a stale base.
 
 DONE 2026-08-08 — the memory runtime is the twentieth core move
 (MUNIDESK-995). `src-tauri/core/src/memory_runtime.rs` composes one
