@@ -15,6 +15,7 @@ describe('Homebrew nightly cask', () => {
 
     expect(version).toBeTruthy()
     expect(cask).toMatch(/^  sha256 "[0-9a-f]{64}"$/m)
+    expect(cask).toContain('https://github.com/mikeydiamonds/homebrew-muniment/releases/download/nightly/')
     expect(cask).toContain(`nightly-#{version}-macos-muniment.app.zip`)
     expect(cask).toContain('app "muniment.app"')
     expect(cask).toContain('xattr -dr com.apple.quarantine /Applications/muniment.app')
@@ -42,9 +43,12 @@ describe('Homebrew nightly cask', () => {
 
   it('updates the cask after the nightly release is finalized', () => {
     const publish = workflow.slice(workflow.indexOf('  publish:'), workflow.indexOf('  linux-e2e:'))
-    expect(publish).toContain('gh release download nightly')
+    expect(publish).toContain('TAP_REPOSITORY: mikeydiamonds/homebrew-muniment')
+    expect(publish).toContain('GH_TOKEN="$SOURCE_TOKEN" gh release download nightly --repo "$GITHUB_REPOSITORY"')
+    expect(publish).toContain('gh release create nightly --repo "$TAP_REPOSITORY"')
+    expect(publish).toContain('GH_TOKEN="$TAP_TOKEN" gh release upload nightly')
     expect(publish).toContain('shasum -a 256')
-    expect(publish).toContain('node .github/bump-homebrew-cask.mjs')
+    expect(publish).toContain('node "$GITHUB_WORKSPACE/.github/bump-homebrew-cask.mjs"')
     expect(publish).toContain('git pull --rebase origin main')
     expect(publish).toContain('git push origin HEAD:main')
   })

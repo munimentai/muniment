@@ -6,7 +6,7 @@ The cask pins each archive by its source commit and SHA-256 digest.
 Install it with these commands:
 
 ```sh
-brew tap mikeydiamonds/muniment https://github.com/mikeydiamonds/muniment-desktop
+brew tap mikeydiamonds/muniment
 brew install --cask mikeydiamonds/muniment/muniment-nightly
 ```
 
