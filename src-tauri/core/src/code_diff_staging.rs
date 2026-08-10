@@ -54,7 +54,7 @@ pub fn stage_proposed_operations(
     Ok(staged)
 }
 
-fn validate_operations(
+pub(crate) fn validate_operations(
     operations: &[ProposedOperation],
 ) -> Result<(), StageProposedOperationsError> {
     if operations.len() > MAX_OPERATIONS {
