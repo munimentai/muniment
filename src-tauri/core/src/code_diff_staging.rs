@@ -118,10 +118,7 @@ fn validate_path(path: &str) -> Result<(), StageProposedOperationsError> {
     }
     let bytes = path.as_bytes();
     if path.starts_with('/')
-        || (bytes.len() >= 3
-            && bytes[0].is_ascii_alphabetic()
-            && bytes[1] == b':'
-            && bytes[2] == b'/')
+        || (bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':')
     {
         return Err(StageProposedOperationsError::AbsolutePath(path.to_owned()));
     }

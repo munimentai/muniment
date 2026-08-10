@@ -282,6 +282,10 @@ mod tests {
                 path: "rewrite.txt".into(),
                 output: b"after\n".to_vec(),
             },
+            ProposedOperation::Write {
+                path: "new.txt".into(),
+                output: b"new\n".to_vec(),
+            },
             ProposedOperation::Rename {
                 source: "rename.txt".into(),
                 target: "moved.txt".into(),
@@ -293,13 +297,66 @@ mod tests {
 
         let (plan, current) = observe_workspace_write_plan(&workspace.root, &proposed).unwrap();
         assert_eq!(current.len(), 3);
+        let root = Dir::open_ambient_dir(&workspace.root, ambient_authority()).unwrap();
+        let parent_identity = directory_identity(&root).unwrap();
+        let rewrite_metadata = fs::metadata(workspace.root.join("rewrite.txt")).unwrap();
         match &plan.operations()[0] {
             WriteOperation::Write { target, mode, .. } => {
-                #[cfg(unix)]
-                assert_eq!(*mode, 0o750);
-                assert!(matches!(target.state(), ObservedState::File { .. }));
+                assert_eq!(*mode, file_mode(&rewrite_metadata));
+                assert_eq!(target.parent_identity(), &parent_identity);
+                assert_eq!(
+                    target.state(),
+                    &ObservedState::File {
+                        byte_length: 7,
+                        sha256: Sha256::digest(b"before\n").into(),
+                        mode: file_mode(&rewrite_metadata),
+                        identity: file_identity(&rewrite_metadata),
+                    }
+                );
             }
             _ => panic!("expected write"),
+        }
+        match &plan.operations()[1] {
+            WriteOperation::Write { target, mode, .. } => {
+                assert_eq!(*mode, DEFAULT_FILE_MODE);
+                assert_eq!(target.state(), &ObservedState::Absent);
+                assert_eq!(target.parent_identity(), &parent_identity);
+            }
+            _ => panic!("expected write"),
+        }
+        match &plan.operations()[2] {
+            WriteOperation::Rename { source, target } => {
+                let metadata = fs::metadata(workspace.root.join("rename.txt")).unwrap();
+                assert_eq!(source.parent_identity(), &parent_identity);
+                assert_eq!(
+                    source.state(),
+                    &ObservedState::File {
+                        byte_length: 5,
+                        sha256: Sha256::digest(b"move\n").into(),
+                        mode: file_mode(&metadata),
+                        identity: file_identity(&metadata),
+                    }
+                );
+                assert_eq!(target.state(), &ObservedState::Absent);
+                assert_eq!(target.parent_identity(), &parent_identity);
+            }
+            _ => panic!("expected rename"),
+        }
+        match &plan.operations()[3] {
+            WriteOperation::Delete { target } => {
+                let metadata = fs::metadata(workspace.root.join("delete.txt")).unwrap();
+                assert_eq!(target.parent_identity(), &parent_identity);
+                assert_eq!(
+                    target.state(),
+                    &ObservedState::File {
+                        byte_length: 7,
+                        sha256: Sha256::digest(b"remove\n").into(),
+                        mode: file_mode(&metadata),
+                        identity: file_identity(&metadata),
+                    }
+                );
+            }
+            _ => panic!("expected delete"),
         }
 
         let store = TestWorkspace::new();
@@ -319,7 +376,16 @@ mod tests {
     #[test]
     fn rejects_unsafe_paths_with_the_offending_path() {
         let workspace = TestWorkspace::new();
-        for path in ["/outside", "a//b", "a/./b", "a/../b"] {
+        for path in [
+            "/outside",
+            "a//b",
+            "a/./b",
+            "a/../b",
+            "C:",
+            "C:relative",
+            r"\\?\C:\device",
+            r"\\.\device",
+        ] {
             let error = observe_workspace_write_plan(
                 &workspace.root,
                 &[ProposedOperation::Write {
@@ -328,11 +394,16 @@ mod tests {
                 }],
             )
             .unwrap_err();
-            assert!(matches!(
-                error,
-                ObserveWritePlanError::InvalidProposal(ref source)
-                    if source.to_string().contains(path)
-            ));
+            match error {
+                ObserveWritePlanError::InvalidProposal(
+                    StageProposedOperationsError::AbsolutePath(offending)
+                    | StageProposedOperationsError::EmptyPathComponent(offending)
+                    | StageProposedOperationsError::CurrentPathComponent(offending)
+                    | StageProposedOperationsError::ParentPathComponent(offending)
+                    | StageProposedOperationsError::BackslashInPath(offending),
+                ) => assert_eq!(offending, path),
+                error => panic!("unexpected error for {path:?}: {error}"),
+            }
         }
     }
 
