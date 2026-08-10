@@ -2,7 +2,7 @@
 
 use muniment_attach::{decode_frame, encode_frame, negotiate_first, welcome, FirstMessage};
 use muniment_core::attach::linux::{
-    AttachAcceptError, AttachFilesystem, AttachTransport, InstanceLockError,
+    AttachAcceptError, AttachFilesystem, AttachTransport, InstanceLock, InstanceLockError,
 };
 use std::fmt;
 use std::io::{self, Read, Write};
@@ -52,6 +52,15 @@ pub fn run_handoff_listener(
         .acquire_instance_lock()
         .map_err(|_: InstanceLockError| HandoffListenerError::InstanceLock)?;
     let transport = AttachTransport::bind(&filesystem).map_err(|_| HandoffListenerError::Bind)?;
+    run_bound_handoff_listener(_instance_lock, transport, handoff_nonce, stop)
+}
+
+pub(crate) fn run_bound_handoff_listener(
+    _instance_lock: InstanceLock,
+    transport: AttachTransport<'_>,
+    handoff_nonce: &str,
+    stop: Receiver<()>,
+) -> Result<(), HandoffListenerError> {
     let stop_handle = transport.stop_handle();
     let finished = Arc::new(AtomicBool::new(false));
 
