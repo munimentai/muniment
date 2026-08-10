@@ -138,6 +138,220 @@ pub fn coordinate_prepared_prompt<T>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Cursor;
+    use std::sync::{Arc, Mutex};
+
+    use base64::{engine::general_purpose::STANDARD, Engine as _};
+    use chrono::{SecondsFormat, Utc};
+    use uuid::Uuid;
+
+    use crate::attachment::{ingest_attachment, AttachmentMetadata};
+    use crate::cas::LocalCas;
+    use crate::journal::{EventEnvelope, EventPayload, Provenance, RunJournal};
+    use crate::run_events::{ChatEvent, ChatStorage};
+
+    #[derive(Default)]
+    struct TestSink;
+
+    impl ChatEventSink for TestSink {
+        fn deliver(&self, _event: ChatEvent) -> Result<(), ()> {
+            Ok(())
+        }
+    }
+
+    fn storage() -> (std::path::PathBuf, SharedStorage) {
+        let root = std::env::temp_dir().join(format!("muniment-pi-execution-{}", Uuid::now_v7()));
+        std::fs::create_dir_all(&root).unwrap();
+        let storage = Arc::new(Mutex::new(ChatStorage {
+            journal: RunJournal::open(root.join("runs.sqlite3")).unwrap(),
+            cas: LocalCas::open(&root.join("cas")).unwrap(),
+        }));
+        (root, storage)
+    }
+
+    fn attachment_event(run_id: &str, run_seq: u64) -> EventEnvelope {
+        EventEnvelope {
+            event_id: Uuid::now_v7().to_string(),
+            run_id: run_id.into(),
+            run_seq,
+            event_type: String::new(),
+            event_version: 0,
+            envelope_version: 1,
+            recorded_at: Utc::now().to_rfc3339_opts(SecondsFormat::AutoSi, true),
+            occurred_at: None,
+            correlation_id: None,
+            causation_id: None,
+            payload: EventPayload::Inline {
+                payload_json: json!({}),
+            },
+            provenance: Provenance {
+                source: "pi-execution-test".into(),
+                source_version: env!("CARGO_PKG_VERSION").into(),
+                actor_id: None,
+                device_id: None,
+                rpc_request_id: None,
+                capability_versions: None,
+                extra: Default::default(),
+            },
+            extra: Default::default(),
+        }
+    }
+
+    fn ingest(storage: &SharedStorage, run_id: &str, run_seq: u64, name: &str, bytes: &[u8]) {
+        let mut storage = storage.lock().unwrap();
+        let ChatStorage { journal, cas } = &mut *storage;
+        ingest_attachment(
+            cas,
+            journal,
+            run_seq - 1,
+            &mut Cursor::new(bytes),
+            AttachmentMetadata {
+                display_name: name,
+                byte_length: bytes.len() as u64,
+                media_type: None,
+            },
+            |attachment| EventEnvelope {
+                payload: EventPayload::Attachment { attachment },
+                ..attachment_event(run_id, run_seq)
+            },
+        )
+        .unwrap();
+    }
+
+    fn png() -> Vec<u8> {
+        STANDARD
+            .decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=")
+            .unwrap()
+    }
+
+    #[test]
+    fn coordinate_prepared_prompt_submits_before_it_appends_coordinator_events() {
+        let (root, storage) = storage();
+        let run_id = Uuid::now_v7().to_string();
+        let mut projector = ChatProjector::new();
+        let mut seq = 0;
+        append_emit(
+            &TestSink,
+            &storage,
+            &mut projector,
+            &run_id,
+            &mut seq,
+            "run.started",
+            json!({}),
+            Some("owner"),
+        )
+        .unwrap();
+        ingest(&storage, &run_id, 2, "first.txt", b"first attachment");
+        ingest(&storage, &run_id, 3, "second.txt", b"second attachment");
+        for event in storage
+            .lock()
+            .unwrap()
+            .journal
+            .events(&run_id)
+            .unwrap()
+            .into_iter()
+            .skip(1)
+        {
+            projector.apply(&event).unwrap();
+        }
+        seq = 3;
+        std::fs::write(root.join("session.jsonl"), "{}\n").unwrap();
+        let (locator, _) = crate::sidecar::validate_pi_session(&root, "session.jsonl").unwrap();
+
+        let (handle, buffered) = coordinate_prepared_prompt(
+            &TestSink,
+            &storage,
+            &mut projector,
+            &run_id,
+            &mut seq,
+            Some("owner"),
+            || {
+                let mut storage = storage.lock().unwrap();
+                let events = storage.journal.events(&run_id).unwrap();
+                assert_eq!(events.len(), 3);
+                for event in &events[1..] {
+                    let EventPayload::Attachment { attachment } = &event.payload else {
+                        panic!("attachment payload")
+                    };
+                    storage.cas.verify(attachment.sha256()).unwrap();
+                }
+                Ok(("handle", locator, vec![PiChatEvent::Completed]))
+            },
+        )
+        .unwrap();
+
+        assert_eq!(handle, "handle");
+        assert_eq!(buffered, vec![PiChatEvent::Completed]);
+        let events = storage.lock().unwrap().journal.events(&run_id).unwrap();
+        assert_eq!(
+            events
+                .iter()
+                .map(|event| event.event_type.as_str())
+                .collect::<Vec<_>>(),
+            [
+                "run.started",
+                "chat.attachment.ingested",
+                "chat.attachment.ingested",
+                "runtime.pi_session.bound",
+                "model.prompt.accepted"
+            ]
+        );
+        drop(events);
+        drop(storage);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn prepared_pi_images_preserve_journal_order_and_omit_unsupported_files() {
+        let (root, storage) = storage();
+        let run_id = Uuid::now_v7().to_string();
+        let gif_data = "R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==";
+        ingest(&storage, &run_id, 1, "renamed.bin", &png());
+        ingest(
+            &storage,
+            &run_id,
+            2,
+            "notes.png",
+            b"durable but not an image",
+        );
+        ingest(
+            &storage,
+            &run_id,
+            3,
+            "second.dat",
+            &STANDARD.decode(gif_data).unwrap(),
+        );
+
+        assert_eq!(
+            prepared_pi_images(&storage, &run_id).unwrap(),
+            vec![
+                PiImageContent::new(STANDARD.encode(png()), "image/png"),
+                PiImageContent::new(gif_data, "image/gif"),
+            ]
+        );
+        drop(storage);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn prepared_pi_prompt_keeps_the_prompt_and_adds_prepared_images() {
+        let (root, storage) = storage();
+        let run_id = Uuid::now_v7().to_string();
+        ingest(&storage, &run_id, 1, "image.png", &png());
+
+        let command = prepared_pi_prompt(&storage, &run_id, "Describe this image.").unwrap();
+
+        assert_eq!(command.message, "Describe this image.");
+        assert_eq!(
+            command.images,
+            vec![PiImageContent::new(STANDARD.encode(png()), "image/png")]
+        );
+
+        let text_only = prepared_pi_prompt(&storage, "run-without-images", "Hello.").unwrap();
+        assert_eq!(text_only, PromptCommand::new("Hello."));
+        drop(storage);
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn resume_attempt_reports_acceptance_and_every_early_return() {

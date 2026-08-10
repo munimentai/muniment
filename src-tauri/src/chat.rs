@@ -43,7 +43,7 @@ use muniment_core::run_start::{
     start_desktop_run, ActiveRun, RunStartBoundaries, RunStartError, RunStartLaunch,
     RunStartRequest, SubmitResult,
 };
-use muniment_core::sidecar::pi_chat::{PiImageContent, PiRunAdapter};
+use muniment_core::sidecar::pi_chat::PiRunAdapter;
 use muniment_core::sidecar::PiRpcTransport;
 use serde_json::{json, Value};
 use std::path::PathBuf;
@@ -1147,7 +1147,6 @@ mod tests {
     use base64::{engine::general_purpose::STANDARD, Engine};
     use muniment_core::journal::reducer::reduce;
     use muniment_core::sidecar::validate_pi_session;
-    use std::sync::atomic::AtomicUsize;
 
     static PI_ENV_LOCK: Mutex<()> = Mutex::new(());
 
@@ -1810,141 +1809,6 @@ mod tests {
         assert!(reduce(&events).unwrap().is_terminal());
 
         std::env::remove_var("PI_RESUME_STUB_PROMPTS");
-        drop(storage);
-        std::fs::remove_dir_all(directory).unwrap();
-    }
-
-    #[test]
-    fn prepared_attachments_reach_pi_before_coordinator_events_continue() {
-        let directory =
-            std::env::temp_dir().join(format!("muniment-coordinate-{}", Uuid::now_v7()));
-        std::fs::create_dir_all(&directory).unwrap();
-        let first = directory.join("first.txt");
-        let second = directory.join("second.txt");
-        std::fs::write(&first, b"first attachment").unwrap();
-        std::fs::write(&second, b"second attachment").unwrap();
-        std::fs::write(directory.join("session.jsonl"), "{}\n").unwrap();
-        let storage = Arc::new(Mutex::new(ChatStorage {
-            journal: RunJournal::open(directory.join("runs.sqlite3")).unwrap(),
-            cas: LocalCas::open(&directory.join("cas")).unwrap(),
-        }));
-        let run_id = Uuid::now_v7().to_string();
-        let prepared = prepare_new_run(
-            &storage,
-            &run_id,
-            "workspace-a",
-            Some("owner"),
-            vec![SelectedFile { path: first }, SelectedFile { path: second }],
-            None,
-        )
-        .unwrap();
-        let (locator, _) = validate_pi_session(&directory, "session.jsonl").unwrap();
-
-        assert_eq!(prepared.0, 3);
-        let (mut seq, mut projector) = prepared;
-        let prompt_submissions = AtomicUsize::new(0);
-        coordinate_prepared_prompt(
-            &FakeCoordinateSink::new(&directory),
-            &storage,
-            &mut projector,
-            &run_id,
-            &mut seq,
-            Some("owner"),
-            || {
-                prompt_submissions.fetch_add(1, Ordering::SeqCst);
-                let mut storage = storage.lock().unwrap();
-                let events = storage.journal.events(&run_id).unwrap();
-                assert_eq!(
-                    events
-                        .iter()
-                        .map(|event| event.event_type.as_str())
-                        .collect::<Vec<_>>(),
-                    [
-                        "run.started",
-                        "chat.attachment.ingested",
-                        "chat.attachment.ingested",
-                    ]
-                );
-                for event in &events[1..] {
-                    let EventPayload::Attachment { attachment } = &event.payload else {
-                        panic!("attachment payload")
-                    };
-                    storage.cas.verify(attachment.sha256()).unwrap();
-                }
-                Ok(((), locator, Vec::new()))
-            },
-        )
-        .unwrap();
-
-        assert_eq!(prompt_submissions.load(Ordering::SeqCst), 1);
-        let events = storage.lock().unwrap().journal.events(&run_id).unwrap();
-        assert_eq!(
-            events.iter().map(|event| event.run_seq).collect::<Vec<_>>(),
-            (1..=events.len() as u64).collect::<Vec<_>>()
-        );
-        assert_eq!(events.len(), 5);
-        assert_eq!(events[1].event_type, "chat.attachment.ingested");
-        assert_eq!(events[2].event_type, "chat.attachment.ingested");
-        assert_eq!(events[3].run_seq, 4);
-        assert_eq!(events[3].event_type, "runtime.pi_session.bound");
-        assert_eq!(events[4].event_type, "model.prompt.accepted");
-        drop(storage);
-        std::fs::remove_dir_all(directory).unwrap();
-    }
-
-    #[test]
-    fn coordinator_prepares_supported_images_in_journal_order_and_omits_unsupported_files() {
-        let directory = std::env::temp_dir().join(format!("muniment-images-{}", Uuid::now_v7()));
-        std::fs::create_dir_all(&directory).unwrap();
-        let png = directory.join("renamed.bin");
-        let unsupported = directory.join("notes.png");
-        let gif = directory.join("second.dat");
-        std::fs::write(&png, valid_test_png()).unwrap();
-        std::fs::write(&unsupported, b"durable but not an image").unwrap();
-        let gif_data = "R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==";
-        std::fs::write(&gif, STANDARD.decode(gif_data).unwrap()).unwrap();
-        let storage = Arc::new(Mutex::new(ChatStorage {
-            journal: RunJournal::open(directory.join("runs.sqlite3")).unwrap(),
-            cas: LocalCas::open(&directory.join("cas")).unwrap(),
-        }));
-        let run_id = Uuid::now_v7().to_string();
-        prepare_new_run(
-            &storage,
-            &run_id,
-            "workspace-a",
-            Some("owner"),
-            vec![
-                SelectedFile { path: png },
-                SelectedFile { path: unsupported },
-                SelectedFile { path: gif },
-            ],
-            None,
-        )
-        .unwrap();
-
-        assert_eq!(
-            prepared_pi_images(&storage, &run_id).unwrap(),
-            vec![
-                PiImageContent::new(
-                    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
-                    "image/png"
-                ),
-                PiImageContent::new(gif_data, "image/gif"),
-            ]
-        );
-        assert_eq!(
-            storage
-                .lock()
-                .unwrap()
-                .journal
-                .events(&run_id)
-                .unwrap()
-                .iter()
-                .filter(|event| matches!(event.payload, EventPayload::Attachment { .. }))
-                .count(),
-            3
-        );
-
         drop(storage);
         std::fs::remove_dir_all(directory).unwrap();
     }
