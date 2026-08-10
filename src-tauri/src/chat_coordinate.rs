@@ -13,9 +13,9 @@ use muniment_core::memory_failure::{MemoryFailure, MemoryFailureAnswer};
 use muniment_core::permission_gate::{
     coordinate_extension_ui_request, coordinate_permission_answer, PendingPermissionAnswer,
 };
-use muniment_core::pi_launch::{
-    pi_launch_config, pi_launch_config_for_executable, PiLaunchBoundaries, PiLaunchError,
-};
+#[cfg(test)]
+use muniment_core::pi_launch::pi_launch_config_for_executable;
+use muniment_core::pi_launch::{pi_launch_config, PiLaunchBoundaries, PiLaunchError};
 use muniment_core::run_events::{
     append_emit, append_terminal as core_append_terminal, fail, fail_start,
     fail_with_open_effects as core_fail_with_open_effects, ChatEventSink, SharedStorage,
@@ -29,9 +29,10 @@ use serde_json::{json, Value};
 use tauri::Manager;
 
 use crate::chat::{
-    coordinate_prepared_prompt, prepared_pi_prompt, ChatState, PiRuntime, PreparedPromptError,
-    ResumeAttempt, ResumeContext, TauriChatEventSink, RPC_TIMEOUT,
+    coordinate_prepared_prompt, prepared_pi_prompt, PiRuntime, PreparedPromptError, ResumeAttempt,
+    ResumeContext, TauriChatEventSink, RPC_TIMEOUT,
 };
+use crate::memory::ApplicationMemoryRuntime;
 
 /// Pairs one coordinate-loop state value with the runtime activity mark that
 /// follows it. Every mutation runs through `with`, so the mark cannot drift
@@ -103,33 +104,32 @@ impl MarkedGate {
     }
 }
 
-/// Reads the shared registry the desktop already manages. The coordinate loop
-/// never creates a second one.
-fn runtime_activity<R: tauri::Runtime>(
-    app: &tauri::AppHandle<R>,
-) -> Option<RuntimeActivityRegistry> {
-    app.try_state::<ChatState>()
-        .map(|state| state.runtime_activity.clone())
+struct CoordinatePiLaunchBoundaries<'a, R: tauri::Runtime> {
+    app: &'a TauriChatEventSink<R>,
+    memory_runtime: &'a ApplicationMemoryRuntime,
 }
 
-impl<R: tauri::Runtime> PiLaunchBoundaries for TauriChatEventSink<R> {
+impl<R: tauri::Runtime> PiLaunchBoundaries for CoordinatePiLaunchBoundaries<'_, R> {
     fn pi_session_root(&self) -> Result<std::path::PathBuf, PiLaunchError> {
-        self.path()
+        self.app
+            .path()
             .app_data_dir()
             .map(|path| ChatProfile::new(path).pi_session_root())
             .map_err(|_| PiLaunchError::UnavailableSessionRoot)
     }
 
     fn memory_agent_extension_path(&self) -> Option<std::path::PathBuf> {
-        self.try_state::<crate::memory::ApplicationMemoryRuntime>()
-            .map(|memory| memory.agent_extension_path())
+        Some(self.memory_runtime.agent_extension_path())
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(super) fn coordinate<R: tauri::Runtime>(
     app: tauri::AppHandle<R>,
     journal: SharedStorage,
     runtime: Arc<Mutex<Option<PiRuntime>>>,
+    runtime_activity: RuntimeActivityRegistry,
+    memory_runtime: Arc<ApplicationMemoryRuntime>,
     run_id: String,
     prompt: String,
     access_token: String,
@@ -144,6 +144,10 @@ pub(super) fn coordinate<R: tauri::Runtime>(
     prepared: Option<(u64, ChatProjector)>,
 ) {
     let app = TauriChatEventSink(app);
+    let launch_boundaries = CoordinatePiLaunchBoundaries {
+        app: &app,
+        memory_runtime: &memory_runtime,
+    };
     let mut resume_attempt = ResumeAttempt::new(resume_result);
     let (mut seq, mut projector) = prepared.unwrap_or_else(|| {
         (
@@ -224,14 +228,14 @@ pub(super) fn coordinate<R: tauri::Runtime>(
             #[cfg(test)]
             if let Some(executable) = std::env::var_os("MUNIMENT_PI_TEST_EXECUTABLE") {
                 pi_launch_config_for_executable(
-                    &app,
+                    &launch_boundaries,
                     executable.into(),
                     &grant,
                     resume.as_ref().map(|resume| &resume.locator),
                 )
             } else {
                 pi_launch_config(
-                    &app,
+                    &launch_boundaries,
                     root.as_deref().map(std::path::Path::new),
                     &grant,
                     resume.as_ref().map(|resume| &resume.locator),
@@ -239,7 +243,7 @@ pub(super) fn coordinate<R: tauri::Runtime>(
             }
             #[cfg(not(test))]
             pi_launch_config(
-                &app,
+                &launch_boundaries,
                 root.as_deref().map(std::path::Path::new),
                 &grant,
                 resume.as_ref().map(|resume| &resume.locator),
@@ -509,9 +513,8 @@ pub(super) fn coordinate<R: tauri::Runtime>(
     };
     let mut buffered_events = buffered_events.into_iter();
     let mut aborting = false;
-    let registry = runtime_activity(&app);
-    let mut open_effects = MarkedEffects::open_effects(registry.clone());
-    let mut pending_permission = MarkedGate::pending_permission(registry);
+    let mut open_effects = MarkedEffects::open_effects(Some(runtime_activity.clone()));
+    let mut pending_permission = MarkedGate::pending_permission(Some(runtime_activity));
     'coordinate: loop {
         if cancelled.swap(false, Ordering::SeqCst) {
             aborting = true;
@@ -667,6 +670,7 @@ pub(super) fn coordinate<R: tauri::Runtime>(
             Ok(event @ PiChatEvent::ExtensionUiRequest(_)) => {
                 if coordinate_memory_search(
                     &app,
+                    &memory_runtime,
                     &journal,
                     &mut projector,
                     &adapter,
@@ -734,8 +738,10 @@ pub(super) fn coordinate<R: tauri::Runtime>(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn coordinate_memory_search<R: tauri::Runtime>(
     app: &tauri::AppHandle<R>,
+    memory_runtime: &ApplicationMemoryRuntime,
     journal: &SharedStorage,
     projector: &mut ChatProjector,
     adapter: &PiRunAdapter,
@@ -753,20 +759,19 @@ fn coordinate_memory_search<R: tauri::Runtime>(
         seq,
         subject,
         event,
-        |arguments| dispatch_memory_search(app, run_id, arguments),
+        |arguments| dispatch_memory_search(memory_runtime, run_id, arguments),
         |request, answer| {
             let _ = adapter.answer_extension_ui(transport, request, answer);
         },
     )
 }
 
-fn dispatch_memory_search<R: tauri::Runtime>(
-    app: &tauri::AppHandle<R>,
+fn dispatch_memory_search(
+    memory_runtime: &ApplicationMemoryRuntime,
     run_id: &str,
     arguments: &str,
 ) -> Result<muniment_core::memory_index::MemorySearchResult, MemoryFailure> {
-    app.try_state::<crate::memory::ApplicationMemoryRuntime>()
-        .ok_or_else(MemoryFailure::runtime_unavailable)?
+    memory_runtime
         .dispatch_tool_call(run_id, "memory-search", arguments.as_bytes())
         .map_err(MemoryFailure::from_index_error)
 }
@@ -925,7 +930,10 @@ mod tests {
             &event,
             |arguments| match failure {
                 Some(failure) => Err(failure),
-                None => dispatch_memory_search(app.handle(), "run-1", arguments),
+                None => {
+                    let _ = arguments;
+                    Err(MemoryFailure::runtime_unavailable())
+                }
             },
             |_, answer| *captured.borrow_mut() = Some(answer),
         ));
@@ -1184,8 +1192,10 @@ mod tests {
         let home = root.join("home");
         std::fs::create_dir_all(home.join("memory")).unwrap();
         std::fs::write(home.join("memory/fact.md"), "saffron belongs in the pantry").unwrap();
-        let runtime =
-            crate::memory::ApplicationMemoryRuntime::new(root.join("config"), root.join("cache"));
+        let runtime = Arc::new(crate::memory::ApplicationMemoryRuntime::new(
+            root.join("config"),
+            root.join("cache"),
+        ));
         let run_id = Uuid::now_v7().to_string();
         runtime.open_session_for_home(
             &run_id,
@@ -1201,7 +1211,7 @@ mod tests {
         assert_eq!(first_definition, second_definition);
 
         let app = tauri::test::mock_app();
-        app.manage(runtime);
+        app.manage(Arc::clone(&runtime));
         let mut journal = RunJournal::open(root.join("runs.sqlite3")).unwrap();
         append_test_event(&mut journal, &run_id, 1, "run.started", json!({}), None);
         let mut projector = ChatProjector::new();
@@ -1258,6 +1268,7 @@ mod tests {
             });
             assert!(coordinate_memory_search(
                 app.handle(),
+                &runtime,
                 &shared,
                 &mut projector,
                 &adapter,
@@ -1301,7 +1312,7 @@ mod tests {
             };
             assert_eq!(payload_json["files"], json!(["memory/fact.md"]));
         }
-        app.state::<crate::memory::ApplicationMemoryRuntime>()
+        app.state::<Arc<crate::memory::ApplicationMemoryRuntime>>()
             .close_session(&run_id);
         assert_eq!(
             shared
