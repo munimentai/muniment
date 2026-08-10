@@ -42,10 +42,11 @@ fn main() {
         .setup(move |app| {
             let app_data = app.path().app_data_dir()?;
             let app_config = app.path().app_config_dir()?;
-            app.manage(memory::ApplicationMemoryRuntime::new(
+            let memory_runtime = Arc::new(memory::ApplicationMemoryRuntime::new(
                 app_config,
                 app_data.join("memory"),
             ));
+            app.manage(Arc::clone(&memory_runtime));
             app.manage(chat::ChatState::new(
                 app.handle(),
                 runtime_activity.clone(),
