@@ -531,22 +531,28 @@ the prepared slot and restarts the listener on a failed probe, because ADR
 0012 permits a temporary interval with no owner and never an interval with
 two.
 
-GATED — the runtime-service half of the handoff has no fileable slice yet.
-`probe_handoff` expects a `welcome` that carries `handoff_nonce`, and
-`Welcome::with_handoff_nonce` (`src-tauri/attach/src/negotiation.rs:108`)
-exists, but no listener sets the value. Only `muniment-runtime` should set it,
-and that binary opens no endpoint. `migration.control` also rides inside an
-authenticated session, because `dispatch_request`
-(`src-tauri/core/src/attach/linux.rs:2237`) runs after the authorization check.
-So the runtime service must first become an admitted client, and ADR 0012 names
-no approval path for it.
+DONE 2026-08-10 — ADR 0012 carries the migration control session admission
+amendment (MUNIDESK-1053). On Linux a connection whose `SO_PEERCRED` peer
+resolves to the installed `muniment-runtime` payload enters a dedicated
+migration control session, with no visible approval and no stored companion
+credential. The peer check is the only admission authority. The session
+authorizes `migration.control` alone, ends with the connection, and fails
+closed when the desktop cannot resolve the peer.
 
-SELECTED 2026-08-10 (thirteenth wave) — that authentication decision is now a
-filed ADR 0012 amendment ticket. It rules how a peer-verified
-`muniment-runtime` connection becomes an admitted client for
-`migration.control` alone, with no visible approval and no thread, run, or
-workspace authority. The runtime-listener slice follows the accepted
-amendment.
+SELECTED 2026-08-10 (fourteenth wave) — the desktop half of that admission is
+the next slice. `run_session` (`src-tauri/core/src/attach/linux.rs:1420`)
+reads the peer credentials before the authorization phase, and
+`verify_migration_control_peer_with_reader`
+(`src-tauri/core/src/attach/migration_authority.rs:46`) already checks a peer
+PID against the installed payload behind an injectable reader.
+
+SELECTED 2026-08-10 (fourteenth wave) — the runtime-side readiness listener is
+the other unblocked half. `muniment-runtime` gains a bounded listener that
+takes the instance lock, binds the endpoint, and answers one `hello` with a
+`welcome` that carries a given handoff nonce, so `probe_handoff` confirms a
+real handoff for the first time. The `migration.control` client half follows
+the admission slice, because both halves must agree about the runtime's
+`hello`.
 
 DONE 2026-08-08 — the listener stop is reported truthfully, and a stop that
 arrives during the bind window is kept (MUNIDESK-1015). `AttachListenerStopState`
@@ -588,12 +594,12 @@ disagree, because `chat_file_metadata` rejects a path with no usable final
 segment and `open_selected_files` does not. The lane waits for an owner look at
 why this one ticket never dispatches.
 
-MERGE HAZARD — two thirteenth-wave slices touch muniment-core. The
-canonical-bytes slice edits `src-tauri/core/src/code_diff.rs`, and the staging
-slice edits `src-tauri/core/src/lib.rs`. The dependency-injection move edits
+MERGE HAZARD — two fourteenth-wave slices touch muniment-core. The journal
+pair adds a module beside `src-tauri/core/src/lib.rs`, and the admission slice
+edits `src-tauri/core/src/attach/linux.rs`. The sink-generic move edits
 `src-tauri/src/chat_coordinate.rs` and `src-tauri/src/chat.rs`. Each ticket
-tells the implementer to rebase on `main` before it opens the pull request. The
-2026-08-04 silent revert came from a stale base.
+tells the implementer to rebase on `main` before it opens the pull request.
+The 2026-08-04 silent revert came from a stale base.
 
 DONE 2026-08-08 — the memory runtime is the twentieth core move
 (MUNIDESK-995). `src-tauri/core/src/memory_runtime.rs` composes one
@@ -645,14 +651,19 @@ pull request, which is the selected-file pattern. The twelfth wave said a
 second drain belongs to the owner, so this lane files no third copy and asks
 the owner why this ticket never dispatches.
 
-SELECTED 2026-08-10 (thirteenth wave) — the twenty-eighth move prepares the
-coordinate loop. The loop reads two values off the app handle.
-`dispatch_memory_search` (`src-tauri/src/chat_coordinate.rs:768`) reads
-`ApplicationMemoryRuntime`, and `runtime_activity` (`:111`) reads the registry
-out of `ChatState`. Each spawn site in `src-tauri/src/chat.rs` passes both
-handles into `coordinate` instead, so the loop performs no state lookup. The
-full coordinate-loop move follows. It waits on this slice alone rather than on
-the held listener-lifecycle move, because the two touch different files.
+DONE 2026-08-10 — the twenty-eighth move landed (MUNIDESK-1054).
+`coordinate` (`src-tauri/src/chat_coordinate.rs:127`) takes the journal, the
+Pi runtime slot, the activity registry, and the memory runtime as arguments,
+and each spawn site in `src-tauri/src/chat.rs` passes them in.
+
+SELECTED 2026-08-10 (fourteenth wave) — the twenty-ninth move makes the loop
+generic over its two remaining Tauri seams. `coordinate` still takes a
+`tauri::AppHandle`, and `coordinate_memory_search_with`
+(`src-tauri/src/chat_coordinate.rs:779`) rebuilds a `TauriChatEventSink` from
+it. The slice makes the loop and the memory-search helpers generic over
+`ChatEventSink` plus `PiLaunchBoundaries`, and the loop tests drive a fake
+sink instead of `tauri::test::mock_app`. The file move into muniment-core
+follows, and it is mechanical once no loop function names a Tauri type.
 
 SEQUENCED — the later extraction slices are the remaining Pi execution move, the
 desktop client conversion, and Linux user-unit registration, each behind a
@@ -782,21 +793,25 @@ producer pairs identical bytes deterministically. The write plan landed
 400-operation and 8 MiB and 64 MiB bounds, `encode`, and `decode_verified`
 with its SHA-256 and canonical-form checks, with no call site.
 
-SELECTED 2026-08-10 (thirteenth wave) — the RFC 8785 canonical `CodeDiff`
-bytes and the 2 MiB canonical-JSON cap are the next codec and producer slice.
-The codec gains a canonical-bytes function that sorts object keys explicitly,
-because the ACP SDK switches on `serde_json/preserve_order` across one cargo
-invocation. The producer measures those bytes and truncates at 2 MiB.
+DONE 2026-08-10 — the canonical-bytes slice landed (MUNIDESK-1051).
+`canonical_bytes` (`src-tauri/code-diff/src/lib.rs:219`) sorts object keys
+explicitly, every golden fixture carries a `.canonical.json` sibling, and
+`compute_code_diff` truncates a diff whose canonical form crosses 2 MiB.
 
-SELECTED 2026-08-10 (thirteenth wave) — the proposed-operation staging tree is
-the next pure producer slice. Nothing turns a list of proposed operations into
-the staged tree that `compute_code_diff` reads, and the slice lands with no
-call site, which is the `write_plan.rs` shape.
+DONE 2026-08-10 — the staging slice landed (MUNIDESK-1052).
+`stage_proposed_operations` (`src-tauri/core/src/code_diff_staging.rs:20`)
+turns a list of proposed operations into the staged tree that
+`compute_code_diff` reads, and it has no production call site, which is the
+`write_plan.rs` shape.
 
-SEQUENCED — the journal pair, `code.write-plan.staged` and `code.diff.proposed`,
-follows the canonical-bytes slice, because the diff event stores the canonical
-bytes in CAS. Slice 4, the produced diff inside the permission gate, and
-slice 5, the receipt replay, still wait behind the full producer.
+SELECTED 2026-08-10 (fourteenth wave) — the journal pair is the next producer
+slice. One core function stores the encoded write plan and the canonical diff
+bytes in CAS and appends `code.write-plan.staged` then `code.diff.proposed` in
+one transaction. Both envelopes carry the effect identifier as
+`correlation_id`, and the diff event carries the plan event's `event_id` as
+`causation_id`. The replay half follows it. Slice 4, the produced diff inside
+the permission gate, and slice 5, the receipt replay, still wait behind the
+full producer.
 
 DECLINED 2026-08-08 (ninth wave) — the planner returned the CLI ANSI renderer
 idea. ADR 0020 gave the CLI a hand-written terminal renderer, and the 2026-07-29
@@ -1273,6 +1288,11 @@ DONE 2026-08-09 — a third pair followed (MUNIDESK-1033, 1034). The JUnit
 report step and the shell gate accept the current harness layout, and the
 installed Linux run resolves `libsherpa-onnx-c-api.so` beside the binary.
 
+DONE 2026-08-10 — the Linux installed lane drives the hosted sign-in window
+through its own WebKitWebDriver (MUNIDESK-1056). The spec had assumed a
+Chrome driver on port 9515, which the Linux VM does not run, and the auth
+driver now stops in one shared cleanup path on every platform.
+
 DONE 2026-08-06 — the Windows-only tests run before they merge (MUNIDESK-946).
 Pull request CI never ran the 14 of them, and 12 failed inside the Windows lane.
 `test/windows-pr-gate.test.js` now guards the gate. MUNIDESK-950 pinned the
@@ -1294,17 +1314,15 @@ earlier one. Requiring an up-to-date branch before merge, or a merge queue, is a
 repository-settings change that sits with the owner. The planner files no ticket
 for it.
 
-VERIFIED 2026-08-10 (thirteenth wave, from a clean clone) — `npm ci` then
-`npm test` passed 915 frontend tests across 63 files, with 31 skipped,
+VERIFIED 2026-08-10 (fourteenth wave, from a clean clone) — `npm ci` then
+`npm test` passed 922 frontend tests across 63 files, with 31 skipped,
 counting the 3 browser tests. `cargo test -p muniment-core -p muniment-attach
--p muniment-cli -p muniment-code-diff` passed 1,062 tests with no failure. The
-planner read the landed twelfth-wave slices and confirmed the producer
-computes word segments, enforces the 200-file and 20,000-line limits, and
-pairs an exact-content rename, and that `write_plan.rs` and `pi_launch.rs`
-carry the recorded shapes. It confirmed the listener lifecycle tuple still
-sits at `src-tauri/src/attach_service.rs:240`, so the twenty-seventh move did
-not land. Earlier waves recorded the same shape of verification, and this
-entry replaces that ledger.
+-p muniment-cli -p muniment-code-diff` passed 1,072 tests with no failure, and
+`cargo test -p muniment-runtime` passed its 7. The planner read the landed
+thirteenth-wave slices and confirmed `canonical_bytes` and the 2 MiB
+truncation, `stage_proposed_operations`, the ADR 0012 admission amendment
+text, and the argument-taking `coordinate` signature. Earlier waves recorded
+the same shape of verification, and this entry replaces that ledger.
 
 NOTE 2026-08-06 — the planning clone ships no `node_modules`. Run `npm ci`
 before `npm test`. Without it the run dies with `vitest: not found`, which reads
