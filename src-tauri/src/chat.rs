@@ -21,6 +21,7 @@ use muniment_core::chat_grant::{
     fetch_grant as core_fetch_grant, validate_grant as core_validate_grant, ChatGrant,
     FetchGrantError,
 };
+use muniment_core::chat_coordinate::coordinate;
 use muniment_core::chat_profile::ChatProfile;
 pub(crate) use muniment_core::chat_resume::ResumeContext;
 use muniment_core::chat_resume::{resumable_context as core_resumable_context, ChatResumeError};
@@ -51,7 +52,6 @@ use tauri::{Emitter, Manager};
 use uuid::Uuid;
 
 use crate::auth;
-use crate::chat_coordinate::coordinate;
 use crate::chat_threads::newest_owned_workspace_thread;
 use muniment_core::session_thread::{OfferedThread, SessionThread};
 
