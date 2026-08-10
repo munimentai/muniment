@@ -124,25 +124,47 @@ fn observe_path(
         byte_length: length,
         sha256: Sha256::digest(&bytes).into(),
         mode: file_mode(&metadata),
-        identity: file_identity(&metadata),
+        identity: file_identity(&file, &metadata).map_err(|source| path_io(path, source))?,
     };
     current.insert(path.into(), bytes);
     Ok(ObservedPath::new(path, state, parent_identity))
 }
 
 #[cfg(unix)]
-fn file_identity(metadata: &std::fs::Metadata) -> StableFileIdentity {
+fn file_identity(
+    _file: &std::fs::File,
+    metadata: &std::fs::Metadata,
+) -> io::Result<StableFileIdentity> {
     use std::os::unix::fs::MetadataExt;
-    StableFileIdentity::new(metadata.dev(), u128::from(metadata.ino()))
+    Ok(StableFileIdentity::new(
+        metadata.dev(),
+        u128::from(metadata.ino()),
+    ))
 }
 
 #[cfg(windows)]
-fn file_identity(metadata: &std::fs::Metadata) -> StableFileIdentity {
-    use std::os::windows::fs::MetadataExt;
-    StableFileIdentity::new(
-        metadata.volume_serial_number().unwrap_or(0).into(),
-        metadata.file_index().unwrap_or(0).into(),
-    )
+fn file_identity(
+    file: &std::fs::File,
+    _metadata: &std::fs::Metadata,
+) -> io::Result<StableFileIdentity> {
+    use std::{mem::MaybeUninit, os::windows::io::AsRawHandle};
+    use windows_sys::Win32::Storage::FileSystem::{
+        GetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION,
+    };
+
+    let mut information = MaybeUninit::<BY_HANDLE_FILE_INFORMATION>::uninit();
+    let succeeded =
+        unsafe { GetFileInformationByHandle(file.as_raw_handle() as _, information.as_mut_ptr()) };
+    if succeeded == 0 {
+        return Err(io::Error::last_os_error());
+    }
+    let information = unsafe { information.assume_init() };
+    let file_index =
+        (u128::from(information.nFileIndexHigh) << 32) | u128::from(information.nFileIndexLow);
+    Ok(StableFileIdentity::new(
+        information.dwVolumeSerialNumber.into(),
+        file_index,
+    ))
 }
 
 #[cfg(unix)]
@@ -168,8 +190,9 @@ fn directory_identity(directory: &Dir) -> io::Result<StableFileIdentity> {
 
 #[cfg(windows)]
 fn directory_identity(directory: &Dir) -> io::Result<StableFileIdentity> {
-    let metadata = directory.try_clone()?.into_std_file().metadata()?;
-    Ok(file_identity(&metadata))
+    let file = directory.try_clone()?.into_std_file();
+    let metadata = file.metadata()?;
+    file_identity(&file, &metadata)
 }
 
 fn path_io(path: &str, source: io::Error) -> ObserveWritePlanError {
@@ -265,6 +288,10 @@ mod tests {
         }
     }
 
+    fn identity_for_path(path: &Path, metadata: &fs::Metadata) -> StableFileIdentity {
+        file_identity(&fs::File::open(path).unwrap(), metadata).unwrap()
+    }
+
     #[test]
     fn observes_operations_and_replays_the_stored_proposal() {
         let workspace = TestWorkspace::new();
@@ -310,7 +337,10 @@ mod tests {
                         byte_length: 7,
                         sha256: Sha256::digest(b"before\n").into(),
                         mode: file_mode(&rewrite_metadata),
-                        identity: file_identity(&rewrite_metadata),
+                        identity: identity_for_path(
+                            &workspace.root.join("rewrite.txt"),
+                            &rewrite_metadata,
+                        ),
                     }
                 );
             }
@@ -334,7 +364,7 @@ mod tests {
                         byte_length: 5,
                         sha256: Sha256::digest(b"move\n").into(),
                         mode: file_mode(&metadata),
-                        identity: file_identity(&metadata),
+                        identity: identity_for_path(&workspace.root.join("rename.txt"), &metadata,),
                     }
                 );
                 assert_eq!(target.state(), &ObservedState::Absent);
@@ -352,7 +382,7 @@ mod tests {
                         byte_length: 7,
                         sha256: Sha256::digest(b"remove\n").into(),
                         mode: file_mode(&metadata),
-                        identity: file_identity(&metadata),
+                        identity: identity_for_path(&workspace.root.join("delete.txt"), &metadata,),
                     }
                 );
             }
