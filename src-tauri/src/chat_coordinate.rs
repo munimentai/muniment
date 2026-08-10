@@ -13,6 +13,9 @@ use muniment_core::memory_failure::{MemoryFailure, MemoryFailureAnswer};
 use muniment_core::permission_gate::{
     coordinate_extension_ui_request, coordinate_permission_answer, PendingPermissionAnswer,
 };
+use muniment_core::pi_launch::{
+    pi_launch_config, pi_launch_config_for_executable, PiLaunchBoundaries, PiLaunchError,
+};
 use muniment_core::run_events::{
     append_emit, append_terminal as core_append_terminal, fail, fail_start,
     fail_with_open_effects as core_fail_with_open_effects, ChatEventSink, SharedStorage,
@@ -21,10 +24,7 @@ use muniment_core::sidecar::pi_chat::{
     cancel_command, ExtensionUiAnswer, ExtensionUiDialog, ExtensionUiRequest, PiChatEvent,
     PiRunAdapter,
 };
-use muniment_core::sidecar::pi_install::resolve_current;
-use muniment_core::sidecar::{
-    pi_sidecar_config, PiRpcTransport, PiRpcWiring, SidecarStatus, SidecarSupervisor,
-};
+use muniment_core::sidecar::{PiRpcTransport, PiRpcWiring, SidecarStatus, SidecarSupervisor};
 use serde_json::{json, Value};
 use tauri::Manager;
 
@@ -110,6 +110,20 @@ fn runtime_activity<R: tauri::Runtime>(
 ) -> Option<RuntimeActivityRegistry> {
     app.try_state::<ChatState>()
         .map(|state| state.runtime_activity.clone())
+}
+
+impl<R: tauri::Runtime> PiLaunchBoundaries for TauriChatEventSink<R> {
+    fn pi_session_root(&self) -> Result<std::path::PathBuf, PiLaunchError> {
+        self.path()
+            .app_data_dir()
+            .map(|path| ChatProfile::new(path).pi_session_root())
+            .map_err(|_| PiLaunchError::UnavailableSessionRoot)
+    }
+
+    fn memory_agent_extension_path(&self) -> Option<std::path::PathBuf> {
+        self.try_state::<crate::memory::ApplicationMemoryRuntime>()
+            .map(|memory| memory.agent_extension_path())
+    }
 }
 
 pub(super) fn coordinate<R: tauri::Runtime>(
@@ -203,9 +217,37 @@ pub(super) fn coordinate<R: tauri::Runtime>(
     // active session into this prompt.
     *runtime = None;
     {
-        let root = match std::env::var("MUNIMENT_PI_ROOT") {
-            Ok(root) => root,
-            Err(_) => {
+        let root = std::env::var("MUNIMENT_PI_ROOT").ok();
+        let config = if root.is_none() {
+            Err(PiLaunchError::MissingRoot)
+        } else {
+            #[cfg(test)]
+            if let Some(executable) = std::env::var_os("MUNIMENT_PI_TEST_EXECUTABLE") {
+                pi_launch_config_for_executable(
+                    &app,
+                    executable.into(),
+                    &grant,
+                    resume.as_ref().map(|resume| &resume.locator),
+                )
+            } else {
+                pi_launch_config(
+                    &app,
+                    root.as_deref().map(std::path::Path::new),
+                    &grant,
+                    resume.as_ref().map(|resume| &resume.locator),
+                )
+            }
+            #[cfg(not(test))]
+            pi_launch_config(
+                &app,
+                root.as_deref().map(std::path::Path::new),
+                &grant,
+                resume.as_ref().map(|resume| &resume.locator),
+            )
+        };
+        let config = match config {
+            Ok(config) => config,
+            Err(PiLaunchError::MissingRoot) => {
                 fail_start(
                     &app,
                     &journal,
@@ -218,16 +260,6 @@ pub(super) fn coordinate<R: tauri::Runtime>(
                 );
                 return;
             }
-        };
-        #[cfg(test)]
-        let executable = std::env::var_os("MUNIMENT_PI_TEST_EXECUTABLE")
-            .map(std::path::PathBuf::from)
-            .map(Ok)
-            .unwrap_or_else(|| resolve_current(std::path::Path::new(&root)));
-        #[cfg(not(test))]
-        let executable = resolve_current(std::path::Path::new(&root));
-        let executable = match executable {
-            Ok(path) => path,
             Err(_) => {
                 fail_start(
                     &app,
@@ -242,62 +274,6 @@ pub(super) fn coordinate<R: tauri::Runtime>(
                 return;
             }
         };
-        let session_root = match app.path().app_data_dir() {
-            Ok(path) => ChatProfile::new(path).pi_session_root(),
-            Err(_) => {
-                fail_start(
-                    &app,
-                    &journal,
-                    &mut projector,
-                    &run_id,
-                    &mut seq,
-                    "The agent runtime is unavailable.",
-                    subject.as_deref(),
-                    resume.is_some(),
-                );
-                return;
-            }
-        };
-        let mut config = match pi_sidecar_config(
-            executable.to_string_lossy(),
-            &session_root,
-            resume.as_ref().map(|resume| &resume.locator),
-        ) {
-            Ok(config) => config,
-            Err(_) => {
-                fail_start(
-                    &app,
-                    &journal,
-                    &mut projector,
-                    &run_id,
-                    &mut seq,
-                    "The agent runtime is unavailable.",
-                    subject.as_deref(),
-                    resume.is_some(),
-                );
-                return;
-            }
-        };
-        // This is a scoped LiteLLM virtual key, never a provider credential. It is
-        // inherited by the supervised child only and never serialized or logged.
-        config
-            .env
-            .insert("OPENAI_API_KEY".into(), grant.virtual_key.clone());
-        config
-            .env
-            .insert("OPENAI_BASE_URL".into(), grant.gateway_url.clone());
-        if let Some(model) = &grant.model {
-            config.env.insert("PI_DEFAULT_MODEL".into(), model.clone());
-        }
-        if let Some(memory) = app.try_state::<crate::memory::ApplicationMemoryRuntime>() {
-            let memory_extension = memory.agent_extension_path();
-            if memory_extension.is_file() {
-                config.args.extend([
-                    "--extension".into(),
-                    memory_extension.to_string_lossy().into_owned(),
-                ]);
-            }
-        }
         let wiring = PiRpcWiring::new();
         let supervisor =
             match SidecarSupervisor::spawn(config, wiring.readiness_probe(Duration::from_secs(10)))
