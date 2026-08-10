@@ -337,7 +337,7 @@ impl<R: tauri::Runtime> RunStartBoundaries for TauriRunStartBoundaries<R> {
         minimum_cacheable_prefix_characters: usize,
     ) -> Result<(), RunStartError> {
         self.app
-            .state::<crate::memory::ApplicationMemoryRuntime>()
+            .state::<Arc<crate::memory::ApplicationMemoryRuntime>>()
             .open_session(
                 run_id,
                 thread_id,
@@ -350,7 +350,7 @@ impl<R: tauri::Runtime> RunStartBoundaries for TauriRunStartBoundaries<R> {
 
     fn close_memory_session(&self, run_id: &str) {
         self.app
-            .state::<crate::memory::ApplicationMemoryRuntime>()
+            .state::<Arc<crate::memory::ApplicationMemoryRuntime>>()
             .close_session(run_id);
     }
 
@@ -380,11 +380,19 @@ impl<R: tauri::Runtime> RunStartBoundaries for TauriRunStartBoundaries<R> {
         let state = self.state();
         let storage = Arc::clone(&state.storage);
         let runtime = Arc::clone(&state.runtime);
+        let runtime_activity = state.runtime_activity.clone();
+        let memory_runtime = Arc::clone(
+            self.app
+                .state::<Arc<crate::memory::ApplicationMemoryRuntime>>()
+                .inner(),
+        );
         tauri::async_runtime::spawn_blocking(move || {
             coordinate(
                 app.clone(),
                 storage,
                 runtime,
+                runtime_activity,
+                memory_runtime,
                 launch.run_id.clone(),
                 launch.prompt,
                 launch.tokens.access_token,
@@ -399,7 +407,7 @@ impl<R: tauri::Runtime> RunStartBoundaries for TauriRunStartBoundaries<R> {
                 Some(launch.prepared),
             );
             if let Some(state) = app.try_state::<ChatState>() {
-                app.state::<crate::memory::ApplicationMemoryRuntime>()
+                app.state::<Arc<crate::memory::ApplicationMemoryRuntime>>()
                     .close_session(&launch.run_id);
                 clear_active_run(&state.active, &launch.run_id);
             }
@@ -523,7 +531,7 @@ fn open_resume_memory_session<R: tauri::Runtime>(
     thread_id: &str,
     minimum_cacheable_prefix_characters: usize,
 ) -> Result<(), String> {
-    app.state::<crate::memory::ApplicationMemoryRuntime>()
+    app.state::<Arc<crate::memory::ApplicationMemoryRuntime>>()
         .open_session(
             run_id,
             thread_id,
@@ -535,7 +543,7 @@ fn open_resume_memory_session<R: tauri::Runtime>(
 }
 
 fn close_resume_memory_session<R: tauri::Runtime>(app: &tauri::AppHandle<R>, run_id: &str) {
-    if let Some(memory) = app.try_state::<crate::memory::ApplicationMemoryRuntime>() {
+    if let Some(memory) = app.try_state::<Arc<crate::memory::ApplicationMemoryRuntime>>() {
         memory.close_session(run_id);
     }
 }
@@ -564,6 +572,8 @@ struct ResumeLaunch<R: tauri::Runtime> {
     app: tauri::AppHandle<R>,
     storage: SharedStorage,
     runtime: Arc<Mutex<Option<PiRuntime>>>,
+    runtime_activity: RuntimeActivityRegistry,
+    memory_runtime: Arc<crate::memory::ApplicationMemoryRuntime>,
     run_id: String,
     tokens: TokenSet,
     grant: ChatGrant,
@@ -582,6 +592,8 @@ fn run_resume<R: tauri::Runtime>(launch: ResumeLaunch<R>) {
         launch.app.clone(),
         launch.storage,
         launch.runtime,
+        launch.runtime_activity,
+        launch.memory_runtime,
         launch.run_id.clone(),
         RESUME_PROMPT.into(),
         launch.tokens.access_token,
@@ -667,10 +679,17 @@ pub async fn chat_resume(
     )?;
     let result_id = run_id.clone();
     let (attempt_sender, attempt_receiver) = std::sync::mpsc::channel();
+    let runtime_activity = state.runtime_activity.clone();
+    let memory_runtime = Arc::clone(
+        app.state::<Arc<crate::memory::ApplicationMemoryRuntime>>()
+            .inner(),
+    );
     let launch = ResumeLaunch {
         app,
         storage: Arc::clone(&state.storage),
         runtime: Arc::clone(&state.runtime),
+        runtime_activity,
+        memory_runtime,
         run_id,
         tokens,
         grant,
@@ -2098,6 +2117,11 @@ mod tests {
                 app.handle().clone(),
                 Arc::clone(&storage),
                 Arc::new(Mutex::new(None)),
+                RuntimeActivityRegistry::new(),
+                Arc::new(crate::memory::ApplicationMemoryRuntime::new(
+                    directory.join("memory-config"),
+                    directory.join("memory-cache"),
+                )),
                 run_id,
                 "original text prompt".into(),
                 "token".into(),
@@ -2274,6 +2298,11 @@ mod tests {
                 tauri::test::mock_app().handle().clone(),
                 Arc::clone(&storage),
                 Arc::new(Mutex::new(None)),
+                RuntimeActivityRegistry::new(),
+                Arc::new(crate::memory::ApplicationMemoryRuntime::new(
+                    directory.join("memory-config"),
+                    directory.join("memory-cache"),
+                )),
                 run_id.clone(),
                 "private prompt bytes".into(),
                 "token".into(),
@@ -2609,6 +2638,11 @@ mod tests {
             app.handle().clone(),
             Arc::clone(&shared),
             Arc::new(Mutex::new(None)),
+            RuntimeActivityRegistry::new(),
+            Arc::new(crate::memory::ApplicationMemoryRuntime::new(
+                directory.join("memory-config"),
+                directory.join("memory-cache"),
+            )),
             run_id.clone(),
             RESUME_PROMPT.into(),
             "token".into(),
@@ -2731,6 +2765,11 @@ mod tests {
             app.handle().clone(),
             Arc::clone(&shared),
             Arc::new(Mutex::new(None)),
+            RuntimeActivityRegistry::new(),
+            Arc::new(crate::memory::ApplicationMemoryRuntime::new(
+                directory.join("memory-config"),
+                directory.join("memory-cache"),
+            )),
             run_id.clone(),
             RESUME_PROMPT.into(),
             "token".into(),
@@ -2806,10 +2845,10 @@ mod tests {
         let app = tauri::test::mock_app();
         let root = std::env::temp_dir().join(format!("muniment-resume-memory-{}", Uuid::now_v7()));
         // The test records no Muniment Home, so the memory session cannot open.
-        app.manage(crate::memory::ApplicationMemoryRuntime::new(
+        app.manage(Arc::new(crate::memory::ApplicationMemoryRuntime::new(
             root.join("config"),
             root.join("cache"),
-        ));
+        )));
 
         let runtime_activity = RuntimeActivityRegistry::new();
         let active = Mutex::new(None);
@@ -2827,7 +2866,7 @@ mod tests {
         assert!(active.lock().unwrap().is_none());
         assert!(!runtime_activity.snapshot().active_run);
         assert!(app
-            .state::<crate::memory::ApplicationMemoryRuntime>()
+            .state::<Arc<crate::memory::ApplicationMemoryRuntime>>()
             .dispatch_tool_call("run-1", "memory-search", br#"{"query":"saffron"}"#)
             .is_err());
         assert!(!root.exists());
@@ -2844,10 +2883,10 @@ mod tests {
         let home = directory.join("home");
         muniment_core::home::confirm_home(&config, &home).unwrap();
         std::fs::write(home.join("memory/fact.md"), "saffron belongs in the pantry").unwrap();
-        app.manage(crate::memory::ApplicationMemoryRuntime::new(
+        app.manage(Arc::new(crate::memory::ApplicationMemoryRuntime::new(
             config,
             directory.join("cache"),
-        ));
+        )));
 
         let session_name = format!("{}.jsonl", Uuid::now_v7());
         let sessions = ChatProfile::new(app.path().app_data_dir().unwrap()).pi_session_root();
@@ -2951,6 +2990,11 @@ mod tests {
             app: app.handle().clone(),
             storage: Arc::clone(&shared),
             runtime: Arc::new(Mutex::new(None)),
+            runtime_activity: runtime_activity.clone(),
+            memory_runtime: Arc::clone(
+                app.state::<Arc<crate::memory::ApplicationMemoryRuntime>>()
+                    .inner(),
+            ),
             run_id: run_id.clone(),
             tokens: TokenSet {
                 access_token: "token".into(),
@@ -3003,7 +3047,7 @@ mod tests {
         assert_eq!(payload_json["thread"], json!(thread_id));
         assert_eq!(payload_json["character_budget"], json!(8_192));
         assert!(app
-            .state::<crate::memory::ApplicationMemoryRuntime>()
+            .state::<Arc<crate::memory::ApplicationMemoryRuntime>>()
             .dispatch_tool_call(&run_id, "memory-search", br#"{"query":"saffron"}"#)
             .is_err());
 
