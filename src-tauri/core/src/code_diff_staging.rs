@@ -116,7 +116,13 @@ fn validate_path(path: &str) -> Result<(), StageProposedOperationsError> {
     if path.is_empty() {
         return Err(StageProposedOperationsError::EmptyPath(path.to_owned()));
     }
-    if path.starts_with('/') {
+    let bytes = path.as_bytes();
+    if path.starts_with('/')
+        || (bytes.len() >= 3
+            && bytes[0].is_ascii_alphabetic()
+            && bytes[1] == b':'
+            && bytes[2] == b'/')
+    {
         return Err(StageProposedOperationsError::AbsolutePath(path.to_owned()));
     }
     if path.contains('\\') {
@@ -258,6 +264,10 @@ mod tests {
             (
                 "/a",
                 StageProposedOperationsError::AbsolutePath("/a".into()),
+            ),
+            (
+                "C:/outside",
+                StageProposedOperationsError::AbsolutePath("C:/outside".into()),
             ),
             (
                 "a//b",
