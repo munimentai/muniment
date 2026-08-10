@@ -217,9 +217,7 @@ impl Error for CanonicalBytesError {}
 
 /// Returns RFC 8785 canonical JSON bytes for a valid code diff.
 pub fn canonical_bytes(value: &CodeDiff) -> Result<Vec<u8>, CanonicalBytesError> {
-    value
-        .validate()
-        .map_err(CanonicalBytesError::Validation)?;
+    value.validate().map_err(CanonicalBytesError::Validation)?;
     let mut value = serde_json::to_value(value).map_err(CanonicalBytesError::Json)?;
     sort_object_keys(&mut value);
     serde_json::to_vec(&value).map_err(CanonicalBytesError::Json)
@@ -259,15 +257,21 @@ mod tests {
     fn canonicalization_ignores_object_key_insertion_order() {
         let mut first = Map::new();
         first.insert("z".into(), Value::Bool(true));
-        first.insert("a".into(), Value::Object(Map::from_iter([
-            ("y".into(), Value::from(2)),
-            ("b".into(), Value::from(1)),
-        ])));
+        first.insert(
+            "a".into(),
+            Value::Object(Map::from_iter([
+                ("y".into(), Value::from(2)),
+                ("b".into(), Value::from(1)),
+            ])),
+        );
         let mut second = Map::new();
-        second.insert("a".into(), Value::Object(Map::from_iter([
-            ("b".into(), Value::from(1)),
-            ("y".into(), Value::from(2)),
-        ])));
+        second.insert(
+            "a".into(),
+            Value::Object(Map::from_iter([
+                ("b".into(), Value::from(1)),
+                ("y".into(), Value::from(2)),
+            ])),
+        );
         second.insert("z".into(), Value::Bool(true));
         let (mut first, mut second) = (Value::Object(first), Value::Object(second));
 
