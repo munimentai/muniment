@@ -582,13 +582,12 @@ disagree, because `chat_file_metadata` rejects a path with no usable final
 segment and `open_selected_files` does not. The lane waits for an owner look at
 why this one ticket never dispatches.
 
-MERGE HAZARD — the open slices edit `src-tauri/src/attach_service.rs`,
-`src-tauri/src/chat_coordinate.rs`, `src-tauri/core/src/lib.rs`,
-`src-tauri/code-diff/src/lib.rs`, `src-tauri/cli/src/main.rs`, and
-`src-tauri/Cargo.lock`. Three eleventh-wave slices change a manifest or the
-lockfile, so a stale base rewrites it. Each ticket tells the implementer to
-rebase on `main` before it opens the pull request. The 2026-08-04 silent revert
-came from a stale base.
+MERGE HAZARD — three twelfth-wave slices edit `src-tauri/core/src/code_diff.rs`
+and its test file, and two more touch `src-tauri/core/src/lib.rs` or
+`src-tauri/core/src/attach/mod.rs`. The open Pi-launch move edits
+`src-tauri/src/chat_coordinate.rs`. Each ticket tells the implementer to rebase
+on `main` before it opens the pull request. The 2026-08-04 silent revert came
+from a stale base.
 
 DONE 2026-08-08 — the memory runtime is the twentieth core move
 (MUNIDESK-995). `src-tauri/core/src/memory_runtime.rs` composes one
@@ -631,12 +630,14 @@ reads the session root through `app.path()` and the memory extension through
 both, and the executable resolution, the `pi_sidecar_config` call, the grant
 environment variables, and the `--extension` argument move behind it.
 
-SELECTED 2026-08-09 (eleventh wave) — the twenty-seventh move takes the attach
+RE-FILED 2026-08-09 (twelfth wave) — the twenty-seventh move takes the attach
 listener lifecycle. `AttachCompanionState`
 (`src-tauri/src/attach_service.rs:234`) keeps the start outcome in a
 `(bool, Option<AttachListenerStartFailure>, bool)` tuple beside a stop state and
 a condvar. That state machine depends on no Tauri type, so it moves into
-muniment-core, and a named enum replaces the tuple.
+muniment-core, and a named enum replaces the tuple. The eleventh-wave filing
+drained without a pull request, so the twelfth wave filed it again. A second
+drain would repeat the MUNIDESK selected-file pattern and belongs to the owner.
 
 SEQUENCED — the coordinate loop itself moves after both, because it still reads
 the memory runtime and the activity registry off the app handle.
@@ -740,28 +741,50 @@ with the model, its validation, and a fixture exporter.
 `code-diff-fixtures-current` CI job, and `src/lib/code-diff.fixtures.test.js`
 reads the same files from the frontend.
 
-SELECTED 2026-08-09 (eleventh wave) — the CLI ANSI renderer is the next slice.
-ADR 0020 already fixes its whole output policy, so the slice adds a pure
-`CodeDiff`-to-text module under `src-tauri/cli/src/` and wires it into no
-command. `muniment-code-diff` already sits in the
-`test/cli-dependency-boundary.sh` allowlist.
+DONE 2026-08-09 — the CLI ANSI renderer is built (MUNIDESK-1041).
+`src-tauri/cli/src/code_diff_render.rs` renders a validated `CodeDiff` to
+terminal text, emphasizes producer-supplied segments, falls back to the whole
+line when the segments do not concatenate to `text`, and is wired into no
+command.
 
-SELECTED 2026-08-09 (eleventh wave) — the codec's file-status rules are the
-second slice. `CodeDiff::validate`
-(`src-tauri/code-diff/src/lib.rs:109`) checks the schema version, binary hunks,
-line numbers on a missing side, and hunk counts. It accepts an `added` file
-that still carries `oldPath`, a `deleted` file that carries `newPath`, and a
-`renamed` file whose two paths match. ADR 0020 says a path or a mode is absent
-when that side does not exist, and ADR 0024 binds approval to a validated
-value, so a contradictory path set must not reach a renderer. The fixture set
-also has no `added` and no `deleted` example, so no consumer tests an absent
-path side.
+DONE 2026-08-09 — the codec's file-status rules are built (MUNIDESK-1042).
+`CodeDiff::validate` (`src-tauri/code-diff/src/lib.rs:121`) rejects a path set
+that contradicts the file status, and the fixture set now carries `added`,
+`deleted`, `empty`, and `truncated` examples beside the earlier three.
 
-SELECTED 2026-08-09 (eleventh wave) — the ADR 0024 producer starts at its pure
-half. One muniment-core function computes a validated `CodeDiff` from a current
-tree and a staged tree held in memory. It touches no Pi message, no journal, no
-CAS, and no filesystem. Intra-line word segments, rename detection, and the ADR
-0024 limits follow as separate slices.
+DONE 2026-08-09 — the ADR 0024 producer's pure half is built (MUNIDESK-1043).
+`compute_code_diff` (`src-tauri/core/src/code_diff.rs:12`) computes a validated
+`CodeDiff` from a current tree and a staged tree held in memory, with an LCS
+edit script, three context lines, and hunk coalescing. It touches no Pi
+message, no journal, no CAS, and no filesystem.
+
+SELECTED 2026-08-09 (twelfth wave) — intra-line word segments are the next
+producer slice. The producer gives every line one `plain` segment
+(`code_diff.rs:247`), so no renderer can emphasize a word change, while the CLI
+renderer (`src-tauri/cli/src/code_diff_render.rs:91`) and the fixture
+`modified.json` already carry the segment shape.
+
+SELECTED 2026-08-09 (twelfth wave) — the ADR 0024 file-count and rendered-line
+limits follow. The producer enforces no bound and always sets
+`truncated: false`. More than 200 changed files must reject, and crossing
+20,000 rendered lines must truncate by omitting only complete trailing hunks
+or files in stable path order.
+
+SELECTED 2026-08-09 (twelfth wave) — exact-content rename detection follows.
+The producer never emits `renamed`, so a moved file renders as a full delete
+plus a full add. The slice pairs identical bytes deterministically and leaves
+similarity matching out of scope.
+
+SELECTED 2026-08-09 (twelfth wave) — the ADR 0024 write plan starts at its
+pure half. `src-tauri/core/src/write_plan.rs` defines the immutable plan
+model, its 400-operation and 8 MiB and 64 MiB bounds, deterministic
+serialization, and SHA-256 verification, with no call site. That is the shape
+`quiesce.rs` and `handoff_probe.rs` landed in.
+
+SEQUENCED — the RFC 8785 canonical `CodeDiff` bytes and the 2 MiB
+canonical-JSON cap follow the limits slice, because the cap measures the
+canonical bytes. Slice 4, the produced diff inside the permission gate, and
+slice 5, the receipt replay, still wait behind the full producer.
 
 DECLINED 2026-08-08 (ninth wave) — the planner returned the CLI ANSI renderer
 idea. ADR 0020 gave the CLI a hand-written terminal renderer, and the 2026-07-29
@@ -1259,18 +1282,16 @@ earlier one. Requiring an up-to-date branch before merge, or a merge queue, is a
 repository-settings change that sits with the owner. The planner files no ticket
 for it.
 
-VERIFIED 2026-08-09 (eleventh wave, from a clean clone) — `npm ci` then `npm
-test` passed 910 frontend tests across 62 files, with 31 skipped, and the
+VERIFIED 2026-08-09 (twelfth wave, from a clean clone) — `npm ci` then `npm
+test` passed 912 frontend tests across 62 files, with 31 skipped, and the
 browser suite passed 3. `cargo test -p muniment-core -p muniment-attach -p
-muniment-cli -p muniment-code-diff` passed with no failure. The planner then
-read the landed codec crate and its five golden fixtures, the CLI source, the
-handoff release step, the migration control dispatcher and its authorization
-gate, the listener lifecycle state, and the coordinate loop's remaining
-app-handle seams. It rebuilt the bundle and captured the empty workspace and
-the restored thread at 1100x760 in headless Chromium. The receipt summary now
-renders its expand marker on a control that clears the 24 pixel floor. Earlier
-waves recorded the same shape of verification, and this entry replaces that
-ledger.
+muniment-cli -p muniment-code-diff` passed 1,035 tests with no failure. The
+planner then read the three landed code-diff slices and confirmed the producer
+emits one `plain` segment per line, detects no rename, and enforces no ADR
+0024 limit. It confirmed the listener lifecycle tuple still sits at
+`src-tauri/src/attach_service.rs:240`, so the twenty-seventh move did not
+land. Earlier waves recorded the same shape of verification, and this entry
+replaces that ledger.
 
 NOTE 2026-08-06 — the planning clone ships no `node_modules`. Run `npm ci`
 before `npm test`. Without it the run dies with `vitest: not found`, which reads
