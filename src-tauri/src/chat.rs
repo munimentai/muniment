@@ -14,9 +14,7 @@ use muniment_core::attach::linux::{
 #[cfg(target_os = "linux")]
 use muniment_core::attach::ProtocolError;
 use muniment_core::attach::{RuntimeActivityGuard, RuntimeActivityRegistry};
-use muniment_core::attachment::{
-    ingest_attachment, prepare_pi_images, AttachmentDeliveryError, AttachmentMetadata,
-};
+use muniment_core::attachment::{ingest_attachment, AttachmentDeliveryError, AttachmentMetadata};
 use muniment_core::auth::TokenSet;
 use muniment_core::cas::LocalCas;
 use muniment_core::chat_grant::{
@@ -34,15 +32,19 @@ use muniment_core::journal::{
 };
 use muniment_core::memory_index::ModelMemoryCapability;
 use muniment_core::permission_gate::{ChatPermissionAnswer, PendingPermissionAnswer};
+pub(crate) use muniment_core::pi_execution::{
+    attachment_delivery_error, attachment_error, coordinate_prepared_prompt, prepared_pi_images,
+    prepared_pi_prompt, PiRuntime, PreparedPromptError, ResumeAttempt, RPC_TIMEOUT,
+};
 use muniment_core::pi_launch::{PiLaunchBoundaries, PiLaunchError};
-use muniment_core::run_events::{append_emit, ChatEvent, ChatEventSink};
+use muniment_core::run_events::{ChatEvent, ChatEventSink};
 pub(crate) use muniment_core::run_events::{ChatStorage, SharedStorage};
 use muniment_core::run_start::{
     start_desktop_run, ActiveRun, RunStartBoundaries, RunStartError, RunStartLaunch,
     RunStartRequest, SubmitResult,
 };
-use muniment_core::sidecar::pi_chat::{PiChatEvent, PiImageContent, PiRunAdapter, PromptCommand};
-use muniment_core::sidecar::{PiRpcTransport, PiRpcWiring, PiSessionLocator, SidecarSupervisor};
+use muniment_core::sidecar::pi_chat::{PiImageContent, PiRunAdapter};
+use muniment_core::sidecar::PiRpcTransport;
 use serde_json::{json, Value};
 use std::path::PathBuf;
 use tauri::{Emitter, Manager};
@@ -52,13 +54,6 @@ use crate::auth;
 use crate::chat_coordinate::coordinate;
 use crate::chat_threads::newest_owned_workspace_thread;
 use muniment_core::session_thread::{OfferedThread, SessionThread};
-
-pub(super) const RPC_TIMEOUT: Duration = Duration::from_secs(30);
-
-pub(super) struct PiRuntime {
-    pub(super) supervisor: SidecarSupervisor,
-    pub(super) wiring: PiRpcWiring,
-}
 
 pub(crate) struct TauriChatEventSink<R: tauri::Runtime> {
     app: tauri::AppHandle<R>,
@@ -460,30 +455,6 @@ impl ChatState {
 const RESUME_PROMPT: &str =
     "Continue the interrupted response from the existing session. Do not repeat completed work.";
 
-pub(super) struct ResumeAttempt {
-    result: Option<std::sync::mpsc::Sender<Result<(), String>>>,
-}
-
-impl ResumeAttempt {
-    pub(super) fn new(result: Option<std::sync::mpsc::Sender<Result<(), String>>>) -> Self {
-        Self { result }
-    }
-
-    pub(super) fn accepted(&mut self) {
-        if let Some(result) = self.result.take() {
-            let _ = result.send(Ok(()));
-        }
-    }
-}
-
-impl Drop for ResumeAttempt {
-    fn drop(&mut self) {
-        if let Some(result) = self.result.take() {
-            let _ = result.send(Err("This reply could not be resumed. Try again.".into()));
-        }
-    }
-}
-
 fn protect_prompt(run_id: &str, prompt: &str, subject: Option<&str>) -> Result<(), String> {
     muniment_core::chat_prompt::store_prompt(run_id, prompt, subject)
         .map_err(|_| "Conversation history is unavailable.".to_string())
@@ -775,57 +746,6 @@ fn clear_active_run(active: &Mutex<Option<ActiveRun>>, run_id: &str) {
     if active.as_ref().is_some_and(|current| current.id == run_id) {
         *active = None;
     }
-}
-
-pub(crate) fn attachment_error() -> String {
-    "One or more selected files could not be added. Check the files and try again.".into()
-}
-
-fn attachment_delivery_error(error: AttachmentDeliveryError) -> String {
-    match error {
-        AttachmentDeliveryError::ImageSizeLimit { display_name } => format!(
-            "{display_name} exceeds the 10 MB image limit. Choose a smaller image before sending again."
-        ),
-        AttachmentDeliveryError::ImageCountLimit { display_name } => format!(
-            "{display_name} crosses the 10-image limit. Remove an image before sending again."
-        ),
-        AttachmentDeliveryError::ImageTotalSizeLimit { display_name } => format!(
-            "{display_name} crosses the 20 MB total image limit. Remove images or choose smaller images before sending again."
-        ),
-        AttachmentDeliveryError::AmbiguousFormat { display_name } => format!(
-            "{display_name} has an image format Muniment cannot verify. Choose a PNG, JPEG, GIF, or WebP image before sending again."
-        ),
-        AttachmentDeliveryError::Storage(_) | AttachmentDeliveryError::InvalidStoredLength => {
-            attachment_error()
-        }
-    }
-}
-
-fn prepared_pi_images(
-    storage: &SharedStorage,
-    run_id: &str,
-) -> Result<Vec<PiImageContent>, String> {
-    let mut storage = storage.lock().map_err(|_| attachment_error())?;
-    let events = storage
-        .journal
-        .events(run_id)
-        .map_err(|_| attachment_error())?;
-    prepare_pi_images(&storage.cas, &events)
-        .map_err(attachment_delivery_error)
-        .map(|images| {
-            images
-                .into_iter()
-                .map(|image| PiImageContent::new(image.data, image.mime_type))
-                .collect()
-        })
-}
-
-pub(super) fn prepared_pi_prompt<'a>(
-    storage: &SharedStorage,
-    run_id: &str,
-    prompt: &'a str,
-) -> Result<PromptCommand<'a>, String> {
-    prepared_pi_images(storage, run_id).map(|images| PromptCommand::with_images(prompt, images))
 }
 
 struct OpenSelectedFile {
@@ -1133,49 +1053,6 @@ pub async fn chat_queue(
             message,
         },
     )
-}
-
-#[derive(Debug)]
-pub(super) enum PreparedPromptError {
-    Start,
-    SessionRoot,
-    Binding,
-    Journal,
-}
-
-pub(super) fn coordinate_prepared_prompt<T>(
-    sink: &impl ChatEventSink,
-    journal: &SharedStorage,
-    projector: &mut ChatProjector,
-    run_id: &str,
-    seq: &mut u64,
-    subject: Option<&str>,
-    submit: impl FnOnce() -> Result<(T, PiSessionLocator, Vec<PiChatEvent>), PreparedPromptError>,
-) -> Result<(T, Vec<PiChatEvent>), PreparedPromptError> {
-    let (handle, locator, buffered_events) = submit()?;
-    append_emit(
-        sink,
-        journal,
-        projector,
-        run_id,
-        seq,
-        "runtime.pi_session.bound",
-        json!({"run_id": run_id, "locator": locator.as_str()}),
-        subject,
-    )
-    .map_err(|_| PreparedPromptError::Journal)?;
-    append_emit(
-        sink,
-        journal,
-        projector,
-        run_id,
-        seq,
-        "model.prompt.accepted",
-        json!({}),
-        subject,
-    )
-    .map_err(|_| PreparedPromptError::Journal)?;
-    Ok((handle, buffered_events))
 }
 
 #[tauri::command]
@@ -2413,48 +2290,6 @@ mod tests {
     }
 
     #[test]
-    fn delivery_errors_name_the_limit_and_recovery() {
-        assert_eq!(
-            attachment_delivery_error(AttachmentDeliveryError::ImageSizeLimit {
-                display_name: "photo.jpg".into(),
-            }),
-            "photo.jpg exceeds the 10 MB image limit. Choose a smaller image before sending again."
-        );
-        assert_eq!(
-            attachment_delivery_error(AttachmentDeliveryError::ImageCountLimit {
-                display_name: "eleventh.png".into(),
-            }),
-            "eleventh.png crosses the 10-image limit. Remove an image before sending again."
-        );
-        assert_eq!(
-            attachment_delivery_error(AttachmentDeliveryError::ImageTotalSizeLimit {
-                display_name: "last.gif".into(),
-            }),
-            "last.gif crosses the 20 MB total image limit. Remove images or choose smaller images before sending again."
-        );
-        assert_eq!(
-            attachment_delivery_error(AttachmentDeliveryError::AmbiguousFormat {
-                display_name: "unclear.webp".into(),
-            }),
-            "unclear.webp has an image format Muniment cannot verify. Choose a PNG, JPEG, GIF, or WebP image before sending again."
-        );
-    }
-
-    #[test]
-    fn storage_and_stored_length_errors_keep_the_generic_message() {
-        assert_eq!(
-            attachment_delivery_error(AttachmentDeliveryError::Storage(
-                muniment_core::cas::CasError::InvalidHash("invalid".into()),
-            )),
-            attachment_error()
-        );
-        assert_eq!(
-            attachment_delivery_error(AttachmentDeliveryError::InvalidStoredLength),
-            attachment_error()
-        );
-    }
-
-    #[test]
     fn event_envelope_records_the_owning_subject() {
         let owned = event_envelope("run-1", 1, "run.started", json!({}), Some("sub-a"));
         assert_eq!(owned.provenance.actor_id.as_deref(), Some("sub-a"));
@@ -2540,23 +2375,6 @@ mod tests {
             .filter_map(|result| result.as_ref().err().map(String::as_str))
             .collect();
         assert_eq!(errors, ["A reply is already in progress."]);
-    }
-
-    #[test]
-    fn resume_attempt_reports_acceptance_and_every_early_return() {
-        let (sender, receiver) = std::sync::mpsc::channel();
-        drop(ResumeAttempt::new(Some(sender)));
-        assert_eq!(
-            receiver.recv().unwrap().unwrap_err(),
-            "This reply could not be resumed. Try again."
-        );
-
-        let (sender, receiver) = std::sync::mpsc::channel();
-        let mut attempt = ResumeAttempt::new(Some(sender));
-        attempt.accepted();
-        drop(attempt);
-        assert_eq!(receiver.recv().unwrap(), Ok(()));
-        assert!(receiver.try_recv().is_err());
     }
 
     #[test]
