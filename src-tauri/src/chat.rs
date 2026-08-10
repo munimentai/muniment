@@ -34,6 +34,7 @@ use muniment_core::journal::{
 };
 use muniment_core::memory_index::ModelMemoryCapability;
 use muniment_core::permission_gate::{ChatPermissionAnswer, PendingPermissionAnswer};
+use muniment_core::pi_launch::{PiLaunchBoundaries, PiLaunchError};
 use muniment_core::run_events::{append_emit, ChatEvent, ChatEventSink};
 pub(crate) use muniment_core::run_events::{ChatStorage, SharedStorage};
 use muniment_core::run_start::{
@@ -59,19 +60,40 @@ pub(super) struct PiRuntime {
     pub(super) wiring: PiRpcWiring,
 }
 
-pub(crate) struct TauriChatEventSink<R: tauri::Runtime>(pub(crate) tauri::AppHandle<R>);
+pub(crate) struct TauriChatEventSink<R: tauri::Runtime> {
+    app: tauri::AppHandle<R>,
+    memory_runtime: Arc<crate::memory::ApplicationMemoryRuntime>,
+}
 
-impl<R: tauri::Runtime> std::ops::Deref for TauriChatEventSink<R> {
-    type Target = tauri::AppHandle<R>;
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
+impl<R: tauri::Runtime> TauriChatEventSink<R> {
+    fn new(
+        app: tauri::AppHandle<R>,
+        memory_runtime: Arc<crate::memory::ApplicationMemoryRuntime>,
+    ) -> Self {
+        Self {
+            app,
+            memory_runtime,
+        }
     }
 }
 
 impl<R: tauri::Runtime> ChatEventSink for TauriChatEventSink<R> {
     fn deliver(&self, event: ChatEvent) -> Result<(), ()> {
-        self.0.emit("chat-event", event).map_err(|_| ())
+        self.app.emit("chat-event", event).map_err(|_| ())
+    }
+}
+
+impl<R: tauri::Runtime> PiLaunchBoundaries for TauriChatEventSink<R> {
+    fn pi_session_root(&self) -> Result<PathBuf, PiLaunchError> {
+        self.app
+            .path()
+            .app_data_dir()
+            .map(|path| ChatProfile::new(path).pi_session_root())
+            .map_err(|_| PiLaunchError::UnavailableSessionRoot)
+    }
+
+    fn memory_agent_extension_path(&self) -> Option<PathBuf> {
+        Some(self.memory_runtime.agent_extension_path())
     }
 }
 
@@ -387,8 +409,9 @@ impl<R: tauri::Runtime> RunStartBoundaries for TauriRunStartBoundaries<R> {
                 .inner(),
         );
         tauri::async_runtime::spawn_blocking(move || {
+            let sink = TauriChatEventSink::new(app.clone(), Arc::clone(&memory_runtime));
             coordinate(
-                app.clone(),
+                sink,
                 storage,
                 runtime,
                 runtime_activity,
@@ -588,8 +611,9 @@ struct ResumeLaunch<R: tauri::Runtime> {
 /// Completes the resumed run. The memory session closes and the active run
 /// clears on both the normal and the failed path.
 fn run_resume<R: tauri::Runtime>(launch: ResumeLaunch<R>) {
+    let sink = TauriChatEventSink::new(launch.app.clone(), Arc::clone(&launch.memory_runtime));
     coordinate(
-        launch.app.clone(),
+        sink,
         launch.storage,
         launch.runtime,
         launch.runtime_activity,
@@ -1119,8 +1143,8 @@ pub(super) enum PreparedPromptError {
     Journal,
 }
 
-pub(super) fn coordinate_prepared_prompt<R: tauri::Runtime, T>(
-    app: &tauri::AppHandle<R>,
+pub(super) fn coordinate_prepared_prompt<T>(
+    sink: &impl ChatEventSink,
     journal: &SharedStorage,
     projector: &mut ChatProjector,
     run_id: &str,
@@ -1129,9 +1153,8 @@ pub(super) fn coordinate_prepared_prompt<R: tauri::Runtime, T>(
     submit: impl FnOnce() -> Result<(T, PiSessionLocator, Vec<PiChatEvent>), PreparedPromptError>,
 ) -> Result<(T, Vec<PiChatEvent>), PreparedPromptError> {
     let (handle, locator, buffered_events) = submit()?;
-    let sink = TauriChatEventSink(app.clone());
     append_emit(
-        &sink,
+        sink,
         journal,
         projector,
         run_id,
@@ -1142,7 +1165,7 @@ pub(super) fn coordinate_prepared_prompt<R: tauri::Runtime, T>(
     )
     .map_err(|_| PreparedPromptError::Journal)?;
     append_emit(
-        &sink,
+        sink,
         journal,
         projector,
         run_id,
@@ -1250,6 +1273,34 @@ mod tests {
     use std::sync::atomic::AtomicUsize;
 
     static PI_ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    struct FakeCoordinateSink {
+        session_root: PathBuf,
+    }
+
+    impl FakeCoordinateSink {
+        fn new(app_data_dir: &std::path::Path) -> Self {
+            Self {
+                session_root: ChatProfile::new(app_data_dir.to_owned()).pi_session_root(),
+            }
+        }
+    }
+
+    impl ChatEventSink for FakeCoordinateSink {
+        fn deliver(&self, _event: ChatEvent) -> Result<(), ()> {
+            Ok(())
+        }
+    }
+
+    impl PiLaunchBoundaries for FakeCoordinateSink {
+        fn pi_session_root(&self) -> Result<PathBuf, PiLaunchError> {
+            Ok(self.session_root.clone())
+        }
+
+        fn memory_agent_extension_path(&self) -> Option<PathBuf> {
+            None
+        }
+    }
 
     #[cfg(target_os = "linux")]
     #[test]
@@ -1888,7 +1939,6 @@ mod tests {
 
     #[test]
     fn prepared_attachments_reach_pi_before_coordinator_events_continue() {
-        let app = tauri::test::mock_app();
         let directory =
             std::env::temp_dir().join(format!("muniment-coordinate-{}", Uuid::now_v7()));
         std::fs::create_dir_all(&directory).unwrap();
@@ -1917,7 +1967,7 @@ mod tests {
         let (mut seq, mut projector) = prepared;
         let prompt_submissions = AtomicUsize::new(0);
         coordinate_prepared_prompt(
-            app.handle(),
+            &FakeCoordinateSink::new(&directory),
             &storage,
             &mut projector,
             &run_id,
@@ -2026,15 +2076,11 @@ mod tests {
     fn coordinator_sends_exact_ordered_images_and_preserves_text_only_prompt_shape() {
         let _environment = lock_pi_environment();
         for with_images in [true, false] {
-            let app = tauri::test::mock_app();
-            // The coordinator refuses to create the session root itself
-            // (ownership must be established by the install flow), so a fresh
-            // machine needs it created here, exactly like the resume test.
-            let sessions = ChatProfile::new(app.path().app_data_dir().unwrap()).pi_session_root();
-            std::fs::create_dir_all(&sessions).unwrap();
             let directory =
                 std::env::temp_dir().join(format!("muniment-prompt-capture-{}", Uuid::now_v7()));
             std::fs::create_dir_all(&directory).unwrap();
+            let sessions = ChatProfile::new(directory.clone()).pi_session_root();
+            std::fs::create_dir_all(&sessions).unwrap();
             let request_log = directory.join("requests.jsonl");
             let mut files = Vec::new();
             if with_images {
@@ -2114,7 +2160,7 @@ mod tests {
             std::env::set_var("MUNIMENT_PI_TEST_EXECUTABLE", &stub);
             std::env::set_var("PI_RESUME_STUB_REQUESTS", &request_log);
             coordinate(
-                app.handle().clone(),
+                FakeCoordinateSink::new(&directory),
                 Arc::clone(&storage),
                 Arc::new(Mutex::new(None)),
                 RuntimeActivityRegistry::new(),
@@ -2295,7 +2341,7 @@ mod tests {
             std::env::set_var("MUNIMENT_PI_TEST_EXECUTABLE", &stub);
             std::env::set_var("PI_RESUME_STUB_REQUESTS", &request_log);
             coordinate(
-                tauri::test::mock_app().handle().clone(),
+                FakeCoordinateSink::new(&directory),
                 Arc::clone(&storage),
                 Arc::new(Mutex::new(None)),
                 RuntimeActivityRegistry::new(),
@@ -2592,7 +2638,6 @@ mod tests {
     #[test]
     fn resume_runtime_failure_leaves_the_existing_journal_event_for_event_unchanged() {
         let _environment = lock_pi_environment();
-        let app = tauri::test::mock_app();
         let directory = std::env::temp_dir().join(format!("muniment-resume-{}", Uuid::now_v7()));
         std::fs::create_dir_all(&directory).unwrap();
         let path = directory.join("runs.sqlite3");
@@ -2635,7 +2680,7 @@ mod tests {
         std::env::remove_var("MUNIMENT_PI_ROOT");
         let (sender, receiver) = std::sync::mpsc::channel();
         coordinate(
-            app.handle().clone(),
+            FakeCoordinateSink::new(&directory),
             Arc::clone(&shared),
             Arc::new(Mutex::new(None)),
             RuntimeActivityRegistry::new(),
@@ -2681,14 +2726,13 @@ mod tests {
     #[test]
     fn resume_reopens_the_stub_session_and_completes_the_same_contiguous_run() {
         let _environment = lock_pi_environment();
-        let app = tauri::test::mock_app();
         let directory = std::env::temp_dir().join(format!("muniment-resume-{}", Uuid::now_v7()));
         std::fs::create_dir_all(&directory).unwrap();
         let args_log = directory.join("args.txt");
         let prompt_log = directory.join("prompt.txt");
         let request_log = directory.join("requests.jsonl");
         let session_name = format!("{}.jsonl", Uuid::now_v7());
-        let sessions = ChatProfile::new(app.path().app_data_dir().unwrap()).pi_session_root();
+        let sessions = ChatProfile::new(directory.clone()).pi_session_root();
         std::fs::create_dir_all(&sessions).unwrap();
         std::fs::write(sessions.join(&session_name), "persisted Pi data\n").unwrap();
 
@@ -2762,7 +2806,7 @@ mod tests {
         std::env::set_var("PI_RESUME_STUB_REQUESTS", &request_log);
         let (sender, receiver) = std::sync::mpsc::channel();
         coordinate(
-            app.handle().clone(),
+            FakeCoordinateSink::new(&directory),
             Arc::clone(&shared),
             Arc::new(Mutex::new(None)),
             RuntimeActivityRegistry::new(),
