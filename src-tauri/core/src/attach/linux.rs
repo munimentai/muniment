@@ -27,6 +27,7 @@ use super::{
     RunEventAdmission, RunStreamCursor, MAX_RUN_STREAM_WINDOW_BYTES, MAX_RUN_STREAM_WINDOW_EVENTS,
     MAX_RUN_STREAM_WINDOW_TEXT_BYTES,
 };
+use crate::browser_control::LinuxProcReader;
 use crate::journal::{
     thread_summaries::ThreadSummaryListError, JournalCommitHint, RunEventPageError, RunJournal,
 };
@@ -714,6 +715,12 @@ pub struct AuthorizationSessionDependencies<R, C, G, W> {
     pub approvals: W,
 }
 
+/// Injectable authority for migration control session admission.
+pub struct MigrationControlSessionDependencies<'a> {
+    pub expected_executable: &'a Path,
+    pub process_reader: &'a dyn LinuxProcReader,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ThreadListRequest {
     pub limit: u8,
@@ -1286,6 +1293,37 @@ pub fn run_authenticated_session_with_service_approvals_and_registry<
     )
 }
 
+/// Runs the concrete service with companion approvals and migration peer admission.
+pub fn run_authenticated_session_with_service_approvals_registry_and_migration<
+    S: ThreadListService,
+    W: ApprovalWaiter,
+>(
+    stream: UnixStream,
+    credentials: PeerCredentials,
+    desktop_version: &str,
+    service: &mut S,
+    approvals: W,
+    registry: &LiveConnectionRegistry,
+    migration: MigrationControlSessionDependencies<'_>,
+) -> Result<(), AttachSessionError> {
+    let mut random = |bytes: &mut [u8]| getrandom::fill(bytes).map_err(|_| ());
+    run_authenticated_session_with_authorization_registry_and_migration(
+        stream,
+        credentials,
+        desktop_version,
+        HELLO_TIMEOUT,
+        AuthorizationSessionDependencies {
+            fill_random: &mut random,
+            clock: SessionClock(Instant::now()),
+            tokens: SessionTokens,
+            approvals,
+        },
+        service,
+        registry,
+        migration,
+    )
+}
+
 #[doc(hidden)]
 pub fn run_authenticated_session_with_service_approvals_registry_and_timeout<
     S: ThreadListService,
@@ -1414,6 +1452,38 @@ where
         dependencies,
         service,
         registry,
+        None,
+    )
+}
+
+/// Runs a session with an injected migration control peer authority.
+#[doc(hidden)]
+pub fn run_authenticated_session_with_authorization_registry_and_migration<R, C, G, W, S>(
+    stream: UnixStream,
+    credentials: PeerCredentials,
+    desktop_version: &str,
+    timeout: Duration,
+    dependencies: AuthorizationSessionDependencies<R, C, G, W>,
+    service: &mut S,
+    registry: &LiveConnectionRegistry,
+    migration: MigrationControlSessionDependencies<'_>,
+) -> Result<(), AttachSessionError>
+where
+    R: FnMut(&mut [u8]) -> Result<(), ()>,
+    C: AuthorizationClock + Clone,
+    G: AuthorizationTokenGenerator,
+    W: ApprovalWaiter,
+    S: ThreadListService,
+{
+    run_session(
+        stream,
+        credentials,
+        desktop_version,
+        timeout,
+        dependencies,
+        service,
+        registry,
+        Some(migration),
     )
 }
 
@@ -1425,6 +1495,7 @@ fn run_session<R, C, G, W, S>(
     dependencies: AuthorizationSessionDependencies<R, C, G, W>,
     service: &mut S,
     registry: &LiveConnectionRegistry,
+    migration: Option<MigrationControlSessionDependencies<'_>>,
 ) -> Result<(), AttachSessionError>
 where
     R: FnMut(&mut [u8]) -> Result<(), ()>,
@@ -1492,6 +1563,17 @@ where
             }
         };
 
+        let migration_peer = migration.is_some_and(|migration| {
+            u32::try_from(credentials.pid).is_ok_and(|peer_pid| {
+                super::verify_migration_control_peer_with_reader(
+                    peer_pid,
+                    migration.expected_executable,
+                    migration.process_reader,
+                )
+                .is_ok()
+            })
+        });
+
         let mut nonce = [0u8; 16];
         fill_random(&mut nonce).map_err(|_| AttachSessionError::Randomness)?;
         let server_nonce = hex(&nonce);
@@ -1502,6 +1584,18 @@ where
             companion_identity: format!("{}:{}", credentials.uid, credentials.pid),
             companion_kind: companion_kind.clone(),
         };
+        if migration_peer {
+            return run_migration_control_session(
+                &mut stream,
+                credentials,
+                desktop_version,
+                selected,
+                timeout,
+                server_nonce,
+                &mut fill_random,
+                service,
+            );
+        }
         let reconnect = authorized_client_credential
             .as_deref()
             .and_then(|credential| {
@@ -1645,6 +1739,114 @@ where
     })();
     let _ = stream.shutdown(std::net::Shutdown::Both);
     result
+}
+
+#[derive(serde::Serialize)]
+struct MigrationControlAuthorized<'a> {
+    profile_id: &'a str,
+    capability: &'a str,
+    expires_at: u64,
+    idle_timeout_seconds: u64,
+    workspace_scopes: BTreeMap<String, std::collections::BTreeSet<String>>,
+}
+
+fn run_migration_control_session<S: ThreadListService>(
+    stream: &mut UnixStream,
+    credentials: PeerCredentials,
+    desktop_version: &str,
+    selected: u32,
+    timeout: Duration,
+    server_nonce: String,
+    fill_random: &mut impl FnMut(&mut [u8]) -> Result<(), ()>,
+    service: &mut S,
+) -> Result<(), AttachSessionError> {
+    let deadline = Instant::now()
+        .checked_add(timeout)
+        .ok_or(AttachSessionError::Timeout)?;
+    let response = muniment_attach::reconnect_welcome(selected, desktop_version, server_nonce, "");
+    write_before(
+        stream,
+        &encode_frame(&response).map_err(|_| AttachSessionError::MalformedFrame)?,
+        deadline,
+    )?;
+    let mut capability_bytes = [0u8; 32];
+    fill_random(&mut capability_bytes).map_err(|_| AttachSessionError::Randomness)?;
+    let capability = hex(&capability_bytes);
+    let authorized = MigrationControlAuthorized {
+        profile_id: "",
+        capability: &capability,
+        expires_at: timeout.as_secs(),
+        idle_timeout_seconds: timeout.as_secs(),
+        workspace_scopes: BTreeMap::new(),
+    };
+    write_before(
+        stream,
+        &encode_frame(&authorized).map_err(|_| AttachSessionError::MalformedFrame)?,
+        deadline,
+    )?;
+    let provenance = CompanionProvenance {
+        profile: String::new(),
+        companion_kind: String::new(),
+        companion_version: String::new(),
+        peer_uid: credentials.uid,
+        peer_pid: credentials.pid as u32,
+    };
+    loop {
+        let deadline = Instant::now()
+            .checked_add(timeout)
+            .ok_or(AttachSessionError::Timeout)?;
+        let request = read_request_before(stream, deadline)?;
+        let request_id = request.request_id.clone();
+        if request.operation != Operation::MigrationControl || request.capability != capability {
+            write_request_error(
+                stream,
+                Some(request_id),
+                ProtocolError::unauthorized(),
+                deadline,
+            );
+            continue;
+        }
+        match dispatch_request(request, "", provenance.clone(), service, &mut Vec::new()) {
+            Ok(dispatched) => {
+                let response = Response {
+                    protocol: Protocol,
+                    request_id,
+                    ok: Success,
+                    body: dispatched.body,
+                };
+                write_before(
+                    stream,
+                    &encode_frame(&response).map_err(|_| AttachSessionError::MalformedFrame)?,
+                    deadline,
+                )?;
+            }
+            Err(failure) => write_request_error(stream, Some(request_id), failure.error, deadline),
+        }
+    }
+}
+
+fn read_request_before(
+    stream: &mut UnixStream,
+    deadline: Instant,
+) -> Result<Request, AttachSessionError> {
+    let mut prefix = [0u8; 4];
+    read_before(stream, &mut prefix, deadline)?;
+    let length = u32::from_be_bytes(prefix) as usize;
+    if length > MAX_FRAME_LENGTH {
+        write_protocol_error(stream, ProtocolError::payload_too_large(), deadline);
+        return Err(AttachSessionError::PayloadTooLarge);
+    }
+    let mut frame = Vec::with_capacity(4 + length);
+    frame.extend_from_slice(&prefix);
+    frame.resize(4 + length, 0);
+    read_before(stream, &mut frame[4..], deadline)?;
+    match super::decode_frame::<Envelope>(&frame) {
+        Ok(Some((Envelope::Request(request), consumed))) if consumed == frame.len() => Ok(request),
+        _ => {
+            write_protocol_error(stream, ProtocolError::malformed_frame(), deadline);
+            Err(AttachSessionError::MalformedFrame)
+        }
+    }
 }
 
 fn read_before(

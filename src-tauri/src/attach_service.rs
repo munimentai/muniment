@@ -17,17 +17,21 @@ use std::sync::{Arc, Condvar};
 #[cfg(target_os = "linux")]
 use std::time::{Duration, Instant};
 
-#[cfg(all(target_os = "linux", test))]
-use muniment_core::attach::linux::run_authenticated_session_with_service_and_approvals;
 #[cfg(target_os = "linux")]
 use muniment_core::attach::linux::{
     approval_waiter_with_claims, attach_listener_start_diagnostic,
-    run_authenticated_session_with_service_approvals_and_registry, AttachAcceptError,
+    run_authenticated_session_with_service_approvals_registry_and_migration, AttachAcceptError,
     AttachFilesystem, AttachListenerStartFailure, AttachStopHandle, AttachTransport,
-    CompanionProvenance, LiveConnectionRegistry, PermissionAnswerAccepted, PermissionAnswerRequest,
-    PermissionDecision, RunCancelAccepted, RunCancelRequest, RunStartAccepted,
-    RunStartRequest as AttachRunStartRequest, RunStreamPage, ThreadCreateAccepted, ThreadListPage,
-    ThreadListRequest, ThreadListService, ThreadOpenPage, ThreadOpenRequest,
+    CompanionProvenance, LiveConnectionRegistry, MigrationControlSessionDependencies,
+    PermissionAnswerAccepted, PermissionAnswerRequest, PermissionDecision, RunCancelAccepted,
+    RunCancelRequest, RunStartAccepted, RunStartRequest as AttachRunStartRequest, RunStreamPage,
+    ThreadCreateAccepted, ThreadListPage, ThreadListRequest, ThreadListService, ThreadOpenPage,
+    ThreadOpenRequest,
+};
+#[cfg(all(target_os = "linux", test))]
+use muniment_core::attach::linux::{
+    run_authenticated_session_with_service_and_approvals,
+    run_authenticated_session_with_service_approvals_and_registry,
 };
 #[cfg(target_os = "linux")]
 use muniment_core::attach::{
@@ -36,6 +40,8 @@ use muniment_core::attach::{
     MigrationAuthorityError, Operation, PreparedHandoffSlot, Protocol, Request as AttachRequest,
     RuntimeActivity, RuntimeActivityRegistry, WorkspaceOnboardRequest, WorkspaceOnboarded,
 };
+#[cfg(target_os = "linux")]
+use muniment_core::browser_control::ProcReader;
 #[cfg(target_os = "linux")]
 use muniment_core::journal::Provenance;
 #[cfg(target_os = "linux")]
@@ -792,7 +798,16 @@ fn run_attach_listener_with_hooks<R: tauri::Runtime>(
                 .state::<AttachApprovalState>()
                 .inner()
                 .clone();
-            let _ = run_authenticated_session_with_service_approvals_and_registry(
+            let expected_executable = service
+                .boundaries
+                .app
+                .path()
+                .resource_dir()
+                .ok()
+                .map(|directory| directory.join("muniment-runtime"))
+                .unwrap_or_else(|| PathBuf::from("muniment-runtime"));
+            let process_reader = ProcReader;
+            let _ = run_authenticated_session_with_service_approvals_registry_and_migration(
                 stream,
                 credentials,
                 env!("CARGO_PKG_VERSION"),
@@ -813,6 +828,10 @@ fn run_attach_listener_with_hooks<R: tauri::Runtime>(
                     },
                 ),
                 &live_connections,
+                MigrationControlSessionDependencies {
+                    expected_executable: &expected_executable,
+                    process_reader: &process_reader,
+                },
             );
         });
     }
