@@ -5,14 +5,15 @@ use std::{
 };
 
 use muniment_code_diff::{
-    CodeDiff, DiffFile, DiffHunk, DiffLine, DiffLineKind, DiffLineSegment, DiffLineSegmentKind,
-    DiffStatus,
+    canonical_bytes, CodeDiff, DiffFile, DiffHunk, DiffLine, DiffLineKind, DiffLineSegment,
+    DiffLineSegmentKind, DiffStatus,
 };
 use uuid::Uuid;
 
 const CONTEXT_LINES: usize = 3;
 const MAX_CHANGED_FILES: usize = 200;
 const MAX_RENDERED_LINES: usize = 20_000;
+const MAX_CANONICAL_BYTES: usize = 2 * 1024 * 1024;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ComputeCodeDiffError {
@@ -129,14 +130,35 @@ pub fn compute_code_diff(
         }
     }
 
-    let diff = CodeDiff {
+    let mut diff = CodeDiff {
         schema_version: 1,
         id: Uuid::now_v7().to_string(),
         files,
         truncated,
     };
+    truncate_to_canonical_byte_limit(&mut diff);
     debug_assert!(diff.validate().is_ok());
     Ok(diff)
+}
+
+fn truncate_to_canonical_byte_limit(diff: &mut CodeDiff) {
+    if canonical_bytes(diff).expect("the producer creates a valid code diff").len()
+        <= MAX_CANONICAL_BYTES
+    {
+        return;
+    }
+
+    diff.truncated = true;
+    while canonical_bytes(diff).expect("the producer creates a valid code diff").len()
+        > MAX_CANONICAL_BYTES
+    {
+        let Some(last_file) = diff.files.last_mut() else {
+            break;
+        };
+        if last_file.hunks.pop().is_none() {
+            diff.files.pop();
+        }
+    }
 }
 
 fn is_binary(bytes: &[u8]) -> bool {
