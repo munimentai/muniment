@@ -11,6 +11,23 @@ fn tree(files: &[(&str, &[u8])]) -> BTreeMap<String, Vec<u8>> {
         .collect()
 }
 
+fn assert_segments_match_lines(diff: &muniment_code_diff::CodeDiff) {
+    for line in diff
+        .files
+        .iter()
+        .flat_map(|file| &file.hunks)
+        .flat_map(|hunk| &hunk.lines)
+    {
+        assert_eq!(
+            line.segments
+                .iter()
+                .map(|segment| segment.text.as_str())
+                .collect::<String>(),
+            line.text
+        );
+    }
+}
+
 #[test]
 fn computes_sorted_valid_files_with_a_uuid_v7() {
     let current = tree(&[("b.txt", b"old"), ("d.txt", b"gone"), ("same", b"x")]);
@@ -62,10 +79,89 @@ fn emits_three_context_lines_and_consistent_hunk_metadata() {
             .count(),
         6
     );
-    for line in &hunk.lines {
+}
+
+#[test]
+fn emits_word_segments_for_paired_lines() {
+    let old = b"context\nHello old wide world\ndeleted alone";
+    let new = b"context\nHello new small world\nadded one\nadded two";
+    let diff = compute_code_diff(&tree(&[("file", old)]), &tree(&[("file", new)]));
+    let lines = &diff.files[0].hunks[0].lines;
+
+    diff.validate().unwrap();
+    assert_segments_match_lines(&diff);
+    assert_eq!(lines[0].segments.len(), 1);
+    assert_eq!(lines[0].segments[0].kind, DiffLineSegmentKind::Plain);
+    assert_eq!(
+        lines[1]
+            .segments
+            .iter()
+            .map(|segment| (segment.kind, segment.text.as_str()))
+            .collect::<Vec<_>>(),
+        vec![
+            (DiffLineSegmentKind::Plain, "Hello "),
+            (DiffLineSegmentKind::Deletion, "old wide"),
+            (DiffLineSegmentKind::Plain, " world"),
+        ]
+    );
+    assert_eq!(
+        lines[3]
+            .segments
+            .iter()
+            .map(|segment| (segment.kind, segment.text.as_str()))
+            .collect::<Vec<_>>(),
+        vec![
+            (DiffLineSegmentKind::Plain, "Hello "),
+            (DiffLineSegmentKind::Addition, "new small"),
+            (DiffLineSegmentKind::Plain, " world"),
+        ]
+    );
+    for line in [lines.last().unwrap(), &lines[2]] {
         assert_eq!(line.segments.len(), 1);
         assert_eq!(line.segments[0].kind, DiffLineSegmentKind::Plain);
-        assert_eq!(line.segments[0].text, line.text);
+    }
+}
+
+#[test]
+fn matches_the_modified_fixture_segment_shape() {
+    let diff = compute_code_diff(
+        &tree(&[("file", b"Hello world")]),
+        &tree(&[("file", b"Hello Muniment")]),
+    );
+    let lines = &diff.files[0].hunks[0].lines;
+
+    assert_eq!(lines[0].segments[0].text, "Hello ");
+    assert_eq!(lines[0].segments[1].kind, DiffLineSegmentKind::Deletion);
+    assert_eq!(lines[0].segments[1].text, "world");
+    assert_eq!(lines[1].segments[0].text, "Hello ");
+    assert_eq!(lines[1].segments[1].kind, DiffLineSegmentKind::Addition);
+    assert_eq!(lines[1].segments[1].text, "Muniment");
+}
+
+#[test]
+fn keeps_full_rewrites_plain_and_all_segments_match_their_lines() {
+    let current = tree(&[
+        ("modified", b"old words"),
+        ("spacing", b"same words"),
+        ("deleted", b"gone"),
+    ]);
+    let staged = tree(&[
+        ("modified", b"new text"),
+        ("spacing", b"same  words"),
+        ("added", b"here"),
+    ]);
+    let diff = compute_code_diff(&current, &staged);
+
+    diff.validate().unwrap();
+    assert_segments_match_lines(&diff);
+    for line in diff
+        .files
+        .iter()
+        .flat_map(|file| &file.hunks)
+        .flat_map(|hunk| &hunk.lines)
+    {
+        assert_eq!(line.segments.len(), 1);
+        assert_eq!(line.segments[0].kind, DiffLineSegmentKind::Plain);
     }
 }
 
@@ -101,9 +197,9 @@ fn reports_an_added_final_newline() {
     assert_eq!((hunk.old_start, hunk.old_count), (1, 1));
     assert_eq!((hunk.new_start, hunk.new_count), (1, 1));
     assert_eq!(hunk.lines.len(), 2);
-    assert_eq!(hunk.lines[0].kind, DiffLineKind::Addition);
+    assert_eq!(hunk.lines[0].kind, DiffLineKind::Deletion);
     assert_eq!(hunk.lines[0].text, "a");
-    assert_eq!(hunk.lines[1].kind, DiffLineKind::Deletion);
+    assert_eq!(hunk.lines[1].kind, DiffLineKind::Addition);
     assert_eq!(hunk.lines[1].text, "a");
 }
 
@@ -115,8 +211,8 @@ fn reports_a_removed_final_newline() {
     assert_eq!((hunk.old_start, hunk.old_count), (1, 1));
     assert_eq!((hunk.new_start, hunk.new_count), (1, 1));
     assert_eq!(hunk.lines.len(), 2);
-    assert_eq!(hunk.lines[0].kind, DiffLineKind::Addition);
+    assert_eq!(hunk.lines[0].kind, DiffLineKind::Deletion);
     assert_eq!(hunk.lines[0].text, "a");
-    assert_eq!(hunk.lines[1].kind, DiffLineKind::Deletion);
+    assert_eq!(hunk.lines[1].kind, DiffLineKind::Addition);
     assert_eq!(hunk.lines[1].text, "a");
 }
