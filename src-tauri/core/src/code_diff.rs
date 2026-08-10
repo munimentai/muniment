@@ -371,6 +371,13 @@ fn line_segments(
     trailing: usize,
     changed_kind: DiffLineSegmentKind,
 ) -> Vec<DiffLineSegment> {
+    if leading + trailing == words.len() {
+        return vec![DiffLineSegment {
+            kind: DiffLineSegmentKind::Plain,
+            text: text.to_owned(),
+        }];
+    }
+
     let changed_start = words.get(leading).map_or(text.len(), |word| word.0);
     let changed_end = words
         .get(words.len().saturating_sub(trailing + 1))

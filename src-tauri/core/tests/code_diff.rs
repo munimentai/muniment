@@ -139,6 +139,54 @@ fn matches_the_modified_fixture_segment_shape() {
 }
 
 #[test]
+fn emits_word_segments_when_only_one_line_has_middle_words() {
+    for (old, new, expected) in [
+        (
+            b"Hello world".as_slice(),
+            b"Hello brave world".as_slice(),
+            vec![
+                vec![(DiffLineSegmentKind::Plain, "Hello world")],
+                vec![
+                    (DiffLineSegmentKind::Plain, "Hello "),
+                    (DiffLineSegmentKind::Addition, "brave"),
+                    (DiffLineSegmentKind::Plain, " world"),
+                ],
+            ],
+        ),
+        (
+            b"Hello brave world".as_slice(),
+            b"Hello world".as_slice(),
+            vec![
+                vec![
+                    (DiffLineSegmentKind::Plain, "Hello "),
+                    (DiffLineSegmentKind::Deletion, "brave"),
+                    (DiffLineSegmentKind::Plain, " world"),
+                ],
+                vec![(DiffLineSegmentKind::Plain, "Hello world")],
+            ],
+        ),
+    ] {
+        let diff = compute_code_diff(&tree(&[("file", old)]), &tree(&[("file", new)]));
+        let lines = &diff.files[0].hunks[0].lines;
+
+        diff.validate().unwrap();
+        assert_segments_match_lines(&diff);
+        assert_eq!(
+            lines
+                .iter()
+                .map(|line| {
+                    line.segments
+                        .iter()
+                        .map(|segment| (segment.kind, segment.text.as_str()))
+                        .collect::<Vec<_>>()
+                })
+                .collect::<Vec<_>>(),
+            expected
+        );
+    }
+}
+
+#[test]
 fn keeps_full_rewrites_plain_and_all_segments_match_their_lines() {
     let current = tree(&[
         ("modified", b"old words"),
