@@ -269,3 +269,25 @@ one handoff at a time. It rejects a second request while a handoff is prepared.
 This rule excludes an approved companion from migration control authority. It
 does not defend against compromise by another process running as the current
 OS user. Windows and macOS need a later amendment for their own peer identity.
+
+## Amendment — 2026-08-10: migration control session admission
+
+On Linux, a connection whose `SO_PEERCRED` peer resolves to the installed
+`muniment-runtime` payload enters a dedicated migration control session. This
+session needs no visible approval and receives no stored companion credential.
+The peer check, not a claimed kind, client ID, or reconnect credential, is the
+only admission authority.
+
+The session authorizes only `migration.control`. It has no workspace scope and
+no thread, run, permission, subscription, authentication, or other companion
+authority. The dispatcher rejects every other companion operation on that
+session. The session ends with the connection and cannot authorize a later
+connection.
+
+Admission fails closed when the desktop cannot resolve the peer or cannot
+match its executable to the installed payload. The request still passes the
+migration control peer check and the single-prepared-handoff rule from the
+2026-08-05 amendment. This admission path shares that amendment's limitation:
+it does not defend against compromise by another process running as the
+current OS user. Windows and macOS need later peer-identity amendments before
+they can use this admission path.
