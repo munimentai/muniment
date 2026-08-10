@@ -65,26 +65,36 @@ describe('installed nightly', () => {
       timeout: 60000,
       timeoutMsg: 'production sign-in continuation was not opened',
     })
-    let edgeDriver
-    if (process.platform === 'win32') {
-      // The Tauri service has already put the WebView2-matched Edge driver on
-      // PATH. Reuse those exact test-side bytes for the hosted auth window.
-      edgeDriver = spawn('msedgedriver.exe', ['--port=9515', '--allowed-ips=127.0.0.1', '--log-level=WARNING'], {
-        stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true,
-      })
-      edgeDriver.stdout.pipe((await import('node:fs')).createWriteStream(path.join(rawDir, 'edge-auth-driver.log')))
-      edgeDriver.stderr.pipe((await import('node:fs')).createWriteStream(path.join(rawDir, 'edge-auth-driver.log'), { flags: 'a' }))
-      await browser.waitUntil(async () => {
-        try { return (await fetch('http://127.0.0.1:9515/status')).ok } catch { return false }
-      }, { timeout: 30000, timeoutMsg: 'matching Edge WebDriver did not start' })
-    }
-    const signInBrowser = await remote({
-      hostname: '127.0.0.1', port: 9515, logLevel: 'error',
-      capabilities: process.platform === 'win32'
-        ? { browserName: 'MicrosoftEdge', 'ms:edgeOptions': { args: ['--headless=new', '--disable-gpu'] } }
-        : { browserName: 'chrome', 'goog:chromeOptions': { args: ['--headless=new', '--no-sandbox', '--disable-dev-shm-usage'] } },
-    })
+    let authDriver
+    let signInBrowser
     try {
+      if (process.platform === 'win32') {
+        // The Tauri service has already put the WebView2-matched Edge driver on
+        // PATH. Reuse those exact test-side bytes for the hosted auth window.
+        authDriver = spawn('msedgedriver.exe', ['--port=9515', '--allowed-ips=127.0.0.1', '--log-level=WARNING'], {
+          stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true,
+        })
+        authDriver.stdout.pipe((await import('node:fs')).createWriteStream(path.join(rawDir, 'edge-auth-driver.log')))
+        authDriver.stderr.pipe((await import('node:fs')).createWriteStream(path.join(rawDir, 'edge-auth-driver.log'), { flags: 'a' }))
+        await browser.waitUntil(async () => {
+          try { return (await fetch('http://127.0.0.1:9515/status')).ok } catch { return false }
+        }, { timeout: 30000, timeoutMsg: 'matching Edge WebDriver did not start' })
+      } else if (process.platform === 'linux') {
+        authDriver = spawn('WebKitWebDriver', ['--port=9515'], { stdio: ['ignore', 'pipe', 'pipe'] })
+        authDriver.stdout.pipe((await import('node:fs')).createWriteStream(path.join(rawDir, 'webkit-auth-driver.log')))
+        authDriver.stderr.pipe((await import('node:fs')).createWriteStream(path.join(rawDir, 'webkit-auth-driver.log'), { flags: 'a' }))
+        await browser.waitUntil(async () => {
+          try { return (await fetch('http://127.0.0.1:9515/status')).ok } catch { return false }
+        }, { timeout: 30000, timeoutMsg: 'WebKitWebDriver did not start' })
+      }
+      signInBrowser = await remote({
+        hostname: '127.0.0.1', port: 9515, logLevel: 'error',
+        capabilities: process.platform === 'win32'
+          ? { browserName: 'MicrosoftEdge', 'ms:edgeOptions': { args: ['--headless=new', '--disable-gpu'] } }
+          : process.platform === 'linux'
+            ? { browserName: 'MiniBrowser' }
+            : { browserName: 'chrome', 'goog:chromeOptions': { args: ['--headless=new', '--no-sandbox', '--disable-dev-shm-usage'] } },
+      })
       await signInBrowser.url(authUrl)
       const userField = await signInBrowser.$('input[type="email"], input[autocomplete="username"]')
       await userField.waitForDisplayed()
@@ -99,8 +109,11 @@ describe('installed nightly', () => {
       await (await signInBrowser.$('button[type="submit"]')).click()
       await signInBrowser.waitUntil(async () => (await signInBrowser.getUrl()).startsWith('http://127.0.0.1:'), { timeout: 120000 })
     } finally {
-      await signInBrowser.deleteSession()
-      if (edgeDriver) edgeDriver.kill()
+      try {
+        if (signInBrowser) await signInBrowser.deleteSession()
+      } finally {
+        if (authDriver) authDriver.kill()
+      }
     }
 
     const authenticatedMarker = await $('textarea[placeholder="Ask anything"]')
