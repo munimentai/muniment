@@ -1,8 +1,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use muniment_code_diff::{
-    CodeDiff, DiffFile, DiffHunk, DiffLine, DiffLineKind, DiffLineSegment,
-    DiffLineSegmentKind, DiffStatus,
+    CodeDiff, DiffFile, DiffHunk, DiffLine, DiffLineKind, DiffLineSegment, DiffLineSegmentKind,
+    DiffStatus,
 };
 use uuid::Uuid;
 
@@ -26,11 +26,7 @@ pub fn compute_code_diff(
         let (status, old_path, new_path) = match (old, new) {
             (None, Some(_)) => (DiffStatus::Added, None, Some(path.clone())),
             (Some(_), None) => (DiffStatus::Deleted, Some(path.clone()), None),
-            (Some(_), Some(_)) => (
-                DiffStatus::Modified,
-                Some(path.clone()),
-                Some(path.clone()),
-            ),
+            (Some(_), Some(_)) => (DiffStatus::Modified, Some(path.clone()), Some(path.clone())),
             (None, None) => unreachable!(),
         };
         let binary = old.into_iter().chain(new).any(|bytes| is_binary(bytes));
@@ -125,10 +121,7 @@ fn edit_script<'a>(old: Vec<&'a str>, new: Vec<&'a str>) -> Vec<Edit<'a>> {
     let (mut old_index, mut new_index) = (0, 0);
     let mut edits = Vec::new();
     while old_index < old.len() || new_index < new.len() {
-        if old_index < old.len()
-            && new_index < new.len()
-            && old[old_index] == new[new_index]
-        {
+        if old_index < old.len() && new_index < new.len() && old[old_index] == new[new_index] {
             edits.push(Edit::Context(old[old_index]));
             old_index += 1;
             new_index += 1;
@@ -196,8 +189,16 @@ fn make_hunk(edits: &[Edit<'_>], position: (u64, u64)) -> DiffHunk {
         .iter()
         .filter(|edit| !matches!(edit, Edit::Deletion(_)))
         .count() as u64;
-    let old_start = if old_count == 0 { position.0 - 1 } else { position.0 };
-    let new_start = if new_count == 0 { position.1 - 1 } else { position.1 };
+    let old_start = if old_count == 0 {
+        position.0 - 1
+    } else {
+        position.0
+    };
+    let new_start = if new_count == 0 {
+        position.1 - 1
+    } else {
+        position.1
+    };
     let mut old_line = position.0;
     let mut new_line = position.1;
     let lines = edits

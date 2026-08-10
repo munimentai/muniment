@@ -19,7 +19,10 @@ fn computes_sorted_valid_files_with_a_uuid_v7() {
     let diff = compute_code_diff(&current, &staged);
 
     diff.validate().unwrap();
-    assert_eq!(Uuid::parse_str(&diff.id).unwrap().get_version(), Some(Version::SortRand));
+    assert_eq!(
+        Uuid::parse_str(&diff.id).unwrap().get_version(),
+        Some(Version::SortRand)
+    );
     assert_eq!(diff.files.len(), 3);
     assert_eq!(diff.files[0].new_path.as_deref(), Some("a.txt"));
     assert_eq!(diff.files[0].status, DiffStatus::Added);
@@ -36,7 +39,10 @@ fn treats_nul_and_invalid_utf8_as_binary() {
 
     let diff = compute_code_diff(&current, &staged);
 
-    assert!(diff.files.iter().all(|file| file.binary && file.hunks.is_empty()));
+    assert!(diff
+        .files
+        .iter()
+        .all(|file| file.binary && file.hunks.is_empty()));
 }
 
 #[test]
@@ -49,7 +55,13 @@ fn emits_three_context_lines_and_consistent_hunk_metadata() {
     assert_eq!((hunk.old_start, hunk.old_count), (1, 7));
     assert_eq!((hunk.new_start, hunk.new_count), (1, 7));
     assert_eq!(hunk.header, "@@ -1,7 +1,7 @@");
-    assert_eq!(hunk.lines.iter().filter(|line| line.kind == DiffLineKind::Context).count(), 6);
+    assert_eq!(
+        hunk.lines
+            .iter()
+            .filter(|line| line.kind == DiffLineKind::Context)
+            .count(),
+        6
+    );
     for line in &hunk.lines {
         assert_eq!(line.segments.len(), 1);
         assert_eq!(line.segments[0].kind, DiffLineSegmentKind::Plain);
