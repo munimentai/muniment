@@ -5098,10 +5098,12 @@ fn verified_runtime_enters_a_migration_only_session_without_approval_or_credenti
                 },
             },
             &mut service,
-            &LiveConnectionRegistry::default(),
-            MigrationControlSessionDependencies {
-                expected_executable: &executable,
-                process_reader: &reader,
+            muniment_core::attach::linux::SessionRegistryDependencies {
+                registry: &LiveConnectionRegistry::default(),
+                migration: Some(MigrationControlSessionDependencies {
+                    expected_executable: &executable,
+                    process_reader: &reader,
+                }),
             },
         );
         std::fs::remove_file(executable).unwrap();
@@ -5117,25 +5119,45 @@ fn verified_runtime_enters_a_migration_only_session_without_approval_or_credenti
     assert_eq!(authorized["workspace_scopes"], json!({}));
     assert!(authorized.get("authorized_client_credential").is_none());
     let capability = authorized["capability"].as_str().unwrap();
+    let forbidden_operations = [
+        Operation::WorkspaceOnboard,
+        Operation::HomeEnsure,
+        Operation::ThreadList,
+        Operation::ThreadOpen,
+        Operation::ThreadCreate,
+        Operation::RunOpen,
+        Operation::RunStart,
+        Operation::RunStream,
+        Operation::RunCursorAck,
+        Operation::RunSteer,
+        Operation::RunFollowUp,
+        Operation::RunCancel,
+        Operation::PermissionAnswer,
+        Operation::ArtifactFetch,
+        Operation::ArtifactWindow,
+        Operation::RequestCancel,
+    ];
+    for (index, operation) in forbidden_operations.into_iter().enumerate() {
+        client
+            .write_all(
+                &encode_frame(&json!({
+                    "protocol": "muniment.attach/1",
+                    "request_id": format!("{:032x}", 811 + index),
+                    "operation": operation.as_str(),
+                    "capability": capability,
+                    "body": {}
+                }))
+                .unwrap(),
+            )
+            .unwrap();
+        let error: ErrorEnvelope = read_frame(&mut client);
+        assert_eq!(error.error.code(), ErrorCode::Unauthorized);
+    }
     client
         .write_all(
             &encode_frame(&json!({
                 "protocol": "muniment.attach/1",
-                "request_id": format!("{:032x}", 811),
-                "operation": "thread.list",
-                "capability": capability,
-                "body": {"limit": 1}
-            }))
-            .unwrap(),
-        )
-        .unwrap();
-    let error: ErrorEnvelope = read_frame(&mut client);
-    assert_eq!(error.error.code(), ErrorCode::Unauthorized);
-    client
-        .write_all(
-            &encode_frame(&json!({
-                "protocol": "muniment.attach/1",
-                "request_id": format!("{:032x}", 812),
+                "request_id": format!("{:032x}", 900),
                 "operation": "migration.control",
                 "capability": capability,
                 "body": {"deadline_ms": 30_000, "handoff_nonce": "session-nonce"}
@@ -5187,10 +5209,12 @@ fn unresolved_runtime_peer_uses_the_ordinary_approval_path() {
             },
         },
         &mut service,
-        &LiveConnectionRegistry::default(),
-        MigrationControlSessionDependencies {
-            expected_executable: &expected,
-            process_reader: &reader,
+        muniment_core::attach::linux::SessionRegistryDependencies {
+            registry: &LiveConnectionRegistry::default(),
+            migration: Some(MigrationControlSessionDependencies {
+                expected_executable: &expected,
+                process_reader: &reader,
+            }),
         },
     );
     assert_eq!(result, Ok(()));

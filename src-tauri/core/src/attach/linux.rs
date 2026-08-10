@@ -721,6 +721,12 @@ pub struct MigrationControlSessionDependencies<'a> {
     pub process_reader: &'a dyn LinuxProcReader,
 }
 
+/// Shared state used by session admission paths.
+pub struct SessionRegistryDependencies<'a> {
+    pub registry: &'a LiveConnectionRegistry,
+    pub migration: Option<MigrationControlSessionDependencies<'a>>,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ThreadListRequest {
     pub limit: u8,
@@ -1319,8 +1325,10 @@ pub fn run_authenticated_session_with_service_approvals_registry_and_migration<
             approvals,
         },
         service,
-        registry,
-        migration,
+        SessionRegistryDependencies {
+            registry,
+            migration: Some(migration),
+        },
     )
 }
 
@@ -1451,8 +1459,10 @@ where
         timeout,
         dependencies,
         service,
-        registry,
-        None,
+        SessionRegistryDependencies {
+            registry,
+            migration: None,
+        },
     )
 }
 
@@ -1465,8 +1475,7 @@ pub fn run_authenticated_session_with_authorization_registry_and_migration<R, C,
     timeout: Duration,
     dependencies: AuthorizationSessionDependencies<R, C, G, W>,
     service: &mut S,
-    registry: &LiveConnectionRegistry,
-    migration: MigrationControlSessionDependencies<'_>,
+    session: SessionRegistryDependencies<'_>,
 ) -> Result<(), AttachSessionError>
 where
     R: FnMut(&mut [u8]) -> Result<(), ()>,
@@ -1482,8 +1491,7 @@ where
         timeout,
         dependencies,
         service,
-        registry,
-        Some(migration),
+        session,
     )
 }
 
@@ -1494,8 +1502,7 @@ fn run_session<R, C, G, W, S>(
     timeout: Duration,
     dependencies: AuthorizationSessionDependencies<R, C, G, W>,
     service: &mut S,
-    registry: &LiveConnectionRegistry,
-    migration: Option<MigrationControlSessionDependencies<'_>>,
+    session: SessionRegistryDependencies<'_>,
 ) -> Result<(), AttachSessionError>
 where
     R: FnMut(&mut [u8]) -> Result<(), ()>,
@@ -1563,7 +1570,7 @@ where
             }
         };
 
-        let migration_peer = migration.is_some_and(|migration| {
+        let migration_peer = session.migration.as_ref().is_some_and(|migration| {
             u32::try_from(credentials.pid).is_ok_and(|peer_pid| {
                 super::verify_migration_control_peer_with_reader(
                     peer_pid,
@@ -1586,12 +1593,14 @@ where
         };
         if migration_peer {
             return run_migration_control_session(
-                &mut stream,
-                credentials,
-                desktop_version,
-                selected,
-                timeout,
-                server_nonce,
+                MigrationSessionInputs {
+                    stream: &mut stream,
+                    credentials,
+                    desktop_version,
+                    selected,
+                    timeout,
+                    server_nonce,
+                },
                 &mut fill_random,
                 service,
             );
@@ -1706,7 +1715,7 @@ where
         );
         let connection_event_id = super::Id::new(uuid::Uuid::new_v4().to_string())
             .map_err(|_| AttachSessionError::Randomness)?;
-        let connection = registry.register(
+        let connection = session.registry.register(
             client_credential,
             capability.as_str().to_owned(),
             connection_event_id,
@@ -1741,25 +1750,28 @@ where
     result
 }
 
-#[derive(serde::Serialize)]
-struct MigrationControlAuthorized<'a> {
-    profile_id: &'a str,
-    capability: &'a str,
-    expires_at: u64,
-    idle_timeout_seconds: u64,
-    workspace_scopes: BTreeMap<String, std::collections::BTreeSet<String>>,
-}
-
-fn run_migration_control_session<S: ThreadListService>(
-    stream: &mut UnixStream,
+struct MigrationSessionInputs<'a> {
+    stream: &'a mut UnixStream,
     credentials: PeerCredentials,
-    desktop_version: &str,
+    desktop_version: &'a str,
     selected: u32,
     timeout: Duration,
     server_nonce: String,
+}
+
+fn run_migration_control_session<S: ThreadListService>(
+    inputs: MigrationSessionInputs<'_>,
     fill_random: &mut impl FnMut(&mut [u8]) -> Result<(), ()>,
     service: &mut S,
 ) -> Result<(), AttachSessionError> {
+    let MigrationSessionInputs {
+        stream,
+        credentials,
+        desktop_version,
+        selected,
+        timeout,
+        server_nonce,
+    } = inputs;
     let deadline = Instant::now()
         .checked_add(timeout)
         .ok_or(AttachSessionError::Timeout)?;
@@ -1772,9 +1784,9 @@ fn run_migration_control_session<S: ThreadListService>(
     let mut capability_bytes = [0u8; 32];
     fill_random(&mut capability_bytes).map_err(|_| AttachSessionError::Randomness)?;
     let capability = hex(&capability_bytes);
-    let authorized = MigrationControlAuthorized {
-        profile_id: "",
-        capability: &capability,
+    let authorized = muniment_attach::MigrationControlAuthorized {
+        profile_id: String::new(),
+        capability: capability.clone(),
         expires_at: timeout.as_secs(),
         idle_timeout_seconds: timeout.as_secs(),
         workspace_scopes: BTreeMap::new(),
