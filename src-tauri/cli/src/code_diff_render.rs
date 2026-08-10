@@ -203,6 +203,9 @@ mod tests {
             .filter(|path| {
                 path.extension()
                     .is_some_and(|extension| extension == "json")
+                    && !path
+                        .file_name()
+                        .is_some_and(|name| name.to_string_lossy().ends_with(".canonical.json"))
             })
             .collect();
         paths.sort();
