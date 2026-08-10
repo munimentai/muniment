@@ -10,9 +10,10 @@ use muniment_core::attach::linux::{
 };
 use muniment_core::attach::{mint_handoff_nonce, HandoffNonceRandomnessError};
 use std::fmt;
+use std::net::Shutdown;
 use std::os::unix::net::UnixStream;
 use std::path::Path;
-use std::sync::mpsc::Receiver;
+use std::sync::mpsc::{self, Receiver, Sender};
 use std::time::{Duration, Instant};
 
 const RETRY_INTERVAL: Duration = Duration::from_millis(10);
@@ -97,35 +98,97 @@ fn request_handoff(
 ) -> Result<(), MigrationTakeoverError> {
     loop {
         let io_timeout = remaining(deadline)?;
-        let stream = UnixStream::connect(filesystem.endpoint_path())
-            .map_err(|_| MigrationTakeoverError::DesktopUnavailable)?;
+        let stream = connect_before(filesystem.endpoint_path(), deadline)?;
+        let deadline_guard = DeadlineGuard::new(&stream, deadline)?;
         let mut client = handshake_migration_control_stream(
             stream,
             env!("CARGO_PKG_VERSION"),
             io_timeout.min(MAX_CONTROL_DEADLINE),
         )
-        .map_err(MigrationTakeoverError::Control)?;
+        .map_err(|error| control_error_before(error, deadline))?;
         let remaining = remaining(deadline)?;
         let deadline_ms = remaining
             .min(MAX_CONTROL_DEADLINE)
             .as_millis()
             .clamp(1, 60_000) as u64;
-        match client.control_migration(nonce, deadline_ms) {
-            Ok(MigrationControlOutcome::Accepted) => return Ok(()),
-            Ok(MigrationControlOutcome::MigrationNotReady { retryable: true }) => {
+        let outcome = client
+            .control_migration(nonce, deadline_ms)
+            .map_err(|error| control_request_error_before(error, deadline))?;
+        drop(deadline_guard);
+        match outcome {
+            MigrationControlOutcome::Accepted => return Ok(()),
+            MigrationControlOutcome::MigrationNotReady { retryable: true } => {
                 wait_to_retry(deadline)?
             }
-            Ok(MigrationControlOutcome::MigrationNotReady { retryable: false }) => {
+            MigrationControlOutcome::MigrationNotReady { retryable: false } => {
                 return Err(MigrationTakeoverError::MigrationNotReady)
             }
-            Ok(MigrationControlOutcome::Unauthorized) => {
+            MigrationControlOutcome::Unauthorized => {
                 return Err(MigrationTakeoverError::Unauthorized)
             }
-            Ok(MigrationControlOutcome::UnsupportedOperation) => {
+            MigrationControlOutcome::UnsupportedOperation => {
                 return Err(MigrationTakeoverError::UnsupportedOperation)
             }
-            Err(error) => return Err(MigrationTakeoverError::ControlRequest(error)),
         }
+    }
+}
+
+fn connect_before(path: &Path, deadline: Instant) -> Result<UnixStream, MigrationTakeoverError> {
+    let path = path.to_owned();
+    let (result_tx, result_rx) = mpsc::sync_channel(1);
+    std::thread::spawn(move || {
+        let _ = result_tx.send(UnixStream::connect(path));
+    });
+    match result_rx.recv_timeout(remaining(deadline)?) {
+        Ok(Ok(stream)) => Ok(stream),
+        Ok(Err(_)) => Err(MigrationTakeoverError::DesktopUnavailable),
+        Err(mpsc::RecvTimeoutError::Timeout) => Err(MigrationTakeoverError::DeadlineElapsed),
+        Err(mpsc::RecvTimeoutError::Disconnected) => {
+            Err(MigrationTakeoverError::DesktopUnavailable)
+        }
+    }
+}
+
+struct DeadlineGuard(Sender<()>);
+
+impl DeadlineGuard {
+    fn new(stream: &UnixStream, deadline: Instant) -> Result<Self, MigrationTakeoverError> {
+        let stream = stream
+            .try_clone()
+            .map_err(|_| MigrationTakeoverError::DesktopUnavailable)?;
+        let (cancel_tx, cancel_rx) = mpsc::channel();
+        let timeout = remaining(deadline)?;
+        std::thread::spawn(move || {
+            if cancel_rx.recv_timeout(timeout).is_err() {
+                let _ = stream.shutdown(Shutdown::Both);
+            }
+        });
+        Ok(Self(cancel_tx))
+    }
+}
+
+impl Drop for DeadlineGuard {
+    fn drop(&mut self) {
+        let _ = self.0.send(());
+    }
+}
+
+fn control_error_before(error: ClientError, deadline: Instant) -> MigrationTakeoverError {
+    if remaining(deadline).is_err() {
+        MigrationTakeoverError::DeadlineElapsed
+    } else {
+        MigrationTakeoverError::Control(error)
+    }
+}
+
+fn control_request_error_before(
+    error: MigrationControlFailure,
+    deadline: Instant,
+) -> MigrationTakeoverError {
+    if remaining(deadline).is_err() {
+        MigrationTakeoverError::DeadlineElapsed
+    } else {
+        MigrationTakeoverError::ControlRequest(error)
     }
 }
 
