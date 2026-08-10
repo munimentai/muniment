@@ -539,8 +539,14 @@ and that binary opens no endpoint. `migration.control` also rides inside an
 authenticated session, because `dispatch_request`
 (`src-tauri/core/src/attach/linux.rs:2237`) runs after the authorization check.
 So the runtime service must first become an admitted client, and ADR 0012 names
-no approval path for it. The lane asks the owner or the ADR author to decide
-how the runtime service authenticates before the acquire side is filed.
+no approval path for it.
+
+SELECTED 2026-08-10 (thirteenth wave) — that authentication decision is now a
+filed ADR 0012 amendment ticket. It rules how a peer-verified
+`muniment-runtime` connection becomes an admitted client for
+`migration.control` alone, with no visible approval and no thread, run, or
+workspace authority. The runtime-listener slice follows the accepted
+amendment.
 
 DONE 2026-08-08 — the listener stop is reported truthfully, and a stop that
 arrives during the bind window is kept (MUNIDESK-1015). `AttachListenerStopState`
@@ -582,12 +588,12 @@ disagree, because `chat_file_metadata` rejects a path with no usable final
 segment and `open_selected_files` does not. The lane waits for an owner look at
 why this one ticket never dispatches.
 
-MERGE HAZARD — three twelfth-wave slices edit `src-tauri/core/src/code_diff.rs`
-and its test file, and two more touch `src-tauri/core/src/lib.rs` or
-`src-tauri/core/src/attach/mod.rs`. The open Pi-launch move edits
-`src-tauri/src/chat_coordinate.rs`. Each ticket tells the implementer to rebase
-on `main` before it opens the pull request. The 2026-08-04 silent revert came
-from a stale base.
+MERGE HAZARD — two thirteenth-wave slices touch muniment-core. The
+canonical-bytes slice edits `src-tauri/core/src/code_diff.rs`, and the staging
+slice edits `src-tauri/core/src/lib.rs`. The dependency-injection move edits
+`src-tauri/src/chat_coordinate.rs` and `src-tauri/src/chat.rs`. Each ticket
+tells the implementer to rebase on `main` before it opens the pull request. The
+2026-08-04 silent revert came from a stale base.
 
 DONE 2026-08-08 — the memory runtime is the twentieth core move
 (MUNIDESK-995). `src-tauri/core/src/memory_runtime.rs` composes one
@@ -623,24 +629,30 @@ its emit seam (MUNIDESK-1037). `src-tauri/core/src/run_events.rs` holds the
 `append_terminal`, `fail`, `fail_start`, and `fail_with_open_effects`.
 `TauriChatEventSink` is the desktop implementation.
 
-SELECTED 2026-08-09 (eleventh wave) — the twenty-sixth move takes the Pi launch
-configuration. The launch block (`src-tauri/src/chat_coordinate.rs:205`) still
-reads the session root through `app.path()` and the memory extension through
-`app.try_state`, so a `PiLaunchEnvironment` trait in muniment-core supplies
-both, and the executable resolution, the `pi_sidecar_config` call, the grant
-environment variables, and the `--extension` argument move behind it.
+DONE 2026-08-10 — the twenty-sixth move took the Pi launch configuration
+(MUNIDESK-1044). `src-tauri/core/src/pi_launch.rs` holds `PiLaunchBoundaries`,
+`pi_launch_config`, the executable resolution, the grant environment variables,
+and the `--extension` argument, and `TauriChatEventSink` implements the
+boundary (`src-tauri/src/chat_coordinate.rs:115`).
 
-RE-FILED 2026-08-09 (twelfth wave) — the twenty-seventh move takes the attach
-listener lifecycle. `AttachCompanionState`
-(`src-tauri/src/attach_service.rs:234`) keeps the start outcome in a
-`(bool, Option<AttachListenerStartFailure>, bool)` tuple beside a stop state and
-a condvar. That state machine depends on no Tauri type, so it moves into
-muniment-core, and a named enum replaces the tuple. The eleventh-wave filing
-drained without a pull request, so the twelfth wave filed it again. A second
-drain would repeat the MUNIDESK selected-file pattern and belongs to the owner.
+HELD 2026-08-10 (thirteenth wave) — the twenty-seventh move takes the attach
+listener lifecycle, and it has now drained twice. `AttachCompanionState`
+(`src-tauri/src/attach_service.rs:240`) still keeps the start outcome in a
+`(bool, Option<AttachListenerStartFailure>, bool)` tuple beside a stop state
+and a condvar, and that state machine still belongs in muniment-core behind a
+named enum. The eleventh-wave and twelfth-wave filings both drained without a
+pull request, which is the selected-file pattern. The twelfth wave said a
+second drain belongs to the owner, so this lane files no third copy and asks
+the owner why this ticket never dispatches.
 
-SEQUENCED — the coordinate loop itself moves after both, because it still reads
-the memory runtime and the activity registry off the app handle.
+SELECTED 2026-08-10 (thirteenth wave) — the twenty-eighth move prepares the
+coordinate loop. The loop reads two values off the app handle.
+`dispatch_memory_search` (`src-tauri/src/chat_coordinate.rs:768`) reads
+`ApplicationMemoryRuntime`, and `runtime_activity` (`:111`) reads the registry
+out of `ChatState`. Each spawn site in `src-tauri/src/chat.rs` passes both
+handles into `coordinate` instead, so the loop performs no state lookup. The
+full coordinate-loop move follows. It waits on this slice alone rather than on
+the held listener-lifecycle move, because the two touch different files.
 
 SEQUENCED — the later extraction slices are the remaining Pi execution move, the
 desktop client conversion, and Linux user-unit registration, each behind a
@@ -758,32 +770,32 @@ DONE 2026-08-09 — the ADR 0024 producer's pure half is built (MUNIDESK-1043).
 edit script, three context lines, and hunk coalescing. It touches no Pi
 message, no journal, no CAS, and no filesystem.
 
-SELECTED 2026-08-09 (twelfth wave) — intra-line word segments are the next
-producer slice. The producer gives every line one `plain` segment
-(`code_diff.rs:247`), so no renderer can emphasize a word change, while the CLI
-renderer (`src-tauri/cli/src/code_diff_render.rs:91`) and the fixture
-`modified.json` already carry the segment shape.
+DONE 2026-08-10 — the four twelfth-wave slices are built. Intra-line word
+segments landed (MUNIDESK-1046), and `add_intra_line_segments`
+(`src-tauri/core/src/code_diff.rs:345`) marks the changed span of each paired
+deletion and addition. The file-count and rendered-line limits landed
+(MUNIDESK-1047), so more than 200 changed files rejects, and crossing 20,000
+rendered lines truncates by omitting only complete trailing hunks in stable
+path order. Exact-content rename detection landed (MUNIDESK-1048), and the
+producer pairs identical bytes deterministically. The write plan landed
+(MUNIDESK-1049), and `src-tauri/core/src/write_plan.rs` holds `WritePlan`, the
+400-operation and 8 MiB and 64 MiB bounds, `encode`, and `decode_verified`
+with its SHA-256 and canonical-form checks, with no call site.
 
-SELECTED 2026-08-09 (twelfth wave) — the ADR 0024 file-count and rendered-line
-limits follow. The producer enforces no bound and always sets
-`truncated: false`. More than 200 changed files must reject, and crossing
-20,000 rendered lines must truncate by omitting only complete trailing hunks
-or files in stable path order.
+SELECTED 2026-08-10 (thirteenth wave) — the RFC 8785 canonical `CodeDiff`
+bytes and the 2 MiB canonical-JSON cap are the next codec and producer slice.
+The codec gains a canonical-bytes function that sorts object keys explicitly,
+because the ACP SDK switches on `serde_json/preserve_order` across one cargo
+invocation. The producer measures those bytes and truncates at 2 MiB.
 
-SELECTED 2026-08-09 (twelfth wave) — exact-content rename detection follows.
-The producer never emits `renamed`, so a moved file renders as a full delete
-plus a full add. The slice pairs identical bytes deterministically and leaves
-similarity matching out of scope.
+SELECTED 2026-08-10 (thirteenth wave) — the proposed-operation staging tree is
+the next pure producer slice. Nothing turns a list of proposed operations into
+the staged tree that `compute_code_diff` reads, and the slice lands with no
+call site, which is the `write_plan.rs` shape.
 
-SELECTED 2026-08-09 (twelfth wave) — the ADR 0024 write plan starts at its
-pure half. `src-tauri/core/src/write_plan.rs` defines the immutable plan
-model, its 400-operation and 8 MiB and 64 MiB bounds, deterministic
-serialization, and SHA-256 verification, with no call site. That is the shape
-`quiesce.rs` and `handoff_probe.rs` landed in.
-
-SEQUENCED — the RFC 8785 canonical `CodeDiff` bytes and the 2 MiB
-canonical-JSON cap follow the limits slice, because the cap measures the
-canonical bytes. Slice 4, the produced diff inside the permission gate, and
+SEQUENCED — the journal pair, `code.write-plan.staged` and `code.diff.proposed`,
+follows the canonical-bytes slice, because the diff event stores the canonical
+bytes in CAS. Slice 4, the produced diff inside the permission gate, and
 slice 5, the receipt replay, still wait behind the full producer.
 
 DECLINED 2026-08-08 (ninth wave) — the planner returned the CLI ANSI renderer
@@ -1282,16 +1294,17 @@ earlier one. Requiring an up-to-date branch before merge, or a merge queue, is a
 repository-settings change that sits with the owner. The planner files no ticket
 for it.
 
-VERIFIED 2026-08-09 (twelfth wave, from a clean clone) — `npm ci` then `npm
-test` passed 912 frontend tests across 62 files, with 31 skipped, and the
-browser suite passed 3. `cargo test -p muniment-core -p muniment-attach -p
-muniment-cli -p muniment-code-diff` passed 1,035 tests with no failure. The
-planner then read the three landed code-diff slices and confirmed the producer
-emits one `plain` segment per line, detects no rename, and enforces no ADR
-0024 limit. It confirmed the listener lifecycle tuple still sits at
-`src-tauri/src/attach_service.rs:240`, so the twenty-seventh move did not
-land. Earlier waves recorded the same shape of verification, and this entry
-replaces that ledger.
+VERIFIED 2026-08-10 (thirteenth wave, from a clean clone) — `npm ci` then
+`npm test` passed 915 frontend tests across 63 files, with 31 skipped,
+counting the 3 browser tests. `cargo test -p muniment-core -p muniment-attach
+-p muniment-cli -p muniment-code-diff` passed 1,062 tests with no failure. The
+planner read the landed twelfth-wave slices and confirmed the producer
+computes word segments, enforces the 200-file and 20,000-line limits, and
+pairs an exact-content rename, and that `write_plan.rs` and `pi_launch.rs`
+carry the recorded shapes. It confirmed the listener lifecycle tuple still
+sits at `src-tauri/src/attach_service.rs:240`, so the twenty-seventh move did
+not land. Earlier waves recorded the same shape of verification, and this
+entry replaces that ledger.
 
 NOTE 2026-08-06 — the planning clone ships no `node_modules`. Run `npm ci`
 before `npm test`. Without it the run dies with `vitest: not found`, which reads
