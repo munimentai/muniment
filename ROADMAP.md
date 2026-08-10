@@ -614,12 +614,12 @@ disagree, because `chat_file_metadata` rejects a path with no usable final
 segment and `open_selected_files` does not. The lane waits for an owner look at
 why this one ticket never dispatches.
 
-MERGE HAZARD — all three seventeenth-wave slices touch muniment-core or its
-callers. The file move edits `src-tauri/core/src/lib.rs` and
-`src-tauri/src/chat.rs`, the observation slice adds a core module, and the
-gate-binding slice edits the reducer and `code_diff_journal.rs`. Each ticket
-tells the implementer to rebase on `main` before it opens the pull request.
-The 2026-08-04 silent revert came from a stale base.
+MERGE HAZARD — three of the four eighteenth-wave slices touch muniment-core.
+The answer verification edits `code_diff_journal.rs`, the stale check edits
+`code_diff_observe.rs`, and the resume move edits `chat_resume.rs` beside
+`src-tauri/src/chat.rs`. Each ticket tells the implementer to rebase on `main`
+before it opens the pull request. The 2026-08-04 silent revert came from a
+stale base.
 
 DONE 2026-08-08 — the memory runtime is the twentieth core move
 (MUNIDESK-995). `src-tauri/core/src/memory_runtime.rs` composes one
@@ -687,13 +687,20 @@ DONE 2026-08-10 — the thirtieth move landed (MUNIDESK-1064).
 `prepared_pi_prompt` beside `prepared_pi_images`, and `chat.rs` keeps thin
 re-exports so no caller changed shape.
 
-SELECTED 2026-08-10 (seventeenth wave) — the thirty-first move takes the
-`chat_coordinate.rs` file. No function in `src-tauri/src/chat_coordinate.rs`
-names a Tauri type, and every import outside the tests resolves to a
-muniment-core item, through the `crate::chat` and `crate::memory`
-re-exports. The file moves to `src-tauri/core/src/chat_coordinate.rs`, its
-imports become core-internal paths, and the desktop keeps a thin wrapper
-module so no spawn site in `chat.rs` changes shape.
+DONE 2026-08-10 — the thirty-first move landed (MUNIDESK-1069).
+`src-tauri/core/src/chat_coordinate.rs` holds the coordinate loop and the
+memory-search helpers, and each spawn site in `src-tauri/src/chat.rs` imports
+`muniment_core::chat_coordinate::coordinate` directly.
+
+SELECTED 2026-08-10 (eighteenth wave) — the thirty-second move takes the
+resume launch composition. `open_resume_memory_session`, `install_resume_run`,
+`ResumeLaunch`, `run_resume`, `install_active_run`, and `clear_active_run`
+(`src-tauri/src/chat.rs:522` through `:609`, `:731`, and `:742`) name Tauri
+only through the app handle, and the handle only creates the sink and re-reads
+values the launch already carries. The items move into
+`src-tauri/core/src/chat_resume.rs`, generic over `ChatEventSink` plus
+`PiLaunchBoundaries`, the memory session opens through the launch's own
+`ApplicationMemoryRuntime` value, and the active-run slot becomes an argument.
 
 SEQUENCED — the later extraction slices are the remaining Pi execution move, the
 desktop client conversion, and Linux user-unit registration, each behind a
@@ -855,20 +862,39 @@ maps a validated `WritePlan` to proposed operations, stages them through
 `stage_proposed_operations`, computes the diff through `compute_code_diff`,
 and persists the pair through `stage_code_diff_proposal`.
 
-SELECTED 2026-08-10 (seventeenth wave) — two independent slices carry the
-producer toward the gate. The observation slice is the producer's filesystem
-half. No code builds an `ObservedPath` from a real workspace, so nothing can
-construct a `WritePlan` from Pi's proposed operations. One core function
-resolves each workspace-relative path under the workspace root, rejects an
-escape or a link, reads the current bytes and metadata off the open handle,
-records each `ObservedState` and parent `StableFileIdentity`, and returns
-the validated plan beside the current tree, under the ADR 0024 read bounds.
-The gate-binding slice is the first half of slice 4. A `code_diff` permission
-kind carries the ADR 0024 approval fields, one core function appends the
-`permission.requested` event from a stored proposal pair, a truncated diff
-opens no gate, and the companion and frontend projections fail closed on the
-new kind. Slice 4's answer verification and ask-card rendering, and slice 5,
-the receipt replay, wait behind these two.
+DONE 2026-08-10 — the observation slice landed (MUNIDESK-1070).
+`observe_workspace_write_plan` (`src-tauri/core/src/code_diff_observe.rs:20`)
+resolves each proposed path under the workspace root through cap-std, rejects
+an escape or a link, reads the current bytes and metadata off the open handle
+under the 8 MiB and 64 MiB read bounds, and returns the validated `WritePlan`
+beside the current tree.
+
+DONE 2026-08-10 — the gate binding landed (MUNIDESK-1071).
+`append_code_diff_permission_request`
+(`src-tauri/core/src/code_diff_journal.rs:158`) loads the stored proposal
+pair, rejects a truncated diff, and appends one `permission.requested` event
+whose `PermissionRequest::CodeDiff` payload carries the effect and diff
+identifiers with both CAS hashes. `chat_pending_permission`
+(`src-tauri/core/src/chat_view.rs:55`) filters the new kind, so the webview
+fails closed until the ask card renders it.
+
+SELECTED 2026-08-10 (eighteenth wave) — three slices carry the gate toward
+the effect. The answer-verification slice is slice 4's core half. One
+function accepts a code_diff answer only when the gate, effect, diff, and
+write-plan identifiers match the recorded request, reloads both CAS objects,
+compares the decoded diff `id`, and returns the verified `WritePlan`. The
+stale-check slice is the pre-write re-observation. One function re-observes
+every path the plan touches, compares each recorded `ObservedState` and
+parent identity, and returns the verified parent handles the write will use.
+The ask-card slice is the dormant frontend half. The permission card renders
+a `code_diff` gate through `CodeDiff.svelte` behind the untouched core
+filter, driven by a probe fixture. The write executor and slice 5, the
+receipt replay, wait behind these.
+
+PARKED — the producer's Pi input waits on the Pi wire contract, with the ADR
+0025 consumers. ADR 0024 requires structured proposed operations from Pi
+before any write starts, and no Pi message carries a file operation today.
+The bounded streaming decoder in `pi_chat.rs` follows the contract.
 
 DECLINED 2026-08-08 (ninth wave) — the planner returned the CLI ANSI renderer
 idea. ADR 0020 gave the CLI a hand-written terminal renderer, and the 2026-07-29
@@ -1371,17 +1397,17 @@ earlier one. Requiring an up-to-date branch before merge, or a merge queue, is a
 repository-settings change that sits with the owner. The planner files no ticket
 for it.
 
-VERIFIED 2026-08-10 (seventeenth wave, from a clean clone) — `npm ci` then
+VERIFIED 2026-08-10 (eighteenth wave, from a clean clone) — `npm ci` then
 `npm test` passed 922 frontend tests across 63 files, with 31 skipped,
 counting the 3 browser tests. `cargo test -p muniment-core -p muniment-attach
--p muniment-cli -p muniment-code-diff -p muniment-runtime` passed 1,104 tests
-with no failure. The planner read the landed sixteenth-wave slices and
-confirmed `compose_code_diff_proposal` (`code_diff_journal.rs:225`),
-`run_migration_takeover` (`runtime/src/migration.rs:62`), and the
-prepared-prompt seam in `pi_execution.rs`, and confirmed that
-`src-tauri/src/chat_coordinate.rs` names no Tauri type and no desktop-only
-item outside its tests. Earlier waves recorded the same shape of
-verification, and this entry replaces that ledger.
+-p muniment-cli -p muniment-code-diff -p muniment-runtime` passed 1,121 tests
+with no failure. The planner read the landed seventeenth-wave slices and
+confirmed `observe_workspace_write_plan` (`code_diff_observe.rs:20`),
+`append_code_diff_permission_request` (`code_diff_journal.rs:158`), the
+`PermissionRequest::CodeDiff` variant, the fail-closed filter in
+`chat_view.rs:55`, and the moved coordinate loop in
+`src-tauri/core/src/chat_coordinate.rs`. Earlier waves recorded the same
+shape of verification, and this entry replaces that ledger.
 
 NOTE 2026-08-06 — the planning clone ships no `node_modules`. Run `npm ci`
 before `npm test`. Without it the run dies with `vitest: not found`, which reads
