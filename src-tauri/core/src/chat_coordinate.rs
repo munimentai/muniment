@@ -3,32 +3,33 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use crate::chat::{
-    coordinate_prepared_prompt, prepared_pi_prompt, PiRuntime, PreparedPromptError, ResumeAttempt,
-    ResumeContext, RPC_TIMEOUT,
-};
-use crate::memory::ApplicationMemoryRuntime;
-use muniment_core::attach::{RuntimeActivityGuard, RuntimeActivityRegistry};
-use muniment_core::chat_grant::{fetch_receipt, ChatGrant};
-use muniment_core::journal::pi_translation::{model_stream_delta_payload, tool_journal_entry};
-use muniment_core::journal::reducer::ChatProjector;
-use muniment_core::journal::split_model_stream_delta;
-use muniment_core::memory_failure::{MemoryFailure, MemoryFailureAnswer};
-use muniment_core::permission_gate::{
+use crate::attach::{RuntimeActivityGuard, RuntimeActivityRegistry};
+use crate::chat_grant::{fetch_receipt, ChatGrant};
+use crate::chat_resume::ResumeContext;
+use crate::journal::pi_translation::{model_stream_delta_payload, tool_journal_entry};
+use crate::journal::reducer::ChatProjector;
+use crate::journal::split_model_stream_delta;
+use crate::memory_failure::{MemoryFailure, MemoryFailureAnswer};
+use crate::memory_runtime::ApplicationMemoryRuntime;
+use crate::permission_gate::{
     coordinate_extension_ui_request, coordinate_permission_answer, PendingPermissionAnswer,
 };
+use crate::pi_execution::{
+    coordinate_prepared_prompt, prepared_pi_prompt, PiRuntime, PreparedPromptError, ResumeAttempt,
+    RPC_TIMEOUT,
+};
 #[cfg(test)]
-use muniment_core::pi_launch::pi_launch_config_for_executable;
-use muniment_core::pi_launch::{pi_launch_config, PiLaunchBoundaries, PiLaunchError};
-use muniment_core::run_events::{
+use crate::pi_launch::pi_launch_config_for_executable;
+use crate::pi_launch::{pi_launch_config, PiLaunchBoundaries, PiLaunchError};
+use crate::run_events::{
     append_emit, append_terminal as core_append_terminal, fail, fail_start,
     fail_with_open_effects as core_fail_with_open_effects, ChatEventSink, SharedStorage,
 };
-use muniment_core::sidecar::pi_chat::{
+use crate::sidecar::pi_chat::{
     cancel_command, ExtensionUiAnswer, ExtensionUiDialog, ExtensionUiRequest, PiChatEvent,
     PiRunAdapter,
 };
-use muniment_core::sidecar::{PiRpcTransport, PiRpcWiring, SidecarStatus, SidecarSupervisor};
+use crate::sidecar::{PiRpcTransport, PiRpcWiring, SidecarStatus, SidecarSupervisor};
 use serde_json::{json, Value};
 
 /// Pairs one coordinate-loop state value with the runtime activity mark that
@@ -102,7 +103,7 @@ impl MarkedGate {
 }
 
 #[allow(clippy::too_many_arguments)]
-pub(super) fn coordinate(
+pub fn coordinate(
     app: impl ChatEventSink + PiLaunchBoundaries,
     journal: SharedStorage,
     runtime: Arc<Mutex<Option<PiRuntime>>>,
@@ -741,12 +742,13 @@ fn dispatch_memory_search(
     memory_runtime: &ApplicationMemoryRuntime,
     run_id: &str,
     arguments: &str,
-) -> Result<muniment_core::memory_index::MemorySearchResult, MemoryFailure> {
+) -> Result<crate::memory_index::MemorySearchResult, MemoryFailure> {
     memory_runtime
         .dispatch_tool_call(run_id, "memory-search", arguments.as_bytes())
         .map_err(MemoryFailure::from_index_error)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn coordinate_memory_search_with(
     sink: &impl ChatEventSink,
     journal: &SharedStorage,
@@ -755,9 +757,7 @@ fn coordinate_memory_search_with(
     seq: &mut u64,
     subject: Option<&str>,
     event: &PiChatEvent,
-    dispatch: impl FnOnce(
-        &str,
-    ) -> Result<muniment_core::memory_index::MemorySearchResult, MemoryFailure>,
+    dispatch: impl FnOnce(&str) -> Result<crate::memory_index::MemorySearchResult, MemoryFailure>,
     respond: impl FnOnce(&ExtensionUiRequest, ExtensionUiAnswer),
 ) -> bool {
     let PiChatEvent::ExtensionUiRequest(request) = event else {
@@ -858,13 +858,12 @@ fn fail_with_open_effects(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::append_test_event;
-    use muniment_core::journal::pi_translation::close_open_effects;
-    use muniment_core::journal::reducer::ChatProjection;
-    use muniment_core::journal::reducer::ProjectedRecall;
-    use muniment_core::journal::RunJournal;
-    use muniment_core::memory_index::MemoryIndexError;
-    use muniment_core::permission_gate::ChatPermissionAnswer;
+    use crate::journal::pi_translation::close_open_effects;
+    use crate::journal::reducer::ChatProjection;
+    use crate::journal::reducer::ProjectedRecall;
+    use crate::journal::RunJournal;
+    use crate::memory_index::MemoryIndexError;
+    use crate::permission_gate::ChatPermissionAnswer;
     use std::cell::RefCell;
     use std::io;
     use uuid::Uuid;
@@ -873,9 +872,25 @@ mod tests {
     struct FakeChatEventSink;
 
     impl ChatEventSink for FakeChatEventSink {
-        fn deliver(&self, _event: muniment_core::run_events::ChatEvent) -> Result<(), ()> {
+        fn deliver(&self, _event: crate::run_events::ChatEvent) -> Result<(), ()> {
             Ok(())
         }
+    }
+
+    fn append_test_event(
+        journal: &mut RunJournal,
+        run_id: &str,
+        seq: u64,
+        kind: &str,
+        payload: Value,
+        subject: Option<&str>,
+    ) {
+        journal
+            .append(
+                seq - 1,
+                &crate::run_events::event_envelope(run_id, seq, kind, payload, subject),
+            )
+            .unwrap();
     }
 
     fn failed_memory_search_answer(
@@ -885,9 +900,9 @@ mod tests {
         let root = std::env::temp_dir().join(format!("muniment-memory-failure-{}", Uuid::now_v7()));
         std::fs::create_dir_all(&root).unwrap();
         let sink = FakeChatEventSink;
-        let shared = Arc::new(Mutex::new(muniment_core::run_events::ChatStorage {
+        let shared = Arc::new(Mutex::new(crate::run_events::ChatStorage {
             journal: RunJournal::open(root.join("runs.sqlite3")).unwrap(),
-            cas: muniment_core::cas::LocalCas::open(&root.join("cas")).unwrap(),
+            cas: crate::cas::LocalCas::open(&root.join("cas")).unwrap(),
         }));
         let event = PiChatEvent::ExtensionUiRequest(ExtensionUiRequest {
             id: "memory-failure".into(),
@@ -1008,7 +1023,7 @@ mod tests {
 
     #[test]
     fn live_chat_event_carries_projected_recalls() {
-        let event = muniment_core::run_events::chat_event(
+        let event = crate::run_events::chat_event(
             "run-1",
             ChatProjection {
                 recalls: vec![ProjectedRecall {
@@ -1171,7 +1186,7 @@ mod tests {
         let home = root.join("home");
         std::fs::create_dir_all(home.join("memory")).unwrap();
         std::fs::write(home.join("memory/fact.md"), "saffron belongs in the pantry").unwrap();
-        let runtime = Arc::new(crate::memory::ApplicationMemoryRuntime::new(
+        let runtime = Arc::new(crate::memory_runtime::ApplicationMemoryRuntime::new(
             root.join("config"),
             root.join("cache"),
         ));
@@ -1179,7 +1194,7 @@ mod tests {
         runtime.open_session_for_home(
             &run_id,
             "thread-1",
-            muniment_core::memory_index::ModelMemoryCapability {
+            crate::memory_index::ModelMemoryCapability {
                 minimum_cacheable_prefix_characters: 100,
             },
             &home,
@@ -1196,9 +1211,9 @@ mod tests {
         projector
             .apply(&journal.events(&run_id).unwrap()[0])
             .unwrap();
-        let shared = Arc::new(Mutex::new(muniment_core::run_events::ChatStorage {
+        let shared = Arc::new(Mutex::new(crate::run_events::ChatStorage {
             journal,
-            cas: muniment_core::cas::LocalCas::open(&root.join("cas")).unwrap(),
+            cas: crate::cas::LocalCas::open(&root.join("cas")).unwrap(),
         }));
 
         let executable_name = if cfg!(windows) {
@@ -1212,11 +1227,10 @@ mod tests {
             .unwrap()
             .parent()
             .unwrap()
-            .join("examples")
             .join(executable_name);
         assert!(stub.is_file(), "sidecar test stub was not built");
         let capture = root.join("answers.jsonl");
-        let mut config = muniment_core::sidecar::SidecarConfig::new(stub.to_string_lossy());
+        let mut config = crate::sidecar::SidecarConfig::new(stub.to_string_lossy());
         config.args = vec![
             "pi-chat-extension-ui".into(),
             capture.to_string_lossy().into_owned(),
@@ -1284,8 +1298,7 @@ mod tests {
             .collect();
         assert_eq!(recalls.len(), 2);
         for recall in recalls {
-            let muniment_core::journal::EventPayload::Inline { payload_json } = &recall.payload
-            else {
+            let crate::journal::EventPayload::Inline { payload_json } = &recall.payload else {
                 panic!("memory recall must use an inline payload");
             };
             assert_eq!(payload_json["files"], json!(["memory/fact.md"]));
