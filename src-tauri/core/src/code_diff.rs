@@ -64,11 +64,17 @@ fn is_binary(bytes: &[u8]) -> bool {
     bytes.contains(&0) || std::str::from_utf8(bytes).is_err()
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct TextLine<'a> {
+    text: &'a str,
+    terminated: bool,
+}
+
 #[derive(Clone, Copy)]
 enum Edit<'a> {
-    Context(&'a str),
-    Addition(&'a str),
-    Deletion(&'a str),
+    Context(TextLine<'a>),
+    Addition(TextLine<'a>),
+    Deletion(TextLine<'a>),
 }
 
 fn text_hunks<'a>(old: &'a str, new: &'a str) -> Vec<DiffHunk> {
@@ -102,11 +108,22 @@ fn text_hunks<'a>(old: &'a str, new: &'a str) -> Vec<DiffHunk> {
         .collect()
 }
 
-fn text_lines(text: &str) -> Vec<&str> {
-    text.lines().collect()
+fn text_lines(text: &str) -> Vec<TextLine<'_>> {
+    text.split_inclusive('\n')
+        .map(|line| {
+            let terminated = line.ends_with('\n');
+            let text = line.strip_suffix('\n').unwrap_or(line);
+            let text = if terminated {
+                text.strip_suffix('\r').unwrap_or(text)
+            } else {
+                text
+            };
+            TextLine { text, terminated }
+        })
+        .collect()
 }
 
-fn edit_script<'a>(old: Vec<&'a str>, new: Vec<&'a str>) -> Vec<Edit<'a>> {
+fn edit_script<'a>(old: Vec<TextLine<'a>>, new: Vec<TextLine<'a>>) -> Vec<Edit<'a>> {
     let mut lengths = vec![vec![0usize; new.len() + 1]; old.len() + 1];
     for old_index in (0..old.len()).rev() {
         for new_index in (0..new.len()).rev() {
@@ -205,21 +222,21 @@ fn make_hunk(edits: &[Edit<'_>], position: (u64, u64)) -> DiffHunk {
         .iter()
         .map(|edit| {
             let (kind, text, old_number, new_number) = match edit {
-                Edit::Context(text) => {
+                Edit::Context(line) => {
                     let numbers = (Some(old_line), Some(new_line));
                     old_line += 1;
                     new_line += 1;
-                    (DiffLineKind::Context, *text, numbers.0, numbers.1)
+                    (DiffLineKind::Context, line.text, numbers.0, numbers.1)
                 }
-                Edit::Addition(text) => {
+                Edit::Addition(line) => {
                     let number = new_line;
                     new_line += 1;
-                    (DiffLineKind::Addition, *text, None, Some(number))
+                    (DiffLineKind::Addition, line.text, None, Some(number))
                 }
-                Edit::Deletion(text) => {
+                Edit::Deletion(line) => {
                     let number = old_line;
                     old_line += 1;
-                    (DiffLineKind::Deletion, *text, Some(number), None)
+                    (DiffLineKind::Deletion, line.text, Some(number), None)
                 }
             };
             DiffLine {

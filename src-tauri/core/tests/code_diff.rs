@@ -92,3 +92,31 @@ fn separates_distant_changes_into_hunks() {
     assert_eq!(diff.files[0].hunks[0].lines.len(), 5);
     assert_eq!(diff.files[0].hunks[1].lines.len(), 5);
 }
+
+#[test]
+fn reports_an_added_final_newline() {
+    let diff = compute_code_diff(&tree(&[("file", b"a")]), &tree(&[("file", b"a\n")]));
+    let hunk = &diff.files[0].hunks[0];
+
+    assert_eq!((hunk.old_start, hunk.old_count), (1, 1));
+    assert_eq!((hunk.new_start, hunk.new_count), (1, 1));
+    assert_eq!(hunk.lines.len(), 2);
+    assert_eq!(hunk.lines[0].kind, DiffLineKind::Addition);
+    assert_eq!(hunk.lines[0].text, "a");
+    assert_eq!(hunk.lines[1].kind, DiffLineKind::Deletion);
+    assert_eq!(hunk.lines[1].text, "a");
+}
+
+#[test]
+fn reports_a_removed_final_newline() {
+    let diff = compute_code_diff(&tree(&[("file", b"a\n")]), &tree(&[("file", b"a")]));
+    let hunk = &diff.files[0].hunks[0];
+
+    assert_eq!((hunk.old_start, hunk.old_count), (1, 1));
+    assert_eq!((hunk.new_start, hunk.new_count), (1, 1));
+    assert_eq!(hunk.lines.len(), 2);
+    assert_eq!(hunk.lines[0].kind, DiffLineKind::Addition);
+    assert_eq!(hunk.lines[0].text, "a");
+    assert_eq!(hunk.lines[1].kind, DiffLineKind::Deletion);
+    assert_eq!(hunk.lines[1].text, "a");
+}
