@@ -10,6 +10,7 @@ use muniment_core::memory_runtime::ApplicationMemoryRuntime;
 use muniment_core::run_events::{ChatEvent, ChatStorage, SharedStorage};
 use muniment_core::run_preparation::{prepare_new_run_with_session_thread, SessionThreadStart};
 use muniment_core::session_thread::SessionThread;
+use muniment_core::sidecar::pi_install::{PiArtifactDescriptor, PI_ARTIFACT};
 use std::collections::{BTreeMap, VecDeque};
 use std::path::Path;
 use std::sync::atomic::AtomicBool;
@@ -29,6 +30,7 @@ pub fn open_profile_storage(
 }
 
 /// Runs one prompt to completion through the dormant runtime service boundaries.
+#[allow(clippy::too_many_arguments)]
 pub fn run_prompt(
     profile_directory: impl AsRef<Path>,
     run_id: String,
@@ -37,6 +39,7 @@ pub fn run_prompt(
     subject: Option<String>,
     grant: ChatGrant,
     subscriber: Option<Sender<ChatEvent>>,
+    pi_artifact: Option<PiArtifactDescriptor>,
 ) -> Result<(), String> {
     let profile_directory = profile_directory.as_ref();
     let storage = open_profile_storage(profile_directory).map_err(|error| error.to_string())?;
@@ -61,7 +64,8 @@ pub fn run_prompt(
         profile_directory.join("memory"),
     ));
     coordinate(
-        RuntimeChatEventSink::new(profile_directory, subscriber),
+        RuntimeChatEventSink::new(profile_directory, subscriber)
+            .with_pi_artifact(pi_artifact.unwrap_or(PI_ARTIFACT)),
         storage,
         Arc::new(Mutex::new(None)),
         RuntimeActivityRegistry::new(),

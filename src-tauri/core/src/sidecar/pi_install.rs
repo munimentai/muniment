@@ -396,6 +396,14 @@ pub fn resolve_current(root: &Path) -> Result<PathBuf, PiInstallError> {
     resolve_pointer(root, "current").or_else(|_| resolve_pointer(root, "previous"))
 }
 
+pub fn resolve_current_for(
+    root: &Path,
+    descriptor: PiArtifactDescriptor,
+) -> Result<PathBuf, PiInstallError> {
+    resolve_pointer_for(root, "current", descriptor, None)
+        .or_else(|_| resolve_pointer_for(root, "previous", descriptor, None))
+}
+
 /// Atomically reactivates the retained verified predecessor after the newly
 /// pinned revision fails its supervisor activation check.
 pub fn rollback_to_previous<B: PiLifecycleBoundary>(
@@ -485,13 +493,6 @@ fn resolve_revision(
     descriptor: PiArtifactDescriptor,
 ) -> Result<PathBuf, PiInstallError> {
     let archive = revision.join(descriptor.archive);
-    #[cfg(muniment_sidecar_test_archive)]
-    if matches!(
-        fs::read(&archive),
-        Ok(contents) if contents == b"muniment-sidecar-test-stub\n"
-    ) {
-        return verify_executable_for(revision, descriptor);
-    }
     verify_archive_for(&archive, descriptor)?;
     verify_executable_for(revision, descriptor)
 }

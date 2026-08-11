@@ -3,9 +3,6 @@ name = "muniment-runtime"
 version = "0.0.1"
 edition = "2021"
 
-[lints.rust]
-unexpected_cfgs = { level = "warn", check-cfg = ["cfg(muniment_sidecar_test_archive)"] }
-
 [dependencies]
 muniment-attach = { path = "../attach", features = ["client"] }
 muniment-core = { path = "../core" }

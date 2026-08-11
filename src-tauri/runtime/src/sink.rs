@@ -6,10 +6,12 @@ use std::sync::mpsc::Sender;
 use muniment_core::chat_profile::ChatProfile;
 use muniment_core::pi_launch::{PiLaunchBoundaries, PiLaunchError};
 use muniment_core::run_events::{ChatEvent, ChatEventSink};
+use muniment_core::sidecar::pi_install::{PiArtifactDescriptor, PI_ARTIFACT};
 
 pub struct RuntimeChatEventSink {
     profile: ChatProfile,
     subscriber: Option<Sender<ChatEvent>>,
+    pi_artifact: PiArtifactDescriptor,
 }
 
 impl RuntimeChatEventSink {
@@ -17,7 +19,13 @@ impl RuntimeChatEventSink {
         Self {
             profile: ChatProfile::new(profile_directory.as_ref()),
             subscriber,
+            pi_artifact: PI_ARTIFACT,
         }
+    }
+
+    pub fn with_pi_artifact(mut self, pi_artifact: PiArtifactDescriptor) -> Self {
+        self.pi_artifact = pi_artifact;
+        self
     }
 }
 
@@ -31,6 +39,10 @@ impl ChatEventSink for RuntimeChatEventSink {
 }
 
 impl PiLaunchBoundaries for RuntimeChatEventSink {
+    fn pi_artifact(&self) -> PiArtifactDescriptor {
+        self.pi_artifact
+    }
+
     fn pi_session_root(&self) -> Result<PathBuf, PiLaunchError> {
         Ok(self.profile.pi_session_root())
     }

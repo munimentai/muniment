@@ -3,36 +3,13 @@ use std::process::Command;
 use std::sync::mpsc;
 
 use muniment_core::chat_grant::ChatGrant;
-use muniment_core::sidecar::pi_install::PI_ARTIFACT;
+use muniment_core::sidecar::pi_install::{PiArtifactDescriptor, PI_ARTIFACT};
 use muniment_runtime::{open_profile_storage, run_prompt};
 
 #[test]
 fn settles_after_driving_the_prompt_through_the_pointer_install() {
     let temporary_root =
         std::env::temp_dir().join(format!("muniment-runtime-run-{}", std::process::id()));
-    if !cfg!(muniment_sidecar_test_archive) {
-        let status = Command::new(env!("CARGO"))
-            .args([
-                "test",
-                "--quiet",
-                "--package",
-                "muniment-runtime",
-                "--test",
-                "run",
-                "--target-dir",
-            ])
-            .arg(temporary_root.join("test-build"))
-            .arg("--")
-            .arg("--exact")
-            .arg("settles_after_driving_the_prompt_through_the_pointer_install")
-            .env("RUSTFLAGS", "--cfg muniment_sidecar_test_archive")
-            .current_dir(env!("CARGO_MANIFEST_DIR"))
-            .status()
-            .unwrap();
-        assert!(status.success());
-        fs::remove_dir_all(temporary_root).unwrap();
-        return;
-    }
     let profile = temporary_root.join("profile");
     let pi_root = temporary_root.join("pi");
     let executable = pi_root
@@ -63,14 +40,22 @@ fn settles_after_driving_the_prompt_through_the_pointer_install() {
         "sidecar-test-stub"
     };
     fs::copy(build_root.join("debug").join(stub_name), &executable).unwrap();
+    let stub_archive = b"muniment-sidecar-test-stub\n";
     fs::write(
         pi_root
             .join("revisions")
             .join(PI_ARTIFACT.version)
             .join(PI_ARTIFACT.archive),
-        b"muniment-sidecar-test-stub\n",
+        stub_archive,
     )
     .unwrap();
+    let descriptor = PiArtifactDescriptor {
+        version: PI_ARTIFACT.version,
+        archive: PI_ARTIFACT.archive,
+        byte_size: stub_archive.len() as u64,
+        sha256: "758b0db8f6304639edfca2b779e886f3006afeb006417e49dd6bce53ff2a65ab",
+        executable: PI_ARTIFACT.executable,
+    };
     fs::write(
         pi_root.join("current"),
         format!("muniment-pi-pointer-v1\n{}\n", PI_ARTIFACT.version),
@@ -98,6 +83,7 @@ fn settles_after_driving_the_prompt_through_the_pointer_install() {
             receipt_url: "https://receipts.example.com".into(),
         },
         Some(subscriber),
+        Some(descriptor),
     )
     .unwrap();
 
