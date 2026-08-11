@@ -89,6 +89,17 @@ fn succeeds_without_a_subscriber() {
 }
 
 #[test]
+fn clears_a_dropped_subscriber() {
+    let profile = ProfileDirectory::new();
+    let (subscriber, events) = mpsc::channel();
+    let sink = RuntimeChatEventSink::new(&profile.0, Some(subscriber), memory_runtime(&profile));
+    drop(events);
+
+    sink.deliver(event()).unwrap();
+    sink.deliver(event()).unwrap();
+}
+
+#[test]
 fn drives_pi_launch_config_over_the_profile_directory() {
     let profile = ProfileDirectory::new();
     let _storage = open_profile_storage(&profile.0).unwrap();

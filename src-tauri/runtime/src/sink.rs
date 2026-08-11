@@ -2,7 +2,7 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::Sender;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use muniment_core::chat_profile::ChatProfile;
 use muniment_core::memory_runtime::ApplicationMemoryRuntime;
@@ -12,7 +12,7 @@ use muniment_core::sidecar::pi_install::{PiArtifactDescriptor, PI_ARTIFACT};
 
 pub struct RuntimeChatEventSink {
     profile: ChatProfile,
-    subscriber: Option<Sender<ChatEvent>>,
+    subscriber: Mutex<Option<Sender<ChatEvent>>>,
     pi_artifact: PiArtifactDescriptor,
     memory_runtime: Arc<ApplicationMemoryRuntime>,
 }
@@ -25,7 +25,7 @@ impl RuntimeChatEventSink {
     ) -> Self {
         Self {
             profile: ChatProfile::new(profile_directory.as_ref()),
-            subscriber,
+            subscriber: Mutex::new(subscriber),
             pi_artifact: PI_ARTIFACT,
             memory_runtime,
         }
@@ -39,10 +39,14 @@ impl RuntimeChatEventSink {
 
 impl ChatEventSink for RuntimeChatEventSink {
     fn deliver(&self, event: ChatEvent) -> Result<(), ()> {
-        match &self.subscriber {
-            Some(subscriber) => subscriber.send(event).map_err(|_| ()),
-            None => Ok(()),
+        let mut subscriber = self.subscriber.lock().map_err(|_| ())?;
+        if subscriber
+            .as_ref()
+            .is_some_and(|subscriber| subscriber.send(event).is_err())
+        {
+            *subscriber = None;
         }
+        Ok(())
     }
 }
 

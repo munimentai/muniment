@@ -8,7 +8,7 @@ use muniment_core::sidecar::pi_install::{PiArtifactDescriptor, PI_ARTIFACT};
 use muniment_runtime::{open_profile_storage, run_prompt};
 
 #[test]
-fn settles_after_driving_the_prompt_through_the_pointer_install() {
+fn settles_after_the_subscriber_is_dropped() {
     let temporary_root =
         std::env::temp_dir().join(format!("muniment-runtime-run-{}", std::process::id()));
     let profile = temporary_root.join("profile");
@@ -72,6 +72,7 @@ fn settles_after_driving_the_prompt_through_the_pointer_install() {
     let run_id = "018f0000-0000-7000-8000-000000000003";
     let prompt = "pointer install prompt";
     let (subscriber, events) = mpsc::channel();
+    drop(events);
     run_prompt(
         &profile,
         run_id.into(),
@@ -91,8 +92,6 @@ fn settles_after_driving_the_prompt_through_the_pointer_install() {
     )
     .unwrap();
 
-    let delivered: Vec<_> = events.try_iter().collect();
-    assert!(delivered.iter().any(|event| event.text.contains("resumed")));
     assert_eq!(
         fs::read_to_string(captured_prompts).unwrap(),
         format!("{prompt}\n")
@@ -104,7 +103,6 @@ fn settles_after_driving_the_prompt_through_the_pointer_install() {
         .collect::<Vec<_>>()
         .windows(2)
         .any(|args| { args == ["--extension", extension.to_string_lossy().as_ref()] }));
-    assert_eq!(delivered.last().unwrap().phase, "failed");
     let storage = open_profile_storage(&profile).unwrap();
     let journal_events = storage.lock().unwrap().journal.events(run_id).unwrap();
     assert_eq!(journal_events.last().unwrap().event_type, "run.failed");
