@@ -2848,6 +2848,28 @@ describe('history hydration', () => {
 
     expect(messages[0].run.toolActivity).toEqual([])
   })
+
+  it('renders each applied diff and the unavailable sentence', async () => {
+    invoke.mockImplementation(async (command) => {
+      if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
+      if (command === 'chat_thread_open') return [{
+        runId: 'run-1', phase: 'complete', text: 'Done', receipt: null, toolActivity: [],
+        appliedDiffs: [
+          { effectId: 'effect-1', codeDiffId: 'fixture-modified', diff: modifiedCodeDiff },
+          { effectId: 'effect-2', codeDiffId: 'missing', diff: null },
+        ],
+      }]
+      if (command === 'auth_entitlement_snapshot') return snapshot()
+      if (command === 'auth_devices') return []
+      throw new Error(`unexpected command: ${command}`)
+    })
+    render(App)
+
+    const headings = await screen.findAllByText('Applied file changes')
+    expect(headings).toHaveLength(2)
+    expect(screen.getByLabelText('Code changes')).toHaveAttribute('data-diff-id', 'fixture-modified')
+    expect(screen.getByText('The applied changes cannot be shown.')).toBeInTheDocument()
+  })
 })
 
 describe('interrupted reply resume', () => {
