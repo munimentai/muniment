@@ -614,7 +614,7 @@ disagree, because `chat_file_metadata` rejects a path with no usable final
 segment and `open_selected_files` does not. The lane waits for an owner look at
 why this one ticket never dispatches.
 
-MERGE HAZARD — three of the five twenty-sixth-wave slices edit
+MERGE HAZARD — four of the five twenty-sixth-wave slices edit
 `src-tauri/runtime/src/service.rs`, and two of those change the
 `run_prompt` signature. Each ticket tells the implementer to rebase on
 `main` before it opens the pull request. The 2026-08-04 silent revert came
