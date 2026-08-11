@@ -935,8 +935,8 @@ refuses a gate that already carries a resolution, so a crash between the two
 events never re-applies silently. It has no call site, which is the
 `write_plan.rs` shape.
 
-SELECTED 2026-08-11 (twentieth wave) — the `codeDiff` answer variant is the
-sibling slice. `ChatPermissionAnswer`
+DONE 2026-08-11 — the `codeDiff` answer variant is built (MUNIDESK-1083).
+`ChatPermissionAnswer`
 (`src-tauri/core/src/permission_gate.rs:23`) gains a `CodeDiff` variant whose
 serde form matches the payload `codeDiffPermissionAnswer`
 (`src/lib/chat-state.js:23`) already sends, and
