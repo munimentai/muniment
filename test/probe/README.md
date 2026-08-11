@@ -8,6 +8,7 @@ Open `markdown.html` for a completed Markdown reply.
 Open `onboarding.html` for first-run setup.
 Open `approved-files.html` for the approved-files review.
 Open `permission.html` for a run paused on a permission decision.
+Open `code-diff.html` for a run paused on proposed file changes.
 Open `select.html` for a run paused on a choice request.
 Open `input.html` for a run paused on a single-line text request.
 Open `editor.html` for a run paused on a multi-line text request.
@@ -17,7 +18,7 @@ Inspect `window.__PROBE__.invokedCommands` and `window.__PROBE__.eventListeners`
 Capture every fixture at the default desktop size:
 
 ```sh
-for fixture in index history markdown signed-out onboarding approved-files permission select input editor; do
+for fixture in index history markdown signed-out onboarding approved-files permission select input editor code-diff; do
   playwright screenshot --browser chromium --viewport-size "1100,720" --wait-for-selector "[data-probe-ready]" "http://127.0.0.1:4173/test/probe/$fixture.html" "/tmp/muniment-probe-$fixture.png"
 done
 ```

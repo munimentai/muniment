@@ -16,6 +16,7 @@ const appRules = new Map([...appStyles
   .matchAll(/([^{}]+)\{([^{}]*)\}/g)]
   .map(([, selector, declarations]) => [selector.trim().replace(/\s+/g, ' '), declarations]))
 const accessPanelSource = fs.readFileSync(path.join(process.cwd(), 'src/lib/AccessPanel.svelte'), 'utf8')
+const modifiedCodeDiff = JSON.parse(fs.readFileSync(path.join(process.cwd(), 'protocol-fixtures/code-diff/1/modified.json'), 'utf8'))
 
 let App
 let invoke
@@ -3102,6 +3103,60 @@ describe('permission gates', () => {
 
     expect(await screen.findByRole('button', { name: 'Deny' })).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Allow' })).not.toBeInTheDocument()
+  })
+
+  it('renders and applies a stored code diff with its bound identifiers', async () => {
+    const answer = restoreGate({
+      gateId: 'gate-code-diff',
+      kind: 'code_diff',
+      effect_id: 'effect-1',
+      code_diff_id: 'fixture-modified',
+      diff_sha256: 'diff-hash',
+      write_plan_sha256: 'plan-hash',
+      diff: modifiedCodeDiff,
+    })
+
+    const title = await screen.findByText('Proposed file changes')
+    const card = title.closest('.permission-card')
+    expect(within(card).getByLabelText('Code changes')).toHaveAttribute('data-diff-id', 'fixture-modified')
+    expect(within(card).getByText((_, element) => element.classList.contains('d2h-code-line-ctn')
+      && element.textContent === 'Hello Muniment')).toBeInTheDocument()
+    const approve = within(card).getByRole('button', { name: 'Apply' })
+    const deny = within(card).getByRole('button', { name: 'Deny' })
+    expect(approve.closest('.permission-approve-actions')).not.toContainElement(deny)
+
+    await fireEvent.click(approve)
+    expect(answer).toHaveBeenCalledWith({
+      runId: 'run-gated',
+      gateId: 'gate-code-diff',
+      answer: {
+        type: 'codeDiff',
+        value: {
+          gate_id: 'gate-code-diff',
+          effect_id: 'effect-1',
+          code_diff_id: 'fixture-modified',
+          diff_sha256: 'diff-hash',
+          write_plan_sha256: 'plan-hash',
+        },
+      },
+    })
+  })
+
+  it('offers only Deny when a code diff gate has no stored diff', async () => {
+    restoreGate({
+      gateId: 'gate-code-diff',
+      kind: 'code_diff',
+      effect_id: 'effect-1',
+      code_diff_id: 'diff-1',
+      diff_sha256: 'diff-hash',
+      write_plan_sha256: 'plan-hash',
+    })
+
+    const title = await screen.findByText('Proposed file changes')
+    const card = title.closest('.permission-card')
+    expect(within(card).getByRole('button', { name: 'Deny' })).toBeInTheDocument()
+    expect(within(card).queryByRole('button', { name: 'Apply' })).not.toBeInTheDocument()
+    expect(within(card).queryByLabelText('Code changes')).not.toBeInTheDocument()
   })
 
   it.each([
