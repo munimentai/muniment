@@ -43,6 +43,7 @@ fn runs_two_prompts_in_one_named_thread_and_rejects_an_unknown_thread() {
     let temporary_root =
         std::env::temp_dir().join(format!("muniment-runtime-run-{}", std::process::id()));
     let profile = temporary_root.join("profile");
+    let config = temporary_root.join("config");
     let pi_root = temporary_root.join("pi");
     let executable = pi_root
         .join("revisions")
@@ -50,7 +51,7 @@ fn runs_two_prompts_in_one_named_thread_and_rejects_an_unknown_thread() {
         .join(PI_ARTIFACT.executable);
     fs::create_dir_all(executable.parent().unwrap()).unwrap();
     fs::create_dir_all(&profile).unwrap();
-    confirm_home(&profile, &temporary_root.join("home")).unwrap();
+    confirm_home(&config, &temporary_root.join("home")).unwrap();
     let build_root = temporary_root.join("build");
     let status = Command::new(env!("CARGO"))
         .args([
@@ -103,6 +104,7 @@ fn runs_two_prompts_in_one_named_thread_and_rejects_an_unknown_thread() {
     let unknown_run_id = "018f0000-0000-7000-8000-000000000002";
     let error = run_prompt(
         &profile,
+        &config,
         unknown_run_id.into(),
         "unknown thread prompt".into(),
         Some("unknown-thread".into()),
@@ -130,6 +132,7 @@ fn runs_two_prompts_in_one_named_thread_and_rejects_an_unknown_thread() {
     drop(events);
     run_prompt(
         &profile,
+        &config,
         run_id.into(),
         prompt.into(),
         None,
@@ -155,6 +158,7 @@ fn runs_two_prompts_in_one_named_thread_and_rejects_an_unknown_thread() {
     let second_prompt = "named thread prompt";
     run_prompt(
         &profile,
+        &config,
         second_run_id.into(),
         second_prompt.into(),
         Some(thread_id.clone()),
@@ -210,6 +214,7 @@ fn resumes_an_interrupted_run_to_a_terminal_event() {
     let temporary_root =
         std::env::temp_dir().join(format!("muniment-runtime-resume-{}", std::process::id()));
     let profile = temporary_root.join("profile");
+    let config = temporary_root.join("config");
     let pi_root = temporary_root.join("pi");
     let executable = pi_root
         .join("revisions")
@@ -217,7 +222,7 @@ fn resumes_an_interrupted_run_to_a_terminal_event() {
         .join(PI_ARTIFACT.executable);
     fs::create_dir_all(executable.parent().unwrap()).unwrap();
     fs::create_dir_all(&profile).unwrap();
-    confirm_home(&profile, &temporary_root.join("home")).unwrap();
+    confirm_home(&config, &temporary_root.join("home")).unwrap();
     let build_root = temporary_root.join("build");
     let status = Command::new(env!("CARGO"))
         .args([
@@ -303,6 +308,7 @@ fn resumes_an_interrupted_run_to_a_terminal_event() {
 
     resume_run(
         &profile,
+        &config,
         run_id.into(),
         "token".into(),
         Some("owner".into()),
