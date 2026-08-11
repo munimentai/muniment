@@ -711,7 +711,7 @@ reconciles interrupted runs under a `muniment-runtime` provenance, and returns
 the shared storage. Nothing in `main` calls it, and the crate took no new
 dependency.
 
-SELECTED 2026-08-11 (twentieth wave) — the second dormant service entry point
+DONE 2026-08-11 — the second dormant service entry point
 is the runtime chat event sink. `muniment-runtime` gains a type that
 implements `ChatEventSink` and `PiLaunchBoundaries`
 (`src-tauri/core/src/run_events.rs`, `src-tauri/core/src/pi_launch.rs`).
