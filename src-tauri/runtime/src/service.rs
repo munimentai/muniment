@@ -79,7 +79,7 @@ pub fn run_prompt(
                 minimum_cacheable_prefix_characters: grant.minimum_cacheable_prefix_characters,
             },
         )
-        .map_err(|error| error.to_string())?;
+        .map_err(|_| "Conversation history is unavailable.".to_string())?;
     coordinate(
         RuntimeChatEventSink::new(profile_directory, subscriber, memory_runtime.clone())
             .with_pi_artifact(pi_artifact.unwrap_or(PI_ARTIFACT)),

@@ -99,9 +99,11 @@ fn settles_after_driving_the_prompt_through_the_pointer_install() {
     );
     let args = fs::read_to_string(captured_args).unwrap();
     let extension = profile.join("memory").join("memory-search-extension.js");
-    assert!(args.lines().collect::<Vec<_>>().windows(2).any(|args| {
-        args == ["--extension", extension.to_string_lossy().as_ref()]
-    }));
+    assert!(args
+        .lines()
+        .collect::<Vec<_>>()
+        .windows(2)
+        .any(|args| { args == ["--extension", extension.to_string_lossy().as_ref()] }));
     assert_eq!(delivered.last().unwrap().phase, "failed");
     let storage = open_profile_storage(&profile).unwrap();
     let journal_events = storage.lock().unwrap().journal.events(run_id).unwrap();
