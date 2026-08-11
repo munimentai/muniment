@@ -10,7 +10,7 @@ use muniment_runtime::{open_profile_storage, run_prompt};
 fn settles_after_driving_the_prompt_through_the_pointer_install() {
     let temporary_root =
         std::env::temp_dir().join(format!("muniment-runtime-run-{}", std::process::id()));
-    if option_env!("MUNIMENT_SIDECAR_TEST_ARCHIVE").is_none() {
+    if !cfg!(muniment_sidecar_test_archive) {
         let status = Command::new(env!("CARGO"))
             .args([
                 "test",
@@ -25,7 +25,7 @@ fn settles_after_driving_the_prompt_through_the_pointer_install() {
             .arg("--")
             .arg("--exact")
             .arg("settles_after_driving_the_prompt_through_the_pointer_install")
-            .env("MUNIMENT_SIDECAR_TEST_ARCHIVE", "1")
+            .env("RUSTFLAGS", "--cfg muniment_sidecar_test_archive")
             .current_dir(env!("CARGO_MANIFEST_DIR"))
             .status()
             .unwrap();

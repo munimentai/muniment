@@ -3,6 +3,9 @@ name = "muniment-core"
 version = "0.0.1"
 edition = "2021"
 
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(muniment_sidecar_test_archive)"] }
+
 # Pure backend logic (sidecar lifecycle, RPC framing, OIDC auth engine).
 # Deliberately free of Tauri and GUI dependencies so `cargo test` compiles
 # and runs on the shared CI runner without the GUI toolchain a desktop-ci

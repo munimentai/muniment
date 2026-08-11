@@ -393,23 +393,7 @@ fn publish_stage<B: PiLifecycleBoundary>(
 }
 
 pub fn resolve_current(root: &Path) -> Result<PathBuf, PiInstallError> {
-    if option_env!("MUNIMENT_SIDECAR_TEST_ARCHIVE").is_some() {
-        return resolve_test_pointer(root);
-    }
     resolve_pointer(root, "current").or_else(|_| resolve_pointer(root, "previous"))
-}
-
-fn resolve_test_pointer(root: &Path) -> Result<PathBuf, PiInstallError> {
-    let version = read_pointer_for(root, "current", PI_ARTIFACT, PI_PREVIOUS_ARTIFACT)?;
-    let revision = root.join("revisions").join(version);
-    let archive = revision.join(PI_ARTIFACT.archive);
-    if !matches!(
-        fs::read(archive),
-        Ok(contents) if contents == b"muniment-sidecar-test-stub\n"
-    ) {
-        return Err(PiInstallError::DigestMismatch);
-    }
-    verify_executable_for(&revision, PI_ARTIFACT)
 }
 
 /// Atomically reactivates the retained verified predecessor after the newly
@@ -501,6 +485,13 @@ fn resolve_revision(
     descriptor: PiArtifactDescriptor,
 ) -> Result<PathBuf, PiInstallError> {
     let archive = revision.join(descriptor.archive);
+    #[cfg(muniment_sidecar_test_archive)]
+    if matches!(
+        fs::read(&archive),
+        Ok(contents) if contents == b"muniment-sidecar-test-stub\n"
+    ) {
+        return verify_executable_for(revision, descriptor);
+    }
     verify_archive_for(&archive, descriptor)?;
     verify_executable_for(revision, descriptor)
 }
