@@ -614,11 +614,11 @@ disagree, because `chat_file_metadata` rejects a path with no usable final
 segment and `open_selected_files` does not. The lane waits for an owner look at
 why this one ticket never dispatches.
 
-MERGE HAZARD — all four twenty-fourth-wave slices touch the
-`muniment-runtime` crate, and two of them edit `service.rs` beside its
-tests. Each ticket tells the implementer to rebase on `main` before it
-opens the pull request. The 2026-08-04 silent revert came from a stale
-base.
+MERGE HAZARD — three of the four twenty-fifth-wave slices edit
+`src-tauri/runtime/src/service.rs`, and two of those change the
+`run_prompt` signature. Each ticket tells the implementer to rebase on
+`main` before it opens the pull request. The 2026-08-04 silent revert came
+from a stale base.
 
 DONE 2026-08-08 — the memory runtime is the twentieth core move
 (MUNIDESK-995). `src-tauri/core/src/memory_runtime.rs` composes one
@@ -749,27 +749,46 @@ queue without a pull request. That is the attach-listener pattern above,
 so this lane files no third copy and asks the owner why the ticket never
 dispatches. The dormant cancel and gate-answer surfaces wait behind it.
 
-MEASURED 2026-08-11 (twenty-third wave, planner, read `run_events.rs:199`
-beside `run_preparation.rs`) — every event the coordinate loop appends
-claims the desktop. `event_envelope` (`src-tauri/core/src/run_events.rs:199`)
-hardcodes the provenance source `muniment-desktop` and the desktop crate
-version. A run that `run_prompt` drives journals its preparation events
-under `muniment-runtime` provenance, because
-`prepare_new_run_with_session_thread` takes the source and the version as
-arguments (MUNIDESK-1079), and then every coordinate-loop event contradicts
-them. The twenty-third-wave filing drained without a pull request, its
-first drain, so the twenty-fourth wave re-files it. The sink is the seam
-that names the source.
+DONE 2026-08-11 — the provenance seam landed on its re-file
+(MUNIDESK-1099). `event_envelope` (`src-tauri/core/src/run_events.rs:180`)
+reads the source and the version from `ChatEventSink::provenance`, and
+`RuntimeChatEventSink` (`src-tauri/runtime/src/sink.rs:41`) answers
+`muniment-runtime`. Every event a runtime-driven run appends now names the
+source its preparation events name.
 
-SELECTED 2026-08-11 (twenty-fourth wave) — the provenance seam re-file,
-the dormant resume entry, the existing-thread run start, and the runtime
-session-freshness entry. The resume entry composes `resumable_context` and
-`run_resume` behind `service.rs`. The thread slice lets `run_prompt` start
-a run in a named existing thread through
-`prepare_new_run_in_thread_after_validation`. The session slice opens the
-keychain credential store through `ensure_native_session` behind a dormant
-`auth.rs` entry, because the extraction amendment gives the runtime the
-device session and the credentials.
+DONE 2026-08-11 — the dormant resume entry landed (MUNIDESK-1100).
+`resume_run` (`src-tauri/runtime/src/service.rs:110`) reads the run's
+events, composes `resumable_context` against the profile session root,
+installs the resumed run through `install_resume_run`, and drives
+`run_resume` to a terminal event.
+
+DRAINED ONCE 2026-08-11 (twenty-fourth wave) — the existing-thread run
+start and the runtime session entry both left the queue without a pull
+request. That is a first drain each, so the twenty-fifth wave re-files
+both. A second drain moves them to the owner, as the run control slot and
+the attach listener lifecycle above already went.
+
+MEASURED 2026-08-11 (twenty-fifth wave, planner, read `service.rs` beside
+`src-tauri/src/main.rs:44`) — the runtime resolves the Home from the wrong
+directory. `run_prompt` and `resume_run` each build
+`ApplicationMemoryRuntime::new(profile_directory, profile_directory.join("memory"))`,
+so they treat one directory as the config root and the data root together.
+The desktop composes the same runtime from `app_config_dir()` beside
+`app_data_dir().join("memory")`, and `open_session` reads the Home through
+`configured_home(config)` (`src-tauri/core/src/home.rs:1045`). On a real
+install those two directories differ. The runtime would find no Home
+pointer, the memory session open would fail, and `run_prompt` returns that
+failure before Pi starts. `src-tauri/runtime/tests/run.rs` passes today
+because it writes the Home pointer into the profile directory.
+
+SELECTED 2026-08-11 (twenty-fifth wave) — the existing-thread run start
+re-file, the runtime session entry re-file, the config-root separation
+above, and the dormant thread read entries. The read entries give the
+service `thread_summaries` over `chat_thread_summaries_page`
+(`src-tauri/core/src/owned_threads.rs:39`) and `thread_page` over
+`chat_thread_open_page` (`src-tauri/core/src/thread_history.rs:108`),
+because a companion that drives a run must first list a thread and open
+it.
 
 SEQUENCED — the later extraction slices are the remaining Pi execution move, the
 desktop client conversion, and Linux user-unit registration, each behind a
@@ -1547,17 +1566,18 @@ earlier one. Requiring an up-to-date branch before merge, or a merge queue, is a
 repository-settings change that sits with the owner. The planner files no ticket
 for it.
 
-VERIFIED 2026-08-11 (twenty-fourth wave, from a clean clone) — `npm ci`
+VERIFIED 2026-08-11 (twenty-fifth wave, from a clean clone) — `npm ci`
 then `npm test` passed 927 frontend tests across 63 files, with 31
 skipped, counting the 3 browser tests. `cargo test -p muniment-core -p
 muniment-attach -p muniment-cli -p muniment-code-diff -p muniment-runtime`
-passed 1,161 tests with no failure. The planner confirmed the two landed
-twenty-third-wave slices in the code, the sink that outlives its
-subscriber (MUNIDESK-1096) and the applied-diff transcript render
-(MUNIDESK-1097), and captured `test/probe/history.html`,
-`test/probe/code-diff.html`, and `test/probe/applied-diff.html` at
-1100x720 with no new visual defect. Earlier waves recorded the same shape
-of verification, and this entry replaces that ledger.
+passed 1,162 tests across 95 binaries with no failure. The planner
+confirmed the two landed twenty-fourth-wave slices in the code, the
+provenance seam (MUNIDESK-1099) and the dormant resume entry
+(MUNIDESK-1100), and captured `test/probe/permission.html` at 1100x720.
+The ask card names the action, states the resource path in the record
+register, and keeps the refusal control apart from the choice. The capture
+recorded no new visual defect. Earlier waves recorded the same shape of
+verification, and this entry replaces that ledger.
 
 NOTE 2026-08-06 — the planning clone ships no `node_modules`. Run `npm ci`
 before `npm test`. Without it the run dies with `vitest: not found`, which reads
