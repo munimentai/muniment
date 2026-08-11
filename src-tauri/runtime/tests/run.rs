@@ -16,6 +16,17 @@ static ENVIRONMENT: Mutex<()> = Mutex::new(());
 
 struct FixtureSink;
 
+fn fixture_grant() -> ChatGrant {
+    ChatGrant {
+        workspace: "workspace-a".into(),
+        gateway_url: "https://gateway.example.com".into(),
+        virtual_key: "virtual-key".into(),
+        model: None,
+        minimum_cacheable_prefix_characters: 8_192,
+        receipt_url: "https://receipts.example.com".into(),
+    }
+}
+
 impl ChatEventSink for FixtureSink {
     fn provenance(&self) -> (&str, &str) {
         ("test", "1")
@@ -27,7 +38,7 @@ impl ChatEventSink for FixtureSink {
 }
 
 #[test]
-fn settles_after_the_subscriber_is_dropped() {
+fn runs_two_prompts_in_one_named_thread_and_rejects_an_unknown_thread() {
     let _environment = ENVIRONMENT.lock().unwrap();
     let temporary_root =
         std::env::temp_dir().join(format!("muniment-runtime-run-{}", std::process::id()));
@@ -89,6 +100,30 @@ fn settles_after_the_subscriber_is_dropped() {
     std::env::set_var("PI_RESUME_STUB_PROMPTS", &captured_prompts);
     std::env::set_var("PI_RESUME_STUB_ARGS", &captured_args);
 
+    let unknown_run_id = "018f0000-0000-7000-8000-000000000002";
+    let error = run_prompt(
+        &profile,
+        unknown_run_id.into(),
+        "unknown thread prompt".into(),
+        Some("unknown-thread".into()),
+        "token".into(),
+        Some("owner".into()),
+        fixture_grant(),
+        None,
+        Some(descriptor),
+    )
+    .unwrap_err();
+    assert_eq!(error, "thread_not_found");
+    let storage = open_profile_storage(&profile).unwrap();
+    assert!(storage
+        .lock()
+        .unwrap()
+        .journal
+        .events(unknown_run_id)
+        .unwrap()
+        .is_empty());
+    drop(storage);
+
     let run_id = "018f0000-0000-7000-8000-000000000003";
     let prompt = "pointer install prompt";
     let (subscriber, events) = mpsc::channel();
@@ -97,24 +132,43 @@ fn settles_after_the_subscriber_is_dropped() {
         &profile,
         run_id.into(),
         prompt.into(),
+        None,
         "token".into(),
         Some("owner".into()),
-        ChatGrant {
-            workspace: "workspace-a".into(),
-            gateway_url: "https://gateway.example.com".into(),
-            virtual_key: "virtual-key".into(),
-            model: None,
-            minimum_cacheable_prefix_characters: 8_192,
-            receipt_url: "https://receipts.example.com".into(),
-        },
+        fixture_grant(),
         Some(subscriber),
+        Some(descriptor),
+    )
+    .unwrap();
+
+    let storage = open_profile_storage(&profile).unwrap();
+    let thread_id = storage
+        .lock()
+        .unwrap()
+        .journal
+        .run_thread_id(run_id)
+        .unwrap()
+        .unwrap();
+    drop(storage);
+
+    let second_run_id = "018f0000-0000-7000-8000-000000000005";
+    let second_prompt = "named thread prompt";
+    run_prompt(
+        &profile,
+        second_run_id.into(),
+        second_prompt.into(),
+        Some(thread_id.clone()),
+        "token".into(),
+        Some("owner".into()),
+        fixture_grant(),
+        None,
         Some(descriptor),
     )
     .unwrap();
 
     assert_eq!(
         fs::read_to_string(captured_prompts).unwrap(),
-        format!("{prompt}\n")
+        format!("{prompt}\n{second_prompt}\n")
     );
     let args = fs::read_to_string(captured_args).unwrap();
     let extension = profile.join("memory").join("memory-search-extension.js");
@@ -124,11 +178,24 @@ fn settles_after_the_subscriber_is_dropped() {
         .windows(2)
         .any(|args| { args == ["--extension", extension.to_string_lossy().as_ref()] }));
     let storage = open_profile_storage(&profile).unwrap();
-    let journal_events = storage.lock().unwrap().journal.events(run_id).unwrap();
+    let mut storage = storage.lock().unwrap();
+    let journal_events = storage.journal.events(run_id).unwrap();
     assert_eq!(journal_events.last().unwrap().event_type, "run.failed");
     assert!(journal_events
         .iter()
         .all(|event| event.provenance.source == "muniment-runtime"));
+    let named_thread_events = storage.journal.events(second_run_id).unwrap();
+    assert!(named_thread_events
+        .iter()
+        .all(|event| event.provenance.source == "muniment-runtime"));
+    assert_eq!(
+        storage
+            .journal
+            .thread_run_ids(&thread_id, 10, None)
+            .unwrap()
+            .run_ids,
+        [run_id, second_run_id]
+    );
 
     drop(storage);
     std::env::remove_var("MUNIMENT_PI_ROOT");
