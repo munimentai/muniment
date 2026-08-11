@@ -1,5 +1,5 @@
 use std::collections::{BTreeMap, VecDeque};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -17,14 +17,17 @@ use muniment_core::attach::{RuntimeActivityGuard, RuntimeActivityRegistry};
 use muniment_core::attachment::{ingest_attachment, AttachmentDeliveryError, AttachmentMetadata};
 use muniment_core::auth::TokenSet;
 use muniment_core::cas::LocalCas;
+use muniment_core::chat_coordinate::coordinate;
 use muniment_core::chat_grant::{
     fetch_grant as core_fetch_grant, validate_grant as core_validate_grant, ChatGrant,
     FetchGrantError,
 };
-use muniment_core::chat_coordinate::coordinate;
 use muniment_core::chat_profile::ChatProfile;
 pub(crate) use muniment_core::chat_resume::ResumeContext;
-use muniment_core::chat_resume::{resumable_context as core_resumable_context, ChatResumeError};
+use muniment_core::chat_resume::{
+    clear_active_run, install_active_run, install_resume_run,
+    resumable_context as core_resumable_context, run_resume, ChatResumeError, ResumeLaunch,
+};
 use muniment_core::chat_view::{chat_attachments, ChatAttachment, SelectedFile};
 use muniment_core::journal::reconciliation::reconcile_interrupted_runs;
 use muniment_core::journal::reducer::{project_chat, ChatProjector};
@@ -34,8 +37,7 @@ use muniment_core::journal::{
 use muniment_core::memory_index::ModelMemoryCapability;
 use muniment_core::permission_gate::{ChatPermissionAnswer, PendingPermissionAnswer};
 pub(crate) use muniment_core::pi_execution::{
-    attachment_delivery_error, attachment_error, coordinate_prepared_prompt, prepared_pi_images,
-    prepared_pi_prompt, PiRuntime, PreparedPromptError, ResumeAttempt, RPC_TIMEOUT,
+    attachment_delivery_error, attachment_error, PiRuntime,
 };
 use muniment_core::pi_launch::{PiLaunchBoundaries, PiLaunchError};
 use muniment_core::run_events::{ChatEvent, ChatEventSink};
@@ -44,8 +46,6 @@ use muniment_core::run_start::{
     start_desktop_run, ActiveRun, RunStartBoundaries, RunStartError, RunStartLaunch,
     RunStartRequest, SubmitResult,
 };
-use muniment_core::sidecar::pi_chat::PiRunAdapter;
-use muniment_core::sidecar::PiRpcTransport;
 use serde_json::{json, Value};
 use std::path::PathBuf;
 use tauri::{Emitter, Manager};
@@ -94,7 +94,7 @@ impl<R: tauri::Runtime> PiLaunchBoundaries for TauriChatEventSink<R> {
 
 pub struct ChatState {
     pub(crate) storage: SharedStorage,
-    active: Mutex<Option<ActiveRun>>,
+    active: Arc<Mutex<Option<ActiveRun>>>,
     runtime: Arc<Mutex<Option<PiRuntime>>>,
     pub(crate) session_thread: SessionThread,
     pub(crate) runtime_activity: RuntimeActivityRegistry,
@@ -444,7 +444,7 @@ impl ChatState {
         reconcile_interrupted_runs(&mut journal, &desktop_provenance(None));
         Ok(Self {
             storage: Arc::new(Mutex::new(ChatStorage { journal, cas })),
-            active: Mutex::new(None),
+            active: Arc::new(Mutex::new(None)),
             runtime: Arc::new(Mutex::new(None)),
             session_thread: SessionThread::default(),
             runtime_activity,
@@ -452,6 +452,7 @@ impl ChatState {
     }
 }
 
+#[cfg(test)]
 const RESUME_PROMPT: &str =
     "Continue the interrupted response from the existing session. Do not repeat completed work.";
 
@@ -519,95 +520,6 @@ pub async fn chat_submit(
     .map_err(|_| "Chat configuration is temporarily unavailable.".to_string())?
 }
 
-fn open_resume_memory_session<R: tauri::Runtime>(
-    app: &tauri::AppHandle<R>,
-    run_id: &str,
-    thread_id: &str,
-    minimum_cacheable_prefix_characters: usize,
-) -> Result<(), String> {
-    app.state::<Arc<crate::memory::ApplicationMemoryRuntime>>()
-        .open_session(
-            run_id,
-            thread_id,
-            ModelMemoryCapability {
-                minimum_cacheable_prefix_characters,
-            },
-        )
-        .map_err(|_| "This reply cannot be resumed.".to_string())
-}
-
-fn close_resume_memory_session<R: tauri::Runtime>(app: &tauri::AppHandle<R>, run_id: &str) {
-    if let Some(memory) = app.try_state::<Arc<crate::memory::ApplicationMemoryRuntime>>() {
-        memory.close_session(run_id);
-    }
-}
-
-/// Installs the resumed run and opens its memory session. A failed open leaves
-/// no active run behind.
-fn install_resume_run<R: tauri::Runtime>(
-    app: &tauri::AppHandle<R>,
-    active: &Mutex<Option<ActiveRun>>,
-    run: ActiveRun,
-    thread_id: &str,
-    minimum_cacheable_prefix_characters: usize,
-) -> Result<(), String> {
-    let run_id = run.id.clone();
-    install_active_run(active, run)?;
-    if let Err(error) =
-        open_resume_memory_session(app, &run_id, thread_id, minimum_cacheable_prefix_characters)
-    {
-        clear_active_run(active, &run_id);
-        return Err(error);
-    }
-    Ok(())
-}
-
-struct ResumeLaunch<R: tauri::Runtime> {
-    app: tauri::AppHandle<R>,
-    storage: SharedStorage,
-    runtime: Arc<Mutex<Option<PiRuntime>>>,
-    runtime_activity: RuntimeActivityRegistry,
-    memory_runtime: Arc<crate::memory::ApplicationMemoryRuntime>,
-    run_id: String,
-    tokens: TokenSet,
-    grant: ChatGrant,
-    cancelled: Arc<AtomicBool>,
-    transport: Arc<Mutex<Option<Arc<PiRpcTransport>>>>,
-    adapter: Arc<Mutex<Option<Arc<PiRunAdapter>>>>,
-    permission_answers: Arc<Mutex<VecDeque<PendingPermissionAnswer>>>,
-    resume: ResumeContext,
-    attempt: std::sync::mpsc::Sender<Result<(), String>>,
-}
-
-/// Completes the resumed run. The memory session closes and the active run
-/// clears on both the normal and the failed path.
-fn run_resume<R: tauri::Runtime>(launch: ResumeLaunch<R>) {
-    let sink = TauriChatEventSink::new(launch.app.clone(), Arc::clone(&launch.memory_runtime));
-    coordinate(
-        sink,
-        launch.storage,
-        launch.runtime,
-        launch.runtime_activity,
-        launch.memory_runtime,
-        launch.run_id.clone(),
-        RESUME_PROMPT.into(),
-        launch.tokens.access_token,
-        launch.tokens.subject,
-        launch.grant,
-        launch.cancelled,
-        launch.transport,
-        launch.adapter,
-        launch.permission_answers,
-        Some(launch.resume),
-        Some(launch.attempt),
-        None,
-    );
-    close_resume_memory_session(&launch.app, &launch.run_id);
-    if let Some(state) = launch.app.try_state::<ChatState>() {
-        clear_active_run(&state.active, &launch.run_id);
-    }
-}
-
 #[tauri::command]
 pub async fn chat_resume(
     app: tauri::AppHandle,
@@ -658,7 +570,8 @@ pub async fn chat_resume(
     // A resumed run owns its own memory session. Open it before the coordinator
     // starts so the declared memory-search tool can answer every call.
     install_resume_run(
-        &app,
+        app.state::<Arc<crate::memory::ApplicationMemoryRuntime>>()
+            .inner(),
         &state.active,
         ActiveRun {
             id: run_id.clone(),
@@ -680,11 +593,12 @@ pub async fn chat_resume(
             .inner(),
     );
     let launch = ResumeLaunch {
-        app,
+        sink: TauriChatEventSink::new(app, Arc::clone(&memory_runtime)),
         storage: Arc::clone(&state.storage),
         runtime: Arc::clone(&state.runtime),
         runtime_activity,
         memory_runtime,
+        active: Arc::clone(&state.active),
         run_id,
         tokens,
         grant,
@@ -726,26 +640,6 @@ pub fn chat_file_metadata(path: PathBuf) -> Result<ChatAttachment, String> {
         byte_length: metadata.len(),
         media_type: None,
     })
-}
-
-fn install_active_run(active: &Mutex<Option<ActiveRun>>, run: ActiveRun) -> Result<(), String> {
-    let mut active = active
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    if active.is_some() {
-        return Err("A reply is already in progress.".into());
-    }
-    *active = Some(run);
-    Ok(())
-}
-
-fn clear_active_run(active: &Mutex<Option<ActiveRun>>, run_id: &str) {
-    let mut active = active
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    if active.as_ref().is_some_and(|current| current.id == run_id) {
-        *active = None;
-    }
 }
 
 struct OpenSelectedFile {
@@ -2183,65 +2077,6 @@ mod tests {
     }
 
     #[test]
-    fn active_run_marks_runtime_activity_for_its_lifetime() {
-        let runtime_activity = RuntimeActivityRegistry::new();
-        let active = Mutex::new(None);
-        assert!(!runtime_activity.snapshot().active_run);
-
-        install_active_run(&active, inactive_transport_run("run-1", &runtime_activity)).unwrap();
-        assert!(runtime_activity.snapshot().active_run);
-
-        clear_active_run(&active, "run-1");
-        assert!(!runtime_activity.snapshot().active_run);
-    }
-
-    #[test]
-    fn sequential_active_runs_clear_runtime_activity() {
-        let runtime_activity = RuntimeActivityRegistry::new();
-        let active = Mutex::new(None);
-
-        for run_id in ["run-1", "run-2"] {
-            install_active_run(&active, inactive_transport_run(run_id, &runtime_activity)).unwrap();
-            assert!(runtime_activity.snapshot().active_run);
-            clear_active_run(&active, run_id);
-        }
-
-        assert!(!runtime_activity.snapshot().active_run);
-    }
-
-    #[test]
-    fn concurrent_active_run_installs_allow_exactly_one_run() {
-        let active = Arc::new(Mutex::new(None));
-        let runtime_activity = RuntimeActivityRegistry::new();
-        let barrier = Arc::new(std::sync::Barrier::new(2));
-        let handles: Vec<_> = (0..2)
-            .map(|index| {
-                let active = Arc::clone(&active);
-                let runtime_activity = runtime_activity.clone();
-                let barrier = Arc::clone(&barrier);
-                std::thread::spawn(move || {
-                    barrier.wait();
-                    install_active_run(
-                        &active,
-                        inactive_transport_run(&format!("run-{index}"), &runtime_activity),
-                    )
-                })
-            })
-            .collect();
-
-        let results: Vec<_> = handles
-            .into_iter()
-            .map(|handle| handle.join().unwrap())
-            .collect();
-        assert_eq!(results.iter().filter(|result| result.is_ok()).count(), 1);
-        let errors: Vec<_> = results
-            .iter()
-            .filter_map(|result| result.as_ref().err().map(String::as_str))
-            .collect();
-        assert_eq!(errors, ["A reply is already in progress."]);
-    }
-
-    #[test]
     fn resume_validation_fails_closed_for_every_unsafe_projection() {
         let directory = std::env::temp_dir().join(format!("muniment-resume-{}", Uuid::now_v7()));
         let sessions = ChatProfile::new(&directory).pi_session_root();
@@ -2567,38 +2402,6 @@ mod tests {
     }
 
     #[test]
-    fn resume_memory_session_failure_reports_the_resume_copy_and_leaves_no_active_run() {
-        let app = tauri::test::mock_app();
-        let root = std::env::temp_dir().join(format!("muniment-resume-memory-{}", Uuid::now_v7()));
-        // The test records no Muniment Home, so the memory session cannot open.
-        app.manage(Arc::new(crate::memory::ApplicationMemoryRuntime::new(
-            root.join("config"),
-            root.join("cache"),
-        )));
-
-        let runtime_activity = RuntimeActivityRegistry::new();
-        let active = Mutex::new(None);
-
-        let error = install_resume_run(
-            app.handle(),
-            &active,
-            inactive_transport_run("run-1", &runtime_activity),
-            "thread-1",
-            8_192,
-        )
-        .unwrap_err();
-
-        assert_eq!(error, "This reply cannot be resumed.");
-        assert!(active.lock().unwrap().is_none());
-        assert!(!runtime_activity.snapshot().active_run);
-        assert!(app
-            .state::<Arc<crate::memory::ApplicationMemoryRuntime>>()
-            .dispatch_tool_call("run-1", "memory-search", br#"{"query":"saffron"}"#)
-            .is_err());
-        assert!(!root.exists());
-    }
-
-    #[test]
     fn resumed_run_answers_a_memory_search_and_ends_without_a_session() {
         let _environment = lock_pi_environment();
         let app = tauri::test::mock_app();
@@ -2691,9 +2494,10 @@ mod tests {
         let adapter = Arc::new(Mutex::new(None));
         let permission_answers = Arc::new(Mutex::new(VecDeque::new()));
         let runtime_activity = RuntimeActivityRegistry::new();
-        let active = Mutex::new(None);
+        let active = Arc::new(Mutex::new(None));
         install_resume_run(
-            app.handle(),
+            app.state::<Arc<crate::memory::ApplicationMemoryRuntime>>()
+                .inner(),
             &active,
             ActiveRun {
                 id: run_id.clone(),
@@ -2713,7 +2517,13 @@ mod tests {
         std::env::set_var("PI_RESUME_STUB_MEMORY_QUERY", "saffron");
         let (sender, receiver) = std::sync::mpsc::channel();
         run_resume(ResumeLaunch {
-            app: app.handle().clone(),
+            sink: TauriChatEventSink::new(
+                app.handle().clone(),
+                Arc::clone(
+                    app.state::<Arc<crate::memory::ApplicationMemoryRuntime>>()
+                        .inner(),
+                ),
+            ),
             storage: Arc::clone(&shared),
             runtime: Arc::new(Mutex::new(None)),
             runtime_activity: runtime_activity.clone(),
@@ -2721,6 +2531,7 @@ mod tests {
                 app.state::<Arc<crate::memory::ApplicationMemoryRuntime>>()
                     .inner(),
             ),
+            active: Arc::clone(&active),
             run_id: run_id.clone(),
             tokens: TokenSet {
                 access_token: "token".into(),
