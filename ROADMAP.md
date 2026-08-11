@@ -614,7 +614,7 @@ disagree, because `chat_file_metadata` rejects a path with no usable final
 segment and `open_selected_files` does not. The lane waits for an owner look at
 why this one ticket never dispatches.
 
-MERGE HAZARD — three of the four twenty-fifth-wave slices edit
+MERGE HAZARD — three of the five twenty-sixth-wave slices edit
 `src-tauri/runtime/src/service.rs`, and two of those change the
 `run_prompt` signature. Each ticket tells the implementer to rebase on
 `main` before it opens the pull request. The 2026-08-04 silent revert came
@@ -660,15 +660,13 @@ DONE 2026-08-10 — the twenty-sixth move took the Pi launch configuration
 and the `--extension` argument, and `TauriChatEventSink` implements the
 boundary (`src-tauri/src/chat_coordinate.rs:115`).
 
-HELD 2026-08-10 (thirteenth wave) — the twenty-seventh move takes the attach
-listener lifecycle, and it has now drained twice. `AttachCompanionState`
-(`src-tauri/src/attach_service.rs:240`) still keeps the start outcome in a
-`(bool, Option<AttachListenerStartFailure>, bool)` tuple beside a stop state
-and a condvar, and that state machine still belongs in muniment-core behind a
-named enum. The eleventh-wave and twelfth-wave filings both drained without a
-pull request, which is the selected-file pattern. The twelfth wave said a
-second drain belongs to the owner, so this lane files no third copy and asks
-the owner why this ticket never dispatches.
+OPEN — the twenty-seventh move takes the attach listener lifecycle.
+`AttachCompanionState` (`src-tauri/src/attach_service.rs:240`) still keeps the
+start outcome in a `(bool, Option<AttachListenerStartFailure>, bool)` tuple
+beside a stop state and a condvar, and that state machine belongs in
+muniment-core behind a named enum. The thirteenth wave held it for the owner
+after two drains. The twenty-sixth-wave drain measurement below retires that
+hold, and the slice returns to the queue in priority order.
 
 DONE 2026-08-10 — the twenty-eighth move landed (MUNIDESK-1054).
 `coordinate` (`src-tauri/src/chat_coordinate.rs:127`) takes the journal, the
@@ -740,14 +738,18 @@ DONE 2026-08-11 — the journal-first delivery rule landed on its re-file
 returning success, so a runtime run settles and journals after its
 observer goes away.
 
-HELD 2026-08-11 (twenty-fourth wave) — the run control slot has drained
-twice. `run_prompt` (`src-tauri/runtime/src/service.rs:35`) still creates
-the cancel flag and the permission answer queue internally and returns no
-handle, so no caller can cancel a runtime run or answer a gate. The
-twenty-second-wave filing and the twenty-third-wave re-file both left the
-queue without a pull request. That is the attach-listener pattern above,
-so this lane files no third copy and asks the owner why the ticket never
-dispatches. The dormant cancel and gate-answer surfaces wait behind it.
+OPEN — the run control slot. `run_prompt`
+(`src-tauri/runtime/src/service.rs:44`) still creates the cancel flag, the
+transport slot, the adapter slot, and the permission answer queue
+internally, and it installs no `ActiveRun`, so no caller can cancel a
+runtime run or answer a gate. `resume_run` (`:135`) already installs one
+through `install_resume_run`, and it owns the slot itself, so a caller
+cannot reach that run either. Both entries take the shared
+`Arc<Mutex<Option<ActiveRun>>>` as an argument, and
+`cancel_active_run` and `queue_permission_answer`
+(`src-tauri/core/src/active_run.rs:66`, `:94`) then reach a live runtime
+run. The twenty-fourth wave held this for the owner after two drains, and
+the drain measurement below retires that hold.
 
 DONE 2026-08-11 — the provenance seam landed on its re-file
 (MUNIDESK-1099). `event_envelope` (`src-tauri/core/src/run_events.rs:180`)
@@ -762,11 +764,35 @@ events, composes `resumable_context` against the profile session root,
 installs the resumed run through `install_resume_run`, and drives
 `run_resume` to a terminal event.
 
-DRAINED ONCE 2026-08-11 (twenty-fourth wave) — the existing-thread run
-start and the runtime session entry both left the queue without a pull
-request. That is a first drain each, so the twenty-fifth wave re-files
-both. A second drain moves them to the owner, as the run control slot and
-the attach listener lifecycle above already went.
+DONE 2026-08-11 — the existing-thread run start landed on its re-file
+(MUNIDESK-1102). `run_prompt` (`src-tauri/runtime/src/service.rs:57`)
+takes an optional `thread_id`. A named thread prepares the run through
+`prepare_new_run_in_thread_after_validation`, and no thread prepares it
+through `prepare_new_run_with_session_thread` against a fresh
+`SessionThread`. `src-tauri/runtime/tests/run.rs` runs two prompts in one
+named thread and rejects an unknown thread.
+
+DONE 2026-08-11 — one API base-URL rule serves the whole workspace
+(MUNIDESK-1103). `api_base_url` (`src-tauri/core/src/auth/mod.rs:34`)
+reads `MUNIMENT_API_BASE_URL`, then `MUNIMENT_ISSUER`, then the shipped
+default, and both desktop call sites read it. The runtime session entry
+below needs exactly that rule, because `ensure_native_session`
+(`src-tauri/core/src/auth/native_session.rs:305`) takes the base URL as an
+argument.
+
+MEASURED 2026-08-11 (twenty-sixth wave, planner, read `git log` between
+each roadmap merge) — a drained slice measures batch position rather than
+ticket content. The twenty-second, twenty-third, twenty-fourth, and
+twenty-fifth waves each selected four slices, and exactly two merged in
+each interval. The existing-thread run start then merged on its second
+filing with no change of shape. Two drains therefore say that a slice sat
+below the wave's throughput ceiling, and they say nothing about its size
+or its clarity. This retires the two-drain escalation rule that held the
+run control slot and the attach listener lifecycle. The lane re-files a
+drained slice in strict priority order instead, and it puts the slice it
+most wants built in the first position. The selected-file open rule keeps
+its own hold, because eight identical filings are a different
+measurement.
 
 MEASURED 2026-08-11 (twenty-fifth wave, planner, read `service.rs` beside
 `src-tauri/src/main.rs:44`) — the runtime resolves the Home from the wrong
@@ -781,14 +807,25 @@ pointer, the memory session open would fail, and `run_prompt` returns that
 failure before Pi starts. `src-tauri/runtime/tests/run.rs` passes today
 because it writes the Home pointer into the profile directory.
 
-SELECTED 2026-08-11 (twenty-fifth wave) — the existing-thread run start
-re-file, the runtime session entry re-file, the config-root separation
-above, and the dormant thread read entries. The read entries give the
-service `thread_summaries` over `chat_thread_summaries_page`
+SELECTED 2026-08-11 (twenty-sixth wave) — five slices in priority order.
+They are the config-root separation above, the run control slot, the
+dormant thread read entries, the runtime session entry, and the attach
+listener lifecycle move. The read entries give the service
+`thread_summaries` over `chat_thread_summaries_page`
 (`src-tauri/core/src/owned_threads.rs:39`) and `thread_page` over
 `chat_thread_open_page` (`src-tauri/core/src/thread_history.rs:108`),
 because a companion that drives a run must first list a thread and open
-it.
+it. The session entry answers a fresh access token from the keychain
+store through `ensure_native_session`, so a caller stops handing the
+service a token it minted elsewhere.
+
+SEQUENCED — the runtime grant entry follows the session entry, because
+`fetch_grant` (`src-tauri/core/src/chat_grant.rs:31`) takes the access
+token the session entry answers. A shared-storage argument follows the
+three service-entry slices above, because `run_prompt`, `resume_run`, and
+both read entries each call `open_profile_storage` today, and every call
+pays the full `validate_database` read the 2026-07-31 measurement
+records.
 
 SEQUENCED — the later extraction slices are the remaining Pi execution move, the
 desktop client conversion, and Linux user-unit registration, each behind a
@@ -1566,18 +1603,19 @@ earlier one. Requiring an up-to-date branch before merge, or a merge queue, is a
 repository-settings change that sits with the owner. The planner files no ticket
 for it.
 
-VERIFIED 2026-08-11 (twenty-fifth wave, from a clean clone) — `npm ci`
+VERIFIED 2026-08-11 (twenty-sixth wave, from a clean clone) — `npm ci`
 then `npm test` passed 927 frontend tests across 63 files, with 31
 skipped, counting the 3 browser tests. `cargo test -p muniment-core -p
 muniment-attach -p muniment-cli -p muniment-code-diff -p muniment-runtime`
-passed 1,162 tests across 95 binaries with no failure. The planner
-confirmed the two landed twenty-fourth-wave slices in the code, the
-provenance seam (MUNIDESK-1099) and the dormant resume entry
-(MUNIDESK-1100), and captured `test/probe/permission.html` at 1100x720.
-The ask card names the action, states the resource path in the record
-register, and keeps the refusal control apart from the choice. The capture
-recorded no new visual defect. Earlier waves recorded the same shape of
-verification, and this entry replaces that ledger.
+passed 1,163 tests across 96 binaries with no failure. The planner
+confirmed the two landed twenty-fifth-wave slices in the code, the
+existing-thread run start (MUNIDESK-1102) and the one API base-URL rule
+(MUNIDESK-1103), and captured `test/probe/history.html` at 1100x760. The
+restored thread renders its sidebar, titlebar, transcript, two tool rows,
+provenance line, interrupted-reply record with its `Resume` control, and
+composer. The capture recorded no new visual defect. Earlier waves
+recorded the same shape of verification, and this entry replaces that
+ledger.
 
 NOTE 2026-08-06 — the planning clone ships no `node_modules`. Run `npm ci`
 before `npm test`. Without it the run dies with `vitest: not found`, which reads
