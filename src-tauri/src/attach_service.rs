@@ -35,10 +35,11 @@ use muniment_core::attach::linux::{
 };
 #[cfg(target_os = "linux")]
 use muniment_core::attach::{
-    evaluate_quiesce, probe_handoff, verify_migration_control_peer, Approval, CommittedResult,
-    ConfirmedHandoff, HandoffProbeError, Id, IdempotencyOutcome, IdempotencyStore,
-    MigrationAuthorityError, Operation, PreparedHandoffSlot, Protocol, Request as AttachRequest,
-    RuntimeActivity, RuntimeActivityRegistry, WorkspaceOnboardRequest, WorkspaceOnboarded,
+    evaluate_quiesce, probe_handoff, verify_migration_control_peer, Approval,
+    AttachListenerLifecycle, CommittedResult, ConfirmedHandoff, HandoffProbeError, Id,
+    IdempotencyOutcome, IdempotencyStore, MigrationAuthorityError, Operation, PreparedHandoffSlot,
+    Protocol, Request as AttachRequest, RuntimeActivity, RuntimeActivityRegistry,
+    WorkspaceOnboardRequest, WorkspaceOnboarded,
 };
 #[cfg(target_os = "linux")]
 use muniment_core::browser_control::ProcReader;
@@ -243,7 +244,7 @@ pub struct AttachCompanionState {
     #[cfg(target_os = "linux")]
     workspace: Arc<Mutex<Option<String>>>,
     #[cfg(target_os = "linux")]
-    listener_start: Mutex<(bool, Option<AttachListenerStartFailure>, bool)>,
+    listener_lifecycle: Mutex<AttachListenerLifecycle>,
     #[cfg(target_os = "linux")]
     listener_stop: Mutex<AttachListenerStopState>,
     #[cfg(target_os = "linux")]
@@ -271,7 +272,7 @@ impl AttachCompanionState {
         Self {
             workspace: listener.workspace.clone(),
             listener: Mutex::new(Some(listener)),
-            listener_start: Mutex::new((true, None, false)),
+            listener_lifecycle: Mutex::new(AttachListenerLifecycle::Listening),
             listener_stop: Mutex::new(AttachListenerStopState::Pending {
                 stop_requested: false,
             }),
@@ -295,17 +296,17 @@ impl AttachCompanionState {
     }
 
     fn record_listener_started(&self) {
-        *self
-            .listener_start
+        self.listener_lifecycle
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = (true, None, false);
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .record_listening();
     }
 
     fn record_listener_pending(&self) {
-        *self
-            .listener_start
+        self.listener_lifecycle
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = (false, None, false);
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .record_pending();
         *self
             .listener_stop
             .lock()
@@ -316,10 +317,10 @@ impl AttachCompanionState {
     }
 
     fn record_listener_start_failure(&self, failure: AttachListenerStartFailure) {
-        *self
-            .listener_start
+        self.listener_lifecycle
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = (false, Some(failure), false);
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .record_failure(failure);
         self.record_listener_finished();
     }
 
@@ -340,10 +341,10 @@ impl AttachCompanionState {
     }
 
     fn record_listener_stopped(&self) {
-        *self
-            .listener_start
+        self.listener_lifecycle
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = (false, None, true);
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .record_stopped();
         self.record_listener_finished();
     }
 
@@ -374,19 +375,23 @@ impl AttachCompanionState {
     }
 
     fn listener_status(&self) -> AttachListenerStatus {
-        let (started, failure, stopped) = *self
-            .listener_start
+        let lifecycle = *self
+            .listener_lifecycle
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let failure = match lifecycle {
+            AttachListenerLifecycle::Failed(failure) => Some(failure),
+            _ => None,
+        };
         AttachListenerStatus {
-            started,
+            started: lifecycle == AttachListenerLifecycle::Listening,
             failure: failure.map(|failure| match failure {
                 AttachListenerStartFailure::Filesystem => "filesystem",
                 AttachListenerStartFailure::InstanceLock => "instance_lock",
                 AttachListenerStartFailure::Bind => "bind",
             }),
-            pending: !started && failure.is_none() && !stopped,
-            stopped,
+            pending: lifecycle == AttachListenerLifecycle::Pending,
+            stopped: lifecycle == AttachListenerLifecycle::Stopped,
         }
     }
 
@@ -420,7 +425,7 @@ impl Default for AttachCompanionState {
         Self {
             listener: Mutex::new(None),
             workspace: Arc::new(Mutex::new(None)),
-            listener_start: Mutex::new((false, None, false)),
+            listener_lifecycle: Mutex::new(AttachListenerLifecycle::Pending),
             listener_stop: Mutex::new(AttachListenerStopState::Pending {
                 stop_requested: false,
             }),
