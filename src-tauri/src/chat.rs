@@ -709,6 +709,8 @@ fn prepare_new_run_with_session_thread_after_validation<F>(
 where
     F: FnOnce() -> Result<(), String>,
 {
+    // Open and validate every selection before creating a run, so ordinary
+    // selection failures cannot leave a rejected submission in the journal.
     let files = open_selected_files(files)?;
     core_run_preparation::prepare_new_run_with_session_thread(
         storage,
