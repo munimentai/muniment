@@ -1,14 +1,18 @@
+use std::collections::VecDeque;
 use std::fs;
 use std::process::Command;
+use std::sync::atomic::AtomicBool;
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::Duration;
 
 use muniment_core::active_run::cancel_active_run;
+use muniment_core::attach::RuntimeActivityRegistry;
 use muniment_core::chat_grant::ChatGrant;
 use muniment_core::home::confirm_home;
 use muniment_core::pi_execution::coordinate_prepared_prompt;
 use muniment_core::run_events::{ChatEvent, ChatEventSink};
 use muniment_core::run_preparation::{prepare_new_run_with_session_thread, SessionThreadStart};
+use muniment_core::run_start::ActiveRun;
 use muniment_core::session_thread::SessionThread;
 use muniment_core::sidecar::pi_install::{PiArtifactDescriptor, PI_ARTIFACT};
 use muniment_core::sidecar::validate_pi_session;
@@ -37,6 +41,51 @@ impl ChatEventSink for FixtureSink {
     fn deliver(&self, _event: ChatEvent) -> Result<(), ()> {
         Ok(())
     }
+}
+
+#[test]
+fn an_occupied_active_run_slot_does_not_prepare_a_new_run() {
+    let temporary_root =
+        std::env::temp_dir().join(format!("muniment-runtime-occupied-{}", std::process::id()));
+    let profile = temporary_root.join("profile");
+    fs::create_dir_all(&profile).unwrap();
+    let activity = RuntimeActivityRegistry::new();
+    let active = Arc::new(Mutex::new(Some(ActiveRun {
+        id: "018f0000-0000-7000-8000-000000000001".into(),
+        workspace: "workspace-a".into(),
+        cancelled: Arc::new(AtomicBool::new(false)),
+        transport: Arc::new(Mutex::new(None)),
+        adapter: Arc::new(Mutex::new(None)),
+        permission_answers: Arc::new(Mutex::new(VecDeque::new())),
+        _activity: activity.mark_active_run(),
+    })));
+    let run_id = "018f0000-0000-7000-8000-000000000002";
+
+    let error = run_prompt(
+        &profile,
+        temporary_root.join("config"),
+        run_id.into(),
+        "prompt".into(),
+        None,
+        "token".into(),
+        Some("owner".into()),
+        fixture_grant(),
+        active,
+        None,
+        None,
+    )
+    .unwrap_err();
+
+    assert_eq!(error, "A reply is already in progress.");
+    let storage = open_profile_storage(&profile).unwrap();
+    assert!(storage
+        .lock()
+        .unwrap()
+        .journal
+        .events(run_id)
+        .unwrap()
+        .is_empty());
+    fs::remove_dir_all(temporary_root).unwrap();
 }
 
 #[test]

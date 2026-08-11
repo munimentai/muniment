@@ -57,64 +57,16 @@ pub fn run_prompt(
 ) -> Result<(), String> {
     let profile_directory = profile_directory.as_ref();
     let storage = open_profile_storage(profile_directory).map_err(|error| error.to_string())?;
-    let prepared = match thread_id.as_deref() {
-        Some(thread_id) => prepare_new_run_in_thread_after_validation(
-            &storage,
-            &run_id,
-            &grant.workspace,
-            subject.as_deref(),
-            Vec::new(),
-            Some(runtime_provenance()),
-            thread_id,
-            "muniment-runtime",
-            env!("CARGO_PKG_VERSION"),
-            || Ok(()),
-        ),
-        None => {
-            let session_thread = SessionThread::default();
-            prepare_new_run_with_session_thread(
-                &storage,
-                SessionThreadStart {
-                    tracker: &session_thread,
-                    continue_existing: false,
-                },
-                &run_id,
-                &grant.workspace,
-                subject.as_deref(),
-                Vec::new(),
-                Some(runtime_provenance()),
-                "muniment-runtime",
-                env!("CARGO_PKG_VERSION"),
-                || Ok(()),
-            )
-        }
-    }?;
     let memory_runtime = Arc::new(ApplicationMemoryRuntime::new(
         config_directory.as_ref().to_path_buf(),
         profile_directory.join("memory"),
     ));
-    let thread_id = storage
-        .lock()
-        .map_err(|_| "Conversation history is unavailable.".to_string())?
-        .journal
-        .run_thread_id(&run_id)
-        .map_err(|error| error.to_string())?
-        .ok_or_else(|| "Conversation history is unavailable.".to_string())?;
-    memory_runtime
-        .open_session(
-            &run_id,
-            &thread_id,
-            ModelMemoryCapability {
-                minimum_cacheable_prefix_characters: grant.minimum_cacheable_prefix_characters,
-            },
-        )
-        .map_err(|_| "Conversation history is unavailable.".to_string())?;
     let runtime_activity = RuntimeActivityRegistry::new();
     let cancelled = Arc::new(AtomicBool::new(false));
     let transport = Arc::new(Mutex::new(None));
     let adapter = Arc::new(Mutex::new(None));
     let permission_answers = Arc::new(Mutex::new(VecDeque::new()));
-    if let Err(error) = install_active_run(
+    install_active_run(
         &active,
         ActiveRun {
             id: run_id.clone(),
@@ -125,10 +77,66 @@ pub fn run_prompt(
             permission_answers: Arc::clone(&permission_answers),
             _activity: runtime_activity.mark_active_run(),
         },
-    ) {
-        memory_runtime.close_session(&run_id);
-        return Err(error);
-    }
+    )?;
+    let setup = (|| {
+        let prepared = match thread_id.as_deref() {
+            Some(thread_id) => prepare_new_run_in_thread_after_validation(
+                &storage,
+                &run_id,
+                &grant.workspace,
+                subject.as_deref(),
+                Vec::new(),
+                Some(runtime_provenance()),
+                thread_id,
+                "muniment-runtime",
+                env!("CARGO_PKG_VERSION"),
+                || Ok(()),
+            ),
+            None => {
+                let session_thread = SessionThread::default();
+                prepare_new_run_with_session_thread(
+                    &storage,
+                    SessionThreadStart {
+                        tracker: &session_thread,
+                        continue_existing: false,
+                    },
+                    &run_id,
+                    &grant.workspace,
+                    subject.as_deref(),
+                    Vec::new(),
+                    Some(runtime_provenance()),
+                    "muniment-runtime",
+                    env!("CARGO_PKG_VERSION"),
+                    || Ok(()),
+                )
+            }
+        }?;
+        let thread_id = storage
+            .lock()
+            .map_err(|_| "Conversation history is unavailable.".to_string())?
+            .journal
+            .run_thread_id(&run_id)
+            .map_err(|error| error.to_string())?
+            .ok_or_else(|| "Conversation history is unavailable.".to_string())?;
+        memory_runtime
+            .open_session(
+                &run_id,
+                &thread_id,
+                ModelMemoryCapability {
+                    minimum_cacheable_prefix_characters: grant.minimum_cacheable_prefix_characters,
+                },
+            )
+            .map_err(|_| "Conversation history is unavailable.".to_string())?;
+        Ok::<_, String>(prepared)
+    })();
+    let prepared = match setup {
+        Ok(prepared) => prepared,
+        Err(error) => {
+            clear_active_run(&active, &run_id);
+            memory_runtime.close_session(&run_id);
+            return Err(error);
+        }
+    };
     coordinate(
         RuntimeChatEventSink::new(profile_directory, subscriber, memory_runtime.clone())
             .with_pi_artifact(pi_artifact.unwrap_or(PI_ARTIFACT)),
