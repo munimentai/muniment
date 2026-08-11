@@ -7,12 +7,13 @@
 
   import AccessPanel from './lib/AccessPanel.svelte'
   import AssistantMarkdown from './lib/AssistantMarkdown.svelte'
+  import CodeDiff from './lib/CodeDiff.svelte'
   import ConfirmDialog from './lib/ConfirmDialog.svelte'
   import Onboarding from './lib/Onboarding.svelte'
   import { ARTIFACT_RAIL_MAX_WIDTH, ARTIFACT_RAIL_MIN_WIDTH, artifactRailShortcut, createArtifactRailController, defaultArtifactRailWidth, isArtifactRailShortcut, shortcutDisplayLabel } from './lib/artifact-rail-state.js'
   import { bootState, errorState, registrationRetryState, statusState, waitingState } from './lib/auth-state.js'
   import { ringPath, solidMilledRingPath } from './lib/mark.js'
-  import { composerAction, formatByteSize, permissionGateAction, permissionGateCommitHint, receiptLabel, receiptRows, receiptSummary, runAnnouncement, toolName, toolStatus } from './lib/chat-state.js'
+  import { codeDiffPermissionAnswer, composerAction, formatByteSize, permissionGateAction, permissionGateCommitHint, receiptLabel, receiptRows, receiptSummary, runAnnouncement, toolName, toolStatus } from './lib/chat-state.js'
   import { createChatController } from './lib/chat-controller.js'
   import { composerHeight } from './lib/composer-size.js'
   import { createDictationController } from './lib/dictation-controller.js'
@@ -921,8 +922,9 @@
                 {@const gate = message.run.pendingPermission}
                 {@const answerState = permissionState(message.run)}
                 <div class="permission-card tool-card">
-                  <strong>{gate.title}</strong>
+                  <strong>{gate.kind === 'code_diff' ? 'Proposed file changes' : gate.title}</strong>
                   {#if gate.kind === 'confirm' && gate.message}<p>{gate.message}</p>{/if}
+                  {#if gate.kind === 'code_diff' && gate.diff}<CodeDiff codeDiff={gate.diff} />{/if}
                   {#if gate.kind === 'input'}
                     <input
                       class="permission-field"
@@ -957,6 +959,8 @@
                         {/each}
                       {:else if gate.kind === 'input' || gate.kind === 'editor'}
                         <button disabled={answerState?.pending} onclick={() => answerPermission(message.run, { type: gate.kind, value: permissionValue(message.run) })}>Submit</button>
+                      {:else if gate.kind === 'code_diff' && gate.diff}
+                        <button disabled={answerState?.pending} onclick={() => answerPermission(message.run, codeDiffPermissionAnswer(gate))}>Apply</button>
                       {/if}
                     </div>
                   </div>

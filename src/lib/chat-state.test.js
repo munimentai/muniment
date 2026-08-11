@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { applyBufferedChatEvents, applyChatEvent, composerAction, historyMessages, permissionGateAction, permissionGateCommitHint, receiptLabel, receiptRows, receiptSummary, runAnnouncement, toolName, toolStatus } from './chat-state.js'
+import { applyBufferedChatEvents, applyChatEvent, codeDiffPermissionAnswer, composerAction, historyMessages, permissionGateAction, permissionGateCommitHint, receiptLabel, receiptRows, receiptSummary, runAnnouncement, toolName, toolStatus } from './chat-state.js'
 
 describe('chat composer and projection', () => {
   it('chooses submit or steer from the active run', () => {
@@ -37,6 +37,25 @@ describe('chat composer and projection', () => {
     expect(permissionGateAction({ key: 'Enter', ctrlKey: true, metaKey: true }, 'editor', 'MacIntel')).toBeNull()
     expect(permissionGateAction({ key: 'Enter', ctrlKey: true, altKey: true }, 'editor', 'Linux x86_64')).toBeNull()
     expect(permissionGateAction({ key: 'Enter', ctrlKey: true }, 'input', 'Linux x86_64')).toBeNull()
+  })
+
+  it('binds a code diff answer to every proposal identifier', () => {
+    expect(codeDiffPermissionAnswer({
+      gateId: 'gate-1',
+      effect_id: 'effect-1',
+      code_diff_id: 'diff-1',
+      diff_sha256: 'diff-hash',
+      write_plan_sha256: 'plan-hash',
+    })).toEqual({
+      type: 'codeDiff',
+      value: {
+        gate_id: 'gate-1',
+        effect_id: 'effect-1',
+        code_diff_id: 'diff-1',
+        diff_sha256: 'diff-hash',
+        write_plan_sha256: 'plan-hash',
+      },
+    })
   })
 
   it('moves thinking to streaming and removes signal on every terminal event', () => {
