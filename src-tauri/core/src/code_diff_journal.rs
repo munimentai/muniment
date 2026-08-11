@@ -435,6 +435,26 @@ pub fn load_code_diff_proposal(
     Ok(Some((write_plan, code_diff)))
 }
 
+/// Loads a verified diff for a pending code-diff gate.
+pub fn load_pending_code_diff(
+    journal: &mut RunJournal,
+    cas: &LocalCas,
+    run_id: &str,
+    gate: &Option<PermissionGate>,
+) -> Option<CodeDiff> {
+    let Some(PermissionGate {
+        request: PermissionRequest::CodeDiff { effect_id, .. },
+        ..
+    }) = gate
+    else {
+        return None;
+    };
+    load_code_diff_proposal(journal, cas, run_id, effect_id)
+        .ok()
+        .flatten()
+        .map(|(_, diff)| diff)
+}
+
 fn load_proposal_object(
     cas: &LocalCas,
     event: &EventEnvelope,

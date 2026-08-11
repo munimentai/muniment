@@ -130,7 +130,11 @@ fn coordinate_code_diff_answer(
         projector.apply(event).map_err(|_| ())?;
     }
     *seq = appended[1].run_seq;
-    sink.deliver(chat_event(run_id, projector.projection().map_err(|_| ())?))?;
+    sink.deliver(chat_event(
+        run_id,
+        projector.projection().map_err(|_| ())?,
+        None,
+    ))?;
     if let Some(resolved) = resolved {
         let _ = resolved.send(Some(*seq));
     }
@@ -1375,6 +1379,7 @@ mod tests {
                 }],
                 ..ChatProjection::default()
             },
+            None,
         );
 
         assert_eq!(
