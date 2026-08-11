@@ -924,7 +924,8 @@
                 <div class="permission-card tool-card">
                   <strong>{gate.kind === 'code_diff' ? 'Proposed file changes' : gate.title}</strong>
                   {#if gate.kind === 'confirm' && gate.message}<p>{gate.message}</p>{/if}
-                  {#if gate.kind === 'code_diff' && gate.diff}<CodeDiff codeDiff={gate.diff} />{/if}
+                  {#if gate.kind === 'code_diff' && gate.diff}<CodeDiff codeDiff={gate.diff} />
+                  {:else if gate.kind === 'code_diff'}<p>The proposed changes cannot be shown.</p>{/if}
                   {#if gate.kind === 'input'}
                     <input
                       class="permission-field"
