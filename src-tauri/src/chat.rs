@@ -1173,18 +1173,6 @@ mod tests {
         }
     }
 
-    fn inactive_transport_run(id: &str, runtime_activity: &RuntimeActivityRegistry) -> ActiveRun {
-        ActiveRun {
-            id: id.into(),
-            workspace: "workspace-a".into(),
-            cancelled: Arc::new(AtomicBool::new(false)),
-            transport: Arc::new(Mutex::new(None)),
-            adapter: Arc::new(Mutex::new(None)),
-            permission_answers: Arc::new(Mutex::new(VecDeque::new())),
-            _activity: runtime_activity.mark_active_run(),
-        }
-    }
-
     #[test]
     fn session_thread_continues_at_the_next_ordinal() {
         let directory =

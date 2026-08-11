@@ -107,10 +107,7 @@ pub fn run_resume<S: ChatEventSink + PiLaunchBoundaries>(launch: ResumeLaunch<S>
     clear_active_run(&launch.active, &launch.run_id);
 }
 
-pub fn install_active_run(
-    active: &Mutex<Option<ActiveRun>>,
-    run: ActiveRun,
-) -> Result<(), String> {
+pub fn install_active_run(active: &Mutex<Option<ActiveRun>>, run: ActiveRun) -> Result<(), String> {
     let mut active = active
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -391,10 +388,7 @@ mod tests {
                 let barrier = Arc::clone(&barrier);
                 std::thread::spawn(move || {
                     barrier.wait();
-                    install_active_run(
-                        &active,
-                        inactive_run(&format!("run-{index}"), &activity),
-                    )
+                    install_active_run(&active, inactive_run(&format!("run-{index}"), &activity))
                 })
             })
             .collect();
@@ -413,10 +407,8 @@ mod tests {
 
     #[test]
     fn memory_session_failure_leaves_no_active_run() {
-        let root = std::env::temp_dir().join(format!(
-            "muniment-resume-memory-{}",
-            uuid::Uuid::now_v7()
-        ));
+        let root =
+            std::env::temp_dir().join(format!("muniment-resume-memory-{}", uuid::Uuid::now_v7()));
         let memory = ApplicationMemoryRuntime::new(root.join("config"), root.join("cache"));
         let activity = RuntimeActivityRegistry::new();
         let active = Mutex::new(None);
