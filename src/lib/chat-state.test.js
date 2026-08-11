@@ -229,6 +229,20 @@ describe('chat composer and projection', () => {
     expect(historyMessages([{ runId: 'r', phase: 'complete', text: 'Done' }])[0].run.recalls).toEqual([])
   })
 
+  it('carries applied diffs from live events and restored history', () => {
+    const appliedDiffs = [{ effectId: 'effect-1', codeDiffId: 'diff-1', diff: null }]
+    expect(applyChatEvent(
+      { id: 'r', phase: 'thinking', text: '' },
+      { runId: 'r', type: 'completed', appliedDiffs },
+    ).appliedDiffs).toEqual(appliedDiffs)
+    expect(applyChatEvent(
+      { id: 'r', phase: 'thinking', text: '' },
+      { runId: 'r', phase: 'complete', text: 'Done' },
+    ).appliedDiffs).toEqual([])
+    expect(historyMessages([{ runId: 'r', phase: 'complete', text: 'Done', appliedDiffs }])[0].run.appliedDiffs).toEqual(appliedDiffs)
+    expect(historyMessages([{ runId: 'r', phase: 'complete', text: 'Done' }])[0].run.appliedDiffs).toEqual([])
+  })
+
   it('announces one coarse in-progress state for a whole generation', () => {
     expect(runAnnouncement({ phase: 'thinking', text: '' })).toBe('Generating a reply.')
     expect(runAnnouncement({ phase: 'streaming', text: 'Half an ans' })).toBe('Generating a reply.')

@@ -915,6 +915,13 @@
               {:else if message.run.phase === 'streaming'}<p class="response-prose streaming" use:streamingUnderline={message.run.text}>{message.run.text}<span class="caret" aria-hidden="true"></span><span class="streaming-rule" aria-hidden="true"></span></p>
               {:else if ['complete', 'failed', 'interrupted', 'cancelled'].includes(message.run.phase)}<AssistantMarkdown text={message.run.text} />
               {:else}<p class="response-prose">{message.run.text}</p>{/if}
+              {#each message.run.appliedDiffs ?? [] as appliedDiff}
+                <div class="applied-diff tool-card">
+                  <strong>Applied file changes</strong>
+                  {#if appliedDiff.diff}<CodeDiff codeDiff={appliedDiff.diff} />
+                  {:else}<p>The applied changes cannot be shown.</p>{/if}
+                </div>
+              {/each}
               {#if message.run.phase === 'failed'}<div class="run-error">Reply failed. <button disabled={dictationBusy()} onclick={() => { draft = message.run.prompt; chatController.send() }}>Try again</button></div>{/if}
               {#if message.run.phase === 'cancelled'}<div class="run-error">Reply stopped. {#if message.run.prompt}<button disabled={dictationBusy()} onclick={() => { draft = message.run.prompt; chatController.send() }}>Try again</button>{/if}</div>{/if}
               {#if message.run.phase === 'interrupted'}<div class="run-error" role={message.run.resumeError ? 'alert' : undefined}>{message.run.resumeError ?? 'Reply interrupted.'} {#if message.run.resumable}<button disabled={!!active || dictationBusy()} onclick={() => chatController.resume(message.run)}>Resume</button>{:else if message.run.prompt}<button disabled={dictationBusy()} onclick={() => { draft = message.run.prompt; chatController.send() }}>Try again</button>{/if}</div>{/if}
@@ -1346,8 +1353,9 @@
   .tool-running .tool-dot { animation: tool-pulse 1.4s ease-in-out infinite; }
   .tool-failed .tool-status { color: var(--oxide); }
   .permission-card { color: var(--ink); }
-  .permission-card strong { font-weight: 600; }
-  .permission-card p { margin: 4px 0 0; color: var(--muted); white-space: pre-wrap; overflow-wrap: anywhere; }
+  .permission-card strong, .applied-diff strong { font-weight: 600; }
+  .permission-card p, .applied-diff p { margin: 4px 0 0; color: var(--muted); white-space: pre-wrap; overflow-wrap: anywhere; }
+  .applied-diff { color: var(--ink); }
   .permission-field { display: block; width: 100%; margin-top: 8px; padding: 7px 9px; border: 1px solid var(--border); border-radius: var(--radius-control); outline: 0; background: var(--surface); color: var(--ink); font: inherit; }
   .permission-field:focus { border-color: var(--muted); }
   .permission-field::placeholder { color: var(--muted); }
