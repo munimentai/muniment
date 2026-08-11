@@ -14,7 +14,10 @@ use muniment_core::memory_index::ModelMemoryCapability;
 use muniment_core::memory_runtime::ApplicationMemoryRuntime;
 use muniment_core::pi_execution::PiRuntime;
 use muniment_core::run_events::{ChatEvent, ChatStorage, SharedStorage};
-use muniment_core::run_preparation::{prepare_new_run_with_session_thread, SessionThreadStart};
+use muniment_core::run_preparation::{
+    prepare_new_run_in_thread_after_validation, prepare_new_run_with_session_thread,
+    SessionThreadStart,
+};
 use muniment_core::run_start::ActiveRun;
 use muniment_core::session_thread::SessionThread;
 use muniment_core::sidecar::pi_install::{PiArtifactDescriptor, PI_ARTIFACT};
@@ -42,6 +45,7 @@ pub fn run_prompt(
     profile_directory: impl AsRef<Path>,
     run_id: String,
     prompt: String,
+    thread_id: Option<String>,
     access_token: String,
     subject: Option<String>,
     grant: ChatGrant,
@@ -50,22 +54,38 @@ pub fn run_prompt(
 ) -> Result<(), String> {
     let profile_directory = profile_directory.as_ref();
     let storage = open_profile_storage(profile_directory).map_err(|error| error.to_string())?;
-    let session_thread = SessionThread::default();
-    let prepared = prepare_new_run_with_session_thread(
-        &storage,
-        SessionThreadStart {
-            tracker: &session_thread,
-            continue_existing: false,
-        },
-        &run_id,
-        &grant.workspace,
-        subject.as_deref(),
-        Vec::new(),
-        Some(runtime_provenance()),
-        "muniment-runtime",
-        env!("CARGO_PKG_VERSION"),
-        || Ok(()),
-    )?;
+    let prepared = match thread_id.as_deref() {
+        Some(thread_id) => prepare_new_run_in_thread_after_validation(
+            &storage,
+            &run_id,
+            &grant.workspace,
+            subject.as_deref(),
+            Vec::new(),
+            Some(runtime_provenance()),
+            thread_id,
+            "muniment-runtime",
+            env!("CARGO_PKG_VERSION"),
+            || Ok(()),
+        ),
+        None => {
+            let session_thread = SessionThread::default();
+            prepare_new_run_with_session_thread(
+                &storage,
+                SessionThreadStart {
+                    tracker: &session_thread,
+                    continue_existing: false,
+                },
+                &run_id,
+                &grant.workspace,
+                subject.as_deref(),
+                Vec::new(),
+                Some(runtime_provenance()),
+                "muniment-runtime",
+                env!("CARGO_PKG_VERSION"),
+                || Ok(()),
+            )
+        }
+    }?;
     let memory_runtime = Arc::new(ApplicationMemoryRuntime::new(
         profile_directory.to_path_buf(),
         profile_directory.join("memory"),
