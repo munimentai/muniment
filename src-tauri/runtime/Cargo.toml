@@ -5,4 +5,4 @@ edition = "2021"
 
 [dependencies]
 muniment-attach = { path = "../attach", features = ["client"] }
-muniment-core = { path = "../core" }
+muniment-core = { path = "../core", features = ["keyring"] }
