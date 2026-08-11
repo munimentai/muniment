@@ -8,7 +8,7 @@ use muniment_core::cas::LocalCas;
 use muniment_core::code_diff_journal::{
     append_code_diff_permission_request, load_pending_code_diff, stage_code_diff_proposal,
 };
-use muniment_core::journal::reducer::{ChatProjector, PermissionRequest};
+use muniment_core::journal::reducer::{ChatProjector, PermissionGate, PermissionRequest};
 use muniment_core::journal::{EventEnvelope, EventPayload, Provenance, RunJournal};
 use muniment_core::run_events::chat_event;
 use muniment_core::thread_history::project_history_entry;
@@ -24,8 +24,20 @@ struct Fixture {
     diff: CodeDiff,
 }
 
+#[derive(Clone, Copy, Debug)]
+enum MismatchedField {
+    EffectId,
+    CodeDiffId,
+    DiffSha256,
+    WritePlanSha256,
+}
+
 impl Fixture {
     fn new() -> Self {
+        Self::with_mismatch(None)
+    }
+
+    fn with_mismatch(mismatch: Option<MismatchedField>) -> Self {
         keyring::set_default_credential_builder(keyring::mock::default_credential_builder());
         let root =
             std::env::temp_dir().join(format!("muniment-code-diff-payload-{}", Uuid::now_v7()));
@@ -50,7 +62,40 @@ impl Fixture {
             &diff,
         )
         .unwrap();
-        append_code_diff_permission_request(&mut journal, &cas, &run_id, &effect_id).unwrap();
+        if let Some(field) = mismatch {
+            let events = journal.events(&run_id).unwrap();
+            let EventPayload::Cas {
+                payload_cas: plan_cas,
+            } = &events[1].payload
+            else {
+                unreachable!();
+            };
+            let EventPayload::Cas {
+                payload_cas: diff_cas,
+            } = &events[2].payload
+            else {
+                unreachable!();
+            };
+            let mut gate = PermissionGate {
+                gate_id: Uuid::now_v7().to_string(),
+                request: PermissionRequest::CodeDiff {
+                    effect_id: effect_id.clone(),
+                    code_diff_id: diff.id.clone(),
+                    diff_sha256: diff_cas.sha256.clone(),
+                    write_plan_sha256: plan_cas.sha256.clone(),
+                },
+            };
+            mismatch_gate(&mut gate, field);
+            let mut event = started_event(&run_id);
+            event.run_seq = 4;
+            event.event_type = "permission.requested".into();
+            event.payload = EventPayload::Inline {
+                payload_json: serde_json::to_value(gate).unwrap(),
+            };
+            journal.append(3, &event).unwrap();
+        } else {
+            append_code_diff_permission_request(&mut journal, &cas, &run_id, &effect_id).unwrap();
+        }
         Self {
             root,
             cas,
@@ -72,6 +117,24 @@ impl Fixture {
             .join(&payload_cas.sha256[..2])
             .join(&payload_cas.sha256[2..]);
         fs::write(path, b"tampered").unwrap();
+    }
+}
+
+fn mismatch_gate(gate: &mut PermissionGate, field: MismatchedField) {
+    let PermissionRequest::CodeDiff {
+        effect_id,
+        code_diff_id,
+        diff_sha256,
+        write_plan_sha256,
+    } = &mut gate.request
+    else {
+        unreachable!();
+    };
+    match field {
+        MismatchedField::EffectId => *effect_id = "different-effect".into(),
+        MismatchedField::CodeDiffId => *code_diff_id = "different-diff".into(),
+        MismatchedField::DiffSha256 => *diff_sha256 = "different-diff-hash".into(),
+        MismatchedField::WritePlanSha256 => *write_plan_sha256 = "different-plan-hash".into(),
     }
 }
 
@@ -179,4 +242,41 @@ fn tampered_diff_keeps_the_history_gate_without_a_diff() {
         .request,
         PermissionRequest::CodeDiff { .. }
     ));
+}
+
+#[test]
+fn mismatched_gate_fields_keep_both_payload_gates_without_a_diff() {
+    for field in [
+        MismatchedField::EffectId,
+        MismatchedField::CodeDiffId,
+        MismatchedField::DiffSha256,
+        MismatchedField::WritePlanSha256,
+    ] {
+        let mut fixture = Fixture::with_mismatch(Some(field));
+        let projection = projection(&mut fixture);
+        let diff = load_pending_code_diff(
+            &mut fixture.journal,
+            &fixture.cas,
+            &fixture.run_id,
+            &projection.pending_permission,
+        );
+        let live = serde_json::to_value(chat_event(&fixture.run_id, projection, diff)).unwrap();
+        let history = serde_json::to_value(
+            project_history_entry(
+                &mut fixture.journal,
+                Some(&fixture.cas),
+                fixture.run_id.clone(),
+                None,
+                &fixture.root,
+            )
+            .unwrap(),
+        )
+        .unwrap();
+
+        for payload in [&live, &history] {
+            let gate = &payload["pendingPermission"];
+            assert_eq!(gate["kind"], "code_diff", "{field:?}");
+            assert!(gate.get("diff").is_none(), "{field:?}");
+        }
+    }
 }
