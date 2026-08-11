@@ -1,16 +1,30 @@
-use std::collections::BTreeMap;
 use std::fs;
 use std::process::Command;
 use std::sync::{mpsc, Mutex};
 
 use muniment_core::chat_grant::ChatGrant;
 use muniment_core::home::confirm_home;
-use muniment_core::journal::{EventEnvelope, EventPayload, Provenance};
+use muniment_core::pi_execution::coordinate_prepared_prompt;
+use muniment_core::run_events::{ChatEvent, ChatEventSink};
+use muniment_core::run_preparation::{prepare_new_run_with_session_thread, SessionThreadStart};
+use muniment_core::session_thread::SessionThread;
 use muniment_core::sidecar::pi_install::{PiArtifactDescriptor, PI_ARTIFACT};
+use muniment_core::sidecar::validate_pi_session;
 use muniment_runtime::{open_profile_storage, resume_run, run_prompt};
-use serde_json::json;
 
 static ENVIRONMENT: Mutex<()> = Mutex::new(());
+
+struct FixtureSink;
+
+impl ChatEventSink for FixtureSink {
+    fn provenance(&self) -> (&str, &str) {
+        ("test", "1")
+    }
+
+    fn deliver(&self, _event: ChatEvent) -> Result<(), ()> {
+        Ok(())
+    }
+}
 
 #[test]
 fn settles_after_the_subscriber_is_dropped() {
@@ -186,51 +200,38 @@ fn resumes_an_interrupted_run_to_a_terminal_event() {
     let session_root = profile.join("pi-sessions");
     fs::create_dir_all(&session_root).unwrap();
     fs::write(session_root.join("session.jsonl"), b"{}\n").unwrap();
-    let provenance = Provenance {
-        source: "test".into(),
-        source_version: "1".into(),
-        actor_id: Some("owner".into()),
-        device_id: None,
-        rpc_request_id: None,
-        capability_versions: None,
-        extra: BTreeMap::new(),
-    };
-    let event = |sequence, event_type: &str, payload| EventEnvelope {
-        event_id: format!("018f0000-0000-7000-8000-00000000010{sequence}"),
-        run_id: run_id.into(),
-        run_seq: sequence,
-        event_type: event_type.into(),
-        event_version: 1,
-        envelope_version: 1,
-        recorded_at: "2026-08-11T00:00:00Z".into(),
-        occurred_at: None,
-        correlation_id: None,
-        causation_id: None,
-        payload: EventPayload::Inline {
-            payload_json: payload,
-        },
-        provenance: provenance.clone(),
-        extra: BTreeMap::new(),
-    };
     let storage = open_profile_storage(&profile).unwrap();
-    {
-        let mut storage = storage.lock().unwrap();
-        storage
-            .journal
-            .append_new_run("workspace-a", &event(1, "run.started", json!({})))
-            .unwrap();
-        storage
-            .journal
-            .append(
-                1,
-                &event(
-                    2,
-                    "runtime.pi_session.bound",
-                    json!({"run_id": run_id, "locator": "session.jsonl"}),
-                ),
-            )
-            .unwrap();
-    }
+    let session_thread = SessionThread::default();
+    let (mut sequence, mut projector) = prepare_new_run_with_session_thread(
+        &storage,
+        SessionThreadStart {
+            tracker: &session_thread,
+            continue_existing: false,
+        },
+        run_id,
+        "workspace-a",
+        Some("owner"),
+        Vec::new(),
+        None,
+        "test",
+        "1",
+        || Ok(()),
+    )
+    .unwrap();
+    coordinate_prepared_prompt(
+        &FixtureSink,
+        &storage,
+        &mut projector,
+        run_id,
+        &mut sequence,
+        Some("owner"),
+        || {
+            let (locator, _) = validate_pi_session(&session_root, "session.jsonl")
+                .map_err(|_| muniment_core::pi_execution::PreparedPromptError::SessionRoot)?;
+            Ok(((), locator, Vec::new()))
+        },
+    )
+    .unwrap();
     drop(storage);
 
     resume_run(
