@@ -43,6 +43,7 @@ pub fn open_profile_storage(
 #[allow(clippy::too_many_arguments)]
 pub fn run_prompt(
     profile_directory: impl AsRef<Path>,
+    config_directory: impl AsRef<Path>,
     run_id: String,
     prompt: String,
     thread_id: Option<String>,
@@ -87,7 +88,7 @@ pub fn run_prompt(
         }
     }?;
     let memory_runtime = Arc::new(ApplicationMemoryRuntime::new(
-        profile_directory.to_path_buf(),
+        config_directory.as_ref().to_path_buf(),
         profile_directory.join("memory"),
     ));
     let thread_id = storage
@@ -134,6 +135,7 @@ pub fn run_prompt(
 #[allow(clippy::too_many_arguments)]
 pub fn resume_run(
     profile_directory: impl AsRef<Path>,
+    config_directory: impl AsRef<Path>,
     run_id: String,
     access_token: String,
     subject: Option<String>,
@@ -162,7 +164,7 @@ pub fn resume_run(
         (resume, thread_id)
     };
     let memory_runtime = Arc::new(ApplicationMemoryRuntime::new(
-        profile_directory.to_path_buf(),
+        config_directory.as_ref().to_path_buf(),
         profile_directory.join("memory"),
     ));
     let runtime_activity = RuntimeActivityRegistry::new();
