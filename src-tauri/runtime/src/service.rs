@@ -6,7 +6,8 @@ use muniment_core::chat_coordinate::coordinate;
 use muniment_core::chat_grant::ChatGrant;
 use muniment_core::chat_profile::{ChatProfile, ChatProfileError};
 use muniment_core::chat_resume::{
-    install_resume_run, resumable_context, run_resume as drive_resume, ResumeLaunch,
+    clear_active_run, install_active_run, install_resume_run, resumable_context,
+    run_resume as drive_resume, ResumeLaunch,
 };
 use muniment_core::journal::reconciliation::reconcile_interrupted_runs;
 use muniment_core::journal::Provenance;
@@ -50,6 +51,7 @@ pub fn run_prompt(
     access_token: String,
     subject: Option<String>,
     grant: ChatGrant,
+    active: Arc<Mutex<Option<ActiveRun>>>,
     subscriber: Option<Sender<ChatEvent>>,
     pi_artifact: Option<PiArtifactDescriptor>,
 ) -> Result<(), String> {
@@ -107,27 +109,48 @@ pub fn run_prompt(
             },
         )
         .map_err(|_| "Conversation history is unavailable.".to_string())?;
+    let runtime_activity = RuntimeActivityRegistry::new();
+    let cancelled = Arc::new(AtomicBool::new(false));
+    let transport = Arc::new(Mutex::new(None));
+    let adapter = Arc::new(Mutex::new(None));
+    let permission_answers = Arc::new(Mutex::new(VecDeque::new()));
+    if let Err(error) = install_active_run(
+        &active,
+        ActiveRun {
+            id: run_id.clone(),
+            workspace: grant.workspace.clone(),
+            cancelled: Arc::clone(&cancelled),
+            transport: Arc::clone(&transport),
+            adapter: Arc::clone(&adapter),
+            permission_answers: Arc::clone(&permission_answers),
+            _activity: runtime_activity.mark_active_run(),
+        },
+    ) {
+        memory_runtime.close_session(&run_id);
+        return Err(error);
+    }
     coordinate(
         RuntimeChatEventSink::new(profile_directory, subscriber, memory_runtime.clone())
             .with_pi_artifact(pi_artifact.unwrap_or(PI_ARTIFACT)),
         storage,
         Arc::new(Mutex::new(None)),
-        RuntimeActivityRegistry::new(),
+        runtime_activity,
         memory_runtime.clone(),
         run_id.clone(),
         prompt,
         access_token,
         subject,
         grant,
-        Arc::new(AtomicBool::new(false)),
-        Arc::new(Mutex::new(None)),
-        Arc::new(Mutex::new(None)),
-        Arc::new(Mutex::new(VecDeque::new())),
+        cancelled,
+        transport,
+        adapter,
+        permission_answers,
         None,
         None,
         Some(prepared),
     );
     memory_runtime.close_session(&run_id);
+    clear_active_run(&active, &run_id);
     Ok(())
 }
 
@@ -140,6 +163,7 @@ pub fn resume_run(
     access_token: String,
     subject: Option<String>,
     grant: ChatGrant,
+    active: Arc<Mutex<Option<ActiveRun>>>,
     subscriber: Option<Sender<ChatEvent>>,
     pi_artifact: Option<PiArtifactDescriptor>,
 ) -> Result<(), String> {
@@ -168,7 +192,6 @@ pub fn resume_run(
         profile_directory.join("memory"),
     ));
     let runtime_activity = RuntimeActivityRegistry::new();
-    let active = Arc::new(Mutex::new(None));
     let cancelled = Arc::new(AtomicBool::new(false));
     let transport = Arc::new(Mutex::new(None));
     let adapter = Arc::new(Mutex::new(None));

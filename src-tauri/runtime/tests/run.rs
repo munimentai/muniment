@@ -1,7 +1,9 @@
 use std::fs;
 use std::process::Command;
-use std::sync::{mpsc, Mutex};
+use std::sync::{mpsc, Arc, Mutex};
+use std::time::Duration;
 
+use muniment_core::active_run::cancel_active_run;
 use muniment_core::chat_grant::ChatGrant;
 use muniment_core::home::confirm_home;
 use muniment_core::pi_execution::coordinate_prepared_prompt;
@@ -111,6 +113,7 @@ fn runs_two_prompts_in_one_named_thread_and_rejects_an_unknown_thread() {
         "token".into(),
         Some("owner".into()),
         fixture_grant(),
+        Arc::new(Mutex::new(None)),
         None,
         Some(descriptor),
     )
@@ -129,20 +132,37 @@ fn runs_two_prompts_in_one_named_thread_and_rejects_an_unknown_thread() {
     let run_id = "018f0000-0000-7000-8000-000000000003";
     let prompt = "pointer install prompt";
     let (subscriber, events) = mpsc::channel();
-    drop(events);
-    run_prompt(
-        &profile,
-        &config,
-        run_id.into(),
-        prompt.into(),
-        None,
-        "token".into(),
-        Some("owner".into()),
-        fixture_grant(),
-        Some(subscriber),
-        Some(descriptor),
-    )
-    .unwrap();
+    let active = Arc::new(Mutex::new(None));
+    std::env::set_var("PI_RESUME_STUB_MEMORY_QUERY", "hold the run open");
+    std::thread::scope(|scope| {
+        let run = scope.spawn(|| {
+            run_prompt(
+                &profile,
+                &config,
+                run_id.into(),
+                prompt.into(),
+                None,
+                "token".into(),
+                Some("owner".into()),
+                fixture_grant(),
+                Arc::clone(&active),
+                Some(subscriber),
+                Some(descriptor),
+            )
+        });
+        assert_eq!(
+            events.recv_timeout(Duration::from_secs(5)).unwrap().phase,
+            "thinking"
+        );
+        cancel_active_run(&active, run_id, Some("workspace-a")).unwrap();
+        run.join().unwrap().unwrap();
+    });
+    std::env::remove_var("PI_RESUME_STUB_MEMORY_QUERY");
+    assert!(active.lock().unwrap().is_none());
+    assert_eq!(
+        cancel_active_run(&active, run_id, Some("workspace-a")),
+        Err("That reply is no longer active.".into())
+    );
 
     let storage = open_profile_storage(&profile).unwrap();
     let thread_id = storage
@@ -165,6 +185,7 @@ fn runs_two_prompts_in_one_named_thread_and_rejects_an_unknown_thread() {
         "token".into(),
         Some("owner".into()),
         fixture_grant(),
+        Arc::new(Mutex::new(None)),
         None,
         Some(descriptor),
     )
@@ -184,7 +205,7 @@ fn runs_two_prompts_in_one_named_thread_and_rejects_an_unknown_thread() {
     let storage = open_profile_storage(&profile).unwrap();
     let mut storage = storage.lock().unwrap();
     let journal_events = storage.journal.events(run_id).unwrap();
-    assert_eq!(journal_events.last().unwrap().event_type, "run.failed");
+    assert_eq!(journal_events.last().unwrap().event_type, "run.cancelled");
     assert!(journal_events
         .iter()
         .all(|event| event.provenance.source == "muniment-runtime"));
@@ -320,6 +341,7 @@ fn resumes_an_interrupted_run_to_a_terminal_event() {
             minimum_cacheable_prefix_characters: 8_192,
             receipt_url: "https://receipts.example.com".into(),
         },
+        Arc::new(Mutex::new(None)),
         None,
         Some(descriptor),
     )
