@@ -1538,6 +1538,10 @@ mod tests {
             root.join("config"),
             root.join("cache"),
         ));
+        let database = root.join("cache/index.sqlite3");
+        crate::memory_index::MemoryIndex::new(&home, &database)
+            .reindex_with_deadline(std::time::Instant::now() + Duration::from_secs(30))
+            .unwrap();
         let run_id = Uuid::now_v7().to_string();
         runtime.open_session_for_home(
             &run_id,
@@ -1546,7 +1550,7 @@ mod tests {
                 minimum_cacheable_prefix_characters: 100,
             },
             &home,
-            root.join("cache/index.sqlite3"),
+            database,
         );
         let first_definition = runtime.tool_definition_for_turn(&run_id).unwrap();
         let second_definition = runtime.tool_definition_for_turn(&run_id).unwrap();
