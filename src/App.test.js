@@ -3154,6 +3154,7 @@ describe('permission gates', () => {
 
     const title = await screen.findByText('Proposed file changes')
     const card = title.closest('.permission-card')
+    expect(within(card).getByText('The proposed changes cannot be shown.')).toBeInTheDocument()
     expect(within(card).getByRole('button', { name: 'Deny' })).toBeInTheDocument()
     expect(within(card).queryByRole('button', { name: 'Apply' })).not.toBeInTheDocument()
     expect(within(card).queryByLabelText('Code changes')).not.toBeInTheDocument()

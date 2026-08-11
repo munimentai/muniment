@@ -144,6 +144,25 @@ const historyFixtures = {
       resumable: false,
     },
   ],
+  'code-diff-unavailable': [
+    {
+      runId: 'probe-code-diff-unavailable',
+      prompt: 'Update the welcome message.',
+      phase: 'pending-permission',
+      text: 'Review the proposed changes before I continue.',
+      receipt: null,
+      toolActivity: [],
+      pendingPermission: {
+        gateId: 'probe-code-diff-unavailable-gate',
+        kind: 'code_diff',
+        effect_id: 'probe-code-diff-unavailable-effect',
+        code_diff_id: 'fixture-unavailable',
+        diff_sha256: 'probe-diff-hash',
+        write_plan_sha256: 'probe-plan-hash',
+      },
+      resumable: false,
+    },
+  ],
 }
 
 const fixtureName = document.currentScript.dataset.history
