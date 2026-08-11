@@ -64,7 +64,7 @@ pub fn run_prompt(
         profile_directory.join("memory"),
     ));
     coordinate(
-        RuntimeChatEventSink::new(profile_directory, subscriber)
+        RuntimeChatEventSink::new(profile_directory, subscriber, memory_runtime.clone())
             .with_pi_artifact(pi_artifact.unwrap_or(PI_ARTIFACT)),
         storage,
         Arc::new(Mutex::new(None)),

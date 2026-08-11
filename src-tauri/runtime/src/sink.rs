@@ -2,8 +2,10 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::Sender;
+use std::sync::Arc;
 
 use muniment_core::chat_profile::ChatProfile;
+use muniment_core::memory_runtime::ApplicationMemoryRuntime;
 use muniment_core::pi_launch::{PiLaunchBoundaries, PiLaunchError};
 use muniment_core::run_events::{ChatEvent, ChatEventSink};
 use muniment_core::sidecar::pi_install::{PiArtifactDescriptor, PI_ARTIFACT};
@@ -12,14 +14,20 @@ pub struct RuntimeChatEventSink {
     profile: ChatProfile,
     subscriber: Option<Sender<ChatEvent>>,
     pi_artifact: PiArtifactDescriptor,
+    memory_runtime: Arc<ApplicationMemoryRuntime>,
 }
 
 impl RuntimeChatEventSink {
-    pub fn new(profile_directory: impl AsRef<Path>, subscriber: Option<Sender<ChatEvent>>) -> Self {
+    pub fn new(
+        profile_directory: impl AsRef<Path>,
+        subscriber: Option<Sender<ChatEvent>>,
+        memory_runtime: Arc<ApplicationMemoryRuntime>,
+    ) -> Self {
         Self {
             profile: ChatProfile::new(profile_directory.as_ref()),
             subscriber,
             pi_artifact: PI_ARTIFACT,
+            memory_runtime,
         }
     }
 
@@ -48,6 +56,6 @@ impl PiLaunchBoundaries for RuntimeChatEventSink {
     }
 
     fn memory_agent_extension_path(&self) -> Option<PathBuf> {
-        None
+        Some(self.memory_runtime.agent_extension_path())
     }
 }
