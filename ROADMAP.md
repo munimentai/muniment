@@ -945,6 +945,11 @@ answer. The coordinate wiring that joins the variant to the composition
 follows both slices. The filter un-gate and slice 5, the receipt replay,
 follow the wiring.
 
+DONE 2026-08-11 — the coordinate wiring is built (MUNIDESK-1087).
+The drain loop routes a `CodeDiff` answer to `apply_code_diff_approval`,
+advances its sequence across both appended events, reduces both events, and
+delivers the updated projection without forwarding the answer to Pi.
+
 PARKED — the producer's Pi input waits on the Pi wire contract, with the ADR
 0025 consumers. ADR 0024 requires structured proposed operations from Pi
 before any write starts, and no Pi message carries a file operation today.
