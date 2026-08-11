@@ -6,6 +6,7 @@ use muniment_core::chat_grant::ChatGrant;
 use muniment_core::chat_profile::{ChatProfile, ChatProfileError};
 use muniment_core::journal::reconciliation::reconcile_interrupted_runs;
 use muniment_core::journal::Provenance;
+use muniment_core::memory_index::ModelMemoryCapability;
 use muniment_core::memory_runtime::ApplicationMemoryRuntime;
 use muniment_core::run_events::{ChatEvent, ChatStorage, SharedStorage};
 use muniment_core::run_preparation::{prepare_new_run_with_session_thread, SessionThreadStart};
@@ -63,14 +64,30 @@ pub fn run_prompt(
         profile_directory.to_path_buf(),
         profile_directory.join("memory"),
     ));
+    let thread_id = storage
+        .lock()
+        .map_err(|_| "Conversation history is unavailable.".to_string())?
+        .journal
+        .run_thread_id(&run_id)
+        .map_err(|error| error.to_string())?
+        .ok_or_else(|| "Conversation history is unavailable.".to_string())?;
+    memory_runtime
+        .open_session(
+            &run_id,
+            &thread_id,
+            ModelMemoryCapability {
+                minimum_cacheable_prefix_characters: grant.minimum_cacheable_prefix_characters,
+            },
+        )
+        .map_err(|error| error.to_string())?;
     coordinate(
         RuntimeChatEventSink::new(profile_directory, subscriber, memory_runtime.clone())
             .with_pi_artifact(pi_artifact.unwrap_or(PI_ARTIFACT)),
         storage,
         Arc::new(Mutex::new(None)),
         RuntimeActivityRegistry::new(),
-        memory_runtime,
-        run_id,
+        memory_runtime.clone(),
+        run_id.clone(),
         prompt,
         access_token,
         subject,
@@ -83,6 +100,7 @@ pub fn run_prompt(
         None,
         Some(prepared),
     );
+    memory_runtime.close_session(&run_id);
     Ok(())
 }
 
