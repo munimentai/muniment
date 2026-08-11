@@ -41,6 +41,7 @@ fn event() -> ChatEvent {
         tool_activity: Vec::new(),
         attachments: Vec::new(),
         recalls: Vec::new(),
+        applied_diffs: Vec::new(),
         pending_permission: None,
     }
 }
