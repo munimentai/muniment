@@ -10,6 +10,29 @@ use muniment_runtime::{open_profile_storage, run_prompt};
 fn settles_after_driving_the_prompt_through_the_pointer_install() {
     let temporary_root =
         std::env::temp_dir().join(format!("muniment-runtime-run-{}", std::process::id()));
+    if option_env!("MUNIMENT_SIDECAR_TEST_ARCHIVE").is_none() {
+        let status = Command::new(env!("CARGO"))
+            .args([
+                "test",
+                "--quiet",
+                "--package",
+                "muniment-runtime",
+                "--test",
+                "run",
+                "--target-dir",
+            ])
+            .arg(temporary_root.join("test-build"))
+            .arg("--")
+            .arg("--exact")
+            .arg("settles_after_driving_the_prompt_through_the_pointer_install")
+            .env("MUNIMENT_SIDECAR_TEST_ARCHIVE", "1")
+            .current_dir(env!("CARGO_MANIFEST_DIR"))
+            .status()
+            .unwrap();
+        assert!(status.success());
+        fs::remove_dir_all(temporary_root).unwrap();
+        return;
+    }
     let profile = temporary_root.join("profile");
     let pi_root = temporary_root.join("pi");
     let executable = pi_root

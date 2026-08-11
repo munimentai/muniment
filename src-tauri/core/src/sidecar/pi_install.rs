@@ -393,7 +393,23 @@ fn publish_stage<B: PiLifecycleBoundary>(
 }
 
 pub fn resolve_current(root: &Path) -> Result<PathBuf, PiInstallError> {
+    if option_env!("MUNIMENT_SIDECAR_TEST_ARCHIVE").is_some() {
+        return resolve_test_pointer(root);
+    }
     resolve_pointer(root, "current").or_else(|_| resolve_pointer(root, "previous"))
+}
+
+fn resolve_test_pointer(root: &Path) -> Result<PathBuf, PiInstallError> {
+    let version = read_pointer_for(root, "current", PI_ARTIFACT, PI_PREVIOUS_ARTIFACT)?;
+    let revision = root.join("revisions").join(version);
+    let archive = revision.join(PI_ARTIFACT.archive);
+    if !matches!(
+        fs::read(archive),
+        Ok(contents) if contents == b"muniment-sidecar-test-stub\n"
+    ) {
+        return Err(PiInstallError::DigestMismatch);
+    }
+    verify_executable_for(&revision, PI_ARTIFACT)
 }
 
 /// Atomically reactivates the retained verified predecessor after the newly
@@ -485,19 +501,8 @@ fn resolve_revision(
     descriptor: PiArtifactDescriptor,
 ) -> Result<PathBuf, PiInstallError> {
     let archive = revision.join(descriptor.archive);
-    if !is_sidecar_test_install(&archive) {
-        verify_archive_for(&archive, descriptor)?;
-    }
+    verify_archive_for(&archive, descriptor)?;
     verify_executable_for(revision, descriptor)
-}
-
-fn is_sidecar_test_install(archive: &Path) -> bool {
-    const MARKER: &[u8] = b"muniment-sidecar-test-stub\n";
-    let is_test_binary = std::env::current_exe()
-        .ok()
-        .and_then(|path| path.file_stem().map(|name| name.to_owned()))
-        .is_some_and(|name| name.to_string_lossy().starts_with("run-"));
-    is_test_binary && fs::read(archive).is_ok_and(|contents| contents == MARKER)
 }
 
 fn read_pointer(root: &Path, name: &str) -> Result<String, PiInstallError> {
