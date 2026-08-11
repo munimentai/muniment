@@ -80,6 +80,10 @@ impl<R: tauri::Runtime> TauriChatEventSink<R> {
 }
 
 impl<R: tauri::Runtime> ChatEventSink for TauriChatEventSink<R> {
+    fn provenance(&self) -> (&str, &str) {
+        ("muniment-desktop", env!("CARGO_PKG_VERSION"))
+    }
+
     fn deliver(&self, event: ChatEvent) -> Result<(), ()> {
         self.app.emit("chat-event", event).map_err(|_| ())
     }
@@ -915,6 +919,10 @@ mod tests {
     }
 
     impl ChatEventSink for FakeCoordinateSink {
+        fn provenance(&self) -> (&str, &str) {
+            ("test", "0.0.0")
+        }
+
         fn deliver(&self, _event: ChatEvent) -> Result<(), ()> {
             Ok(())
         }
