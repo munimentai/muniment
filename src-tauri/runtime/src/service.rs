@@ -38,6 +38,53 @@ pub fn run_prompt(
     grant: ChatGrant,
     subscriber: Option<Sender<ChatEvent>>,
 ) -> Result<(), String> {
+    run_prompt_with_sink(
+        profile_directory,
+        run_id,
+        prompt,
+        access_token,
+        subject,
+        grant,
+        subscriber,
+        None,
+    )
+}
+
+#[doc(hidden)]
+#[allow(clippy::too_many_arguments)]
+pub fn run_prompt_with_pi_executable(
+    profile_directory: impl AsRef<Path>,
+    run_id: String,
+    prompt: String,
+    access_token: String,
+    subject: Option<String>,
+    grant: ChatGrant,
+    subscriber: Option<Sender<ChatEvent>>,
+    executable: std::path::PathBuf,
+) -> Result<(), String> {
+    run_prompt_with_sink(
+        profile_directory,
+        run_id,
+        prompt,
+        access_token,
+        subject,
+        grant,
+        subscriber,
+        Some(executable),
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn run_prompt_with_sink(
+    profile_directory: impl AsRef<Path>,
+    run_id: String,
+    prompt: String,
+    access_token: String,
+    subject: Option<String>,
+    grant: ChatGrant,
+    subscriber: Option<Sender<ChatEvent>>,
+    executable: Option<std::path::PathBuf>,
+) -> Result<(), String> {
     let profile_directory = profile_directory.as_ref();
     let storage = open_profile_storage(profile_directory).map_err(|error| error.to_string())?;
     let session_thread = SessionThread::default();
@@ -60,8 +107,12 @@ pub fn run_prompt(
         profile_directory.to_path_buf(),
         profile_directory.join("memory"),
     ));
+    let mut sink = RuntimeChatEventSink::new(profile_directory, subscriber);
+    if let Some(executable) = executable {
+        sink = sink.with_pi_executable(executable);
+    }
     coordinate(
-        RuntimeChatEventSink::new(profile_directory, subscriber),
+        sink,
         storage,
         Arc::new(Mutex::new(None)),
         RuntimeActivityRegistry::new(),

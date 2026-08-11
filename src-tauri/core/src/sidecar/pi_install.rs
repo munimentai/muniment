@@ -396,6 +396,18 @@ pub fn resolve_current(root: &Path) -> Result<PathBuf, PiInstallError> {
     resolve_pointer(root, "current").or_else(|_| resolve_pointer(root, "previous"))
 }
 
+/// Resolves a test install through the production pointer checks.
+///
+/// The caller supplies archive verification so tests can use a compiled stub.
+#[doc(hidden)]
+pub fn resolve_current_with_archive_verifier(
+    root: &Path,
+    verify_archive: impl Fn(&Path, PiArtifactDescriptor) -> Result<(), PiInstallError>,
+) -> Result<PathBuf, PiInstallError> {
+    resolve_pointer_with(root, "current", &verify_archive)
+        .or_else(|_| resolve_pointer_with(root, "previous", &verify_archive))
+}
+
 /// Atomically reactivates the retained verified predecessor after the newly
 /// pinned revision fails its supervisor activation check.
 pub fn rollback_to_previous<B: PiLifecycleBoundary>(
@@ -453,7 +465,21 @@ fn rollback_to_previous_for<B: PiLifecycleBoundary>(
 }
 
 fn resolve_pointer(root: &Path, pointer: &str) -> Result<PathBuf, PiInstallError> {
-    resolve_pointer_for(root, pointer, PI_ARTIFACT, PI_PREVIOUS_ARTIFACT)
+    resolve_pointer_with(root, pointer, &verify_archive_for)
+}
+
+fn resolve_pointer_with(
+    root: &Path,
+    pointer: &str,
+    verify_archive: &impl Fn(&Path, PiArtifactDescriptor) -> Result<(), PiInstallError>,
+) -> Result<PathBuf, PiInstallError> {
+    resolve_pointer_for_with(
+        root,
+        pointer,
+        PI_ARTIFACT,
+        PI_PREVIOUS_ARTIFACT,
+        verify_archive,
+    )
 }
 
 fn resolve_pointer_for(
@@ -462,11 +488,21 @@ fn resolve_pointer_for(
     current: PiArtifactDescriptor,
     retained: Option<PiArtifactDescriptor>,
 ) -> Result<PathBuf, PiInstallError> {
+    resolve_pointer_for_with(root, pointer, current, retained, &verify_archive_for)
+}
+
+fn resolve_pointer_for_with(
+    root: &Path,
+    pointer: &str,
+    current: PiArtifactDescriptor,
+    retained: Option<PiArtifactDescriptor>,
+    verify_archive: &impl Fn(&Path, PiArtifactDescriptor) -> Result<(), PiInstallError>,
+) -> Result<PathBuf, PiInstallError> {
     let version = read_pointer_for(root, pointer, current, retained)?;
     let descriptor = descriptor_for_version_from(&version, current, retained)
         .ok_or(PiInstallError::NotInstalled)?;
     let revision = root.join("revisions").join(version);
-    resolve_revision(&revision, descriptor)
+    resolve_revision_with(&revision, descriptor, verify_archive)
 }
 
 fn descriptor_for_version_from(
@@ -484,8 +520,15 @@ fn resolve_revision(
     revision: &Path,
     descriptor: PiArtifactDescriptor,
 ) -> Result<PathBuf, PiInstallError> {
-    #[cfg(not(feature = "sidecar-test-install"))]
-    verify_archive_for(&revision.join(descriptor.archive), descriptor)?;
+    resolve_revision_with(revision, descriptor, &verify_archive_for)
+}
+
+fn resolve_revision_with(
+    revision: &Path,
+    descriptor: PiArtifactDescriptor,
+    verify_archive: &impl Fn(&Path, PiArtifactDescriptor) -> Result<(), PiInstallError>,
+) -> Result<PathBuf, PiInstallError> {
+    verify_archive(&revision.join(descriptor.archive), descriptor)?;
     verify_executable_for(revision, descriptor)
 }
 

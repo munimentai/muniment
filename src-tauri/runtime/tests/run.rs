@@ -3,8 +3,8 @@ use std::process::Command;
 use std::sync::mpsc;
 
 use muniment_core::chat_grant::ChatGrant;
-use muniment_core::sidecar::pi_install::PI_ARTIFACT;
-use muniment_runtime::{open_profile_storage, run_prompt};
+use muniment_core::sidecar::pi_install::{resolve_current_with_archive_verifier, PI_ARTIFACT};
+use muniment_runtime::{open_profile_storage, run_prompt_with_pi_executable};
 
 #[test]
 fn settles_after_driving_the_prompt_through_the_pointer_install() {
@@ -49,6 +49,7 @@ fn settles_after_driving_the_prompt_through_the_pointer_install() {
         format!("muniment-pi-pointer-v1\n{}\n", PI_ARTIFACT.version),
     )
     .unwrap();
+    let resolved = resolve_current_with_archive_verifier(&pi_root, |_, _| Ok(())).unwrap();
     let captured_prompts = temporary_root.join("prompts");
     std::env::set_var("MUNIMENT_PI_ROOT", &pi_root);
     std::env::set_var("PI_RESUME_STUB_PROMPTS", &captured_prompts);
@@ -56,7 +57,7 @@ fn settles_after_driving_the_prompt_through_the_pointer_install() {
     let run_id = "018f0000-0000-7000-8000-000000000003";
     let prompt = "pointer install prompt";
     let (subscriber, events) = mpsc::channel();
-    run_prompt(
+    run_prompt_with_pi_executable(
         &profile,
         run_id.into(),
         prompt.into(),
@@ -71,6 +72,7 @@ fn settles_after_driving_the_prompt_through_the_pointer_install() {
             receipt_url: "https://receipts.example.com".into(),
         },
         Some(subscriber),
+        resolved,
     )
     .unwrap();
 

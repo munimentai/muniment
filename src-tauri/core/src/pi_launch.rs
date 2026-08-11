@@ -7,6 +7,9 @@ use crate::sidecar::{pi_sidecar_config, PiSessionLocator, SidecarConfig};
 pub trait PiLaunchBoundaries {
     fn pi_session_root(&self) -> Result<PathBuf, PiLaunchError>;
     fn memory_agent_extension_path(&self) -> Option<PathBuf>;
+    fn pi_executable_override(&self) -> Option<PathBuf> {
+        None
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -8,7 +8,6 @@ muniment-attach = { path = "../attach", features = ["client"] }
 muniment-core = { path = "../core" }
 
 [dev-dependencies]
-muniment-core = { path = "../core", features = ["sidecar-test-install"] }
 serde_json = "1"
 
 [[example]]

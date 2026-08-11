@@ -16,7 +16,6 @@ edition = "2021"
 tls = ["ureq/tls", "ureq/native-certs", "ureq/proxy-from-env"]
 keyring = ["dep:keyring"]
 network-tests = ["tls"]
-sidecar-test-install = []
 
 [dependencies]
 base64 = "0.22"
