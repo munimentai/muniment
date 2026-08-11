@@ -924,8 +924,8 @@ temporary file and a rename inside the stored parent, a delete and a rename
 go through the stored handles, and a missing handle rejects before any write.
 It touches no journal and has no call site.
 
-SELECTED 2026-08-11 (twentieth wave) — the answer application composition is
-the next slice. One core function takes the journal, the CAS, the workspace
+DONE 2026-08-11 — the answer application composition is built (MUNIDESK-1082).
+One core function takes the journal, the CAS, the workspace
 root, the run id, the pending gate, and a `CodeDiffPermissionAnswer`
 (`src-tauri/core/src/code_diff_journal.rs:208`). It composes
 `verify_code_diff_permission_answer`, `verify_workspace_write_plan`, and
