@@ -2,8 +2,10 @@ use std::fs;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc;
+use std::sync::Arc;
 
 use muniment_core::chat_grant::ChatGrant;
+use muniment_core::memory_runtime::ApplicationMemoryRuntime;
 use muniment_core::pi_launch::{
     pi_launch_config, pi_launch_config_for_executable, PiLaunchBoundaries, PiLaunchError,
 };
@@ -57,11 +59,18 @@ fn grant() -> ChatGrant {
     }
 }
 
+fn memory_runtime(profile: &ProfileDirectory) -> Arc<ApplicationMemoryRuntime> {
+    Arc::new(ApplicationMemoryRuntime::new(
+        profile.0.clone(),
+        profile.0.join("memory"),
+    ))
+}
+
 #[test]
 fn delivers_to_an_optional_subscriber() {
     let profile = ProfileDirectory::new();
     let (subscriber, events) = mpsc::channel();
-    let sink = RuntimeChatEventSink::new(&profile.0, Some(subscriber));
+    let sink = RuntimeChatEventSink::new(&profile.0, Some(subscriber), memory_runtime(&profile));
 
     sink.deliver(event()).unwrap();
 
@@ -74,7 +83,7 @@ fn delivers_to_an_optional_subscriber() {
 fn succeeds_without_a_subscriber() {
     let profile = ProfileDirectory::new();
 
-    RuntimeChatEventSink::new(&profile.0, None)
+    RuntimeChatEventSink::new(&profile.0, None, memory_runtime(&profile))
         .deliver(event())
         .unwrap();
 }
@@ -85,7 +94,11 @@ fn drives_pi_launch_config_over_the_profile_directory() {
     let _storage = open_profile_storage(&profile.0).unwrap();
     let pi_install = profile.0.join("pi-install");
     fs::create_dir(&pi_install).unwrap();
-    let sink = RuntimeChatEventSink::new(&profile.0, None);
+    let memory_runtime = memory_runtime(&profile);
+    let extension = memory_runtime.agent_extension_path();
+    fs::create_dir_all(extension.parent().unwrap()).unwrap();
+    fs::write(&extension, "export default function () {}\n").unwrap();
+    let sink = RuntimeChatEventSink::new(&profile.0, None, memory_runtime);
 
     assert_eq!(
         pi_launch_config(&sink, Some(&pi_install), &grant(), None).unwrap_err(),
@@ -95,7 +108,7 @@ fn drives_pi_launch_config_over_the_profile_directory() {
         sink.pi_session_root().unwrap(),
         profile.0.join("pi-sessions")
     );
-    assert_eq!(sink.memory_agent_extension_path(), None);
+    assert_eq!(sink.memory_agent_extension_path(), Some(extension.clone()));
     let config = pi_launch_config_for_executable(&sink, "pi".into(), &grant(), None).unwrap();
     assert!(config.args.windows(2).any(|args| {
         args == [
@@ -103,5 +116,8 @@ fn drives_pi_launch_config_over_the_profile_directory() {
             profile.0.join("pi-sessions").to_string_lossy().as_ref(),
         ]
     }));
-    assert!(!config.args.iter().any(|arg| arg == "--extension"));
+    assert!(config
+        .args
+        .windows(2)
+        .any(|args| { args == ["--extension", extension.to_string_lossy().as_ref()] }));
 }
