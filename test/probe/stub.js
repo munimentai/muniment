@@ -125,6 +125,25 @@ const historyFixtures = {
       resumable: false,
     },
   ],
+  'code-diff': [
+    {
+      runId: 'probe-code-diff',
+      prompt: 'Update the welcome message.',
+      phase: 'pending-permission',
+      text: 'Review the proposed changes before I continue.',
+      receipt: null,
+      toolActivity: [],
+      pendingPermission: {
+        gateId: 'probe-code-diff-gate',
+        kind: 'code_diff',
+        effect_id: 'probe-code-diff-effect',
+        code_diff_id: 'fixture-modified',
+        diff_sha256: 'probe-diff-hash',
+        write_plan_sha256: 'probe-plan-hash',
+      },
+      resumable: false,
+    },
+  ],
 }
 
 const fixtureName = document.currentScript.dataset.history
@@ -234,6 +253,11 @@ window.__PROBE__ = {
     }
   },
   async loadBundle() {
+    if (fixtureName === 'code-diff') {
+      const response = await fetch('/protocol-fixtures/code-diff/1/modified.json')
+      if (!response.ok) throw new Error(`Could not load the code diff fixture: ${response.status}`)
+      history[0].pendingPermission.diff = await response.json()
+    }
     const response = await fetch('/dist/index.html')
     if (!response.ok) throw new Error(`Could not load the built bundle: ${response.status}`)
     const builtPage = new DOMParser().parseFromString(await response.text(), 'text/html')
@@ -310,6 +334,7 @@ window.__TAURI__ = {
           ],
         }
       }
+      if (command === 'chat_answer_permission') return null
       if (command === 'chat_thread_open') return { entries: structuredClone(history), nextCursor: null }
       if (command === 'auth_entitlement_snapshot') {
         return {

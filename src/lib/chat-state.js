@@ -20,6 +20,19 @@ export function permissionGateAction(event, kind, platform = navigator.platform)
   return (mac ? event.metaKey && !event.ctrlKey : event.ctrlKey && !event.metaKey) ? 'commit' : null
 }
 
+export function codeDiffPermissionAnswer(gate) {
+  return {
+    type: 'codeDiff',
+    value: {
+      gate_id: gate.gateId,
+      effect_id: gate.effect_id,
+      code_diff_id: gate.code_diff_id,
+      diff_sha256: gate.diff_sha256,
+      write_plan_sha256: gate.write_plan_sha256,
+    },
+  }
+}
+
 // A receipt field is recorded when the server sent something to show. Zero is a
 // record (a route can genuinely cost nothing); a blank is a gap and would only
 // render as a stray separator.
