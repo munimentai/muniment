@@ -21,16 +21,9 @@ use muniment_core::auth::{
 use serde::Serialize;
 use tauri::Emitter;
 
-/// Default OIDC issuer: the muniment-cloud control plane.
-const DEFAULT_ISSUER: &str = "https://api.muniment.ai";
 /// How long the loopback listener waits for the user to finish in the
 /// browser before the sign-in attempt is abandoned.
 const SIGN_IN_TIMEOUT: Duration = Duration::from_secs(300);
-fn api_base_url() -> String {
-    std::env::var("MUNIMENT_API_BASE_URL")
-        .or_else(|_| std::env::var("MUNIMENT_ISSUER"))
-        .unwrap_or_else(|_| DEFAULT_ISSUER.into())
-}
 
 /// Managed by Tauri; shared across the `auth_*` commands.
 pub struct AuthState {
@@ -207,7 +200,7 @@ fn sign_in_blocking(
         &UreqAuthorizationTransport::new(network_timeout),
         &UreqTokenTransport::new(network_timeout),
         &|url: &str| spawn_browser(url).map_err(|_| BrowserOpenError),
-        &api_base_url(),
+        &auth::api_base_url(),
         &unix_time,
         SIGN_IN_TIMEOUT,
         &|delay| {
@@ -278,7 +271,7 @@ pub async fn auth_devices(
         list_devices(
             Some(&credentials.tokens.access_token),
             &UreqNativeDeviceListTransport::new(Duration::from_secs(30)),
-            &api_base_url(),
+            &auth::api_base_url(),
         )
     })
     .await
@@ -303,7 +296,7 @@ fn device_list_error() -> String {
 fn ensure_native_session(
     store: &dyn NativeCredentialStore,
 ) -> Result<auth::FreshNativeSession, String> {
-    auth::ensure_native_session(store, &api_base_url(), unix_time())
+    auth::ensure_native_session(store, &auth::api_base_url(), unix_time())
         .map_err(|error| error.to_string())
 }
 
@@ -321,7 +314,7 @@ pub async fn auth_sign_out(
             auth::sign_out_native_session(
                 store.as_ref(),
                 &UreqRevocationTransport::new(Duration::from_secs(2)),
-                &api_base_url(),
+                &auth::api_base_url(),
             )
             .map_err(|error| error.to_string())?;
             auth::native_status(store.as_ref(), unix_time()).map_err(|error| error.to_string())
