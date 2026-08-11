@@ -89,8 +89,16 @@ pub(crate) fn chat_thread_open_page(
     limit: usize,
     cursor: Option<&str>,
 ) -> Result<ChatThreadOpenPage, String> {
-    core_chat_thread_open_page(journal, subject, session_root, thread_id, limit, cursor)
-        .map_err(thread_history_error_message)
+    core_chat_thread_open_page(
+        journal,
+        None,
+        subject,
+        session_root,
+        thread_id,
+        limit,
+        cursor,
+    )
+    .map_err(thread_history_error_message)
 }
 
 fn thread_history_error_message(_error: ThreadHistoryError) -> String {
@@ -296,14 +304,17 @@ pub async fn chat_thread_open(
         .storage
         .lock()
         .map_err(|_| "Conversation history is unavailable.".to_string())?;
-    chat_thread_open_page(
-        &mut storage.journal,
+    let muniment_core::run_events::ChatStorage { journal, cas } = &mut *storage;
+    core_chat_thread_open_page(
+        journal,
+        Some(cas),
         tokens.subject.as_deref(),
         &session_root,
         &thread_id,
         limit,
         cursor.as_deref(),
     )
+    .map_err(thread_history_error_message)
 }
 
 #[cfg(test)]
