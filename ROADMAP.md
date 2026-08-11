@@ -614,10 +614,11 @@ disagree, because `chat_file_metadata` rejects a path with no usable final
 segment and `open_selected_files` does not. The lane waits for an owner look at
 why this one ticket never dispatches.
 
-MERGE HAZARD — three of the four twenty-third-wave slices touch the
-`muniment-runtime` crate, and two of them edit `sink.rs` beside its tests.
-Each ticket tells the implementer to rebase on `main` before it opens the
-pull request. The 2026-08-04 silent revert came from a stale base.
+MERGE HAZARD — all four twenty-fourth-wave slices touch the
+`muniment-runtime` crate, and two of them edit `service.rs` beside its
+tests. Each ticket tells the implementer to rebase on `main` before it
+opens the pull request. The 2026-08-04 silent revert came from a stale
+base.
 
 DONE 2026-08-08 — the memory runtime is the twentieth core move
 (MUNIDESK-995). `src-tauri/core/src/memory_runtime.rs` composes one
@@ -733,17 +734,20 @@ the extension path, so a runtime-driven Pi launch registers the
 memory-search tool exactly as the desktop launch does. `run_prompt` opens
 the memory session before `coordinate` and closes it after.
 
-DRAINED 2026-08-11 (twenty-third wave) — the other two twenty-second-wave
-slices never reached a pull request. `run_prompt`
-(`src-tauri/runtime/src/service.rs:35`) still creates the cancel flag and
-the permission answer queue internally and returns no handle, so no caller
-can cancel a run or answer a gate. `RuntimeChatEventSink::deliver`
-(`src-tauri/runtime/src/sink.rs:43`) still fails on a dropped subscriber,
-and a failed `append_emit` ends the coordinate loop mid-run, so a run dies
-with its observer even though the journal append succeeded. This is each
-slice's first drain, so the twenty-third wave re-files both. The dormant
-resume entry still follows them, because it edits the same `service.rs`
-seam.
+DONE 2026-08-11 — the journal-first delivery rule landed on its re-file
+(MUNIDESK-1096). `RuntimeChatEventSink::deliver`
+(`src-tauri/runtime/src/sink.rs:41`) clears a dropped subscriber and keeps
+returning success, so a runtime run settles and journals after its
+observer goes away.
+
+HELD 2026-08-11 (twenty-fourth wave) — the run control slot has drained
+twice. `run_prompt` (`src-tauri/runtime/src/service.rs:35`) still creates
+the cancel flag and the permission answer queue internally and returns no
+handle, so no caller can cancel a runtime run or answer a gate. The
+twenty-second-wave filing and the twenty-third-wave re-file both left the
+queue without a pull request. That is the attach-listener pattern above,
+so this lane files no third copy and asks the owner why the ticket never
+dispatches. The dormant cancel and gate-answer surfaces wait behind it.
 
 MEASURED 2026-08-11 (twenty-third wave, planner, read `run_events.rs:199`
 beside `run_preparation.rs`) — every event the coordinate loop appends
@@ -753,8 +757,19 @@ version. A run that `run_prompt` drives journals its preparation events
 under `muniment-runtime` provenance, because
 `prepare_new_run_with_session_thread` takes the source and the version as
 arguments (MUNIDESK-1079), and then every coordinate-loop event contradicts
-them. The twenty-third wave selects the slice, and the sink is the seam
+them. The twenty-third-wave filing drained without a pull request, its
+first drain, so the twenty-fourth wave re-files it. The sink is the seam
 that names the source.
+
+SELECTED 2026-08-11 (twenty-fourth wave) — the provenance seam re-file,
+the dormant resume entry, the existing-thread run start, and the runtime
+session-freshness entry. The resume entry composes `resumable_context` and
+`run_resume` behind `service.rs`. The thread slice lets `run_prompt` start
+a run in a named existing thread through
+`prepare_new_run_in_thread_after_validation`. The session slice opens the
+keychain credential store through `ensure_native_session` behind a dormant
+`auth.rs` entry, because the extraction amendment gives the runtime the
+device session and the credentials.
 
 SEQUENCED — the later extraction slices are the remaining Pi execution move, the
 desktop client conversion, and Linux user-unit registration, each behind a
@@ -1018,6 +1033,13 @@ missing. `applyChatEvent` (`src/lib/chat-state.js:138`) and
 `historyMessages` (`src/lib/chat-state.js:154`) both drop `appliedDiffs`,
 so the transcript shows the proposed changes before Apply and nothing
 after. The twenty-third wave selects the shell rendering slice.
+
+DONE 2026-08-11 — the shell half landed (MUNIDESK-1097). The transcript
+renders each applied diff through an `Applied file changes` card, a record
+whose diff cannot be reloaded states that plainly, and
+`test/probe/applied-diff.html` drives the built bundle to both states. The
+local ADR 0024 chain is now built end to end, and only the Pi producer
+input stays parked on the wire contract.
 
 PARKED — the producer's Pi input waits on the Pi wire contract, with the ADR
 0025 consumers. ADR 0024 requires structured proposed operations from Pi
@@ -1525,17 +1547,17 @@ earlier one. Requiring an up-to-date branch before merge, or a merge queue, is a
 repository-settings change that sits with the owner. The planner files no ticket
 for it.
 
-VERIFIED 2026-08-11 (twenty-third wave, from a clean clone) — `npm ci` then
-`npm test` passed 925 frontend tests across 63 files, with 31 skipped,
-counting the 3 browser tests. `cargo test -p muniment-core -p muniment-attach
--p muniment-cli -p muniment-code-diff -p muniment-runtime` passed 1,160 tests
-with no failure. The planner confirmed the two landed twenty-second-wave
-slices in the code, `load_applied_code_diffs` reaching both payload sites
-(MUNIDESK-1093) and `memory_agent_extension_path` answering the extension
-path (MUNIDESK-1094), and captured `test/probe/history.html` beside
-`test/probe/code-diff.html` at 1100x720 with no new visual defect. Earlier
-waves recorded the same shape of verification, and this entry replaces that
-ledger.
+VERIFIED 2026-08-11 (twenty-fourth wave, from a clean clone) — `npm ci`
+then `npm test` passed 927 frontend tests across 63 files, with 31
+skipped, counting the 3 browser tests. `cargo test -p muniment-core -p
+muniment-attach -p muniment-cli -p muniment-code-diff -p muniment-runtime`
+passed 1,161 tests with no failure. The planner confirmed the two landed
+twenty-third-wave slices in the code, the sink that outlives its
+subscriber (MUNIDESK-1096) and the applied-diff transcript render
+(MUNIDESK-1097), and captured `test/probe/history.html`,
+`test/probe/code-diff.html`, and `test/probe/applied-diff.html` at
+1100x720 with no new visual defect. Earlier waves recorded the same shape
+of verification, and this entry replaces that ledger.
 
 NOTE 2026-08-06 — the planning clone ships no `node_modules`. Run `npm ci`
 before `npm test`. Without it the run dies with `vitest: not found`, which reads
