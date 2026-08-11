@@ -17,7 +17,7 @@ use muniment_core::attach::ProtocolError;
 use muniment_core::attach::{RuntimeActivityGuard, RuntimeActivityRegistry};
 #[cfg(test)]
 use muniment_core::attachment::AttachmentDeliveryError;
-use muniment_core::auth::TokenSet;
+use muniment_core::auth::{api_base_url, TokenSet};
 #[cfg(test)]
 use muniment_core::cas::LocalCas;
 use muniment_core::chat_coordinate::coordinate;
@@ -887,9 +887,7 @@ fn map_fetch_grant_error(error: FetchGrantError) -> RunStartError {
 }
 
 fn fetch_grant(access_token: &str) -> Result<ChatGrant, FetchGrantError> {
-    let issuer =
-        std::env::var("MUNIMENT_ISSUER").unwrap_or_else(|_| "https://api.muniment.ai".into());
-    core_fetch_grant(&issuer, access_token)
+    core_fetch_grant(&api_base_url(), access_token)
 }
 
 fn validate_grant(grant: &ChatGrant) -> Result<(), String> {
