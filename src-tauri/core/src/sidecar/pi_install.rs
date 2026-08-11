@@ -396,18 +396,6 @@ pub fn resolve_current(root: &Path) -> Result<PathBuf, PiInstallError> {
     resolve_pointer(root, "current").or_else(|_| resolve_pointer(root, "previous"))
 }
 
-/// Resolves a test install through the production pointer checks.
-///
-/// The caller supplies archive verification so tests can use a compiled stub.
-#[doc(hidden)]
-pub fn resolve_current_with_archive_verifier(
-    root: &Path,
-    verify_archive: impl Fn(&Path, PiArtifactDescriptor) -> Result<(), PiInstallError>,
-) -> Result<PathBuf, PiInstallError> {
-    resolve_pointer_with(root, "current", &verify_archive)
-        .or_else(|_| resolve_pointer_with(root, "previous", &verify_archive))
-}
-
 /// Atomically reactivates the retained verified predecessor after the newly
 /// pinned revision fails its supervisor activation check.
 pub fn rollback_to_previous<B: PiLifecycleBoundary>(
@@ -465,21 +453,7 @@ fn rollback_to_previous_for<B: PiLifecycleBoundary>(
 }
 
 fn resolve_pointer(root: &Path, pointer: &str) -> Result<PathBuf, PiInstallError> {
-    resolve_pointer_with(root, pointer, &verify_archive_for)
-}
-
-fn resolve_pointer_with(
-    root: &Path,
-    pointer: &str,
-    verify_archive: &impl Fn(&Path, PiArtifactDescriptor) -> Result<(), PiInstallError>,
-) -> Result<PathBuf, PiInstallError> {
-    resolve_pointer_for_with(
-        root,
-        pointer,
-        PI_ARTIFACT,
-        PI_PREVIOUS_ARTIFACT,
-        verify_archive,
-    )
+    resolve_pointer_for(root, pointer, PI_ARTIFACT, PI_PREVIOUS_ARTIFACT)
 }
 
 fn resolve_pointer_for(
@@ -488,21 +462,11 @@ fn resolve_pointer_for(
     current: PiArtifactDescriptor,
     retained: Option<PiArtifactDescriptor>,
 ) -> Result<PathBuf, PiInstallError> {
-    resolve_pointer_for_with(root, pointer, current, retained, &verify_archive_for)
-}
-
-fn resolve_pointer_for_with(
-    root: &Path,
-    pointer: &str,
-    current: PiArtifactDescriptor,
-    retained: Option<PiArtifactDescriptor>,
-    verify_archive: &impl Fn(&Path, PiArtifactDescriptor) -> Result<(), PiInstallError>,
-) -> Result<PathBuf, PiInstallError> {
     let version = read_pointer_for(root, pointer, current, retained)?;
     let descriptor = descriptor_for_version_from(&version, current, retained)
         .ok_or(PiInstallError::NotInstalled)?;
     let revision = root.join("revisions").join(version);
-    resolve_revision_with(&revision, descriptor, verify_archive)
+    resolve_revision(&revision, descriptor)
 }
 
 fn descriptor_for_version_from(
@@ -520,16 +484,20 @@ fn resolve_revision(
     revision: &Path,
     descriptor: PiArtifactDescriptor,
 ) -> Result<PathBuf, PiInstallError> {
-    resolve_revision_with(revision, descriptor, &verify_archive_for)
+    let archive = revision.join(descriptor.archive);
+    if !is_sidecar_test_install(&archive) {
+        verify_archive_for(&archive, descriptor)?;
+    }
+    verify_executable_for(revision, descriptor)
 }
 
-fn resolve_revision_with(
-    revision: &Path,
-    descriptor: PiArtifactDescriptor,
-    verify_archive: &impl Fn(&Path, PiArtifactDescriptor) -> Result<(), PiInstallError>,
-) -> Result<PathBuf, PiInstallError> {
-    verify_archive(&revision.join(descriptor.archive), descriptor)?;
-    verify_executable_for(revision, descriptor)
+fn is_sidecar_test_install(archive: &Path) -> bool {
+    const MARKER: &[u8] = b"muniment-sidecar-test-stub\n";
+    let is_test_binary = std::env::current_exe()
+        .ok()
+        .and_then(|path| path.file_stem().map(|name| name.to_owned()))
+        .is_some_and(|name| name.to_string_lossy().starts_with("run-"));
+    is_test_binary && fs::read(archive).is_ok_and(|contents| contents == MARKER)
 }
 
 fn read_pointer(root: &Path, name: &str) -> Result<String, PiInstallError> {

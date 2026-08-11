@@ -7,5 +7,5 @@ mod sink;
 
 #[cfg(target_os = "linux")]
 pub use migration::{run_migration_takeover, MigrationTakeoverError};
-pub use service::{open_profile_storage, run_prompt, run_prompt_with_pi_executable};
+pub use service::{open_profile_storage, run_prompt};
 pub use sink::RuntimeChatEventSink;
