@@ -92,7 +92,7 @@ describe('installed nightly', () => {
         capabilities: process.platform === 'win32'
           ? { browserName: 'MicrosoftEdge', 'ms:edgeOptions': { args: ['--headless=new', '--disable-gpu'] } }
           : process.platform === 'linux'
-            ? { browserName: 'MiniBrowser' }
+            ? { browserName: 'MiniBrowser', 'wdio:enforceWebDriverClassic': true }
             : { browserName: 'chrome', 'goog:chromeOptions': { args: ['--headless=new', '--no-sandbox', '--disable-dev-shm-usage'] } },
       })
       await signInBrowser.url(authUrl)
