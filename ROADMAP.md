@@ -614,11 +614,11 @@ disagree, because `chat_file_metadata` rejects a path with no usable final
 segment and `open_selected_files` does not. The lane waits for an owner look at
 why this one ticket never dispatches.
 
-MERGE HAZARD — two of the three nineteenth-wave slices touch muniment-core.
-The write executor adds `code_diff_apply.rs`, and the run-preparation move
-adds `run_preparation.rs` beside edits to `src-tauri/src/chat.rs`. Each
-ticket tells the implementer to rebase on `main` before it opens the pull
-request. The 2026-08-04 silent revert came from a stale base.
+MERGE HAZARD — two of the three twentieth-wave slices touch muniment-core.
+The answer application composition adds `code_diff_effect.rs`, and the answer
+variant edits `permission_gate.rs`. Each ticket tells the implementer to
+rebase on `main` before it opens the pull request. The 2026-08-04 silent
+revert came from a stale base.
 
 DONE 2026-08-08 — the memory runtime is the twentieth core move
 (MUNIDESK-995). `src-tauri/core/src/memory_runtime.rs` composes one
@@ -696,22 +696,31 @@ DONE 2026-08-10 — the thirty-second move landed (MUNIDESK-1076).
 `run_resume`, `install_active_run`, and `clear_active_run`, generic over
 `ChatEventSink` plus `PiLaunchBoundaries`, and the desktop keeps thin wrappers.
 
-SELECTED 2026-08-10 (nineteenth wave) — the thirty-third move takes the run
-preparation seam. `SessionThreadStart`, `prepare_new_run_with_session_thread`,
+DONE 2026-08-11 — the thirty-third move landed (MUNIDESK-1079).
+`src-tauri/core/src/run_preparation.rs` holds `SessionThreadStart`,
+`prepare_new_run_with_session_thread`,
 `prepare_new_run_in_thread_after_validation`, `prepare_opened_run`,
-`record_preparation_failure`, `event_envelope`, and `desktop_provenance`
-(`src-tauri/src/chat.rs:678` through `:1002`) name no Tauri type. They move
-into `src-tauri/core/src/run_preparation.rs`. The recorded provenance keeps
-source `muniment-desktop` and the desktop crate version, passed as arguments.
-`open_selected_files` stays in the desktop untouched, because the selected-file
-rule is the held owner item.
+`record_preparation_failure`, `event_envelope`, and `desktop_provenance`, with
+the provenance source and version passed as arguments. The desktop keeps thin
+wrappers, and `open_selected_files` stayed in the desktop untouched.
 
-SELECTED 2026-08-10 (nineteenth wave) — the first dormant service entry point
-follows the moves. `muniment-runtime` gains a function that opens the
-per-profile chat storage through `ChatProfile::open_storage`, reconciles
-interrupted runs under a `muniment-runtime` provenance, and returns the shared
-storage. Nothing in `main` calls it, which is the `run_handoff_listener` shape,
-and the crate takes no new dependency.
+DONE 2026-08-11 — the first dormant service entry point landed
+(MUNIDESK-1080). `open_profile_storage` (`src-tauri/runtime/src/service.rs:13`)
+opens the per-profile chat storage through `ChatProfile::open_storage`,
+reconciles interrupted runs under a `muniment-runtime` provenance, and returns
+the shared storage. Nothing in `main` calls it, and the crate took no new
+dependency.
+
+SELECTED 2026-08-11 (twentieth wave) — the second dormant service entry point
+is the runtime chat event sink. `muniment-runtime` gains a type that
+implements `ChatEventSink` and `PiLaunchBoundaries`
+(`src-tauri/core/src/run_events.rs`, `src-tauri/core/src/pi_launch.rs`).
+`deliver` sends the event to an optional in-process subscriber and succeeds
+with none registered, because companions read run events through the journal.
+`pi_session_root` reads `ChatProfile::pi_session_root` for the same profile
+directory `open_profile_storage` takes, and `memory_agent_extension_path`
+answers `None` until the runtime memory composition follows. The dormant run
+entry that drives `coordinate` through this sink is the slice after it.
 
 SEQUENCED — the later extraction slices are the remaining Pi execution move, the
 desktop client conversion, and Linux user-unit registration, each behind a
@@ -907,15 +916,34 @@ card renders a `code_diff` gate through `CodeDiff.svelte`, the `Apply` control
 sends the five approval identifiers, and `test/probe/code-diff.html` drives
 it. The core filter still keeps the kind from production.
 
-SELECTED 2026-08-10 (nineteenth wave) — the write executor is the next slice.
-One function applies a verified `WritePlan` through the exact parent handles
-in `VerifiedWritePlan`, with no path re-resolution. A write lands through a
-temporary file and a rename inside the stored parent, a delete and a rename go
-through the stored handles, and a missing handle rejects before any write. It
-touches no journal and has no call site, which is the `write_plan.rs` shape.
-The coordinate wiring follows it, because `ChatPermissionAnswer`
-(`src-tauri/core/src/permission_gate.rs:23`) still has no code_diff variant.
-The filter un-gate and slice 5, the receipt replay, follow the wiring.
+DONE 2026-08-11 — the write executor landed (MUNIDESK-1078).
+`apply_workspace_write_plan` (`src-tauri/core/src/code_diff_apply.rs:13`)
+applies a verified `WritePlan` through the exact parent handles in
+`VerifiedWritePlan`, with no path re-resolution. A write lands through a
+temporary file and a rename inside the stored parent, a delete and a rename
+go through the stored handles, and a missing handle rejects before any write.
+It touches no journal and has no call site.
+
+SELECTED 2026-08-11 (twentieth wave) — the answer application composition is
+the next slice. One core function takes the journal, the CAS, the workspace
+root, the run id, the pending gate, and a `CodeDiffPermissionAnswer`
+(`src-tauri/core/src/code_diff_journal.rs:208`). It composes
+`verify_code_diff_permission_answer`, `verify_workspace_write_plan`, and
+`apply_workspace_write_plan` in that order, appends `permission.resolved`
+before the first write and `code.diff.applied` after the last one, and
+refuses a gate that already carries a resolution, so a crash between the two
+events never re-applies silently. It has no call site, which is the
+`write_plan.rs` shape.
+
+SELECTED 2026-08-11 (twentieth wave) — the `codeDiff` answer variant is the
+sibling slice. `ChatPermissionAnswer`
+(`src-tauri/core/src/permission_gate.rs:23`) gains a `CodeDiff` variant whose
+serde form matches the payload `codeDiffPermissionAnswer`
+(`src/lib/chat-state.js:23`) already sends, and
+`coordinate_permission_answer` never forwards it to Pi as an extension UI
+answer. The coordinate wiring that joins the variant to the composition
+follows both slices. The filter un-gate and slice 5, the receipt replay,
+follow the wiring.
 
 PARKED — the producer's Pi input waits on the Pi wire contract, with the ADR
 0025 consumers. ADR 0024 requires structured proposed operations from Pi
@@ -1423,17 +1451,16 @@ earlier one. Requiring an up-to-date branch before merge, or a merge queue, is a
 repository-settings change that sits with the owner. The planner files no ticket
 for it.
 
-VERIFIED 2026-08-10 (nineteenth wave, from a clean clone) — `npm ci` then
+VERIFIED 2026-08-11 (twentieth wave, from a clean clone) — `npm ci` then
 `npm test` passed 925 frontend tests across 63 files, with 31 skipped,
 counting the 3 browser tests. `cargo test -p muniment-core -p muniment-attach
--p muniment-cli -p muniment-code-diff -p muniment-runtime` passed 1,137 tests
-with no failure. The planner read the landed eighteenth-wave slices and
-confirmed `verify_code_diff_permission_answer` (`code_diff_journal.rs:217`),
-`verify_workspace_write_plan` with its `VerifiedWritePlan` parent handles
-(`code_diff_observe.rs:80`), the `code_diff` branch of the permission card
-with its `Apply` control (`src/App.svelte:925`), and the moved
-`src-tauri/core/src/chat_resume.rs` composition. Earlier waves recorded the
-same shape of verification, and this entry replaces that ledger.
+-p muniment-cli -p muniment-code-diff -p muniment-runtime` passed 1,145 tests
+with no failure. The planner read the landed nineteenth-wave slices and
+confirmed `apply_workspace_write_plan` (`code_diff_apply.rs:13`), the moved
+`src-tauri/core/src/run_preparation.rs` seam behind thin desktop wrappers,
+and `open_profile_storage` (`src-tauri/runtime/src/service.rs:13`) with no
+caller in `main`. Earlier waves recorded the same shape of verification, and
+this entry replaces that ledger.
 
 NOTE 2026-08-06 — the planning clone ships no `node_modules`. Run `npm ci`
 before `npm test`. Without it the run dies with `vitest: not found`, which reads
