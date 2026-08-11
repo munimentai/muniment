@@ -1,6 +1,7 @@
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::VecDeque;
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
+#[cfg(test)]
 use std::time::Duration;
 
 use chrono::{SecondsFormat, Utc};
@@ -14,8 +15,10 @@ use muniment_core::attach::linux::{
 #[cfg(target_os = "linux")]
 use muniment_core::attach::ProtocolError;
 use muniment_core::attach::{RuntimeActivityGuard, RuntimeActivityRegistry};
-use muniment_core::attachment::{ingest_attachment, AttachmentDeliveryError, AttachmentMetadata};
+#[cfg(test)]
+use muniment_core::attachment::AttachmentDeliveryError;
 use muniment_core::auth::TokenSet;
+#[cfg(test)]
 use muniment_core::cas::LocalCas;
 use muniment_core::chat_coordinate::coordinate;
 use muniment_core::chat_grant::{
@@ -31,17 +34,19 @@ use muniment_core::chat_resume::{
 use muniment_core::chat_view::{chat_attachments, ChatAttachment, SelectedFile};
 use muniment_core::journal::reconciliation::reconcile_interrupted_runs;
 use muniment_core::journal::reducer::{project_chat, ChatProjector};
-use muniment_core::journal::{
-    EventEnvelope, EventPayload, JournalCommitHint, JournalError, Provenance, RunJournal,
-};
+use muniment_core::journal::{EventEnvelope, JournalCommitHint, Provenance};
+#[cfg(test)]
+use muniment_core::journal::{EventPayload, RunJournal};
 use muniment_core::memory_index::ModelMemoryCapability;
 use muniment_core::permission_gate::{ChatPermissionAnswer, PendingPermissionAnswer};
-pub(crate) use muniment_core::pi_execution::{
-    attachment_delivery_error, attachment_error, PiRuntime,
-};
+#[cfg(test)]
+use muniment_core::pi_execution::attachment_delivery_error;
+pub(crate) use muniment_core::pi_execution::{attachment_error, PiRuntime};
 use muniment_core::pi_launch::{PiLaunchBoundaries, PiLaunchError};
 use muniment_core::run_events::{ChatEvent, ChatEventSink};
 pub(crate) use muniment_core::run_events::{ChatStorage, SharedStorage};
+pub(crate) use muniment_core::run_preparation::SessionThreadStart;
+use muniment_core::run_preparation::{self as core_run_preparation, OpenSelectedFile};
 use muniment_core::run_start::{
     start_desktop_run, ActiveRun, RunStartBoundaries, RunStartError, RunStartLaunch,
     RunStartRequest, SubmitResult,
@@ -49,11 +54,13 @@ use muniment_core::run_start::{
 use serde_json::{json, Value};
 use std::path::PathBuf;
 use tauri::{Emitter, Manager};
+#[cfg(test)]
 use uuid::Uuid;
 
 use crate::auth;
-use crate::chat_threads::newest_owned_workspace_thread;
-use muniment_core::session_thread::{OfferedThread, SessionThread};
+#[cfg(test)]
+use muniment_core::session_thread::OfferedThread;
+use muniment_core::session_thread::SessionThread;
 
 pub(crate) struct TauriChatEventSink<R: tauri::Runtime> {
     app: tauri::AppHandle<R>,
@@ -642,12 +649,6 @@ pub fn chat_file_metadata(path: PathBuf) -> Result<ChatAttachment, String> {
     })
 }
 
-struct OpenSelectedFile {
-    file: std::fs::File,
-    display_name: String,
-    byte_length: u64,
-}
-
 fn open_selected_files(files: Vec<SelectedFile>) -> Result<Vec<OpenSelectedFile>, String> {
     files
         .into_iter()
@@ -672,12 +673,6 @@ fn open_selected_files(files: Vec<SelectedFile>) -> Result<Vec<OpenSelectedFile>
             })
         })
         .collect()
-}
-
-#[derive(Clone, Copy)]
-pub(crate) struct SessionThreadStart<'a> {
-    pub(crate) tracker: &'a SessionThread,
-    pub(crate) continue_existing: bool,
 }
 
 pub(crate) fn prepare_new_run_with_session_thread(
@@ -714,10 +709,8 @@ fn prepare_new_run_with_session_thread_after_validation<F>(
 where
     F: FnOnce() -> Result<(), String>,
 {
-    // Open and validate every selection before creating a run, so ordinary
-    // selection failures cannot leave a rejected submission in the journal.
     let files = open_selected_files(files)?;
-    prepare_opened_run(
+    core_run_preparation::prepare_new_run_with_session_thread(
         storage,
         session_thread,
         run_id,
@@ -725,7 +718,8 @@ where
         subject,
         files,
         provenance,
-        None,
+        "muniment-desktop",
+        env!("CARGO_PKG_VERSION"),
         after_validation,
     )
 }
@@ -744,18 +738,16 @@ where
     F: FnOnce() -> Result<(), String>,
 {
     let files = open_selected_files(files)?;
-    prepare_opened_run(
+    core_run_preparation::prepare_new_run_in_thread_after_validation(
         storage,
-        SessionThreadStart {
-            tracker: &SessionThread::default(),
-            continue_existing: false,
-        },
         run_id,
         workspace,
         subject,
         files,
         provenance,
-        Some(thread_id),
+        thread_id,
+        "muniment-desktop",
+        env!("CARGO_PKG_VERSION"),
         after_validation,
     )
 }
@@ -774,120 +766,19 @@ fn prepare_opened_run<F>(
 where
     F: FnOnce() -> Result<(), String>,
 {
-    let mut storage = storage.lock().map_err(|_| attachment_error())?;
-    let ChatStorage { journal, cas } = &mut *storage;
-    let mut projector = ChatProjector::new();
-    let mut seq = 1;
-    let mut started = event_envelope(run_id, seq, "run.started", json!({}), subject);
-    if let Some(provenance) = provenance {
-        started.provenance = Provenance {
-            actor_id: provenance.actor_id.or_else(|| subject.map(str::to_owned)),
-            ..provenance
-        };
-    }
-    projector.apply(&started).map_err(|_| attachment_error())?;
-    let mut after_validation = Some(after_validation);
-    if !workspace.is_empty() {
-        let thread_id = if let Some(thread_id) = requested_thread_id {
-            journal
-                .append_new_run_in_thread_after_validation(workspace, thread_id, &started, || {
-                    after_validation.take().unwrap()()
-                })
-                .and_then(|result| result.map_err(|_| JournalError::Corrupt(attachment_error())))
-                .map(|()| thread_id.to_owned())
-        } else {
-            after_validation.take().unwrap()()?;
-            if session_thread.continue_existing {
-                let offered = match session_thread.tracker.offered(workspace, subject) {
-                    OfferedThread::AdoptNewest => {
-                        newest_owned_workspace_thread(journal, workspace, subject)
-                            .ok()
-                            .flatten()
-                    }
-                    OfferedThread::Selected(thread_id) => Some(thread_id),
-                    OfferedThread::Fresh => None,
-                };
-                match offered {
-                    Some(thread_id) => journal
-                        .append_new_run_in_thread(workspace, &thread_id, &started)
-                        .map(|()| thread_id)
-                        .or_else(|_| journal.append_new_run(workspace, &started)),
-                    None => journal.append_new_run(workspace, &started),
-                }
-            } else {
-                journal.append_new_run(workspace, &started)
-            }
-        }
-        .map_err(|error| {
-            if requested_thread_id.is_some() && matches!(error, JournalError::InvalidEnvelope(_)) {
-                "thread_not_found".to_owned()
-            } else {
-                attachment_error()
-            }
-        })?;
-        if session_thread.continue_existing {
-            session_thread.tracker.record(thread_id, workspace, subject);
-        }
-    } else {
-        after_validation.take().unwrap()()?;
-        journal
-            .append(0, &started)
-            .map_err(|_| attachment_error())?;
-    }
-
-    for mut selected in files {
-        let next_seq = seq + 1;
-        let envelope_subject = subject.map(str::to_owned);
-        let attachment = match ingest_attachment(
-            cas,
-            journal,
-            seq,
-            &mut selected.file,
-            AttachmentMetadata {
-                display_name: &selected.display_name,
-                byte_length: selected.byte_length,
-                media_type: None,
-            },
-            |attachment| {
-                let mut envelope = event_envelope(
-                    run_id,
-                    next_seq,
-                    "chat.attachment.ingested",
-                    json!({}),
-                    envelope_subject.as_deref(),
-                );
-                envelope.payload = EventPayload::Attachment { attachment };
-                envelope
-            },
-        ) {
-            Ok(attachment) => attachment,
-            Err(_) => {
-                record_preparation_failure(journal, &mut projector, run_id, seq, subject);
-                return Err(attachment_error());
-            }
-        };
-        let attachment_event = match journal
-            .events(run_id)
-            .ok()
-            .and_then(|events| events.last().cloned())
-        {
-            Some(event) => event,
-            None => {
-                record_preparation_failure(journal, &mut projector, run_id, seq, subject);
-                return Err(attachment_error());
-            }
-        };
-        if projector.apply(&attachment_event).is_err() {
-            record_preparation_failure(journal, &mut projector, run_id, seq, subject);
-            return Err(attachment_error());
-        }
-        seq = next_seq;
-        if cas.verify(attachment.sha256()).is_err() {
-            record_preparation_failure(journal, &mut projector, run_id, seq, subject);
-            return Err(attachment_error());
-        }
-    }
-    Ok((seq, projector))
+    core_run_preparation::prepare_opened_run(
+        storage,
+        session_thread,
+        run_id,
+        workspace,
+        subject,
+        files,
+        provenance,
+        requested_thread_id,
+        "muniment-desktop",
+        env!("CARGO_PKG_VERSION"),
+        after_validation,
+    )
 }
 
 #[cfg(test)]
@@ -911,25 +802,6 @@ pub(crate) fn prepare_new_run(
         files,
         provenance,
     )
-}
-
-fn record_preparation_failure(
-    journal: &mut RunJournal,
-    projector: &mut ChatProjector,
-    run_id: &str,
-    seq: u64,
-    subject: Option<&str>,
-) {
-    let failed = event_envelope(
-        run_id,
-        seq + 1,
-        "run.failed",
-        json!({"reason": "attachment"}),
-        subject,
-    );
-    if projector.apply(&failed).is_ok() {
-        let _ = journal.append(seq, &failed);
-    }
 }
 
 #[tauri::command]
@@ -971,35 +843,19 @@ pub(crate) fn event_envelope(
     payload: Value,
     subject: Option<&str>,
 ) -> EventEnvelope {
-    EventEnvelope {
-        event_id: Uuid::now_v7().to_string(),
-        run_id: run_id.into(),
+    core_run_preparation::event_envelope(
+        run_id,
         run_seq,
-        event_type: kind.into(),
-        event_version: 1,
-        envelope_version: 1,
-        recorded_at: Utc::now().to_rfc3339_opts(SecondsFormat::AutoSi, true),
-        occurred_at: None,
-        correlation_id: None,
-        causation_id: None,
-        payload: EventPayload::Inline {
-            payload_json: payload,
-        },
-        provenance: desktop_provenance(subject),
-        extra: BTreeMap::new(),
-    }
+        kind,
+        payload,
+        subject,
+        "muniment-desktop",
+        env!("CARGO_PKG_VERSION"),
+    )
 }
 
 pub(crate) fn desktop_provenance(subject: Option<&str>) -> Provenance {
-    Provenance {
-        source: "muniment-desktop".into(),
-        source_version: env!("CARGO_PKG_VERSION").into(),
-        actor_id: subject.map(str::to_owned),
-        device_id: None,
-        rpc_request_id: None,
-        capability_versions: None,
-        extra: BTreeMap::new(),
-    }
+    core_run_preparation::desktop_provenance(subject, "muniment-desktop", env!("CARGO_PKG_VERSION"))
 }
 
 fn fetch_grant_error_message(error: FetchGrantError) -> String {
@@ -2039,6 +1895,8 @@ mod tests {
     fn event_envelope_records_the_owning_subject() {
         let owned = event_envelope("run-1", 1, "run.started", json!({}), Some("sub-a"));
         assert_eq!(owned.provenance.actor_id.as_deref(), Some("sub-a"));
+        assert_eq!(owned.provenance.source, "muniment-desktop");
+        assert_eq!(owned.provenance.source_version, env!("CARGO_PKG_VERSION"));
 
         let unowned = event_envelope("run-2", 1, "run.started", json!({}), None);
         assert_eq!(unowned.provenance.actor_id, None);
