@@ -38,6 +38,10 @@ impl RuntimeChatEventSink {
 }
 
 impl ChatEventSink for RuntimeChatEventSink {
+    fn provenance(&self) -> (&str, &str) {
+        ("muniment-runtime", env!("CARGO_PKG_VERSION"))
+    }
+
     fn deliver(&self, event: ChatEvent) -> Result<(), ()> {
         let mut subscriber = self.subscriber.lock().map_err(|_| ())?;
         if subscriber
