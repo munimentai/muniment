@@ -112,7 +112,9 @@ fn settles_after_the_subscriber_is_dropped() {
     let storage = open_profile_storage(&profile).unwrap();
     let journal_events = storage.lock().unwrap().journal.events(run_id).unwrap();
     assert_eq!(journal_events.last().unwrap().event_type, "run.failed");
-    assert_eq!(journal_events[0].provenance.source, "muniment-runtime");
+    assert!(journal_events
+        .iter()
+        .all(|event| event.provenance.source == "muniment-runtime"));
 
     drop(storage);
     std::env::remove_var("MUNIMENT_PI_ROOT");
