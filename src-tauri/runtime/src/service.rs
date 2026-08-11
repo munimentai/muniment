@@ -10,9 +10,11 @@ use muniment_core::chat_resume::{
     run_resume as drive_resume, ResumeLaunch,
 };
 use muniment_core::journal::reconciliation::reconcile_interrupted_runs;
+use muniment_core::journal::thread_summaries::ThreadSummaryPage;
 use muniment_core::journal::Provenance;
 use muniment_core::memory_index::ModelMemoryCapability;
 use muniment_core::memory_runtime::ApplicationMemoryRuntime;
+use muniment_core::owned_threads::chat_thread_summaries_page;
 use muniment_core::pi_execution::PiRuntime;
 use muniment_core::run_events::{ChatEvent, ChatStorage, SharedStorage};
 use muniment_core::run_preparation::{
@@ -22,6 +24,7 @@ use muniment_core::run_preparation::{
 use muniment_core::run_start::ActiveRun;
 use muniment_core::session_thread::SessionThread;
 use muniment_core::sidecar::pi_install::{PiArtifactDescriptor, PI_ARTIFACT};
+use muniment_core::thread_history::{chat_thread_open_page, ChatThreadOpenPage};
 use std::collections::{BTreeMap, VecDeque};
 use std::path::Path;
 use std::sync::atomic::AtomicBool;
@@ -38,6 +41,55 @@ pub fn open_profile_storage(
     let (mut journal, cas) = profile.open_storage()?;
     reconcile_interrupted_runs(&mut journal, &runtime_provenance());
     Ok(Arc::new(Mutex::new(ChatStorage { journal, cas })))
+}
+
+/// Lists the threads owned by one subject.
+pub fn thread_summaries(
+    profile_directory: impl AsRef<Path>,
+    subject: Option<String>,
+    limit: usize,
+    cursor: Option<String>,
+) -> Result<ThreadSummaryPage, String> {
+    let storage = open_profile_storage(profile_directory)
+        .map_err(|_| "Conversation history is unavailable.".to_string())?;
+    let mut storage = storage
+        .lock()
+        .map_err(|_| "Conversation history is unavailable.".to_string())?;
+    chat_thread_summaries_page(
+        &mut storage.journal,
+        subject.as_deref(),
+        limit,
+        cursor.as_deref(),
+    )
+    .map_err(|_| "Conversation history is unavailable.".to_string())
+}
+
+/// Opens one thread owned by one subject.
+pub fn thread_page(
+    profile_directory: impl AsRef<Path>,
+    subject: Option<String>,
+    thread_id: String,
+    limit: usize,
+    cursor: Option<String>,
+) -> Result<ChatThreadOpenPage, String> {
+    let profile_directory = profile_directory.as_ref();
+    let profile = ChatProfile::new(profile_directory);
+    let storage = open_profile_storage(profile_directory)
+        .map_err(|_| "Conversation history is unavailable.".to_string())?;
+    let mut storage = storage
+        .lock()
+        .map_err(|_| "Conversation history is unavailable.".to_string())?;
+    let ChatStorage { journal, cas } = &mut *storage;
+    chat_thread_open_page(
+        journal,
+        Some(cas),
+        subject.as_deref(),
+        &profile.pi_session_root(),
+        &thread_id,
+        limit,
+        cursor.as_deref(),
+    )
+    .map_err(|_| "Conversation history is unavailable.".to_string())
 }
 
 /// Runs one prompt to completion through the dormant runtime service boundaries.
