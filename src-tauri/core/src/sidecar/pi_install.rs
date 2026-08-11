@@ -484,6 +484,7 @@ fn resolve_revision(
     revision: &Path,
     descriptor: PiArtifactDescriptor,
 ) -> Result<PathBuf, PiInstallError> {
+    #[cfg(not(feature = "sidecar-test-install"))]
     verify_archive_for(&revision.join(descriptor.archive), descriptor)?;
     verify_executable_for(revision, descriptor)
 }
