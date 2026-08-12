@@ -25,7 +25,7 @@ use muniment_core::pi_execution::PiRuntime;
 use muniment_core::run_events::{ChatEvent, ChatStorage, SharedStorage};
 use muniment_core::run_preparation::{
     prepare_new_run_in_thread_after_validation, prepare_new_run_with_session_thread,
-    SessionThreadStart,
+    OpenSelectedFile, SessionThreadStart,
 };
 use muniment_core::run_start::ActiveRun;
 use muniment_core::session_thread::SessionThread;
@@ -178,6 +178,7 @@ pub fn run_prompt(
     thread_id: Option<String>,
     access_token: String,
     subject: Option<String>,
+    files: Vec<OpenSelectedFile>,
     grant: ChatGrant,
     active: Arc<Mutex<Option<ActiveRun>>>,
     subscriber: Option<Sender<ChatEvent>>,
@@ -212,7 +213,7 @@ pub fn run_prompt(
                 &run_id,
                 &grant.workspace,
                 subject.as_deref(),
-                Vec::new(),
+                files,
                 Some(runtime_provenance()),
                 thread_id,
                 "muniment-runtime",
@@ -230,7 +231,7 @@ pub fn run_prompt(
                     &run_id,
                     &grant.workspace,
                     subject.as_deref(),
-                    Vec::new(),
+                    files,
                     Some(runtime_provenance()),
                     "muniment-runtime",
                     env!("CARGO_PKG_VERSION"),
