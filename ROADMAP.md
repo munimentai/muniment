@@ -11,8 +11,8 @@ them must exercise the real contracts. It must add no mocked production path.
 > do-not-re-file measurement is preserved below. Git history holds the full
 > slice-by-slice record. The first 2026-08-12 pass took the ADR 0012 extraction
 > section. The second took the ADR 0024 code-diff chain. The third took the
-> memory index and retrieval section. The signed-in shell section is the next
-> compaction target.
+> memory index and retrieval section. The fourth took the signed-in shell
+> section. The desktop QA automation section is the next compaction target.
 
 ## M0 — Scaffold (done 2026-07-09)
 
@@ -484,7 +484,7 @@ every call site reads it.
 
 DONE — the dormant service entry points are built (MUNIDESK-1080, 1086, 1091,
 1094, 1096, 1099, 1100, 1102, 1105, 1108, 1110, 1112, 1113, 1115, 1117, 1119,
-1121, 1123, 1125, 1128, 1130, 1133, 1135, 1136, 1139). `src-tauri/runtime/src/service.rs`
+1121, 1123, 1125, 1128, 1130, 1133, 1135, 1136, 1139, 1142, 1144). `src-tauri/runtime/src/service.rs`
 opens one shared profile storage and reconciles interrupted runs, answers a fresh
 native session from the platform credential store, fetches and validates a cloud
 chat grant, lists and opens one subject's threads, creates one durable thread for
@@ -502,9 +502,12 @@ companions read run events through the journal. `accept_prompt`
 the committed sequence, and the acceptance time, and `drive_prompt` (`:413`)
 drives the accepted run, so the attach `run.start` reply has the shape
 `prepare_desktop_run` (`src-tauri/core/src/run_start.rs:203`) already answers
-with. `src-tauri/runtime/tests/` proves the steer, the permission answer, the
-attachment pass-through, the named-thread start, the prompt protection, and the
-separate config root against a live run. Nothing in `main` calls any entry.
+with. A preparation failure after the prepared append records itself through
+`record_persistence_failure`, so no run reaches reconciliation with no terminal
+event. `src-tauri/runtime/tests/` proves the steer, the permission answer, the
+cancel with its recorded `abort`, the attachment pass-through, the named-thread
+start, the prompt protection, the preparation failure, and the separate config
+root against a live run. Nothing in `main` calls any entry.
 
 MEASURED 2026-08-11 (twenty-sixth wave, planner, read `git log` between
 each roadmap merge) — a drained slice measures batch position rather than
@@ -535,40 +538,37 @@ disagree, because `chat_file_metadata` rejects a path with no usable final
 segment and `open_selected_files` does not. The lane waits for an owner look at
 why this one ticket never dispatches.
 
-MERGE HAZARD — five fortieth-wave slices edit
-`src-tauri/runtime/src/service.rs`. They are the prepared-run failure parity, the
-run control entries, the shared Pi runtime slot, the `home.ensure` entry, and the
-`workspace.onboard` entry. The failure parity and the Pi runtime slot both edit
-`accept_prompt`, and the Pi runtime slot rebases on the failure parity when that
-one merges first. The cancel parity test edits
-`src-tauri/core/src/bin/sidecar-test-stub.rs` instead. Each ticket tells the
-implementer to rebase on `main` before it opens the pull request. The 2026-08-04
-silent revert came from a stale base.
+MERGE HAZARD — five forty-first-wave slices edit
+`src-tauri/runtime/src/service.rs`. They are the two run control entries, the
+permission answer entry, the shared Pi runtime slot, the `home.ensure` entry, and
+the `workspace.onboard` entry. Only the shared Pi runtime slot edits
+`accept_prompt` and its signature. The other four add functions beside the
+existing entries. Each ticket tells the implementer to rebase on `main` before it
+opens the pull request. The 2026-08-04 silent revert came from a stale base.
 
-VERIFIED 2026-08-12 (fortieth wave, planner, read `src-tauri/runtime/` and ran
-`cargo test --package muniment-runtime`) — two thirty-ninth-wave slices landed.
-`stream_run` and `subscribe_run_commits` (`src-tauri/runtime/src/service.rs:135`,
-`:153`) answer the attach `run.stream` reply, and
-`src-tauri/runtime/tests/run_stream.rs` proves the page, the invalid cursor, and
-the subscription (MUNIDESK-1139). `choose_default_home`
-(`src-tauri/core/src/home.rs:29`) is the one default Home rule, and
-`resolve_attach_home` (`src-tauri/src/attach_service.rs:519`) reads it
-(MUNIDESK-1140). The other four slices are unbuilt. `accept_prompt` still drops
-its prepared sequence on the error path, both `drive_prompt` and `resume_run`
-build their own Pi runtime slot, `service.rs` exposes no run control entry, and
-the `pi_resume` stub still records no `abort`. The whole runtime suite passes.
+VERIFIED 2026-08-12 (forty-first wave, planner, read `src-tauri/runtime/` and ran
+`cargo test --package muniment-runtime`) — two fortieth-wave slices landed.
+`accept_prompt` records its preparation failure through
+`record_persistence_failure` on all three error paths
+(`src-tauri/runtime/src/service.rs:353`, `:368`, `:398`), and
+`src-tauri/runtime/tests/preparation_failure.rs` proves it (MUNIDESK-1142).
+`src-tauri/runtime/tests/cancel.rs` drives a live stub run and reads the recorded
+`abort` back off the capture file (MUNIDESK-1144). The other four slices are
+unbuilt. `service.rs` still exposes no run control entry and no permission answer
+entry, both `drive_prompt` and `resume_run` build their own Pi runtime slot, and
+neither `home.ensure` nor `workspace.onboard` has a runtime entry. The whole
+runtime suite passes, and it now holds sixteen test binaries.
 
-MEASURED 2026-08-12 (thirty-ninth wave, planner, read `accept_prompt` beside
-`prepare_desktop_run`) — a runtime prompt that fails after preparation leaves a
-run with no terminal event. `prepare_desktop_run`
-(`src-tauri/core/src/run_start.rs:268`, `:289`) appends `run.failed` through
-`fail_prepared_run` when the thread-id read or the memory-session open fails.
-`accept_prompt` (`src-tauri/runtime/src/service.rs:305`) runs the same two steps
-inside a closure, drops the prepared sequence on the error path, and returns
-without appending a terminal event. `reconcile_interrupted_runs`
-(`src-tauri/core/src/journal/reconciliation.rs:9`) then appends
-`run.needs_attention` on the next `open_profile_storage`, so the thread shows an
-interrupted reply with a `Resume` control for a run Pi never started.
+MEASURED 2026-08-12 (forty-first wave, planner, read the attach permission answer
+beside `active_run.rs`) — the attach `permission.answer` reply needs the
+committed sequence, and the core queue function does not carry it.
+`DesktopAttachService::answer_permission`
+(`src-tauri/core/src/attach/desktop_service.rs:381`) waits on the channel that
+`queue_attach_permission_answer` (`src-tauri/src/chat.rs:213`) returns, and that
+seam pushes a `PendingPermissionAnswer` with `resolved: Some(sender)`.
+`queue_permission_answer` (`src-tauri/core/src/active_run.rs:94`) pushes
+`resolved: None`, so it serves the desktop command alone. The runtime permission
+answer entry therefore splits from the steer and cancel entries.
 
 MEASURED 2026-08-12 (thirty-ninth wave, planner, read the runtime manifest beside
 `test/runtime-dependency-boundary.sh`) — the runtime crate cannot build a
@@ -598,25 +598,23 @@ thread id therefore open two threads, and the desktop composer continues one. Th
 is the fourth shared-slot slice. It waits behind the shared Pi runtime slot,
 because both edit `accept_prompt` and its signature.
 
-SELECTED 2026-08-12 (fortieth wave) — six slices in priority order.
+SELECTED 2026-08-12 (forty-first wave) — five slices in priority order.
 
-1. The prepared-run failure parity above, with the core seam the runtime
-   dependency measurement calls for.
-2. The runtime run control entries. `queue_message`, `cancel_active_run`, and
-   `queue_permission_answer` (`src-tauri/core/src/active_run.rs`) all read the
-   shared run control slot, and the runtime service exposes no entry for the
-   attach `run.steer`, `run.follow_up`, `run.cancel`, and `permission.answer`
-   operations.
+1. The runtime steer and cancel entries. `queue_message` and `cancel_active_run`
+   (`src-tauri/core/src/active_run.rs:28`, `:66`) both read the shared run
+   control slot, and the runtime service exposes no entry for the attach
+   `run.steer`, `run.follow_up`, and `run.cancel` operations. The existing
+   `steer.rs` and `cancel.rs` tests point at the new entries.
+2. The runtime permission answer entry, per the forty-first-wave measurement
+   above. It returns the resolved commit sequence, so it carries the attach shape
+   rather than the desktop command shape.
 3. The shared Pi runtime slot. `drive_prompt` and `resume_run`
-   (`src-tauri/runtime/src/service.rs:422`, `:540`) each build their own
+   (`src-tauri/runtime/src/service.rs:467`, `:585`) each build their own
    `Arc<Mutex<Option<PiRuntime>>>`, where the desktop holds one slot in
    `ChatState` (`src-tauri/src/chat.rs:110`). The shared storage and the shared
    run control slot took the same shape.
-4. The cancel parity test. `cancel_active_run`
-   (`src-tauri/core/src/active_run.rs:66`) has no test that proves `abort` reaches
-   the `pi_resume` stub, because that arm records nothing.
-5. The runtime `home.ensure` entry, per the fortieth-wave measurement.
-6. The runtime `workspace.onboard` entry, per the same measurement.
+4. The runtime `home.ensure` entry, per the fortieth-wave measurement.
+5. The runtime `workspace.onboard` entry, per the same measurement.
 
 SEQUENCED — after the shared Pi runtime slot, the later extraction slices are the
 desktop client conversion and Linux user-unit registration. Each sits behind a
@@ -912,19 +910,17 @@ cards, the composer with its ten-line cap, dictation controls, and the profile
 popover with its Appearance, Your access, Devices, Connected programs, and Voice
 shortcut sections over a fixed Sign out footer.
 
-DONE — the design laws carry enforcing lints. `src/styles/signal-allowlist.test.js`
-guards §1.2's color law, `shape-scale.test.js` guards the radius and shadow
-scales, `type-scale.test.js` permits a component font size only through a
-`var(--text-*)` token, `class-usage.test.js` fails on a class no rule defines,
-`text-wrap.test.js` lints six text-bearing selectors, `contrast.test.js` guards
-the token matrix, `record-font.test.js` guards the record register, and
-`npm run lint:copy` lints component copy.
+DONE — the design laws carry enforcing lints. `src/styles/` holds
+`signal-allowlist.test.js` for §1.2's color law, `shape-scale.test.js` for the
+radius and shadow scales, `type-scale.test.js` for the `var(--text-*)` rule,
+`class-usage.test.js` for a class no rule defines, `text-wrap.test.js` for six
+text-bearing selectors, `contrast.test.js` for the token matrix,
+`record-font.test.js` for the record register, and `target-size.test.js` for the
+24 pixel floor. `npm run lint:copy` lints component copy.
 
 DONE — ADR 0016 gives threads a durable identity over the run journal
-(MUNIDESK-544 through 546, 551, 554, 557, 562, 565, 566, 573, 574, 578, 580 through
-584, 588, 595, 596, 598, 599, 601 through 604, 608 through 610, 618, 619, 627,
-628, 687, 712, 739, 740, 743, 744). Thread identity is an append-only `thread.*`
-event ledger plus an immutable `run_threads` stamping edge. `PRAGMA user_version`
+(MUNIDESK-544 through 744). Thread identity is an append-only `thread.*` event
+ledger plus an immutable `run_threads` stamping edge, and `PRAGMA user_version`
 is an ordered migration boundary. The shell lists threads with relative times,
 marks the current one, opens one by click or by the platform chord plus a digit,
 reaches older pages through an explicit `Older threads` control outside the list,
@@ -932,27 +928,31 @@ renames inline from the titlebar, deletes through a quiet row control with an
 inline confirm, and sets the operating-system window title from the open thread.
 
 DONE — ADR 0023 decides assistant Markdown rendering, and it is built
-(MUNIDESK-699, 702, 706, 711, 734). `src/lib/assistant-markdown.js` parses with
-the pinned `marked` 18.0.7 and sanitizes with the pinned `dompurify` 3.4.12.
-Every construct outside the subset renders as literal source text.
+(MUNIDESK-699 through 734). `src/lib/assistant-markdown.js` parses with the
+pinned `marked` 18.0.7 and sanitizes with the pinned `dompurify` 3.4.12. Every
+construct outside the subset renders as literal source text.
 `src/lib/AssistantMarkdown.svelte` renders it, a fenced block and a table each
 scroll inside their own block and take a tab stop only while they overflow, and
 `src/lib/external-link.js` opens an anchor through the opener plugin for `https:`,
 `http:`, and `mailto:` alone.
 
-DONE — the shell answers the accessibility floor. One workspace `h1`, `Threads`
-and `Artifacts` as its two `h2` groups, a real thread list, a named transcript
-region, one coarse live-region announcement per run phase, a visually hidden
-`Message` label on the composer tied to its hint through `aria-describedby`, a
-persistent `Send` and a persistent `Sign in` that take `aria-disabled` rather than
-`disabled` so activation never drops focus, and a signed-out lockup that names the
-product once as that screen's `h1`.
-
-DONE — the run records are honest. A failed reply, an interrupted reply, and a
-stopped reply each carry their own mono record beside the control that recovers
-it. A failed tool row takes `--oxide` and says `failed` once. The entitlement
-toast is the design system's first toast primitive, and the pairing approval
-dialog is its first dialog primitive (MUNIDESK-862).
+DONE — the shell answers the accessibility floor, and its run records are honest
+(MUNIDESK-704, 862, 890, 986, 996, 1008, 1020, 1030, 1038). The workspace carries
+one `h1`, `Threads` and `Artifacts` as its two `h2` groups, a real thread list, a
+named transcript region, one coarse live-region announcement per run phase, and a
+visually hidden `Message` label tied to its hint through `aria-describedby`.
+`Send` and `Sign in` take `aria-disabled` rather than `disabled`, so activation
+never drops focus, and the signed-out lockup names the product once as that
+screen's `h1`. Tool activity renders as one named list rather than one live
+region per tool. A failed, interrupted, or stopped reply carries its own mono
+record beside the control that recovers it, a failed tool row takes `--oxide` and
+says `failed` once, and the transcript error banner offers the recovery that
+repeats the failed action. The receipt summary carries a rotating expand marker
+and its memory row. A multi-line permission gate names its commit chord, and it
+renders `⌘⏎` on macOS and `Ctrl ⏎` elsewhere. The sidebar delete, the delete
+confirm, the run-record controls, and the receipt summary all meet the 24 pixel
+target-size floor. The entitlement toast is the design system's first toast
+primitive, and the pairing approval dialog is its first dialog primitive.
 
 DONE — the frontend is factored into injectable modules with direct tests:
 `chat-controller.js`, `chat-transcript-controller.js`, `dictation-controller.js`,
@@ -968,36 +968,10 @@ pages, so no thread renders twice. The sidebar accepts one staleness: a thread
 that the refresh pushes out of the newest page leaves the list until the next
 `Older threads` activation or the next launch. DONE (MUNIDESK-739).
 
-DONE 2026-08-04 — the multi-line permission gate names its commit chord
-(MUNIDESK-890). The card carries a hint under the field, and it renders `⌘⏎` on
-macOS and `Ctrl ⏎` elsewhere. The single-line kind commits on a plain Enter and
-needs no hint.
-
-DONE 2026-08-08 — the sidebar delete, the delete confirm, and the run-record
-controls meet the 24 pixel floor, DESIGN.md states the law, and
-`src/styles/target-size.test.js` guards the three selectors (MUNIDESK-1020).
-
-DONE 2026-08-09 — the receipt summary meets the 24 pixel target-size floor
-(MUNIDESK-1038). The tenth wave had measured the `.provenance` button at 334 by
-17 CSS pixels with `padding: 0`, and the DESIGN.md law admits no exception for a
-control on its own line.
-
 DO NOT RE-POLISH — the receipt summary has taken three consecutive waves.
 MUNIDESK-996 added the expand marker, MUNIDESK-1008 fixed the memory row, and
 MUNIDESK-1038 raised the target size. A later wave needs a new measurement
 before it touches that element again.
-
-DONE 2026-08-09 — the transcript error banner offers the recovery that
-repeats the failed action (MUNIDESK-1030). Each failing call site passes the
-action that repeats it, and a failed older-page read no longer resets the
-retained pages.
-
-DONE 2026-08-08 — the receipt summary shows that it expands (MUNIDESK-996). The
-expandable line carries a rotating marker (`src/App.svelte:990`, `.receipt-marker`
-at `:1357`), and the static `Receipt unavailable` caption carries none. A
-`prefers-reduced-motion` reader gets the same two states with no rotation. The
-planner captured `test/probe/history.html` at 1100x720 on 2026-08-08 and read the
-marker beside the provenance line.
 
 NOT FILED — the empty workspace reads `New thread` three times, in the titlebar,
 the sidebar action, and the sidebar current-thread record. The owner mockup sets
@@ -1009,13 +983,6 @@ which model answers.`, the composer placeholder reads `Ask anything`, and the
 composer hint explains routing again. `docs/spec/01-design-system.md:139` asks an
 empty state for one sentence. The sentence is owner ground truth in the mockup
 and in two specs, so rewording it is an owner call. The planner asks for one.
-
-DONE 2026-08-07 — tool activity is one named list rather than one live region
-per tool (MUNIDESK-986). The planner had measured seven polite live regions on a
-run with four sequential tools and three parallel tools, each speaking twice.
-The coarse per-phase announcement is the transcript's only live region again.
-MUNIDESK-704 added those `role="status"` attributes deliberately, and that
-measurement was the evidence the earlier wave asked for.
 
 WITHDRAWN 2026-07-31 — the claim that the open thread's row exposes no `current`
 state does not survive its own check. This Chromium build reports no `current`
