@@ -8,6 +8,7 @@ use std::time::Duration;
 use muniment_core::active_run::cancel_active_run;
 use muniment_core::attach::RuntimeActivityRegistry;
 use muniment_core::chat_grant::ChatGrant;
+use muniment_core::chat_resume::clear_active_run;
 use muniment_core::home::confirm_home;
 use muniment_core::pi_execution::{coordinate_prepared_prompt, PiRuntime};
 use muniment_core::run_events::{ChatEvent, ChatEventSink};
@@ -47,6 +48,94 @@ impl ChatEventSink for FixtureSink {
     }
 }
 
+fn accept_two_prompts_with_session_thread(continue_existing: bool) -> (String, String) {
+    let _environment = ENVIRONMENT.lock().unwrap();
+    muniment_core::chat_prompt::use_mock_keyring_for_tests();
+    let mode = if continue_existing {
+        "continued"
+    } else {
+        "separate"
+    };
+    let temporary_root = std::env::temp_dir().join(format!(
+        "muniment-runtime-session-thread-{mode}-{}",
+        std::process::id()
+    ));
+    let _ = fs::remove_dir_all(&temporary_root);
+    let profile = temporary_root.join("profile");
+    let config = temporary_root.join("config");
+    fs::create_dir_all(&profile).unwrap();
+    confirm_home(&config, &temporary_root.join("home")).unwrap();
+    let storage = open_profile_storage(&profile).unwrap();
+    let runtime = Arc::new(Mutex::new(None));
+    let active = Arc::new(Mutex::new(None));
+    let session_thread = SessionThread::default();
+    let first_run_id = "018f0000-0000-7000-8000-000000000021";
+    let second_run_id = "018f0000-0000-7000-8000-000000000022";
+
+    let (first, first_launch) = accept_prompt(
+        &profile,
+        Arc::clone(&storage),
+        Arc::clone(&runtime),
+        &config,
+        first_run_id.into(),
+        "first prompt".into(),
+        None,
+        &session_thread,
+        continue_existing,
+        "token".into(),
+        Some("owner".into()),
+        Vec::new(),
+        fixture_grant(),
+        Arc::clone(&active),
+        None,
+        None,
+    )
+    .unwrap();
+    drop(first_launch);
+    clear_active_run(&active, first_run_id);
+
+    let (second, second_launch) = accept_prompt(
+        &profile,
+        Arc::clone(&storage),
+        runtime,
+        &config,
+        second_run_id.into(),
+        "second prompt".into(),
+        None,
+        &session_thread,
+        continue_existing,
+        "token".into(),
+        Some("owner".into()),
+        Vec::new(),
+        fixture_grant(),
+        Arc::clone(&active),
+        None,
+        None,
+    )
+    .unwrap();
+    drop(second_launch);
+    clear_active_run(&active, second_run_id);
+
+    let thread_ids = (first.thread_id, second.thread_id);
+    drop(storage);
+    fs::remove_dir_all(temporary_root).unwrap();
+    thread_ids
+}
+
+#[test]
+fn session_thread_continues_two_prompts() {
+    let (first_thread_id, second_thread_id) = accept_two_prompts_with_session_thread(true);
+
+    assert_eq!(first_thread_id, second_thread_id);
+}
+
+#[test]
+fn disabled_session_thread_continuation_starts_two_threads() {
+    let (first_thread_id, second_thread_id) = accept_two_prompts_with_session_thread(false);
+
+    assert_ne!(first_thread_id, second_thread_id);
+}
+
 #[test]
 fn an_occupied_active_run_slot_does_not_prepare_a_new_run() {
     let temporary_root =
@@ -74,6 +163,8 @@ fn an_occupied_active_run_slot_does_not_prepare_a_new_run() {
         run_id.into(),
         "prompt".into(),
         None,
+        &SessionThread::default(),
+        false,
         "token".into(),
         Some("owner".into()),
         Vec::new(),
@@ -171,6 +262,8 @@ fn runs_two_prompts_in_one_named_thread_and_rejects_an_unknown_thread() {
         unknown_run_id.into(),
         "unknown thread prompt".into(),
         Some("unknown-thread".into()),
+        &SessionThread::default(),
+        false,
         "token".into(),
         Some("owner".into()),
         Vec::new(),
@@ -203,6 +296,8 @@ fn runs_two_prompts_in_one_named_thread_and_rejects_an_unknown_thread() {
                 run_id.into(),
                 prompt.into(),
                 None,
+                &SessionThread::default(),
+                false,
                 "token".into(),
                 Some("owner".into()),
                 Vec::new(),
@@ -247,6 +342,8 @@ fn runs_two_prompts_in_one_named_thread_and_rejects_an_unknown_thread() {
         second_run_id.into(),
         second_prompt.into(),
         Some(thread_id.clone()),
+        &SessionThread::default(),
+        false,
         "token".into(),
         Some("owner".into()),
         vec![OpenSelectedFile {

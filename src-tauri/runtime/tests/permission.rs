@@ -175,6 +175,8 @@ fn a_queued_permission_answer_reaches_a_live_runtime_run() {
                 run_id.into(),
                 "initial prompt".into(),
                 None,
+                &muniment_core::session_thread::SessionThread::default(),
+                false,
                 "token".into(),
                 Some("owner".into()),
                 Vec::new(),
