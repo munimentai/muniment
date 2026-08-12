@@ -532,8 +532,9 @@ why this one ticket never dispatches.
 MERGE HAZARD — every forty-seventh-wave slice edits
 `src-tauri/runtime/src/service.rs`. They are the entitlement snapshot entry, the
 sign-out entry, the device list entry, the session status entry, the companion
-list and revoke entries, and the shared runtime activity registry. The first five
-add a function beside the existing entries. The registry slice changes the
+list and revoke entries, and the shared runtime activity registry. The first four
+add one function each beside the existing entries. The fifth adds two companion
+functions. The registry slice changes the
 `accept_prompt` and `resume_run` signatures, and it edits the five runtime test
 files that call them. Each ticket tells the implementer to rebase on `main`
 before it opens the pull request. The 2026-08-04 silent revert came from a stale
