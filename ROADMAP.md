@@ -12,7 +12,8 @@ them must exercise the real contracts. It must add no mocked production path.
 > slice-by-slice record. The first 2026-08-12 pass took the ADR 0012 extraction
 > section. The second took the ADR 0024 code-diff chain. The third took the
 > memory index and retrieval section. The fourth took the signed-in shell
-> section. The desktop QA automation section is the next compaction target.
+> section. The fifth took the desktop QA automation repair waves. The Phase 3
+> voice section is the next compaction target.
 
 ## M0 — Scaffold (done 2026-07-09)
 
@@ -484,14 +485,16 @@ every call site reads it.
 
 DONE — the dormant service entry points are built (MUNIDESK-1080, 1086, 1091,
 1094, 1096, 1099, 1100, 1102, 1105, 1108, 1110, 1112, 1113, 1115, 1117, 1119,
-1121, 1123, 1125, 1128, 1130, 1133, 1135, 1136, 1139, 1142, 1144). `src-tauri/runtime/src/service.rs`
+1121, 1123, 1125, 1128, 1130, 1133, 1135, 1136, 1139, 1142, 1144, 1145).
+`src-tauri/runtime/src/service.rs`
 opens one shared profile storage and reconciles interrupted runs, answers a fresh
 native session from the platform credential store, fetches and validates a cloud
 chat grant, lists and opens one subject's threads, creates one durable thread for
 an authorized attach profile, renames and deletes an owned thread, sweeps expired
 terminal runs and their protected prompts, reads one page of a run stream and
-subscribes to that run's commits, accepts one prompt and drives it, and
-resumes an interrupted run. `accept_prompt`,
+subscribes to that run's commits, accepts one prompt and drives it, queues one
+steer or follow-up message into the live run, cancels the active run in one
+workspace, and resumes an interrupted run. `accept_prompt`,
 `run_prompt`, and `resume_run` take the shared storage, the shared run control
 slot, and a config directory beside the profile directory. `RuntimeChatEventSink`
 (`src-tauri/runtime/src/sink.rs`) implements `ChatEventSink` and
@@ -538,26 +541,34 @@ disagree, because `chat_file_metadata` rejects a path with no usable final
 segment and `open_selected_files` does not. The lane waits for an owner look at
 why this one ticket never dispatches.
 
-MERGE HAZARD — five forty-first-wave slices edit
-`src-tauri/runtime/src/service.rs`. They are the two run control entries, the
-permission answer entry, the shared Pi runtime slot, the `home.ensure` entry, and
-the `workspace.onboard` entry. Only the shared Pi runtime slot edits
-`accept_prompt` and its signature. The other four add functions beside the
-existing entries. Each ticket tells the implementer to rebase on `main` before it
-opens the pull request. The 2026-08-04 silent revert came from a stale base.
+MERGE HAZARD — four forty-second-wave slices edit
+`src-tauri/runtime/src/service.rs`. They are the permission answer entry, the
+shared Pi runtime slot, the `home.ensure` entry, and the `workspace.onboard`
+entry. Only the shared Pi runtime slot edits `accept_prompt` and its signature.
+The other three add functions beside the existing entries. Each ticket tells the
+implementer to rebase on `main` before it opens the pull request. The 2026-08-04
+silent revert came from a stale base.
 
-VERIFIED 2026-08-12 (forty-first wave, planner, read `src-tauri/runtime/` and ran
-`cargo test --package muniment-runtime`) — two fortieth-wave slices landed.
-`accept_prompt` records its preparation failure through
-`record_persistence_failure` on all three error paths
-(`src-tauri/runtime/src/service.rs:353`, `:368`, `:398`), and
-`src-tauri/runtime/tests/preparation_failure.rs` proves it (MUNIDESK-1142).
-`src-tauri/runtime/tests/cancel.rs` drives a live stub run and reads the recorded
-`abort` back off the capture file (MUNIDESK-1144). The other four slices are
-unbuilt. `service.rs` still exposes no run control entry and no permission answer
-entry, both `drive_prompt` and `resume_run` build their own Pi runtime slot, and
-neither `home.ensure` nor `workspace.onboard` has a runtime entry. The whole
-runtime suite passes, and it now holds sixteen test binaries.
+VERIFIED 2026-08-12 (forty-second wave, planner, read `src-tauri/runtime/` and
+ran `cargo test --package muniment-runtime`) — one forty-first-wave slice landed.
+`queue_run_message` and `cancel_run` (`src-tauri/runtime/src/service.rs:525`,
+`:533`) read the shared run control slot, and `src-tauri/runtime/tests/steer.rs`
+and `cancel.rs` drive them against a live stub run (MUNIDESK-1145). The other
+four slices are unbuilt. `service.rs` still exposes no permission answer entry,
+both `drive_prompt` and `resume_run` build their own Pi runtime slot
+(`:468`, `:603`), and neither `home.ensure` nor `workspace.onboard` has a runtime
+entry. The whole runtime suite passes over sixteen test binaries.
+
+MEASURED 2026-08-12 (forty-second wave, planner, read `prepare_desktop_run`
+beside `accept_prompt`) — a failed attachment projection leaves a prepared run
+with no terminal event. `prepare_desktop_run`
+(`src-tauri/core/src/run_start.rs:293`) clears the active run when
+`project_attachments` fails, and it calls no `fail_prepared_run`. The two error
+paths above it both call one. `accept_prompt`
+(`src-tauri/runtime/src/service.rs:420`) carries the same gap against
+`record_persistence_failure`. The core half is the filed slice, because
+`FakeRunStartBoundaries` already fakes a boundary failure and counts the call.
+The runtime half needs a seam that forces a `ReduceError`, so it waits.
 
 MEASURED 2026-08-12 (forty-first wave, planner, read the attach permission answer
 beside `active_run.rs`) — the attach `permission.answer` reply needs the
@@ -598,23 +609,20 @@ thread id therefore open two threads, and the desktop composer continues one. Th
 is the fourth shared-slot slice. It waits behind the shared Pi runtime slot,
 because both edit `accept_prompt` and its signature.
 
-SELECTED 2026-08-12 (forty-first wave) — five slices in priority order.
+SELECTED 2026-08-12 (forty-second wave) — four slices in priority order.
 
-1. The runtime steer and cancel entries. `queue_message` and `cancel_active_run`
-   (`src-tauri/core/src/active_run.rs:28`, `:66`) both read the shared run
-   control slot, and the runtime service exposes no entry for the attach
-   `run.steer`, `run.follow_up`, and `run.cancel` operations. The existing
-   `steer.rs` and `cancel.rs` tests point at the new entries.
-2. The runtime permission answer entry, per the forty-first-wave measurement
+1. The runtime permission answer entry, per the forty-first-wave measurement
    above. It returns the resolved commit sequence, so it carries the attach shape
-   rather than the desktop command shape.
-3. The shared Pi runtime slot. `drive_prompt` and `resume_run`
-   (`src-tauri/runtime/src/service.rs:467`, `:585`) each build their own
+   rather than the desktop command shape. The core seam it adds also serves
+   `queue_attach_permission_answer` (`src-tauri/src/chat.rs:213`).
+2. The shared Pi runtime slot. `drive_prompt` and `resume_run`
+   (`src-tauri/runtime/src/service.rs:459`, `:543`) each build their own
    `Arc<Mutex<Option<PiRuntime>>>`, where the desktop holds one slot in
    `ChatState` (`src-tauri/src/chat.rs:110`). The shared storage and the shared
-   run control slot took the same shape.
-4. The runtime `home.ensure` entry, per the fortieth-wave measurement.
-5. The runtime `workspace.onboard` entry, per the same measurement.
+   run control slot took the same shape. One slot per process is also the rule
+   that stops two runtime runs from starting two Pi children.
+3. The runtime `home.ensure` entry, per the fortieth-wave measurement.
+4. The runtime `workspace.onboard` entry, per the same measurement.
 
 SEQUENCED — after the shared Pi runtime slot, the later extraction slices are the
 desktop client conversion and Linux user-unit registration. Each sits behind a
@@ -1071,43 +1079,21 @@ POSIX shell, and `test/posix-shell-gate.test.js` fails when a new `bash` call si
 appears outside a guarded block (MUNIDESK-679). Its walk skips any path segment
 named `target` or `dist`, so it never descends into build output (MUNIDESK-731).
 
-DONE — the installed Linux and Windows lanes are green. The most recent repairs
-are MUNIDESK-757, 758, 759, 789, 827, 828, 872, 873, 900, and 901. MUNIDESK-900
-waits for the four Home `README.md` files instead of reading them the moment the
-`Sign in` control appears. MUNIDESK-901 widens the folder-picker window match to
-accept a title that names a file, which the installed portal dialog uses.
-
-DONE 2026-08-06 — a repair wave carried the three lanes further (MUNIDESK-934
-through 946, 950, and 951). All three desktop lanes now drive the embedded WDIO
-WebDriver behind the `e2e-webdriver` Cargo feature, which a release build never
-carries (`src-tauri/Cargo.toml:8`, `src-tauri/e2e/capability.json`). The Linux
-lane opens the native folder picker under Xvfb and mounts the document portal.
-The Windows lane speaks before it can fail, survives an `npm ci` deprecation
-warning on stderr, resolves `npm` without `ComSpec`, and gives a PowerShell
-spawn more than the 5000ms default. A targeted nightly dispatch no longer
-reports success while skipping the job it was asked to run.
-
-DONE 2026-08-07 — a second repair wave followed (MUNIDESK-970, 973, 974, 976,
-977, 978). The Linux in-VM build installs `libasound2-dev` and builds
-`muniment-acp` and `muniment-runtime` before the Tauri bundle, and the e2e Tauri
-config resolves its capabilities file. The Windows lane launches the nested
-browser suite through `npx` and declares `@vitest/browser-playwright`. The macOS
-probe counts windows with CoreGraphics, so it needs no privacy permission.
-
-DONE 2026-08-09 — a third pair followed (MUNIDESK-1033, 1034). The JUnit
-report step and the shell gate accept the current harness layout, and the
-installed Linux run resolves `libsherpa-onnx-c-api.so` beside the binary.
-
-DONE 2026-08-10 — the Linux installed lane drives the hosted sign-in window
-through its own WebKitWebDriver (MUNIDESK-1056). The spec had assumed a
-Chrome driver on port 9515, which the Linux VM does not run, and the auth
-driver now stops in one shared cleanup path on every platform.
-
-DONE 2026-08-06 — the Windows-only tests run before they merge (MUNIDESK-946).
-Pull request CI never ran the 14 of them, and 12 failed inside the Windows lane.
-`test/windows-pr-gate.test.js` now guards the gate. MUNIDESK-950 pinned the
-working tree to LF, because one CRLF checkout broke three contract suites at
-once.
+DONE — the installed Linux, Windows, and macOS lanes are green, and five repair
+waves carried them there (MUNIDESK-757, 758, 759, 789, 827, 828, 872, 873, 900,
+901, 934 through 946, 950, 951, 970, 973, 974, 976, 977, 978, 1033, 1034, 1056).
+All three lanes drive the embedded WDIO WebDriver behind the `e2e-webdriver`
+Cargo feature, which a release build never carries (`src-tauri/Cargo.toml:8`,
+`src-tauri/e2e/capability.json`). The Linux lane opens the native folder picker
+under Xvfb, mounts the document portal, builds `muniment-acp` and
+`muniment-runtime` before the Tauri bundle, resolves `libsherpa-onnx-c-api.so`
+beside the binary, and drives the hosted sign-in window through its own
+WebKitWebDriver. The Windows lane speaks before it can fail, survives an
+`npm ci` deprecation warning on stderr, resolves `npm` without `ComSpec`, and
+gives a PowerShell spawn more than the 5000ms default. The macOS probe counts
+windows with CoreGraphics, so it needs no privacy permission. Pull request CI
+runs the 14 Windows-only tests, `test/windows-pr-gate.test.js` guards that gate,
+and MUNIDESK-950 pinned the working tree to LF.
 
 OPERATING CONSTRAINT — the planning clone cannot compile the `src-tauri` desktop
 crate, because the container has no ALSA headers for `alsa-sys`. The desktop-ci VM
@@ -1124,10 +1110,11 @@ earlier one. Requiring an up-to-date branch before merge, or a merge queue, is a
 repository-settings change that sits with the owner. The planner files no ticket
 for it.
 
-VERIFIED 2026-08-12 (thirty-ninth wave, planner) — `cargo test --package
-muniment-runtime` passes from `src-tauri`, and `npm test` passes after `npm ci`
-with 928 frontend tests and 3 browser tests. The extraction section above records
-what the planner read in the code. This entry replaces the earlier ledger.
+VERIFIED 2026-08-12 (forty-second wave, planner) — `cargo test --package
+muniment-runtime` passes from `src-tauri` over sixteen test binaries. The
+thirty-ninth wave read 928 frontend tests and 3 browser tests from `npm test`
+after `npm ci`. The extraction section above records what the planner read in the
+code. This entry replaces the earlier ledger.
 
 NOTE 2026-08-06 — the planning clone ships no `node_modules`. Run `npm ci`
 before `npm test`. Without it the run dies with `vitest: not found`, which reads
