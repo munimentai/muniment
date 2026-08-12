@@ -88,7 +88,7 @@ describe('installed nightly', () => {
         }, { timeout: 30000, timeoutMsg: 'WebKitWebDriver did not start' })
       }
       signInBrowser = await remote({
-        hostname: '127.0.0.1', port: 9515, logLevel: 'error',
+        hostname: '127.0.0.1', port: 9515, logLevel: 'silent',
         capabilities: process.platform === 'win32'
           ? { browserName: 'MicrosoftEdge', 'ms:edgeOptions': { args: ['--headless=new', '--disable-gpu'] } }
           : process.platform === 'linux'
