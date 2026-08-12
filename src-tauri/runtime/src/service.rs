@@ -70,13 +70,11 @@ pub fn open_profile_storage(
 
 /// Lists the threads owned by one subject.
 pub fn thread_summaries(
-    profile_directory: impl AsRef<Path>,
+    storage: SharedStorage,
     subject: Option<String>,
     limit: usize,
     cursor: Option<String>,
 ) -> Result<ThreadSummaryPage, String> {
-    let storage = open_profile_storage(profile_directory)
-        .map_err(|_| "Conversation history is unavailable.".to_string())?;
     let mut storage = storage
         .lock()
         .map_err(|_| "Conversation history is unavailable.".to_string())?;
@@ -92,6 +90,7 @@ pub fn thread_summaries(
 /// Opens one thread owned by one subject.
 pub fn thread_page(
     profile_directory: impl AsRef<Path>,
+    storage: SharedStorage,
     subject: Option<String>,
     thread_id: String,
     limit: usize,
@@ -99,8 +98,6 @@ pub fn thread_page(
 ) -> Result<ChatThreadOpenPage, String> {
     let profile_directory = profile_directory.as_ref();
     let profile = ChatProfile::new(profile_directory);
-    let storage = open_profile_storage(profile_directory)
-        .map_err(|_| "Conversation history is unavailable.".to_string())?;
     let mut storage = storage
         .lock()
         .map_err(|_| "Conversation history is unavailable.".to_string())?;
@@ -121,6 +118,7 @@ pub fn thread_page(
 #[allow(clippy::too_many_arguments)]
 pub fn run_prompt(
     profile_directory: impl AsRef<Path>,
+    storage: SharedStorage,
     config_directory: impl AsRef<Path>,
     run_id: String,
     prompt: String,
@@ -133,7 +131,6 @@ pub fn run_prompt(
     pi_artifact: Option<PiArtifactDescriptor>,
 ) -> Result<(), String> {
     let profile_directory = profile_directory.as_ref();
-    let storage = open_profile_storage(profile_directory).map_err(|error| error.to_string())?;
     let memory_runtime = Arc::new(ApplicationMemoryRuntime::new(
         config_directory.as_ref().to_path_buf(),
         profile_directory.join("memory"),
@@ -243,6 +240,7 @@ pub fn run_prompt(
 #[allow(clippy::too_many_arguments)]
 pub fn resume_run(
     profile_directory: impl AsRef<Path>,
+    storage: SharedStorage,
     config_directory: impl AsRef<Path>,
     run_id: String,
     access_token: String,
@@ -254,7 +252,6 @@ pub fn resume_run(
 ) -> Result<(), String> {
     let profile_directory = profile_directory.as_ref();
     let profile = ChatProfile::new(profile_directory);
-    let storage = open_profile_storage(profile_directory).map_err(|error| error.to_string())?;
     let (resume, thread_id) = {
         let mut storage = storage
             .lock()
