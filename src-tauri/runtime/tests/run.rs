@@ -11,12 +11,14 @@ use muniment_core::chat_grant::ChatGrant;
 use muniment_core::home::confirm_home;
 use muniment_core::pi_execution::coordinate_prepared_prompt;
 use muniment_core::run_events::{ChatEvent, ChatEventSink};
-use muniment_core::run_preparation::{prepare_new_run_with_session_thread, SessionThreadStart};
+use muniment_core::run_preparation::{
+    prepare_new_run_with_session_thread, OpenSelectedFile, SessionThreadStart,
+};
 use muniment_core::run_start::ActiveRun;
 use muniment_core::session_thread::SessionThread;
 use muniment_core::sidecar::pi_install::{PiArtifactDescriptor, PI_ARTIFACT};
 use muniment_core::sidecar::validate_pi_session;
-use muniment_runtime::{open_profile_storage, resume_run, run_prompt};
+use muniment_runtime::{open_profile_storage, resume_run, run_prompt, thread_page};
 
 static ENVIRONMENT: Mutex<()> = Mutex::new(());
 
@@ -71,6 +73,7 @@ fn an_occupied_active_run_slot_does_not_prepare_a_new_run() {
         None,
         "token".into(),
         Some("owner".into()),
+        Vec::new(),
         fixture_grant(),
         active,
         None,
@@ -92,6 +95,7 @@ fn an_occupied_active_run_slot_does_not_prepare_a_new_run() {
 #[test]
 fn runs_two_prompts_in_one_named_thread_and_rejects_an_unknown_thread() {
     let _environment = ENVIRONMENT.lock().unwrap();
+    muniment_core::chat_prompt::use_mock_keyring_for_tests();
     let temporary_root =
         std::env::temp_dir().join(format!("muniment-runtime-run-{}", std::process::id()));
     let profile = temporary_root.join("profile");
@@ -164,6 +168,7 @@ fn runs_two_prompts_in_one_named_thread_and_rejects_an_unknown_thread() {
         Some("unknown-thread".into()),
         "token".into(),
         Some("owner".into()),
+        Vec::new(),
         fixture_grant(),
         Arc::new(Mutex::new(None)),
         None,
@@ -194,6 +199,7 @@ fn runs_two_prompts_in_one_named_thread_and_rejects_an_unknown_thread() {
                 None,
                 "token".into(),
                 Some("owner".into()),
+                Vec::new(),
                 fixture_grant(),
                 Arc::clone(&active),
                 Some(subscriber),
@@ -223,6 +229,9 @@ fn runs_two_prompts_in_one_named_thread_and_rejects_an_unknown_thread() {
         .unwrap();
     let second_run_id = "018f0000-0000-7000-8000-000000000005";
     let second_prompt = "named thread prompt";
+    let attachment_path = temporary_root.join("runtime-attachment.txt");
+    let attachment_bytes = b"runtime attachment";
+    fs::write(&attachment_path, attachment_bytes).unwrap();
     run_prompt(
         &profile,
         Arc::clone(&storage),
@@ -232,6 +241,11 @@ fn runs_two_prompts_in_one_named_thread_and_rejects_an_unknown_thread() {
         Some(thread_id.clone()),
         "token".into(),
         Some("owner".into()),
+        vec![OpenSelectedFile {
+            file: fs::File::open(&attachment_path).unwrap(),
+            display_name: "runtime-attachment.txt".into(),
+            byte_length: attachment_bytes.len() as u64,
+        }],
         fixture_grant(),
         Arc::new(Mutex::new(None)),
         None,
@@ -250,18 +264,25 @@ fn runs_two_prompts_in_one_named_thread_and_rejects_an_unknown_thread() {
         .collect::<Vec<_>>()
         .windows(2)
         .any(|args| { args == ["--extension", extension.to_string_lossy().as_ref()] }));
-    let mut storage = storage.lock().unwrap();
-    let journal_events = storage.journal.events(run_id).unwrap();
+    let mut stored_chat = storage.lock().unwrap();
+    let journal_events = stored_chat.journal.events(run_id).unwrap();
     assert_eq!(journal_events.last().unwrap().event_type, "run.cancelled");
     assert!(journal_events
         .iter()
         .all(|event| event.provenance.source == "muniment-runtime"));
-    let named_thread_events = storage.journal.events(second_run_id).unwrap();
+    let named_thread_events = stored_chat.journal.events(second_run_id).unwrap();
+    assert_eq!(
+        named_thread_events
+            .iter()
+            .filter(|event| event.event_type == "chat.attachment.ingested")
+            .count(),
+        1
+    );
     assert!(named_thread_events
         .iter()
         .all(|event| event.provenance.source == "muniment-runtime"));
     assert_eq!(
-        storage
+        stored_chat
             .journal
             .thread_run_ids(&thread_id, 10, None)
             .unwrap()
@@ -269,7 +290,27 @@ fn runs_two_prompts_in_one_named_thread_and_rejects_an_unknown_thread() {
         [run_id, second_run_id]
     );
 
-    drop(storage);
+    drop(stored_chat);
+    let page = thread_page(
+        &profile,
+        Arc::clone(&storage),
+        Some("owner".into()),
+        thread_id,
+        10,
+        None,
+    )
+    .unwrap();
+    let entry = page
+        .entries
+        .iter()
+        .find(|entry| entry.run_id == second_run_id)
+        .unwrap();
+    assert_eq!(entry.attachments.len(), 1);
+    assert_eq!(entry.attachments[0].display_name, "runtime-attachment.txt");
+    assert_eq!(
+        entry.attachments[0].byte_length,
+        attachment_bytes.len() as u64
+    );
     std::env::remove_var("MUNIMENT_PI_ROOT");
     std::env::remove_var("PI_RESUME_STUB_PROMPTS");
     std::env::remove_var("PI_RESUME_STUB_ARGS");
