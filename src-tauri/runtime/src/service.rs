@@ -14,7 +14,9 @@ use muniment_core::chat_resume::{
     run_resume as drive_resume, ResumeLaunch,
 };
 use muniment_core::journal::reconciliation::reconcile_interrupted_runs;
-use muniment_core::journal::retention::{apply_retention_now, RetentionOutcome};
+use muniment_core::journal::retention::{
+    apply_retention_now_with, RetentionError, RetentionOutcome,
+};
 use muniment_core::journal::thread_mutation::{append_thread_delete_now, append_thread_rename_now};
 use muniment_core::journal::thread_summaries::ThreadSummaryPage;
 use muniment_core::journal::Provenance;
@@ -136,8 +138,14 @@ pub fn apply_retention(
         .lock()
         .map_err(|_| "Conversation history is unavailable.".to_string())?;
     let ChatStorage { journal, cas } = &mut *storage;
-    apply_retention_now(journal, Some(cas), max_age_seconds)
-        .map_err(|_| "Conversation history is unavailable.".to_string())
+    apply_retention_now_with(journal, Some(cas), max_age_seconds, |deleted_run| {
+        muniment_core::chat_prompt::delete_prompt(
+            &deleted_run.run_id,
+            deleted_run.subject.as_deref(),
+        )
+        .map_err(|_| RetentionError::BeforeDelete)
+    })
+    .map_err(|_| "Conversation history is unavailable.".to_string())
 }
 
 /// Opens one thread owned by one subject.
