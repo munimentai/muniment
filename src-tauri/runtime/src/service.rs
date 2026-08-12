@@ -1,6 +1,8 @@
 //! Dormant runtime service composition.
 
-use muniment_core::active_run::{cancel_active_run, queue_message, ChatQueueRequest};
+use muniment_core::active_run::{
+    cancel_active_run, queue_message, queue_permission_answer_with_commit, ChatQueueRequest,
+};
 use muniment_core::attach::RuntimeActivityRegistry;
 #[cfg(target_os = "linux")]
 use muniment_core::attach::{linux::RunStreamPage, ProtocolError};
@@ -31,6 +33,7 @@ use muniment_core::journal::Provenance;
 use muniment_core::memory_index::ModelMemoryCapability;
 use muniment_core::memory_runtime::ApplicationMemoryRuntime;
 use muniment_core::owned_threads::chat_thread_summaries_page;
+use muniment_core::permission_gate::ChatPermissionAnswer;
 use muniment_core::pi_execution::PiRuntime;
 use muniment_core::run_events::{ChatEvent, ChatStorage, SharedStorage};
 use muniment_core::run_preparation::{
@@ -49,7 +52,7 @@ use std::sync::atomic::AtomicBool;
 use std::sync::mpsc::Receiver;
 use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crate::RuntimeChatEventSink;
 
@@ -536,6 +539,23 @@ pub fn cancel_run(
     run_id: String,
 ) -> Result<(), String> {
     cancel_active_run(&active, &run_id, Some(&workspace))
+}
+
+/// Answers one permission gate and returns its committed run sequence.
+pub fn answer_permission(
+    active: Arc<Mutex<Option<ActiveRun>>>,
+    workspace: String,
+    run_id: String,
+    gate_id: String,
+    answer: ChatPermissionAnswer,
+    timeout: Duration,
+) -> Result<u64, String> {
+    let resolved =
+        queue_permission_answer_with_commit(&active, Some(&workspace), run_id, gate_id, answer)?;
+    resolved
+        .recv_timeout(timeout)
+        .map_err(|_| "The permission answer did not commit in time.".to_string())?
+        .ok_or_else(|| "The permission answer was rejected.".to_string())
 }
 
 /// Resumes one interrupted run through the dormant runtime service boundaries.

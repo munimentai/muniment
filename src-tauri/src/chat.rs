@@ -5,7 +5,8 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use muniment_core::active_run::{
-    cancel_active_run, queue_message, queue_permission_answer, ChatDelivery, ChatQueueRequest,
+    cancel_active_run, queue_message, queue_permission_answer, queue_permission_answer_with_commit,
+    ChatDelivery, ChatQueueRequest,
 };
 #[cfg(target_os = "linux")]
 use muniment_core::attach::linux::{
@@ -39,7 +40,7 @@ use muniment_core::journal::{EventEnvelope, JournalCommitHint, Provenance};
 #[cfg(test)]
 use muniment_core::journal::{EventPayload, RunJournal};
 use muniment_core::memory_index::ModelMemoryCapability;
-use muniment_core::permission_gate::{ChatPermissionAnswer, PendingPermissionAnswer};
+use muniment_core::permission_gate::ChatPermissionAnswer;
 #[cfg(test)]
 use muniment_core::pi_execution::attachment_delivery_error;
 pub(crate) use muniment_core::pi_execution::{attachment_error, PiRuntime};
@@ -218,26 +219,14 @@ impl<R: tauri::Runtime> RunStartBoundaries for TauriRunStartBoundaries<R> {
         answer: ChatPermissionAnswer,
     ) -> Result<std::sync::mpsc::Receiver<Option<u64>>, RunStartError> {
         let state = self.state();
-        let active = state
-            .active
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let run = active
-            .as_ref()
-            .filter(|run| run.id == run_id && run.workspace == workspace)
-            .ok_or_else(|| {
-                RunStartError::InvalidRequest("That reply is no longer active.".into())
-            })?;
-        let (sender, receiver) = std::sync::mpsc::sync_channel(1);
-        run.permission_answers
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .push_back(PendingPermissionAnswer {
-                gate_id: gate_id.to_owned(),
-                answer,
-                resolved: Some(sender),
-            });
-        Ok(receiver)
+        queue_permission_answer_with_commit(
+            &state.active,
+            Some(workspace),
+            run_id.to_owned(),
+            gate_id.to_owned(),
+            answer,
+        )
+        .map_err(RunStartError::InvalidRequest)
     }
 
     fn active_run_exists(&self) -> bool {
