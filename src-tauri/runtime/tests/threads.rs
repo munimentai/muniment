@@ -120,6 +120,27 @@ fn renames_and_deletes_owned_threads() {
     )
     .unwrap();
 
+    {
+        let mut storage = storage.lock().unwrap();
+        let rename_events = storage.journal.thread_events(&renamed_thread).unwrap();
+        let rename_event = rename_events.last().unwrap();
+        assert_eq!(rename_event.event_type, "thread.title.renamed");
+        assert_eq!(rename_event.provenance.source, "muniment-runtime");
+        assert_eq!(
+            rename_event.provenance.source_version,
+            env!("CARGO_PKG_VERSION")
+        );
+
+        let delete_events = storage.journal.thread_events(&deleted_thread).unwrap();
+        let delete_event = delete_events.last().unwrap();
+        assert_eq!(delete_event.event_type, "thread.deleted");
+        assert_eq!(delete_event.provenance.source, "muniment-runtime");
+        assert_eq!(
+            delete_event.provenance.source_version,
+            env!("CARGO_PKG_VERSION")
+        );
+    }
+
     let summaries = thread_summaries(Arc::clone(&storage), Some("owner".into()), 10, None).unwrap();
     assert_eq!(summaries.summaries.len(), 1);
     assert_eq!(summaries.summaries[0].thread_id, renamed_thread);
