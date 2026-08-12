@@ -14,6 +14,7 @@ use muniment_core::chat_resume::{
     run_resume as drive_resume, ResumeLaunch,
 };
 use muniment_core::journal::reconciliation::reconcile_interrupted_runs;
+use muniment_core::journal::retention::{apply_retention_now, RetentionOutcome};
 use muniment_core::journal::thread_mutation::{append_thread_delete_now, append_thread_rename_now};
 use muniment_core::journal::thread_summaries::ThreadSummaryPage;
 use muniment_core::journal::Provenance;
@@ -124,6 +125,19 @@ pub fn delete_thread(
         &runtime_provenance(),
     )
     .map_err(|_| "Conversation history is unavailable.".to_string())
+}
+
+/// Deletes terminal runs older than the maximum age.
+pub fn apply_retention(
+    storage: SharedStorage,
+    max_age_seconds: i64,
+) -> Result<RetentionOutcome, String> {
+    let mut storage = storage
+        .lock()
+        .map_err(|_| "Conversation history is unavailable.".to_string())?;
+    let ChatStorage { journal, cas } = &mut *storage;
+    apply_retention_now(journal, Some(cas), max_age_seconds)
+        .map_err(|_| "Conversation history is unavailable.".to_string())
 }
 
 /// Opens one thread owned by one subject.
