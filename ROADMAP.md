@@ -614,12 +614,12 @@ disagree, because `chat_file_metadata` rejects a path with no usable final
 segment and `open_selected_files` does not. The lane waits for an owner look at
 why this one ticket never dispatches.
 
-MERGE HAZARD — three thirty-seventh-wave slices edit
+MERGE HAZARD — four thirty-seventh-wave slices edit
 `src-tauri/runtime/src/service.rs`. They are the run acceptance split, the
-thread-create entry, and the run stream read entries. Two more slices edit
-`src-tauri/core/src/bin/sidecar-test-stub.rs`. They are the permission answer
-parity test and the cancel parity test. Each ticket tells the implementer to
-rebase on `main` before it opens the pull request. The 2026-08-04 silent
+thread-create entry, the run stream read entries, and the remaining Pi execution
+move. The cancel parity test edits
+`src-tauri/core/src/bin/sidecar-test-stub.rs`. Each ticket tells the implementer
+to rebase on `main` before it opens the pull request. The 2026-08-04 silent
 revert came from a stale base.
 
 DONE 2026-08-08 — the memory runtime is the twentieth core move
@@ -880,44 +880,48 @@ each deleted run to a caller hook, and the runtime `apply_retention`
 (`src-tauri/runtime/src/service.rs:141`) deletes that run's protected prompt
 through `muniment_core::chat_prompt::delete_prompt`.
 
+DONE 2026-08-12 — the permission answer parity test landed (MUNIDESK-1133).
+`src-tauri/runtime/tests/permission.rs` proves that `queue_permission_answer`
+reaches a live `run_prompt` run and records the permission lifecycle.
+
 DRAINED 2026-08-12 (thirty-sixth wave) — the permission answer parity test and
 the run acceptance split sat at batch positions two and four. Neither merged.
 The permission answer parity test has now drained three times, always below
 position one. The 2026-08-11 measurement above reads that as batch position
-rather than ticket content, so both re-file in the first two positions.
+rather than ticket content, so both re-filed in the first two positions.
 
 SELECTED 2026-08-12 (thirty-seventh wave) — five slices in priority order.
 
-1. The permission answer parity test. `queue_permission_answer`
-   (`src-tauri/core/src/active_run.rs:94`) has no test against a live runtime
-   run. The steer path gained its test with MUNIDESK-1123, and the
-   `pi_resume` stub needs one permission-gate branch beside its steer branch.
-2. The run acceptance split. `run_prompt`
+1. The run acceptance split. `run_prompt`
    (`src-tauri/runtime/src/service.rs:180`) blocks until the run settles, so
    no caller learns the thread id or the projected attachments of the run it
    started. The attach `run.start` reply needs both, and
    `prepare_desktop_run` (`src-tauri/core/src/run_start.rs:198`) is the shape
    the desktop already answers with.
-3. The runtime thread-create entry. `create_thread_now` landed with
+2. The runtime thread-create entry. `create_thread_now` landed with
    MUNIDESK-1129, and `src-tauri/runtime/src/service.rs` still carries no
    entry for the attach `thread.create` operation.
-4. The runtime run stream read entries. `ThreadListService for RunJournal`
+3. The runtime run stream read entries. `ThreadListService for RunJournal`
    (`src-tauri/core/src/attach/linux.rs:984`) answers `stream_run` and
    `subscribe_run_commits`, and the runtime service reaches neither. The
    attach `run.stream` reply needs both.
-5. The cancel parity test. `cancel_active_run`
+4. The cancel parity test. `cancel_active_run`
    (`src-tauri/core/src/active_run.rs:66`) has a live runtime test, but that
    test does not prove `abort` reaches the `pi_resume` stub. Add that proof
    and verify that the run records cancellation.
+5. The remaining Pi execution move. `src-tauri/src/chat.rs` still owns the
+   desktop `PiRuntime` state after the shared execution rules moved to
+   `src-tauri/core/src/pi_execution.rs`. Move that state behind the dormant
+   runtime service boundary before the desktop client conversion.
 
-SEQUENCED — the later extraction slices are the remaining Pi execution move, the
-desktop client conversion, and Linux user-unit registration, each behind a
-dormant service entry point. The desktop stays the owner throughout. The final
-cutover slice activates the listener, approval coordinator, journal, CAS, Pi,
-device session, credentials, authorization, and permission gates together. Remote
-Control follows the cutover. User-unit registration must not precede the cutover,
-because a service that takes the instance lock first would stop the desktop
-listener.
+SEQUENCED — after the remaining Pi execution move, the later extraction slices
+are the desktop client conversion and Linux user-unit registration. Each sits
+behind a dormant service entry point. The desktop stays the owner throughout.
+The final cutover slice activates the listener, approval coordinator, journal,
+CAS, Pi, device session, credentials, authorization, and permission gates
+together. Remote Control follows the cutover. User-unit registration must not
+precede the cutover, because a service that takes the instance lock first would
+stop the desktop listener.
 
 DONE — all three slices of the ADR 0009 attach workspace namespace amendment are
 built (MUNIDESK-883, 887, 893, 896, 905). The signed `grant.workspace` value is
@@ -1689,14 +1693,12 @@ for it.
 VERIFIED 2026-08-12 (thirty-sixth wave, planner, read the code) — the
 planner confirmed the landed prompt protection parity in `run_prompt`
 (MUNIDESK-1128), the landed `create_thread_now` seam (MUNIDESK-1129), and
-the landed retention prompt sweep (MUNIDESK-1130). The planner confirmed
-that `src-tauri/runtime/tests/` holds no permission test and that
-`run_prompt` still returns `Result<(), String>` after `coordinate`
-settles, so the permission answer parity test and the run acceptance
-split remain unbuilt. This planning clone carried no warm build and no
-Cargo registry cache, so the Rust CI job and the desktop-ci gates remain
-the test evidence for this wave. Earlier waves recorded the same shape of
-verification, and this entry replaces that ledger.
+the landed retention prompt sweep (MUNIDESK-1130). MUNIDESK-1133 then added
+`src-tauri/runtime/tests/permission.rs`, which proves that an answer reaches a
+live runtime run. `run_prompt` still returns `Result<(), String>` after
+`coordinate` settles, so the run acceptance split remains unbuilt. The
+`muniment-runtime` test suite passes with the permission test included. This
+entry replaces the earlier ledger.
 
 NOTE 2026-08-06 — the planning clone ships no `node_modules`. Run `npm ci`
 before `npm test`. Without it the run dies with `vitest: not found`, which reads
