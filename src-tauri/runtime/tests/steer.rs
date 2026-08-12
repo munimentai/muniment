@@ -78,6 +78,7 @@ fn install_stub(temporary_root: &std::path::Path) -> PiArtifactDescriptor {
 #[test]
 fn a_queued_steer_reaches_a_live_runtime_run() {
     let _environment = ENVIRONMENT.lock().unwrap();
+    muniment_core::chat_prompt::use_mock_keyring_for_tests();
     let temporary_root =
         std::env::temp_dir().join(format!("muniment-runtime-steer-{}", std::process::id()));
     let _ = fs::remove_dir_all(&temporary_root);
