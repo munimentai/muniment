@@ -614,11 +614,13 @@ disagree, because `chat_file_metadata` rejects a path with no usable final
 segment and `open_selected_files` does not. The lane waits for an owner look at
 why this one ticket never dispatches.
 
-MERGE HAZARD — three thirty-sixth-wave slices edit
-`src-tauri/runtime/src/service.rs`. They are the prompt protection parity, the
-acceptance split, and the retention prompt sweep. Each ticket tells the
-implementer to rebase on `main` before it opens the pull request. The
-2026-08-04 silent revert came from a stale base.
+MERGE HAZARD — three thirty-seventh-wave slices edit
+`src-tauri/runtime/src/service.rs`. They are the run acceptance split, the
+thread-create entry, and the run stream read entries. Two more slices edit
+`src-tauri/core/src/bin/sidecar-test-stub.rs`. They are the permission answer
+parity test and the cancel parity test. Each ticket tells the implementer to
+rebase on `main` before it opens the pull request. The 2026-08-04 silent
+revert came from a stale base.
 
 DONE 2026-08-08 — the memory runtime is the twentieth core move
 (MUNIDESK-995). `src-tauri/core/src/memory_runtime.rs` composes one
@@ -844,14 +846,11 @@ expired terminal runs through `apply_retention_now`
 the time, and `src-tauri/runtime/tests/retention.rs` drives one
 expired and one recent run.
 
-MEASURED 2026-08-11 (thirty-third wave, planner, read
-`src-tauri/runtime/src/service.rs` beside `src-tauri/src/chat.rs`) —
-the runtime run entry never protects its prompt. `run_prompt` passes
-`|| Ok(())` as both preparation hooks (`service.rs:206`, `:223`)
-where the desktop passes `protect_prompt` (`chat.rs:315`, `:328`),
-and `chat_thread_open_page` reads each run's prompt from that store
-(`src-tauri/core/src/thread_history.rs:85`). A runtime-driven run's
-thread page therefore carries no prompt text.
+DONE 2026-08-12 — the prompt protection parity landed (MUNIDESK-1128).
+`run_prompt` (`src-tauri/runtime/src/service.rs:229`, `:249`) stores the
+run's prompt through `muniment_core::chat_prompt::store_prompt` in both
+preparation hooks, so a runtime-driven run's thread page carries its
+prompt text exactly as a desktop run's page does.
 
 DONE 2026-08-11 — the steer parity test landed (MUNIDESK-1123).
 `src-tauri/runtime/tests/steer.rs` drives a live runtime-driven run
@@ -870,31 +869,45 @@ the `RunStartIdempotency` trait, and their implementations. The seam stays
 generic over `RunStartBoundaries` (`src-tauri/core/src/run_start.rs:64`). The
 runtime crate composes the same seam at the cutover.
 
-DRAINED 2026-08-12 (thirty-fifth wave) — the prompt protection parity and the
-permission answer parity test sat at batch positions two and three. Neither
-merged. The 2026-08-11 measurement above reads that as batch position rather
-than ticket content. Both re-file in the first two positions.
+DONE 2026-08-12 — the thread-create seam landed (MUNIDESK-1129).
+`create_thread_now` (`src-tauri/core/src/journal/thread_mutation.rs:6`)
+stamps the time, and the desktop `create_thread` reads it. The runtime
+crate now has the seam it needs, because it may name no chrono type.
 
-SELECTED 2026-08-12 (thirty-sixth wave) — five slices in priority order.
+DONE 2026-08-12 — the retention prompt sweep landed (MUNIDESK-1130).
+`apply_retention_now_with` (`src-tauri/core/src/journal/retention.rs`) hands
+each deleted run to a caller hook, and the runtime `apply_retention`
+(`src-tauri/runtime/src/service.rs:141`) deletes that run's protected prompt
+through `muniment_core::chat_prompt::delete_prompt`.
 
-1. The prompt protection parity. `run_prompt`
-   (`src-tauri/runtime/src/service.rs:221`, `:238`) still passes `|| Ok(())`
-   where the desktop passes `protect_prompt` (`src-tauri/src/chat.rs:315`,
-   `:328`).
-2. The permission answer parity test. `queue_permission_answer`
+DRAINED 2026-08-12 (thirty-sixth wave) — the permission answer parity test and
+the run acceptance split sat at batch positions two and four. Neither merged.
+The permission answer parity test has now drained three times, always below
+position one. The 2026-08-11 measurement above reads that as batch position
+rather than ticket content, so both re-file in the first two positions.
+
+SELECTED 2026-08-12 (thirty-seventh wave) — five slices in priority order.
+
+1. The permission answer parity test. `queue_permission_answer`
    (`src-tauri/core/src/active_run.rs:94`) has no test against a live runtime
-   run. The steer path gained its test with MUNIDESK-1123.
-3. A `create_thread_now` seam in
-   `src-tauri/core/src/journal/thread_mutation.rs`. The desktop
-   `create_thread` (`src-tauri/src/chat.rs:165`) stamps the time at the call
-   site. The runtime crate may name no chrono type, so it needs the seam the
-   rename and delete entries already read.
-4. The acceptance split. `run_prompt` blocks until the run settles, so no
-   caller learns the thread id or the projected attachments of the run it
-   started. The attach `run.start` reply needs both.
-5. The retention prompt sweep. `apply_retention`
-   (`src-tauri/core/src/journal/retention.rs:55`) deletes an expired run, and
-   that run's protected prompt stays in the platform keychain.
+   run. The steer path gained its test with MUNIDESK-1123, and the
+   `pi_resume` stub needs one permission-gate branch beside its steer branch.
+2. The run acceptance split. `run_prompt`
+   (`src-tauri/runtime/src/service.rs:180`) blocks until the run settles, so
+   no caller learns the thread id or the projected attachments of the run it
+   started. The attach `run.start` reply needs both, and
+   `prepare_desktop_run` (`src-tauri/core/src/run_start.rs:198`) is the shape
+   the desktop already answers with.
+3. The runtime thread-create entry. `create_thread_now` landed with
+   MUNIDESK-1129, and `src-tauri/runtime/src/service.rs` still carries no
+   entry for the attach `thread.create` operation.
+4. The runtime run stream read entries. `ThreadListService for RunJournal`
+   (`src-tauri/core/src/attach/linux.rs:984`) answers `stream_run` and
+   `subscribe_run_commits`, and the runtime service reaches neither. The
+   attach `run.stream` reply needs both.
+5. The cancel parity test. `cancel_active_run`
+   (`src-tauri/core/src/active_run.rs:66`) has no test against a live runtime
+   run, and the `pi_resume` stub answers `abort` without ending its run.
 
 SEQUENCED — the later extraction slices are the remaining Pi execution move, the
 desktop client conversion, and Linux user-unit registration, each behind a
@@ -1672,15 +1685,17 @@ earlier one. Requiring an up-to-date branch before merge, or a merge queue, is a
 repository-settings change that sits with the owner. The planner files no ticket
 for it.
 
-VERIFIED 2026-08-12 (thirty-fifth wave, planner, read the code) —
-the planner confirmed the landed steer parity test at
-`src-tauri/runtime/tests/steer.rs` (MUNIDESK-1123), confirmed the landed
-attachment pass-through (MUNIDESK-1125), and confirmed that the prompt
-protection parity and the permission answer parity test remain unbuilt, so
-both re-file in strict priority order. This planning clone carried no
-warm build, so the Rust CI job and the desktop-ci gates remain the
-test evidence for this wave. Earlier waves recorded the same shape
-of verification, and this entry replaces that ledger.
+VERIFIED 2026-08-12 (thirty-sixth wave, planner, read the code) — the
+planner confirmed the landed prompt protection parity in `run_prompt`
+(MUNIDESK-1128), the landed `create_thread_now` seam (MUNIDESK-1129), and
+the landed retention prompt sweep (MUNIDESK-1130). The planner confirmed
+that `src-tauri/runtime/tests/` holds no permission test and that
+`run_prompt` still returns `Result<(), String>` after `coordinate`
+settles, so the permission answer parity test and the run acceptance
+split remain unbuilt. This planning clone carried no warm build and no
+Cargo registry cache, so the Rust CI job and the desktop-ci gates remain
+the test evidence for this wave. Earlier waves recorded the same shape of
+verification, and this entry replaces that ledger.
 
 NOTE 2026-08-06 — the planning clone ships no `node_modules`. Run `npm ci`
 before `npm test`. Without it the run dies with `vitest: not found`, which reads
