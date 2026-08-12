@@ -16,5 +16,7 @@ pub use service::{
     SignOutError,
 };
 #[cfg(target_os = "linux")]
-pub use service::{stream_run, subscribe_run_commits};
+pub use service::{
+    list_companions, open_companion_registry, revoke_companion, stream_run, subscribe_run_commits,
+};
 pub use sink::RuntimeChatEventSink;
