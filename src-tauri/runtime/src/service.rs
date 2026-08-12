@@ -7,7 +7,7 @@ use muniment_core::auth::{
     FreshNativeSessionError, KeyringNativeCredentialStore,
 };
 use muniment_core::chat_coordinate::coordinate;
-use muniment_core::chat_grant::ChatGrant;
+use muniment_core::chat_grant::{fetch_grant, validate_grant, ChatGrant, FetchGrantError};
 use muniment_core::chat_profile::{ChatProfile, ChatProfileError};
 use muniment_core::chat_resume::{
     clear_active_run, install_active_run, install_resume_run, resumable_context,
@@ -49,6 +49,13 @@ pub fn ensure_native_session() -> Result<FreshNativeSession, FreshNativeSessionE
         &api_base_url(),
         now_unix_seconds,
     )
+}
+
+/// Fetches and validates a cloud chat grant.
+pub fn fetch_chat_grant(access_token: &str) -> Result<ChatGrant, FetchGrantError> {
+    let grant = fetch_grant(&api_base_url(), access_token)?;
+    validate_grant(&grant)?;
+    Ok(grant)
 }
 
 /// Opens profile storage after the ADR 0009 instance-lock cutover gate transfers ownership.
