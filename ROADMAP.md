@@ -17,7 +17,8 @@ them must exercise the real contracts. It must add no mocked production path.
 > section. The eighth took the onboarding and Muniment Home section. The ninth
 > took the durable local run journal section. The tenth took the cross-surface
 > contracts section. The eleventh took the stable release and distribution
-> section. The desktop QA automation section is the next compaction target.
+> section. The twelfth took the desktop QA automation section. The ADR 0012
+> runtime-service extraction section is the next compaction target.
 
 ## M0 — Scaffold (done 2026-07-09)
 
@@ -468,12 +469,13 @@ every call site reads it.
 DONE — the dormant service entry points are built (MUNIDESK-1080, 1086, 1091,
 1094, 1096, 1099, 1100, 1102, 1105, 1108, 1110, 1112, 1113, 1115, 1117, 1119,
 1121, 1123, 1125, 1128, 1130, 1133, 1135, 1136, 1139, 1142, 1144, 1145, 1147,
-1150, 1152, 1154, 1155, 1157, 1161).
+1150, 1152, 1154, 1155, 1157, 1161, 1163).
 `src-tauri/runtime/src/service.rs`
 opens one shared profile storage and reconciles interrupted runs, answers a fresh
 native session from the platform credential store, projects the signed
 entitlement snapshot and reports a version change, revokes the server session and
-clears the local one on sign-out, scaffolds the cross-project
+clears the local one on sign-out, lists this account's native installations
+through the caller's access token, scaffolds the cross-project
 Home, records a companion workspace and its two canonical directories, fetches
 and validates a cloud chat grant, lists and opens one subject's
 threads, creates one durable thread for
@@ -532,26 +534,25 @@ disagree, because `chat_file_metadata` rejects a path with no usable final
 segment and `open_selected_files` does not. The lane waits for an owner look at
 why this one ticket never dispatches.
 
-MERGE HAZARD — every forty-ninth-wave slice edits
+MERGE HAZARD — every fiftieth-wave service slice edits
 `src-tauri/runtime/src/service.rs` and `src-tauri/runtime/src/lib.rs`. They are
-the device list entry, the session status entry, the companion list and revoke
-entries, and the shared runtime activity registry. The first two add one function
-each beside the existing entries. The third adds a registry open path and two
-companion functions. The registry slice changes the `accept_prompt`,
-`run_prompt`, and `resume_run` signatures, and it edits the five runtime test
-files that call them. Each ticket tells the implementer to rebase on `main`
-before it opens the pull request. The 2026-08-04 silent revert came from a stale
-base.
+the session status entry, the companion registry entries, and the shared runtime
+activity registry. The first adds one function beside the existing auth entries.
+The second adds a registry open path and two companion functions. The registry
+slice changes the `accept_prompt`, `run_prompt`, and `resume_run` signatures, and
+it edits the runtime test files that call them. Each ticket tells the implementer
+to rebase on `main` before it opens the pull request. The 2026-08-04 silent
+revert came from a stale base.
 
-VERIFIED 2026-08-12 (forty-ninth wave, planner, read
+VERIFIED 2026-08-12 (fiftieth wave, planner, read
 `src-tauri/runtime/src/service.rs` and ran `cargo test
---manifest-path src-tauri/runtime/Cargo.toml`) — the sign-out entry stands at
-`service.rs:148` with `tests/sign_out.rs` beside it, and the suite exits clean.
-One selected slice merged, and four remain unbuilt. `service.rs` has no device
-list entry, no session status entry, and no companion entry, and `accept_prompt`
-(`service.rs:403`) and `resume_run` (`:697`) each still build their own
-`RuntimeActivityRegistry` (`:426`, `:733`). The two remaining auth entries lead
-this wave, and the companion entries and the shared registry follow them.
+--manifest-path src-tauri/runtime/Cargo.toml`) — the device list entry stands at
+`service.rs:186` with `tests/devices.rs` beside it, and the suite exits clean at
+47 tests over 24 binaries. One selected slice merged, and three remain unbuilt.
+`service.rs` has no session status entry and no companion entry, and
+`accept_prompt` (`service.rs:413`) and `resume_run` (`:707`) each still build
+their own `RuntimeActivityRegistry` (`:436`, `:742`). The last auth entry leads
+this wave, and the companion entries and the shared registry follow it.
 
 DONE 2026-08-12 — a prepared run that fails its attachment projection ends itself
 (MUNIDESK-1148). `prepare_desktop_run` (`src-tauri/core/src/run_start.rs:293`)
@@ -618,19 +619,15 @@ so later builds stay warm. The forty-sixth wave measured five cold builds at
 25,347ms each, against a whole-suite wall time of about 122 seconds. The
 forty-seventh wave measured the same suite at 7 seconds.
 
-SELECTED 2026-08-12 (forty-ninth wave) — four slices in priority order. They are
-the forty-eighth wave's remainder, re-filed in strict priority order.
+SELECTED 2026-08-12 (fiftieth wave) — three slices in priority order. They are
+the forty-ninth wave's remainder, re-filed in strict priority order.
 
-1. The runtime device list entry, over `list_native_devices`
-   (`src-tauri/core/src/auth/native_devices.rs:169`). `auth_devices`
-   (`src-tauri/src/auth/mod.rs:259`) is the desktop shape it mirrors. The entry
-   takes the access token from the caller, the way `fetch_chat_grant` does.
-2. The runtime session status entry, over `native_status`
+1. The runtime session status entry, over `native_status`
    (`src-tauri/core/src/auth/native_session.rs:291`). It reads the platform
    credential store with no network call, the way `auth_status`
-   (`src-tauri/src/auth/mod.rs:232`) does. `sign_out` (`service.rs:160`) already
+   (`src-tauri/src/auth/mod.rs:232`) does. `sign_out` (`service.rs:149`) already
    calls the same core function after its local clear.
-3. The runtime companion list and revoke entries, over `CompanionRegistry`
+2. The runtime companion list and revoke entries, over `CompanionRegistry`
    (`src-tauri/core/src/attach/companion_registry.rs:26`). `attach_companions`
    and `attach_revoke_companion` (`src-tauri/src/attach_service.rs:398`, `:431`)
    are the desktop shapes. ADR 0012 phase one moves the companion credentials
@@ -640,9 +637,20 @@ the forty-eighth wave's remainder, re-filed in strict priority order.
    `AttachListenerState::load_with_workspace`
    (`src-tauri/src/attach_service.rs:451`) is the desktop open path. All three
    entries are Linux-only, the way `stream_run` is.
-4. The shared runtime activity registry, per the forty-third-wave measurement. It
+3. The shared runtime activity registry, per the forty-third-wave measurement. It
    changes the `accept_prompt`, `run_prompt`, and `resume_run` signatures, so it
    sits last.
+
+SEQUENCED 2026-08-12 (fiftieth wave, planner, read `ThreadListService`
+(`src-tauri/core/src/attach/linux.rs:853`) beside `DesktopAttachService`
+(`src-tauri/core/src/attach/desktop_service.rs:68`)) — the entry-point sweep ends
+with the companion entries, and the next lane is the runtime composition of the
+attach seam. `DesktopAttachService` is generic over `RunStartBoundaries`
+(`src-tauri/core/src/run_start.rs:69`), so the runtime needs its own
+`RunStartBoundaries` value before it can answer a dispatched attach request. That
+value holds the shared activity registry, the shared storage, and the companion
+registry, so it follows all three slices above. The planner splits it by trait
+method group rather than filing it whole.
 
 SEQUENCED — the session-refresh mark on the runtime `ensure_native_session`
 follows the shared runtime activity registry, because the registry argument has
@@ -1031,17 +1039,14 @@ product inspection keeps rendering the built bundle against a stubbed signed-in
 a CI layer, and it is the layer that finds geometry and interaction defects.
 
 DONE — `test/probe/` is the committed planner harness (MUNIDESK-552, 558, 632,
-715, 769). Ten fixture pages cover the empty workspace, restored history,
-Markdown, signed out, onboarding, approved files, and the four permission-gate
-kinds. `npm run probe` builds and prints every URL. `fixtureRendered` compares
-rendered text with whitespace removed, and `markProbeReady` awaits
-`document.fonts.ready` before it sets `data-probe-ready`, so a capture never shoots
-the fallback type. `test/probe-harness.test.js` guards the single ready-marker
-write.
-DONE 2026-08-08 — the probe stub answers the listener-status command, and an
-unknown command fails loudly (MUNIDESK-1013). `test/probe/stub.js` no longer
-answers `null` to a command it does not know, so the next missing command breaks
-a fixture instead of hiding a panel.
+715, 769, 1013). Its fixture pages cover the empty workspace, restored history,
+Markdown, signed out, onboarding, approved files, the three code diff states, and
+the four permission-gate kinds. `npm run probe` builds and prints every URL.
+`fixtureRendered` compares rendered text with whitespace removed, and
+`markProbeReady` awaits `document.fonts.ready` before it sets `data-probe-ready`,
+so a capture never shoots the fallback type. `test/probe-harness.test.js` guards
+the single ready-marker write. `test/probe/stub.js` fails loudly on a command it
+does not know, so a missing command breaks a fixture instead of hiding a panel.
 
 DONE — the suite runs on Windows. Three slices gated every block that spawns a
 POSIX shell, and `test/posix-shell-gate.test.js` fails when a new `bash` call site
@@ -1053,16 +1058,12 @@ waves carried them there (MUNIDESK-757, 758, 759, 789, 827, 828, 872, 873, 900,
 901, 934 through 946, 950, 951, 970, 973, 974, 976, 977, 978, 1033, 1034, 1056).
 All three lanes drive the embedded WDIO WebDriver behind the `e2e-webdriver`
 Cargo feature, which a release build never carries (`src-tauri/Cargo.toml:8`,
-`src-tauri/e2e/capability.json`). The Linux lane opens the native folder picker
-under Xvfb, mounts the document portal, builds `muniment-acp` and
-`muniment-runtime` before the Tauri bundle, resolves `libsherpa-onnx-c-api.so`
-beside the binary, and drives the hosted sign-in window through its own
-WebKitWebDriver. The Windows lane speaks before it can fail, survives an
-`npm ci` deprecation warning on stderr, resolves `npm` without `ComSpec`, and
-gives a PowerShell spawn more than the 5000ms default. The macOS probe counts
-windows with CoreGraphics, so it needs no privacy permission. Pull request CI
-runs the 14 Windows-only tests, `test/windows-pr-gate.test.js` guards that gate,
-and MUNIDESK-950 pinned the working tree to LF.
+`src-tauri/e2e/capability.json`). The Linux lane runs under Xvfb with the
+document portal mounted, and it builds `muniment-acp` and `muniment-runtime`
+before the Tauri bundle. The macOS probe counts windows with CoreGraphics, so it
+needs no privacy permission. Pull request CI runs the 14 Windows-only tests,
+`test/windows-pr-gate.test.js` guards that gate, and MUNIDESK-950 pinned the
+working tree to LF. Git history holds the per-lane repair detail.
 
 OPERATING CONSTRAINT — the planning clone cannot compile the `src-tauri` desktop
 crate, because the container has no ALSA headers for `alsa-sys`. The desktop-ci VM
@@ -1079,36 +1080,41 @@ earlier one. Requiring an up-to-date branch before merge, or a merge queue, is a
 repository-settings change that sits with the owner. The planner files no ticket
 for it.
 
-VERIFIED 2026-08-12 (forty-ninth wave, planner) — `cargo test --manifest-path
-src-tauri/runtime/Cargo.toml` passes 45 tests over 23 test binaries. A warm run
-of that suite costs 12 seconds, and a cold run adds a 24-second build. The
+VERIFIED 2026-08-12 (fiftieth wave, planner) — `cargo test --manifest-path
+src-tauri/runtime/Cargo.toml` passes 47 tests over 24 test binaries. A warm run
+of that suite costs 7 seconds, and a cold run adds a 24-second build. The
 thirty-ninth wave read 928 frontend tests and 3 browser tests from `npm test`
 after `npm ci`. The extraction section above records what the planner read in the
 code. This entry replaces the earlier ledger.
 
-NOTE 2026-08-06 — the planning clone ships no `node_modules`. Run `npm ci`
+MEASURED 2026-08-12 (fiftieth wave, planner, read every file under
+`src-tauri/runtime/tests/`) — the runtime test binaries copy their loopback HTTP
+stub. `spawn_server` appears in `entitlement.rs`, `grant.rs`, `devices.rs`,
+`sign_out.rs`, and `session.rs`. `read_request` appears in those five and in
+`migration.rs`. The `credentials()` native fixture appears in `sign_out.rs`,
+`entitlement.rs`, and `session.rs`. `tests/common/mod.rs` already exists and
+holds `stage_pi_stub` alone, so the shared module is the obvious home. Every
+later runtime entry that speaks to the cloud pays this copy again.
+
+PLANNER PROCEDURE — the planning clone ships no `node_modules`, so run `npm ci`
 before `npm test`. Without it the run dies with `vitest: not found`, which reads
-as a broken harness.
+as a broken harness. Run `npm test` rather than `npx vitest run`, because the
+bare command loads the browser tests into the jsdom environment and reports three
+false failures. For a capture, run `npm run build`, serve the repository root
+with `python3 -m http.server --directory .`, and pass
+`--wait-for-selector "[data-probe-ready]"` to playwright. The fixture loads the
+built bundle asynchronously, so a capture without that flag shoots a blank page.
+A stray server started from another directory answers 404, and the wait then
+hangs until the timeout.
 
-MEASURED 2026-08-07 — the probe capture ran again after `npm run build`.
-`python3 -m http.server --directory .` served the repository root, and headless
-Chromium captured `test/probe/history.html` at 1100x720. The restored thread
-renders its sidebar, titlebar, transcript, two tool rows, provenance line,
-interrupted-reply record with its `Resume` control, and composer. The capture
-recorded no new visual defect. The live-region count above came from the markup
-behind that capture rather than from the image.
-
-NOTE 2026-08-05 — a capture must pass `--wait-for-selector "[data-probe-ready]"`
-to playwright. The fixture loads the built bundle asynchronously, so a capture
-without that flag shoots a blank page. Serve the repository root with
-`--directory`, because a stray server started from another directory answers
-404 and the wait then hangs until the timeout.
-
-NOTE 2026-08-05 — `npx vitest run` with no arguments loads the browser tests into
-the jsdom environment and reports three failures. `npm test` is the correct
-command. It excludes `**/*.browser.test.js` and then runs `npm run test:browser`
-against the browser config. A planner or an implementer that runs the bare
-command reads a false failure.
+MEASURED 2026-08-12 (fiftieth wave, planner) — the capture ran again after
+`npm run build`, and headless Chromium shot `test/probe/history.html` at
+1100x720. The restored thread renders its sidebar, titlebar, transcript, two tool
+rows, provenance line, interrupted-reply record with its `Resume` control, and
+composer. The `Older threads` control is a real button under the list. The
+capture recorded no new visual defect, so this wave files no shell polish slice.
+The build emits a 302,750-byte script, a 63,930-byte stylesheet, and two
+webfonts.
 
 ## Stable release and distribution
 
