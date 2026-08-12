@@ -614,7 +614,7 @@ disagree, because `chat_file_metadata` rejects a path with no usable final
 segment and `open_selected_files` does not. The lane waits for an owner look at
 why this one ticket never dispatches.
 
-MERGE HAZARD — three of the four twenty-ninth-wave slices edit
+MERGE HAZARD — all four thirtieth-wave slices edit
 `src-tauri/runtime/src/service.rs`. Each ticket tells the implementer to
 rebase on `main` before it opens the pull request. The 2026-08-04 silent
 revert came from a stale base.
@@ -803,21 +803,35 @@ through `chat_thread_open_page`, and
 `src-tauri/runtime/tests/threads.rs` drives both against a prepared
 journal.
 
-SELECTED 2026-08-11 (twenty-ninth wave) — four slices in priority
-order. The session entry and the grant entry drained at batch positions
-below the throughput ceiling, so they re-file in the first two
-positions. The session entry answers a fresh native session from the
-platform credential store through `ensure_native_session` and
-`api_base_url`, so a caller stops handing the service a token it minted
-elsewhere. The grant entry takes the access token as an argument and
-answers a validated grant through `fetch_grant` and `validate_grant`
-(`src-tauri/core/src/chat_grant.rs:31`, `:50`), so it files beside the
-session entry rather than behind it. The shared-storage argument
-follows, because `run_prompt`, `resume_run`, and both read entries each
-open profile storage per call, and every open pays the full
-`validate_database` read the 2026-07-31 measurement records. The fourth
-slice refreshes the ADR 0012 row in `THREAT_MODEL.md`, which still
-calls the crate a scaffold that opens no journal, CAS, or Pi.
+DONE 2026-08-11 — the runtime session entry landed (MUNIDESK-1112).
+`ensure_native_session` (`src-tauri/runtime/src/service.rs:42`) answers
+a fresh native session from the platform credential store through the
+core `ensure_native_session` and `api_base_url`, and
+`src-tauri/runtime/tests/session.rs` drives the success and the failure
+paths against a local server.
+
+DONE 2026-08-11 — the THREAT_MODEL row refresh landed (MUNIDESK-1113).
+The ADR 0012 row now states that the shipped binary takes the instance
+lock and waits, and that the dormant service entries open the journal
+and CAS and drive Pi only when a caller invokes them.
+
+SELECTED 2026-08-11 (thirtieth wave) — four slices in priority order.
+The grant entry and the shared-storage argument drained at batch
+positions below the throughput ceiling, so they re-file in the first
+two positions. The grant entry takes the access token as an argument
+and answers a validated grant through `fetch_grant` and `validate_grant`
+(`src-tauri/core/src/chat_grant.rs:31`, `:50`). The shared-storage
+argument follows, because `run_prompt`, `resume_run`, and both read
+entries each open profile storage per call, and every open pays the
+full `validate_database` read the 2026-07-31 measurement records. The
+third slice adds the thread rename and delete entries through
+`append_thread_rename` and `append_thread_delete`
+(`src-tauri/core/src/journal/thread_mutation.rs:25`, `:42`), so the
+service owns the thread write half beside its read entries. The fourth
+slice adds the retention entry through `apply_retention`
+(`src-tauri/core/src/journal/retention.rs:55`), because retention has
+no production caller and the 2026-08-04 entry names this service as
+its owner.
 
 SEQUENCED — the later extraction slices are the remaining Pi execution move, the
 desktop client conversion, and Linux user-unit registration, each behind a
@@ -1595,16 +1609,15 @@ earlier one. Requiring an up-to-date branch before merge, or a merge queue, is a
 repository-settings change that sits with the owner. The planner files no ticket
 for it.
 
-VERIFIED 2026-08-11 (twenty-ninth wave, from a clean clone) — `npm ci`
-then `npm test` passed 927 frontend tests across 63 files, with 31
-skipped, counting the 3 browser tests. `cargo test -p muniment-core -p
-muniment-attach -p muniment-cli -p muniment-code-diff -p muniment-runtime`
-passed 1,181 tests across 97 binaries with no failure. The planner
-confirmed the landed thread read entries (MUNIDESK-1110) in
-`service.rs`, and confirmed that the session entry and the grant entry
-remain unbuilt, so both re-file in the first two batch positions.
-Earlier waves recorded the same shape of verification, and this entry
-replaces that ledger.
+VERIFIED 2026-08-11 (thirtieth wave, from a cold build) — `cargo test
+-p muniment-runtime` passed 24 tests across 12 binaries with no
+failure. The twenty-ninth wave had passed the full workspace pair, 927
+frontend tests and 1,181 Rust tests, from a clean clone. The planner
+confirmed the landed session entry (MUNIDESK-1112) at
+`src-tauri/runtime/src/service.rs:42`, and confirmed that the grant
+entry and the shared-storage argument remain unbuilt, so both re-file
+in the first two batch positions. Earlier waves recorded the same
+shape of verification, and this entry replaces that ledger.
 
 NOTE 2026-08-06 — the planning clone ships no `node_modules`. Run `npm ci`
 before `npm test`. Without it the run dies with `vitest: not found`, which reads
@@ -1701,9 +1714,9 @@ attach approval prompt names the program that asked, with its claimed kind and
 version bounded, stripped of control characters, and marked as claimed rather
 than verified. The attach socket row records companion revocation and the
 workspace namespace. The ADR 0012 runtime service row records the per-profile
-instance lock, the `muniment-runtime` scaffold, the migration control peer check,
-the one prepared handoff, the unimplemented desktop answer, and the same-user
-limitation.
+instance lock, the shipped `muniment-runtime` binary with its dormant service
+entries, the migration control peer check, the one prepared handoff, the desktop
+answer with its release path, and the same-user limitation (MUNIDESK-1113).
 
 OPEN — the MUNIQA prompt-injection suite still follows ADR 0018's landed slices.
 
