@@ -59,28 +59,22 @@ fn attach_provenance() -> Provenance {
 
 #[test]
 fn creates_a_thread_for_a_run_and_rejects_invalid_inputs_without_events() {
-    let temporary_root =
-        std::env::temp_dir().join(format!("muniment-runtime-thread-create-{}", std::process::id()));
+    let temporary_root = std::env::temp_dir().join(format!(
+        "muniment-runtime-thread-create-{}",
+        std::process::id()
+    ));
     let profile = temporary_root.join("profile");
     fs::create_dir_all(&profile).unwrap();
     let storage = open_profile_storage(&profile).unwrap();
 
-    assert!(create_thread(
-        Arc::clone(&storage),
-        String::new(),
-        "profile-a".into(),
-    )
-    .is_err());
-    assert!(create_thread(
-        Arc::clone(&storage),
-        "workspace-a".into(),
-        String::new(),
-    )
-    .is_err());
-    assert!(thread_summaries(Arc::clone(&storage), Some("owner".into()), 10, None)
-        .unwrap()
-        .summaries
-        .is_empty());
+    assert!(create_thread(Arc::clone(&storage), String::new(), "profile-a".into(),).is_err());
+    assert!(create_thread(Arc::clone(&storage), "workspace-a".into(), String::new(),).is_err());
+    assert!(
+        thread_summaries(Arc::clone(&storage), Some("owner".into()), 10, None)
+            .unwrap()
+            .summaries
+            .is_empty()
+    );
 
     let thread_id = create_thread(
         Arc::clone(&storage),
