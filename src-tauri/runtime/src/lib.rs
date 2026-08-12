@@ -12,4 +12,6 @@ pub use service::{
     ensure_native_session, fetch_chat_grant, open_profile_storage, rename_thread, resume_run,
     run_prompt, thread_page, thread_summaries, PromptAcceptance, PromptLaunch,
 };
+#[cfg(target_os = "linux")]
+pub use service::{stream_run, subscribe_run_commits};
 pub use sink::RuntimeChatEventSink;
