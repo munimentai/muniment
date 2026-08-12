@@ -3,9 +3,10 @@
 use muniment_core::active_run::{
     cancel_active_run, queue_message, queue_permission_answer_with_commit, ChatQueueRequest,
 };
-use muniment_core::attach::RuntimeActivityRegistry;
 #[cfg(target_os = "linux")]
-use muniment_core::attach::{linux::RunStreamPage, ProtocolError};
+use muniment_core::attach::linux::RunStreamPage;
+use muniment_core::attach::ProtocolError;
+use muniment_core::attach::RuntimeActivityRegistry;
 use muniment_core::auth::TokenSet;
 use muniment_core::auth::{
     api_base_url, ensure_native_session as ensure_core_native_session, FreshNativeSession,
@@ -97,6 +98,12 @@ pub fn ensure_native_session() -> Result<FreshNativeSession, FreshNativeSessionE
         &api_base_url(),
         now_unix_seconds,
     )
+}
+
+/// Creates the cross-project home scaffold.
+pub fn ensure_home(home: impl AsRef<Path>) -> Result<(), ProtocolError> {
+    muniment_core::ensure_cross_project_home(home.as_ref())
+        .map_err(|_| ProtocolError::persistence_failed())
 }
 
 /// Fetches and validates a cloud chat grant.
