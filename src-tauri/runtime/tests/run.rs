@@ -9,7 +9,7 @@ use muniment_core::active_run::cancel_active_run;
 use muniment_core::attach::RuntimeActivityRegistry;
 use muniment_core::chat_grant::ChatGrant;
 use muniment_core::home::confirm_home;
-use muniment_core::pi_execution::coordinate_prepared_prompt;
+use muniment_core::pi_execution::{coordinate_prepared_prompt, PiRuntime};
 use muniment_core::run_events::{ChatEvent, ChatEventSink};
 use muniment_core::run_preparation::{
     prepare_new_run_with_session_thread, OpenSelectedFile, SessionThreadStart,
@@ -69,6 +69,7 @@ fn an_occupied_active_run_slot_does_not_prepare_a_new_run() {
     let error = run_prompt(
         &profile,
         Arc::clone(&storage),
+        Arc::new(Mutex::new(None)),
         temporary_root.join("config"),
         run_id.into(),
         "prompt".into(),
@@ -110,6 +111,7 @@ fn runs_two_prompts_in_one_named_thread_and_rejects_an_unknown_thread() {
     fs::create_dir_all(executable.parent().unwrap()).unwrap();
     fs::create_dir_all(&profile).unwrap();
     let storage = open_profile_storage(&profile).unwrap();
+    let runtime = Arc::new(Mutex::new(None::<PiRuntime>));
     confirm_home(&config, &temporary_root.join("home")).unwrap();
     let build_root = temporary_root.join("build");
     let status = Command::new(env!("CARGO"))
@@ -164,6 +166,7 @@ fn runs_two_prompts_in_one_named_thread_and_rejects_an_unknown_thread() {
     let error = run_prompt(
         &profile,
         Arc::clone(&storage),
+        Arc::clone(&runtime),
         &config,
         unknown_run_id.into(),
         "unknown thread prompt".into(),
@@ -195,6 +198,7 @@ fn runs_two_prompts_in_one_named_thread_and_rejects_an_unknown_thread() {
             run_prompt(
                 &profile,
                 Arc::clone(&storage),
+                Arc::clone(&runtime),
                 &config,
                 run_id.into(),
                 prompt.into(),
@@ -238,6 +242,7 @@ fn runs_two_prompts_in_one_named_thread_and_rejects_an_unknown_thread() {
     let (accepted, launch) = accept_prompt(
         &profile,
         Arc::clone(&storage),
+        Arc::clone(&runtime),
         &config,
         second_run_id.into(),
         second_prompt.into(),
@@ -281,6 +286,7 @@ fn runs_two_prompts_in_one_named_thread_and_rejects_an_unknown_thread() {
         )));
     drive_prompt(launch);
     assert!(second_active.lock().unwrap().is_none());
+    assert!(runtime.lock().unwrap().is_some());
 
     assert_eq!(
         fs::read_to_string(captured_prompts).unwrap(),
@@ -454,6 +460,7 @@ fn resumes_an_interrupted_run_to_a_terminal_event() {
     resume_run(
         &profile,
         Arc::clone(&storage),
+        Arc::new(Mutex::new(None)),
         &config,
         run_id.into(),
         "token".into(),

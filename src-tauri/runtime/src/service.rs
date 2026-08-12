@@ -67,6 +67,7 @@ pub struct PromptAcceptance {
 pub struct PromptLaunch {
     profile_directory: PathBuf,
     storage: SharedStorage,
+    runtime: Arc<Mutex<Option<PiRuntime>>>,
     memory_runtime: Arc<ApplicationMemoryRuntime>,
     runtime_activity: RuntimeActivityRegistry,
     active: Arc<Mutex<Option<ActiveRun>>>,
@@ -272,6 +273,7 @@ pub fn thread_page(
 pub fn accept_prompt(
     profile_directory: impl AsRef<Path>,
     storage: SharedStorage,
+    runtime: Arc<Mutex<Option<PiRuntime>>>,
     config_directory: impl AsRef<Path>,
     run_id: String,
     prompt: String,
@@ -439,6 +441,7 @@ pub fn accept_prompt(
     let launch = PromptLaunch {
         profile_directory: profile_directory.to_path_buf(),
         storage,
+        runtime,
         memory_runtime,
         runtime_activity,
         active,
@@ -468,7 +471,7 @@ pub fn drive_prompt(launch: PromptLaunch) {
         )
         .with_pi_artifact(launch.pi_artifact.unwrap_or(PI_ARTIFACT)),
         launch.storage,
-        Arc::new(Mutex::new(None)),
+        launch.runtime,
         launch.runtime_activity,
         launch.memory_runtime.clone(),
         launch.run_id.clone(),
@@ -493,6 +496,7 @@ pub fn drive_prompt(launch: PromptLaunch) {
 pub fn run_prompt(
     profile_directory: impl AsRef<Path>,
     storage: SharedStorage,
+    runtime: Arc<Mutex<Option<PiRuntime>>>,
     config_directory: impl AsRef<Path>,
     run_id: String,
     prompt: String,
@@ -508,6 +512,7 @@ pub fn run_prompt(
     let (_, launch) = accept_prompt(
         profile_directory,
         storage,
+        runtime,
         config_directory,
         run_id,
         prompt,
@@ -563,6 +568,7 @@ pub fn answer_permission(
 pub fn resume_run(
     profile_directory: impl AsRef<Path>,
     storage: SharedStorage,
+    runtime: Arc<Mutex<Option<PiRuntime>>>,
     config_directory: impl AsRef<Path>,
     run_id: String,
     access_token: String,
@@ -620,7 +626,7 @@ pub fn resume_run(
         sink: RuntimeChatEventSink::new(profile_directory, subscriber, memory_runtime.clone())
             .with_pi_artifact(pi_artifact.unwrap_or(PI_ARTIFACT)),
         storage,
-        runtime: Arc::new(Mutex::new(None::<PiRuntime>)),
+        runtime,
         runtime_activity,
         memory_runtime,
         active,
