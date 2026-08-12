@@ -11,9 +11,10 @@ use muniment_core::attach::{
 };
 use muniment_core::auth::TokenSet;
 use muniment_core::auth::{
-    api_base_url, ensure_native_session as ensure_core_native_session, EntitlementSnapshotTracker,
-    EntitlementSnapshotView, FreshNativeSession, FreshNativeSessionError,
-    KeyringNativeCredentialStore,
+    api_base_url, ensure_native_session as ensure_core_native_session, native_status,
+    sign_out_native_session, AuthStatus, EntitlementSnapshotTracker, EntitlementSnapshotView,
+    FreshNativeSession, FreshNativeSessionError, KeyringNativeCredentialStore, NativeTokenError,
+    UreqRevocationTransport,
 };
 use muniment_core::chat_coordinate::coordinate;
 use muniment_core::chat_grant::{fetch_grant, validate_grant, ChatGrant, FetchGrantError};
@@ -113,6 +114,23 @@ impl std::fmt::Display for EntitlementSnapshotError {
 
 impl std::error::Error for EntitlementSnapshotError {}
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SignOutError {
+    LocalClear(NativeTokenError),
+    Status(FreshNativeSessionError),
+}
+
+impl std::fmt::Display for SignOutError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::LocalClear(error) => write!(formatter, "{error}"),
+            Self::Status(error) => write!(formatter, "{error}"),
+        }
+    }
+}
+
+impl std::error::Error for SignOutError {}
+
 /// Returns a fresh native session from the platform credential store.
 pub fn ensure_native_session() -> Result<FreshNativeSession, FreshNativeSessionError> {
     let now_unix_seconds = SystemTime::now()
@@ -124,6 +142,24 @@ pub fn ensure_native_session() -> Result<FreshNativeSession, FreshNativeSessionE
         &api_base_url(),
         now_unix_seconds,
     )
+}
+
+/// Revokes the server session and clears the local native session.
+pub fn sign_out(tracker: &EntitlementSnapshotTracker) -> Result<AuthStatus, SignOutError> {
+    let store = KeyringNativeCredentialStore::new();
+    sign_out_native_session(
+        &store,
+        &UreqRevocationTransport::new(Duration::from_secs(2)),
+        &api_base_url(),
+    )
+    .map_err(SignOutError::LocalClear)?;
+    let now_unix_seconds = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs())
+        .unwrap_or(0);
+    let status = native_status(&store, now_unix_seconds).map_err(SignOutError::Status)?;
+    tracker.clear();
+    Ok(status)
 }
 
 /// Returns the display-only entitlement projection and reports a version change.
