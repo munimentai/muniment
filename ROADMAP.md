@@ -614,10 +614,10 @@ disagree, because `chat_file_metadata` rejects a path with no usable final
 segment and `open_selected_files` does not. The lane waits for an owner look at
 why this one ticket never dispatches.
 
-MERGE HAZARD — all three twenty-eighth-wave slices edit
-`src-tauri/runtime/src/service.rs` and `src-tauri/runtime/src/lib.rs`.
-Each ticket tells the implementer to rebase on `main` before it opens the
-pull request. The 2026-08-04 silent revert came from a stale base.
+MERGE HAZARD — three of the four twenty-ninth-wave slices edit
+`src-tauri/runtime/src/service.rs`. Each ticket tells the implementer to
+rebase on `main` before it opens the pull request. The 2026-08-04 silent
+revert came from a stale base.
 
 DONE 2026-08-08 — the memory runtime is the twentieth core move
 (MUNIDESK-995). `src-tauri/core/src/memory_runtime.rs` composes one
@@ -795,27 +795,29 @@ so the runtime reads the Home pointer from the root the desktop reads.
 `src-tauri/runtime/tests/run.rs` confirms the Home under a separate
 config root.
 
-SELECTED 2026-08-11 (twenty-eighth wave) — three slices in priority
-order. They are the dormant thread read entries, the runtime session
-entry, and the runtime grant entry. The run control slot landed from the
-twenty-seventh batch, and the two other slices drained at batch positions
-below the throughput ceiling, so they re-file in the first two positions.
-The read entries give the service `thread_summaries` over
-`chat_thread_summaries_page` (`src-tauri/core/src/owned_threads.rs:39`)
-and `thread_page` over `chat_thread_open_page`
-(`src-tauri/core/src/thread_history.rs:108`), because a companion that
-drives a run must first list a thread and open it. The session entry
-answers a fresh native session from the credential store through
-`ensure_native_session` and `api_base_url`, so a caller stops handing the
-service a token it minted elsewhere. The grant entry takes the access
-token as an argument and answers a validated grant through `fetch_grant`
-and `validate_grant` (`src-tauri/core/src/chat_grant.rs:31`, `:50`), so
-it files beside the session entry rather than behind it.
+DONE 2026-08-11 — the dormant thread read entries landed
+(MUNIDESK-1110). `thread_summaries` and `thread_page`
+(`src-tauri/runtime/src/service.rs:47`, `:68`) list one subject's
+threads through `chat_thread_summaries_page` and open one thread
+through `chat_thread_open_page`, and
+`src-tauri/runtime/tests/threads.rs` drives both against a prepared
+journal.
 
-SEQUENCED — a shared-storage argument follows the twenty-eighth-wave
-slices, because `run_prompt`, `resume_run`, and both read entries each
+SELECTED 2026-08-11 (twenty-ninth wave) — four slices in priority
+order. The session entry and the grant entry drained at batch positions
+below the throughput ceiling, so they re-file in the first two
+positions. The session entry answers a fresh native session from the
+platform credential store through `ensure_native_session` and
+`api_base_url`, so a caller stops handing the service a token it minted
+elsewhere. The grant entry takes the access token as an argument and
+answers a validated grant through `fetch_grant` and `validate_grant`
+(`src-tauri/core/src/chat_grant.rs:31`, `:50`), so it files beside the
+session entry rather than behind it. The shared-storage argument
+follows, because `run_prompt`, `resume_run`, and both read entries each
 open profile storage per call, and every open pays the full
-`validate_database` read the 2026-07-31 measurement records.
+`validate_database` read the 2026-07-31 measurement records. The fourth
+slice refreshes the ADR 0012 row in `THREAT_MODEL.md`, which still
+calls the crate a scaffold that opens no journal, CAS, or Pi.
 
 SEQUENCED — the later extraction slices are the remaining Pi execution move, the
 desktop client conversion, and Linux user-unit registration, each behind a
@@ -1593,16 +1595,16 @@ earlier one. Requiring an up-to-date branch before merge, or a merge queue, is a
 repository-settings change that sits with the owner. The planner files no ticket
 for it.
 
-VERIFIED 2026-08-11 (twenty-eighth wave, from a clean clone) — `npm ci`
+VERIFIED 2026-08-11 (twenty-ninth wave, from a clean clone) — `npm ci`
 then `npm test` passed 927 frontend tests across 63 files, with 31
 skipped, counting the 3 browser tests. `cargo test -p muniment-core -p
 muniment-attach -p muniment-cli -p muniment-code-diff -p muniment-runtime`
-passed 1,168 tests across 96 binaries with no failure. The planner
-confirmed the landed run control slot (MUNIDESK-1108) in `service.rs`,
-where both run entries take the shared slot, and confirmed that the
-thread read entries, the session entry, and the grant entry remain
-unbuilt. Earlier waves recorded the same shape of verification, and this
-entry replaces that ledger.
+passed 1,181 tests across 97 binaries with no failure. The planner
+confirmed the landed thread read entries (MUNIDESK-1110) in
+`service.rs`, and confirmed that the session entry and the grant entry
+remain unbuilt, so both re-file in the first two batch positions.
+Earlier waves recorded the same shape of verification, and this entry
+replaces that ledger.
 
 NOTE 2026-08-06 — the planning clone ships no `node_modules`. Run `npm ci`
 before `npm test`. Without it the run dies with `vitest: not found`, which reads
