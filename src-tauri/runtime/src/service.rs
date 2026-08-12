@@ -11,10 +11,11 @@ use muniment_core::attach::{
 };
 use muniment_core::auth::TokenSet;
 use muniment_core::auth::{
-    api_base_url, ensure_native_session as ensure_core_native_session, native_status,
-    sign_out_native_session, AuthStatus, EntitlementSnapshotTracker, EntitlementSnapshotView,
-    FreshNativeSession, FreshNativeSessionError, KeyringNativeCredentialStore, NativeTokenError,
-    UreqRevocationTransport,
+    api_base_url, ensure_native_session as ensure_core_native_session, list_native_devices,
+    native_status, sign_out_native_session, AuthStatus, EntitlementSnapshotTracker,
+    EntitlementSnapshotView, FreshNativeSession, FreshNativeSessionError,
+    KeyringNativeCredentialStore, NativeDeviceList, NativeDeviceListError, NativeTokenError,
+    UreqNativeDeviceListTransport, UreqRevocationTransport,
 };
 use muniment_core::chat_coordinate::coordinate;
 use muniment_core::chat_grant::{fetch_grant, validate_grant, ChatGrant, FetchGrantError};
@@ -179,6 +180,15 @@ pub fn entitlement_snapshot(
         snapshot,
         changed_snapshot_version,
     })
+}
+
+/// Lists display-only metadata for one account's native installations.
+pub fn list_devices(access_token: &str) -> Result<NativeDeviceList, NativeDeviceListError> {
+    list_native_devices(
+        &UreqNativeDeviceListTransport::new(Duration::from_secs(30)),
+        &api_base_url(),
+        access_token,
+    )
 }
 
 /// Creates the cross-project home scaffold.
