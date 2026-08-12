@@ -707,7 +707,9 @@ version.
 
 DONE 2026-07-29 through 2026-08-12 — ADR 0020 and ADR 0024 decide the code diff
 contract, and the whole local chain is built (MUNIDESK-630, 640, 765, 772, 775,
-779, 1029 through 1097, 1137). `code-diff/1` became a desktop-owned local
+779, 1029, 1036, 1041, 1042, 1043, 1046 through 1049, 1051, 1052, 1057, 1062,
+1066, 1070, 1071, 1073, 1074, 1075, 1078, 1082, 1083, 1087, 1089, 1090, 1092,
+1093, 1097, 1137). `code-diff/1` became a desktop-owned local
 contract on 2026-08-09, because it crosses no cloud boundary and the ADR 0019
 cloud artifact never published. ADR 0024 makes the desktop core the sole trusted
 producer, and the desktop shell, the CLI, and the ACP adapter are its three
