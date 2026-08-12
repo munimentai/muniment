@@ -1,6 +1,8 @@
 //! Dormant runtime service composition.
 
 use muniment_core::attach::RuntimeActivityRegistry;
+#[cfg(target_os = "linux")]
+use muniment_core::attach::{linux::RunStreamPage, ProtocolError};
 use muniment_core::auth::TokenSet;
 use muniment_core::auth::{
     api_base_url, ensure_native_session as ensure_core_native_session, FreshNativeSession,
@@ -22,6 +24,8 @@ use muniment_core::journal::thread_mutation::{
     append_thread_delete_now, append_thread_rename_now, create_thread_now,
 };
 use muniment_core::journal::thread_summaries::ThreadSummaryPage;
+#[cfg(target_os = "linux")]
+use muniment_core::journal::JournalCommitHint;
 use muniment_core::journal::Provenance;
 use muniment_core::memory_index::ModelMemoryCapability;
 use muniment_core::memory_runtime::ApplicationMemoryRuntime;
@@ -40,6 +44,8 @@ use std::collections::{BTreeMap, VecDeque};
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
+#[cfg(target_os = "linux")]
+use std::sync::mpsc::Receiver;
 use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -122,6 +128,38 @@ pub fn thread_summaries(
         cursor.as_deref(),
     )
     .map_err(|_| "Conversation history is unavailable.".to_string())
+}
+
+/// Reads one page of a run stream.
+#[cfg(target_os = "linux")]
+pub fn stream_run(
+    storage: SharedStorage,
+    workspace: String,
+    run_id: String,
+    after_run_seq: u64,
+) -> Result<RunStreamPage, ProtocolError> {
+    use muniment_core::attach::linux::ThreadListService;
+
+    let mut storage = storage
+        .lock()
+        .map_err(|_| ProtocolError::persistence_failed())?;
+    storage
+        .journal
+        .stream_run(&workspace, &run_id, after_run_seq)
+}
+
+/// Subscribes to commits for one run.
+#[cfg(target_os = "linux")]
+pub fn subscribe_run_commits(
+    storage: SharedStorage,
+    run_id: String,
+) -> Result<Option<(u64, Receiver<JournalCommitHint>)>, ProtocolError> {
+    use muniment_core::attach::linux::ThreadListService;
+
+    let mut storage = storage
+        .lock()
+        .map_err(|_| ProtocolError::persistence_failed())?;
+    storage.journal.subscribe_run_commits(&run_id)
 }
 
 /// Creates one thread for an authorized attach profile.
