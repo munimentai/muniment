@@ -1,5 +1,7 @@
 // @vitest-environment jsdom
 
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { render, screen, waitFor } from '@testing-library/svelte'
 import '@testing-library/jest-dom/vitest'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -41,6 +43,21 @@ function value(files, options = {}) {
 afterEach(() => document.body.replaceChildren())
 
 describe('code diff view', () => {
+  it.each([
+    ['added.json', 'new.txt added'],
+    ['modified.json', 'src/message.txt changed'],
+    ['deleted.json', 'old.txt deleted'],
+    ['renamed.json', 'old-name.txt → new-name.txt renamed'],
+  ])('renders the %s fixture header', (fixtureName, expectedHeader) => {
+    const fixturePath = join(process.cwd(), 'protocol-fixtures/code-diff/1', fixtureName)
+    const codeDiff = JSON.parse(readFileSync(fixturePath, 'utf8'))
+    const { container } = render(CodeDiff, { props: { codeDiff } })
+    const header = container.querySelector('.d2h-file-header')
+
+    expect(header?.textContent.replace(/\s+/g, ' ').trim()).toBe(expectedHeader)
+    expect(container).not.toHaveTextContent('Viewed')
+  })
+
   it('renders text files through the side-by-side renderer', () => {
     const { container } = render(CodeDiff, { props: { codeDiff: value([textFile('src/file.js')]) } })
 
