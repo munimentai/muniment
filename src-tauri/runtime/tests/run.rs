@@ -1,6 +1,5 @@
 use std::collections::VecDeque;
 use std::fs;
-use std::process::Command;
 use std::sync::atomic::AtomicBool;
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::Duration;
@@ -17,11 +16,13 @@ use muniment_core::run_preparation::{
 };
 use muniment_core::run_start::ActiveRun;
 use muniment_core::session_thread::SessionThread;
-use muniment_core::sidecar::pi_install::{PiArtifactDescriptor, PI_ARTIFACT};
 use muniment_core::sidecar::validate_pi_session;
 use muniment_runtime::{
     accept_prompt, drive_prompt, open_profile_storage, resume_run, run_prompt, thread_page,
 };
+
+mod common;
+use common::stage_pi_stub;
 
 static ENVIRONMENT: Mutex<()> = Mutex::new(());
 
@@ -194,62 +195,13 @@ fn runs_two_prompts_in_one_named_thread_and_rejects_an_unknown_thread() {
         std::env::temp_dir().join(format!("muniment-runtime-run-{}", std::process::id()));
     let profile = temporary_root.join("profile");
     let config = temporary_root.join("config");
-    let pi_root = temporary_root.join("pi");
-    let executable = pi_root
-        .join("revisions")
-        .join(PI_ARTIFACT.version)
-        .join(PI_ARTIFACT.executable);
-    fs::create_dir_all(executable.parent().unwrap()).unwrap();
     fs::create_dir_all(&profile).unwrap();
     let storage = open_profile_storage(&profile).unwrap();
     let runtime = Arc::new(Mutex::new(None::<PiRuntime>));
     confirm_home(&config, &temporary_root.join("home")).unwrap();
-    let build_root = temporary_root.join("build");
-    let status = Command::new(env!("CARGO"))
-        .args([
-            "build",
-            "--quiet",
-            "--package",
-            "muniment-core",
-            "--bin",
-            "sidecar-test-stub",
-            "--target-dir",
-        ])
-        .arg(&build_root)
-        .current_dir(env!("CARGO_MANIFEST_DIR"))
-        .status()
-        .unwrap();
-    assert!(status.success());
-    let stub_name = if cfg!(windows) {
-        "sidecar-test-stub.exe"
-    } else {
-        "sidecar-test-stub"
-    };
-    fs::copy(build_root.join("debug").join(stub_name), &executable).unwrap();
-    let stub_archive = b"muniment-sidecar-test-stub\n";
-    fs::write(
-        pi_root
-            .join("revisions")
-            .join(PI_ARTIFACT.version)
-            .join(PI_ARTIFACT.archive),
-        stub_archive,
-    )
-    .unwrap();
-    let descriptor = PiArtifactDescriptor {
-        version: PI_ARTIFACT.version,
-        archive: PI_ARTIFACT.archive,
-        byte_size: stub_archive.len() as u64,
-        sha256: "758b0db8f6304639edfca2b779e886f3006afeb006417e49dd6bce53ff2a65ab",
-        executable: PI_ARTIFACT.executable,
-    };
-    fs::write(
-        pi_root.join("current"),
-        format!("muniment-pi-pointer-v1\n{}\n", PI_ARTIFACT.version),
-    )
-    .unwrap();
+    let descriptor = stage_pi_stub(&temporary_root);
     let captured_prompts = temporary_root.join("prompts");
     let captured_args = temporary_root.join("args");
-    std::env::set_var("MUNIMENT_PI_ROOT", &pi_root);
     std::env::set_var("PI_RESUME_STUB_PROMPTS", &captured_prompts);
     std::env::set_var("PI_RESUME_STUB_ARGS", &captured_args);
 
@@ -463,58 +415,9 @@ fn resumes_an_interrupted_run_to_a_terminal_event() {
         std::env::temp_dir().join(format!("muniment-runtime-resume-{}", std::process::id()));
     let profile = temporary_root.join("profile");
     let config = temporary_root.join("config");
-    let pi_root = temporary_root.join("pi");
-    let executable = pi_root
-        .join("revisions")
-        .join(PI_ARTIFACT.version)
-        .join(PI_ARTIFACT.executable);
-    fs::create_dir_all(executable.parent().unwrap()).unwrap();
     fs::create_dir_all(&profile).unwrap();
     confirm_home(&config, &temporary_root.join("home")).unwrap();
-    let build_root = temporary_root.join("build");
-    let status = Command::new(env!("CARGO"))
-        .args([
-            "build",
-            "--quiet",
-            "--package",
-            "muniment-core",
-            "--bin",
-            "sidecar-test-stub",
-            "--target-dir",
-        ])
-        .arg(&build_root)
-        .current_dir(env!("CARGO_MANIFEST_DIR"))
-        .status()
-        .unwrap();
-    assert!(status.success());
-    let stub_name = if cfg!(windows) {
-        "sidecar-test-stub.exe"
-    } else {
-        "sidecar-test-stub"
-    };
-    fs::copy(build_root.join("debug").join(stub_name), &executable).unwrap();
-    let stub_archive = b"muniment-sidecar-test-stub\n";
-    fs::write(
-        pi_root
-            .join("revisions")
-            .join(PI_ARTIFACT.version)
-            .join(PI_ARTIFACT.archive),
-        stub_archive,
-    )
-    .unwrap();
-    let descriptor = PiArtifactDescriptor {
-        version: PI_ARTIFACT.version,
-        archive: PI_ARTIFACT.archive,
-        byte_size: stub_archive.len() as u64,
-        sha256: "758b0db8f6304639edfca2b779e886f3006afeb006417e49dd6bce53ff2a65ab",
-        executable: PI_ARTIFACT.executable,
-    };
-    fs::write(
-        pi_root.join("current"),
-        format!("muniment-pi-pointer-v1\n{}\n", PI_ARTIFACT.version),
-    )
-    .unwrap();
-    std::env::set_var("MUNIMENT_PI_ROOT", &pi_root);
+    let descriptor = stage_pi_stub(&temporary_root);
 
     let run_id = "018f0000-0000-7000-8000-000000000004";
     let session_root = profile.join("pi-sessions");
