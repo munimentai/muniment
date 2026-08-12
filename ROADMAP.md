@@ -614,11 +614,10 @@ disagree, because `chat_file_metadata` rejects a path with no usable final
 segment and `open_selected_files` does not. The lane waits for an owner look at
 why this one ticket never dispatches.
 
-MERGE HAZARD — the first, third, and fourth thirty-third-wave slices edit
-`src-tauri/runtime/src/service.rs`, and the second and third both edit
-`src-tauri/runtime/tests/run.rs`. Each ticket tells the implementer to rebase
-on `main` before it opens the pull request. The 2026-08-04 silent revert came
-from a stale base.
+MERGE HAZARD — the second and third thirty-fourth-wave slices both edit
+`src-tauri/runtime/src/service.rs`. Each ticket tells the implementer to
+rebase on `main` before it opens the pull request. The 2026-08-04 silent
+revert came from a stale base.
 
 DONE 2026-08-08 — the memory runtime is the twentieth core move
 (MUNIDESK-995). `src-tauri/core/src/memory_runtime.rs` composes one
@@ -837,6 +836,13 @@ owned thread through `append_thread_rename_now` and
 (`src-tauri/core/src/journal/thread_mutation.rs:43`, `:76`). The core
 seam stamps the time, so the runtime crate names no chrono type.
 
+DONE 2026-08-11 — the retention entry landed (MUNIDESK-1121).
+`apply_retention` (`src-tauri/runtime/src/service.rs:131`) sweeps
+expired terminal runs through `apply_retention_now`
+(`src-tauri/core/src/journal/retention.rs`), the core seam stamps
+the time, and `src-tauri/runtime/tests/retention.rs` drives one
+expired and one recent run.
+
 MEASURED 2026-08-11 (thirty-third wave, planner, read
 `src-tauri/runtime/src/service.rs` beside `src-tauri/src/chat.rs`) —
 the runtime run entry never protects its prompt. `run_prompt` passes
@@ -846,22 +852,23 @@ and `chat_thread_open_page` reads each run's prompt from that store
 (`src-tauri/core/src/thread_history.rs:85`). A runtime-driven run's
 thread page therefore carries no prompt text.
 
-SELECTED 2026-08-11 (thirty-third wave) — four slices in priority
-order. The retention entry, the steer parity test, and the
-attachment pass-through drained at batch positions two through
-four, so they re-file in strict priority order. The retention entry
-takes the first position, and it needs a core seam beside
-`apply_retention` (`src-tauri/core/src/journal/retention.rs:55`)
-that stamps the time, in the `append_thread_rename_now` shape. The
-steer parity test follows, through `queue_message`
+SELECTED 2026-08-11 (thirty-fourth wave) — four slices in priority
+order. The steer parity test, the attachment pass-through, and the
+prompt protection parity drained at batch positions two through
+four, so they re-file in strict priority order. The steer parity
+test takes the first position, through `queue_message`
 (`src-tauri/core/src/active_run.rs:28`) and the stub's
 `pi_chat_queue` mode
 (`src-tauri/core/src/bin/sidecar-test-stub.rs:270`). The attachment
 pass-through follows, because `run_prompt`
-(`src-tauri/runtime/src/service.rs:201`, `:219`) passes `Vec::new()`
+(`src-tauri/runtime/src/service.rs:216`, `:233`) passes `Vec::new()`
 where both preparation entries take `files: Vec<OpenSelectedFile>`
-(`src-tauri/core/src/run_preparation.rs:15`). The fourth slice is
-the prompt protection parity above.
+(`src-tauri/core/src/run_preparation.rs:15`). The prompt protection
+parity follows, per the measurement above. The fourth slice is new:
+the permission answer parity test, because `queue_permission_answer`
+(`src-tauri/core/src/active_run.rs:94`) has no test against a live
+runtime run, while the cancel path gained its test with
+MUNIDESK-1108 (`src-tauri/runtime/tests/run.rs:207`).
 
 SEQUENCED — the later extraction slices are the remaining Pi execution move, the
 desktop client conversion, and Linux user-unit registration, each behind a
@@ -1639,14 +1646,14 @@ earlier one. Requiring an up-to-date branch before merge, or a merge queue, is a
 repository-settings change that sits with the owner. The planner files no ticket
 for it.
 
-VERIFIED 2026-08-11 (thirty-second wave, from a warm build) — `cargo
-test -p muniment-runtime` passed 25 tests across 13 binaries with no
-failure. The planner confirmed the landed shared-storage argument
-(MUNIDESK-1117) at `src-tauri/runtime/src/service.rs:62`, and
-confirmed that the thread mutation entries, the retention entry, and
-the steer parity test remain unbuilt, so all three re-file in strict
-priority order. Earlier waves recorded the same shape of
-verification, and this entry replaces that ledger.
+VERIFIED 2026-08-11 (thirty-third wave, from a warm build) — `cargo
+test -p muniment-runtime` passed 28 tests across 14 binaries with no
+failure. The planner confirmed the landed retention entry
+(MUNIDESK-1121) at `src-tauri/runtime/src/service.rs:131`, and
+confirmed that the steer parity test, the attachment pass-through,
+and the prompt protection parity remain unbuilt, so all three
+re-file in strict priority order. Earlier waves recorded the same
+shape of verification, and this entry replaces that ledger.
 
 NOTE 2026-08-06 — the planning clone ships no `node_modules`. Run `npm ci`
 before `npm test`. Without it the run dies with `vitest: not found`, which reads
