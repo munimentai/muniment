@@ -14,6 +14,7 @@ use muniment_core::chat_resume::{
     run_resume as drive_resume, ResumeLaunch,
 };
 use muniment_core::journal::reconciliation::reconcile_interrupted_runs;
+use muniment_core::journal::thread_mutation::{append_thread_delete_now, append_thread_rename_now};
 use muniment_core::journal::thread_summaries::ThreadSummaryPage;
 use muniment_core::journal::Provenance;
 use muniment_core::memory_index::ModelMemoryCapability;
@@ -83,6 +84,44 @@ pub fn thread_summaries(
         subject.as_deref(),
         limit,
         cursor.as_deref(),
+    )
+    .map_err(|_| "Conversation history is unavailable.".to_string())
+}
+
+/// Renames one thread owned by one subject.
+pub fn rename_thread(
+    storage: SharedStorage,
+    subject: Option<String>,
+    thread_id: String,
+    title: String,
+) -> Result<(), String> {
+    let mut storage = storage
+        .lock()
+        .map_err(|_| "Conversation history is unavailable.".to_string())?;
+    append_thread_rename_now(
+        &mut storage.journal,
+        subject.as_deref(),
+        &thread_id,
+        &title,
+        &runtime_provenance(),
+    )
+    .map_err(|_| "Conversation history is unavailable.".to_string())
+}
+
+/// Deletes one thread owned by one subject.
+pub fn delete_thread(
+    storage: SharedStorage,
+    subject: Option<String>,
+    thread_id: String,
+) -> Result<(), String> {
+    let mut storage = storage
+        .lock()
+        .map_err(|_| "Conversation history is unavailable.".to_string())?;
+    append_thread_delete_now(
+        &mut storage.journal,
+        subject.as_deref(),
+        &thread_id,
+        &runtime_provenance(),
     )
     .map_err(|_| "Conversation history is unavailable.".to_string())
 }
