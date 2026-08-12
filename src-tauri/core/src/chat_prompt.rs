@@ -1,10 +1,12 @@
 use keyring::Entry;
 use std::any::Any;
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 const PROMPT_SERVICE: &str = "ai.muniment.desktop.chat";
 const PROMPT_USER: &str = "protected-prompts";
+static FAIL_NEXT_MOCK_DELETE: AtomicBool = AtomicBool::new(false);
 
 #[doc(hidden)]
 pub fn use_mock_keyring_for_tests() {
@@ -54,6 +56,11 @@ pub fn use_mock_keyring_for_tests() {
         }
 
         fn delete_credential(&self) -> keyring::Result<()> {
+            if FAIL_NEXT_MOCK_DELETE.swap(false, Ordering::SeqCst) {
+                return Err(keyring::Error::PlatformFailure(Box::new(
+                    std::io::Error::other("injected prompt delete failure"),
+                )));
+            }
             self.secrets
                 .lock()
                 .unwrap()
@@ -70,6 +77,11 @@ pub fn use_mock_keyring_for_tests() {
     keyring::set_default_credential_builder(Box::new(SharedCredentialBuilder(Arc::new(
         Mutex::new(HashMap::new()),
     ))));
+}
+
+#[doc(hidden)]
+pub fn fail_next_mock_prompt_delete_for_tests() {
+    FAIL_NEXT_MOCK_DELETE.store(true, Ordering::SeqCst);
 }
 
 #[derive(Debug)]

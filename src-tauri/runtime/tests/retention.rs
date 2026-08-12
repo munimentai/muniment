@@ -1,4 +1,6 @@
-use muniment_core::chat_prompt::{load_prompt, store_prompt, use_mock_keyring_for_tests};
+use muniment_core::chat_prompt::{
+    fail_next_mock_prompt_delete_for_tests, load_prompt, store_prompt, use_mock_keyring_for_tests,
+};
 use muniment_core::journal::{EventEnvelope, EventPayload, Provenance};
 use muniment_core::run_events::SharedStorage;
 use muniment_core::run_preparation::{prepare_new_run_with_session_thread, SessionThreadStart};
@@ -79,6 +81,8 @@ fn deletes_an_expired_terminal_run_and_keeps_a_recent_run() {
     let storage = open_profile_storage(&temporary_root).unwrap();
     let expired_run = "01900000-0000-7000-8000-000000000001";
     let recent_run = "01900000-0000-7000-8000-000000000002";
+    let retry_run = "01900000-0000-7000-8000-000000000003";
+    let cas_failure_run = "01900000-0000-7000-8000-000000000007";
     let subject = "subject-a";
     {
         let mut storage = storage.lock().unwrap();
@@ -122,6 +126,102 @@ fn deletes_an_expired_terminal_run_and_keeps_a_recent_run() {
         assert!(locked.journal.events(expired_run).unwrap().is_empty());
         assert_eq!(locked.journal.events(recent_run).unwrap().len(), 2);
     }
+
+    {
+        let mut storage = storage.lock().unwrap();
+        let mut started = event(
+            retry_run,
+            "01900000-0000-7000-8000-000000000005",
+            1,
+            "run.started",
+            "2000-01-01T00:00:00Z",
+        );
+        started.provenance.actor_id = Some(subject.into());
+        storage
+            .journal
+            .append_batch(
+                0,
+                &[
+                    started,
+                    event(
+                        retry_run,
+                        "01900000-0000-7000-8000-000000000006",
+                        2,
+                        "run.completed",
+                        "2000-01-01T00:00:00Z",
+                    ),
+                ],
+            )
+            .unwrap();
+    }
+    store_prompt(retry_run, "retry prompt", Some(subject)).unwrap();
+    fail_next_mock_prompt_delete_for_tests();
+
+    assert!(apply_retention(Arc::clone(&storage), 30 * 24 * 60 * 60).is_err());
+    assert_eq!(
+        load_prompt(retry_run, Some(subject)).unwrap().as_deref(),
+        Some("retry prompt")
+    );
+    assert_eq!(
+        storage
+            .lock()
+            .unwrap()
+            .journal
+            .events(retry_run)
+            .unwrap()
+            .len(),
+        2
+    );
+
+    apply_retention(Arc::clone(&storage), 30 * 24 * 60 * 60).unwrap();
+    assert_eq!(load_prompt(retry_run, Some(subject)).unwrap(), None);
+    assert!(storage
+        .lock()
+        .unwrap()
+        .journal
+        .events(retry_run)
+        .unwrap()
+        .is_empty());
+
+    {
+        let mut storage = storage.lock().unwrap();
+        let mut started = event(
+            cas_failure_run,
+            "01900000-0000-7000-8000-000000000007",
+            1,
+            "run.started",
+            "2000-01-01T00:00:00Z",
+        );
+        started.provenance.actor_id = Some(subject.into());
+        storage
+            .journal
+            .append_batch(
+                0,
+                &[
+                    started,
+                    event(
+                        cas_failure_run,
+                        "01900000-0000-7000-8000-000000000008",
+                        2,
+                        "run.completed",
+                        "2000-01-01T00:00:00Z",
+                    ),
+                ],
+            )
+            .unwrap();
+    }
+    store_prompt(cas_failure_run, "CAS failure prompt", Some(subject)).unwrap();
+    fs::remove_dir(temporary_root.join("cas/objects")).unwrap();
+
+    assert!(apply_retention(Arc::clone(&storage), 30 * 24 * 60 * 60).is_err());
+    assert_eq!(load_prompt(cas_failure_run, Some(subject)).unwrap(), None);
+    assert!(storage
+        .lock()
+        .unwrap()
+        .journal
+        .events(cas_failure_run)
+        .unwrap()
+        .is_empty());
     drop(storage);
     fs::remove_dir_all(temporary_root).unwrap();
 }
