@@ -18,7 +18,9 @@ use muniment_core::journal::reconciliation::reconcile_interrupted_runs;
 use muniment_core::journal::retention::{
     apply_retention_now_with, RetentionError, RetentionOutcome,
 };
-use muniment_core::journal::thread_mutation::{append_thread_delete_now, append_thread_rename_now};
+use muniment_core::journal::thread_mutation::{
+    append_thread_delete_now, append_thread_rename_now, create_thread_now,
+};
 use muniment_core::journal::thread_summaries::ThreadSummaryPage;
 use muniment_core::journal::Provenance;
 use muniment_core::memory_index::ModelMemoryCapability;
@@ -120,6 +122,23 @@ pub fn thread_summaries(
         cursor.as_deref(),
     )
     .map_err(|_| "Conversation history is unavailable.".to_string())
+}
+
+/// Creates one thread for an authorized attach profile.
+pub fn create_thread(
+    storage: SharedStorage,
+    workspace: String,
+    attach_profile: String,
+) -> Result<String, String> {
+    let mut provenance = runtime_provenance();
+    provenance
+        .extra
+        .insert("attach_profile".into(), attach_profile.into());
+    let mut storage = storage
+        .lock()
+        .map_err(|_| "Conversation history is unavailable.".to_string())?;
+    create_thread_now(&mut storage.journal, &workspace, provenance)
+        .map_err(|_| "Conversation history is unavailable.".to_string())
 }
 
 /// Renames one thread owned by one subject.

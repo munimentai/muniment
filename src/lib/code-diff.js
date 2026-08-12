@@ -7,6 +7,13 @@ const lineTypes = {
 export const codeDiffRendererOptions = Object.freeze({
   outputFormat: 'side-by-side',
   drawFileList: false,
+  rawTemplates: {
+    'generic-file-path': '<span class="d2h-file-name-wrapper">{{>fileIcon}}<span class="d2h-file-name">{{fileDiffName}}</span> {{>fileTag}}</span>',
+    'tag-file-added': '<span class="d2h-tag d2h-added d2h-added-tag">added</span>',
+    'tag-file-changed': '<span class="d2h-tag d2h-changed d2h-changed-tag">changed</span>',
+    'tag-file-deleted': '<span class="d2h-tag d2h-deleted d2h-deleted-tag">deleted</span>',
+    'tag-file-renamed': '<span class="d2h-tag d2h-moved d2h-moved-tag">renamed</span>',
+  },
   matching: 'none',
   matchingMaxComparisons: 2500,
   maxLineSizeInBlockForComparison: 200,
