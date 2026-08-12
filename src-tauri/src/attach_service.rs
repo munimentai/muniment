@@ -520,7 +520,7 @@ fn resolve_attach_home(
     documents: Option<PathBuf>,
     home: Option<PathBuf>,
 ) -> Result<PathBuf, ProtocolError> {
-    crate::home::choose_default_home(documents, home)
+    muniment_core::home::choose_default_home(documents, home)
         .map_err(|_| ProtocolError::persistence_failed())
 }
 
