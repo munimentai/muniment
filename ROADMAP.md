@@ -614,8 +614,8 @@ disagree, because `chat_file_metadata` rejects a path with no usable final
 segment and `open_selected_files` does not. The lane waits for an owner look at
 why this one ticket never dispatches.
 
-MERGE HAZARD — the first, second, and fourth thirty-second-wave slices edit
-`src-tauri/runtime/src/service.rs`, and the third and fourth both edit
+MERGE HAZARD — the first, third, and fourth thirty-third-wave slices edit
+`src-tauri/runtime/src/service.rs`, and the second and third both edit
 `src-tauri/runtime/tests/run.rs`. Each ticket tells the implementer to rebase
 on `main` before it opens the pull request. The 2026-08-04 silent revert came
 from a stale base.
@@ -829,30 +829,39 @@ and `run_prompt`, `resume_run`, `thread_summaries`, and `thread_page`
 each take it as an argument, so a caller pays the `validate_database`
 open once rather than once per call.
 
-SELECTED 2026-08-11 (thirty-second wave) — four slices in priority
-order. The thread mutation entries, the retention entry, and the
-steer parity test drained at batch positions two through four, so
-they re-file in strict priority order. The thread mutation entries
-take the first position, through `append_thread_rename` and
-`append_thread_delete`
-(`src-tauri/core/src/journal/thread_mutation.rs:25`, `:42`). The
-retention entry follows through `apply_retention`
-(`src-tauri/core/src/journal/retention.rs:55`). Both need a core seam
-that stamps the time, because `test/runtime-dependency-boundary.sh`
-pins the runtime crate's direct dependencies to muniment-core and
-muniment-attach, so the crate may name no chrono type. The steer
-parity test follows. Nothing proves a queued steer or follow-up
-reaches a live runtime run. `queue_message`
-(`src-tauri/core/src/active_run.rs:28`) reads the shared run slot,
-the stub's `pi_chat_queue` mode
-(`src-tauri/core/src/bin/sidecar-test-stub.rs:270`) answers both
-commands, and the MUNIDESK-1108 entry names only the cancel and the
-permission answer. The fourth slice is new. `run_prompt`
-(`src-tauri/runtime/src/service.rs:119`) passes `Vec::new()` where
-both preparation entries take `files: Vec<OpenSelectedFile>`
-(`src-tauri/core/src/run_preparation.rs:64`), so a runtime run cannot
-carry an attachment that a desktop run ingests through the same core
-path.
+DONE 2026-08-11 — the thread mutation entries landed (MUNIDESK-1119).
+`rename_thread` and `delete_thread`
+(`src-tauri/runtime/src/service.rs:92`, `:112`) rename and delete an
+owned thread through `append_thread_rename_now` and
+`append_thread_delete_now`
+(`src-tauri/core/src/journal/thread_mutation.rs:43`, `:76`). The core
+seam stamps the time, so the runtime crate names no chrono type.
+
+MEASURED 2026-08-11 (thirty-third wave, planner, read
+`src-tauri/runtime/src/service.rs` beside `src-tauri/src/chat.rs`) —
+the runtime run entry never protects its prompt. `run_prompt` passes
+`|| Ok(())` as both preparation hooks (`service.rs:206`, `:223`)
+where the desktop passes `protect_prompt` (`chat.rs:315`, `:328`),
+and `chat_thread_open_page` reads each run's prompt from that store
+(`src-tauri/core/src/thread_history.rs:85`). A runtime-driven run's
+thread page therefore carries no prompt text.
+
+SELECTED 2026-08-11 (thirty-third wave) — four slices in priority
+order. The retention entry, the steer parity test, and the
+attachment pass-through drained at batch positions two through
+four, so they re-file in strict priority order. The retention entry
+takes the first position, and it needs a core seam beside
+`apply_retention` (`src-tauri/core/src/journal/retention.rs:55`)
+that stamps the time, in the `append_thread_rename_now` shape. The
+steer parity test follows, through `queue_message`
+(`src-tauri/core/src/active_run.rs:28`) and the stub's
+`pi_chat_queue` mode
+(`src-tauri/core/src/bin/sidecar-test-stub.rs:270`). The attachment
+pass-through follows, because `run_prompt`
+(`src-tauri/runtime/src/service.rs:201`, `:219`) passes `Vec::new()`
+where both preparation entries take `files: Vec<OpenSelectedFile>`
+(`src-tauri/core/src/run_preparation.rs:15`). The fourth slice is
+the prompt protection parity above.
 
 SEQUENCED — the later extraction slices are the remaining Pi execution move, the
 desktop client conversion, and Linux user-unit registration, each behind a
