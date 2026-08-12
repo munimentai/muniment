@@ -303,8 +303,15 @@ fn runs_two_prompts_in_one_named_thread_and_rejects_an_unknown_thread() {
     let entry = page
         .entries
         .iter()
+        .find(|entry| entry.run_id == run_id)
+        .unwrap();
+    assert_eq!(entry.prompt.as_deref(), Some(prompt));
+    let entry = page
+        .entries
+        .iter()
         .find(|entry| entry.run_id == second_run_id)
         .unwrap();
+    assert_eq!(entry.prompt.as_deref(), Some(second_prompt));
     assert_eq!(entry.attachments.len(), 1);
     assert_eq!(entry.attachments[0].display_name, "runtime-attachment.txt");
     assert_eq!(

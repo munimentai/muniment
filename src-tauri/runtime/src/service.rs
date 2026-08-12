@@ -218,7 +218,10 @@ pub fn run_prompt(
                 thread_id,
                 "muniment-runtime",
                 env!("CARGO_PKG_VERSION"),
-                || Ok(()),
+                || {
+                    muniment_core::chat_prompt::store_prompt(&run_id, &prompt, subject.as_deref())
+                        .map_err(|_| "Conversation history is unavailable.".to_string())
+                },
             ),
             None => {
                 let session_thread = SessionThread::default();
@@ -235,7 +238,14 @@ pub fn run_prompt(
                     Some(runtime_provenance()),
                     "muniment-runtime",
                     env!("CARGO_PKG_VERSION"),
-                    || Ok(()),
+                    || {
+                        muniment_core::chat_prompt::store_prompt(
+                            &run_id,
+                            &prompt,
+                            subject.as_deref(),
+                        )
+                        .map_err(|_| "Conversation history is unavailable.".to_string())
+                    },
                 )
             }
         }?;
