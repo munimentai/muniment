@@ -906,8 +906,9 @@ SELECTED 2026-08-12 (thirty-seventh wave) — five slices in priority order.
    `subscribe_run_commits`, and the runtime service reaches neither. The
    attach `run.stream` reply needs both.
 5. The cancel parity test. `cancel_active_run`
-   (`src-tauri/core/src/active_run.rs:66`) has no test against a live runtime
-   run, and the `pi_resume` stub answers `abort` without ending its run.
+   (`src-tauri/core/src/active_run.rs:66`) has a live runtime test, but that
+   test does not prove `abort` reaches the `pi_resume` stub. Add that proof
+   and verify that the run records cancellation.
 
 SEQUENCED — the later extraction slices are the remaining Pi execution move, the
 desktop client conversion, and Linux user-unit registration, each behind a
