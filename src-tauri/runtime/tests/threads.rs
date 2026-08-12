@@ -1,11 +1,17 @@
+use std::collections::BTreeMap;
 use std::fs;
 use std::sync::Arc;
 
+use muniment_core::journal::Provenance;
 use muniment_core::run_events::SharedStorage;
-use muniment_core::run_preparation::{prepare_new_run_with_session_thread, SessionThreadStart};
+use muniment_core::run_preparation::{
+    prepare_new_run_in_thread_after_validation, prepare_new_run_with_session_thread,
+    SessionThreadStart,
+};
 use muniment_core::session_thread::SessionThread;
 use muniment_runtime::{
-    delete_thread, open_profile_storage, rename_thread, thread_page, thread_summaries,
+    create_thread, delete_thread, open_profile_storage, rename_thread, thread_page,
+    thread_summaries,
 };
 
 fn prepare_run(storage: &SharedStorage, run_id: &str, subject: &str) -> String {
@@ -33,6 +39,84 @@ fn prepare_run(storage: &SharedStorage, run_id: &str, subject: &str) -> String {
         .unwrap()
         .unwrap();
     thread_id
+}
+
+fn attach_provenance() -> Provenance {
+    let mut provenance = Provenance {
+        source: "test".into(),
+        source_version: "1".into(),
+        actor_id: None,
+        device_id: None,
+        rpc_request_id: None,
+        capability_versions: None,
+        extra: BTreeMap::new(),
+    };
+    provenance
+        .extra
+        .insert("attach_profile".into(), "profile-a".into());
+    provenance
+}
+
+#[test]
+fn creates_a_thread_for_a_run_and_rejects_invalid_inputs_without_events() {
+    let temporary_root =
+        std::env::temp_dir().join(format!("muniment-runtime-thread-create-{}", std::process::id()));
+    let profile = temporary_root.join("profile");
+    fs::create_dir_all(&profile).unwrap();
+    let storage = open_profile_storage(&profile).unwrap();
+
+    assert!(create_thread(
+        Arc::clone(&storage),
+        String::new(),
+        "profile-a".into(),
+    )
+    .is_err());
+    assert!(create_thread(
+        Arc::clone(&storage),
+        "workspace-a".into(),
+        String::new(),
+    )
+    .is_err());
+    assert!(thread_summaries(Arc::clone(&storage), Some("owner".into()), 10, None)
+        .unwrap()
+        .summaries
+        .is_empty());
+
+    let thread_id = create_thread(
+        Arc::clone(&storage),
+        "workspace-a".into(),
+        "profile-a".into(),
+    )
+    .unwrap();
+    let run_id = "01900000-0000-7000-8000-000000000000";
+    prepare_new_run_in_thread_after_validation(
+        &storage,
+        run_id,
+        "workspace-a",
+        Some("owner"),
+        Vec::new(),
+        Some(attach_provenance()),
+        &thread_id,
+        "test",
+        "1",
+        || Ok(()),
+    )
+    .unwrap();
+
+    let page = thread_page(
+        &profile,
+        Arc::clone(&storage),
+        Some("owner".into()),
+        thread_id,
+        10,
+        None,
+    )
+    .unwrap();
+    assert_eq!(page.entries.len(), 1);
+    assert_eq!(page.entries[0].run_id, run_id);
+
+    drop(storage);
+    fs::remove_dir_all(temporary_root).unwrap();
 }
 
 #[test]
