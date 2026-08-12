@@ -614,10 +614,11 @@ disagree, because `chat_file_metadata` rejects a path with no usable final
 segment and `open_selected_files` does not. The lane waits for an owner look at
 why this one ticket never dispatches.
 
-MERGE HAZARD — all four thirtieth-wave slices edit
-`src-tauri/runtime/src/service.rs`. Each ticket tells the implementer to
-rebase on `main` before it opens the pull request. The 2026-08-04 silent
-revert came from a stale base.
+MERGE HAZARD — the first three thirty-first-wave slices edit
+`src-tauri/runtime/src/service.rs`, and the fourth edits
+`src-tauri/runtime/tests/run.rs` beside the first. Each ticket tells the
+implementer to rebase on `main` before it opens the pull request. The
+2026-08-04 silent revert came from a stale base.
 
 DONE 2026-08-08 — the memory runtime is the twentieth core move
 (MUNIDESK-995). `src-tauri/core/src/memory_runtime.rs` composes one
@@ -815,23 +816,33 @@ The ADR 0012 row now states that the shipped binary takes the instance
 lock and waits, and that the dormant service entries open the journal
 and CAS and drive Pi only when a caller invokes them.
 
-SELECTED 2026-08-11 (thirtieth wave) — four slices in priority order.
-The grant entry and the shared-storage argument drained at batch
-positions below the throughput ceiling, so they re-file in the first
-two positions. The grant entry takes the access token as an argument
-and answers a validated grant through `fetch_grant` and `validate_grant`
-(`src-tauri/core/src/chat_grant.rs:31`, `:50`). The shared-storage
-argument follows, because `run_prompt`, `resume_run`, and both read
-entries each open profile storage per call, and every open pays the
-full `validate_database` read the 2026-07-31 measurement records. The
-third slice adds the thread rename and delete entries through
-`append_thread_rename` and `append_thread_delete`
-(`src-tauri/core/src/journal/thread_mutation.rs:25`, `:42`), so the
-service owns the thread write half beside its read entries. The fourth
-slice adds the retention entry through `apply_retention`
-(`src-tauri/core/src/journal/retention.rs:55`), because retention has
-no production caller and the 2026-08-04 entry names this service as
-its owner.
+DONE 2026-08-11 — the runtime grant entry landed (MUNIDESK-1115).
+`fetch_chat_grant` (`src-tauri/runtime/src/service.rs:55`) fetches and
+validates a cloud chat grant through `fetch_grant`, `validate_grant`,
+and the shared `api_base_url`, and `src-tauri/runtime/tests/grant.rs`
+drives it against a local server.
+
+SELECTED 2026-08-11 (thirty-first wave) — four slices in priority
+order. The shared-storage argument, the thread mutation entries, and
+the retention entry drained at batch positions two through four, so
+they re-file in strict priority order. The shared-storage argument
+takes the first position, because `run_prompt`, `resume_run`, and both
+read entries each open profile storage per call, and every open pays
+the full `validate_database` read the 2026-07-31 measurement records.
+The thread mutation entries follow through `append_thread_rename` and
+`append_thread_delete`
+(`src-tauri/core/src/journal/thread_mutation.rs:25`, `:42`). The
+retention entry follows through `apply_retention`
+(`src-tauri/core/src/journal/retention.rs:55`). Both need a core seam
+that stamps the time, because `test/runtime-dependency-boundary.sh`
+pins the runtime crate's direct dependencies to muniment-core and
+muniment-attach, so the crate may name no chrono type. The fourth
+slice is new. Nothing proves a queued steer or follow-up reaches a
+live runtime run. `queue_message` (`src-tauri/core/src/active_run.rs:28`)
+reads the shared run slot, the stub's `pi_chat_queue` mode
+(`src-tauri/core/src/bin/sidecar-test-stub.rs:270`) answers both
+commands, and the MUNIDESK-1108 entry names only the cancel and the
+permission answer.
 
 SEQUENCED — the later extraction slices are the remaining Pi execution move, the
 desktop client conversion, and Linux user-unit registration, each behind a
@@ -1609,15 +1620,14 @@ earlier one. Requiring an up-to-date branch before merge, or a merge queue, is a
 repository-settings change that sits with the owner. The planner files no ticket
 for it.
 
-VERIFIED 2026-08-11 (thirtieth wave, from a cold build) — `cargo test
--p muniment-runtime` passed 24 tests across 12 binaries with no
-failure. The twenty-ninth wave had passed the full workspace pair, 927
-frontend tests and 1,181 Rust tests, from a clean clone. The planner
-confirmed the landed session entry (MUNIDESK-1112) at
-`src-tauri/runtime/src/service.rs:42`, and confirmed that the grant
-entry and the shared-storage argument remain unbuilt, so both re-file
-in the first two batch positions. Earlier waves recorded the same
-shape of verification, and this entry replaces that ledger.
+VERIFIED 2026-08-11 (thirty-first wave, from a cold build) — `cargo
+test -p muniment-runtime` passed 25 tests across 13 binaries with no
+failure. The planner confirmed the landed grant entry (MUNIDESK-1115)
+at `src-tauri/runtime/src/service.rs:55`, and confirmed that the
+shared-storage argument, the thread mutation entries, and the
+retention entry remain unbuilt in `service.rs`, so all three re-file
+in strict priority order. Earlier waves recorded the same shape of
+verification, and this entry replaces that ledger.
 
 NOTE 2026-08-06 — the planning clone ships no `node_modules`. Run `npm ci`
 before `npm test`. Without it the run dies with `vitest: not found`, which reads
