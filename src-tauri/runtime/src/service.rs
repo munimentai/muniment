@@ -11,8 +11,9 @@ use muniment_core::attach::{
 };
 use muniment_core::auth::TokenSet;
 use muniment_core::auth::{
-    api_base_url, ensure_native_session as ensure_core_native_session, FreshNativeSession,
-    FreshNativeSessionError, KeyringNativeCredentialStore,
+    api_base_url, ensure_native_session as ensure_core_native_session, EntitlementSnapshotTracker,
+    EntitlementSnapshotView, FreshNativeSession, FreshNativeSessionError,
+    KeyringNativeCredentialStore,
 };
 use muniment_core::chat_coordinate::coordinate;
 use muniment_core::chat_grant::{fetch_grant, validate_grant, ChatGrant, FetchGrantError};
@@ -89,6 +90,29 @@ pub struct PromptLaunch {
     prepared: (u64, muniment_core::journal::reducer::ChatProjector),
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EntitlementSnapshotResult {
+    pub snapshot: EntitlementSnapshotView,
+    pub changed_snapshot_version: Option<u64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EntitlementSnapshotError {
+    Session(FreshNativeSessionError),
+    Missing,
+}
+
+impl std::fmt::Display for EntitlementSnapshotError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Session(error) => write!(formatter, "{error}"),
+            Self::Missing => formatter.write_str("native session has no entitlement snapshot"),
+        }
+    }
+}
+
+impl std::error::Error for EntitlementSnapshotError {}
+
 /// Returns a fresh native session from the platform credential store.
 pub fn ensure_native_session() -> Result<FreshNativeSession, FreshNativeSessionError> {
     let now_unix_seconds = SystemTime::now()
@@ -100,6 +124,25 @@ pub fn ensure_native_session() -> Result<FreshNativeSession, FreshNativeSessionE
         &api_base_url(),
         now_unix_seconds,
     )
+}
+
+/// Returns the display-only entitlement projection and reports a version change.
+pub fn entitlement_snapshot(
+    tracker: &EntitlementSnapshotTracker,
+) -> Result<EntitlementSnapshotResult, EntitlementSnapshotError> {
+    let session = ensure_native_session().map_err(EntitlementSnapshotError::Session)?;
+    let next = session
+        .entitlement_snapshot
+        .as_ref()
+        .map(|snapshot| snapshot.snapshot_version);
+    let changed_snapshot_version = tracker.observe(next);
+    let snapshot = session
+        .entitlement_snapshot
+        .ok_or(EntitlementSnapshotError::Missing)?;
+    Ok(EntitlementSnapshotResult {
+        snapshot,
+        changed_snapshot_version,
+    })
 }
 
 /// Creates the cross-project home scaffold.
