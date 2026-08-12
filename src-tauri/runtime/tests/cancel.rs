@@ -105,6 +105,8 @@ fn cancelling_a_live_run_sends_abort_to_pi() {
                 run_id.into(),
                 "initial prompt".into(),
                 None,
+                &muniment_core::session_thread::SessionThread::default(),
+                false,
                 "token".into(),
                 Some("owner".into()),
                 Vec::new(),
