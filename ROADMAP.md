@@ -10,8 +10,9 @@ them must exercise the real contracts. It must add no mocked production path.
 > ticket ranges. Every open item, parked item, held item, gated item, and
 > do-not-re-file measurement is preserved below. Git history holds the full
 > slice-by-slice record. The first 2026-08-12 pass took the ADR 0012 extraction
-> section. The second took the ADR 0024 code-diff chain. The memory index and
-> retrieval section is the next compaction target.
+> section. The second took the ADR 0024 code-diff chain. The third took the
+> memory index and retrieval section. The signed-in shell section is the next
+> compaction target.
 
 ## M0 — Scaffold (done 2026-07-09)
 
@@ -483,12 +484,13 @@ every call site reads it.
 
 DONE — the dormant service entry points are built (MUNIDESK-1080, 1086, 1091,
 1094, 1096, 1099, 1100, 1102, 1105, 1108, 1110, 1112, 1113, 1115, 1117, 1119,
-1121, 1123, 1125, 1128, 1130, 1133, 1135, 1136). `src-tauri/runtime/src/service.rs`
+1121, 1123, 1125, 1128, 1130, 1133, 1135, 1136, 1139). `src-tauri/runtime/src/service.rs`
 opens one shared profile storage and reconciles interrupted runs, answers a fresh
 native session from the platform credential store, fetches and validates a cloud
 chat grant, lists and opens one subject's threads, creates one durable thread for
 an authorized attach profile, renames and deletes an owned thread, sweeps expired
-terminal runs and their protected prompts, accepts one prompt and drives it, and
+terminal runs and their protected prompts, reads one page of a run stream and
+subscribes to that run's commits, accepts one prompt and drives it, and
 resumes an interrupted run. `accept_prompt`,
 `run_prompt`, and `resume_run` take the shared storage, the shared run control
 slot, and a config directory beside the profile directory. `RuntimeChatEventSink`
@@ -496,8 +498,8 @@ slot, and a config directory beside the profile directory. `RuntimeChatEventSink
 `PiLaunchBoundaries`, answers the `muniment-runtime` provenance, owns the run's
 memory runtime, and keeps returning success after a subscriber goes away, because
 companions read run events through the journal. `accept_prompt`
-(`service.rs:211`) returns the run id, the thread id, the projected attachments,
-the committed sequence, and the acceptance time, and `drive_prompt` (`:356`)
+(`service.rs:268`) returns the run id, the thread id, the projected attachments,
+the committed sequence, and the acceptance time, and `drive_prompt` (`:413`)
 drives the accepted run, so the attach `run.start` reply has the shape
 `prepare_desktop_run` (`src-tauri/core/src/run_start.rs:203`) already answers
 with. `src-tauri/runtime/tests/` proves the steer, the permission answer, the
@@ -533,31 +535,35 @@ disagree, because `chat_file_metadata` rejects a path with no usable final
 segment and `open_selected_files` does not. The lane waits for an owner look at
 why this one ticket never dispatches.
 
-MERGE HAZARD — four thirty-ninth-wave slices edit
-`src-tauri/runtime/src/service.rs`. They are the run stream read entries, the
-prepared-run failure parity, the shared Pi runtime slot, and the run control
-entries. The failure parity and the Pi runtime slot both edit `accept_prompt`.
-The cancel parity test edits `src-tauri/core/src/bin/sidecar-test-stub.rs`, and
-the Home rule move edits the desktop crate. Each ticket tells the implementer to
-rebase on `main` before it opens the pull request. The 2026-08-04 silent revert
-came from a stale base.
+MERGE HAZARD — five fortieth-wave slices edit
+`src-tauri/runtime/src/service.rs`. They are the prepared-run failure parity, the
+run control entries, the shared Pi runtime slot, the `home.ensure` entry, and the
+`workspace.onboard` entry. The failure parity and the Pi runtime slot both edit
+`accept_prompt`, and the Pi runtime slot rebases on the failure parity when that
+one merges first. The cancel parity test edits
+`src-tauri/core/src/bin/sidecar-test-stub.rs` instead. Each ticket tells the
+implementer to rebase on `main` before it opens the pull request. The 2026-08-04
+silent revert came from a stale base.
 
-VERIFIED 2026-08-12 (thirty-ninth wave, planner, read `src-tauri/runtime/` and ran
-`cargo test --package muniment-runtime`) — the thread-create entry landed
-(MUNIDESK-1136). `create_thread` (`src-tauri/runtime/src/service.rs:128`) stamps an
-`attach_profile` provenance value and calls `create_thread_now`, and
-`src-tauri/runtime/tests/threads.rs` proves it against a live journal. The other
-four thirty-eighth-wave slices are unbuilt. `service.rs` carries no run stream
-read entry, `accept_prompt` still drops its prepared sequence on the error path,
-and both `drive_prompt` and `resume_run` build their own Pi runtime slot. The
-whole runtime suite passes.
+VERIFIED 2026-08-12 (fortieth wave, planner, read `src-tauri/runtime/` and ran
+`cargo test --package muniment-runtime`) — two thirty-ninth-wave slices landed.
+`stream_run` and `subscribe_run_commits` (`src-tauri/runtime/src/service.rs:135`,
+`:153`) answer the attach `run.stream` reply, and
+`src-tauri/runtime/tests/run_stream.rs` proves the page, the invalid cursor, and
+the subscription (MUNIDESK-1139). `choose_default_home`
+(`src-tauri/core/src/home.rs:29`) is the one default Home rule, and
+`resolve_attach_home` (`src-tauri/src/attach_service.rs:519`) reads it
+(MUNIDESK-1140). The other four slices are unbuilt. `accept_prompt` still drops
+its prepared sequence on the error path, both `drive_prompt` and `resume_run`
+build their own Pi runtime slot, `service.rs` exposes no run control entry, and
+the `pi_resume` stub still records no `abort`. The whole runtime suite passes.
 
 MEASURED 2026-08-12 (thirty-ninth wave, planner, read `accept_prompt` beside
 `prepare_desktop_run`) — a runtime prompt that fails after preparation leaves a
 run with no terminal event. `prepare_desktop_run`
-(`src-tauri/core/src/run_start.rs:254`, `:273`) appends `run.failed` through
+(`src-tauri/core/src/run_start.rs:268`, `:289`) appends `run.failed` through
 `fail_prepared_run` when the thread-id read or the memory-session open fails.
-`accept_prompt` (`src-tauri/runtime/src/service.rs:267`) runs the same two steps
+`accept_prompt` (`src-tauri/runtime/src/service.rs:305`) runs the same two steps
 inside a closure, drops the prepared sequence on the error path, and returns
 without appending a terminal event. `reconcile_interrupted_runs`
 (`src-tauri/core/src/journal/reconciliation.rs:9`) then appends
@@ -572,44 +578,45 @@ package. A runtime entry that must append an event therefore needs a core seam
 that owns the payload, the way `record_preparation_failure`
 (`src-tauri/core/src/run_preparation.rs:267`) owns the attachment failure.
 
-MEASURED 2026-08-12 (thirty-ninth wave, planner, read `resolve_attach_home` beside
-the desktop home module) — the attach `home.ensure` operation has no runtime entry,
-and the rule it needs sits in the desktop crate. `choose_default_home`
-(`src-tauri/src/home.rs:91`) is a pure function with five unit tests and no Tauri
-call, and `resolve_attach_home` (`src-tauri/src/attach_service.rs:519`) is its
-attach caller. The move into muniment-core is the first slice, and the runtime
-`home.ensure` entry follows it.
+MEASURED 2026-08-12 (fortieth wave, planner, read the attach `Operation` enum
+beside `service.rs`) — two attach operations still have no runtime entry beyond
+the run control set. `home.ensure` calls `ensure_cross_project_home`
+(`src-tauri/attach/src/workspace.rs:87`) over the resolved default Home, and the
+Home rule now sits in muniment-core, so the runtime entry composes two published
+functions. `workspace.onboard` calls `onboard_companion_workspace`
+(`workspace.rs:60`) and records two canonical directories in
+`WorkspaceContextMap` (`src-tauri/core/src/attach/workspace_context.rs:16`).
+`DesktopAttachService::onboard_workspace` and `ensure_home`
+(`src-tauri/core/src/attach/desktop_service.rs:133`, `:168`) are the shapes both
+runtime entries mirror.
 
 MEASURED 2026-08-12 (thirty-ninth wave, planner, read `accept_prompt` beside
 `ChatState`) — a runtime prompt with no thread id builds `SessionThread::default()`
-per call (`src-tauri/runtime/src/service.rs:285`), where the desktop holds one
+per call (`src-tauri/runtime/src/service.rs:323`), where the desktop holds one
 tracker in `ChatState` (`src-tauri/src/chat.rs:111`). Two runtime prompts with no
 thread id therefore open two threads, and the desktop composer continues one. This
 is the fourth shared-slot slice. It waits behind the shared Pi runtime slot,
 because both edit `accept_prompt` and its signature.
 
-SELECTED 2026-08-12 (thirty-ninth wave) — six slices in priority order.
+SELECTED 2026-08-12 (fortieth wave) — six slices in priority order.
 
-1. The runtime run stream read entries. `ThreadListService for RunJournal`
-   (`src-tauri/core/src/attach/linux.rs:984`) answers `stream_run` and
-   `subscribe_run_commits`, and the runtime service reaches neither. The attach
-   `run.stream` reply needs both.
-2. The prepared-run failure parity above, with the core seam the second
-   measurement calls for.
-3. The cancel parity test. `cancel_active_run`
-   (`src-tauri/core/src/active_run.rs:66`) has no test that proves `abort` reaches
-   the `pi_resume` stub, because that arm records nothing.
-4. The shared Pi runtime slot. `drive_prompt` and `resume_run`
-   (`src-tauri/runtime/src/service.rs:384`, `:502`) each build their own
-   `Arc<Mutex<Option<PiRuntime>>>`, where the desktop holds one slot in
-   `ChatState` (`src-tauri/src/chat.rs:110`). The shared storage and the shared
-   run control slot took the same shape.
-5. The default Home rule move into muniment-core, per the third measurement.
-6. The runtime run control entries. `queue_message`, `cancel_active_run`, and
+1. The prepared-run failure parity above, with the core seam the runtime
+   dependency measurement calls for.
+2. The runtime run control entries. `queue_message`, `cancel_active_run`, and
    `queue_permission_answer` (`src-tauri/core/src/active_run.rs`) all read the
    shared run control slot, and the runtime service exposes no entry for the
    attach `run.steer`, `run.follow_up`, `run.cancel`, and `permission.answer`
    operations.
+3. The shared Pi runtime slot. `drive_prompt` and `resume_run`
+   (`src-tauri/runtime/src/service.rs:422`, `:540`) each build their own
+   `Arc<Mutex<Option<PiRuntime>>>`, where the desktop holds one slot in
+   `ChatState` (`src-tauri/src/chat.rs:110`). The shared storage and the shared
+   run control slot took the same shape.
+4. The cancel parity test. `cancel_active_run`
+   (`src-tauri/core/src/active_run.rs:66`) has no test that proves `abort` reaches
+   the `pi_resume` stub, because that arm records nothing.
+5. The runtime `home.ensure` entry, per the fortieth-wave measurement.
+6. The runtime `workspace.onboard` entry, per the same measurement.
 
 SEQUENCED — after the shared Pi runtime slot, the later extraction slices are the
 desktop client conversion and Linux user-unit registration. Each sits behind a
@@ -841,17 +848,26 @@ The tool set stays fixed for a conversation. Every retrieval is capped, and the
 character budget comes from the selected model capability record. Every write
 filters secrets, and every recall carries a receipt.
 
-DONE 2026-08-07 — phase one is built end to end (MUNIDESK-960, 966, 967).
-`collect_markdown` (`src-tauri/core/src/memory_index.rs:696`) reads the four
-scaffold directories under bounded limits.
-`src-tauri/core/src/memory_secret.rs` rejects a record that
-carries one of the four `secret.*` rules. `src-tauri/core/src/memory_index.rs`
-holds the rebuildable SQLite FTS5 cache, the `RetrievalLimits` rule that lowers
-but never raises a cap, the static `memory-search` tool declaration, and the
-`RecallRecord` receipt. `src-tauri/src/memory.rs` composes one session per run,
-writes the Pi agent extension that registers the tool, and dispatches each call.
-`coordinate_memory_search` (`src-tauri/src/chat_coordinate.rs:672`) appends a
-`memory.recalled` event for every recall.
+DONE 2026-08-07 through 2026-08-09 — phase one is built end to end
+(MUNIDESK-960, 966, 967, 980, 981, 984, 990, 991, 994, 998, 1006, 1008, 1012,
+1016, 1019, 1025, 1026). `src-tauri/core/src/memory_index.rs` holds the
+rebuildable SQLite FTS5 cache, the bounded Home walk over the four scaffold
+directories, the `RetrievalLimits` rule that lowers but never raises a cap, the
+static `memory-search` tool declaration, and the `RecallRecord` receipt.
+`src-tauri/core/src/memory_secret.rs` rejects a record that carries one of the
+four `secret.*` rules, and `compile_onboarding_home_write_plan`
+(`src-tauri/core/src/home.rs:509`) rejects an approved import file that carries a
+credential and names that file. `src-tauri/src/memory.rs` composes one session
+per run and writes the Pi agent extension atomically, a resumed run opens its own
+session, and `coordinate_memory_search`
+(`src-tauri/src/chat_coordinate.rs:672`) appends one `memory.recalled` event per
+recall. A search caps at 1,024 Unicode scalar values and 64 terms, answers every
+failure with a named `error.kind`, reads the cache without scanning the Home, and
+reads its `source_file_state` digest from the `memory_cache_state` table beside a
+cache generation. A damaged cache rebuilds, a timed-out first build rolls back,
+and one session's build no longer blocks another session's search. The chat
+projection carries each recall, and the shell renders it as one `Memory` row in
+the expanded receipt record.
 
 ANSWERED IN PRACTICE 2026-08-07 — the memory lane filed the phase-one store slice
 without the owner ruling it had promised to wait for. MUNIDESK-960 landed the
@@ -862,124 +878,27 @@ from the Markdown sources. The journal migration alters the schema of the durabl
 store that holds the only copy of run history. That reading releases the cache and
 leaves the journal migration held.
 
-DONE 2026-08-07 — §17 rule 7 reaches production (MUNIDESK-980). The onboarding
-import is the product's only memory write path, and
-`compile_onboarding_home_write_plan` now rejects an approved file that carries a
-secret.
-DONE 2026-08-08 — the secret rejection names the approved file that carries the
-credential (MUNIDESK-1012). `OnboardingHomeWritePlanError::SecretRejected` now
-carries the offending entry's `source_name`, the command error carries it, and
-the screen names the file. The loop returns the first offending entry, and
-`reject_unsafe_metadata` already bounds the name. DESIGN.md carries the rule
-that an error rejecting one item from a set names that item.
-
-DONE 2026-08-07 — a resumed run opens its memory session (MUNIDESK-981).
-`install_resume_run` (`src-tauri/src/chat.rs:885`) opens the session and clears
-the active run when the open fails, so a resumed run never declares a tool it
-cannot serve.
-
-DONE 2026-08-08 — the Pi agent extension file is written atomically
-(MUNIDESK-991). `write_agent_extension` (`src-tauri/src/memory.rs:57`) writes a
-uniquely named temporary file and replaces the fixed path through `rename` on
-POSIX and `MoveFileExW` on Windows. Two runs that start at once no longer hand
-Pi a truncated `--extension` file. The planner had measured the race by reading
-every call site.
-
-DONE 2026-08-07 — a timed-out first index build no longer breaks memory search
-for good (MUNIDESK-984). `MemoryIndex::open`
-(`src-tauri/core/src/memory_index.rs:331`) sets `PRAGMA journal_mode = MEMORY`,
-so a reindex that stops at its deadline rolls back rather than leaving half its
-rows behind. `refreshed_cache` (`:303`) deletes and rebuilds a cache that SQLite
-reports as damaged. The planner measured the original defect on a Home of 2,000
-Markdown files, where the first build took 1.14 seconds and every later search
-then failed with SQLite constraint error 1555 on `memory_files`.
-
-DONE 2026-08-08 — the index build left the retrieval deadline (MUNIDESK-990).
-`MemoryIndex::search` (`src-tauri/core/src/memory_index.rs:259`) calls
-`read_cache`, which opens the cache and reads it without scanning the Home.
-`MemoryRuntimeSession::build_with_timeout` (`:172`) owns the build under its own
-deadline, and `ApplicationMemoryRuntime::open_session` runs it once per run.
-
-MEASURED 2026-08-08, corrected on the fifth wave (planner, scratch `cargo test`
-over a Home of 2,000 Markdown files) — the recall receipt reads every indexed
-row. `source_state` (`src-tauri/core/src/memory_index.rs:696`) reads every
-`memory_files` row and SHA-256 hashes the whole set on every search, only to
-stamp `RecallRecord::source_file_state`. The fourth wave measured 9.5ms of a
-16.2ms search and called the receipt dearer than the search. That run used a
-debug build. A release build measures 5.4ms per search, with 0.9ms for the cache
-open plus the digest, so the earlier reading overstated the cost. The scan is
-still linear in the indexed file count, and the index caps at 10,000 files. All
-sessions share `memory-index.sqlite3`, so a digest cached inside one
-`MemoryIndex` can go stale when another session reindexes. Store the digest with
-a cache generation in SQLite. Write both in the same reindex transaction as
-`memory_files` and FTS5, and read them in the same snapshot as the search
-results. Cache removal and rebuild must replace both values. Add a concurrency
-test where one session reindexes before an earlier session searches. The earlier
-session must return the updated rows and their matching `source_file_state`.
-This removes the scan without a durable-store migration, because the database
-remains a disposable cache. DONE 2026-08-08 (MUNIDESK-1006). The
-`memory_cache_state` table stores the digest beside a cache generation, and one
-reindex transaction writes both.
-
-DO NOT RE-FILE — the per-run index build is not a defect. On the same 2,000-file
-Home a release-build reindex costs 30ms once the cache holds the current hashes,
+DO NOT RE-FILE — the per-run index build is not a defect. On a Home of 2,000
+Markdown files a release-build reindex costs 30ms once the cache holds the
+current hashes,
 and the first build costs about 600ms. `ApplicationMemoryRuntime::open_session`
 runs one build per run start, so a warm run start pays 30ms.
 
-DONE 2026-08-08 — one session's index build no longer blocks another
-session's search (MUNIDESK-1016). Each session holds its own lock, and the map
-lock covers the lookup alone.
+DESIGN CALL 2026-08-07 — a recall belongs in the expanded receipt record under
+the provenance line, beside the route, model, cost, and time rows, rather than in
+a new transcript element. The owner mockups name no memory surface, and
+design-spec §2.2 already promises the expanded receipt names the connections a
+reply touched. A running search also already renders as an ordinary
+`Memory search` tool card, because Pi reports the registered tool. DESIGN.md
+states that a recall renders there and nowhere else, and that an error rejecting
+one item from a set names that item. `RunEventProjection`
+(`src-tauri/core/src/journal/mod.rs:230`) stayed a strict field allowlist, so a
+companion still receives no recall payload.
 
-DONE 2026-08-08 — the dead Home scanner is removed, and the deadline-aware
-index walker is the one copy (MUNIDESK-1019).
-
-DONE 2026-08-08 — a memory-search query accepts at most 1,024 Unicode scalar
-values and at most 64 whitespace-delimited terms (MUNIDESK-1025).
-`MemoryIndex::search` checks both limits before it opens the cache, and an
-oversized query returns `query_too_long` instead of overrunning the 250ms
-retrieval budget.
-
-DONE 2026-08-09 — every failed memory search answers the model with a named
-reason instead of a cancelled request (MUNIDESK-1026). The response carries
-`error.kind` and a stable message, from `invalid_tool_arguments` through
-`runtime_unavailable`, so the model can shorten a rejected query or lower a
-raised limit.
-
-MEASURED 2026-08-07 — nothing renders a recall. The reducer drops
-`memory.recalled`, so `ChatProjection`
-(`src-tauri/core/src/journal/reducer.rs:434`) carries no recall and the frontend
-receives none. DESIGN CALL 2026-08-07 — a recall belongs in the expanded receipt
-record under the provenance line, beside the route, model, cost, and time rows,
-rather than in a new transcript element. The owner mockups name no memory
-surface, and design-spec §2.2 already promises the expanded receipt names the
-connections a reply touched. A running search also already renders as an
-ordinary `Memory search` tool card, because Pi reports the registered tool.
-DONE 2026-08-08 — the chat projection carries the recall (MUNIDESK-994).
-`ChatProjection::recalls` (`src-tauri/core/src/journal/reducer.rs:443`) holds one
-`ProjectedRecall` per `memory.recalled` event with its query and its files. Both
-webview payload sites carry the list, `chat_event`
-(`src-tauri/src/chat_coordinate.rs:878`) and `project_history_entry`
-(`src-tauri/src/chat_threads.rs:126`). `RunEventProjection` (`journal/mod.rs:230`)
-stayed a strict field allowlist, so a companion still receives no recall payload.
-
-DONE 2026-08-08 — the shell renders that recall (MUNIDESK-998).
-`applyChatEvent` and `historyMessages` (`src/lib/chat-state.js:120`, `:136`)
-carry the field, and `receiptRows` (`:62`) appends one `Memory` row per recall
-to the expanded record. DESIGN.md states that a recall renders there and nowhere
-else.
-
-MEASURED 2026-08-08 (sixth wave, planner, built the bundle and captured
-`test/probe/history.html` at 1100x760 with the receipt expanded) — that row
-carries the wrong half of the recall. `receiptRows`
-(`src/lib/chat-state.js:68`) joins `recall.files` with a comma and drops
-`recall.query`, which `ProjectedRecall`
-(`src-tauri/core/src/journal/reducer.rs:448`) supplies beside the files. Three
-Home-relative paths in one value widened the record card from 329px to the full
-760px thread column, so one receipt in a thread renders at a different width
-from its neighbours. Two recalls in one run produce two `Memory` terms that name
-nothing that tells them apart. A recall that matched no file renders the prose
-`no files` where every other value is data. DONE 2026-08-08
-(MUNIDESK-1008).
+DO NOT RE-POLISH — the memory receipt row has taken three waves. MUNIDESK-994
+projected the recall, MUNIDESK-998 rendered it, and MUNIDESK-1008 fixed the
+value it carried. A later wave needs a new measurement before it touches that
+row again.
 
 DEFERRED — phase two embeddings follow phase one and a pinned artifact decision.
 
