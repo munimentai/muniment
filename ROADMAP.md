@@ -542,23 +542,24 @@ disagree, because `chat_file_metadata` rejects a path with no usable final
 segment and `open_selected_files` does not. The lane waits for an owner look at
 why this one ticket never dispatches.
 
-MERGE HAZARD — all six forty-fourth-wave slices edit
-`src-tauri/runtime/src/service.rs`. They are the shared session-thread tracker,
-the `home.ensure` entry, the `workspace.onboard` entry, the entitlement snapshot
-entry, the sign-out entry, and the device list entry. Only the shared
-session-thread tracker edits `accept_prompt` and its signature. The other five
-add functions beside the existing entries. Each ticket tells the implementer to
+MERGE HAZARD — all five remaining forty-fourth-wave slices edit
+`src-tauri/runtime/src/service.rs`. They are the `home.ensure` entry, the
+`workspace.onboard` entry, the entitlement snapshot entry, the sign-out entry,
+and the device list entry. Each adds a function beside the existing entries.
+Each ticket tells the implementer to
 rebase on `main` before it opens the pull request. The 2026-08-04 silent revert
 came from a stale base.
 
 VERIFIED 2026-08-12 (forty-fourth wave, planner, read
 `src-tauri/runtime/src/service.rs` and ran `cargo test --package
-muniment-runtime`) — one forty-third-wave slice landed. `accept_prompt`,
+muniment-runtime`) — two shared-slot slices landed. `accept_prompt`,
 `run_prompt`, and `resume_run` now take one
 `Arc<Mutex<Option<PiRuntime>>>` from the caller, so one slot per process serves
-every runtime run (MUNIDESK-1150). The other five slices are unbuilt. `service.rs`
-still has no `home.ensure` entry, no `workspace.onboard` entry, no entitlement
-snapshot entry, no sign-out entry, and no device list entry.
+every runtime run (MUNIDESK-1150). `accept_prompt` and `run_prompt` now take one
+`SessionThread` and the continuation choice from the caller, so one tracker can
+serve every runtime prompt (MUNIDESK-1152). Five slices remain unbuilt.
+`service.rs` still has no `home.ensure` entry, no `workspace.onboard` entry, no
+entitlement snapshot entry, no sign-out entry, and no device list entry.
 
 DONE 2026-08-12 — a prepared run that fails its attachment projection ends itself
 (MUNIDESK-1148). `prepare_desktop_run` (`src-tauri/core/src/run_start.rs:293`)
@@ -601,38 +602,30 @@ functions. `workspace.onboard` calls `onboard_companion_workspace`
 (`src-tauri/core/src/attach/desktop_service.rs:133`, `:168`) are the shapes both
 runtime entries mirror.
 
-MEASURED 2026-08-12 (thirty-ninth wave, planner, read `accept_prompt` beside
-`ChatState`, confirmed again in the forty-fourth wave) — a runtime prompt with no
-thread id builds `SessionThread::default()` per call
-(`src-tauri/runtime/src/service.rs:331`), and it pins `continue_existing` to
-`false`. The desktop holds one tracker in `ChatState`
-(`src-tauri/src/chat.rs:112`) and passes `continue_session_thread`
-(`src-tauri/src/chat.rs:307`). Two runtime prompts with no thread id therefore
-open two threads, where the desktop composer continues one. The shared Pi runtime
-slot has landed, so this slice is now unblocked.
+DONE 2026-08-12 — the runtime accepts a shared session-thread tracker and the
+caller's continuation choice (MUNIDESK-1152). Two prompts with continuation
+enabled reuse one thread, and two prompts with continuation disabled open
+separate threads.
 
-SELECTED 2026-08-12 (forty-fourth wave) — six slices in priority order.
+SELECTED 2026-08-12 (forty-fourth wave) — five slices in priority order.
 
-1. The shared session-thread tracker, per the measurement above. The shared
-   storage, the shared run control slot, and the shared Pi runtime slot all took
-   the same shape.
-2. The runtime `home.ensure` entry, per the fortieth-wave measurement.
-3. The runtime `workspace.onboard` entry, per the same measurement.
-4. The runtime entitlement snapshot entry. `service.rs` answers a fresh native
+1. The runtime `home.ensure` entry, per the fortieth-wave measurement.
+2. The runtime `workspace.onboard` entry, per the same measurement.
+3. The runtime entitlement snapshot entry. `service.rs` answers a fresh native
    session and a validated cloud chat grant, and it projects no entitlement
    snapshot, so `EntitlementSnapshotTracker`
    (`src-tauri/core/src/auth/entitlement_snapshot.rs`) has no runtime call site.
    ADR 0012 gives the service the signed snapshot.
-5. The runtime sign-out entry. `sign_out_native_session`
+4. The runtime sign-out entry. `sign_out_native_session`
    (`src-tauri/core/src/auth/native_revocation.rs:172`) has no runtime call site,
    and ADR 0012 makes sign-out a service capability rather than a desktop
    prerequisite.
-6. The runtime device list entry, over `list_native_devices`
+5. The runtime device list entry, over `list_native_devices`
    (`src-tauri/core/src/auth/native_devices.rs:169`). `auth_devices`
    (`src-tauri/src/auth/mod.rs:258`) is the desktop shape it mirrors.
 
-SEQUENCED — the shared runtime activity registry follows the shared session-thread
-tracker, because both edit `accept_prompt` and its signature.
+SEQUENCED — the shared runtime activity registry remains after the landed shared
+session-thread tracker, because both edit `accept_prompt` and its signature.
 
 SEQUENCED — after the shared Pi runtime slot, the later extraction slices are the
 desktop client conversion and Linux user-unit registration. Each sits behind a
