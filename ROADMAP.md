@@ -556,9 +556,9 @@ VERIFIED 2026-08-12 (forty-fourth wave, planner, read
 muniment-runtime`) — one forty-third-wave slice landed. `accept_prompt`,
 `run_prompt`, and `resume_run` now take one
 `Arc<Mutex<Option<PiRuntime>>>` from the caller, so one slot per process serves
-every runtime run (MUNIDESK-1150). The other four slices are unbuilt. `service.rs`
+every runtime run (MUNIDESK-1150). The other five slices are unbuilt. `service.rs`
 still has no `home.ensure` entry, no `workspace.onboard` entry, no entitlement
-snapshot entry, and no sign-out entry.
+snapshot entry, no sign-out entry, and no device list entry.
 
 DONE 2026-08-12 — a prepared run that fails its attachment projection ends itself
 (MUNIDESK-1148). `prepare_desktop_run` (`src-tauri/core/src/run_start.rs:293`)
