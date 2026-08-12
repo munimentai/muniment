@@ -614,10 +614,11 @@ disagree, because `chat_file_metadata` rejects a path with no usable final
 segment and `open_selected_files` does not. The lane waits for an owner look at
 why this one ticket never dispatches.
 
-MERGE HAZARD — the first and second thirty-fifth-wave slices both edit
-`src-tauri/runtime/src/service.rs`. Each ticket tells the implementer to
-rebase on `main` before it opens the pull request. The 2026-08-04 silent
-revert came from a stale base.
+MERGE HAZARD — three thirty-sixth-wave slices edit
+`src-tauri/runtime/src/service.rs`. They are the prompt protection parity, the
+acceptance split, and the retention prompt sweep. Each ticket tells the
+implementer to rebase on `main` before it opens the pull request. The
+2026-08-04 silent revert came from a stale base.
 
 DONE 2026-08-08 — the memory runtime is the twentieth core move
 (MUNIDESK-995). `src-tauri/core/src/memory_runtime.rs` composes one
@@ -857,25 +858,43 @@ DONE 2026-08-11 — the steer parity test landed (MUNIDESK-1123).
 through `queue_message` and the stub's queue mode, so a queued steer
 reaches a runtime run exactly as it reaches a desktop run.
 
-SELECTED 2026-08-12 (thirty-fifth wave) — four slices in priority
-order. The attachment pass-through, the prompt protection parity,
-and the permission answer parity test drained at batch positions
-two through four, so they re-file in strict priority order. The
-attachment pass-through takes the first position, because
-`run_prompt` (`src-tauri/runtime/src/service.rs:215`, `:233`)
-passes `Vec::new()` where both preparation entries take
-`files: Vec<OpenSelectedFile>`
-(`src-tauri/core/src/run_preparation.rs:15`). The prompt protection
-parity follows, per the measurement above. The permission answer
-parity test follows, because `queue_permission_answer`
-(`src-tauri/core/src/active_run.rs:94`) has no test against a live
-runtime run, while the steer path gained its test with
-MUNIDESK-1123. The fourth slice is new: `DesktopAttachService`, the
-`RunStartIdempotency` trait, and their implementations move into
-muniment-core as the thirty-fourth core move, because the seam is
-already generic over the core `RunStartBoundaries` trait
-(`src-tauri/src/attach_service.rs:215`, `:854`), names no Tauri
-type, and the runtime crate needs the same seam for the cutover.
+DONE 2026-08-12 — the attachment pass-through landed (MUNIDESK-1125).
+`run_prompt` (`src-tauri/runtime/src/service.rs:181`) takes
+`files: Vec<OpenSelectedFile>` and hands them to both preparation entries
+(`src-tauri/core/src/run_preparation.rs`). A runtime-driven run records its
+opened files as a desktop run does.
+
+DONE 2026-08-12 — the thirty-fourth core move landed (MUNIDESK-1126).
+`src-tauri/core/src/attach/desktop_service.rs` holds `DesktopAttachService`,
+the `RunStartIdempotency` trait, and their implementations. The seam stays
+generic over `RunStartBoundaries` (`src-tauri/core/src/run_start.rs:64`). The
+runtime crate composes the same seam at the cutover.
+
+DRAINED 2026-08-12 (thirty-fifth wave) — the prompt protection parity and the
+permission answer parity test sat at batch positions two and three. Neither
+merged. The 2026-08-11 measurement above reads that as batch position rather
+than ticket content. Both re-file in the first two positions.
+
+SELECTED 2026-08-12 (thirty-sixth wave) — five slices in priority order.
+
+1. The prompt protection parity. `run_prompt`
+   (`src-tauri/runtime/src/service.rs:221`, `:238`) still passes `|| Ok(())`
+   where the desktop passes `protect_prompt` (`src-tauri/src/chat.rs:315`,
+   `:328`).
+2. The permission answer parity test. `queue_permission_answer`
+   (`src-tauri/core/src/active_run.rs:94`) has no test against a live runtime
+   run. The steer path gained its test with MUNIDESK-1123.
+3. A `create_thread_now` seam in
+   `src-tauri/core/src/journal/thread_mutation.rs`. The desktop
+   `create_thread` (`src-tauri/src/chat.rs:165`) stamps the time at the call
+   site. The runtime crate may name no chrono type, so it needs the seam the
+   rename and delete entries already read.
+4. The acceptance split. `run_prompt` blocks until the run settles, so no
+   caller learns the thread id or the projected attachments of the run it
+   started. The attach `run.start` reply needs both.
+5. The retention prompt sweep. `apply_retention`
+   (`src-tauri/core/src/journal/retention.rs:55`) deletes an expired run, and
+   that run's protected prompt stays in the platform keychain.
 
 SEQUENCED — the later extraction slices are the remaining Pi execution move, the
 desktop client conversion, and Linux user-unit registration, each behind a
@@ -1655,10 +1674,10 @@ for it.
 
 VERIFIED 2026-08-12 (thirty-fifth wave, planner, read the code) —
 the planner confirmed the landed steer parity test at
-`src-tauri/runtime/tests/steer.rs` (MUNIDESK-1123), and confirmed
-that the attachment pass-through, the prompt protection parity, and
-the permission answer parity test remain unbuilt, so all three
-re-file in strict priority order. This planning clone carried no
+`src-tauri/runtime/tests/steer.rs` (MUNIDESK-1123), confirmed the landed
+attachment pass-through (MUNIDESK-1125), and confirmed that the prompt
+protection parity and the permission answer parity test remain unbuilt, so
+both re-file in strict priority order. This planning clone carried no
 warm build, so the Rust CI job and the desktop-ci gates remain the
 test evidence for this wave. Earlier waves recorded the same shape
 of verification, and this entry replaces that ledger.
