@@ -3,11 +3,10 @@ use std::process::Command;
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::Duration;
 
-use muniment_core::active_run::cancel_active_run;
 use muniment_core::chat_grant::ChatGrant;
 use muniment_core::home::confirm_home;
 use muniment_core::sidecar::pi_install::{PiArtifactDescriptor, PI_ARTIFACT};
-use muniment_runtime::{open_profile_storage, run_prompt};
+use muniment_runtime::{cancel_run, open_profile_storage, run_prompt};
 
 static ENVIRONMENT: Mutex<()> = Mutex::new(());
 
@@ -117,14 +116,14 @@ fn cancelling_a_live_run_sends_abort_to_pi() {
             events.recv_timeout(Duration::from_secs(5)).unwrap().phase,
             "thinking"
         );
-        cancel_active_run(&active, run_id, Some("workspace-a")).unwrap();
+        cancel_run(Arc::clone(&active), "workspace-a".into(), run_id.into()).unwrap();
         run.join().unwrap().unwrap();
     });
 
     let captured = fs::read_to_string(abort_capture).unwrap();
     assert!(captured.contains(r#""type":"abort""#));
     assert_eq!(
-        cancel_active_run(&active, run_id, Some("workspace-a")),
+        cancel_run(Arc::clone(&active), "workspace-a".into(), run_id.into()),
         Err("That reply is no longer active.".into())
     );
     let journal_events = storage.lock().unwrap().journal.events(run_id).unwrap();
