@@ -92,6 +92,7 @@ fn cancelling_a_live_run_sends_abort_to_pi() {
 
     let run_id = "018f0000-0000-7000-8000-000000000113";
     let storage = open_profile_storage(&profile).unwrap();
+    let runtime = Arc::new(Mutex::new(None));
     let active = Arc::new(Mutex::new(None));
     let (subscriber, events) = mpsc::channel();
     std::thread::scope(|scope| {
@@ -99,6 +100,7 @@ fn cancelling_a_live_run_sends_abort_to_pi() {
             run_prompt(
                 &profile,
                 Arc::clone(&storage),
+                Arc::clone(&runtime),
                 &config,
                 run_id.into(),
                 "initial prompt".into(),
