@@ -4,7 +4,11 @@ use muniment_core::active_run::{
     cancel_active_run, queue_message, queue_permission_answer_with_commit, ChatQueueRequest,
 };
 #[cfg(target_os = "linux")]
-use muniment_core::attach::linux::RunStreamPage;
+use muniment_core::attach::linux::{LiveConnectionRegistry, RunStreamPage};
+#[cfg(target_os = "linux")]
+use muniment_core::attach::{
+    load_client_credentials, CompanionRecord, CompanionRegistry, COMPANION_CREDENTIAL_FILE_NAME,
+};
 use muniment_core::attach::{
     ProtocolError, RuntimeActivityRegistry, WorkspaceContextMap, WorkspaceOnboardRequest,
     WorkspaceOnboarded,
@@ -263,6 +267,36 @@ pub fn open_profile_storage(
     let (mut journal, cas) = profile.open_storage()?;
     reconcile_interrupted_runs(&mut journal, &runtime_provenance());
     Ok(Arc::new(Mutex::new(ChatStorage { journal, cas })))
+}
+
+/// Opens the shared companion registry under a configuration directory.
+#[cfg(target_os = "linux")]
+pub fn open_companion_registry(
+    config_directory: impl AsRef<Path>,
+) -> Result<CompanionRegistry, ProtocolError> {
+    let credential_path = config_directory
+        .as_ref()
+        .join(COMPANION_CREDENTIAL_FILE_NAME);
+    let credentials = Arc::new(Mutex::new(load_client_credentials(&credential_path)?));
+    Ok(CompanionRegistry::new(
+        credentials,
+        credential_path,
+        LiveConnectionRegistry::default(),
+    ))
+}
+
+/// Lists authorized companions by identity without their secret credentials.
+#[cfg(target_os = "linux")]
+pub fn list_companions(
+    registry: &CompanionRegistry,
+) -> Result<Vec<CompanionRecord>, ProtocolError> {
+    registry.list()
+}
+
+/// Revokes one authorized companion.
+#[cfg(target_os = "linux")]
+pub fn revoke_companion(registry: &CompanionRegistry, identity: &str) -> Result<(), ProtocolError> {
+    registry.revoke(identity)
 }
 
 /// Lists the threads owned by one subject.

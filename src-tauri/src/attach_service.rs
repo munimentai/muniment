@@ -3,7 +3,7 @@ use muniment_core::attach::ApprovalRequest;
 #[cfg(target_os = "linux")]
 use muniment_core::attach::{
     bounded_claim, load_client_credentials, save_client_credentials as persist_client_credentials,
-    ClientCredential, CompanionRegistry, WorkspaceContextMap,
+    ClientCredential, CompanionRegistry, WorkspaceContextMap, COMPANION_CREDENTIAL_FILE_NAME,
 };
 use muniment_core::attach::{ApprovalCoordinator, ProtocolError};
 use std::collections::HashMap;
@@ -555,7 +555,7 @@ impl<R: tauri::Runtime> TauriDesktopAttachService<R>
             .path()
             .app_data_dir()
             .map_err(|_| ProtocolError::persistence_failed())?
-            .join("attach-client-credentials.json");
+            .join(COMPANION_CREDENTIAL_FILE_NAME);
         Ok(Self {
             boundaries: TauriRunStartBoundaries {
                 app,
@@ -661,7 +661,7 @@ pub fn start_attach_listener<R: tauri::Runtime>(app: tauri::AppHandle<R>) {
         app.path()
             .app_data_dir()
             .ok()
-            .map(|path| path.join("attach-client-credentials.json"))
+            .map(|path| path.join(COMPANION_CREDENTIAL_FILE_NAME))
     }) else {
         return;
     };
@@ -950,7 +950,7 @@ mod tests {
         let filesystem = AttachFilesystem::from_runtime_directory(&runtime).unwrap();
         let endpoint = filesystem.endpoint_path().to_owned();
         let listener = Arc::new(
-            AttachListenerState::load(&runtime.join("attach-client-credentials.json")).unwrap(),
+            AttachListenerState::load(&runtime.join(COMPANION_CREDENTIAL_FILE_NAME)).unwrap(),
         );
         let app = tauri::test::mock_app();
         app.manage(AttachCompanionState::default());
@@ -1011,7 +1011,7 @@ mod tests {
         let filesystem = AttachFilesystem::from_runtime_directory(&runtime).unwrap();
         let endpoint = filesystem.endpoint_path().to_owned();
         let listener = Arc::new(
-            AttachListenerState::load(&runtime.join("attach-client-credentials.json")).unwrap(),
+            AttachListenerState::load(&runtime.join(COMPANION_CREDENTIAL_FILE_NAME)).unwrap(),
         );
         let app = tauri::test::mock_app();
         app.manage(AttachCompanionState::default());
@@ -1115,7 +1115,7 @@ mod tests {
         std::fs::set_permissions(&runtime, std::fs::Permissions::from_mode(0o700)).unwrap();
         let filesystem = AttachFilesystem::from_runtime_directory(&runtime).unwrap();
         let listener = Arc::new(
-            AttachListenerState::load(&runtime.join("attach-client-credentials.json")).unwrap(),
+            AttachListenerState::load(&runtime.join(COMPANION_CREDENTIAL_FILE_NAME)).unwrap(),
         );
         let app = tauri::test::mock_app();
         app.manage(AttachCompanionState::default());
@@ -1213,7 +1213,7 @@ mod tests {
         let filesystem = AttachFilesystem::from_runtime_directory(&runtime).unwrap();
         std::fs::write(filesystem.endpoint_path(), "not a socket").unwrap();
         let listener = Arc::new(
-            AttachListenerState::load(&runtime.join("attach-client-credentials.json")).unwrap(),
+            AttachListenerState::load(&runtime.join(COMPANION_CREDENTIAL_FILE_NAME)).unwrap(),
         );
         let app = tauri::test::mock_app();
         app.manage(AttachCompanionState::default());
