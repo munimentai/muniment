@@ -18,7 +18,9 @@ use muniment_core::run_start::ActiveRun;
 use muniment_core::session_thread::SessionThread;
 use muniment_core::sidecar::pi_install::{PiArtifactDescriptor, PI_ARTIFACT};
 use muniment_core::sidecar::validate_pi_session;
-use muniment_runtime::{open_profile_storage, resume_run, run_prompt, thread_page};
+use muniment_runtime::{
+    accept_prompt, drive_prompt, open_profile_storage, resume_run, run_prompt, thread_page,
+};
 
 static ENVIRONMENT: Mutex<()> = Mutex::new(());
 
@@ -232,7 +234,8 @@ fn runs_two_prompts_in_one_named_thread_and_rejects_an_unknown_thread() {
     let attachment_path = temporary_root.join("runtime-attachment.txt");
     let attachment_bytes = b"runtime attachment";
     fs::write(&attachment_path, attachment_bytes).unwrap();
-    run_prompt(
+    let second_active = Arc::new(Mutex::new(None));
+    let (accepted, launch) = accept_prompt(
         &profile,
         Arc::clone(&storage),
         &config,
@@ -247,11 +250,37 @@ fn runs_two_prompts_in_one_named_thread_and_rejects_an_unknown_thread() {
             byte_length: attachment_bytes.len() as u64,
         }],
         fixture_grant(),
-        Arc::new(Mutex::new(None)),
+        Arc::clone(&second_active),
         None,
         Some(descriptor),
     )
     .unwrap();
+    assert_eq!(accepted.run_id, second_run_id);
+    assert_eq!(accepted.thread_id, thread_id);
+    assert_eq!(accepted.attachments.len(), 1);
+    assert_eq!(
+        accepted.attachments[0].display_name,
+        "runtime-attachment.txt"
+    );
+    assert!(accepted.committed_seq > 0);
+    assert!(!accepted.accepted_at.is_empty());
+    assert_eq!(
+        second_active.lock().unwrap().as_ref().unwrap().id,
+        second_run_id
+    );
+    assert!(storage
+        .lock()
+        .unwrap()
+        .journal
+        .events(second_run_id)
+        .unwrap()
+        .iter()
+        .all(|event| !matches!(
+            event.event_type.as_str(),
+            "run.completed" | "run.failed" | "run.cancelled" | "run.needs_attention"
+        )));
+    drive_prompt(launch);
+    assert!(second_active.lock().unwrap().is_none());
 
     assert_eq!(
         fs::read_to_string(captured_prompts).unwrap(),

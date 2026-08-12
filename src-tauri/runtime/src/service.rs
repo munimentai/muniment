@@ -13,6 +13,7 @@ use muniment_core::chat_resume::{
     clear_active_run, install_active_run, install_resume_run, resumable_context,
     run_resume as drive_resume, ResumeLaunch,
 };
+use muniment_core::chat_view::{chat_attachments, ChatAttachment};
 use muniment_core::journal::reconciliation::reconcile_interrupted_runs;
 use muniment_core::journal::retention::{
     apply_retention_now_with, RetentionError, RetentionOutcome,
@@ -29,18 +30,48 @@ use muniment_core::run_preparation::{
     prepare_new_run_in_thread_after_validation, prepare_new_run_with_session_thread,
     OpenSelectedFile, SessionThreadStart,
 };
-use muniment_core::run_start::ActiveRun;
+use muniment_core::run_start::{accepted_time_now, ActiveRun};
 use muniment_core::session_thread::SessionThread;
 use muniment_core::sidecar::pi_install::{PiArtifactDescriptor, PI_ARTIFACT};
 use muniment_core::thread_history::{chat_thread_open_page, ChatThreadOpenPage};
 use std::collections::{BTreeMap, VecDeque};
 use std::path::Path;
+use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
 use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::RuntimeChatEventSink;
+
+pub struct PromptAcceptance {
+    pub run_id: String,
+    pub thread_id: String,
+    pub attachments: Vec<ChatAttachment>,
+    pub committed_seq: u64,
+    pub accepted_at: String,
+}
+
+pub struct PromptLaunch {
+    profile_directory: PathBuf,
+    storage: SharedStorage,
+    memory_runtime: Arc<ApplicationMemoryRuntime>,
+    runtime_activity: RuntimeActivityRegistry,
+    active: Arc<Mutex<Option<ActiveRun>>>,
+    run_id: String,
+    prompt: String,
+    access_token: String,
+    subject: Option<String>,
+    grant: ChatGrant,
+    cancelled: Arc<AtomicBool>,
+    transport: Arc<Mutex<Option<Arc<muniment_core::sidecar::PiRpcTransport>>>>,
+    adapter: Arc<Mutex<Option<Arc<muniment_core::sidecar::pi_chat::PiRunAdapter>>>>,
+    permission_answers:
+        Arc<Mutex<VecDeque<muniment_core::permission_gate::PendingPermissionAnswer>>>,
+    subscriber: Option<Sender<ChatEvent>>,
+    pi_artifact: Option<PiArtifactDescriptor>,
+    prepared: (u64, muniment_core::journal::reducer::ChatProjector),
+}
 
 /// Returns a fresh native session from the platform credential store.
 pub fn ensure_native_session() -> Result<FreshNativeSession, FreshNativeSessionError> {
@@ -175,9 +206,9 @@ pub fn thread_page(
     .map_err(|_| "Conversation history is unavailable.".to_string())
 }
 
-/// Runs one prompt to completion through the dormant runtime service boundaries.
+/// Accepts one prompt without driving it to completion.
 #[allow(clippy::too_many_arguments)]
-pub fn run_prompt(
+pub fn accept_prompt(
     profile_directory: impl AsRef<Path>,
     storage: SharedStorage,
     config_directory: impl AsRef<Path>,
@@ -191,7 +222,7 @@ pub fn run_prompt(
     active: Arc<Mutex<Option<ActiveRun>>>,
     subscriber: Option<Sender<ChatEvent>>,
     pi_artifact: Option<PiArtifactDescriptor>,
-) -> Result<(), String> {
+) -> Result<(PromptAcceptance, PromptLaunch), String> {
     let profile_directory = profile_directory.as_ref();
     let memory_runtime = Arc::new(ApplicationMemoryRuntime::new(
         config_directory.as_ref().to_path_buf(),
@@ -273,24 +304,39 @@ pub fn run_prompt(
                 },
             )
             .map_err(|_| "Conversation history is unavailable.".to_string())?;
-        Ok::<_, String>(prepared)
+        Ok::<_, String>((prepared, thread_id))
     })();
-    let prepared = match setup {
-        Ok(prepared) => prepared,
+    let (prepared, thread_id) = match setup {
+        Ok(setup) => setup,
         Err(error) => {
             clear_active_run(&active, &run_id);
             memory_runtime.close_session(&run_id);
             return Err(error);
         }
     };
-    coordinate(
-        RuntimeChatEventSink::new(profile_directory, subscriber, memory_runtime.clone())
-            .with_pi_artifact(pi_artifact.unwrap_or(PI_ARTIFACT)),
+    let projection = match prepared.1.projection() {
+        Ok(projection) => projection,
+        Err(error) => {
+            memory_runtime.close_session(&run_id);
+            clear_active_run(&active, &run_id);
+            return Err(error.to_string());
+        }
+    };
+    let attachments = chat_attachments(&projection.attachments);
+    let acceptance = PromptAcceptance {
+        run_id: run_id.clone(),
+        thread_id,
+        attachments,
+        committed_seq: prepared.0,
+        accepted_at: accepted_time_now(),
+    };
+    let launch = PromptLaunch {
+        profile_directory: profile_directory.to_path_buf(),
         storage,
-        Arc::new(Mutex::new(None)),
+        memory_runtime,
         runtime_activity,
-        memory_runtime.clone(),
-        run_id.clone(),
+        active,
+        run_id,
         prompt,
         access_token,
         subject,
@@ -299,12 +345,76 @@ pub fn run_prompt(
         transport,
         adapter,
         permission_answers,
+        subscriber,
+        pi_artifact,
+        prepared,
+    };
+    Ok((acceptance, launch))
+}
+
+/// Drives an accepted prompt to completion.
+pub fn drive_prompt(launch: PromptLaunch) {
+    coordinate(
+        RuntimeChatEventSink::new(
+            &launch.profile_directory,
+            launch.subscriber,
+            launch.memory_runtime.clone(),
+        )
+        .with_pi_artifact(launch.pi_artifact.unwrap_or(PI_ARTIFACT)),
+        launch.storage,
+        Arc::new(Mutex::new(None)),
+        launch.runtime_activity,
+        launch.memory_runtime.clone(),
+        launch.run_id.clone(),
+        launch.prompt,
+        launch.access_token,
+        launch.subject,
+        launch.grant,
+        launch.cancelled,
+        launch.transport,
+        launch.adapter,
+        launch.permission_answers,
         None,
         None,
-        Some(prepared),
+        Some(launch.prepared),
     );
-    memory_runtime.close_session(&run_id);
-    clear_active_run(&active, &run_id);
+    launch.memory_runtime.close_session(&launch.run_id);
+    clear_active_run(&launch.active, &launch.run_id);
+}
+
+/// Runs one prompt to completion through the dormant runtime service boundaries.
+#[allow(clippy::too_many_arguments)]
+pub fn run_prompt(
+    profile_directory: impl AsRef<Path>,
+    storage: SharedStorage,
+    config_directory: impl AsRef<Path>,
+    run_id: String,
+    prompt: String,
+    thread_id: Option<String>,
+    access_token: String,
+    subject: Option<String>,
+    files: Vec<OpenSelectedFile>,
+    grant: ChatGrant,
+    active: Arc<Mutex<Option<ActiveRun>>>,
+    subscriber: Option<Sender<ChatEvent>>,
+    pi_artifact: Option<PiArtifactDescriptor>,
+) -> Result<(), String> {
+    let (_, launch) = accept_prompt(
+        profile_directory,
+        storage,
+        config_directory,
+        run_id,
+        prompt,
+        thread_id,
+        access_token,
+        subject,
+        files,
+        grant,
+        active,
+        subscriber,
+        pi_artifact,
+    )?;
+    drive_prompt(launch);
     Ok(())
 }
 
