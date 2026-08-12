@@ -1674,10 +1674,10 @@ for it.
 
 VERIFIED 2026-08-12 (thirty-fifth wave, planner, read the code) —
 the planner confirmed the landed steer parity test at
-`src-tauri/runtime/tests/steer.rs` (MUNIDESK-1123), and confirmed
-that the attachment pass-through, the prompt protection parity, and
-the permission answer parity test remain unbuilt, so all three
-re-file in strict priority order. This planning clone carried no
+`src-tauri/runtime/tests/steer.rs` (MUNIDESK-1123), confirmed the landed
+attachment pass-through (MUNIDESK-1125), and confirmed that the prompt
+protection parity and the permission answer parity test remain unbuilt, so
+both re-file in strict priority order. This planning clone carried no
 warm build, so the Rust CI job and the desktop-ci gates remain the
 test evidence for this wave. Earlier waves recorded the same shape
 of verification, and this entry replaces that ledger.
