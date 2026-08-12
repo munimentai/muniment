@@ -16,8 +16,8 @@ them must exercise the real contracts. It must add no mocked production path.
 > the Phase 3 voice section. The seventh took the companion execution surfaces
 > section. The eighth took the onboarding and Muniment Home section. The ninth
 > took the durable local run journal section. The tenth took the cross-surface
-> contracts section. The stable release and distribution section is the next
-> compaction target.
+> contracts section. The eleventh took the stable release and distribution
+> section. The desktop QA automation section is the next compaction target.
 
 ## M0 — Scaffold (done 2026-07-09)
 
@@ -468,11 +468,12 @@ every call site reads it.
 DONE — the dormant service entry points are built (MUNIDESK-1080, 1086, 1091,
 1094, 1096, 1099, 1100, 1102, 1105, 1108, 1110, 1112, 1113, 1115, 1117, 1119,
 1121, 1123, 1125, 1128, 1130, 1133, 1135, 1136, 1139, 1142, 1144, 1145, 1147,
-1150, 1152, 1154, 1155, 1157).
+1150, 1152, 1154, 1155, 1157, 1161).
 `src-tauri/runtime/src/service.rs`
 opens one shared profile storage and reconciles interrupted runs, answers a fresh
 native session from the platform credential store, projects the signed
-entitlement snapshot and reports a version change, scaffolds the cross-project
+entitlement snapshot and reports a version change, revokes the server session and
+clears the local one on sign-out, scaffolds the cross-project
 Home, records a companion workspace and its two canonical directories, fetches
 and validates a cloud chat grant, lists and opens one subject's
 threads, creates one durable thread for
@@ -531,26 +532,26 @@ disagree, because `chat_file_metadata` rejects a path with no usable final
 segment and `open_selected_files` does not. The lane waits for an owner look at
 why this one ticket never dispatches.
 
-MERGE HAZARD — every forty-eighth-wave slice edits
-`src-tauri/runtime/src/service.rs`. They are the sign-out entry, the device list
-entry, the session status entry, the companion list and revoke entries, and the
-shared runtime activity registry. The first three add one function each beside
-the existing entries. The fourth adds a registry open path and two companion
-functions. The registry slice changes the
-`accept_prompt` and `resume_run` signatures, and it edits the five runtime test
+MERGE HAZARD — every forty-ninth-wave slice edits
+`src-tauri/runtime/src/service.rs` and `src-tauri/runtime/src/lib.rs`. They are
+the device list entry, the session status entry, the companion list and revoke
+entries, and the shared runtime activity registry. The first two add one function
+each beside the existing entries. The third adds a registry open path and two
+companion functions. The registry slice changes the `accept_prompt`,
+`run_prompt`, and `resume_run` signatures, and it edits the five runtime test
 files that call them. Each ticket tells the implementer to rebase on `main`
 before it opens the pull request. The 2026-08-04 silent revert came from a stale
 base.
 
-VERIFIED 2026-08-12 (forty-eighth wave, planner, read
+VERIFIED 2026-08-12 (forty-ninth wave, planner, read
 `src-tauri/runtime/src/service.rs` and ran `cargo test
---manifest-path src-tauri/runtime/Cargo.toml`) — the entitlement snapshot entry
-stands at `service.rs:130`, and the suite exits clean. Five selected slices
-remain unbuilt. `service.rs` has no sign-out entry, no device list entry, no
-session status entry, and no companion entry, and `accept_prompt`
-(`service.rs:390`) and `resume_run` (`:697`) each still build their own
-`RuntimeActivityRegistry`. The remaining auth entries are therefore the wave's
-work, and the companion list and revoke operations join them.
+--manifest-path src-tauri/runtime/Cargo.toml`) — the sign-out entry stands at
+`service.rs:148` with `tests/sign_out.rs` beside it, and the suite exits clean.
+One selected slice merged, and four remain unbuilt. `service.rs` has no device
+list entry, no session status entry, and no companion entry, and `accept_prompt`
+(`service.rs:403`) and `resume_run` (`:697`) each still build their own
+`RuntimeActivityRegistry` (`:426`, `:733`). The two remaining auth entries lead
+this wave, and the companion entries and the shared registry follow them.
 
 DONE 2026-08-12 — a prepared run that fails its attachment projection ends itself
 (MUNIDESK-1148). `prepare_desktop_run` (`src-tauri/core/src/run_start.rs:293`)
@@ -617,34 +618,31 @@ so later builds stay warm. The forty-sixth wave measured five cold builds at
 25,347ms each, against a whole-suite wall time of about 122 seconds. The
 forty-seventh wave measured the same suite at 7 seconds.
 
-SELECTED 2026-08-12 (forty-eighth wave) — five slices in priority order. Each of
-the first three adds one function.
+SELECTED 2026-08-12 (forty-ninth wave) — four slices in priority order. They are
+the forty-eighth wave's remainder, re-filed in strict priority order.
 
-1. The runtime sign-out entry. `sign_out_native_session`
-   (`src-tauri/core/src/auth/native_revocation.rs:172`) has no runtime call site,
-   and ADR 0012 makes sign-out a service capability rather than a desktop
-   prerequisite. The entry clears the caller's entitlement tracker after the
-   local clear, the way `sign_out_marked` (`src-tauri/src/auth/mod.rs:328`) does.
-   The signed workspace stays with the caller, because the runtime holds no
-   attach companion state until the cutover.
-2. The runtime device list entry, over `list_native_devices`
+1. The runtime device list entry, over `list_native_devices`
    (`src-tauri/core/src/auth/native_devices.rs:169`). `auth_devices`
-   (`src-tauri/src/auth/mod.rs:257`) is the desktop shape it mirrors. The entry
+   (`src-tauri/src/auth/mod.rs:259`) is the desktop shape it mirrors. The entry
    takes the access token from the caller, the way `fetch_chat_grant` does.
-3. The runtime session status entry, over `native_status`
+2. The runtime session status entry, over `native_status`
    (`src-tauri/core/src/auth/native_session.rs:291`). It reads the platform
    credential store with no network call, the way `auth_status`
-   (`src-tauri/src/auth/mod.rs:231`) does.
-4. The runtime companion list and revoke entries, over `CompanionRegistry`
+   (`src-tauri/src/auth/mod.rs:232`) does. `sign_out` (`service.rs:160`) already
+   calls the same core function after its local clear.
+3. The runtime companion list and revoke entries, over `CompanionRegistry`
    (`src-tauri/core/src/attach/companion_registry.rs:26`). `attach_companions`
-   and `attach_revoke_companion` (`src-tauri/src/attach_service.rs:398`, `:429`)
+   and `attach_revoke_companion` (`src-tauri/src/attach_service.rs:398`, `:431`)
    are the desktop shapes. ADR 0012 phase one moves the companion credentials
    with the ADR 0009 listener, and neither operation has a runtime entry. The
    slice also opens the registry, because one shared `LiveConnectionRegistry`
    carries the block, resume, and revoke states that a per-call registry loses.
-   All three entries are Linux-only, the way `stream_run` is.
-5. The shared runtime activity registry, per the forty-third-wave measurement. It
-   changes the `accept_prompt` and `resume_run` signatures, so it sits last.
+   `AttachListenerState::load_with_workspace`
+   (`src-tauri/src/attach_service.rs:451`) is the desktop open path. All three
+   entries are Linux-only, the way `stream_run` is.
+4. The shared runtime activity registry, per the forty-third-wave measurement. It
+   changes the `accept_prompt`, `run_prompt`, and `resume_run` signatures, so it
+   sits last.
 
 SEQUENCED — the session-refresh mark on the runtime `ensure_native_session`
 follows the shared runtime activity registry, because the registry argument has
@@ -1081,12 +1079,12 @@ earlier one. Requiring an up-to-date branch before merge, or a merge queue, is a
 repository-settings change that sits with the owner. The planner files no ticket
 for it.
 
-VERIFIED 2026-08-12 (forty-eighth wave, planner) — `cargo test --manifest-path
-src-tauri/runtime/Cargo.toml` passes 43 tests over 21 test binaries. A warm run
-of that suite costs 6 seconds. The thirty-ninth wave read 928
-frontend tests and 3 browser tests from `npm test` after `npm ci`. The extraction
-section above records what the planner read in the code. This entry replaces the
-earlier ledger.
+VERIFIED 2026-08-12 (forty-ninth wave, planner) — `cargo test --manifest-path
+src-tauri/runtime/Cargo.toml` passes 45 tests over 23 test binaries. A warm run
+of that suite costs 12 seconds, and a cold run adds a 24-second build. The
+thirty-ninth wave read 928 frontend tests and 3 browser tests from `npm test`
+after `npm ci`. The extraction section above records what the planner read in the
+code. This entry replaces the earlier ledger.
 
 NOTE 2026-08-06 — the planning clone ships no `node_modules`. Run `npm ci`
 before `npm test`. Without it the run dies with `vitest: not found`, which reads
@@ -1114,40 +1112,26 @@ command reads a false failure.
 
 ## Stable release and distribution
 
-DONE — a rolling nightly builds one pinned SHA across Linux, signed Windows, and
-unsigned macOS. Owner-triggered SemVer promotion copies exact green artifacts and
-labels unsigned macOS. Promotion hashes the MSI, generates the `Muniment.Muniment`
-WinGet manifest, and opens a draft fork pull request.
-
-DONE 2026-07-24 — macOS Developer ID signing, notarization, and stapling are
-pre-staged behind the same environment-injection seam Windows signing uses. With
-no Apple credentials the build stays a clean unsigned no-op. A partial credential
-set fails fast and names only the missing variables. `docs/macos-signing.md`
-records the six vault keys and the verification checklist.
-
-DONE 2026-08-08 — the nightly builds an MDM-consumable macOS package
-(MUNIDESK-113). `productbuildArguments` (`.github/lib/macos-signing.mjs:65`)
-installs `muniment.app` into `/Applications`, `signingEnabled` (`:21`) reads the
-`MACOS_SIGNING_ENABLED` repository variable, and the signed path notarizes and
-staples the package beside the app. The nightly now carries seven assets, and
-`docs/macos-packages.md` is the deployment page.
-
-DONE 2026-08-08 — the repository carries a Homebrew cask for the nightly
-(MUNIDESK-115). `Casks/muniment-nightly.rb` holds the cask, the nightly
-workflow bumps its version and hashes, `docs/homebrew.md` is the setup page,
-and `test/homebrew-cask.test.js` guards the cask shape.
-
-DONE 2026-08-09 — stable promotion states the true macOS signing state
-(MUNIDESK-1031). `promoteRelease` reads the macOS sentence from the nightly
-body instead of a fixed string, so a promotion after the enrollment clears
-reports the signed, notarized package.
-
-DONE — the shipped package carries its notices (MUNIDESK-716, 726, 801).
+DONE — the distribution lane is built (MUNIDESK-113, 115, 716, 726, 801, 1031).
+A rolling nightly builds one pinned SHA across Linux, signed Windows, and
+unsigned macOS, and owner-triggered SemVer promotion copies exact green
+artifacts. Promotion hashes the MSI, generates the `Muniment.Muniment` WinGet
+manifest, opens a draft fork pull request, and reads the macOS sentence from the
+nightly body rather than a fixed string. macOS Developer ID signing,
+notarization, and stapling sit behind the same environment-injection seam
+Windows signing uses. With no Apple credentials the build stays a clean unsigned
+no-op, and a partial credential set fails fast and names only the missing
+variables. The nightly carries seven assets, including an MDM-consumable macOS
+package that installs `muniment.app` into `/Applications`
+(`.github/lib/macos-signing.mjs:65`). `Casks/muniment-nightly.rb` is the Homebrew
+cask, and the nightly workflow bumps its version and hashes.
 `THIRD_PARTY_NOTICES.md` names every bundled frontend package at its resolved
-version and both webfont families. `THIRD_PARTY_RUST_NOTICES.md` names every
+version and both webfont families, and `THIRD_PARTY_RUST_NOTICES.md` names every
 non-workspace crate with its version and license expression. All three platform
-bundle configs ship both records beside the two webfont license texts, and
-`test/third-party-notices.test.js` fails when an entry is missing or wrong.
+bundle configs ship both records beside the two webfont license texts.
+`test/homebrew-cask.test.js` and `test/third-party-notices.test.js` guard both
+shapes, and `docs/macos-signing.md`, `docs/macos-packages.md`, and
+`docs/homebrew.md` are the pages.
 
 OWNER-GATED — fork and token setup, WinGet publication, Homebrew tap publication, Apple
 enrollment Y5DUNHQA74, public download and install docs, distribution accounts,
