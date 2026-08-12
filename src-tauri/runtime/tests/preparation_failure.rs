@@ -22,6 +22,7 @@ fn memory_session_failure_ends_the_prepared_run() {
     let result = accept_prompt(
         &profile,
         Arc::clone(&storage),
+        Arc::new(Mutex::new(None)),
         &config,
         run_id.into(),
         "prompt".into(),
