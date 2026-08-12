@@ -15,8 +15,9 @@ them must exercise the real contracts. It must add no mocked production path.
 > section. The fifth took the desktop QA automation repair waves. The sixth took
 > the Phase 3 voice section. The seventh took the companion execution surfaces
 > section. The eighth took the onboarding and Muniment Home section. The ninth
-> took the durable local run journal section. The cross-surface contracts section
-> is the next compaction target.
+> took the durable local run journal section. The tenth took the cross-surface
+> contracts section. The stable release and distribution section is the next
+> compaction target.
 
 ## M0 — Scaffold (done 2026-07-09)
 
@@ -467,10 +468,11 @@ every call site reads it.
 DONE — the dormant service entry points are built (MUNIDESK-1080, 1086, 1091,
 1094, 1096, 1099, 1100, 1102, 1105, 1108, 1110, 1112, 1113, 1115, 1117, 1119,
 1121, 1123, 1125, 1128, 1130, 1133, 1135, 1136, 1139, 1142, 1144, 1145, 1147,
-1150, 1152, 1154, 1155).
+1150, 1152, 1154, 1155, 1157).
 `src-tauri/runtime/src/service.rs`
 opens one shared profile storage and reconciles interrupted runs, answers a fresh
-native session from the platform credential store, scaffolds the cross-project
+native session from the platform credential store, projects the signed
+entitlement snapshot and reports a version change, scaffolds the cross-project
 Home, records a companion workspace and its two canonical directories, fetches
 and validates a cloud chat grant, lists and opens one subject's
 threads, creates one durable thread for
@@ -529,25 +531,26 @@ disagree, because `chat_file_metadata` rejects a path with no usable final
 segment and `open_selected_files` does not. The lane waits for an owner look at
 why this one ticket never dispatches.
 
-MERGE HAZARD — every forty-seventh-wave slice edits
-`src-tauri/runtime/src/service.rs`. They are the entitlement snapshot entry, the
-sign-out entry, the device list entry, the session status entry, the companion
-list and revoke entries, and the shared runtime activity registry. The first four
-add one function each beside the existing entries. The fifth adds two companion
+MERGE HAZARD — every forty-eighth-wave slice edits
+`src-tauri/runtime/src/service.rs`. They are the sign-out entry, the device list
+entry, the session status entry, the companion list and revoke entries, and the
+shared runtime activity registry. The first three add one function each beside
+the existing entries. The fourth adds a registry open path and two companion
 functions. The registry slice changes the
 `accept_prompt` and `resume_run` signatures, and it edits the five runtime test
 files that call them. Each ticket tells the implementer to rebase on `main`
 before it opens the pull request. The 2026-08-04 silent revert came from a stale
 base.
 
-VERIFIED 2026-08-12 (forty-seventh wave, planner, read
-`src-tauri/runtime/src/service.rs` and ran `cargo test --package
-muniment-runtime`) — the `workspace.onboard` entry stands, so every attach
-operation has a runtime twin. Six selected slices remain unbuilt. `service.rs`
-has no entitlement snapshot entry, no sign-out entry, and no device list entry,
-and `accept_prompt` (`service.rs:347`) and `resume_run` (`:654`) each still build
-their own `RuntimeActivityRegistry`. The auth entry set is therefore the wave's
-work, and the companion list and revoke operations join it.
+VERIFIED 2026-08-12 (forty-eighth wave, planner, read
+`src-tauri/runtime/src/service.rs` and ran `cargo test
+--manifest-path src-tauri/runtime/Cargo.toml`) — the entitlement snapshot entry
+stands at `service.rs:130`, and the suite exits clean. Five selected slices
+remain unbuilt. `service.rs` has no sign-out entry, no device list entry, no
+session status entry, and no companion entry, and `accept_prompt`
+(`service.rs:390`) and `resume_run` (`:697`) each still build their own
+`RuntimeActivityRegistry`. The remaining auth entries are therefore the wave's
+work, and the companion list and revoke operations join them.
 
 DONE 2026-08-12 — a prepared run that fails its attachment projection ends itself
 (MUNIDESK-1148). `prepare_desktop_run` (`src-tauri/core/src/run_start.rs:293`)
@@ -614,34 +617,33 @@ so later builds stay warm. The forty-sixth wave measured five cold builds at
 25,347ms each, against a whole-suite wall time of about 122 seconds. The
 forty-seventh wave measured the same suite at 7 seconds.
 
-SELECTED 2026-08-12 (forty-seventh wave) — six slices in priority order.
-Each of the first four slices adds one function. The fifth adds two functions.
+SELECTED 2026-08-12 (forty-eighth wave) — five slices in priority order. Each of
+the first three adds one function.
 
-1. The runtime entitlement snapshot entry. `service.rs` answers a fresh native
-   session and a validated cloud chat grant, and it projects no entitlement
-   snapshot, so `EntitlementSnapshotTracker`
-   (`src-tauri/core/src/auth/entitlement_snapshot.rs`) has no runtime call site.
-   ADR 0012 gives the service the signed snapshot. It carries over from the
-   forty-sixth wave and keeps the first position.
-2. The runtime sign-out entry. `sign_out_native_session`
+1. The runtime sign-out entry. `sign_out_native_session`
    (`src-tauri/core/src/auth/native_revocation.rs:172`) has no runtime call site,
    and ADR 0012 makes sign-out a service capability rather than a desktop
    prerequisite. The entry clears the caller's entitlement tracker after the
    local clear, the way `sign_out_marked` (`src-tauri/src/auth/mod.rs:328`) does.
-3. The runtime device list entry, over `list_native_devices`
+   The signed workspace stays with the caller, because the runtime holds no
+   attach companion state until the cutover.
+2. The runtime device list entry, over `list_native_devices`
    (`src-tauri/core/src/auth/native_devices.rs:169`). `auth_devices`
-   (`src-tauri/src/auth/mod.rs:259`) is the desktop shape it mirrors. The entry
+   (`src-tauri/src/auth/mod.rs:257`) is the desktop shape it mirrors. The entry
    takes the access token from the caller, the way `fetch_chat_grant` does.
-4. The runtime session status entry, over `native_status`
+3. The runtime session status entry, over `native_status`
    (`src-tauri/core/src/auth/native_session.rs:291`). It reads the platform
    credential store with no network call, the way `auth_status`
-   (`src-tauri/src/auth/mod.rs:232`) does.
-5. The runtime companion list and revoke entries, over `CompanionRegistry`
+   (`src-tauri/src/auth/mod.rs:231`) does.
+4. The runtime companion list and revoke entries, over `CompanionRegistry`
    (`src-tauri/core/src/attach/companion_registry.rs:26`). `attach_companions`
-   and `attach_revoke_companion` (`src-tauri/src/attach_service.rs:398`, `:431`)
+   and `attach_revoke_companion` (`src-tauri/src/attach_service.rs:398`, `:429`)
    are the desktop shapes. ADR 0012 phase one moves the companion credentials
-   with the ADR 0009 listener, and neither operation has a runtime entry.
-6. The shared runtime activity registry, per the forty-third-wave measurement. It
+   with the ADR 0009 listener, and neither operation has a runtime entry. The
+   slice also opens the registry, because one shared `LiveConnectionRegistry`
+   carries the block, resume, and revoke states that a per-call registry loses.
+   All three entries are Linux-only, the way `stream_run` is.
+5. The shared runtime activity registry, per the forty-third-wave measurement. It
    changes the `accept_prompt` and `resume_run` signatures, so it sits last.
 
 SEQUENCED — the session-refresh mark on the runtime `ensure_native_session`
@@ -703,46 +705,18 @@ published cloud contract (MUNIDESK-626). Canonical schemas live under
 only in the cloud publication lane, and every surface pins one exact artifact
 version.
 
-DONE 2026-07-29 — ADR 0020 decides the code diff renderer across two slices
-(MUNIDESK-630, 640). The shared contract is `code-diff/1`. The desktop renders
-through the `diff2html` parser and generator with a design-token override sheet
-and adds no React. The CLI selects a hand-written standard-library terminal
-renderer that adds no crate.
-
-DONE 2026-08-01 — the desktop half is built. ADR 0020 carries the desktop build
-order amendment (MUNIDESK-765), `src/lib/code-diff.js` is the presentation-only
-adapter (MUNIDESK-772), and `src/lib/CodeDiff.svelte` renders it with its warning
-and empty states (MUNIDESK-779). ADR 0024 makes the desktop core the sole trusted
-`CodeDiff` producer, puts the immutable plan in CAS behind two journal events, and
-gates its first implementation slice on the published ADR 0019 Rust artifact
-(MUNIDESK-775).
-
-DIRECTION CHANGE 2026-08-09 (ninth wave, planner, after the owner's 2026-08-09
-grooming promoted the CLI diff renderer) — `code-diff/1` becomes a desktop-owned
-local contract. The lane waited on the cloud repository from 2026-07-29 and the
-artifact never published. `code-diff/1` also crosses no cloud boundary. ADR 0024
-makes the desktop core the sole trusted producer, and the desktop shell, the
-CLI, and the ACP adapter are its three consumers. No endpoint carries the value.
-That is the `muniment.attach/1` shape, which ADR 0009 and ADR 0011 already keep
-in this repository with golden fixtures. The planner verified on 2026-08-09 that
-no Rust `CodeDiff` type exists, that `src-tauri/cli/Cargo.toml` depends on
-`muniment-attach` alone, and that `src/lib/code-diff.js` is the only
-implementation of the model. The ADR amendment is the first slice, and it names
-`src-tauri/code-diff/` as the crate directory, `muniment-code-diff` as the
-package, and `protocol-fixtures/code-diff/1/` as the fixture directory.
-
-SEQUENCED — the codec crate follows the amendment. The CLI ANSI renderer follows
-the crate, and it reads the fixtures as a pure function over a `CodeDiff` value,
-exactly as the desktop adapter shipped before its wiring. The ADR 0024 producer
-slice follows the renderer. Slice 4, the produced diff inside the permission
-gate, and slice 5, the receipt replay of an applied diff, both wait behind the
-producer. ADR 0019 keeps every E0 cloud contract, and the cloud lane publishes no
-`code-diff` artifact.
-
-DONE 2026-08-09 through 2026-08-11 — the ADR 0024 local chain is built end to end
-(MUNIDESK-1029, 1036, 1041, 1042, 1043, 1046 through 1049, 1051, 1052, 1057,
-1062, 1066, 1070, 1071, 1073, 1074, 1075, 1078, 1082, 1083, 1087, 1089, 1090,
-1092, 1093, 1097). ADR 0020 carries the desktop-owned local contract amendment.
+DONE 2026-07-29 through 2026-08-12 — ADR 0020 and ADR 0024 decide the code diff
+contract, and the whole local chain is built (MUNIDESK-630, 640, 765, 772, 775,
+779, 1029, 1036, 1041, 1042, 1043, 1046 through 1049, 1051, 1052, 1057, 1062,
+1066, 1070, 1071, 1073, 1074, 1075, 1078, 1082, 1083, 1087, 1089, 1090, 1092,
+1093, 1097, 1137). `code-diff/1` became a desktop-owned local
+contract on 2026-08-09, because it crosses no cloud boundary and the ADR 0019
+cloud artifact never published. ADR 0024 makes the desktop core the sole trusted
+producer, and the desktop shell, the CLI, and the ACP adapter are its three
+consumers. The desktop renders through the `diff2html` parser and generator with
+a design-token override sheet and adds no React, and the file header states each
+file status in the shell register. ADR 0019 keeps every E0 cloud contract, and
+the cloud lane publishes no `code-diff` artifact.
 `src-tauri/code-diff/` holds the `muniment-code-diff` package with the model, its
 validation, its canonical bytes, and a fixture exporter, and
 `protocol-fixtures/code-diff/1/` holds the golden examples behind the
@@ -758,28 +732,16 @@ the workspace observation with its pre-write stale check, and the write executor
 that applies through verified parent handles. The gate, its answer verification,
 the coordinate wiring, and the filter un-gate put a `code_diff` permission card
 into production, and the transcript renders each applied diff through an
-`Applied file changes` card. `src/lib/CodeDiff.svelte` renders both,
-`src/lib/code-diff.js` holds the one generator configuration, and
-`test/probe/code-diff.html` and `test/probe/applied-diff.html` drive the built
-bundle. Only the Pi producer input stays parked on the wire contract.
-
-DONE 2026-08-12 — the diff file header drops the upstream control text and states
-each file status in the shell register (MUNIDESK-1137).
-`codeDiffRendererOptions` (`src/lib/code-diff.js:7`) passes `rawTemplates`, so
-`generic-file-path` emits no `d2h-file-collapse` label and the four `tag-file-*`
-templates read `added`, `changed`, `deleted`, and `renamed` in lowercase.
+`Applied file changes` card. `src/lib/CodeDiff.svelte` renders both cards,
+`src/lib/code-diff.js` holds the one generator configuration and its
+`rawTemplates` header, and `test/probe/code-diff.html` and
+`test/probe/applied-diff.html` drive the built bundle.
 
 PARKED — the producer's Pi input waits on the Pi wire contract, with the ADR
 0025 consumers. ADR 0024 requires structured proposed operations from Pi
 before any write starts, and no Pi message carries a file operation today.
-The bounded streaming decoder in `pi_chat.rs` follows the contract.
-
-DECLINED 2026-08-08 (ninth wave) — the planner returned the CLI ANSI renderer
-idea. ADR 0020 gave the CLI a hand-written terminal renderer, and the 2026-07-29
-owner ruling then deferred the CLI surface indefinitely. `src-tauri/` also holds
-no Rust diff model, because the desktop half renders through
-`src/lib/code-diff.js`. A terminal renderer has nothing to render over until the
-ADR 0019 contract crate publishes.
+The bounded streaming decoder in `pi_chat.rs` follows the contract. It is the
+last open item in this chain.
 
 CLOSED 2026-07-30 — ADR 0021 landed as a superseded record rather than an
 on-device classifier store design, because the cloud ingress ruling arrived
@@ -1119,9 +1081,9 @@ earlier one. Requiring an up-to-date branch before merge, or a merge queue, is a
 repository-settings change that sits with the owner. The planner files no ticket
 for it.
 
-VERIFIED 2026-08-12 (forty-seventh wave, planner) — `cargo test --package
-muniment-runtime` passes 42 tests from `src-tauri` over eighteen test binaries.
-A warm run of that suite now costs 7 seconds. The thirty-ninth wave read 928
+VERIFIED 2026-08-12 (forty-eighth wave, planner) — `cargo test --manifest-path
+src-tauri/runtime/Cargo.toml` passes 43 tests over 21 test binaries. A warm run
+of that suite costs 6 seconds. The thirty-ninth wave read 928
 frontend tests and 3 browser tests from `npm test` after `npm ci`. The extraction
 section above records what the planner read in the code. This entry replaces the
 earlier ledger.
