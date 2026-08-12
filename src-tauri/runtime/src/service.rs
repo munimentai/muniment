@@ -145,6 +145,15 @@ pub fn ensure_native_session() -> Result<FreshNativeSession, FreshNativeSessionE
     )
 }
 
+/// Reads the native session status from the platform credential store.
+pub fn session_status() -> Result<AuthStatus, FreshNativeSessionError> {
+    let now_unix_seconds = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs())
+        .unwrap_or(0);
+    native_status(&KeyringNativeCredentialStore::new(), now_unix_seconds)
+}
+
 /// Revokes the server session and clears the local native session.
 pub fn sign_out(tracker: &EntitlementSnapshotTracker) -> Result<AuthStatus, SignOutError> {
     let store = KeyringNativeCredentialStore::new();
