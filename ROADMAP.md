@@ -547,7 +547,7 @@ VERIFIED 2026-08-12 (thirty-ninth wave, planner, read `src-tauri/runtime/` and r
 (MUNIDESK-1136). `create_thread` (`src-tauri/runtime/src/service.rs:128`) stamps an
 `attach_profile` provenance value and calls `create_thread_now`, and
 `src-tauri/runtime/tests/threads.rs` proves it against a live journal. The other
-three thirty-eighth-wave slices are unbuilt. `service.rs` carries no run stream
+four thirty-eighth-wave slices are unbuilt. `service.rs` carries no run stream
 read entry, `accept_prompt` still drops its prepared sequence on the error path,
 and both `drive_prompt` and `resume_run` build their own Pi runtime slot. The
 whole runtime suite passes.
@@ -604,7 +604,7 @@ SELECTED 2026-08-12 (thirty-ninth wave) — six slices in priority order.
    `Arc<Mutex<Option<PiRuntime>>>`, where the desktop holds one slot in
    `ChatState` (`src-tauri/src/chat.rs:110`). The shared storage and the shared
    run control slot took the same shape.
-5. The default Home rule move into muniment-core, per the fourth measurement.
+5. The default Home rule move into muniment-core, per the third measurement.
 6. The runtime run control entries. `queue_message`, `cancel_active_run`, and
    `queue_permission_answer` (`src-tauri/core/src/active_run.rs`) all read the
    shared run control slot, and the runtime service exposes no entry for the
