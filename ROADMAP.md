@@ -614,7 +614,7 @@ disagree, because `chat_file_metadata` rejects a path with no usable final
 segment and `open_selected_files` does not. The lane waits for an owner look at
 why this one ticket never dispatches.
 
-MERGE HAZARD — the second and third thirty-fourth-wave slices both edit
+MERGE HAZARD — the first and second thirty-fifth-wave slices both edit
 `src-tauri/runtime/src/service.rs`. Each ticket tells the implementer to
 rebase on `main` before it opens the pull request. The 2026-08-04 silent
 revert came from a stale base.
@@ -852,23 +852,30 @@ and `chat_thread_open_page` reads each run's prompt from that store
 (`src-tauri/core/src/thread_history.rs:85`). A runtime-driven run's
 thread page therefore carries no prompt text.
 
-SELECTED 2026-08-11 (thirty-fourth wave) — four slices in priority
-order. The steer parity test, the attachment pass-through, and the
-prompt protection parity drained at batch positions two through
-four, so they re-file in strict priority order. The steer parity
-test takes the first position, through `queue_message`
-(`src-tauri/core/src/active_run.rs:28`) and the stub's
-`pi_chat_queue` mode
-(`src-tauri/core/src/bin/sidecar-test-stub.rs:270`). The attachment
-pass-through follows, because `run_prompt`
-(`src-tauri/runtime/src/service.rs:216`, `:233`) passes `Vec::new()`
-where both preparation entries take `files: Vec<OpenSelectedFile>`
+DONE 2026-08-11 — the steer parity test landed (MUNIDESK-1123).
+`src-tauri/runtime/tests/steer.rs` drives a live runtime-driven run
+through `queue_message` and the stub's queue mode, so a queued steer
+reaches a runtime run exactly as it reaches a desktop run.
+
+SELECTED 2026-08-12 (thirty-fifth wave) — four slices in priority
+order. The attachment pass-through, the prompt protection parity,
+and the permission answer parity test drained at batch positions
+two through four, so they re-file in strict priority order. The
+attachment pass-through takes the first position, because
+`run_prompt` (`src-tauri/runtime/src/service.rs:215`, `:233`)
+passes `Vec::new()` where both preparation entries take
+`files: Vec<OpenSelectedFile>`
 (`src-tauri/core/src/run_preparation.rs:15`). The prompt protection
-parity follows, per the measurement above. The fourth slice is new:
-the permission answer parity test, because `queue_permission_answer`
+parity follows, per the measurement above. The permission answer
+parity test follows, because `queue_permission_answer`
 (`src-tauri/core/src/active_run.rs:94`) has no test against a live
-runtime run, while the cancel path gained its test with
-MUNIDESK-1108 (`src-tauri/runtime/tests/run.rs:207`).
+runtime run, while the steer path gained its test with
+MUNIDESK-1123. The fourth slice is new: `DesktopAttachService`, the
+`RunStartIdempotency` trait, and their implementations move into
+muniment-core as the thirty-fourth core move, because the seam is
+already generic over the core `RunStartBoundaries` trait
+(`src-tauri/src/attach_service.rs:215`, `:854`), names no Tauri
+type, and the runtime crate needs the same seam for the cutover.
 
 SEQUENCED — the later extraction slices are the remaining Pi execution move, the
 desktop client conversion, and Linux user-unit registration, each behind a
@@ -1646,14 +1653,15 @@ earlier one. Requiring an up-to-date branch before merge, or a merge queue, is a
 repository-settings change that sits with the owner. The planner files no ticket
 for it.
 
-VERIFIED 2026-08-11 (thirty-third wave, from a warm build) — `cargo
-test -p muniment-runtime` passed 28 tests across 14 binaries with no
-failure. The planner confirmed the landed retention entry
-(MUNIDESK-1121) at `src-tauri/runtime/src/service.rs:131`, and
-confirmed that the steer parity test, the attachment pass-through,
-and the prompt protection parity remain unbuilt, so all three
-re-file in strict priority order. Earlier waves recorded the same
-shape of verification, and this entry replaces that ledger.
+VERIFIED 2026-08-12 (thirty-fifth wave, planner, read the code) —
+the planner confirmed the landed steer parity test at
+`src-tauri/runtime/tests/steer.rs` (MUNIDESK-1123), and confirmed
+that the attachment pass-through, the prompt protection parity, and
+the permission answer parity test remain unbuilt, so all three
+re-file in strict priority order. This planning clone carried no
+warm build, so the Rust CI job and the desktop-ci gates remain the
+test evidence for this wave. Earlier waves recorded the same shape
+of verification, and this entry replaces that ledger.
 
 NOTE 2026-08-06 — the planning clone ships no `node_modules`. Run `npm ci`
 before `npm test`. Without it the run dies with `vitest: not found`, which reads
