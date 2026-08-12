@@ -60,9 +60,11 @@ fn an_occupied_active_run_slot_does_not_prepare_a_new_run() {
         _activity: activity.mark_active_run(),
     })));
     let run_id = "018f0000-0000-7000-8000-000000000002";
+    let storage = open_profile_storage(&profile).unwrap();
 
     let error = run_prompt(
         &profile,
+        Arc::clone(&storage),
         temporary_root.join("config"),
         run_id.into(),
         "prompt".into(),
@@ -77,7 +79,6 @@ fn an_occupied_active_run_slot_does_not_prepare_a_new_run() {
     .unwrap_err();
 
     assert_eq!(error, "A reply is already in progress.");
-    let storage = open_profile_storage(&profile).unwrap();
     assert!(storage
         .lock()
         .unwrap()
@@ -102,6 +103,7 @@ fn runs_two_prompts_in_one_named_thread_and_rejects_an_unknown_thread() {
         .join(PI_ARTIFACT.executable);
     fs::create_dir_all(executable.parent().unwrap()).unwrap();
     fs::create_dir_all(&profile).unwrap();
+    let storage = open_profile_storage(&profile).unwrap();
     confirm_home(&config, &temporary_root.join("home")).unwrap();
     let build_root = temporary_root.join("build");
     let status = Command::new(env!("CARGO"))
@@ -155,6 +157,7 @@ fn runs_two_prompts_in_one_named_thread_and_rejects_an_unknown_thread() {
     let unknown_run_id = "018f0000-0000-7000-8000-000000000002";
     let error = run_prompt(
         &profile,
+        Arc::clone(&storage),
         &config,
         unknown_run_id.into(),
         "unknown thread prompt".into(),
@@ -168,7 +171,6 @@ fn runs_two_prompts_in_one_named_thread_and_rejects_an_unknown_thread() {
     )
     .unwrap_err();
     assert_eq!(error, "thread_not_found");
-    let storage = open_profile_storage(&profile).unwrap();
     assert!(storage
         .lock()
         .unwrap()
@@ -176,8 +178,6 @@ fn runs_two_prompts_in_one_named_thread_and_rejects_an_unknown_thread() {
         .events(unknown_run_id)
         .unwrap()
         .is_empty());
-    drop(storage);
-
     let run_id = "018f0000-0000-7000-8000-000000000003";
     let prompt = "pointer install prompt";
     let (subscriber, events) = mpsc::channel();
@@ -187,6 +187,7 @@ fn runs_two_prompts_in_one_named_thread_and_rejects_an_unknown_thread() {
         let run = scope.spawn(|| {
             run_prompt(
                 &profile,
+                Arc::clone(&storage),
                 &config,
                 run_id.into(),
                 prompt.into(),
@@ -213,7 +214,6 @@ fn runs_two_prompts_in_one_named_thread_and_rejects_an_unknown_thread() {
         Err("That reply is no longer active.".into())
     );
 
-    let storage = open_profile_storage(&profile).unwrap();
     let thread_id = storage
         .lock()
         .unwrap()
@@ -221,12 +221,11 @@ fn runs_two_prompts_in_one_named_thread_and_rejects_an_unknown_thread() {
         .run_thread_id(run_id)
         .unwrap()
         .unwrap();
-    drop(storage);
-
     let second_run_id = "018f0000-0000-7000-8000-000000000005";
     let second_prompt = "named thread prompt";
     run_prompt(
         &profile,
+        Arc::clone(&storage),
         &config,
         second_run_id.into(),
         second_prompt.into(),
@@ -251,7 +250,6 @@ fn runs_two_prompts_in_one_named_thread_and_rejects_an_unknown_thread() {
         .collect::<Vec<_>>()
         .windows(2)
         .any(|args| { args == ["--extension", extension.to_string_lossy().as_ref()] }));
-    let storage = open_profile_storage(&profile).unwrap();
     let mut storage = storage.lock().unwrap();
     let journal_events = storage.journal.events(run_id).unwrap();
     assert_eq!(journal_events.last().unwrap().event_type, "run.cancelled");
@@ -375,9 +373,10 @@ fn resumes_an_interrupted_run_to_a_terminal_event() {
     )
     .unwrap();
     drop(storage);
-
+    let storage = open_profile_storage(&profile).unwrap();
     resume_run(
         &profile,
+        Arc::clone(&storage),
         &config,
         run_id.into(),
         "token".into(),
@@ -396,7 +395,6 @@ fn resumes_an_interrupted_run_to_a_terminal_event() {
     )
     .unwrap();
 
-    let storage = open_profile_storage(&profile).unwrap();
     let events = storage.lock().unwrap().journal.events(run_id).unwrap();
     assert!(matches!(
         events.last().map(|event| event.event_type.as_str()),
