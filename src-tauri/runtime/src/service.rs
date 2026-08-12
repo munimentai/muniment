@@ -34,7 +34,7 @@ use muniment_core::pi_execution::PiRuntime;
 use muniment_core::run_events::{ChatEvent, ChatStorage, SharedStorage};
 use muniment_core::run_preparation::{
     prepare_new_run_in_thread_after_validation, prepare_new_run_with_session_thread,
-    OpenSelectedFile, SessionThreadStart,
+    record_persistence_failure, OpenSelectedFile, SessionThreadStart,
 };
 use muniment_core::run_start::{accepted_time_now, ActiveRun};
 use muniment_core::session_thread::SessionThread;
@@ -303,7 +303,7 @@ pub fn accept_prompt(
         },
     )?;
     let setup = (|| {
-        let prepared = match thread_id.as_deref() {
+        let mut prepared = match thread_id.as_deref() {
             Some(thread_id) => prepare_new_run_in_thread_after_validation(
                 &storage,
                 &run_id,
@@ -345,14 +345,44 @@ pub fn accept_prompt(
                 )
             }
         }?;
-        let thread_id = storage
-            .lock()
-            .map_err(|_| "Conversation history is unavailable.".to_string())?
-            .journal
-            .run_thread_id(&run_id)
-            .map_err(|error| error.to_string())?
-            .ok_or_else(|| "Conversation history is unavailable.".to_string())?;
-        memory_runtime
+        let thread_id = {
+            let mut storage = match storage.lock() {
+                Ok(storage) => storage,
+                Err(poisoned) => {
+                    let mut storage = poisoned.into_inner();
+                    record_persistence_failure(
+                        &mut storage.journal,
+                        &mut prepared.1,
+                        &run_id,
+                        prepared.0,
+                        subject.as_deref(),
+                        "muniment-runtime",
+                        env!("CARGO_PKG_VERSION"),
+                    );
+                    return Err("Conversation history is unavailable.".to_string());
+                }
+            };
+            match storage.journal.run_thread_id(&run_id) {
+                Ok(Some(thread_id)) => thread_id,
+                result => {
+                    record_persistence_failure(
+                        &mut storage.journal,
+                        &mut prepared.1,
+                        &run_id,
+                        prepared.0,
+                        subject.as_deref(),
+                        "muniment-runtime",
+                        env!("CARGO_PKG_VERSION"),
+                    );
+                    return Err(match result {
+                        Err(error) => error.to_string(),
+                        Ok(None) => "Conversation history is unavailable.".to_string(),
+                        Ok(Some(_)) => unreachable!(),
+                    });
+                }
+            }
+        };
+        if memory_runtime
             .open_session(
                 &run_id,
                 &thread_id,
@@ -360,7 +390,22 @@ pub fn accept_prompt(
                     minimum_cacheable_prefix_characters: grant.minimum_cacheable_prefix_characters,
                 },
             )
-            .map_err(|_| "Conversation history is unavailable.".to_string())?;
+            .is_err()
+        {
+            let mut storage = storage
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            record_persistence_failure(
+                &mut storage.journal,
+                &mut prepared.1,
+                &run_id,
+                prepared.0,
+                subject.as_deref(),
+                "muniment-runtime",
+                env!("CARGO_PKG_VERSION"),
+            );
+            return Err("Conversation history is unavailable.".to_string());
+        }
         Ok::<_, String>((prepared, thread_id))
     })();
     let (prepared, thread_id) = match setup {
