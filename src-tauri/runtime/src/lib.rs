@@ -8,7 +8,7 @@ mod sink;
 #[cfg(target_os = "linux")]
 pub use migration::{run_migration_takeover, MigrationTakeoverError};
 pub use service::{
-    ensure_native_session, fetch_chat_grant, open_profile_storage, resume_run, run_prompt,
-    thread_page, thread_summaries,
+    delete_thread, ensure_native_session, fetch_chat_grant, open_profile_storage, rename_thread,
+    resume_run, run_prompt, thread_page, thread_summaries,
 };
 pub use sink::RuntimeChatEventSink;
