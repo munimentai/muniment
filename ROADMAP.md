@@ -14,8 +14,8 @@ them must exercise the real contracts. It must add no mocked production path.
 > memory index and retrieval section. The fourth took the signed-in shell
 > section. The fifth took the desktop QA automation repair waves. The sixth took
 > the Phase 3 voice section. The seventh took the companion execution surfaces
-> section. The onboarding and Muniment Home section is the next compaction
-> target.
+> section. The eighth took the onboarding and Muniment Home section. The durable
+> local run journal section is the next compaction target.
 
 ## M0 — Scaffold (done 2026-07-09)
 
@@ -475,11 +475,12 @@ every call site reads it.
 DONE — the dormant service entry points are built (MUNIDESK-1080, 1086, 1091,
 1094, 1096, 1099, 1100, 1102, 1105, 1108, 1110, 1112, 1113, 1115, 1117, 1119,
 1121, 1123, 1125, 1128, 1130, 1133, 1135, 1136, 1139, 1142, 1144, 1145, 1147,
-1150, 1152, 1154).
+1150, 1152, 1154, 1155).
 `src-tauri/runtime/src/service.rs`
 opens one shared profile storage and reconciles interrupted runs, answers a fresh
 native session from the platform credential store, scaffolds the cross-project
-Home, fetches and validates a cloud chat grant, lists and opens one subject's
+Home, records a companion workspace and its two canonical directories, fetches
+and validates a cloud chat grant, lists and opens one subject's
 threads, creates one durable thread for
 an authorized attach profile, renames and deletes an owned thread, sweeps expired
 terminal runs and their protected prompts, reads one page of a run stream and
@@ -536,23 +537,27 @@ disagree, because `chat_file_metadata` rejects a path with no usable final
 segment and `open_selected_files` does not. The lane waits for an owner look at
 why this one ticket never dispatches.
 
-MERGE HAZARD — all five forty-fifth-wave slices edit
-`src-tauri/runtime/src/service.rs`. They are the `workspace.onboard` entry, the
-entitlement snapshot entry, the sign-out entry, the device list entry, and the
-shared runtime activity registry. The first four add a function beside the
-existing entries, and the fifth changes two signatures. Each ticket tells the
-implementer to rebase on `main` before it opens the pull request. The 2026-08-04
-silent revert came from a stale base.
+MERGE HAZARD — three of the four forty-sixth-wave slices edit
+`src-tauri/runtime/src/service.rs`. They are the entitlement snapshot entry, the
+sign-out entry, the device list entry, and the shared runtime activity registry.
+The first three add a function beside the existing entries, and the fourth
+changes two signatures. The fourth also edits the four live-run test files that
+the stub-staging slice edits. Each ticket tells the implementer to rebase on
+`main` before it opens the pull request. The 2026-08-04 silent revert came from a
+stale base.
 
-VERIFIED 2026-08-12 (forty-fifth wave, planner, read
+VERIFIED 2026-08-12 (forty-sixth wave, planner, read
 `src-tauri/runtime/src/service.rs` and ran `cargo test --package
-muniment-runtime`) — the `home.ensure` entry landed. `ensure_home`
-(`service.rs:104`) composes `muniment_core::ensure_cross_project_home` and maps a
-failure to `ProtocolError::persistence_failed()`, and
-`src-tauri/runtime/tests/home.rs` guards the scaffold and the regular-file
-rejection (MUNIDESK-1154). Four selected slices remain unbuilt. `service.rs` has
-no `workspace.onboard` entry, no entitlement snapshot entry, no sign-out entry,
-and no device list entry.
+muniment-runtime`) — the `workspace.onboard` entry landed. `onboard_workspace`
+(`service.rs:112`) rejects a relative path, composes
+`muniment_core::onboard_companion_workspace`, and records both canonical
+directories in the caller's `WorkspaceContextMap`.
+`src-tauri/runtime/tests/workspace.rs` guards the nearest instructions, the
+relative-path rejection, and the filesystem failure (MUNIDESK-1155). Every attach
+operation now has a runtime twin. Three selected slices remain unbuilt.
+`service.rs` has no entitlement snapshot entry, no sign-out entry, and no device
+list entry, and `accept_prompt` and `resume_run` still build their own
+`RuntimeActivityRegistry`.
 
 DONE 2026-08-12 — a prepared run that fails its attachment projection ends itself
 (MUNIDESK-1148). `prepare_desktop_run` (`src-tauri/core/src/run_start.rs:293`)
@@ -600,32 +605,45 @@ caller's continuation choice (MUNIDESK-1152). Two prompts with continuation
 enabled reuse one thread, and two prompts with continuation disabled open
 separate threads.
 
-DONE 2026-08-12 — the runtime `home.ensure` entry scaffolds the cross-project
-Home (MUNIDESK-1154). One `workspace.onboard` entry now remains before every
-attach operation has a runtime twin.
+DONE 2026-08-12 — the runtime `home.ensure` and `workspace.onboard` entries are
+built (MUNIDESK-1154, 1155). Every attach operation now has a runtime twin, so
+the entry-point sweep moves to the ADR 0012 capabilities the desktop still owns
+alone.
 
-SELECTED 2026-08-12 (forty-fifth wave) — five slices in priority order.
+MEASURED 2026-08-12 (forty-sixth wave, planner, timed one stub build twice) — the
+runtime test suite rebuilds the Pi stub five times per run. `run.rs:216`,
+`run.rs:483`, `cancel.rs:40`, `permission.rs:109`, and `steer.rs:41` each shell
+out to `cargo build --package muniment-core --bin sidecar-test-stub` with a
+`--target-dir` under a fresh temporary directory. A cold build into a fresh
+target directory cost 25,347ms and 1.1 GB of disk. A second build into the same
+directory cost 286ms. The four live-run test binaries measured 49.5s, 24.1s,
+24.0s, and 24.1s against a whole-suite wall time of about 122s, so the repeated
+builds are nearly all of it. `core/tests/pi_chat.rs:233` needs no build, because
+a same-package test reads `env!("CARGO_BIN_EXE_sidecar-test-stub")`. The runtime
+crate is a different package, so it has no such variable.
 
-1. The runtime `workspace.onboard` entry, per the fortieth-wave measurement.
-   `DesktopAttachService::onboard_workspace`
-   (`src-tauri/core/src/attach/desktop_service.rs:133`) is the shape it mirrors,
-   and the caller owns the `WorkspaceContextMap`.
-2. The runtime entitlement snapshot entry. `service.rs` answers a fresh native
+SELECTED 2026-08-12 (forty-sixth wave) — four slices in priority order.
+
+1. The runtime entitlement snapshot entry. `service.rs` answers a fresh native
    session and a validated cloud chat grant, and it projects no entitlement
    snapshot, so `EntitlementSnapshotTracker`
    (`src-tauri/core/src/auth/entitlement_snapshot.rs`) has no runtime call site.
    ADR 0012 gives the service the signed snapshot.
-3. The runtime sign-out entry. `sign_out_native_session`
+2. The runtime sign-out entry. `sign_out_native_session`
    (`src-tauri/core/src/auth/native_revocation.rs:172`) has no runtime call site,
    and ADR 0012 makes sign-out a service capability rather than a desktop
    prerequisite. The entry clears the caller's entitlement tracker after the
    local clear, the way `sign_out_marked` (`src-tauri/src/auth/mod.rs:328`) does.
-4. The runtime device list entry, over `list_native_devices`
+3. The runtime device list entry, over `list_native_devices`
    (`src-tauri/core/src/auth/native_devices.rs:169`). `auth_devices`
    (`src-tauri/src/auth/mod.rs:259`) is the desktop shape it mirrors. The entry
    takes the access token from the caller, the way `fetch_chat_grant` does.
-5. The shared runtime activity registry, per the forty-third-wave measurement. It
+4. The shared runtime activity registry, per the forty-third-wave measurement. It
    changes the `accept_prompt` and `resume_run` signatures, so it sits last.
+
+SELECTED 2026-08-12 (forty-sixth wave, structural) — one shared Pi stub staging
+helper for the runtime tests, per the measurement above. It removes four of the
+five cold builds.
 
 SEQUENCED — the session-refresh mark on the runtime `ensure_native_session`
 follows the shared runtime activity registry, because the registry argument has
@@ -818,35 +836,20 @@ SUPERSEDED 2026-07-29 — the required resident model no longer serves onboardin
 triage or routing. Import retains consent, preview, provenance, and verbatim
 originals.
 
-DONE — first-run Home picker and scaffold, bounded ZIP preview and manifest
-review, bounded extraction of explicitly selected entries with verbatim text and
-stable provenance, the consent checklist, conflict-safe persistence with rollback
-and symlink defenses, and one typed completion command with structured
-invalid-input, destination-conflict, and save-failure results.
-
-DONE 2026-07-30 — the import ends by saving the approved verbatim originals
-(MUNIDESK-682, 692). `compile_onboarding_home_write_plan`
-(`src-tauri/core/src/home.rs:482`) emits one
-`memory/imports/<date>-<name>-<digest>.md` document per approved entry and
-nothing else. The `approved-review` screen is headed `Save approved files` and
-carries `Back to archive review` beside `Save Home and finish`.
-`test/probe/approved-files.html` drives the built bundle to it.
-
-DONE 2026-07-29 — first-run folder setup fails open (MUNIDESK-660, 661, 684).
-`choose_default_home` returns `<home>/Documents/Muniment` when that parent exists
-and `<home>/Muniment` otherwise. The onboarding `load-error` branch carries
-`Choose folder…` beside `Try again`, and the Linux attach Home takes the same
-fallback.
-
-DONE 2026-07-29 — the onboarding surface is a fixed header, one scrolling content
-region, and a fixed footer, so its actions stay on screen at the 960x640 window
-minimum (MUNIDESK-657).
-
-DONE 2026-08-06 — first-run onboarding scaffolds the chosen Home before it
-reaches the sign-in screen (MUNIDESK-944). The completion path skipped the
-scaffold, so a new user finished onboarding with an empty folder.
-`src-tauri/core/src/home.rs` carries the fix and
-`src-tauri/core/tests/home_scaffold.rs` guards it.
+DONE — the onboarding lane is built end to end (MUNIDESK-657, 660, 661, 682, 684,
+692, 944). It covers the first-run Home picker, the fail-open default that returns
+`<home>/Documents/Muniment` when that parent exists and `<home>/Muniment`
+otherwise, the scaffold that runs before the sign-in screen, the bounded ZIP
+preview and manifest review, bounded extraction of explicitly selected entries
+with verbatim text and stable provenance, the consent checklist, conflict-safe
+persistence with rollback and symlink defenses, one typed completion command with
+structured invalid-input, destination-conflict, and save-failure results, and the
+approved-originals save step. `src-tauri/core/src/home.rs` holds the write-plan
+compiler and the default Home rule, and `src-tauri/core/tests/home_scaffold.rs`
+guards the scaffold. The surface is a fixed header, one scrolling content region,
+and a fixed footer, so its actions stay on screen at the 960x640 window minimum.
+`test/probe/onboarding.html` and `test/probe/approved-files.html` drive the built
+bundle.
 
 ### Memory index and retrieval (§17)
 
@@ -1117,9 +1120,9 @@ earlier one. Requiring an up-to-date branch before merge, or a merge queue, is a
 repository-settings change that sits with the owner. The planner files no ticket
 for it.
 
-VERIFIED 2026-08-12 (forty-fifth wave, planner) — `cargo test --package
-muniment-runtime` passes 35 tests from `src-tauri` over sixteen test binaries. The
-thirty-ninth wave read 928 frontend tests and 3 browser tests from `npm test`
+VERIFIED 2026-08-12 (forty-sixth wave, planner) — `cargo test --package
+muniment-runtime` passes 42 tests from `src-tauri` over eighteen test binaries.
+The thirty-ninth wave read 928 frontend tests and 3 browser tests from `npm test`
 after `npm ci`. The extraction section above records what the planner read in the
 code. This entry replaces the earlier ledger.
 
