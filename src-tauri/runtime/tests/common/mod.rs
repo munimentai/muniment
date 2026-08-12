@@ -50,21 +50,25 @@ pub fn credentials() -> NativeCredentials {
         .duration_since(UNIX_EPOCH)
         .unwrap()
         .as_secs();
+    credentials_with_expiry(unix_time + 3_600)
+}
+
+pub fn credentials_with_expiry(expires_at: u64) -> NativeCredentials {
     NativeCredentials {
         installation: InstallationRecord {
             private_key: [1; 32],
             device_id: DEVICE_ID.parse().unwrap(),
             registration_token: "registration-secret".into(),
             device_challenge: "challenge-secret".into(),
-            registration_expires_at: unix_time + 7_200,
+            registration_expires_at: expires_at + 3_600,
         },
         tokens: TokenSet {
             access_token: "access-secret".into(),
             refresh_token: Some("refresh-secret".into()),
-            expires_at: Some(unix_time + 3_600),
+            expires_at: Some(expires_at),
             subject: Some("user".into()),
         },
-        refresh_expires_at: unix_time + 7_200,
+        refresh_expires_at: expires_at + 3_600,
     }
 }
 
