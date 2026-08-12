@@ -4,7 +4,6 @@ use std::sync::{Arc, Mutex};
 #[cfg(test)]
 use std::time::Duration;
 
-use chrono::{SecondsFormat, Utc};
 use muniment_core::active_run::{
     cancel_active_run, queue_message, queue_permission_answer, ChatDelivery, ChatQueueRequest,
 };
@@ -34,6 +33,8 @@ use muniment_core::chat_resume::{
 use muniment_core::chat_view::{chat_attachments, ChatAttachment, SelectedFile};
 use muniment_core::journal::reconciliation::reconcile_interrupted_runs;
 use muniment_core::journal::reducer::{project_chat, ChatProjector};
+#[cfg(target_os = "linux")]
+use muniment_core::journal::thread_mutation::create_thread_now;
 use muniment_core::journal::{EventEnvelope, JournalCommitHint, Provenance};
 #[cfg(test)]
 use muniment_core::journal::{EventPayload, RunJournal};
@@ -170,16 +171,12 @@ impl<R: tauri::Runtime> RunStartBoundaries for TauriRunStartBoundaries<R> {
         workspace: &str,
         provenance: Provenance,
     ) -> Result<String, ProtocolError> {
-        self.state()
+        let state = self.state();
+        let mut storage = state
             .storage
             .lock()
-            .map_err(|_| ProtocolError::persistence_failed())?
-            .journal
-            .create_thread(
-                workspace,
-                &Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true),
-                provenance,
-            )
+            .map_err(|_| ProtocolError::persistence_failed())?;
+        create_thread_now(&mut storage.journal, workspace, provenance)
             .map_err(|_| ProtocolError::persistence_failed())
     }
 
