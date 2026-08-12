@@ -406,13 +406,13 @@ on `SIGTERM` and `SIGINT`, and backs off instead of polling every 25 millisecond
 The Linux package ships it beside `muniment-acp`, and the installed nightly reads
 its `--version`. The crate took no new dependency for any of it.
 
-DONE — thirty-four core moves landed one slice at a time (MUNIDESK-878 through
-1126). muniment-core now owns every seam the two processes share. The list runs
-from the approval coordinator, interrupted-run reconciliation, the chat profile
+DONE — thirty-four core moves landed one slice at a time. The completed
+muniment-core scope runs from the approval coordinator, interrupted-run
+reconciliation, the chat profile
 layout, the companion credential store and its registry, and the platform keychain
 credential store, through the native device session, the entitlement snapshot
 tracker, the cloud chat grant, the protected prompt store, the memory runtime, the
-workspace-context map, and every journal read and append path, to the run-start
+workspace-context map, and the moved journal read and append paths, to the run-start
 coordinator, the coordinate loop, `pi_execution.rs`, `chat_resume.rs`,
 `run_preparation.rs`, and the desktop attach service seam. Each desktop call site
 keeps a thin wrapper, so no caller changed shape.
@@ -460,14 +460,13 @@ DONE 2026-08-11 — one API base-URL rule serves the whole workspace
 `MUNIMENT_API_BASE_URL`, then `MUNIMENT_ISSUER`, then the shipped default, and
 every call site reads it.
 
-DONE — the dormant service entry points are built (MUNIDESK-1080 through 1165).
-`src-tauri/runtime/src/service.rs` answers every attach operation and the auth
-surface beside it. It opens one shared profile storage and reconciles interrupted
-runs, answers a fresh native session, reports the stored session status, projects
-the signed entitlement snapshot and reports a version change, revokes the server
-session and clears the local one on sign-out, lists this account's native
-installations, fetches and validates a cloud chat grant, scaffolds the
-cross-project Home, records a companion workspace and its two canonical
+DONE — the dormant runtime service entries listed below are built.
+`src-tauri/runtime/src/service.rs` opens one shared profile storage and reconciles
+interrupted runs, answers a fresh native session, reports the stored session
+status, projects the signed entitlement snapshot and reports a version change,
+revokes the server session and clears the local one on sign-out, lists this
+account's native installations, fetches and validates a cloud chat grant,
+scaffolds the cross-project Home, records a companion workspace and its two canonical
 directories, lists and opens one subject's threads, creates, renames, and deletes
 an owned thread, sweeps expired terminal runs and their protected prompts, reads
 one page of a run stream and subscribes to that run's commits, accepts one prompt
