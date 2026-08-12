@@ -8,8 +8,8 @@ mod sink;
 #[cfg(target_os = "linux")]
 pub use migration::{run_migration_takeover, MigrationTakeoverError};
 pub use service::{
-    accept_prompt, apply_retention, cancel_run, create_thread, delete_thread, drive_prompt,
-    ensure_native_session, fetch_chat_grant, open_profile_storage, queue_run_message,
+    accept_prompt, answer_permission, apply_retention, cancel_run, create_thread, delete_thread,
+    drive_prompt, ensure_native_session, fetch_chat_grant, open_profile_storage, queue_run_message,
     rename_thread, resume_run, run_prompt, thread_page, thread_summaries, PromptAcceptance,
     PromptLaunch,
 };

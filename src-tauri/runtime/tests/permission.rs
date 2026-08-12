@@ -1,16 +1,83 @@
+use std::collections::VecDeque;
 use std::fs;
 use std::process::Command;
+use std::sync::atomic::AtomicBool;
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::Duration;
 
-use muniment_core::active_run::queue_permission_answer;
+use muniment_core::attach::RuntimeActivityRegistry;
 use muniment_core::chat_grant::ChatGrant;
 use muniment_core::home::confirm_home;
 use muniment_core::permission_gate::ChatPermissionAnswer;
+use muniment_core::run_start::ActiveRun;
 use muniment_core::sidecar::pi_install::{PiArtifactDescriptor, PI_ARTIFACT};
-use muniment_runtime::{open_profile_storage, run_prompt};
+use muniment_runtime::{answer_permission, open_profile_storage, run_prompt};
 
 static ENVIRONMENT: Mutex<()> = Mutex::new(());
+
+fn inactive_run() -> ActiveRun {
+    let runtime_activity = RuntimeActivityRegistry::new();
+    ActiveRun {
+        id: "run-1".into(),
+        workspace: "workspace-a".into(),
+        cancelled: Arc::new(AtomicBool::new(false)),
+        transport: Arc::new(Mutex::new(None)),
+        adapter: Arc::new(Mutex::new(None)),
+        permission_answers: Arc::new(Mutex::new(VecDeque::new())),
+        _activity: runtime_activity.mark_active_run(),
+    }
+}
+
+#[test]
+fn permission_answer_reports_rejection_and_timeout() {
+    let active = Arc::new(Mutex::new(Some(inactive_run())));
+    std::thread::scope(|scope| {
+        let answer = scope.spawn(|| {
+            answer_permission(
+                Arc::clone(&active),
+                "workspace-a".into(),
+                "run-1".into(),
+                "gate-1".into(),
+                ChatPermissionAnswer::Confirm(true),
+                Duration::from_secs(1),
+            )
+        });
+        loop {
+            let sender = active
+                .lock()
+                .unwrap()
+                .as_ref()
+                .unwrap()
+                .permission_answers
+                .lock()
+                .unwrap()
+                .pop_front()
+                .and_then(|answer| answer.resolved);
+            if let Some(sender) = sender {
+                sender.send(None).unwrap();
+                break;
+            }
+            std::thread::yield_now();
+        }
+        assert_eq!(
+            answer.join().unwrap().unwrap_err(),
+            "The permission answer was rejected."
+        );
+    });
+
+    assert_eq!(
+        answer_permission(
+            active,
+            "workspace-a".into(),
+            "run-1".into(),
+            "gate-2".into(),
+            ChatPermissionAnswer::Confirm(true),
+            Duration::ZERO,
+        )
+        .unwrap_err(),
+        "The permission answer did not commit in time."
+    );
+}
 
 fn fixture_grant() -> ChatGrant {
     ChatGrant {
@@ -97,7 +164,7 @@ fn a_queued_permission_answer_reaches_a_live_runtime_run() {
     let storage = open_profile_storage(&profile).unwrap();
     let active = Arc::new(Mutex::new(None));
     let (subscriber, events) = mpsc::channel();
-    std::thread::scope(|scope| {
+    let committed_seq = std::thread::scope(|scope| {
         let run = scope.spawn(|| {
             run_prompt(
                 &profile,
@@ -121,14 +188,17 @@ fn a_queued_permission_answer_reaches_a_live_runtime_run() {
                 break permission.gate_id;
             }
         };
-        queue_permission_answer(
-            &active,
+        let committed_seq = answer_permission(
+            Arc::clone(&active),
+            "workspace-a".into(),
             run_id.into(),
             gate_id,
             ChatPermissionAnswer::Confirm(true),
+            Duration::from_secs(5),
         )
         .unwrap();
         run.join().unwrap().unwrap();
+        committed_seq
     });
 
     let captured = fs::read_to_string(permission_capture).unwrap();
@@ -156,6 +226,7 @@ fn a_queued_permission_answer_reaches_a_live_runtime_run() {
         .position(|event| matches!(*event, "run.completed" | "run.failed" | "run.cancelled"))
         .unwrap();
     assert!(requested < resolved && resolved < terminal);
+    assert_eq!(journal_events[resolved].run_seq, committed_seq);
 
     drop(journal_events);
     drop(storage);
