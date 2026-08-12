@@ -268,6 +268,17 @@ fn runs_two_prompts_in_one_named_thread_and_rejects_an_unknown_thread() {
         second_active.lock().unwrap().as_ref().unwrap().id,
         second_run_id
     );
+    assert!(storage
+        .lock()
+        .unwrap()
+        .journal
+        .events(second_run_id)
+        .unwrap()
+        .iter()
+        .all(|event| !matches!(
+            event.event_type.as_str(),
+            "run.completed" | "run.failed" | "run.cancelled" | "run.needs_attention"
+        )));
     drive_prompt(launch);
     assert!(second_active.lock().unwrap().is_none());
 
