@@ -12,8 +12,9 @@ them must exercise the real contracts. It must add no mocked production path.
 > slice-by-slice record. The first 2026-08-12 pass took the ADR 0012 extraction
 > section. The second took the ADR 0024 code-diff chain. The third took the
 > memory index and retrieval section. The fourth took the signed-in shell
-> section. The fifth took the desktop QA automation repair waves. The Phase 3
-> voice section is the next compaction target.
+> section. The fifth took the desktop QA automation repair waves. The sixth took
+> the Phase 3 voice section. The companion execution surfaces section is the next
+> compaction target.
 
 ## M0 — Scaffold (done 2026-07-09)
 
@@ -255,26 +256,21 @@ evidence, and its ratification status. No MUNICLOUD ticket has ruled on the name
 yet, so this lane files no rename slice.
 
 DONE — the voice direction is Parakeet verbatim capture with Kokoro read-aloud
-and global hotkeys. Pinned Parakeet and Silero acquisition and publication,
-sherpa-onnx packaging and bindings, fixed-capacity microphone capture, bounded
-utterance segmentation, a safe VAD boundary, chunk-invariant dictation
-composition, desktop command and event wiring with redacted statuses, composer
-dictation controls, a reproducible target-hardware evaluator, a bounded
-100-utterance endurance mode, press-and-hold dictation with Escape to cancel, a
-fixed system-wide hold-to-talk shortcut, hands-free promotion on rapid double
-activation, and user rebinding with collision-safe rollback.
-
-DONE 2026-07-29 — ADR 0004 pins muniment's own Parakeet conversion
+and global hotkeys, and the whole dictation lane is built. It covers pinned
+Parakeet and Silero acquisition and publication, sherpa-onnx packaging and
+bindings, bounded capture, segmentation, and chunk-invariant composition, a safe
+VAD boundary, redacted command and event wiring, composer controls, press-and-hold
+dictation with Escape to cancel, a fixed system-wide hold-to-talk shortcut,
+hands-free promotion on rapid double activation, user rebinding with
+collision-safe rollback, a reproducible target-hardware evaluator, and a bounded
+100-utterance endurance mode. ADR 0004 pins muniment's own Parakeet conversion
 (MUNIDESK-678), so the desktop depends on no third-party conversion for its ASR
-graphs.
-
-DONE 2026-08-01 — ADR 0005's on-demand speech-model install is implemented end to
-end (MUNIDESK-752, 764, 771, 774, 777, 780). `parakeet_install_facts` reports the
-pinned identity, the revision, the source repository, 672,384,307 download bytes,
-940,819,763 required free bytes, and both artifact licenses. Pressing `Voice`
-without a verified model opens the install card with those facts and an explicit
-Install action. The card reports byte progress and cancels an active install.
-Handy's architecture notes are vendored as voice reference.
+graphs. ADR 0005's on-demand install is built end to end (MUNIDESK-752, 764, 771,
+774, 777, 780). `parakeet_install_facts` reports the pinned identity, the
+revision, the source repository, 672,384,307 download bytes, 940,819,763 required
+free bytes, and both artifact licenses, and the install card reports byte progress
+and cancels an active install. Handy's architecture notes are vendored as voice
+reference.
 
 GATED — no further Kokoro slice is selected. Native runtime and G2P packaging
 remain subject to ADR 0015's redistribution approval gate. Synthesis, playback,
@@ -485,7 +481,7 @@ every call site reads it.
 
 DONE — the dormant service entry points are built (MUNIDESK-1080, 1086, 1091,
 1094, 1096, 1099, 1100, 1102, 1105, 1108, 1110, 1112, 1113, 1115, 1117, 1119,
-1121, 1123, 1125, 1128, 1130, 1133, 1135, 1136, 1139, 1142, 1144, 1145).
+1121, 1123, 1125, 1128, 1130, 1133, 1135, 1136, 1139, 1142, 1144, 1145, 1147).
 `src-tauri/runtime/src/service.rs`
 opens one shared profile storage and reconciles interrupted runs, answers a fresh
 native session from the platform credential store, fetches and validates a cloud
@@ -494,7 +490,10 @@ an authorized attach profile, renames and deletes an owned thread, sweeps expire
 terminal runs and their protected prompts, reads one page of a run stream and
 subscribes to that run's commits, accepts one prompt and drives it, queues one
 steer or follow-up message into the live run, cancels the active run in one
-workspace, and resumes an interrupted run. `accept_prompt`,
+workspace, answers one permission gate, and resumes an interrupted run.
+`answer_permission` (`src-tauri/runtime/src/service.rs:545`) queues the answer
+through the new core seam `queue_permission_answer_with_commit` and returns the
+committed run sequence the attach reply needs (MUNIDESK-1147). `accept_prompt`,
 `run_prompt`, and `resume_run` take the shared storage, the shared run control
 slot, and a config directory beside the profile directory. `RuntimeChatEventSink`
 (`src-tauri/runtime/src/sink.rs`) implements `ChatEventSink` and
@@ -541,45 +540,43 @@ disagree, because `chat_file_metadata` rejects a path with no usable final
 segment and `open_selected_files` does not. The lane waits for an owner look at
 why this one ticket never dispatches.
 
-MERGE HAZARD — four forty-second-wave slices edit
-`src-tauri/runtime/src/service.rs`. They are the permission answer entry, the
-shared Pi runtime slot, the `home.ensure` entry, and the `workspace.onboard`
-entry. Only the shared Pi runtime slot edits `accept_prompt` and its signature.
-The other three add functions beside the existing entries. Each ticket tells the
-implementer to rebase on `main` before it opens the pull request. The 2026-08-04
-silent revert came from a stale base.
+MERGE HAZARD — five forty-third-wave slices edit
+`src-tauri/runtime/src/service.rs`. They are the shared Pi runtime slot, the
+`home.ensure` entry, the `workspace.onboard` entry, the entitlement snapshot
+entry, and the sign-out entry. Only the shared Pi runtime slot edits
+`accept_prompt` and its signature. The other four add functions beside the
+existing entries. Each ticket tells the implementer to rebase on `main` before it
+opens the pull request. The 2026-08-04 silent revert came from a stale base.
 
-VERIFIED 2026-08-12 (forty-second wave, planner, read `src-tauri/runtime/` and
-ran `cargo test --package muniment-runtime`) — one forty-first-wave slice landed.
-`queue_run_message` and `cancel_run` (`src-tauri/runtime/src/service.rs:525`,
-`:533`) read the shared run control slot, and `src-tauri/runtime/tests/steer.rs`
-and `cancel.rs` drive them against a live stub run (MUNIDESK-1145). The other
-four slices are unbuilt. `service.rs` still exposes no permission answer entry,
-both `drive_prompt` and `resume_run` build their own Pi runtime slot
-(`:468`, `:603`), and neither `home.ensure` nor `workspace.onboard` has a runtime
-entry. The whole runtime suite passes over sixteen test binaries.
+VERIFIED 2026-08-12 (forty-third wave, planner, read `src-tauri/runtime/` and ran
+`cargo test --package muniment-runtime`) — one forty-second-wave slice landed.
+`answer_permission` (`src-tauri/runtime/src/service.rs:545`) returns the committed
+run sequence, and `src-tauri/runtime/tests/permission.rs` drives its rejection and
+its timeout (MUNIDESK-1147). The other three slices are unbuilt. Both
+`drive_prompt` and `resume_run` still build their own Pi runtime slot (`:471`,
+`:623`), and neither `home.ensure` nor `workspace.onboard` has a runtime entry.
+The runtime suite passes 31 tests over sixteen test binaries.
 
-MEASURED 2026-08-12 (forty-second wave, planner, read `prepare_desktop_run`
-beside `accept_prompt`) — a failed attachment projection leaves a prepared run
-with no terminal event. `prepare_desktop_run`
-(`src-tauri/core/src/run_start.rs:293`) clears the active run when
-`project_attachments` fails, and it calls no `fail_prepared_run`. The two error
-paths above it both call one. `accept_prompt`
-(`src-tauri/runtime/src/service.rs:420`) carries the same gap against
-`record_persistence_failure`. The core half is the filed slice, because
-`FakeRunStartBoundaries` already fakes a boundary failure and counts the call.
-The runtime half needs a seam that forces a `ReduceError`, so it waits.
+DONE 2026-08-12 — a prepared run that fails its attachment projection ends itself
+(MUNIDESK-1148). `prepare_desktop_run` (`src-tauri/core/src/run_start.rs:293`)
+calls `fail_prepared_run` before it closes the memory session and clears the
+active run, and `attachment_projection_failure_marks_the_prepared_run_failed`
+guards that order.
 
-MEASURED 2026-08-12 (forty-first wave, planner, read the attach permission answer
-beside `active_run.rs`) — the attach `permission.answer` reply needs the
-committed sequence, and the core queue function does not carry it.
-`DesktopAttachService::answer_permission`
-(`src-tauri/core/src/attach/desktop_service.rs:381`) waits on the channel that
-`queue_attach_permission_answer` (`src-tauri/src/chat.rs:213`) returns, and that
-seam pushes a `PendingPermissionAnswer` with `resolved: Some(sender)`.
-`queue_permission_answer` (`src-tauri/core/src/active_run.rs:94`) pushes
-`resolved: None`, so it serves the desktop command alone. The runtime permission
-answer entry therefore splits from the steer and cancel entries.
+OPEN — the runtime half of that gap stands. `accept_prompt`
+(`src-tauri/runtime/src/service.rs:423`) returns a projection error without
+calling `record_persistence_failure`, so a runtime-driven run can reach
+reconciliation with no terminal event. A runtime test needs a seam that forces a
+`ReduceError`, and the crate has none, so the lane files no slice yet.
+
+MEASURED 2026-08-12 (forty-third wave, planner, read `accept_prompt` and
+`resume_run` beside `ChatState`) — each runtime prompt builds its own
+`RuntimeActivityRegistry` (`src-tauri/runtime/src/service.rs:292`, `:598`), where
+the desktop holds one registry in `ChatState` (`src-tauri/src/chat.rs:113`). Every
+mark therefore lands in a throwaway registry, so no quiesce evaluation in the
+runtime process can see an active run, an authentication operation, or an open
+gate. `ensure_native_session` (`:89`) marks no session refresh either. This is the
+fifth shared-slot slice.
 
 MEASURED 2026-08-12 (thirty-ninth wave, planner, read the runtime manifest beside
 `test/runtime-dependency-boundary.sh`) — the runtime crate cannot build a
@@ -603,26 +600,36 @@ runtime entries mirror.
 
 MEASURED 2026-08-12 (thirty-ninth wave, planner, read `accept_prompt` beside
 `ChatState`) — a runtime prompt with no thread id builds `SessionThread::default()`
-per call (`src-tauri/runtime/src/service.rs:323`), where the desktop holds one
-tracker in `ChatState` (`src-tauri/src/chat.rs:111`). Two runtime prompts with no
+per call (`src-tauri/runtime/src/service.rs:327`), where the desktop holds one
+tracker in `ChatState` (`src-tauri/src/chat.rs:112`). Two runtime prompts with no
 thread id therefore open two threads, and the desktop composer continues one. This
 is the fourth shared-slot slice. It waits behind the shared Pi runtime slot,
 because both edit `accept_prompt` and its signature.
 
-SELECTED 2026-08-12 (forty-second wave) — four slices in priority order.
+SELECTED 2026-08-12 (forty-third wave) — five slices in priority order.
 
-1. The runtime permission answer entry, per the forty-first-wave measurement
-   above. It returns the resolved commit sequence, so it carries the attach shape
-   rather than the desktop command shape. The core seam it adds also serves
-   `queue_attach_permission_answer` (`src-tauri/src/chat.rs:213`).
-2. The shared Pi runtime slot. `drive_prompt` and `resume_run`
-   (`src-tauri/runtime/src/service.rs:459`, `:543`) each build their own
+1. The shared Pi runtime slot. `drive_prompt` and `resume_run`
+   (`src-tauri/runtime/src/service.rs:471`, `:623`) each build their own
    `Arc<Mutex<Option<PiRuntime>>>`, where the desktop holds one slot in
-   `ChatState` (`src-tauri/src/chat.rs:110`). The shared storage and the shared
+   `ChatState` (`src-tauri/src/chat.rs:111`). The shared storage and the shared
    run control slot took the same shape. One slot per process is also the rule
    that stops two runtime runs from starting two Pi children.
-3. The runtime `home.ensure` entry, per the fortieth-wave measurement.
-4. The runtime `workspace.onboard` entry, per the same measurement.
+2. The runtime `home.ensure` entry, per the fortieth-wave measurement.
+3. The runtime `workspace.onboard` entry, per the same measurement.
+4. The runtime entitlement snapshot entry. `service.rs` answers a fresh native
+   session and a validated cloud chat grant, and it projects no entitlement
+   snapshot, so `EntitlementSnapshotTracker`
+   (`src-tauri/core/src/auth/entitlement_snapshot.rs`) has no runtime call site.
+   ADR 0012 gives the service the signed snapshot.
+5. The runtime sign-out entry. `sign_out_native_session`
+   (`src-tauri/core/src/auth/native_revocation.rs:172`) has no runtime call site,
+   and ADR 0012 makes sign-out a service capability rather than a desktop
+   prerequisite.
+
+SEQUENCED — the runtime device list entry follows the two auth entries above, over
+`list_native_devices` (`src-tauri/core/src/auth/native_devices.rs:169`). The shared
+session-thread tracker and the shared runtime activity registry follow the shared
+Pi runtime slot, in that order, because all three edit `accept_prompt`.
 
 SEQUENCED — after the shared Pi runtime slot, the later extraction slices are the
 desktop client conversion and Linux user-unit registration. Each sits behind a
@@ -1110,8 +1117,8 @@ earlier one. Requiring an up-to-date branch before merge, or a merge queue, is a
 repository-settings change that sits with the owner. The planner files no ticket
 for it.
 
-VERIFIED 2026-08-12 (forty-second wave, planner) — `cargo test --package
-muniment-runtime` passes from `src-tauri` over sixteen test binaries. The
+VERIFIED 2026-08-12 (forty-third wave, planner) — `cargo test --package
+muniment-runtime` passes 31 tests from `src-tauri` over sixteen test binaries. The
 thirty-ninth wave read 928 frontend tests and 3 browser tests from `npm test`
 after `npm ci`. The extraction section above records what the planner read in the
 code. This entry replaces the earlier ledger.
