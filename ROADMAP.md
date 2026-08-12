@@ -9,8 +9,9 @@ them must exercise the real contracts. It must add no mocked production path.
 > its own paragraph. Those paragraphs are now per-lane summaries with their
 > ticket ranges. Every open item, parked item, held item, gated item, and
 > do-not-re-file measurement is preserved below. Git history holds the full
-> slice-by-slice record. The 2026-08-12 pass took the ADR 0012 extraction
-> section alone. The ADR 0024 code-diff chain is the next compaction target.
+> slice-by-slice record. The first 2026-08-12 pass took the ADR 0012 extraction
+> section. The second took the ADR 0024 code-diff chain. The memory index and
+> retrieval section is the next compaction target.
 
 ## M0 — Scaffold (done 2026-07-09)
 
@@ -482,12 +483,13 @@ every call site reads it.
 
 DONE — the dormant service entry points are built (MUNIDESK-1080, 1086, 1091,
 1094, 1096, 1099, 1100, 1102, 1105, 1108, 1110, 1112, 1113, 1115, 1117, 1119,
-1121, 1123, 1125, 1128, 1130, 1133, 1135). `src-tauri/runtime/src/service.rs`
+1121, 1123, 1125, 1128, 1130, 1133, 1135, 1136). `src-tauri/runtime/src/service.rs`
 opens one shared profile storage and reconciles interrupted runs, answers a fresh
 native session from the platform credential store, fetches and validates a cloud
-chat grant, lists and opens one subject's threads, renames and deletes an owned
-thread, sweeps expired terminal runs and their protected prompts, accepts one
-prompt and drives it, and resumes an interrupted run. `accept_prompt`,
+chat grant, lists and opens one subject's threads, creates one durable thread for
+an authorized attach profile, renames and deletes an owned thread, sweeps expired
+terminal runs and their protected prompts, accepts one prompt and drives it, and
+resumes an interrupted run. `accept_prompt`,
 `run_prompt`, and `resume_run` take the shared storage, the shared run control
 slot, and a config directory beside the profile directory. `RuntimeChatEventSink`
 (`src-tauri/runtime/src/sink.rs`) implements `ChatEventSink` and
@@ -531,54 +533,83 @@ disagree, because `chat_file_metadata` rejects a path with no usable final
 segment and `open_selected_files` does not. The lane waits for an owner look at
 why this one ticket never dispatches.
 
-MERGE HAZARD — four thirty-eighth-wave slices edit
-`src-tauri/runtime/src/service.rs`. They are the thread-create entry, the run
-stream read entries, the prepared-run failure parity, and the shared Pi runtime
-slot. The cancel parity test edits `src-tauri/core/src/bin/sidecar-test-stub.rs`.
-Each ticket tells the implementer to rebase on `main` before it opens the pull
-request. The 2026-08-04 silent revert came from a stale base.
+MERGE HAZARD — four thirty-ninth-wave slices edit
+`src-tauri/runtime/src/service.rs`. They are the run stream read entries, the
+prepared-run failure parity, the shared Pi runtime slot, and the run control
+entries. The failure parity and the Pi runtime slot both edit `accept_prompt`.
+The cancel parity test edits `src-tauri/core/src/bin/sidecar-test-stub.rs`, and
+the Home rule move edits the desktop crate. Each ticket tells the implementer to
+rebase on `main` before it opens the pull request. The 2026-08-04 silent revert
+came from a stale base.
 
-VERIFIED 2026-08-12 (thirty-eighth wave, planner, read `src-tauri/runtime/` and
-ran `cargo test --package muniment-runtime`) — the run acceptance split landed
-(MUNIDESK-1135). `accept_prompt` and `drive_prompt`
-(`src-tauri/runtime/src/service.rs:211`, `:356`) split acceptance from the drive,
-and `run_prompt` composes both. The other four thirty-eighth-wave slices are
-unbuilt. `service.rs` carries no thread-create entry and no run stream read
-entry, no test proves that `abort` reaches the `pi_resume` stub, and both
-`drive_prompt` and `resume_run` build their own Pi runtime slot. The whole
-runtime suite passes.
+VERIFIED 2026-08-12 (thirty-ninth wave, planner, read `src-tauri/runtime/` and ran
+`cargo test --package muniment-runtime`) — the thread-create entry landed
+(MUNIDESK-1136). `create_thread` (`src-tauri/runtime/src/service.rs:128`) stamps an
+`attach_profile` provenance value and calls `create_thread_now`, and
+`src-tauri/runtime/tests/threads.rs` proves it against a live journal. The other
+three thirty-eighth-wave slices are unbuilt. `service.rs` carries no run stream
+read entry, `accept_prompt` still drops its prepared sequence on the error path,
+and both `drive_prompt` and `resume_run` build their own Pi runtime slot. The
+whole runtime suite passes.
 
-MEASURED 2026-08-12 (thirty-eighth wave, planner, read `accept_prompt` beside
+MEASURED 2026-08-12 (thirty-ninth wave, planner, read `accept_prompt` beside
 `prepare_desktop_run`) — a runtime prompt that fails after preparation leaves a
 run with no terminal event. `prepare_desktop_run`
 (`src-tauri/core/src/run_start.rs:254`, `:273`) appends `run.failed` through
 `fail_prepared_run` when the thread-id read or the memory-session open fails.
-`accept_prompt` (`src-tauri/runtime/src/service.rs:248`) runs the same two steps
+`accept_prompt` (`src-tauri/runtime/src/service.rs:267`) runs the same two steps
 inside a closure, drops the prepared sequence on the error path, and returns
 without appending a terminal event. `reconcile_interrupted_runs`
 (`src-tauri/core/src/journal/reconciliation.rs:9`) then appends
 `run.needs_attention` on the next `open_profile_storage`, so the thread shows an
 interrupted reply with a `Resume` control for a run Pi never started.
 
-SELECTED 2026-08-12 (thirty-eighth wave) — five slices in priority order.
+MEASURED 2026-08-12 (thirty-ninth wave, planner, read the runtime manifest beside
+`test/runtime-dependency-boundary.sh`) — the runtime crate cannot build a
+`serde_json` payload. `src-tauri/runtime/Cargo.toml` depends on `muniment-core`
+and `muniment-attach` alone, and the boundary check fails on a third direct
+package. A runtime entry that must append an event therefore needs a core seam
+that owns the payload, the way `record_preparation_failure`
+(`src-tauri/core/src/run_preparation.rs:267`) owns the attachment failure.
 
-1. The runtime thread-create entry. `create_thread_now`
-   (`src-tauri/core/src/journal/thread_mutation.rs:6`) stamps the time, and
-   `src-tauri/runtime/src/service.rs` still carries no entry for the attach
-   `thread.create` operation.
-2. The runtime run stream read entries. `ThreadListService for RunJournal`
+MEASURED 2026-08-12 (thirty-ninth wave, planner, read `resolve_attach_home` beside
+the desktop home module) — the attach `home.ensure` operation has no runtime entry,
+and the rule it needs sits in the desktop crate. `choose_default_home`
+(`src-tauri/src/home.rs:91`) is a pure function with five unit tests and no Tauri
+call, and `resolve_attach_home` (`src-tauri/src/attach_service.rs:519`) is its
+attach caller. The move into muniment-core is the first slice, and the runtime
+`home.ensure` entry follows it.
+
+MEASURED 2026-08-12 (thirty-ninth wave, planner, read `accept_prompt` beside
+`ChatState`) — a runtime prompt with no thread id builds `SessionThread::default()`
+per call (`src-tauri/runtime/src/service.rs:285`), where the desktop holds one
+tracker in `ChatState` (`src-tauri/src/chat.rs:111`). Two runtime prompts with no
+thread id therefore open two threads, and the desktop composer continues one. This
+is the fourth shared-slot slice. It waits behind the shared Pi runtime slot,
+because both edit `accept_prompt` and its signature.
+
+SELECTED 2026-08-12 (thirty-ninth wave) — six slices in priority order.
+
+1. The runtime run stream read entries. `ThreadListService for RunJournal`
    (`src-tauri/core/src/attach/linux.rs:984`) answers `stream_run` and
    `subscribe_run_commits`, and the runtime service reaches neither. The attach
    `run.stream` reply needs both.
-3. The prepared-run failure parity above.
-4. The cancel parity test. `cancel_active_run`
-   (`src-tauri/core/src/active_run.rs:66`) has a live runtime test, but that test
-   does not prove `abort` reaches the `pi_resume` stub.
-5. The shared Pi runtime slot. `drive_prompt` and `resume_run`
-   (`src-tauri/runtime/src/service.rs:365`, `:483`) each build their own
+2. The prepared-run failure parity above, with the core seam the second
+   measurement calls for.
+3. The cancel parity test. `cancel_active_run`
+   (`src-tauri/core/src/active_run.rs:66`) has no test that proves `abort` reaches
+   the `pi_resume` stub, because that arm records nothing.
+4. The shared Pi runtime slot. `drive_prompt` and `resume_run`
+   (`src-tauri/runtime/src/service.rs:384`, `:502`) each build their own
    `Arc<Mutex<Option<PiRuntime>>>`, where the desktop holds one slot in
    `ChatState` (`src-tauri/src/chat.rs:110`). The shared storage and the shared
    run control slot took the same shape.
+5. The default Home rule move into muniment-core, per the fourth measurement.
+6. The runtime run control entries. `queue_message`, `cancel_active_run`, and
+   `queue_permission_answer` (`src-tauri/core/src/active_run.rs`) all read the
+   shared run control slot, and the runtime service exposes no entry for the
+   attach `run.steer`, `run.follow_up`, `run.cancel`, and `permission.answer`
+   operations.
 
 SEQUENCED — after the shared Pi runtime slot, the later extraction slices are the
 desktop client conversion and Linux user-unit registration. Each sits behind a
@@ -671,197 +702,35 @@ gate, and slice 5, the receipt replay of an applied diff, both wait behind the
 producer. ADR 0019 keeps every E0 cloud contract, and the cloud lane publishes no
 `code-diff` artifact.
 
-DONE 2026-08-09 — ADR 0020 carries the desktop-owned local contract
-amendment (MUNIDESK-1029). DONE 2026-08-09 — the codec crate followed
-(MUNIDESK-1036). `src-tauri/code-diff/` holds the `muniment-code-diff` package
-with the model, its validation, and a fixture exporter.
-`protocol-fixtures/code-diff/1/` holds five golden examples behind the
-`code-diff-fixtures-current` CI job, and `src/lib/code-diff.fixtures.test.js`
-reads the same files from the frontend.
+DONE 2026-08-09 through 2026-08-11 — the ADR 0024 local chain is built end to end
+(MUNIDESK-1029, 1036, 1041, 1042, 1043, 1046 through 1049, 1051, 1052, 1057,
+1062, 1066, 1070, 1071, 1073, 1074, 1075, 1078, 1082, 1083, 1087, 1089, 1090,
+1092, 1093, 1097). ADR 0020 carries the desktop-owned local contract amendment.
+`src-tauri/code-diff/` holds the `muniment-code-diff` package with the model, its
+validation, its canonical bytes, and a fixture exporter, and
+`protocol-fixtures/code-diff/1/` holds the golden examples behind the
+`code-diff-fixtures-current` CI job. `src-tauri/cli/src/code_diff_render.rs`
+renders a validated diff to terminal text and is wired into no command.
+`compute_code_diff` (`src-tauri/core/src/code_diff.rs:12`) computes the diff with
+intra-line word segments, exact-content rename detection, three context lines,
+and the 200-file, 20,000-line, and 2 MiB canonical bounds.
+`src-tauri/core/src/write_plan.rs`, `code_diff_staging.rs`, `code_diff_journal.rs`,
+`code_diff_observe.rs`, and `code_diff_apply.rs` carry the bounded write plan, the
+staging step, the CAS and journal event pair with its replay and its gate binding,
+the workspace observation with its pre-write stale check, and the write executor
+that applies through verified parent handles. The gate, its answer verification,
+the coordinate wiring, and the filter un-gate put a `code_diff` permission card
+into production, and the transcript renders each applied diff through an
+`Applied file changes` card. `src/lib/CodeDiff.svelte` renders both,
+`src/lib/code-diff.js` holds the one generator configuration, and
+`test/probe/code-diff.html` and `test/probe/applied-diff.html` drive the built
+bundle. Only the Pi producer input stays parked on the wire contract.
 
-DONE 2026-08-09 — the CLI ANSI renderer is built (MUNIDESK-1041).
-`src-tauri/cli/src/code_diff_render.rs` renders a validated `CodeDiff` to
-terminal text, emphasizes producer-supplied segments, falls back to the whole
-line when the segments do not concatenate to `text`, and is wired into no
-command.
-
-DONE 2026-08-09 — the codec's file-status rules are built (MUNIDESK-1042).
-`CodeDiff::validate` (`src-tauri/code-diff/src/lib.rs:121`) rejects a path set
-that contradicts the file status, and the fixture set now carries `added`,
-`deleted`, `empty`, and `truncated` examples beside the earlier three.
-
-DONE 2026-08-09 — the ADR 0024 producer's pure half is built (MUNIDESK-1043).
-`compute_code_diff` (`src-tauri/core/src/code_diff.rs:12`) computes a validated
-`CodeDiff` from a current tree and a staged tree held in memory, with an LCS
-edit script, three context lines, and hunk coalescing. It touches no Pi
-message, no journal, no CAS, and no filesystem.
-
-DONE 2026-08-10 — the four twelfth-wave slices are built. Intra-line word
-segments landed (MUNIDESK-1046), and `add_intra_line_segments`
-(`src-tauri/core/src/code_diff.rs:345`) marks the changed span of each paired
-deletion and addition. The file-count and rendered-line limits landed
-(MUNIDESK-1047), so more than 200 changed files rejects, and crossing 20,000
-rendered lines truncates by omitting only complete trailing hunks in stable
-path order. Exact-content rename detection landed (MUNIDESK-1048), and the
-producer pairs identical bytes deterministically. The write plan landed
-(MUNIDESK-1049), and `src-tauri/core/src/write_plan.rs` holds `WritePlan`, the
-400-operation and 8 MiB and 64 MiB bounds, `encode`, and `decode_verified`
-with its SHA-256 and canonical-form checks, with no call site.
-
-DONE 2026-08-10 — the canonical-bytes slice landed (MUNIDESK-1051).
-`canonical_bytes` (`src-tauri/code-diff/src/lib.rs:219`) sorts object keys
-explicitly, every golden fixture carries a `.canonical.json` sibling, and
-`compute_code_diff` truncates a diff whose canonical form crosses 2 MiB.
-
-DONE 2026-08-10 — the staging slice landed (MUNIDESK-1052).
-`stage_proposed_operations` (`src-tauri/core/src/code_diff_staging.rs:20`)
-turns a list of proposed operations into the staged tree that
-`compute_code_diff` reads, and it has no production call site, which is the
-`write_plan.rs` shape.
-
-DONE 2026-08-10 — the journal pair landed (MUNIDESK-1057).
-`stage_code_diff_proposal` (`src-tauri/core/src/code_diff_journal.rs:47`)
-stores the encoded plan and the canonical diff bytes in CAS and appends
-`code.write-plan.staged` then `code.diff.proposed` in one batch. Both
-envelopes carry the effect identifier as `correlation_id`, and the diff event
-carries the plan event's `event_id` as `causation_id`. The reducer's
-catch-all arm accepts both events after `run.started`, so a run that carries
-the pair still replays.
-
-DONE 2026-08-10 — the replay half is built (MUNIDESK-1062).
-`load_code_diff_proposal` (`src-tauri/core/src/code_diff_journal.rs:105`)
-finds the event pair linked to one effect, verifies each CAS object against
-its reference, and returns the decoded plan beside the validated canonical
-diff.
-
-DONE 2026-08-10 — the composition landed (MUNIDESK-1066).
-`compose_code_diff_proposal` (`src-tauri/core/src/code_diff_journal.rs:225`)
-maps a validated `WritePlan` to proposed operations, stages them through
-`stage_proposed_operations`, computes the diff through `compute_code_diff`,
-and persists the pair through `stage_code_diff_proposal`.
-
-DONE 2026-08-10 — the observation slice landed (MUNIDESK-1070).
-`observe_workspace_write_plan` (`src-tauri/core/src/code_diff_observe.rs:20`)
-resolves each proposed path under the workspace root through cap-std, rejects
-an escape or a link, reads the current bytes and metadata off the open handle
-under the 8 MiB and 64 MiB read bounds, and returns the validated `WritePlan`
-beside the current tree.
-
-DONE 2026-08-10 — the gate binding landed (MUNIDESK-1071).
-`append_code_diff_permission_request`
-(`src-tauri/core/src/code_diff_journal.rs:158`) loads the stored proposal
-pair, rejects a truncated diff, and appends one `permission.requested` event
-whose `PermissionRequest::CodeDiff` payload carries the effect and diff
-identifiers with both CAS hashes. `chat_pending_permission`
-(`src-tauri/core/src/chat_view.rs:55`) filtered the new kind until the
-MUNIDESK-1089 un-gate below.
-
-DONE 2026-08-10 — the answer verification landed (MUNIDESK-1073).
-`verify_code_diff_permission_answer`
-(`src-tauri/core/src/code_diff_journal.rs:217`) matches the gate, effect,
-diff, and write-plan identifiers, reloads both CAS objects, verifies both
-hashes, rejects a truncated diff, compares the decoded diff `id`, and returns
-the verified plan beside the diff.
-
-DONE 2026-08-10 — the pre-write stale check landed (MUNIDESK-1074).
-`verify_workspace_write_plan` (`src-tauri/core/src/code_diff_observe.rs:80`)
-re-observes every path the plan touches, names the first stale dimension from
-existence through parent identity, and returns the verified parent handles in
-`VerifiedWritePlan`.
-
-DONE 2026-08-10 — the dormant ask card landed (MUNIDESK-1075). The permission
-card renders a `code_diff` gate through `CodeDiff.svelte`, the `Apply` control
-sends the five approval identifiers, and `test/probe/code-diff.html` drives
-it. The MUNIDESK-1089 un-gate later put the kind into production.
-
-DONE 2026-08-11 — the write executor landed (MUNIDESK-1078).
-`apply_workspace_write_plan` (`src-tauri/core/src/code_diff_apply.rs:13`)
-applies a verified `WritePlan` through the exact parent handles in
-`VerifiedWritePlan`, with no path re-resolution. A write lands through a
-temporary file and a rename inside the stored parent, a delete and a rename
-go through the stored handles, and a missing handle rejects before any write.
-It touches no journal and has no call site.
-
-DONE 2026-08-11 — the answer application composition is built (MUNIDESK-1082).
-One core function takes the journal, the CAS, the workspace
-root, the run id, the pending gate, and a `CodeDiffPermissionAnswer`
-(`src-tauri/core/src/code_diff_journal.rs:208`). It composes
-`verify_code_diff_permission_answer`, `verify_workspace_write_plan`, and
-`apply_workspace_write_plan` in that order, appends `permission.resolved`
-before the first write and `code.diff.applied` after the last one, and
-refuses a gate that already carries a resolution, so a crash between the two
-events never re-applies silently. It has no call site, which is the
-`write_plan.rs` shape.
-
-DONE 2026-08-11 — the `codeDiff` answer variant is built (MUNIDESK-1083).
-`ChatPermissionAnswer`
-(`src-tauri/core/src/permission_gate.rs:23`) gains a `CodeDiff` variant whose
-serde form matches the payload `codeDiffPermissionAnswer`
-(`src/lib/chat-state.js:23`) already sends, and
-`coordinate_permission_answer` never forwards it to Pi as an extension UI
-answer. The coordinate wiring that joins the variant to the composition
-landed next (MUNIDESK-1087).
-
-DONE 2026-08-11 — the coordinate wiring is built (MUNIDESK-1087).
-The drain loop routes a `CodeDiff` answer to `apply_code_diff_approval`,
-advances its sequence across both appended events, reduces both events, and
-delivers the updated projection without forwarding the answer to Pi.
-
-DONE 2026-08-11 — the filter un-gate landed (MUNIDESK-1089).
-`chat_pending_permission` (`src-tauri/core/src/chat_view.rs:55`) passes a
-`code_diff` gate through with its verified diff. `load_pending_code_diff`
-(`src-tauri/core/src/code_diff_journal.rs:451`) reloads the canonical bytes
-from CAS at both payload sites, `chat_event`
-(`src-tauri/core/src/run_events.rs:51`) and the thread history projection.
-
-DONE 2026-08-11 — the ask card states a missing diff (MUNIDESK-1092). A
-`code_diff` gate whose diff fails to load renders a plain notice instead of
-an empty frame.
-
-DONE 2026-08-11 — the replay projection landed (MUNIDESK-1090).
-`ChatProjection::applied_diffs` (`src-tauri/core/src/journal/reducer.rs:450`)
-holds one `ProjectedAppliedDiff` per `code.diff.applied` event, and
-`ChatEvent` and `HistoryEntry` both carry the list.
-
-MEASURED 2026-08-11 (twenty-second wave, planner, read `chat-state.js`,
-`App.svelte`, and the reducer) — no frontend code reads `appliedDiffs`, and
-the projection carries identifiers and hashes alone, so nothing a user sees
-replays an applied diff. The record needs the validated `CodeDiff` reloaded
-from CAS before the shell can render it. The twenty-second wave selects that
-core half, and the shell rendering follows it as its own slice.
-
-DONE 2026-08-11 — the core half landed (MUNIDESK-1093). `ChatAppliedDiff`
-(`src-tauri/core/src/chat_view.rs:39`) carries the record beside its
-optional reloaded `CodeDiff`, and `load_applied_code_diffs`
-(`src-tauri/core/src/code_diff_journal.rs:488`) reaches both payload sites,
-`append_emit` and the thread history projection.
-
-MEASURED 2026-08-11 (twenty-third wave, planner, built the bundle and
-captured `test/probe/code-diff.html` at 1100x720) — the shell half is still
-missing. `applyChatEvent` (`src/lib/chat-state.js:138`) and
-`historyMessages` (`src/lib/chat-state.js:154`) both drop `appliedDiffs`,
-so the transcript shows the proposed changes before Apply and nothing
-after. The twenty-third wave selects the shell rendering slice.
-
-DONE 2026-08-11 — the shell half landed (MUNIDESK-1097). The transcript
-renders each applied diff through an `Applied file changes` card, a record
-whose diff cannot be reloaded states that plainly, and
-`test/probe/applied-diff.html` drives the built bundle to both states. The
-local ADR 0024 chain is now built end to end, and only the Pi producer
-input stays parked on the wire contract.
-
-MEASURED 2026-08-12 (thirty-eighth wave, planner, built the bundle and captured
-`test/probe/applied-diff.html` at 1100x900) — the diff file header renders
-upstream chrome. diff2html's `generic-file-path` template appends a
-`d2h-file-collapse` label that reads `Viewed` around a checkbox.
-`src/lib/CodeDiff.svelte:15` allows neither `label` nor `input`, and DOMPurify
-keeps the text of a removed element, so the bare word `Viewed` renders at the
-right of every file header. It names no state and it operates nothing, where
-DESIGN.md reads that a control renders as a control at rest. The four
-`tag-file-*` templates emit `ADDED`, `CHANGED`, `DELETED`, and `RENAMED` in
-capitals, where the tool rows say `completed` and `failed` in lowercase.
-`codeDiffRendererOptions` (`src/lib/code-diff.js:7`) is the one generator
-configuration site, and diff2html reads a `rawTemplates` option.
+DONE 2026-08-12 — the diff file header drops the upstream control text and states
+each file status in the shell register (MUNIDESK-1137).
+`codeDiffRendererOptions` (`src/lib/code-diff.js:7`) passes `rawTemplates`, so
+`generic-file-path` emits no `d2h-file-collapse` label and the four `tag-file-*`
+templates read `added`, `changed`, `deleted`, and `renamed` in lowercase.
 
 PARKED — the producer's Pi input waits on the Pi wire contract, with the ADR
 0025 consumers. ADR 0024 requires structured proposed operations from Pi
@@ -1369,10 +1238,10 @@ earlier one. Requiring an up-to-date branch before merge, or a merge queue, is a
 repository-settings change that sits with the owner. The planner files no ticket
 for it.
 
-VERIFIED 2026-08-12 (thirty-eighth wave, planner) — `cargo test --package
-muniment-runtime` passes, and `npm test` passes after `npm ci`. The extraction
-section above records what the planner read in the code. This entry replaces the
-earlier ledger.
+VERIFIED 2026-08-12 (thirty-ninth wave, planner) — `cargo test --package
+muniment-runtime` passes from `src-tauri`, and `npm test` passes after `npm ci`
+with 928 frontend tests and 3 browser tests. The extraction section above records
+what the planner read in the code. This entry replaces the earlier ledger.
 
 NOTE 2026-08-06 — the planning clone ships no `node_modules`. Run `npm ci`
 before `npm test`. Without it the run dies with `vitest: not found`, which reads
