@@ -614,11 +614,11 @@ disagree, because `chat_file_metadata` rejects a path with no usable final
 segment and `open_selected_files` does not. The lane waits for an owner look at
 why this one ticket never dispatches.
 
-MERGE HAZARD — the first three thirty-first-wave slices edit
-`src-tauri/runtime/src/service.rs`, and the fourth edits
-`src-tauri/runtime/tests/run.rs` beside the first. Each ticket tells the
-implementer to rebase on `main` before it opens the pull request. The
-2026-08-04 silent revert came from a stale base.
+MERGE HAZARD — the first, second, and fourth thirty-second-wave slices edit
+`src-tauri/runtime/src/service.rs`, and the third and fourth both edit
+`src-tauri/runtime/tests/run.rs`. Each ticket tells the implementer to rebase
+on `main` before it opens the pull request. The 2026-08-04 silent revert came
+from a stale base.
 
 DONE 2026-08-08 — the memory runtime is the twentieth core move
 (MUNIDESK-995). `src-tauri/core/src/memory_runtime.rs` composes one
@@ -822,27 +822,37 @@ validates a cloud chat grant through `fetch_grant`, `validate_grant`,
 and the shared `api_base_url`, and `src-tauri/runtime/tests/grant.rs`
 drives it against a local server.
 
-SELECTED 2026-08-11 (thirty-first wave) — four slices in priority
-order. The shared-storage argument, the thread mutation entries, and
-the retention entry drained at batch positions two through four, so
-they re-file in strict priority order. The shared-storage argument
-takes the first position, because `run_prompt`, `resume_run`, and both
-read entries each open profile storage per call, and every open pays
-the full `validate_database` read the 2026-07-31 measurement records.
-The thread mutation entries follow through `append_thread_rename` and
+DONE 2026-08-11 — the run and read entries take one shared storage
+(MUNIDESK-1117). `open_profile_storage`
+(`src-tauri/runtime/src/service.rs:62`) returns the `SharedStorage`,
+and `run_prompt`, `resume_run`, `thread_summaries`, and `thread_page`
+each take it as an argument, so a caller pays the `validate_database`
+open once rather than once per call.
+
+SELECTED 2026-08-11 (thirty-second wave) — four slices in priority
+order. The thread mutation entries, the retention entry, and the
+steer parity test drained at batch positions two through four, so
+they re-file in strict priority order. The thread mutation entries
+take the first position, through `append_thread_rename` and
 `append_thread_delete`
 (`src-tauri/core/src/journal/thread_mutation.rs:25`, `:42`). The
 retention entry follows through `apply_retention`
 (`src-tauri/core/src/journal/retention.rs:55`). Both need a core seam
 that stamps the time, because `test/runtime-dependency-boundary.sh`
 pins the runtime crate's direct dependencies to muniment-core and
-muniment-attach, so the crate may name no chrono type. The fourth
-slice is new. Nothing proves a queued steer or follow-up reaches a
-live runtime run. `queue_message` (`src-tauri/core/src/active_run.rs:28`)
-reads the shared run slot, the stub's `pi_chat_queue` mode
+muniment-attach, so the crate may name no chrono type. The steer
+parity test follows. Nothing proves a queued steer or follow-up
+reaches a live runtime run. `queue_message`
+(`src-tauri/core/src/active_run.rs:28`) reads the shared run slot,
+the stub's `pi_chat_queue` mode
 (`src-tauri/core/src/bin/sidecar-test-stub.rs:270`) answers both
 commands, and the MUNIDESK-1108 entry names only the cancel and the
-permission answer.
+permission answer. The fourth slice is new. `run_prompt`
+(`src-tauri/runtime/src/service.rs:119`) passes `Vec::new()` where
+both preparation entries take `files: Vec<OpenSelectedFile>`
+(`src-tauri/core/src/run_preparation.rs:64`), so a runtime run cannot
+carry an attachment that a desktop run ingests through the same core
+path.
 
 SEQUENCED — the later extraction slices are the remaining Pi execution move, the
 desktop client conversion, and Linux user-unit registration, each behind a
@@ -1620,13 +1630,13 @@ earlier one. Requiring an up-to-date branch before merge, or a merge queue, is a
 repository-settings change that sits with the owner. The planner files no ticket
 for it.
 
-VERIFIED 2026-08-11 (thirty-first wave, from a cold build) — `cargo
+VERIFIED 2026-08-11 (thirty-second wave, from a warm build) — `cargo
 test -p muniment-runtime` passed 25 tests across 13 binaries with no
-failure. The planner confirmed the landed grant entry (MUNIDESK-1115)
-at `src-tauri/runtime/src/service.rs:55`, and confirmed that the
-shared-storage argument, the thread mutation entries, and the
-retention entry remain unbuilt in `service.rs`, so all three re-file
-in strict priority order. Earlier waves recorded the same shape of
+failure. The planner confirmed the landed shared-storage argument
+(MUNIDESK-1117) at `src-tauri/runtime/src/service.rs:62`, and
+confirmed that the thread mutation entries, the retention entry, and
+the steer parity test remain unbuilt, so all three re-file in strict
+priority order. Earlier waves recorded the same shape of
 verification, and this entry replaces that ledger.
 
 NOTE 2026-08-06 — the planning clone ships no `node_modules`. Run `npm ci`
