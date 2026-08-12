@@ -13,8 +13,14 @@ pub struct RetentionPolicy {
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct RetentionOutcome {
-    pub deleted_run_ids: Vec<String>,
+    pub deleted_runs: Vec<DeletedRun>,
     pub collected_hashes: Vec<ContentHash>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DeletedRun {
+    pub run_id: String,
+    pub subject: Option<String>,
 }
 
 #[derive(Debug)]
@@ -64,7 +70,7 @@ pub fn apply_retention(
     let cutoff = now
         .checked_sub_signed(policy.max_age)
         .ok_or(RetentionError::InvalidPolicy)?;
-    let mut deleted_run_ids = Vec::new();
+    let mut deleted_runs = Vec::new();
 
     let event_types = journal.run_event_types_with_newest_recorded_at()?;
     for run in event_types.chunk_by(|left, right| left.run_id == right.run_id) {
@@ -104,8 +110,14 @@ pub fn apply_retention(
         if recorded_at.with_timezone(&Utc) >= cutoff {
             continue;
         }
+        let subject = events
+            .first()
+            .and_then(|event| event.provenance.actor_id.clone());
         journal.delete_run(&newest.run_id)?;
-        deleted_run_ids.push(newest.run_id.clone());
+        deleted_runs.push(DeletedRun {
+            run_id: newest.run_id.clone(),
+            subject,
+        });
     }
 
     let mut collected_hashes = if let Some(cas) = cas {
@@ -115,10 +127,10 @@ pub fn apply_retention(
     } else {
         Vec::new()
     };
-    deleted_run_ids.sort();
+    deleted_runs.sort_by(|left, right| left.run_id.cmp(&right.run_id));
     collected_hashes.sort_by(|left, right| left.as_str().cmp(right.as_str()));
     Ok(RetentionOutcome {
-        deleted_run_ids,
+        deleted_runs,
         collected_hashes,
     })
 }

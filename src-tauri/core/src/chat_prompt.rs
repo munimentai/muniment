@@ -77,6 +77,7 @@ pub enum ChatPromptError {
     Entry(keyring::Error),
     Store(keyring::Error),
     Load(keyring::Error),
+    Delete(keyring::Error),
 }
 
 pub fn prompt_user(subject: Option<&str>, run_id: &str) -> String {
@@ -103,5 +104,14 @@ pub fn load_prompt(run_id: &str, subject: Option<&str>) -> Result<Option<String>
         Ok(prompt) => Ok(Some(prompt)),
         Err(keyring::Error::NoEntry) => Ok(None),
         Err(error) => Err(ChatPromptError::Load(error)),
+    }
+}
+
+pub fn delete_prompt(run_id: &str, subject: Option<&str>) -> Result<(), ChatPromptError> {
+    let user = prompt_user(subject, run_id);
+    let entry = Entry::new(PROMPT_SERVICE, &user).map_err(ChatPromptError::Entry)?;
+    match entry.delete_credential() {
+        Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
+        Err(error) => Err(ChatPromptError::Delete(error)),
     }
 }

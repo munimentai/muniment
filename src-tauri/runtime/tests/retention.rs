@@ -1,3 +1,4 @@
+use muniment_core::chat_prompt::{load_prompt, store_prompt, use_mock_keyring_for_tests};
 use muniment_core::journal::{EventEnvelope, EventPayload, Provenance};
 use muniment_core::run_events::SharedStorage;
 use muniment_core::run_preparation::{prepare_new_run_with_session_thread, SessionThreadStart};
@@ -71,12 +72,14 @@ fn prepare_recent_terminal_run(storage: &SharedStorage, run_id: &str) {
 
 #[test]
 fn deletes_an_expired_terminal_run_and_keeps_a_recent_run() {
+    use_mock_keyring_for_tests();
     let temporary_root =
         std::env::temp_dir().join(format!("muniment-runtime-retention-{}", std::process::id()));
     fs::create_dir_all(&temporary_root).unwrap();
     let storage = open_profile_storage(&temporary_root).unwrap();
     let expired_run = "01900000-0000-7000-8000-000000000001";
     let recent_run = "01900000-0000-7000-8000-000000000002";
+    let subject = "subject-a";
     {
         let mut storage = storage.lock().unwrap();
         storage
@@ -84,13 +87,17 @@ fn deletes_an_expired_terminal_run_and_keeps_a_recent_run() {
             .append_batch(
                 0,
                 &[
-                    event(
-                        expired_run,
-                        "01900000-0000-7000-8000-000000000001",
-                        1,
-                        "run.started",
-                        "2000-01-01T00:00:00Z",
-                    ),
+                    {
+                        let mut started = event(
+                            expired_run,
+                            "01900000-0000-7000-8000-000000000001",
+                            1,
+                            "run.started",
+                            "2000-01-01T00:00:00Z",
+                        );
+                        started.provenance.actor_id = Some(subject.into());
+                        started
+                    },
                     event(
                         expired_run,
                         "01900000-0000-7000-8000-000000000002",
@@ -103,10 +110,13 @@ fn deletes_an_expired_terminal_run_and_keeps_a_recent_run() {
             .unwrap();
     }
     prepare_recent_terminal_run(&storage, recent_run);
+    store_prompt(expired_run, "expired prompt", Some(subject)).unwrap();
 
     let outcome = apply_retention(Arc::clone(&storage), 30 * 24 * 60 * 60).unwrap();
 
-    assert_eq!(outcome.deleted_run_ids, [expired_run]);
+    assert_eq!(outcome.deleted_runs[0].run_id, expired_run);
+    assert_eq!(outcome.deleted_runs[0].subject.as_deref(), Some(subject));
+    assert_eq!(load_prompt(expired_run, Some(subject)).unwrap(), None);
     {
         let mut locked = storage.lock().unwrap();
         assert!(locked.journal.events(expired_run).unwrap().is_empty());

@@ -136,8 +136,23 @@ pub fn apply_retention(
         .lock()
         .map_err(|_| "Conversation history is unavailable.".to_string())?;
     let ChatStorage { journal, cas } = &mut *storage;
-    apply_retention_now(journal, Some(cas), max_age_seconds)
-        .map_err(|_| "Conversation history is unavailable.".to_string())
+    let outcome = apply_retention_now(journal, Some(cas), max_age_seconds)
+        .map_err(|_| "Conversation history is unavailable.".to_string())?;
+    let mut prompt_delete_failed = false;
+    for deleted_run in &outcome.deleted_runs {
+        if muniment_core::chat_prompt::delete_prompt(
+            &deleted_run.run_id,
+            deleted_run.subject.as_deref(),
+        )
+        .is_err()
+        {
+            prompt_delete_failed = true;
+        }
+    }
+    if prompt_delete_failed {
+        return Err("Conversation history is unavailable.".to_string());
+    }
+    Ok(outcome)
 }
 
 /// Opens one thread owned by one subject.
