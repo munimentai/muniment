@@ -1,10 +1,72 @@
+#![allow(dead_code)]
+
 use std::collections::hash_map::DefaultHasher;
 use std::fs;
 use std::hash::{Hash, Hasher};
+use std::io::{Read, Write};
+use std::net::{TcpListener, TcpStream};
 use std::path::Path;
 use std::process::Command;
+use std::thread;
+use std::time::{SystemTime, UNIX_EPOCH};
 
+use muniment_core::auth::{InstallationRecord, NativeCredentials, TokenSet};
 use muniment_core::sidecar::pi_install::{PiArtifactDescriptor, PI_ARTIFACT};
+
+const DEVICE_ID: &str = "10000000-0000-4000-8000-000000000001";
+
+pub fn spawn_server(status: u16, body: String) -> (String, thread::JoinHandle<String>) {
+    let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+    let base_url = format!("http://{}", listener.local_addr().unwrap());
+    let handle = thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let request = read_request(&mut stream);
+        write!(
+            stream,
+            "HTTP/1.1 {status} Result\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        )
+        .unwrap();
+        request
+    });
+    (base_url, handle)
+}
+
+pub fn read_request(stream: &mut TcpStream) -> String {
+    let mut bytes = Vec::new();
+    loop {
+        let mut buffer = [0; 1024];
+        let read = stream.read(&mut buffer).unwrap();
+        bytes.extend_from_slice(&buffer[..read]);
+        if bytes.windows(4).any(|window| window == b"\r\n\r\n") {
+            break;
+        }
+    }
+    String::from_utf8(bytes).unwrap()
+}
+
+pub fn credentials() -> NativeCredentials {
+    let unix_time = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    NativeCredentials {
+        installation: InstallationRecord {
+            private_key: [1; 32],
+            device_id: DEVICE_ID.parse().unwrap(),
+            registration_token: "registration-secret".into(),
+            device_challenge: "challenge-secret".into(),
+            registration_expires_at: unix_time + 7_200,
+        },
+        tokens: TokenSet {
+            access_token: "access-secret".into(),
+            refresh_token: Some("refresh-secret".into()),
+            expires_at: Some(unix_time + 3_600),
+            subject: Some("user".into()),
+        },
+        refresh_expires_at: unix_time + 7_200,
+    }
+}
 
 pub fn stage_pi_stub(temporary_root: &Path) -> PiArtifactDescriptor {
     let pi_root = temporary_root.join("pi");
