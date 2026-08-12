@@ -542,7 +542,7 @@ base.
 VERIFIED 2026-08-12 (forty-seventh wave, planner, read
 `src-tauri/runtime/src/service.rs` and ran `cargo test --package
 muniment-runtime`) — the `workspace.onboard` entry stands, so every attach
-operation has a runtime twin. Four selected slices remain unbuilt. `service.rs`
+operation has a runtime twin. Six selected slices remain unbuilt. `service.rs`
 has no entitlement snapshot entry, no sign-out entry, and no device list entry,
 and `accept_prompt` (`service.rs:347`) and `resume_run` (`:654`) each still build
 their own `RuntimeActivityRegistry`. The auth entry set is therefore the wave's
@@ -606,14 +606,15 @@ built (MUNIDESK-1154, 1155). Every attach operation now has a runtime twin, so
 the entry-point sweep moves to the ADR 0012 capabilities the desktop still owns
 alone.
 
-DONE 2026-08-12 — the runtime tests stage the Pi stub once (MUNIDESK-1158).
-`stage_pi_stub` (`src-tauri/runtime/tests/common/mod.rs:9`) builds
-`sidecar-test-stub` into one temporary directory keyed by the manifest path, so
-the four live-run test binaries share a warm build. The forty-sixth wave measured
-five cold builds at 25,347ms each, against a whole-suite wall time of about 122
-seconds. The forty-seventh wave measured the same suite at 7 seconds.
+DONE 2026-08-12 — the runtime tests share a warm Pi stub build (MUNIDESK-1158).
+Five `stage_pi_stub` calls across four test binaries each invoke Cargo and copy
+`sidecar-test-stub`. They use one target directory keyed by the manifest path,
+so later builds stay warm. The forty-sixth wave measured five cold builds at
+25,347ms each, against a whole-suite wall time of about 122 seconds. The
+forty-seventh wave measured the same suite at 7 seconds.
 
 SELECTED 2026-08-12 (forty-seventh wave) — six slices in priority order.
+Each of the first four slices adds one function. The fifth adds two functions.
 
 1. The runtime entitlement snapshot entry. `service.rs` answers a fresh native
    session and a validated cloud chat grant, and it projects no entitlement
