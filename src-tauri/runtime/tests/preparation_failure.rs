@@ -27,6 +27,8 @@ fn memory_session_failure_ends_the_prepared_run() {
         run_id.into(),
         "prompt".into(),
         None,
+        &muniment_core::session_thread::SessionThread::default(),
+        false,
         "token".into(),
         Some("owner".into()),
         Vec::new(),

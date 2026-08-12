@@ -278,6 +278,8 @@ pub fn accept_prompt(
     run_id: String,
     prompt: String,
     thread_id: Option<String>,
+    session_thread: &SessionThread,
+    continue_existing: bool,
     access_token: String,
     subject: Option<String>,
     files: Vec<OpenSelectedFile>,
@@ -325,31 +327,24 @@ pub fn accept_prompt(
                         .map_err(|_| "Conversation history is unavailable.".to_string())
                 },
             ),
-            None => {
-                let session_thread = SessionThread::default();
-                prepare_new_run_with_session_thread(
-                    &storage,
-                    SessionThreadStart {
-                        tracker: &session_thread,
-                        continue_existing: false,
-                    },
-                    &run_id,
-                    &grant.workspace,
-                    subject.as_deref(),
-                    files,
-                    Some(runtime_provenance()),
-                    "muniment-runtime",
-                    env!("CARGO_PKG_VERSION"),
-                    || {
-                        muniment_core::chat_prompt::store_prompt(
-                            &run_id,
-                            &prompt,
-                            subject.as_deref(),
-                        )
+            None => prepare_new_run_with_session_thread(
+                &storage,
+                SessionThreadStart {
+                    tracker: session_thread,
+                    continue_existing,
+                },
+                &run_id,
+                &grant.workspace,
+                subject.as_deref(),
+                files,
+                Some(runtime_provenance()),
+                "muniment-runtime",
+                env!("CARGO_PKG_VERSION"),
+                || {
+                    muniment_core::chat_prompt::store_prompt(&run_id, &prompt, subject.as_deref())
                         .map_err(|_| "Conversation history is unavailable.".to_string())
-                    },
-                )
-            }
+                },
+            ),
         }?;
         let thread_id = {
             let mut storage = match storage.lock() {
@@ -501,6 +496,8 @@ pub fn run_prompt(
     run_id: String,
     prompt: String,
     thread_id: Option<String>,
+    session_thread: &SessionThread,
+    continue_existing: bool,
     access_token: String,
     subject: Option<String>,
     files: Vec<OpenSelectedFile>,
@@ -517,6 +514,8 @@ pub fn run_prompt(
         run_id,
         prompt,
         thread_id,
+        session_thread,
+        continue_existing,
         access_token,
         subject,
         files,
