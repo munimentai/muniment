@@ -2,6 +2,10 @@
 
 use muniment_core::attach::RuntimeActivityRegistry;
 use muniment_core::auth::TokenSet;
+use muniment_core::auth::{
+    api_base_url, ensure_native_session as ensure_core_native_session, FreshNativeSession,
+    FreshNativeSessionError, KeyringNativeCredentialStore,
+};
 use muniment_core::chat_coordinate::coordinate;
 use muniment_core::chat_grant::ChatGrant;
 use muniment_core::chat_profile::{ChatProfile, ChatProfileError};
@@ -30,8 +34,22 @@ use std::path::Path;
 use std::sync::atomic::AtomicBool;
 use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::RuntimeChatEventSink;
+
+/// Returns a fresh native session from the platform credential store.
+pub fn ensure_native_session() -> Result<FreshNativeSession, FreshNativeSessionError> {
+    let now_unix_seconds = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs())
+        .unwrap_or(0);
+    ensure_core_native_session(
+        &KeyringNativeCredentialStore::new(),
+        &api_base_url(),
+        now_unix_seconds,
+    )
+}
 
 /// Opens profile storage after the ADR 0009 instance-lock cutover gate transfers ownership.
 pub fn open_profile_storage(
