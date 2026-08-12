@@ -2553,4 +2553,284 @@ mod tests {
             }
         }
     }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn attach_credentials_reject_impersonation_and_canonical_grants_reject_retargeting() {
+        use std::os::unix::fs::symlink;
+
+        let root = std::env::temp_dir().join(format!("muniment-attach-grants-{}", Uuid::now_v7()));
+        let first = root.join("first");
+        let second = root.join("second");
+        let memory = root.join("memory");
+        let alias = root.join("alias");
+        std::fs::create_dir_all(&first).unwrap();
+        std::fs::create_dir_all(&second).unwrap();
+        symlink(&first, &alias).unwrap();
+        let contexts = Arc::new(Mutex::new(WorkspaceContextMap::default()));
+        let credentials = Arc::new(Mutex::new(HashMap::new()));
+        let make_service = || DesktopAttachService {
+            boundaries: FakeRunStartBoundaries::accepting(),
+            idempotency: IdempotencyStore::open(":memory:").unwrap(),
+            home: root.join("home"),
+            workspace_contexts: contexts.clone(),
+            client_credentials: credentials.clone(),
+            credential_path: None,
+            client_identity: None,
+        };
+
+        let mut client = make_service();
+        assert_eq!(
+            client
+                .authorize_client("client-a", None, &"aa".repeat(32), "cli", "1.2.3")
+                .unwrap(),
+            "aa".repeat(32)
+        );
+        client
+            .onboard_workspace(
+                "workspace-a",
+                WorkspaceOnboardRequest {
+                    opened_directory: alias.to_string_lossy().into_owned(),
+                    memory_location: memory.to_string_lossy().into_owned(),
+                },
+            )
+            .unwrap();
+        assert_eq!(
+            client.authorized_workspace("workspace-a", &alias.to_string_lossy()),
+            Some(first.to_string_lossy().into_owned())
+        );
+        assert!(client
+            .authorized_workspace("workspace-a", &root.join("missing").to_string_lossy())
+            .is_none());
+        std::fs::remove_file(&alias).unwrap();
+        symlink(&second, &alias).unwrap();
+        assert!(client
+            .authorized_workspace("workspace-a", &alias.to_string_lossy())
+            .is_none());
+
+        let mut impersonator = make_service();
+        for credential in [None, Some("cc".repeat(32))] {
+            assert_eq!(
+                impersonator
+                    .authorize_client(
+                        "client-a",
+                        credential.as_deref(),
+                        &"bb".repeat(32),
+                        "cli",
+                        "1.2.3",
+                    )
+                    .unwrap_err()
+                    .code(),
+                ErrorCode::Unauthorized
+            );
+        }
+        assert!(impersonator.client_identity.is_none());
+        assert!(impersonator
+            .boundaries
+            .prepared_provenance
+            .lock()
+            .unwrap()
+            .is_none());
+
+        let mut reconnect = make_service();
+        assert_eq!(
+            reconnect
+                .authorize_client(
+                    "client-a",
+                    Some(&"aa".repeat(32)),
+                    &"dd".repeat(32),
+                    "cli",
+                    "1.2.3",
+                )
+                .unwrap(),
+            "aa".repeat(32)
+        );
+        assert_eq!(
+            reconnect.authorized_workspace("workspace-a", &first.to_string_lossy()),
+            Some(first.to_string_lossy().into_owned())
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn attach_client_credentials_survive_restart_and_unsafe_state_fails_closed() {
+        use crate::attach::load_client_credentials;
+        use std::os::unix::fs::{symlink, PermissionsExt};
+
+        let root =
+            std::env::temp_dir().join(format!("muniment-attach-credentials-{}", Uuid::now_v7()));
+        let path = root.join("credentials.json");
+        let identity = "018f0000-0000-7000-8000-000000000099";
+        let credential = "ab".repeat(32);
+        let make_service = |credentials| DesktopAttachService {
+            boundaries: FakeRunStartBoundaries::accepting(),
+            idempotency: IdempotencyStore::open(":memory:").unwrap(),
+            home: root.join("home"),
+            workspace_contexts: Arc::new(Mutex::new(WorkspaceContextMap::default())),
+            client_credentials: Arc::new(Mutex::new(credentials)),
+            credential_path: Some(path.clone()),
+            client_identity: None,
+        };
+
+        let mut initial = make_service(HashMap::new());
+        assert_eq!(
+            initial
+                .authorize_client(identity, None, &credential, "cli", "1.2.3")
+                .unwrap(),
+            credential
+        );
+        assert_eq!(
+            std::fs::symlink_metadata(&path)
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o600
+        );
+        drop(initial);
+        let stored: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(stored["version"], 1);
+        assert_eq!(stored["companions"][identity]["credential"], credential);
+        assert_eq!(stored["companions"][identity]["claimed_kind"], "cli");
+        assert_eq!(stored["companions"][identity]["claimed_version"], "1.2.3");
+        let approved_at = stored["companions"][identity]["approved_at"]
+            .as_str()
+            .unwrap();
+        assert!(approved_at.ends_with('Z'));
+        assert!(chrono::DateTime::parse_from_rfc3339(approved_at).is_ok());
+
+        let mut restarted = make_service(load_client_credentials(&path).unwrap());
+        assert_eq!(
+            restarted
+                .authorize_client(
+                    identity,
+                    Some(&credential),
+                    &"cd".repeat(32),
+                    "changed",
+                    "9.9.9"
+                )
+                .unwrap(),
+            credential
+        );
+        for presented in [None, Some("00".repeat(32))] {
+            let mut rejected = make_service(load_client_credentials(&path).unwrap());
+            assert_eq!(
+                rejected
+                    .authorize_client(
+                        identity,
+                        presented.as_deref(),
+                        &"ef".repeat(32),
+                        "cli",
+                        "1.2.3"
+                    )
+                    .unwrap_err()
+                    .code(),
+                ErrorCode::Unauthorized
+            );
+            assert!(rejected.client_identity.is_none());
+        }
+        let mut unknown = make_service(load_client_credentials(&path).unwrap());
+        assert_eq!(
+            unknown
+                .authorize_client(
+                    "018f0000-0000-7000-8000-000000000100",
+                    Some(&credential),
+                    &"ef".repeat(32),
+                    "cli",
+                    "1.2.3"
+                )
+                .unwrap_err()
+                .code(),
+            ErrorCode::Unauthorized
+        );
+
+        let mut unsupported = stored.clone();
+        unsupported["version"] = json!(2);
+        std::fs::write(&path, serde_json::to_vec(&unsupported).unwrap()).unwrap();
+        assert!(load_client_credentials(&path).is_err());
+        let mut incomplete = stored;
+        incomplete["companions"][identity]
+            .as_object_mut()
+            .unwrap()
+            .remove("approved_at");
+        std::fs::write(&path, serde_json::to_vec(&incomplete).unwrap()).unwrap();
+        assert!(load_client_credentials(&path).is_err());
+        std::fs::write(&path, b"not-json").unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        assert!(load_client_credentials(&path).is_err());
+        std::fs::remove_file(&path).unwrap();
+        let target = root.join("target");
+        std::fs::write(&target, b"{}").unwrap();
+        symlink(&target, &path).unwrap();
+        assert!(load_client_credentials(&path).is_err());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn legacy_attach_credentials_authenticate_with_unknown_claims() {
+        use crate::attach::load_client_credentials;
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = std::env::temp_dir().join(format!("muniment-attach-legacy-{}", Uuid::now_v7()));
+        let path = root.join("credentials.json");
+        let identity = "018f0000-0000-7000-8000-000000000099";
+        let credential = "ab".repeat(32);
+        let new_identity = "018f0000-0000-7000-8000-000000000100";
+        let new_credential = "cd".repeat(32);
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(
+            &path,
+            serde_json::to_vec(&HashMap::from([(identity, &credential)])).unwrap(),
+        )
+        .unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let credentials = load_client_credentials(&path).unwrap();
+        assert_eq!(credentials[identity].claimed_kind, "unknown");
+        assert_eq!(credentials[identity].claimed_version, "unknown");
+        assert_eq!(credentials[identity].approved_at, None);
+        let mut service = DesktopAttachService {
+            boundaries: FakeRunStartBoundaries::accepting(),
+            idempotency: IdempotencyStore::open(":memory:").unwrap(),
+            home: root.join("home"),
+            workspace_contexts: Arc::new(Mutex::new(WorkspaceContextMap::default())),
+            client_credentials: Arc::new(Mutex::new(credentials)),
+            credential_path: Some(path.clone()),
+            client_identity: None,
+        };
+        assert_eq!(
+            service
+                .authorize_client(identity, Some(&credential), "", "changed", "9.9.9")
+                .unwrap(),
+            credential
+        );
+        assert_eq!(
+            service
+                .authorize_client(new_identity, None, &new_credential, "desktop", "1.0.0")
+                .unwrap(),
+            new_credential
+        );
+        drop(service);
+        let loaded = load_client_credentials(&path).unwrap();
+        assert_eq!(loaded[identity].claimed_kind, "unknown");
+        assert_eq!(loaded[new_identity].claimed_kind, "desktop");
+        assert!(loaded[new_identity].approved_at.is_some());
+        let mut restarted = DesktopAttachService {
+            boundaries: FakeRunStartBoundaries::accepting(),
+            idempotency: IdempotencyStore::open(":memory:").unwrap(),
+            home: root.join("home"),
+            workspace_contexts: Arc::new(Mutex::new(WorkspaceContextMap::default())),
+            client_credentials: Arc::new(Mutex::new(loaded)),
+            credential_path: Some(path.clone()),
+            client_identity: None,
+        };
+        assert!(restarted
+            .authorize_client(identity, Some(&credential), "", "changed", "9.9.9")
+            .is_ok());
+        assert!(restarted
+            .authorize_client(new_identity, Some(&new_credential), "", "changed", "9.9.9")
+            .is_ok());
+        std::fs::remove_dir_all(root).unwrap();
+    }
 }
