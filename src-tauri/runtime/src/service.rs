@@ -5,8 +5,10 @@ use muniment_core::active_run::{
 };
 #[cfg(target_os = "linux")]
 use muniment_core::attach::linux::RunStreamPage;
-use muniment_core::attach::ProtocolError;
-use muniment_core::attach::RuntimeActivityRegistry;
+use muniment_core::attach::{
+    ProtocolError, RuntimeActivityRegistry, WorkspaceContextMap, WorkspaceOnboardRequest,
+    WorkspaceOnboarded,
+};
 use muniment_core::auth::TokenSet;
 use muniment_core::auth::{
     api_base_url, ensure_native_session as ensure_core_native_session, FreshNativeSession,
@@ -104,6 +106,48 @@ pub fn ensure_native_session() -> Result<FreshNativeSession, FreshNativeSessionE
 pub fn ensure_home(home: impl AsRef<Path>) -> Result<(), ProtocolError> {
     muniment_core::ensure_cross_project_home(home.as_ref())
         .map_err(|_| ProtocolError::persistence_failed())
+}
+
+/// Creates a companion workspace scaffold and records its authorized directories.
+pub fn onboard_workspace(
+    workspace_contexts: Arc<Mutex<WorkspaceContextMap>>,
+    client_identity: &str,
+    session_workspace: &str,
+    request: WorkspaceOnboardRequest,
+) -> Result<WorkspaceOnboarded, ProtocolError> {
+    let opened = PathBuf::from(&request.opened_directory);
+    let memory = PathBuf::from(&request.memory_location);
+    if !opened.is_absolute() || !memory.is_absolute() {
+        return Err(ProtocolError::invalid_request());
+    }
+    let instructions = muniment_core::onboard_companion_workspace(&opened, &memory)
+        .map_err(|_| ProtocolError::persistence_failed())?;
+    let opened_canonical = opened
+        .canonicalize()
+        .map_err(|_| ProtocolError::persistence_failed())?;
+    let memory_canonical = memory
+        .canonicalize()
+        .map_err(|_| ProtocolError::persistence_failed())?;
+    let mut contexts = workspace_contexts
+        .lock()
+        .map_err(|_| ProtocolError::persistence_failed())?;
+    contexts.record(
+        client_identity,
+        session_workspace,
+        opened_canonical,
+        instructions.clone(),
+    );
+    contexts.record(
+        client_identity,
+        session_workspace,
+        memory_canonical,
+        instructions.clone(),
+    );
+    Ok(WorkspaceOnboarded {
+        opened_directory: opened.to_string_lossy().into_owned(),
+        memory_location: memory.to_string_lossy().into_owned(),
+        instructions,
+    })
 }
 
 /// Fetches and validates a cloud chat grant.
