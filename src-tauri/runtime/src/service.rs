@@ -1,5 +1,6 @@
 //! Dormant runtime service composition.
 
+use muniment_core::active_run::{cancel_active_run, queue_message, ChatQueueRequest};
 use muniment_core::attach::RuntimeActivityRegistry;
 #[cfg(target_os = "linux")]
 use muniment_core::attach::{linux::RunStreamPage, ProtocolError};
@@ -518,6 +519,23 @@ pub fn run_prompt(
     )?;
     drive_prompt(launch);
     Ok(())
+}
+
+/// Queues a message for the active run.
+pub fn queue_run_message(
+    active: Arc<Mutex<Option<ActiveRun>>>,
+    request: ChatQueueRequest,
+) -> Result<(), String> {
+    queue_message(&active, request)
+}
+
+/// Cancels the active run in one workspace.
+pub fn cancel_run(
+    active: Arc<Mutex<Option<ActiveRun>>>,
+    workspace: String,
+    run_id: String,
+) -> Result<(), String> {
+    cancel_active_run(&active, &run_id, Some(&workspace))
 }
 
 /// Resumes one interrupted run through the dormant runtime service boundaries.

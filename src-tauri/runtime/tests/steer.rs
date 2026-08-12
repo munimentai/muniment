@@ -3,11 +3,11 @@ use std::process::Command;
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::Duration;
 
-use muniment_core::active_run::{queue_message, ChatDelivery, ChatQueueRequest};
+use muniment_core::active_run::{ChatDelivery, ChatQueueRequest};
 use muniment_core::chat_grant::ChatGrant;
 use muniment_core::home::confirm_home;
 use muniment_core::sidecar::pi_install::{PiArtifactDescriptor, PI_ARTIFACT};
-use muniment_runtime::{open_profile_storage, run_prompt};
+use muniment_runtime::{open_profile_storage, queue_run_message, run_prompt};
 
 static ENVIRONMENT: Mutex<()> = Mutex::new(());
 
@@ -116,8 +116,8 @@ fn a_queued_steer_reaches_a_live_runtime_run() {
             events.recv_timeout(Duration::from_secs(5)).unwrap().phase,
             "thinking"
         );
-        queue_message(
-            &active,
+        queue_run_message(
+            Arc::clone(&active),
             ChatQueueRequest {
                 run_id: run_id.into(),
                 delivery: ChatDelivery::Steer,
@@ -145,7 +145,7 @@ fn a_queued_steer_reaches_a_live_runtime_run() {
     };
     for id in [run_id, "018f0000-0000-7000-8000-000000000999"] {
         assert_eq!(
-            queue_message(&active, inactive(id)),
+            queue_run_message(Arc::clone(&active), inactive(id)),
             Err("That reply is no longer active.".into())
         );
     }
