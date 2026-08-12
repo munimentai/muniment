@@ -13,8 +13,9 @@ them must exercise the real contracts. It must add no mocked production path.
 > section. The second took the ADR 0024 code-diff chain. The third took the
 > memory index and retrieval section. The fourth took the signed-in shell
 > section. The fifth took the desktop QA automation repair waves. The sixth took
-> the Phase 3 voice section. The companion execution surfaces section is the next
-> compaction target.
+> the Phase 3 voice section. The seventh took the companion execution surfaces
+> section. The onboarding and Muniment Home section is the next compaction
+> target.
 
 ## M0 — Scaffold (done 2026-07-09)
 
@@ -304,29 +305,26 @@ RETIRED, and its tree is removed (MUNIDESK-858, 861).
 
 ### ACP interop
 
-DONE — ADR 0022 decides the direction across two slices (MUNIDESK-673, 683). The
-Muniment ACP adapter is the only component that speaks ACP, and it is a thin
-`muniment.attach/1` client of the ADR 0012 runtime service. That service keeps
-sole ownership of sessions, threads, runs, effects, and receipts, so the
-editor-spawned process never becomes a second executor. An editor answer to
-`session/request_permission` is an input to a Muniment gate rather than a grant.
-The ADR names the supported v1 method subset, answers no to the filesystem and
-terminal client capabilities, negotiates the integer `1`, rejects the v2 draft,
-and pins the Rust crate `agent-client-protocol` at exactly `2.0.0`.
-
-DONE — the adapter is built and shipped (MUNIDESK-686, 690, 695, 698, 703, 707,
-712 through 724, 736 through 746, 754, 768, 773, 776 through 799, 803 through
-813, 815 through 819, 821 through 825, 829 through 831, 833 through 840, 843
-through 852, 854 through 857). `src-tauri/acp/` holds the `muniment-acp` binary
-crate. It pairs with a persisted identity under `$XDG_CONFIG_HOME/muniment/`,
-claims the client kind `acp-adapter`, creates a durable thread through attach
-`thread.create`, writes a versioned session record, streams released assistant
-text as `agent_message_chunk`, translates live tool calls, bridges a permission
-gate to `session/request_permission`, cancels through `run.cancel`, ends a prompt
-on `run.needs_attention` and on a non-resumable `stream.closed`, and restores a
-recorded session through `session/load` with `loadSession: true`. The Linux
-package installs it at `/usr/lib/muniment/muniment-acp`, `docs/acp-editors.md` is
-the setup page, and the installed nightly drives it through `initialize`.
+DONE — ADR 0022 decides the direction and the adapter is built and shipped
+(MUNIDESK-673, 683, 686 through 857). The Muniment ACP adapter is the only
+component that speaks ACP, and it is a thin `muniment.attach/1` client of the ADR
+0012 runtime service. That service keeps sole ownership of sessions, threads,
+runs, effects, and receipts, so the editor-spawned process never becomes a second
+executor. An editor answer to `session/request_permission` is an input to a
+Muniment gate rather than a grant. The ADR names the supported v1 method subset,
+answers no to the filesystem and terminal client capabilities, negotiates the
+integer `1`, rejects the v2 draft, and pins the Rust crate
+`agent-client-protocol` at exactly `2.0.0`. `src-tauri/acp/` holds the
+`muniment-acp` binary crate. It pairs with a persisted identity under
+`$XDG_CONFIG_HOME/muniment/`, claims the client kind `acp-adapter`, creates a
+durable thread through attach `thread.create`, writes a versioned session record,
+streams released assistant text as `agent_message_chunk`, translates live tool
+calls, bridges a permission gate to `session/request_permission`, cancels through
+`run.cancel`, ends a prompt on `run.needs_attention` and on a non-resumable
+`stream.closed`, and restores a recorded session through `session/load` with
+`loadSession: true`. The Linux package installs it at
+`/usr/lib/muniment/muniment-acp`, `docs/acp-editors.md` is the setup page, and
+the installed nightly drives it through `initialize`.
 
 DONE — the assistant-text redaction lane behind that streaming is complete. ADR
 0009 carries the `assistant-text-v1` rule set: four `secret.*` rules, two
@@ -336,15 +334,14 @@ holds the scanner, `assistant_text/ledger.rs` holds the envelope attribution
 ledger, and `assistant_text/projector.rs` is the stateful retained-suffix
 projector. `thread.open` and the attach run stream both read that one projector.
 
-DONE 2026-08-04 — ADR 0022 carries the capability-revocation amendment
-(MUNIDESK-875). It supersedes the reservation in the prompt-ending amendment. A
-revoked prompt ends with JSON-RPC code `-32000` and the exact message `Muniment
-capability revoked`. The adapter removes `acp-client-credential`, keeps
-`acp-client-id`, and reaches fresh visible approval on its next attach.
-
-DONE 2026-08-04 — the adapter half of that amendment is built (MUNIDESK-882).
-`ClientError::CapabilityRevoked` (`src-tauri/acp/src/main.rs:40`) is its own typed
-variant, the run-stream loop drops the client credential and ends the prompt on
+DONE 2026-08-04 — ADR 0022 carries the capability-revocation amendment and the
+adapter half is built (MUNIDESK-875, 882). It supersedes the reservation in the
+prompt-ending amendment. A revoked prompt ends with JSON-RPC code `-32000` and
+the exact message `Muniment capability revoked`. The adapter removes
+`acp-client-credential`, keeps `acp-client-id`, and reaches fresh visible approval
+on its next attach. `ClientError::CapabilityRevoked`
+(`src-tauri/acp/src/main.rs:40`) is its own typed variant, the run-stream loop
+drops the client credential and ends the prompt on
 `RunStreamMessage::CapabilityRevoked` (`:749`), a revoked `run.cancel` maps to the
 same failure (`:775`), and the prompt answers code `-32000` with the exact
 message (`:807`).
@@ -371,29 +368,25 @@ promotion runs.
 
 ### Companion revocation and management
 
-DONE 2026-08-04 — ADR 0009 carries the companion revocation amendment
-(MUNIDESK-864). Revocation is a local decision by the attach owner. It removes
-the selected companion's persisted client credential, blocks admission while it
-persists the removal, invalidates every live connection capability authenticated
-with that credential, and emits exactly one `capability.revoked` event per
-affected connection with `reason: "companion_revoked"` and the connection's
-`connection_event_id` as `subscription_id`. A revoked companion reconnects only
-through a fresh visible approval.
-
-DONE 2026-08-04 — the emitter half is built (MUNIDESK-865, 866, 867).
-`LiveConnectionRegistry` (`src-tauri/core/src/attach/linux.rs:398`) tracks
-connections by credential and carries the block, resume, and revoke states.
+DONE 2026-08-04 — ADR 0009 carries the companion revocation amendment, and the
+emitter and the desktop management surface are both built (MUNIDESK-864 through
+867, 874, 876, 877, 881). Revocation is a local decision by the attach owner. It
+removes the selected companion's persisted client credential, blocks admission
+while it persists the removal, invalidates every live connection capability
+authenticated with that credential, and emits exactly one `capability.revoked`
+event per affected connection with `reason: "companion_revoked"` and the
+connection's `connection_event_id` as `subscription_id`. A revoked companion
+reconnects only through a fresh visible approval. `LiveConnectionRegistry`
+(`src-tauri/core/src/attach/linux.rs:398`) tracks connections by credential and
+carries the block, resume, and revoke states.
 `AttachListenerState::revoke_companion` (`src-tauri/src/attach_service.rs:153`)
 persists before it emits and restores authority when the write fails.
 `list_companions` (`:171`) reports each companion's identity, claimed kind,
-claimed version, and approval time, and the credential store records all three.
-
-DONE 2026-08-04 — the desktop management surface is built and whole
-(MUNIDESK-874, 876, 877, 881). `attach_companions` and `attach_revoke_companion`
-are registered Tauri commands, and the profile popover carries a
-`Connected programs` section under Devices. The MUNIDESK-876 merge overwrote the
-MUNIDESK-877 revoke control from a stale base, and MUNIDESK-881 restored the
-control and its tests.
+claimed version, and approval time. `attach_companions` and
+`attach_revoke_companion` are registered Tauri commands, and the profile popover
+carries a `Connected programs` section under Devices. The MUNIDESK-876 merge
+overwrote the MUNIDESK-877 revoke control from a stale base, and MUNIDESK-881
+restored the control and its tests.
 
 ### ADR 0012 runtime-service extraction
 
@@ -482,11 +475,12 @@ every call site reads it.
 DONE — the dormant service entry points are built (MUNIDESK-1080, 1086, 1091,
 1094, 1096, 1099, 1100, 1102, 1105, 1108, 1110, 1112, 1113, 1115, 1117, 1119,
 1121, 1123, 1125, 1128, 1130, 1133, 1135, 1136, 1139, 1142, 1144, 1145, 1147,
-1150).
+1150, 1152, 1154).
 `src-tauri/runtime/src/service.rs`
 opens one shared profile storage and reconciles interrupted runs, answers a fresh
-native session from the platform credential store, fetches and validates a cloud
-chat grant, lists and opens one subject's threads, creates one durable thread for
+native session from the platform credential store, scaffolds the cross-project
+Home, fetches and validates a cloud chat grant, lists and opens one subject's
+threads, creates one durable thread for
 an authorized attach profile, renames and deletes an owned thread, sweeps expired
 terminal runs and their protected prompts, reads one page of a run stream and
 subscribes to that run's commits, accepts one prompt and drives it, queues one
@@ -542,24 +536,23 @@ disagree, because `chat_file_metadata` rejects a path with no usable final
 segment and `open_selected_files` does not. The lane waits for an owner look at
 why this one ticket never dispatches.
 
-MERGE HAZARD — all five remaining forty-fourth-wave slices edit
-`src-tauri/runtime/src/service.rs`. They are the `home.ensure` entry, the
-`workspace.onboard` entry, the entitlement snapshot entry, the sign-out entry,
-and the device list entry. Each adds a function beside the existing entries.
-Each ticket tells the implementer to
-rebase on `main` before it opens the pull request. The 2026-08-04 silent revert
-came from a stale base.
+MERGE HAZARD — all five forty-fifth-wave slices edit
+`src-tauri/runtime/src/service.rs`. They are the `workspace.onboard` entry, the
+entitlement snapshot entry, the sign-out entry, the device list entry, and the
+shared runtime activity registry. The first four add a function beside the
+existing entries, and the fifth changes two signatures. Each ticket tells the
+implementer to rebase on `main` before it opens the pull request. The 2026-08-04
+silent revert came from a stale base.
 
-VERIFIED 2026-08-12 (forty-fourth wave, planner, read
+VERIFIED 2026-08-12 (forty-fifth wave, planner, read
 `src-tauri/runtime/src/service.rs` and ran `cargo test --package
-muniment-runtime`) — two shared-slot slices landed. `accept_prompt`,
-`run_prompt`, and `resume_run` now take one
-`Arc<Mutex<Option<PiRuntime>>>` from the caller, so one slot per process serves
-every runtime run (MUNIDESK-1150). `accept_prompt` and `run_prompt` now take one
-`SessionThread` and the continuation choice from the caller, so one tracker can
-serve every runtime prompt (MUNIDESK-1152). Five slices remain unbuilt.
-`service.rs` still has no `home.ensure` entry, no `workspace.onboard` entry, no
-entitlement snapshot entry, no sign-out entry, and no device list entry.
+muniment-runtime`) — the `home.ensure` entry landed. `ensure_home`
+(`service.rs:104`) composes `muniment_core::ensure_cross_project_home` and maps a
+failure to `ProtocolError::persistence_failed()`, and
+`src-tauri/runtime/tests/home.rs` guards the scaffold and the regular-file
+rejection (MUNIDESK-1154). Four selected slices remain unbuilt. `service.rs` has
+no `workspace.onboard` entry, no entitlement snapshot entry, no sign-out entry,
+and no device list entry.
 
 DONE 2026-08-12 — a prepared run that fails its attachment projection ends itself
 (MUNIDESK-1148). `prepare_desktop_run` (`src-tauri/core/src/run_start.rs:293`)
@@ -607,25 +600,36 @@ caller's continuation choice (MUNIDESK-1152). Two prompts with continuation
 enabled reuse one thread, and two prompts with continuation disabled open
 separate threads.
 
-SELECTED 2026-08-12 (forty-fourth wave) — five slices in priority order.
+DONE 2026-08-12 — the runtime `home.ensure` entry scaffolds the cross-project
+Home (MUNIDESK-1154). One `workspace.onboard` entry now remains before every
+attach operation has a runtime twin.
 
-1. The runtime `home.ensure` entry, per the fortieth-wave measurement.
-2. The runtime `workspace.onboard` entry, per the same measurement.
-3. The runtime entitlement snapshot entry. `service.rs` answers a fresh native
+SELECTED 2026-08-12 (forty-fifth wave) — five slices in priority order.
+
+1. The runtime `workspace.onboard` entry, per the fortieth-wave measurement.
+   `DesktopAttachService::onboard_workspace`
+   (`src-tauri/core/src/attach/desktop_service.rs:133`) is the shape it mirrors,
+   and the caller owns the `WorkspaceContextMap`.
+2. The runtime entitlement snapshot entry. `service.rs` answers a fresh native
    session and a validated cloud chat grant, and it projects no entitlement
    snapshot, so `EntitlementSnapshotTracker`
    (`src-tauri/core/src/auth/entitlement_snapshot.rs`) has no runtime call site.
    ADR 0012 gives the service the signed snapshot.
-4. The runtime sign-out entry. `sign_out_native_session`
+3. The runtime sign-out entry. `sign_out_native_session`
    (`src-tauri/core/src/auth/native_revocation.rs:172`) has no runtime call site,
    and ADR 0012 makes sign-out a service capability rather than a desktop
-   prerequisite.
-5. The runtime device list entry, over `list_native_devices`
+   prerequisite. The entry clears the caller's entitlement tracker after the
+   local clear, the way `sign_out_marked` (`src-tauri/src/auth/mod.rs:328`) does.
+4. The runtime device list entry, over `list_native_devices`
    (`src-tauri/core/src/auth/native_devices.rs:169`). `auth_devices`
-   (`src-tauri/src/auth/mod.rs:258`) is the desktop shape it mirrors.
+   (`src-tauri/src/auth/mod.rs:259`) is the desktop shape it mirrors. The entry
+   takes the access token from the caller, the way `fetch_chat_grant` does.
+5. The shared runtime activity registry, per the forty-third-wave measurement. It
+   changes the `accept_prompt` and `resume_run` signatures, so it sits last.
 
-SEQUENCED — the shared runtime activity registry remains after the landed shared
-session-thread tracker, because both edit `accept_prompt` and its signature.
+SEQUENCED — the session-refresh mark on the runtime `ensure_native_session`
+follows the shared runtime activity registry, because the registry argument has
+to arrive first.
 
 SEQUENCED — after the shared Pi runtime slot, the later extraction slices are the
 desktop client conversion and Linux user-unit registration. Each sits behind a
@@ -1113,7 +1117,7 @@ earlier one. Requiring an up-to-date branch before merge, or a merge queue, is a
 repository-settings change that sits with the owner. The planner files no ticket
 for it.
 
-VERIFIED 2026-08-12 (forty-fourth wave, planner) — `cargo test --package
+VERIFIED 2026-08-12 (forty-fifth wave, planner) — `cargo test --package
 muniment-runtime` passes 35 tests from `src-tauri` over sixteen test binaries. The
 thirty-ninth wave read 928 frontend tests and 3 browser tests from `npm test`
 after `npm ci`. The extraction section above records what the planner read in the
