@@ -487,9 +487,9 @@ opens one shared profile storage and reconciles interrupted runs, answers a fres
 native session from the platform credential store, fetches and validates a cloud
 chat grant, lists and opens one subject's threads, renames and deletes an owned
 thread, sweeps expired terminal runs and their protected prompts, accepts one
-prompt and drives it, and resumes an interrupted run. Each entry takes the shared
-storage and the shared run control slot as arguments, and it takes a config
-directory beside the profile directory. `RuntimeChatEventSink`
+prompt and drives it, and resumes an interrupted run. `accept_prompt`,
+`run_prompt`, and `resume_run` take the shared storage, the shared run control
+slot, and a config directory beside the profile directory. `RuntimeChatEventSink`
 (`src-tauri/runtime/src/sink.rs`) implements `ChatEventSink` and
 `PiLaunchBoundaries`, answers the `muniment-runtime` provenance, owns the run's
 memory runtime, and keeps returning success after a subscriber goes away, because
@@ -542,7 +542,7 @@ VERIFIED 2026-08-12 (thirty-eighth wave, planner, read `src-tauri/runtime/` and
 ran `cargo test --package muniment-runtime`) — the run acceptance split landed
 (MUNIDESK-1135). `accept_prompt` and `drive_prompt`
 (`src-tauri/runtime/src/service.rs:211`, `:356`) split acceptance from the drive,
-and `run_prompt` composes both. The other four thirty-seventh-wave slices are
+and `run_prompt` composes both. The other four thirty-eighth-wave slices are
 unbuilt. `service.rs` carries no thread-create entry and no run stream read
 entry, no test proves that `abort` reaches the `pi_resume` stub, and both
 `drive_prompt` and `resume_run` build their own Pi runtime slot. The whole
