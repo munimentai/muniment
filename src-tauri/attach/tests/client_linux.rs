@@ -136,6 +136,89 @@ fn approval_presenter_hands_the_request_to_the_caller_and_sends_the_choice() {
 }
 
 #[test]
+fn approval_presenter_resets_the_io_deadline_after_a_delayed_choice() {
+    let (client, mut server) = UnixStream::pair().unwrap();
+    let worker = thread::spawn(move || {
+        complete_approval_presenter_handshake(&mut server);
+        server
+            .write_all(&encode_frame(&approval_present_request()).unwrap())
+            .unwrap();
+        server
+            .set_read_timeout(Some(Duration::from_secs(1)))
+            .unwrap();
+        let answer = read_client_value(&mut server);
+        assert_eq!(answer["body"]["decision"], "approve");
+    });
+    let mut presenter = handshake_approval_presenter_stream(client, "0.0.1", SHORT).unwrap();
+    presenter
+        .present(|_| {
+            thread::sleep(SHORT + SHORT);
+            ApprovalDecision::Approve
+        })
+        .unwrap();
+    worker.join().unwrap();
+}
+
+#[test]
+fn approval_presenter_resets_the_io_deadline_after_a_slow_invalid_request() {
+    let (client, mut server) = UnixStream::pair().unwrap();
+    let worker = thread::spawn(move || {
+        complete_approval_presenter_handshake(&mut server);
+        let mut request = approval_present_request();
+        request["body"]["deadline_ms"] = serde_json::json!(0);
+        let frame = encode_frame(&request).unwrap();
+        let split = frame.len() - 1;
+        server.write_all(&frame[..split]).unwrap();
+        thread::sleep(SHORT / 2);
+        server.write_all(&frame[split..]).unwrap();
+        thread::sleep(SHORT);
+        server
+            .set_read_timeout(Some(Duration::from_secs(1)))
+            .unwrap();
+        let answer = read_client_value(&mut server);
+        assert_eq!(answer["error"]["code"], "unauthorized");
+    });
+    let mut presenter = handshake_approval_presenter_stream(client, "0.0.1", SHORT).unwrap();
+    assert_eq!(
+        presenter.present(|_| panic!("invalid request reached the caller")),
+        Err(ClientError::UnexpectedMessage)
+    );
+    worker.join().unwrap();
+}
+
+#[test]
+fn approval_presenter_times_out_while_reading_a_request() {
+    let (client, mut server) = UnixStream::pair().unwrap();
+    let worker = thread::spawn(move || {
+        complete_approval_presenter_handshake(&mut server);
+        thread::sleep(SHORT + SHORT);
+    });
+    let mut presenter = handshake_approval_presenter_stream(client, "0.0.1", SHORT).unwrap();
+    assert_eq!(
+        presenter.present(|_| ApprovalDecision::Deny),
+        Err(ClientError::Timeout)
+    );
+    worker.join().unwrap();
+}
+
+fn approval_present_request() -> serde_json::Value {
+    serde_json::json!({
+        "protocol": "muniment.attach/1",
+        "request_id": "00000000000000000000000000000073",
+        "operation": "approval.present",
+        "capability": "33".repeat(32),
+        "body": {
+            "challenge": "fixture-challenge",
+            "claimed_kind": "editor-extension",
+            "claimed_version": "0.0.1",
+            "workspace": "workspace-1",
+            "scopes": ["thread.read"],
+            "deadline_ms": 120_000,
+        }
+    })
+}
+
+#[test]
 fn approval_presenter_rejects_unauthorized_requests_without_asking_the_caller() {
     let mut cases = vec![
         serde_json::json!({"capability": "44".repeat(32)}),

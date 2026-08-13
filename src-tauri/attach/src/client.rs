@@ -1424,7 +1424,7 @@ mod linux {
                     error: crate::ProtocolError::unauthorized(),
                 };
                 let bytes = encode_frame(&error).map_err(map_frame_error)?;
-                write_all_before(&mut self.stream, &bytes, request_deadline)?;
+                write_all_before(&mut self.stream, &bytes, deadline(self.io_timeout))?;
                 return Err(ClientError::UnexpectedMessage);
             }
 
@@ -1448,7 +1448,7 @@ mod linux {
                 }),
             };
             let bytes = encode_frame(&response).map_err(map_frame_error)?;
-            write_all_before(&mut self.stream, &bytes, request_deadline)
+            write_all_before(&mut self.stream, &bytes, deadline(self.io_timeout))
         }
 
         pub fn into_stream(self) -> UnixStream {
