@@ -338,7 +338,7 @@
   .access-popover header p, .access-label { margin: 3px 0 0; color: var(--muted); font: var(--text-12) var(--font-mono); }
   .access-heading { display: flex; align-items: baseline; justify-content: space-between; }
   .access-heading p { margin: 0; color: var(--muted); font: var(--text-12) var(--font-mono); }
-  .close-access { padding: 0 4px; font-size: var(--text-17); }
+  .close-access { min-width: 24px; min-height: 24px; padding: 0 4px; font-size: var(--text-17); }
   .access-content { min-height: 0; overflow-y: auto; padding: 14px; }
   .access-label { margin: 0 0 6px; text-transform: uppercase; letter-spacing: .04em; }
   .access-group { border-top: 1px solid var(--border); }
@@ -387,7 +387,7 @@
   .companion-heading strong { min-width: 0; font-weight: 600; }
   .companion-heading span { flex: none; margin-left: auto; color: var(--muted); font: var(--text-12) var(--font-mono); }
   .companion-version, .companion-time, .companion-list time { display: block; margin: 3px 0 0; color: var(--muted); font: var(--text-12) var(--font-mono); }
-  .companion-revoke { position: absolute; top: 5px; right: 0; padding: 3px 6px; border-color: transparent; background: var(--paper); color: var(--muted); font: var(--text-12) var(--font-mono); opacity: 0; transition: opacity 120ms ease; }
+  .companion-revoke { position: absolute; top: 5px; right: 0; min-width: 24px; min-height: 24px; padding: 3px 6px; border-color: transparent; background: var(--paper); color: var(--muted); font: var(--text-12) var(--font-mono); opacity: 0; transition: opacity 120ms ease; }
   .companion-row:hover .companion-revoke, .companion-row:focus-within .companion-revoke { opacity: 1; }
   .companion-row:hover .companion-heading span, .companion-row:focus-within .companion-heading span { visibility: hidden; }
   .companion-revoke:hover:not(:disabled) { border-color: transparent; background: var(--faint); color: var(--ink); }

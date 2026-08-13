@@ -6,7 +6,6 @@ use std::time::Duration;
 
 use muniment_core::active_run::cancel_active_run;
 use muniment_core::attach::RuntimeActivityRegistry;
-use muniment_core::chat_grant::ChatGrant;
 use muniment_core::chat_resume::clear_active_run;
 use muniment_core::home::confirm_home;
 use muniment_core::pi_execution::{coordinate_prepared_prompt, PiRuntime};
@@ -22,22 +21,11 @@ use muniment_runtime::{
 };
 
 mod common;
-use common::stage_pi_stub;
+use common::{fixture_grant, stage_pi_stub};
 
 static ENVIRONMENT: Mutex<()> = Mutex::new(());
 
 struct FixtureSink;
-
-fn fixture_grant() -> ChatGrant {
-    ChatGrant {
-        workspace: "workspace-a".into(),
-        gateway_url: "https://gateway.example.com".into(),
-        virtual_key: "virtual-key".into(),
-        model: None,
-        minimum_cacheable_prefix_characters: 8_192,
-        receipt_url: "https://receipts.example.com".into(),
-    }
-}
 
 impl ChatEventSink for FixtureSink {
     fn provenance(&self) -> (&str, &str) {
@@ -477,14 +465,7 @@ fn resumes_an_interrupted_run_to_a_terminal_event() {
         run_id.into(),
         "token".into(),
         Some("owner".into()),
-        ChatGrant {
-            workspace: "workspace-a".into(),
-            gateway_url: "https://gateway.example.com".into(),
-            virtual_key: "virtual-key".into(),
-            model: None,
-            minimum_cacheable_prefix_characters: 8_192,
-            receipt_url: "https://receipts.example.com".into(),
-        },
+        fixture_grant(),
         Arc::new(Mutex::new(None)),
         None,
         Some(descriptor),

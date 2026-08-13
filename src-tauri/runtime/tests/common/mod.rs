@@ -11,9 +11,21 @@ use std::thread;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use muniment_core::auth::{InstallationRecord, NativeCredentials, TokenSet};
+use muniment_core::chat_grant::ChatGrant;
 use muniment_core::sidecar::pi_install::{PiArtifactDescriptor, PI_ARTIFACT};
 
 const DEVICE_ID: &str = "10000000-0000-4000-8000-000000000001";
+
+pub fn fixture_grant() -> ChatGrant {
+    ChatGrant {
+        workspace: "workspace-a".into(),
+        gateway_url: "https://gateway.example.com".into(),
+        virtual_key: "virtual-key".into(),
+        model: None,
+        minimum_cacheable_prefix_characters: 8_192,
+        receipt_url: "https://receipts.example.com".into(),
+    }
+}
 
 pub fn spawn_server(status: u16, body: String) -> (String, thread::JoinHandle<String>) {
     spawn_server_with(status, body, || {})

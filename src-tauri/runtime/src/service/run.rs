@@ -1,53 +1,25 @@
-//! Dormant runtime service composition.
+//! Run service operations.
 
 use muniment_core::active_run::{
     cancel_active_run, queue_message, queue_permission_answer_with_commit, ChatQueueRequest,
 };
-#[cfg(target_os = "linux")]
-use muniment_core::attach::linux::{LiveConnectionRegistry, RunStreamPage};
-#[cfg(target_os = "linux")]
-use muniment_core::attach::{
-    load_client_credentials, CompanionRecord, CompanionRegistry, COMPANION_CREDENTIAL_FILE_NAME,
-};
-use muniment_core::attach::{
-    ProtocolError, RuntimeActivityRegistry, WorkspaceContextMap, WorkspaceOnboardRequest,
-    WorkspaceOnboarded,
-};
-use muniment_core::auth::TokenSet;
-use muniment_core::auth::{
-    api_base_url, ensure_native_session as ensure_core_native_session, list_native_devices,
-    native_status, sign_out_native_session, AuthStatus, EntitlementSnapshotTracker,
-    EntitlementSnapshotView, FreshNativeSession, FreshNativeSessionError,
-    KeyringNativeCredentialStore, NativeDeviceList, NativeDeviceListError, NativeTokenError,
-    UreqNativeDeviceListTransport, UreqRevocationTransport,
-};
+use muniment_core::attach::RuntimeActivityRegistry;
+use muniment_core::auth::{api_base_url, TokenSet};
 use muniment_core::chat_coordinate::coordinate;
 use muniment_core::chat_grant::{
     fetch_grant, grant_authorizes_workspace, validate_grant, ChatGrant, FetchGrantError,
 };
-use muniment_core::chat_profile::{ChatProfile, ChatProfileError};
+use muniment_core::chat_profile::ChatProfile;
 use muniment_core::chat_resume::{
     clear_active_run, install_active_run, install_resume_run, resumable_context,
     run_resume as drive_resume, ResumeLaunch,
 };
 use muniment_core::chat_view::{chat_attachments, ChatAttachment};
-use muniment_core::journal::reconciliation::reconcile_interrupted_runs;
-use muniment_core::journal::retention::{
-    apply_retention_now_with, RetentionError, RetentionOutcome,
-};
-use muniment_core::journal::thread_mutation::{
-    append_thread_delete_now, append_thread_rename_now, create_thread_now,
-};
-use muniment_core::journal::thread_summaries::ThreadSummaryPage;
-#[cfg(target_os = "linux")]
-use muniment_core::journal::JournalCommitHint;
-use muniment_core::journal::Provenance;
 use muniment_core::memory_index::ModelMemoryCapability;
 use muniment_core::memory_runtime::ApplicationMemoryRuntime;
-use muniment_core::owned_threads::chat_thread_summaries_page;
 use muniment_core::permission_gate::ChatPermissionAnswer;
 use muniment_core::pi_execution::PiRuntime;
-use muniment_core::run_events::{ChatEvent, ChatStorage, SharedStorage};
+use muniment_core::run_events::{ChatEvent, SharedStorage};
 use muniment_core::run_preparation::{
     prepare_new_run_in_thread_after_validation, prepare_new_run_with_session_thread,
     record_persistence_failure, OpenSelectedFile, SessionThreadStart,
@@ -55,17 +27,14 @@ use muniment_core::run_preparation::{
 use muniment_core::run_start::{accepted_time_now, ActiveRun};
 use muniment_core::session_thread::SessionThread;
 use muniment_core::sidecar::pi_install::{PiArtifactDescriptor, PI_ARTIFACT};
-use muniment_core::thread_history::{chat_thread_open_page, ChatThreadOpenPage};
-use std::collections::{BTreeMap, VecDeque};
-use std::path::Path;
-use std::path::PathBuf;
+use std::collections::VecDeque;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
-#[cfg(target_os = "linux")]
-use std::sync::mpsc::Receiver;
 use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
 
+use super::runtime_provenance;
 use crate::RuntimeChatEventSink;
 
 pub struct PromptAcceptance {
@@ -98,177 +67,11 @@ pub struct PromptLaunch {
     prepared: (u64, muniment_core::journal::reducer::ChatProjector),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct EntitlementSnapshotResult {
-    pub snapshot: EntitlementSnapshotView,
-    pub changed_snapshot_version: Option<u64>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum EntitlementSnapshotError {
-    Session(FreshNativeSessionError),
-    Missing,
-}
-
-impl std::fmt::Display for EntitlementSnapshotError {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Session(error) => write!(formatter, "{error}"),
-            Self::Missing => formatter.write_str("native session has no entitlement snapshot"),
-        }
-    }
-}
-
-impl std::error::Error for EntitlementSnapshotError {}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum SignOutError {
-    LocalClear(NativeTokenError),
-    Status(FreshNativeSessionError),
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ConfigureRunError {
     Grant(FetchGrantError),
     Unauthorized,
 }
-
-impl std::fmt::Display for SignOutError {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::LocalClear(error) => write!(formatter, "{error}"),
-            Self::Status(error) => write!(formatter, "{error}"),
-        }
-    }
-}
-
-impl std::error::Error for SignOutError {}
-
-/// Returns a fresh native session from the platform credential store.
-pub fn ensure_native_session(
-    runtime_activity: &RuntimeActivityRegistry,
-) -> Result<FreshNativeSession, FreshNativeSessionError> {
-    let _activity = runtime_activity.mark_session_refresh();
-    let now_unix_seconds = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_secs())
-        .unwrap_or(0);
-    ensure_core_native_session(
-        &KeyringNativeCredentialStore::new(),
-        &api_base_url(),
-        now_unix_seconds,
-    )
-}
-
-/// Reads the native session status locally, so this call takes no activity mark.
-pub fn session_status() -> Result<AuthStatus, FreshNativeSessionError> {
-    let now_unix_seconds = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_secs())
-        .unwrap_or(0);
-    native_status(&KeyringNativeCredentialStore::new(), now_unix_seconds)
-}
-
-/// Revokes the server session and clears the local native session.
-pub fn sign_out(
-    tracker: &EntitlementSnapshotTracker,
-    runtime_activity: &RuntimeActivityRegistry,
-) -> Result<AuthStatus, SignOutError> {
-    let _activity = runtime_activity.mark_authentication_operation();
-    let store = KeyringNativeCredentialStore::new();
-    sign_out_native_session(
-        &store,
-        &UreqRevocationTransport::new(Duration::from_secs(2)),
-        &api_base_url(),
-    )
-    .map_err(SignOutError::LocalClear)?;
-    let now_unix_seconds = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_secs())
-        .unwrap_or(0);
-    let status = native_status(&store, now_unix_seconds).map_err(SignOutError::Status)?;
-    tracker.clear();
-    Ok(status)
-}
-
-/// Returns the display-only entitlement projection and reports a version change.
-pub fn entitlement_snapshot(
-    tracker: &EntitlementSnapshotTracker,
-    runtime_activity: &RuntimeActivityRegistry,
-) -> Result<EntitlementSnapshotResult, EntitlementSnapshotError> {
-    let session =
-        ensure_native_session(runtime_activity).map_err(EntitlementSnapshotError::Session)?;
-    let next = session
-        .entitlement_snapshot
-        .as_ref()
-        .map(|snapshot| snapshot.snapshot_version);
-    let changed_snapshot_version = tracker.observe(next);
-    let snapshot = session
-        .entitlement_snapshot
-        .ok_or(EntitlementSnapshotError::Missing)?;
-    Ok(EntitlementSnapshotResult {
-        snapshot,
-        changed_snapshot_version,
-    })
-}
-
-/// Lists display-only metadata for one account's native installations.
-pub fn list_devices(access_token: &str) -> Result<NativeDeviceList, NativeDeviceListError> {
-    list_native_devices(
-        &UreqNativeDeviceListTransport::new(Duration::from_secs(30)),
-        &api_base_url(),
-        access_token,
-    )
-}
-
-/// Creates the cross-project home scaffold.
-pub fn ensure_home(home: impl AsRef<Path>) -> Result<(), ProtocolError> {
-    muniment_core::ensure_cross_project_home(home.as_ref())
-        .map_err(|_| ProtocolError::persistence_failed())
-}
-
-/// Creates a companion workspace scaffold and records its authorized directories.
-pub fn onboard_workspace(
-    workspace_contexts: Arc<Mutex<WorkspaceContextMap>>,
-    client_identity: &str,
-    session_workspace: &str,
-    request: WorkspaceOnboardRequest,
-) -> Result<WorkspaceOnboarded, ProtocolError> {
-    let opened = PathBuf::from(&request.opened_directory);
-    let memory = PathBuf::from(&request.memory_location);
-    if !opened.is_absolute() || !memory.is_absolute() {
-        return Err(ProtocolError::invalid_request());
-    }
-    let instructions = muniment_core::onboard_companion_workspace(&opened, &memory)
-        .map_err(|_| ProtocolError::persistence_failed())?;
-    let opened_canonical = opened
-        .canonicalize()
-        .map_err(|_| ProtocolError::persistence_failed())?;
-    let memory_canonical = memory
-        .canonicalize()
-        .map_err(|_| ProtocolError::persistence_failed())?;
-    let mut contexts = workspace_contexts
-        .lock()
-        .map_err(|_| ProtocolError::persistence_failed())?;
-    contexts.record(
-        client_identity,
-        session_workspace,
-        opened_canonical,
-        instructions.clone(),
-    );
-    contexts.record(
-        client_identity,
-        session_workspace,
-        memory_canonical,
-        instructions.clone(),
-    );
-    Ok(WorkspaceOnboarded {
-        opened_directory: opened.to_string_lossy().into_owned(),
-        memory_location: memory.to_string_lossy().into_owned(),
-        instructions,
-    })
-}
-
 /// Fetches a cloud chat grant and checks the requested workspace.
 pub fn configure_run(
     access_token: &str,
@@ -280,198 +83,6 @@ pub fn configure_run(
         return Err(ConfigureRunError::Unauthorized);
     }
     Ok(grant)
-}
-
-/// Opens profile storage after the ADR 0009 instance-lock cutover gate transfers ownership.
-pub fn open_profile_storage(
-    profile_directory: impl AsRef<Path>,
-) -> Result<SharedStorage, ChatProfileError> {
-    let profile = ChatProfile::new(profile_directory.as_ref());
-    let (mut journal, cas) = profile.open_storage()?;
-    reconcile_interrupted_runs(&mut journal, &runtime_provenance());
-    Ok(Arc::new(Mutex::new(ChatStorage { journal, cas })))
-}
-
-/// Opens the shared companion registry under a configuration directory.
-#[cfg(target_os = "linux")]
-pub fn open_companion_registry(
-    config_directory: impl AsRef<Path>,
-) -> Result<CompanionRegistry, ProtocolError> {
-    let credential_path = config_directory
-        .as_ref()
-        .join(COMPANION_CREDENTIAL_FILE_NAME);
-    let credentials = Arc::new(Mutex::new(load_client_credentials(&credential_path)?));
-    Ok(CompanionRegistry::new(
-        credentials,
-        credential_path,
-        LiveConnectionRegistry::default(),
-    ))
-}
-
-/// Lists authorized companions by identity without their secret credentials.
-#[cfg(target_os = "linux")]
-pub fn list_companions(
-    registry: &CompanionRegistry,
-) -> Result<Vec<CompanionRecord>, ProtocolError> {
-    registry.list()
-}
-
-/// Revokes one authorized companion.
-#[cfg(target_os = "linux")]
-pub fn revoke_companion(registry: &CompanionRegistry, identity: &str) -> Result<(), ProtocolError> {
-    registry.revoke(identity)
-}
-
-/// Lists the threads owned by one subject.
-pub fn thread_summaries(
-    storage: SharedStorage,
-    subject: Option<String>,
-    limit: usize,
-    cursor: Option<String>,
-) -> Result<ThreadSummaryPage, String> {
-    let mut storage = storage
-        .lock()
-        .map_err(|_| "Conversation history is unavailable.".to_string())?;
-    chat_thread_summaries_page(
-        &mut storage.journal,
-        subject.as_deref(),
-        limit,
-        cursor.as_deref(),
-    )
-    .map_err(|_| "Conversation history is unavailable.".to_string())
-}
-
-/// Reads one page of a run stream.
-#[cfg(target_os = "linux")]
-pub fn stream_run(
-    storage: SharedStorage,
-    workspace: String,
-    run_id: String,
-    after_run_seq: u64,
-) -> Result<RunStreamPage, ProtocolError> {
-    use muniment_core::attach::linux::ThreadListService;
-
-    let mut storage = storage
-        .lock()
-        .map_err(|_| ProtocolError::persistence_failed())?;
-    storage
-        .journal
-        .stream_run(&workspace, &run_id, after_run_seq)
-}
-
-/// Subscribes to commits for one run.
-#[cfg(target_os = "linux")]
-pub fn subscribe_run_commits(
-    storage: SharedStorage,
-    run_id: String,
-) -> Result<Option<(u64, Receiver<JournalCommitHint>)>, ProtocolError> {
-    use muniment_core::attach::linux::ThreadListService;
-
-    let mut storage = storage
-        .lock()
-        .map_err(|_| ProtocolError::persistence_failed())?;
-    storage.journal.subscribe_run_commits(&run_id)
-}
-
-/// Creates one thread for an authorized attach profile.
-pub fn create_thread(
-    storage: SharedStorage,
-    workspace: String,
-    attach_profile: String,
-) -> Result<String, String> {
-    let mut provenance = runtime_provenance();
-    provenance
-        .extra
-        .insert("attach_profile".into(), attach_profile.into());
-    let mut storage = storage
-        .lock()
-        .map_err(|_| "Conversation history is unavailable.".to_string())?;
-    create_thread_now(&mut storage.journal, &workspace, provenance)
-        .map_err(|_| "Conversation history is unavailable.".to_string())
-}
-
-/// Renames one thread owned by one subject.
-pub fn rename_thread(
-    storage: SharedStorage,
-    subject: Option<String>,
-    thread_id: String,
-    title: String,
-) -> Result<(), String> {
-    let mut storage = storage
-        .lock()
-        .map_err(|_| "Conversation history is unavailable.".to_string())?;
-    append_thread_rename_now(
-        &mut storage.journal,
-        subject.as_deref(),
-        &thread_id,
-        &title,
-        &runtime_provenance(),
-    )
-    .map_err(|_| "Conversation history is unavailable.".to_string())
-}
-
-/// Deletes one thread owned by one subject.
-pub fn delete_thread(
-    storage: SharedStorage,
-    subject: Option<String>,
-    thread_id: String,
-) -> Result<(), String> {
-    let mut storage = storage
-        .lock()
-        .map_err(|_| "Conversation history is unavailable.".to_string())?;
-    append_thread_delete_now(
-        &mut storage.journal,
-        subject.as_deref(),
-        &thread_id,
-        &runtime_provenance(),
-    )
-    .map_err(|_| "Conversation history is unavailable.".to_string())
-}
-
-/// Deletes terminal runs older than the maximum age.
-pub fn apply_retention(
-    storage: SharedStorage,
-    max_age_seconds: i64,
-) -> Result<RetentionOutcome, String> {
-    let mut storage = storage
-        .lock()
-        .map_err(|_| "Conversation history is unavailable.".to_string())?;
-    let ChatStorage { journal, cas } = &mut *storage;
-    apply_retention_now_with(journal, Some(cas), max_age_seconds, |deleted_run| {
-        muniment_core::chat_prompt::delete_prompt(
-            &deleted_run.run_id,
-            deleted_run.subject.as_deref(),
-        )
-        .map_err(|_| RetentionError::BeforeDelete)
-    })
-    .map_err(|_| "Conversation history is unavailable.".to_string())
-}
-
-/// Opens one thread owned by one subject.
-pub fn thread_page(
-    profile_directory: impl AsRef<Path>,
-    storage: SharedStorage,
-    subject: Option<String>,
-    thread_id: String,
-    limit: usize,
-    cursor: Option<String>,
-) -> Result<ChatThreadOpenPage, String> {
-    let profile_directory = profile_directory.as_ref();
-    let profile = ChatProfile::new(profile_directory);
-    let mut storage = storage
-        .lock()
-        .map_err(|_| "Conversation history is unavailable.".to_string())?;
-    let ChatStorage { journal, cas } = &mut *storage;
-    chat_thread_open_page(
-        journal,
-        Some(cas),
-        subject.as_deref(),
-        &profile.pi_session_root(),
-        &thread_id,
-        limit,
-        cursor.as_deref(),
-    )
-    .map_err(|_| "Conversation history is unavailable.".to_string())
 }
 
 /// Accepts one prompt without driving it to completion.
@@ -855,16 +466,4 @@ pub fn resume_run(
     result
         .recv()
         .map_err(|_| "This reply could not be resumed. Try again.".to_string())?
-}
-
-fn runtime_provenance() -> Provenance {
-    Provenance {
-        source: "muniment-runtime".into(),
-        source_version: env!("CARGO_PKG_VERSION").into(),
-        actor_id: None,
-        device_id: None,
-        rpc_request_id: None,
-        capability_versions: None,
-        extra: BTreeMap::new(),
-    }
 }
