@@ -27,7 +27,10 @@ fn configure_run_checks_the_requested_workspace() {
 
     let (base_url, server) = spawn_server(200, valid_grant.into());
     std::env::set_var("MUNIMENT_API_BASE_URL", base_url);
-    assert_eq!(configure_run("access-secret", None).unwrap().workspace, "/work");
+    assert_eq!(
+        configure_run("access-secret", None).unwrap().workspace,
+        "/work"
+    );
     server.join().unwrap();
 
     let invalid_grant = r#"{"workspace":"/work","gatewayUrl":"http://gateway.example.com","virtualKey":"key","minimumCacheablePrefixCharacters":8192,"receiptUrl":"https://receipts.example.com"}"#;
