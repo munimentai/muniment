@@ -42,6 +42,7 @@ pub fn run_attach_listener<S, F, E>(
     companion_registry: &CompanionRegistry,
     approval: SignedWorkspaceApproval,
     approvals: ApprovalCoordinator,
+    handoff_nonce: Option<String>,
     service_factory: F,
     stop: Receiver<()>,
 ) -> Result<(), AttachListenerError>
@@ -88,6 +89,7 @@ where
             let approval = approval.clone();
             let approvals = approvals.clone();
             let live_connections = live_connections.clone();
+            let handoff_nonce = handoff_nonce.clone();
             std::thread::spawn(move || {
                 let Ok(mut service) = service_factory() else {
                     return;
@@ -114,6 +116,7 @@ where
                     &mut service,
                     waiter,
                     &live_connections,
+                    handoff_nonce.as_deref(),
                 );
             });
         };
