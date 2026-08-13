@@ -518,6 +518,19 @@ time, and a disconnected presenter, a deny, a missed two-minute deadline, or a
 late, repeated, unknown, or mismatched choice all fail closed. Both halves of
 the wire are built, and no runtime code claims the presenter yet.
 
+DONE 2026-08-13 — the sixty-second wave closed four more slices (MUNIDESK-1217
+through 1220). `ApprovalPresenterSession::wait_until_closed`
+(`src-tauri/core/src/attach/presenter_session.rs:19`) polls the connection, so a
+runtime thread holds its claim for the life of that connection and releases it on
+close. `RuntimeAttachState` (`src-tauri/runtime/src/attach_state.rs:19`) opens the
+profile storage and the companion registry once, then builds one boundaries value
+and one service per connection. `installed_desktop_executable`
+(`runtime/src/directories.rs:26`) maps the installed
+`/usr/lib/muniment/muniment-runtime` payload to `/usr/bin/muniment`.
+`run_migration_takeover` (`runtime/src/migration.rs:64`) now serves companions
+through `run_bound_attach_listener`, so a completed takeover leaves companions a
+working listener rather than a readiness-probe stub.
+
 MEASURED 2026-08-12 (thirty-ninth wave, planner, read the runtime manifest beside
 `test/runtime-dependency-boundary.sh`) — the runtime crate cannot build a
 `serde_json` payload. `src-tauri/runtime/Cargo.toml` depends on `muniment-core`
@@ -566,69 +579,64 @@ projector always holds state there. A test seam would also prove nothing, becaus
 projector rejects that event too. The lane re-opens this only against a new
 failure route.
 
-MERGE HAZARD — the sixty-second wave puts slice 1 in
-`src-tauri/core/src/attach/presenter_session.rs`, slice 2 in a new
-`src-tauri/runtime/src/` module, slice 3 in
-`src-tauri/runtime/src/directories.rs`, and slice 4 in
-`src-tauri/runtime/src/attach_listener.rs`. Slices 2, 3, and 4 all export
-through `src-tauri/runtime/src/lib.rs`. Each ticket tells the implementer to
+MERGE HAZARD — the sixty-third wave puts slice 1 in a new
+`src-tauri/core/src/attach/` module, slice 2 in
+`docs/decisions/0012-user-level-runtime-service.md`, slice 3 in
+`src-tauri/runtime/src/attach_state.rs`, slice 4 in
+`src-tauri/attach/src/client.rs`, and slice 5 in `test/`. Slice 1 also exports
+through `src-tauri/core/src/attach/mod.rs`. Each ticket tells the implementer to
 rebase on `main` before it opens the pull request. The 2026-08-04 silent revert
 came from a stale base.
 
-VERIFIED 2026-08-13 (sixty-second wave, planner, read
+VERIFIED 2026-08-13 (sixty-third wave, planner, read
 `src-tauri/core/src/attach/presenter_session.rs`,
-`src-tauri/runtime/src/attach_boundaries.rs`,
-`src-tauri/attach/src/client.rs`, and
-`src-tauri/runtime/src/attach_listener.rs`, then ran the runtime, the attach, and
-both core presenter suites) — all four sixty-first-wave slices are built. The
-runtime accept loop still hands every connection to the companion session, so no
-runtime code admits a desktop peer as presenter. Nothing in `main` starts the
-runtime listener, and no desktop code dials the endpoint.
+`src-tauri/runtime/src/attach_state.rs`,
+`src-tauri/runtime/src/directories.rs`, and
+`src-tauri/runtime/src/migration.rs`, then ran the runtime, the attach, and the
+core presenter suites) — all four sixty-second-wave slices are built. The runtime
+accept loop still hands every connection to the companion session, so no runtime
+code admits a desktop peer as presenter. Nothing in `main` starts the runtime
+listener, and no desktop code dials the endpoint.
 
-MEASURED 2026-08-13 (sixty-second wave, planner, read `serve_approval_presenter`
-beside the runtime accept loop) — the presenter session reports no closed
-connection. `ApprovalPresenterSession`
-(`src-tauri/core/src/attach/presenter_session.rs:10`) releases its claim on drop
-alone, and it exposes no wait. A runtime thread that admitted a presenter would
-have to hold the claim forever or release it at once, and each choice denies
-every later companion approval. The runtime crate cannot poll the descriptor
-itself, because `src-tauri/runtime/Cargo.toml` bars a third direct package. The
-close signal therefore belongs in core.
+MEASURED 2026-08-13 (sixty-third wave, planner, read `probe_handoff` beside
+`admit_approval_presenter`) — the peer check alone cannot route a desktop
+connection. The desktop runs the handoff readiness probe itself
+(`src-tauri/src/attach_service.rs:133`), so the probe connection and a presenter
+connection carry the same `SO_PEERCRED` executable. The probe hello claims the
+client kind `desktop-handoff-probe`
+(`src-tauri/core/src/attach/handoff_probe.rs:124`) and the presenter hello claims
+`desktop` (`src-tauri/attach/src/client.rs:1873`), so the claimed kind is the
+only discriminator. Both admitted paths read the first hello themselves, so the
+routing decision must consume no byte of the connection.
 
-MEASURED 2026-08-13 (sixty-second wave, planner, read the three runtime test
-files that build `RuntimeAttachBoundaries`) — the runtime has no composition
-root. `attach_service.rs:22`, `attach_boundaries.rs:54`, and
-`run_boundaries.rs:67` each hand-assemble the same nine arguments, and each call
-opens its own storage through `open_profile_storage`. `run_attach_listener`
-takes a service factory that runs per connection, so that shape would open the
-journal once per companion connection and give each one its own approval.
+MEASURED 2026-08-13 (sixty-third wave, planner, read `RuntimeAttachState` beside
+`AttachListenerInputs`) — the composition root holds no approval coordinator.
+`RuntimeAttachState` (`src-tauri/runtime/src/attach_state.rs:19`) shares the
+companion registry and the signed workspace approval, and every caller still
+builds its own `ApprovalCoordinator`. A presenter that claims one coordinator
+answers no companion session that asks another.
 
-MEASURED 2026-08-13 (sixty-second wave, planner, read
-`admit_approval_presenter` beside `src-tauri/tauri.linux.conf.json`) — the
-runtime cannot name the peer it must verify. Admission takes an
-`expected_desktop_executable` path, and no runtime code resolves one. The Linux
-package installs the runtime beside the ACP adapter under `/usr/lib/muniment/`,
-and `test/e2e/runner/linux.sh:223` probes that path. The desktop resolves its
-own counterpart from `resource_dir()` (`src-tauri/src/attach_service.rs:757`).
+MEASURED 2026-08-13 (sixty-third wave, planner, read `ApprovalPresenterClient`
+beside its five tests) — the desktop half has no supervisor. `serve`
+(`src-tauri/attach/src/client.rs:1466`) returns `ConnectionClosed` on the first
+close, and no code reconnects. Neither the planning clone nor an implementer
+container compiles the desktop crate, so every line that can live in
+`muniment-attach` belongs there.
 
-SELECTED 2026-08-13 (sixty-second wave) — four slices in priority order.
+SELECTED 2026-08-13 (sixty-third wave) — five slices in priority order.
 
-1. The core close signal that lets a presenter session hold its claim for the
-   life of the connection.
-2. The runtime composition root that opens the shared state once and builds one
-   boundaries value per connection.
-3. The installed desktop executable path that presenter admission verifies
-   against.
-4. The bound-endpoint listener entry, so a caller that already holds the lock
-   and the transport can serve companions.
+1. The core route that names a new attach connection, so a presenter connection
+   and a readiness probe take different paths.
+2. The ADR 0012 amendment that writes that routing rule down.
+3. The runtime composition root that owns the one approval coordinator.
+4. The desktop presenter supervisor that reconnects until it is stopped.
+5. The static guard that ties the resolved desktop executable to the packaged
+   product name.
 
-SEQUENCED 2026-08-13 (sixty-second wave) — the accept-loop routing that admits a
-desktop peer as presenter follows slices 1 and 3. It needs both the close signal
-and the expected executable. The takeover swap follows slices 2 and 4, and it
-replaces `run_bound_handoff_listener` with the bound attach listener. Only then
-does `run_migration_takeover` leave companions a working listener. The desktop
-presenter wiring follows the routing slice, and it lands in the
-`muniment-desktop` crate that no implementer container compiles.
+SEQUENCED 2026-08-13 (sixty-third wave) — the runtime accept-loop wiring follows
+slices 1 and 3. It reads the route, admits the presenter, and holds the claim
+until the connection closes. The desktop presenter wiring follows slice 4, and it
+lands in the `muniment-desktop` crate that no implementer container compiles.
 
 SEQUENCED — after the attach seam, the later extraction slices are the desktop
 client conversion and Linux user-unit registration. Each sits behind a dormant
@@ -1110,12 +1118,11 @@ earlier one. Requiring an up-to-date branch before merge, or a merge queue, is a
 repository-settings change that sits with the owner. The planner files no ticket
 for it.
 
-VERIFIED 2026-08-13 (sixty-second wave, planner) — `cargo test -p
-muniment-runtime` passes 66 tests over 31 test binaries, and `cargo test -p
-muniment-attach` passes 33 over 5. The two core presenter test binaries pass 12.
-The sixty-first wave ran `npm ci` then `npm test` and passed 928 frontend tests
-over 62 files with 31 skipped, plus 3 browser tests. This entry replaces the
-earlier ledger.
+VERIFIED 2026-08-13 (sixty-third wave, planner) — `cargo test -p muniment-runtime
+-p muniment-attach` passes, and so do the four core attach presenter, approval,
+and session suites. The sixty-first wave ran `npm ci` then `npm test` and passed
+928 frontend tests over 62 files with 31 skipped, plus 3 browser tests. This
+entry replaces the earlier ledger.
 
 MEASURED 2026-08-13 (fifty-eighth wave, planner, counted each path with
 `git log --name-only --since=2026-08-01 -- <path>`) — `src-tauri/src/chat.rs` is
