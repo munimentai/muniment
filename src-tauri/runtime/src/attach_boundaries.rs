@@ -179,7 +179,7 @@ impl RunStartBoundaries for RuntimeAttachBoundaries {
                 &self.storage,
                 SessionThreadStart {
                     tracker: &self.session_thread,
-                    continue_existing: false,
+                    continue_existing: true,
                 },
                 run_id,
                 &grant.workspace,

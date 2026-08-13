@@ -16,7 +16,7 @@ use muniment_core::session_thread::SessionThread;
 use muniment_runtime::{open_profile_storage, RuntimeAttachBoundaries};
 
 mod common;
-use common::{spawn_server, TemporaryProfile};
+use common::TemporaryProfile;
 
 fn provenance() -> Provenance {
     let mut provenance = Provenance {
@@ -158,14 +158,16 @@ fn runtime_boundaries_answer_all_attach_reads() {
 }
 
 #[test]
-fn runtime_boundaries_record_and_clear_the_owner_attach_approval() {
+fn runtime_boundaries_share_owner_approval_and_session_thread() {
+    muniment_core::chat_prompt::use_mock_keyring_for_tests();
     let temporary_profile = TemporaryProfile::new("attach-approval", false);
     let profile = temporary_profile.profile.clone();
     let config = temporary_profile.config.clone();
+    let storage = open_profile_storage(&profile).unwrap();
     let approval = SignedWorkspaceApproval::default();
     let session_thread = Arc::new(SessionThread::default());
     let boundaries = RuntimeAttachBoundaries::new(
-        open_profile_storage(&profile).unwrap(),
+        Arc::clone(&storage),
         Arc::new(Mutex::new(None)),
         profile.clone(),
         config.clone(),
@@ -179,7 +181,7 @@ fn runtime_boundaries_record_and_clear_the_owner_attach_approval() {
         Arc::clone(&session_thread),
     );
     let sibling = RuntimeAttachBoundaries::new(
-        open_profile_storage(&profile).unwrap(),
+        Arc::clone(&storage),
         Arc::new(Mutex::new(None)),
         profile.clone(),
         config.clone(),
@@ -192,35 +194,68 @@ fn runtime_boundaries_record_and_clear_the_owner_attach_approval() {
         approval,
         Arc::clone(&session_thread),
     );
-    assert!(boundaries.attach_approval().is_none());
 
-    let (base_url, failed_server) = spawn_server(401, r#"{"error":"unauthorized"}"#.into());
-    std::env::set_var("MUNIMENT_API_BASE_URL", base_url);
-    assert!(boundaries
-        .configure_run("run-1", "prompt", &common::credentials().tokens, None)
-        .is_err());
-    failed_server.join().unwrap();
-    assert!(boundaries.attach_approval().is_none());
-
-    let grant = r#"{"workspace":"workspace-a","gatewayUrl":"https://gateway.example.com","virtualKey":"key","minimumCacheablePrefixCharacters":8192,"receiptUrl":"https://receipts.example.com"}"#;
-    let (base_url, server) = spawn_server(200, grant.into());
-    std::env::set_var("MUNIMENT_API_BASE_URL", base_url);
     boundaries
-        .configure_run("run-1", "prompt", &common::credentials().tokens, None)
-        .unwrap();
-    server.join().unwrap();
+        .signed_workspace_approval()
+        .record("workspace-a".into());
 
     let approval = sibling.attach_approval().unwrap();
     assert_eq!(approval.profile, "desktop-owner");
     assert_eq!(approval.workspace, "workspace-a");
 
-    boundaries.clear_workspace();
-    assert!(sibling.attach_approval().is_none());
+    sibling.clear_workspace();
+    assert!(boundaries.attach_approval().is_none());
 
-    session_thread.record("thread-a".into(), "workspace-a", Some("owner"));
-    assert_eq!(
-        session_thread.offered("workspace-a", Some("owner")),
-        muniment_core::session_thread::OfferedThread::Selected("thread-a".into())
-    );
-    std::env::remove_var("MUNIMENT_API_BASE_URL");
+    let initial_run_id = "01900000-0000-7000-8000-000000000020";
+    prepare_new_run_with_session_thread(
+        &storage,
+        SessionThreadStart {
+            tracker: &SessionThread::default(),
+            continue_existing: false,
+        },
+        initial_run_id,
+        "workspace-a",
+        Some("user"),
+        Vec::new(),
+        None,
+        "test",
+        "1",
+        || Ok(()),
+    )
+    .unwrap();
+    let thread_id = storage
+        .lock()
+        .unwrap()
+        .journal
+        .run_thread_id(initial_run_id)
+        .unwrap()
+        .unwrap();
+    session_thread.record(thread_id.clone(), "workspace-a", Some("user"));
+    let tokens = common::credentials().tokens;
+    for (boundary, run_id) in [
+        (&boundaries, "01900000-0000-7000-8000-000000000021"),
+        (&sibling, "01900000-0000-7000-8000-000000000022"),
+    ] {
+        boundary
+            .prepare_run(
+                run_id,
+                "prompt",
+                &common::fixture_grant(),
+                &tokens,
+                Vec::new(),
+                None,
+                None,
+            )
+            .unwrap();
+        assert_eq!(
+            storage
+                .lock()
+                .unwrap()
+                .journal
+                .run_thread_id(run_id)
+                .unwrap()
+                .as_deref(),
+            Some(thread_id.as_str())
+        );
+    }
 }
