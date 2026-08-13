@@ -8,7 +8,9 @@ use std::sync::{Arc, Mutex};
 use muniment_core::attach::linux::{ThreadListRequest, ThreadOpenRequest};
 use muniment_core::attach::{ProtocolError, RuntimeActivityRegistry};
 use muniment_core::journal::Provenance;
+use muniment_core::memory_runtime::ApplicationMemoryRuntime;
 use muniment_core::permission_gate::ChatPermissionAnswer;
+use muniment_core::pi_execution::PiRuntime;
 use muniment_core::run_preparation::{prepare_new_run_with_session_thread, SessionThreadStart};
 use muniment_core::run_start::{ActiveRun, RunAttachBoundaries};
 use muniment_core::session_thread::SessionThread;
@@ -51,7 +53,20 @@ fn runtime_boundaries_answer_all_attach_reads() {
         permission_answers: Arc::clone(&permission_answers),
         _activity: runtime_activity.mark_active_run(),
     })));
-    let boundaries = RuntimeAttachBoundaries::new(Arc::clone(&storage), active);
+    let config = temporary_root.join("config");
+    let boundaries = RuntimeAttachBoundaries::new(
+        Arc::clone(&storage),
+        active,
+        profile.clone(),
+        config.clone(),
+        Arc::new(Mutex::new(None::<PiRuntime>)),
+        Arc::new(ApplicationMemoryRuntime::new(
+            config,
+            profile.join("memory"),
+        )),
+        runtime_activity,
+        SessionThread::default(),
+    );
 
     let created_thread = boundaries
         .create_thread("workspace-a", provenance())
