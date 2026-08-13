@@ -11,12 +11,12 @@ use muniment_core::memory_runtime::ApplicationMemoryRuntime;
 use muniment_core::permission_gate::ChatPermissionAnswer;
 use muniment_core::pi_execution::PiRuntime;
 use muniment_core::run_preparation::{prepare_new_run_with_session_thread, SessionThreadStart};
-use muniment_core::run_start::{ActiveRun, RunAttachBoundaries};
+use muniment_core::run_start::{ActiveRun, RunAttachBoundaries, RunStartBoundaries};
 use muniment_core::session_thread::SessionThread;
 use muniment_runtime::{open_profile_storage, RuntimeAttachBoundaries};
 
 mod common;
-use common::TemporaryProfile;
+use common::{spawn_server, TemporaryProfile};
 
 fn provenance() -> Provenance {
     let mut provenance = Provenance {
@@ -154,4 +154,49 @@ fn runtime_boundaries_answer_all_attach_reads() {
 
     drop(boundaries);
     drop(storage);
+}
+
+#[test]
+fn runtime_boundaries_record_and_clear_the_owner_attach_approval() {
+    let temporary_profile = TemporaryProfile::new("attach-approval", false);
+    let profile = temporary_profile.profile.clone();
+    let config = temporary_profile.config.clone();
+    let boundaries = RuntimeAttachBoundaries::new(
+        open_profile_storage(&profile).unwrap(),
+        Arc::new(Mutex::new(None)),
+        profile.clone(),
+        config.clone(),
+        Arc::new(Mutex::new(None::<PiRuntime>)),
+        Arc::new(ApplicationMemoryRuntime::new(
+            config,
+            profile.join("memory"),
+        )),
+        RuntimeActivityRegistry::new(),
+        SessionThread::default(),
+    );
+    assert!(boundaries.attach_approval().is_none());
+
+    let (base_url, failed_server) = spawn_server(401, r#"{"error":"unauthorized"}"#.into());
+    std::env::set_var("MUNIMENT_API_BASE_URL", base_url);
+    assert!(boundaries
+        .configure_run("run-1", "prompt", &common::credentials().tokens, None)
+        .is_err());
+    failed_server.join().unwrap();
+    assert!(boundaries.attach_approval().is_none());
+
+    let grant = r#"{"workspace":"workspace-a","gatewayUrl":"https://gateway.example.com","virtualKey":"key","minimumCacheablePrefixCharacters":8192,"receiptUrl":"https://receipts.example.com"}"#;
+    let (base_url, server) = spawn_server(200, grant.into());
+    std::env::set_var("MUNIMENT_API_BASE_URL", base_url);
+    boundaries
+        .configure_run("run-1", "prompt", &common::credentials().tokens, None)
+        .unwrap();
+    server.join().unwrap();
+
+    let approval = boundaries.attach_approval().unwrap();
+    assert_eq!(approval.profile, "desktop-owner");
+    assert_eq!(approval.workspace, "workspace-a");
+
+    boundaries.clear_workspace();
+    assert!(boundaries.attach_approval().is_none());
+    std::env::remove_var("MUNIMENT_API_BASE_URL");
 }
