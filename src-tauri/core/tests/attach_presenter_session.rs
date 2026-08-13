@@ -61,7 +61,7 @@ fn returns_each_presented_desktop_choice() {
     let server = thread::spawn(move || {
         for decision in ["approve", "deny"] {
             let request = read_request(&mut desktop);
-            assert_eq!(request.body["deadline_ms"], 120_000);
+            assert!(request.body["deadline_ms"].as_u64().unwrap() <= 120_000);
             answer(&mut desktop, &request, decision);
         }
     });
@@ -113,6 +113,55 @@ fn a_closed_connection_denies_without_waiting_for_the_request_deadline() {
     let started = Instant::now();
     assert!(!coordinator.request(approval_request("closed"), Duration::from_secs(120)));
     assert!(started.elapsed() < Duration::from_secs(1));
+}
+
+#[test]
+fn a_silent_connection_obeys_the_request_deadline() {
+    let coordinator = ApprovalCoordinator::default();
+    let (runtime, mut desktop) = UnixStream::pair().unwrap();
+    let _session = serve_approval_presenter(
+        coordinator.clone(),
+        ApprovalPresenterConnection::new(runtime, "presenter-capability"),
+    )
+    .unwrap();
+    let server = thread::spawn(move || {
+        let request = read_request(&mut desktop);
+        assert!(request.body["deadline_ms"].as_u64().unwrap() <= 80);
+        thread::sleep(Duration::from_millis(200));
+    });
+
+    let started = Instant::now();
+    assert!(!coordinator.request(approval_request("silent"), Duration::from_millis(80)));
+    assert!(started.elapsed() < Duration::from_millis(180));
+    server.join().unwrap();
+}
+
+#[test]
+fn a_request_queued_behind_a_presentation_obeys_its_deadline() {
+    let coordinator = ApprovalCoordinator::default();
+    let (runtime, mut desktop) = UnixStream::pair().unwrap();
+    let _session = serve_approval_presenter(
+        coordinator.clone(),
+        ApprovalPresenterConnection::new(runtime, "presenter-capability"),
+    )
+    .unwrap();
+    let (presented_sender, presented) = mpsc::channel();
+    let server = thread::spawn(move || {
+        let _ = read_request(&mut desktop);
+        presented_sender.send(()).unwrap();
+        thread::sleep(Duration::from_millis(250));
+    });
+    let first_coordinator = coordinator.clone();
+    let first = thread::spawn(move || {
+        first_coordinator.request(approval_request("first"), Duration::from_millis(200))
+    });
+    presented.recv_timeout(Duration::from_secs(1)).unwrap();
+
+    let started = Instant::now();
+    assert!(!coordinator.request(approval_request("queued"), Duration::from_millis(50)));
+    assert!(started.elapsed() < Duration::from_millis(150));
+    assert!(!first.join().unwrap());
+    server.join().unwrap();
 }
 
 #[test]

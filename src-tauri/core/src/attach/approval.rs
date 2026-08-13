@@ -1,6 +1,6 @@
 use std::collections::{BTreeSet, HashMap};
 use std::sync::{mpsc, Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use super::Approval;
 
@@ -48,7 +48,7 @@ pub struct ApprovalRequest {
     pub scopes: BTreeSet<String>,
 }
 
-type Presenter = dyn Fn(&ApprovalRequest) -> bool + Send + Sync;
+type Presenter = dyn Fn(&ApprovalRequest, Instant) -> bool + Send + Sync;
 
 #[derive(Default)]
 struct ApprovalState {
@@ -79,7 +79,7 @@ impl ApprovalCoordinator {
     {
         if let Ok(mut state) = self.state.lock() {
             if !state.presenter_claimed {
-                state.presenter = Some(Arc::new(presenter));
+                state.presenter = Some(Arc::new(move |request, _| presenter(request)));
             }
         }
     }
@@ -87,6 +87,13 @@ impl ApprovalCoordinator {
     pub fn claim_presenter<F>(&self, presenter: F) -> Option<PresenterGuard>
     where
         F: Fn(&ApprovalRequest) -> bool + Send + Sync + 'static,
+    {
+        self.claim_presenter_until(move |request, _| presenter(request))
+    }
+
+    pub(crate) fn claim_presenter_until<F>(&self, presenter: F) -> Option<PresenterGuard>
+    where
+        F: Fn(&ApprovalRequest, Instant) -> bool + Send + Sync + 'static,
     {
         let mut state = self.state.lock().ok()?;
         if state.presenter_claimed {
@@ -100,6 +107,9 @@ impl ApprovalCoordinator {
     }
 
     pub fn request(&self, request: ApprovalRequest, remaining: Duration) -> bool {
+        let Some(deadline) = Instant::now().checked_add(remaining) else {
+            return false;
+        };
         let (receiver, id, presenter) = {
             let Ok(mut state) = self.state.lock() else {
                 return false;
@@ -119,12 +129,14 @@ impl ApprovalCoordinator {
             (receiver, id, presenter)
         };
 
-        if !presenter(&request) {
+        if !presenter(&request, deadline) {
             self.remove_pending(&request.challenge, id);
             return false;
         }
 
-        let approved = receiver.recv_timeout(remaining).unwrap_or(false);
+        let approved = receiver
+            .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+            .unwrap_or(false);
         self.remove_pending(&request.challenge, id);
         approved
     }
