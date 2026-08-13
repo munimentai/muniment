@@ -1,5 +1,6 @@
 #[cfg(target_os = "linux")]
 mod attach_boundaries;
+mod directories;
 #[cfg(target_os = "linux")]
 pub mod handoff_listener;
 #[cfg(target_os = "linux")]
@@ -9,6 +10,10 @@ mod sink;
 
 #[cfg(target_os = "linux")]
 pub use attach_boundaries::RuntimeAttachBoundaries;
+pub use directories::{
+    config_directory, profile_directory, resolve_directory, DirectoryUnavailableError,
+    APPLICATION_IDENTIFIER,
+};
 #[cfg(target_os = "linux")]
 pub use migration::{run_migration_takeover, MigrationTakeoverError};
 pub use service::{
