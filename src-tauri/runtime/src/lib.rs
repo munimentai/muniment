@@ -1,6 +1,8 @@
 #[cfg(target_os = "linux")]
 mod attach_boundaries;
 #[cfg(target_os = "linux")]
+mod attach_listener;
+#[cfg(target_os = "linux")]
 mod attach_service;
 mod directories;
 #[cfg(target_os = "linux")]
@@ -12,6 +14,8 @@ mod sink;
 
 #[cfg(target_os = "linux")]
 pub use attach_boundaries::RuntimeAttachBoundaries;
+#[cfg(target_os = "linux")]
+pub use attach_listener::{run_attach_listener, AttachListenerError};
 #[cfg(target_os = "linux")]
 pub use attach_service::compose_attach_service;
 pub use directories::{

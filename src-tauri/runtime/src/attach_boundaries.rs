@@ -78,6 +78,11 @@ impl RuntimeAttachBoundaries {
     pub fn clear_workspace(&self) {
         self.approval.clear();
     }
+
+    /// Returns the approval state shared with the attach listener.
+    pub fn signed_workspace_approval(&self) -> SignedWorkspaceApproval {
+        self.approval.clone()
+    }
 }
 
 impl RunStartBoundaries for RuntimeAttachBoundaries {
