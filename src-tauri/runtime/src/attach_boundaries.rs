@@ -46,7 +46,7 @@ pub struct RuntimeAttachBoundaries {
     runtime: Arc<Mutex<Option<PiRuntime>>>,
     memory_runtime: Arc<ApplicationMemoryRuntime>,
     runtime_activity: RuntimeActivityRegistry,
-    session_thread: SessionThread,
+    session_thread: Arc<SessionThread>,
     approval: SignedWorkspaceApproval,
 }
 
@@ -60,7 +60,8 @@ impl RuntimeAttachBoundaries {
         runtime: Arc<Mutex<Option<PiRuntime>>>,
         memory_runtime: Arc<ApplicationMemoryRuntime>,
         runtime_activity: RuntimeActivityRegistry,
-        session_thread: SessionThread,
+        approval: SignedWorkspaceApproval,
+        session_thread: Arc<SessionThread>,
     ) -> Self {
         Self {
             storage,
@@ -71,7 +72,7 @@ impl RuntimeAttachBoundaries {
             memory_runtime,
             runtime_activity,
             session_thread,
-            approval: SignedWorkspaceApproval::default(),
+            approval,
         }
     }
 
@@ -178,7 +179,7 @@ impl RunStartBoundaries for RuntimeAttachBoundaries {
                 &self.storage,
                 SessionThreadStart {
                     tracker: &self.session_thread,
-                    continue_existing: false,
+                    continue_existing: true,
                 },
                 run_id,
                 &grant.workspace,
