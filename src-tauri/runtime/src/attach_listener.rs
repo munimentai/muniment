@@ -12,7 +12,7 @@ use muniment_core::attach::linux::{
     ApprovalDecision, AttachAcceptError, AttachFilesystem, AttachTransport, ThreadListService,
 };
 use muniment_core::attach::{
-    ApprovalCoordinator, ApprovalRequest, CompanionRegistry, SignedWorkspaceApproval,
+    bounded_claim, ApprovalCoordinator, ApprovalRequest, CompanionRegistry, SignedWorkspaceApproval,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -139,8 +139,8 @@ fn request_approval(
     let approved = approvals.request(
         ApprovalRequest {
             challenge: challenge.to_owned(),
-            claimed_kind: claimed_kind.to_owned(),
-            claimed_version: claimed_version.to_owned(),
+            claimed_kind: bounded_claim(claimed_kind),
+            claimed_version: bounded_claim(claimed_version),
             workspace: recorded.workspace.clone(),
             scopes: recorded.scopes.clone(),
         },
@@ -154,5 +154,44 @@ fn request_approval(
             ApprovalDecision::Approve(current)
         }
         _ => ApprovalDecision::Deny,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::mpsc;
+
+    #[test]
+    fn approval_request_bounds_untrusted_claims() {
+        let approval = SignedWorkspaceApproval::default();
+        approval.record("workspace-a".into());
+        let approvals = ApprovalCoordinator::default();
+        let (request_tx, request_rx) = mpsc::channel();
+        approvals.register_presenter(move |request| {
+            request_tx
+                .send((
+                    request.claimed_kind.clone(),
+                    request.claimed_version.clone(),
+                ))
+                .unwrap();
+            false
+        });
+
+        assert_eq!(
+            request_approval(
+                &approval,
+                &approvals,
+                "challenge",
+                &"x".repeat(81),
+                "1.0\nmalicious",
+                Duration::from_secs(1),
+            ),
+            ApprovalDecision::Deny
+        );
+
+        let (claimed_kind, claimed_version) = request_rx.recv().unwrap();
+        assert_eq!(claimed_kind, "unknown");
+        assert_eq!(claimed_version, "unknown");
     }
 }
