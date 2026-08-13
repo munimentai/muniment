@@ -2,9 +2,11 @@ use std::fs;
 use std::sync::{Arc, Mutex};
 
 use muniment_core::attach::RuntimeActivityRegistry;
-use muniment_core::chat_grant::ChatGrant;
 use muniment_core::journal::EventPayload;
 use muniment_runtime::{accept_prompt, open_profile_storage};
+
+mod common;
+use common::fixture_grant;
 
 #[test]
 fn memory_session_failure_ends_the_prepared_run() {
@@ -35,14 +37,7 @@ fn memory_session_failure_ends_the_prepared_run() {
         "token".into(),
         Some("owner".into()),
         Vec::new(),
-        ChatGrant {
-            workspace: "workspace-a".into(),
-            gateway_url: "https://gateway.example.com".into(),
-            virtual_key: "virtual-key".into(),
-            model: None,
-            minimum_cacheable_prefix_characters: 8_192,
-            receipt_url: "https://receipts.example.com".into(),
-        },
+        fixture_grant(),
         Arc::clone(&active),
         None,
         None,
