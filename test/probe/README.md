@@ -3,6 +3,7 @@
 Run `npm run probe` from the repository root. The command builds the frontend and prints the local probe URLs.
 
 Open `index.html` for an empty signed-in workspace. Open `history.html` for completed and interrupted fixture runs.
+Open `access.html` for the signed-in shell with the profile popover open.
 Open `signed-out.html` for the signed-out screen.
 Open `markdown.html` for a completed Markdown reply.
 Open `onboarding.html` for first-run setup.
@@ -20,7 +21,7 @@ Inspect `window.__PROBE__.invokedCommands` and `window.__PROBE__.eventListeners`
 Capture every fixture at the default desktop size:
 
 ```sh
-for fixture in index history markdown signed-out onboarding approved-files permission select input editor code-diff code-diff-unavailable applied-diff; do
+for fixture in index history access markdown signed-out onboarding approved-files permission select input editor code-diff code-diff-unavailable applied-diff; do
   playwright screenshot --browser chromium --viewport-size "1100,720" --wait-for-selector "[data-probe-ready]" "http://127.0.0.1:4173/test/probe/$fixture.html" "/tmp/muniment-probe-$fixture.png"
 done
 ```
