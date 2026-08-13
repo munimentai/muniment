@@ -161,24 +161,47 @@ fn approval_presenter_resets_the_io_deadline_after_a_delayed_choice() {
 
 #[test]
 fn approval_presenter_resets_the_io_deadline_after_a_slow_invalid_request() {
+    let io_timeout = Duration::from_millis(400);
     let (client, mut server) = UnixStream::pair().unwrap();
+    let mut filler = client.try_clone().unwrap();
+    let (handshake_done_tx, handshake_done_rx) = std::sync::mpsc::channel();
+    let (filled_bytes_tx, filled_bytes_rx) = std::sync::mpsc::channel();
     let worker = thread::spawn(move || {
         complete_approval_presenter_handshake(&mut server);
+        handshake_done_tx.send(()).unwrap();
+        let filled_bytes = filled_bytes_rx.recv().unwrap();
         let mut request = approval_present_request();
         request["body"]["deadline_ms"] = serde_json::json!(0);
         let frame = encode_frame(&request).unwrap();
         let split = frame.len() - 1;
         server.write_all(&frame[..split]).unwrap();
-        thread::sleep(SHORT / 2);
+        thread::sleep(io_timeout / 2);
         server.write_all(&frame[split..]).unwrap();
-        thread::sleep(SHORT);
+        thread::sleep(io_timeout * 3 / 4);
         server
             .set_read_timeout(Some(Duration::from_secs(1)))
             .unwrap();
+        let mut filled = vec![0; filled_bytes];
+        server.read_exact(&mut filled).unwrap();
         let answer = read_client_value(&mut server);
         assert_eq!(answer["error"]["code"], "unauthorized");
     });
-    let mut presenter = handshake_approval_presenter_stream(client, "0.0.1", SHORT).unwrap();
+    let mut presenter = handshake_approval_presenter_stream(client, "0.0.1", io_timeout).unwrap();
+    handshake_done_rx.recv().unwrap();
+    filler.set_nonblocking(true).unwrap();
+    let bytes = [0; 4096];
+    let mut filled_bytes = 0;
+    loop {
+        match filler.write(&bytes) {
+            Ok(written) => filled_bytes += written,
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => break,
+            result => {
+                result.unwrap();
+            }
+        }
+    }
+    filler.set_nonblocking(false).unwrap();
+    filled_bytes_tx.send(filled_bytes).unwrap();
     assert_eq!(
         presenter.present(|_| panic!("invalid request reached the caller")),
         Err(ClientError::UnexpectedMessage)
