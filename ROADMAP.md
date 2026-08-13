@@ -18,9 +18,9 @@ them must exercise the real contracts. It must add no mocked production path.
 > took the durable local run journal section. The tenth took the cross-surface
 > contracts section. The eleventh took the stable release and distribution
 > section. The twelfth took the desktop QA automation section. The thirteenth
-> took the ADR 0012 runtime-service extraction section. The fourteenth took the
-> Phase 2 client core section. The ADR 0012 runtime-service extraction section
-> grows every wave, so it is the next compaction target again.
+> and the fifteenth both took the ADR 0012 runtime-service extraction section.
+> The fourteenth took the Phase 2 client core section. That extraction section
+> grows every wave, so it stays the next compaction target.
 
 ## M0 — Scaffold (done 2026-07-09)
 
@@ -158,7 +158,7 @@ muniment-cloud deploy path, not to this repository.
 **HELD — the owner ruling this lane waits on.** The standing owner exclusion on
 self-initiated database migrations and the 2026-07-12 RULE above disagree about
 this repository's local journal. Migration steps 2, 3, and 4 all landed under
-that RULE. Eighteen waves have now passed with no answer, and the lane files
+that RULE. Nineteen waves have now passed with no answer, and the lane files
 nothing each time. The memory lane read the same exclusion as covering durable
 stores alone, and it filed its disposable cache without a ruling. This lane keeps
 waiting, because its work alters the durable journal schema rather than a
@@ -398,16 +398,13 @@ on `SIGTERM` and `SIGINT`, and backs off instead of polling every 25 millisecond
 The Linux package ships it beside `muniment-acp`, and the installed nightly reads
 its `--version`. The crate took no new dependency for any of it.
 
-DONE — thirty-four core moves landed one slice at a time. The completed
-muniment-core scope runs from the approval coordinator, interrupted-run
-reconciliation, the chat profile
-layout, the companion credential store and its registry, and the platform keychain
-credential store, through the native device session, the entitlement snapshot
-tracker, the cloud chat grant, the protected prompt store, the memory runtime, the
-workspace-context map, and the moved journal read and append paths, to the run-start
-coordinator, the coordinate loop, `pi_execution.rs`, `chat_resume.rs`,
-`run_preparation.rs`, and the desktop attach service seam. Each desktop call site
-keeps a thin wrapper, so no caller changed shape.
+DONE — thirty-four core moves landed one slice at a time, from the approval
+coordinator and the two credential stores through the native device session, the
+entitlement snapshot tracker, the cloud chat grant, the protected prompt store,
+the memory runtime, the workspace-context map, and the journal read and append
+paths, to the run-start coordinator, the coordinate loop, `pi_execution.rs`,
+`chat_resume.rs`, `run_preparation.rs`, and the desktop attach service seam. Each
+desktop call site keeps a thin wrapper, so no caller changed shape.
 
 LESSON 2026-08-07 — the permission gate coordination rules moved into
 muniment-core on the fourth filing (MUNIDESK-982). Naming the target module, the
@@ -452,161 +449,36 @@ DONE 2026-08-11 — one API base-URL rule serves the whole workspace
 `MUNIMENT_API_BASE_URL`, then `MUNIMENT_ISSUER`, then the shipped default, and
 every call site reads it.
 
-DONE — the dormant runtime service entries listed below are built.
+DONE — the dormant runtime service entry sweep is finished, and every attach
+operation has a runtime twin (MUNIDESK-1150 through 1171).
 `src-tauri/runtime/src/service.rs` opens one shared profile storage and reconciles
 interrupted runs, answers a fresh native session, reports the stored session
 status, projects the signed entitlement snapshot and reports a version change,
 revokes the server session and clears the local one on sign-out, lists this
 account's native installations, fetches and validates a cloud chat grant,
-scaffolds the cross-project Home, records a companion workspace and its two canonical
-directories, lists and opens one subject's threads, creates, renames, and deletes
-an owned thread, sweeps expired terminal runs and their protected prompts, reads
-one page of a run stream and subscribes to that run's commits, accepts one prompt
-and drives it, queues one steer or follow-up message, cancels the active run in
-one workspace, answers one permission gate, and resumes an interrupted run.
-`accept_prompt` (`service.rs:422`) returns the run id, the thread id, the
-projected attachments, the committed sequence, and the acceptance time, and
-`drive_prompt` (`:609`) drives the accepted run, so the attach `run.start` reply
-has the shape `prepare_desktop_run` (`src-tauri/core/src/run_start.rs:203`)
-already answers with. `answer_permission` (`:698`) queues the answer through the
-core seam `queue_permission_answer_with_commit` and returns the committed run
-sequence the attach reply needs. `accept_prompt`, `run_prompt`, and `resume_run`
-take the shared storage, the shared run control slot, the shared Pi runtime slot,
-the shared session-thread tracker, and a config directory beside the profile
-directory. A preparation failure after the prepared append records itself through
+scaffolds the cross-project Home, records a companion workspace and its two
+canonical directories, lists and revokes paired companions, lists and opens one
+subject's threads, creates, renames, and deletes an owned thread, sweeps expired
+terminal runs and their protected prompts, reads one page of a run stream and
+subscribes to that run's commits, accepts one prompt and drives it, queues one
+steer or follow-up message, cancels the active run in one workspace, answers one
+permission gate, and resumes an interrupted run. The run entries take the shared
+storage, the shared run control slot, the shared Pi runtime slot, the shared
+session-thread tracker, the shared activity registry, and a config directory
+beside the profile directory, so every mark lands where `evaluate_quiesce` can
+read it (MUNIDESK-1171). `accept_prompt` (`service.rs:456`) returns the run id,
+the thread id, the projected attachments, the committed sequence, and the
+acceptance time, `drive_prompt` (`:643`) drives the accepted run, and
+`answer_permission` (`:734`) returns the committed run sequence the attach reply
+needs. A preparation failure after the prepared append records itself through
 `record_persistence_failure`, so no run reaches reconciliation with no terminal
 event. `RuntimeChatEventSink` (`src-tauri/runtime/src/sink.rs`) implements
 `ChatEventSink` and `PiLaunchBoundaries`, answers the `muniment-runtime`
 provenance, owns the run's memory runtime, and keeps returning success after a
 subscriber goes away, because companions read run events through the journal.
-`src-tauri/runtime/tests/` proves the steer, the permission answer, the cancel
-with its recorded `abort`, the attachment pass-through, the named-thread start,
-the prompt protection, the preparation failure, and the separate config root
-against a live run. Nothing in `main` calls any entry.
-
-MEASURED 2026-08-11 (twenty-sixth wave, planner, read `git log` between
-each roadmap merge) — a drained slice measures batch position rather than
-ticket content. The twenty-second, twenty-third, twenty-fourth, and
-twenty-fifth waves each selected four slices, and exactly two merged in
-each interval. The existing-thread run start then merged on its second
-filing with no change of shape. Two drains therefore say that a slice sat
-below the wave's throughput ceiling, and they say nothing about its size
-or its clarity. This retires the two-drain escalation rule that held the
-run control slot and the attach listener lifecycle. The lane re-files a
-drained slice in strict priority order instead, and it puts the slice it
-most wants built in the first position. The selected-file open rule keeps
-its own hold, because eight identical filings are a different
-measurement.
-
-HELD 2026-08-06 (eighth drain) — the selected-file open rule drained again, and
-the planner has stopped re-filing it. `src-tauri/core/src/selected_file.rs` does
-not exist. The eighth filing carried the core half alone, with the target module
-path, the function names, and the test cases, so ticket size is not the cause.
-Eight identical filings that never reach a pull request are an orchestration
-question, and a ninth filing would only repeat the measurement. The work itself
-still stands. `open_selected_files` (`src-tauri/src/chat.rs:1069`) repeats
-`chat_file_metadata` (`:993`). Each copy opens the path, reads the metadata off
-the open handle, rejects anything that is not a file, and takes the display name
-from the last path segment. Reading the open handle rather than the path closes
-a replacement window, and no test guards that defense. The two copies also
-disagree, because `chat_file_metadata` rejects a path with no usable final
-segment and `open_selected_files` does not. The lane waits for an owner look at
-why this one ticket never dispatches.
-
-MERGE HAZARD — every fifty-second-wave service slice edits
-`src-tauri/runtime/src/service.rs` and `src-tauri/runtime/src/lib.rs`. The shared
-activity registry changes the `accept_prompt`, `run_prompt`, and `resume_run`
-signatures, and it edits five runtime test files. The configure-run slice renames
-the grant entry and edits `tests/grant.rs`. The device-session mark slice changes
-`ensure_native_session`, `sign_out`, and `entitlement_snapshot` and edits three
-other test files. The sign-in slice adds one function and one test binary. Each
-ticket tells the implementer to rebase on `main` before it opens the pull
-request. The 2026-08-04 silent revert came from a stale base.
-
-DONE 2026-08-12 — a prepared run that fails its attachment projection ends itself
-(MUNIDESK-1148). `prepare_desktop_run` (`src-tauri/core/src/run_start.rs:293`)
-calls `fail_prepared_run` before it closes the memory session and clears the
-active run, and `attachment_projection_failure_marks_the_prepared_run_failed`
-guards that order.
-
-RETIRED 2026-08-12 (forty-seventh wave, planner, read `ChatProjector::projection`
-beside `RunReducer::finish`, then ran an empty projector) — the runtime half of
-that gap cannot fire. `projection`
-(`src-tauri/core/src/journal/reducer.rs:613`) fails only when `finish` (`:857`)
-finds no run state, which is the empty-journal case.
-`ChatProjector::new().projection()` returns
-`InvalidTransition { event_type: "end-of-stream", detail: "empty journal" }`.
-`accept_prompt` reaches its projection branch only after `prepare_new_run_*`
-appends `run.started`, so the projector always holds state there. A test seam
-would also prove nothing. `record_persistence_failure` appends through
-`projector.apply`, and an empty projector rejects that event too. The lane files
-no slice, and it re-opens this only against a new failure route.
-
-MEASURED 2026-08-12 (forty-third wave, planner, read `accept_prompt` and
-`resume_run` beside `ChatState`) — each runtime prompt builds its own
-`RuntimeActivityRegistry` (`src-tauri/runtime/src/service.rs:445`, `:752`), where
-the desktop holds one registry in `ChatState` (`src-tauri/src/chat.rs:113`). Every
-mark therefore lands in a throwaway registry, so no quiesce evaluation in the
-runtime process can see an active run, an authentication operation, or an open
-gate. `ensure_native_session` (`:136`) marks no session refresh either. This is
-the fifth shared-slot slice.
-
-MEASURED 2026-08-12 (thirty-ninth wave, planner, read the runtime manifest beside
-`test/runtime-dependency-boundary.sh`) — the runtime crate cannot build a
-`serde_json` payload. `src-tauri/runtime/Cargo.toml` depends on `muniment-core`
-and `muniment-attach` alone, and the boundary check fails on a third direct
-package. A runtime entry that must append an event therefore needs a core seam
-that owns the payload, the way `record_preparation_failure`
-(`src-tauri/core/src/run_preparation.rs:267`) owns the attachment failure.
-
-DONE 2026-08-12 — the runtime accepts a shared session-thread tracker and the
-caller's continuation choice (MUNIDESK-1152). Two prompts with continuation
-enabled reuse one thread, and two prompts with continuation disabled open
-separate threads.
-
-DONE 2026-08-12 — the runtime `home.ensure` and `workspace.onboard` entries are
-built (MUNIDESK-1154, 1155). Every attach operation now has a runtime twin, so
-the entry-point sweep moves to the ADR 0012 capabilities the desktop still owns
-alone.
-
-DONE 2026-08-12 — the runtime tests share a warm Pi stub build (MUNIDESK-1158).
-Five `stage_pi_stub` calls across four test binaries each invoke Cargo and copy
-`sidecar-test-stub`. They use one target directory keyed by the manifest path,
-so later builds stay warm. The forty-sixth wave measured five cold builds at
-25,347ms each, against a whole-suite wall time of about 122 seconds. The
-forty-seventh wave measured the same suite at 7 seconds.
-
-DONE 2026-08-12 — the runtime session status entry reads the stored native record
-(MUNIDESK-1165). `session_status` (`src-tauri/runtime/src/service.rs:149`) calls
-`native_status` over the platform credential store, and
-`tests/session_status.rs` proves it answers with the API port closed.
-
-DONE 2026-08-12 — the runtime tests share one loopback HTTP stub and one
-credential fixture (MUNIDESK-1166). `tests/common/mod.rs` holds `spawn_server`,
-`read_request`, `credentials`, and `stage_pi_stub`, and nine test binaries read
-it. `tests/session_status.rs` still carries its own copy, because it needs a
-chosen expiry.
-
-DONE 2026-08-12 — the runtime companion entries list and revoke paired programs
-(MUNIDESK-1168). `open_companion_registry` (`src-tauri/runtime/src/service.rs:274`)
-opens one shared `CompanionRegistry` over the persisted credential file and one
-`LiveConnectionRegistry`, and `list_companions` (`:290`) and `revoke_companion`
-(`:298`) answer over it. All three are Linux-only, the way `stream_run` is.
-`tests/companions.rs` is the proof.
-
-DONE 2026-08-12 — the session status test reads the shared credential fixture
-(MUNIDESK-1169). `tests/common/mod.rs` owns `credentials_with_expiry`, and no
-test binary keeps a private copy.
-
-VERIFIED 2026-08-12 (fifty-second wave, planner, read
-`src-tauri/runtime/src/service.rs` beside `src-tauri/src/chat.rs` and
-`src-tauri/src/auth/mod.rs`, then ran `cargo test --manifest-path
-src-tauri/runtime/Cargo.toml`) — the fifty-first wave's first and fourth slices
-are built and the middle two are not. The companion entries stand at
-`service.rs:274`, `:290`, and `:298`, and the suite exits clean at 50 tests over
-25 binaries. `accept_prompt` (`:456`) and `resume_run` (`:750`) each still build
-their own `RuntimeActivityRegistry`, and `fetch_chat_grant` (`:256`) still takes
-no requested workspace.
+`src-tauri/runtime/tests/` proves each entry against a live run, and
+`tests/common/mod.rs` owns the shared loopback HTTP stub, both credential
+fixtures, and the warm Pi stub staging. Nothing in `main` calls any entry.
 
 MEASURED 2026-08-12 (fifty-first wave, planner, read `fetch_chat_grant`
 (`src-tauri/runtime/src/service.rs:256`) beside `configure_run`
@@ -627,30 +499,6 @@ spawning a browser itself. The desktop also marks every refresh and every
 authentication operation, where `ensure_native_session`
 (`src-tauri/runtime/src/service.rs:140`) and `sign_out` (`:162`) mark nothing.
 
-SELECTED 2026-08-12 (fifty-second wave) — four slices in priority order.
-
-1. The shared runtime activity registry, per the forty-third-wave measurement. It
-   changes the `accept_prompt`, `run_prompt`, and `resume_run` signatures, and it
-   edits five runtime test files.
-2. The runtime configure-run entry, per the fifty-first-wave measurement above.
-   One core predicate owns the requested-workspace rule, and the desktop and the
-   runtime both read it.
-3. The device-session marks on `ensure_native_session`, `sign_out`, and
-   `entitlement_snapshot`. The lane files this beside slice 1 rather than behind
-   it, because the two slices change disjoint functions and disjoint test files.
-4. The runtime sign-in entry, per the fifty-second-wave measurement above.
-
-SEQUENCED 2026-08-12 (fiftieth wave, planner, read `ThreadListService`
-(`src-tauri/core/src/attach/linux.rs:853`) beside `DesktopAttachService`
-(`src-tauri/core/src/attach/desktop_service.rs:68`)) — the entry-point sweep ends
-with the companion entries, and the next lane is the runtime composition of the
-attach seam. `DesktopAttachService` is generic over `RunStartBoundaries`
-(`src-tauri/core/src/run_start.rs:69`), so the runtime needs its own
-`RunStartBoundaries` value before it can answer a dispatched attach request. That
-value holds the shared activity registry, the shared storage, and the companion
-registry, so it follows the slices above. The planner splits it by trait method
-group rather than filing it whole.
-
 MEASURED 2026-08-12 (fifty-second wave, planner, counted the trait) —
 `RunStartBoundaries` declares 22 methods, and 19 of them carry no default. A
 partial implementation therefore does not compile, so "split by method group"
@@ -659,14 +507,99 @@ attach reads (`list_threads`, `open_thread`, `stream_run`,
 `subscribe_run_commits`, `queue_attach_permission_answer`, `create_thread`) form
 one group over the journal alone. The run-acceptance methods form the other. That
 split edits `src-tauri/src/chat.rs`, `src-tauri/src/test_support.rs`, and the
-`desktop_service.rs` test double, so it follows the configure-run slice that
-already edits all three.
+`desktop_service.rs` test double.
 
-SEQUENCED — after the shared Pi runtime slot, the later extraction slices are the
-desktop client conversion and Linux user-unit registration. Each sits behind a
-dormant service entry point. The desktop stays the owner throughout. The final
-cutover slice activates the listener, approval coordinator, journal, CAS, Pi,
-device session, credentials, authorization, and permission gates together. Remote
+MEASURED 2026-08-12 (thirty-ninth wave, planner, read the runtime manifest beside
+`test/runtime-dependency-boundary.sh`) — the runtime crate cannot build a
+`serde_json` payload. `src-tauri/runtime/Cargo.toml` depends on `muniment-core`
+and `muniment-attach` alone, and the boundary check fails on a third direct
+package. A runtime entry that must append an event therefore needs a core seam
+that owns the payload, the way `record_preparation_failure`
+(`src-tauri/core/src/run_preparation.rs:267`) owns the attachment failure.
+
+MEASURED 2026-08-11 (twenty-sixth wave, planner, read `git log` between each
+roadmap merge) — a drained slice measures batch position rather than ticket
+content. The twenty-second through twenty-fifth waves each selected four slices,
+and exactly two merged in each interval. The existing-thread run start then merged
+on its second filing with no change of shape. This retires the two-drain
+escalation rule that held the run control slot and the attach listener lifecycle.
+The lane re-files a drained slice in strict priority order instead, and it puts
+the slice it most wants built in the first position. The selected-file open rule
+keeps its own hold, because eight identical filings are a different measurement.
+
+HELD 2026-08-06 (eighth drain) — the selected-file open rule drained again, and
+the planner has stopped re-filing it. `src-tauri/core/src/selected_file.rs` does
+not exist. The eighth filing carried the core half alone, with the target module
+path, the function names, and the test cases, so ticket size is not the cause.
+Eight identical filings that never reach a pull request are an orchestration
+question, and a ninth filing would only repeat the measurement. The work itself
+still stands. `open_selected_files` (`src-tauri/src/chat.rs:1069`) repeats
+`chat_file_metadata` (`:993`). Each copy opens the path, reads the metadata off
+the open handle, rejects anything that is not a file, and takes the display name
+from the last path segment. Reading the open handle rather than the path closes
+a replacement window, and no test guards that defense. The two copies also
+disagree, because `chat_file_metadata` rejects a path with no usable final
+segment and `open_selected_files` does not. The lane waits for an owner look at
+why this one ticket never dispatches.
+
+RETIRED 2026-08-12 (forty-seventh wave, planner, read `ChatProjector::projection`
+beside `RunReducer::finish`, then ran an empty projector) — the runtime
+projection-failure gap cannot fire. `projection`
+(`src-tauri/core/src/journal/reducer.rs:613`) fails only when `finish` (`:857`)
+finds no run state, which is the empty-journal case. `accept_prompt` reaches its
+projection branch only after `prepare_new_run_*` appends `run.started`, so the
+projector always holds state there. A test seam would also prove nothing, because
+`record_persistence_failure` appends through `projector.apply` and an empty
+projector rejects that event too. The lane re-opens this only against a new
+failure route.
+
+MERGE HAZARD — every fifty-third-wave service slice edits
+`src-tauri/runtime/src/service.rs`. The configure-run slice renames the grant
+entry and edits `tests/grant.rs` and one line of `src-tauri/src/chat.rs`. The
+device-session mark slice changes `ensure_native_session`, `sign_out`, and
+`entitlement_snapshot` and edits four test binaries. The sign-in slice adds one
+function and one test binary. The trait split edits `src-tauri/src/chat.rs`,
+`src-tauri/src/test_support.rs`, and the `desktop_service.rs` test double. Each
+ticket tells the implementer to rebase on `main` before it opens the pull
+request. The 2026-08-04 silent revert came from a stale base.
+
+VERIFIED 2026-08-12 (fifty-third wave, planner, read
+`src-tauri/runtime/src/service.rs` beside `src-tauri/src/chat.rs` and
+`src-tauri/src/auth/mod.rs`, then ran `cargo test --manifest-path
+src-tauri/runtime/Cargo.toml`) — the fifty-second wave's first slice is built and
+the other three are not. `accept_prompt` (`:456`), `run_prompt` (`:674`), and
+`resume_run` (`:752`) each take `runtime_activity: &RuntimeActivityRegistry`, and
+`tests/run.rs:333` asserts the shared registry reports the active run.
+`fetch_chat_grant` (`:256`) still takes no requested workspace,
+`ensure_native_session` (`:140`) and `sign_out` (`:162`) still mark nothing, and
+no runtime sign-in entry exists.
+
+SELECTED 2026-08-12 (fifty-third wave) — four slices in priority order.
+
+1. The runtime configure-run entry, per the fifty-first-wave measurement. One
+   core predicate owns the requested-workspace rule, and the desktop and the
+   runtime both read it.
+2. The device-session marks on `ensure_native_session`, `sign_out`, and
+   `entitlement_snapshot`.
+3. The runtime sign-in entry, per the fifty-second-wave measurement.
+4. The `RunStartBoundaries` split into the Linux attach reads and the
+   run-acceptance methods, per the fifty-second-wave count.
+
+SEQUENCED 2026-08-12 (fiftieth wave, planner, read `ThreadListService`
+(`src-tauri/core/src/attach/linux.rs:853`) beside `DesktopAttachService`
+(`src-tauri/core/src/attach/desktop_service.rs:68`)) — the entry-point sweep is
+finished, and the next lane is the runtime composition of the attach seam.
+`DesktopAttachService` is generic over `RunStartBoundaries`
+(`src-tauri/core/src/run_start.rs:69`), so the runtime needs its own boundaries
+value before it can answer a dispatched attach request. That value holds the
+shared activity registry, the shared storage, and the companion registry, so it
+follows the trait split above.
+
+SEQUENCED — after the attach seam, the later extraction slices are the desktop
+client conversion and Linux user-unit registration. Each sits behind a dormant
+service entry point. The desktop stays the owner throughout. The final cutover
+slice activates the listener, approval coordinator, journal, CAS, Pi, device
+session, credentials, authorization, and permission gates together. Remote
 Control follows the cutover. User-unit registration must not precede the cutover,
 because a service that takes the instance lock first would stop the desktop
 listener.
@@ -748,6 +681,16 @@ into production, and the transcript renders each applied diff through an
 `src/lib/code-diff.js` holds the one generator configuration and its
 `rawTemplates` header, and `test/probe/code-diff.html` and
 `test/probe/applied-diff.html` drive the built bundle.
+
+MEASURED 2026-08-12 (fifty-third wave, planner, drove `test/probe/code-diff.html`
+in headless Chromium at 960x640 and measured `.d2h-file-side-diff`) — the
+`Proposed file changes` card cannot stack when it needs to. Each side measures
+312 CSS pixels with the artifact rail closed and 122 pixels with the rail open,
+and at 122 pixels the changed words `world` and `Muniment` sit outside the visible
+box. The stacking rule at `src/styles/code-diff.css:101` reads
+`@media (max-width: 720px)`, so it measures the window rather than the card. The
+window is 960 pixels wide in that state, and the rule never fires. A container
+query on the `.code-diff` wrapper is the fix.
 
 PARKED — the producer's Pi input waits on the Pi wire contract, with the ADR
 0025 consumers. ADR 0024 requires structured proposed operations from Pi
@@ -869,9 +812,9 @@ leaves the journal migration held.
 
 DO NOT RE-FILE — the per-run index build is not a defect. On a Home of 2,000
 Markdown files a release-build reindex costs 30ms once the cache holds the
-current hashes,
-and the first build costs about 600ms. `ApplicationMemoryRuntime::open_session`
-runs one build per run start, so a warm run start pays 30ms.
+current hashes, and the first build costs about 600ms.
+`ApplicationMemoryRuntime::open_session` runs one build per run start, so a warm
+run start pays 30ms.
 
 DESIGN CALL 2026-08-07 — a recall belongs in the expanded receipt record under
 the provenance line, beside the route, model, cost, and time rows, rather than in
@@ -999,7 +942,9 @@ region whose text column is 272px after its padding.
 `availableArtifactRailWidth` (`src/App.svelte:291`) already subtracts a
 `minimumThreadWidth` of 320 before it clamps, and design-spec §2 pins the rail
 between 380 and 560. The layout meets its own floor, and the empty rail is the
-Phase 4 placeholder.
+Phase 4 placeholder. A card inside that column still owes the reader a layout
+that fits 246 pixels, which is what the fifty-third-wave code-diff measurement
+records.
 
 DO NOT RE-FILE — asset weight is not worth a slice. The frontend emits one
 252,280-byte script, one 62,240-byte stylesheet, and 154,444 bytes of webfont.
@@ -1086,23 +1031,17 @@ earlier one. Requiring an up-to-date branch before merge, or a merge queue, is a
 repository-settings change that sits with the owner. The planner files no ticket
 for it.
 
-VERIFIED 2026-08-12 (fifty-second wave, planner) — `cargo test --manifest-path
+VERIFIED 2026-08-12 (fifty-third wave, planner) — `cargo test --manifest-path
 src-tauri/runtime/Cargo.toml` passes 50 tests over 25 test binaries. `npm ci`
 then `npm test` passes 928 frontend tests with 31 skipped, plus 3 browser tests.
 `npm run build` emits a 302,750-byte script, a 63,930-byte stylesheet, and three
-webfont files across two families. The extraction section above records what the
-planner read in the code. This entry replaces the earlier ledger.
+webfont files across two families. This entry replaces the earlier ledger.
 
 MEASURED 2026-08-12 (fifty-second wave, planner, read the vitest JSON report) —
 all 31 skipped frontend tests are Windows-only cases. Every one sits behind
 `it.skipIf(process.platform !== 'win32')` in `test/desktop-e2e-harness.test.js`,
 and the pull request Windows gate runs them. The skip count is the designed
 shape rather than dead coverage, so the lane files no slice for it.
-
-DONE 2026-08-12 — the runtime test binaries share one loopback HTTP stub and one
-credential fixture (MUNIDESK-1166, 1169). The fiftieth wave had measured
-`spawn_server` copied into five binaries and `read_request` into six. No test
-binary keeps a private copy now.
 
 PLANNER PROCEDURE — the planning clone ships no `node_modules`, so run `npm ci`
 before `npm test`. Without it the run dies with `vitest: not found`, which reads
@@ -1115,17 +1054,21 @@ built bundle asynchronously, so a capture without that flag shoots a blank page.
 A stray server started from another directory answers 404, and the wait then
 hangs until the timeout.
 
-MEASURED 2026-08-12 (fifty-second wave, planner) — the capture ran after
-`npm run build`, and headless Chromium shot `test/probe/onboarding.html` at
-960x640 and `test/probe/input.html` at 1100x720. The onboarding surface fits the
-minimum window with its header, its Home location field, its four folder chips,
-and its footer all on screen. The input gate renders its label, its example
-placeholder, and the separated `Deny` control beside `Submit`. Neither capture
-recorded a new visual defect, so this wave files no shell polish slice.
-
 PLANNER PROCEDURE — pick an unused port for the capture server. Port 8899 was
 already bound by another workspace in this container, and the stale server
-answered 404 for every probe path until the planner moved to 8944.
+answered 404 for every probe path until the planner moved to 8944. The
+fifty-third wave used 8951.
+
+PLANNER PROCEDURE — for a measurement that needs a click, write a short
+playwright script and run it from the repository root. Playwright is a project
+dependency rather than a global one, so a script under `/tmp` cannot import it.
+
+MEASURED 2026-08-12 (fifty-third wave, planner) — the capture ran after
+`npm run build`, and headless Chromium shot `test/probe/markdown.html` and
+`test/probe/code-diff.html` at 1100x720 and at 960x640. The Markdown reply renders
+its list, its inline code, its fenced block, and its wide table inside the thread
+column with no clipping. The code-diff capture produced the container-query
+measurement recorded in the cross-surface contracts section above.
 
 ## Stable release and distribution
 
