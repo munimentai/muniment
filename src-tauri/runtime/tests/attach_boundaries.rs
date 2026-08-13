@@ -138,7 +138,7 @@ fn runtime_boundaries_answer_all_attach_reads() {
     assert_eq!(stream.current_run_seq, current_run_seq);
 
     let subscription = boundaries.subscribe_run_commits(run_id).unwrap();
-    assert_eq!(subscription.0, current_run_seq);
+    assert_eq!(subscription.committed_high_water, current_run_seq);
     assert_eq!(
         boundaries.subscribe_run_commits("unknown-run").unwrap_err(),
         ProtocolError::thread_not_found()

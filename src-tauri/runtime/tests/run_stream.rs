@@ -59,7 +59,7 @@ fn reads_a_run_stream_and_subscribes_to_its_commits() {
     let subscription = subscribe_run_commits(Arc::clone(&storage), run_id.into())
         .unwrap()
         .expect("the file-backed journal should open a subscription");
-    assert_eq!(subscription.0, current_run_seq);
+    assert_eq!(subscription.committed_high_water, current_run_seq);
 
     drop(subscription);
     drop(storage);
