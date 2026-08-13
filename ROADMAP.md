@@ -587,10 +587,13 @@ projector always holds state there. A test seam would also prove nothing, becaus
 projector rejects that event too. The lane re-opens this only against a new
 failure route.
 
-MERGE HAZARD — the fifty-ninth wave puts two slices in
-`src-tauri/runtime/src/lib.rs` and two more in `src-tauri/core/src/attach/`. Each
-ticket tells the implementer to rebase on `main` before it opens the pull
-request. The 2026-08-04 silent revert came from a stale base.
+MERGE HAZARD — the fifty-ninth wave puts slices 1 and 2 in
+`src-tauri/runtime/src/lib.rs`. Slice 3 targets
+`src-tauri/core/src/attach/mod.rs`, slice 4 targets
+`src-tauri/core/src/attach/approval.rs`, and slice 5 targets
+`src-tauri/core/src/attach/migration_authority.rs`. Each ticket tells the
+implementer to rebase on `main` before it opens the pull request. The 2026-08-04
+silent revert came from a stale base.
 
 VERIFIED 2026-08-13 (fifty-ninth wave, planner, read
 `src-tauri/runtime/src/attach_boundaries.rs`,
