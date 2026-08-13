@@ -78,7 +78,9 @@ impl ApprovalCoordinator {
         F: Fn(&ApprovalRequest) -> bool + Send + Sync + 'static,
     {
         if let Ok(mut state) = self.state.lock() {
-            state.presenter = Some(Arc::new(presenter));
+            if !state.presenter_claimed {
+                state.presenter = Some(Arc::new(presenter));
+            }
         }
     }
 
@@ -277,6 +279,24 @@ mod tests {
         assert!(coordinator.claim_presenter(|_| true).is_none());
         drop(guard);
         assert!(coordinator.claim_presenter(|_| true).is_some());
+    }
+
+    #[test]
+    fn registration_does_not_replace_a_claimed_presenter() {
+        let coordinator = ApprovalCoordinator::default();
+        let (claimed_sender, claimed) = channel();
+        let guard = coordinator
+            .claim_presenter(move |_| claimed_sender.send(()).is_ok())
+            .unwrap();
+        coordinator.register_presenter(|_| false);
+
+        let waiter = coordinator.clone();
+        let result =
+            thread::spawn(move || waiter.request(request("claimed"), Duration::from_secs(1)));
+        claimed.recv_timeout(Duration::from_secs(1)).unwrap();
+        assert!(coordinator.decide("claimed", true));
+        assert!(result.join().unwrap());
+        drop(guard);
     }
 
     #[test]
