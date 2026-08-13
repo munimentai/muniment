@@ -10,7 +10,7 @@ use std::collections::HashMap;
 #[cfg(target_os = "linux")]
 use std::collections::{BTreeMap, BTreeSet};
 #[cfg(target_os = "linux")]
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 #[cfg(target_os = "linux")]
 use std::sync::{Arc, Condvar};
@@ -501,11 +501,17 @@ pub fn attach_pairing_decide(
 
 #[cfg(target_os = "linux")]
 fn resolve_attach_home(
+    config: &Path,
     documents: Option<PathBuf>,
     home: Option<PathBuf>,
 ) -> Result<PathBuf, ProtocolError> {
-    muniment_core::home::choose_default_home(documents, home)
-        .map_err(|_| ProtocolError::persistence_failed())
+    match muniment_core::home::configured_home(config)
+        .map_err(|_| ProtocolError::persistence_failed())?
+    {
+        Some(home) => Ok(home),
+        None => muniment_core::home::choose_default_home(documents, home)
+            .map_err(|_| ProtocolError::persistence_failed()),
+    }
 }
 
 #[cfg(target_os = "linux")]
@@ -528,7 +534,15 @@ impl<R: tauri::Runtime> TauriDesktopAttachService<R>
         workspace_contexts: WorkspaceContexts,
         client_credentials: Arc<Mutex<HashMap<String, ClientCredential>>>,
     ) -> Result<Self, ProtocolError> {
-        let home = resolve_attach_home(app.path().document_dir().ok(), app.path().home_dir().ok())?;
+        let config = app
+            .path()
+            .app_config_dir()
+            .map_err(|_| ProtocolError::persistence_failed())?;
+        let home = resolve_attach_home(
+            &config,
+            app.path().document_dir().ok(),
+            app.path().home_dir().ok(),
+        )?;
         let idempotency = IdempotencyStore::open(
             app.path()
                 .app_data_dir()
@@ -1500,16 +1514,53 @@ mod tests {
 
     #[cfg(target_os = "linux")]
     #[test]
-    fn attach_home_uses_home_once_when_documents_directory_is_absent() {
+    fn attach_home_uses_recorded_home() {
         let root = std::env::temp_dir().join(format!("muniment-attach-home-{}", Uuid::now_v7()));
-        std::fs::create_dir(&root).unwrap();
+        let config = root.join("config");
+        let recorded_home = root.join("recorded-home");
+        muniment_core::home::confirm_home(&config, &recorded_home).unwrap();
 
         assert_eq!(
-            resolve_attach_home(None, Some(root.clone())).unwrap(),
+            resolve_attach_home(
+                &config,
+                Some(root.join("documents")),
+                Some(root.join("user-home")),
+            )
+            .unwrap(),
+            recorded_home
+        );
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn attach_home_uses_default_when_home_is_not_recorded() {
+        let root = std::env::temp_dir().join(format!("muniment-attach-home-{}", Uuid::now_v7()));
+        let config = root.join("config");
+        std::fs::create_dir_all(&config).unwrap();
+
+        assert_eq!(
+            resolve_attach_home(&config, None, Some(root.clone())).unwrap(),
             root.join("Muniment")
         );
 
-        std::fs::remove_dir(root).unwrap();
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn attach_home_rejects_unreadable_recorded_home() {
+        let root = std::env::temp_dir().join(format!("muniment-attach-home-{}", Uuid::now_v7()));
+        let config = root.join("config");
+        std::fs::create_dir_all(config.join("home.json")).unwrap();
+
+        assert_eq!(
+            resolve_attach_home(&config, Some(root.join("documents")), Some(root.clone())),
+            Err(ProtocolError::persistence_failed())
+        );
+
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[cfg(target_os = "linux")]
