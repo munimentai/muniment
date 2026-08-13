@@ -19,8 +19,9 @@ them must exercise the real contracts. It must add no mocked production path.
 > contracts section. The eleventh took the stable release and distribution
 > section. The twelfth took the desktop QA automation section. The thirteenth
 > and the fifteenth both took the ADR 0012 runtime-service extraction section.
-> The fourteenth took the Phase 2 client core section. That extraction section
-> grows every wave, so it stays the next compaction target.
+> The fourteenth took the Phase 2 client core section. The sixteenth took that
+> extraction section again. It grows every wave, so it stays the next compaction
+> target.
 
 ## M0 — Scaffold (done 2026-07-09)
 
@@ -387,24 +388,22 @@ presentation state. Both processes share ADR 0009's one per-profile instance
 lock, and the amendment pins the quiesce, handoff-nonce, and readiness-probe rules
 that keep a temporary interval with no owner but never an interval with two.
 
-DONE — the instance lock, the crate, and its packaging landed (MUNIDESK-868, 869,
-894, 908, 929, 954). `AttachFilesystem::acquire_instance_lock` is the core
-primitive, and `start_attach_listener` takes it before it binds.
+DONE — the instance lock, the crate, its packaging, and thirty-four core moves
+landed (MUNIDESK-868 through 954). `AttachFilesystem::acquire_instance_lock` is
+the core primitive, and `start_attach_listener` takes it before it binds.
 `src-tauri/runtime/` holds the `muniment-runtime` binary crate with its own
 format, lint, test, and dependency-boundary CI steps
-(`test/runtime-dependency-boundary.sh`). The binary answers `--version`,
-`--help`, and `-h`, rejects an unknown argument before the lock, releases the lock
-on `SIGTERM` and `SIGINT`, and backs off instead of polling every 25 milliseconds.
-The Linux package ships it beside `muniment-acp`, and the installed nightly reads
-its `--version`. The crate took no new dependency for any of it.
-
-DONE — thirty-four core moves landed one slice at a time, from the approval
-coordinator and the two credential stores through the native device session, the
-entitlement snapshot tracker, the cloud chat grant, the protected prompt store,
-the memory runtime, the workspace-context map, and the journal read and append
-paths, to the run-start coordinator, the coordinate loop, `pi_execution.rs`,
-`chat_resume.rs`, `run_preparation.rs`, and the desktop attach service seam. Each
-desktop call site keeps a thin wrapper, so no caller changed shape.
+(`test/runtime-dependency-boundary.sh`), it answers `--version`, `--help`, and
+`-h`, it rejects an unknown argument before the lock, it releases the lock on
+`SIGTERM` and `SIGINT`, and it took no new dependency. The Linux package ships it
+beside `muniment-acp`, and the installed nightly reads its `--version`. The core
+moves ran one slice at a time, from the approval coordinator and the two
+credential stores through the device session, the entitlement snapshot tracker,
+the cloud chat grant, the protected prompt store, the memory runtime, the
+workspace-context map, and the journal paths, to the run-start coordinator, the
+coordinate loop, `pi_execution.rs`, `chat_resume.rs`, `run_preparation.rs`, and
+the desktop attach service seam. Each desktop call site keeps a thin wrapper, so
+no caller changed shape.
 
 LESSON 2026-08-07 — the permission gate coordination rules moved into
 muniment-core on the fourth filing (MUNIDESK-982). Naming the target module, the
@@ -426,9 +425,9 @@ bytes and the deadline at 60,000 milliseconds and refuse a second preparation.
 `ErrorCode::MigrationNotReady` answers a temporary quiesce blocker, where
 `unsupported_operation` reads as a stale desktop. `control_desktop_migration`
 (`src-tauri/src/attach_service.rs:65`) answers the request,
-`release_prepared_handoff` (`:119`) stops the listener and probes the endpoint
-through `probe_handoff`, and `cancel_handoff_and_restart` (`:140`) restarts the
-listener on a failed probe. `MigrationControlClient::control_migration`
+`release_prepared_handoff` (`:119`) stops the listener and probes the endpoint,
+and `cancel_handoff_and_restart` (`:140`) restarts the listener on a failed probe.
+`MigrationControlClient::control_migration`
 (`src-tauri/attach/src/client.rs:1351`) is the client half.
 `run_migration_takeover` (`src-tauri/runtime/src/migration.rs:62`) is the runtime
 composition, and `run_handoff_listener`
@@ -436,57 +435,59 @@ composition, and `run_handoff_listener`
 Nothing wires the takeover into `main`, because a takeover today would leave
 companions a listener that answers only readiness probes.
 
-DONE — the attach listener reports its own state truthfully (MUNIDESK-1001, 1007,
-1015). `attach_listener_start_diagnostic`
-(`src-tauri/core/src/attach/linux.rs:58`) names the filesystem, instance-lock, and
-bind failures. `AttachListenerLifecycle`
+DONE — the attach listener reports its own state truthfully, and one API base-URL
+rule serves the whole workspace (MUNIDESK-1001, 1007, 1015, 1103).
+`attach_listener_start_diagnostic` (`src-tauri/core/src/attach/linux.rs:58`) names
+the filesystem, instance-lock, and bind failures, `AttachListenerLifecycle`
 (`src-tauri/core/src/attach/listener_lifecycle.rs`) carries the pending,
 listening, failed, and stopped records, and `Connected programs` says the listener
-did not start instead of rendering an empty list.
-
-DONE 2026-08-11 — one API base-URL rule serves the whole workspace
-(MUNIDESK-1103). `api_base_url` (`src-tauri/core/src/auth/mod.rs:34`) reads
-`MUNIMENT_API_BASE_URL`, then `MUNIMENT_ISSUER`, then the shipped default, and
-every call site reads it.
+did not start instead of rendering an empty list. `api_base_url`
+(`src-tauri/core/src/auth/mod.rs:34`) reads `MUNIMENT_API_BASE_URL`, then
+`MUNIMENT_ISSUER`, then the shipped default, and every call site reads it.
 
 DONE — the dormant runtime service entry sweep is finished, and every attach
-operation has a runtime twin (MUNIDESK-1150 through 1171).
+operation has a runtime twin (MUNIDESK-1150 through 1173).
 `src-tauri/runtime/src/service.rs` opens one shared profile storage and reconciles
 interrupted runs, answers a fresh native session, reports the stored session
 status, projects the signed entitlement snapshot and reports a version change,
 revokes the server session and clears the local one on sign-out, lists this
-account's native installations, fetches and validates a cloud chat grant,
-scaffolds the cross-project Home, records a companion workspace and its two
-canonical directories, lists and revokes paired companions, lists and opens one
-subject's threads, creates, renames, and deletes an owned thread, sweeps expired
-terminal runs and their protected prompts, reads one page of a run stream and
-subscribes to that run's commits, accepts one prompt and drives it, queues one
-steer or follow-up message, cancels the active run in one workspace, answers one
-permission gate, and resumes an interrupted run. The run entries take the shared
-storage, the shared run control slot, the shared Pi runtime slot, the shared
-session-thread tracker, the shared activity registry, and a config directory
-beside the profile directory, so every mark lands where `evaluate_quiesce` can
-read it (MUNIDESK-1171). `accept_prompt` (`service.rs:456`) returns the run id,
-the thread id, the projected attachments, the committed sequence, and the
-acceptance time, `drive_prompt` (`:643`) drives the accepted run, and
-`answer_permission` (`:734`) returns the committed run sequence the attach reply
-needs. A preparation failure after the prepared append records itself through
-`record_persistence_failure`, so no run reaches reconciliation with no terminal
-event. `RuntimeChatEventSink` (`src-tauri/runtime/src/sink.rs`) implements
-`ChatEventSink` and `PiLaunchBoundaries`, answers the `muniment-runtime`
-provenance, owns the run's memory runtime, and keeps returning success after a
-subscriber goes away, because companions read run events through the journal.
-`src-tauri/runtime/tests/` proves each entry against a live run, and
+account's native installations, scaffolds the cross-project Home, records a
+companion workspace and its two canonical directories, lists and revokes paired
+companions, lists and opens one subject's threads, creates, renames, and deletes
+an owned thread, sweeps expired terminal runs and their protected prompts, reads
+one page of a run stream and subscribes to that run's commits, accepts one prompt
+and drives it, queues one steer or follow-up message, cancels the active run in
+one workspace, answers one permission gate, and resumes an interrupted run. The
+run entries take the shared storage, the shared run control slot, the shared Pi
+runtime slot, the shared session-thread tracker, the shared activity registry, and
+a config directory beside the profile directory, so every mark lands where
+`evaluate_quiesce` can read it (MUNIDESK-1171). `accept_prompt` (`service.rs:470`)
+returns the run id, the thread id, the projected attachments, the committed
+sequence, and the acceptance time, `drive_prompt` (`:657`) drives the accepted
+run, and `answer_permission` (`:748`) returns the committed run sequence the
+attach reply needs. A preparation failure after the prepared append records itself
+through `record_persistence_failure`, so no run reaches reconciliation with no
+terminal event. `RuntimeChatEventSink` (`src-tauri/runtime/src/sink.rs`)
+implements `ChatEventSink` and `PiLaunchBoundaries`, answers the
+`muniment-runtime` provenance, owns the run's memory runtime, and keeps returning
+success after a subscriber goes away, because companions read run events through
+the journal. `src-tauri/runtime/tests/` proves each entry against a live run, and
 `tests/common/mod.rs` owns the shared loopback HTTP stub, both credential
 fixtures, and the warm Pi stub staging. Nothing in `main` calls any entry.
 
-MEASURED 2026-08-12 (fifty-first wave, planner, read `fetch_chat_grant`
-(`src-tauri/runtime/src/service.rs:256`) beside `configure_run`
-(`src-tauri/src/chat.rs:250`)) — the runtime grant entry applies no
-requested-workspace check. The desktop rejects a requested workspace that differs
-from `grant.workspace`, and the ADR 0009 namespace amendment makes the signed
-`grant.workspace` the only workspace authority. A dispatched attach `run.start`
-would reach the runtime with a companion-chosen workspace and meet no such check.
+DONE 2026-08-12 — the runtime grant entry enforces the ADR 0009 workspace rule
+(MUNIDESK-1173). `configure_run` (`src-tauri/runtime/src/service.rs:264`) fetches
+the grant, validates it, and rejects a requested workspace the signed
+`grant.workspace` does not authorize. `grant_authorizes_workspace` is the one core
+predicate, and the desktop `configure_run` (`src-tauri/src/chat.rs:250`) reads the
+same predicate.
+
+DONE 2026-08-12 — `RunStartBoundaries` is split (MUNIDESK-1174).
+`RunAttachBoundaries` (`src-tauri/core/src/run_start.rs:69`) holds the six Linux
+attach reads over the journal alone, and `RunStartBoundaries` (`:112`) holds the
+run-acceptance methods. `DesktopAttachService` takes both bounds
+(`src-tauri/core/src/attach/desktop_service.rs:81`), so the runtime can answer the
+attach reads before it answers run acceptance.
 
 MEASURED 2026-08-12 (fifty-second wave, planner, read the runtime device-session
 entries beside `AuthState` (`src-tauri/src/auth/mod.rs:88`)) — the runtime
@@ -495,19 +496,20 @@ desktop holds `run_native_sign_in` (`src-tauri/core/src/auth/native_sign_in.rs:4
 through `sign_in_blocking` (`src-tauri/src/auth/mod.rs:192`), which is the last
 ADR 0012 device-session capability with no runtime twin. That core function takes
 a `&dyn BrowserOpener`, so a runtime entry passes the opener in rather than
-spawning a browser itself. The desktop also marks every refresh and every
-authentication operation, where `ensure_native_session`
-(`src-tauri/runtime/src/service.rs:140`) and `sign_out` (`:162`) mark nothing.
+spawning a browser itself. The desktop marks a refresh with `mark_session_refresh`
+and a sign-in or sign-out with `mark_authentication_operation`, and it leaves the
+local `auth_status` read unmarked. `ensure_native_session`
+(`src-tauri/runtime/src/service.rs:148`) and `sign_out` (`:170`) mark nothing.
 
-MEASURED 2026-08-12 (fifty-second wave, planner, counted the trait) —
-`RunStartBoundaries` declares 22 methods, and 19 of them carry no default. A
-partial implementation therefore does not compile, so "split by method group"
-means splitting the trait itself before the runtime implements it. The Linux
-attach reads (`list_threads`, `open_thread`, `stream_run`,
-`subscribe_run_commits`, `queue_attach_permission_answer`, `create_thread`) form
-one group over the journal alone. The run-acceptance methods form the other. That
-split edits `src-tauri/src/chat.rs`, `src-tauri/src/test_support.rs`, and the
-`desktop_service.rs` test double.
+MEASURED 2026-08-12 (fifty-fourth wave, planner, counted lines and merges) —
+`src-tauri/runtime/src/service.rs` is the extraction lane's merge chokepoint. The
+file holds 861 lines, and 15 of the last 40 merges into `main` edited it. Every
+selected service slice therefore rebases against the slice before it, and the
+2026-08-04 silent revert came from exactly that shape. Splitting the module by
+concern, with `service::*` re-exports so no caller changes, is one slice. It is
+not selected while three service slices are open, because the split would move
+the lines those slices edit. The lane files it in the first wave that opens with
+no open service slice.
 
 MEASURED 2026-08-12 (thirty-ninth wave, planner, read the runtime manifest beside
 `test/runtime-dependency-boundary.sh`) — the runtime crate cannot build a
@@ -553,47 +555,42 @@ projector always holds state there. A test seam would also prove nothing, becaus
 projector rejects that event too. The lane re-opens this only against a new
 failure route.
 
-MERGE HAZARD — every fifty-third-wave service slice edits
-`src-tauri/runtime/src/service.rs`. The configure-run slice renames the grant
-entry and edits `tests/grant.rs` and one line of `src-tauri/src/chat.rs`. The
-device-session mark slice changes `ensure_native_session`, `sign_out`, and
-`entitlement_snapshot` and edits four test binaries. The sign-in slice adds one
-function and one test binary. The trait split edits `src-tauri/src/chat.rs`,
-`src-tauri/src/test_support.rs`, and the `desktop_service.rs` test double. Each
-ticket tells the implementer to rebase on `main` before it opens the pull
-request. The 2026-08-04 silent revert came from a stale base.
+MERGE HAZARD — every fifty-fourth-wave service slice edits
+`src-tauri/runtime/src/service.rs`. The device-session mark slice changes
+`ensure_native_session`, `sign_out`, and `entitlement_snapshot` and edits four
+test binaries. The sign-in slice adds one function and one test binary. The
+attach-boundaries slice adds one module and touches `lib.rs` alone. Each ticket
+tells the implementer to rebase on `main` before it opens the pull request. The
+2026-08-04 silent revert came from a stale base.
 
-VERIFIED 2026-08-12 (fifty-third wave, planner, read
-`src-tauri/runtime/src/service.rs` beside `src-tauri/src/chat.rs` and
+VERIFIED 2026-08-12 (fifty-fourth wave, planner, read
+`src-tauri/runtime/src/service.rs` beside `src-tauri/core/src/run_start.rs` and
 `src-tauri/src/auth/mod.rs`, then ran `cargo test --manifest-path
-src-tauri/runtime/Cargo.toml`) — the fifty-second wave's first slice is built and
-the other three are not. `accept_prompt` (`:456`), `run_prompt` (`:674`), and
-`resume_run` (`:752`) each take `runtime_activity: &RuntimeActivityRegistry`, and
-`tests/run.rs:333` asserts the shared registry reports the active run.
-`fetch_chat_grant` (`:256`) still takes no requested workspace,
-`ensure_native_session` (`:140`) and `sign_out` (`:162`) still mark nothing, and
-no runtime sign-in entry exists.
+src-tauri/runtime/Cargo.toml`) — two of the fifty-third wave's four slices are
+built and two are not. `configure_run` (`:264`) takes the requested workspace and
+`RunAttachBoundaries` is its own trait. `ensure_native_session` (`:148`) and
+`sign_out` (`:170`) still mark nothing, and no runtime sign-in entry exists. The
+runtime suite passes 50 tests over 26 test binaries.
 
-SELECTED 2026-08-12 (fifty-third wave) — four slices in priority order.
+SELECTED 2026-08-12 (fifty-fourth wave) — three slices in priority order.
 
-1. The runtime configure-run entry, per the fifty-first-wave measurement. One
-   core predicate owns the requested-workspace rule, and the desktop and the
-   runtime both read it.
-2. The device-session marks on `ensure_native_session`, `sign_out`, and
-   `entitlement_snapshot`.
-3. The runtime sign-in entry, per the fifty-second-wave measurement.
-4. The `RunStartBoundaries` split into the Linux attach reads and the
-   run-acceptance methods, per the fifty-second-wave count.
+1. The device-session marks on `ensure_native_session` and `sign_out`, with the
+   entitlement snapshot inheriting the refresh mark from its own session read.
+2. The runtime sign-in entry, per the fifty-second-wave measurement. The caller
+   passes the browser opener, and the entry marks an authentication operation.
+3. The runtime boundaries value that answers `RunAttachBoundaries` over the
+   shared storage and the shared run control slot.
 
-SEQUENCED 2026-08-12 (fiftieth wave, planner, read `ThreadListService`
-(`src-tauri/core/src/attach/linux.rs:853`) beside `DesktopAttachService`
-(`src-tauri/core/src/attach/desktop_service.rs:68`)) — the entry-point sweep is
-finished, and the next lane is the runtime composition of the attach seam.
-`DesktopAttachService` is generic over `RunStartBoundaries`
-(`src-tauri/core/src/run_start.rs:69`), so the runtime needs its own boundaries
-value before it can answer a dispatched attach request. That value holds the
-shared activity registry, the shared storage, and the companion registry, so it
-follows the trait split above.
+SEQUENCED 2026-08-12 (fifty-fourth wave, planner, read `TauriRunStartBoundaries`
+(`src-tauri/src/chat.rs:127`) beside `DesktopAttachService`
+(`src-tauri/core/src/attach/desktop_service.rs:81`)) — the trait split landed, so
+the runtime composition of the attach seam is the open lane.
+`DesktopAttachService` takes `RunStartBoundaries + RunAttachBoundaries`. The
+attach-read half comes first, because its six methods read the journal alone. The
+run-acceptance half follows on the same value, and it holds the shared activity
+registry, the shared Pi runtime slot, the memory runtime, and the companion
+registry. Only after both halves does a runtime `DesktopAttachService` answer a
+dispatched attach request.
 
 SEQUENCED — after the attach seam, the later extraction slices are the desktop
 client conversion and Linux user-unit registration. Each sits behind a dormant
@@ -682,15 +679,26 @@ into production, and the transcript renders each applied diff through an
 `rawTemplates` header, and `test/probe/code-diff.html` and
 `test/probe/applied-diff.html` drive the built bundle.
 
-MEASURED 2026-08-12 (fifty-third wave, planner, drove `test/probe/code-diff.html`
-in headless Chromium at 960x640 and measured `.d2h-file-side-diff`) — the
-`Proposed file changes` card cannot stack when it needs to. Each side measures
-312 CSS pixels with the artifact rail closed and 122 pixels with the rail open,
-and at 122 pixels the changed words `world` and `Muniment` sit outside the visible
-box. The stacking rule at `src/styles/code-diff.css:101` reads
-`@media (max-width: 720px)`, so it measures the window rather than the card. The
-window is 960 pixels wide in that state, and the rule never fires. A container
-query on the `.code-diff` wrapper is the fix.
+DONE 2026-08-12 — a code card sizes its layout from its own width
+(MUNIDESK-1175). `src/styles/code-diff.css:108` reads
+`@container (width < 480px)`, so the `Proposed file changes` card stacks its two
+sides when the card is narrow rather than when the window is narrow. The
+fifty-third wave measured each side at 122 CSS pixels with the artifact rail open
+at a 960 pixel window, where the old `max-width: 720px` media query never fired.
+
+MEASURED 2026-08-12 (fifty-fourth wave, planner, read `src/App.svelte:922` and
+`:935` beside `load_applied_code_diff`
+(`src-tauri/core/src/code_diff_journal.rs:498`)) — both unavailable code-diff
+states leave the reader guessing. A stored diff body goes missing when its CAS
+object is gone or its recorded hash no longer matches, and the journal event
+survives either way. The applied card then says `The applied changes cannot be
+shown.`, which reads as a failed write, when the event proves the write happened.
+The gate card says `The proposed changes cannot be shown.` and drops its `Apply`
+control, because `:971` gates that control on `gate.diff`. The user meets an
+approval card with one `Deny` control, no approve control, and no sentence
+explaining that Muniment refuses to apply a change it cannot show. DESIGN.md asks
+an error message to name the failure and the control beside it to name the
+action.
 
 PARKED — the producer's Pi input waits on the Pi wire contract, with the ADR
 0025 consumers. ADR 0024 requires structured proposed operations from Pi
@@ -946,6 +954,18 @@ Phase 4 placeholder. A card inside that column still owes the reader a layout
 that fits 246 pixels, which is what the fifty-third-wave code-diff measurement
 records.
 
+MEASURED 2026-08-12 (fifty-fourth wave, planner, opened the profile popover in
+headless Chromium at three window sizes and measured `.access-popover` beside
+`.access-content`) — the popover hides its last section at every window size.
+`src/lib/AccessPanel.svelte:334` caps the panel at `min(560px, 70vh)`, and the
+content region needs 495 pixels beside a fixed header and a fixed footer. At
+960x640 the panel measures 448 pixels tall, the content region shows 339 of its
+495 pixels, and 156 pixels stay below the fold. The whole `Voice shortcut`
+section, its `Change` control, and its `Restore default` control sit outside the
+panel. The panel also leaves 111 unused pixels above itself and 81 below. At
+1100x720 the hidden amount is 100 pixels, and at 1440x900 it is still 44. The
+`560px` literal, not the viewport, is what binds on a large window.
+
 DO NOT RE-FILE — asset weight is not worth a slice. The frontend emits one
 252,280-byte script, one 62,240-byte stylesheet, and 154,444 bytes of webfont.
 `marked` and DOMPurify account for roughly 55,000 bytes. Tauri serves those bytes
@@ -1031,10 +1051,10 @@ earlier one. Requiring an up-to-date branch before merge, or a merge queue, is a
 repository-settings change that sits with the owner. The planner files no ticket
 for it.
 
-VERIFIED 2026-08-12 (fifty-third wave, planner) — `cargo test --manifest-path
-src-tauri/runtime/Cargo.toml` passes 50 tests over 25 test binaries. `npm ci`
+VERIFIED 2026-08-12 (fifty-fourth wave, planner) — `cargo test --manifest-path
+src-tauri/runtime/Cargo.toml` passes 50 tests over 26 test binaries. `npm ci`
 then `npm test` passes 928 frontend tests with 31 skipped, plus 3 browser tests.
-`npm run build` emits a 302,750-byte script, a 63,930-byte stylesheet, and three
+`npm run build` emits a 302,750-byte script, a 63,970-byte stylesheet, and three
 webfont files across two families. This entry replaces the earlier ledger.
 
 MEASURED 2026-08-12 (fifty-second wave, planner, read the vitest JSON report) —
@@ -1057,18 +1077,19 @@ hangs until the timeout.
 PLANNER PROCEDURE — pick an unused port for the capture server. Port 8899 was
 already bound by another workspace in this container, and the stale server
 answered 404 for every probe path until the planner moved to 8944. The
-fifty-third wave used 8951.
+fifty-third wave used 8951, and the fifty-fourth used 8962.
 
 PLANNER PROCEDURE — for a measurement that needs a click, write a short
 playwright script and run it from the repository root. Playwright is a project
 dependency rather than a global one, so a script under `/tmp` cannot import it.
+Delete the script before the wave ends, so the clone stays clean.
 
-MEASURED 2026-08-12 (fifty-third wave, planner) — the capture ran after
-`npm run build`, and headless Chromium shot `test/probe/markdown.html` and
-`test/probe/code-diff.html` at 1100x720 and at 960x640. The Markdown reply renders
-its list, its inline code, its fenced block, and its wide table inside the thread
-column with no clipping. The code-diff capture produced the container-query
-measurement recorded in the cross-surface contracts section above.
+MEASURED 2026-08-12 (fifty-fourth wave, planner) — the capture ran after
+`npm run build`, and headless Chromium shot the history, permission, editor,
+applied-diff, code-diff-unavailable, onboarding, and signed-out fixtures at
+1100x720 and at 960x640. The applied diff stacks correctly at the minimum window
+after MUNIDESK-1175. The two unavailable code-diff states and the profile popover
+produced the measurements recorded above.
 
 ## Stable release and distribution
 
