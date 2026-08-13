@@ -5,7 +5,7 @@ use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
 
 use muniment_core::attach::linux::{ThreadListRequest, ThreadOpenRequest};
-use muniment_core::attach::{ProtocolError, RuntimeActivityRegistry};
+use muniment_core::attach::{ProtocolError, RuntimeActivityRegistry, SignedWorkspaceApproval};
 use muniment_core::journal::Provenance;
 use muniment_core::memory_runtime::ApplicationMemoryRuntime;
 use muniment_core::permission_gate::ChatPermissionAnswer;
@@ -62,7 +62,8 @@ fn runtime_boundaries_answer_all_attach_reads() {
             profile.join("memory"),
         )),
         runtime_activity,
-        SessionThread::default(),
+        SignedWorkspaceApproval::default(),
+        Arc::new(SessionThread::default()),
     );
 
     let created_thread = boundaries
@@ -161,7 +162,23 @@ fn runtime_boundaries_record_and_clear_the_owner_attach_approval() {
     let temporary_profile = TemporaryProfile::new("attach-approval", false);
     let profile = temporary_profile.profile.clone();
     let config = temporary_profile.config.clone();
+    let approval = SignedWorkspaceApproval::default();
+    let session_thread = Arc::new(SessionThread::default());
     let boundaries = RuntimeAttachBoundaries::new(
+        open_profile_storage(&profile).unwrap(),
+        Arc::new(Mutex::new(None)),
+        profile.clone(),
+        config.clone(),
+        Arc::new(Mutex::new(None::<PiRuntime>)),
+        Arc::new(ApplicationMemoryRuntime::new(
+            config.clone(),
+            profile.join("memory"),
+        )),
+        RuntimeActivityRegistry::new(),
+        approval.clone(),
+        Arc::clone(&session_thread),
+    );
+    let sibling = RuntimeAttachBoundaries::new(
         open_profile_storage(&profile).unwrap(),
         Arc::new(Mutex::new(None)),
         profile.clone(),
@@ -172,7 +189,8 @@ fn runtime_boundaries_record_and_clear_the_owner_attach_approval() {
             profile.join("memory"),
         )),
         RuntimeActivityRegistry::new(),
-        SessionThread::default(),
+        approval,
+        Arc::clone(&session_thread),
     );
     assert!(boundaries.attach_approval().is_none());
 
@@ -192,11 +210,17 @@ fn runtime_boundaries_record_and_clear_the_owner_attach_approval() {
         .unwrap();
     server.join().unwrap();
 
-    let approval = boundaries.attach_approval().unwrap();
+    let approval = sibling.attach_approval().unwrap();
     assert_eq!(approval.profile, "desktop-owner");
     assert_eq!(approval.workspace, "workspace-a");
 
     boundaries.clear_workspace();
-    assert!(boundaries.attach_approval().is_none());
+    assert!(sibling.attach_approval().is_none());
+
+    session_thread.record("thread-a".into(), "workspace-a", Some("owner"));
+    assert_eq!(
+        session_thread.offered("workspace-a", Some("owner")),
+        muniment_core::session_thread::OfferedThread::Selected("thread-a".into())
+    );
     std::env::remove_var("MUNIMENT_API_BASE_URL");
 }

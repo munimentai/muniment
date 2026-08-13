@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use muniment_core::attach::{
-    save_client_credentials, ClientCredential, RuntimeActivityRegistry,
+    save_client_credentials, ClientCredential, RuntimeActivityRegistry, SignedWorkspaceApproval,
     COMPANION_CREDENTIAL_FILE_NAME,
 };
 use muniment_core::memory_runtime::ApplicationMemoryRuntime;
@@ -30,7 +30,8 @@ fn boundaries(profile: &TemporaryProfile) -> RuntimeAttachBoundaries {
             profile.profile.join("memory"),
         )),
         RuntimeActivityRegistry::new(),
-        SessionThread::default(),
+        SignedWorkspaceApproval::default(),
+        Arc::new(SessionThread::default()),
     )
 }
 
