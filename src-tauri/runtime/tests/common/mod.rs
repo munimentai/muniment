@@ -5,8 +5,9 @@ use std::fs;
 use std::hash::{Hash, Hasher};
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::thread;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -15,6 +16,47 @@ use muniment_core::chat_grant::ChatGrant;
 use muniment_core::sidecar::pi_install::{PiArtifactDescriptor, PI_ARTIFACT};
 
 const DEVICE_ID: &str = "10000000-0000-4000-8000-000000000001";
+static TEMPORARY_PROFILE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+
+pub struct TemporaryProfile {
+    pub root: PathBuf,
+    pub profile: PathBuf,
+    pub config: PathBuf,
+}
+
+impl TemporaryProfile {
+    pub fn new(test_name: &str, scaffold_home: bool) -> Self {
+        let sequence = TEMPORARY_PROFILE_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+        let root = std::env::temp_dir().join(format!(
+            "muniment-runtime-{test_name}-{}-{sequence}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        let profile = root.join("profile");
+        let config = root.join("config");
+        let temporary_profile = Self {
+            root,
+            profile,
+            config,
+        };
+        fs::create_dir_all(&temporary_profile.profile).unwrap();
+        fs::create_dir_all(&temporary_profile.config).unwrap();
+        if scaffold_home {
+            muniment_core::home::confirm_home(
+                &temporary_profile.config,
+                &temporary_profile.root.join("home"),
+            )
+            .unwrap();
+        }
+        temporary_profile
+    }
+}
+
+impl Drop for TemporaryProfile {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.root);
+    }
+}
 
 pub fn fixture_grant() -> ChatGrant {
     ChatGrant {

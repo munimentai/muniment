@@ -1,7 +1,6 @@
 #![cfg(target_os = "linux")]
 
 use std::collections::BTreeMap;
-use std::fs;
 use std::io::{Read, Write};
 use std::net::TcpListener;
 use std::sync::{Arc, Mutex};
@@ -9,7 +8,6 @@ use std::sync::{Arc, Mutex};
 use muniment_core::attach::RuntimeActivityRegistry;
 use muniment_core::auth::{KeyringNativeCredentialStore, NativeCredentialStore};
 use muniment_core::chat_view::SelectedFile;
-use muniment_core::home::confirm_home;
 use muniment_core::journal::thread_mutation::create_thread_now;
 use muniment_core::journal::Provenance;
 use muniment_core::memory_runtime::ApplicationMemoryRuntime;
@@ -21,7 +19,7 @@ use muniment_core::session_thread::SessionThread;
 use muniment_runtime::{open_profile_storage, RuntimeAttachBoundaries};
 
 mod common;
-use common::credentials;
+use common::{credentials, TemporaryProfile};
 
 #[test]
 fn runtime_boundaries_prepare_a_desktop_run() {
@@ -46,15 +44,10 @@ fn runtime_boundaries_prepare_a_desktop_run() {
         }
     });
 
-    let root = std::env::temp_dir().join(format!(
-        "muniment-runtime-run-boundaries-{}",
-        std::process::id()
-    ));
-    let _ = fs::remove_dir_all(&root);
-    let profile = root.join("profile");
-    let config = root.join("config");
-    fs::create_dir_all(&profile).unwrap();
-    confirm_home(&config, &root.join("home")).unwrap();
+    let temporary_profile = TemporaryProfile::new("run-boundaries", true);
+    let root = temporary_profile.root.clone();
+    let profile = temporary_profile.profile.clone();
+    let config = temporary_profile.config.clone();
     let storage = open_profile_storage(&profile).unwrap();
     let thread_id = create_thread_now(
         &mut storage.lock().unwrap().journal,
@@ -133,7 +126,6 @@ fn runtime_boundaries_prepare_a_desktop_run() {
     responses.join().unwrap();
     store.clear_session().unwrap();
     std::env::remove_var("MUNIMENT_API_BASE_URL");
-    fs::remove_dir_all(root).unwrap();
 }
 
 fn session_body() -> String {

@@ -1,4 +1,3 @@
-use std::fs;
 use std::sync::{Arc, Mutex};
 
 use muniment_core::attach::RuntimeActivityRegistry;
@@ -6,18 +5,14 @@ use muniment_core::journal::EventPayload;
 use muniment_runtime::{accept_prompt, open_profile_storage};
 
 mod common;
-use common::fixture_grant;
+use common::{fixture_grant, TemporaryProfile};
 
 #[test]
 fn memory_session_failure_ends_the_prepared_run() {
     muniment_core::chat_prompt::use_mock_keyring_for_tests();
-    let temporary_root = std::env::temp_dir().join(format!(
-        "muniment-runtime-preparation-failure-{}",
-        std::process::id()
-    ));
-    let profile = temporary_root.join("profile");
-    let config = temporary_root.join("config");
-    fs::create_dir_all(&profile).unwrap();
+    let temporary_profile = TemporaryProfile::new("preparation-failure", false);
+    let profile = temporary_profile.profile.clone();
+    let config = temporary_profile.config.clone();
     let storage = open_profile_storage(&profile).unwrap();
     let active = Arc::new(Mutex::new(None));
     let runtime_activity = RuntimeActivityRegistry::new();
@@ -72,6 +67,4 @@ fn memory_session_failure_ends_the_prepared_run() {
         .all(|event| event.event_type != "run.needs_attention"));
     drop(events);
     drop(reopened);
-
-    fs::remove_dir_all(temporary_root).unwrap();
 }
