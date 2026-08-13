@@ -65,16 +65,18 @@ describe('code diff browser styles', () => {
     })
   }
 
-  it('stacks side-by-side panels in the narrow viewport', () => {
+  it('stacks panels below the card threshold and keeps them side-by-side at it', () => {
     mountDiff()
+    const card = document.querySelector('.code-diff')
+    const files = document.querySelector('.d2h-files-diff')
     const panels = [...document.querySelectorAll('.d2h-file-side-diff')]
-    const first = panels[0].getBoundingClientRect()
-    const second = panels[1].getBoundingClientRect()
 
-    expect(document.documentElement.clientWidth).toBeLessThanOrEqual(720)
-    expect(getComputedStyle(document.querySelector('.d2h-files-diff')).display).toBe('block')
-    expect(first.width).toBeGreaterThan(0)
-    expect(second.top).toBeGreaterThanOrEqual(first.bottom)
-    expect(second.width).toBeCloseTo(first.width, 0)
+    card.style.width = '479px'
+    expect(getComputedStyle(files).display).toBe('block')
+    expect(panels[1].getBoundingClientRect().top).toBeGreaterThanOrEqual(panels[0].getBoundingClientRect().bottom)
+
+    card.style.width = '480px'
+    expect(getComputedStyle(files).display).toBe('flex')
+    expect(panels[1].getBoundingClientRect().top).toBeCloseTo(panels[0].getBoundingClientRect().top, 0)
   })
 })

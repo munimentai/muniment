@@ -1,5 +1,9 @@
 @import 'diff2html/bundles/css/diff2html.min.css';
 
+.code-diff {
+  container-type: inline-size;
+}
+
 .code-diff .d2h-wrapper {
   --d2h-bg-color: var(--surface);
   --d2h-border-color: var(--border);
@@ -103,7 +107,7 @@
   overflow-x: auto;
 }
 
-@media (max-width: 720px) {
+@container (width < 480px) {
   .code-diff .d2h-files-diff {
     display: block;
   }
