@@ -12,6 +12,9 @@ use muniment_core::pi_launch::{
 use muniment_core::run_events::{ChatEvent, ChatEventSink};
 use muniment_runtime::{open_profile_storage, RuntimeChatEventSink};
 
+mod common;
+use common::fixture_grant;
+
 static NEXT_DIRECTORY: AtomicU64 = AtomicU64::new(0);
 
 struct ProfileDirectory(PathBuf);
@@ -51,11 +54,8 @@ fn event() -> ChatEvent {
 fn grant() -> ChatGrant {
     ChatGrant {
         workspace: "/work".into(),
-        gateway_url: "https://gateway.example.com".into(),
         virtual_key: "secret-key".into(),
-        model: None,
-        minimum_cacheable_prefix_characters: 8_192,
-        receipt_url: "https://receipts.example.com".into(),
+        ..fixture_grant()
     }
 }
 
