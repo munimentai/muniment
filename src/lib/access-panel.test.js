@@ -66,7 +66,7 @@ afterEach(() => {
 
 describe('access popover layout', () => {
   it('bounds the column while only its content region scrolls', () => {
-    expect(rules.get('.access-popover')).toMatch(/max-height:\s*min\(\d+px,\s*70vh\)/)
+    expect(rules.get('.access-popover')).toMatch(/max-height:\s*calc\(100vh\s*-\s*82px\)/)
     expect(rules.get('.access-popover')).toMatch(/display:\s*flex/)
     expect(rules.get('.access-popover')).toMatch(/flex-direction:\s*column/)
     expect(rules.get('.access-popover')).not.toMatch(/overflow-y\s*:/)
