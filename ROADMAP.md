@@ -493,9 +493,11 @@ DONE 2026-08-13 — three of the four fifty-sixth-wave slices landed
 (MUNIDESK-1188, 1189, 1190). `SignedWorkspaceApproval`
 (`src-tauri/core/src/attach/approval.rs:8`) is one core value holding the signed
 workspace and the owner approval rule, and both desktop attach states read it
-instead of repeating six lines each. `publish_commit_hint`
-(`src-tauri/core/src/journal/mod.rs:409`) drops every disconnected subscriber
-rather than only the committed run's own, so the list stops growing.
+instead of repeating six lines each. `CommitSubscription::drop`
+(`src-tauri/core/src/journal/mod.rs:406`) removes its registered subscriber by
+ID. `dropped_commit_subscriptions_unregister_without_affecting_live_subscribers`
+(`src-tauri/core/src/journal/mod.rs:3408`) proves dropped subscriptions leave no
+entries and do not disrupt a live subscriber.
 
 MEASURED 2026-08-13 (fifty-seventh wave, planner, read
 `src-tauri/runtime/src/service/session.rs` beside `sign_in_blocking`
