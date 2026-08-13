@@ -4,6 +4,8 @@ mod attach_boundaries;
 mod attach_listener;
 #[cfg(target_os = "linux")]
 mod attach_service;
+#[cfg(target_os = "linux")]
+mod attach_state;
 mod directories;
 #[cfg(target_os = "linux")]
 pub mod handoff_listener;
@@ -15,12 +17,16 @@ mod sink;
 #[cfg(target_os = "linux")]
 pub use attach_boundaries::RuntimeAttachBoundaries;
 #[cfg(target_os = "linux")]
-pub use attach_listener::{run_attach_listener, AttachListenerError};
+pub use attach_listener::{
+    run_attach_listener, run_bound_attach_listener, AttachListenerError, AttachListenerInputs,
+};
 #[cfg(target_os = "linux")]
 pub use attach_service::compose_attach_service;
+#[cfg(target_os = "linux")]
+pub use attach_state::RuntimeAttachState;
 pub use directories::{
-    config_directory, profile_directory, resolve_directory, DirectoryUnavailableError,
-    APPLICATION_IDENTIFIER,
+    config_directory, installed_desktop_executable, installed_desktop_executable_from,
+    profile_directory, resolve_directory, DirectoryUnavailableError, APPLICATION_IDENTIFIER,
 };
 #[cfg(target_os = "linux")]
 pub use migration::{run_migration_takeover, MigrationTakeoverError};
