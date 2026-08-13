@@ -50,8 +50,8 @@ pub(crate) use muniment_core::run_events::{ChatStorage, SharedStorage};
 pub(crate) use muniment_core::run_preparation::SessionThreadStart;
 use muniment_core::run_preparation::{self as core_run_preparation, OpenSelectedFile};
 use muniment_core::run_start::{
-    start_desktop_run, ActiveRun, RunStartBoundaries, RunStartError, RunStartLaunch,
-    RunStartRequest, SubmitResult,
+    start_desktop_run, ActiveRun, RunAttachBoundaries, RunStartBoundaries, RunStartError,
+    RunStartLaunch, RunStartRequest, SubmitResult,
 };
 use serde_json::{json, Value};
 use std::path::PathBuf;
@@ -124,20 +124,7 @@ impl<R: tauri::Runtime> TauriRunStartBoundaries<R> {
     }
 }
 
-impl<R: tauri::Runtime> RunStartBoundaries for TauriRunStartBoundaries<R> {
-    fn mark_active_run(&self) -> RuntimeActivityGuard {
-        self.state().runtime_activity.mark_active_run()
-    }
-
-    #[cfg(target_os = "linux")]
-    fn control_migration(
-        &self,
-        request: muniment_core::attach::linux::MigrationControlRequest,
-        peer_pid: u32,
-    ) -> Result<(), ProtocolError> {
-        crate::attach_service::control_desktop_migration(&self.app, request, peer_pid)
-    }
-
+impl<R: tauri::Runtime> RunAttachBoundaries for TauriRunStartBoundaries<R> {
     #[cfg(target_os = "linux")]
     fn list_threads(
         &self,
@@ -227,6 +214,21 @@ impl<R: tauri::Runtime> RunStartBoundaries for TauriRunStartBoundaries<R> {
             answer,
         )
         .map_err(RunStartError::InvalidRequest)
+    }
+}
+
+impl<R: tauri::Runtime> RunStartBoundaries for TauriRunStartBoundaries<R> {
+    fn mark_active_run(&self) -> RuntimeActivityGuard {
+        self.state().runtime_activity.mark_active_run()
+    }
+
+    #[cfg(target_os = "linux")]
+    fn control_migration(
+        &self,
+        request: muniment_core::attach::linux::MigrationControlRequest,
+        peer_pid: u32,
+    ) -> Result<(), ProtocolError> {
+        crate::attach_service::control_desktop_migration(&self.app, request, peer_pid)
     }
 
     fn active_run_exists(&self) -> bool {

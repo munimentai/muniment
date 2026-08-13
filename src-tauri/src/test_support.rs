@@ -21,7 +21,9 @@ use muniment_core::permission_gate::ChatPermissionAnswer;
 use serde_json::json;
 use serde_json::Value;
 
-use muniment_core::run_start::{ActiveRun, RunStartBoundaries, RunStartError, RunStartLaunch};
+use muniment_core::run_start::{
+    ActiveRun, RunAttachBoundaries, RunStartBoundaries, RunStartError, RunStartLaunch,
+};
 
 use crate::chat::{attachment_error, event_envelope};
 
@@ -119,11 +121,7 @@ impl FakeRunStartBoundaries {
     }
 }
 
-impl RunStartBoundaries for FakeRunStartBoundaries {
-    fn mark_active_run(&self) -> RuntimeActivityGuard {
-        self.runtime_activity.mark_active_run()
-    }
-
+impl RunAttachBoundaries for FakeRunStartBoundaries {
     #[cfg(target_os = "linux")]
     fn list_threads(
         &self,
@@ -271,6 +269,12 @@ impl RunStartBoundaries for FakeRunStartBoundaries {
             .send((!self.permission_competing_answer).then_some(seq))
             .unwrap();
         Ok(resolved_receiver)
+    }
+}
+
+impl RunStartBoundaries for FakeRunStartBoundaries {
+    fn mark_active_run(&self) -> RuntimeActivityGuard {
+        self.runtime_activity.mark_active_run()
     }
 
     fn active_run_exists(&self) -> bool {
