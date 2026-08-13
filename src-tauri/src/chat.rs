@@ -371,20 +371,20 @@ impl<R: tauri::Runtime> RunStartBoundaries for TauriRunStartBoundaries<R> {
     }
 
     fn fail_prepared_run(&self, launch: &RunStartLaunch) -> Result<(), RunStartError> {
-        let failed = event_envelope(
+        core_run_preparation::append_prepared_run_persistence_failure(
+            &mut self
+                .state()
+                .storage
+                .lock()
+                .map_err(|_| RunStartError::Persistence(attachment_error()))?
+                .journal,
             &launch.run_id,
-            launch.prepared.0 + 1,
-            "run.failed",
-            json!({"reason": "persistence"}),
+            launch.prepared.0,
             launch.tokens.subject.as_deref(),
-        );
-        self.state()
-            .storage
-            .lock()
-            .map_err(|_| RunStartError::Persistence(attachment_error()))?
-            .journal
-            .append(launch.prepared.0, &failed)
-            .map_err(|_| RunStartError::Persistence(attachment_error()))
+            "muniment-desktop",
+            env!("CARGO_PKG_VERSION"),
+        )
+        .map_err(|_| RunStartError::Persistence(attachment_error()))
     }
 
     fn clear_active_run(&self, run_id: &str) {
