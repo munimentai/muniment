@@ -35,11 +35,7 @@ pub fn resolve_directory(
 pub fn profile_directory() -> Result<PathBuf, DirectoryUnavailableError> {
     let xdg_value = std::env::var_os("XDG_DATA_HOME");
     let home_value = std::env::var_os("HOME");
-    resolve_directory(
-        xdg_value.as_deref(),
-        home_value.as_deref(),
-        ".local/share",
-    )
+    resolve_directory(xdg_value.as_deref(), home_value.as_deref(), ".local/share")
 }
 
 pub fn config_directory() -> Result<PathBuf, DirectoryUnavailableError> {

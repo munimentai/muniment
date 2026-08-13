@@ -1,9 +1,7 @@
 use std::ffi::OsStr;
 use std::path::Path;
 
-use muniment_runtime::{
-    resolve_directory, DirectoryUnavailableError, APPLICATION_IDENTIFIER,
-};
+use muniment_runtime::{resolve_directory, DirectoryUnavailableError, APPLICATION_IDENTIFIER};
 
 #[test]
 fn uses_an_absolute_xdg_directory() {
@@ -60,11 +58,9 @@ fn rejects_missing_and_relative_sources() {
 
 #[test]
 fn tauri_identifier_matches_the_runtime_identifier() {
-    let config = std::fs::read_to_string(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../tauri.conf.json"
-    ))
-    .unwrap();
+    let config =
+        std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../tauri.conf.json"))
+            .unwrap();
     let identifier = format!("\"identifier\": \"{APPLICATION_IDENTIFIER}\"");
 
     assert!(config.contains(&identifier));
