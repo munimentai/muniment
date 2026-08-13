@@ -5,7 +5,7 @@ use std::io::{Read, Write};
 use std::net::TcpListener;
 use std::sync::{Arc, Mutex};
 
-use muniment_core::attach::RuntimeActivityRegistry;
+use muniment_core::attach::{RuntimeActivityRegistry, SignedWorkspaceApproval};
 use muniment_core::auth::{KeyringNativeCredentialStore, NativeCredentialStore};
 use muniment_core::chat_view::SelectedFile;
 use muniment_core::journal::thread_mutation::create_thread_now;
@@ -75,7 +75,8 @@ fn runtime_boundaries_prepare_a_desktop_run() {
             profile.join("memory"),
         )),
         activity,
-        SessionThread::default(),
+        SignedWorkspaceApproval::default(),
+        Arc::new(SessionThread::default()),
     );
     assert!(matches!(
         boundaries.prepare_run(
