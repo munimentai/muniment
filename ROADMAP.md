@@ -18,8 +18,9 @@ them must exercise the real contracts. It must add no mocked production path.
 > took the durable local run journal section. The tenth took the cross-surface
 > contracts section. The eleventh took the stable release and distribution
 > section. The twelfth took the desktop QA automation section. The thirteenth
-> took the ADR 0012 runtime-service extraction section. The Phase 2 client core
-> section is the next compaction target.
+> took the ADR 0012 runtime-service extraction section. The fourteenth took the
+> Phase 2 client core section. The ADR 0012 runtime-service extraction section
+> grows every wave, so it is the next compaction target again.
 
 ## M0 — Scaffold (done 2026-07-09)
 
@@ -32,15 +33,11 @@ frontend test harnesses, and Linux, Windows, and macOS CI gates.
 
 DONE — Svelte 5 and Vite shell, design tokens, signed-out and signed-in states,
 native installation-bound authorization, keychain persistence, refresh, session,
-and revocation flows, live entitlement projection, access-device states, and
-server-unreachable recovery. The production contract is `/v1/auth/native/*`.
-Generic OIDC remains test groundwork and is not the production handshake.
-
-DONE 2026-08-05 — first-run registration retries a rate-limited device
-registration (MUNIDESK-927). `NativeRegistrationError::RateLimited`
-(`src-tauri/core/src/auth/native_registration.rs`) carries the server delay, the
-transport reads `Retry-After` as seconds or as an RFC 2822 date, and one sign-in
-attempt waits at most 300 seconds across its retries.
+and revocation flows, live entitlement projection, access-device states,
+server-unreachable recovery, and a bounded retry for a rate-limited first-run
+device registration (MUNIDESK-927). The production contract is
+`/v1/auth/native/*`. Generic OIDC remains test groundwork and is not the
+production handshake.
 
 SPEC LANDED 2026-08-05 — the org capability catalog joins the Your access view
 (MUNIDESK-926). `docs/spec/02-desktop-app.md` adds an `Available in your org`
@@ -72,13 +69,12 @@ run's memory session. The transcript offers `Resume` beside `Try again`
 (`src/App.svelte:917`) and shows `Resume` only for a resumable interrupted run.
 
 DONE — the permission gate reaches the user end to end (MUNIDESK-577, 582, 587,
-594, 605, 766). The core seam validates an answer against its request. The
-coordinate loop drains a typed answer queue and appends `permission.resolved`.
-The thread renders a mono ask card for the `confirm`, `select`, `input`, and
-`editor` kinds. Plain Enter commits a single-line field, and the platform chord
-plus Enter commits a multi-line field. The refusal control sits apart from the
-request's own choices. `test/probe/permission.html`, `input.html`, `editor.html`,
-and `select.html` are the fixtures.
+594, 605, 766). The core seam validates an answer against its request, the
+coordinate loop drains a typed answer queue and appends `permission.resolved`,
+and the thread renders a mono ask card for the `confirm`, `select`, `input`, and
+`editor` kinds with the refusal control apart from the request's own choices.
+`test/probe/permission.html`, `input.html`, `editor.html`, and `select.html` are
+the fixtures.
 
 DONE 2026-08-02 — ADR 0025 decides per-thread permission answers (MUNIDESK-800).
 They are two versioned event types in the `thread_events` ledger,
@@ -133,13 +129,9 @@ puts every shared attachment behind the cloud file store, and ADR 0019 makes
 muniment-cloud the source of that contract. No published artifact describes the
 upload, so this lane waits exactly as the code-diff producer waits.
 
-DONE 2026-08-09 — each saved attachment chip states its own file kind, and the
-delivery rule renders once for the whole row (MUNIDESK-1023). The ninth wave had
-measured one blanket sentence repeated inside every chip.
-
-DONE 2026-08-09 — an image-limit failure names the file and the limit it
-crossed (MUNIDESK-1022). The ninth wave had measured every limit variant
-collapsing to one sentence that blamed files the run had already saved.
+DONE 2026-08-09 — the attachment copy is honest per file (MUNIDESK-1022, 1023).
+Each saved chip states its own file kind, the delivery rule renders once for the
+whole row, and an image-limit failure names the file and the limit it crossed.
 
 ### Durable local run journal
 
@@ -521,14 +513,15 @@ disagree, because `chat_file_metadata` rejects a path with no usable final
 segment and `open_selected_files` does not. The lane waits for an owner look at
 why this one ticket never dispatches.
 
-MERGE HAZARD — every fifty-first-wave service slice edits
-`src-tauri/runtime/src/service.rs` and `src-tauri/runtime/src/lib.rs`. The
-companion slice adds a registry open path and two functions. The shared activity
-registry changes the `accept_prompt`, `run_prompt`, and `resume_run` signatures,
-and it edits five runtime test files. The configure-run slice adds one function
-beside the grant entry. Each ticket tells the implementer to rebase on `main`
-before it opens the pull request. The 2026-08-04 silent revert came from a stale
-base.
+MERGE HAZARD — every fifty-second-wave service slice edits
+`src-tauri/runtime/src/service.rs` and `src-tauri/runtime/src/lib.rs`. The shared
+activity registry changes the `accept_prompt`, `run_prompt`, and `resume_run`
+signatures, and it edits five runtime test files. The configure-run slice renames
+the grant entry and edits `tests/grant.rs`. The device-session mark slice changes
+`ensure_native_session`, `sign_out`, and `entitlement_snapshot` and edits three
+other test files. The sign-in slice adds one function and one test binary. Each
+ticket tells the implementer to rebase on `main` before it opens the pull
+request. The 2026-08-04 silent revert came from a stale base.
 
 DONE 2026-08-12 — a prepared run that fails its attachment projection ends itself
 (MUNIDESK-1148). `prepare_desktop_run` (`src-tauri/core/src/run_start.rs:293`)
@@ -594,46 +587,58 @@ credential fixture (MUNIDESK-1166). `tests/common/mod.rs` holds `spawn_server`,
 it. `tests/session_status.rs` still carries its own copy, because it needs a
 chosen expiry.
 
-VERIFIED 2026-08-12 (fifty-first wave, planner, read
-`src-tauri/runtime/src/service.rs` beside `src-tauri/src/attach_service.rs`, then
-ran `cargo test --manifest-path src-tauri/runtime/Cargo.toml`) — the fiftieth
-wave's first slice is built and the other two are not. The session status entry
-stands at `service.rs:149`, and the suite exits clean at 48 tests over 25
-binaries. `service.rs` has no companion entry, and `accept_prompt` (`:445`) and
-`resume_run` (`:752`) each still build their own `RuntimeActivityRegistry`.
+DONE 2026-08-12 — the runtime companion entries list and revoke paired programs
+(MUNIDESK-1168). `open_companion_registry` (`src-tauri/runtime/src/service.rs:274`)
+opens one shared `CompanionRegistry` over the persisted credential file and one
+`LiveConnectionRegistry`, and `list_companions` (`:290`) and `revoke_companion`
+(`:298`) answer over it. All three are Linux-only, the way `stream_run` is.
+`tests/companions.rs` is the proof.
+
+DONE 2026-08-12 — the session status test reads the shared credential fixture
+(MUNIDESK-1169). `tests/common/mod.rs` owns `credentials_with_expiry`, and no
+test binary keeps a private copy.
+
+VERIFIED 2026-08-12 (fifty-second wave, planner, read
+`src-tauri/runtime/src/service.rs` beside `src-tauri/src/chat.rs` and
+`src-tauri/src/auth/mod.rs`, then ran `cargo test --manifest-path
+src-tauri/runtime/Cargo.toml`) — the fifty-first wave's first and fourth slices
+are built and the middle two are not. The companion entries stand at
+`service.rs:274`, `:290`, and `:298`, and the suite exits clean at 50 tests over
+25 binaries. `accept_prompt` (`:456`) and `resume_run` (`:750`) each still build
+their own `RuntimeActivityRegistry`, and `fetch_chat_grant` (`:256`) still takes
+no requested workspace.
 
 MEASURED 2026-08-12 (fifty-first wave, planner, read `fetch_chat_grant`
-(`src-tauri/runtime/src/service.rs:252`) beside `configure_run`
+(`src-tauri/runtime/src/service.rs:256`) beside `configure_run`
 (`src-tauri/src/chat.rs:250`)) — the runtime grant entry applies no
 requested-workspace check. The desktop rejects a requested workspace that differs
 from `grant.workspace`, and the ADR 0009 namespace amendment makes the signed
 `grant.workspace` the only workspace authority. A dispatched attach `run.start`
 would reach the runtime with a companion-chosen workspace and meet no such check.
 
-SELECTED 2026-08-12 (fifty-first wave) — four slices in priority order.
+MEASURED 2026-08-12 (fifty-second wave, planner, read the runtime device-session
+entries beside `AuthState` (`src-tauri/src/auth/mod.rs:88`)) — the runtime
+answers no sign-in, and its device-session entries take no activity mark. The
+desktop holds `run_native_sign_in` (`src-tauri/core/src/auth/native_sign_in.rs:43`)
+through `sign_in_blocking` (`src-tauri/src/auth/mod.rs:192`), which is the last
+ADR 0012 device-session capability with no runtime twin. That core function takes
+a `&dyn BrowserOpener`, so a runtime entry passes the opener in rather than
+spawning a browser itself. The desktop also marks every refresh and every
+authentication operation, where `ensure_native_session`
+(`src-tauri/runtime/src/service.rs:140`) and `sign_out` (`:162`) mark nothing.
 
-1. The runtime companion list and revoke entries, over `CompanionRegistry`
-   (`src-tauri/core/src/attach/companion_registry.rs:26`). `attach_companions`
-   and `attach_revoke_companion` (`src-tauri/src/attach_service.rs:398`, `:431`)
-   are the desktop shapes. ADR 0012 phase one moves the companion credentials
-   with the ADR 0009 listener, and neither operation has a runtime entry. The
-   slice also opens the registry, because one shared `LiveConnectionRegistry`
-   carries the block, resume, and revoke states that a per-call registry loses.
-   `AttachListenerState::load_with_workspace`
-   (`src-tauri/src/attach_service.rs:451`) is the desktop open path. All three
-   entries are Linux-only, the way `stream_run` is.
-2. The shared runtime activity registry, per the forty-third-wave measurement. It
-   changes the `accept_prompt`, `run_prompt`, and `resume_run` signatures, so it
-   sits behind the companion entries.
-3. The runtime configure-run entry, per the fifty-first-wave measurement above.
+SELECTED 2026-08-12 (fifty-second wave) — four slices in priority order.
+
+1. The shared runtime activity registry, per the forty-third-wave measurement. It
+   changes the `accept_prompt`, `run_prompt`, and `resume_run` signatures, and it
+   edits five runtime test files.
+2. The runtime configure-run entry, per the fifty-first-wave measurement above.
    One core predicate owns the requested-workspace rule, and the desktop and the
    runtime both read it.
-4. The session status test reads the shared credential fixture, so
-   `tests/common/mod.rs` owns the last copy.
-
-SEQUENCED — the session-refresh mark on the runtime `ensure_native_session`
-follows the shared runtime activity registry, because the registry argument has
-to arrive first.
+3. The device-session marks on `ensure_native_session`, `sign_out`, and
+   `entitlement_snapshot`. The lane files this beside slice 1 rather than behind
+   it, because the two slices change disjoint functions and disjoint test files.
+4. The runtime sign-in entry, per the fifty-second-wave measurement above.
 
 SEQUENCED 2026-08-12 (fiftieth wave, planner, read `ThreadListService`
 (`src-tauri/core/src/attach/linux.rs:853`) beside `DesktopAttachService`
@@ -643,8 +648,19 @@ attach seam. `DesktopAttachService` is generic over `RunStartBoundaries`
 (`src-tauri/core/src/run_start.rs:69`), so the runtime needs its own
 `RunStartBoundaries` value before it can answer a dispatched attach request. That
 value holds the shared activity registry, the shared storage, and the companion
-registry, so it follows all three slices above. The planner splits it by trait
-method group rather than filing it whole.
+registry, so it follows the slices above. The planner splits it by trait method
+group rather than filing it whole.
+
+MEASURED 2026-08-12 (fifty-second wave, planner, counted the trait) —
+`RunStartBoundaries` declares 22 methods, and 19 of them carry no default. A
+partial implementation therefore does not compile, so "split by method group"
+means splitting the trait itself before the runtime implements it. The Linux
+attach reads (`list_threads`, `open_thread`, `stream_run`,
+`subscribe_run_commits`, `queue_attach_permission_answer`, `create_thread`) form
+one group over the journal alone. The run-acceptance methods form the other. That
+split edits `src-tauri/src/chat.rs`, `src-tauri/src/test_support.rs`, and the
+`desktop_service.rs` test double, so it follows the configure-run slice that
+already edits all three.
 
 SEQUENCED — after the shared Pi runtime slot, the later extraction slices are the
 desktop client conversion and Linux user-unit registration. Each sits behind a
@@ -1070,19 +1086,23 @@ earlier one. Requiring an up-to-date branch before merge, or a merge queue, is a
 repository-settings change that sits with the owner. The planner files no ticket
 for it.
 
-VERIFIED 2026-08-12 (fifty-first wave, planner) — `cargo test --manifest-path
-src-tauri/runtime/Cargo.toml` passes 48 tests over 25 test binaries. A warm run
-of that suite costs 9 seconds, and a cold run adds a 24-second build. `npm ci`
+VERIFIED 2026-08-12 (fifty-second wave, planner) — `cargo test --manifest-path
+src-tauri/runtime/Cargo.toml` passes 50 tests over 25 test binaries. `npm ci`
 then `npm test` passes 928 frontend tests with 31 skipped, plus 3 browser tests.
 `npm run build` emits a 302,750-byte script, a 63,930-byte stylesheet, and three
 webfont files across two families. The extraction section above records what the
 planner read in the code. This entry replaces the earlier ledger.
 
+MEASURED 2026-08-12 (fifty-second wave, planner, read the vitest JSON report) —
+all 31 skipped frontend tests are Windows-only cases. Every one sits behind
+`it.skipIf(process.platform !== 'win32')` in `test/desktop-e2e-harness.test.js`,
+and the pull request Windows gate runs them. The skip count is the designed
+shape rather than dead coverage, so the lane files no slice for it.
+
 DONE 2026-08-12 — the runtime test binaries share one loopback HTTP stub and one
-credential fixture (MUNIDESK-1166). The fiftieth wave had measured `spawn_server`
-copied into five binaries and `read_request` into six. `tests/session_status.rs`
-still carries its own credential fixture, and the fifty-first wave files that last
-copy.
+credential fixture (MUNIDESK-1166, 1169). The fiftieth wave had measured
+`spawn_server` copied into five binaries and `read_request` into six. No test
+binary keeps a private copy now.
 
 PLANNER PROCEDURE — the planning clone ships no `node_modules`, so run `npm ci`
 before `npm test`. Without it the run dies with `vitest: not found`, which reads
@@ -1095,13 +1115,17 @@ built bundle asynchronously, so a capture without that flag shoots a blank page.
 A stray server started from another directory answers 404, and the wait then
 hangs until the timeout.
 
-MEASURED 2026-08-12 (fifty-first wave, planner) — the capture ran after
-`npm run build`, and headless Chromium shot `test/probe/applied-diff.html` and
-`test/probe/select.html` at 1100x720. The applied-diff thread renders both cards,
-the split diff with its intra-line segments, the `changed` file-status chip, and
-the withheld-changes sentence. The select gate renders its title, its six options,
-and the separated `Deny` control on one row. Neither capture recorded a new visual
-defect, so this wave files no shell polish slice.
+MEASURED 2026-08-12 (fifty-second wave, planner) — the capture ran after
+`npm run build`, and headless Chromium shot `test/probe/onboarding.html` at
+960x640 and `test/probe/input.html` at 1100x720. The onboarding surface fits the
+minimum window with its header, its Home location field, its four folder chips,
+and its footer all on screen. The input gate renders its label, its example
+placeholder, and the separated `Deny` control beside `Submit`. Neither capture
+recorded a new visual defect, so this wave files no shell polish slice.
+
+PLANNER PROCEDURE — pick an unused port for the capture server. Port 8899 was
+already bound by another workspace in this container, and the stale server
+answered 404 for every probe path until the planner moved to 8944.
 
 ## Stable release and distribution
 
