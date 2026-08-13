@@ -9,7 +9,9 @@ use muniment_core::attach::linux::{
     ThreadOpenRequest,
 };
 use muniment_core::attach::ProtocolError;
-use muniment_core::attach::{RuntimeActivityGuard, RuntimeActivityRegistry};
+use muniment_core::attach::{
+    RuntimeActivityGuard, RuntimeActivityRegistry, SignedWorkspaceApproval,
+};
 use muniment_core::auth::TokenSet;
 use muniment_core::chat_grant::{ChatGrant, FetchGrantError};
 use muniment_core::chat_resume::{clear_active_run, install_active_run};
@@ -45,6 +47,7 @@ pub struct RuntimeAttachBoundaries {
     memory_runtime: Arc<ApplicationMemoryRuntime>,
     runtime_activity: RuntimeActivityRegistry,
     session_thread: SessionThread,
+    approval: SignedWorkspaceApproval,
 }
 
 impl RuntimeAttachBoundaries {
@@ -68,7 +71,12 @@ impl RuntimeAttachBoundaries {
             memory_runtime,
             runtime_activity,
             session_thread,
+            approval: SignedWorkspaceApproval::default(),
         }
+    }
+
+    pub fn clear_workspace(&self) {
+        self.approval.clear();
     }
 }
 
@@ -99,26 +107,34 @@ impl RunStartBoundaries for RuntimeAttachBoundaries {
         tokens: &TokenSet,
         requested_workspace: Option<&str>,
     ) -> Result<ChatGrant, RunStartError> {
-        service::configure_run(&tokens.access_token, requested_workspace).map_err(|error| {
-            match error {
-                ConfigureRunError::Grant(FetchGrantError::Unauthorized) => {
-                    RunStartError::Unauthorized("The capability is not authorized.".into())
+        let grant =
+            service::configure_run(&tokens.access_token, requested_workspace).map_err(|error| {
+                match error {
+                    ConfigureRunError::Grant(FetchGrantError::Unauthorized) => {
+                        RunStartError::Unauthorized("The capability is not authorized.".into())
+                    }
+                    ConfigureRunError::Grant(FetchGrantError::Unavailable) => {
+                        RunStartError::Persistence(
+                            "Chat configuration is temporarily unavailable.".into(),
+                        )
+                    }
+                    ConfigureRunError::Grant(FetchGrantError::InvalidResponse) => {
+                        RunStartError::Persistence(
+                            "The chat configuration response was invalid.".into(),
+                        )
+                    }
+                    ConfigureRunError::Unauthorized => {
+                        RunStartError::Unauthorized("The capability is not authorized.".into())
+                    }
                 }
-                ConfigureRunError::Grant(FetchGrantError::Unavailable) => {
-                    RunStartError::Persistence(
-                        "Chat configuration is temporarily unavailable.".into(),
-                    )
-                }
-                ConfigureRunError::Grant(FetchGrantError::InvalidResponse) => {
-                    RunStartError::Persistence(
-                        "The chat configuration response was invalid.".into(),
-                    )
-                }
-                ConfigureRunError::Unauthorized => {
-                    RunStartError::Unauthorized("The capability is not authorized.".into())
-                }
-            }
-        })
+            })?;
+        self.approval.record(grant.workspace.clone());
+        Ok(grant)
+    }
+
+    #[cfg(target_os = "linux")]
+    fn attach_approval(&self) -> Option<muniment_core::attach::Approval> {
+        self.approval.approval()
     }
 
     fn install_active_run(&self, run: ActiveRun) -> Result<(), RunStartError> {
