@@ -405,22 +405,10 @@ that keep a temporary interval with no owner but never an interval with two.
 Through phase one the desktop presents the service-owned approval challenge, and
 a new connection fails closed when no desktop can present it.
 
-DONE — the crate, its packaging, the instance lock, and thirty-four core moves
-landed (MUNIDESK-868 through 954). `src-tauri/runtime/` holds the
-`muniment-runtime` binary crate with its own format, lint, test, and
-dependency-boundary CI steps (`test/runtime-dependency-boundary.sh`), it answers
-`--version`, `--help`, and `-h`, it rejects an unknown argument before the lock,
-it releases the lock on `SIGTERM` and `SIGINT`, and it took no new dependency.
-`AttachFilesystem::acquire_instance_lock` is the core primitive, and
-`start_attach_listener` takes it before it binds. The Linux package ships the
-binary beside `muniment-acp`, and the installed nightly reads its `--version`.
-Each desktop call site keeps a thin wrapper, so no caller changed shape. Git
-history holds the per-move record.
-
-LESSON 2026-08-07 — the permission gate coordination rules moved into
-muniment-core on the fourth filing (MUNIDESK-982). Naming the target module, the
-items, the call sites, and the tests to move is what carried that filing to a
-merge.
+DONE — the runtime crate, packaging, instance lock, and thirty-four core moves
+landed (MUNIDESK-868 through 954, 982). The crate has its own checks, handles its
+CLI and signals, and adds no dependency. The Linux package ships it beside
+`muniment-acp`. Each desktop call site keeps a thin wrapper.
 
 DONE — the migration control chain is built end to end (MUNIDESK-913 through
 1067). ADR 0012 carries the control-authority amendment and the migration control
@@ -1110,10 +1098,11 @@ muniment-runtime` passes 53 tests over 26 test binaries. `npm ci` then `npm test
 passes 928 frontend tests over 62 files with 31 skipped, plus 3 browser tests.
 This entry replaces the earlier ledger.
 
-MEASURED 2026-08-13 (fifty-eighth wave, planner, counted `git log --name-only`
-since 2026-08-01) — `src-tauri/src/chat.rs` is the busiest file in the tree at 38
-touches and 2,437 lines, ahead of `src-tauri/runtime/src/service.rs` at 34 and
-`src-tauri/src/attach_service.rs` at 33. That is the churn shape that justified
+MEASURED 2026-08-13 (fifty-eighth wave, planner, counted each path with
+`git log --name-only --since=2026-08-01 -- <path>`) — `src-tauri/src/chat.rs` is
+the busiest file in the tree at 38 touches and 2,437 lines, ahead of
+`src-tauri/runtime/src/service.rs` at 35 and `src-tauri/src/attach_service.rs` at
+33. That is the churn shape that justified
 the runtime `service.rs` split (MUNIDESK-1181). The lane files no split for
 `chat.rs` anyway. It sits in the `muniment-desktop` crate, which neither the
 planning clone nor an implementer container can compile, so a pure-move refactor
