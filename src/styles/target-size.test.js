@@ -3,12 +3,15 @@ import fs from 'node:fs'
 import path from 'node:path'
 
 const app = fs.readFileSync(path.join(process.cwd(), 'src/App.svelte'), 'utf8')
-const style = app.match(/<style>([\s\S]*)<\/style>/)?.[1] ?? ''
+const accessPanel = fs.readFileSync(path.join(process.cwd(), 'src/lib/AccessPanel.svelte'), 'utf8')
+const style = [app, accessPanel].map((source) => source.match(/<style>([\s\S]*)<\/style>/)?.[1] ?? '').join('\n')
 const selectors = [
   '.thread-delete',
   '.thread-delete-confirm button',
   '.run-error button',
   '.provenance',
+  '.companion-revoke',
+  '.close-access',
 ]
 
 const ruleBody = (source, selector) => [
@@ -37,5 +40,10 @@ describe('signed-in shell target sizes', () => {
   it('rejects a compact shell control without a minimum width', () => {
     const drift = style.replace(/(\.run-error button\s*\{[^{}]*)min-width:\s*24px;/, '$1')
     expect(undersized(drift)).toContain('.run-error button')
+  })
+
+  it('rejects a compact panel control below the target-size floor', () => {
+    const drift = style.replace(/(\.companion-revoke\s*\{[^{}]*min-height:\s*)24px/, (_, prefix) => `${prefix}23px`)
+    expect(undersized(drift)).toContain('.companion-revoke')
   })
 })
