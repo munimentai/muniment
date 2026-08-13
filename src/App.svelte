@@ -919,7 +919,7 @@
                 <div class="applied-diff tool-card">
                   <strong>Applied file changes</strong>
                   {#if appliedDiff.diff}<CodeDiff codeDiff={appliedDiff.diff} />
-                  {:else}<p>The applied changes cannot be shown.</p>{/if}
+                  {:else}<p>The changes were applied, but their record is no longer stored.</p>{/if}
                 </div>
               {/each}
               {#if message.run.phase === 'failed'}<div class="run-error">Reply failed. <button disabled={dictationBusy()} onclick={() => { draft = message.run.prompt; chatController.send() }}>Try again</button></div>{/if}
@@ -932,7 +932,7 @@
                   <strong>{gate.kind === 'code_diff' ? 'Proposed file changes' : gate.title}</strong>
                   {#if gate.kind === 'confirm' && gate.message}<p>{gate.message}</p>{/if}
                   {#if gate.kind === 'code_diff' && gate.diff}<CodeDiff codeDiff={gate.diff} />
-                  {:else if gate.kind === 'code_diff'}<p>The proposed changes cannot be shown.</p>{/if}
+                  {:else if gate.kind === 'code_diff'}<p>Muniment will not apply a change it cannot show. Deny is the only choice.</p>{/if}
                   {#if gate.kind === 'input'}
                     <input
                       class="permission-field"
