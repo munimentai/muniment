@@ -37,7 +37,7 @@ use muniment_core::attach::linux::{
 use muniment_core::attach::{
     evaluate_quiesce, probe_handoff, verify_migration_control_peer, Approval,
     AttachListenerLifecycle, CommittedResult, ConfirmedHandoff, HandoffProbeError, Id,
-    IdempotencyOutcome, IdempotencyStore, MigrationAuthorityError, Operation, PreparedHandoffSlot,
+    IdempotencyOutcome, IdempotencyStore, Operation, PeerAuthorityError, PreparedHandoffSlot,
     Protocol, Request as AttachRequest, RuntimeActivity, RuntimeActivityRegistry,
     SignedWorkspaceApproval, WorkspaceOnboardRequest, WorkspaceOnboarded,
 };
@@ -56,7 +56,7 @@ use uuid::Uuid;
 
 #[cfg(target_os = "linux")]
 fn decide_migration_control(
-    peer_result: Result<(), MigrationAuthorityError>,
+    peer_result: Result<(), PeerAuthorityError>,
     activity: RuntimeActivity,
     slot: &mut PreparedHandoffSlot,
     nonce: String,
@@ -888,7 +888,7 @@ mod tests {
     #[test]
     fn migration_control_rejects_an_unverified_peer() {
         let error = decide_migration_control(
-            Err(MigrationAuthorityError::ExecutableMismatch),
+            Err(PeerAuthorityError::ExecutableMismatch),
             RuntimeActivity::default(),
             &mut PreparedHandoffSlot::new(),
             "nonce-a".into(),
