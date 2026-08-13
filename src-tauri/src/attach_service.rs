@@ -39,7 +39,7 @@ use muniment_core::attach::{
     AttachListenerLifecycle, CommittedResult, ConfirmedHandoff, HandoffProbeError, Id,
     IdempotencyOutcome, IdempotencyStore, MigrationAuthorityError, Operation, PreparedHandoffSlot,
     Protocol, Request as AttachRequest, RuntimeActivity, RuntimeActivityRegistry,
-    WorkspaceOnboardRequest, WorkspaceOnboarded,
+    SignedWorkspaceApproval, WorkspaceOnboardRequest, WorkspaceOnboarded,
 };
 #[cfg(target_os = "linux")]
 use muniment_core::browser_control::ProcReader;
@@ -173,7 +173,7 @@ pub(crate) struct AttachListenerState {
     workspace_contexts: WorkspaceContexts,
     client_credentials: Arc<Mutex<HashMap<String, ClientCredential>>>,
     companion_registry: CompanionRegistry,
-    workspace: Arc<Mutex<Option<String>>>,
+    approval: SignedWorkspaceApproval,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
@@ -188,7 +188,7 @@ pub struct AttachCompanionState {
     #[cfg(target_os = "linux")]
     listener: Mutex<Option<Arc<AttachListenerState>>>,
     #[cfg(target_os = "linux")]
-    workspace: Arc<Mutex<Option<String>>>,
+    approval: SignedWorkspaceApproval,
     #[cfg(target_os = "linux")]
     listener_lifecycle: Mutex<AttachListenerLifecycle>,
     #[cfg(target_os = "linux")]
@@ -216,7 +216,7 @@ enum AttachListenerStopState {
 impl AttachCompanionState {
     fn new(listener: Arc<AttachListenerState>) -> Self {
         Self {
-            workspace: listener.workspace.clone(),
+            approval: listener.approval.clone(),
             listener: Mutex::new(Some(listener)),
             listener_lifecycle: Mutex::new(AttachListenerLifecycle::Listening),
             listener_stop: Mutex::new(AttachListenerStopState::Pending {
@@ -342,26 +342,15 @@ impl AttachCompanionState {
     }
 
     pub(crate) fn record_workspace(&self, workspace: String) {
-        *self
-            .workspace
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(workspace);
+        self.approval.record(workspace);
     }
 
     pub(crate) fn clear_workspace(&self) {
-        *self
-            .workspace
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
+        self.approval.clear();
     }
 
     pub(crate) fn approval(&self) -> Option<Approval> {
-        let workspace = self
-            .workspace
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .clone()?;
-        Some(desktop_attach_approval(workspace))
+        self.approval.approval()
     }
 }
 
@@ -370,7 +359,7 @@ impl Default for AttachCompanionState {
     fn default() -> Self {
         Self {
             listener: Mutex::new(None),
-            workspace: Arc::new(Mutex::new(None)),
+            approval: SignedWorkspaceApproval::default(),
             listener_lifecycle: Mutex::new(AttachListenerLifecycle::Pending),
             listener_stop: Mutex::new(AttachListenerStopState::Pending {
                 stop_requested: false,
@@ -445,12 +434,12 @@ pub fn attach_revoke_companion(
 #[cfg(target_os = "linux")]
 impl AttachListenerState {
     fn load(credential_path: &std::path::Path) -> Result<Self, ProtocolError> {
-        Self::load_with_workspace(credential_path, Arc::new(Mutex::new(None)))
+        Self::load_with_approval(credential_path, SignedWorkspaceApproval::default())
     }
 
-    fn load_with_workspace(
+    fn load_with_approval(
         credential_path: &std::path::Path,
-        workspace: Arc<Mutex<Option<String>>>,
+        approval: SignedWorkspaceApproval,
     ) -> Result<Self, ProtocolError> {
         let client_credentials = Arc::new(Mutex::new(load_client_credentials(credential_path)?));
         let companion_registry = CompanionRegistry::new(
@@ -462,17 +451,12 @@ impl AttachListenerState {
             workspace_contexts: Arc::new(Mutex::new(WorkspaceContextMap::default())),
             client_credentials,
             companion_registry,
-            workspace,
+            approval,
         })
     }
 
     fn approval(&self) -> Option<Approval> {
-        let workspace = self
-            .workspace
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .clone()?;
-        Some(desktop_attach_approval(workspace))
+        self.approval.approval()
     }
 
     pub(crate) fn revoke_companion(&self, client_identity: &str) -> Result<(), ProtocolError> {
@@ -572,16 +556,6 @@ impl<R: tauri::Runtime> TauriDesktopAttachService<R>
 }
 
 #[cfg(target_os = "linux")]
-fn desktop_attach_approval(workspace: String) -> Approval {
-    Approval {
-        profile: "desktop-owner".into(),
-        workspace,
-        scopes: BTreeSet::from(["thread.read".into(), "run.write".into()]),
-        lifetime: Duration::from_secs(60 * 60),
-    }
-}
-
-#[cfg(target_os = "linux")]
 fn request_attach_pairing_approval(
     approval_state: &AttachListenerState,
     approvals: &AttachApprovalState,
@@ -639,8 +613,8 @@ where
             .record_listener_start_failure(AttachListenerStartFailure::Filesystem);
         return None;
     };
-    let workspace = app.state::<AttachCompanionState>().workspace.clone();
-    let Ok(state) = AttachListenerState::load_with_workspace(&credential_path, workspace) else {
+    let approval = app.state::<AttachCompanionState>().approval.clone();
+    let Ok(state) = AttachListenerState::load_with_approval(&credential_path, approval) else {
         app.state::<AttachCompanionState>()
             .record_listener_start_failure(AttachListenerStartFailure::Filesystem);
         return None;
@@ -1427,11 +1401,11 @@ mod tests {
             Uuid::now_v7()
         ));
         let state = AttachListenerState::load(&credential_path).unwrap();
-        *state.workspace.lock().unwrap() = Some("workspace-a".into());
-        let workspace = state.workspace.clone();
+        state.approval.record("workspace-a".into());
+        let approval = state.approval.clone();
         let approvals = AttachApprovalState::default();
         approvals.register_presenter(move |_| {
-            *workspace.lock().unwrap() = None;
+            approval.clear();
             true
         });
 
@@ -1456,11 +1430,11 @@ mod tests {
             Uuid::now_v7()
         ));
         let state = AttachListenerState::load(&credential_path).unwrap();
-        *state.workspace.lock().unwrap() = Some("workspace-a".into());
-        let workspace = state.workspace.clone();
+        state.approval.record("workspace-a".into());
+        let approval = state.approval.clone();
         let approvals = AttachApprovalState::default();
         approvals.register_presenter(move |_| {
-            *workspace.lock().unwrap() = Some("workspace-b".into());
+            approval.record("workspace-b".into());
             true
         });
 
@@ -1653,9 +1627,9 @@ mod tests {
                     "0.0.1",
                     &mut service,
                     |_: &muniment_core::attach::PairingChallenge, _: Duration| {
-                        Some(ApprovalDecision::Approve(desktop_attach_approval(
-                            "workspace-a".into(),
-                        )))
+                        let approval = SignedWorkspaceApproval::default();
+                        approval.record("workspace-a".into());
+                        Some(ApprovalDecision::Approve(approval.approval().unwrap()))
                     },
                     &registry,
                 )
