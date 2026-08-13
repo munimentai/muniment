@@ -1,10 +1,11 @@
+use muniment_core::attach::RuntimeActivityRegistry;
 use muniment_core::auth::{
     FreshNativeSessionError, KeyringNativeCredentialStore, NativeCredentialStore,
 };
 use muniment_runtime::ensure_native_session;
 
 mod common;
-use common::{credentials, spawn_server};
+use common::{credentials, spawn_server, spawn_server_with};
 
 const DEVICE_ID: &str = "10000000-0000-4000-8000-000000000001";
 
@@ -21,10 +22,15 @@ fn session_entry_reads_the_keyring_for_success_and_failure() {
     store.clear_session().unwrap();
     store.save_credentials(&credentials()).unwrap();
     assert!(store.load_credentials().unwrap().is_some());
+    let runtime_activity = RuntimeActivityRegistry::new();
 
-    let (base_url, server) = spawn_server(200, session_body());
+    let activity_during_request = runtime_activity.clone();
+    let (base_url, server) = spawn_server_with(200, session_body(), move || {
+        assert!(activity_during_request.snapshot().session_refresh);
+    });
     std::env::set_var("MUNIMENT_API_BASE_URL", base_url);
-    let session = ensure_native_session().unwrap();
+    let session = ensure_native_session(&runtime_activity).unwrap();
+    assert!(!runtime_activity.snapshot().session_refresh);
     assert!(session.status.signed_in);
     assert_eq!(
         session.status.subject.as_deref(),
@@ -37,9 +43,10 @@ fn session_entry_reads_the_keyring_for_success_and_failure() {
     let (base_url, server) = spawn_server(401, "denied".into());
     std::env::set_var("MUNIMENT_API_BASE_URL", base_url);
     assert_eq!(
-        ensure_native_session().unwrap_err(),
+        ensure_native_session(&runtime_activity).unwrap_err(),
         FreshNativeSessionError::SessionInspection
     );
+    assert!(!runtime_activity.snapshot().session_refresh);
     server.join().unwrap();
 
     store.clear_session().unwrap();
