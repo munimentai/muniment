@@ -16,11 +16,23 @@ use muniment_core::sidecar::pi_install::{PiArtifactDescriptor, PI_ARTIFACT};
 const DEVICE_ID: &str = "10000000-0000-4000-8000-000000000001";
 
 pub fn spawn_server(status: u16, body: String) -> (String, thread::JoinHandle<String>) {
+    spawn_server_with(status, body, || {})
+}
+
+pub fn spawn_server_with<F>(
+    status: u16,
+    body: String,
+    before_response: F,
+) -> (String, thread::JoinHandle<String>)
+where
+    F: FnOnce() + Send + 'static,
+{
     let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
     let base_url = format!("http://{}", listener.local_addr().unwrap());
     let handle = thread::spawn(move || {
         let (mut stream, _) = listener.accept().unwrap();
         let request = read_request(&mut stream);
+        before_response();
         write!(
             stream,
             "HTTP/1.1 {status} Result\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
