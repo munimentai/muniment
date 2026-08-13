@@ -1683,6 +1683,7 @@ mod tests {
                         Some(ApprovalDecision::Approve(approval.approval().unwrap()))
                     },
                     &registry,
+                    None,
                 )
             });
             let client = handshake_stream_with_credential(
