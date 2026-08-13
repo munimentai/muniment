@@ -4,6 +4,7 @@ use std::fs;
 use std::io::{Read, Write};
 use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
+use std::thread;
 use std::time::{Duration, Instant};
 
 use muniment_core::attach::linux::PeerCredentials;
@@ -155,4 +156,27 @@ fn expired_timeout_routes_to_companion() {
         AttachConnectionRoute::Companion
     );
     assert!(started.elapsed() < Duration::from_millis(100));
+}
+
+#[test]
+fn delayed_prefix_and_incomplete_payload_share_one_timeout() {
+    let (expected, reader) = expected_and_reader();
+    let (mut client, server) = UnixStream::pair().unwrap();
+    let timeout = Duration::from_millis(250);
+    let previous_timeout = Duration::from_secs(17);
+    server.set_read_timeout(Some(previous_timeout)).unwrap();
+    let writer = thread::spawn(move || {
+        thread::sleep(Duration::from_millis(180));
+        client.write_all(&64_u32.to_be_bytes()).unwrap();
+        thread::sleep(timeout);
+    });
+    let started = Instant::now();
+
+    assert_eq!(
+        name_attach_connection_route(&server, credentials(), &expected, &reader, timeout),
+        AttachConnectionRoute::Companion
+    );
+    assert!(started.elapsed() < timeout + Duration::from_millis(125));
+    assert_eq!(server.read_timeout().unwrap(), Some(previous_timeout));
+    writer.join().unwrap();
 }

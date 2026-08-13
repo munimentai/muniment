@@ -4,7 +4,7 @@ use std::io;
 use std::os::fd::AsRawFd;
 use std::os::unix::net::UnixStream;
 use std::path::Path;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use muniment_attach::{decode_frame, Hello};
 
@@ -44,11 +44,11 @@ pub fn name_attach_connection_route(
     let Ok(previous_timeout) = stream.read_timeout() else {
         return AttachConnectionRoute::Companion;
     };
-    if stream.set_read_timeout(Some(timeout)).is_err() {
+    let Some(deadline) = Instant::now().checked_add(timeout) else {
         return AttachConnectionRoute::Companion;
-    }
+    };
 
-    let route = peek_hello(stream).map_or(AttachConnectionRoute::Companion, |hello| {
+    let route = peek_hello(stream, deadline).map_or(AttachConnectionRoute::Companion, |hello| {
         if hello.client.kind == "desktop" {
             AttachConnectionRoute::ApprovalPresenter
         } else {
@@ -59,24 +59,29 @@ pub fn name_attach_connection_route(
     route
 }
 
-fn peek_hello(stream: &UnixStream) -> Option<Hello> {
+fn peek_hello(stream: &UnixStream, deadline: Instant) -> Option<Hello> {
     let mut prefix = [0_u8; 4];
-    peek_exact(stream, &mut prefix).ok()?;
+    peek_exact(stream, &mut prefix, deadline).ok()?;
     let frame_length = (u32::from_be_bytes(prefix) as usize).checked_add(prefix.len())?;
     if frame_length > ROUTE_PEEK_CAP {
         return None;
     }
 
     let mut frame = vec![0_u8; frame_length];
-    peek_exact(stream, &mut frame).ok()?;
+    peek_exact(stream, &mut frame, deadline).ok()?;
     match decode_frame::<Hello>(&frame) {
         Ok(Some((hello, consumed))) if consumed == frame.len() => Some(hello),
         _ => None,
     }
 }
 
-fn peek_exact(stream: &UnixStream, buffer: &mut [u8]) -> io::Result<()> {
+fn peek_exact(stream: &UnixStream, buffer: &mut [u8], deadline: Instant) -> io::Result<()> {
     loop {
+        let remaining = deadline
+            .checked_duration_since(Instant::now())
+            .filter(|remaining| !remaining.is_zero())
+            .ok_or(io::ErrorKind::TimedOut)?;
+        stream.set_read_timeout(Some(remaining))?;
         let read = unsafe {
             libc::recv(
                 stream.as_raw_fd(),
