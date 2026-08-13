@@ -111,6 +111,7 @@ fn a_queued_permission_answer_reaches_a_live_runtime_run() {
     let run_id = "018f0000-0000-7000-8000-000000000113";
     let storage = open_profile_storage(&profile).unwrap();
     let runtime = Arc::new(Mutex::new(None));
+    let runtime_activity = RuntimeActivityRegistry::new();
     let active = Arc::new(Mutex::new(None));
     let (subscriber, events) = mpsc::channel();
     let committed_seq = std::thread::scope(|scope| {
@@ -119,6 +120,7 @@ fn a_queued_permission_answer_reaches_a_live_runtime_run() {
                 &profile,
                 Arc::clone(&storage),
                 Arc::clone(&runtime),
+                &runtime_activity,
                 &config,
                 run_id.into(),
                 "initial prompt".into(),
