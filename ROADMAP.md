@@ -612,7 +612,7 @@ SELECTED 2026-08-13 (fifty-sixth wave) — four slices in priority order.
 1. The runtime value that answers the fourteen `RunStartBoundaries` methods.
 2. The core signed-workspace slot that answers the owner attach approval.
 3. The runtime sign-in entry, which completes the device-session set.
-4. One temporary-profile guard for the runtime test suite.
+4. The commit-subscriber cleanup that removes disconnected run subscribers.
 
 SEQUENCED 2026-08-13 (fifty-sixth wave) — after the run-acceptance half, the
 runtime composes its own `DesktopAttachService` and answers a dispatched attach
