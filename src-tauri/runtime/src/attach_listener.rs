@@ -9,7 +9,8 @@ use std::time::Duration;
 
 use muniment_core::attach::linux::{
     approval_waiter_with_claims, run_authenticated_session_with_service_approvals_and_registry,
-    ApprovalDecision, AttachAcceptError, AttachFilesystem, AttachTransport, ThreadListService,
+    ApprovalDecision, AttachAcceptError, AttachFilesystem, AttachTransport, InstanceLock,
+    ThreadListService,
 };
 use muniment_core::attach::{
     bounded_claim, ApprovalCoordinator, ApprovalRequest, CompanionRegistry, SignedWorkspaceApproval,
@@ -36,6 +37,13 @@ impl fmt::Display for AttachListenerError {
 
 impl std::error::Error for AttachListenerError {}
 
+/// Shared state used by an attach listener.
+pub struct AttachListenerInputs<'a> {
+    pub companion_registry: &'a CompanionRegistry,
+    pub approval: SignedWorkspaceApproval,
+    pub approvals: ApprovalCoordinator,
+}
+
 /// Owns the profile endpoint and serves companion sessions until `stop` fires.
 pub fn run_attach_listener<S, F, E>(
     profile_directory: impl AsRef<Path>,
@@ -57,10 +65,39 @@ where
         .acquire_instance_lock()
         .map_err(|_| AttachListenerError::InstanceLock)?;
     let transport = AttachTransport::bind(&filesystem).map_err(|_| AttachListenerError::Bind)?;
+    run_bound_attach_listener(
+        _instance_lock,
+        transport,
+        AttachListenerInputs {
+            companion_registry,
+            approval,
+            approvals,
+        },
+        handoff_nonce,
+        service_factory,
+        stop,
+    )
+}
+
+/// Serves companion sessions on an instance lock and transport owned by the caller.
+pub fn run_bound_attach_listener<S, F, E>(
+    _instance_lock: InstanceLock,
+    transport: AttachTransport<'_>,
+    inputs: AttachListenerInputs<'_>,
+    handoff_nonce: Option<String>,
+    service_factory: F,
+    stop: Receiver<()>,
+) -> Result<(), AttachListenerError>
+where
+    S: ThreadListService + Send + 'static,
+    F: Fn() -> Result<S, E> + Send + Sync + 'static,
+{
     let stop_handle = transport.stop_handle();
     let finished = Arc::new(AtomicBool::new(false));
     let service_factory = Arc::new(service_factory);
-    let live_connections = companion_registry.live_connections();
+    let live_connections = inputs.companion_registry.live_connections();
+    let approval = inputs.approval;
+    let approvals = inputs.approvals;
 
     std::thread::scope(|scope| {
         let stop_finished = finished.clone();

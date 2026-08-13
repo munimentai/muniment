@@ -1,12 +1,14 @@
 //! Runtime composition for a prepared migration handoff.
 
-use crate::handoff_listener::{run_bound_handoff_listener, HandoffListenerError};
+use crate::attach_listener::{
+    run_bound_attach_listener, AttachListenerError, AttachListenerInputs,
+};
 use muniment_attach::{
     handshake_migration_control_stream, ClientError, MigrationControlFailure,
     MigrationControlOutcome,
 };
 use muniment_core::attach::linux::{
-    AttachFilesystem, AttachFilesystemError, AttachTransport, InstanceLockError,
+    AttachFilesystem, AttachFilesystemError, AttachTransport, InstanceLockError, ThreadListService,
 };
 use muniment_core::attach::{mint_handoff_nonce, HandoffNonceRandomnessError};
 use std::fmt;
@@ -31,7 +33,7 @@ pub enum MigrationTakeoverError {
     UnsupportedOperation,
     InstanceLock,
     DeadlineElapsed,
-    Listener(HandoffListenerError),
+    Listener(AttachListenerError),
 }
 
 impl fmt::Display for MigrationTakeoverError {
@@ -58,12 +60,18 @@ impl fmt::Display for MigrationTakeoverError {
 
 impl std::error::Error for MigrationTakeoverError {}
 
-/// Requests a migration handoff and owns its readiness listener until `stop` fires.
-pub fn run_migration_takeover(
+/// Requests a migration handoff and serves companion sessions until `stop` fires.
+pub fn run_migration_takeover<S, F, E>(
     profile_directory: impl AsRef<Path>,
+    listener_inputs: AttachListenerInputs<'_>,
+    service_factory: F,
     deadline: Instant,
     stop: Receiver<()>,
-) -> Result<(), MigrationTakeoverError> {
+) -> Result<(), MigrationTakeoverError>
+where
+    S: ThreadListService + Send + 'static,
+    F: Fn() -> Result<S, E> + Send + Sync + 'static,
+{
     let nonce = mint_handoff_nonce().map_err(map_nonce_error)?;
     let filesystem =
         AttachFilesystem::from_runtime_directory(profile_directory.as_ref().as_os_str())
@@ -87,8 +95,15 @@ pub fn run_migration_takeover(
         }
     };
 
-    run_bound_handoff_listener(instance_lock, transport, &nonce, stop)
-        .map_err(MigrationTakeoverError::Listener)
+    run_bound_attach_listener(
+        instance_lock,
+        transport,
+        listener_inputs,
+        Some(nonce),
+        service_factory,
+        stop,
+    )
+    .map_err(MigrationTakeoverError::Listener)
 }
 
 fn request_handoff(
