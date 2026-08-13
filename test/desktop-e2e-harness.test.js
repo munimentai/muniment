@@ -527,16 +527,16 @@ describe('Windows finalizer contract', { timeout: 30_000 }, () => { // A PowerSh
     expect(fs.readdirSync(directory).filter((name) => name.startsWith('muniment-e2e-'))).toEqual([])
   })
 
-  it.skipIf(process.platform !== 'win32')('blocks a transcript that contains an injected secret', () => {
+  it.skipIf(process.platform !== 'win32')('redacts an injected secret from the transcript', () => {
     const plantedSecret = 'windows-planted-secret'
     const { result, artifacts } = runWindowsFinalizer('', '', {
       MUNIMENT_E2E_PASSWORD: plantedSecret,
       MUNIMENT_E2E_FINALIZER_TEST_TRANSCRIPT_TEXT: plantedSecret,
     })
-    expect(result.status).not.toBe(0)
-    expect(fs.readdirSync(artifacts).sort()).toEqual(['cleanup-status.log', 'envelope-reason.txt', 'redaction-failure.txt'])
-    expect(fs.readFileSync(path.join(artifacts, 'redaction-failure.txt'), 'utf8')).toContain('file: "runner-transcript.log"')
-    expect(fs.readFileSync(path.join(artifacts, 'redaction-failure.txt'), 'utf8')).not.toContain(plantedSecret)
+    expect(result.status).toBe(0)
+    const transcript = fs.readFileSync(path.join(artifacts, 'runner-transcript.log'), 'utf8')
+    expect(transcript).toContain('[REDACTED]')
+    expect(transcript).not.toContain(plantedSecret)
   })
 
   it.skipIf(process.platform !== 'win32')('destroys staging and prints the transcript after publication failure', () => {
