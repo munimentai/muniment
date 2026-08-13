@@ -2,6 +2,7 @@ const historyFixtures = {
   'signed-out': [],
   onboarding: [],
   approved: [],
+  access: [],
   empty: [],
   restored: [
     {
@@ -185,6 +186,7 @@ const history = historyFixtures[fixtureName]
 if (!history) throw new Error(`Unknown probe history fixture: ${fixtureName}`)
 const onboardingFixture = fixtureName === 'onboarding' || fixtureName === 'approved'
 const approvedFixture = fixtureName === 'approved'
+const accessFixture = fixtureName === 'access'
 const signedOutFixture = fixtureName === 'signed-out'
 const onboardingHomePath = '/Users/alice/Documents/Muniment'
 const threadSummaries = history.length
@@ -223,6 +225,15 @@ function fixtureRendered() {
     const homePath = document.querySelector('[data-testid="onboarding-home-path"]')
     return heading?.textContent === 'Choose your Muniment Home' && homePath?.textContent === onboardingHomePath
   }
+  if (accessFixture) {
+    const popover = document.querySelector('.access-popover')
+    const headings = Array.from(popover?.querySelectorAll('.access-label') ?? [], (heading) => heading.textContent)
+    return ['Appearance', 'Your access', 'Devices', 'Connected programs', 'Voice shortcut']
+      .every((heading) => headings.includes(heading))
+      && popover.querySelector('.current-device')?.textContent === 'This device'
+      && popover.querySelector('.revoked .device-state')?.textContent === 'Revoked'
+      && popover.querySelector('.sign-out')?.textContent === 'Sign out'
+  }
   const workspace = document.querySelector('.workspace')
   if (!workspace) return false
   if (history.length === 0) return workspace.querySelector('.empty') !== null
@@ -258,6 +269,11 @@ function advanceApprovedFixture() {
   document.querySelector('[data-testid="onboarding-import-continue"]')?.click()
 }
 
+function advanceAccessFixture() {
+  if (!accessFixture || fixtureRendered()) return
+  document.querySelector('.profile-button[aria-expanded="false"]')?.click()
+}
+
 async function markProbeReady() {
   await document.fonts.ready
   document.body.dataset.probeReady = ''
@@ -265,12 +281,14 @@ async function markProbeReady() {
 
 function markReadyAfterFixtureRender() {
   advanceApprovedFixture()
+  advanceAccessFixture()
   if (fixtureRendered()) {
     void markProbeReady()
     return
   }
   const observer = new MutationObserver(() => {
     advanceApprovedFixture()
+    advanceAccessFixture()
     if (!fixtureRendered()) return
     observer.disconnect()
     void markProbeReady()
@@ -384,7 +402,30 @@ window.__TAURI__ = {
           groups: [],
         }
       }
-      if (command === 'auth_devices') return []
+      if (command === 'auth_devices') return accessFixture
+        ? [
+            {
+              device_id: 'probe-current-device',
+              client_id: 'muniment-desktop',
+              client_role: 'desktop',
+              platform: 'desktop',
+              created_at: '2026-07-01T12:00:00Z',
+              revoked_at: null,
+              last_active_at: '2026-08-13T12:00:00Z',
+              current: true,
+            },
+            {
+              device_id: 'probe-revoked-device',
+              client_id: 'muniment-mobile',
+              client_role: 'mobile',
+              platform: 'ios',
+              created_at: '2026-06-01T12:00:00Z',
+              revoked_at: '2026-08-01T12:00:00Z',
+              last_active_at: '2026-07-31T12:00:00Z',
+              current: false,
+            },
+          ]
+        : []
       if (command === 'attach_listener_status') return { started: true, failure: null }
       if (command === 'attach_companions') return [
         {
