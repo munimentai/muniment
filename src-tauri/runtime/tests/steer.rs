@@ -4,25 +4,13 @@ use std::time::Duration;
 
 use muniment_core::active_run::{ChatDelivery, ChatQueueRequest};
 use muniment_core::attach::RuntimeActivityRegistry;
-use muniment_core::chat_grant::ChatGrant;
 use muniment_core::home::confirm_home;
 use muniment_runtime::{open_profile_storage, queue_run_message, run_prompt};
 
 mod common;
-use common::stage_pi_stub;
+use common::{fixture_grant, stage_pi_stub};
 
 static ENVIRONMENT: Mutex<()> = Mutex::new(());
-
-fn fixture_grant() -> ChatGrant {
-    ChatGrant {
-        workspace: "workspace-a".into(),
-        gateway_url: "https://gateway.example.com".into(),
-        virtual_key: "virtual-key".into(),
-        model: None,
-        minimum_cacheable_prefix_characters: 8_192,
-        receipt_url: "https://receipts.example.com".into(),
-    }
-}
 
 #[test]
 fn a_queued_steer_reaches_a_live_runtime_run() {
