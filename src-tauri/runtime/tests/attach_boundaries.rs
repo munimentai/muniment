@@ -1,7 +1,6 @@
 #![cfg(target_os = "linux")]
 
 use std::collections::{BTreeMap, VecDeque};
-use std::fs;
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
 
@@ -15,6 +14,9 @@ use muniment_core::run_preparation::{prepare_new_run_with_session_thread, Sessio
 use muniment_core::run_start::{ActiveRun, RunAttachBoundaries};
 use muniment_core::session_thread::SessionThread;
 use muniment_runtime::{open_profile_storage, RuntimeAttachBoundaries};
+
+mod common;
+use common::TemporaryProfile;
 
 fn provenance() -> Provenance {
     let mut provenance = Provenance {
@@ -34,13 +36,8 @@ fn provenance() -> Provenance {
 
 #[test]
 fn runtime_boundaries_answer_all_attach_reads() {
-    let temporary_root = std::env::temp_dir().join(format!(
-        "muniment-runtime-attach-boundaries-{}",
-        std::process::id()
-    ));
-    let _ = fs::remove_dir_all(&temporary_root);
-    let profile = temporary_root.join("profile");
-    fs::create_dir_all(&profile).unwrap();
+    let temporary_profile = TemporaryProfile::new("attach-boundaries", false);
+    let profile = temporary_profile.profile.clone();
     let storage = open_profile_storage(&profile).unwrap();
     let runtime_activity = RuntimeActivityRegistry::new();
     let permission_answers = Arc::new(Mutex::new(VecDeque::new()));
@@ -53,7 +50,7 @@ fn runtime_boundaries_answer_all_attach_reads() {
         permission_answers: Arc::clone(&permission_answers),
         _activity: runtime_activity.mark_active_run(),
     })));
-    let config = temporary_root.join("config");
+    let config = temporary_profile.config.clone();
     let boundaries = RuntimeAttachBoundaries::new(
         Arc::clone(&storage),
         active,
@@ -157,5 +154,4 @@ fn runtime_boundaries_answer_all_attach_reads() {
 
     drop(boundaries);
     drop(storage);
-    fs::remove_dir_all(temporary_root).unwrap();
 }

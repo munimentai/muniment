@@ -1,31 +1,9 @@
 use muniment_core::journal::{EventEnvelope, EventPayload, Provenance};
 use muniment_runtime::open_profile_storage;
 use std::collections::BTreeMap;
-use std::fs;
-use std::path::PathBuf;
-use std::sync::atomic::{AtomicU64, Ordering};
 
-static NEXT_DIRECTORY: AtomicU64 = AtomicU64::new(0);
-
-struct ProfileDirectory(PathBuf);
-
-impl ProfileDirectory {
-    fn new() -> Self {
-        let sequence = NEXT_DIRECTORY.fetch_add(1, Ordering::Relaxed);
-        let path = std::env::temp_dir().join(format!(
-            "muniment-runtime-service-{}-{sequence}",
-            std::process::id()
-        ));
-        fs::create_dir(&path).unwrap();
-        Self(path)
-    }
-}
-
-impl Drop for ProfileDirectory {
-    fn drop(&mut self) {
-        fs::remove_dir_all(&self.0).unwrap();
-    }
-}
+mod common;
+use common::TemporaryProfile;
 
 fn started_event(run_id: &str) -> EventEnvelope {
     EventEnvelope {
@@ -57,22 +35,22 @@ fn started_event(run_id: &str) -> EventEnvelope {
 
 #[test]
 fn opens_fresh_profile_storage() {
-    let profile = ProfileDirectory::new();
+    let profile = TemporaryProfile::new("service-fresh", false);
 
-    let storage = open_profile_storage(&profile.0).unwrap();
+    let storage = open_profile_storage(&profile.profile).unwrap();
     let mut storage = storage.lock().unwrap();
 
-    assert!(profile.0.join("runs.sqlite3").is_file());
-    assert!(profile.0.join("cas").is_dir());
+    assert!(profile.profile.join("runs.sqlite3").is_file());
+    assert!(profile.profile.join("cas").is_dir());
     assert!(storage.journal.run_event_types().unwrap().is_empty());
 }
 
 #[test]
 fn reconciles_an_interrupted_run_when_reopened() {
-    let profile = ProfileDirectory::new();
+    let profile = TemporaryProfile::new("service-reopen", false);
     let run_id = "018f0000-0000-7000-8000-000000000002";
     {
-        let storage = open_profile_storage(&profile.0).unwrap();
+        let storage = open_profile_storage(&profile.profile).unwrap();
         storage
             .lock()
             .unwrap()
@@ -81,7 +59,7 @@ fn reconciles_an_interrupted_run_when_reopened() {
             .unwrap();
     }
 
-    let storage = open_profile_storage(&profile.0).unwrap();
+    let storage = open_profile_storage(&profile.profile).unwrap();
     let mut storage = storage.lock().unwrap();
     let events = storage.journal.events(run_id).unwrap();
 

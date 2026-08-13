@@ -10,6 +10,9 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::sync::Arc;
 
+mod common;
+use common::TemporaryProfile;
+
 fn event(run_id: &str, event_id: &str, run_seq: u64, event_type: &str, at: &str) -> EventEnvelope {
     EventEnvelope {
         event_id: event_id.into(),
@@ -75,10 +78,9 @@ fn prepare_recent_terminal_run(storage: &SharedStorage, run_id: &str) {
 #[test]
 fn deletes_an_expired_terminal_run_and_keeps_a_recent_run() {
     use_mock_keyring_for_tests();
-    let temporary_root =
-        std::env::temp_dir().join(format!("muniment-runtime-retention-{}", std::process::id()));
-    fs::create_dir_all(&temporary_root).unwrap();
-    let storage = open_profile_storage(&temporary_root).unwrap();
+    let temporary_profile = TemporaryProfile::new("retention", false);
+    let profile = temporary_profile.profile.clone();
+    let storage = open_profile_storage(&profile).unwrap();
     let expired_run = "01900000-0000-7000-8000-000000000001";
     let recent_run = "01900000-0000-7000-8000-000000000002";
     let retry_run = "01900000-0000-7000-8000-000000000003";
@@ -211,7 +213,7 @@ fn deletes_an_expired_terminal_run_and_keeps_a_recent_run() {
             .unwrap();
     }
     store_prompt(cas_failure_run, "CAS failure prompt", Some(subject)).unwrap();
-    fs::remove_dir(temporary_root.join("cas/objects")).unwrap();
+    fs::remove_dir(profile.join("cas/objects")).unwrap();
 
     assert!(apply_retention(Arc::clone(&storage), 30 * 24 * 60 * 60).is_err());
     assert_eq!(load_prompt(cas_failure_run, Some(subject)).unwrap(), None);
@@ -223,5 +225,4 @@ fn deletes_an_expired_terminal_run_and_keeps_a_recent_run() {
         .unwrap()
         .is_empty());
     drop(storage);
-    fs::remove_dir_all(temporary_root).unwrap();
 }
