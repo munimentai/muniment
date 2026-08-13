@@ -49,12 +49,13 @@ pub fn open_profile_storage(
     Ok(Arc::new(Mutex::new(ChatStorage { journal, cas })))
 }
 
-/// Opens the shared companion registry under a configuration directory.
+/// Opens the shared companion registry.
+/// The credential file sits under the data directory beside the journal.
 #[cfg(target_os = "linux")]
 pub fn open_companion_registry(
-    config_directory: impl AsRef<Path>,
+    profile_directory: impl AsRef<Path>,
 ) -> Result<CompanionRegistry, ProtocolError> {
-    let credential_path = config_directory
+    let credential_path = profile_directory
         .as_ref()
         .join(COMPANION_CREDENTIAL_FILE_NAME);
     let credentials = Arc::new(Mutex::new(load_client_credentials(&credential_path)?));
