@@ -20,8 +20,9 @@ them must exercise the real contracts. It must add no mocked production path.
 > section. The twelfth took the desktop QA automation section. The thirteenth
 > and the fifteenth both took the ADR 0012 runtime-service extraction section.
 > The fourteenth took the Phase 2 client core section. The sixteenth, the
-> seventeenth, the eighteenth, and the nineteenth took that extraction section
-> again. It grows every wave, so it stays the next compaction target.
+> seventeenth, the eighteenth, the nineteenth, and the twentieth took that
+> extraction section again. It grows every wave, so it stays the next
+> compaction target.
 
 ## M0 — Scaffold (done 2026-07-09)
 
@@ -489,55 +490,56 @@ runtime value supplies everything `DesktopAttachService` reads.
 fixtures, the shared chat grant, the warm Pi stub staging, and the
 temporary-profile guard. Nothing in `main` calls any entry.
 
-DONE 2026-08-13 — three of the four fifty-sixth-wave slices landed
-(MUNIDESK-1188, 1189, 1190). `SignedWorkspaceApproval`
+DONE 2026-08-13 — the fifty-sixth and fifty-seventh waves closed four extraction
+slices (MUNIDESK-1188, 1189, 1190, 1194). `SignedWorkspaceApproval`
 (`src-tauri/core/src/attach/approval.rs:8`) is one core value holding the signed
 workspace and the owner approval rule, and both desktop attach states read it
 instead of repeating six lines each. `CommitSubscription::drop`
 (`src-tauri/core/src/journal/mod.rs:406`) removes its registered subscriber by
-ID. `dropped_commit_subscriptions_unregister_without_affecting_live_subscribers`
-(`src-tauri/core/src/journal/mod.rs:3408`) proves dropped subscriptions leave no
-entries and do not disrupt a live subscriber.
+ID. `sign_in` (`src-tauri/runtime/src/service/session.rs:55`) runs the native
+browser flow through an injected `&dyn BrowserOpener`, marks an authentication
+operation, and clears the entitlement tracker, so every device-session capability
+now has a runtime twin.
 
-MEASURED 2026-08-13 (fifty-seventh wave, planner, read
-`src-tauri/runtime/src/service/session.rs` beside `sign_in_blocking`
-(`src-tauri/src/auth/mod.rs:192`)) — the runtime still answers no sign-in. ADR
-0012 makes sign-in a service capability rather than a desktop prerequisite, and
-`run_native_sign_in` (`src-tauri/core/src/auth/native_sign_in.rs:43`) takes a
-`&dyn BrowserOpener`, so a runtime entry passes the opener in rather than spawning
-a browser itself. The entry marks an authentication operation, the way `sign_out`
-does. This is the last device-session capability with no runtime twin. The
-fifty-fifth wave held it behind the `service.rs` split, and the fifty-sixth-wave
-filing drained.
-
-MEASURED 2026-08-13 (fifty-seventh wave, planner, read
+MEASURED 2026-08-13 (fifty-seventh wave, re-read by the fifty-eighth) — a
+runtime-composed attach service would refuse every companion.
 `RunStartBoundaries::attach_approval` (`src-tauri/core/src/run_start.rs:125`)
-beside `RuntimeAttachBoundaries`) — a runtime-composed attach service would refuse
-every companion. That trait method carries a `None` default,
-`RuntimeAttachBoundaries` takes the default, and
+carries a `None` default, `RuntimeAttachBoundaries` takes that default, and
 `DesktopAttachService::reconnect_approval`
 (`src-tauri/core/src/attach/desktop_service.rs:89`) reads it. The desktop records
 the signed `grant.workspace` inside its own `configure_run`
 (`src-tauri/src/chat.rs:250`) and reads it back at `:273`. The runtime
-`configure_run` records nothing, so the runtime has no source for the approval.
+`configure_run` (`src-tauri/runtime/src/attach_boundaries.rs:95`) records nothing,
+so the runtime has no source for the approval.
 
-MEASURED 2026-08-13 (fifty-seventh wave, planner, read
-`TauriDesktopAttachService::new` (`src-tauri/src/attach_service.rs:517`) beside
-`open_companion_registry` (`src-tauri/runtime/src/service/workspace.rs:79`)) — the
+MEASURED 2026-08-13 (fifty-seventh wave, re-read by the fifty-eighth) — the
 runtime knows no directory of its own. Every runtime entry takes a profile
 directory and a config directory as arguments, and `main.rs` computes neither.
 The desktop reads Tauri's `app_data_dir` and `app_config_dir`, which resolve on
 Linux to `$XDG_DATA_HOME/ai.muniment.desktop` and
 `$XDG_CONFIG_HOME/ai.muniment.desktop`, with the `$HOME/.local/share` and
-`$HOME/.config` fallbacks. The two directories hold different files. The journal,
-the CAS, the Pi sessions, the attach idempotency store, and
+`$HOME/.config` fallbacks. The identifier comes from
+`src-tauri/tauri.conf.json:5`. The two directories hold different files. The
+journal, the CAS, the Pi sessions, the attach idempotency store, and
 `attach-client-credentials.json` sit under the data directory. The recorded Home
 and the memory index cache sit under the config directory.
-`open_companion_registry` names its argument `config_directory` and joins
-`COMPANION_CREDENTIAL_FILE_NAME` to it, so a caller that honors that name reads a
-file the desktop never wrote and every approved companion pairs again.
-`config_directory` (`src-tauri/acp/src/main.rs:948`) is the `$XDG_CONFIG_HOME`
-pattern this workspace already uses.
+`open_companion_registry` (`src-tauri/runtime/src/service/workspace.rs:79`) names
+its argument `config_directory` and joins `COMPANION_CREDENTIAL_FILE_NAME` to it,
+so a caller that honors that name reads a file the desktop never wrote and every
+approved companion pairs again. `config_directory`
+(`src-tauri/acp/src/main.rs:948`) is the environment-lookup pattern this
+workspace already uses, and it joins a different leaf name.
+
+MEASURED 2026-08-13 (fifty-eighth wave, planner, read
+`DesktopAttachService::onboard_workspace`
+(`src-tauri/core/src/attach/desktop_service.rs:135`) beside `onboard_workspace`
+(`src-tauri/runtime/src/service/workspace.rs:28`)) — two services repeat one
+onboarding rule. Each copy rejects a relative path, calls
+`onboard_companion_workspace`, canonicalizes both directories, and records each
+canonical directory against the client identity and the session workspace. The
+copies differ only in where the client identity comes from. The rule decides
+which directories a companion may execute in, so it belongs in one core
+function.
 
 MEASURED 2026-08-12 (thirty-ninth wave, planner, read the runtime manifest beside
 `test/runtime-dependency-boundary.sh`) — the runtime crate cannot build a
@@ -587,37 +589,41 @@ projector always holds state there. A test seam would also prove nothing, becaus
 projector rejects that event too. The lane re-opens this only against a new
 failure route.
 
-MERGE HAZARD — the fifty-seventh wave puts two slices in
-`src-tauri/runtime/src/attach_boundaries.rs` and three in
-`src-tauri/runtime/src/lib.rs`. Each ticket tells the implementer to rebase on
-`main` before it opens the pull request. The 2026-08-04 silent revert came from a
-stale base.
+MERGE HAZARD — the fifty-eighth wave puts three slices in
+`src-tauri/runtime/src/lib.rs` and two in
+`src-tauri/runtime/src/service/workspace.rs`. Each ticket tells the implementer
+to rebase on `main` before it opens the pull request. The 2026-08-04 silent
+revert came from a stale base.
 
-VERIFIED 2026-08-13 (fifty-seventh wave, planner, read
-`src-tauri/runtime/src/attach_boundaries.rs`,
-`src-tauri/runtime/src/service/session.rs`, and
-`src-tauri/core/src/attach/approval.rs`, then ran the runtime suite) — three of
-the four fifty-sixth-wave slices are built. `RuntimeAttachBoundaries` implements
-`RunStartBoundaries`, `SignedWorkspaceApproval` serves both desktop attach
-states, and the commit-subscriber cleanup landed. No runtime sign-in entry
-exists. The runtime suite passes 52 tests over 28 test binaries.
+VERIFIED 2026-08-13 (fifty-eighth wave, planner, read
+`src-tauri/runtime/src/service/session.rs`,
+`src-tauri/runtime/src/attach_boundaries.rs`, and
+`src-tauri/src/attach_service.rs`, then ran the runtime suite) — two of the five
+fifty-seventh-wave slices are built. The runtime answers a sign-in, and the
+attach Home reads the confirmed Home. `RuntimeAttachBoundaries` still takes the
+`attach_approval` default, no runtime file composes a `DesktopAttachService`, and
+the runtime still computes no directory. The runtime suite passes 53 tests over
+26 test binaries.
 
-SELECTED 2026-08-13 (fifty-seventh wave) — five slices in priority order.
+SELECTED 2026-08-13 (fifty-eighth wave) — five slices in priority order.
 
-1. The runtime sign-in entry, which completes the device-session set.
-2. The runtime boundaries that answer the owner attach approval.
+1. The runtime boundaries that record the signed workspace and answer the owner
+   approval.
+2. The runtime rule for its own data and config directories.
 3. The runtime composition of its own `DesktopAttachService`.
-4. The runtime rule for its own data and config directories.
-5. The attach Home that reads the Home the user confirmed.
+4. One core function for the companion workspace onboarding rule.
+5. The ADR 0012 amendment that names the approval presentation wire.
 
-SEQUENCED 2026-08-13 (fifty-seventh wave) — after the composition, the runtime
+SEQUENCED 2026-08-13 (fifty-eighth wave) — after the composition, the runtime
 answers a companion `run.start` through that service, then serves real attach
 sessions from `run_handoff_listener` instead of readiness probes alone. Only then
 does the takeover in `run_migration_takeover` leave companions a working
 listener. The approval presenter stays with the desktop through phase one, so a
 runtime-owned listener needs a channel that reaches a desktop window before the
-cutover. The lane selects no slice for that channel, because ADR 0012 names no
-wire for it and the amendment owes one.
+cutover. ADR 0012 names no wire for that channel, so this wave files the
+amendment itself rather than waiting. The 2026-08-10 migration control session
+admission amendment is its template, read in the opposite direction: the runtime
+resolves the connecting peer to the installed desktop payload.
 
 SEQUENCED — after the attach seam, the later extraction slices are the desktop
 client conversion and Linux user-unit registration. Each sits behind a dormant
@@ -798,17 +804,14 @@ and a fixed footer, so its actions stay on screen at the 960x640 window minimum.
 `test/probe/onboarding.html` and `test/probe/approved-files.html` drive the built
 bundle.
 
-MEASURED 2026-08-13 (fifty-seventh wave, planner, read `resolve_attach_home`
-(`src-tauri/src/attach_service.rs:503`) beside `home_status`
-(`src-tauri/src/home.rs:95`)) — the attach Home ignores the Home the user picked.
-The first-run picker records the choice through `confirm_home`, `home_status`
-reads it back through `configured_home`, and `ApplicationMemoryRuntime::open_session`
-(`src-tauri/core/src/memory_runtime.rs:31`) reads the same recorded value.
-`resolve_attach_home` calls `choose_default_home` alone, so
-`DesktopAttachService.home` is always `<documents>/Muniment`. A companion
-`home.ensure` then scaffolds `memory/`, `agents/`, `projects/`, and `sessions/`
-in a directory the model never reads, and it leaves that stray tree behind
-whenever the user chose another Home.
+DONE 2026-08-13 — a companion `home.ensure` scaffolds the Home the user
+confirmed (MUNIDESK-1195). `resolve_attach_home`
+(`src-tauri/src/attach_service.rs:502`) reads `configured_home` first and falls
+back to `choose_default_home` only when the user recorded no choice, so
+`DesktopAttachService.home` is the directory the model reads. The fifty-seventh
+wave measured the old path scaffolding `memory/`, `agents/`, `projects/`, and
+`sessions/` under `<documents>/Muniment` whatever the user picked. The runtime
+composition owes the same resolution when it builds its own service.
 
 ### Memory index and retrieval (§17)
 
@@ -1102,10 +1105,20 @@ earlier one. Requiring an up-to-date branch before merge, or a merge queue, is a
 repository-settings change that sits with the owner. The planner files no ticket
 for it.
 
-VERIFIED 2026-08-13 (fifty-seventh wave, planner) — `cargo test --manifest-path
-src-tauri/runtime/Cargo.toml` passes 52 tests over 28 test binaries. `npm ci`
-then `npm test` passes 928 frontend tests over 62 files with 31 skipped, plus 3
-browser tests. This entry replaces the earlier ledger.
+VERIFIED 2026-08-13 (fifty-eighth wave, planner) — `cargo test -p
+muniment-runtime` passes 53 tests over 26 test binaries. `npm ci` then `npm test`
+passes 928 frontend tests over 62 files with 31 skipped, plus 3 browser tests.
+This entry replaces the earlier ledger.
+
+MEASURED 2026-08-13 (fifty-eighth wave, planner, counted `git log --name-only`
+since 2026-08-01) — `src-tauri/src/chat.rs` is the busiest file in the tree at 38
+touches and 2,437 lines, ahead of `src-tauri/runtime/src/service.rs` at 34 and
+`src-tauri/src/attach_service.rs` at 33. That is the churn shape that justified
+the runtime `service.rs` split (MUNIDESK-1181). The lane files no split for
+`chat.rs` anyway. It sits in the `muniment-desktop` crate, which neither the
+planning clone nor an implementer container can compile, so a pure-move refactor
+would reach a desktop-ci VM with no local proof. The split waits for either a
+compilable path or an owner call.
 
 MEASURED 2026-08-12 (fifty-second wave, planner, read the vitest JSON report) —
 all 31 skipped frontend tests are Windows-only cases. Every one sits behind
@@ -1128,21 +1141,23 @@ PLANNER PROCEDURE — pick an unused port for the capture server. Port 8899 was
 already bound by another workspace in this container, and the stale server
 answered 404 for every probe path until the planner moved to 8944. The
 fifty-third wave used 8951, the fifty-fourth used 8962, the fifty-fifth used
-8975, and the fifty-sixth used 8988. The fifty-seventh wave ran no capture,
-because it read code alone.
+8975, the fifty-sixth used 8988, and the fifty-eighth used 8993. The
+fifty-seventh wave ran no capture, because it read code alone.
 
 PLANNER PROCEDURE — for a measurement that needs a click, write a short
 playwright script and run it from the repository root. Playwright is a project
 dependency rather than a global one, so a script under `/tmp` cannot import it.
 Delete the script before the wave ends, so the clone stays clean.
 
-MEASURED 2026-08-13 (fifty-sixth wave, planner) — the capture ran after
-`npm run build`, and headless Chromium shot the access fixture at 1100x720 and the
-onboarding and signed-out fixtures at 960x640. The popover renders all six
-sections, the onboarding surface keeps its header, content, and footer on one
-screen, and the signed-out lockup is unchanged. No design slice came out of the
-pass. The fifty-seventh wave is a roadmap-fulfilment wave, so it spent its whole
-budget on the ADR 0012 extraction lane.
+MEASURED 2026-08-13 (fifty-eighth wave, planner) — the capture ran after
+`npm run build`, and headless Chromium shot the restored-history fixture at
+1100x720 and the Markdown fixture at 960x640. The sidebar, thread column, tool
+cards, provenance line, interrupted-reply record, and composer all render as
+design-spec §2 describes, and the Markdown fixture's `Receipt unavailable` line
+is the designed state that `src/App.svelte:1013` renders and `App.test.js` guards.
+No design slice came out of the pass, so the wave spent its whole budget on the
+ADR 0012 extraction lane. The fifty-sixth wave read the same result from the
+access, onboarding, and signed-out fixtures.
 
 ## Stable release and distribution
 
