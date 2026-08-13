@@ -291,3 +291,38 @@ migration control peer check and the single-prepared-handoff rule from the
 it does not defend against compromise by another process running as the
 current OS user. Windows and macOS need later peer-identity amendments before
 they can use this admission path.
+
+## Amendment – 2026-08-13: approval presentation session
+
+During phase one, the runtime presents its ADR 0009 approval challenge to the
+desktop over the existing `muniment.attach/1` connection. The runtime sends an
+`approval.present` request envelope containing the requesting surface,
+workspace scopes, single-use challenge, and its decision deadline. The desktop
+returns its explicit approve or deny choice in the correlated response. This
+operation adds no endpoint and no wire version.
+
+On Linux, the runtime admits a presenter session only when the connection's
+`SO_PEERCRED` peer PID resolves to the installed desktop payload. This uses the
+same executable-resolution primitive as migration control in the opposite
+direction. An unresolved, changed, or mismatched peer fails closed. The peer
+check, not a claimed kind, client ID, or companion credential, is the only
+admission authority.
+
+The presenter session authorizes only approval presentation. It has no
+workspace, thread, run, permission, subscription, authentication, migration
+control, or other companion authority. The runtime rejects every other
+operation on that session. The session ends with the connection and cannot
+authorize a later connection.
+
+The runtime admits at most one presenter session at a time and rejects a
+second while the first remains connected. It keeps at most one pending
+decision for each challenge. If no presenter session exists when a new
+connection needs approval, that connection fails closed. A disconnected
+presenter, a deny choice, no choice by the challenge's two-minute deadline, or
+a late, repeated, unknown, or mismatched choice also fails closed. Existing
+approved connections and active runs do not depend on the presenter session.
+
+This admission proves only the installed desktop payload under the same OS
+user. It does not defend against compromise by another process running as that
+user. Windows and macOS need later peer-identity amendments before they can
+admit a presenter session.
