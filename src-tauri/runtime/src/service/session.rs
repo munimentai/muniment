@@ -3,10 +3,11 @@
 use muniment_core::attach::RuntimeActivityRegistry;
 use muniment_core::auth::{
     api_base_url, ensure_native_session as ensure_core_native_session, list_native_devices,
-    native_status, sign_out_native_session, AuthStatus, EntitlementSnapshotTracker,
-    EntitlementSnapshotView, FreshNativeSession, FreshNativeSessionError,
-    KeyringNativeCredentialStore, NativeDeviceList, NativeDeviceListError, NativeTokenError,
-    UreqNativeDeviceListTransport, UreqRevocationTransport,
+    native_status, run_native_sign_in, sign_out_native_session, AuthStatus, BrowserOpener,
+    EntitlementSnapshotTracker, EntitlementSnapshotView, FreshNativeSession,
+    FreshNativeSessionError, KeyringNativeCredentialStore, NativeDeviceList, NativeDeviceListError,
+    NativeSignInError, NativeTokenError, UreqAuthorizationTransport, UreqNativeDeviceListTransport,
+    UreqRegistrationTransport, UreqRevocationTransport, UreqTokenTransport,
 };
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -50,15 +51,42 @@ impl std::fmt::Display for SignOutError {
 
 impl std::error::Error for SignOutError {}
 
+/// Runs the native browser sign-in flow and stores the resulting session.
+pub fn sign_in(
+    browser: &dyn BrowserOpener,
+    tracker: &EntitlementSnapshotTracker,
+    runtime_activity: &RuntimeActivityRegistry,
+) -> Result<AuthStatus, NativeSignInError> {
+    let _activity = runtime_activity.mark_authentication_operation();
+    let network_timeout = Duration::from_secs(30);
+    let status = run_native_sign_in(
+        &KeyringNativeCredentialStore::new(),
+        &UreqRegistrationTransport::new(network_timeout),
+        &UreqAuthorizationTransport::new(network_timeout),
+        &UreqTokenTransport::new(network_timeout),
+        browser,
+        &api_base_url(),
+        &unix_time,
+        Duration::from_secs(300),
+        &std::thread::sleep,
+    )?;
+    tracker.clear();
+    Ok(status)
+}
+
+fn unix_time() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs())
+        .unwrap_or(0)
+}
+
 /// Returns a fresh native session from the platform credential store.
 pub fn ensure_native_session(
     runtime_activity: &RuntimeActivityRegistry,
 ) -> Result<FreshNativeSession, FreshNativeSessionError> {
     let _activity = runtime_activity.mark_session_refresh();
-    let now_unix_seconds = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_secs())
-        .unwrap_or(0);
+    let now_unix_seconds = unix_time();
     ensure_core_native_session(
         &KeyringNativeCredentialStore::new(),
         &api_base_url(),
@@ -68,10 +96,7 @@ pub fn ensure_native_session(
 
 /// Reads the native session status locally, so this call takes no activity mark.
 pub fn session_status() -> Result<AuthStatus, FreshNativeSessionError> {
-    let now_unix_seconds = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_secs())
-        .unwrap_or(0);
+    let now_unix_seconds = unix_time();
     native_status(&KeyringNativeCredentialStore::new(), now_unix_seconds)
 }
 
@@ -88,10 +113,7 @@ pub fn sign_out(
         &api_base_url(),
     )
     .map_err(SignOutError::LocalClear)?;
-    let now_unix_seconds = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_secs())
-        .unwrap_or(0);
+    let now_unix_seconds = unix_time();
     let status = native_status(&store, now_unix_seconds).map_err(SignOutError::Status)?;
     tracker.clear();
     Ok(status)
