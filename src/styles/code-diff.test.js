@@ -32,8 +32,10 @@ describe('code diff styles', () => {
     expect(css).toMatch(/\.d2h-file-diff \.d2h-ins\.d2h-change\s*\{[^}]*var\(--signal\)/)
   })
 
-  it('stacks the side-by-side panels at the narrow breakpoint', () => {
-    const narrow = css.match(/@media \(max-width: 720px\)\s*\{([\s\S]*)\}\s*$/)?.[1] ?? ''
+  it('stacks the side-by-side panels when the card is under 480 pixels wide', () => {
+    expect(css).toMatch(/\.code-diff\s*\{[^}]*container-type:\s*inline-size;/)
+
+    const narrow = css.match(/@container \(width < 480px\)\s*\{([\s\S]*)\}\s*$/)?.[1] ?? ''
 
     expect(narrow).toMatch(/\.d2h-files-diff\s*\{\s*display:\s*block;/)
     expect(narrow).toMatch(/\.d2h-file-side-diff\s*\{[^}]*width:\s*100%;/)

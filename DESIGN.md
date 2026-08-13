@@ -28,6 +28,7 @@ attention rather than silent replay.
 A memory recall renders as one row with its query inside the expanded receipt and nowhere else.
 Each saved attachment shows its media type when the record provides one. The image delivery rule appears once under the attachment list.
 A code-diff gate renders the stored diff. It never re-reads the workspace for display.
+A card that renders code sizes its layout from its own width rather than the window width. It stacks diff sides below 480 pixels.
 
 The signed-in shell has one workspace `h1`, a headed thread list, and a transcript region named for the open thread.
 An error message names the failure. The control beside it names and repeats the action that failed.
