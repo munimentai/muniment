@@ -1,19 +1,39 @@
 #![cfg(target_os = "linux")]
 
-use muniment_attach::{decode_frame, Request};
-use muniment_core::attach::linux::{AttachFilesystem, AttachTransport};
-use muniment_core::attach::probe_handoff;
-use muniment_runtime::{run_migration_takeover, MigrationTakeoverError};
+use muniment_attach::{decode_frame, handshake_stream, Request};
+use muniment_core::attach::linux::{
+    AttachFilesystem, AttachTransport, LiveConnectionRegistry, ThreadListPage, ThreadListRequest,
+    ThreadListService,
+};
+use muniment_core::attach::{
+    probe_handoff, ApprovalCoordinator, CompanionRegistry, ProtocolError, SignedWorkspaceApproval,
+};
+use muniment_runtime::{run_migration_takeover, AttachListenerInputs, MigrationTakeoverError};
+use std::collections::HashMap;
 use std::fs;
 use std::io::{Read, Write};
 use std::os::unix::fs::PermissionsExt;
+use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::mpsc;
+use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
 static NEXT_DIRECTORY: AtomicU64 = AtomicU64::new(0);
+
+#[derive(Default)]
+struct TestService;
+
+impl ThreadListService for TestService {
+    fn list_threads(
+        &mut self,
+        _workspace: &str,
+        _request: ThreadListRequest,
+    ) -> Result<ThreadListPage, ProtocolError> {
+        unreachable!("the handshake does not list threads")
+    }
+}
 
 struct RuntimeDirectory(PathBuf);
 
@@ -36,6 +56,43 @@ impl Drop for RuntimeDirectory {
     }
 }
 
+fn listener_state(
+    runtime: &RuntimeDirectory,
+) -> (
+    CompanionRegistry,
+    SignedWorkspaceApproval,
+    ApprovalCoordinator,
+) {
+    let approval = SignedWorkspaceApproval::default();
+    approval.record("workspace-a".into());
+    let approvals = ApprovalCoordinator::default();
+    let decisions = approvals.clone();
+    approvals.register_presenter(move |request| {
+        let decisions = decisions.clone();
+        let challenge = request.challenge.clone();
+        thread::spawn(move || decisions.decide(&challenge, true));
+        true
+    });
+    let registry = CompanionRegistry::new(
+        Arc::new(Mutex::new(HashMap::new())),
+        runtime.0.join("companions.json"),
+        LiveConnectionRegistry::default(),
+    );
+    (registry, approval, approvals)
+}
+
+fn inputs<'a>(
+    registry: &'a CompanionRegistry,
+    approval: &SignedWorkspaceApproval,
+    approvals: &ApprovalCoordinator,
+) -> AttachListenerInputs<'a> {
+    AttachListenerInputs {
+        companion_registry: registry,
+        approval: approval.clone(),
+        approvals: approvals.clone(),
+    }
+}
+
 #[test]
 fn takes_over_the_endpoint_with_the_minted_nonce() {
     let runtime = RuntimeDirectory::new();
@@ -44,11 +101,19 @@ fn takes_over_the_endpoint_with_the_minted_nonce() {
     let desktop_lock = filesystem.acquire_instance_lock().unwrap();
     let desktop = AttachTransport::bind(&filesystem).unwrap();
     let (stop_tx, stop_rx) = mpsc::channel();
+    let (registry, approval, approvals) = listener_state(&runtime);
     let test_timeout = Duration::from_secs(2);
 
     thread::scope(|scope| {
         let takeover = scope.spawn(|| {
-            run_migration_takeover(&runtime.0, Instant::now() + test_timeout, stop_rx).unwrap()
+            run_migration_takeover(
+                &runtime.0,
+                inputs(&registry, &approval, &approvals),
+                || Ok::<_, ()>(TestService),
+                Instant::now() + test_timeout,
+                stop_rx,
+            )
+            .unwrap()
         });
         let (mut stream, _) = desktop.accept().unwrap();
         let request = complete_handshake(&mut stream);
@@ -62,10 +127,32 @@ fn takes_over_the_endpoint_with_the_minted_nonce() {
         drop(stream);
         drop(desktop);
         drop(desktop_lock);
-        assert!(probe_handoff(&endpoint, &nonce, Instant::now() + test_timeout).is_ok());
+        let companion_deadline = Instant::now() + test_timeout;
+        let companion_connected = loop {
+            if let Ok(companion) = UnixStream::connect(&endpoint) {
+                if handshake_stream(
+                    companion,
+                    "1.0.0",
+                    Duration::from_millis(200),
+                    Duration::from_secs(1),
+                    || {},
+                )
+                .is_ok()
+                {
+                    break true;
+                }
+            }
+            if Instant::now() >= companion_deadline {
+                break false;
+            }
+            thread::sleep(Duration::from_millis(10));
+        };
+        let probe_result = probe_handoff(&endpoint, &nonce, Instant::now() + test_timeout);
 
         stop_tx.send(()).unwrap();
         takeover.join().unwrap();
+        assert!(companion_connected);
+        assert!(probe_result.is_ok());
     });
 }
 
@@ -77,11 +164,19 @@ fn retries_migration_not_ready_before_acceptance() {
     let desktop_lock = filesystem.acquire_instance_lock().unwrap();
     let desktop = AttachTransport::bind(&filesystem).unwrap();
     let (stop_tx, stop_rx) = mpsc::channel();
+    let (registry, approval, approvals) = listener_state(&runtime);
     let test_timeout = Duration::from_secs(2);
 
     thread::scope(|scope| {
         let takeover = scope.spawn(|| {
-            run_migration_takeover(&runtime.0, Instant::now() + test_timeout, stop_rx).unwrap()
+            run_migration_takeover(
+                &runtime.0,
+                inputs(&registry, &approval, &approvals),
+                || Ok::<_, ()>(TestService),
+                Instant::now() + test_timeout,
+                stop_rx,
+            )
+            .unwrap()
         });
         let (mut first, _) = desktop.accept().unwrap();
         let first_request = complete_handshake(&mut first);
@@ -128,10 +223,17 @@ fn maps_nonretryable_control_answers_to_typed_errors() {
         let _desktop_lock = filesystem.acquire_instance_lock().unwrap();
         let desktop = AttachTransport::bind(&filesystem).unwrap();
         let (_stop_tx, stop_rx) = mpsc::channel();
+        let (registry, approval, approvals) = listener_state(&runtime);
 
         thread::scope(|scope| {
             let takeover = scope.spawn(|| {
-                run_migration_takeover(&runtime.0, Instant::now() + test_timeout, stop_rx)
+                run_migration_takeover(
+                    &runtime.0,
+                    inputs(&registry, &approval, &approvals),
+                    || Ok::<_, ()>(TestService),
+                    Instant::now() + test_timeout,
+                    stop_rx,
+                )
             });
             let (mut stream, _) = desktop.accept().unwrap();
             let request = complete_handshake(&mut stream);
@@ -148,13 +250,21 @@ fn stalled_desktop_cannot_extend_the_caller_deadline() {
     let _desktop_lock = filesystem.acquire_instance_lock().unwrap();
     let desktop = AttachTransport::bind(&filesystem).unwrap();
     let (_stop_tx, stop_rx) = mpsc::channel();
+    let (registry, approval, approvals) = listener_state(&runtime);
     let caller_deadline = Duration::from_millis(100);
     let test_timeout = Duration::from_secs(1);
     let started = Instant::now();
 
     thread::scope(|scope| {
-        let takeover =
-            scope.spawn(|| run_migration_takeover(&runtime.0, started + caller_deadline, stop_rx));
+        let takeover = scope.spawn(|| {
+            run_migration_takeover(
+                &runtime.0,
+                inputs(&registry, &approval, &approvals),
+                || Ok::<_, ()>(TestService),
+                started + caller_deadline,
+                stop_rx,
+            )
+        });
         let (mut stream, _) = desktop.accept().unwrap();
         let _request = complete_handshake(&mut stream);
         assert_eq!(
