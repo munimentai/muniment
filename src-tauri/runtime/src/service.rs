@@ -22,7 +22,9 @@ use muniment_core::auth::{
     UreqNativeDeviceListTransport, UreqRevocationTransport,
 };
 use muniment_core::chat_coordinate::coordinate;
-use muniment_core::chat_grant::{fetch_grant, validate_grant, ChatGrant, FetchGrantError};
+use muniment_core::chat_grant::{
+    fetch_grant, grant_authorizes_workspace, validate_grant, ChatGrant, FetchGrantError,
+};
 use muniment_core::chat_profile::{ChatProfile, ChatProfileError};
 use muniment_core::chat_resume::{
     clear_active_run, install_active_run, install_resume_run, resumable_context,
@@ -123,6 +125,12 @@ impl std::error::Error for EntitlementSnapshotError {}
 pub enum SignOutError {
     LocalClear(NativeTokenError),
     Status(FreshNativeSessionError),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConfigureRunError {
+    Grant(FetchGrantError),
+    Unauthorized,
 }
 
 impl std::fmt::Display for SignOutError {
@@ -252,10 +260,16 @@ pub fn onboard_workspace(
     })
 }
 
-/// Fetches and validates a cloud chat grant.
-pub fn fetch_chat_grant(access_token: &str) -> Result<ChatGrant, FetchGrantError> {
-    let grant = fetch_grant(&api_base_url(), access_token)?;
-    validate_grant(&grant)?;
+/// Fetches a cloud chat grant and checks the requested workspace.
+pub fn configure_run(
+    access_token: &str,
+    requested_workspace: Option<&str>,
+) -> Result<ChatGrant, ConfigureRunError> {
+    let grant = fetch_grant(&api_base_url(), access_token).map_err(ConfigureRunError::Grant)?;
+    validate_grant(&grant).map_err(ConfigureRunError::Grant)?;
+    if !grant_authorizes_workspace(&grant, requested_workspace) {
+        return Err(ConfigureRunError::Unauthorized);
+    }
     Ok(grant)
 }
 
