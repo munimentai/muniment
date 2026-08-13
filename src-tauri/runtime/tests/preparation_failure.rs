@@ -1,6 +1,7 @@
 use std::fs;
 use std::sync::{Arc, Mutex};
 
+use muniment_core::attach::RuntimeActivityRegistry;
 use muniment_core::chat_grant::ChatGrant;
 use muniment_core::journal::EventPayload;
 use muniment_runtime::{accept_prompt, open_profile_storage};
@@ -17,12 +18,14 @@ fn memory_session_failure_ends_the_prepared_run() {
     fs::create_dir_all(&profile).unwrap();
     let storage = open_profile_storage(&profile).unwrap();
     let active = Arc::new(Mutex::new(None));
+    let runtime_activity = RuntimeActivityRegistry::new();
     let run_id = "018f0000-0000-7000-8000-000000000001";
 
     let result = accept_prompt(
         &profile,
         Arc::clone(&storage),
         Arc::new(Mutex::new(None)),
+        &runtime_activity,
         &config,
         run_id.into(),
         "prompt".into(),
