@@ -1,3 +1,4 @@
+use muniment_core::attach::RuntimeActivityRegistry;
 use muniment_core::auth::{
     EntitlementSnapshotTracker, KeyringNativeCredentialStore, NativeCredentialStore,
 };
@@ -21,10 +22,11 @@ fn entitlement_entry_projects_snapshots_and_reports_version_changes() {
     store.clear_session().unwrap();
     store.save_credentials(&credentials()).unwrap();
     let tracker = EntitlementSnapshotTracker::new();
+    let runtime_activity = RuntimeActivityRegistry::new();
 
     let (base_url, server) = spawn_server(200, session_body(7));
     std::env::set_var("MUNIMENT_API_BASE_URL", base_url);
-    let first = entitlement_snapshot(&tracker).unwrap();
+    let first = entitlement_snapshot(&tracker, &runtime_activity).unwrap();
     assert_eq!(first.snapshot.snapshot_version, 7);
     assert_eq!(first.changed_snapshot_version, None);
     let request = server.join().unwrap().to_ascii_lowercase();
@@ -33,21 +35,21 @@ fn entitlement_entry_projects_snapshots_and_reports_version_changes() {
 
     let (base_url, server) = spawn_server(200, session_body(8));
     std::env::set_var("MUNIMENT_API_BASE_URL", base_url);
-    let second = entitlement_snapshot(&tracker).unwrap();
+    let second = entitlement_snapshot(&tracker, &runtime_activity).unwrap();
     assert_eq!(second.snapshot.snapshot_version, 8);
     assert_eq!(second.changed_snapshot_version, Some(8));
     server.join().unwrap();
 
     store.clear_session().unwrap();
     assert_eq!(
-        entitlement_snapshot(&tracker).unwrap_err(),
+        entitlement_snapshot(&tracker, &runtime_activity).unwrap_err(),
         EntitlementSnapshotError::Missing
     );
 
     store.save_credentials(&credentials()).unwrap();
     let (base_url, server) = spawn_server(200, session_body(9));
     std::env::set_var("MUNIMENT_API_BASE_URL", base_url);
-    let after_missing = entitlement_snapshot(&tracker).unwrap();
+    let after_missing = entitlement_snapshot(&tracker, &runtime_activity).unwrap();
     assert_eq!(after_missing.changed_snapshot_version, None);
     server.join().unwrap();
 

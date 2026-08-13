@@ -145,7 +145,10 @@ impl std::fmt::Display for SignOutError {
 impl std::error::Error for SignOutError {}
 
 /// Returns a fresh native session from the platform credential store.
-pub fn ensure_native_session() -> Result<FreshNativeSession, FreshNativeSessionError> {
+pub fn ensure_native_session(
+    runtime_activity: &RuntimeActivityRegistry,
+) -> Result<FreshNativeSession, FreshNativeSessionError> {
+    let _activity = runtime_activity.mark_session_refresh();
     let now_unix_seconds = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_secs())
@@ -157,7 +160,7 @@ pub fn ensure_native_session() -> Result<FreshNativeSession, FreshNativeSessionE
     )
 }
 
-/// Reads the native session status from the platform credential store.
+/// Reads the native session status locally, so this call takes no activity mark.
 pub fn session_status() -> Result<AuthStatus, FreshNativeSessionError> {
     let now_unix_seconds = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -167,7 +170,11 @@ pub fn session_status() -> Result<AuthStatus, FreshNativeSessionError> {
 }
 
 /// Revokes the server session and clears the local native session.
-pub fn sign_out(tracker: &EntitlementSnapshotTracker) -> Result<AuthStatus, SignOutError> {
+pub fn sign_out(
+    tracker: &EntitlementSnapshotTracker,
+    runtime_activity: &RuntimeActivityRegistry,
+) -> Result<AuthStatus, SignOutError> {
+    let _activity = runtime_activity.mark_authentication_operation();
     let store = KeyringNativeCredentialStore::new();
     sign_out_native_session(
         &store,
@@ -187,8 +194,10 @@ pub fn sign_out(tracker: &EntitlementSnapshotTracker) -> Result<AuthStatus, Sign
 /// Returns the display-only entitlement projection and reports a version change.
 pub fn entitlement_snapshot(
     tracker: &EntitlementSnapshotTracker,
+    runtime_activity: &RuntimeActivityRegistry,
 ) -> Result<EntitlementSnapshotResult, EntitlementSnapshotError> {
-    let session = ensure_native_session().map_err(EntitlementSnapshotError::Session)?;
+    let session =
+        ensure_native_session(runtime_activity).map_err(EntitlementSnapshotError::Session)?;
     let next = session
         .entitlement_snapshot
         .as_ref()
