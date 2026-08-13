@@ -1,6 +1,8 @@
 //! Thread and run stream service operations.
 
 #[cfg(target_os = "linux")]
+use super::runtime_provenance;
+#[cfg(target_os = "linux")]
 use muniment_core::attach::linux::RunStreamPage;
 use muniment_core::attach::ProtocolError;
 use muniment_core::chat_profile::ChatProfile;
@@ -12,15 +14,10 @@ use muniment_core::journal::thread_mutation::{
 };
 use muniment_core::journal::thread_summaries::ThreadSummaryPage;
 #[cfg(target_os = "linux")]
-use muniment_core::journal::JournalCommitHint;
 use muniment_core::owned_threads::chat_thread_summaries_page;
 use muniment_core::run_events::{ChatStorage, SharedStorage};
 use muniment_core::thread_history::{chat_thread_open_page, ChatThreadOpenPage};
 use std::path::Path;
-#[cfg(target_os = "linux")]
-use std::sync::mpsc::Receiver;
-
-use super::runtime_provenance;
 
 /// Lists the threads owned by one subject.
 pub fn thread_summaries(
@@ -64,7 +61,7 @@ pub fn stream_run(
 pub fn subscribe_run_commits(
     storage: SharedStorage,
     run_id: String,
-) -> Result<Option<(u64, Receiver<JournalCommitHint>)>, ProtocolError> {
+) -> Result<Option<muniment_core::journal::CommitSubscription>, ProtocolError> {
     use muniment_core::attach::linux::ThreadListService;
 
     let mut storage = storage

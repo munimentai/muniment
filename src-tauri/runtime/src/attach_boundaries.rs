@@ -16,7 +16,7 @@ use muniment_core::chat_resume::{clear_active_run, install_active_run};
 use muniment_core::chat_view::{chat_attachments, ChatAttachment, SelectedFile};
 use muniment_core::journal::reducer::ChatProjector;
 use muniment_core::journal::thread_mutation::create_thread_now;
-use muniment_core::journal::{JournalCommitHint, Provenance};
+use muniment_core::journal::Provenance;
 use muniment_core::memory_index::ModelMemoryCapability;
 use muniment_core::memory_runtime::ApplicationMemoryRuntime;
 use muniment_core::permission_gate::ChatPermissionAnswer;
@@ -366,7 +366,7 @@ impl RunAttachBoundaries for RuntimeAttachBoundaries {
     fn subscribe_run_commits(
         &self,
         run_id: &str,
-    ) -> Result<(u64, std::sync::mpsc::Receiver<JournalCommitHint>), ProtocolError> {
+    ) -> Result<muniment_core::journal::CommitSubscription, ProtocolError> {
         let mut storage = self
             .storage
             .lock()
