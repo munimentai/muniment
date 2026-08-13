@@ -464,9 +464,10 @@ runtime value supplies everything `DesktopAttachService` reads.
 fixtures, the shared chat grant, the warm Pi stub staging, and the
 temporary-profile guard. Nothing in `main` calls any entry.
 
-DONE 2026-08-13 — the fifty-sixth through sixty-first waves closed sixteen
+DONE 2026-08-13 — the fifty-sixth through sixty-first waves closed twenty
 extraction slices (MUNIDESK-1188 through 1190, 1194, 1197 through 1199, 1201
-through 1205, and 1207 through 1215). The core half holds the approval seam.
+through 1205, 1207 through 1210, and 1212 through 1215). The core half holds the
+approval seam.
 `SignedWorkspaceApproval` (`src-tauri/core/src/attach/approval.rs:8`) is the one
 value carrying the signed workspace and the owner approval rule.
 `onboard_workspace_context` (`attach/workspace_context.rs:64`) is the one
@@ -486,7 +487,7 @@ coordinator and answers each presentation over the admitted connection.
 `CommitSubscription::drop` (`src-tauri/core/src/journal/mod.rs:406`) removes its
 registered subscriber by ID.
 
-DONE 2026-08-13 — the runtime half of those sixteen slices holds the service.
+DONE 2026-08-13 — the runtime half of those twenty slices holds the service.
 `profile_directory` and `config_directory`
 (`src-tauri/runtime/src/directories.rs`) resolve the two directories the desktop
 already uses. `compose_attach_service` (`runtime/src/attach_service.rs:15`)
