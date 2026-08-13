@@ -36,7 +36,7 @@ use muniment_core::journal::reconciliation::reconcile_interrupted_runs;
 use muniment_core::journal::reducer::{project_chat, ChatProjector};
 #[cfg(target_os = "linux")]
 use muniment_core::journal::thread_mutation::create_thread_now;
-use muniment_core::journal::{EventEnvelope, JournalCommitHint, Provenance};
+use muniment_core::journal::{EventEnvelope, Provenance};
 #[cfg(test)]
 use muniment_core::journal::{EventPayload, RunJournal};
 use muniment_core::memory_index::ModelMemoryCapability;
@@ -187,7 +187,7 @@ impl<R: tauri::Runtime> RunAttachBoundaries for TauriRunStartBoundaries<R> {
     fn subscribe_run_commits(
         &self,
         run_id: &str,
-    ) -> Result<(u64, std::sync::mpsc::Receiver<JournalCommitHint>), ProtocolError> {
+    ) -> Result<muniment_core::journal::CommitSubscription, ProtocolError> {
         self.state()
             .storage
             .lock()
