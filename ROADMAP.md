@@ -19,9 +19,9 @@ them must exercise the real contracts. It must add no mocked production path.
 > contracts section. The eleventh took the stable release and distribution
 > section. The twelfth took the desktop QA automation section. The thirteenth
 > and the fifteenth both took the ADR 0012 runtime-service extraction section.
-> The fourteenth took the Phase 2 client core section. The sixteenth took that
-> extraction section again. It grows every wave, so it stays the next compaction
-> target.
+> The fourteenth took the Phase 2 client core section. The sixteenth and the
+> seventeenth took that extraction section again. It grows every wave, so it
+> stays the next compaction target.
 
 ## M0 — Scaffold (done 2026-07-09)
 
@@ -475,41 +475,38 @@ the journal. `src-tauri/runtime/tests/` proves each entry against a live run, an
 `tests/common/mod.rs` owns the shared loopback HTTP stub, both credential
 fixtures, and the warm Pi stub staging. Nothing in `main` calls any entry.
 
-DONE 2026-08-12 — the runtime grant entry enforces the ADR 0009 workspace rule
-(MUNIDESK-1173). `configure_run` (`src-tauri/runtime/src/service.rs:264`) fetches
-the grant, validates it, and rejects a requested workspace the signed
-`grant.workspace` does not authorize. `grant_authorizes_workspace` is the one core
-predicate, and the desktop `configure_run` (`src-tauri/src/chat.rs:250`) reads the
-same predicate.
-
-DONE 2026-08-12 — `RunStartBoundaries` is split (MUNIDESK-1174).
-`RunAttachBoundaries` (`src-tauri/core/src/run_start.rs:69`) holds the six Linux
-attach reads over the journal alone, and `RunStartBoundaries` (`:112`) holds the
-run-acceptance methods. `DesktopAttachService` takes both bounds
-(`src-tauri/core/src/attach/desktop_service.rs:81`), so the runtime can answer the
-attach reads before it answers run acceptance.
+DONE 2026-08-12 — three boundary slices landed (MUNIDESK-1173, 1174, 1177).
+`configure_run` (`src-tauri/runtime/src/service.rs:273`) fetches the grant,
+validates it, and rejects a requested workspace the signed `grant.workspace` does
+not authorize, through the one core predicate `grant_authorizes_workspace` that
+the desktop `configure_run` (`src-tauri/src/chat.rs:250`) also reads.
+`RunAttachBoundaries` (`src-tauri/core/src/run_start.rs:69`) is now its own trait
+holding the six Linux attach reads over the journal alone, and
+`RunStartBoundaries` (`:112`) holds the run-acceptance methods, so
+`DesktopAttachService` (`src-tauri/core/src/attach/desktop_service.rs:70`) takes
+both bounds. `ensure_native_session` (`service.rs:148`) takes
+`mark_session_refresh` and `sign_out` (`:173`) takes
+`mark_authentication_operation`, so `entitlement_snapshot` (`:195`) inherits the
+refresh mark from its own session read.
 
 MEASURED 2026-08-12 (fifty-second wave, planner, read the runtime device-session
 entries beside `AuthState` (`src-tauri/src/auth/mod.rs:88`)) — the runtime
-answers no sign-in, and its device-session entries take no activity mark. The
-desktop holds `run_native_sign_in` (`src-tauri/core/src/auth/native_sign_in.rs:43`)
-through `sign_in_blocking` (`src-tauri/src/auth/mod.rs:192`), which is the last
-ADR 0012 device-session capability with no runtime twin. That core function takes
-a `&dyn BrowserOpener`, so a runtime entry passes the opener in rather than
-spawning a browser itself. The desktop marks a refresh with `mark_session_refresh`
-and a sign-in or sign-out with `mark_authentication_operation`, and it leaves the
-local `auth_status` read unmarked. `ensure_native_session`
-(`src-tauri/runtime/src/service.rs:148`) and `sign_out` (`:170`) mark nothing.
+answers no sign-in. The desktop holds `run_native_sign_in`
+(`src-tauri/core/src/auth/native_sign_in.rs:43`) through `sign_in_blocking`
+(`src-tauri/src/auth/mod.rs:192`), which is the last ADR 0012 device-session
+capability with no runtime twin. That core function takes a `&dyn BrowserOpener`,
+so a runtime entry passes the opener in rather than spawning a browser itself.
+The entry marks an authentication operation, the way `sign_out` now does.
 
-MEASURED 2026-08-12 (fifty-fourth wave, planner, counted lines and merges) —
+MEASURED 2026-08-13 (fifty-fifth wave, planner, counted lines and merges) —
 `src-tauri/runtime/src/service.rs` is the extraction lane's merge chokepoint. The
-file holds 861 lines, and 15 of the last 40 merges into `main` edited it. Every
-selected service slice therefore rebases against the slice before it, and the
-2026-08-04 silent revert came from exactly that shape. Splitting the module by
-concern, with `service::*` re-exports so no caller changes, is one slice. It is
-not selected while three service slices are open, because the split would move
-the lines those slices edit. The lane files it in the first wave that opens with
-no open service slice.
+file holds 870 lines and 34 public entry points, and 15 of the last 40 merges into
+`main` edited it. Every selected service slice therefore rebases against the slice
+before it, and the 2026-08-04 silent revert came from exactly that shape.
+Splitting the module by concern, with `service::*` re-exports so no caller
+changes, is one slice. The hold said the lane files it in the first wave that
+opens with no open service slice. The fifty-fifth wave opened drained, so the
+split is selected first, and the runtime sign-in entry waits for it to merge.
 
 MEASURED 2026-08-12 (thirty-ninth wave, planner, read the runtime manifest beside
 `test/runtime-dependency-boundary.sh`) — the runtime crate cannot build a
@@ -555,42 +552,52 @@ projector always holds state there. A test seam would also prove nothing, becaus
 projector rejects that event too. The lane re-opens this only against a new
 failure route.
 
-MERGE HAZARD — every fifty-fourth-wave service slice edits
-`src-tauri/runtime/src/service.rs`. The device-session mark slice changes
-`ensure_native_session`, `sign_out`, and `entitlement_snapshot` and edits four
-test binaries. The sign-in slice adds one function and one test binary. The
-attach-boundaries slice adds one module and touches `lib.rs` alone. Each ticket
-tells the implementer to rebase on `main` before it opens the pull request. The
-2026-08-04 silent revert came from a stale base.
+MERGE HAZARD — the fifty-fifth-wave split moves every line of
+`src-tauri/runtime/src/service.rs`. No other selected slice may edit that file in
+the same wave. The attach-boundaries slice adds one module and appends to
+`lib.rs`, so it survives the move. Each ticket tells the implementer to rebase on
+`main` before it opens the pull request. The 2026-08-04 silent revert came from a
+stale base.
 
-VERIFIED 2026-08-12 (fifty-fourth wave, planner, read
-`src-tauri/runtime/src/service.rs` beside `src-tauri/core/src/run_start.rs` and
-`src-tauri/src/auth/mod.rs`, then ran `cargo test --manifest-path
-src-tauri/runtime/Cargo.toml`) — two of the fifty-third wave's four slices are
-built and two are not. `configure_run` (`:264`) takes the requested workspace and
-`RunAttachBoundaries` is its own trait. `ensure_native_session` (`:148`) and
-`sign_out` (`:170`) still mark nothing, and no runtime sign-in entry exists. The
-runtime suite passes 50 tests over 26 test binaries.
+VERIFIED 2026-08-13 (fifty-fifth wave, planner, read
+`src-tauri/runtime/src/service.rs` beside `src-tauri/core/src/run_start.rs`, then
+ran `cargo test --manifest-path src-tauri/runtime/Cargo.toml`) — one of the
+fifty-fourth wave's three slices is built and two are not. The device-session
+marks are in place at `:151` and `:177`. No runtime sign-in entry exists, and no
+value in the runtime crate implements `RunAttachBoundaries`. The runtime suite
+passes 50 tests over 26 test binaries.
 
-SELECTED 2026-08-12 (fifty-fourth wave) — three slices in priority order.
+SELECTED 2026-08-13 (fifty-fifth wave) — three slices in priority order.
 
-1. The device-session marks on `ensure_native_session` and `sign_out`, with the
-   entitlement snapshot inheriting the refresh mark from its own session read.
-2. The runtime sign-in entry, per the fifty-second-wave measurement. The caller
-   passes the browser opener, and the entry marks an authentication operation.
-3. The runtime boundaries value that answers `RunAttachBoundaries` over the
+1. The `service.rs` split by concern, per the chokepoint measurement above.
+2. The runtime boundaries value that answers `RunAttachBoundaries` over the
    shared storage and the shared run control slot.
+3. One shared chat-grant fixture for the runtime test suite.
 
-SEQUENCED 2026-08-12 (fifty-fourth wave, planner, read `TauriRunStartBoundaries`
+MEASURED 2026-08-13 (fifty-fifth wave, planner, read every `ChatGrant` literal
+under `src-tauri/runtime/tests/`) — seven copies of the same grant literal sit in
+six test files. `run.rs` holds two, and `steer.rs`, `permission.rs`, `cancel.rs`,
+and `preparation_failure.rs` hold one each with byte-identical field values.
+`sink.rs` holds a seventh that differs in `workspace` and `virtual_key` alone, so
+a shared fixture plus a struct-update override covers every site. `tests/common`
+already owns the loopback HTTP stub, both credential fixtures, and the warm Pi
+stub staging, so the grant belongs beside them.
+
+SEQUENCED 2026-08-13 (fifty-fifth wave, planner, read `TauriRunStartBoundaries`
 (`src-tauri/src/chat.rs:127`) beside `DesktopAttachService`
-(`src-tauri/core/src/attach/desktop_service.rs:81`)) — the trait split landed, so
-the runtime composition of the attach seam is the open lane.
-`DesktopAttachService` takes `RunStartBoundaries + RunAttachBoundaries`. The
-attach-read half comes first, because its six methods read the journal alone. The
-run-acceptance half follows on the same value, and it holds the shared activity
-registry, the shared Pi runtime slot, the memory runtime, and the companion
-registry. Only after both halves does a runtime `DesktopAttachService` answer a
-dispatched attach request.
+(`src-tauri/core/src/attach/desktop_service.rs:70`)) — the runtime composition of
+the attach seam is the open lane. `DesktopAttachService` takes
+`RunStartBoundaries + RunAttachBoundaries`. The attach-read half comes first,
+because its six methods read the journal alone. The runtime service already holds
+free functions for most of those reads, but three signatures differ from the
+trait: `thread_summaries` and `thread_page` take page arguments rather than a
+`ThreadListRequest`, and `subscribe_run_commits` returns an `Option`. The
+boundaries value therefore calls `ThreadListService` on the journal directly, the
+way `TauriRunStartBoundaries` does. The run-acceptance half follows on the same
+value, and it holds the shared activity registry, the shared Pi runtime slot, the
+memory runtime, and the companion registry. Only after both halves does a runtime
+`DesktopAttachService` answer a dispatched attach request. The runtime sign-in
+entry waits for the split, because it adds a function to the moved file.
 
 SEQUENCED — after the attach seam, the later extraction slices are the desktop
 client conversion and Linux user-unit registration. Each sits behind a dormant
@@ -686,19 +693,15 @@ sides when the card is narrow rather than when the window is narrow. The
 fifty-third wave measured each side at 122 CSS pixels with the artifact rail open
 at a 960 pixel window, where the old `max-width: 720px` media query never fired.
 
-MEASURED 2026-08-12 (fifty-fourth wave, planner, read `src/App.svelte:922` and
-`:935` beside `load_applied_code_diff`
-(`src-tauri/core/src/code_diff_journal.rs:498`)) — both unavailable code-diff
-states leave the reader guessing. A stored diff body goes missing when its CAS
-object is gone or its recorded hash no longer matches, and the journal event
-survives either way. The applied card then says `The applied changes cannot be
-shown.`, which reads as a failed write, when the event proves the write happened.
-The gate card says `The proposed changes cannot be shown.` and drops its `Apply`
-control, because `:971` gates that control on `gate.diff`. The user meets an
-approval card with one `Deny` control, no approve control, and no sentence
-explaining that Muniment refuses to apply a change it cannot show. DESIGN.md asks
-an error message to name the failure and the control beside it to name the
-action.
+DONE 2026-08-12 — both unavailable code-diff states now say what happened
+(MUNIDESK-1178). A stored diff body goes missing when its CAS object is gone or
+its recorded hash no longer matches, and the journal event survives either way.
+The applied card reads `The changes were applied, but their record is no longer
+stored.` (`src/App.svelte:922`), so it no longer reads as a failed write. The gate
+card reads `Muniment will not apply a change it cannot show. Deny is the only
+choice.` (`:935`) beside its single `Deny` control. The fifty-fifth wave shot
+`test/probe/code-diff-unavailable.html` at 1100x720 and confirmed both strings
+render.
 
 PARKED — the producer's Pi input waits on the Pi wire contract, with the ADR
 0025 consumers. ADR 0024 requires structured proposed operations from Pi
@@ -954,17 +957,28 @@ Phase 4 placeholder. A card inside that column still owes the reader a layout
 that fits 246 pixels, which is what the fifty-third-wave code-diff measurement
 records.
 
-MEASURED 2026-08-12 (fifty-fourth wave, planner, opened the profile popover in
-headless Chromium at three window sizes and measured `.access-popover` beside
-`.access-content`) — the popover hides its last section at every window size.
-`src/lib/AccessPanel.svelte:334` caps the panel at `min(560px, 70vh)`, and the
-content region needs 495 pixels beside a fixed header and a fixed footer. At
-960x640 the panel measures 448 pixels tall, the content region shows 339 of its
-495 pixels, and 156 pixels stay below the fold. The whole `Voice shortcut`
-section, its `Change` control, and its `Restore default` control sit outside the
-panel. The panel also leaves 111 unused pixels above itself and 81 below. At
-1100x720 the hidden amount is 100 pixels, and at 1440x900 it is still 44. The
-`560px` literal, not the viewport, is what binds on a large window.
+DONE 2026-08-12 — the profile popover sizes itself to the space above the profile
+button (MUNIDESK-1179). The fifty-fourth wave measured a 448 pixel panel at
+960x640 that hid 156 pixels of content, including the whole `Voice shortcut`
+section. The fifty-fifth wave re-opened the popover in headless Chromium at
+960x640 and measured a 558 pixel panel whose content region shows 449 of its 495
+pixels. All six sections and the fixed `Sign out` footer render, and the remaining
+46 pixels scroll. DO NOT RE-POLISH the panel height. A later wave needs a new
+measurement before it touches that dimension again.
+
+MEASURED 2026-08-13 (fifty-fifth wave, planner, opened the profile popover in
+headless Chromium at 1100x720 and measured every control inside
+`.access-popover`) — the 24 pixel target-size floor is enforced over one file, and
+two controls outside that file miss it. `.companion-revoke`
+(`src/lib/AccessPanel.svelte:390`) renders 56 by 21 pixels, and `.close-access`
+renders 21 by 28 pixels. Both are 3 pixels short of the DESIGN.md floor. Neither
+rule carries `min-width` or `min-height`, where `.thread-delete`
+(`src/App.svelte:1292`) carries both and measures 56 by 24 after MUNIDESK-1038.
+`src/styles/target-size.test.js` reads `src/App.svelte` alone and checks a
+hand-written list of four selectors, so it never opens `src/lib/AccessPanel.svelte`
+and stayed green through both violations. The other six popover controls clear the
+floor, the smallest at 53 by 30. The revoke control is also the only path to
+revoke a paired companion's access, which is an ADR 0009 security decision.
 
 DO NOT RE-FILE — asset weight is not worth a slice. The frontend emits one
 252,280-byte script, one 62,240-byte stylesheet, and 154,444 bytes of webfont.
@@ -1013,6 +1027,15 @@ DONE — `test/probe/` is the committed planner harness (MUNIDESK-552, 558, 632,
 715, 769, 1013). Its fixture pages cover the empty workspace, restored history,
 Markdown, signed out, onboarding, approved files, the three code diff states, and
 the four permission-gate kinds. `npm run probe` builds and prints every URL.
+MEASURED 2026-08-13 (fifty-fifth wave, planner) — no fixture opens the profile
+popover, so every wave that inspects `Appearance`, `Your access`, `Devices`,
+`Connected programs`, or `Voice shortcut` hand-writes a throwaway Playwright
+script. The fifty-fourth wave wrote one, and the fifty-fifth wrote two.
+`test/probe/stub.js` already answers `auth_entitlement_snapshot`, `auth_devices`,
+`attach_listener_status`, and `attach_companions`, and `advanceApprovedFixture`
+(`stub.js:243`) is the precedent for a fixture that drives a click before it marks
+ready. `auth_devices` returns an empty list, so the `Devices` section renders its
+empty state alone.
 `fixtureRendered` compares rendered text with whitespace removed, and
 `markProbeReady` awaits `document.fonts.ready` before it sets `data-probe-ready`,
 so a capture never shoots the fallback type. `test/probe-harness.test.js` guards
@@ -1051,11 +1074,12 @@ earlier one. Requiring an up-to-date branch before merge, or a merge queue, is a
 repository-settings change that sits with the owner. The planner files no ticket
 for it.
 
-VERIFIED 2026-08-12 (fifty-fourth wave, planner) — `cargo test --manifest-path
+VERIFIED 2026-08-13 (fifty-fifth wave, planner) — `cargo test --manifest-path
 src-tauri/runtime/Cargo.toml` passes 50 tests over 26 test binaries. `npm ci`
-then `npm test` passes 928 frontend tests with 31 skipped, plus 3 browser tests.
-`npm run build` emits a 302,750-byte script, a 63,970-byte stylesheet, and three
-webfont files across two families. This entry replaces the earlier ledger.
+then `npm test` passes 928 frontend tests over 62 files with 31 skipped, plus 3
+browser tests. `npm run build` emits a 302,810-byte script, a 63,980-byte
+stylesheet, and three webfont files across two families. This entry replaces the
+earlier ledger.
 
 MEASURED 2026-08-12 (fifty-second wave, planner, read the vitest JSON report) —
 all 31 skipped frontend tests are Windows-only cases. Every one sits behind
@@ -1077,19 +1101,20 @@ hangs until the timeout.
 PLANNER PROCEDURE — pick an unused port for the capture server. Port 8899 was
 already bound by another workspace in this container, and the stale server
 answered 404 for every probe path until the planner moved to 8944. The
-fifty-third wave used 8951, and the fifty-fourth used 8962.
+fifty-third wave used 8951, the fifty-fourth used 8962, and the fifty-fifth used
+8975.
 
 PLANNER PROCEDURE — for a measurement that needs a click, write a short
 playwright script and run it from the repository root. Playwright is a project
 dependency rather than a global one, so a script under `/tmp` cannot import it.
 Delete the script before the wave ends, so the clone stays clean.
 
-MEASURED 2026-08-12 (fifty-fourth wave, planner) — the capture ran after
-`npm run build`, and headless Chromium shot the history, permission, editor,
-applied-diff, code-diff-unavailable, onboarding, and signed-out fixtures at
-1100x720 and at 960x640. The applied diff stacks correctly at the minimum window
-after MUNIDESK-1175. The two unavailable code-diff states and the profile popover
-produced the measurements recorded above.
+MEASURED 2026-08-13 (fifty-fifth wave, planner) — the capture ran after
+`npm run build`, and headless Chromium shot the history, permission,
+code-diff-unavailable, and markdown fixtures at 1100x720. Both MUNIDESK-1178
+strings render, and MUNIDESK-1179 fits every popover section at 960x640. A
+throwaway Playwright script opened the popover and produced the target-size
+measurement recorded above.
 
 ## Stable release and distribution
 
