@@ -1,18 +1,22 @@
 #![cfg(target_os = "linux")]
 
 use std::collections::{BTreeMap, VecDeque};
-use std::fs;
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
 
 use muniment_core::attach::linux::{ThreadListRequest, ThreadOpenRequest};
 use muniment_core::attach::{ProtocolError, RuntimeActivityRegistry};
 use muniment_core::journal::Provenance;
+use muniment_core::memory_runtime::ApplicationMemoryRuntime;
 use muniment_core::permission_gate::ChatPermissionAnswer;
+use muniment_core::pi_execution::PiRuntime;
 use muniment_core::run_preparation::{prepare_new_run_with_session_thread, SessionThreadStart};
 use muniment_core::run_start::{ActiveRun, RunAttachBoundaries};
 use muniment_core::session_thread::SessionThread;
 use muniment_runtime::{open_profile_storage, RuntimeAttachBoundaries};
+
+mod common;
+use common::TemporaryProfile;
 
 fn provenance() -> Provenance {
     let mut provenance = Provenance {
@@ -32,13 +36,8 @@ fn provenance() -> Provenance {
 
 #[test]
 fn runtime_boundaries_answer_all_attach_reads() {
-    let temporary_root = std::env::temp_dir().join(format!(
-        "muniment-runtime-attach-boundaries-{}",
-        std::process::id()
-    ));
-    let _ = fs::remove_dir_all(&temporary_root);
-    let profile = temporary_root.join("profile");
-    fs::create_dir_all(&profile).unwrap();
+    let temporary_profile = TemporaryProfile::new("attach-boundaries", false);
+    let profile = temporary_profile.profile.clone();
     let storage = open_profile_storage(&profile).unwrap();
     let runtime_activity = RuntimeActivityRegistry::new();
     let permission_answers = Arc::new(Mutex::new(VecDeque::new()));
@@ -51,7 +50,20 @@ fn runtime_boundaries_answer_all_attach_reads() {
         permission_answers: Arc::clone(&permission_answers),
         _activity: runtime_activity.mark_active_run(),
     })));
-    let boundaries = RuntimeAttachBoundaries::new(Arc::clone(&storage), active);
+    let config = temporary_profile.config.clone();
+    let boundaries = RuntimeAttachBoundaries::new(
+        Arc::clone(&storage),
+        active,
+        profile.clone(),
+        config.clone(),
+        Arc::new(Mutex::new(None::<PiRuntime>)),
+        Arc::new(ApplicationMemoryRuntime::new(
+            config,
+            profile.join("memory"),
+        )),
+        runtime_activity,
+        SessionThread::default(),
+    );
 
     let created_thread = boundaries
         .create_thread("workspace-a", provenance())
@@ -123,7 +135,7 @@ fn runtime_boundaries_answer_all_attach_reads() {
     assert_eq!(stream.current_run_seq, current_run_seq);
 
     let subscription = boundaries.subscribe_run_commits(run_id).unwrap();
-    assert_eq!(subscription.0, current_run_seq);
+    assert_eq!(subscription.committed_high_water, current_run_seq);
     assert_eq!(
         boundaries.subscribe_run_commits("unknown-run").unwrap_err(),
         ProtocolError::thread_not_found()
@@ -142,5 +154,4 @@ fn runtime_boundaries_answer_all_attach_reads() {
 
     drop(boundaries);
     drop(storage);
-    fs::remove_dir_all(temporary_root).unwrap();
 }

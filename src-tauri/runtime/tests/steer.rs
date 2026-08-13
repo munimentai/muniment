@@ -4,11 +4,10 @@ use std::time::Duration;
 
 use muniment_core::active_run::{ChatDelivery, ChatQueueRequest};
 use muniment_core::attach::RuntimeActivityRegistry;
-use muniment_core::home::confirm_home;
 use muniment_runtime::{open_profile_storage, queue_run_message, run_prompt};
 
 mod common;
-use common::{fixture_grant, stage_pi_stub};
+use common::{fixture_grant, stage_pi_stub, TemporaryProfile};
 
 static ENVIRONMENT: Mutex<()> = Mutex::new(());
 
@@ -16,13 +15,10 @@ static ENVIRONMENT: Mutex<()> = Mutex::new(());
 fn a_queued_steer_reaches_a_live_runtime_run() {
     let _environment = ENVIRONMENT.lock().unwrap();
     muniment_core::chat_prompt::use_mock_keyring_for_tests();
-    let temporary_root =
-        std::env::temp_dir().join(format!("muniment-runtime-steer-{}", std::process::id()));
-    let _ = fs::remove_dir_all(&temporary_root);
-    let profile = temporary_root.join("profile");
-    let config = temporary_root.join("config");
-    fs::create_dir_all(&profile).unwrap();
-    confirm_home(&config, &temporary_root.join("home")).unwrap();
+    let temporary_profile = TemporaryProfile::new("steer", true);
+    let temporary_root = temporary_profile.root.clone();
+    let profile = temporary_profile.profile.clone();
+    let config = temporary_profile.config.clone();
     let descriptor = stage_pi_stub(&temporary_root);
     let steer_capture = temporary_root.join("steer.json");
     std::env::set_var("PI_RESUME_STUB_STEER_CAPTURE", &steer_capture);
@@ -105,5 +101,4 @@ fn a_queued_steer_reaches_a_live_runtime_run() {
     drop(storage);
     std::env::remove_var("PI_RESUME_STUB_STEER_CAPTURE");
     std::env::remove_var("MUNIMENT_PI_ROOT");
-    fs::remove_dir_all(temporary_root).unwrap();
 }

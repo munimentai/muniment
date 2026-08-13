@@ -36,7 +36,7 @@ use muniment_core::journal::reconciliation::reconcile_interrupted_runs;
 use muniment_core::journal::reducer::{project_chat, ChatProjector};
 #[cfg(target_os = "linux")]
 use muniment_core::journal::thread_mutation::create_thread_now;
-use muniment_core::journal::{EventEnvelope, JournalCommitHint, Provenance};
+use muniment_core::journal::{EventEnvelope, Provenance};
 #[cfg(test)]
 use muniment_core::journal::{EventPayload, RunJournal};
 use muniment_core::memory_index::ModelMemoryCapability;
@@ -187,7 +187,7 @@ impl<R: tauri::Runtime> RunAttachBoundaries for TauriRunStartBoundaries<R> {
     fn subscribe_run_commits(
         &self,
         run_id: &str,
-    ) -> Result<(u64, std::sync::mpsc::Receiver<JournalCommitHint>), ProtocolError> {
+    ) -> Result<muniment_core::journal::CommitSubscription, ProtocolError> {
         self.state()
             .storage
             .lock()
@@ -371,20 +371,20 @@ impl<R: tauri::Runtime> RunStartBoundaries for TauriRunStartBoundaries<R> {
     }
 
     fn fail_prepared_run(&self, launch: &RunStartLaunch) -> Result<(), RunStartError> {
-        let failed = event_envelope(
+        core_run_preparation::append_prepared_run_persistence_failure(
+            &mut self
+                .state()
+                .storage
+                .lock()
+                .map_err(|_| RunStartError::Persistence(attachment_error()))?
+                .journal,
             &launch.run_id,
-            launch.prepared.0 + 1,
-            "run.failed",
-            json!({"reason": "persistence"}),
+            launch.prepared.0,
             launch.tokens.subject.as_deref(),
-        );
-        self.state()
-            .storage
-            .lock()
-            .map_err(|_| RunStartError::Persistence(attachment_error()))?
-            .journal
-            .append(launch.prepared.0, &failed)
-            .map_err(|_| RunStartError::Persistence(attachment_error()))
+            "muniment-desktop",
+            env!("CARGO_PKG_VERSION"),
+        )
+        .map_err(|_| RunStartError::Persistence(attachment_error()))
     }
 
     fn clear_active_run(&self, run_id: &str) {

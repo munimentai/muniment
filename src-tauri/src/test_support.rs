@@ -183,7 +183,7 @@ impl RunAttachBoundaries for FakeRunStartBoundaries {
     fn subscribe_run_commits(
         &self,
         run_id: &str,
-    ) -> Result<(u64, std::sync::mpsc::Receiver<JournalCommitHint>), ProtocolError> {
+    ) -> Result<muniment_core::journal::CommitSubscription, ProtocolError> {
         let high_water = self
             .journal
             .lock()
@@ -196,7 +196,9 @@ impl RunAttachBoundaries for FakeRunStartBoundaries {
             .map_or(0, |event| event.run_seq);
         let (sender, receiver) = std::sync::mpsc::sync_channel(4);
         *self.permission_commit_sender.lock().unwrap() = Some(sender);
-        Ok((high_water, receiver))
+        Ok(muniment_core::journal::CommitSubscription::detached(
+            high_water, receiver,
+        ))
     }
 
     #[cfg(target_os = "linux")]

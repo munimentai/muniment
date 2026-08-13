@@ -7,7 +7,6 @@ use std::time::Duration;
 use muniment_core::active_run::cancel_active_run;
 use muniment_core::attach::RuntimeActivityRegistry;
 use muniment_core::chat_resume::clear_active_run;
-use muniment_core::home::confirm_home;
 use muniment_core::pi_execution::{coordinate_prepared_prompt, PiRuntime};
 use muniment_core::run_events::{ChatEvent, ChatEventSink};
 use muniment_core::run_preparation::{
@@ -21,7 +20,7 @@ use muniment_runtime::{
 };
 
 mod common;
-use common::{fixture_grant, stage_pi_stub};
+use common::{fixture_grant, stage_pi_stub, TemporaryProfile};
 
 static ENVIRONMENT: Mutex<()> = Mutex::new(());
 
@@ -45,15 +44,9 @@ fn accept_two_prompts_with_session_thread(continue_existing: bool) -> (String, S
     } else {
         "separate"
     };
-    let temporary_root = std::env::temp_dir().join(format!(
-        "muniment-runtime-session-thread-{mode}-{}",
-        std::process::id()
-    ));
-    let _ = fs::remove_dir_all(&temporary_root);
-    let profile = temporary_root.join("profile");
-    let config = temporary_root.join("config");
-    fs::create_dir_all(&profile).unwrap();
-    confirm_home(&config, &temporary_root.join("home")).unwrap();
+    let temporary_profile = TemporaryProfile::new(&format!("session-thread-{mode}"), true);
+    let profile = temporary_profile.profile.clone();
+    let config = temporary_profile.config.clone();
     let storage = open_profile_storage(&profile).unwrap();
     let runtime = Arc::new(Mutex::new(None));
     let runtime_activity = RuntimeActivityRegistry::new();
@@ -110,7 +103,6 @@ fn accept_two_prompts_with_session_thread(continue_existing: bool) -> (String, S
 
     let thread_ids = (first.thread_id, second.thread_id);
     drop(storage);
-    fs::remove_dir_all(temporary_root).unwrap();
     thread_ids
 }
 
@@ -130,10 +122,8 @@ fn disabled_session_thread_continuation_starts_two_threads() {
 
 #[test]
 fn an_occupied_active_run_slot_does_not_prepare_a_new_run() {
-    let temporary_root =
-        std::env::temp_dir().join(format!("muniment-runtime-occupied-{}", std::process::id()));
-    let profile = temporary_root.join("profile");
-    fs::create_dir_all(&profile).unwrap();
+    let temporary_profile = TemporaryProfile::new("occupied", false);
+    let profile = temporary_profile.profile.clone();
     let activity = RuntimeActivityRegistry::new();
     let active = Arc::new(Mutex::new(Some(ActiveRun {
         id: "018f0000-0000-7000-8000-000000000001".into(),
@@ -152,7 +142,7 @@ fn an_occupied_active_run_slot_does_not_prepare_a_new_run() {
         Arc::clone(&storage),
         Arc::new(Mutex::new(None)),
         &activity,
-        temporary_root.join("config"),
+        temporary_profile.config.clone(),
         run_id.into(),
         "prompt".into(),
         None,
@@ -176,22 +166,19 @@ fn an_occupied_active_run_slot_does_not_prepare_a_new_run() {
         .events(run_id)
         .unwrap()
         .is_empty());
-    fs::remove_dir_all(temporary_root).unwrap();
 }
 
 #[test]
 fn runs_two_prompts_in_one_named_thread_and_rejects_an_unknown_thread() {
     let _environment = ENVIRONMENT.lock().unwrap();
     muniment_core::chat_prompt::use_mock_keyring_for_tests();
-    let temporary_root =
-        std::env::temp_dir().join(format!("muniment-runtime-run-{}", std::process::id()));
-    let profile = temporary_root.join("profile");
-    let config = temporary_root.join("config");
-    fs::create_dir_all(&profile).unwrap();
+    let temporary_profile = TemporaryProfile::new("run", true);
+    let temporary_root = temporary_profile.root.clone();
+    let profile = temporary_profile.profile.clone();
+    let config = temporary_profile.config.clone();
     let storage = open_profile_storage(&profile).unwrap();
     let runtime = Arc::new(Mutex::new(None::<PiRuntime>));
     let runtime_activity = RuntimeActivityRegistry::new();
-    confirm_home(&config, &temporary_root.join("home")).unwrap();
     let descriptor = stage_pi_stub(&temporary_root);
     let captured_prompts = temporary_root.join("prompts");
     let captured_args = temporary_root.join("args");
@@ -403,18 +390,15 @@ fn runs_two_prompts_in_one_named_thread_and_rejects_an_unknown_thread() {
     std::env::remove_var("MUNIMENT_PI_ROOT");
     std::env::remove_var("PI_RESUME_STUB_PROMPTS");
     std::env::remove_var("PI_RESUME_STUB_ARGS");
-    fs::remove_dir_all(temporary_root).unwrap();
 }
 
 #[test]
 fn resumes_an_interrupted_run_to_a_terminal_event() {
     let _environment = ENVIRONMENT.lock().unwrap();
-    let temporary_root =
-        std::env::temp_dir().join(format!("muniment-runtime-resume-{}", std::process::id()));
-    let profile = temporary_root.join("profile");
-    let config = temporary_root.join("config");
-    fs::create_dir_all(&profile).unwrap();
-    confirm_home(&config, &temporary_root.join("home")).unwrap();
+    let temporary_profile = TemporaryProfile::new("resume", true);
+    let temporary_root = temporary_profile.root.clone();
+    let profile = temporary_profile.profile.clone();
+    let config = temporary_profile.config.clone();
     let descriptor = stage_pi_stub(&temporary_root);
     let runtime_activity = RuntimeActivityRegistry::new();
 
@@ -481,5 +465,4 @@ fn resumes_an_interrupted_run_to_a_terminal_event() {
     drop(events);
     drop(storage);
     std::env::remove_var("MUNIMENT_PI_ROOT");
-    fs::remove_dir_all(temporary_root).unwrap();
 }
