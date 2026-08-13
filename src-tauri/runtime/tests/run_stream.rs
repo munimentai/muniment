@@ -1,6 +1,5 @@
 #![cfg(target_os = "linux")]
 
-use std::fs;
 use std::sync::Arc;
 
 use muniment_core::attach::ProtocolError;
@@ -8,14 +7,13 @@ use muniment_core::run_preparation::{prepare_new_run_with_session_thread, Sessio
 use muniment_core::session_thread::SessionThread;
 use muniment_runtime::{open_profile_storage, stream_run, subscribe_run_commits};
 
+mod common;
+use common::TemporaryProfile;
+
 #[test]
 fn reads_a_run_stream_and_subscribes_to_its_commits() {
-    let temporary_root = std::env::temp_dir().join(format!(
-        "muniment-runtime-run-stream-{}",
-        std::process::id()
-    ));
-    let profile = temporary_root.join("profile");
-    fs::create_dir_all(&profile).unwrap();
+    let temporary_profile = TemporaryProfile::new("run-stream", false);
+    let profile = temporary_profile.profile.clone();
     let storage = open_profile_storage(&profile).unwrap();
     let run_id = "01900000-0000-7000-8000-000000000010";
 
@@ -63,5 +61,4 @@ fn reads_a_run_stream_and_subscribes_to_its_commits() {
 
     drop(subscription);
     drop(storage);
-    fs::remove_dir_all(temporary_root).unwrap();
 }

@@ -1,5 +1,4 @@
 use std::collections::BTreeMap;
-use std::fs;
 use std::sync::Arc;
 
 use muniment_core::journal::Provenance;
@@ -13,6 +12,9 @@ use muniment_runtime::{
     create_thread, delete_thread, open_profile_storage, rename_thread, thread_page,
     thread_summaries,
 };
+
+mod common;
+use common::TemporaryProfile;
 
 fn prepare_run(storage: &SharedStorage, run_id: &str, subject: &str) -> String {
     prepare_new_run_with_session_thread(
@@ -59,12 +61,8 @@ fn attach_provenance() -> Provenance {
 
 #[test]
 fn creates_a_thread_for_a_run_and_rejects_invalid_inputs_without_events() {
-    let temporary_root = std::env::temp_dir().join(format!(
-        "muniment-runtime-thread-create-{}",
-        std::process::id()
-    ));
-    let profile = temporary_root.join("profile");
-    fs::create_dir_all(&profile).unwrap();
+    let temporary_profile = TemporaryProfile::new("thread-create", false);
+    let profile = temporary_profile.profile.clone();
     let storage = open_profile_storage(&profile).unwrap();
 
     assert!(create_thread(Arc::clone(&storage), String::new(), "profile-a".into(),).is_err());
@@ -110,16 +108,13 @@ fn creates_a_thread_for_a_run_and_rejects_invalid_inputs_without_events() {
     assert_eq!(page.entries[0].run_id, run_id);
 
     drop(storage);
-    fs::remove_dir_all(temporary_root).unwrap();
 }
 
 #[test]
 fn lists_threads_and_opens_the_selected_thread() {
     muniment_core::chat_prompt::use_mock_keyring_for_tests();
-    let temporary_root =
-        std::env::temp_dir().join(format!("muniment-runtime-threads-{}", std::process::id()));
-    let profile = temporary_root.join("profile");
-    fs::create_dir_all(&profile).unwrap();
+    let temporary_profile = TemporaryProfile::new("threads-list", false);
+    let profile = temporary_profile.profile.clone();
     let storage = open_profile_storage(&profile).unwrap();
     let first_run = "01900000-0000-7000-8000-000000000001";
     let second_run = "01900000-0000-7000-8000-000000000002";
@@ -150,17 +145,12 @@ fn lists_threads_and_opens_the_selected_thread() {
     assert_eq!(page.entries[0].run_id, first_run);
 
     drop(storage);
-    fs::remove_dir_all(temporary_root).unwrap();
 }
 
 #[test]
 fn rejects_a_thread_owned_by_another_subject() {
-    let temporary_root = std::env::temp_dir().join(format!(
-        "muniment-runtime-thread-owner-{}",
-        std::process::id()
-    ));
-    let profile = temporary_root.join("profile");
-    fs::create_dir_all(&profile).unwrap();
+    let temporary_profile = TemporaryProfile::new("thread-owner", false);
+    let profile = temporary_profile.profile.clone();
     let storage = open_profile_storage(&profile).unwrap();
     let thread_id = prepare_run(&storage, "01900000-0000-7000-8000-000000000003", "owner");
 
@@ -169,17 +159,12 @@ fn rejects_a_thread_owned_by_another_subject() {
         .unwrap();
 
     assert_eq!(error, "Conversation history is unavailable.");
-    fs::remove_dir_all(temporary_root).unwrap();
 }
 
 #[test]
 fn renames_and_deletes_owned_threads() {
-    let temporary_root = std::env::temp_dir().join(format!(
-        "muniment-runtime-thread-mutations-{}",
-        std::process::id()
-    ));
-    let profile = temporary_root.join("profile");
-    fs::create_dir_all(&profile).unwrap();
+    let temporary_profile = TemporaryProfile::new("thread-mutations", false);
+    let profile = temporary_profile.profile.clone();
     let storage = open_profile_storage(&profile).unwrap();
     let renamed_thread = prepare_run(&storage, "01900000-0000-7000-8000-000000000004", "owner");
     let deleted_thread = prepare_run(&storage, "01900000-0000-7000-8000-000000000005", "owner");
@@ -229,17 +214,12 @@ fn renames_and_deletes_owned_threads() {
         .any(|summary| summary.thread_id == deleted_thread));
 
     drop(storage);
-    fs::remove_dir_all(temporary_root).unwrap();
 }
 
 #[test]
 fn rejects_mutations_by_another_subject_without_appending_events() {
-    let temporary_root = std::env::temp_dir().join(format!(
-        "muniment-runtime-thread-mutation-owner-{}",
-        std::process::id()
-    ));
-    let profile = temporary_root.join("profile");
-    fs::create_dir_all(&profile).unwrap();
+    let temporary_profile = TemporaryProfile::new("thread-mutation-owner", false);
+    let profile = temporary_profile.profile.clone();
     let storage = open_profile_storage(&profile).unwrap();
     let thread_id = prepare_run(&storage, "01900000-0000-7000-8000-000000000006", "owner");
 
@@ -273,5 +253,4 @@ fn rejects_mutations_by_another_subject_without_appending_events() {
     );
 
     drop(storage);
-    fs::remove_dir_all(temporary_root).unwrap();
 }

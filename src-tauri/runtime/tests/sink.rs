@@ -1,6 +1,4 @@
 use std::fs;
-use std::path::PathBuf;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc;
 use std::sync::Arc;
 
@@ -13,29 +11,7 @@ use muniment_core::run_events::{ChatEvent, ChatEventSink};
 use muniment_runtime::{open_profile_storage, RuntimeChatEventSink};
 
 mod common;
-use common::fixture_grant;
-
-static NEXT_DIRECTORY: AtomicU64 = AtomicU64::new(0);
-
-struct ProfileDirectory(PathBuf);
-
-impl ProfileDirectory {
-    fn new() -> Self {
-        let sequence = NEXT_DIRECTORY.fetch_add(1, Ordering::Relaxed);
-        let path = std::env::temp_dir().join(format!(
-            "muniment-runtime-sink-{}-{sequence}",
-            std::process::id()
-        ));
-        fs::create_dir(&path).unwrap();
-        Self(path)
-    }
-}
-
-impl Drop for ProfileDirectory {
-    fn drop(&mut self) {
-        fs::remove_dir_all(&self.0).unwrap();
-    }
-}
+use common::{fixture_grant, TemporaryProfile};
 
 fn event() -> ChatEvent {
     ChatEvent {
@@ -59,18 +35,19 @@ fn grant() -> ChatGrant {
     }
 }
 
-fn memory_runtime(profile: &ProfileDirectory) -> Arc<ApplicationMemoryRuntime> {
+fn memory_runtime(profile: &TemporaryProfile) -> Arc<ApplicationMemoryRuntime> {
     Arc::new(ApplicationMemoryRuntime::new(
-        profile.0.clone(),
-        profile.0.join("memory"),
+        profile.profile.clone(),
+        profile.profile.join("memory"),
     ))
 }
 
 #[test]
 fn delivers_to_an_optional_subscriber() {
-    let profile = ProfileDirectory::new();
+    let profile = TemporaryProfile::new("sink-subscriber", false);
     let (subscriber, events) = mpsc::channel();
-    let sink = RuntimeChatEventSink::new(&profile.0, Some(subscriber), memory_runtime(&profile));
+    let sink =
+        RuntimeChatEventSink::new(&profile.profile, Some(subscriber), memory_runtime(&profile));
 
     sink.deliver(event()).unwrap();
 
@@ -81,18 +58,19 @@ fn delivers_to_an_optional_subscriber() {
 
 #[test]
 fn succeeds_without_a_subscriber() {
-    let profile = ProfileDirectory::new();
+    let profile = TemporaryProfile::new("sink-no-subscriber", false);
 
-    RuntimeChatEventSink::new(&profile.0, None, memory_runtime(&profile))
+    RuntimeChatEventSink::new(&profile.profile, None, memory_runtime(&profile))
         .deliver(event())
         .unwrap();
 }
 
 #[test]
 fn clears_a_dropped_subscriber() {
-    let profile = ProfileDirectory::new();
+    let profile = TemporaryProfile::new("sink-dropped-subscriber", false);
     let (subscriber, events) = mpsc::channel();
-    let sink = RuntimeChatEventSink::new(&profile.0, Some(subscriber), memory_runtime(&profile));
+    let sink =
+        RuntimeChatEventSink::new(&profile.profile, Some(subscriber), memory_runtime(&profile));
     drop(events);
 
     sink.deliver(event()).unwrap();
@@ -101,15 +79,15 @@ fn clears_a_dropped_subscriber() {
 
 #[test]
 fn drives_pi_launch_config_over_the_profile_directory() {
-    let profile = ProfileDirectory::new();
-    let _storage = open_profile_storage(&profile.0).unwrap();
-    let pi_install = profile.0.join("pi-install");
+    let profile = TemporaryProfile::new("sink-launch-config", false);
+    let _storage = open_profile_storage(&profile.profile).unwrap();
+    let pi_install = profile.profile.join("pi-install");
     fs::create_dir(&pi_install).unwrap();
     let memory_runtime = memory_runtime(&profile);
     let extension = memory_runtime.agent_extension_path();
     fs::create_dir_all(extension.parent().unwrap()).unwrap();
     fs::write(&extension, "export default function () {}\n").unwrap();
-    let sink = RuntimeChatEventSink::new(&profile.0, None, memory_runtime);
+    let sink = RuntimeChatEventSink::new(&profile.profile, None, memory_runtime);
 
     assert_eq!(
         pi_launch_config(&sink, Some(&pi_install), &grant(), None).unwrap_err(),
@@ -117,14 +95,18 @@ fn drives_pi_launch_config_over_the_profile_directory() {
     );
     assert_eq!(
         sink.pi_session_root().unwrap(),
-        profile.0.join("pi-sessions")
+        profile.profile.join("pi-sessions")
     );
     assert_eq!(sink.memory_agent_extension_path(), Some(extension.clone()));
     let config = pi_launch_config_for_executable(&sink, "pi".into(), &grant(), None).unwrap();
     assert!(config.args.windows(2).any(|args| {
         args == [
             "--session-dir",
-            profile.0.join("pi-sessions").to_string_lossy().as_ref(),
+            profile
+                .profile
+                .join("pi-sessions")
+                .to_string_lossy()
+                .as_ref(),
         ]
     }));
     assert!(config
