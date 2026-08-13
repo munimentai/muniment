@@ -20,8 +20,9 @@ them must exercise the real contracts. It must add no mocked production path.
 > stable release and distribution section. The twelfth took the desktop QA
 > automation section. The thirteenth and the fifteenth both took the ADR 0012
 > runtime-service extraction section. The fourteenth took the Phase 2 client
-> core section. The sixteenth through the twenty-first all took that extraction
-> section again. It grows every wave, so it stays the next compaction target.
+> core section. The sixteenth through the twenty-second all took that
+> extraction section again. It grows every wave, so it stays the next
+> compaction target.
 
 ## M0 — Scaffold (done 2026-07-09)
 
@@ -205,20 +206,6 @@ measured 32.7µs per append against an in-memory database and 11.3µs with
 `prepare_cached`. The same append against a real file measured 26.6ms, because
 the journal opens WAL with `synchronous=FULL`. The commit fsync outweighs the
 parse by three orders of magnitude.
-
-MEASURED 2026-08-13 (fifty-sixth wave, planner, read `publish_commit_hint`
-(`src-tauri/core/src/journal/mod.rs:409`) beside
-`DesktopAttachService::answer_permission`
-(`src-tauri/core/src/attach/desktop_service.rs:412`)) — the commit-subscriber list
-only ever grows. `publish_commit_hint` drops a subscriber whose channel is
-disconnected only when that subscriber's `run_id` matches the committed run, so an
-entry for a run that never commits again stays for the life of the journal handle.
-Every attach `permission.answer` subscribes before it validates. An unknown run, a
-settled run, a workspace mismatch, and a gate mismatch each drop the receiver and
-leave the entry behind. The success path leaves one too, because a settled run
-commits nothing more. Each later append then walks a longer list. This is
-in-memory coordination rather than stored schema, so the owner hold on journal
-migrations does not cover it.
 
 OPEN — `chat_thread_open_page` projects each run through `project_history_entry`,
 which loads and reduces every envelope of that run. `thread_projection_entries`
@@ -508,36 +495,29 @@ time, and a disconnected presenter, a deny, a missed two-minute deadline, or a
 late, repeated, unknown, or mismatched choice all fail closed. No code
 implements the wire yet.
 
-MEASURED 2026-08-13 (fifty-seventh wave, re-read by the fifty-ninth) — the
-runtime knows no directory of its own. Every runtime entry takes a profile
-directory and a config directory as arguments, and `main.rs` computes neither.
-The desktop reads Tauri's `app_data_dir` and `app_config_dir`, which resolve on
-Linux to `$XDG_DATA_HOME/ai.muniment.desktop` and
-`$XDG_CONFIG_HOME/ai.muniment.desktop`, with the `$HOME/.local/share` and
-`$HOME/.config` fallbacks. The identifier comes from
-`src-tauri/tauri.conf.json:5`. The two directories hold different files. The
-journal, the CAS, the Pi sessions, the attach idempotency store, and
-`attach-client-credentials.json` sit under the data directory. The recorded Home
-and the memory index cache sit under the config directory.
-`open_companion_registry` (`src-tauri/runtime/src/service/workspace.rs:54`) names
-its argument `config_directory` and joins `COMPANION_CREDENTIAL_FILE_NAME` to it,
-so a caller that honors that name reads a file the desktop never wrote and every
-approved companion pairs again. The desktop joins that leaf name to
-`app_data_dir` instead (`src-tauri/src/attach_service.rs:554`).
-`config_directory` (`src-tauri/acp/src/main.rs:948`) is the environment-lookup
-pattern this workspace already uses, and it joins a different leaf name.
+DONE 2026-08-13 — the five fifty-ninth-wave slices all landed (MUNIDESK-1201
+through 1205). `profile_directory` and `config_directory`
+(`src-tauri/runtime/src/directories.rs`) read `$XDG_DATA_HOME` and
+`$XDG_CONFIG_HOME`, fall back to `$HOME/.local/share` and `$HOME/.config`, and
+join the `ai.muniment.desktop` identifier, so the runtime resolves the two
+directories the desktop already uses. `compose_attach_service`
+(`src-tauri/runtime/src/attach_service.rs:15`) builds a `DesktopAttachService`
+from the runtime boundaries, the companion registry, the profile directory, and
+the Home the user confirmed. `Operation::ApprovalPresent`
+(`src-tauri/attach/src/envelope.rs:277`) and
+`protocol-fixtures/muniment.attach/1/request-approval-present.json` reserve the
+wire. `claim_presenter` (`src-tauri/core/src/attach/approval.rs:85`) admits one
+presenter, and its `PresenterGuard` denies every waiting request on release.
+`verify_approval_presenter_peer`
+(`src-tauri/core/src/attach/peer_authority.rs:60`) is the presenter half of the
+peer check, and `AuthorizedApprovalPresenter` is its own proof type.
 
-MEASURED 2026-08-13 (fifty-ninth wave, planner, read `ApprovalCoordinator`
-(`src-tauri/core/src/attach/approval.rs:66`) against the new ADR 0012
-amendment) — the coordinator already answers most of the presenter rules. It
-holds one registered presenter, keeps one pending decision per challenge, denies
-a second request for the same challenge, denies when no presenter is registered,
-and gives up at the caller's deadline. Two rules are missing.
-`register_presenter` (`:71`) overwrites a registered presenter instead of
-rejecting a second one, and no release path exists, so a disconnected presenter
-leaves every waiting request to sit until its deadline. The desktop registers an
-in-process presenter at `src-tauri/src/attach_service.rs:657`, so a session claim
-must sit beside `register_presenter` rather than replace it.
+DECIDED 2026-08-13 (sixtieth wave, planner) — the `approval.present` response
+body carries the echoed `challenge` and a `decision` of `approve` or `deny`. The
+sender rejects a response whose challenge differs from the request it sent, so a
+late or repeated answer cannot approve another challenge. The presenter session
+reuses the credential-free `MigrationControlAuthorized` grant shape, because that
+message already means an authorized connection with no reconnect credential.
 
 MEASURED 2026-08-12 (thirty-ninth wave, planner, read the runtime manifest beside
 `test/runtime-dependency-boundary.sh`) — the runtime crate cannot build a
@@ -587,40 +567,42 @@ projector always holds state there. A test seam would also prove nothing, becaus
 projector rejects that event too. The lane re-opens this only against a new
 failure route.
 
-MERGE HAZARD — the fifty-ninth wave puts slices 1 and 2 in
-`src-tauri/runtime/src/lib.rs`. Slice 3 targets
-`src-tauri/core/src/attach/mod.rs`, slice 4 targets
-`src-tauri/core/src/attach/approval.rs`, and slice 5 targets
-`src-tauri/core/src/attach/migration_authority.rs`. Each ticket tells the
-implementer to rebase on `main` before it opens the pull request. The 2026-08-04
-silent revert came from a stale base.
+MERGE HAZARD — the sixtieth wave puts slice 1 in
+`src-tauri/core/src/attach/approval_present.rs`, slice 2 in
+`src-tauri/core/src/attach/presenter_admission.rs`, slice 3 in
+`src-tauri/runtime/src/attach_listener.rs`, and slice 4 in
+`src-tauri/attach/src/client.rs`. Slices 1 and 2 both edit
+`src-tauri/core/src/attach/mod.rs`, and slices 1 and 4 both edit
+`src-tauri/attach/`. Each ticket tells the implementer to rebase on `main`
+before it opens the pull request. The 2026-08-04 silent revert came from a stale
+base.
 
-VERIFIED 2026-08-13 (fifty-ninth wave, planner, read
-`src-tauri/runtime/src/attach_boundaries.rs`,
-`src-tauri/core/src/attach/workspace_context.rs`, and the ADR 0012 amendment,
-then ran the runtime suite) — three of the five fifty-eighth-wave slices are
-built. The runtime boundaries answer the owner approval, one core function owns
-the companion onboarding rule, and the ADR names the approval presentation wire.
-The runtime still computes no directory of its own, and no runtime file composes
-a `DesktopAttachService`. The runtime suite passes 54 tests over 26 test
+VERIFIED 2026-08-13 (sixtieth wave, planner, read
+`src-tauri/runtime/src/directories.rs`,
+`src-tauri/runtime/src/attach_service.rs`,
+`src-tauri/core/src/attach/approval.rs`, and
+`src-tauri/core/src/attach/peer_authority.rs`, then ran both suites) — all five
+fifty-ninth-wave slices are built. No code sends an `approval.present` request
+yet, no code admits a presenter connection, and no runtime file serves a
+companion attach session. The runtime suite passes 61 tests over 31 test
 binaries.
 
-SELECTED 2026-08-13 (fifty-ninth wave) — five slices in priority order.
+SELECTED 2026-08-13 (sixtieth wave) — four slices in priority order.
 
-1. The runtime rule for its own data and config directories.
-2. The runtime composition of its own `DesktopAttachService`.
-3. The attach vocabulary entry for `approval.present`.
-4. The presenter session claim and release on `ApprovalCoordinator`.
-5. One peer-executable check with a separate approval-presenter proof.
+1. The core value that presents one challenge over a presenter connection.
+2. The core admission that returns a peer-verified presenter connection.
+3. The runtime attach listener that serves companions through the composed
+   service.
+4. The desktop client half that answers one `approval.present` request.
 
-SEQUENCED 2026-08-13 (fifty-ninth wave) — the approval presentation wire needs
-four parts, and slices 3, 4, and 5 are the three that stand alone today. The
-fourth part is the runtime listener that admits the presenter session and sends
-the challenge, and it waits on the other three. The desktop client half follows
-it. After the composition, the runtime answers a companion `run.start` through
-that service, then serves real attach sessions from `run_handoff_listener`
-instead of readiness probes alone. Only then does the takeover in
-`run_migration_takeover` leave companions a working listener.
+SEQUENCED 2026-08-13 (sixtieth wave) — slices 1 and 2 split the runtime
+presenter session, because the exchange and the admission each stand alone
+today. The wiring that claims the presenter and answers each coordinator
+presentation over the admitted connection follows both, and it is the next
+wave's first slice. The desktop then connects to the runtime endpoint and
+serves as its presenter. After that the runtime listener replaces the
+readiness-probe listener in `run_handoff_listener`. Only then does the takeover
+in `run_migration_takeover` leave companions a working listener.
 
 SEQUENCED — after the attach seam, the later extraction slices are the desktop
 client conversion and Linux user-unit registration. Each sits behind a dormant
@@ -1102,10 +1084,10 @@ earlier one. Requiring an up-to-date branch before merge, or a merge queue, is a
 repository-settings change that sits with the owner. The planner files no ticket
 for it.
 
-VERIFIED 2026-08-13 (fifty-ninth wave, planner) — `cargo test -p
-muniment-runtime` passes 54 tests over 26 test binaries. `npm ci` then `npm test`
-passes 928 frontend tests over 62 files with 31 skipped, plus 3 browser tests.
-This entry replaces the earlier ledger.
+VERIFIED 2026-08-13 (sixtieth wave, planner) — `cargo test -p muniment-runtime`
+passes 61 tests over 31 test binaries. `npm ci` then `npm test` passes 928
+frontend tests over 62 files with 31 skipped, plus 3 browser tests. This entry
+replaces the earlier ledger.
 
 MEASURED 2026-08-13 (fifty-eighth wave, planner, counted each path with
 `git log --name-only --since=2026-08-01 -- <path>`) — `src-tauri/src/chat.rs` is
@@ -1140,8 +1122,8 @@ already bound by another workspace in this container, and the stale server
 answered 404 for every probe path until the planner moved to 8944. The
 fifty-third wave used 8951, the fifty-fourth used 8962, the fifty-fifth used
 8975, the fifty-sixth used 8988, and the fifty-eighth used 8993. The
-fifty-seventh and the fifty-ninth waves each ran no capture, because each read
-code alone.
+fifty-seventh, the fifty-ninth, and the sixtieth waves each ran no capture,
+because each read code alone.
 
 PLANNER PROCEDURE — for a measurement that needs a click, write a short
 playwright script and run it from the repository root. Playwright is a project
