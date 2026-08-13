@@ -23,8 +23,8 @@ pub use attach_service::compose_attach_service;
 #[cfg(target_os = "linux")]
 pub use attach_state::RuntimeAttachState;
 pub use directories::{
-    config_directory, profile_directory, resolve_directory, DirectoryUnavailableError,
-    APPLICATION_IDENTIFIER,
+    config_directory, installed_desktop_executable, installed_desktop_executable_from,
+    profile_directory, resolve_directory, DirectoryUnavailableError, APPLICATION_IDENTIFIER,
 };
 #[cfg(target_os = "linux")]
 pub use migration::{run_migration_takeover, MigrationTakeoverError};

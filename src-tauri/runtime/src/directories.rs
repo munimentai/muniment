@@ -3,6 +3,32 @@ use std::path::{Path, PathBuf};
 
 pub const APPLICATION_IDENTIFIER: &str = "ai.muniment.desktop";
 
+pub fn installed_desktop_executable_from(runtime_executable: &Path) -> Option<PathBuf> {
+    if !runtime_executable.is_absolute()
+        || runtime_executable.file_name() != Some(OsStr::new("muniment-runtime"))
+    {
+        return None;
+    }
+
+    let resource_directory = runtime_executable.parent()?;
+    if resource_directory.file_name() != Some(OsStr::new("muniment")) {
+        return None;
+    }
+
+    let library_directory = resource_directory.parent()?;
+    if library_directory.file_name() != Some(OsStr::new("lib")) {
+        return None;
+    }
+
+    Some(library_directory.parent()?.join("bin/muniment"))
+}
+
+pub fn installed_desktop_executable() -> Option<PathBuf> {
+    std::env::current_exe()
+        .ok()
+        .and_then(|path| installed_desktop_executable_from(&path))
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct DirectoryUnavailableError;
 
