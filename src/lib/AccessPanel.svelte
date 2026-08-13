@@ -331,7 +331,7 @@
   .profile-button > span:last-child { min-width: 0; display: grid; }
   .profile-button strong { overflow: hidden; text-overflow: ellipsis; font-size: var(--text-13); }
   .profile-button small { overflow: hidden; color: var(--muted); font: var(--text-12) var(--font-mono); text-overflow: ellipsis; white-space: nowrap; }
-  .access-popover { position: absolute; z-index: 5; left: 0; bottom: calc(100% + 8px); width: 330px; max-height: min(560px, 70vh); display: flex; flex-direction: column; overflow: hidden; background: var(--paper); border: 1px solid var(--border); border-radius: var(--radius-control); box-shadow: var(--shadow-overlay); outline: none; }
+  .access-popover { position: absolute; z-index: 5; left: 0; bottom: calc(100% + 8px); width: 330px; max-height: calc(100vh - 82px); display: flex; flex-direction: column; overflow: hidden; background: var(--paper); border: 1px solid var(--border); border-radius: var(--radius-control); box-shadow: var(--shadow-overlay); outline: none; }
   .access-popover:focus-visible { border-color: var(--muted); }
   .access-popover header { display: flex; flex: none; align-items: start; justify-content: space-between; padding: 14px; border-bottom: 1px solid var(--border); }
   .access-popover h2 { margin: 0; font-size: var(--text-13); }
