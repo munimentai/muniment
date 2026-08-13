@@ -2,6 +2,7 @@ use std::fs;
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::Duration;
 
+use muniment_core::attach::RuntimeActivityRegistry;
 use muniment_core::chat_grant::ChatGrant;
 use muniment_core::home::confirm_home;
 use muniment_runtime::{cancel_run, open_profile_storage, run_prompt};
@@ -41,6 +42,7 @@ fn cancelling_a_live_run_sends_abort_to_pi() {
     let run_id = "018f0000-0000-7000-8000-000000000113";
     let storage = open_profile_storage(&profile).unwrap();
     let runtime = Arc::new(Mutex::new(None));
+    let runtime_activity = RuntimeActivityRegistry::new();
     let active = Arc::new(Mutex::new(None));
     let (subscriber, events) = mpsc::channel();
     std::thread::scope(|scope| {
@@ -49,6 +51,7 @@ fn cancelling_a_live_run_sends_abort_to_pi() {
                 &profile,
                 Arc::clone(&storage),
                 Arc::clone(&runtime),
+                &runtime_activity,
                 &config,
                 run_id.into(),
                 "initial prompt".into(),

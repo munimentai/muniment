@@ -68,6 +68,7 @@ fn accept_two_prompts_with_session_thread(continue_existing: bool) -> (String, S
     confirm_home(&config, &temporary_root.join("home")).unwrap();
     let storage = open_profile_storage(&profile).unwrap();
     let runtime = Arc::new(Mutex::new(None));
+    let runtime_activity = RuntimeActivityRegistry::new();
     let active = Arc::new(Mutex::new(None));
     let session_thread = SessionThread::default();
     let first_run_id = "018f0000-0000-7000-8000-000000000021";
@@ -77,6 +78,7 @@ fn accept_two_prompts_with_session_thread(continue_existing: bool) -> (String, S
         &profile,
         Arc::clone(&storage),
         Arc::clone(&runtime),
+        &runtime_activity,
         &config,
         first_run_id.into(),
         "first prompt".into(),
@@ -99,6 +101,7 @@ fn accept_two_prompts_with_session_thread(continue_existing: bool) -> (String, S
         &profile,
         Arc::clone(&storage),
         runtime,
+        &runtime_activity,
         &config,
         second_run_id.into(),
         "second prompt".into(),
@@ -160,6 +163,7 @@ fn an_occupied_active_run_slot_does_not_prepare_a_new_run() {
         &profile,
         Arc::clone(&storage),
         Arc::new(Mutex::new(None)),
+        &activity,
         temporary_root.join("config"),
         run_id.into(),
         "prompt".into(),
@@ -198,6 +202,7 @@ fn runs_two_prompts_in_one_named_thread_and_rejects_an_unknown_thread() {
     fs::create_dir_all(&profile).unwrap();
     let storage = open_profile_storage(&profile).unwrap();
     let runtime = Arc::new(Mutex::new(None::<PiRuntime>));
+    let runtime_activity = RuntimeActivityRegistry::new();
     confirm_home(&config, &temporary_root.join("home")).unwrap();
     let descriptor = stage_pi_stub(&temporary_root);
     let captured_prompts = temporary_root.join("prompts");
@@ -210,6 +215,7 @@ fn runs_two_prompts_in_one_named_thread_and_rejects_an_unknown_thread() {
         &profile,
         Arc::clone(&storage),
         Arc::clone(&runtime),
+        &runtime_activity,
         &config,
         unknown_run_id.into(),
         "unknown thread prompt".into(),
@@ -244,6 +250,7 @@ fn runs_two_prompts_in_one_named_thread_and_rejects_an_unknown_thread() {
                 &profile,
                 Arc::clone(&storage),
                 Arc::clone(&runtime),
+                &runtime_activity,
                 &config,
                 run_id.into(),
                 prompt.into(),
@@ -290,6 +297,7 @@ fn runs_two_prompts_in_one_named_thread_and_rejects_an_unknown_thread() {
         &profile,
         Arc::clone(&storage),
         Arc::clone(&runtime),
+        &runtime_activity,
         &config,
         second_run_id.into(),
         second_prompt.into(),
@@ -322,6 +330,7 @@ fn runs_two_prompts_in_one_named_thread_and_rejects_an_unknown_thread() {
         second_active.lock().unwrap().as_ref().unwrap().id,
         second_run_id
     );
+    assert!(runtime_activity.snapshot().active_run);
     assert!(storage
         .lock()
         .unwrap()
@@ -335,6 +344,7 @@ fn runs_two_prompts_in_one_named_thread_and_rejects_an_unknown_thread() {
         )));
     drive_prompt(launch);
     assert!(second_active.lock().unwrap().is_none());
+    assert!(!runtime_activity.snapshot().active_run);
     assert!(runtime.lock().unwrap().is_some());
 
     assert_eq!(
@@ -418,6 +428,7 @@ fn resumes_an_interrupted_run_to_a_terminal_event() {
     fs::create_dir_all(&profile).unwrap();
     confirm_home(&config, &temporary_root.join("home")).unwrap();
     let descriptor = stage_pi_stub(&temporary_root);
+    let runtime_activity = RuntimeActivityRegistry::new();
 
     let run_id = "018f0000-0000-7000-8000-000000000004";
     let session_root = profile.join("pi-sessions");
@@ -461,6 +472,7 @@ fn resumes_an_interrupted_run_to_a_terminal_event() {
         &profile,
         Arc::clone(&storage),
         Arc::new(Mutex::new(None)),
+        &runtime_activity,
         &config,
         run_id.into(),
         "token".into(),

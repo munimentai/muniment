@@ -457,6 +457,7 @@ pub fn accept_prompt(
     profile_directory: impl AsRef<Path>,
     storage: SharedStorage,
     runtime: Arc<Mutex<Option<PiRuntime>>>,
+    runtime_activity: &RuntimeActivityRegistry,
     config_directory: impl AsRef<Path>,
     run_id: String,
     prompt: String,
@@ -476,7 +477,6 @@ pub fn accept_prompt(
         config_directory.as_ref().to_path_buf(),
         profile_directory.join("memory"),
     ));
-    let runtime_activity = RuntimeActivityRegistry::new();
     let cancelled = Arc::new(AtomicBool::new(false));
     let transport = Arc::new(Mutex::new(None));
     let adapter = Arc::new(Mutex::new(None));
@@ -621,7 +621,7 @@ pub fn accept_prompt(
         storage,
         runtime,
         memory_runtime,
-        runtime_activity,
+        runtime_activity: runtime_activity.clone(),
         active,
         run_id,
         prompt,
@@ -675,6 +675,7 @@ pub fn run_prompt(
     profile_directory: impl AsRef<Path>,
     storage: SharedStorage,
     runtime: Arc<Mutex<Option<PiRuntime>>>,
+    runtime_activity: &RuntimeActivityRegistry,
     config_directory: impl AsRef<Path>,
     run_id: String,
     prompt: String,
@@ -693,6 +694,7 @@ pub fn run_prompt(
         profile_directory,
         storage,
         runtime,
+        runtime_activity,
         config_directory,
         run_id,
         prompt,
@@ -751,6 +753,7 @@ pub fn resume_run(
     profile_directory: impl AsRef<Path>,
     storage: SharedStorage,
     runtime: Arc<Mutex<Option<PiRuntime>>>,
+    runtime_activity: &RuntimeActivityRegistry,
     config_directory: impl AsRef<Path>,
     run_id: String,
     access_token: String,
@@ -783,7 +786,6 @@ pub fn resume_run(
         config_directory.as_ref().to_path_buf(),
         profile_directory.join("memory"),
     ));
-    let runtime_activity = RuntimeActivityRegistry::new();
     let cancelled = Arc::new(AtomicBool::new(false));
     let transport = Arc::new(Mutex::new(None));
     let adapter = Arc::new(Mutex::new(None));
@@ -809,7 +811,7 @@ pub fn resume_run(
             .with_pi_artifact(pi_artifact.unwrap_or(PI_ARTIFACT)),
         storage,
         runtime,
-        runtime_activity,
+        runtime_activity: runtime_activity.clone(),
         memory_runtime,
         active,
         run_id,

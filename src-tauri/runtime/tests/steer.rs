@@ -3,6 +3,7 @@ use std::sync::{mpsc, Arc, Mutex};
 use std::time::Duration;
 
 use muniment_core::active_run::{ChatDelivery, ChatQueueRequest};
+use muniment_core::attach::RuntimeActivityRegistry;
 use muniment_core::chat_grant::ChatGrant;
 use muniment_core::home::confirm_home;
 use muniment_runtime::{open_profile_storage, queue_run_message, run_prompt};
@@ -41,6 +42,7 @@ fn a_queued_steer_reaches_a_live_runtime_run() {
     let run_id = "018f0000-0000-7000-8000-000000000112";
     let storage = open_profile_storage(&profile).unwrap();
     let runtime = Arc::new(Mutex::new(None));
+    let runtime_activity = RuntimeActivityRegistry::new();
     let active = Arc::new(Mutex::new(None));
     let (subscriber, events) = mpsc::channel();
     std::thread::scope(|scope| {
@@ -49,6 +51,7 @@ fn a_queued_steer_reaches_a_live_runtime_run() {
                 &profile,
                 Arc::clone(&storage),
                 Arc::clone(&runtime),
+                &runtime_activity,
                 &config,
                 run_id.into(),
                 "initial prompt".into(),
