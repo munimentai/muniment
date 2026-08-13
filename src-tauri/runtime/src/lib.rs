@@ -17,7 +17,9 @@ mod sink;
 #[cfg(target_os = "linux")]
 pub use attach_boundaries::RuntimeAttachBoundaries;
 #[cfg(target_os = "linux")]
-pub use attach_listener::{run_attach_listener, AttachListenerError};
+pub use attach_listener::{
+    run_attach_listener, run_bound_attach_listener, AttachListenerError, AttachListenerInputs,
+};
 #[cfg(target_os = "linux")]
 pub use attach_service::compose_attach_service;
 #[cfg(target_os = "linux")]
