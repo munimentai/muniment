@@ -614,7 +614,6 @@ describe('artifact redaction boundary', () => {
     expect(result.status).toBe(0); expect(fs.readFileSync(path.join(destination, 'wdio.log'), 'utf8')).toContain('ordinary')
   })
   it.each([
-    ['injected text', { 'app.log': 'private-user' }, { MUNIMENT_E2E_USERNAME: 'private-user' }],
     ['unapproved screenshot', { 'failure-current-window.png': Buffer.from('not safe') }, {}],
     ['rendered production conversation', { '03-chat-complete.png': Buffer.from('not safe') }, {}],
   ])('blocks %s before destination creation', (_name, files, env) => {
@@ -632,16 +631,13 @@ describe('artifact redaction boundary', () => {
     expect(result.status).toBe(0)
     expect(fs.readFileSync(path.join(destination, 'page-source-sign-in.html'), 'utf8')).toBe(`[REDACTED:${category}]`)
   })
-  it('reports the file and category without reporting an injected value', () => {
-    const source = temp(); const destination = path.join(temp(), 'safe'); const report = path.join(temp(), 'failure')
-    fs.writeFileSync(path.join(source, 'app.log'), 'before private-user after')
-    const result = runNode('test/e2e/support/redact.mjs', [source, destination, report], {
-      env: { ...process.env, MUNIMENT_E2E_USERNAME: 'private-user' },
-    })
-    expect(result.status).not.toBe(0)
-    expect(fs.readFileSync(report, 'utf8')).toBe('file: "app.log"\ncategory: verbatim-injected-secret\n')
-    expect(fs.readFileSync(report, 'utf8')).not.toContain('private-user')
-    expect(fs.existsSync(destination)).toBe(false)
+  it('redacts injected values from text logs', () => {
+    const { result, destination } = redact(
+      { 'real-sign-in.spec-0-0.log': 'before private and private-password after' },
+      { MUNIMENT_E2E_USERNAME: 'private', MUNIMENT_E2E_PASSWORD: 'private-password' },
+    )
+    expect(result.status, result.stderr).toBe(0)
+    expect(fs.readFileSync(path.join(destination, 'real-sign-in.spec-0-0.log'), 'utf8')).toBe('before [REDACTED] and [REDACTED] after')
   })
   it('blocks an injected value hidden in an approved screenshot file', () => {
     const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=', 'base64')

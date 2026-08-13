@@ -5,7 +5,7 @@ const [source, destination, failureReport] = process.argv.slice(2)
 if (!source || !destination) throw new Error('usage: redact.mjs SOURCE DESTINATION')
 
 const secrets = ['MUNIMENT_E2E_USERNAME', 'MUNIMENT_E2E_PASSWORD', 'GH_TOKEN']
-  .map((name) => process.env[name]).filter(Boolean)
+  .map((name) => process.env[name]).filter(Boolean).sort((left, right) => right.length - left.length)
 const tokenPatterns = [
   ['credential-header', /\b(?:authorization|cookie|set-cookie)\s*[:=][^\r\n]+/gi],
   ['bearer-token', /\bBearer\s+[A-Za-z0-9._~+\/-]+=*/gi],
@@ -45,18 +45,15 @@ function inspectScreenshot(input) {
   fail(name, 'screenshot-truncated')
 }
 
-// Verbatim injected secrets show that the capture boundary failed. Credential
-// forms in page sources and logs are expected near sign-in flows and get
-// redacted below.
+// Verbatim injected secrets in screenshots show that the capture boundary
+// failed. Page sources and logs can contain them near sign-in flows, so redact
+// text below and verify the result before publication.
 for (const entry of fs.readdirSync(source, { withFileTypes: true })) {
   if (!entry.isFile()) continue
   const input = path.join(source, entry.name)
   if (/\.png$/i.test(entry.name)) {
     if (!isSafeScreenshot(entry.name)) fail(entry.name, 'unapproved-screenshot')
     inspectScreenshot(input)
-  } else {
-    const text = fs.readFileSync(input, 'utf8')
-    if (secrets.some((secret) => text.includes(secret))) fail(entry.name, 'verbatim-injected-secret')
   }
 }
 
