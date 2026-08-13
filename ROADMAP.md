@@ -4,25 +4,24 @@ Phases mirror harness-spec §9. Muniment-cloud Phase 1 native auth and the cloud
 prerequisites for desktop chat went live on 2026-07-11. Client work that uses
 them must exercise the real contracts. It must add no mocked production path.
 
-> **Compacted 2026-08-04, again 2026-08-07, again 2026-08-12.** This document
-> reached 265 KB and no longer fit in one read. Every landed slice used to carry
-> its own paragraph. Those paragraphs are now per-lane summaries with their
-> ticket ranges. Every open item, parked item, held item, gated item, and
-> do-not-re-file measurement is preserved below. Git history holds the full
-> slice-by-slice record. The first 2026-08-12 pass took the ADR 0012 extraction
-> section. The second took the ADR 0024 code-diff chain. The third took the
-> memory index and retrieval section. The fourth took the signed-in shell
-> section. The fifth took the desktop QA automation repair waves. The sixth took
-> the Phase 3 voice section. The seventh took the companion execution surfaces
-> section. The eighth took the onboarding and Muniment Home section. The ninth
-> took the durable local run journal section. The tenth took the cross-surface
-> contracts section. The eleventh took the stable release and distribution
-> section. The twelfth took the desktop QA automation section. The thirteenth
-> and the fifteenth both took the ADR 0012 runtime-service extraction section.
-> The fourteenth took the Phase 2 client core section. The sixteenth, the
-> seventeenth, the eighteenth, the nineteenth, and the twentieth took that
-> extraction section again. It grows every wave, so it stays the next
-> compaction target.
+> **Compacted 2026-08-04, again 2026-08-07, again 2026-08-12, and again
+> 2026-08-13.** This document reached 265 KB and no longer fit in one read.
+> Every landed slice used to carry its own paragraph. Those paragraphs are now
+> per-lane summaries with their ticket ranges. Every open item, parked item,
+> held item, gated item, and do-not-re-file measurement is preserved below. Git
+> history holds the full slice-by-slice record. The first 2026-08-12 pass took
+> the ADR 0012 extraction section. The second took the ADR 0024 code-diff chain.
+> The third took the memory index and retrieval section. The fourth took the
+> signed-in shell section. The fifth took the desktop QA automation repair
+> waves. The sixth took the Phase 3 voice section. The seventh took the
+> companion execution surfaces section. The eighth took the onboarding and
+> Muniment Home section. The ninth took the durable local run journal section.
+> The tenth took the cross-surface contracts section. The eleventh took the
+> stable release and distribution section. The twelfth took the desktop QA
+> automation section. The thirteenth and the fifteenth both took the ADR 0012
+> runtime-service extraction section. The fourteenth took the Phase 2 client
+> core section. The sixteenth through the twenty-first all took that extraction
+> section again. It grows every wave, so it stays the next compaction target.
 
 ## M0 — Scaffold (done 2026-07-09)
 
@@ -478,29 +477,38 @@ runtime value supplies everything `DesktopAttachService` reads.
 fixtures, the shared chat grant, the warm Pi stub staging, and the
 temporary-profile guard. Nothing in `main` calls any entry.
 
-DONE 2026-08-13 — the fifty-sixth and fifty-seventh waves closed four extraction
-slices (MUNIDESK-1188, 1189, 1190, 1194). `SignedWorkspaceApproval`
-(`src-tauri/core/src/attach/approval.rs:8`) is one core value holding the signed
-workspace and the owner approval rule, and both desktop attach states read it
-instead of repeating six lines each. `CommitSubscription::drop`
-(`src-tauri/core/src/journal/mod.rs:406`) removes its registered subscriber by
-ID. `sign_in` (`src-tauri/runtime/src/service/session.rs:55`) runs the native
-browser flow through an injected `&dyn BrowserOpener`, marks an authentication
-operation, and clears the entitlement tracker, so every device-session capability
-now has a runtime twin.
+DONE 2026-08-13 — the fifty-sixth through fifty-eighth waves closed seven
+extraction slices (MUNIDESK-1188, 1189, 1190, 1194, 1197, 1198, 1199).
+`SignedWorkspaceApproval` (`src-tauri/core/src/attach/approval.rs:8`) is one core
+value holding the signed workspace and the owner approval rule, and the desktop
+attach states and `RuntimeAttachBoundaries` all read it.
+`CommitSubscription::drop` (`src-tauri/core/src/journal/mod.rs:406`) removes its
+registered subscriber by ID. `sign_in`
+(`src-tauri/runtime/src/service/session.rs:55`) runs the native browser flow
+through an injected `&dyn BrowserOpener`, so every device-session capability has
+a runtime twin. The runtime `configure_run`
+(`src-tauri/runtime/src/attach_boundaries.rs:103`) records the signed
+`grant.workspace`, and `attach_approval` (`:136`) answers it, so a
+runtime-composed service no longer refuses every companion.
+`onboard_workspace_context`
+(`src-tauri/core/src/attach/workspace_context.rs:64`) is the one core function
+that rejects a relative path, canonicalizes both companion directories, and
+records each against the client identity and the session workspace. Both
+services call it.
 
-MEASURED 2026-08-13 (fifty-seventh wave, re-read by the fifty-eighth) — a
-runtime-composed attach service would refuse every companion.
-`RunStartBoundaries::attach_approval` (`src-tauri/core/src/run_start.rs:125`)
-carries a `None` default, `RuntimeAttachBoundaries` takes that default, and
-`DesktopAttachService::reconnect_approval`
-(`src-tauri/core/src/attach/desktop_service.rs:89`) reads it. The desktop records
-the signed `grant.workspace` inside its own `configure_run`
-(`src-tauri/src/chat.rs:250`) and reads it back at `:273`. The runtime
-`configure_run` (`src-tauri/runtime/src/attach_boundaries.rs:95`) records nothing,
-so the runtime has no source for the approval.
+DONE 2026-08-13 — ADR 0012 carries the approval presentation session amendment
+(MUNIDESK-1199), and `THREAT_MODEL.md` records it. Through phase one the runtime
+presents its ADR 0009 approval challenge to the desktop over the existing
+`muniment.attach/1` connection, as an `approval.present` request that carries the
+requesting surface, the workspace scopes, the single-use challenge, and the
+decision deadline. On Linux the runtime admits a presenter session only when the
+connection's `SO_PEERCRED` peer PID resolves to the installed desktop payload.
+That session authorizes approval presentation alone, the runtime admits one at a
+time, and a disconnected presenter, a deny, a missed two-minute deadline, or a
+late, repeated, unknown, or mismatched choice all fail closed. No code
+implements the wire yet.
 
-MEASURED 2026-08-13 (fifty-seventh wave, re-read by the fifty-eighth) — the
+MEASURED 2026-08-13 (fifty-seventh wave, re-read by the fifty-ninth) — the
 runtime knows no directory of its own. Every runtime entry takes a profile
 directory and a config directory as arguments, and `main.rs` computes neither.
 The desktop reads Tauri's `app_data_dir` and `app_config_dir`, which resolve on
@@ -511,23 +519,25 @@ Linux to `$XDG_DATA_HOME/ai.muniment.desktop` and
 journal, the CAS, the Pi sessions, the attach idempotency store, and
 `attach-client-credentials.json` sit under the data directory. The recorded Home
 and the memory index cache sit under the config directory.
-`open_companion_registry` (`src-tauri/runtime/src/service/workspace.rs:79`) names
+`open_companion_registry` (`src-tauri/runtime/src/service/workspace.rs:54`) names
 its argument `config_directory` and joins `COMPANION_CREDENTIAL_FILE_NAME` to it,
 so a caller that honors that name reads a file the desktop never wrote and every
-approved companion pairs again. `config_directory`
-(`src-tauri/acp/src/main.rs:948`) is the environment-lookup pattern this
-workspace already uses, and it joins a different leaf name.
+approved companion pairs again. The desktop joins that leaf name to
+`app_data_dir` instead (`src-tauri/src/attach_service.rs:554`).
+`config_directory` (`src-tauri/acp/src/main.rs:948`) is the environment-lookup
+pattern this workspace already uses, and it joins a different leaf name.
 
-MEASURED 2026-08-13 (fifty-eighth wave, planner, read
-`DesktopAttachService::onboard_workspace`
-(`src-tauri/core/src/attach/desktop_service.rs:135`) beside `onboard_workspace`
-(`src-tauri/runtime/src/service/workspace.rs:28`)) — two services repeat one
-onboarding rule. Each copy rejects a relative path, calls
-`onboard_companion_workspace`, canonicalizes both directories, and records each
-canonical directory against the client identity and the session workspace. The
-copies differ only in where the client identity comes from. The rule decides
-which directories a companion may execute in, so it belongs in one core
-function.
+MEASURED 2026-08-13 (fifty-ninth wave, planner, read `ApprovalCoordinator`
+(`src-tauri/core/src/attach/approval.rs:66`) against the new ADR 0012
+amendment) — the coordinator already answers most of the presenter rules. It
+holds one registered presenter, keeps one pending decision per challenge, denies
+a second request for the same challenge, denies when no presenter is registered,
+and gives up at the caller's deadline. Two rules are missing.
+`register_presenter` (`:71`) overwrites a registered presenter instead of
+rejecting a second one, and no release path exists, so a disconnected presenter
+leaves every waiting request to sit until its deadline. The desktop registers an
+in-process presenter at `src-tauri/src/attach_service.rs:657`, so a session claim
+must sit beside `register_presenter` rather than replace it.
 
 MEASURED 2026-08-12 (thirty-ninth wave, planner, read the runtime manifest beside
 `test/runtime-dependency-boundary.sh`) — the runtime crate cannot build a
@@ -577,41 +587,37 @@ projector always holds state there. A test seam would also prove nothing, becaus
 projector rejects that event too. The lane re-opens this only against a new
 failure route.
 
-MERGE HAZARD — the fifty-eighth wave puts three slices in
-`src-tauri/runtime/src/lib.rs` and two in
-`src-tauri/runtime/src/service/workspace.rs`. Each ticket tells the implementer
-to rebase on `main` before it opens the pull request. The 2026-08-04 silent
-revert came from a stale base.
+MERGE HAZARD — the fifty-ninth wave puts two slices in
+`src-tauri/runtime/src/lib.rs` and two more in `src-tauri/core/src/attach/`. Each
+ticket tells the implementer to rebase on `main` before it opens the pull
+request. The 2026-08-04 silent revert came from a stale base.
 
-VERIFIED 2026-08-13 (fifty-eighth wave, planner, read
-`src-tauri/runtime/src/service/session.rs`,
-`src-tauri/runtime/src/attach_boundaries.rs`, and
-`src-tauri/src/attach_service.rs`, then ran the runtime suite) — two of the five
-fifty-seventh-wave slices are built. The runtime answers a sign-in, and the
-attach Home reads the confirmed Home. `RuntimeAttachBoundaries` still takes the
-`attach_approval` default, no runtime file composes a `DesktopAttachService`, and
-the runtime still computes no directory. The runtime suite passes 53 tests over
-26 test binaries.
+VERIFIED 2026-08-13 (fifty-ninth wave, planner, read
+`src-tauri/runtime/src/attach_boundaries.rs`,
+`src-tauri/core/src/attach/workspace_context.rs`, and the ADR 0012 amendment,
+then ran the runtime suite) — three of the five fifty-eighth-wave slices are
+built. The runtime boundaries answer the owner approval, one core function owns
+the companion onboarding rule, and the ADR names the approval presentation wire.
+The runtime still computes no directory of its own, and no runtime file composes
+a `DesktopAttachService`. The runtime suite passes 54 tests over 26 test
+binaries.
 
-SELECTED 2026-08-13 (fifty-eighth wave) — five slices in priority order.
+SELECTED 2026-08-13 (fifty-ninth wave) — five slices in priority order.
 
-1. The runtime boundaries that record the signed workspace and answer the owner
-   approval.
-2. The runtime rule for its own data and config directories.
-3. The runtime composition of its own `DesktopAttachService`.
-4. One core function for the companion workspace onboarding rule.
-5. The ADR 0012 amendment that names the approval presentation wire.
+1. The runtime rule for its own data and config directories.
+2. The runtime composition of its own `DesktopAttachService`.
+3. The attach vocabulary entry for `approval.present`.
+4. The presenter session claim and release on `ApprovalCoordinator`.
+5. One peer-executable check with a separate approval-presenter proof.
 
-SEQUENCED 2026-08-13 (fifty-eighth wave) — after the composition, the runtime
-answers a companion `run.start` through that service, then serves real attach
-sessions from `run_handoff_listener` instead of readiness probes alone. Only then
-does the takeover in `run_migration_takeover` leave companions a working
-listener. The approval presenter stays with the desktop through phase one, so a
-runtime-owned listener needs a channel that reaches a desktop window before the
-cutover. ADR 0012 names no wire for that channel, so this wave files the
-amendment itself rather than waiting. The 2026-08-10 migration control session
-admission amendment is its template, read in the opposite direction: the runtime
-resolves the connecting peer to the installed desktop payload.
+SEQUENCED 2026-08-13 (fifty-ninth wave) — the approval presentation wire needs
+four parts, and slices 3, 4, and 5 are the three that stand alone today. The
+fourth part is the runtime listener that admits the presenter session and sends
+the challenge, and it waits on the other three. The desktop client half follows
+it. After the composition, the runtime answers a companion `run.start` through
+that service, then serves real attach sessions from `run_handoff_listener`
+instead of readiness probes alone. Only then does the takeover in
+`run_migration_takeover` leave companions a working listener.
 
 SEQUENCED — after the attach seam, the later extraction slices are the desktop
 client conversion and Linux user-unit registration. Each sits behind a dormant
@@ -1093,8 +1099,8 @@ earlier one. Requiring an up-to-date branch before merge, or a merge queue, is a
 repository-settings change that sits with the owner. The planner files no ticket
 for it.
 
-VERIFIED 2026-08-13 (fifty-eighth wave, planner) — `cargo test -p
-muniment-runtime` passes 53 tests over 26 test binaries. `npm ci` then `npm test`
+VERIFIED 2026-08-13 (fifty-ninth wave, planner) — `cargo test -p
+muniment-runtime` passes 54 tests over 26 test binaries. `npm ci` then `npm test`
 passes 928 frontend tests over 62 files with 31 skipped, plus 3 browser tests.
 This entry replaces the earlier ledger.
 
@@ -1131,7 +1137,8 @@ already bound by another workspace in this container, and the stale server
 answered 404 for every probe path until the planner moved to 8944. The
 fifty-third wave used 8951, the fifty-fourth used 8962, the fifty-fifth used
 8975, the fifty-sixth used 8988, and the fifty-eighth used 8993. The
-fifty-seventh wave ran no capture, because it read code alone.
+fifty-seventh and the fifty-ninth waves each ran no capture, because each read
+code alone.
 
 PLANNER PROCEDURE — for a measurement that needs a click, write a short
 playwright script and run it from the repository root. Playwright is a project
