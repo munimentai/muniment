@@ -12,8 +12,8 @@ use muniment_attach::{
     MAX_FRAME_LENGTH,
 };
 
-use super::linux::PeerCredentials;
 use super::deadline_io::{is_timeout, read_exact_before, write_all_before};
+use super::linux::PeerCredentials;
 use super::verify_approval_presenter_peer_with_reader;
 use crate::browser_control::LinuxProcReader;
 
