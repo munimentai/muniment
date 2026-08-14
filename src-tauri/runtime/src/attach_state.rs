@@ -4,8 +4,8 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use muniment_core::attach::{
-    ApprovalCoordinator, CompanionRegistry, DesktopAttachService, ProtocolError, RuntimeActivityRegistry,
-    SignedWorkspaceApproval,
+    ApprovalCoordinator, CompanionRegistry, DesktopAttachService, ProtocolError,
+    RuntimeActivityRegistry, SignedWorkspaceApproval,
 };
 use muniment_core::memory_runtime::ApplicationMemoryRuntime;
 use muniment_core::pi_execution::PiRuntime;
