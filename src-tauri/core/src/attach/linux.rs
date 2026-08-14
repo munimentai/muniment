@@ -29,8 +29,7 @@ use super::{
 };
 use crate::browser_control::LinuxProcReader;
 use crate::journal::{
-    thread_summaries::ThreadSummaryListError, RunEventPageError, RunJournal,
-    MAX_THREAD_TITLE_CHARS,
+    thread_summaries::ThreadSummaryListError, RunEventPageError, RunJournal, MAX_THREAD_TITLE_CHARS,
 };
 
 const ATTACH_DIRECTORY: &[u8] = b"muniment\0";

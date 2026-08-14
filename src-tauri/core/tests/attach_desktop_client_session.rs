@@ -13,8 +13,8 @@ use muniment_core::attach::{
     decode_frame, encode_frame, DesktopClientSession, Envelope, ErrorCode, EventName, Id,
     Operation, Protocol, ProtocolError, Request, WorkspaceOnboardRequest, WorkspaceOnboarded,
 };
-use muniment_core::journal::{CommitSubscription, JournalCommitHint, RunEventProjection};
 use muniment_core::journal::MAX_THREAD_TITLE_CHARS;
+use muniment_core::journal::{CommitSubscription, JournalCommitHint, RunEventProjection};
 
 struct TestService;
 
@@ -164,10 +164,22 @@ fn desktop_client_dispatches_thread_mutations() {
     assert_eq!(service.renames[0].0, "/work/signed");
     assert_eq!(service.renames[0].1.as_str(), thread_id);
     assert_eq!(service.renames[0].2, "Renamed thread");
-    assert_eq!(service.renames[0].3.as_str(), "018f0000-0000-7000-8000-000000000230");
-    assert_eq!(service.renames[0].4.as_str(), "018f0000-0000-7000-8000-000000000299");
-    assert_eq!(service.deletes[0].2.as_str(), "018f0000-0000-7000-8000-000000000231");
-    assert_eq!(service.deletes[0].3.as_str(), "018f0000-0000-7000-8000-000000000299");
+    assert_eq!(
+        service.renames[0].3.as_str(),
+        "018f0000-0000-7000-8000-000000000230"
+    );
+    assert_eq!(
+        service.renames[0].4.as_str(),
+        "018f0000-0000-7000-8000-000000000299"
+    );
+    assert_eq!(
+        service.deletes[0].2.as_str(),
+        "018f0000-0000-7000-8000-000000000231"
+    );
+    assert_eq!(
+        service.deletes[0].3.as_str(),
+        "018f0000-0000-7000-8000-000000000299"
+    );
 }
 
 #[test]
