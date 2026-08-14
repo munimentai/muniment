@@ -22,8 +22,8 @@ them must exercise the real contracts. It must add no mocked production path.
 > automation section. The thirteenth and the fifteenth both took the ADR 0012
 > runtime-service extraction section. The fourteenth took the Phase 2 client
 > core section. The sixteenth through the twenty-fifth all took that
-> extraction section again, and so did the twenty-sixth. It grows every wave,
-> so it stays the next compaction target.
+> extraction section again, and so did the twenty-sixth and the twenty-seventh.
+> It grows every wave, so it stays the next compaction target.
 
 ## M0 — Scaffold (done 2026-07-09)
 
@@ -452,109 +452,115 @@ provenance, and `RuntimeAttachBoundaries`
 fixtures, the shared chat grant, the warm Pi stub staging, and the
 temporary-profile guard. Nothing in `main` calls any entry.
 
-DONE 2026-08-13 — the attach approval seam is built on both sides
-(MUNIDESK-1188 through 1226). The core half holds the seam.
-`SignedWorkspaceApproval` (`src-tauri/core/src/attach/approval.rs:8`) carries the
-signed workspace and the owner approval rule, and `claim_presenter` (`:85`)
-admits one presenter and denies every waiting request on release.
-`onboard_workspace_context` (`attach/workspace_context.rs:64`) rejects a relative
-path and records both canonical companion directories.
-`Operation::ApprovalPresent` (`src-tauri/attach/src/envelope.rs:277`) and the two
+DONE 2026-08-13 and 2026-08-14 — the attach approval seam is built on all three
+sides (MUNIDESK-1188 through 1238). The core half holds the seam under
+`src-tauri/core/src/attach/`. `approval.rs` carries the signed workspace and the
+one-presenter claim, `workspace_context.rs` rejects a relative path and records
+both canonical companion directories, `peer_authority.rs` checks the peer
+executable, `presenter_admission.rs` negotiates version 1 and issues a
+credential-free grant, `approval_present.rs` sends one request and reads its
+correlated answer, `presenter_session.rs` claims the coordinator and holds it for
+the life of the connection, `presented_approval.rs` turns one presented request
+into a coordinator round trip and bounds both untrusted claims,
+`connection_route.rs` names a new connection's route from the peer executable and
+the claimed kind without consuming a byte, and `deadline_io.rs` is the one
+deadline-bounded read and write helper set. `Operation::ApprovalPresent`
+(`src-tauri/attach/src/envelope.rs:277`) and the two
 `protocol-fixtures/muniment.attach/1/` approval files hold the wire.
-`verify_approval_presenter_peer` (`attach/peer_authority.rs:60`) is the peer
-check, `admit_approval_presenter` (`attach/presenter_admission.rs:34`) negotiates
-version 1 and issues a credential-free grant,
-`ApprovalPresenterConnection::present` (`attach/approval_present.rs:31`) sends one
-request and reads its correlated answer, `serve_approval_presenter`
-(`attach/presenter_session.rs:40`) claims the coordinator, and
-`ApprovalPresenterSession::wait_until_closed` (`:19`) holds the claim for the life
-of the connection. `name_attach_connection_route`
-(`attach/connection_route.rs:25`) names a new connection's route from the peer
-executable and the claimed kind, and it consumes no byte.
 
-DONE 2026-08-13 — the runtime half holds the service, and the desktop half holds
-the client. `profile_directory`, `config_directory`, and
-`installed_desktop_executable` (`src-tauri/runtime/src/directories.rs`) resolve
-the two directories and the installed desktop payload.
+DONE 2026-08-13 and 2026-08-14 — the runtime half holds the service and the
+desktop half holds the client. `src-tauri/runtime/src/directories.rs` resolves the
+profile directory, the config directory, and the installed desktop payload.
 `compose_attach_service` (`runtime/src/attach_service.rs:15`) builds a
-`DesktopAttachService` from the runtime boundaries, and it reads the confirmed
-Home before the default one. `RuntimeAttachState`
-(`runtime/src/attach_state.rs:19`) opens the profile storage and the companion
-registry once and owns the one `ApprovalCoordinator`. `run_attach_listener`
-(`runtime/src/attach_listener.rs:48`) owns the profile endpoint, takes the
-instance lock, answers the handoff readiness probe, and serves each companion
-session. `sign_in` (`runtime/src/service/session.rs:55`) runs the native browser
-flow through an injected `&dyn BrowserOpener`. `ApprovalPresenterClient`
-(`src-tauri/attach/src/client.rs:1379`) answers each validated request with
-`approve` or `deny`, and `serve_approval_presenter_at` (`:1775`) reconnects
-through an interruptible connect until its `ApprovalPresenterStopHandle` fires.
-`test/installed-executable-paths.test.js` ties the resolved desktop executable to
-the packaged product name.
+`DesktopAttachService` from the runtime boundaries and reads the confirmed Home
+before the default one. `RuntimeAttachState` (`runtime/src/attach_state.rs:19`)
+opens the profile storage and the companion registry once and owns the one
+`ApprovalCoordinator`. `run_attach_listener` (`runtime/src/attach_listener.rs:48`)
+owns the profile endpoint, takes the instance lock, and answers the handoff
+readiness probe. `run_bound_attach_listener` (`:85`) names each accepted
+connection's route, admits an approval presenter, holds the presenter session for
+the life of the connection, and falls back to the companion route when it
+resolves no installed desktop payload. `sign_in`
+(`runtime/src/service/session.rs:55`) runs the native browser flow through an
+injected `&dyn BrowserOpener`. `ApprovalPresenterClient`
+(`src-tauri/attach/src/client.rs:1379`) answers each validated request,
+`serve_approval_presenter_at` (`:1775`) reconnects through an interruptible
+connect until its `ApprovalPresenterStopHandle` fires, and
+`AttachCompanionState::start_approval_presenter`
+(`src-tauri/src/attach_service.rs:353`) starts that supervisor once after a
+confirmed handoff probe or a held instance lock and stops it when the desktop
+listener starts. `test/installed-executable-paths.test.js` ties the resolved
+desktop executable to the packaged product name. The probe-only handoff listener
+is gone.
 
-DONE 2026-08-13 — ADR 0012 carries the approval presentation session amendment
-(MUNIDESK-1199) and the runtime attach connection routing amendment
-(MUNIDESK-1223), and `THREAT_MODEL.md` records the first. Through phase one the
-runtime presents its ADR 0009 approval challenge to the desktop over the existing
-`muniment.attach/1` connection, as an `approval.present` request that carries the
-requesting surface, the workspace scopes, the single-use challenge, and the
-decision deadline. On Linux the runtime admits a presenter session only when the
-connection's `SO_PEERCRED` peer PID resolves to the installed desktop payload and
-its first hello claims the client kind `desktop`. A hello claiming
-`desktop-handoff-probe` keeps the readiness answer, and every other connection
-takes the companion route. That session authorizes approval presentation alone,
-the runtime admits one at a time, and a disconnected presenter, a deny, a missed
-two-minute deadline, or a late, repeated, unknown, or mismatched choice all fail
-closed.
+DONE 2026-08-13 and 2026-08-14 — ADR 0012 carries four attach amendments, and
+`THREAT_MODEL.md` records each (MUNIDESK-1199, 1223, 1230, 1237). They decide
+approval presentation over the existing `muniment.attach/1` connection, the
+routing rule that reads the first hello, the desktop presenter lifecycle with its
+two start states, and desktop client session admission. Through phase one the
+runtime presents its ADR 0009 approval challenge to the desktop as an
+`approval.present` request that carries the requesting surface, the workspace
+scopes, the single-use challenge, and the decision deadline. On Linux the runtime
+routes a connection whose `SO_PEERCRED` peer PID resolves to the installed desktop
+payload by its claimed kind. A `desktop` hello takes the presenter session. A
+`desktop-client` hello takes a connection-bound desktop client session that
+carries owner authority over the signed `grant.workspace` value and carries
+neither migration control nor approval presentation. A `desktop-handoff-probe`
+hello keeps the readiness answer. Every other connection takes the companion
+route. The runtime admits one presenter at a time, and a disconnected presenter, a
+deny, a missed two-minute deadline, or a late, repeated, unknown, or mismatched
+choice all fail closed.
 
-DONE 2026-08-14 — all five sixty-fourth-wave slices landed (MUNIDESK-1228
-through 1232). `run_bound_attach_listener`
-(`src-tauri/runtime/src/attach_listener.rs:85`) names each accepted connection's
-route, admits an approval presenter, and holds the presenter session for the life
-of the connection. `answer_presented_approval`
-(`src-tauri/core/src/attach/presented_approval.rs:9`) turns one presented request
-into a coordinator round trip, and it bounds both untrusted claims. ADR 0012
-carries the desktop approval presenter lifecycle amendment, and `THREAT_MODEL.md`
-records it. The probe-only handoff listener is gone. `attach/deadline_io.rs` is
-the one deadline-bounded read and write helper set for `handoff_probe.rs`,
-`approval_present.rs`, and `presenter_admission.rs`.
+DONE 2026-08-14 — four of the five sixty-fifth-wave slices landed (MUNIDESK-1235
+through 1238). They built the desktop presenter supervisor and its two start
+states, the runtime accept-loop fallback to the companion route, the ADR 0012
+desktop client session admission amendment, and the proof that a mismatched
+presenter answer fails closed.
 
-VERIFIED 2026-08-14 (sixty-fifth wave, planner, ran
-`cargo test -p muniment-core -p muniment-runtime -p muniment-attach`) — 1,283
+DRAINED 2026-08-14 — the fifth sixty-fifth-wave slice never reached a pull
+request. It asked for the end-to-end proof that a companion pairs through a live
+presenter connection. `src-tauri/runtime/tests/attach_listener.rs` proves the two
+halves apart instead. `handshake_gets_a_grant_when_the_presenter_approves`
+(`:158`) registers an in-process presenter callback, and
+`desktop_presenter_answers_an_approval_request` (`:194`) drives a live presenter
+connection from a direct coordinator request. No test drives a companion handshake
+through a live presenter connection. The sixty-sixth wave re-files it.
+
+VERIFIED 2026-08-14 (sixty-sixth wave, planner, ran
+`cargo test -p muniment-core -p muniment-runtime -p muniment-attach`) — 1,286
 tests pass over 117 test binaries, and the build prints no warning.
 
-MEASURED 2026-08-14 (sixty-fifth wave, planner, read the accept loop beside
-`installed_desktop_executable`) — the runtime drops every connection when it
-resolves no installed desktop payload. The connection thread returns at
-`attach_listener.rs:133` when `expected_desktop_executable` is `None`, and
-`RuntimeAttachState::attach_listener_inputs` (`attach_state.rs:99`) fills that
-field from `installed_desktop_executable` (`directories.rs:26`). That function
-answers `None` for every runtime binary outside
-`<prefix>/lib/muniment/muniment-runtime`. The ADR 0012 routing amendment gives
-every connection that is not the desktop payload the companion route. An approved
-companion reconnects on its stored credential and needs no approval, so the drop
-costs a working reconnect.
+MEASURED 2026-08-14 (sixty-sixth wave, planner, read
+`run_attach_listener_with_hooks` beside `start_approval_presenter`) — a second
+desktop window asks the first window to pair its own presenter connection. The
+desktop starts the presenter supervisor when it cannot take the instance lock
+(`src-tauri/src/attach_service.rs:777`), and the supervisor dials the endpoint
+with a hello claiming the client kind `desktop`
+(`src-tauri/attach/src/client.rs:2045`). The listening desktop names no route. Its
+accept loop (`attach_service.rs:798`) hands every connection to
+`run_authenticated_session_with_service_approvals_registry_and_migration`, which
+finds no stored credential and calls `request_attach_pairing_approval` (`:622`).
+A signed-in user therefore sees a pairing dialog for a program claiming the kind
+`desktop`, and the supervisor repeats the dial every 250 milliseconds. The runtime
+listener already refuses that shape, because `name_attach_connection_route` sends
+it to the presenter route.
 
-MEASURED 2026-08-14 (sixty-fifth wave, planner, grepped every construction) —
-`AttachListenerError::Accept` (`attach_listener.rs:29`) has no producer. The
-accept loop retries `AttachAcceptError::Accept` and breaks on `Closed`, so the
-variant names a failure the listener never reports.
-
-MEASURED 2026-08-14 (sixty-fifth wave, planner, read the routing amendment
-against the extraction sequence) — no rule says how a converted desktop client
-attaches. Routing sends a desktop-payload connection claiming `desktop` to the
-presenter session, and that session carries no thread, run, or session authority.
-The companion route requires visible pairing approval, and the extraction
-amendment forbids the desktop from approving its own connection. The desktop
-client conversion therefore needs an admission rule before its first code slice.
+MEASURED 2026-08-14 (sixty-sixth wave, planner, read the accept loop with no
+expected desktop payload) — a runtime that resolves no installed desktop payload
+denies the desktop presenter rather than prompting for it. The connection takes
+the companion route, `request_approval` (`runtime/src/attach_listener.rs:190`)
+finds no registered presenter, and `ApprovalCoordinator::request` answers false at
+once. That is the fail-closed shape a development runtime should have, so the lane
+files no slice for it.
 
 MEASURED 2026-08-14 (sixty-fifth wave, planner, read `AccessPanel.svelte:279`
 beside `attach_listener_status`) — `Connected programs` answers a held instance
 lock with `Connected programs are available in another Muniment window.` and a
 `Close this window` control. The desktop learns only that the lock is held, never
 which process holds it. Once the runtime service owns the endpoint, that copy
-sends the user to close the window that presents approvals. The honest copy needs
-a signal that names the owner, so the slice follows the desktop presenter
-supervisor instead of leading it.
+sends the user to close the window that presents approvals. The presenter
+supervisor now carries the missing signal, because only the runtime admits a
+presenter connection. The sixty-sixth wave files the slice.
 
 MEASURED 2026-08-12 (thirty-ninth wave, planner, read the runtime manifest beside
 `test/runtime-dependency-boundary.sh`) — the runtime crate cannot build a
@@ -604,33 +610,37 @@ projector always holds state there. A test seam would also prove nothing, becaus
 projector rejects that event too. The lane re-opens this only against a new
 failure route.
 
-MERGE HAZARD — the sixty-fifth wave puts slice 1 in
-`src-tauri/src/attach_service.rs`, slices 2 and 3 in
-`src-tauri/runtime/src/attach_listener.rs` and
-`src-tauri/runtime/tests/attach_listener.rs`, slice 4 in
-`docs/decisions/0012-user-level-runtime-service.md` and `THREAT_MODEL.md`, and
-slice 5 in `src-tauri/core/tests/attach_presenter_session.rs`. Slices 2 and 3
-share the runtime test file. Each ticket tells the implementer to rebase on
-`main` before it opens the pull request. The 2026-08-04 silent revert came from a
-stale base.
+MERGE HAZARD — the sixty-sixth wave puts slice 1 and slice 5 in
+`src-tauri/src/attach_service.rs`, slice 2 in
+`src-tauri/core/src/attach/connection_route.rs` and
+`src-tauri/runtime/src/attach_listener.rs`, slice 3 in a new
+`src-tauri/core/src/attach/desktop_client_admission.rs`, and slice 4 in
+`src-tauri/runtime/tests/attach_listener.rs`. Slices 1 and 5 share the desktop
+file. Slice 1 matches the approval presenter route and treats every other route as
+the companion path, so slice 2 can add a route variant without breaking that
+match. Each ticket tells the implementer to rebase on `main` before it opens the
+pull request. The 2026-08-04 silent revert came from a stale base.
 
-SELECTED 2026-08-14 (sixty-fifth wave) — five slices in priority order.
+SELECTED 2026-08-14 (sixty-sixth wave) — five slices in priority order.
 
-1. The desktop approval presenter supervisor and its two start states.
-2. The runtime accept loop fallback to the companion route.
-3. The end-to-end proof that a companion pairs through a presenter connection.
-4. The ADR 0012 amendment that names how a converted desktop client attaches.
-5. The proof that a mismatched presenter answer fails closed.
+1. The desktop listener refuses an approval presenter connection instead of
+   pairing it.
+2. The route that names a `desktop-client` hello from the installed desktop
+   payload.
+3. The core admission that admits one desktop client session.
+4. The end-to-end proof that a companion pairs through a live presenter
+   connection.
+5. The `Connected programs` copy for a runtime-owned endpoint.
 
-SEQUENCED 2026-08-14 (sixty-fifth wave) — the `Connected programs` copy for a
-runtime-owned endpoint follows slice 1. The desktop client conversion follows
-slice 4, and Linux user-unit registration follows that conversion. Each later
-slice sits behind a dormant service entry point, and the desktop stays the owner
-throughout. The final cutover slice activates the listener, approval coordinator,
-journal, CAS, Pi, device session, credentials, authorization, and permission
-gates together. Remote Control follows the cutover. User-unit registration must
-not precede the cutover, because a service that takes the instance lock first
-would stop the desktop listener.
+SEQUENCED 2026-08-14 (sixty-sixth wave) — the runtime route that serves an
+admitted desktop client session follows slices 2 and 3. The desktop client dial
+follows that service, and Linux user-unit registration follows the dial. Each
+later slice sits behind a dormant service entry point, and the desktop stays the
+owner throughout. The final cutover slice activates the listener, approval
+coordinator, journal, CAS, Pi, device session, credentials, authorization, and
+permission gates together. Remote Control follows the cutover. User-unit
+registration must not precede the cutover, because a service that takes the
+instance lock first would stop the desktop listener.
 
 DONE — all three slices of the ADR 0009 attach workspace namespace amendment are
 built (MUNIDESK-883, 887, 893, 896, 905). The signed `grant.workspace` value is
@@ -1103,9 +1113,9 @@ earlier one. Requiring an up-to-date branch before merge, or a merge queue, is a
 repository-settings change that sits with the owner. The planner files no ticket
 for it.
 
-VERIFIED 2026-08-14 (sixty-fifth wave, planner) — one
+VERIFIED 2026-08-14 (sixty-sixth wave, planner) — one
 `cargo test -p muniment-core -p muniment-runtime -p muniment-attach` run passes
-1,283 tests over 117 test binaries. The sixty-first wave ran `npm ci` then
+1,286 tests over 117 test binaries. The sixty-first wave ran `npm ci` then
 `npm test` and passed 928 frontend tests over 62 files with 31 skipped, plus 3
 browser tests. This entry replaces the earlier ledger.
 
@@ -1142,8 +1152,8 @@ already bound by another workspace in this container, and the stale server
 answered 404 for every probe path until the planner moved to 8944. The
 fifty-third wave used 8951, the fifty-fourth used 8962, the fifty-fifth used
 8975, the fifty-sixth used 8988, and the fifty-eighth used 8993. The
-fifty-seventh, the fifty-ninth, the sixtieth, the sixty-first, and the
-sixty-fifth waves each ran no capture, because each read code alone.
+fifty-seventh, the fifty-ninth, the sixtieth, the sixty-first, the sixty-fifth,
+and the sixty-sixth waves each ran no capture, because each read code alone.
 
 PLANNER PROCEDURE — for a measurement that needs a click, write a short
 playwright script and run it from the repository root. Playwright is a project
