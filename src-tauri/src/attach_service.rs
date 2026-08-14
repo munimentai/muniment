@@ -827,7 +827,10 @@ fn run_attach_listener_with_hooks<R: tauri::Runtime>(
                     )
                 },
             );
-            if let AttachConnectionRoute::ApprovalPresenter = route {
+            if matches!(
+                route,
+                AttachConnectionRoute::ApprovalPresenter | AttachConnectionRoute::DesktopClient
+            ) {
                 return;
             }
             let Ok(mut service) =
