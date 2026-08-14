@@ -383,3 +383,18 @@ installed desktop payload under the same OS user. It does not defend against
 compromise by another process running as that user. Windows and macOS need
 their own peer-identity amendments before they can admit a desktop client
 session.
+
+## Amendment – 2026-08-14: desktop client session lifecycle
+
+The desktop starts its client supervisor in two states. It starts after a
+handoff probe confirms that the runtime owns the profile endpoint. It also
+starts at launch when another process holds the per-profile instance lock. The
+desktop opens no client connection while its own listener owns the endpoint.
+
+The desktop keeps at most one client connection. Every desktop command rides
+that connection. A dropped connection fails each in-flight request, and the
+supervisor reconnects until the desktop stops it.
+
+A restarted desktop listener stops the client connection, as does desktop
+shutdown. While the desktop holds no client session, it shows the existing
+server-unreachable notice rather than an empty surface.
