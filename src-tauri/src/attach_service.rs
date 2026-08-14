@@ -2,6 +2,10 @@
 use muniment_core::attach::ApprovalRequest;
 #[cfg(target_os = "linux")]
 use muniment_core::attach::{
+    answer_presented_approval, serve_approval_presenter_at, ApprovalPresenterStopHandle,
+};
+#[cfg(target_os = "linux")]
+use muniment_core::attach::{
     bounded_claim, load_client_credentials, save_client_credentials as persist_client_credentials,
     ClientCredential, CompanionRegistry, WorkspaceContextMap, COMPANION_CREDENTIAL_FILE_NAME,
 };
@@ -134,6 +138,7 @@ fn release_prepared_handoff<R: tauri::Runtime>(
     match probe_handoff(endpoint, nonce, deadline) {
         Ok(confirmed) => {
             eprintln!("runtime service handoff confirmed");
+            start_approval_presenter(app);
             Ok(confirmed)
         }
         Err(error) => {
@@ -195,6 +200,8 @@ pub struct AttachCompanionState {
     listener_stop: Mutex<AttachListenerStopState>,
     #[cfg(target_os = "linux")]
     listener_stopped: Condvar,
+    #[cfg(target_os = "linux")]
+    approval_presenter: Mutex<Option<ApprovalPresenterStopHandle>>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
@@ -223,6 +230,7 @@ impl AttachCompanionState {
                 stop_requested: false,
             }),
             listener_stopped: Condvar::new(),
+            approval_presenter: Mutex::new(None),
         }
     }
 
@@ -242,6 +250,7 @@ impl AttachCompanionState {
     }
 
     fn record_listener_started(&self) {
+        self.stop_approval_presenter();
         self.listener_lifecycle
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -341,6 +350,31 @@ impl AttachCompanionState {
         }
     }
 
+    fn start_approval_presenter(&self, start: impl FnOnce(ApprovalPresenterStopHandle)) {
+        let mut presenter = self
+            .approval_presenter
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if presenter.is_some() {
+            return;
+        }
+        let stop = ApprovalPresenterStopHandle::new();
+        *presenter = Some(stop.clone());
+        drop(presenter);
+        start(stop);
+    }
+
+    fn stop_approval_presenter(&self) {
+        if let Some(stop) = self
+            .approval_presenter
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take()
+        {
+            stop.stop();
+        }
+    }
+
     pub(crate) fn record_workspace(&self, workspace: String) {
         self.approval.record(workspace);
     }
@@ -365,6 +399,21 @@ impl Default for AttachCompanionState {
                 stop_requested: false,
             }),
             listener_stopped: Condvar::new(),
+            approval_presenter: Mutex::new(None),
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+impl Drop for AttachCompanionState {
+    fn drop(&mut self) {
+        if let Some(stop) = self
+            .approval_presenter
+            .get_mut()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take()
+        {
+            stop.stop();
         }
     }
 }
@@ -640,6 +689,30 @@ where
 }
 
 #[cfg(target_os = "linux")]
+fn start_approval_presenter<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
+    let Ok(filesystem) = AttachFilesystem::from_environment() else {
+        eprintln!("approval presenter filesystem lookup failed");
+        return;
+    };
+    let endpoint = filesystem.endpoint_path().to_owned();
+    let presenter_app = app.clone();
+    app.state::<AttachCompanionState>()
+        .start_approval_presenter(move |stop| {
+            std::thread::spawn(move || {
+                let approvals = presenter_app.state::<AttachApprovalState>().inner().clone();
+                serve_approval_presenter_at(
+                    &endpoint,
+                    env!("CARGO_PKG_VERSION"),
+                    Duration::from_secs(5),
+                    Duration::from_millis(250),
+                    stop,
+                    move |request| answer_presented_approval(&approvals, request),
+                );
+            });
+        });
+}
+
+#[cfg(target_os = "linux")]
 pub fn start_attach_listener<R: tauri::Runtime>(app: tauri::AppHandle<R>) {
     if app.try_state::<AttachCompanionState>().is_some() {
         app.state::<AttachCompanionState>()
@@ -701,6 +774,7 @@ fn run_attach_listener_with_hooks<R: tauri::Runtime>(
     let Ok(instance_lock) = filesystem.acquire_instance_lock() else {
         app.state::<AttachCompanionState>()
             .record_listener_start_failure(AttachListenerStartFailure::InstanceLock);
+        start_approval_presenter(&app);
         eprintln!(
             "{}",
             attach_listener_start_diagnostic(AttachListenerStartFailure::InstanceLock)
@@ -825,6 +899,42 @@ mod tests {
     }
 
     #[cfg(target_os = "linux")]
+    #[test]
+    fn approval_presenter_starts_once_and_stops_when_listener_starts() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let state = AttachCompanionState::default();
+        let starts = Arc::new(AtomicUsize::new(0));
+        let worker = Arc::new(Mutex::new(None));
+        let endpoint =
+            std::env::temp_dir().join(format!("mt-presenter-{}", Uuid::now_v7().simple()));
+
+        for _ in 0..2 {
+            let starts = starts.clone();
+            let worker = worker.clone();
+            let endpoint = endpoint.clone();
+            state.start_approval_presenter(move |stop| {
+                starts.fetch_add(1, Ordering::SeqCst);
+                *worker.lock().unwrap() = Some(std::thread::spawn(move || {
+                    serve_approval_presenter_at(
+                        &endpoint,
+                        "0.0.1",
+                        Duration::from_millis(10),
+                        Duration::from_secs(30),
+                        stop,
+                        |_| unreachable!("the test endpoint has no listener"),
+                    );
+                }));
+            });
+        }
+
+        assert_eq!(starts.load(Ordering::SeqCst), 1);
+        state.record_listener_started();
+        worker.lock().unwrap().take().unwrap().join().unwrap();
+        assert!(state.approval_presenter.lock().unwrap().is_none());
+    }
+
+    #[cfg(target_os = "linux")]
     fn answer_handoff_probe(stream: &mut std::os::unix::net::UnixStream, nonce: &str) {
         use std::io::{Read, Write};
 
@@ -942,6 +1052,7 @@ mod tests {
         );
         let app = tauri::test::mock_app();
         app.manage(AttachCompanionState::default());
+        app.manage(AttachApprovalState::default());
         app.manage(Mutex::new(PreparedHandoffSlot::new()));
         app.state::<AttachCompanionState>()
             .set_listener(listener.clone());
