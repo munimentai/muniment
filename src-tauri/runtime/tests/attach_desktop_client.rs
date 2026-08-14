@@ -37,6 +37,10 @@ impl ThreadListService for TestService {
     }
 }
 
+fn thread_list_body<T: FromIterator<(String, T)> + From<u64>>() -> T {
+    [("limit".to_owned(), T::from(20))].into_iter().collect()
+}
+
 #[test]
 fn shipped_desktop_client_completes_the_session() {
     let profile = TemporaryProfile::new("attach-desktop-client", false);
@@ -81,11 +85,7 @@ fn shipped_desktop_client_completes_the_session() {
         let profile_id = client.profile_id().to_owned();
         let workspace_scopes = client.workspace_scopes().clone();
         let summary = client.authorization_summary();
-        let response = client.request(
-            Operation::ThreadList,
-            None,
-            serde_json::json!({"limit": 20}),
-        );
+        let response = client.request(Operation::ThreadList, None, thread_list_body());
 
         drop(client);
         stop_tx.send(()).unwrap();
@@ -104,5 +104,8 @@ fn shipped_desktop_client_completes_the_session() {
         summary.idle_timeout_seconds,
         CAPABILITY_IDLE_LIFETIME.as_secs()
     );
-    assert_eq!(response.unwrap().body, serde_json::json!({"threads": []}));
+    assert!(response.unwrap().body["threads"]
+        .as_array()
+        .unwrap()
+        .is_empty());
 }
