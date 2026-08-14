@@ -339,3 +339,20 @@ connection takes the companion route.
 The routing check consumes no byte from the connection. The admitted path
 reads the first hello itself. An unreadable, oversized, or late first frame
 falls to the companion route, which still requires visible pairing approval.
+
+## Amendment – 2026-08-14: desktop approval presenter lifecycle
+
+The desktop starts its approval presenter supervisor in two states. It starts
+after a handoff probe confirms that the runtime owns the profile endpoint. It
+also starts at launch when another process holds the per-profile instance
+lock. The desktop dials no presenter connection while its own listener owns
+the endpoint.
+
+The supervisor reconnects until the desktop stops it. A restarted desktop
+listener stops the supervisor, as does desktop shutdown. A dropped presenter
+connection cancels no approval that the user already made.
+
+While presenting, the desktop asks the user through the same visible pairing
+prompt that its local listener uses. The runtime still applies the admission,
+routing, single-presenter, and decision rules from the two 2026-08-13
+amendments.
