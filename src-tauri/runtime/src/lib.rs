@@ -8,8 +8,6 @@ mod attach_service;
 mod attach_state;
 mod directories;
 #[cfg(target_os = "linux")]
-pub mod handoff_listener;
-#[cfg(target_os = "linux")]
 mod migration;
 pub mod service;
 mod sink;
