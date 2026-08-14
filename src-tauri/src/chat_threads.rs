@@ -16,6 +16,8 @@ use muniment_core::thread_ownership::{subject_owns_first_run, ThreadOwnershipErr
 use serde::Serialize;
 use std::collections::BTreeMap;
 
+#[cfg(target_os = "linux")]
+use crate::attach_service::{AttachCompanionState, DesktopClientSession};
 use crate::auth;
 use crate::chat::{state_session_root, ChatState};
 use muniment_core::run_events::SharedStorage;
@@ -38,6 +40,21 @@ pub struct ChatThreadSummaryPage {
 
 fn thread_ownership_error_message(_error: ThreadOwnershipError) -> String {
     "Conversation history is unavailable.".into()
+}
+
+#[cfg(target_os = "linux")]
+fn route_thread_write(
+    session: DesktopClientSession,
+    remote: impl FnOnce(&muniment_core::attach::DesktopClientHolder) -> Result<(), String>,
+    local: impl FnOnce() -> Result<(), String>,
+) -> Result<(), String> {
+    match session {
+        DesktopClientSession::NoSupervisor => local(),
+        DesktopClientSession::Connected(client) => remote(&client),
+        DesktopClientSession::Disconnected => {
+            Err("Muniment cannot reach its background service.".into())
+        }
+    }
 }
 
 pub(crate) fn newest_owned_workspace_thread(
@@ -239,20 +256,44 @@ pub async fn chat_rename_thread(
     app_handle: tauri::AppHandle,
     auth_state: tauri::State<'_, auth::AuthState>,
     state: tauri::State<'_, ChatState>,
+    #[cfg(target_os = "linux")] attach_state: tauri::State<'_, AttachCompanionState>,
     thread_id: String,
     title: String,
 ) -> Result<(), String> {
     let tokens = auth::fresh_tokens(&auth_state, &app_handle)?;
+    #[cfg(target_os = "linux")]
+    return route_thread_write(
+        attach_state.desktop_client_session(),
+        |client| {
+            client
+                .rename_thread(&thread_id, &title)
+                .map_err(|_| "Muniment cannot reach its background service.".to_string())
+        },
+        || {
+            let mut storage = state
+                .storage
+                .lock()
+                .map_err(|_| "Conversation history is unavailable.".to_string())?;
+            rename_thread(
+                &mut storage.journal,
+                tokens.subject.as_deref(),
+                &thread_id,
+                &title,
+            )
+        },
+    );
+    #[cfg(not(target_os = "linux"))]
     let mut storage = state
         .storage
         .lock()
         .map_err(|_| "Conversation history is unavailable.".to_string())?;
-    rename_thread(
+    #[cfg(not(target_os = "linux"))]
+    return rename_thread(
         &mut storage.journal,
         tokens.subject.as_deref(),
         &thread_id,
         &title,
-    )
+    );
 }
 
 #[tauri::command]
@@ -260,19 +301,43 @@ pub async fn chat_delete_thread(
     app_handle: tauri::AppHandle,
     auth_state: tauri::State<'_, auth::AuthState>,
     state: tauri::State<'_, ChatState>,
+    #[cfg(target_os = "linux")] attach_state: tauri::State<'_, AttachCompanionState>,
     thread_id: String,
 ) -> Result<(), String> {
     let tokens = auth::fresh_tokens(&auth_state, &app_handle)?;
+    #[cfg(target_os = "linux")]
+    return route_thread_write(
+        attach_state.desktop_client_session(),
+        |client| {
+            client
+                .delete_thread(&thread_id)
+                .map_err(|_| "Muniment cannot reach its background service.".to_string())
+        },
+        || {
+            let mut storage = state
+                .storage
+                .lock()
+                .map_err(|_| "Conversation history is unavailable.".to_string())?;
+            delete_thread(
+                &mut storage.journal,
+                &state.session_thread,
+                tokens.subject.as_deref(),
+                &thread_id,
+            )
+        },
+    );
+    #[cfg(not(target_os = "linux"))]
     let mut storage = state
         .storage
         .lock()
         .map_err(|_| "Conversation history is unavailable.".to_string())?;
-    delete_thread(
+    #[cfg(not(target_os = "linux"))]
+    return delete_thread(
         &mut storage.journal,
         &state.session_thread,
         tokens.subject.as_deref(),
         &thread_id,
-    )
+    );
 }
 
 #[tauri::command]
@@ -342,6 +407,58 @@ mod tests {
     use std::sync::{Arc, Mutex};
     use std::time::Duration;
     use uuid::Uuid;
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn thread_writes_route_both_commands_for_each_desktop_client_state() {
+        use std::cell::Cell;
+
+        for command in ["rename", "delete"] {
+            for (session, expected_remote, expected_local, expected_error) in [
+                (DesktopClientSession::NoSupervisor, 0, 1, None),
+                (
+                    DesktopClientSession::Connected(
+                        muniment_core::attach::DesktopClientHolder::new(),
+                    ),
+                    1,
+                    0,
+                    None,
+                ),
+                (
+                    DesktopClientSession::Disconnected,
+                    0,
+                    0,
+                    Some("Muniment cannot reach its background service."),
+                ),
+            ] {
+                let remote_calls = Cell::new(0);
+                let local_calls = Cell::new(0);
+                let result = route_thread_write(
+                    session,
+                    |_| {
+                        remote_calls.set(remote_calls.get() + 1);
+                        Ok(())
+                    },
+                    || {
+                        local_calls.set(local_calls.get() + 1);
+                        Ok(())
+                    },
+                );
+
+                assert_eq!(remote_calls.get(), expected_remote, "{command}");
+                assert_eq!(local_calls.get(), expected_local, "{command}");
+                assert_eq!(result.err().as_deref(), expected_error, "{command}");
+            }
+        }
+
+        let error = route_thread_write(
+            DesktopClientSession::NoSupervisor,
+            |_| Ok(()),
+            || Err("Conversation history is unavailable.".into()),
+        )
+        .unwrap_err();
+        assert_eq!(error, "Conversation history is unavailable.");
+    }
 
     #[test]
     fn rename_thread_accepts_owned_thread_and_rejects_invalid_requests() {
