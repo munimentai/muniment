@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use muniment_core::attach::{
-    CompanionRegistry, DesktopAttachService, ProtocolError, RuntimeActivityRegistry,
+    ApprovalCoordinator, CompanionRegistry, DesktopAttachService, ProtocolError, RuntimeActivityRegistry,
     SignedWorkspaceApproval,
 };
 use muniment_core::memory_runtime::ApplicationMemoryRuntime;
@@ -13,7 +13,7 @@ use muniment_core::run_start::ActiveRun;
 use muniment_core::session_thread::SessionThread;
 
 use crate::service::{open_companion_registry, open_profile_storage};
-use crate::{compose_attach_service, RuntimeAttachBoundaries};
+use crate::{compose_attach_service, AttachListenerInputs, RuntimeAttachBoundaries};
 
 /// Owns the state shared by all runtime attach connections.
 pub struct RuntimeAttachState {
@@ -27,6 +27,7 @@ pub struct RuntimeAttachState {
     approval: SignedWorkspaceApproval,
     session_thread: Arc<SessionThread>,
     companion_registry: CompanionRegistry,
+    approvals: ApprovalCoordinator,
 }
 
 impl RuntimeAttachState {
@@ -55,6 +56,7 @@ impl RuntimeAttachState {
             approval: SignedWorkspaceApproval::default(),
             session_thread: Arc::new(SessionThread::default()),
             companion_registry,
+            approvals: ApprovalCoordinator::default(),
         })
     }
 
@@ -83,6 +85,15 @@ impl RuntimeAttachState {
             &self.profile_directory,
             &self.config_directory,
         )
+    }
+
+    /// Builds listener inputs that share the runtime attach state.
+    pub fn attach_listener_inputs(&self) -> AttachListenerInputs<'_> {
+        AttachListenerInputs {
+            companion_registry: &self.companion_registry,
+            approval: self.approval.clone(),
+            approvals: self.approvals.clone(),
+        }
     }
 
     /// Returns the companion registry shared with attach services.
