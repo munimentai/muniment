@@ -39,11 +39,11 @@ use muniment_core::attach::linux::{
 };
 #[cfg(target_os = "linux")]
 use muniment_core::attach::{
-    evaluate_quiesce, probe_handoff, verify_migration_control_peer, Approval,
-    AttachListenerLifecycle, CommittedResult, ConfirmedHandoff, HandoffProbeError, Id,
-    IdempotencyOutcome, IdempotencyStore, Operation, PeerAuthorityError, PreparedHandoffSlot,
-    Protocol, Request as AttachRequest, RuntimeActivity, RuntimeActivityRegistry,
-    SignedWorkspaceApproval, WorkspaceOnboardRequest, WorkspaceOnboarded,
+    evaluate_quiesce, name_attach_connection_route, probe_handoff, verify_migration_control_peer,
+    Approval, AttachConnectionRoute, AttachListenerLifecycle, CommittedResult, ConfirmedHandoff,
+    HandoffProbeError, Id, IdempotencyOutcome, IdempotencyStore, Operation, PeerAuthorityError,
+    PreparedHandoffSlot, Protocol, Request as AttachRequest, RuntimeActivity,
+    RuntimeActivityRegistry, SignedWorkspaceApproval, WorkspaceOnboardRequest, WorkspaceOnboarded,
 };
 #[cfg(target_os = "linux")]
 use muniment_core::browser_control::ProcReader;
@@ -796,6 +796,7 @@ fn run_attach_listener_with_hooks<R: tauri::Runtime>(
     let companion_state = app.state::<AttachCompanionState>();
     companion_state.publish_listener_stop(listener.stop_handle());
     companion_state.record_listener_started();
+    let expected_desktop_executable = std::env::current_exe().ok();
     loop {
         let (stream, credentials) = match listener.accept() {
             Ok(accepted) => accepted,
@@ -812,7 +813,23 @@ fn run_attach_listener_with_hooks<R: tauri::Runtime>(
         let client_credentials = state.client_credentials.clone();
         let live_connections = state.companion_registry.live_connections();
         let approval_state = state.clone();
+        let expected_desktop_executable = expected_desktop_executable.clone();
         std::thread::spawn(move || {
+            let route = expected_desktop_executable.as_ref().map_or(
+                AttachConnectionRoute::Companion,
+                |expected_desktop_executable| {
+                    name_attach_connection_route(
+                        &stream,
+                        credentials,
+                        expected_desktop_executable,
+                        &ProcReader,
+                        Duration::from_secs(5),
+                    )
+                },
+            );
+            if let AttachConnectionRoute::ApprovalPresenter = route {
+                return;
+            }
             let Ok(mut service) =
                 DesktopAttachService::new(app, workspace_contexts, client_credentials)
             else {
@@ -1249,6 +1266,51 @@ mod tests {
             None
         );
         drop(_instance_lock);
+        std::fs::remove_dir_all(runtime).unwrap();
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn listener_refuses_an_approval_presenter_without_pairing() {
+        use muniment_attach::connect_approval_presenter_at;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let runtime = handoff_test_runtime("presenter-refused");
+        let filesystem = AttachFilesystem::from_runtime_directory(&runtime).unwrap();
+        let endpoint = filesystem.endpoint_path().to_owned();
+        let listener = Arc::new(
+            AttachListenerState::load(&runtime.join(COMPANION_CREDENTIAL_FILE_NAME)).unwrap(),
+        );
+        listener.approval.record("signed-workspace".into());
+        let app = tauri::test::mock_app();
+        app.manage(AttachCompanionState::default());
+        let approvals = AttachApprovalState::default();
+        let presentations = Arc::new(AtomicUsize::new(0));
+        let presenter_count = presentations.clone();
+        approvals.register_presenter(move |_| {
+            presenter_count.fetch_add(1, Ordering::SeqCst);
+            true
+        });
+        app.manage(approvals);
+        app.state::<AttachCompanionState>()
+            .set_listener(listener.clone());
+
+        let listener_app = app.handle().clone();
+        let worker = std::thread::spawn(move || {
+            run_attach_listener(listener_app, listener, filesystem);
+        });
+        wait_for_listener(&app.state::<AttachCompanionState>());
+
+        assert!(connect_approval_presenter_at(
+            &endpoint,
+            env!("CARGO_PKG_VERSION"),
+            Duration::from_secs(1),
+        )
+        .is_err());
+        assert_eq!(presentations.load(Ordering::SeqCst), 0);
+
+        stop_attach_listener(app.handle());
+        worker.join().unwrap();
         std::fs::remove_dir_all(runtime).unwrap();
     }
 
