@@ -398,3 +398,18 @@ supervisor reconnects until the desktop stops it.
 A restarted desktop listener stops the client connection, as does desktop
 shutdown. While the desktop holds no client session, it shows the existing
 server-unreachable notice rather than an empty surface.
+
+## Amendment – 2026-08-14: desktop client operation surface
+
+The desktop client session may send every companion operation that its signed
+`grant.workspace` value authorizes. It may also send the desktop-only
+operations named by this amendment. The first desktop-only pair consists of
+`thread.rename` and `thread.delete`. Each request requires an idempotency key.
+
+A companion session receives `unauthorized` for a desktop-only operation. The
+desktop client session still receives `unauthorized` for `migration.control`
+and `approval.present`.
+
+Session, entitlement, device, sign-out, and home commands remain outside this
+tranche. They require their own amendment before the desktop client session may
+send them.
