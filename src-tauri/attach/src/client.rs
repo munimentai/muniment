@@ -1418,6 +1418,7 @@ mod linux {
     #[derive(Clone, Debug, Default)]
     pub struct DesktopClientStopHandle {
         inner: Arc<(Mutex<DesktopClientStopState>, Condvar)>,
+        notification: Arc<(Mutex<Option<std::thread::ThreadId>>, Condvar)>,
     }
 
     #[derive(Debug, Default)]
@@ -1433,6 +1434,16 @@ mod linux {
         }
 
         pub fn stop(&self) {
+            let current_thread = std::thread::current().id();
+            let (notification, notification_wake) = &*self.notification;
+            let notification = notification
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            let _notification = notification_wake
+                .wait_while(notification, |thread| {
+                    thread.is_some_and(|thread| thread != current_thread)
+                })
+                .unwrap_or_else(|error| error.into_inner());
             let (state, wake) = &*self.inner;
             let mut state = state.lock().unwrap_or_else(|error| error.into_inner());
             state.stopped = true;
@@ -1977,6 +1988,10 @@ mod linux {
                 if let Ok(client) =
                     handshake_desktop_client_stream(stream, client_version, io_timeout)
                 {
+                    let (notification_lock, notification_wake) = &*stop.notification;
+                    let mut notification = notification_lock
+                        .lock()
+                        .unwrap_or_else(|error| error.into_inner());
                     let (stop_state, _) = &*stop.inner;
                     let stop_state = stop_state.lock().unwrap_or_else(|error| error.into_inner());
                     if stop_state.stopped {
@@ -1984,8 +1999,16 @@ mod linux {
                     }
                     let (held, wake) = &*holder.inner;
                     *held.lock().unwrap_or_else(|error| error.into_inner()) = Some(client);
+                    *notification = Some(std::thread::current().id());
                     drop(stop_state);
+                    drop(notification);
                     observe(true);
+                    let mut notification = notification_lock
+                        .lock()
+                        .unwrap_or_else(|error| error.into_inner());
+                    *notification = None;
+                    notification_wake.notify_all();
+                    drop(notification);
                     let connection = held.lock().unwrap_or_else(|error| error.into_inner());
                     let mut connection = wake
                         .wait_while(connection, |client| {

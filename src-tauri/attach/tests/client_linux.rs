@@ -759,6 +759,7 @@ fn desktop_client_stop_serializes_publication_and_notifications() {
     let worker_stop = stop.clone();
     let worker_holder = holder.clone();
     let (observed_tx, observed) = mpsc::channel();
+    let (publishing_tx, publishing) = mpsc::channel();
     let (release_tx, release) = mpsc::channel();
     let server = thread::spawn(move || {
         let (mut client, _) = listener.accept().unwrap();
@@ -776,22 +777,28 @@ fn desktop_client_stop_serializes_publication_and_notifications() {
             worker_stop,
             worker_holder,
             move |connected| {
-                observed_tx.send(connected).unwrap();
                 if connected {
+                    publishing_tx.send(()).unwrap();
                     release.recv().unwrap();
                 }
+                observed_tx.send(connected).unwrap();
             },
         );
     });
 
-    assert_eq!(observed.recv_timeout(SHORT), Ok(true));
+    publishing.recv_timeout(SHORT).unwrap();
     let (stopped_tx, stopped) = mpsc::channel();
     let stopper = thread::spawn(move || {
         stop.stop();
         stopped_tx.send(()).unwrap();
     });
-    stopped.recv_timeout(SHORT).unwrap();
+    assert_eq!(
+        stopped.recv_timeout(SHORT),
+        Err(mpsc::RecvTimeoutError::Timeout)
+    );
     release_tx.send(()).unwrap();
+    assert_eq!(observed.recv_timeout(SHORT), Ok(true));
+    stopped.recv_timeout(SHORT).unwrap();
     worker.join().unwrap();
     stopper.join().unwrap();
     assert_eq!(observed.recv_timeout(SHORT), Ok(false));
