@@ -2,18 +2,21 @@
 
 use std::collections::{BTreeSet, HashMap};
 use std::fs;
-use std::os::unix::fs::PermissionsExt;
+use std::os::unix::{fs::PermissionsExt, net::UnixStream};
 use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use muniment_attach::{connect_desktop_client_at, Operation};
+use muniment_attach::{
+    connect_desktop_client_at, handshake_stream, serve_approval_presenter_at,
+    ApprovalDecision as PresenterDecision, ApprovalPresenterStopHandle, Operation,
+};
 use muniment_core::attach::linux::{
     AttachFilesystem, LiveConnectionRegistry, ThreadListPage, ThreadListRequest, ThreadListService,
 };
 use muniment_core::attach::{
-    ApprovalCoordinator, CompanionRegistry, ProtocolError, SignedWorkspaceApproval,
-    CAPABILITY_IDLE_LIFETIME,
+    ApprovalCoordinator, ApprovalRequest, CompanionRegistry, ProtocolError,
+    SignedWorkspaceApproval, CAPABILITY_IDLE_LIFETIME,
 };
 use muniment_runtime::{run_attach_listener, AttachListenerInputs};
 
@@ -108,4 +111,125 @@ fn shipped_desktop_client_completes_the_session() {
         .as_array()
         .unwrap()
         .is_empty());
+}
+
+#[test]
+fn presenter_and_desktop_client_serve_concurrent_sessions() {
+    let profile = TemporaryProfile::new("attach-desktop-concurrent", false);
+    fs::set_permissions(&profile.root, fs::Permissions::from_mode(0o700)).unwrap();
+    let filesystem = AttachFilesystem::from_runtime_directory(&profile.root).unwrap();
+    let endpoint = filesystem.endpoint_path().to_owned();
+    drop(filesystem);
+    let approval = SignedWorkspaceApproval::default();
+    approval.record("workspace-a".into());
+    let registry = CompanionRegistry::new(
+        Arc::new(Mutex::new(HashMap::new())),
+        profile.profile.join("companions.json"),
+        LiveConnectionRegistry::default(),
+    );
+    let approvals = ApprovalCoordinator::default();
+    let requests = approvals.clone();
+    let (stop_tx, stop_rx) = mpsc::channel();
+    let presenter_stop = ApprovalPresenterStopHandle::new();
+    let worker_stop = presenter_stop.clone();
+    let (presented_tx, presented_rx) = mpsc::channel();
+
+    thread::scope(|scope| {
+        let listener = scope.spawn(|| {
+            run_attach_listener(
+                &profile.root,
+                AttachListenerInputs {
+                    companion_registry: &registry,
+                    approval,
+                    approvals,
+                    expected_desktop_executable: Some(std::env::current_exe().unwrap()),
+                },
+                None,
+                || Ok::<_, ()>(TestService),
+                stop_rx,
+            )
+            .unwrap()
+        });
+        let presenter = scope.spawn(|| {
+            serve_approval_presenter_at(
+                &endpoint,
+                "1.0.0",
+                Duration::from_secs(1),
+                Duration::from_millis(10),
+                worker_stop,
+                |_| {},
+                |request| {
+                    presented_tx.send(request.challenge.clone()).unwrap();
+                    PresenterDecision::Approve
+                },
+            )
+        });
+
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let mut attempt = 0;
+        loop {
+            attempt += 1;
+            if requests.request(
+                approval_request(format!("presenter-ready-{attempt}")),
+                Duration::from_millis(100),
+            ) {
+                break;
+            }
+            assert!(Instant::now() < deadline, "presenter did not connect");
+            thread::sleep(Duration::from_millis(10));
+        }
+        presented_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+
+        let mut client = connect_desktop_client_at(&endpoint, "1.0.0", Duration::from_secs(1))
+            .expect("desktop client did not connect");
+        assert!(client
+            .request(Operation::ThreadList, None, thread_list_body())
+            .unwrap()
+            .body["threads"]
+            .as_array()
+            .unwrap()
+            .is_empty());
+
+        let companion = handshake_stream(
+            UnixStream::connect(&endpoint).unwrap(),
+            "1.0.0",
+            Duration::from_secs(1),
+            Duration::from_secs(1),
+            || {},
+        )
+        .expect("companion did not pair through the presenter");
+        let paired_challenge = presented_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        assert!(!paired_challenge.is_empty());
+        drop(companion);
+
+        client
+            .request(Operation::ThreadList, None, thread_list_body())
+            .expect("desktop client stopped after companion pairing");
+        drop(client);
+
+        let final_challenge = "presenter-after-desktop-client";
+        assert!(requests.request(
+            approval_request(final_challenge.into()),
+            Duration::from_secs(1),
+        ));
+        assert_eq!(
+            presented_rx.recv_timeout(Duration::from_secs(1)).unwrap(),
+            final_challenge
+        );
+
+        presenter_stop.stop();
+        presenter.join().unwrap();
+        stop_tx.send(()).unwrap();
+        listener.join().unwrap();
+    });
+}
+
+fn approval_request(challenge: String) -> ApprovalRequest {
+    ApprovalRequest {
+        challenge,
+        claimed_kind: "test".into(),
+        claimed_version: "1.0.0".into(),
+        workspace: "workspace-a".into(),
+        scopes: Default::default(),
+    }
 }
