@@ -511,9 +511,11 @@ route. The runtime admits one presenter at a time, and a disconnected presenter,
 deny, a missed two-minute deadline, or a late, repeated, unknown, or mismatched
 choice all fail closed.
 
-DONE 2026-08-14 — the five sixty-fifth-wave slices and the five sixty-sixth-wave
-slices all landed (MUNIDESK-1235 through 1244). They built the desktop presenter
-supervisor and its two start states, the runtime accept-loop fallback to the
+DONE 2026-08-14 — four sixty-fifth-wave slices landed (MUNIDESK-1235 through
+1238), and one drained (MUNIDESK-1239). All five sixty-sixth-wave slices landed
+(MUNIDESK-1240 through 1244), including the refiled proof. These slices built
+the desktop presenter supervisor and its two start states, the runtime accept-loop
+fallback to the
 companion route, the ADR 0012 desktop client session admission amendment, the
 proof that a mismatched presenter answer fails closed, the proof that a companion
 pairs through a live presenter connection, the desktop listener refusal that
