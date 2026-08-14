@@ -2,7 +2,7 @@
 
 use std::collections::HashMap;
 use std::fs;
-use std::io::{Read, Write};
+use std::io::{ErrorKind, Read, Write};
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::UnixStream;
 use std::sync::{mpsc, Arc, Mutex};
@@ -10,9 +10,10 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use muniment_attach::{
-    encode_frame, handshake as companion_handshake, handshake_stream, serve_approval_presenter_at,
-    ApprovalDecision as PresenterDecision, ApprovalPresentRequest, ApprovalPresenterStopHandle,
-    Client, Hello, Id, Protocol, VersionRange,
+    decode_frame, encode_frame, handshake as companion_handshake, handshake_stream,
+    serve_approval_presenter_at, ApprovalDecision as PresenterDecision, ApprovalPresentRequest,
+    ApprovalPresenterStopHandle, Client, ErrorCode, ErrorEnvelope, Hello, Id, Protocol,
+    VersionRange,
 };
 use muniment_core::attach::linux::{
     AttachFilesystem, LiveConnectionRegistry, ThreadListPage, ThreadListRequest, ThreadListService,
@@ -43,13 +44,17 @@ impl ThreadListService for TestService {
     }
 }
 
-fn read_frame_text(stream: &mut UnixStream) -> String {
+fn read_frame(stream: &mut UnixStream) -> Vec<u8> {
     let mut prefix = [0_u8; 4];
     stream.read_exact(&mut prefix).unwrap();
     let mut frame = vec![0_u8; u32::from_be_bytes(prefix) as usize + 4];
     frame[..4].copy_from_slice(&prefix);
     stream.read_exact(&mut frame[4..]).unwrap();
-    String::from_utf8(frame[4..].to_vec()).unwrap()
+    frame
+}
+
+fn read_frame_text(stream: &mut UnixStream) -> String {
+    String::from_utf8(read_frame(stream)[4..].to_vec()).unwrap()
 }
 
 fn handshake(
@@ -280,6 +285,77 @@ fn desktop_client_lists_threads_without_a_presenter() {
         assert!(response.contains("\"threads\":[]"));
 
         drop(stream);
+        stop_tx.send(()).unwrap();
+        listener.join().unwrap();
+    });
+}
+
+#[test]
+fn desktop_client_without_a_workspace_receives_unauthorized() {
+    let profile = TemporaryProfile::new("attach-listener-desktop-client-refusal", false);
+    fs::set_permissions(&profile.root, fs::Permissions::from_mode(0o700)).unwrap();
+    let filesystem = AttachFilesystem::from_runtime_directory(&profile.root).unwrap();
+    let endpoint = filesystem.endpoint_path().to_owned();
+    drop(filesystem);
+    let registry = CompanionRegistry::new(
+        Arc::new(Mutex::new(HashMap::new())),
+        profile.profile.join("companions.json"),
+        LiveConnectionRegistry::default(),
+    );
+    let (stop_tx, stop_rx) = mpsc::channel();
+
+    thread::scope(|scope| {
+        let listener = scope.spawn(|| {
+            run_attach_listener(
+                &profile.root,
+                AttachListenerInputs {
+                    companion_registry: &registry,
+                    approval: SignedWorkspaceApproval::default(),
+                    approvals: ApprovalCoordinator::default(),
+                    expected_desktop_executable: Some(std::env::current_exe().unwrap()),
+                },
+                None,
+                || Ok::<_, ()>(TestService),
+                stop_rx,
+            )
+            .unwrap()
+        });
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let mut stream = loop {
+            match UnixStream::connect(&endpoint) {
+                Ok(stream) => break stream,
+                Err(_) if Instant::now() < deadline => thread::sleep(Duration::from_millis(10)),
+                Err(error) => panic!("attach listener did not start: {error}"),
+            }
+        };
+        stream
+            .write_all(
+                &encode_frame(&Hello {
+                    protocol: Protocol,
+                    client: Client {
+                        kind: "desktop-client".into(),
+                        version: "1.0.0".into(),
+                    },
+                    supported: VersionRange { min: 1, max: 1 },
+                    client_nonce: "client-nonce".into(),
+                    authorized_client_id: Id::new("018f0000-0000-7000-8000-000000000126").unwrap(),
+                    authorized_client_credential: None,
+                })
+                .unwrap(),
+            )
+            .unwrap();
+
+        let frame = read_frame(&mut stream);
+        let (refusal, consumed) = decode_frame::<ErrorEnvelope>(&frame).unwrap().unwrap();
+        assert_eq!(consumed, frame.len());
+        assert_eq!(refusal.error.code(), ErrorCode::Unauthorized);
+        let closed = match stream.read(&mut [0_u8]) {
+            Ok(0) => true,
+            Err(error) if error.kind() == ErrorKind::ConnectionReset => true,
+            _ => false,
+        };
+        assert!(closed);
+
         stop_tx.send(()).unwrap();
         listener.join().unwrap();
     });
