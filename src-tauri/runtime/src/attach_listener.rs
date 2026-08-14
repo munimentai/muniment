@@ -162,6 +162,7 @@ where
                         session.wait_until_closed();
                         return;
                     }
+                    AttachConnectionRoute::DesktopClient => return,
                     AttachConnectionRoute::Companion => {}
                 }
                 let Ok(mut service) = service_factory() else {
