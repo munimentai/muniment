@@ -413,3 +413,29 @@ and `approval.present`.
 Session, entitlement, device, sign-out, and home commands remain outside this
 tranche. They require their own amendment before the desktop client session may
 send them.
+
+## Amendment – 2026-08-14: second desktop client operation tranche
+
+The second desktop-only tranche maps these wire operations to the existing
+runtime service entries:
+
+| Operation | Runtime service entry |
+|---|---|
+| `session.status` | `service::session::session_status` |
+| `entitlement.snapshot` | `service::session::entitlement_snapshot` |
+| `device.list` | `service::session::list_devices` |
+| `session.sign_out` | `service::session::sign_out` |
+| `companion.list` | `service::workspace::list_companions` |
+| `companion.revoke` | `service::workspace::revoke_companion` |
+
+A desktop client session may send these six operations. A companion session
+receives `unauthorized` for each operation.
+
+`session.sign_out` and `companion.revoke` require an idempotency key.
+`session.status`, `entitlement.snapshot`, `device.list`, and `companion.list`
+are read operations and require no idempotency key.
+
+Browser sign-in and `home.ensure` remain outside this tranche. Sign-in opens a
+visible system browser through the injected `BrowserOpener`. A background
+service that starts that browser needs its own decision before the desktop
+client session may request sign-in.
