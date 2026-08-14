@@ -23,7 +23,7 @@ them must exercise the real contracts. It must add no mocked production path.
 > runtime-service extraction section. The fourteenth took the Phase 2 client
 > core section. The sixteenth through the twenty-fifth all took that
 > extraction section again, and so did the twenty-sixth through the
-> thirtieth. It grows every wave, so it stays the next compaction target.
+> thirty-first. It grows every wave, so it stays the next compaction target.
 
 ## M0 — Scaffold (done 2026-07-09)
 
@@ -161,7 +161,7 @@ muniment-cloud deploy path, not to this repository.
 **HELD — the owner ruling this lane waits on.** The standing owner exclusion on
 self-initiated database migrations and the 2026-07-12 RULE above disagree about
 this repository's local journal. Migration steps 2, 3, and 4 all landed under
-that RULE. Nineteen waves have now passed with no answer, and the lane files
+that RULE. Twenty waves have now passed with no answer, and the lane files
 nothing each time. The memory lane read the same exclusion as covering durable
 stores alone, and it filed its disposable cache without a ruling. This lane keeps
 waiting, because its work alters the durable journal schema rather than a
@@ -392,31 +392,25 @@ that keep a temporary interval with no owner but never an interval with two.
 Through phase one the desktop presents the service-owned approval challenge, and
 a new connection fails closed when no desktop can present it.
 
-DONE — the runtime crate, its packaging, the instance lock, and thirty-four core
-moves landed (MUNIDESK-868 through 954, 982). The crate has its own checks,
-handles its CLI and signals, and adds no dependency. The Linux package ships it
-beside `muniment-acp`, and each desktop call site keeps a thin wrapper.
-
-DONE — the migration control chain is built end to end (MUNIDESK-913 through
-1067). ADR 0012 carries the control-authority amendment and the migration control
-session admission amendment. Only the waiting runtime service may send
-`migration.control`, an approved client credential grants no authority, and on
-Linux the desktop resolves the `SO_PEERCRED` peer PID to the installed
-`muniment-runtime` payload. `evaluate_quiesce`
-(`src-tauri/core/src/attach/quiesce.rs`) weighs five inputs in field order and
-names the first blocker, and every input carries a production call site through
-`RuntimeActivityRegistry` (`attach/runtime_activity.rs`). `PreparedHandoffSlot`
-and `mint_handoff_nonce` (`attach/handoff.rs`) bound the nonce at 128 printable
-ASCII bytes and the deadline at 60,000 milliseconds and refuse a second
-preparation. `ErrorCode::MigrationNotReady` answers a temporary quiesce blocker,
-where `unsupported_operation` reads as a stale desktop.
-`control_desktop_migration` (`src-tauri/src/attach_service.rs:73`),
-`release_prepared_handoff` (`:126`), and `cancel_handoff_and_restart` (`:147`)
-are the desktop half, and `MigrationControlClient::control_migration`
-(`src-tauri/attach/src/client.rs:1351`) is the client half.
+DONE — the runtime crate, its packaging, the instance lock, thirty-four core
+moves, and the whole migration control chain landed (MUNIDESK-868 through 1067).
+The crate has its own checks, handles its CLI and signals, and adds no
+dependency. The Linux package ships it beside `muniment-acp`, and each desktop
+call site keeps a thin wrapper. ADR 0012 carries the control-authority amendment
+and the migration control session admission amendment. Only the waiting runtime
+service may send `migration.control`, and on Linux the desktop resolves the
+`SO_PEERCRED` peer PID to the installed `muniment-runtime` payload.
+`evaluate_quiesce` (`src-tauri/core/src/attach/quiesce.rs`) weighs five inputs in
+field order and names the first blocker, and `RuntimeActivityRegistry`
+(`attach/runtime_activity.rs`) gives each input a production call site.
+`PreparedHandoffSlot` and `mint_handoff_nonce` (`attach/handoff.rs`) bound the
+nonce at 128 printable ASCII bytes and the deadline at 60,000 milliseconds and
+refuse a second preparation. `control_desktop_migration`
+(`src-tauri/src/attach_service.rs:73`) and
+`MigrationControlClient::control_migration`
+(`src-tauri/attach/src/client.rs:1351`) are the two halves, and
 `run_migration_takeover` (`src-tauri/runtime/src/migration.rs:64`) is the runtime
-composition, and it serves companions through `run_bound_attach_listener`.
-Nothing wires the takeover into `main`.
+composition. Nothing wires the takeover into `main`.
 
 DONE — the attach listener reports its own state truthfully, and one API base-URL
 rule serves the whole workspace (MUNIDESK-1001, 1007, 1015, 1103).
@@ -434,37 +428,34 @@ device session, the entitlement snapshot, sign-out, native installations, the
 cross-project Home, companion workspaces, companion listing and revocation,
 thread reads and mutations, retention, run streaming and subscription, prompt
 acceptance, steering, cancellation, permission answers, and resume. Every run
-entry takes the shared storage, the shared run control slot, the shared Pi
-runtime slot, the shared session-thread tracker, and the shared activity
-registry, so every mark lands where `evaluate_quiesce` can read it.
-`configure_run` (`service/run.rs:76`) rejects a requested workspace the signed
-`grant.workspace` does not authorize, through the one core predicate
+entry takes the shared storage, run control slot, Pi runtime slot, session-thread
+tracker, and activity registry, so every mark lands where `evaluate_quiesce` can
+read it. `configure_run` (`service/run.rs:76`) rejects a requested workspace the
+signed `grant.workspace` does not authorize, through the one core predicate
 `grant_authorizes_workspace` that the desktop `configure_run`
-(`src-tauri/src/chat.rs:250`) also reads. A preparation failure after the
-prepared append records itself through `record_persistence_failure`.
-`RuntimeChatEventSink` (`src-tauri/runtime/src/sink.rs`) implements
-`ChatEventSink` and `PiLaunchBoundaries` and answers the `muniment-runtime`
-provenance, and `RuntimeAttachBoundaries`
-(`src-tauri/runtime/src/attach_boundaries.rs:37`) answers the six
-`RunAttachBoundaries` reads and the fourteen `RunStartBoundaries` methods.
-`src-tauri/runtime/tests/` proves each entry against a live run, and
+(`src-tauri/src/chat.rs:250`) also reads. `RuntimeChatEventSink`
+(`src-tauri/runtime/src/sink.rs`) answers the `muniment-runtime` provenance, and
+`RuntimeAttachBoundaries` (`src-tauri/runtime/src/attach_boundaries.rs:37`)
+answers the six `RunAttachBoundaries` reads and the fourteen `RunStartBoundaries`
+methods. `src-tauri/runtime/tests/` proves each entry against a live run, and
 `tests/common/mod.rs` owns the shared loopback HTTP stub, both credential
 fixtures, the shared chat grant, the warm Pi stub staging, and the
 temporary-profile guard. Nothing in `main` calls any entry.
 
-DONE 2026-08-13 through 2026-08-14 — the landed attach parts span all three
-sides (MUNIDESK-1188 through 1255). The core half sits under
+DONE 2026-08-13 through 2026-08-14 — the attach parts span all three sides
+(MUNIDESK-1188 through 1261). The core half sits under
 `src-tauri/core/src/attach/`, where `approval.rs`, `workspace_context.rs`,
 `peer_authority.rs`, `presenter_admission.rs`, `approval_present.rs`,
 `presenter_session.rs`, `presented_approval.rs`, `connection_route.rs`,
 `deadline_io.rs`, and `desktop_client_admission.rs` carry the signed workspace, the
 peer check, the presenter session, the connection route, the one deadline-bounded
 read and write helper set, and desktop client admission.
-`serve_desktop_client_session` (`src-tauri/core/src/attach/linux.rs:1852`) binds the
-client identity and refuses `migration.control` and `approval.present` without
-ending the session. `Operation::ApprovalPresent`
-(`src-tauri/attach/src/envelope.rs:277`) and the approval and desktop client files
-under `protocol-fixtures/muniment.attach/1/` hold the wire.
+`serve_desktop_client_session` (`src-tauri/core/src/attach/linux.rs:1875`) binds
+the client identity, passes the session's signed workspace to `dispatch_request`,
+and refuses `migration.control` and `approval.present` without ending the session.
+`Operation::ApprovalPresent` (`src-tauri/attach/src/envelope.rs:277`) and the
+approval and desktop client files under `protocol-fixtures/muniment.attach/1/`
+hold the wire.
 
 The runtime half holds the service. `directories.rs`, `compose_attach_service`
 (`runtime/src/attach_service.rs:15`), `RuntimeAttachState`
@@ -472,61 +463,96 @@ The runtime half holds the service. `directories.rs`, `compose_attach_service`
 (`runtime/src/attach_listener.rs:48`), and `run_bound_attach_listener` (`:85`)
 resolve the profile, build the service, own the endpoint, take the instance lock,
 route each accepted connection, and answer the handoff readiness probe. A desktop
-client connection that meets a runtime holding no signed workspace now receives a
+client connection that meets a runtime holding no signed workspace receives a
 typed refusal rather than a closed socket (MUNIDESK-1253).
 
 The desktop half holds the clients. `ApprovalPresenterClient`
-(`src-tauri/attach/src/client.rs:1462`), `serve_approval_presenter_at` (`:1930`),
-`DesktopClient` (`:1379`), `connect_desktop_client_at` (`:1911`), and
-`serve_desktop_client_at` (`:1968`) are the two supervisors, and
+(`src-tauri/attach/src/client.rs:1462`), `serve_approval_presenter_at` (`:1988`),
+`DesktopClient` (`:1379`), `connect_desktop_client_at`, and
+`serve_desktop_client_at` are the two supervisors.
 `AttachCompanionState::start_approval_presenter`
-(`src-tauri/src/attach_service.rs:361`) starts the presenter one. The shipped client
-completes its handshake, because `admit_desktop_client` sends the 900-second
-`CAPABILITY_IDLE_LIFETIME` ceiling the protocol names (MUNIDESK-1251). ADR 0012
-carries six attach amendments, and `THREAT_MODEL.md` records each. `thread.rename`
-and `thread.delete` carry wire names and golden request fixtures (MUNIDESK-1255).
+(`src-tauri/src/attach_service.rs:383`) and `start_desktop_client` (`:409`) start
+them, and `start_desktop_client` (`:811`) dials the endpoint after a confirmed
+handoff or at launch when another process holds the instance lock. The shipped
+client completes its handshake, because `admit_desktop_client` sends the
+900-second `CAPABILITY_IDLE_LIFETIME` ceiling the protocol names
+(MUNIDESK-1251). `DesktopClientHolder::rename_thread` and `delete_thread`
+(`client.rs:1417`, `:1431`) are the two typed desktop-only methods
+(MUNIDESK-1259). ADR 0012 carries eight attach amendments, and `THREAT_MODEL.md`
+records each, including both desktop client operation tranches.
 
-DONE 2026-08-14 — all five sixty-ninth-wave attach slices landed
-(MUNIDESK-1257 through 1261). The desktop starts and stops its desktop client
-supervisor. Dispatch serves `thread.rename` and `thread.delete` for a desktop client
-and refuses both for a companion. The client exposes both operations as typed
-methods. A runtime test holds the presenter and desktop client sessions at once.
-ADR 0012 and `THREAT_MODEL.md` name the second desktop client operation tranche.
+MEASURED 2026-08-14 (seventy-first wave, planner, read `git log` beside the
+seventieth-wave selection) — that selection reached no pull request. The queue
+drained with none of its five slices filed, so this wave re-files them in strict
+priority order under the twenty-sixth-wave rule. It merges the core service half
+and the runtime boundaries half into one slice, because the boundaries override
+cannot compile before the trait method exists.
 
-MEASURED 2026-08-14 (seventieth wave, planner, read the thread mutation dispatch
-beside both service implementations) — dispatch reaches only the default
-`ThreadListService` mutation methods. `DesktopAttachService` implements neither
-method, so both the desktop and runtime services still answer
-`unsupported_operation`. The core service must own the idempotency ledger before
-either boundaries implementation can run the existing thread mutation code.
+MEASURED 2026-08-14 (seventy-first wave, planner, read the thread mutation
+dispatch beside both service implementations) — dispatch decodes both mutation
+bodies and calls `service.rename_thread` (`attach/linux.rs:2646`) and
+`service.delete_thread` (`:2674`). `ThreadListService` defaults both to
+`unsupported_operation` (`:921`, `:933`), and `DesktopAttachService` overrides
+neither, so both the desktop and the runtime service refuse both operations.
+`RunAttachBoundaries` (`core/src/run_start.rs:69`) also names neither mutation.
+`DesktopAttachService::create_thread` (`attach/desktop_service.rs:189`) is the
+idempotency-ledger shape both methods must copy.
 
-The runtime boundaries also expose neither mutation. They must call the dormant
-runtime service entries after the core service adds both methods.
+MEASURED 2026-08-14 (seventy-first wave, planner, read every thread ownership
+call site) — the runtime mutation boundary needs a subject. `append_thread_rename`
+(`core/src/journal/thread_mutation.rs:38`) calls `subject_owns_first_run`, which
+refuses every thread whose first run carries an actor when the caller passes
+`None`. The desktop command reads `tokens.subject` from `auth::fresh_tokens`
+before each write (`src-tauri/src/chat_threads.rs:238`), so the runtime boundary
+reads the same subject through `RunStartBoundaries::fresh_tokens`.
 
-MEASURED 2026-08-14 (seventieth wave, planner, read both desktop thread commands) —
-`chat_rename_thread` and `chat_delete_thread` still write through the desktop
-journal, and the desktop boundaries expose neither mutation. Neither command reads
-the connected `DesktopClientHolder`, so the runtime cannot own either write after
-handoff.
+MEASURED 2026-08-14 (seventy-first wave, planner, read both desktop thread
+commands) — `chat_rename_thread` and `chat_delete_thread`
+(`src-tauri/src/chat_threads.rs:238`, `:259`) still write through the desktop
+journal. Neither command reads the connected `DesktopClientHolder`, so the runtime
+cannot own either write after handoff. `AttachCompanionState` exposes no accessor
+for the holder, and it exposes no flag that separates a running desktop client
+supervisor from a supervisor that never started.
 
-MEASURED 2026-08-14 (seventieth wave, planner, read the desktop client status
-call sites) — the supervisor records whether it holds a connection, but the app
-does not read that state. A desktop with no client session can still show an empty
-surface instead of the existing server-unreachable notice required by ADR 0012.
+MEASURED 2026-08-14 (seventy-first wave, planner, read the desktop client status
+call sites) — `AttachListenerStatus` (`src-tauri/src/attach_service.rs:218`)
+carries `connected`, and no frontend module reads it. `src/App.svelte` never
+invokes `attach_listener_status`, so a desktop that holds no client session shows
+an empty workspace instead of the notice ADR 0012 requires.
 
-MEASURED 2026-08-14 (seventieth wave, planner, compared `Operation` with the ADR
-0012 second tranche) — the wire names none of `session.status`,
+MEASURED 2026-08-14 (seventy-first wave, planner, read the `Connected programs`
+branch order) — the panel tells a user to close a window that is not the problem.
+`src/lib/AccessPanel.svelte:306` renders the background-service line only while
+`presenting` is true, and `serve_approval_presenter_at`
+(`src-tauri/attach/src/client.rs:2005`) sets that flag only between a completed
+handshake and a dropped session. While the presenter reconnects, the panel falls
+to `Connected programs are available in another Muniment window.` with a
+`Close this window` button. The runtime service holds the lock in that state, so
+closing the window fixes nothing. The fix needs the supervisor flag, so it
+follows the status slice.
+
+MEASURED 2026-08-14 (seventy-first wave, planner, compared `Operation` with the
+ADR 0012 second tranche) — the wire names none of `session.status`,
 `entitlement.snapshot`, `device.list`, `session.sign_out`, `companion.list`, or
 `companion.revoke`. Their fixtures, authorization, and dispatch are also absent.
+`request_body` (`src-tauri/attach/src/fixtures.rs:699`) matches `Operation`
+exhaustively, so each new variant fails the build until its canonical fixture
+exists.
+
+RETIRED 2026-08-14 (seventy-first wave, planner, read `compose_attach_service`) —
+the runtime composition owes no Home resolution work. It reads `configured_home`
+first and falls back to `choose_default_home` only when the user recorded no
+choice (`src-tauri/runtime/src/attach_service.rs:22`), which is the rule
+`resolve_attach_home` follows on the desktop.
 
 MEASURED 2026-08-14 (sixty-seventh wave, planner, read every
 `MigrationControlAuthorized` construction) — one frame type names three different
-grants. `src-tauri/attach/src/negotiation.rs:268` declares it, and migration control
-(`src-tauri/core/src/attach/linux.rs:1797`), the approval presenter
+grants. `src-tauri/attach/src/negotiation.rs:270` declares it, and migration control
+(`src-tauri/core/src/attach/linux.rs:1823`), the approval presenter
 (`attach/presenter_admission.rs:102`), and the desktop client
-(`attach/desktop_client_admission.rs:121`) each send it under different field rules.
-The rename takes `src-tauri/core/src/attach/linux.rs`, which a sixty-ninth-wave
-slice also takes, so the lane holds it for a third wave.
+(`attach/desktop_client_admission.rs:124`) each send it under different field rules.
+The rename takes `src-tauri/attach/src/fixtures.rs`, which the seventy-first-wave
+wire-naming slice also takes, so the lane holds it for a fourth wave.
 
 MEASURED 2026-08-14 (sixty-sixth wave, planner, read the accept loop with no
 expected desktop payload) — a runtime that resolves no installed desktop payload
@@ -584,31 +610,33 @@ projector always holds state there. A test seam would also prove nothing, becaus
 projector rejects that event too. The lane re-opens this only against a new
 failure route.
 
-MERGE HAZARD — the seventieth wave puts slice 1 in
-`src-tauri/core/src/attach/desktop_service.rs`. Slice 2 takes
-`src-tauri/runtime/src/attach_boundaries.rs`. Slice 3 takes `src-tauri/src/chat.rs`
-and `src-tauri/src/chat_threads.rs`. Slice 4 takes the desktop status surface.
-Slice 5 takes the attach wire, fixtures, and dispatch. No two slices share a file.
-Each ticket still tells the implementer to rebase on `main` before it opens the
-pull request. The 2026-08-04 silent revert came from a stale base.
+MERGE HAZARD — the seventy-first wave puts slice 1 in
+`src-tauri/core/src/attach/desktop_service.rs` and
+`src-tauri/runtime/src/attach_boundaries.rs`. Slice 3 takes the attach wire and
+its fixtures. Slices 2 and 4 both take `src-tauri/src/attach_service.rs`, which
+is the one shared file of this wave, and they edit different regions of it. Every
+ticket tells the implementer to rebase on `main` before it opens the pull
+request. The 2026-08-04 silent revert came from a stale base.
 
-SELECTED 2026-08-14 (seventieth wave) — five slices in priority order.
+SELECTED 2026-08-14 (seventy-first wave) — four slices in priority order.
 
-1. The `DesktopAttachService` thread mutation methods and idempotency ledger.
-2. The runtime boundaries implementation for both thread mutations.
-3. The desktop boundaries and commands moved onto the desktop client connection.
-4. The server-unreachable notice when the desktop holds no client session.
-5. The second-tranche wire names, fixtures, authorization, and dispatch.
+1. The `DesktopAttachService` thread mutations, their idempotency ledger, and the
+   runtime boundaries that carry both writes to the journal.
+2. The desktop thread rename and delete commands moved onto the desktop client
+   connection.
+3. The second-tranche wire names and their canonical fixtures.
+4. The service-unreachable notice when the desktop holds no client session.
 
-SEQUENCED 2026-08-14 (seventieth wave) — slices 2 and 3 follow slice 1. Slice 4
-follows slice 3, when every thread mutation can use the connection state. Typed
-client methods for the second tranche follow slice 5. Linux user-unit registration
-follows them all. The final cutover slice activates the listener, approval
-coordinator, journal, CAS, Pi, device session, credentials, authorization, and
-permission gates together, and it gives the runtime service its own signed
-workspace. Remote Control follows the cutover. User-unit registration must not
-precede the cutover, because a service that takes the instance lock first would stop
-the desktop listener.
+SEQUENCED 2026-08-14 (seventy-first wave) — the second-tranche authorization,
+dispatch, and typed client methods follow slice 3. The `Connected programs`
+instance-lock copy follows slice 4, because it reads the same supervisor flag.
+The `MigrationControlAuthorized` rename follows slice 3, which frees its files.
+Linux user-unit registration follows them all. The final cutover slice activates
+the listener, approval coordinator, journal, CAS, Pi, device session, credentials,
+authorization, and permission gates together, and it gives the runtime service its
+own signed workspace. Remote Control follows the cutover. User-unit registration
+must not precede the cutover, because a service that takes the instance lock first
+would stop the desktop listener.
 
 DONE — all three slices of the ADR 0009 attach workspace namespace amendment are
 built (MUNIDESK-883, 887, 893, 896, 905). The signed `grant.workspace` value is
@@ -787,7 +815,7 @@ back to `choose_default_home` only when the user recorded no choice, so
 `DesktopAttachService.home` is the directory the model reads. The fifty-seventh
 wave measured the old path scaffolding `memory/`, `agents/`, `projects/`, and
 `sessions/` under `<documents>/Muniment` whatever the user picked. The runtime
-composition owes the same resolution when it builds its own service.
+composition already follows the same rule.
 
 ### Memory index and retrieval (§17)
 
@@ -1081,9 +1109,9 @@ earlier one. Requiring an up-to-date branch before merge, or a merge queue, is a
 repository-settings change that sits with the owner. The planner files no ticket
 for it.
 
-VERIFIED 2026-08-14 (sixty-ninth wave, planner) — one
+VERIFIED 2026-08-14 (seventy-first wave, planner) — one
 `cargo test -p muniment-core -p muniment-runtime -p muniment-attach` run started
-from `src-tauri` passes 1,316 tests over 120 test binaries, and the build prints no
+from `src-tauri` passes 1,323 tests over 120 test binaries, and the build prints no
 warning. One `npm ci` then `npm test` run passes 933 frontend tests over 63 files
 with 31 skipped, plus 3 browser tests. Start cargo from `src-tauri`, because the
 repository root holds no `Cargo.toml`. A run started from the root dies with
@@ -1100,6 +1128,14 @@ the runtime `service.rs` split (MUNIDESK-1181). The lane files no split for
 planning clone nor an implementer container can compile, so a pure-move refactor
 would reach a desktop-ci VM with no local proof. The split waits for either a
 compilable path or an owner call.
+
+MEASURED 2026-08-14 (seventy-first wave, planner, re-counted the same paths) —
+`src-tauri/src/attach_service.rs` now leads at 40 touches and 2,404 lines, and
+`src-tauri/core/src/attach/linux.rs` follows at 26 touches and 3,636 lines. The
+core file is the largest in the tree and the planning clone compiles it, so a
+pure-move split is provable here. The lane still files none, because the next
+three attach slices all edit that file and a 3,600-line move would block them.
+The split waits until the second tranche lands.
 
 MEASURED 2026-08-12 (fifty-second wave, planner, read the vitest JSON report) —
 all 31 skipped frontend tests are Windows-only cases. Every one sits behind
@@ -1124,9 +1160,10 @@ answered 404 for every probe path until the planner moved to 8944. The
 fifty-third wave used 8951, the fifty-fourth used 8962, the fifty-fifth used
 8975, the fifty-sixth used 8988, the fifty-eighth used 8993, and the
 sixty-seventh used 9014. The fifty-seventh, the fifty-ninth, the sixtieth, the
-sixty-first, the sixty-fifth, the sixty-sixth, the sixty-eighth, and the sixty-ninth waves
-each ran no capture, because each read code alone. A server started from `src-tauri`
-answers 404 for every `test/probe/` path, so start it from the repository root.
+sixty-first, the sixty-fifth, the sixty-sixth, the sixty-eighth, the sixty-ninth,
+and the seventy-first waves each ran no capture, because each read code alone. A
+server started from `src-tauri` answers 404 for every `test/probe/` path, so start
+it from the repository root.
 
 PLANNER PROCEDURE — for a measurement that needs a click, write a short
 playwright script and run it from the repository root. Playwright is a project
@@ -1210,7 +1247,8 @@ than verified. The attach socket row records companion revocation and the
 workspace namespace. The ADR 0012 runtime service row records the per-profile
 instance lock, the shipped `muniment-runtime` binary with its dormant service
 entries, the migration control peer check, the one prepared handoff, the desktop
-answer with its release path, and the same-user limitation (MUNIDESK-1113).
+answer with its release path, both desktop client operation tranches, and the
+same-user limitation (MUNIDESK-1113).
 
 OPEN — the MUNIQA prompt-injection suite still follows ADR 0018's landed slices.
 
