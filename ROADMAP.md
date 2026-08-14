@@ -22,8 +22,8 @@ them must exercise the real contracts. It must add no mocked production path.
 > automation section. The thirteenth and the fifteenth both took the ADR 0012
 > runtime-service extraction section. The fourteenth took the Phase 2 client
 > core section. The sixteenth through the twenty-fifth all took that
-> extraction section again, and so did the twenty-sixth, the twenty-seventh, and
-> the twenty-eighth. It grows every wave, so it stays the next compaction target.
+> extraction section again, and so did the twenty-sixth through the
+> twenty-ninth. It grows every wave, so it stays the next compaction target.
 
 ## M0 — Scaffold (done 2026-07-09)
 
@@ -511,44 +511,73 @@ route. The runtime admits one presenter at a time, and a disconnected presenter,
 deny, a missed two-minute deadline, or a late, repeated, unknown, or mismatched
 choice all fail closed.
 
-DONE 2026-08-14 — four sixty-fifth-wave slices landed (MUNIDESK-1235 through
-1238), and one drained (MUNIDESK-1239). All five sixty-sixth-wave slices landed
-(MUNIDESK-1240 through 1244), including the refiled proof. These slices built
+DONE 2026-08-13 and 2026-08-14 — the whole attach seam landed over three waves
+(MUNIDESK-1235 through 1249, with MUNIDESK-1239 drained and refiled). It covers
 the desktop presenter supervisor and its two start states, the runtime accept-loop
-fallback to the
-companion route, the ADR 0012 desktop client session admission amendment, the
-proof that a mismatched presenter answer fails closed, the proof that a companion
-pairs through a live presenter connection, the desktop listener refusal that
-answers a presenter or a desktop client connection without pairing it, the
-`desktop-client` route, the core desktop client admission, and the `Connected
-programs` copy for a runtime-owned endpoint.
+fallback to the companion route, the desktop listener refusal that answers a
+presenter or a desktop client connection without pairing it, the proof that a
+mismatched presenter answer fails closed, the proof that a companion pairs through
+a live presenter connection, the `desktop-client` route, core desktop client
+admission, the `Connected programs` copy for a runtime-owned endpoint, the runtime
+session that serves requests over an admitted desktop client stream, the attach
+client that dials the runtime as a desktop client, the two golden desktop client
+fixtures, and the ADR 0012 desktop client session lifecycle amendment.
+`serve_desktop_client_session` (`src-tauri/core/src/attach/linux.rs:1852`) binds
+the client identity and refuses `migration.control` and `approval.present` without
+ending the session. `DesktopClient` (`src-tauri/attach/src/client.rs:1379`) and
+`connect_desktop_client_at` (`:1838`) are the client half.
 
-VERIFIED 2026-08-14 (sixty-seventh wave, planner, ran
-`cargo test -p muniment-core -p muniment-runtime -p muniment-attach`) — 1,295
-tests pass over 118 test binaries, and the build prints no warning.
+VERIFIED 2026-08-14 (sixty-eighth wave, planner, ran
+`cargo test -p muniment-core -p muniment-runtime -p muniment-attach`) — 1,306
+tests pass over 116 test binaries, and the build prints no warning.
 
-MEASURED 2026-08-14 (sixty-seventh wave, planner, read
-`run_bound_attach_listener` beside `admit_desktop_client`) — the runtime names the
-desktop client route and then drops the connection.
-`AttachConnectionRoute::DesktopClient => return`
-(`src-tauri/runtime/src/attach_listener.rs:165`) closes the socket before any
-admission runs, so `admit_desktop_client`
-(`src-tauri/core/src/attach/desktop_client_admission.rs:35`) has no production
-caller. That core function writes the welcome and a credential-free grant, and no
-function serves a request over the admitted stream. `run_migration_control_session`
-(`src-tauri/core/src/attach/linux.rs:1773`) is the nearest shape, and it answers
-one operation alone. The sixty-seventh wave files the slice.
+MEASURED 2026-08-14 (sixty-eighth wave, planner, dialed `connect_desktop_client_at`
+against `run_attach_listener` in a scratch runtime test) — the shipped client
+cannot complete a desktop client handshake. The client answers
+`UnexpectedMessage`, because `admit_desktop_client`
+(`src-tauri/core/src/attach/desktop_client_admission.rs:125`) sends
+`idle_timeout_seconds: 3600` from the approval lifetime, and
+`handshake_desktop_client_stream` (`src-tauri/attach/src/client.rs:2160`) rejects
+any value above 900 seconds. The planner re-ran the same probe with 900 and the
+handshake completed, carrying the profile `desktop-owner`, the workspace
+`workspace-a`, and both scopes. `CAPABILITY_IDLE_LIFETIME`
+(`src-tauri/core/src/attach/authorization.rs:9`) is the 900-second ceiling the
+protocol already names. The two halves never met before, because the runtime test
+writes raw frames and the client test answers from a hand-written server. The
+sixty-eighth wave files the fix with an end-to-end proof.
+
+MEASURED 2026-08-14 (sixty-eighth wave, planner, read the desktop client route
+beside `RuntimeAttachBoundaries::configure_run`) — a desktop client connection
+dies silently when the runtime holds no signed workspace.
+`run_bound_attach_listener` (`src-tauri/runtime/src/attach_listener.rs:163`)
+returns without a byte when `approval.approval()` is `None`, so the caller reads a
+closed socket instead of a typed refusal. The runtime records a workspace only in
+`configure_run` (`src-tauri/runtime/src/attach_boundaries.rs:137`), which runs at
+run start. Through phase one the desktop still owns the cloud grant, so a runtime
+that started no run of its own holds no workspace. The client supervisor meets
+that state on every reconnect until the cutover. The wave files the typed refusal
+and leaves the runtime's own workspace source to the cutover slice.
+
+MEASURED 2026-08-14 (sixty-eighth wave, planner, read every desktop thread command
+beside the `Operation` enum) — the wire names no thread mutation besides
+`thread.create`. `Operation` (`src-tauri/attach/src/envelope.rs:242`) names
+`thread.list`, `thread.open`, and `thread.create`, and the desktop renames and
+deletes a thread through `src-tauri/src/chat_threads.rs`. The runtime already owns
+both writes through `rename_thread` and `delete_thread`
+(`src-tauri/runtime/src/service/threads.rs`). The desktop command surfaces cannot
+move onto the desktop client session until the wire names both operations.
 
 MEASURED 2026-08-14 (sixty-seventh wave, planner, read every
 `MigrationControlAuthorized` construction) — one frame type now names three
 different grants. `src-tauri/attach/src/negotiation.rs:270` declares it, and
 migration control (`src-tauri/core/src/attach/linux.rs:1798`), the approval
 presenter (`attach/presenter_admission.rs:102`), and the desktop client
-(`attach/desktop_client_admission.rs:104`) each send it under different field
+(`attach/desktop_client_admission.rs:121`) each send it under different field
 rules. The migration and presenter grants carry an empty profile and no scopes,
-and the desktop client grant carries a real profile and one scope entry. A rename
-touches the same files as two sixty-seventh-wave slices, so the lane holds it for
-a later wave.
+and the desktop client grant carries a real profile and one scope entry. The
+rename takes `src-tauri/attach/src/client.rs` and
+`src-tauri/core/src/attach/desktop_client_admission.rs`, which two sixty-eighth-wave
+slices also take, so the lane holds it again.
 
 MEASURED 2026-08-14 (sixty-sixth wave, planner, read the accept loop with no
 expected desktop payload) — a runtime that resolves no installed desktop payload
@@ -606,30 +635,39 @@ projector always holds state there. A test seam would also prove nothing, becaus
 projector rejects that event too. The lane re-opens this only against a new
 failure route.
 
-MERGE HAZARD — the sixty-seventh wave puts slice 1 in
-`src-tauri/core/src/attach/linux.rs` and
-`src-tauri/runtime/src/attach_listener.rs`, slice 2 in
-`src-tauri/attach/src/client.rs`, slice 3 in `src-tauri/attach/src/fixtures.rs`
-and `protocol-fixtures/muniment.attach/1/`, and slice 4 in
-`docs/decisions/0012-user-level-runtime-service.md` and `THREAT_MODEL.md`. No two
-slices share a file. Each ticket still tells the implementer to rebase on `main`
-before it opens the pull request. The 2026-08-04 silent revert came from a stale
-base.
+MERGE HAZARD — the sixty-eighth wave puts slice 1 in
+`src-tauri/core/src/attach/desktop_client_admission.rs`, its core test, and a new
+`src-tauri/runtime/tests/attach_desktop_client.rs`, slice 2 in
+`src-tauri/attach/src/client.rs` and `src-tauri/attach/tests/client_linux.rs`,
+slice 3 in `src-tauri/runtime/src/attach_listener.rs` and
+`src-tauri/runtime/tests/attach_listener.rs`, slice 4 in
+`docs/decisions/0012-user-level-runtime-service.md` and `THREAT_MODEL.md`, and
+slice 5 in `src-tauri/attach/src/envelope.rs`, `src-tauri/attach/src/fixtures.rs`,
+`protocol-fixtures/muniment.attach/1/`, and
+`src-tauri/core/src/attach/linux.rs`. No two slices share a file. Each ticket
+still tells the implementer to rebase on `main` before it opens the pull request.
+The 2026-08-04 silent revert came from a stale base.
 
-SELECTED 2026-08-14 (sixty-seventh wave) — four slices in priority order.
+SELECTED 2026-08-14 (sixty-eighth wave) — five slices in priority order.
 
-1. The runtime serves requests over an admitted desktop client session.
-2. The attach client half that dials the runtime as a desktop client.
-3. The golden fixtures for the desktop client hello and its grant.
-4. The ADR 0012 amendment that names the desktop client session lifecycle.
+1. The desktop client grant the shipped client accepts, proven end to end.
+2. The desktop client supervisor that holds one connection and reconnects.
+3. The typed refusal for a desktop client connection with no signed workspace.
+4. The ADR 0012 amendment that names the desktop client operation surface.
+5. The `thread.rename` and `thread.delete` wire names with their fixtures.
 
-SEQUENCED 2026-08-14 (sixty-seventh wave) — the desktop client supervisor follows
-slices 2 and 4. The desktop command surfaces move onto that supervisor next, and
-Linux user-unit registration follows them. Each later slice sits behind a dormant
-service entry point, and the desktop stays the owner throughout. The final cutover
-slice activates the listener, approval coordinator, journal, CAS, Pi, device
-session, credentials, authorization, and permission gates together. Remote Control
-follows the cutover. User-unit registration must not precede the cutover, because
+SEQUENCED 2026-08-14 (sixty-eighth wave) — the desktop supervisor wiring follows
+slice 2. That slice starts the client supervisor after a confirmed handoff probe
+or a held instance lock, stops it when the desktop listener starts, and shows the
+server-unreachable notice while the desktop holds no client session. The
+`thread.rename` and `thread.delete` dispatch follows slices 4 and 5, and the
+desktop command surfaces move onto the supervisor after it. Linux user-unit
+registration follows them. Each later slice sits behind a dormant service entry
+point, and the desktop stays the owner throughout. The final cutover slice
+activates the listener, approval coordinator, journal, CAS, Pi, device session,
+credentials, authorization, and permission gates together, and it gives the
+runtime service its own signed workspace. Remote Control follows the cutover.
+User-unit registration must not precede the cutover, because
 a service that takes the instance lock first would stop the desktop listener.
 
 DONE — all three slices of the ADR 0009 attach workspace namespace amendment are
@@ -1103,11 +1141,14 @@ earlier one. Requiring an up-to-date branch before merge, or a merge queue, is a
 repository-settings change that sits with the owner. The planner files no ticket
 for it.
 
-VERIFIED 2026-08-14 (sixty-seventh wave, planner) — one
+VERIFIED 2026-08-14 (sixty-eighth wave, planner) — one
 `cargo test -p muniment-core -p muniment-runtime -p muniment-attach` run passes
-1,295 tests over 118 test binaries. One `npm ci` then `npm test` run passes 933
-frontend tests over 63 files with 31 skipped, plus 3 browser tests. This entry
-replaces the earlier ledger.
+1,306 tests over 116 test binaries. One `npm ci` then `npm test` run passes 933
+frontend tests over 63 files with 31 skipped, plus 3 browser tests. The
+`muniment-runtime` instance-lock binary failed once beside a second cargo run in
+this container, then passed five times alone, so the lane reads it as
+cross-workspace interference rather than a defect. This entry replaces the earlier
+ledger.
 
 MEASURED 2026-08-13 (fifty-eighth wave, planner, counted each path with
 `git log --name-only --since=2026-08-01 -- <path>`) — `src-tauri/src/chat.rs` is
@@ -1143,9 +1184,9 @@ answered 404 for every probe path until the planner moved to 8944. The
 fifty-third wave used 8951, the fifty-fourth used 8962, the fifty-fifth used
 8975, the fifty-sixth used 8988, the fifty-eighth used 8993, and the
 sixty-seventh used 9014. The fifty-seventh, the fifty-ninth, the sixtieth, the
-sixty-first, the sixty-fifth, and the sixty-sixth waves each ran no capture,
-because each read code alone. A server started from `src-tauri` answers 404 for
-every `test/probe/` path, so start it from the repository root.
+sixty-first, the sixty-fifth, the sixty-sixth, and the sixty-eighth waves each ran
+no capture, because each read code alone. A server started from `src-tauri`
+answers 404 for every `test/probe/` path, so start it from the repository root.
 
 PLANNER PROCEDURE — for a measurement that needs a click, write a short
 playwright script and run it from the repository root. Playwright is a project
