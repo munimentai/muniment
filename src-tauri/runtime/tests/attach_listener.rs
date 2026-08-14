@@ -2,6 +2,7 @@
 
 use std::collections::HashMap;
 use std::fs;
+use std::io::{Read, Write};
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::UnixStream;
 use std::sync::{mpsc, Arc, Mutex};
@@ -9,8 +10,9 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use muniment_attach::{
-    handshake as companion_handshake, handshake_stream, serve_approval_presenter_at,
+    encode_frame, handshake as companion_handshake, handshake_stream, serve_approval_presenter_at,
     ApprovalDecision as PresenterDecision, ApprovalPresentRequest, ApprovalPresenterStopHandle,
+    Client, Hello, Id, Protocol, VersionRange,
 };
 use muniment_core::attach::linux::{
     AttachFilesystem, LiveConnectionRegistry, ThreadListPage, ThreadListRequest, ThreadListService,
@@ -30,11 +32,24 @@ struct TestService;
 impl ThreadListService for TestService {
     fn list_threads(
         &mut self,
-        _workspace: &str,
+        workspace: &str,
         _request: ThreadListRequest,
     ) -> Result<ThreadListPage, ProtocolError> {
-        unreachable!("the handshake does not list threads")
+        assert_eq!(workspace, "workspace-a");
+        Ok(ThreadListPage {
+            threads: Vec::new(),
+            next_cursor: None,
+        })
     }
+}
+
+fn read_frame_text(stream: &mut UnixStream) -> String {
+    let mut prefix = [0_u8; 4];
+    stream.read_exact(&mut prefix).unwrap();
+    let mut frame = vec![0_u8; u32::from_be_bytes(prefix) as usize + 4];
+    frame[..4].copy_from_slice(&prefix);
+    stream.read_exact(&mut frame[4..]).unwrap();
+    String::from_utf8(frame[4..].to_vec()).unwrap()
 }
 
 fn handshake(
@@ -188,6 +203,86 @@ fn handshake_gets_a_grant_without_an_expected_desktop_executable() {
     });
 
     assert!(handshake(approvals, Some("prepared-nonce".into()), None));
+}
+
+#[test]
+fn desktop_client_lists_threads_without_a_presenter() {
+    let profile = TemporaryProfile::new("attach-listener-desktop-client", false);
+    fs::set_permissions(&profile.root, fs::Permissions::from_mode(0o700)).unwrap();
+    let filesystem = AttachFilesystem::from_runtime_directory(&profile.root).unwrap();
+    let endpoint = filesystem.endpoint_path().to_owned();
+    drop(filesystem);
+    let approval = SignedWorkspaceApproval::default();
+    approval.record("workspace-a".into());
+    let registry = CompanionRegistry::new(
+        Arc::new(Mutex::new(HashMap::new())),
+        profile.profile.join("companions.json"),
+        LiveConnectionRegistry::default(),
+    );
+    let (stop_tx, stop_rx) = mpsc::channel();
+
+    thread::scope(|scope| {
+        let listener = scope.spawn(|| {
+            run_attach_listener(
+                &profile.root,
+                AttachListenerInputs {
+                    companion_registry: &registry,
+                    approval,
+                    approvals: ApprovalCoordinator::default(),
+                    expected_desktop_executable: Some(std::env::current_exe().unwrap()),
+                },
+                None,
+                || Ok::<_, ()>(TestService),
+                stop_rx,
+            )
+            .unwrap()
+        });
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let mut stream = loop {
+            match UnixStream::connect(&endpoint) {
+                Ok(stream) => break stream,
+                Err(_) if Instant::now() < deadline => thread::sleep(Duration::from_millis(10)),
+                Err(error) => panic!("attach listener did not start: {error}"),
+            }
+        };
+        stream
+            .write_all(
+                &encode_frame(&Hello {
+                    protocol: Protocol,
+                    client: Client {
+                        kind: "desktop-client".into(),
+                        version: "1.0.0".into(),
+                    },
+                    supported: VersionRange { min: 1, max: 1 },
+                    client_nonce: "client-nonce".into(),
+                    authorized_client_id: Id::new("018f0000-0000-7000-8000-000000000124").unwrap(),
+                    authorized_client_credential: None,
+                })
+                .unwrap(),
+            )
+            .unwrap();
+        let welcome = read_frame_text(&mut stream);
+        assert!(welcome.contains("\"selected\":1"));
+        let grant = read_frame_text(&mut stream);
+        let capability_key = "\"capability\":\"";
+        let capability_start = grant.find(capability_key).unwrap() + capability_key.len();
+        let capability_end = grant[capability_start..].find('"').unwrap() + capability_start;
+        let request = format!(
+            "{{\"protocol\":\"muniment.attach/1\",\"request_id\":\"018f0000-0000-7000-8000-000000000125\",\"operation\":\"thread.list\",\"capability\":\"{}\",\"body\":{{\"limit\":20}}}}",
+            &grant[capability_start..capability_end]
+        );
+        stream
+            .write_all(&(request.len() as u32).to_be_bytes())
+            .unwrap();
+        stream.write_all(request.as_bytes()).unwrap();
+        let response = read_frame_text(&mut stream);
+        assert!(response.contains("\"ok\":true"));
+        assert!(response.contains("\"threads\":[]"));
+
+        drop(stream);
+        stop_tx.send(()).unwrap();
+        listener.join().unwrap();
+    });
 }
 
 #[test]
