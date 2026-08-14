@@ -16,6 +16,8 @@ use muniment_core::thread_ownership::{subject_owns_first_run, ThreadOwnershipErr
 use serde::Serialize;
 use std::collections::BTreeMap;
 
+#[cfg(target_os = "linux")]
+use crate::attach_service::{AttachCompanionState, DesktopClientSession};
 use crate::auth;
 use crate::chat::{state_session_root, ChatState};
 use muniment_core::run_events::SharedStorage;
@@ -38,6 +40,54 @@ pub struct ChatThreadSummaryPage {
 
 fn thread_ownership_error_message(_error: ThreadOwnershipError) -> String {
     "Conversation history is unavailable.".into()
+}
+
+#[cfg(target_os = "linux")]
+fn rename_thread_command(
+    storage: &SharedStorage,
+    attach_state: &AttachCompanionState,
+    subject: Option<&str>,
+    thread_id: &str,
+    title: &str,
+) -> Result<(), String> {
+    match attach_state.desktop_client_session() {
+        DesktopClientSession::NoSupervisor => {
+            let mut storage = storage
+                .lock()
+                .map_err(|_| "Conversation history is unavailable.".to_string())?;
+            rename_thread(&mut storage.journal, subject, thread_id, title)
+        }
+        DesktopClientSession::Connected(client) => client
+            .rename_thread(thread_id, title)
+            .map_err(|_| "Muniment cannot reach its background service.".to_string()),
+        DesktopClientSession::Disconnected => {
+            Err("Muniment cannot reach its background service.".into())
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn delete_thread_command(
+    storage: &SharedStorage,
+    session_thread: &SessionThread,
+    attach_state: &AttachCompanionState,
+    subject: Option<&str>,
+    thread_id: &str,
+) -> Result<(), String> {
+    match attach_state.desktop_client_session() {
+        DesktopClientSession::NoSupervisor => {
+            let mut storage = storage
+                .lock()
+                .map_err(|_| "Conversation history is unavailable.".to_string())?;
+            delete_thread(&mut storage.journal, session_thread, subject, thread_id)
+        }
+        DesktopClientSession::Connected(client) => client
+            .delete_thread(thread_id)
+            .map_err(|_| "Muniment cannot reach its background service.".to_string()),
+        DesktopClientSession::Disconnected => {
+            Err("Muniment cannot reach its background service.".into())
+        }
+    }
 }
 
 pub(crate) fn newest_owned_workspace_thread(
@@ -234,6 +284,28 @@ pub async fn chat_select_thread(
     )
 }
 
+#[cfg(target_os = "linux")]
+#[tauri::command]
+pub async fn chat_rename_thread(
+    app_handle: tauri::AppHandle,
+    auth_state: tauri::State<'_, auth::AuthState>,
+    state: tauri::State<'_, ChatState>,
+    attach_state: tauri::State<'_, AttachCompanionState>,
+    thread_id: String,
+    title: String,
+) -> Result<(), String> {
+    chat_rename_thread_with_state(
+        app_handle,
+        auth_state,
+        state,
+        attach_state,
+        thread_id,
+        title,
+    )
+    .await
+}
+
+#[cfg(not(target_os = "linux"))]
 #[tauri::command]
 pub async fn chat_rename_thread(
     app_handle: tauri::AppHandle,
@@ -242,19 +314,53 @@ pub async fn chat_rename_thread(
     thread_id: String,
     title: String,
 ) -> Result<(), String> {
+    chat_rename_thread_with_state(app_handle, auth_state, state, thread_id, title).await
+}
+
+async fn chat_rename_thread_with_state<R: tauri::Runtime>(
+    app_handle: tauri::AppHandle<R>,
+    auth_state: tauri::State<'_, auth::AuthState>,
+    state: tauri::State<'_, ChatState>,
+    #[cfg(target_os = "linux")] attach_state: tauri::State<'_, AttachCompanionState>,
+    thread_id: String,
+    title: String,
+) -> Result<(), String> {
     let tokens = auth::fresh_tokens(&auth_state, &app_handle)?;
+    #[cfg(target_os = "linux")]
+    return rename_thread_command(
+        &state.storage,
+        &attach_state,
+        tokens.subject.as_deref(),
+        &thread_id,
+        &title,
+    );
+    #[cfg(not(target_os = "linux"))]
     let mut storage = state
         .storage
         .lock()
         .map_err(|_| "Conversation history is unavailable.".to_string())?;
-    rename_thread(
+    #[cfg(not(target_os = "linux"))]
+    return rename_thread(
         &mut storage.journal,
         tokens.subject.as_deref(),
         &thread_id,
         &title,
-    )
+    );
 }
 
+#[cfg(target_os = "linux")]
+#[tauri::command]
+pub async fn chat_delete_thread(
+    app_handle: tauri::AppHandle,
+    auth_state: tauri::State<'_, auth::AuthState>,
+    state: tauri::State<'_, ChatState>,
+    attach_state: tauri::State<'_, AttachCompanionState>,
+    thread_id: String,
+) -> Result<(), String> {
+    chat_delete_thread_with_state(app_handle, auth_state, state, attach_state, thread_id).await
+}
+
+#[cfg(not(target_os = "linux"))]
 #[tauri::command]
 pub async fn chat_delete_thread(
     app_handle: tauri::AppHandle,
@@ -262,17 +368,37 @@ pub async fn chat_delete_thread(
     state: tauri::State<'_, ChatState>,
     thread_id: String,
 ) -> Result<(), String> {
+    chat_delete_thread_with_state(app_handle, auth_state, state, thread_id).await
+}
+
+async fn chat_delete_thread_with_state<R: tauri::Runtime>(
+    app_handle: tauri::AppHandle<R>,
+    auth_state: tauri::State<'_, auth::AuthState>,
+    state: tauri::State<'_, ChatState>,
+    #[cfg(target_os = "linux")] attach_state: tauri::State<'_, AttachCompanionState>,
+    thread_id: String,
+) -> Result<(), String> {
     let tokens = auth::fresh_tokens(&auth_state, &app_handle)?;
+    #[cfg(target_os = "linux")]
+    return delete_thread_command(
+        &state.storage,
+        &state.session_thread,
+        &attach_state,
+        tokens.subject.as_deref(),
+        &thread_id,
+    );
+    #[cfg(not(target_os = "linux"))]
     let mut storage = state
         .storage
         .lock()
         .map_err(|_| "Conversation history is unavailable.".to_string())?;
-    delete_thread(
+    #[cfg(not(target_os = "linux"))]
+    return delete_thread(
         &mut storage.journal,
         &state.session_thread,
         tokens.subject.as_deref(),
         &thread_id,
-    )
+    );
 }
 
 #[tauri::command]
@@ -342,6 +468,262 @@ mod tests {
     use std::sync::{Arc, Mutex};
     use std::time::Duration;
     use uuid::Uuid;
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn thread_commands_cover_each_desktop_client_state() {
+        use muniment_core::attach::{
+            encode_frame, reconnect_welcome, serve_desktop_client_at, Id, Protocol, Response,
+            Success,
+        };
+        use std::io::{Read, Write};
+        use std::os::unix::net::UnixListener;
+        use std::sync::mpsc;
+        use tauri::Manager;
+
+        fn app_with_thread(
+            attach_state: AttachCompanionState,
+        ) -> (tauri::App<tauri::test::MockRuntime>, String) {
+            use muniment_core::attach::RuntimeActivityRegistry;
+            use muniment_core::auth::TokenSet;
+            use tauri::Manager;
+
+            let app = tauri::test::mock_app();
+            let runtime_activity = RuntimeActivityRegistry::new();
+            app.manage(auth::AuthState::with_test_tokens(
+                runtime_activity.clone(),
+                TokenSet {
+                    access_token: "token".into(),
+                    refresh_token: None,
+                    expires_at: None,
+                    subject: Some("owner".into()),
+                },
+            ));
+            app.manage(ChatState::new(app.handle(), runtime_activity).unwrap());
+            app.manage(attach_state);
+            let run_id = Uuid::now_v7().to_string();
+            let state = app.state::<ChatState>();
+            let thread_id = state
+                .storage
+                .lock()
+                .unwrap()
+                .journal
+                .append_new_run(
+                    "workspace-a",
+                    &event_envelope(&run_id, 1, "run.started", json!({}), Some("owner")),
+                )
+                .unwrap();
+            drop(state);
+            (app, thread_id)
+        }
+
+        fn invoke_rename(
+            app: &tauri::App<tauri::test::MockRuntime>,
+            thread_id: &str,
+            title: &str,
+        ) -> Result<(), String> {
+            use tauri::Manager;
+            tauri::async_runtime::block_on(chat_rename_thread_with_state(
+                app.handle().clone(),
+                app.state(),
+                app.state(),
+                app.state(),
+                thread_id.into(),
+                title.into(),
+            ))
+        }
+
+        fn invoke_delete(
+            app: &tauri::App<tauri::test::MockRuntime>,
+            thread_id: &str,
+        ) -> Result<(), String> {
+            use tauri::Manager;
+            tauri::async_runtime::block_on(chat_delete_thread_with_state(
+                app.handle().clone(),
+                app.state(),
+                app.state(),
+                app.state(),
+                thread_id.into(),
+            ))
+        }
+
+        fn read_value(stream: &mut impl Read) -> Value {
+            let mut length = [0; 4];
+            stream.read_exact(&mut length).unwrap();
+            let mut payload = vec![0; u32::from_be_bytes(length) as usize];
+            stream.read_exact(&mut payload).unwrap();
+            serde_json::from_slice(&payload).unwrap()
+        }
+
+        let (rename_app, rename_id) = app_with_thread(AttachCompanionState::default());
+        invoke_rename(&rename_app, &rename_id, "Renamed thread").unwrap();
+        assert_eq!(
+            rename_app
+                .state::<ChatState>()
+                .storage
+                .lock()
+                .unwrap()
+                .journal
+                .thread_events(&rename_id)
+                .unwrap()[1]
+                .event_type,
+            "thread.title.renamed"
+        );
+        let (delete_app, delete_id) = app_with_thread(AttachCompanionState::default());
+        invoke_delete(&delete_app, &delete_id).unwrap();
+        assert_eq!(
+            delete_app
+                .state::<ChatState>()
+                .storage
+                .lock()
+                .unwrap()
+                .journal
+                .thread_events(&delete_id)
+                .unwrap()[1]
+                .event_type,
+            "thread.deleted"
+        );
+
+        let endpoint =
+            std::env::temp_dir().join(format!("muniment-client-{}.sock", Uuid::now_v7()));
+        let listener = UnixListener::bind(&endpoint).unwrap();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            assert_eq!(read_value(&mut stream)["client"]["kind"], "desktop-client");
+            stream
+                .write_all(
+                    &encode_frame(&reconnect_welcome(1, "0.0.1", "11".repeat(16), "")).unwrap(),
+                )
+                .unwrap();
+            stream
+                .write_all(
+                    &encode_frame(&json!({
+                        "profile_id": "profile-1",
+                        "capability": "33".repeat(32),
+                        "expires_at": 60,
+                        "idle_timeout_seconds": 30,
+                        "workspace_scopes": {"/work/signed": ["threads:read"]}
+                    }))
+                    .unwrap(),
+                )
+                .unwrap();
+            let mut requests = Vec::new();
+            for _ in 0..2 {
+                let request = read_value(&mut stream);
+                requests.push((request["operation"].clone(), request["body"].clone()));
+                let request_id = Id::new(request["request_id"].as_str().unwrap()).unwrap();
+                stream
+                    .write_all(
+                        &encode_frame(&Response {
+                            protocol: Protocol,
+                            request_id,
+                            ok: Success,
+                            body: json!({}),
+                        })
+                        .unwrap(),
+                    )
+                    .unwrap();
+            }
+            requests
+        });
+        let live_state = AttachCompanionState::default();
+        let client_endpoint = endpoint.clone();
+        let (connected_tx, connected_rx) = mpsc::channel();
+        live_state.set_desktop_client_for_test(false, move |stop, holder| {
+            std::thread::spawn(move || {
+                let mut connected_tx = Some(connected_tx);
+                serve_desktop_client_at(
+                    &client_endpoint,
+                    "0.0.1",
+                    Duration::from_secs(1),
+                    Duration::from_millis(10),
+                    stop,
+                    holder,
+                    move |connected| {
+                        if connected {
+                            connected_tx.take().unwrap().send(()).unwrap();
+                        }
+                    },
+                )
+            })
+        });
+        connected_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        live_state.set_desktop_client_for_test(true, |_, _| std::thread::spawn(|| {}));
+        let (live_app, live_id) = app_with_thread(live_state);
+        invoke_rename(&live_app, &live_id, "Remote title").unwrap();
+        invoke_delete(&live_app, &live_id).unwrap();
+        assert_eq!(
+            live_app
+                .state::<ChatState>()
+                .storage
+                .lock()
+                .unwrap()
+                .journal
+                .thread_events(&live_id)
+                .unwrap()
+                .len(),
+            1
+        );
+        let requests = server.join().unwrap();
+        assert_eq!(
+            requests,
+            vec![
+                (
+                    json!("thread.rename"),
+                    json!({"thread_id": live_id, "title": "Remote title"})
+                ),
+                (json!("thread.delete"), json!({"thread_id": live_id})),
+            ]
+        );
+        live_app
+            .state::<AttachCompanionState>()
+            .stop_desktop_client_for_test();
+
+        let disconnected_state = AttachCompanionState::default();
+        disconnected_state.set_desktop_client_for_test(false, |_, _| std::thread::spawn(|| {}));
+        let (disconnected_app, disconnected_id) = app_with_thread(disconnected_state);
+        for result in [
+            invoke_rename(&disconnected_app, &disconnected_id, "title"),
+            invoke_delete(&disconnected_app, &disconnected_id),
+        ] {
+            assert_eq!(
+                result.unwrap_err(),
+                "Muniment cannot reach its background service."
+            );
+        }
+        assert_eq!(
+            disconnected_app
+                .state::<ChatState>()
+                .storage
+                .lock()
+                .unwrap()
+                .journal
+                .thread_events(&disconnected_id)
+                .unwrap()
+                .len(),
+            1
+        );
+        disconnected_app
+            .state::<AttachCompanionState>()
+            .stop_desktop_client_for_test();
+
+        for rename in [true, false] {
+            let (app, thread_id) = app_with_thread(AttachCompanionState::default());
+            let poisoned = Arc::clone(&app.state::<ChatState>().storage);
+            let _ = std::thread::spawn(move || {
+                let _guard = poisoned.lock().unwrap();
+                panic!("poison journal lock");
+            })
+            .join();
+            let result = if rename {
+                invoke_rename(&app, &thread_id, "title")
+            } else {
+                invoke_delete(&app, &thread_id)
+            };
+            assert_eq!(result.unwrap_err(), "Conversation history is unavailable.");
+        }
+        let _ = std::fs::remove_file(endpoint);
+    }
 
     #[test]
     fn rename_thread_accepts_owned_thread_and_rejects_invalid_requests() {

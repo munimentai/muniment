@@ -433,8 +433,8 @@ impl<R: tauri::Runtime> RunStartBoundaries for TauriRunStartBoundaries<R> {
 }
 
 impl ChatState {
-    pub fn new(
-        app: &tauri::AppHandle,
+    pub fn new<R: tauri::Runtime>(
+        app: &tauri::AppHandle<R>,
         runtime_activity: RuntimeActivityRegistry,
     ) -> Result<Self, Box<dyn std::error::Error>> {
         let directory = app.path().app_data_dir()?;
