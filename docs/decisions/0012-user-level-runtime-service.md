@@ -326,3 +326,16 @@ This admission proves only the installed desktop payload under the same OS
 user. It does not defend against compromise by another process running as that
 user. Windows and macOS need later peer-identity amendments before they can
 admit a presenter session.
+
+## Amendment – 2026-08-13: runtime attach connection routing
+
+The runtime routes a new attach connection to the presenter session only when
+both checks pass. The connection's `SO_PEERCRED` peer PID must resolve to the
+installed desktop payload, and its first hello must claim the client kind
+`desktop`. For a connection from that payload, a first hello that claims
+`desktop-handoff-probe` keeps the existing readiness answer. Every other
+connection takes the companion route.
+
+The routing check consumes no byte from the connection. The admitted path
+reads the first hello itself. An unreadable, oversized, or late first frame
+falls to the companion route, which still requires visible pairing approval.
