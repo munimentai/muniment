@@ -9,8 +9,8 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use muniment_attach::{
-    handshake_stream, serve_approval_presenter_at, ApprovalDecision as PresenterDecision,
-    ApprovalPresenterStopHandle,
+    handshake as companion_handshake, handshake_stream, serve_approval_presenter_at,
+    ApprovalDecision as PresenterDecision, ApprovalPresentRequest, ApprovalPresenterStopHandle,
 };
 use muniment_core::attach::linux::{
     AttachFilesystem, LiveConnectionRegistry, ThreadListPage, ThreadListRequest, ThreadListService,
@@ -269,4 +269,118 @@ fn desktop_presenter_answers_an_approval_request() {
         stop_tx.send(()).unwrap();
         listener.join().unwrap();
     });
+}
+
+#[test]
+fn companion_pairs_through_the_desktop_presenter() {
+    for (decision, authorized) in [
+        (PresenterDecision::Approve, true),
+        (PresenterDecision::Deny, false),
+    ] {
+        let profile = TemporaryProfile::new("attach-listener-live-presenter", false);
+        fs::set_permissions(&profile.root, fs::Permissions::from_mode(0o700)).unwrap();
+        let filesystem = AttachFilesystem::from_runtime_directory(&profile.root).unwrap();
+        let endpoint = filesystem.endpoint_path().to_owned();
+        drop(filesystem);
+        let approval = SignedWorkspaceApproval::default();
+        approval.record("workspace-a".into());
+        let registry = CompanionRegistry::new(
+            Arc::new(Mutex::new(HashMap::new())),
+            profile.profile.join("companions.json"),
+            LiveConnectionRegistry::default(),
+        );
+        let approvals = ApprovalCoordinator::default();
+        let readiness = approvals.clone();
+        let (stop_tx, stop_rx) = mpsc::channel();
+        let presenter_stop = ApprovalPresenterStopHandle::new();
+        let worker_stop = presenter_stop.clone();
+        let (presented_tx, presented_rx) = mpsc::channel();
+
+        let (connected, handshake_result, presented) = thread::scope(|scope| {
+            let listener = scope.spawn(|| {
+                run_attach_listener(
+                    &profile.root,
+                    AttachListenerInputs {
+                        companion_registry: &registry,
+                        approval,
+                        approvals,
+                        expected_desktop_executable: Some(std::env::current_exe().unwrap()),
+                    },
+                    None,
+                    || Ok::<_, ()>(TestService),
+                    stop_rx,
+                )
+                .unwrap()
+            });
+            let presenter = scope.spawn(|| {
+                serve_approval_presenter_at(
+                    &endpoint,
+                    "1.0.0",
+                    Duration::from_secs(1),
+                    Duration::from_millis(10),
+                    worker_stop,
+                    |request| {
+                        presented_tx.send(request.clone()).unwrap();
+                        if request.challenge.starts_with("presenter-ready-") {
+                            PresenterDecision::Approve
+                        } else {
+                            decision
+                        }
+                    },
+                )
+            });
+
+            let deadline = Instant::now() + Duration::from_secs(2);
+            let mut attempt = 0;
+            let connected = loop {
+                attempt += 1;
+                if readiness.request(
+                    ApprovalRequest {
+                        challenge: format!("presenter-ready-{attempt}"),
+                        claimed_kind: "test".into(),
+                        claimed_version: "1.0.0".into(),
+                        workspace: "workspace-a".into(),
+                        scopes: Default::default(),
+                    },
+                    Duration::from_millis(100),
+                ) {
+                    break true;
+                }
+                if Instant::now() >= deadline {
+                    break false;
+                }
+                thread::sleep(Duration::from_millis(10));
+            };
+            let _readiness_request = presented_rx.recv_timeout(Duration::from_secs(1));
+
+            let previous_runtime_directory = std::env::var_os("XDG_RUNTIME_DIR");
+            std::env::set_var("XDG_RUNTIME_DIR", &profile.root);
+            let handshake_result = companion_handshake("1.0.0", "editor-extension", || {}).is_ok();
+            match previous_runtime_directory {
+                Some(value) => std::env::set_var("XDG_RUNTIME_DIR", value),
+                None => std::env::remove_var("XDG_RUNTIME_DIR"),
+            }
+            let presented = presented_rx.recv_timeout(Duration::from_secs(1));
+
+            presenter_stop.stop();
+            presenter.join().unwrap();
+            stop_tx.send(()).unwrap();
+            listener.join().unwrap();
+            (connected, handshake_result, presented)
+        });
+
+        assert!(connected, "presenter did not connect");
+        assert_eq!(handshake_result, authorized);
+        let ApprovalPresentRequest {
+            challenge,
+            claimed_kind,
+            claimed_version,
+            workspace,
+            ..
+        } = presented.unwrap();
+        assert!(!challenge.is_empty());
+        assert_eq!(claimed_kind, "editor-extension");
+        assert_eq!(claimed_version, "1.0.0");
+        assert_eq!(workspace, "workspace-a");
+    }
 }
