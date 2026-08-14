@@ -8,15 +8,18 @@ use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use muniment_attach::handshake_stream;
+use muniment_attach::{
+    handshake_stream, serve_approval_presenter_at, ApprovalDecision as PresenterDecision,
+    ApprovalPresenterStopHandle,
+};
 use muniment_core::attach::linux::{
     AttachFilesystem, LiveConnectionRegistry, ThreadListPage, ThreadListRequest, ThreadListService,
 };
 use muniment_core::attach::{
-    probe_handoff, ApprovalCoordinator, CompanionRegistry, HandoffProbeError, ProtocolError,
-    SignedWorkspaceApproval,
+    probe_handoff, ApprovalCoordinator, ApprovalRequest, CompanionRegistry, HandoffProbeError,
+    ProtocolError, SignedWorkspaceApproval,
 };
-use muniment_runtime::run_attach_listener;
+use muniment_runtime::{run_attach_listener, AttachListenerInputs};
 
 mod common;
 use common::TemporaryProfile;
@@ -53,9 +56,12 @@ fn handshake(approvals: ApprovalCoordinator, handoff_nonce: Option<String>) -> b
         let listener = scope.spawn(|| {
             run_attach_listener(
                 &profile.root,
-                &registry,
-                approval,
-                approvals,
+                AttachListenerInputs {
+                    companion_registry: &registry,
+                    approval,
+                    approvals,
+                    expected_desktop_executable: std::env::current_exe().ok(),
+                },
                 handoff_nonce,
                 || Ok::<_, ()>(TestService),
                 stop_rx,
@@ -101,9 +107,12 @@ fn probe(handoff_nonce: Option<String>) -> Result<(), HandoffProbeError> {
         let listener = scope.spawn(|| {
             run_attach_listener(
                 &profile.root,
-                &registry,
-                SignedWorkspaceApproval::default(),
-                ApprovalCoordinator::default(),
+                AttachListenerInputs {
+                    companion_registry: &registry,
+                    approval: SignedWorkspaceApproval::default(),
+                    approvals: ApprovalCoordinator::default(),
+                    expected_desktop_executable: std::env::current_exe().ok(),
+                },
                 handoff_nonce,
                 || Ok::<_, ()>(TestService),
                 stop_rx,
@@ -151,4 +160,85 @@ fn handshake_gets_a_grant_when_the_presenter_approves() {
     });
 
     assert!(handshake(approvals, Some("prepared-nonce".into())));
+}
+
+#[test]
+fn desktop_presenter_answers_an_approval_request() {
+    let profile = TemporaryProfile::new("attach-listener-presenter", false);
+    fs::set_permissions(&profile.root, fs::Permissions::from_mode(0o700)).unwrap();
+    let filesystem = AttachFilesystem::from_runtime_directory(&profile.root).unwrap();
+    let endpoint = filesystem.endpoint_path().to_owned();
+    drop(filesystem);
+    let registry = CompanionRegistry::new(
+        Arc::new(Mutex::new(HashMap::new())),
+        profile.profile.join("companions.json"),
+        LiveConnectionRegistry::default(),
+    );
+    let approvals = ApprovalCoordinator::default();
+    let requests = approvals.clone();
+    let (stop_tx, stop_rx) = mpsc::channel();
+    let presenter_stop = ApprovalPresenterStopHandle::new();
+    let worker_stop = presenter_stop.clone();
+    let (presented_tx, presented_rx) = mpsc::channel();
+
+    thread::scope(|scope| {
+        let listener = scope.spawn(|| {
+            run_attach_listener(
+                &profile.root,
+                AttachListenerInputs {
+                    companion_registry: &registry,
+                    approval: SignedWorkspaceApproval::default(),
+                    approvals,
+                    expected_desktop_executable: std::env::current_exe().ok(),
+                },
+                None,
+                || Ok::<_, ()>(TestService),
+                stop_rx,
+            )
+            .unwrap()
+        });
+        let presenter = scope.spawn(|| {
+            serve_approval_presenter_at(
+                &endpoint,
+                "1.0.0",
+                Duration::from_secs(1),
+                Duration::from_millis(10),
+                worker_stop,
+                |request| {
+                    presented_tx.send(request.challenge.clone()).unwrap();
+                    PresenterDecision::Approve
+                },
+            )
+        });
+
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let mut attempt = 0;
+        let challenge = loop {
+            attempt += 1;
+            let challenge = format!("runtime-presenter-{attempt}");
+            if requests.request(
+                ApprovalRequest {
+                    challenge: challenge.clone(),
+                    claimed_kind: "editor-extension".into(),
+                    claimed_version: "1.0.0".into(),
+                    workspace: "workspace-a".into(),
+                    scopes: Default::default(),
+                },
+                Duration::from_millis(100),
+            ) {
+                break challenge;
+            }
+            assert!(Instant::now() < deadline, "presenter did not connect");
+            thread::sleep(Duration::from_millis(10));
+        };
+        assert_eq!(
+            presented_rx.recv_timeout(Duration::from_secs(1)).unwrap(),
+            challenge
+        );
+
+        presenter_stop.stop();
+        presenter.join().unwrap();
+        stop_tx.send(()).unwrap();
+        listener.join().unwrap();
+    });
 }

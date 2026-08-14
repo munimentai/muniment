@@ -90,6 +90,7 @@ fn inputs<'a>(
         companion_registry: registry,
         approval: approval.clone(),
         approvals: approvals.clone(),
+        expected_desktop_executable: std::env::current_exe().ok(),
     }
 }
 

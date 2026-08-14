@@ -1,7 +1,7 @@
 //! Runtime-owned companion attach listener.
 
 use std::fmt;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, RecvTimeoutError};
 use std::sync::Arc;
@@ -13,8 +13,13 @@ use muniment_core::attach::linux::{
     ThreadListService,
 };
 use muniment_core::attach::{
-    bounded_claim, ApprovalCoordinator, ApprovalRequest, CompanionRegistry, SignedWorkspaceApproval,
+    admit_approval_presenter, bounded_claim, name_attach_connection_route,
+    serve_approval_presenter, ApprovalCoordinator, ApprovalPresenterConnection, ApprovalRequest,
+    AttachConnectionRoute, CompanionRegistry, SignedWorkspaceApproval,
 };
+use muniment_core::browser_control::ProcReader;
+
+const PRESENTER_ADMISSION_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum AttachListenerError {
@@ -42,14 +47,13 @@ pub struct AttachListenerInputs<'a> {
     pub companion_registry: &'a CompanionRegistry,
     pub approval: SignedWorkspaceApproval,
     pub approvals: ApprovalCoordinator,
+    pub expected_desktop_executable: Option<PathBuf>,
 }
 
 /// Owns the profile endpoint and serves companion sessions until `stop` fires.
 pub fn run_attach_listener<S, F, E>(
     profile_directory: impl AsRef<Path>,
-    companion_registry: &CompanionRegistry,
-    approval: SignedWorkspaceApproval,
-    approvals: ApprovalCoordinator,
+    inputs: AttachListenerInputs<'_>,
     handoff_nonce: Option<String>,
     service_factory: F,
     stop: Receiver<()>,
@@ -68,11 +72,7 @@ where
     run_bound_attach_listener(
         _instance_lock,
         transport,
-        AttachListenerInputs {
-            companion_registry,
-            approval,
-            approvals,
-        },
+        inputs,
         handoff_nonce,
         service_factory,
         stop,
@@ -98,6 +98,7 @@ where
     let live_connections = inputs.companion_registry.live_connections();
     let approval = inputs.approval;
     let approvals = inputs.approvals;
+    let expected_desktop_executable = inputs.expected_desktop_executable;
 
     std::thread::scope(|scope| {
         let stop_finished = finished.clone();
@@ -127,7 +128,39 @@ where
             let approvals = approvals.clone();
             let live_connections = live_connections.clone();
             let handoff_nonce = handoff_nonce.clone();
+            let expected_desktop_executable = expected_desktop_executable.clone();
             std::thread::spawn(move || {
+                let Some(expected_desktop_executable) = expected_desktop_executable else {
+                    return;
+                };
+                let process_reader = ProcReader;
+                match name_attach_connection_route(
+                    &stream,
+                    credentials,
+                    &expected_desktop_executable,
+                    &process_reader,
+                    PRESENTER_ADMISSION_TIMEOUT,
+                ) {
+                    AttachConnectionRoute::ApprovalPresenter => {
+                        let Ok((stream, capability)) = admit_approval_presenter(
+                            stream,
+                            credentials,
+                            &expected_desktop_executable,
+                            &process_reader,
+                            env!("CARGO_PKG_VERSION"),
+                            PRESENTER_ADMISSION_TIMEOUT,
+                        ) else {
+                            return;
+                        };
+                        let connection = ApprovalPresenterConnection::new(stream, capability);
+                        let Some(session) = serve_approval_presenter(approvals, connection) else {
+                            return;
+                        };
+                        session.wait_until_closed();
+                        return;
+                    }
+                    AttachConnectionRoute::Companion => {}
+                }
                 let Ok(mut service) = service_factory() else {
                     return;
                 };
