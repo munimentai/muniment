@@ -26,7 +26,6 @@ pub enum AttachListenerError {
     Filesystem,
     InstanceLock,
     Bind,
-    Accept,
 }
 
 impl fmt::Display for AttachListenerError {
@@ -35,7 +34,6 @@ impl fmt::Display for AttachListenerError {
             Self::Filesystem => "runtime attach filesystem setup failed",
             Self::InstanceLock => "runtime attach instance lock could not be acquired",
             Self::Bind => "runtime attach endpoint bind failed",
-            Self::Accept => "runtime attach connection accept failed",
         })
     }
 }
@@ -130,23 +128,28 @@ where
             let handoff_nonce = handoff_nonce.clone();
             let expected_desktop_executable = expected_desktop_executable.clone();
             std::thread::spawn(move || {
-                let Some(expected_desktop_executable) = expected_desktop_executable else {
-                    return;
-                };
-                let process_reader = ProcReader;
-                match name_attach_connection_route(
-                    &stream,
-                    credentials,
-                    &expected_desktop_executable,
-                    &process_reader,
-                    PRESENTER_ADMISSION_TIMEOUT,
-                ) {
+                let route = expected_desktop_executable.as_ref().map_or(
+                    AttachConnectionRoute::Companion,
+                    |expected_desktop_executable| {
+                        name_attach_connection_route(
+                            &stream,
+                            credentials,
+                            expected_desktop_executable,
+                            &ProcReader,
+                            PRESENTER_ADMISSION_TIMEOUT,
+                        )
+                    },
+                );
+                match route {
                     AttachConnectionRoute::ApprovalPresenter => {
+                        let expected_desktop_executable = expected_desktop_executable
+                            .as_ref()
+                            .expect("the approval presenter route has an expected executable");
                         let Ok((stream, capability)) = admit_approval_presenter(
                             stream,
                             credentials,
-                            &expected_desktop_executable,
-                            &process_reader,
+                            expected_desktop_executable,
+                            &ProcReader,
                             env!("CARGO_PKG_VERSION"),
                             PRESENTER_ADMISSION_TIMEOUT,
                         ) else {

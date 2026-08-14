@@ -37,7 +37,11 @@ impl ThreadListService for TestService {
     }
 }
 
-fn handshake(approvals: ApprovalCoordinator, handoff_nonce: Option<String>) -> bool {
+fn handshake(
+    approvals: ApprovalCoordinator,
+    handoff_nonce: Option<String>,
+    expected_desktop_executable: Option<std::path::PathBuf>,
+) -> bool {
     let profile = TemporaryProfile::new("attach-listener", false);
     fs::set_permissions(&profile.root, fs::Permissions::from_mode(0o700)).unwrap();
     let filesystem = AttachFilesystem::from_runtime_directory(&profile.root).unwrap();
@@ -60,7 +64,7 @@ fn handshake(approvals: ApprovalCoordinator, handoff_nonce: Option<String>) -> b
                     companion_registry: &registry,
                     approval,
                     approvals,
-                    expected_desktop_executable: std::env::current_exe().ok(),
+                    expected_desktop_executable,
                 },
                 handoff_nonce,
                 || Ok::<_, ()>(TestService),
@@ -143,7 +147,11 @@ fn probe_rejects_a_welcome_without_a_handoff_nonce() {
 
 #[test]
 fn handshake_gets_no_grant_without_a_presenter() {
-    assert!(!handshake(ApprovalCoordinator::default(), None));
+    assert!(!handshake(
+        ApprovalCoordinator::default(),
+        None,
+        std::env::current_exe().ok(),
+    ));
 }
 
 #[test]
@@ -159,7 +167,27 @@ fn handshake_gets_a_grant_when_the_presenter_approves() {
         true
     });
 
-    assert!(handshake(approvals, Some("prepared-nonce".into())));
+    assert!(handshake(
+        approvals,
+        Some("prepared-nonce".into()),
+        std::env::current_exe().ok(),
+    ));
+}
+
+#[test]
+fn handshake_gets_a_grant_without_an_expected_desktop_executable() {
+    let approvals = ApprovalCoordinator::default();
+    let decisions = approvals.clone();
+    approvals.register_presenter(move |request| {
+        let decisions = decisions.clone();
+        let challenge = request.challenge.clone();
+        thread::spawn(move || {
+            decisions.decide(&challenge, true);
+        });
+        true
+    });
+
+    assert!(handshake(approvals, Some("prepared-nonce".into()), None));
 }
 
 #[test]
