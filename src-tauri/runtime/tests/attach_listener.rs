@@ -232,6 +232,7 @@ fn desktop_presenter_answers_an_approval_request() {
                 Duration::from_secs(1),
                 Duration::from_millis(10),
                 worker_stop,
+                |_| {},
                 |request| {
                     presented_tx.send(request.challenge.clone()).unwrap();
                     PresenterDecision::Approve
@@ -319,6 +320,7 @@ fn companion_pairs_through_the_desktop_presenter() {
                     Duration::from_secs(1),
                     Duration::from_millis(10),
                     worker_stop,
+                    |_| {},
                     |request| {
                         presented_tx.send(request.clone()).unwrap();
                         if request.challenge.starts_with("presenter-ready-") {

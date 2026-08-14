@@ -93,6 +93,7 @@ describe('access popover layout', () => {
     expect(source).toMatch(/No connected programs found/)
     expect(source).toMatch(/The connected programs folder is unavailable\./)
     expect(source).toMatch(/Connected programs are available in another Muniment window\./)
+    expect(source).toMatch(/The Muniment background service manages connected programs\./)
     expect(source).toMatch(/The connected programs connection could not start\./)
     expect(source).toMatch(/The connected programs listener stopped\./)
     expect(source).toMatch(/Restart Muniment/)
@@ -167,7 +168,6 @@ describe('access popover layout', () => {
 
   for (const [failure, message, recovery] of [
     ['filesystem', 'The connected programs folder is unavailable.', 'Restart Muniment'],
-    ['instance_lock', 'Connected programs are available in another Muniment window.', 'Close this window'],
     ['bind', 'The connected programs connection could not start.', 'Restart Muniment'],
   ]) {
     it(`renders the ${failure} listener failure and its recovery`, async () => {
@@ -184,11 +184,78 @@ describe('access popover layout', () => {
 
       expect(await screen.findByText(message)).toBeInTheDocument()
       await fireEvent.click(screen.getByRole('button', { name: recovery }))
-      if (failure === 'instance_lock') expect(closeWindow).toHaveBeenCalledOnce()
-      else expect(invoke).toHaveBeenCalledWith('restart_muniment')
+      expect(invoke).toHaveBeenCalledWith('restart_muniment')
       expect(screen.queryByText('No connected programs found')).not.toBeInTheDocument()
     })
   }
+
+  for (const [presenting, message, recovery] of [
+    [true, 'The Muniment background service manages connected programs.', null],
+    [false, 'Connected programs are available in another Muniment window.', 'Close this window'],
+  ]) {
+    it(`renders the instance lock state when presenting is ${presenting}`, async () => {
+      const invoke = vi.fn(async (command) => {
+        if (command === 'auth_entitlement_snapshot') return snapshot
+        if (command === 'auth_devices') return []
+        if (command === 'attach_companions') return []
+        if (command === 'attach_listener_status') return { started: false, failure: 'instance_lock', presenting }
+        throw new Error(`unexpected command: ${command}`)
+      })
+      renderPanel(invoke)
+      await fireEvent.click(await screen.findByRole('button', { name: /Alice/ }))
+
+      expect(await screen.findByText(message)).toBeInTheDocument()
+      if (recovery) {
+        await fireEvent.click(screen.getByRole('button', { name: recovery }))
+        expect(closeWindow).toHaveBeenCalledOnce()
+      } else {
+        expect(screen.queryByRole('button', { name: 'Close this window' })).not.toBeInTheDocument()
+      }
+      expect(screen.queryByText('No connected programs found')).not.toBeInTheDocument()
+    })
+  }
+
+  it('updates the instance lock state when the background service starts presenting', async () => {
+    let statusCalls = 0
+    const invoke = vi.fn(async (command) => {
+      if (command === 'auth_entitlement_snapshot') return snapshot
+      if (command === 'auth_devices') return []
+      if (command === 'attach_companions') return []
+      if (command === 'attach_listener_status') {
+        statusCalls += 1
+        return { started: false, failure: 'instance_lock', presenting: statusCalls > 1 }
+      }
+      throw new Error(`unexpected command: ${command}`)
+    })
+    renderPanel(invoke)
+    await fireEvent.click(await screen.findByRole('button', { name: /Alice/ }))
+
+    expect(await screen.findByText('Connected programs are available in another Muniment window.')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Close this window' })).toBeInTheDocument()
+    expect(await screen.findByText('The Muniment background service manages connected programs.')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Close this window' })).not.toBeInTheDocument()
+  })
+
+  it('updates the instance lock state when the background service stops presenting', async () => {
+    let statusCalls = 0
+    const invoke = vi.fn(async (command) => {
+      if (command === 'auth_entitlement_snapshot') return snapshot
+      if (command === 'auth_devices') return []
+      if (command === 'attach_companions') return []
+      if (command === 'attach_listener_status') {
+        statusCalls += 1
+        return { started: false, failure: 'instance_lock', presenting: statusCalls === 1 }
+      }
+      throw new Error(`unexpected command: ${command}`)
+    })
+    renderPanel(invoke)
+    await fireEvent.click(await screen.findByRole('button', { name: /Alice/ }))
+
+    expect(await screen.findByText('The Muniment background service manages connected programs.')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Close this window' })).not.toBeInTheDocument()
+    expect(await screen.findByText('Connected programs are available in another Muniment window.')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Close this window' })).toBeInTheDocument()
+  })
 
   it('renders the stopped listener and its recovery', async () => {
     const invoke = vi.fn(async (command) => {
