@@ -215,6 +215,27 @@ describe('access popover layout', () => {
     })
   }
 
+  it('updates the instance lock state when the background service starts presenting', async () => {
+    let statusCalls = 0
+    const invoke = vi.fn(async (command) => {
+      if (command === 'auth_entitlement_snapshot') return snapshot
+      if (command === 'auth_devices') return []
+      if (command === 'attach_companions') return []
+      if (command === 'attach_listener_status') {
+        statusCalls += 1
+        return { started: false, failure: 'instance_lock', presenting: statusCalls > 1 }
+      }
+      throw new Error(`unexpected command: ${command}`)
+    })
+    renderPanel(invoke)
+    await fireEvent.click(await screen.findByRole('button', { name: /Alice/ }))
+
+    expect(await screen.findByText('Connected programs are available in another Muniment window.')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Close this window' })).toBeInTheDocument()
+    expect(await screen.findByText('The Muniment background service manages connected programs.')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Close this window' })).not.toBeInTheDocument()
+  })
+
   it('renders the stopped listener and its recovery', async () => {
     const invoke = vi.fn(async (command) => {
       if (command === 'auth_entitlement_snapshot') return snapshot
