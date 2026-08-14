@@ -1,5 +1,5 @@
 <script>
-  import { onMount, tick } from 'svelte'
+  import { onDestroy, onMount, tick } from 'svelte'
   import { getCurrentWindow } from '@tauri-apps/api/window'
 
   import { accessErrorState, accessIdleState, accessLoadingState, accessReadyState, companionsErrorState, companionsIdleState, companionsLoadingState, companionsReadyState, devicesErrorState, devicesIdleState, devicesLoadingState, devicesReadyState } from './auth-state.js'
@@ -23,10 +23,13 @@
   let revokingIdentity = $state(null)
   let revokePending = $state(false)
   let revokeError = $state('')
+  let attachListenerPoll = 0
   let profileName = $derived(profileSnapshot?.user_display_name ?? subject ?? 'Signed in')
   let profileDetails = $derived(profileSnapshot ? `${profileSnapshot.organization_display_name ?? profileSnapshot.org_id} · ${profileSnapshot.role}` : 'Access unavailable')
 
   const themeOptions = [['System', 'system'], ['Light', 'light'], ['Dark', 'dark']]
+
+  onDestroy(() => { attachListenerPoll += 1 })
 
   function readTheme() {
     try {
@@ -74,22 +77,45 @@
 
   async function loadCompanions() {
     companions = companionsLoadingState()
+    const poll = ++attachListenerPoll
     try {
       const [programs] = await Promise.all([
         tauri.invoke('attach_companions'),
-        waitForAttachListener(),
+        waitForAttachListener(poll),
       ])
+      if (poll !== attachListenerPoll) return
       companions = companionsReadyState(programs)
     } catch (_) {
+      if (poll !== attachListenerPoll) return
       companions = companionsErrorState()
     }
   }
 
-  async function waitForAttachListener() {
+  async function waitForAttachListener(poll) {
     while (true) {
-      attachListener = await tauri.invoke('attach_listener_status')
-      if (!attachListener.pending) return
+      const status = await tauri.invoke('attach_listener_status')
+      if (poll !== attachListenerPoll) return
+      attachListener = status
+      if (!status.pending) {
+        if (status.failure === 'instance_lock') void watchForApprovalPresenter(poll)
+        return
+      }
       await new Promise((resolve) => setTimeout(resolve, 50))
+    }
+  }
+
+  async function watchForApprovalPresenter(poll) {
+    while (accessOpen && poll === attachListenerPoll) {
+      await new Promise((resolve) => setTimeout(resolve, 50))
+      if (!accessOpen || poll !== attachListenerPoll) return
+      try {
+        const status = await tauri.invoke('attach_listener_status')
+        if (poll !== attachListenerPoll) return
+        attachListener = status
+        if (status.failure !== 'instance_lock') return
+      } catch (_) {
+        return
+      }
     }
   }
 
@@ -144,6 +170,7 @@
   function closeAccess() {
     if (!accessOpen) return
     accessOpen = false
+    attachListenerPoll += 1
     capturingShortcut = false
     pendingShortcut = ''
     shortcutStatus = ''
@@ -276,7 +303,11 @@
             {#if !attachListener.started && attachListener.failure === 'filesystem'}
               <div class="access-status" role="alert"><p>The connected programs folder is unavailable.</p><button onclick={restartMuniment}>Restart Muniment</button></div>
             {:else if !attachListener.started && attachListener.failure === 'instance_lock'}
-              <div class="access-status" role="status"><p>Connected programs are available in another Muniment window.</p><button onclick={closeWindow}>Close this window</button></div>
+              {#if attachListener.presenting}
+                <div class="access-status" role="status"><p>The Muniment background service manages connected programs.</p></div>
+              {:else}
+                <div class="access-status" role="status"><p>Connected programs are available in another Muniment window.</p><button onclick={closeWindow}>Close this window</button></div>
+              {/if}
             {:else if !attachListener.started && attachListener.failure === 'bind'}
               <div class="access-status" role="alert"><p>The connected programs connection could not start.</p><button onclick={restartMuniment}>Restart Muniment</button></div>
             {:else if attachListener.stopped}

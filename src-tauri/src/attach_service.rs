@@ -202,6 +202,8 @@ pub struct AttachCompanionState {
     listener_stopped: Condvar,
     #[cfg(target_os = "linux")]
     approval_presenter: Mutex<Option<ApprovalPresenterStopHandle>>,
+    #[cfg(target_os = "linux")]
+    presenting: Mutex<bool>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
@@ -210,6 +212,7 @@ pub struct AttachListenerStatus {
     failure: Option<&'static str>,
     pending: bool,
     stopped: bool,
+    presenting: bool,
 }
 
 #[cfg(target_os = "linux")]
@@ -231,6 +234,7 @@ impl AttachCompanionState {
             }),
             listener_stopped: Condvar::new(),
             approval_presenter: Mutex::new(None),
+            presenting: Mutex::new(false),
         }
     }
 
@@ -347,6 +351,10 @@ impl AttachCompanionState {
             }),
             pending: lifecycle == AttachListenerLifecycle::Pending,
             stopped: lifecycle == AttachListenerLifecycle::Stopped,
+            presenting: *self
+                .presenting
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
         }
     }
 
@@ -375,6 +383,13 @@ impl AttachCompanionState {
         }
     }
 
+    fn record_presenting(&self, presenting: bool) {
+        *self
+            .presenting
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = presenting;
+    }
+
     pub(crate) fn record_workspace(&self, workspace: String) {
         self.approval.record(workspace);
     }
@@ -400,6 +415,7 @@ impl Default for AttachCompanionState {
             }),
             listener_stopped: Condvar::new(),
             approval_presenter: Mutex::new(None),
+            presenting: Mutex::new(false),
         }
     }
 }
@@ -461,6 +477,7 @@ pub fn attach_listener_status(
             failure: None,
             pending: false,
             stopped: false,
+            presenting: false,
         }
     }
 }
@@ -700,12 +717,18 @@ fn start_approval_presenter<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
         .start_approval_presenter(move |stop| {
             std::thread::spawn(move || {
                 let approvals = presenter_app.state::<AttachApprovalState>().inner().clone();
+                let observer_app = presenter_app.clone();
                 serve_approval_presenter_at(
                     &endpoint,
                     env!("CARGO_PKG_VERSION"),
                     Duration::from_secs(5),
                     Duration::from_millis(250),
                     stop,
+                    move |presenting| {
+                        observer_app
+                            .state::<AttachCompanionState>()
+                            .record_presenting(presenting);
+                    },
                     move |request| answer_presented_approval(&approvals, request),
                 );
             });
@@ -942,6 +965,7 @@ mod tests {
                         Duration::from_millis(10),
                         Duration::from_secs(30),
                         stop,
+                        |_| {},
                         |_| unreachable!("the test endpoint has no listener"),
                     );
                 }));
@@ -1115,6 +1139,7 @@ mod tests {
                 failure: None,
                 pending: false,
                 stopped: true,
+                presenting: false,
             }
         );
         std::fs::remove_dir_all(runtime).unwrap();
@@ -1499,6 +1524,7 @@ mod tests {
                     failure: Some(name),
                     pending: false,
                     stopped: false,
+                    presenting: false,
                 }
             );
         }
@@ -1511,8 +1537,13 @@ mod tests {
                 failure: None,
                 pending: false,
                 stopped: false,
+                presenting: false,
             }
         );
+
+        state.record_presenting(true);
+        assert!(state.listener_status().presenting);
+        state.record_presenting(false);
 
         let pending = AttachCompanionState::default().listener_status();
         assert_eq!(
@@ -1522,6 +1553,7 @@ mod tests {
                 failure: None,
                 pending: true,
                 stopped: false,
+                presenting: false,
             }
         );
 
@@ -1533,6 +1565,7 @@ mod tests {
                 failure: None,
                 pending: false,
                 stopped: true,
+                presenting: false,
             }
         );
     }
@@ -1662,6 +1695,7 @@ mod tests {
                 failure: Some("filesystem"),
                 pending: false,
                 stopped: false,
+                presenting: false,
             }
         );
         assert_state_works(&app);
@@ -1682,6 +1716,7 @@ mod tests {
                 failure: Some("filesystem"),
                 pending: false,
                 stopped: false,
+                presenting: false,
             }
         );
         assert_state_works(&app);
