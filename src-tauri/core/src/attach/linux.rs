@@ -1851,28 +1851,20 @@ fn run_migration_control_session<S: ThreadListService>(
 /// Serves requests authorized by an admitted desktop client capability.
 pub fn serve_desktop_client_session<S: ThreadListService>(
     mut stream: UnixStream,
-    capability: &str,
-    workspace: &str,
+    session: &super::DesktopClientSession,
     service: &mut S,
 ) -> Result<(), AttachSessionError> {
-    let result = serve_desktop_client_requests(&mut stream, capability, workspace, service);
+    service.bind_authorized_client(&session.client_identity);
+    let result = serve_desktop_client_requests(&mut stream, session, service);
     let _ = stream.shutdown(std::net::Shutdown::Both);
     result
 }
 
 fn serve_desktop_client_requests<S: ThreadListService>(
     stream: &mut UnixStream,
-    capability: &str,
-    workspace: &str,
+    session: &super::DesktopClientSession,
     service: &mut S,
 ) -> Result<(), AttachSessionError> {
-    let provenance = CompanionProvenance {
-        profile: String::new(),
-        companion_kind: "desktop-client".into(),
-        companion_version: String::new(),
-        peer_uid: 0,
-        peer_pid: 0,
-    };
     let mut subscriptions = Vec::new();
     loop {
         let live_events = match poll_run_streams(service, &mut subscriptions) {
@@ -1900,7 +1892,7 @@ fn serve_desktop_client_requests<S: ThreadListService>(
             Err(error) => return Err(error),
         };
         let request_id = request.request_id.clone();
-        if request.capability != capability
+        if request.capability != session.capability
             || matches!(
                 request.operation,
                 Operation::MigrationControl | Operation::ApprovalPresent
@@ -1916,8 +1908,8 @@ fn serve_desktop_client_requests<S: ThreadListService>(
         }
         match dispatch_request(
             request,
-            workspace,
-            provenance.clone(),
+            &session.workspace,
+            session.provenance.clone(),
             service,
             &mut subscriptions,
         ) {

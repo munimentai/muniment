@@ -169,8 +169,7 @@ where
                         let Some(desktop_approval) = approval.approval() else {
                             return;
                         };
-                        let workspace = desktop_approval.workspace.clone();
-                        let Ok((stream, capability)) = admit_desktop_client(
+                        let Ok((stream, session)) = admit_desktop_client(
                             stream,
                             credentials,
                             expected_desktop_executable,
@@ -184,12 +183,7 @@ where
                         let Ok(mut service) = service_factory() else {
                             return;
                         };
-                        let _ = serve_desktop_client_session(
-                            stream,
-                            &capability,
-                            &workspace,
-                            &mut service,
-                        );
+                        let _ = serve_desktop_client_session(stream, &session, &mut service);
                         return;
                     }
                     AttachConnectionRoute::Companion => {}
