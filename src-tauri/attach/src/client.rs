@@ -1439,9 +1439,8 @@ mod linux {
             if let Some(stream) = state.stream.take() {
                 let _ = stream.shutdown(std::net::Shutdown::Both);
             }
-            if let Some(holder) = state.holder.take() {
-                let (client, client_wake) = &*holder.inner;
-                *client.lock().unwrap_or_else(|error| error.into_inner()) = None;
+            if let Some(holder) = state.holder.as_ref() {
+                let (_, client_wake) = &*holder.inner;
                 client_wake.notify_all();
             }
             wake.notify_all();
@@ -1985,13 +1984,22 @@ mod linux {
                     }
                     let (held, wake) = &*holder.inner;
                     *held.lock().unwrap_or_else(|error| error.into_inner()) = Some(client);
-                    observe(true);
                     drop(stop_state);
+                    observe(true);
                     let connection = held.lock().unwrap_or_else(|error| error.into_inner());
-                    drop(
-                        wake.wait_while(connection, |client| client.is_some())
-                            .unwrap_or_else(|error| error.into_inner()),
-                    );
+                    let mut connection = wake
+                        .wait_while(connection, |client| {
+                            if client.is_none() {
+                                return false;
+                            }
+                            let (state, _) = &*stop.inner;
+                            !state
+                                .lock()
+                                .unwrap_or_else(|error| error.into_inner())
+                                .stopped
+                        })
+                        .unwrap_or_else(|error| error.into_inner());
+                    *connection = None;
                     observe(false);
                 }
                 clear_desktop_stream(&stop);

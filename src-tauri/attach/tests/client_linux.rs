@@ -790,16 +790,53 @@ fn desktop_client_stop_serializes_publication_and_notifications() {
         stop.stop();
         stopped_tx.send(()).unwrap();
     });
-    assert_eq!(
-        stopped.recv_timeout(Duration::from_millis(20)),
-        Err(mpsc::RecvTimeoutError::Timeout)
-    );
-    release_tx.send(()).unwrap();
     stopped.recv_timeout(SHORT).unwrap();
+    release_tx.send(()).unwrap();
     worker.join().unwrap();
     stopper.join().unwrap();
     assert_eq!(observed.recv_timeout(SHORT), Ok(false));
     assert_eq!(observed.try_recv(), Err(mpsc::TryRecvError::Disconnected));
+    assert_eq!(
+        holder.request(Operation::ThreadList, None, serde_json::json!({})),
+        Err(ClientError::DesktopUnavailable)
+    );
+    server.join().unwrap();
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn desktop_client_connected_observer_can_stop_the_supervisor() {
+    let path = socket_path();
+    let listener = UnixListener::bind(&path).unwrap();
+    let stop = DesktopClientStopHandle::new();
+    let holder = DesktopClientHolder::new();
+    let worker_stop = stop.clone();
+    let observer_stop = stop.clone();
+    let worker_holder = holder.clone();
+    let server = thread::spawn(move || {
+        let (mut client, _) = listener.accept().unwrap();
+        complete_desktop_client_handshake(&mut client);
+        let mut byte = [0];
+        assert_eq!(client.read(&mut byte).unwrap(), 0);
+    });
+    let path_for_worker = path.clone();
+    let worker = thread::spawn(move || {
+        serve_desktop_client_at(
+            &path_for_worker,
+            "0.0.1",
+            SHORT,
+            SHORT,
+            worker_stop,
+            worker_holder,
+            move |connected| {
+                if connected {
+                    observer_stop.stop();
+                }
+            },
+        );
+    });
+
+    worker.join().unwrap();
     assert_eq!(
         holder.request(Operation::ThreadList, None, serde_json::json!({})),
         Err(ClientError::DesktopUnavailable)
