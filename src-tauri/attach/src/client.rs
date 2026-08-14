@@ -1812,7 +1812,7 @@ mod linux {
         stop: &ApprovalPresenterStopHandle,
     ) -> Option<UnixStream> {
         let path = endpoint.as_os_str().as_bytes();
-        if path.is_empty() || path.len() >= 108 {
+        if path.is_empty() || path.len() >= 108 || path.contains(&0) {
             return None;
         }
         // SAFETY: The constants and arguments match Linux's socket(2) interface.

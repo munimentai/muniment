@@ -13,6 +13,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::io::{Read, Write};
 use std::net::Shutdown;
 use std::os::fd::AsRawFd;
+use std::os::unix::ffi::{OsStrExt, OsStringExt};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -372,10 +373,12 @@ fn approval_presenter_stop_interrupts_a_blocked_connect() {
     let stop = ApprovalPresenterStopHandle::new();
     let worker_stop = stop.clone();
     let path_for_worker = path.clone();
+    let (returned_tx, returned) = mpsc::channel();
     let worker = thread::spawn(move || {
         serve_approval_presenter_at(&path_for_worker, "0.0.1", SHORT, SHORT, worker_stop, |_| {
             ApprovalDecision::Approve
         });
+        returned_tx.send(()).unwrap();
     });
     thread::sleep(Duration::from_millis(20));
 
@@ -384,15 +387,44 @@ fn approval_presenter_stop_interrupts_a_blocked_connect() {
         stop.stop();
         stopped.send(()).unwrap();
     });
-    let prompt = stopped_rx.recv_timeout(SHORT).is_ok();
-    drop(queued);
-    drop(listener);
-    stopper.join().unwrap();
-    worker.join().unwrap();
     assert!(
-        prompt,
+        stopped_rx.recv_timeout(SHORT).is_ok(),
         "stop did not interrupt the blocked connection attempt"
     );
+    assert!(
+        returned.recv_timeout(SHORT).is_ok(),
+        "serve did not return while the connection attempt was blocked"
+    );
+    stopper.join().unwrap();
+    worker.join().unwrap();
+    drop(queued);
+    drop(listener);
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn approval_presenter_rejects_an_endpoint_with_a_nul_byte() {
+    let path = socket_path();
+    let listener = UnixListener::bind(&path).unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let mut endpoint = path.as_os_str().as_bytes().to_vec();
+    endpoint.extend_from_slice(b"\0ignored");
+    let endpoint = PathBuf::from(std::ffi::OsString::from_vec(endpoint));
+    let stop = ApprovalPresenterStopHandle::new();
+    let worker_stop = stop.clone();
+    let worker = thread::spawn(move || {
+        serve_approval_presenter_at(&endpoint, "0.0.1", SHORT, SHORT, worker_stop, |_| {
+            ApprovalDecision::Approve
+        });
+    });
+
+    thread::sleep(Duration::from_millis(20));
+    assert!(
+        matches!(listener.accept(), Err(error) if error.kind() == std::io::ErrorKind::WouldBlock)
+    );
+    stop.stop();
+    worker.join().unwrap();
+    drop(listener);
     std::fs::remove_file(path).unwrap();
 }
 
