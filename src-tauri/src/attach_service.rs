@@ -207,7 +207,7 @@ pub struct AttachCompanionState {
     #[cfg(target_os = "linux")]
     presenting: Mutex<bool>,
     #[cfg(target_os = "linux")]
-    desktop_client: Mutex<Option<DesktopClientStopHandle>>,
+    desktop_client: Mutex<Option<DesktopClientSupervisor>>,
     #[cfg(target_os = "linux")]
     desktop_client_holder: DesktopClientHolder,
     #[cfg(target_os = "linux")]
@@ -229,6 +229,12 @@ enum AttachListenerStopState {
     Pending { stop_requested: bool },
     Listening(AttachStopHandle),
     Stopped,
+}
+
+#[cfg(target_os = "linux")]
+struct DesktopClientSupervisor {
+    stop: DesktopClientStopHandle,
+    worker: std::thread::JoinHandle<()>,
 }
 
 #[cfg(target_os = "linux")]
@@ -402,7 +408,7 @@ impl AttachCompanionState {
 
     fn start_desktop_client(
         &self,
-        start: impl FnOnce(DesktopClientStopHandle, DesktopClientHolder),
+        start: impl FnOnce(DesktopClientStopHandle, DesktopClientHolder) -> std::thread::JoinHandle<()>,
     ) {
         let mut client = self
             .desktop_client
@@ -412,20 +418,19 @@ impl AttachCompanionState {
             return;
         }
         let stop = DesktopClientStopHandle::new();
-        *client = Some(stop.clone());
         let holder = self.desktop_client_holder.clone();
-        drop(client);
-        start(stop, holder);
+        let worker = start(stop.clone(), holder);
+        *client = Some(DesktopClientSupervisor { stop, worker });
     }
 
     fn stop_desktop_client(&self) {
-        if let Some(stop) = self
+        let mut client = self
             .desktop_client
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .take()
-        {
-            stop.stop();
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(supervisor) = client.take() {
+            supervisor.stop.stop();
+            let _ = supervisor.worker.join();
         }
         self.record_connected(false);
     }
@@ -488,13 +493,14 @@ impl Drop for AttachCompanionState {
         {
             stop.stop();
         }
-        if let Some(stop) = self
+        if let Some(supervisor) = self
             .desktop_client
             .get_mut()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .take()
         {
-            stop.stop();
+            supervisor.stop.stop();
+            let _ = supervisor.worker.join();
         }
     }
 }
@@ -826,7 +832,7 @@ fn start_desktop_client<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
                             .record_connected(connected);
                     },
                 );
-            });
+            })
         });
 }
 
@@ -1081,16 +1087,14 @@ mod tests {
 
         let state = AttachCompanionState::default();
         let starts = Arc::new(AtomicUsize::new(0));
-        let worker = Arc::new(Mutex::new(None));
         let endpoint = std::env::temp_dir().join(format!("mt-client-{}", Uuid::now_v7().simple()));
 
         for _ in 0..2 {
             let starts = starts.clone();
-            let worker = worker.clone();
             let endpoint = endpoint.clone();
             state.start_desktop_client(move |stop, holder| {
                 starts.fetch_add(1, Ordering::SeqCst);
-                *worker.lock().unwrap() = Some(std::thread::spawn(move || {
+                std::thread::spawn(move || {
                     serve_desktop_client_at(
                         &endpoint,
                         "0.0.1",
@@ -1100,7 +1104,7 @@ mod tests {
                         holder,
                         |_| {},
                     );
-                }));
+                })
             });
         }
 
@@ -1108,9 +1112,58 @@ mod tests {
         state.record_connected(true);
         assert!(state.listener_status().connected);
         state.record_listener_started();
-        worker.lock().unwrap().take().unwrap().join().unwrap();
         assert!(state.desktop_client.lock().unwrap().is_none());
         assert!(!state.listener_status().connected);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn desktop_client_stop_finishes_before_restart() {
+        use std::sync::mpsc;
+
+        let state = Arc::new(AttachCompanionState::default());
+        let (old_started, old_started_rx) = mpsc::channel();
+        let (release_old, release_old_rx) = mpsc::channel();
+        let old_state = state.clone();
+        state.start_desktop_client(move |_, _| {
+            std::thread::spawn(move || {
+                old_started.send(()).unwrap();
+                release_old_rx.recv().unwrap();
+                old_state.record_connected(false);
+            })
+        });
+        old_started_rx.recv().unwrap();
+        state.record_connected(true);
+
+        let stop_state = state.clone();
+        let stopper = std::thread::spawn(move || stop_state.record_listener_started());
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while state.desktop_client.try_lock().is_ok() {
+            assert!(
+                Instant::now() < deadline,
+                "desktop client stop did not start"
+            );
+            std::thread::yield_now();
+        }
+        let (new_started, new_started_rx) = mpsc::channel();
+        let restart_state = state.clone();
+        let restarter = std::thread::spawn(move || {
+            let new_state = restart_state.clone();
+            restart_state.start_desktop_client(move |_, _| {
+                std::thread::spawn(move || {
+                    new_state.record_connected(true);
+                    new_started.send(()).unwrap();
+                })
+            });
+        });
+
+        assert!(new_started_rx.try_recv().is_err());
+        release_old.send(()).unwrap();
+        stopper.join().unwrap();
+        restarter.join().unwrap();
+        new_started_rx.recv().unwrap();
+        assert!(state.listener_status().connected);
+        state.stop_desktop_client();
     }
 
     #[cfg(target_os = "linux")]
