@@ -13,7 +13,10 @@ use muniment_core::run_start::ActiveRun;
 use muniment_core::session_thread::SessionThread;
 
 use crate::service::{open_companion_registry, open_profile_storage};
-use crate::{compose_attach_service, AttachListenerInputs, RuntimeAttachBoundaries};
+use crate::{
+    compose_attach_service, installed_desktop_executable, AttachListenerInputs,
+    RuntimeAttachBoundaries,
+};
 
 /// Owns the state shared by all runtime attach connections.
 pub struct RuntimeAttachState {
@@ -93,6 +96,7 @@ impl RuntimeAttachState {
             companion_registry: &self.companion_registry,
             approval: self.approval.clone(),
             approvals: self.approvals.clone(),
+            expected_desktop_executable: installed_desktop_executable(),
         }
     }
 
