@@ -1,8 +1,8 @@
 #![cfg(all(target_os = "linux", feature = "client"))]
 
 use muniment_attach::{
-    authorized, connect_approval_presenter_at, connect_desktop_client_at, encode_frame,
-    handshake_approval_presenter_stream, handshake_desktop_client_stream,
+    authorized, connect_approval_presenter_at, connect_desktop_client, connect_desktop_client_at,
+    encode_frame, handshake_approval_presenter_stream, handshake_desktop_client_stream,
     handshake_migration_control_stream, handshake_stream, handshake_stream_with_credential,
     reconnect_welcome, welcome, ApprovalDecision, ApprovalPresenterServeOutcome, ClientError,
     ErrorAction, ErrorEnvelope, Event, EventName, Failure, Id, MigrationControlFailure,
@@ -18,12 +18,13 @@ use std::os::unix::ffi::{OsStrExt, OsStringExt};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::mpsc;
+use std::sync::{mpsc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
 const SHORT: Duration = Duration::from_millis(100);
 static NEXT_SOCKET: AtomicU64 = AtomicU64::new(0);
+static ENVIRONMENT: Mutex<()> = Mutex::new(());
 
 unsafe extern "C" {
     fn listen(socket: i32, backlog: i32) -> i32;
@@ -690,6 +691,34 @@ fn desktop_client_handshake_rejects_invalid_welcome_and_grant_fields() {
 }
 
 #[test]
+fn desktop_client_handshake_rejects_a_nonhex_capability() {
+    let (client, mut server) = UnixStream::pair().unwrap();
+    let worker = thread::spawn(move || {
+        read_client_frame(&mut server);
+        server
+            .write_all(&encode_frame(&reconnect_welcome(1, "0.0.1", "11".repeat(16), "")).unwrap())
+            .unwrap();
+        server
+            .write_all(
+                &encode_frame(&serde_json::json!({
+                    "profile_id": "profile-1",
+                    "capability": "g".repeat(64),
+                    "expires_at": 60,
+                    "idle_timeout_seconds": 30,
+                    "workspace_scopes": {"one": []},
+                }))
+                .unwrap(),
+            )
+            .unwrap();
+    });
+    assert_eq!(
+        handshake_desktop_client_stream(client, "0.0.1", SHORT).unwrap_err(),
+        ClientError::UnexpectedMessage
+    );
+    worker.join().unwrap();
+}
+
+#[test]
 fn desktop_client_sends_the_capability_and_checks_the_response_id() {
     for matching_id in [true, false] {
         let (client, mut server) = UnixStream::pair().unwrap();
@@ -747,6 +776,35 @@ fn desktop_client_connects_at_a_path() {
     );
     worker.join().unwrap();
     std::fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn desktop_client_connects_through_the_runtime_directory() {
+    let _environment = ENVIRONMENT.lock().unwrap();
+    let runtime = std::env::temp_dir().join(format!(
+        "muniment-client-runtime-test-{}-{}",
+        std::process::id(),
+        NEXT_SOCKET.fetch_add(1, Ordering::Relaxed)
+    ));
+    let attach_directory = runtime.join("muniment");
+    std::fs::create_dir_all(&attach_directory).unwrap();
+    let path = attach_directory.join("attach-v1.sock");
+    let listener = UnixListener::bind(&path).unwrap();
+    let previous_runtime = std::env::var_os("XDG_RUNTIME_DIR");
+    std::env::set_var("XDG_RUNTIME_DIR", &runtime);
+    let worker = thread::spawn(move || {
+        let (mut server, _) = listener.accept().unwrap();
+        complete_desktop_client_handshake(&mut server);
+    });
+
+    let client = connect_desktop_client("0.0.1");
+    match previous_runtime {
+        Some(value) => std::env::set_var("XDG_RUNTIME_DIR", value),
+        None => std::env::remove_var("XDG_RUNTIME_DIR"),
+    }
+    assert_eq!(client.unwrap().profile_id(), "profile-1");
+    worker.join().unwrap();
+    std::fs::remove_dir_all(runtime).unwrap();
 }
 
 #[test]
