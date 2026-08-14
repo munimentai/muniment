@@ -452,7 +452,7 @@ provenance, and `RuntimeAttachBoundaries`
 fixtures, the shared chat grant, the warm Pi stub staging, and the
 temporary-profile guard. Nothing in `main` calls any entry.
 
-DONE 2026-08-13 through 2026-08-14 — the whole attach seam is built on all three
+DONE 2026-08-13 through 2026-08-14 — the landed attach parts span all three
 sides (MUNIDESK-1188 through 1255). The core half sits under
 `src-tauri/core/src/attach/`, where `approval.rs`, `workspace_context.rs`,
 `peer_authority.rs`, `presenter_admission.rs`, `approval_present.rs`,
@@ -460,7 +460,7 @@ sides (MUNIDESK-1188 through 1255). The core half sits under
 `deadline_io.rs`, and `desktop_client_admission.rs` carry the signed workspace, the
 peer check, the presenter session, the connection route, the one deadline-bounded
 read and write helper set, and desktop client admission.
-`serve_desktop_client_session` (`src-tauri/core/src/attach/linux.rs:1851`) binds the
+`serve_desktop_client_session` (`src-tauri/core/src/attach/linux.rs:1852`) binds the
 client identity and refuses `migration.control` and `approval.present` without
 ending the session. `Operation::ApprovalPresent`
 (`src-tauri/attach/src/envelope.rs:277`) and the approval and desktop client files
@@ -483,7 +483,7 @@ The desktop half holds the clients. `ApprovalPresenterClient`
 (`src-tauri/src/attach_service.rs:361`) starts the presenter one. The shipped client
 completes its handshake, because `admit_desktop_client` sends the 900-second
 `CAPABILITY_IDLE_LIFETIME` ceiling the protocol names (MUNIDESK-1251). ADR 0012
-carries five attach amendments, and `THREAT_MODEL.md` records each. `thread.rename`
+carries six attach amendments, and `THREAT_MODEL.md` records each. `thread.rename`
 and `thread.delete` carry wire names and golden request fixtures (MUNIDESK-1255).
 
 MEASURED 2026-08-14 (sixty-ninth wave, planner, read every `Operation::ThreadRename`
