@@ -293,6 +293,26 @@ pub async fn chat_rename_thread(
     thread_id: String,
     title: String,
 ) -> Result<(), String> {
+    chat_rename_thread_with_state(
+        app_handle,
+        auth_state,
+        state,
+        #[cfg(target_os = "linux")]
+        attach_state,
+        thread_id,
+        title,
+    )
+    .await
+}
+
+async fn chat_rename_thread_with_state<R: tauri::Runtime>(
+    app_handle: tauri::AppHandle<R>,
+    auth_state: tauri::State<'_, auth::AuthState>,
+    state: tauri::State<'_, ChatState>,
+    #[cfg(target_os = "linux")] attach_state: tauri::State<'_, AttachCompanionState>,
+    thread_id: String,
+    title: String,
+) -> Result<(), String> {
     let tokens = auth::fresh_tokens(&auth_state, &app_handle)?;
     #[cfg(target_os = "linux")]
     return rename_thread_command(
@@ -319,6 +339,24 @@ pub async fn chat_rename_thread(
 #[tauri::command]
 pub async fn chat_delete_thread(
     app_handle: tauri::AppHandle,
+    auth_state: tauri::State<'_, auth::AuthState>,
+    state: tauri::State<'_, ChatState>,
+    #[cfg(target_os = "linux")] attach_state: tauri::State<'_, AttachCompanionState>,
+    thread_id: String,
+) -> Result<(), String> {
+    chat_delete_thread_with_state(
+        app_handle,
+        auth_state,
+        state,
+        #[cfg(target_os = "linux")]
+        attach_state,
+        thread_id,
+    )
+    .await
+}
+
+async fn chat_delete_thread_with_state<R: tauri::Runtime>(
+    app_handle: tauri::AppHandle<R>,
     auth_state: tauri::State<'_, auth::AuthState>,
     state: tauri::State<'_, ChatState>,
     #[cfg(target_os = "linux")] attach_state: tauri::State<'_, AttachCompanionState>,
@@ -425,24 +463,72 @@ mod tests {
         use std::io::{Read, Write};
         use std::os::unix::net::UnixListener;
         use std::sync::mpsc;
+        use tauri::Manager;
 
-        fn storage_with_thread() -> (SharedStorage, String, std::path::PathBuf) {
-            let directory =
-                std::env::temp_dir().join(format!("muniment-command-{}", Uuid::now_v7()));
-            std::fs::create_dir_all(&directory).unwrap();
-            let mut journal = RunJournal::open(directory.join("runs.sqlite3")).unwrap();
+        fn app_with_thread(
+            attach_state: AttachCompanionState,
+        ) -> (tauri::App<tauri::test::MockRuntime>, String) {
+            use muniment_core::attach::RuntimeActivityRegistry;
+            use muniment_core::auth::TokenSet;
+            use tauri::Manager;
+
+            let app = tauri::test::mock_app();
+            let runtime_activity = RuntimeActivityRegistry::new();
+            app.manage(auth::AuthState::with_test_tokens(
+                runtime_activity.clone(),
+                TokenSet {
+                    access_token: "token".into(),
+                    refresh_token: None,
+                    expires_at: None,
+                    subject: Some("owner".into()),
+                },
+            ));
+            app.manage(ChatState::new(app.handle(), runtime_activity).unwrap());
+            app.manage(attach_state);
             let run_id = Uuid::now_v7().to_string();
-            let thread_id = journal
+            let state = app.state::<ChatState>();
+            let thread_id = state
+                .storage
+                .lock()
+                .unwrap()
+                .journal
                 .append_new_run(
                     "workspace-a",
                     &event_envelope(&run_id, 1, "run.started", json!({}), Some("owner")),
                 )
                 .unwrap();
-            let storage = Arc::new(Mutex::new(ChatStorage {
-                journal,
-                cas: LocalCas::open(&directory.join("cas")).unwrap(),
-            }));
-            (storage, thread_id, directory)
+            drop(state);
+            (app, thread_id)
+        }
+
+        fn invoke_rename(
+            app: &tauri::App<tauri::test::MockRuntime>,
+            thread_id: &str,
+            title: &str,
+        ) -> Result<(), String> {
+            use tauri::Manager;
+            tauri::async_runtime::block_on(chat_rename_thread_with_state(
+                app.handle().clone(),
+                app.state(),
+                app.state(),
+                app.state(),
+                thread_id.into(),
+                title.into(),
+            ))
+        }
+
+        fn invoke_delete(
+            app: &tauri::App<tauri::test::MockRuntime>,
+            thread_id: &str,
+        ) -> Result<(), String> {
+            use tauri::Manager;
+            tauri::async_runtime::block_on(chat_delete_thread_with_state(
+                app.handle().clone(),
+                app.state(),
+                app.state(),
+                app.state(),
+                thread_id.into(),
+            ))
         }
 
         fn read_value(stream: &mut impl Read) -> Value {
@@ -453,18 +539,12 @@ mod tests {
             serde_json::from_slice(&payload).unwrap()
         }
 
-        let local_state = AttachCompanionState::default();
-        let (rename_storage, rename_id, rename_directory) = storage_with_thread();
-        rename_thread_command(
-            &rename_storage,
-            &local_state,
-            Some("owner"),
-            &rename_id,
-            "Renamed thread",
-        )
-        .unwrap();
+        let (rename_app, rename_id) = app_with_thread(AttachCompanionState::default());
+        invoke_rename(&rename_app, &rename_id, "Renamed thread").unwrap();
         assert_eq!(
-            rename_storage
+            rename_app
+                .state::<ChatState>()
+                .storage
                 .lock()
                 .unwrap()
                 .journal
@@ -473,17 +553,12 @@ mod tests {
                 .event_type,
             "thread.title.renamed"
         );
-        let (delete_storage, delete_id, delete_directory) = storage_with_thread();
-        delete_thread_command(
-            &delete_storage,
-            &SessionThread::default(),
-            &local_state,
-            Some("owner"),
-            &delete_id,
-        )
-        .unwrap();
+        let (delete_app, delete_id) = app_with_thread(AttachCompanionState::default());
+        invoke_delete(&delete_app, &delete_id).unwrap();
         assert_eq!(
-            delete_storage
+            delete_app
+                .state::<ChatState>()
+                .storage
                 .lock()
                 .unwrap()
                 .journal
@@ -558,25 +633,13 @@ mod tests {
         });
         connected_rx.recv_timeout(Duration::from_secs(1)).unwrap();
         live_state.set_desktop_client_for_test(true, |_, _| std::thread::spawn(|| {}));
-        let (live_storage, live_id, live_directory) = storage_with_thread();
-        rename_thread_command(
-            &live_storage,
-            &live_state,
-            Some("owner"),
-            &live_id,
-            "Remote title",
-        )
-        .unwrap();
-        delete_thread_command(
-            &live_storage,
-            &SessionThread::default(),
-            &live_state,
-            Some("owner"),
-            &live_id,
-        )
-        .unwrap();
+        let (live_app, live_id) = app_with_thread(live_state);
+        invoke_rename(&live_app, &live_id, "Remote title").unwrap();
+        invoke_delete(&live_app, &live_id).unwrap();
         assert_eq!(
-            live_storage
+            live_app
+                .state::<ChatState>()
+                .storage
                 .lock()
                 .unwrap()
                 .journal
@@ -596,26 +659,16 @@ mod tests {
                 (json!("thread.delete"), json!({"thread_id": live_id})),
             ]
         );
-        live_state.stop_desktop_client_for_test();
+        live_app
+            .state::<AttachCompanionState>()
+            .stop_desktop_client_for_test();
 
         let disconnected_state = AttachCompanionState::default();
         disconnected_state.set_desktop_client_for_test(false, |_, _| std::thread::spawn(|| {}));
-        let (disconnected_storage, disconnected_id, disconnected_directory) = storage_with_thread();
+        let (disconnected_app, disconnected_id) = app_with_thread(disconnected_state);
         for result in [
-            rename_thread_command(
-                &disconnected_storage,
-                &disconnected_state,
-                Some("owner"),
-                &disconnected_id,
-                "title",
-            ),
-            delete_thread_command(
-                &disconnected_storage,
-                &SessionThread::default(),
-                &disconnected_state,
-                Some("owner"),
-                &disconnected_id,
-            ),
+            invoke_rename(&disconnected_app, &disconnected_id, "title"),
+            invoke_delete(&disconnected_app, &disconnected_id),
         ] {
             assert_eq!(
                 result.unwrap_err(),
@@ -623,7 +676,9 @@ mod tests {
             );
         }
         assert_eq!(
-            disconnected_storage
+            disconnected_app
+                .state::<ChatState>()
+                .storage
                 .lock()
                 .unwrap()
                 .journal
@@ -632,43 +687,24 @@ mod tests {
                 .len(),
             1
         );
-        disconnected_state.stop_desktop_client_for_test();
+        disconnected_app
+            .state::<AttachCompanionState>()
+            .stop_desktop_client_for_test();
 
         for rename in [true, false] {
-            let (storage, thread_id, directory) = storage_with_thread();
-            let poisoned = Arc::clone(&storage);
+            let (app, thread_id) = app_with_thread(AttachCompanionState::default());
+            let poisoned = Arc::clone(&app.state::<ChatState>().storage);
             let _ = std::thread::spawn(move || {
                 let _guard = poisoned.lock().unwrap();
                 panic!("poison journal lock");
             })
             .join();
             let result = if rename {
-                rename_thread_command(&storage, &local_state, Some("owner"), &thread_id, "title")
+                invoke_rename(&app, &thread_id, "title")
             } else {
-                delete_thread_command(
-                    &storage,
-                    &SessionThread::default(),
-                    &local_state,
-                    Some("owner"),
-                    &thread_id,
-                )
+                invoke_delete(&app, &thread_id)
             };
             assert_eq!(result.unwrap_err(), "Conversation history is unavailable.");
-            drop(storage);
-            std::fs::remove_dir_all(directory).unwrap();
-        }
-
-        drop(rename_storage);
-        drop(delete_storage);
-        drop(live_storage);
-        drop(disconnected_storage);
-        for directory in [
-            rename_directory,
-            delete_directory,
-            live_directory,
-            disconnected_directory,
-        ] {
-            std::fs::remove_dir_all(directory).unwrap();
         }
         let _ = std::fs::remove_file(endpoint);
     }

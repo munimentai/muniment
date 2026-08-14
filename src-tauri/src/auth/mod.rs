@@ -31,6 +31,8 @@ pub struct AuthState {
     sign_in_running: Arc<AtomicBool>,
     entitlement_snapshot_tracker: EntitlementSnapshotTracker,
     runtime_activity: RuntimeActivityRegistry,
+    #[cfg(test)]
+    test_tokens: Option<muniment_core::auth::TokenSet>,
 }
 
 #[derive(Clone, Copy, Serialize)]
@@ -61,6 +63,10 @@ pub(crate) fn fresh_tokens<R: tauri::Runtime>(
     state: &AuthState,
     app: &tauri::AppHandle<R>,
 ) -> Result<muniment_core::auth::TokenSet, String> {
+    #[cfg(test)]
+    if let Some(tokens) = &state.test_tokens {
+        return Ok(tokens.clone());
+    }
     let result = state.marked_refresh_blocking(state.native_store.as_ref())?;
     observe_snapshot(state, app, &result)?;
     result
@@ -91,7 +97,19 @@ impl AuthState {
             sign_in_running: Arc::new(AtomicBool::new(false)),
             entitlement_snapshot_tracker: EntitlementSnapshotTracker::new(),
             runtime_activity,
+            #[cfg(test)]
+            test_tokens: None,
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn with_test_tokens(
+        runtime_activity: RuntimeActivityRegistry,
+        tokens: muniment_core::auth::TokenSet,
+    ) -> Self {
+        let mut state = Self::new(runtime_activity);
+        state.test_tokens = Some(tokens);
+        state
     }
 
     /// Marks a sign-in or a sign-out until the returned guard drops.
