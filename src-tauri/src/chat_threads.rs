@@ -43,14 +43,47 @@ fn thread_ownership_error_message(_error: ThreadOwnershipError) -> String {
 }
 
 #[cfg(target_os = "linux")]
-fn route_thread_write(
-    session: DesktopClientSession,
-    remote: impl FnOnce(&muniment_core::attach::DesktopClientHolder) -> Result<(), String>,
-    local: impl FnOnce() -> Result<(), String>,
+fn rename_thread_command(
+    storage: &SharedStorage,
+    attach_state: &AttachCompanionState,
+    subject: Option<&str>,
+    thread_id: &str,
+    title: &str,
 ) -> Result<(), String> {
-    match session {
-        DesktopClientSession::NoSupervisor => local(),
-        DesktopClientSession::Connected(client) => remote(&client),
+    match attach_state.desktop_client_session() {
+        DesktopClientSession::NoSupervisor => {
+            let mut storage = storage
+                .lock()
+                .map_err(|_| "Conversation history is unavailable.".to_string())?;
+            rename_thread(&mut storage.journal, subject, thread_id, title)
+        }
+        DesktopClientSession::Connected(client) => client
+            .rename_thread(thread_id, title)
+            .map_err(|_| "Muniment cannot reach its background service.".to_string()),
+        DesktopClientSession::Disconnected => {
+            Err("Muniment cannot reach its background service.".into())
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn delete_thread_command(
+    storage: &SharedStorage,
+    session_thread: &SessionThread,
+    attach_state: &AttachCompanionState,
+    subject: Option<&str>,
+    thread_id: &str,
+) -> Result<(), String> {
+    match attach_state.desktop_client_session() {
+        DesktopClientSession::NoSupervisor => {
+            let mut storage = storage
+                .lock()
+                .map_err(|_| "Conversation history is unavailable.".to_string())?;
+            delete_thread(&mut storage.journal, session_thread, subject, thread_id)
+        }
+        DesktopClientSession::Connected(client) => client
+            .delete_thread(thread_id)
+            .map_err(|_| "Muniment cannot reach its background service.".to_string()),
         DesktopClientSession::Disconnected => {
             Err("Muniment cannot reach its background service.".into())
         }
@@ -262,25 +295,12 @@ pub async fn chat_rename_thread(
 ) -> Result<(), String> {
     let tokens = auth::fresh_tokens(&auth_state, &app_handle)?;
     #[cfg(target_os = "linux")]
-    return route_thread_write(
-        attach_state.desktop_client_session(),
-        |client| {
-            client
-                .rename_thread(&thread_id, &title)
-                .map_err(|_| "Muniment cannot reach its background service.".to_string())
-        },
-        || {
-            let mut storage = state
-                .storage
-                .lock()
-                .map_err(|_| "Conversation history is unavailable.".to_string())?;
-            rename_thread(
-                &mut storage.journal,
-                tokens.subject.as_deref(),
-                &thread_id,
-                &title,
-            )
-        },
+    return rename_thread_command(
+        &state.storage,
+        &attach_state,
+        tokens.subject.as_deref(),
+        &thread_id,
+        &title,
     );
     #[cfg(not(target_os = "linux"))]
     let mut storage = state
@@ -306,25 +326,12 @@ pub async fn chat_delete_thread(
 ) -> Result<(), String> {
     let tokens = auth::fresh_tokens(&auth_state, &app_handle)?;
     #[cfg(target_os = "linux")]
-    return route_thread_write(
-        attach_state.desktop_client_session(),
-        |client| {
-            client
-                .delete_thread(&thread_id)
-                .map_err(|_| "Muniment cannot reach its background service.".to_string())
-        },
-        || {
-            let mut storage = state
-                .storage
-                .lock()
-                .map_err(|_| "Conversation history is unavailable.".to_string())?;
-            delete_thread(
-                &mut storage.journal,
-                &state.session_thread,
-                tokens.subject.as_deref(),
-                &thread_id,
-            )
-        },
+    return delete_thread_command(
+        &state.storage,
+        &state.session_thread,
+        &attach_state,
+        tokens.subject.as_deref(),
+        &thread_id,
     );
     #[cfg(not(target_os = "linux"))]
     let mut storage = state
@@ -410,54 +417,260 @@ mod tests {
 
     #[cfg(target_os = "linux")]
     #[test]
-    fn thread_writes_route_both_commands_for_each_desktop_client_state() {
-        use std::cell::Cell;
+    fn thread_commands_cover_each_desktop_client_state() {
+        use muniment_core::attach::{
+            encode_frame, reconnect_welcome, serve_desktop_client_at, Id, Protocol, Response,
+            Success,
+        };
+        use std::io::{Read, Write};
+        use std::os::unix::net::UnixListener;
+        use std::sync::mpsc;
 
-        for command in ["rename", "delete"] {
-            for (session, expected_remote, expected_local, expected_error) in [
-                (DesktopClientSession::NoSupervisor, 0, 1, None),
-                (
-                    DesktopClientSession::Connected(
-                        muniment_core::attach::DesktopClientHolder::new(),
-                    ),
-                    1,
-                    0,
-                    None,
-                ),
-                (
-                    DesktopClientSession::Disconnected,
-                    0,
-                    0,
-                    Some("Muniment cannot reach its background service."),
-                ),
-            ] {
-                let remote_calls = Cell::new(0);
-                let local_calls = Cell::new(0);
-                let result = route_thread_write(
-                    session,
-                    |_| {
-                        remote_calls.set(remote_calls.get() + 1);
-                        Ok(())
-                    },
-                    || {
-                        local_calls.set(local_calls.get() + 1);
-                        Ok(())
-                    },
-                );
-
-                assert_eq!(remote_calls.get(), expected_remote, "{command}");
-                assert_eq!(local_calls.get(), expected_local, "{command}");
-                assert_eq!(result.err().as_deref(), expected_error, "{command}");
-            }
+        fn storage_with_thread() -> (SharedStorage, String, std::path::PathBuf) {
+            let directory =
+                std::env::temp_dir().join(format!("muniment-command-{}", Uuid::now_v7()));
+            std::fs::create_dir_all(&directory).unwrap();
+            let mut journal = RunJournal::open(directory.join("runs.sqlite3")).unwrap();
+            let run_id = Uuid::now_v7().to_string();
+            let thread_id = journal
+                .append_new_run(
+                    "workspace-a",
+                    &event_envelope(&run_id, 1, "run.started", json!({}), Some("owner")),
+                )
+                .unwrap();
+            let storage = Arc::new(Mutex::new(ChatStorage {
+                journal,
+                cas: LocalCas::open(&directory.join("cas")).unwrap(),
+            }));
+            (storage, thread_id, directory)
         }
 
-        let error = route_thread_write(
-            DesktopClientSession::NoSupervisor,
-            |_| Ok(()),
-            || Err("Conversation history is unavailable.".into()),
+        fn read_value(stream: &mut impl Read) -> Value {
+            let mut length = [0; 4];
+            stream.read_exact(&mut length).unwrap();
+            let mut payload = vec![0; u32::from_be_bytes(length) as usize];
+            stream.read_exact(&mut payload).unwrap();
+            serde_json::from_slice(&payload).unwrap()
+        }
+
+        let local_state = AttachCompanionState::default();
+        let (rename_storage, rename_id, rename_directory) = storage_with_thread();
+        rename_thread_command(
+            &rename_storage,
+            &local_state,
+            Some("owner"),
+            &rename_id,
+            "Renamed thread",
         )
-        .unwrap_err();
-        assert_eq!(error, "Conversation history is unavailable.");
+        .unwrap();
+        assert_eq!(
+            rename_storage
+                .lock()
+                .unwrap()
+                .journal
+                .thread_events(&rename_id)
+                .unwrap()[1]
+                .event_type,
+            "thread.title.renamed"
+        );
+        let (delete_storage, delete_id, delete_directory) = storage_with_thread();
+        delete_thread_command(
+            &delete_storage,
+            &SessionThread::default(),
+            &local_state,
+            Some("owner"),
+            &delete_id,
+        )
+        .unwrap();
+        assert_eq!(
+            delete_storage
+                .lock()
+                .unwrap()
+                .journal
+                .thread_events(&delete_id)
+                .unwrap()[1]
+                .event_type,
+            "thread.deleted"
+        );
+
+        let endpoint =
+            std::env::temp_dir().join(format!("muniment-client-{}.sock", Uuid::now_v7()));
+        let listener = UnixListener::bind(&endpoint).unwrap();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            assert_eq!(read_value(&mut stream)["client"]["kind"], "desktop-client");
+            stream
+                .write_all(
+                    &encode_frame(&reconnect_welcome(1, "0.0.1", "11".repeat(16), "")).unwrap(),
+                )
+                .unwrap();
+            stream
+                .write_all(
+                    &encode_frame(&json!({
+                        "profile_id": "profile-1",
+                        "capability": "33".repeat(32),
+                        "expires_at": 60,
+                        "idle_timeout_seconds": 30,
+                        "workspace_scopes": {"/work/signed": ["threads:read"]}
+                    }))
+                    .unwrap(),
+                )
+                .unwrap();
+            let mut requests = Vec::new();
+            for _ in 0..2 {
+                let request = read_value(&mut stream);
+                requests.push((request["operation"].clone(), request["body"].clone()));
+                let request_id = Id::new(request["request_id"].as_str().unwrap()).unwrap();
+                stream
+                    .write_all(
+                        &encode_frame(&Response {
+                            protocol: Protocol,
+                            request_id,
+                            ok: Success,
+                            body: json!({}),
+                        })
+                        .unwrap(),
+                    )
+                    .unwrap();
+            }
+            requests
+        });
+        let live_state = AttachCompanionState::default();
+        let client_endpoint = endpoint.clone();
+        let (connected_tx, connected_rx) = mpsc::channel();
+        live_state.set_desktop_client_for_test(false, move |stop, holder| {
+            std::thread::spawn(move || {
+                let mut connected_tx = Some(connected_tx);
+                serve_desktop_client_at(
+                    &client_endpoint,
+                    "0.0.1",
+                    Duration::from_secs(1),
+                    Duration::from_millis(10),
+                    stop,
+                    holder,
+                    move |connected| {
+                        if connected {
+                            connected_tx.take().unwrap().send(()).unwrap();
+                        }
+                    },
+                )
+            })
+        });
+        connected_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        live_state.set_desktop_client_for_test(true, |_, _| std::thread::spawn(|| {}));
+        let (live_storage, live_id, live_directory) = storage_with_thread();
+        rename_thread_command(
+            &live_storage,
+            &live_state,
+            Some("owner"),
+            &live_id,
+            "Remote title",
+        )
+        .unwrap();
+        delete_thread_command(
+            &live_storage,
+            &SessionThread::default(),
+            &live_state,
+            Some("owner"),
+            &live_id,
+        )
+        .unwrap();
+        assert_eq!(
+            live_storage
+                .lock()
+                .unwrap()
+                .journal
+                .thread_events(&live_id)
+                .unwrap()
+                .len(),
+            1
+        );
+        let requests = server.join().unwrap();
+        assert_eq!(
+            requests,
+            vec![
+                (
+                    json!("thread.rename"),
+                    json!({"thread_id": live_id, "title": "Remote title"})
+                ),
+                (json!("thread.delete"), json!({"thread_id": live_id})),
+            ]
+        );
+        live_state.stop_desktop_client_for_test();
+
+        let disconnected_state = AttachCompanionState::default();
+        disconnected_state.set_desktop_client_for_test(false, |_, _| std::thread::spawn(|| {}));
+        let (disconnected_storage, disconnected_id, disconnected_directory) = storage_with_thread();
+        for result in [
+            rename_thread_command(
+                &disconnected_storage,
+                &disconnected_state,
+                Some("owner"),
+                &disconnected_id,
+                "title",
+            ),
+            delete_thread_command(
+                &disconnected_storage,
+                &SessionThread::default(),
+                &disconnected_state,
+                Some("owner"),
+                &disconnected_id,
+            ),
+        ] {
+            assert_eq!(
+                result.unwrap_err(),
+                "Muniment cannot reach its background service."
+            );
+        }
+        assert_eq!(
+            disconnected_storage
+                .lock()
+                .unwrap()
+                .journal
+                .thread_events(&disconnected_id)
+                .unwrap()
+                .len(),
+            1
+        );
+        disconnected_state.stop_desktop_client_for_test();
+
+        for rename in [true, false] {
+            let (storage, thread_id, directory) = storage_with_thread();
+            let poisoned = Arc::clone(&storage);
+            let _ = std::thread::spawn(move || {
+                let _guard = poisoned.lock().unwrap();
+                panic!("poison journal lock");
+            })
+            .join();
+            let result = if rename {
+                rename_thread_command(&storage, &local_state, Some("owner"), &thread_id, "title")
+            } else {
+                delete_thread_command(
+                    &storage,
+                    &SessionThread::default(),
+                    &local_state,
+                    Some("owner"),
+                    &thread_id,
+                )
+            };
+            assert_eq!(result.unwrap_err(), "Conversation history is unavailable.");
+            drop(storage);
+            std::fs::remove_dir_all(directory).unwrap();
+        }
+
+        drop(rename_storage);
+        drop(delete_storage);
+        drop(live_storage);
+        drop(disconnected_storage);
+        for directory in [
+            rename_directory,
+            delete_directory,
+            live_directory,
+            disconnected_directory,
+        ] {
+            std::fs::remove_dir_all(directory).unwrap();
+        }
+        let _ = std::fs::remove_file(endpoint);
     }
 
     #[test]
