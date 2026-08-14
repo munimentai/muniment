@@ -284,12 +284,13 @@ pub async fn chat_select_thread(
     )
 }
 
+#[cfg(target_os = "linux")]
 #[tauri::command]
 pub async fn chat_rename_thread(
     app_handle: tauri::AppHandle,
     auth_state: tauri::State<'_, auth::AuthState>,
     state: tauri::State<'_, ChatState>,
-    #[cfg(target_os = "linux")] attach_state: tauri::State<'_, AttachCompanionState>,
+    attach_state: tauri::State<'_, AttachCompanionState>,
     thread_id: String,
     title: String,
 ) -> Result<(), String> {
@@ -297,12 +298,23 @@ pub async fn chat_rename_thread(
         app_handle,
         auth_state,
         state,
-        #[cfg(target_os = "linux")]
         attach_state,
         thread_id,
         title,
     )
     .await
+}
+
+#[cfg(not(target_os = "linux"))]
+#[tauri::command]
+pub async fn chat_rename_thread(
+    app_handle: tauri::AppHandle,
+    auth_state: tauri::State<'_, auth::AuthState>,
+    state: tauri::State<'_, ChatState>,
+    thread_id: String,
+    title: String,
+) -> Result<(), String> {
+    chat_rename_thread_with_state(app_handle, auth_state, state, thread_id, title).await
 }
 
 async fn chat_rename_thread_with_state<R: tauri::Runtime>(
@@ -336,23 +348,27 @@ async fn chat_rename_thread_with_state<R: tauri::Runtime>(
     );
 }
 
+#[cfg(target_os = "linux")]
 #[tauri::command]
 pub async fn chat_delete_thread(
     app_handle: tauri::AppHandle,
     auth_state: tauri::State<'_, auth::AuthState>,
     state: tauri::State<'_, ChatState>,
-    #[cfg(target_os = "linux")] attach_state: tauri::State<'_, AttachCompanionState>,
+    attach_state: tauri::State<'_, AttachCompanionState>,
     thread_id: String,
 ) -> Result<(), String> {
-    chat_delete_thread_with_state(
-        app_handle,
-        auth_state,
-        state,
-        #[cfg(target_os = "linux")]
-        attach_state,
-        thread_id,
-    )
-    .await
+    chat_delete_thread_with_state(app_handle, auth_state, state, attach_state, thread_id).await
+}
+
+#[cfg(not(target_os = "linux"))]
+#[tauri::command]
+pub async fn chat_delete_thread(
+    app_handle: tauri::AppHandle,
+    auth_state: tauri::State<'_, auth::AuthState>,
+    state: tauri::State<'_, ChatState>,
+    thread_id: String,
+) -> Result<(), String> {
+    chat_delete_thread_with_state(app_handle, auth_state, state, thread_id).await
 }
 
 async fn chat_delete_thread_with_state<R: tauri::Runtime>(
