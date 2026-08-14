@@ -356,3 +356,30 @@ While presenting, the desktop asks the user through the same visible pairing
 prompt that its local listener uses. The runtime still applies the admission,
 routing, single-presenter, and decision rules from the two 2026-08-13
 amendments.
+
+## Amendment – 2026-08-14: desktop client session admission
+
+The converted desktop opens a second `muniment.attach/1` connection whose
+first hello claims the client kind `desktop-client`. On Linux, the runtime
+routes that connection to a dedicated desktop client session only when its
+`SO_PEERCRED` peer PID resolves to the installed desktop payload. A connection
+from that payload whose first hello claims `desktop` still takes the presenter
+route. A `desktop-handoff-probe` claim still keeps the readiness answer. Every
+other connection still takes the companion route.
+
+The peer check is the only admission authority. Neither visible approval nor
+a stored companion credential applies. A claimed kind, client ID, or reconnect
+credential grants no authority without the peer check.
+
+The desktop client session carries owner authority over the signed
+`grant.workspace` value, including its workspace, thread, run, permission, and
+subscription authority. It carries neither migration control nor approval
+presentation. The session ends with the connection and cannot authorize a
+later connection.
+
+Admission fails closed when the runtime cannot resolve the peer or cannot
+match its executable to the installed payload. This admission proves only the
+installed desktop payload under the same OS user. It does not defend against
+compromise by another process running as that user. Windows and macOS need
+their own peer-identity amendments before they can admit a desktop client
+session.
