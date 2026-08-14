@@ -486,30 +486,38 @@ completes its handshake, because `admit_desktop_client` sends the 900-second
 carries six attach amendments, and `THREAT_MODEL.md` records each. `thread.rename`
 and `thread.delete` carry wire names and golden request fixtures (MUNIDESK-1255).
 
-MEASURED 2026-08-14 (sixty-ninth wave, planner, read every `Operation::ThreadRename`
-call site) — the wire names both thread mutations and no code serves them.
-`dispatch_request` (`src-tauri/core/src/attach/linux.rs:2611`) answers
-`unsupported_operation` for `Operation::ThreadRename` and `Operation::ThreadDelete`,
-and the companion scope table (`:2149`) still maps both to `run.write`. The ADR 0012
-operation surface amendment makes both desktop-only, so the companion route owes an
-`unauthorized` answer instead. `ThreadListService` (`:852`) defaults every optional
-method to `unsupported_operation`, so the seam takes two new methods without
-touching another implementation.
+DONE 2026-08-14 — all five sixty-ninth-wave attach slices landed
+(MUNIDESK-1257 through 1261). The desktop starts and stops its desktop client
+supervisor. Dispatch serves `thread.rename` and `thread.delete` for a desktop client
+and refuses both for a companion. The client exposes both operations as typed
+methods. A runtime test holds the presenter and desktop client sessions at once.
+ADR 0012 and `THREAT_MODEL.md` name the second desktop client operation tranche.
 
-MEASURED 2026-08-14 (sixty-ninth wave, planner, read every `serve_desktop_client_at`
-call site) — the desktop starts no client supervisor.
-`src-tauri/src/attach_service.rs` starts the approval presenter after a confirmed
-handoff probe and after a held instance lock, then stops it when the listener
-starts. It holds no `DesktopClientStopHandle` and no `DesktopClientHolder`, so a
-converted desktop dials the runtime in tests alone.
+MEASURED 2026-08-14 (seventieth wave, planner, read the thread mutation dispatch
+beside both service implementations) — dispatch reaches only the default
+`ThreadListService` mutation methods. `DesktopAttachService` implements neither
+method, so both the desktop and runtime services still answer
+`unsupported_operation`. The core service must own the idempotency ledger before
+either boundaries implementation can run the existing thread mutation code.
 
-MEASURED 2026-08-14 (sixty-ninth wave, planner, read the runtime listener tests) —
-no test holds a presenter connection and a desktop client connection at once.
-`desktop_client_lists_threads_without_a_presenter`
-(`src-tauri/runtime/tests/attach_listener.rs:214`) proves one route, and
-`companion_pairs_through_the_desktop_presenter` (`:447`) proves the other. The
-production desktop holds both from one process as soon as it starts its client
-supervisor.
+The runtime boundaries also expose neither mutation. They must call the dormant
+runtime service entries after the core service adds both methods.
+
+MEASURED 2026-08-14 (seventieth wave, planner, read both desktop thread commands) —
+`chat_rename_thread` and `chat_delete_thread` still write through the desktop
+journal, and the desktop boundaries expose neither mutation. Neither command reads
+the connected `DesktopClientHolder`, so the runtime cannot own either write after
+handoff.
+
+MEASURED 2026-08-14 (seventieth wave, planner, read the desktop client status
+call sites) — the supervisor records whether it holds a connection, but the app
+does not read that state. A desktop with no client session can still show an empty
+surface instead of the existing server-unreachable notice required by ADR 0012.
+
+MEASURED 2026-08-14 (seventieth wave, planner, compared `Operation` with the ADR
+0012 second tranche) — the wire names none of `session.status`,
+`entitlement.snapshot`, `device.list`, `session.sign_out`, `companion.list`, or
+`companion.revoke`. Their fixtures, authorization, and dispatch are also absent.
 
 MEASURED 2026-08-14 (sixty-seventh wave, planner, read every
 `MigrationControlAuthorized` construction) — one frame type names three different
@@ -576,31 +584,25 @@ projector always holds state there. A test seam would also prove nothing, becaus
 projector rejects that event too. The lane re-opens this only against a new
 failure route.
 
-MERGE HAZARD — the sixty-ninth wave puts slice 1 in
-`src-tauri/src/attach_service.rs`, slice 2 in `src-tauri/core/src/attach/linux.rs`
-and `src-tauri/core/tests/attach_linux_session.rs`, slice 3 in
-`src-tauri/attach/src/client.rs` and `src-tauri/attach/tests/client_linux.rs`,
-slice 4 in `src-tauri/runtime/tests/attach_desktop_client.rs`, and slice 5 in
-`docs/decisions/0012-user-level-runtime-service.md` and `THREAT_MODEL.md`. No two
-slices share a file. Each ticket still tells the implementer to rebase on `main`
-before it opens the pull request. The 2026-08-04 silent revert came from a stale
-base.
+MERGE HAZARD — the seventieth wave puts slice 1 in
+`src-tauri/core/src/attach/desktop_service.rs`. Slice 2 takes
+`src-tauri/runtime/src/attach_boundaries.rs`. Slice 3 takes `src-tauri/src/chat.rs`
+and `src-tauri/src/chat_threads.rs`. Slice 4 takes the desktop status surface.
+Slice 5 takes the attach wire, fixtures, and dispatch. No two slices share a file.
+Each ticket still tells the implementer to rebase on `main` before it opens the
+pull request. The 2026-08-04 silent revert came from a stale base.
 
-SELECTED 2026-08-14 (sixty-ninth wave) — five slices in priority order.
+SELECTED 2026-08-14 (seventieth wave) — five slices in priority order.
 
-1. The desktop client supervisor the desktop starts and stops.
-2. The `thread.rename` and `thread.delete` dispatch, refused for a companion.
-3. The typed `thread.rename` and `thread.delete` pair on the desktop client.
-4. The proof that a presenter session and a desktop client session run at once.
-5. The ADR 0012 amendment that names the second desktop client operation tranche.
+1. The `DesktopAttachService` thread mutation methods and idempotency ledger.
+2. The runtime boundaries implementation for both thread mutations.
+3. The desktop boundaries and commands moved onto the desktop client connection.
+4. The server-unreachable notice when the desktop holds no client session.
+5. The second-tranche wire names, fixtures, authorization, and dispatch.
 
-SEQUENCED 2026-08-14 (sixty-ninth wave) — the `DesktopAttachService` half of the two
-thread mutations follows slice 2, and it carries the idempotency ledger the way
-`create_thread` does. The runtime boundaries implementation follows that half. The
-desktop `chat_rename_thread` and `chat_delete_thread` commands move onto the client
-connection after slices 1, 2, and 3. The server-unreachable notice for a desktop
-that holds no client session follows slice 1. The second tranche takes its wire
-names, its fixtures, and its dispatch after slice 5. Linux user-unit registration
+SEQUENCED 2026-08-14 (seventieth wave) — slices 2 and 3 follow slice 1. Slice 4
+follows slice 3, when every thread mutation can use the connection state. Typed
+client methods for the second tranche follow slice 5. Linux user-unit registration
 follows them all. The final cutover slice activates the listener, approval
 coordinator, journal, CAS, Pi, device session, credentials, authorization, and
 permission gates together, and it gives the runtime service its own signed
