@@ -1848,6 +1848,113 @@ fn run_migration_control_session<S: ThreadListService>(
     }
 }
 
+/// Serves requests authorized by an admitted desktop client capability.
+pub fn serve_desktop_client_session<S: ThreadListService>(
+    mut stream: UnixStream,
+    capability: &str,
+    workspace: &str,
+    service: &mut S,
+) -> Result<(), AttachSessionError> {
+    let result = serve_desktop_client_requests(&mut stream, capability, workspace, service);
+    let _ = stream.shutdown(std::net::Shutdown::Both);
+    result
+}
+
+fn serve_desktop_client_requests<S: ThreadListService>(
+    stream: &mut UnixStream,
+    capability: &str,
+    workspace: &str,
+    service: &mut S,
+) -> Result<(), AttachSessionError> {
+    let provenance = CompanionProvenance {
+        profile: String::new(),
+        companion_kind: "desktop-client".into(),
+        companion_version: String::new(),
+        peer_uid: 0,
+        peer_pid: 0,
+    };
+    let mut subscriptions = Vec::new();
+    loop {
+        let live_events = match poll_run_streams(service, &mut subscriptions) {
+            Ok(events) => events,
+            Err(error) => {
+                write_protocol_error(stream, error, Instant::now() + HELLO_TIMEOUT);
+                return Err(AttachSessionError::Closed);
+            }
+        };
+        for event in live_events {
+            let frame = encode_frame(&event).map_err(|_| AttachSessionError::MalformedFrame)?;
+            write_before(stream, &frame, Instant::now() + HELLO_TIMEOUT)?;
+        }
+
+        match wait_until_readable(stream, Instant::now() + Duration::from_millis(50)) {
+            Ok(()) => {}
+            Err(AttachSessionError::Closed) => return Ok(()),
+            Err(AttachSessionError::Timeout) => continue,
+            Err(error) => return Err(error),
+        }
+        let deadline = Instant::now() + HELLO_TIMEOUT;
+        let request = match read_request_before(stream, deadline) {
+            Ok(request) => request,
+            Err(AttachSessionError::Closed) => return Ok(()),
+            Err(error) => return Err(error),
+        };
+        let request_id = request.request_id.clone();
+        if request.capability != capability
+            || matches!(
+                request.operation,
+                Operation::MigrationControl | Operation::ApprovalPresent
+            )
+        {
+            write_request_error(
+                stream,
+                Some(request_id),
+                ProtocolError::unauthorized(),
+                deadline,
+            );
+            continue;
+        }
+        match dispatch_request(
+            request,
+            workspace,
+            provenance.clone(),
+            service,
+            &mut subscriptions,
+        ) {
+            Ok(dispatched) => {
+                let response = Response {
+                    protocol: Protocol,
+                    request_id,
+                    ok: Success,
+                    body: dispatched.body,
+                };
+                write_before(
+                    stream,
+                    &encode_frame(&response).map_err(|_| AttachSessionError::MalformedFrame)?,
+                    deadline,
+                )?;
+                for event in dispatched.events {
+                    write_before(
+                        stream,
+                        &encode_frame(&event).map_err(|_| AttachSessionError::MalformedFrame)?,
+                        deadline,
+                    )?;
+                }
+            }
+            Err(failure) => {
+                write_request_error(stream, Some(request_id), failure.error, deadline);
+                for event in failure.events {
+                    write_before(
+                        stream,
+                        &encode_frame(&event).map_err(|_| AttachSessionError::MalformedFrame)?,
+                        deadline,
+                    )?;
+                }
+            }
+        }
+    }
+}
+
 fn read_request_before(
     stream: &mut UnixStream,
     deadline: Instant,

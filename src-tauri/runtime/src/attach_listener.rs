@@ -9,11 +9,11 @@ use std::time::Duration;
 
 use muniment_core::attach::linux::{
     approval_waiter_with_claims, run_authenticated_session_with_service_approvals_and_registry,
-    ApprovalDecision, AttachAcceptError, AttachFilesystem, AttachTransport, InstanceLock,
-    ThreadListService,
+    serve_desktop_client_session, ApprovalDecision, AttachAcceptError, AttachFilesystem,
+    AttachTransport, InstanceLock, ThreadListService,
 };
 use muniment_core::attach::{
-    admit_approval_presenter, bounded_claim, name_attach_connection_route,
+    admit_approval_presenter, admit_desktop_client, bounded_claim, name_attach_connection_route,
     serve_approval_presenter, ApprovalCoordinator, ApprovalPresenterConnection, ApprovalRequest,
     AttachConnectionRoute, CompanionRegistry, SignedWorkspaceApproval,
 };
@@ -162,7 +162,36 @@ where
                         session.wait_until_closed();
                         return;
                     }
-                    AttachConnectionRoute::DesktopClient => return,
+                    AttachConnectionRoute::DesktopClient => {
+                        let expected_desktop_executable = expected_desktop_executable
+                            .as_ref()
+                            .expect("the desktop client route has an expected executable");
+                        let Some(desktop_approval) = approval.approval() else {
+                            return;
+                        };
+                        let workspace = desktop_approval.workspace.clone();
+                        let Ok((stream, capability)) = admit_desktop_client(
+                            stream,
+                            credentials,
+                            expected_desktop_executable,
+                            &ProcReader,
+                            env!("CARGO_PKG_VERSION"),
+                            desktop_approval,
+                            PRESENTER_ADMISSION_TIMEOUT,
+                        ) else {
+                            return;
+                        };
+                        let Ok(mut service) = service_factory() else {
+                            return;
+                        };
+                        let _ = serve_desktop_client_session(
+                            stream,
+                            &capability,
+                            &workspace,
+                            &mut service,
+                        );
+                        return;
+                    }
                     AttachConnectionRoute::Companion => {}
                 }
                 let Ok(mut service) = service_factory() else {
