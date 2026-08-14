@@ -97,7 +97,7 @@
       if (poll !== attachListenerPoll) return
       attachListener = status
       if (!status.pending) {
-        if (status.failure === 'instance_lock' && !status.presenting) void watchForApprovalPresenter(poll)
+        if (status.failure === 'instance_lock') void watchForApprovalPresenter(poll)
         return
       }
       await new Promise((resolve) => setTimeout(resolve, 50))
@@ -112,7 +112,7 @@
         const status = await tauri.invoke('attach_listener_status')
         if (poll !== attachListenerPoll) return
         attachListener = status
-        if (status.failure !== 'instance_lock' || status.presenting) return
+        if (status.failure !== 'instance_lock') return
       } catch (_) {
         return
       }
