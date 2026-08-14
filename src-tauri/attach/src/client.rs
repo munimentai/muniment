@@ -1978,18 +1978,15 @@ mod linux {
                 if let Ok(client) =
                     handshake_desktop_client_stream(stream, client_version, io_timeout)
                 {
-                    let interrupt = client.stream.try_clone().ok();
                     let (stop_state, _) = &*stop.inner;
-                    let mut stop_state =
-                        stop_state.lock().unwrap_or_else(|error| error.into_inner());
+                    let stop_state = stop_state.lock().unwrap_or_else(|error| error.into_inner());
                     if stop_state.stopped {
                         return;
                     }
-                    stop_state.stream = interrupt;
                     let (held, wake) = &*holder.inner;
                     *held.lock().unwrap_or_else(|error| error.into_inner()) = Some(client);
-                    drop(stop_state);
                     observe(true);
+                    drop(stop_state);
                     let connection = held.lock().unwrap_or_else(|error| error.into_inner());
                     drop(
                         wake.wait_while(connection, |client| client.is_some())

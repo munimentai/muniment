@@ -751,6 +751,122 @@ fn desktop_client_supervisor_retries_a_refused_handshake() {
 }
 
 #[test]
+fn desktop_client_stop_serializes_publication_and_notifications() {
+    let path = socket_path();
+    let listener = UnixListener::bind(&path).unwrap();
+    let stop = DesktopClientStopHandle::new();
+    let holder = DesktopClientHolder::new();
+    let worker_stop = stop.clone();
+    let worker_holder = holder.clone();
+    let (observed_tx, observed) = mpsc::channel();
+    let (release_tx, release) = mpsc::channel();
+    let server = thread::spawn(move || {
+        let (mut client, _) = listener.accept().unwrap();
+        complete_desktop_client_handshake(&mut client);
+        let mut byte = [0];
+        assert_eq!(client.read(&mut byte).unwrap(), 0);
+    });
+    let path_for_worker = path.clone();
+    let worker = thread::spawn(move || {
+        serve_desktop_client_at(
+            &path_for_worker,
+            "0.0.1",
+            SHORT,
+            SHORT,
+            worker_stop,
+            worker_holder,
+            move |connected| {
+                observed_tx.send(connected).unwrap();
+                if connected {
+                    release.recv().unwrap();
+                }
+            },
+        );
+    });
+
+    assert_eq!(observed.recv_timeout(SHORT), Ok(true));
+    let (stopped_tx, stopped) = mpsc::channel();
+    let stopper = thread::spawn(move || {
+        stop.stop();
+        stopped_tx.send(()).unwrap();
+    });
+    assert_eq!(
+        stopped.recv_timeout(Duration::from_millis(20)),
+        Err(mpsc::RecvTimeoutError::Timeout)
+    );
+    release_tx.send(()).unwrap();
+    stopped.recv_timeout(SHORT).unwrap();
+    worker.join().unwrap();
+    stopper.join().unwrap();
+    assert_eq!(observed.recv_timeout(SHORT), Ok(false));
+    assert_eq!(observed.try_recv(), Err(mpsc::TryRecvError::Disconnected));
+    assert_eq!(
+        holder.request(Operation::ThreadList, None, serde_json::json!({})),
+        Err(ClientError::DesktopUnavailable)
+    );
+    server.join().unwrap();
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn desktop_client_supervisor_keeps_one_connection_until_failure() {
+    let path = socket_path();
+    let listener = UnixListener::bind(&path).unwrap();
+    let stop = DesktopClientStopHandle::new();
+    let holder = DesktopClientHolder::new();
+    let worker_stop = stop.clone();
+    let worker_holder = holder.clone();
+    let retry_interval = Duration::from_millis(60);
+    let (healthy_tx, healthy) = mpsc::channel();
+    let (fail_tx, fail) = mpsc::channel();
+    let server = thread::spawn(move || {
+        let (mut first, _) = listener.accept().unwrap();
+        complete_desktop_client_handshake(&mut first);
+        listener.set_nonblocking(true).unwrap();
+        healthy_tx.send(()).unwrap();
+        thread::sleep(retry_interval + Duration::from_millis(20));
+        assert!(
+            matches!(listener.accept(), Err(error) if error.kind() == std::io::ErrorKind::WouldBlock)
+        );
+        fail_tx.send(()).unwrap();
+        let request = read_client_value(&mut first);
+        assert_eq!(request["operation"], "thread.list");
+        let failed_at = Instant::now();
+        drop(first);
+        listener.set_nonblocking(false).unwrap();
+        let (mut second, _) = listener.accept().unwrap();
+        assert!(failed_at.elapsed() >= retry_interval);
+        complete_desktop_client_handshake(&mut second);
+        let mut byte = [0];
+        assert_eq!(second.read(&mut byte).unwrap(), 0);
+    });
+    let path_for_worker = path.clone();
+    let worker = thread::spawn(move || {
+        serve_desktop_client_at(
+            &path_for_worker,
+            "0.0.1",
+            SHORT,
+            retry_interval,
+            worker_stop,
+            worker_holder,
+            |_| {},
+        );
+    });
+
+    healthy.recv_timeout(SHORT).unwrap();
+    fail.recv_timeout(SHORT + SHORT).unwrap();
+    assert_eq!(
+        holder.request(Operation::ThreadList, None, serde_json::json!({})),
+        Err(ClientError::ConnectionClosed)
+    );
+    thread::sleep(retry_interval + SHORT);
+    stop.stop();
+    worker.join().unwrap();
+    server.join().unwrap();
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
 fn desktop_client_stop_interrupts_a_blocked_connect() {
     let path = socket_path();
     let listener = UnixListener::bind(&path).unwrap();
