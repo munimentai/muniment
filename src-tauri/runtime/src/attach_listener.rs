@@ -1,11 +1,14 @@
 //! Runtime-owned companion attach listener.
 
 use std::fmt;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, RecvTimeoutError};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
+
+use muniment_attach::{encode_frame, ErrorEnvelope, Failure, Protocol, ProtocolError};
 
 use muniment_core::attach::linux::{
     approval_waiter_with_claims, run_authenticated_session_with_service_approvals_and_registry,
@@ -167,6 +170,7 @@ where
                             .as_ref()
                             .expect("the desktop client route has an expected executable");
                         let Some(desktop_approval) = approval.approval() else {
+                            refuse_desktop_client_without_approval(stream);
                             return;
                         };
                         let Ok((stream, session)) = admit_desktop_client(
@@ -223,6 +227,25 @@ where
             .expect("attach stop thread does not panic");
         result
     })
+}
+
+fn refuse_desktop_client_without_approval(mut stream: std::os::unix::net::UnixStream) {
+    let deadline = Instant::now() + PRESENTER_ADMISSION_TIMEOUT;
+    let envelope = ErrorEnvelope {
+        protocol: Protocol,
+        request_id: None,
+        ok: Failure,
+        error: ProtocolError::unauthorized(),
+    };
+    let Ok(frame) = encode_frame(&envelope) else {
+        return;
+    };
+    let Some(remaining) = deadline.checked_duration_since(Instant::now()) else {
+        return;
+    };
+    if stream.set_write_timeout(Some(remaining)).is_ok() {
+        let _ = stream.write_all(&frame);
+    }
 }
 
 fn request_approval(
