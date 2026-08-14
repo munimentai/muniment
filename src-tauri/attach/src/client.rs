@@ -382,6 +382,7 @@ mod linux {
     use std::os::unix::io::AsRawFd;
     use std::os::unix::net::UnixStream;
     use std::path::{Path, PathBuf};
+    use std::sync::{Arc, Condvar, Mutex};
     use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
     #[repr(C)]
@@ -1365,6 +1366,33 @@ mod linux {
         io_timeout: Duration,
     }
 
+    #[derive(Clone, Debug, Default)]
+    pub struct ApprovalPresenterStopHandle {
+        inner: Arc<(Mutex<ApprovalPresenterStopState>, Condvar)>,
+    }
+
+    #[derive(Debug, Default)]
+    struct ApprovalPresenterStopState {
+        stopped: bool,
+        stream: Option<UnixStream>,
+    }
+
+    impl ApprovalPresenterStopHandle {
+        pub fn new() -> Self {
+            Self::default()
+        }
+
+        pub fn stop(&self) {
+            let (state, wake) = &*self.inner;
+            let mut state = state.lock().unwrap_or_else(|error| error.into_inner());
+            state.stopped = true;
+            if let Some(stream) = state.stream.take() {
+                let _ = stream.shutdown(std::net::Shutdown::Both);
+            }
+            wake.notify_all();
+        }
+    }
+
     impl std::fmt::Debug for ApprovalPresenterClient {
         fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
             formatter.write_str("ApprovalPresenterClient { .. }")
@@ -1725,6 +1753,51 @@ mod linux {
     ) -> Result<ApprovalPresenterClient, ClientError> {
         let stream = UnixStream::connect(endpoint).map_err(|_| ClientError::DesktopUnavailable)?;
         handshake_approval_presenter_stream(stream, client_version, io_timeout)
+    }
+
+    pub fn serve_approval_presenter_at(
+        endpoint: &Path,
+        client_version: &str,
+        io_timeout: Duration,
+        retry_interval: Duration,
+        stop: ApprovalPresenterStopHandle,
+        mut choose: impl FnMut(&ApprovalPresentRequest) -> ApprovalDecision,
+    ) {
+        loop {
+            let (state, wake) = &*stop.inner;
+            let connected = {
+                let mut state = state.lock().unwrap_or_else(|error| error.into_inner());
+                if state.stopped {
+                    return;
+                }
+                UnixStream::connect(endpoint).ok().and_then(|stream| {
+                    let interrupt = stream.try_clone().ok()?;
+                    state.stream = Some(interrupt);
+                    Some(stream)
+                })
+            };
+
+            if let Some(stream) = connected {
+                if let Ok(mut presenter) =
+                    handshake_approval_presenter_stream(stream, client_version, io_timeout)
+                {
+                    let _ = presenter.serve(&mut choose);
+                }
+                let mut state = state.lock().unwrap_or_else(|error| error.into_inner());
+                state.stream = None;
+            }
+
+            let state = state.lock().unwrap_or_else(|error| error.into_inner());
+            if state.stopped {
+                return;
+            }
+            let (state, _) = wake
+                .wait_timeout_while(state, retry_interval, |state| !state.stopped)
+                .unwrap_or_else(|error| error.into_inner());
+            if state.stopped {
+                return;
+            }
+        }
     }
 
     fn endpoint_from_environment() -> Result<PathBuf, ClientError> {
@@ -2172,7 +2245,8 @@ mod linux {
 pub use linux::{
     connect_approval_presenter, connect_approval_presenter_at, handshake_approval_presenter_stream,
     handshake_migration_control_stream, handshake_stream, handshake_stream_with_credential,
-    ApprovalPresenterClient, AuthorizedClient, MigrationControlClient,
+    serve_approval_presenter_at, ApprovalPresenterClient, ApprovalPresenterStopHandle,
+    AuthorizedClient, MigrationControlClient,
 };
 
 #[cfg(not(target_os = "linux"))]

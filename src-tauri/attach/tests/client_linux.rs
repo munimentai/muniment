@@ -8,6 +8,7 @@ use muniment_attach::{
     MigrationControlOutcome, PermissionDecision, PermissionKind, Protocol, ProtocolError, Response,
     RunStreamMessage, Success, VersionRange, MAX_FRAME_LENGTH,
 };
+use muniment_attach::{serve_approval_presenter_at, ApprovalPresenterStopHandle};
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::{Read, Write};
 use std::net::Shutdown;
@@ -255,6 +256,42 @@ fn approval_presenter_connects_and_serves_until_the_peer_closes() {
         })
         .unwrap();
     assert_eq!(outcome, ApprovalPresenterServeOutcome::ConnectionClosed);
+    server.join().unwrap();
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn approval_presenter_reconnects_and_stops() {
+    let path = socket_path();
+    let listener = UnixListener::bind(&path).unwrap();
+    let stop = ApprovalPresenterStopHandle::new();
+    let server_stop = stop.clone();
+    let server = thread::spawn(move || {
+        for (request_id, challenge) in [
+            ("00000000000000000000000000000073", "first"),
+            ("00000000000000000000000000000074", "second"),
+        ] {
+            let (mut stream, _) = listener.accept().unwrap();
+            complete_approval_presenter_handshake(&mut stream);
+            let mut request = approval_present_request();
+            request["request_id"] = serde_json::json!(request_id);
+            request["body"]["challenge"] = serde_json::json!(challenge);
+            stream.write_all(&encode_frame(&request).unwrap()).unwrap();
+            let response = read_client_value(&mut stream);
+            assert_eq!(response["request_id"], request_id);
+            assert_eq!(response["body"]["challenge"], challenge);
+        }
+        server_stop.stop();
+    });
+
+    serve_approval_presenter_at(
+        &path,
+        "0.0.1",
+        SHORT,
+        Duration::from_millis(10),
+        stop,
+        |_| ApprovalDecision::Approve,
+    );
     server.join().unwrap();
     std::fs::remove_file(path).unwrap();
 }
