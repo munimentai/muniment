@@ -12,7 +12,7 @@ use muniment_core::attach::ProtocolError;
 use muniment_core::attach::{
     RuntimeActivityGuard, RuntimeActivityRegistry, SignedWorkspaceApproval,
 };
-use muniment_core::auth::TokenSet;
+use muniment_core::auth::{NativeDeviceListError, TokenSet};
 use muniment_core::chat_grant::{ChatGrant, FetchGrantError};
 use muniment_core::chat_resume::{clear_active_run, install_active_run};
 use muniment_core::chat_view::{chat_attachments, ChatAttachment, SelectedFile};
@@ -335,6 +335,18 @@ fn persistence_error() -> RunStartError {
 }
 
 impl RunAttachBoundaries for RuntimeAttachBoundaries {
+    fn session_status(&self) -> Result<muniment_core::auth::AuthStatus, ProtocolError> {
+        service::session_status().map_err(|_| ProtocolError::persistence_failed())
+    }
+
+    fn list_devices(&self) -> Result<muniment_core::auth::NativeDeviceList, ProtocolError> {
+        let access_token = self
+            .fresh_tokens()
+            .map_err(|error| error.protocol_error())?
+            .access_token;
+        service::list_devices(&access_token).map_err(device_list_protocol_error)
+    }
+
     fn list_threads(
         &self,
         workspace: &str,
@@ -483,5 +495,16 @@ fn thread_mutation_protocol_error(error: ThreadMutationError) -> ProtocolError {
         ThreadMutationError::Ownership(_) | ThreadMutationError::Journal(_) => {
             ProtocolError::persistence_failed()
         }
+    }
+}
+
+fn device_list_protocol_error(error: NativeDeviceListError) -> ProtocolError {
+    match error {
+        NativeDeviceListError::CredentialsMissing
+        | NativeDeviceListError::HttpStatus(401 | 403) => ProtocolError::unauthorized(),
+        NativeDeviceListError::Config(_)
+        | NativeDeviceListError::Transport(_)
+        | NativeDeviceListError::HttpStatus(_)
+        | NativeDeviceListError::MalformedResponse(_) => ProtocolError::persistence_failed(),
     }
 }
