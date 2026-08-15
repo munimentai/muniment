@@ -5,15 +5,15 @@ use std::sync::{Arc, Mutex};
 
 use muniment_core::active_run::queue_permission_answer_with_commit;
 use muniment_core::attach::linux::{
-    RunStreamPage, ThreadListPage, ThreadListRequest, ThreadListService, ThreadOpenPage,
-    ThreadOpenRequest,
+    EntitlementSnapshotResult, RunStreamPage, ThreadListPage, ThreadListRequest, ThreadListService,
+    ThreadOpenPage, ThreadOpenRequest,
 };
 use muniment_core::attach::ProtocolError;
 use muniment_core::attach::{
     CompanionRecord, CompanionRegistry, RuntimeActivityGuard, RuntimeActivityRegistry,
     SignedWorkspaceApproval,
 };
-use muniment_core::auth::{NativeDeviceListError, TokenSet};
+use muniment_core::auth::{EntitlementSnapshotTracker, NativeDeviceListError, TokenSet};
 use muniment_core::chat_grant::{ChatGrant, FetchGrantError};
 use muniment_core::chat_resume::{clear_active_run, install_active_run};
 use muniment_core::chat_view::{chat_attachments, ChatAttachment, SelectedFile};
@@ -49,6 +49,7 @@ pub struct RuntimeAttachBoundaries {
     runtime: Arc<Mutex<Option<PiRuntime>>>,
     memory_runtime: Arc<ApplicationMemoryRuntime>,
     runtime_activity: RuntimeActivityRegistry,
+    entitlement_tracker: Arc<EntitlementSnapshotTracker>,
     session_thread: Arc<SessionThread>,
     approval: SignedWorkspaceApproval,
     companion_registry: CompanionRegistry,
@@ -64,6 +65,7 @@ impl RuntimeAttachBoundaries {
         runtime: Arc<Mutex<Option<PiRuntime>>>,
         memory_runtime: Arc<ApplicationMemoryRuntime>,
         runtime_activity: RuntimeActivityRegistry,
+        entitlement_tracker: Arc<EntitlementSnapshotTracker>,
         approval: SignedWorkspaceApproval,
         session_thread: Arc<SessionThread>,
         companion_registry: CompanionRegistry,
@@ -76,6 +78,7 @@ impl RuntimeAttachBoundaries {
             runtime,
             memory_runtime,
             runtime_activity,
+            entitlement_tracker,
             session_thread,
             approval,
             companion_registry,
@@ -341,6 +344,19 @@ fn persistence_error() -> RunStartError {
 impl RunAttachBoundaries for RuntimeAttachBoundaries {
     fn session_status(&self) -> Result<muniment_core::auth::AuthStatus, ProtocolError> {
         service::session_status().map_err(|_| ProtocolError::persistence_failed())
+    }
+
+    fn entitlement_snapshot(&self) -> Result<EntitlementSnapshotResult, ProtocolError> {
+        service::entitlement_snapshot(&self.entitlement_tracker, &self.runtime_activity)
+            .map_err(|_| ProtocolError::persistence_failed())
+    }
+
+    fn sign_out(
+        &self,
+        _provenance: Provenance,
+    ) -> Result<muniment_core::auth::AuthStatus, ProtocolError> {
+        service::sign_out(&self.entitlement_tracker, &self.runtime_activity)
+            .map_err(|_| ProtocolError::persistence_failed())
     }
 
     fn list_devices(&self) -> Result<muniment_core::auth::NativeDeviceList, ProtocolError> {

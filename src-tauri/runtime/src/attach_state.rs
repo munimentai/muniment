@@ -7,6 +7,7 @@ use muniment_core::attach::{
     ApprovalCoordinator, CompanionRegistry, DesktopAttachService, ProtocolError,
     RuntimeActivityRegistry, SignedWorkspaceApproval,
 };
+use muniment_core::auth::EntitlementSnapshotTracker;
 use muniment_core::memory_runtime::ApplicationMemoryRuntime;
 use muniment_core::pi_execution::PiRuntime;
 use muniment_core::run_start::ActiveRun;
@@ -27,6 +28,7 @@ pub struct RuntimeAttachState {
     runtime: Arc<Mutex<Option<PiRuntime>>>,
     memory_runtime: Arc<ApplicationMemoryRuntime>,
     runtime_activity: RuntimeActivityRegistry,
+    entitlement_tracker: Arc<EntitlementSnapshotTracker>,
     approval: SignedWorkspaceApproval,
     session_thread: Arc<SessionThread>,
     companion_registry: CompanionRegistry,
@@ -56,6 +58,7 @@ impl RuntimeAttachState {
             active: Arc::new(Mutex::new(None)),
             runtime: Arc::new(Mutex::new(None)),
             runtime_activity: RuntimeActivityRegistry::new(),
+            entitlement_tracker: Arc::new(EntitlementSnapshotTracker::new()),
             approval: SignedWorkspaceApproval::default(),
             session_thread: Arc::new(SessionThread::default()),
             companion_registry,
@@ -73,6 +76,7 @@ impl RuntimeAttachState {
             Arc::clone(&self.runtime),
             Arc::clone(&self.memory_runtime),
             self.runtime_activity.clone(),
+            Arc::clone(&self.entitlement_tracker),
             self.approval.clone(),
             Arc::clone(&self.session_thread),
             self.companion_registry.clone(),
