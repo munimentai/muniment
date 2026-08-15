@@ -126,6 +126,8 @@
   let workspace = $state()
   let entitlementToastVisible = $state(false)
   let pairingRequests = $state([])
+  let desktopClientStatus = $state({ connected: false, supervisor_running: false })
+  let desktopClientStatusVersion = 0
   const artifactShortcut = artifactRailShortcut()
   let destroyed = false
   const sidebarWidth = 260
@@ -635,6 +637,25 @@
   onMount(() => {
     let pairingUnlisten
     let registrationRetryUnlisten
+    let desktopClientUnlisten
+    const readDesktopClientStatus = () => {
+      const version = desktopClientStatusVersion
+      return tauri?.invoke('attach_listener_status').then((status) => {
+        if (version === desktopClientStatusVersion) desktopClientStatus = status
+      }).catch(() => {
+        console.error('Desktop client status failed.')
+      })
+    }
+    window.__TAURI__?.event?.listen('desktop-client-connection-changed', ({ payload }) => {
+      desktopClientStatusVersion += 1
+      desktopClientStatus = { ...desktopClientStatus, connected: payload === true }
+    }).then((stop) => {
+      if (destroyed) stop()
+      else desktopClientUnlisten = stop
+    }).catch(() => {
+      desktopClientUnlisten = undefined
+      console.error('Desktop client listener registration failed.')
+    })
     window.__TAURI__?.event?.listen('auth-registration-retry', ({ payload }) => {
       if (auth.name === 'signing-in') auth = registrationRetryState(payload?.delay_seconds)
     }).then((stop) => {
@@ -664,6 +685,7 @@
       console.error('Pairing decision failed.')
     })
     if (tauri) {
+      readDesktopClientStatus()
       run('status')
       chatController.start()
       entitlementToast.start()
@@ -735,6 +757,7 @@
       entitlementToast.cleanup()
       pairingUnlisten?.()
       registrationRetryUnlisten?.()
+      desktopClientUnlisten?.()
       voiceGesture.cleanup()
       transcriptController.cleanup()
       stopDragDrop?.()
@@ -827,6 +850,11 @@
       <section class="auth-state">
         <p class="support" aria-live="polite">{auth.name === 'signing-in' ? auth.message : 'Sign in to continue to your workspace.'}</p>
         <button class="primary" class:inactive={auth.name === 'signing-in'} aria-disabled={auth.name === 'signing-in' ? 'true' : undefined} onclick={signIn}>Sign in</button>
+      </section>
+    {:else if auth.name === 'signed-in' && desktopClientStatus.supervisor_running && !desktopClientStatus.connected}
+      <section class="auth-state" aria-live="polite">
+        <p class="record error-record">Muniment cannot reach its background service.</p>
+        <p class="support">Muniment reconnects on its own.</p>
       </section>
     {:else if auth.name === 'signed-in'}
       <section class="workspace" class:sidebar-collapsed={sidebarCollapsed} class:artifact-open={artifactRailOpen} class:artifact-resizing={artifactRailPointer !== undefined} style:--artifact-rail-width={`${artifactRailWidth}px`} bind:this={workspace}>

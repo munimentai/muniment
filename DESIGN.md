@@ -33,6 +33,7 @@ A card that cannot show a stored change says whether Muniment applied the change
 
 The signed-in shell has one workspace `h1`, a headed thread list, and a transcript region named for the open thread.
 An error message names the failure. The control beside it names and repeats the action that failed.
+The background service notice reuses the auth error state's mono record register.
 An error that rejects one item from a set names that item.
 A surface that renders model or user text wraps an unbreakable string.
 A control renders as a control at rest.
