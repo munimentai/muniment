@@ -23,7 +23,7 @@ them must exercise the real contracts. It must add no mocked production path.
 > runtime-service extraction section. The fourteenth took the Phase 2 client
 > core section. The sixteenth through the twenty-fifth all took that
 > extraction section again, and so did the twenty-sixth through the
-> thirty-third. It grows every wave, so it stays the next compaction target.
+> thirty-fourth. It grows every wave, so it stays the next compaction target.
 
 ## M0 — Scaffold (done 2026-07-09)
 
@@ -500,55 +500,70 @@ shell shows the service-unreachable notice without hiding local empty states,
 `Connected programs` names the background service while the supervisor
 reconnects, and each admission route sends its own grant type.
 
-DONE 2026-08-15 — the six filed seventy-fourth-wave slices landed
-(MUNIDESK-1283 through 1288). ADR 0012 carries the runtime-owned browser
-sign-in amendment. The wire names `session.sign_in` with its fixture,
-`dispatch_request` serves it under one concurrent attempt and answers
-`AuthStatus` alone, `DesktopClientHolder::sign_in` is the typed method, and
-`auth_sign_in` (`src-tauri/src/auth/mod.rs:181`) reaches it through
-`sign_in_for_session`. The runtime opens the system browser through its own
-injected opener. The unfiled Linux ownership cutover slice never
-dispatched.
+DONE 2026-08-15 — the sign-in tranche and the thread history tranche both landed
+(MUNIDESK-1283 through 1294). ADR 0012 carries the runtime-owned browser sign-in
+amendment and the third desktop client operation tranche. The wire names
+`session.sign_in`, `thread.summaries`, and `thread.history` with their fixtures,
+`dispatch_request` serves all three to the desktop client and refuses each one
+for a companion, `RuntimeAttachBoundaries` answers them through
+`service::sign_in`, `service::thread_summaries`, and `service::thread_page`, and
+`DesktopClientHolder` carries a typed method per operation. `auth_sign_in`
+(`src-tauri/src/auth/mod.rs:181`), `chat_thread_summaries`, and
+`chat_thread_open` (`src-tauri/src/chat_threads.rs:324`, `:517`) each ride the
+connected client on Linux and keep their local path elsewhere. The runtime opens
+the system browser through its own injected opener. Sign-in answers `AuthStatus`
+alone under one concurrent attempt, and each history read shrinks its page until
+the encoded response fits the frame bound.
 
 MEASURED 2026-08-15 (seventy-fourth wave, planner, read the runtime composition
 beside `main`) — the complete runtime owner is dormant. `RuntimeAttachState`
-(`src-tauri/runtime/src/attach_state.rs:22`) opens the journal, companion
+(`src-tauri/runtime/src/attach_state.rs:24`) opens the journal, companion
 registry, activity state, entitlement tracker, approval coordinator, and every
-boundary used by `compose_attach_service`. `run_migration_takeover`
+boundary `compose_attach_service` uses. `run_migration_takeover`
 (`runtime/src/migration.rs:64`) performs the nonce-bound handoff and starts the
-listener, while `run_attach_listener` starts one for a fresh profile. `main`
-(`runtime/src/main.rs:60`) calls neither path. It only waits for the instance
-lock and then waits for a termination signal, so no installed runtime process
-can answer a desktop client.
+listener, and `run_attach_listener` starts one for a fresh profile. `main`
+(`runtime/src/main.rs:60`) calls neither path. It waits for the instance lock and
+then waits for a termination signal, so no installed runtime process answers a
+desktop client.
 
 MEASURED 2026-08-15 (seventy-sixth wave, planner, read `main` beside
 `ChatState::new` and `RuntimeAttachState::open`) — the cutover cannot flip yet.
 `main` (`src-tauri/src/main.rs:49`) builds `ChatState` on every desktop launch,
 and that constructor opens the profile journal and CAS. Every chat command then
 reads and writes that journal inside the desktop process.
-`RuntimeAttachState::open` (`src-tauri/runtime/src/attach_state.rs:42`) opens the
-same files for the service. Activating the runtime listener today would give one
-profile two journal owners and two Pi runtimes, which ADR 0012 forbids. The chat
-surface therefore rides the desktop client before the cutover, and that
-conversion is the third desktop client operation tranche.
+`RuntimeAttachState::open` (`attach_state.rs:42`) opens the same files for the
+service. Activating the runtime listener today would give one profile two journal
+owners and two Pi runtimes, which ADR 0012 forbids. The chat surface therefore
+rides the desktop client before the cutover. The Linux bundle also ships the
+runtime payload (`src-tauri/tauri.linux.conf.json:12`) with no `systemd --user`
+socket or service unit to start it. That unit ships with the cutover.
 
-MEASURED 2026-08-15 (seventy-sixth wave, planner, read the runtime service
-entries beside the desktop thread commands) — the thread history reads are the
-cheapest half of that conversion. `service::thread_summaries` and
-`service::thread_page` (`src-tauri/runtime/src/service/threads.rs:23`, `:148`)
-already return `ThreadSummaryPage` and `ChatThreadOpenPage`, which are the exact
-shapes `chat_thread_summaries` and `chat_thread_open`
-(`src-tauri/src/chat_threads.rs:247`, `:419`) return today. The companion
-operations `thread.list` and `thread.open` cannot serve them. Those two scope by
-the signed `grant.workspace` value and return the redacted `ThreadOpenPage`
-projection instead of prompts, receipts, tool activity, attachments, recalls,
-applied diffs, and the pending gate.
+MEASURED 2026-08-15 (seventy-seventh wave, planner, read
+`RuntimeAttachBoundaries::launch` beside `RuntimeChatEventSink`) — a
+runtime-driven run reaches nobody. `launch`
+(`src-tauri/runtime/src/attach_boundaries.rs:336`) builds
+`RuntimeChatEventSink::new(&profile_directory, None, ...)`, so the sink's one
+subscriber slot (`runtime/src/sink.rs:15`) stays empty and every `ChatEvent` the
+coordinate loop delivers is dropped. The desktop transcript reads the
+`chat-event` Tauri event alone (`src/lib/chat-controller.js:100`), which
+`TauriChatEventSink::deliver` (`src-tauri/src/chat.rs:89`) emits from the desktop
+process. Converting a run command before the event channel exists would leave the
+transcript blank for the whole run. The event channel is therefore the first half
+of the run surface conversion.
 
-MEASURED 2026-08-15 (seventy-sixth wave, planner, read the Linux package
-inputs) — the bundle ships the runtime payload
-(`src-tauri/tauri.linux.conf.json:12`), and the repository still holds no
-`systemd --user` socket or service unit to start it. That unit ships with the
-cutover.
+MEASURED 2026-08-15 (seventy-seventh wave, planner, read
+`serve_desktop_client_requests` beside `DesktopClient::request_before`) — the
+event channel takes its own connection. The session loop already writes
+unsolicited event frames between requests
+(`src-tauri/core/src/attach/linux.rs:1955`), because `poll_run_streams` drains
+the companion run streams there. The desktop client reads exactly one envelope
+per request and answers `UnexpectedMessage` for anything else
+(`src-tauri/attach/src/client.rs:1784`), and `DesktopClientHolder` holds one
+mutex over that socket, so a blocking event read on it would stall every command.
+The desktop opens a second desktop client connection instead. Each accepted
+connection already gets its own thread and its own service
+(`runtime/src/attach_listener.rs:184`), so that route needs no new admission
+rule.
 
 RETIRED 2026-08-14 (seventy-first wave, planner, read `compose_attach_service`) —
 the runtime composition owes no Home resolution work. It reads `configured_home`
@@ -612,23 +627,21 @@ projector always holds state there. A test seam would also prove nothing, becaus
 projector rejects that event too. The lane re-opens this only against a new
 failure route.
 
-MERGE HAZARD — the seventy-sixth-wave slices are filed. Slices 2 and 3 both
-take the attach operation surface in sequence, and slices 4 through 6 each build
-on the wire names slice 2 adds. Every ticket tells the implementer to rebase on
-`main` before it opens the pull request. The 2026-08-04 silent revert came from a
-stale base.
+MERGE HAZARD — the seventy-seventh-wave slices are filed. Slices 3 through 6
+each build on the wire names slice 2 adds, and slice 4 answers the seam slice 3
+declares. Every ticket tells the implementer to rebase on `main` before it opens
+the pull request. The 2026-08-04 silent revert came from a stale base.
 
-SELECTED 2026-08-15 (seventy-sixth wave) — six slices in priority order. They
-convert the desktop thread history reads, which is the first half of the chat
-surface conversion.
+SELECTED 2026-08-15 (seventy-seventh wave) — six slices in priority order. They
+build the chat event channel, which is the first half of the run surface
+conversion.
 
-1. Amend ADR 0012 with the third desktop client operation tranche.
-2. Name `thread.summaries` and `thread.history` on the wire with their fixtures.
-3. Dispatch both operations to the desktop client and refuse them for a
-   companion.
-4. Answer both operations from the runtime attach boundaries.
-5. Add the two typed desktop client methods.
-6. Route `chat_thread_summaries` and `chat_thread_open` through the client.
+1. Amend ADR 0012 with the fourth desktop client operation tranche.
+2. Name `run.chat_events` and the `chat.event` frame on the wire with fixtures.
+3. Dispatch the subscription to the desktop client and refuse it for a companion.
+4. Answer the subscription from one runtime chat-event broadcast.
+5. Add the typed desktop client subscription and its reader.
+6. Carry the events into the transcript over a second desktop client connection.
 
 NOT FILED 2026-08-15 (seventy-fourth wave, planner, read the shell's auth branch
 order) — `auth_status` keeps its local keychain read before the cutover. The
@@ -638,13 +651,15 @@ screen where the design shows the notice. `service::session_status` reads the
 keychain and takes no activity mark, so the local read returns the same answer the
 service would. The cutover moves this read with the credential store.
 
-SEQUENCED 2026-08-15 (seventy-sixth wave) — the decision comes before the
-wire, the wire before the dispatch, the dispatch before the boundary, and the
-boundary before its client and its one caller. The run surface, the
-session-thread tracker commands, and `home.ensure` follow this tranche. The
-Linux cutover follows the whole chat surface conversion, and it carries the user
-unit, the `auth_status` move, and the runtime's signed workspace. Remote Control
-follows the cutover.
+SEQUENCED 2026-08-15 (seventy-seventh wave) — the decision comes before the
+wire, the wire before the dispatch, the dispatch before the broadcast, and the
+broadcast before its client and its one caller. The five run commands follow the
+event channel, then the session-thread tracker commands and `home.ensure`. The
+tracker commands wait for the run commands, because `chat_submit` reads the same
+tracker to place a new prompt, and a tracker split across two processes would
+send that prompt to the wrong thread. The Linux cutover follows the whole chat
+surface conversion, and it carries the user unit, the `auth_status` move, and the
+runtime's signed workspace. Remote Control follows the cutover.
 
 NOT FILED 2026-08-14 (seventy-second wave, planner, read the seventy-second-wave
 selection beside its own sequencing rule) — Linux user-unit registration stays
@@ -1124,9 +1139,9 @@ earlier one. Requiring an up-to-date branch before merge, or a merge queue, is a
 repository-settings change that sits with the owner. The planner files no ticket
 for it.
 
-VERIFIED 2026-08-15 (seventy-sixth wave, planner) — one
+VERIFIED 2026-08-15 (seventy-seventh wave, planner) — one
 `cargo test -p muniment-core -p muniment-runtime -p muniment-attach` run started
-from `src-tauri` passes 1,337 tests over 120 test binaries, and the build prints no
+from `src-tauri` passes 1,348 tests over 120 test binaries, and the build prints no
 warning. One `npm ci` then `npm test` run passes 940 frontend tests over 63 files
 with 31 skipped, plus 3 browser tests. Start cargo from `src-tauri`, because the
 repository root holds no `Cargo.toml`. A run started from the root dies with
