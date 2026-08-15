@@ -1,15 +1,21 @@
 #![cfg(target_os = "linux")]
 
 use std::collections::{BTreeMap, VecDeque};
+use std::io::{Read, Write};
+use std::net::{TcpListener, TcpStream};
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
+use std::thread;
 
 use muniment_core::attach::linux::{
     CompanionProvenance, ThreadListRequest, ThreadListService, ThreadOpenRequest,
 };
-use muniment_core::attach::{Id, ProtocolError, RuntimeActivityRegistry, SignedWorkspaceApproval};
+use muniment_core::attach::{
+    ErrorCode, Id, ProtocolError, RuntimeActivityRegistry, SignedWorkspaceApproval,
+};
 use muniment_core::auth::{
-    EntitlementSnapshotTracker, KeyringNativeCredentialStore, NativeCredentialStore,
+    BrowserOpenError, EntitlementSnapshotTracker, KeyringNativeCredentialStore,
+    NativeCredentialStore,
 };
 use muniment_core::journal::Provenance;
 use muniment_core::memory_runtime::ApplicationMemoryRuntime;
@@ -43,6 +49,141 @@ fn provenance() -> Provenance {
         .extra
         .insert("attach_profile".into(), "profile-a".into());
     provenance
+}
+
+#[derive(Clone)]
+struct AuthorizationAttempt {
+    redirect_uri: String,
+    state: String,
+}
+
+fn spawn_sign_in_server() -> (
+    String,
+    Arc<Mutex<Option<AuthorizationAttempt>>>,
+    thread::JoinHandle<()>,
+) {
+    let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+    let base_url = format!("http://{}", listener.local_addr().unwrap());
+    let attempt = Arc::new(Mutex::new(None));
+    let captured_attempt = Arc::clone(&attempt);
+    let server = thread::spawn(move || {
+        for index in 0..3 {
+            let (mut stream, _) = listener.accept().unwrap();
+            let request = read_request_body(&mut stream);
+            let body: String = match index {
+                0 => r#"{"device_id":"10000000-0000-4000-8000-000000000001","registration_token":"AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI","device_challenge":"AwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwM","expires_in":600}"#.into(),
+                1 => {
+                    let request_body = request.split_once("\r\n\r\n").unwrap().1;
+                    *captured_attempt.lock().unwrap() = Some(AuthorizationAttempt {
+                        redirect_uri: json_field(request_body, "redirect_uri"),
+                        state: json_field(request_body, "state"),
+                    });
+                    r#"{"authorization_url":"https://login.muniment.test/continue","device_challenge":"BAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQ"}"#.into()
+                }
+                _ => r#"{"access_token":"access-secret","token_type":"Bearer","expires_in":900,"refresh_token":"refresh-secret","refresh_expires_in":86400,"session":{"org_id":"20000000-0000-4000-8000-000000000002","user_id":"30000000-0000-4000-8000-000000000003","role":"user","device_id":"10000000-0000-4000-8000-000000000001","client_role":"desktop"},"entitlement_snapshot":{"payload":{"version":1},"signature":"snapshot-secret","algorithm":"hmac-sha256"},"device_challenge":"BQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQU"}"#.into(),
+            };
+            write!(stream, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).unwrap();
+        }
+    });
+    (base_url, attempt, server)
+}
+
+fn json_field(body: &str, field: &str) -> String {
+    body.split_once(&format!(r#""{field}":""#))
+        .unwrap()
+        .1
+        .split_once('"')
+        .unwrap()
+        .0
+        .into()
+}
+
+fn read_request_body(stream: &mut TcpStream) -> String {
+    let mut request = Vec::new();
+    while !request.windows(4).any(|bytes| bytes == b"\r\n\r\n") {
+        let mut buffer = [0; 1024];
+        let count = stream.read(&mut buffer).unwrap();
+        request.extend_from_slice(&buffer[..count]);
+    }
+    let headers = String::from_utf8(request).unwrap();
+    let content_length = headers
+        .lines()
+        .find_map(|line| {
+            line.to_ascii_lowercase()
+                .strip_prefix("content-length: ")
+                .and_then(|value| value.parse::<usize>().ok())
+        })
+        .unwrap_or(0);
+    let present = headers.split_once("\r\n\r\n").unwrap().1.len();
+    let mut request = headers;
+    let mut body = vec![0; content_length.saturating_sub(present)];
+    stream.read_exact(&mut body).unwrap();
+    request.push_str(std::str::from_utf8(&body).unwrap());
+    request
+}
+
+fn send_callback(attempt: AuthorizationAttempt) {
+    let (authority, path) = attempt
+        .redirect_uri
+        .strip_prefix("http://")
+        .unwrap()
+        .split_once('/')
+        .unwrap();
+    let mut stream = TcpStream::connect(authority).unwrap();
+    write!(stream, "GET /{path}?code=CQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQk&state={} HTTP/1.1\r\nHost: {authority}\r\nConnection: close\r\n\r\n", attempt.state).unwrap();
+    let mut response = String::new();
+    stream.read_to_string(&mut response).unwrap();
+    assert!(response.starts_with("HTTP/1.1 200"));
+}
+
+#[test]
+fn runtime_boundaries_serve_sign_in_and_refuse_a_concurrent_attempt() {
+    let _guard = TEST_LOCK.lock().unwrap();
+    muniment_core::chat_prompt::use_mock_keyring_for_tests();
+    let temporary_profile = TemporaryProfile::new("attach-sign-in", false);
+    let state = Arc::new(
+        RuntimeAttachState::open(&temporary_profile.profile, &temporary_profile.config).unwrap(),
+    );
+    let (base_url, attempt, server) = spawn_sign_in_server();
+    std::env::set_var("MUNIMENT_API_BASE_URL", base_url);
+    let (opened_tx, opened_rx) = std::sync::mpsc::sync_channel(0);
+    let (continue_tx, continue_rx) = std::sync::mpsc::sync_channel(0);
+    let continue_rx = Mutex::new(continue_rx);
+    let first_state = Arc::clone(&state);
+    let first = thread::spawn(move || {
+        let opener = Arc::new(move |url: &str| -> Result<(), BrowserOpenError> {
+            assert_eq!(url, "https://login.muniment.test/continue");
+            opened_tx.send(()).unwrap();
+            continue_rx.lock().unwrap().recv().unwrap();
+            let callback = attempt.lock().unwrap().clone().unwrap();
+            thread::spawn(move || send_callback(callback));
+            Ok(())
+        });
+        first_state
+            .boundaries()
+            .with_browser_opener(opener)
+            .sign_in(provenance())
+    });
+    opened_rx.recv().unwrap();
+
+    let browser_count = Arc::new(AtomicBool::new(false));
+    let called = Arc::clone(&browser_count);
+    let second = state
+        .boundaries()
+        .with_browser_opener(Arc::new(move |_: &str| {
+            called.store(true, std::sync::atomic::Ordering::SeqCst);
+            Ok(())
+        }))
+        .sign_in(provenance())
+        .unwrap_err();
+    assert_eq!(second.code(), ErrorCode::InvalidRequest);
+    assert!(!browser_count.load(std::sync::atomic::Ordering::SeqCst));
+
+    continue_tx.send(()).unwrap();
+    let status = first.join().unwrap().unwrap();
+    assert!(status.signed_in);
+    server.join().unwrap();
+    std::env::remove_var("MUNIMENT_API_BASE_URL");
 }
 
 #[test]
