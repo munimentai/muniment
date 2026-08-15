@@ -521,7 +521,8 @@ MEASURED 2026-08-15 (seventy-third wave, planner, read each desktop command
 beside `chat_threads.rs`) — six desktop commands still bypass the client
 connection. `auth_status` (`src-tauri/src/auth/mod.rs:250`),
 `auth_entitlement_snapshot` (`:261`), `auth_devices` (`:277`), and `auth_sign_out`
-(`:323`) each reach the keychain and the cloud directly, and `attach_companions`
+(`:323`) reach the keychain or cloud directly. `auth_status` reads only the
+keychain. `attach_companions`
 and `attach_revoke_companion` (`src-tauri/src/attach_service.rs:572`, `:608`)
 each read the desktop's own listener. `rename_thread_command`
 (`src-tauri/src/chat_threads.rs:45`) is the shape they take: it branches on the
@@ -621,8 +622,9 @@ the credential store.
 SEQUENCED 2026-08-15 (seventy-third wave) — the three boundary slices and the
 three desktop command slices are two independent tracks, because the dispatch and
 the typed client methods both landed. The boundary track gives the runtime service
-an answer for each of the six operations. The command track gives the desktop a
-caller for each. The final cutover slice activates the listener, approval
+an answer for each of the six operations. The command track gives the desktop
+callers for five operations because `session.status` remains local. The final
+cutover slice activates the listener, approval
 coordinator, journal, CAS, Pi, device session, credentials, authorization, and
 permission gates together, and it gives the runtime service its own signed
 workspace. Remote Control follows the cutover.
