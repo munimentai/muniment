@@ -7,6 +7,7 @@ use muniment_core::attach::{
     save_client_credentials, ClientCredential, RuntimeActivityRegistry, SignedWorkspaceApproval,
     COMPANION_CREDENTIAL_FILE_NAME,
 };
+use muniment_core::auth::EntitlementSnapshotTracker;
 use muniment_core::memory_runtime::ApplicationMemoryRuntime;
 use muniment_core::pi_execution::PiRuntime;
 use muniment_core::session_thread::SessionThread;
@@ -30,6 +31,7 @@ fn boundaries(profile: &TemporaryProfile) -> RuntimeAttachBoundaries {
             profile.profile.join("memory"),
         )),
         RuntimeActivityRegistry::new(),
+        Arc::new(EntitlementSnapshotTracker::new()),
         SignedWorkspaceApproval::default(),
         Arc::new(SessionThread::default()),
     )
