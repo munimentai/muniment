@@ -338,10 +338,10 @@ pub async fn auth_sign_out(
         || attach_state.clear_workspace(),
         move || local_sign_out(store),
         |client| {
-            let status = client
+            let response = client
                 .sign_out()
                 .map_err(|_| "Muniment cannot reach its background service.".to_string())?;
-            serde_json::from_value(status).map_err(|error| error.to_string())
+            decode_sign_out_status(response)
         },
     )
     .await;
@@ -353,6 +353,15 @@ pub async fn auth_sign_out(
         move || local_sign_out(store),
     )
     .await
+}
+
+#[cfg(target_os = "linux")]
+fn decode_sign_out_status(response: serde_json::Value) -> Result<AuthStatus, String> {
+    let status = response
+        .get("status")
+        .cloned()
+        .ok_or_else(|| "missing status field".to_string())?;
+    serde_json::from_value(status).map_err(|error| error.to_string())
 }
 
 fn local_sign_out(store: Arc<KeyringNativeCredentialStore>) -> Result<AuthStatus, String> {
@@ -562,6 +571,23 @@ mod tests {
 
     #[cfg(target_os = "linux")]
     #[test]
+    fn connected_sign_out_decodes_the_wrapped_status() {
+        let status = decode_sign_out_status(serde_json::json!({
+            "status": {
+                "signed_in": false,
+                "subject": null,
+                "expires_at": null
+            }
+        }))
+        .unwrap();
+
+        assert!(!status.signed_in);
+        assert_eq!(status.subject, None);
+        assert_eq!(status.expires_at, None);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
     fn sign_out_handles_each_desktop_client_session() {
         use std::sync::atomic::AtomicUsize;
 
@@ -584,12 +610,7 @@ mod tests {
                 },
                 move |_| {
                     assert_eq!(connected_calls.fetch_add(1, Ordering::SeqCst), 1);
-                    serde_json::from_value(serde_json::json!({
-                        "signed_in": false,
-                        "subject": null,
-                        "expires_at": null
-                    }))
-                    .map_err(|error| error.to_string())
+                    Ok(signed_out_status())
                 },
             )
         }
