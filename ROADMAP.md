@@ -23,7 +23,7 @@ them must exercise the real contracts. It must add no mocked production path.
 > runtime-service extraction section. The fourteenth took the Phase 2 client
 > core section. The sixteenth through the twenty-fifth all took that
 > extraction section again, and so did the twenty-sixth through the
-> thirty-first. It grows every wave, so it stays the next compaction target.
+> thirty-second. It grows every wave, so it stays the next compaction target.
 
 ## M0 — Scaffold (done 2026-07-09)
 
@@ -491,42 +491,50 @@ reads the client status and shows the service-unreachable notice without hiding
 local empty states. The four slices changed 22 unique files after the branch
 sync.
 
-MEASURED 2026-08-14 (seventy-second wave, planner, read `dispatch_request`
-beside the six landed fixtures) — the wire names the second tranche and no code
-serves it. `dispatch_request` (`src-tauri/core/src/attach/linux.rs:2545`) answers
-eleven operations and falls to `unsupported_operation` for every other one, so a
-desktop client that sends `session.status` receives that error. The companion
-loop refuses `thread.rename` and `thread.delete` alone (`linux.rs:2174`), so a
-companion that sends one of the six also receives `unsupported_operation` where
-the amendment names `unauthorized`. `ThreadListService` (`linux.rs:854`) carries
-no entry for the six, so no runtime override can exist yet.
+DONE 2026-08-14 through 2026-08-15 — all five seventy-second-wave slices landed
+(MUNIDESK-1269 through 1273). `dispatch_request`
+(`src-tauri/core/src/attach/linux.rs:2601`) serves the six second-tranche
+operations, `ThreadListService` (`linux.rs:891`) declares one entry per
+operation, and the companion loop refuses all eight desktop-only operations with
+`unauthorized`. `DesktopClientHolder` carries a method per operation
+(`src-tauri/attach/src/client.rs:1445`). `Connected programs` names the
+background service while its supervisor reconnects, and each admission route
+sends its own grant type instead of one shared `MigrationControlAuthorized`
+frame.
 
-MEASURED 2026-08-14 (seventy-first wave, planner, read the `Connected programs`
-branch order) — the panel tells a user to close a window that is not the problem.
-`src/lib/AccessPanel.svelte:306` renders the background-service line only while
-`presenting` is true, and `serve_approval_presenter_at`
-(`src-tauri/attach/src/client.rs:2005`) sets that flag only between a completed
-handshake and a dropped session. While the presenter reconnects, the panel falls
-to `Connected programs are available in another Muniment window.` with a
-`Close this window` button. The runtime service holds the lock in that state, so
-closing the window fixes nothing. The status slice landed, so
-`AttachListenerStatus` (`src-tauri/src/attach_service.rs:386`) now reports
-`supervisor_running`, and the seventy-second wave files the copy fix.
+DONE 2026-08-15 — all six seventy-third-wave slices landed (MUNIDESK-1276
+through MUNIDESK-1281). `RuntimeAttachBoundaries` answers all six second-tranche
+operations through the runtime service entries. `auth_entitlement_snapshot`,
+`auth_devices`, `auth_sign_out`, `attach_companions`, and
+`attach_revoke_companion` use the connected desktop client, fail while its
+supervisor reconnects, and keep their local path while the desktop owns the
+listener. `auth_status` remains a local keychain read.
+
+MEASURED 2026-08-15 (seventy-fourth wave, planner, read the runtime composition
+beside `main`) — the complete runtime owner is dormant. `RuntimeAttachState`
+(`src-tauri/runtime/src/attach_state.rs:22`) opens the journal, companion
+registry, activity state, entitlement tracker, approval coordinator, and every
+boundary used by `compose_attach_service`. `run_migration_takeover`
+(`runtime/src/migration.rs:64`) performs the nonce-bound handoff and starts the
+listener, while `run_attach_listener` starts one for a fresh profile. `main`
+(`runtime/src/main.rs:60`) calls neither path. It only waits for the instance
+lock and then waits for a termination signal, so no installed runtime process
+can answer a desktop client.
+
+MEASURED 2026-08-15 (seventy-fourth wave, planner, read the remaining auth
+commands and the Linux package inputs) — browser sign-in is the last desktop
+auth operation with no client route. `auth_sign_in`
+(`src-tauri/src/auth/mod.rs:181`) opens the browser and writes the desktop
+keychain directly. The attach operation enum has no sign-in operation, and ADR
+0012 requires a separate browser-opener decision before adding one. The Linux
+bundle ships the runtime payload (`src-tauri/tauri.linux.conf.json:12`), but the
+repository contains no `systemd --user` socket or service unit to start it.
 
 RETIRED 2026-08-14 (seventy-first wave, planner, read `compose_attach_service`) —
 the runtime composition owes no Home resolution work. It reads `configured_home`
 first and falls back to `choose_default_home` only when the user recorded no
 choice (`src-tauri/runtime/src/attach_service.rs:22`), which is the rule
 `resolve_attach_home` follows on the desktop.
-
-MEASURED 2026-08-14 (sixty-seventh wave, planner, read every
-`MigrationControlAuthorized` construction) — one frame type names three different
-grants. `src-tauri/attach/src/negotiation.rs:270` declares it, and migration control
-(`src-tauri/core/src/attach/linux.rs:1823`), the approval presenter
-(`attach/presenter_admission.rs:102`), and the desktop client
-(`attach/desktop_client_admission.rs:124`) each send it under different field rules.
-The rename takes `src-tauri/attach/src/fixtures.rs`, which the seventy-first-wave
-wire-naming slice also takes, so the lane holds it for a fourth wave.
 
 MEASURED 2026-08-14 (sixty-sixth wave, planner, read the accept loop with no
 expected desktop payload) — a runtime that resolves no installed desktop payload
@@ -584,28 +592,39 @@ projector always holds state there. A test seam would also prove nothing, becaus
 projector rejects that event too. The lane re-opens this only against a new
 failure route.
 
-MERGE HAZARD — the seventy-second-wave slices are filed. Slices 1 and 2 both
-take `src-tauri/core/src/attach/linux.rs`, and both edit the same desktop-only
-refusal list. Slice 3 takes the attach client alone. Slice 4 takes the access
-panel and its tests. Slice 5 takes the attach negotiation module and the three
-admission sites. Every ticket tells the implementer to rebase on `main` before it
-opens the pull request. The 2026-08-04 silent revert came from a stale base.
+MERGE HAZARD — the seventy-fourth-wave slices are filed. Slices 2 through 4 all
+take the attach operation surface in sequence. Slices 4 and 5 both take
+`src-tauri/src/auth/mod.rs`. Slice 6 takes the runtime entry point and Linux
+package inputs after the first five land. Every ticket tells the implementer to
+rebase on `main` before it opens the pull request. The 2026-08-04 silent revert
+came from a stale base.
 
-SELECTED 2026-08-14 (seventy-second wave) — five slices in priority order.
+SELECTED 2026-08-15 (seventy-fourth wave) — six slices in priority order.
 
-1. Core dispatch for the four session operations of the second tranche.
-2. Core dispatch for `companion.list` and `companion.revoke`.
-3. The typed desktop client methods for all six second-tranche operations.
-4. The `Connected programs` instance-lock copy while its supervisor reconnects.
-5. The grant-specific replacement for `MigrationControlAuthorized`.
+1. Amend ADR 0012 with the service-owned browser sign-in request and presenter
+   rules.
+2. Add the sign-in operation, canonical fixtures, and desktop-only refusal rules.
+3. Dispatch sign-in through a runtime boundary with one concurrent attempt and
+   no token-bearing response.
+4. Add the typed desktop client sign-in method and its disconnect behavior.
+5. Route `auth_sign_in` through the client while the runtime owns the endpoint.
+6. Cut Linux ownership over to `RuntimeAttachState`, fresh or migration listener
+   startup, and the `systemd --user` registration as one activation slice.
 
-SEQUENCED 2026-08-14 (seventy-second wave) — the two dispatch slices come first,
-because a runtime override cannot exist before its trait method. The runtime
-boundaries for the six operations follow them. The desktop commands that ride the
-client connection follow the typed methods. The final cutover slice activates the
-listener, approval coordinator, journal, CAS, Pi, device session, credentials,
-authorization, and permission gates together, and it gives the runtime service its
-own signed workspace. Remote Control follows the cutover.
+NOT FILED 2026-08-15 (seventy-fourth wave, planner, read the shell's auth branch
+order) — `auth_status` keeps its local keychain read before the cutover. The
+signed-out branch precedes the service-unreachable branch
+(`src/App.svelte:864`, `:869`), so a failed `auth_status` would show the sign-in
+screen where the design shows the notice. `service::session_status` reads the
+keychain and takes no activity mark, so the local read returns the same answer the
+service would. Slice 6 moves this read with the credential store.
+
+SEQUENCED 2026-08-15 (seventy-fourth wave) — the decision comes before the wire,
+the wire before the boundary, and the boundary before its two callers. The final
+slice activates the listener, approval coordinator, journal, CAS, Pi, device
+session, credentials, authorization, and permission gates together. It also
+installs the user unit, moves `auth_status`, and gives the runtime its signed
+workspace. Remote Control follows the cutover.
 
 NOT FILED 2026-08-14 (seventy-second wave, planner, read the seventy-second-wave
 selection beside its own sequencing rule) — Linux user-unit registration stays
@@ -1085,10 +1104,10 @@ earlier one. Requiring an up-to-date branch before merge, or a merge queue, is a
 repository-settings change that sits with the owner. The planner files no ticket
 for it.
 
-VERIFIED 2026-08-14 (seventy-second wave, planner) — one
+VERIFIED 2026-08-15 (seventy-third wave, planner) — one
 `cargo test -p muniment-core -p muniment-runtime -p muniment-attach` run started
-from `src-tauri` passes 1,325 tests over 120 test binaries, and the build prints no
-warning. One `npm ci` then `npm test` run passes 939 frontend tests over 63 files
+from `src-tauri` passes 1,337 tests over 120 test binaries, and the build prints no
+warning. One `npm ci` then `npm test` run passes 940 frontend tests over 63 files
 with 31 skipped, plus 3 browser tests. Start cargo from `src-tauri`, because the
 repository root holds no `Cargo.toml`. A run started from the root dies with
 `could not find Cargo.toml`, which reads as a broken harness. This entry replaces
