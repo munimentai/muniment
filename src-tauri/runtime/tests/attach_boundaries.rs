@@ -21,7 +21,10 @@ use muniment_core::journal::Provenance;
 use muniment_core::memory_runtime::ApplicationMemoryRuntime;
 use muniment_core::permission_gate::ChatPermissionAnswer;
 use muniment_core::pi_execution::PiRuntime;
-use muniment_core::run_preparation::{prepare_new_run_with_session_thread, SessionThreadStart};
+use muniment_core::run_preparation::{
+    prepare_new_run_in_thread_after_validation, prepare_new_run_with_session_thread,
+    SessionThreadStart,
+};
 use muniment_core::run_start::{ActiveRun, RunAttachBoundaries, RunStartBoundaries};
 use muniment_core::session_thread::SessionThread;
 use muniment_runtime::{
@@ -295,6 +298,19 @@ fn runtime_boundaries_answer_all_attach_reads() {
         created_events[0].provenance.source_version,
         env!("CARGO_PKG_VERSION")
     );
+    prepare_new_run_in_thread_after_validation(
+        &storage,
+        "01900000-0000-7000-8000-000000000019",
+        "workspace-a",
+        Some("user"),
+        Vec::new(),
+        Some(provenance()),
+        &created_thread,
+        "test",
+        "1",
+        || Ok(()),
+    )
+    .unwrap();
 
     let run_id = "01900000-0000-7000-8000-000000000020";
     let (current_run_seq, _) = prepare_new_run_with_session_thread(
@@ -305,7 +321,7 @@ fn runtime_boundaries_answer_all_attach_reads() {
         },
         run_id,
         "workspace-a",
-        None,
+        Some("user"),
         Vec::new(),
         None,
         "test",
@@ -318,6 +334,30 @@ fn runtime_boundaries_answer_all_attach_reads() {
         .unwrap()
         .journal
         .run_thread_id(run_id)
+        .unwrap()
+        .unwrap();
+    let other_run = "01900000-0000-7000-8000-000000000021";
+    prepare_new_run_with_session_thread(
+        &storage,
+        SessionThreadStart {
+            tracker: &SessionThread::default(),
+            continue_existing: false,
+        },
+        other_run,
+        "workspace-a",
+        Some("other"),
+        Vec::new(),
+        None,
+        "test",
+        "1",
+        || Ok(()),
+    )
+    .unwrap();
+    let other_thread = storage
+        .lock()
+        .unwrap()
+        .journal
+        .run_thread_id(other_run)
         .unwrap()
         .unwrap();
 
@@ -357,6 +397,51 @@ fn runtime_boundaries_answer_all_attach_reads() {
     assert_eq!(status.subject.as_deref(), Some("user"));
 
     let session_body = r#"{"session":{"org_id":"20000000-0000-4000-8000-000000000002","user_id":"30000000-0000-4000-8000-000000000003","role":"owner","device_id":"10000000-0000-4000-8000-000000000001","client_role":"desktop"},"entitlement_snapshot":{"payload":{"version":7,"user_display_name":"User","organization_display_name":"Muniment","groups":[]},"signature":"signature-secret","algorithm":"hmac-sha256"}}"#;
+    let (base_url, summaries_server) = spawn_server(200, session_body.into());
+    std::env::set_var("MUNIMENT_API_BASE_URL", base_url);
+    let summaries = boundaries
+        .thread_summaries(ThreadListRequest {
+            limit: 10,
+            cursor: None,
+        })
+        .unwrap();
+    summaries_server.join().unwrap();
+    let summaries = summaries.summaries;
+    assert!(summaries
+        .iter()
+        .any(|summary| summary.thread_id == run_thread));
+    assert!(!summaries
+        .iter()
+        .any(|summary| summary.thread_id == other_thread));
+
+    let (base_url, history_server) = spawn_server(200, session_body.into());
+    std::env::set_var("MUNIMENT_API_BASE_URL", base_url);
+    let history = boundaries
+        .thread_history(ThreadOpenRequest {
+            thread_id: run_thread.clone(),
+            limit: 10,
+            cursor: None,
+        })
+        .unwrap();
+    history_server.join().unwrap();
+    assert_eq!(history.entries.len(), 1);
+    assert_eq!(history.entries[0].run_id, run_id);
+
+    let (base_url, other_history_server) = spawn_server(200, session_body.into());
+    std::env::set_var("MUNIMENT_API_BASE_URL", base_url);
+    assert_eq!(
+        boundaries
+            .thread_history(ThreadOpenRequest {
+                thread_id: other_thread,
+                limit: 10,
+                cursor: None,
+            })
+            .err()
+            .unwrap(),
+        ProtocolError::persistence_failed()
+    );
+    other_history_server.join().unwrap();
+
     let devices_body = r#"{"devices":[{"device_id":"10000000-0000-4000-8000-000000000001","client_id":"muniment-desktop","client_role":"desktop","platform":"desktop","created_at":"2026-08-01T10:00:00Z","revoked_at":null,"last_active_at":"2026-08-12T12:00:00Z","current":true}]}"#;
     let (base_url, devices_server) =
         spawn_server_sequence(vec![(200, session_body.into()), (200, devices_body.into())]);
@@ -383,6 +468,26 @@ fn runtime_boundaries_answer_all_attach_reads() {
     credential_store.clear_session().unwrap();
     assert_eq!(
         boundaries.list_devices().unwrap_err(),
+        ProtocolError::unauthorized()
+    );
+    assert_eq!(
+        boundaries
+            .thread_summaries(ThreadListRequest {
+                limit: 10,
+                cursor: None,
+            })
+            .unwrap_err(),
+        ProtocolError::unauthorized()
+    );
+    assert_eq!(
+        boundaries
+            .thread_history(ThreadOpenRequest {
+                thread_id: run_thread.clone(),
+                limit: 10,
+                cursor: None,
+            })
+            .err()
+            .unwrap(),
         ProtocolError::unauthorized()
     );
     credential_store
