@@ -17,7 +17,9 @@ use muniment_core::session_thread::SessionThread;
 use muniment_runtime::{open_profile_storage, RuntimeAttachBoundaries};
 
 mod common;
-use common::{credentials, spawn_server, TemporaryProfile};
+use common::{
+    credentials, credentials_with_expiry, spawn_server, spawn_server_sequence, TemporaryProfile,
+};
 
 fn provenance() -> Provenance {
     let mut provenance = Provenance {
@@ -137,7 +139,24 @@ fn runtime_boundaries_answer_all_attach_reads() {
     let credential_store = KeyringNativeCredentialStore::new();
     credential_store.clear_session().unwrap();
     credential_store.save_credentials(&credentials()).unwrap();
+
+    let status = boundaries.session_status().unwrap();
+    assert!(status.signed_in);
+    assert_eq!(status.subject.as_deref(), Some("user"));
+
     let session_body = r#"{"session":{"org_id":"20000000-0000-4000-8000-000000000002","user_id":"30000000-0000-4000-8000-000000000003","role":"owner","device_id":"10000000-0000-4000-8000-000000000001","client_role":"desktop"},"entitlement_snapshot":{"payload":{"version":7,"user_display_name":"User","organization_display_name":"Muniment","groups":[]},"signature":"signature-secret","algorithm":"hmac-sha256"}}"#;
+    let devices_body = r#"{"devices":[{"device_id":"10000000-0000-4000-8000-000000000001","client_id":"muniment-desktop","client_role":"desktop","platform":"desktop","created_at":"2026-08-01T10:00:00Z","revoked_at":null,"last_active_at":"2026-08-12T12:00:00Z","current":true}]}"#;
+    let (base_url, devices_server) =
+        spawn_server_sequence(vec![(200, session_body.into()), (200, devices_body.into())]);
+    std::env::set_var("MUNIMENT_API_BASE_URL", base_url);
+    let devices = boundaries.list_devices().unwrap();
+    assert_eq!(devices.devices.len(), 1);
+    assert!(devices.devices[0].current);
+    let device_requests = devices_server.join().unwrap();
+    assert_eq!(device_requests.len(), 2);
+    let devices_request = device_requests[1].to_ascii_lowercase();
+    assert!(devices_request.contains("authorization: bearer access-secret\r\n"));
+
     let (base_url, rename_server) = spawn_server(200, session_body.into());
     std::env::set_var("MUNIMENT_API_BASE_URL", base_url);
     boundaries
@@ -149,6 +168,18 @@ fn runtime_boundaries_answer_all_attach_reads() {
     boundaries.delete_thread(&run_thread, provenance()).unwrap();
     delete_server.join().unwrap();
     std::env::remove_var("MUNIMENT_API_BASE_URL");
+    credential_store.clear_session().unwrap();
+    assert_eq!(
+        boundaries.list_devices().unwrap_err(),
+        ProtocolError::unauthorized()
+    );
+    credential_store
+        .save_credentials(&credentials_with_expiry(0))
+        .unwrap();
+    assert_eq!(
+        boundaries.list_devices().unwrap_err(),
+        ProtocolError::unauthorized()
+    );
     credential_store.clear_session().unwrap();
 
     let mutation_events = storage
