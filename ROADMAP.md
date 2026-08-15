@@ -500,14 +500,14 @@ shell shows the service-unreachable notice without hiding local empty states,
 `Connected programs` names the background service while the supervisor
 reconnects, and each admission route sends its own grant type.
 
-DONE 2026-08-15 — the five filed seventy-fourth-wave slices landed
+DONE 2026-08-15 — the six filed seventy-fourth-wave slices landed
 (MUNIDESK-1283 through 1288). ADR 0012 carries the runtime-owned browser
 sign-in amendment. The wire names `session.sign_in` with its fixture,
 `dispatch_request` serves it under one concurrent attempt and answers
 `AuthStatus` alone, `DesktopClientHolder::sign_in` is the typed method, and
 `auth_sign_in` (`src-tauri/src/auth/mod.rs:181`) reaches it through
 `sign_in_for_session`. The runtime opens the system browser through its own
-injected opener. The sixth slice, the Linux ownership cutover, never
+injected opener. The unfiled Linux ownership cutover slice never
 dispatched.
 
 MEASURED 2026-08-15 (seventy-fourth wave, planner, read the runtime composition
