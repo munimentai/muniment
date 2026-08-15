@@ -434,7 +434,7 @@ async fn auth_devices_with_state<R: tauri::Runtime>(
 }
 
 #[cfg(target_os = "linux")]
-fn background_service_error() -> String {
+pub(crate) fn background_service_error() -> String {
     "Muniment cannot reach its background service.".to_string()
 }
 
