@@ -77,6 +77,7 @@ fn runtime_boundaries_prepare_a_desktop_run() {
         activity,
         SignedWorkspaceApproval::default(),
         Arc::new(SessionThread::default()),
+        muniment_runtime::open_companion_registry(&profile).unwrap(),
     );
     assert!(matches!(
         boundaries.prepare_run(
