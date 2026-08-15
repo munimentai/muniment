@@ -21,6 +21,11 @@ use muniment_core::auth::{
 use serde::Serialize;
 use tauri::Emitter;
 
+#[cfg(target_os = "linux")]
+use crate::attach_service::DesktopClientSession;
+#[cfg(target_os = "linux")]
+use muniment_core::attach::DesktopClientHolder;
+
 /// How long the loopback listener waits for the user to finish in the
 /// browser before the sign-in attempt is abandoned.
 const SIGN_IN_TIMEOUT: Duration = Duration::from_secs(300);
@@ -325,20 +330,60 @@ pub async fn auth_sign_out(
     attach_state: tauri::State<'_, crate::attach_service::AttachCompanionState>,
 ) -> Result<AuthStatus, String> {
     let store = state.native_store.clone();
+
+    #[cfg(target_os = "linux")]
+    return sign_out_for_session(
+        &state,
+        attach_state.desktop_client_session(),
+        || attach_state.clear_workspace(),
+        move || local_sign_out(store),
+        |client| {
+            let status = client
+                .sign_out()
+                .map_err(|_| "Muniment cannot reach its background service.".to_string())?;
+            serde_json::from_value(status).map_err(|error| error.to_string())
+        },
+    )
+    .await;
+
+    #[cfg(not(target_os = "linux"))]
     sign_out_marked(
         &state,
         || attach_state.clear_workspace(),
-        move || {
-            auth::sign_out_native_session(
-                store.as_ref(),
-                &UreqRevocationTransport::new(Duration::from_secs(2)),
-                &auth::api_base_url(),
-            )
-            .map_err(|error| error.to_string())?;
-            auth::native_status(store.as_ref(), unix_time()).map_err(|error| error.to_string())
-        },
+        move || local_sign_out(store),
     )
     .await
+}
+
+fn local_sign_out(store: Arc<KeyringNativeCredentialStore>) -> Result<AuthStatus, String> {
+    auth::sign_out_native_session(
+        store.as_ref(),
+        &UreqRevocationTransport::new(Duration::from_secs(2)),
+        &auth::api_base_url(),
+    )
+    .map_err(|error| error.to_string())?;
+    auth::native_status(store.as_ref(), unix_time()).map_err(|error| error.to_string())
+}
+
+#[cfg(target_os = "linux")]
+async fn sign_out_for_session(
+    state: &AuthState,
+    session: DesktopClientSession,
+    clear_workspace: impl FnOnce(),
+    local_step: impl FnOnce() -> Result<AuthStatus, String> + Send + 'static,
+    connected_step: impl FnOnce(DesktopClientHolder) -> Result<AuthStatus, String> + Send + 'static,
+) -> Result<AuthStatus, String> {
+    match session {
+        DesktopClientSession::NoSupervisor => {
+            sign_out_marked(state, clear_workspace, local_step).await
+        }
+        DesktopClientSession::Connected(client) => {
+            sign_out_marked(state, clear_workspace, move || connected_step(client)).await
+        }
+        DesktopClientSession::Disconnected => {
+            Err("Muniment cannot reach its background service.".into())
+        }
+    }
 }
 
 /// Takes the authentication-operation mark before `clear_workspace` mutates
@@ -513,6 +558,78 @@ mod tests {
         assert!(marked_at_clear.load(Ordering::SeqCst));
         assert!(marked_during_sign_out.load(Ordering::SeqCst));
         assert!(!runtime_activity.snapshot().authentication_operation);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn sign_out_handles_each_desktop_client_session() {
+        use std::sync::atomic::AtomicUsize;
+
+        fn steps() -> (
+            Arc<AtomicUsize>,
+            impl FnOnce(),
+            impl FnOnce() -> Result<AuthStatus, String> + Send + 'static,
+            impl FnOnce(DesktopClientHolder) -> Result<AuthStatus, String> + Send + 'static,
+        ) {
+            let calls = Arc::new(AtomicUsize::new(0));
+            let clear_calls = calls.clone();
+            let local_calls = calls.clone();
+            let connected_calls = calls.clone();
+            (
+                calls,
+                move || assert_eq!(clear_calls.fetch_add(1, Ordering::SeqCst), 0),
+                move || {
+                    assert_eq!(local_calls.fetch_add(1, Ordering::SeqCst), 1);
+                    Ok(signed_out_status())
+                },
+                move |_| {
+                    assert_eq!(connected_calls.fetch_add(1, Ordering::SeqCst), 1);
+                    serde_json::from_value(serde_json::json!({
+                        "signed_in": false,
+                        "subject": null,
+                        "expires_at": null
+                    }))
+                    .map_err(|error| error.to_string())
+                },
+            )
+        }
+
+        let state = AuthState::new(RuntimeActivityRegistry::new());
+        let (calls, clear, local, connected) = steps();
+        let status = tauri::async_runtime::block_on(sign_out_for_session(
+            &state,
+            DesktopClientSession::NoSupervisor,
+            clear,
+            local,
+            connected,
+        ))
+        .unwrap();
+        assert!(!status.signed_in);
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
+
+        let (calls, clear, local, connected) = steps();
+        let status = tauri::async_runtime::block_on(sign_out_for_session(
+            &state,
+            DesktopClientSession::Connected(DesktopClientHolder::new()),
+            clear,
+            local,
+            connected,
+        ))
+        .unwrap();
+        assert!(!status.signed_in);
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
+
+        let (calls, clear, local, connected) = steps();
+        let error = tauri::async_runtime::block_on(sign_out_for_session(
+            &state,
+            DesktopClientSession::Disconnected,
+            clear,
+            local,
+            connected,
+        ))
+        .unwrap_err();
+        assert_eq!(error, "Muniment cannot reach its background service.");
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
     }
 
     #[test]
