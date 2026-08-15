@@ -458,6 +458,42 @@ impl RunAttachBoundaries for RuntimeAttachBoundaries {
         ThreadListService::open_thread(&mut storage.journal, workspace, request)
     }
 
+    fn thread_summaries(
+        &self,
+        request: ThreadListRequest,
+    ) -> Result<muniment_core::journal::thread_summaries::ThreadSummaryPage, ProtocolError> {
+        let subject = self
+            .fresh_tokens()
+            .map_err(|error| error.protocol_error())?
+            .subject;
+        service::thread_summaries(
+            Arc::clone(&self.storage),
+            subject,
+            usize::from(request.limit),
+            request.cursor,
+        )
+        .map_err(|_| ProtocolError::persistence_failed())
+    }
+
+    fn thread_history(
+        &self,
+        request: ThreadOpenRequest,
+    ) -> Result<muniment_core::thread_history::ChatThreadOpenPage, ProtocolError> {
+        let subject = self
+            .fresh_tokens()
+            .map_err(|error| error.protocol_error())?
+            .subject;
+        service::thread_page(
+            &self.profile_directory,
+            Arc::clone(&self.storage),
+            subject,
+            request.thread_id,
+            usize::from(request.limit),
+            request.cursor,
+        )
+        .map_err(|_| ProtocolError::persistence_failed())
+    }
+
     fn create_thread(
         &self,
         workspace: &str,
