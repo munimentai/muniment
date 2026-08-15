@@ -371,14 +371,20 @@ jobs:
           retention-days: 2
           if-no-files-found: error
 
-      - name: Upload stable JUnit report
+      - name: Publish the linux-e2e-report to the CI artifact store
         if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: linux-e2e-report
-          path: ${{ runner.temp }}/muniment-e2e-artifacts/junit-*.xml
-          retention-days: 30
-          if-no-files-found: error
+        continue-on-error: true
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.FACTORY_CI_S3_ACCESS_KEY }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.FACTORY_CI_S3_SECRET_KEY }}
+          AWS_DEFAULT_REGION: us-east-1
+        run: |
+          set -euo pipefail
+          for f in "$RUNNER_TEMP"/muniment-e2e-artifacts/junit-*.xml; do
+            [ -f "$f" ] || continue
+            aws --endpoint-url http://10.1.10.101:9000 s3 cp "$f" \
+              "s3://factory-ci-artifacts/muniment-desktop/${{ github.run_id }}/linux-e2e-report/$(basename "$f")"
+          done
 
       - name: Preserve E2E result
         if: always()
