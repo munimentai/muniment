@@ -6,6 +6,7 @@ use std::sync::{Arc, Mutex};
 
 use muniment_core::attach::linux::{ThreadListRequest, ThreadOpenRequest};
 use muniment_core::attach::{ProtocolError, RuntimeActivityRegistry, SignedWorkspaceApproval};
+use muniment_core::auth::{KeyringNativeCredentialStore, NativeCredentialStore};
 use muniment_core::journal::Provenance;
 use muniment_core::memory_runtime::ApplicationMemoryRuntime;
 use muniment_core::permission_gate::ChatPermissionAnswer;
@@ -16,7 +17,7 @@ use muniment_core::session_thread::SessionThread;
 use muniment_runtime::{open_profile_storage, RuntimeAttachBoundaries};
 
 mod common;
-use common::TemporaryProfile;
+use common::{credentials, spawn_server, TemporaryProfile};
 
 fn provenance() -> Provenance {
     let mut provenance = Provenance {
@@ -131,6 +132,35 @@ fn runtime_boundaries_answer_all_attach_reads() {
         )
         .unwrap();
     assert_eq!(opened.thread_id, run_thread);
+
+    muniment_core::chat_prompt::use_mock_keyring_for_tests();
+    let credential_store = KeyringNativeCredentialStore::new();
+    credential_store.clear_session().unwrap();
+    credential_store.save_credentials(&credentials()).unwrap();
+    let session_body = r#"{"session":{"org_id":"20000000-0000-4000-8000-000000000002","user_id":"30000000-0000-4000-8000-000000000003","role":"owner","device_id":"10000000-0000-4000-8000-000000000001","client_role":"desktop"},"entitlement_snapshot":{"payload":{"version":7,"user_display_name":"User","organization_display_name":"Muniment","groups":[]},"signature":"signature-secret","algorithm":"hmac-sha256"}}"#;
+    let (base_url, rename_server) = spawn_server(200, session_body.into());
+    std::env::set_var("MUNIMENT_API_BASE_URL", base_url);
+    boundaries
+        .rename_thread(&run_thread, "New title", provenance())
+        .unwrap();
+    rename_server.join().unwrap();
+    let (base_url, delete_server) = spawn_server(200, session_body.into());
+    std::env::set_var("MUNIMENT_API_BASE_URL", base_url);
+    boundaries.delete_thread(&run_thread, provenance()).unwrap();
+    delete_server.join().unwrap();
+    std::env::remove_var("MUNIMENT_API_BASE_URL");
+    credential_store.clear_session().unwrap();
+
+    let mutation_events = storage
+        .lock()
+        .unwrap()
+        .journal
+        .thread_events(&run_thread)
+        .unwrap();
+    assert_eq!(mutation_events[1].event_type, "thread.title.renamed");
+    assert_eq!(mutation_events[1].provenance.source, "muniment-runtime");
+    assert_eq!(mutation_events[2].event_type, "thread.deleted");
+    assert_eq!(mutation_events[2].provenance.source, "muniment-runtime");
 
     let stream = boundaries.stream_run("workspace-a", run_id, 0).unwrap();
     assert_eq!(stream.current_run_seq, current_run_seq);

@@ -17,7 +17,9 @@ use muniment_core::chat_grant::{ChatGrant, FetchGrantError};
 use muniment_core::chat_resume::{clear_active_run, install_active_run};
 use muniment_core::chat_view::{chat_attachments, ChatAttachment, SelectedFile};
 use muniment_core::journal::reducer::ChatProjector;
-use muniment_core::journal::thread_mutation::create_thread_now;
+use muniment_core::journal::thread_mutation::{
+    append_thread_delete_now, append_thread_rename_now, create_thread_now, ThreadMutationError,
+};
 use muniment_core::journal::Provenance;
 use muniment_core::memory_index::ModelMemoryCapability;
 use muniment_core::memory_runtime::ApplicationMemoryRuntime;
@@ -372,6 +374,56 @@ impl RunAttachBoundaries for RuntimeAttachBoundaries {
             .map_err(|_| ProtocolError::persistence_failed())
     }
 
+    fn rename_thread(
+        &self,
+        thread_id: &str,
+        title: &str,
+        mut provenance: Provenance,
+    ) -> Result<(), ProtocolError> {
+        let subject = self
+            .fresh_tokens()
+            .map_err(|error| error.protocol_error())?
+            .subject;
+        provenance.source = "muniment-runtime".into();
+        provenance.source_version = env!("CARGO_PKG_VERSION").into();
+        let mut storage = self
+            .storage
+            .lock()
+            .map_err(|_| ProtocolError::persistence_failed())?;
+        append_thread_rename_now(
+            &mut storage.journal,
+            subject.as_deref(),
+            thread_id,
+            title,
+            &provenance,
+        )
+        .map_err(thread_mutation_protocol_error)
+    }
+
+    fn delete_thread(
+        &self,
+        thread_id: &str,
+        mut provenance: Provenance,
+    ) -> Result<(), ProtocolError> {
+        let subject = self
+            .fresh_tokens()
+            .map_err(|error| error.protocol_error())?
+            .subject;
+        provenance.source = "muniment-runtime".into();
+        provenance.source_version = env!("CARGO_PKG_VERSION").into();
+        let mut storage = self
+            .storage
+            .lock()
+            .map_err(|_| ProtocolError::persistence_failed())?;
+        append_thread_delete_now(
+            &mut storage.journal,
+            subject.as_deref(),
+            thread_id,
+            &provenance,
+        )
+        .map_err(thread_mutation_protocol_error)
+    }
+
     fn stream_run(
         &self,
         workspace: &str,
@@ -422,5 +474,14 @@ impl RunAttachBoundaries for RuntimeAttachBoundaries {
             answer,
         )
         .map_err(RunStartError::InvalidRequest)
+    }
+}
+
+fn thread_mutation_protocol_error(error: ThreadMutationError) -> ProtocolError {
+    match error {
+        ThreadMutationError::NotOwned => ProtocolError::thread_not_found(),
+        ThreadMutationError::Ownership(_) | ThreadMutationError::Journal(_) => {
+            ProtocolError::persistence_failed()
+        }
     }
 }

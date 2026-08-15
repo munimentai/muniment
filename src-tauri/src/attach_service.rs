@@ -238,6 +238,13 @@ struct DesktopClientSupervisor {
 }
 
 #[cfg(target_os = "linux")]
+pub(crate) enum DesktopClientSession {
+    NoSupervisor,
+    Connected(DesktopClientHolder),
+    Disconnected,
+}
+
+#[cfg(target_os = "linux")]
 impl AttachCompanionState {
     fn new(listener: Arc<AttachListenerState>) -> Self {
         Self {
@@ -435,11 +442,46 @@ impl AttachCompanionState {
         self.record_connected(false);
     }
 
+    pub(crate) fn desktop_client_session(&self) -> DesktopClientSession {
+        if self
+            .desktop_client
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .is_none()
+        {
+            return DesktopClientSession::NoSupervisor;
+        }
+        if *self
+            .connected
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+        {
+            DesktopClientSession::Connected(self.desktop_client_holder.clone())
+        } else {
+            DesktopClientSession::Disconnected
+        }
+    }
+
     fn record_connected(&self, connected: bool) {
         *self
             .connected
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner) = connected;
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_desktop_client_for_test(
+        &self,
+        connected: bool,
+        start: impl FnOnce(DesktopClientStopHandle, DesktopClientHolder) -> std::thread::JoinHandle<()>,
+    ) {
+        self.start_desktop_client(start);
+        self.record_connected(connected);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn stop_desktop_client_for_test(&self) {
+        self.stop_desktop_client();
     }
 
     fn record_presenting(&self, presenting: bool) {
