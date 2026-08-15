@@ -68,6 +68,32 @@ pub struct RunStartLaunch {
 
 pub trait RunAttachBoundaries {
     #[cfg(target_os = "linux")]
+    fn session_status(&self) -> Result<crate::auth::AuthStatus, ProtocolError> {
+        Err(ProtocolError::unsupported_operation())
+    }
+    #[cfg(target_os = "linux")]
+    fn entitlement_snapshot(
+        &self,
+    ) -> Result<crate::attach::linux::EntitlementSnapshotResult, ProtocolError> {
+        Err(ProtocolError::unsupported_operation())
+    }
+    #[cfg(target_os = "linux")]
+    fn sign_out(&self, _provenance: Provenance) -> Result<crate::auth::AuthStatus, ProtocolError> {
+        Err(ProtocolError::unsupported_operation())
+    }
+    #[cfg(target_os = "linux")]
+    fn list_devices(&self) -> Result<crate::auth::NativeDeviceList, ProtocolError> {
+        Err(ProtocolError::unsupported_operation())
+    }
+    #[cfg(target_os = "linux")]
+    fn list_companions(&self) -> Result<Vec<crate::attach::CompanionRecord>, ProtocolError> {
+        Err(ProtocolError::unsupported_operation())
+    }
+    #[cfg(target_os = "linux")]
+    fn revoke_companion(&self, _client_identity: &str) -> Result<(), ProtocolError> {
+        Err(ProtocolError::unsupported_operation())
+    }
+    #[cfg(target_os = "linux")]
     fn list_threads(
         &self,
         workspace: &str,

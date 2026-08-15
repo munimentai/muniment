@@ -4,9 +4,13 @@ use std::collections::{BTreeMap, VecDeque};
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
 
-use muniment_core::attach::linux::{ThreadListRequest, ThreadOpenRequest};
-use muniment_core::attach::{ProtocolError, RuntimeActivityRegistry, SignedWorkspaceApproval};
-use muniment_core::auth::{KeyringNativeCredentialStore, NativeCredentialStore};
+use muniment_core::attach::linux::{
+    CompanionProvenance, ThreadListRequest, ThreadListService, ThreadOpenRequest,
+};
+use muniment_core::attach::{Id, ProtocolError, RuntimeActivityRegistry, SignedWorkspaceApproval};
+use muniment_core::auth::{
+    EntitlementSnapshotTracker, KeyringNativeCredentialStore, NativeCredentialStore,
+};
 use muniment_core::journal::Provenance;
 use muniment_core::memory_runtime::ApplicationMemoryRuntime;
 use muniment_core::permission_gate::ChatPermissionAnswer;
@@ -14,10 +18,16 @@ use muniment_core::pi_execution::PiRuntime;
 use muniment_core::run_preparation::{prepare_new_run_with_session_thread, SessionThreadStart};
 use muniment_core::run_start::{ActiveRun, RunAttachBoundaries, RunStartBoundaries};
 use muniment_core::session_thread::SessionThread;
-use muniment_runtime::{open_profile_storage, RuntimeAttachBoundaries};
+use muniment_runtime::{
+    open_companion_registry, open_profile_storage, RuntimeAttachBoundaries, RuntimeAttachState,
+};
 
 mod common;
-use common::{credentials, spawn_server, TemporaryProfile};
+use common::{
+    credentials, credentials_with_expiry, spawn_server, spawn_server_sequence, TemporaryProfile,
+};
+
+static TEST_LOCK: Mutex<()> = Mutex::new(());
 
 fn provenance() -> Provenance {
     let mut provenance = Provenance {
@@ -36,7 +46,68 @@ fn provenance() -> Provenance {
 }
 
 #[test]
+fn runtime_state_answers_entitlement_and_replays_sign_out() {
+    let _guard = TEST_LOCK.lock().unwrap();
+    muniment_core::chat_prompt::use_mock_keyring_for_tests();
+    let temporary_profile = TemporaryProfile::new("attach-session", false);
+    let state =
+        RuntimeAttachState::open(&temporary_profile.profile, &temporary_profile.config).unwrap();
+    let credential_store = KeyringNativeCredentialStore::new();
+    credential_store.clear_session().unwrap();
+    credential_store.save_credentials(&credentials()).unwrap();
+
+    let session_body = |version| {
+        format!(
+            r#"{{"session":{{"org_id":"20000000-0000-4000-8000-000000000002","user_id":"30000000-0000-4000-8000-000000000003","role":"owner","device_id":"10000000-0000-4000-8000-000000000001","client_role":"desktop"}},"entitlement_snapshot":{{"payload":{{"version":{version},"user_display_name":"User","organization_display_name":"Muniment","groups":[]}},"signature":"signature-secret","algorithm":"hmac-sha256"}}}}"#
+        )
+    };
+    let (base_url, server) = spawn_server(200, session_body(7));
+    std::env::set_var("MUNIMENT_API_BASE_URL", base_url);
+    let first = state.boundaries().entitlement_snapshot().unwrap();
+    assert_eq!(first.snapshot.snapshot_version, 7);
+    assert_eq!(first.changed_snapshot_version, None);
+    server.join().unwrap();
+
+    let (base_url, server) = spawn_server(200, session_body(8));
+    std::env::set_var("MUNIMENT_API_BASE_URL", base_url);
+    let second = state.boundaries().entitlement_snapshot().unwrap();
+    assert_eq!(second.snapshot.snapshot_version, 8);
+    assert_eq!(second.changed_snapshot_version, Some(8));
+    server.join().unwrap();
+
+    let (base_url, server) = spawn_server(200, r#"{"ok":true}"#.into());
+    std::env::set_var("MUNIMENT_API_BASE_URL", base_url);
+    let mut service = state.attach_service().unwrap();
+    let idempotency_key = Id::new("018f0000-0000-7000-8000-000000000030").unwrap();
+    let companion = CompanionProvenance {
+        profile: "default".into(),
+        companion_kind: "cli".into(),
+        companion_version: "1.2.3".into(),
+        peer_uid: 1000,
+        peer_pid: 42,
+    };
+    for request_id in [
+        "018f0000-0000-7000-8000-000000000031",
+        "018f0000-0000-7000-8000-000000000032",
+    ] {
+        let status = service
+            .sign_out(
+                &Id::new(request_id).unwrap(),
+                &idempotency_key,
+                companion.clone(),
+            )
+            .unwrap();
+        assert!(!status.signed_in);
+    }
+    let request = server.join().unwrap().to_ascii_lowercase();
+    assert!(request.starts_with("post /v1/auth/native/revoke http/1.1\r\n"));
+    assert!(credential_store.load_credentials().unwrap().is_none());
+    std::env::remove_var("MUNIMENT_API_BASE_URL");
+}
+
+#[test]
 fn runtime_boundaries_answer_all_attach_reads() {
+    let _guard = TEST_LOCK.lock().unwrap();
     let temporary_profile = TemporaryProfile::new("attach-boundaries", false);
     let profile = temporary_profile.profile.clone();
     let storage = open_profile_storage(&profile).unwrap();
@@ -63,8 +134,10 @@ fn runtime_boundaries_answer_all_attach_reads() {
             profile.join("memory"),
         )),
         runtime_activity,
+        Arc::new(EntitlementSnapshotTracker::new()),
         SignedWorkspaceApproval::default(),
         Arc::new(SessionThread::default()),
+        open_companion_registry(&profile).unwrap(),
     );
 
     let created_thread = boundaries
@@ -137,7 +210,24 @@ fn runtime_boundaries_answer_all_attach_reads() {
     let credential_store = KeyringNativeCredentialStore::new();
     credential_store.clear_session().unwrap();
     credential_store.save_credentials(&credentials()).unwrap();
+
+    let status = boundaries.session_status().unwrap();
+    assert!(status.signed_in);
+    assert_eq!(status.subject.as_deref(), Some("user"));
+
     let session_body = r#"{"session":{"org_id":"20000000-0000-4000-8000-000000000002","user_id":"30000000-0000-4000-8000-000000000003","role":"owner","device_id":"10000000-0000-4000-8000-000000000001","client_role":"desktop"},"entitlement_snapshot":{"payload":{"version":7,"user_display_name":"User","organization_display_name":"Muniment","groups":[]},"signature":"signature-secret","algorithm":"hmac-sha256"}}"#;
+    let devices_body = r#"{"devices":[{"device_id":"10000000-0000-4000-8000-000000000001","client_id":"muniment-desktop","client_role":"desktop","platform":"desktop","created_at":"2026-08-01T10:00:00Z","revoked_at":null,"last_active_at":"2026-08-12T12:00:00Z","current":true}]}"#;
+    let (base_url, devices_server) =
+        spawn_server_sequence(vec![(200, session_body.into()), (200, devices_body.into())]);
+    std::env::set_var("MUNIMENT_API_BASE_URL", base_url);
+    let devices = boundaries.list_devices().unwrap();
+    assert_eq!(devices.devices.len(), 1);
+    assert!(devices.devices[0].current);
+    let device_requests = devices_server.join().unwrap();
+    assert_eq!(device_requests.len(), 2);
+    let devices_request = device_requests[1].to_ascii_lowercase();
+    assert!(devices_request.contains("authorization: bearer access-secret\r\n"));
+
     let (base_url, rename_server) = spawn_server(200, session_body.into());
     std::env::set_var("MUNIMENT_API_BASE_URL", base_url);
     boundaries
@@ -149,6 +239,18 @@ fn runtime_boundaries_answer_all_attach_reads() {
     boundaries.delete_thread(&run_thread, provenance()).unwrap();
     delete_server.join().unwrap();
     std::env::remove_var("MUNIMENT_API_BASE_URL");
+    credential_store.clear_session().unwrap();
+    assert_eq!(
+        boundaries.list_devices().unwrap_err(),
+        ProtocolError::unauthorized()
+    );
+    credential_store
+        .save_credentials(&credentials_with_expiry(0))
+        .unwrap();
+    assert_eq!(
+        boundaries.list_devices().unwrap_err(),
+        ProtocolError::unauthorized()
+    );
     credential_store.clear_session().unwrap();
 
     let mutation_events = storage
@@ -207,8 +309,10 @@ fn runtime_boundaries_share_owner_approval_and_session_thread() {
             profile.join("memory"),
         )),
         RuntimeActivityRegistry::new(),
+        Arc::new(EntitlementSnapshotTracker::new()),
         approval.clone(),
         Arc::clone(&session_thread),
+        open_companion_registry(&profile).unwrap(),
     );
     let sibling = RuntimeAttachBoundaries::new(
         Arc::clone(&storage),
@@ -221,8 +325,10 @@ fn runtime_boundaries_share_owner_approval_and_session_thread() {
             profile.join("memory"),
         )),
         RuntimeActivityRegistry::new(),
+        Arc::new(EntitlementSnapshotTracker::new()),
         approval,
         Arc::clone(&session_thread),
+        open_companion_registry(&profile).unwrap(),
     );
 
     boundaries

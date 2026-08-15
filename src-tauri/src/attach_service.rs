@@ -183,7 +183,7 @@ pub(crate) struct AttachListenerState {
     approval: SignedWorkspaceApproval,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
 pub struct AuthorizedCompanion {
     pub(crate) identity: String,
     pub(crate) claimed_kind: String,
@@ -573,7 +573,23 @@ pub fn attach_companions(
     state: tauri::State<'_, AttachCompanionState>,
 ) -> Result<Vec<AuthorizedCompanion>, ProtocolError> {
     #[cfg(target_os = "linux")]
-    return state.listener()?.list_companions();
+    return match state.desktop_client_session() {
+        DesktopClientSession::NoSupervisor => state.listener()?.list_companions(),
+        DesktopClientSession::Connected(client) => {
+            #[derive(serde::Deserialize)]
+            struct CompanionList {
+                companions: Vec<AuthorizedCompanion>,
+            }
+
+            let response = client
+                .list_companions()
+                .map_err(|_| ProtocolError::persistence_failed())?;
+            serde_json::from_value::<CompanionList>(response)
+                .map(|response| response.companions)
+                .map_err(|_| ProtocolError::persistence_failed())
+        }
+        DesktopClientSession::Disconnected => Err(ProtocolError::persistence_failed()),
+    };
 
     #[cfg(not(target_os = "linux"))]
     {
@@ -610,7 +626,14 @@ pub fn attach_revoke_companion(
     client_identity: String,
 ) -> Result<(), ProtocolError> {
     #[cfg(target_os = "linux")]
-    return state.listener()?.revoke_companion(&client_identity);
+    return match state.desktop_client_session() {
+        DesktopClientSession::NoSupervisor => state.listener()?.revoke_companion(&client_identity),
+        DesktopClientSession::Connected(client) => client
+            .revoke_companion(&client_identity)
+            .map(|_| ())
+            .map_err(|_| ProtocolError::persistence_failed()),
+        DesktopClientSession::Disconnected => Err(ProtocolError::persistence_failed()),
+    };
 
     #[cfg(not(target_os = "linux"))]
     {
@@ -1078,7 +1101,10 @@ pub fn stop_attach_listener<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
 mod tests {
     use super::*;
     use crate::test_support::{append_test_event, FakeRunStartBoundaries};
-    use muniment_core::attach::{decode_frame, encode_frame, Authorization, ErrorCode, Welcome};
+    use muniment_core::attach::{
+        decode_frame, encode_frame, Authorization, ErrorCode, Id, Protocol, Response, Success,
+        Welcome,
+    };
     use muniment_core::journal::reducer::reduce;
     use muniment_core::journal::RunJournal;
 
@@ -1754,6 +1780,136 @@ mod tests {
         );
 
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn companion_commands_use_each_desktop_client_session_state() {
+        use muniment_core::attach::{reconnect_welcome, serve_desktop_client_at};
+        use std::io::{Read, Write};
+        use std::os::unix::net::UnixListener;
+        use std::sync::mpsc;
+
+        fn read_value(stream: &mut impl Read) -> Value {
+            let mut prefix = [0; 4];
+            stream.read_exact(&mut prefix).unwrap();
+            let mut frame = vec![0; 4 + u32::from_be_bytes(prefix) as usize];
+            frame[..4].copy_from_slice(&prefix);
+            stream.read_exact(&mut frame[4..]).unwrap();
+            decode_frame(&frame).unwrap().unwrap().0
+        }
+
+        let endpoint =
+            std::env::temp_dir().join(format!("muniment-companion-client-{}.sock", Uuid::now_v7()));
+        let listener = UnixListener::bind(&endpoint).unwrap();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            assert_eq!(read_value(&mut stream)["client"]["kind"], "desktop-client");
+            stream
+                .write_all(
+                    &encode_frame(&reconnect_welcome(1, "0.0.1", "11".repeat(16), "")).unwrap(),
+                )
+                .unwrap();
+            stream
+                .write_all(
+                    &encode_frame(&json!({
+                        "profile_id": "profile-1",
+                        "capability": "33".repeat(32),
+                        "expires_at": 60,
+                        "idle_timeout_seconds": 30,
+                        "workspace_scopes": {"/work/signed": ["threads:read"]}
+                    }))
+                    .unwrap(),
+                )
+                .unwrap();
+
+            for body in [
+                json!({"companions": [{
+                    "identity": "companion-1",
+                    "claimed_kind": "cli",
+                    "claimed_version": "1.2.3",
+                    "approved_at": "2026-08-04T12:00:00Z"
+                }]}),
+                json!({}),
+                json!({"companions": [{"identity": "partial"}]}),
+            ] {
+                let request = read_value(&mut stream);
+                let request_id = Id::new(request["request_id"].as_str().unwrap()).unwrap();
+                stream
+                    .write_all(
+                        &encode_frame(&Response {
+                            protocol: Protocol,
+                            request_id,
+                            ok: Success,
+                            body,
+                        })
+                        .unwrap(),
+                    )
+                    .unwrap();
+            }
+        });
+
+        let state = AttachCompanionState::default();
+        let client_endpoint = endpoint.clone();
+        let (connected_tx, connected_rx) = mpsc::channel();
+        state.set_desktop_client_for_test(false, move |stop, holder| {
+            std::thread::spawn(move || {
+                let mut connected_tx = Some(connected_tx);
+                serve_desktop_client_at(
+                    &client_endpoint,
+                    "0.0.1",
+                    Duration::from_secs(1),
+                    Duration::from_millis(10),
+                    stop,
+                    holder,
+                    move |connected| {
+                        if connected {
+                            connected_tx.take().unwrap().send(()).unwrap();
+                        }
+                    },
+                )
+            })
+        });
+        connected_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        state.record_connected(true);
+        let app = tauri::test::mock_app();
+        app.manage(state);
+
+        assert_eq!(
+            attach_companions(app.state()).unwrap(),
+            vec![AuthorizedCompanion {
+                identity: "companion-1".into(),
+                claimed_kind: "cli".into(),
+                claimed_version: "1.2.3".into(),
+                approved_at: Some("2026-08-04T12:00:00Z".into()),
+            }]
+        );
+        attach_revoke_companion(app.state(), "companion-1".into()).unwrap();
+        assert_eq!(
+            attach_companions(app.state()).unwrap_err().code(),
+            ErrorCode::PersistenceFailed
+        );
+        server.join().unwrap();
+        app.state::<AttachCompanionState>()
+            .stop_desktop_client_for_test();
+        let _ = std::fs::remove_file(endpoint);
+
+        let disconnected = AttachCompanionState::default();
+        disconnected.set_desktop_client_for_test(false, |_, _| std::thread::spawn(|| {}));
+        let app = tauri::test::mock_app();
+        app.manage(disconnected);
+        assert_eq!(
+            attach_companions(app.state()).unwrap_err().code(),
+            ErrorCode::PersistenceFailed
+        );
+        assert_eq!(
+            attach_revoke_companion(app.state(), "companion-1".into())
+                .unwrap_err()
+                .code(),
+            ErrorCode::PersistenceFailed
+        );
+        app.state::<AttachCompanionState>()
+            .stop_desktop_client_for_test();
     }
 
     #[cfg(target_os = "linux")]

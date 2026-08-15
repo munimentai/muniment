@@ -3,9 +3,9 @@
 #![cfg(target_os = "linux")]
 
 use super::linux::{
-    CompanionProvenance, MigrationControlRequest, PermissionAnswerAccepted,
-    PermissionAnswerRequest, PermissionDecision, RunCancelAccepted, RunCancelRequest,
-    RunStartAccepted, RunStartRequest as AttachRunStartRequest, RunStreamPage,
+    CompanionProvenance, EntitlementSnapshotResult, MigrationControlRequest,
+    PermissionAnswerAccepted, PermissionAnswerRequest, PermissionDecision, RunCancelAccepted,
+    RunCancelRequest, RunStartAccepted, RunStartRequest as AttachRunStartRequest, RunStreamPage,
     ThreadCreateAccepted, ThreadListPage, ThreadListRequest, ThreadListService, ThreadOpenPage,
     ThreadOpenRequest,
 };
@@ -89,6 +89,42 @@ impl<B: RunStartBoundaries + RunAttachBoundaries, I: RunStartIdempotency> Thread
         self.boundaries.attach_approval()
     }
 
+    fn list_companions(&mut self) -> Result<Vec<super::CompanionRecord>, ProtocolError> {
+        self.boundaries.list_companions()
+    }
+
+    fn revoke_companion(
+        &mut self,
+        client_identity: &str,
+        request_id: &Id,
+        idempotency_key: &Id,
+        provenance: CompanionProvenance,
+    ) -> Result<(), ProtocolError> {
+        let canonical_input = json!({"client_identity": client_identity});
+        let ledger_request = AttachRequest {
+            protocol: Protocol,
+            request_id: request_id.clone(),
+            operation: Operation::CompanionRevoke,
+            capability: String::new(),
+            idempotency_key: Some(idempotency_key.clone()),
+            body: canonical_input.clone(),
+        };
+        self.idempotency.execute(
+            &provenance.profile,
+            &ledger_request,
+            &canonical_input,
+            || Ok(()),
+            || {
+                self.boundaries.revoke_companion(client_identity)?;
+                Ok(CommittedResult {
+                    body: json!({}),
+                    cursor: None,
+                })
+            },
+        )?;
+        Ok(())
+    }
+
     fn authorize_client(
         &mut self,
         client_identity: &str,
@@ -147,6 +183,54 @@ impl<B: RunStartBoundaries + RunAttachBoundaries, I: RunStartIdempotency> Thread
     fn ensure_home(&mut self) -> Result<(), ProtocolError> {
         crate::ensure_cross_project_home(&self.home)
             .map_err(|_| ProtocolError::persistence_failed())
+    }
+
+    fn session_status(&mut self) -> Result<crate::auth::AuthStatus, ProtocolError> {
+        self.boundaries.session_status()
+    }
+
+    fn entitlement_snapshot(&mut self) -> Result<EntitlementSnapshotResult, ProtocolError> {
+        self.boundaries.entitlement_snapshot()
+    }
+
+    fn sign_out(
+        &mut self,
+        request_id: &Id,
+        idempotency_key: &Id,
+        companion: CompanionProvenance,
+    ) -> Result<crate::auth::AuthStatus, ProtocolError> {
+        let canonical_input = json!({});
+        let ledger_request = AttachRequest {
+            protocol: Protocol,
+            request_id: request_id.clone(),
+            operation: Operation::SessionSignOut,
+            capability: String::new(),
+            idempotency_key: Some(idempotency_key.clone()),
+            body: canonical_input.clone(),
+        };
+        let provenance = attach_provenance(request_id, idempotency_key, &companion);
+        let outcome = self.idempotency.execute(
+            &companion.profile,
+            &ledger_request,
+            &canonical_input,
+            || Ok(()),
+            || {
+                let status = self.boundaries.sign_out(provenance)?;
+                Ok(CommittedResult {
+                    body: serde_json::to_value(status)
+                        .map_err(|_| ProtocolError::persistence_failed())?,
+                    cursor: None,
+                })
+            },
+        )?;
+        let committed = match outcome {
+            IdempotencyOutcome::Committed(result) | IdempotencyOutcome::Replayed(result) => result,
+        };
+        serde_json::from_value(committed.body).map_err(|_| ProtocolError::persistence_failed())
+    }
+
+    fn list_devices(&mut self) -> Result<crate::auth::NativeDeviceList, ProtocolError> {
+        self.boundaries.list_devices()
     }
 
     fn control_migration(

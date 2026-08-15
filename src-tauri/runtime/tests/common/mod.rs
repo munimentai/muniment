@@ -73,6 +73,30 @@ pub fn spawn_server(status: u16, body: String) -> (String, thread::JoinHandle<St
     spawn_server_with(status, body, || {})
 }
 
+pub fn spawn_server_sequence(
+    responses: Vec<(u16, String)>,
+) -> (String, thread::JoinHandle<Vec<String>>) {
+    let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+    let base_url = format!("http://{}", listener.local_addr().unwrap());
+    let handle = thread::spawn(move || {
+        responses
+            .into_iter()
+            .map(|(status, body)| {
+                let (mut stream, _) = listener.accept().unwrap();
+                let request = read_request(&mut stream);
+                write!(
+                    stream,
+                    "HTTP/1.1 {status} Result\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                )
+                .unwrap();
+                request
+            })
+            .collect()
+    });
+    (base_url, handle)
+}
+
 pub fn spawn_server_with<F>(
     status: u16,
     body: String,
