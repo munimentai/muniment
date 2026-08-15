@@ -426,7 +426,7 @@ window.__TAURI__ = {
             },
           ]
         : []
-      if (command === 'attach_listener_status') return { started: true, failure: null }
+      if (command === 'attach_listener_status') return { started: true, failure: null, connected: false, supervisor_running: false }
       if (command === 'attach_companions') return [
         {
           identity: '018f0000-0000-7000-8000-000000000001',
