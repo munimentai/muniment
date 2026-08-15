@@ -5,7 +5,7 @@ prerequisites for desktop chat went live on 2026-07-11. Client work that uses
 them must exercise the real contracts. It must add no mocked production path.
 
 > **Compacted 2026-08-04, again 2026-08-07, again 2026-08-12, again
-> 2026-08-13, and again 2026-08-14.** This document reached 265 KB and no longer
+> 2026-08-13, again 2026-08-14, and again 2026-08-15.** This document reached 265 KB and no longer
 > fit in one read.
 > Every landed slice used to carry its own paragraph. Those paragraphs are now
 > per-lane summaries with their ticket ranges. Every open item, parked item,
@@ -23,7 +23,7 @@ them must exercise the real contracts. It must add no mocked production path.
 > runtime-service extraction section. The fourteenth took the Phase 2 client
 > core section. The sixteenth through the twenty-fifth all took that
 > extraction section again, and so did the twenty-sixth through the
-> thirty-second. It grows every wave, so it stays the next compaction target.
+> thirty-third. It grows every wave, so it stays the next compaction target.
 
 ## M0 — Scaffold (done 2026-07-09)
 
@@ -478,37 +478,37 @@ client completes its handshake, because `admit_desktop_client` sends the
 900-second `CAPABILITY_IDLE_LIFETIME` ceiling the protocol names
 (MUNIDESK-1251). `DesktopClientHolder::rename_thread` and `delete_thread`
 (`client.rs:1417`, `:1431`) are the two typed desktop-only methods
-(MUNIDESK-1259). ADR 0012 carries eight attach amendments, and `THREAT_MODEL.md`
-records each, including both desktop client operation tranches.
+(MUNIDESK-1259). ADR 0012 carries nine attach amendments, and `THREAT_MODEL.md`
+records each, including every desktop client operation tranche.
 
-DONE 2026-08-14 — all four seventy-first-wave slices landed (MUNIDESK-1263
-through 1266). The service serves thread rename and delete through its
-idempotency ledger, and the runtime boundaries supply the authenticated subject.
-Both desktop commands use `DesktopClientSession`, whose three states distinguish
-no supervisor, a disconnected supervisor, and a connected holder. The attach
-wire names the six second-tranche operations with canonical fixtures. The shell
-reads the client status and shows the service-unreachable notice without hiding
-local empty states. The four slices changed 22 unique files after the branch
-sync.
+DONE 2026-08-14 through 2026-08-15 — the second desktop client operation
+tranche is built end to end (MUNIDESK-1263 through 1281). `dispatch_request`
+(`src-tauri/core/src/attach/linux.rs:2601`) serves `thread.rename`,
+`thread.delete`, and the six second-tranche operations through the idempotency
+ledger, `ThreadListService` (`linux.rs:891`) declares one entry per operation,
+and the companion loop refuses all nine desktop-only operations with
+`unauthorized`. `DesktopClientHolder` (`src-tauri/attach/src/client.rs:1445`)
+carries a typed method per operation, and `RuntimeAttachBoundaries` answers each
+one through a runtime service entry that supplies the authenticated subject.
+`DesktopClientSession` distinguishes no supervisor, a disconnected supervisor,
+and a connected holder. `chat_rename_thread`, `chat_delete_thread`,
+`auth_entitlement_snapshot`, `auth_devices`, `auth_sign_out`,
+`attach_companions`, and `attach_revoke_companion` all ride the connected
+client, fail while that supervisor reconnects, and keep their local path while
+the desktop owns the listener. `auth_status` remains a local keychain read. The
+shell shows the service-unreachable notice without hiding local empty states,
+`Connected programs` names the background service while the supervisor
+reconnects, and each admission route sends its own grant type.
 
-DONE 2026-08-14 through 2026-08-15 — all five seventy-second-wave slices landed
-(MUNIDESK-1269 through 1273). `dispatch_request`
-(`src-tauri/core/src/attach/linux.rs:2601`) serves the six second-tranche
-operations, `ThreadListService` (`linux.rs:891`) declares one entry per
-operation, and the companion loop refuses all eight desktop-only operations with
-`unauthorized`. `DesktopClientHolder` carries a method per operation
-(`src-tauri/attach/src/client.rs:1445`). `Connected programs` names the
-background service while its supervisor reconnects, and each admission route
-sends its own grant type instead of one shared `MigrationControlAuthorized`
-frame.
-
-DONE 2026-08-15 — all six seventy-third-wave slices landed (MUNIDESK-1276
-through MUNIDESK-1281). `RuntimeAttachBoundaries` answers all six second-tranche
-operations through the runtime service entries. `auth_entitlement_snapshot`,
-`auth_devices`, `auth_sign_out`, `attach_companions`, and
-`attach_revoke_companion` use the connected desktop client, fail while its
-supervisor reconnects, and keep their local path while the desktop owns the
-listener. `auth_status` remains a local keychain read.
+DONE 2026-08-15 — the six filed seventy-fourth-wave slices landed
+(MUNIDESK-1283 through 1288). ADR 0012 carries the runtime-owned browser
+sign-in amendment. The wire names `session.sign_in` with its fixture,
+`dispatch_request` serves it under one concurrent attempt and answers
+`AuthStatus` alone, `DesktopClientHolder::sign_in` is the typed method, and
+`auth_sign_in` (`src-tauri/src/auth/mod.rs:181`) reaches it through
+`sign_in_for_session`. The runtime opens the system browser through its own
+injected opener. The unfiled Linux ownership cutover slice never
+dispatched.
 
 MEASURED 2026-08-15 (seventy-fourth wave, planner, read the runtime composition
 beside `main`) — the complete runtime owner is dormant. `RuntimeAttachState`
@@ -521,14 +521,34 @@ listener, while `run_attach_listener` starts one for a fresh profile. `main`
 lock and then waits for a termination signal, so no installed runtime process
 can answer a desktop client.
 
-MEASURED 2026-08-15 (seventy-fourth wave, planner, read the remaining auth
-commands and the Linux package inputs) — browser sign-in is the last desktop
-auth operation with no client route. `auth_sign_in`
-(`src-tauri/src/auth/mod.rs:181`) opens the browser and writes the desktop
-keychain directly. The attach operation enum has no sign-in operation, and ADR
-0012 requires a separate browser-opener decision before adding one. The Linux
-bundle ships the runtime payload (`src-tauri/tauri.linux.conf.json:12`), but the
-repository contains no `systemd --user` socket or service unit to start it.
+MEASURED 2026-08-15 (seventy-sixth wave, planner, read `main` beside
+`ChatState::new` and `RuntimeAttachState::open`) — the cutover cannot flip yet.
+`main` (`src-tauri/src/main.rs:49`) builds `ChatState` on every desktop launch,
+and that constructor opens the profile journal and CAS. Every chat command then
+reads and writes that journal inside the desktop process.
+`RuntimeAttachState::open` (`src-tauri/runtime/src/attach_state.rs:42`) opens the
+same files for the service. Activating the runtime listener today would give one
+profile two journal owners and two Pi runtimes, which ADR 0012 forbids. The chat
+surface therefore rides the desktop client before the cutover, and that
+conversion is the third desktop client operation tranche.
+
+MEASURED 2026-08-15 (seventy-sixth wave, planner, read the runtime service
+entries beside the desktop thread commands) — the thread history reads are the
+cheapest half of that conversion. `service::thread_summaries` and
+`service::thread_page` (`src-tauri/runtime/src/service/threads.rs:23`, `:148`)
+already return `ThreadSummaryPage` and `ChatThreadOpenPage`, which are the exact
+shapes `chat_thread_summaries` and `chat_thread_open`
+(`src-tauri/src/chat_threads.rs:247`, `:419`) return today. The companion
+operations `thread.list` and `thread.open` cannot serve them. Those two scope by
+the signed `grant.workspace` value and return the redacted `ThreadOpenPage`
+projection instead of prompts, receipts, tool activity, attachments, recalls,
+applied diffs, and the pending gate.
+
+MEASURED 2026-08-15 (seventy-sixth wave, planner, read the Linux package
+inputs) — the bundle ships the runtime payload
+(`src-tauri/tauri.linux.conf.json:12`), and the repository still holds no
+`systemd --user` socket or service unit to start it. That unit ships with the
+cutover.
 
 RETIRED 2026-08-14 (seventy-first wave, planner, read `compose_attach_service`) —
 the runtime composition owes no Home resolution work. It reads `configured_home`
@@ -592,24 +612,23 @@ projector always holds state there. A test seam would also prove nothing, becaus
 projector rejects that event too. The lane re-opens this only against a new
 failure route.
 
-MERGE HAZARD — the seventy-fourth-wave slices are filed. Slices 2 through 4 all
-take the attach operation surface in sequence. Slices 4 and 5 both take
-`src-tauri/src/auth/mod.rs`. Slice 6 takes the runtime entry point and Linux
-package inputs after the first five land. Every ticket tells the implementer to
-rebase on `main` before it opens the pull request. The 2026-08-04 silent revert
-came from a stale base.
+MERGE HAZARD — the seventy-sixth-wave slices are filed. Slices 2 and 3 both
+take the attach operation surface in sequence, and slices 4 through 6 each build
+on the wire names slice 2 adds. Every ticket tells the implementer to rebase on
+`main` before it opens the pull request. The 2026-08-04 silent revert came from a
+stale base.
 
-SELECTED 2026-08-15 (seventy-fourth wave) — six slices in priority order.
+SELECTED 2026-08-15 (seventy-sixth wave) — six slices in priority order. They
+convert the desktop thread history reads, which is the first half of the chat
+surface conversion.
 
-1. Amend ADR 0012 with the service-owned browser sign-in request and presenter
-   rules.
-2. Add the sign-in operation, canonical fixtures, and desktop-only refusal rules.
-3. Dispatch sign-in through a runtime boundary with one concurrent attempt and
-   no token-bearing response.
-4. Add the typed desktop client sign-in method and its disconnect behavior.
-5. Route `auth_sign_in` through the client while the runtime owns the endpoint.
-6. Cut Linux ownership over to `RuntimeAttachState`, fresh or migration listener
-   startup, and the `systemd --user` registration as one activation slice.
+1. Amend ADR 0012 with the third desktop client operation tranche.
+2. Name `thread.summaries` and `thread.history` on the wire with their fixtures.
+3. Dispatch both operations to the desktop client and refuse them for a
+   companion.
+4. Answer both operations from the runtime attach boundaries.
+5. Add the two typed desktop client methods.
+6. Route `chat_thread_summaries` and `chat_thread_open` through the client.
 
 NOT FILED 2026-08-15 (seventy-fourth wave, planner, read the shell's auth branch
 order) — `auth_status` keeps its local keychain read before the cutover. The
@@ -617,14 +636,15 @@ signed-out branch precedes the service-unreachable branch
 (`src/App.svelte:864`, `:869`), so a failed `auth_status` would show the sign-in
 screen where the design shows the notice. `service::session_status` reads the
 keychain and takes no activity mark, so the local read returns the same answer the
-service would. Slice 6 moves this read with the credential store.
+service would. The cutover moves this read with the credential store.
 
-SEQUENCED 2026-08-15 (seventy-fourth wave) — the decision comes before the wire,
-the wire before the boundary, and the boundary before its two callers. The final
-slice activates the listener, approval coordinator, journal, CAS, Pi, device
-session, credentials, authorization, and permission gates together. It also
-installs the user unit, moves `auth_status`, and gives the runtime its signed
-workspace. Remote Control follows the cutover.
+SEQUENCED 2026-08-15 (seventy-sixth wave) — the decision comes before the
+wire, the wire before the dispatch, the dispatch before the boundary, and the
+boundary before its client and its one caller. The run surface, the
+session-thread tracker commands, and `home.ensure` follow this tranche. The
+Linux cutover follows the whole chat surface conversion, and it carries the user
+unit, the `auth_status` move, and the runtime's signed workspace. Remote Control
+follows the cutover.
 
 NOT FILED 2026-08-14 (seventy-second wave, planner, read the seventy-second-wave
 selection beside its own sequencing rule) — Linux user-unit registration stays
@@ -1104,7 +1124,7 @@ earlier one. Requiring an up-to-date branch before merge, or a merge queue, is a
 repository-settings change that sits with the owner. The planner files no ticket
 for it.
 
-VERIFIED 2026-08-15 (seventy-third wave, planner) — one
+VERIFIED 2026-08-15 (seventy-sixth wave, planner) — one
 `cargo test -p muniment-core -p muniment-runtime -p muniment-attach` run started
 from `src-tauri` passes 1,337 tests over 120 test binaries, and the build prints no
 warning. One `npm ci` then `npm test` run passes 940 frontend tests over 63 files
