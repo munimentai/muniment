@@ -465,3 +465,33 @@ This tranche drops the existing rate-limit retry notice. The service sends no
 progress event through the single request, so the desktop cannot show that
 notice while sign-in waits to retry. A later operation may add progress
 reporting without changing sign-in ownership.
+
+## Amendment – 2026-08-15: third desktop client operation tranche
+
+The third desktop-only tranche maps these wire operations to the existing
+runtime service entries:
+
+| Operation | Runtime service entry |
+|---|---|
+| `thread.summaries` | `service::thread_summaries` |
+| `thread.history` | `service::thread_page` |
+
+A desktop client session may send these two operations. Both are read
+operations and require no idempotency key. A companion session receives
+`unauthorized` for each operation. Both requests use the attach client's
+five-second I/O deadline.
+
+The existing `thread.list` and `thread.open` operations remain companion
+operations. They scope reads by the signed `grant.workspace` value and return
+the redacted `ThreadListPage` and `ThreadOpenPage` projections. The new
+operations return the subject-scoped desktop projections instead.
+
+Each service entry shrinks the requested page until its encoded response fits
+the `MAX_FRAME_LENGTH` bound. It returns `persistence_failed` only when a
+one-entry page still does not fit.
+
+The run surface, session-thread tracker commands, and `home.ensure` remain
+outside this tranche. The Linux cutover follows conversion of the whole chat
+surface. The desktop opens the profile journal and CAS when it creates
+`ChatState`, so an earlier listener cutover would create two owners for one
+profile.
