@@ -3,11 +3,11 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
+use muniment_core::attach::linux::{CompanionProvenance, ThreadListService};
 use muniment_core::attach::{
     save_client_credentials, ClientCredential, Id, ProtocolError, RuntimeActivityRegistry,
     SignedWorkspaceApproval, COMPANION_CREDENTIAL_FILE_NAME,
 };
-use muniment_core::attach::linux::{CompanionProvenance, ThreadListService};
 use muniment_core::memory_runtime::ApplicationMemoryRuntime;
 use muniment_core::pi_execution::PiRuntime;
 use muniment_core::session_thread::SessionThread;
@@ -127,13 +127,8 @@ fn service_lists_and_idempotently_revokes_companions() {
         Arc::new(SessionThread::default()),
         registry.clone(),
     );
-    let mut service = compose_attach_service(
-        boundaries,
-        &registry,
-        &profile.profile,
-        &profile.config,
-    )
-    .unwrap();
+    let mut service =
+        compose_attach_service(boundaries, &registry, &profile.profile, &profile.config).unwrap();
     let provenance = CompanionProvenance {
         profile: "default".into(),
         companion_kind: "cli".into(),
