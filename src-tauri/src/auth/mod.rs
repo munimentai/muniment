@@ -18,11 +18,13 @@ use muniment_core::auth::{
     NativeCredentialStore, UreqAuthorizationTransport, UreqNativeDeviceListTransport,
     UreqRegistrationTransport, UreqRevocationTransport, UreqTokenTransport,
 };
+#[cfg(target_os = "linux")]
+use serde::Deserialize;
 use serde::Serialize;
 use tauri::Emitter;
 
 #[cfg(target_os = "linux")]
-use crate::attach_service::DesktopClientSession;
+use crate::attach_service::{AttachCompanionState, DesktopClientSession};
 #[cfg(target_os = "linux")]
 use muniment_core::attach::DesktopClientHolder;
 
@@ -43,6 +45,14 @@ pub struct AuthState {
 #[derive(Clone, Copy, Serialize)]
 struct EntitlementChanged {
     snapshot_version: u64,
+}
+
+#[cfg(target_os = "linux")]
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct EntitlementSnapshotResponse {
+    snapshot: auth::EntitlementSnapshotView,
+    changed_snapshot_version: Option<u64>,
 }
 
 fn observe_snapshot<R: tauri::Runtime>(
@@ -262,11 +272,51 @@ pub async fn auth_status(state: tauri::State<'_, AuthState>) -> Result<AuthStatu
 
 /// Fetch the authoritative native session and expose only its typed,
 /// display-only entitlement projection.
+#[cfg(target_os = "linux")]
+#[tauri::command]
+pub async fn auth_entitlement_snapshot(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, AuthState>,
+    attach_state: tauri::State<'_, AttachCompanionState>,
+) -> Result<auth::EntitlementSnapshotView, String> {
+    auth_entitlement_snapshot_with_state(app, state, attach_state).await
+}
+
+#[cfg(not(target_os = "linux"))]
 #[tauri::command]
 pub async fn auth_entitlement_snapshot(
     app: tauri::AppHandle,
     state: tauri::State<'_, AuthState>,
 ) -> Result<auth::EntitlementSnapshotView, String> {
+    auth_entitlement_snapshot_with_state(app, state).await
+}
+
+async fn auth_entitlement_snapshot_with_state<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+    state: tauri::State<'_, AuthState>,
+    #[cfg(target_os = "linux")] attach_state: tauri::State<'_, AttachCompanionState>,
+) -> Result<auth::EntitlementSnapshotView, String> {
+    #[cfg(target_os = "linux")]
+    match attach_state.desktop_client_session() {
+        DesktopClientSession::Connected(client) => {
+            let response: EntitlementSnapshotResponse = serde_json::from_value(
+                client
+                    .entitlement_snapshot()
+                    .map_err(|_| background_service_error())?,
+            )
+            .map_err(|_| background_service_error())?;
+            if let Some(snapshot_version) = response.changed_snapshot_version {
+                app.emit(
+                    "entitlement-changed",
+                    EntitlementChanged { snapshot_version },
+                )
+                .map_err(|_| background_service_error())?;
+            }
+            return Ok(response.snapshot);
+        }
+        DesktopClientSession::Disconnected => return Err(background_service_error()),
+        DesktopClientSession::NoSupervisor => {}
+    }
     let result = state
         .marked_refresh(state.native_store.clone())
         .await
@@ -278,11 +328,44 @@ pub async fn auth_entitlement_snapshot(
 }
 
 /// List display-only metadata for this account's native installations.
+#[cfg(target_os = "linux")]
+#[tauri::command]
+pub async fn auth_devices(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, AuthState>,
+    attach_state: tauri::State<'_, AttachCompanionState>,
+) -> Result<Vec<auth::NativeDevice>, String> {
+    auth_devices_with_state(app, state, attach_state).await
+}
+
+#[cfg(not(target_os = "linux"))]
 #[tauri::command]
 pub async fn auth_devices(
     app: tauri::AppHandle,
     state: tauri::State<'_, AuthState>,
 ) -> Result<Vec<auth::NativeDevice>, String> {
+    auth_devices_with_state(app, state).await
+}
+
+async fn auth_devices_with_state<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+    state: tauri::State<'_, AuthState>,
+    #[cfg(target_os = "linux")] attach_state: tauri::State<'_, AttachCompanionState>,
+) -> Result<Vec<auth::NativeDevice>, String> {
+    #[cfg(target_os = "linux")]
+    match attach_state.desktop_client_session() {
+        DesktopClientSession::Connected(client) => {
+            let response: auth::NativeDeviceList = serde_json::from_value(
+                client
+                    .list_devices()
+                    .map_err(|_| background_service_error())?,
+            )
+            .map_err(|_| background_service_error())?;
+            return Ok(response.devices);
+        }
+        DesktopClientSession::Disconnected => return Err(background_service_error()),
+        DesktopClientSession::NoSupervisor => {}
+    }
     let session = state
         .marked_refresh(state.native_store.clone())
         .await
@@ -299,6 +382,11 @@ pub async fn auth_devices(
     })
     .await
     .map_err(|_| device_list_error())?
+}
+
+#[cfg(target_os = "linux")]
+fn background_service_error() -> String {
+    "Muniment cannot reach its background service.".to_string()
 }
 
 fn list_devices(
@@ -720,5 +808,186 @@ mod tests {
         .unwrap_err();
         assert_eq!(error, "Your devices could not be loaded.");
         assert!(!error.contains("secret"));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn auth_reads_cover_each_desktop_client_state() {
+        use muniment_core::attach::{
+            encode_frame, reconnect_welcome, serve_desktop_client_at, Id, Protocol, Response,
+            Success,
+        };
+        use serde_json::{json, Value};
+        use std::io::{Read, Write};
+        use std::os::unix::net::UnixListener;
+        use std::sync::mpsc;
+        use tauri::{Listener, Manager};
+        use uuid::Uuid;
+
+        fn read_value(stream: &mut impl Read) -> Value {
+            let mut length = [0; 4];
+            stream.read_exact(&mut length).unwrap();
+            let mut payload = vec![0; u32::from_be_bytes(length) as usize];
+            stream.read_exact(&mut payload).unwrap();
+            serde_json::from_slice(&payload).unwrap()
+        }
+
+        fn app_with_state(
+            attach_state: AttachCompanionState,
+        ) -> tauri::App<tauri::test::MockRuntime> {
+            let app = tauri::test::mock_app();
+            app.manage(AuthState::new(RuntimeActivityRegistry::new()));
+            app.manage(attach_state);
+            app
+        }
+
+        fn entitlement(
+            app: &tauri::App<tauri::test::MockRuntime>,
+        ) -> Result<auth::EntitlementSnapshotView, String> {
+            tauri::async_runtime::block_on(auth_entitlement_snapshot_with_state(
+                app.handle().clone(),
+                app.state(),
+                app.state(),
+            ))
+        }
+
+        fn devices(
+            app: &tauri::App<tauri::test::MockRuntime>,
+        ) -> Result<Vec<auth::NativeDevice>, String> {
+            tauri::async_runtime::block_on(auth_devices_with_state(
+                app.handle().clone(),
+                app.state(),
+                app.state(),
+            ))
+        }
+
+        let local_app = app_with_state(AttachCompanionState::default());
+        assert_ne!(
+            entitlement(&local_app).unwrap_err(),
+            background_service_error()
+        );
+        assert_eq!(devices(&local_app).unwrap_err(), device_list_error());
+
+        let endpoint = std::env::temp_dir().join(format!("muniment-auth-{}.sock", Uuid::now_v7()));
+        let listener = UnixListener::bind(&endpoint).unwrap();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            assert_eq!(read_value(&mut stream)["client"]["kind"], "desktop-client");
+            stream
+                .write_all(
+                    &encode_frame(&reconnect_welcome(1, "0.0.1", "11".repeat(16), "")).unwrap(),
+                )
+                .unwrap();
+            stream
+                .write_all(
+                    &encode_frame(&json!({
+                        "profile_id": "profile-1",
+                        "capability": "33".repeat(32),
+                        "expires_at": 60,
+                        "idle_timeout_seconds": 30,
+                        "workspace_scopes": {"/work/signed": ["threads:read"]}
+                    }))
+                    .unwrap(),
+                )
+                .unwrap();
+            let bodies = [
+                json!({
+                    "snapshot": {
+                        "snapshot_version": 7,
+                        "org_id": "20000000-0000-4000-8000-000000000002",
+                        "user_id": "30000000-0000-4000-8000-000000000003",
+                        "role": "owner",
+                        "user_display_name": "User",
+                        "organization_display_name": "Muniment",
+                        "groups": []
+                    },
+                    "changed_snapshot_version": 7
+                }),
+                json!({"devices": [{
+                    "device_id": "10000000-0000-4000-8000-000000000001",
+                    "client_id": "desktop-1",
+                    "client_role": "desktop",
+                    "platform": "desktop",
+                    "created_at": "2026-01-01T00:00:00Z",
+                    "revoked_at": null,
+                    "last_active_at": "2026-01-02T00:00:00Z",
+                    "current": true
+                }]}),
+            ];
+            let mut operations = Vec::new();
+            for body in bodies {
+                let request = read_value(&mut stream);
+                operations.push(request["operation"].clone());
+                let request_id = Id::new(request["request_id"].as_str().unwrap()).unwrap();
+                stream
+                    .write_all(
+                        &encode_frame(&Response {
+                            protocol: Protocol,
+                            request_id,
+                            ok: Success,
+                            body,
+                        })
+                        .unwrap(),
+                    )
+                    .unwrap();
+            }
+            operations
+        });
+        let live_state = AttachCompanionState::default();
+        let client_endpoint = endpoint.clone();
+        let (connected_tx, connected_rx) = mpsc::channel();
+        live_state.set_desktop_client_for_test(false, move |stop, holder| {
+            std::thread::spawn(move || {
+                let mut connected_tx = Some(connected_tx);
+                serve_desktop_client_at(
+                    &client_endpoint,
+                    "0.0.1",
+                    Duration::from_secs(1),
+                    Duration::from_millis(10),
+                    stop,
+                    holder,
+                    move |connected| {
+                        if connected {
+                            connected_tx.take().unwrap().send(()).unwrap();
+                        }
+                    },
+                )
+            })
+        });
+        connected_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        live_state.set_desktop_client_for_test(true, |_, _| std::thread::spawn(|| {}));
+        let live_app = app_with_state(live_state);
+        let (event_tx, event_rx) = mpsc::channel();
+        live_app.listen("entitlement-changed", move |event| {
+            event_tx.send(event.payload().to_string()).unwrap();
+        });
+        assert_eq!(entitlement(&live_app).unwrap().snapshot_version, 7);
+        assert_eq!(devices(&live_app).unwrap().len(), 1);
+        assert_eq!(
+            event_rx.recv_timeout(Duration::from_secs(1)).unwrap(),
+            json!({"snapshot_version": 7}).to_string()
+        );
+        assert_eq!(
+            server.join().unwrap(),
+            [json!("entitlement.snapshot"), json!("device.list")]
+        );
+        live_app
+            .state::<AttachCompanionState>()
+            .stop_desktop_client_for_test();
+
+        let disconnected_state = AttachCompanionState::default();
+        disconnected_state.set_desktop_client_for_test(false, |_, _| std::thread::spawn(|| {}));
+        let disconnected_app = app_with_state(disconnected_state);
+        assert_eq!(
+            entitlement(&disconnected_app).unwrap_err(),
+            background_service_error()
+        );
+        assert_eq!(
+            devices(&disconnected_app).unwrap_err(),
+            background_service_error()
+        );
+        disconnected_app
+            .state::<AttachCompanionState>()
+            .stop_desktop_client_for_test();
     }
 }
