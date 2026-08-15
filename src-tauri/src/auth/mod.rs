@@ -178,19 +178,68 @@ async fn marked_blocking<T: Send + 'static>(
 /// Run the browser sign-in flow, persist the tokens, and report the new
 /// status. Concurrent invocations are rejected while one is in flight.
 #[tauri::command]
+#[cfg(target_os = "linux")]
+pub async fn auth_sign_in(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, AuthState>,
+    attach_state: tauri::State<'_, AttachCompanionState>,
+) -> Result<AuthStatus, String> {
+    let store = state.native_store.clone();
+    sign_in_for_session(
+        &state,
+        attach_state.desktop_client_session(),
+        move || sign_in_blocking(store.as_ref(), &app).map_err(|error| error.to_string()),
+        |client| {
+            let response = client.sign_in().map_err(|_| background_service_error())?;
+            decode_sign_in_status(response)
+        },
+    )
+    .await
+}
+
+#[tauri::command]
+#[cfg(not(target_os = "linux"))]
 pub async fn auth_sign_in(
     app: tauri::AppHandle,
     state: tauri::State<'_, AuthState>,
 ) -> Result<AuthStatus, String> {
     let store = state.native_store.clone();
-    sign_in_marked(&state, move || sign_in_blocking(store.as_ref(), &app)).await
+    sign_in_marked(&state, move || {
+        sign_in_blocking(store.as_ref(), &app).map_err(|error| error.to_string())
+    })
+    .await
+}
+
+#[cfg(target_os = "linux")]
+fn decode_sign_in_status(response: serde_json::Value) -> Result<AuthStatus, String> {
+    let status = response
+        .get("status")
+        .cloned()
+        .ok_or_else(|| "missing status field".to_string())?;
+    serde_json::from_value(status).map_err(|error| error.to_string())
+}
+
+#[cfg(target_os = "linux")]
+async fn sign_in_for_session(
+    state: &AuthState,
+    session: DesktopClientSession,
+    local_step: impl FnOnce() -> Result<AuthStatus, String> + Send + 'static,
+    connected_step: impl FnOnce(DesktopClientHolder) -> Result<AuthStatus, String> + Send + 'static,
+) -> Result<AuthStatus, String> {
+    match session {
+        DesktopClientSession::NoSupervisor => sign_in_marked(state, local_step).await,
+        DesktopClientSession::Connected(client) => {
+            sign_in_marked(state, move || connected_step(client)).await
+        }
+        DesktopClientSession::Disconnected => Err(background_service_error()),
+    }
 }
 
 /// Takes the sign-in permit, then runs `step` under an authentication-operation
 /// mark that covers the whole blocking call.
 async fn sign_in_marked(
     state: &AuthState,
-    step: impl FnOnce() -> Result<AuthStatus, auth::NativeSignInError> + Send + 'static,
+    step: impl FnOnce() -> Result<AuthStatus, String> + Send + 'static,
 ) -> Result<AuthStatus, String> {
     let permit = SignInPermit::acquire(state.sign_in_running.clone())
         .ok_or_else(|| "a sign-in is already in progress".to_string())?;
@@ -200,7 +249,7 @@ async fn sign_in_marked(
     })
     .await
     .map_err(|e| format!("sign-in task failed: {e}"))?;
-    let status = outcome.map_err(|e| e.to_string())?;
+    let status = outcome?;
     state.entitlement_snapshot_tracker.clear();
     Ok(status)
 }
@@ -676,6 +725,110 @@ mod tests {
 
     #[cfg(target_os = "linux")]
     #[test]
+    fn connected_sign_in_decodes_the_wrapped_status() {
+        let status = decode_sign_in_status(serde_json::json!({
+            "status": {
+                "signed_in": true,
+                "subject": "account-1",
+                "expires_at": 42
+            }
+        }))
+        .unwrap();
+
+        assert!(status.signed_in);
+        assert_eq!(status.subject.as_deref(), Some("account-1"));
+        assert_eq!(status.expires_at, Some(42));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn sign_in_handles_each_desktop_client_session() {
+        use std::sync::atomic::AtomicUsize;
+
+        fn steps() -> (
+            Arc<AtomicUsize>,
+            impl FnOnce() -> Result<AuthStatus, String> + Send + 'static,
+            impl FnOnce(DesktopClientHolder) -> Result<AuthStatus, String> + Send + 'static,
+        ) {
+            let calls = Arc::new(AtomicUsize::new(0));
+            let local_calls = calls.clone();
+            let connected_calls = calls.clone();
+            (
+                calls,
+                move || {
+                    local_calls.fetch_add(1, Ordering::SeqCst);
+                    Ok(signed_out_status())
+                },
+                move |_| {
+                    connected_calls.fetch_add(1, Ordering::SeqCst);
+                    Ok(signed_out_status())
+                },
+            )
+        }
+
+        let state = AuthState::new(RuntimeActivityRegistry::new());
+        state.entitlement_snapshot_tracker.observe(Some(1));
+        let (calls, local, connected) = steps();
+        tauri::async_runtime::block_on(sign_in_for_session(
+            &state,
+            DesktopClientSession::NoSupervisor,
+            local,
+            connected,
+        ))
+        .unwrap();
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        assert_eq!(state.entitlement_snapshot_tracker.observe(Some(2)), None);
+
+        let (calls, local, connected) = steps();
+        tauri::async_runtime::block_on(sign_in_for_session(
+            &state,
+            DesktopClientSession::Connected(DesktopClientHolder::new()),
+            local,
+            connected,
+        ))
+        .unwrap();
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+
+        let (calls, local, connected) = steps();
+        let error = tauri::async_runtime::block_on(sign_in_for_session(
+            &state,
+            DesktopClientSession::Disconnected,
+            local,
+            connected,
+        ))
+        .unwrap_err();
+        assert_eq!(error, "Muniment cannot reach its background service.");
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn sign_in_permit_rejects_both_served_routes() {
+        fn local() -> Result<AuthStatus, String> {
+            panic!("the rejected sign-in must not run")
+        }
+
+        fn connected(_: DesktopClientHolder) -> Result<AuthStatus, String> {
+            panic!("the rejected sign-in must not run")
+        }
+
+        let state = AuthState::new(RuntimeActivityRegistry::new());
+        let _permit = SignInPermit::acquire(state.sign_in_running.clone()).unwrap();
+
+        for session in [
+            DesktopClientSession::NoSupervisor,
+            DesktopClientSession::Connected(DesktopClientHolder::new()),
+        ] {
+            let error = tauri::async_runtime::block_on(sign_in_for_session(
+                &state, session, local, connected,
+            ))
+            .unwrap_err();
+            assert_eq!(error, "a sign-in is already in progress");
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
     fn sign_out_handles_each_desktop_client_session() {
         use std::sync::atomic::AtomicUsize;
 
@@ -775,7 +928,7 @@ mod tests {
         let state = AuthState::new(runtime_activity.clone());
 
         let outcome = tauri::async_runtime::block_on(sign_in_marked(&state, || {
-            Err(auth::NativeSignInError::TokenExchange)
+            Err(auth::NativeSignInError::TokenExchange.to_string())
         }));
 
         assert!(outcome.is_err());
