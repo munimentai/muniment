@@ -488,37 +488,15 @@ priority order under the twenty-sixth-wave rule. It merges the core service half
 and the runtime boundaries half into one slice, because the boundaries override
 cannot compile before the trait method exists.
 
-MEASURED 2026-08-14 (seventy-first wave, planner, read the thread mutation
-dispatch beside both service implementations) — dispatch decodes both mutation
-bodies and calls `service.rename_thread` (`attach/linux.rs:2646`) and
-`service.delete_thread` (`:2674`). `ThreadListService` defaults both to
-`unsupported_operation` (`:921`, `:933`), and `DesktopAttachService` overrides
-neither, so both the desktop and the runtime service refuse both operations.
-`RunAttachBoundaries` (`core/src/run_start.rs:69`) also names neither mutation.
-`DesktopAttachService::create_thread` (`attach/desktop_service.rs:189`) is the
-idempotency-ledger shape both methods must copy.
-
-MEASURED 2026-08-14 (seventy-first wave, planner, read every thread ownership
-call site) — the runtime mutation boundary needs a subject. `append_thread_rename`
-(`core/src/journal/thread_mutation.rs:38`) calls `subject_owns_first_run`, which
-refuses every thread whose first run carries an actor when the caller passes
-`None`. The desktop command reads `tokens.subject` from `auth::fresh_tokens`
-before each write (`src-tauri/src/chat_threads.rs:238`), so the runtime boundary
-reads the same subject through `RunStartBoundaries::fresh_tokens`.
-
-MEASURED 2026-08-14 (seventy-first wave, planner, read both desktop thread
-commands) — `chat_rename_thread` and `chat_delete_thread`
-(`src-tauri/src/chat_threads.rs:238`, `:259`) still write through the desktop
-journal. Neither command reads the connected `DesktopClientHolder`, so the runtime
-cannot own either write after handoff. `AttachCompanionState` exposes no accessor
-for the holder, and it exposes no flag that separates a running desktop client
-supervisor from a supervisor that never started.
-
-MEASURED 2026-08-14 (seventy-first wave, planner, read the desktop client status
-call sites) — `AttachListenerStatus` (`src-tauri/src/attach_service.rs:218`)
-carries `connected`, and no frontend module reads it. `src/App.svelte` never
-invokes `attach_listener_status`, so a desktop that holds no client session shows
-an empty workspace instead of the notice ADR 0012 requires.
+DONE 2026-08-14 — all four seventy-first-wave slices landed (MUNIDESK-1263
+through 1266). The service serves thread rename and delete through its
+idempotency ledger, and the runtime boundaries supply the authenticated subject.
+Both desktop commands use `DesktopClientSession`, whose three states distinguish
+no supervisor, a disconnected supervisor, and a connected holder. The attach
+wire names the six second-tranche operations with canonical fixtures. The shell
+reads the client status and shows the service-unreachable notice without hiding
+local empty states. The four slices changed 22 unique files after the branch
+sync.
 
 MEASURED 2026-08-14 (seventy-first wave, planner, read the `Connected programs`
 branch order) — the panel tells a user to close a window that is not the problem.
@@ -530,14 +508,6 @@ to `Connected programs are available in another Muniment window.` with a
 `Close this window` button. The runtime service holds the lock in that state, so
 closing the window fixes nothing. The fix needs the supervisor flag, so it
 follows the status slice.
-
-MEASURED 2026-08-14 (seventy-first wave, planner, compared `Operation` with the
-ADR 0012 second tranche) — the wire names none of `session.status`,
-`entitlement.snapshot`, `device.list`, `session.sign_out`, `companion.list`, or
-`companion.revoke`. Their fixtures, authorization, and dispatch are also absent.
-`request_body` (`src-tauri/attach/src/fixtures.rs:699`) matches `Operation`
-exhaustively, so each new variant fails the build until its canonical fixture
-exists.
 
 RETIRED 2026-08-14 (seventy-first wave, planner, read `compose_attach_service`) —
 the runtime composition owes no Home resolution work. It reads `configured_home`
@@ -610,28 +580,24 @@ projector always holds state there. A test seam would also prove nothing, becaus
 projector rejects that event too. The lane re-opens this only against a new
 failure route.
 
-MERGE HAZARD — the seventy-first wave puts slice 1 in
-`src-tauri/core/src/attach/desktop_service.rs` and
-`src-tauri/runtime/src/attach_boundaries.rs`. Slice 3 takes the attach wire and
-its fixtures. Slices 2 and 4 both take `src-tauri/src/attach_service.rs`, which
-is the one shared file of this wave, and they edit different regions of it. Every
-ticket tells the implementer to rebase on `main` before it opens the pull
-request. The 2026-08-04 silent revert came from a stale base.
+MERGE HAZARD — the seventy-first-wave slices are merged. Seventy-second-wave
+slices 1 and 3 both take `src-tauri/core/src/attach/linux.rs` and the attach
+client. Slice 2 takes the access panel and its status tests. Slice 4 takes Linux
+packaging and startup files after the protocol work. Every ticket tells the
+implementer to rebase on `main` before it opens the pull request. The 2026-08-04
+silent revert came from a stale base.
 
-SELECTED 2026-08-14 (seventy-first wave) — four slices in priority order.
+SELECTED 2026-08-14 (seventy-second wave) — four slices in priority order.
 
-1. The `DesktopAttachService` thread mutations, their idempotency ledger, and the
-   runtime boundaries that carry both writes to the journal.
-2. The desktop thread rename and delete commands moved onto the desktop client
-   connection.
-3. The second-tranche wire names and their canonical fixtures.
-4. The service-unreachable notice when the desktop holds no client session.
+1. The second-tranche authorization, dispatch, and typed desktop client methods.
+2. The `Connected programs` instance-lock copy while its supervisor reconnects.
+3. The grant-specific replacement for `MigrationControlAuthorized`.
+4. Linux user-unit registration for the dormant runtime service.
 
-SEQUENCED 2026-08-14 (seventy-first wave) — the second-tranche authorization,
-dispatch, and typed client methods follow slice 3. The `Connected programs`
-instance-lock copy follows slice 4, because it reads the same supervisor flag.
-The `MigrationControlAuthorized` rename follows slice 3, which frees its files.
-Linux user-unit registration follows them all. The final cutover slice activates
+SEQUENCED 2026-08-14 (seventy-second wave) — slices 1 and 2 can start from the
+landed wire names and supervisor state. Slice 3 follows slice 1 because both edit
+the attach dispatch and client. Linux user-unit registration follows all three.
+The final cutover slice activates
 the listener, approval coordinator, journal, CAS, Pi, device session, credentials,
 authorization, and permission gates together, and it gives the runtime service its
 own signed workspace. Remote Control follows the cutover. User-unit registration
@@ -1129,9 +1095,9 @@ planning clone nor an implementer container can compile, so a pure-move refactor
 would reach a desktop-ci VM with no local proof. The split waits for either a
 compilable path or an owner call.
 
-MEASURED 2026-08-14 (seventy-first wave, planner, re-counted the same paths) —
-`src-tauri/src/attach_service.rs` now leads at 40 touches and 2,404 lines, and
-`src-tauri/src/chat.rs` follows at 38 touches. Among production Rust source
+MEASURED 2026-08-14 (seventy-second wave, planner, re-counted the same paths) —
+`src-tauri/src/attach_service.rs` now leads at 42 touches and 2,471 lines, and
+`src-tauri/src/chat.rs` follows at 39 touches. Among production Rust source
 files, `src-tauri/core/src/attach/linux.rs` is the largest at 3,636 lines and
 has 26 touches. The planning clone compiles it, so a pure-move split is provable
 here. The lane files no split this wave.
