@@ -18,12 +18,16 @@ use muniment_core::pi_execution::PiRuntime;
 use muniment_core::run_preparation::{prepare_new_run_with_session_thread, SessionThreadStart};
 use muniment_core::run_start::{ActiveRun, RunAttachBoundaries, RunStartBoundaries};
 use muniment_core::session_thread::SessionThread;
-use muniment_runtime::{open_profile_storage, RuntimeAttachBoundaries, RuntimeAttachState};
+use muniment_runtime::{
+    open_companion_registry, open_profile_storage, RuntimeAttachBoundaries, RuntimeAttachState,
+};
 
 mod common;
 use common::{
     credentials, credentials_with_expiry, spawn_server, spawn_server_sequence, TemporaryProfile,
 };
+
+static TEST_LOCK: Mutex<()> = Mutex::new(());
 
 fn provenance() -> Provenance {
     let mut provenance = Provenance {
@@ -43,6 +47,7 @@ fn provenance() -> Provenance {
 
 #[test]
 fn runtime_state_answers_entitlement_and_replays_sign_out() {
+    let _guard = TEST_LOCK.lock().unwrap();
     muniment_core::chat_prompt::use_mock_keyring_for_tests();
     let temporary_profile = TemporaryProfile::new("attach-session", false);
     let state =
@@ -102,6 +107,7 @@ fn runtime_state_answers_entitlement_and_replays_sign_out() {
 
 #[test]
 fn runtime_boundaries_answer_all_attach_reads() {
+    let _guard = TEST_LOCK.lock().unwrap();
     let temporary_profile = TemporaryProfile::new("attach-boundaries", false);
     let profile = temporary_profile.profile.clone();
     let storage = open_profile_storage(&profile).unwrap();
@@ -131,6 +137,7 @@ fn runtime_boundaries_answer_all_attach_reads() {
         Arc::new(EntitlementSnapshotTracker::new()),
         SignedWorkspaceApproval::default(),
         Arc::new(SessionThread::default()),
+        open_companion_registry(&profile).unwrap(),
     );
 
     let created_thread = boundaries
@@ -305,6 +312,7 @@ fn runtime_boundaries_share_owner_approval_and_session_thread() {
         Arc::new(EntitlementSnapshotTracker::new()),
         approval.clone(),
         Arc::clone(&session_thread),
+        open_companion_registry(&profile).unwrap(),
     );
     let sibling = RuntimeAttachBoundaries::new(
         Arc::clone(&storage),
@@ -320,6 +328,7 @@ fn runtime_boundaries_share_owner_approval_and_session_thread() {
         Arc::new(EntitlementSnapshotTracker::new()),
         approval,
         Arc::clone(&session_thread),
+        open_companion_registry(&profile).unwrap(),
     );
 
     boundaries

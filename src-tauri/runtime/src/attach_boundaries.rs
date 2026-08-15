@@ -10,7 +10,8 @@ use muniment_core::attach::linux::{
 };
 use muniment_core::attach::ProtocolError;
 use muniment_core::attach::{
-    RuntimeActivityGuard, RuntimeActivityRegistry, SignedWorkspaceApproval,
+    CompanionRecord, CompanionRegistry, RuntimeActivityGuard, RuntimeActivityRegistry,
+    SignedWorkspaceApproval,
 };
 use muniment_core::auth::{EntitlementSnapshotTracker, NativeDeviceListError, TokenSet};
 use muniment_core::chat_grant::{ChatGrant, FetchGrantError};
@@ -51,6 +52,7 @@ pub struct RuntimeAttachBoundaries {
     entitlement_tracker: Arc<EntitlementSnapshotTracker>,
     session_thread: Arc<SessionThread>,
     approval: SignedWorkspaceApproval,
+    companion_registry: CompanionRegistry,
 }
 
 impl RuntimeAttachBoundaries {
@@ -66,6 +68,7 @@ impl RuntimeAttachBoundaries {
         entitlement_tracker: Arc<EntitlementSnapshotTracker>,
         approval: SignedWorkspaceApproval,
         session_thread: Arc<SessionThread>,
+        companion_registry: CompanionRegistry,
     ) -> Self {
         Self {
             storage,
@@ -78,6 +81,7 @@ impl RuntimeAttachBoundaries {
             entitlement_tracker,
             session_thread,
             approval,
+            companion_registry,
         }
     }
 
@@ -361,6 +365,14 @@ impl RunAttachBoundaries for RuntimeAttachBoundaries {
             .map_err(|error| error.protocol_error())?
             .access_token;
         service::list_devices(&access_token).map_err(device_list_protocol_error)
+    }
+
+    fn list_companions(&self) -> Result<Vec<CompanionRecord>, ProtocolError> {
+        service::list_companions(&self.companion_registry)
+    }
+
+    fn revoke_companion(&self, client_identity: &str) -> Result<(), ProtocolError> {
+        service::revoke_companion(&self.companion_registry, client_identity)
     }
 
     fn list_threads(

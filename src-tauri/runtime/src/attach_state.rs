@@ -79,6 +79,7 @@ impl RuntimeAttachState {
             Arc::clone(&self.entitlement_tracker),
             self.approval.clone(),
             Arc::clone(&self.session_thread),
+            self.companion_registry.clone(),
         )
     }
 
