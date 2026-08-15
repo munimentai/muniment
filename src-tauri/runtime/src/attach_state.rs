@@ -75,6 +75,7 @@ impl RuntimeAttachState {
             self.runtime_activity.clone(),
             self.approval.clone(),
             Arc::clone(&self.session_thread),
+            self.companion_registry.clone(),
         )
     }
 
