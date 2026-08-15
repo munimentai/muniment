@@ -303,7 +303,7 @@
             {#if !attachListener.started && attachListener.failure === 'filesystem'}
               <div class="access-status" role="alert"><p>The connected programs folder is unavailable.</p><button onclick={restartMuniment}>Restart Muniment</button></div>
             {:else if !attachListener.started && attachListener.failure === 'instance_lock'}
-              {#if attachListener.presenting}
+              {#if attachListener.presenting || attachListener.supervisor_running}
                 <div class="access-status" role="status"><p>The Muniment background service manages connected programs.</p></div>
               {:else}
                 <div class="access-status" role="status"><p>Connected programs are available in another Muniment window.</p><button onclick={closeWindow}>Close this window</button></div>

@@ -189,16 +189,17 @@ describe('access popover layout', () => {
     })
   }
 
-  for (const [presenting, message, recovery] of [
-    [true, 'The Muniment background service manages connected programs.', null],
-    [false, 'Connected programs are available in another Muniment window.', 'Close this window'],
+  for (const [presenting, supervisorRunning, message, recovery] of [
+    [true, false, 'The Muniment background service manages connected programs.', null],
+    [false, true, 'The Muniment background service manages connected programs.', null],
+    [false, false, 'Connected programs are available in another Muniment window.', 'Close this window'],
   ]) {
-    it(`renders the instance lock state when presenting is ${presenting}`, async () => {
+    it(`renders the instance lock state when presenting is ${presenting} and the supervisor is ${supervisorRunning}`, async () => {
       const invoke = vi.fn(async (command) => {
         if (command === 'auth_entitlement_snapshot') return snapshot
         if (command === 'auth_devices') return []
         if (command === 'attach_companions') return []
-        if (command === 'attach_listener_status') return { started: false, failure: 'instance_lock', presenting }
+        if (command === 'attach_listener_status') return { started: false, failure: 'instance_lock', presenting, supervisor_running: supervisorRunning }
         throw new Error(`unexpected command: ${command}`)
       })
       renderPanel(invoke)
