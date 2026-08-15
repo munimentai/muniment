@@ -80,13 +80,17 @@ describe('nightly Linux E2E workflow', () => {
     expect(conditionResult({ eventName: 'workflow_dispatch', platform: 'linux', build: 'failure', publish: 'skipped' })).toBe(false)
   })
 
-  it('uploads only generated JUnit XML under the stable report name', () => {
-    const reportStep = linuxE2e.slice(linuxE2e.indexOf('      - name: Upload stable JUnit report'), linuxE2e.indexOf('      - name: Preserve E2E result'))
+  it('publishes only generated JUnit XML to the CI artifact store', () => {
+    const reportStep = linuxE2e.slice(linuxE2e.indexOf('      - name: Publish the linux-e2e-report to the CI artifact store'), linuxE2e.indexOf('      - name: Preserve E2E result'))
     expect(linuxE2e).toContain('ensure-junit-report.sh')
     expect(reportStep).toContain('if: always()')
-    expect(reportStep).toContain('name: linux-e2e-report')
-    expect(reportStep).toContain('path: ${{ runner.temp }}/muniment-e2e-artifacts/junit-*.xml')
-    expect(reportStep).not.toContain('path: ${{ runner.temp }}/muniment-e2e-artifacts\n')
+    expect(reportStep).toContain('continue-on-error: true')
+    expect(reportStep).toContain('AWS_ACCESS_KEY_ID: ${{ secrets.FACTORY_CI_S3_ACCESS_KEY }}')
+    expect(reportStep).toContain('AWS_SECRET_ACCESS_KEY: ${{ secrets.FACTORY_CI_S3_SECRET_KEY }}')
+    expect(reportStep).toContain('for f in "$RUNNER_TEMP"/muniment-e2e-artifacts/junit-*.xml; do')
+    expect(reportStep).toContain('aws --endpoint-url http://10.1.10.101:9000 s3 cp "$f"')
+    expect(reportStep).toContain('s3://factory-ci-artifacts/muniment-desktop/${{ github.run_id }}/linux-e2e-report/$(basename "$f")')
+    expect(reportStep).not.toContain('actions/upload-artifact')
   })
 
   it('requests the desktop-ci artifact collector for the guest-published report', () => {
