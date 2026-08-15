@@ -543,7 +543,6 @@ fn fixture_bytes() -> io::Result<BTreeMap<String, Vec<u8>>> {
         ("session-status", Operation::SessionStatus),
         ("entitlement-snapshot", Operation::EntitlementSnapshot),
         ("device-list", Operation::DeviceList),
-        ("session-sign-in", Operation::SessionSignIn),
         ("session-sign-out", Operation::SessionSignOut),
         ("companion-list", Operation::CompanionList),
         ("companion-revoke", Operation::CompanionRevoke),
@@ -719,7 +718,6 @@ fn request_body(operation: Operation) -> serde_json::Value {
         Operation::SessionStatus
         | Operation::EntitlementSnapshot
         | Operation::DeviceList
-        | Operation::SessionSignIn
         | Operation::SessionSignOut
         | Operation::SessionSignIn
         | Operation::CompanionList => json!({}),
@@ -922,7 +920,6 @@ mod tests {
             Operation::SessionStatus,
             Operation::EntitlementSnapshot,
             Operation::DeviceList,
-            Operation::SessionSignIn,
             Operation::SessionSignOut,
             Operation::SessionSignIn,
             Operation::CompanionList,
