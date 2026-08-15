@@ -14,7 +14,7 @@ use muniment_core::pi_execution::PiRuntime;
 use muniment_core::run_preparation::{prepare_new_run_with_session_thread, SessionThreadStart};
 use muniment_core::run_start::{ActiveRun, RunAttachBoundaries, RunStartBoundaries};
 use muniment_core::session_thread::SessionThread;
-use muniment_runtime::{open_profile_storage, RuntimeAttachBoundaries};
+use muniment_runtime::{open_companion_registry, open_profile_storage, RuntimeAttachBoundaries};
 
 mod common;
 use common::{
@@ -67,6 +67,7 @@ fn runtime_boundaries_answer_all_attach_reads() {
         runtime_activity,
         SignedWorkspaceApproval::default(),
         Arc::new(SessionThread::default()),
+        open_companion_registry(&profile).unwrap(),
     );
 
     let created_thread = boundaries
@@ -240,6 +241,7 @@ fn runtime_boundaries_share_owner_approval_and_session_thread() {
         RuntimeActivityRegistry::new(),
         approval.clone(),
         Arc::clone(&session_thread),
+        open_companion_registry(&profile).unwrap(),
     );
     let sibling = RuntimeAttachBoundaries::new(
         Arc::clone(&storage),
@@ -254,6 +256,7 @@ fn runtime_boundaries_share_owner_approval_and_session_thread() {
         RuntimeActivityRegistry::new(),
         approval,
         Arc::clone(&session_thread),
+        open_companion_registry(&profile).unwrap(),
     );
 
     boundaries
