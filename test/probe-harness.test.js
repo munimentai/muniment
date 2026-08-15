@@ -12,7 +12,7 @@ describe('probe harness', () => {
   })
 
   it('reports a started attachment listener', () => {
-    expect(source).toMatch(/if \(command === 'attach_listener_status'\) return \{ started: true, failure: null \}/)
+    expect(source).toMatch(/if \(command === 'attach_listener_status'\) return \{ started: true, failure: null, connected: false, supervisor_running: false \}/)
   })
 
   it('rejects an unknown core command with its name', () => {

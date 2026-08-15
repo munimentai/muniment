@@ -221,6 +221,7 @@ pub struct AttachListenerStatus {
     pending: bool,
     stopped: bool,
     presenting: bool,
+    supervisor_running: bool,
     connected: bool,
 }
 
@@ -381,6 +382,11 @@ impl AttachCompanionState {
                 .presenting
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner),
+            supervisor_running: self
+                .desktop_client
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .is_some(),
             connected: *self
                 .connected
                 .lock()
@@ -431,11 +437,12 @@ impl AttachCompanionState {
     }
 
     fn stop_desktop_client(&self) {
-        let mut client = self
+        let supervisor = self
             .desktop_client
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if let Some(supervisor) = client.take() {
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take();
+        if let Some(supervisor) = supervisor {
             supervisor.stop.stop();
             let _ = supervisor.worker.join();
         }
@@ -592,6 +599,7 @@ pub fn attach_listener_status(
             stopped: false,
             presenting: false,
             connected: false,
+            supervisor_running: false,
         }
     }
 }
@@ -872,10 +880,16 @@ fn start_desktop_client<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
                         observer_app
                             .state::<AttachCompanionState>()
                             .record_connected(connected);
+                        let status = observer_app
+                            .state::<AttachCompanionState>()
+                            .listener_status();
+                        let _ = observer_app.emit("desktop-client-status-changed", status);
                     },
                 );
             })
         });
+    let status = app.state::<AttachCompanionState>().listener_status();
+    let _ = app.emit("desktop-client-status-changed", status);
 }
 
 #[cfg(target_os = "linux")]
@@ -963,6 +977,8 @@ fn run_attach_listener_with_hooks<R: tauri::Runtime>(
     let companion_state = app.state::<AttachCompanionState>();
     companion_state.publish_listener_stop(listener.stop_handle());
     companion_state.record_listener_started();
+    let status = companion_state.listener_status();
+    let _ = app.emit("desktop-client-status-changed", status);
     let expected_desktop_executable = std::env::current_exe().ok();
     loop {
         let (stream, credentials) = match listener.accept() {
@@ -1151,10 +1167,12 @@ mod tests {
         }
 
         assert_eq!(starts.load(Ordering::SeqCst), 1);
+        assert!(state.listener_status().supervisor_running);
         state.record_connected(true);
         assert!(state.listener_status().connected);
         state.record_listener_started();
         assert!(state.desktop_client.lock().unwrap().is_none());
+        assert!(!state.listener_status().supervisor_running);
         assert!(!state.listener_status().connected);
     }
 
@@ -1370,6 +1388,7 @@ mod tests {
                 pending: false,
                 stopped: true,
                 presenting: false,
+                supervisor_running: false,
                 connected: false,
             }
         );
@@ -1756,6 +1775,7 @@ mod tests {
                     pending: false,
                     stopped: false,
                     presenting: false,
+                    supervisor_running: false,
                     connected: false,
                 }
             );
@@ -1770,6 +1790,7 @@ mod tests {
                 pending: false,
                 stopped: false,
                 presenting: false,
+                supervisor_running: false,
                 connected: false,
             }
         );
@@ -1787,6 +1808,7 @@ mod tests {
                 pending: true,
                 stopped: false,
                 presenting: false,
+                supervisor_running: false,
                 connected: false,
             }
         );
@@ -1800,6 +1822,7 @@ mod tests {
                 pending: false,
                 stopped: true,
                 presenting: false,
+                supervisor_running: false,
                 connected: false,
             }
         );
@@ -1931,6 +1954,7 @@ mod tests {
                 pending: false,
                 stopped: false,
                 presenting: false,
+                supervisor_running: false,
                 connected: false,
             }
         );
@@ -1953,6 +1977,7 @@ mod tests {
                 pending: false,
                 stopped: false,
                 presenting: false,
+                supervisor_running: false,
                 connected: false,
             }
         );
