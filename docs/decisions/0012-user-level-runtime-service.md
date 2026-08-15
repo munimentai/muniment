@@ -166,6 +166,11 @@ per-user product boundary.
 boundary; coupling the two build lines delays usable client work without
 reducing the later migration.
 
+**Route browser opening through the approval presenter.** Asking the
+registered desktop approval presenter to open the authorization URL adds a
+second wire operation and a presenter dependency to every sign-in. The service
+opens the browser itself, as the authentication decision requires.
+
 ## References
 
 - [ADR 0008 — Pi runtime distribution](0008-pi-runtime-distribution.md)
@@ -439,3 +444,24 @@ Browser sign-in and `home.ensure` remain outside this tranche. Sign-in opens a
 visible system browser through the injected `BrowserOpener`. A background
 service that starts that browser needs its own decision before the desktop
 client session may request sign-in.
+
+## Amendment – 2026-08-15: runtime-owned browser sign-in
+
+The desktop client session may send `session.sign_in`. The request requires an
+idempotency key. A companion session receives `unauthorized` for this
+operation.
+
+The runtime service runs the native sign-in flow and opens the system browser
+through its own injected `BrowserOpener`. It permits one sign-in attempt per
+service. A second concurrent request receives the typed
+`sign_in_in_progress` refusal. The response carries `AuthStatus` alone. It
+carries no token material or authorization URL.
+
+This request uses its own deadline instead of the attach client's five-second
+I/O deadline. The deadline covers the 300-second sign-in window and protocol
+overhead. A running sign-in blocks quiesce as an authentication operation.
+
+This tranche drops the existing rate-limit retry notice. The service sends no
+progress event through the single request, so the desktop cannot show that
+notice while sign-in waits to retry. A later operation may add progress
+reporting without changing sign-in ownership.
