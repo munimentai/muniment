@@ -101,12 +101,12 @@ describe('installed nightly', () => {
       await userField.setValue(username)
       let passwordField = await signInBrowser.$('input[type="password"], input[autocomplete="current-password"]')
       if (!await passwordField.isExisting()) {
-        await (await signInBrowser.$('button[type="submit"]')).click()
+        await userField.keys('Enter')
         passwordField = await signInBrowser.$('input[type="password"], input[autocomplete="current-password"]')
       }
       await passwordField.waitForDisplayed()
       await passwordField.setValue(password)
-      await (await signInBrowser.$('button[type="submit"]')).click()
+      await passwordField.keys('Enter')
       await signInBrowser.waitUntil(async () => (await signInBrowser.getUrl()).startsWith('http://127.0.0.1:'), { timeout: 120000 })
     } finally {
       try {
