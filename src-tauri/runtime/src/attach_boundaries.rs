@@ -1,6 +1,8 @@
 //! Runtime-owned boundaries for desktop attach reads.
 
 use std::path::PathBuf;
+use std::process::Command;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use muniment_core::active_run::queue_permission_answer_with_commit;
@@ -13,7 +15,9 @@ use muniment_core::attach::{
     CompanionRecord, CompanionRegistry, RuntimeActivityGuard, RuntimeActivityRegistry,
     SignedWorkspaceApproval,
 };
-use muniment_core::auth::{EntitlementSnapshotTracker, NativeDeviceListError, TokenSet};
+use muniment_core::auth::{
+    BrowserOpenError, BrowserOpener, EntitlementSnapshotTracker, NativeDeviceListError, TokenSet,
+};
 use muniment_core::chat_grant::{ChatGrant, FetchGrantError};
 use muniment_core::chat_resume::{clear_active_run, install_active_run};
 use muniment_core::chat_view::{chat_attachments, ChatAttachment, SelectedFile};
@@ -53,6 +57,8 @@ pub struct RuntimeAttachBoundaries {
     session_thread: Arc<SessionThread>,
     approval: SignedWorkspaceApproval,
     companion_registry: CompanionRegistry,
+    sign_in_running: Arc<AtomicBool>,
+    browser_opener: Arc<dyn BrowserOpener>,
 }
 
 impl RuntimeAttachBoundaries {
@@ -70,6 +76,37 @@ impl RuntimeAttachBoundaries {
         session_thread: Arc<SessionThread>,
         companion_registry: CompanionRegistry,
     ) -> Self {
+        Self::new_with_sign_in(
+            storage,
+            active,
+            profile_directory,
+            config_directory,
+            runtime,
+            memory_runtime,
+            runtime_activity,
+            entitlement_tracker,
+            approval,
+            session_thread,
+            companion_registry,
+            Arc::new(AtomicBool::new(false)),
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn new_with_sign_in(
+        storage: SharedStorage,
+        active: Arc<Mutex<Option<ActiveRun>>>,
+        profile_directory: PathBuf,
+        config_directory: PathBuf,
+        runtime: Arc<Mutex<Option<PiRuntime>>>,
+        memory_runtime: Arc<ApplicationMemoryRuntime>,
+        runtime_activity: RuntimeActivityRegistry,
+        entitlement_tracker: Arc<EntitlementSnapshotTracker>,
+        approval: SignedWorkspaceApproval,
+        session_thread: Arc<SessionThread>,
+        companion_registry: CompanionRegistry,
+        sign_in_running: Arc<AtomicBool>,
+    ) -> Self {
         Self {
             storage,
             active,
@@ -82,7 +119,15 @@ impl RuntimeAttachBoundaries {
             session_thread,
             approval,
             companion_registry,
+            sign_in_running,
+            browser_opener: Arc::new(open_browser),
         }
+    }
+
+    /// Replaces the production browser opener for tests and alternate hosts.
+    pub fn with_browser_opener(mut self, browser_opener: Arc<dyn BrowserOpener>) -> Self {
+        self.browser_opener = browser_opener;
+        self
     }
 
     pub fn clear_workspace(&self) {
@@ -351,6 +396,20 @@ impl RunAttachBoundaries for RuntimeAttachBoundaries {
             .map_err(|_| ProtocolError::persistence_failed())
     }
 
+    fn sign_in(
+        &self,
+        _provenance: Provenance,
+    ) -> Result<muniment_core::auth::AuthStatus, ProtocolError> {
+        let _permit = SignInPermit::acquire(Arc::clone(&self.sign_in_running))
+            .ok_or_else(ProtocolError::invalid_request)?;
+        service::sign_in(
+            self.browser_opener.as_ref(),
+            &self.entitlement_tracker,
+            &self.runtime_activity,
+        )
+        .map_err(|_| ProtocolError::persistence_failed())
+    }
+
     fn sign_out(
         &self,
         _provenance: Provenance,
@@ -517,6 +576,31 @@ impl RunAttachBoundaries for RuntimeAttachBoundaries {
     }
 }
 
+struct SignInPermit(Arc<AtomicBool>);
+
+impl SignInPermit {
+    fn acquire(running: Arc<AtomicBool>) -> Option<Self> {
+        running
+            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+            .ok()
+            .map(|_| Self(running))
+    }
+}
+
+impl Drop for SignInPermit {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::SeqCst);
+    }
+}
+
+fn open_browser(url: &str) -> Result<(), BrowserOpenError> {
+    Command::new("xdg-open")
+        .arg(url)
+        .spawn()
+        .map(drop)
+        .map_err(|_| BrowserOpenError)
+}
+
 fn thread_mutation_protocol_error(error: ThreadMutationError) -> ProtocolError {
     match error {
         ThreadMutationError::NotOwned => ProtocolError::thread_not_found(),
@@ -534,5 +618,19 @@ fn device_list_protocol_error(error: NativeDeviceListError) -> ProtocolError {
         | NativeDeviceListError::Transport(_)
         | NativeDeviceListError::HttpStatus(_)
         | NativeDeviceListError::MalformedResponse(_) => ProtocolError::persistence_failed(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sign_in_permit_clears_when_an_attempt_ends() {
+        let running = Arc::new(AtomicBool::new(false));
+        let first = SignInPermit::acquire(Arc::clone(&running)).unwrap();
+        assert!(SignInPermit::acquire(Arc::clone(&running)).is_none());
+        drop(first);
+        assert!(SignInPermit::acquire(running).is_some());
     }
 }

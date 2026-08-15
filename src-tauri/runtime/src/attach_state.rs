@@ -1,6 +1,7 @@
 //! Shared state for runtime attach connections.
 
 use std::path::{Path, PathBuf};
+use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
 
 use muniment_core::attach::{
@@ -33,6 +34,7 @@ pub struct RuntimeAttachState {
     session_thread: Arc<SessionThread>,
     companion_registry: CompanionRegistry,
     approvals: ApprovalCoordinator,
+    sign_in_running: Arc<AtomicBool>,
 }
 
 impl RuntimeAttachState {
@@ -63,12 +65,13 @@ impl RuntimeAttachState {
             session_thread: Arc::new(SessionThread::default()),
             companion_registry,
             approvals: ApprovalCoordinator::default(),
+            sign_in_running: Arc::new(AtomicBool::new(false)),
         })
     }
 
     /// Builds boundaries that share the runtime state.
     pub fn boundaries(&self) -> RuntimeAttachBoundaries {
-        RuntimeAttachBoundaries::new(
+        RuntimeAttachBoundaries::new_with_sign_in(
             Arc::clone(&self.storage),
             Arc::clone(&self.active),
             self.profile_directory.clone(),
@@ -80,6 +83,7 @@ impl RuntimeAttachState {
             self.approval.clone(),
             Arc::clone(&self.session_thread),
             self.companion_registry.clone(),
+            Arc::clone(&self.sign_in_running),
         )
     }
 
