@@ -1131,11 +1131,10 @@ compilable path or an owner call.
 
 MEASURED 2026-08-14 (seventy-first wave, planner, re-counted the same paths) —
 `src-tauri/src/attach_service.rs` now leads at 40 touches and 2,404 lines, and
-`src-tauri/core/src/attach/linux.rs` follows at 26 touches and 3,636 lines. The
-core file is the largest in the tree and the planning clone compiles it, so a
-pure-move split is provable here. The lane still files none, because the next
-three attach slices all edit that file and a 3,600-line move would block them.
-The split waits until the second tranche lands.
+`src-tauri/src/chat.rs` follows at 38 touches. Among production Rust source
+files, `src-tauri/core/src/attach/linux.rs` is the largest at 3,636 lines and
+has 26 touches. The planning clone compiles it, so a pure-move split is provable
+here. The lane files no split this wave.
 
 MEASURED 2026-08-12 (fifty-second wave, planner, read the vitest JSON report) —
 all 31 skipped frontend tests are Windows-only cases. Every one sits behind
