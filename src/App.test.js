@@ -26,6 +26,7 @@ let entitlementListener
 let registrationRetryListener
 let desktopClientListener
 let desktopClientUnlisten
+let desktopClientListen
 let eventUnlisten
 let pairingListener
 let pairingUnlisten
@@ -146,13 +147,13 @@ beforeAll(async () => {
       if (event === 'dictation-event') dictationListener = listener
       if (event === 'entitlement-changed') entitlementListener = listener
       if (event === 'auth-registration-retry') registrationRetryListener = listener
-      if (event === 'desktop-client-connection-changed') desktopClientListener = listener
+      if (event === 'desktop-client-status-changed') desktopClientListener = listener
       if (event === 'attach-pairing-requested') pairingListener = listener
       if (event === 'attach-pairing-requested' && pairingRegistrationError) {
         return Promise.reject(pairingRegistrationError)
       }
       if (event === 'attach-pairing-requested') return Promise.resolve(pairingUnlisten)
-      if (event === 'desktop-client-connection-changed') return Promise.resolve(desktopClientUnlisten)
+      if (event === 'desktop-client-status-changed') return desktopClientListen(listener)
       return Promise.resolve(eventUnlisten)
     }) },
   }
@@ -174,6 +175,7 @@ beforeEach(() => {
   registrationRetryListener = undefined
   desktopClientListener = undefined
   desktopClientUnlisten = vi.fn()
+  desktopClientListen = vi.fn().mockResolvedValue(desktopClientUnlisten)
   eventUnlisten = vi.fn()
   pairingListener = undefined
   pairingUnlisten = vi.fn()
@@ -424,7 +426,79 @@ describe('workspace composer entry', () => {
     expect(screen.getByText('Muniment reconnects on its own.')).toBeInTheDocument()
     expect(screen.queryByRole('textbox', { name: 'Message' })).not.toBeInTheDocument()
 
-    desktopClientListener({ payload: true })
+    desktopClientListener({ payload: { connected: true, supervisor_running: true } })
+    expect(await screen.findByRole('textbox', { name: 'Message' })).toBeInTheDocument()
+    expect(screen.queryByText('Muniment cannot reach its background service.')).not.toBeInTheDocument()
+  })
+
+  it('updates the surface when the desktop client supervisor starts and stops', async () => {
+    render(App)
+    await screen.findByRole('textbox', { name: 'Message' })
+
+    desktopClientListener({ payload: { connected: false, supervisor_running: true } })
+    expect(await screen.findByText('Muniment cannot reach its background service.')).toBeInTheDocument()
+    expect(screen.queryByRole('textbox', { name: 'Message' })).not.toBeInTheDocument()
+
+    desktopClientListener({ payload: { connected: false, supervisor_running: false } })
+    expect(await screen.findByRole('textbox', { name: 'Message' })).toBeInTheDocument()
+    expect(screen.queryByText('Muniment cannot reach its background service.')).not.toBeInTheDocument()
+  })
+
+  it('reads status after listener registration completes', async () => {
+    let finishRegistration
+    let connected = true
+    desktopClientListen = vi.fn(() => new Promise((resolve) => { finishRegistration = resolve }))
+    invoke.mockImplementation(async (command) => {
+      if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
+      if (command === 'attach_listener_status') return { connected, supervisor_running: true }
+      if (command === 'chat_thread_open') return []
+      if (command === 'auth_entitlement_snapshot') return snapshot()
+      if (command === 'chat_thread_summaries') return { summaries: [], nextCursor: null }
+      throw new Error(`unexpected command: ${command}`)
+    })
+    render(App)
+    await waitFor(() => expect(desktopClientListen).toHaveBeenCalled())
+    expect(invoke).not.toHaveBeenCalledWith('attach_listener_status')
+
+    connected = false
+    finishRegistration(desktopClientUnlisten)
+    expect(await screen.findByText('Muniment cannot reach its background service.')).toBeInTheDocument()
+  })
+
+  it('hides the workspace until the initial desktop client status arrives', async () => {
+    let finishStatus
+    invoke.mockImplementation((command) => {
+      if (command === 'auth_status') return Promise.resolve({ signed_in: true, subject: 'token-subject' })
+      if (command === 'attach_listener_status') return new Promise((resolve) => { finishStatus = resolve })
+      if (command === 'chat_thread_open') return Promise.resolve([])
+      if (command === 'auth_entitlement_snapshot') return Promise.resolve(snapshot())
+      if (command === 'chat_thread_summaries') return Promise.resolve({ summaries: [], nextCursor: null })
+      return Promise.reject(new Error(`unexpected command: ${command}`))
+    })
+    render(App)
+    await waitFor(() => expect(finishStatus).toBeDefined())
+    expect(screen.queryByRole('textbox', { name: 'Message' })).not.toBeInTheDocument()
+
+    finishStatus({ connected: false, supervisor_running: true })
+    expect(await screen.findByText('Muniment cannot reach its background service.')).toBeInTheDocument()
+    expect(screen.queryByRole('textbox', { name: 'Message' })).not.toBeInTheDocument()
+  })
+
+  it('keeps an event received during the initial status read', async () => {
+    let finishStatus
+    invoke.mockImplementation((command) => {
+      if (command === 'auth_status') return Promise.resolve({ signed_in: true, subject: 'token-subject' })
+      if (command === 'attach_listener_status') return new Promise((resolve) => { finishStatus = resolve })
+      if (command === 'chat_thread_open') return Promise.resolve([])
+      if (command === 'auth_entitlement_snapshot') return Promise.resolve(snapshot())
+      if (command === 'chat_thread_summaries') return Promise.resolve({ summaries: [], nextCursor: null })
+      return Promise.reject(new Error(`unexpected command: ${command}`))
+    })
+    render(App)
+    await waitFor(() => expect(finishStatus).toBeDefined())
+
+    desktopClientListener({ payload: { connected: true, supervisor_running: true } })
+    finishStatus({ connected: false, supervisor_running: true })
     expect(await screen.findByRole('textbox', { name: 'Message' })).toBeInTheDocument()
     expect(screen.queryByText('Muniment cannot reach its background service.')).not.toBeInTheDocument()
   })

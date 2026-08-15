@@ -126,7 +126,7 @@
   let workspace = $state()
   let entitlementToastVisible = $state(false)
   let pairingRequests = $state([])
-  let desktopClientStatus = $state({ connected: false, supervisor_running: false })
+  let desktopClientStatus = $state(null)
   let desktopClientStatusVersion = 0
   const artifactShortcut = artifactRailShortcut()
   let destroyed = false
@@ -505,6 +505,13 @@
     composerInputDraft = event.currentTarget.value
   }
 
+  function focusComposerOnMount(node) {
+    if (!wasInWorkspace && active?.phase !== 'resuming') {
+      wasInWorkspace = true
+      node.focus()
+    }
+  }
+
   // §4: the input grows with the draft to a ten-line cap, then scrolls.
   // Measuring needs the textarea collapsed first, and every step of that
   // resizes the thread, which lets the browser clamp its scrollTop. Put the
@@ -598,7 +605,8 @@
   })
 
   $effect(() => {
-    const inWorkspace = auth.name === 'signed-in' && onboarding.name === 'complete'
+    const inWorkspace = auth.name === 'signed-in' && onboarding.name === 'complete' && desktopClientStatus
+      && !(desktopClientStatus.supervisor_running && !desktopClientStatus.connected)
     if (inWorkspace && !wasInWorkspace && active?.phase !== 'resuming' && composer) {
       wasInWorkspace = true
       composer.focus()
@@ -643,19 +651,26 @@
       return tauri?.invoke('attach_listener_status').then((status) => {
         if (version === desktopClientStatusVersion) desktopClientStatus = status
       }).catch(() => {
+        if (version === desktopClientStatusVersion) {
+          desktopClientStatus = { connected: false, supervisor_running: false }
+        }
         console.error('Desktop client status failed.')
       })
     }
-    window.__TAURI__?.event?.listen('desktop-client-connection-changed', ({ payload }) => {
-      desktopClientStatusVersion += 1
-      desktopClientStatus = { ...desktopClientStatus, connected: payload === true }
-    }).then((stop) => {
-      if (destroyed) stop()
-      else desktopClientUnlisten = stop
-    }).catch(() => {
-      desktopClientUnlisten = undefined
-      console.error('Desktop client listener registration failed.')
-    })
+    const startDesktopClientStatus = async () => {
+      try {
+        const stop = await window.__TAURI__?.event?.listen('desktop-client-status-changed', ({ payload }) => {
+          desktopClientStatusVersion += 1
+          desktopClientStatus = payload
+        })
+        if (destroyed) stop?.()
+        else desktopClientUnlisten = stop
+      } catch {
+        desktopClientUnlisten = undefined
+        console.error('Desktop client listener registration failed.')
+      }
+      await readDesktopClientStatus()
+    }
     window.__TAURI__?.event?.listen('auth-registration-retry', ({ payload }) => {
       if (auth.name === 'signing-in') auth = registrationRetryState(payload?.delay_seconds)
     }).then((stop) => {
@@ -685,7 +700,7 @@
       console.error('Pairing decision failed.')
     })
     if (tauri) {
-      readDesktopClientStatus()
+      void startDesktopClientStatus()
       run('status')
       chatController.start()
       entitlementToast.start()
@@ -851,12 +866,12 @@
         <p class="support" aria-live="polite">{auth.name === 'signing-in' ? auth.message : 'Sign in to continue to your workspace.'}</p>
         <button class="primary" class:inactive={auth.name === 'signing-in'} aria-disabled={auth.name === 'signing-in' ? 'true' : undefined} onclick={signIn}>Sign in</button>
       </section>
-    {:else if auth.name === 'signed-in' && desktopClientStatus.supervisor_running && !desktopClientStatus.connected}
+    {:else if auth.name === 'signed-in' && desktopClientStatus?.supervisor_running && !desktopClientStatus.connected}
       <section class="auth-state" aria-live="polite">
         <p class="record error-record">Muniment cannot reach its background service.</p>
         <p class="support">Muniment reconnects on its own.</p>
       </section>
-    {:else if auth.name === 'signed-in'}
+    {:else if auth.name === 'signed-in' && desktopClientStatus}
       <section class="workspace" class:sidebar-collapsed={sidebarCollapsed} class:artifact-open={artifactRailOpen} class:artifact-resizing={artifactRailPointer !== undefined} style:--artifact-rail-width={`${artifactRailWidth}px`} bind:this={workspace}>
         {#if draggingFiles}<div class="drop-affordance" role="status"><strong>Drop files to add them</strong><span>Saved locally · supported images sent with first prompt</span></div>{/if}
         <header class="titlebar">{#if editingThreadTitle}<input class="thread-title" aria-label="Thread name" maxlength="160" bind:this={threadTitleInput} value={threadTitleDraft} oninput={limitThreadTitle} onkeydown={threadTitleKeydown} onblur={commitThreadTitle}>{:else}<h1 class="thread-title-heading" aria-label={currentThreadTitle}><button type="button" class="thread-title" aria-label="Rename thread" title={currentThreadTitle} disabled={!currentThreadId} bind:this={threadTitleButton} onclick={(event) => editThreadTitle(event.currentTarget.title)} onkeydown={threadTitleButtonKeydown}>{currentThreadTitle}</button></h1>{/if}<span class="title-spacer"></span><button type="button" class="quiet" aria-controls="artifact-rail" aria-expanded={artifactRailOpen} aria-keyshortcuts={artifactShortcut} aria-label={`${artifactRailOpen ? 'Close' : 'Open'} artifact rail`} onclick={toggleArtifactRail}>Artifacts <kbd>{shortcutDisplayLabel(artifactShortcut)}</kbd></button></header>
@@ -1065,7 +1080,7 @@
           {/if}
           <div class="composer-input">
             <label class="visually-hidden" for="composer-message">Message</label>
-            <textarea id="composer-message" aria-describedby="composer-hint" bind:this={composer} bind:value={draft} oninput={composerInput} onkeydown={keydown} rows="2" placeholder={active?.phase === 'resuming' ? 'Resuming interrupted reply…' : 'Ask anything'} disabled={active?.phase === 'resuming' || threadSwitching}></textarea>
+            <textarea id="composer-message" aria-describedby="composer-hint" bind:this={composer} use:focusComposerOnMount bind:value={draft} oninput={composerInput} onkeydown={keydown} rows="2" placeholder={active?.phase === 'resuming' ? 'Resuming interrupted reply…' : 'Ask anything'} disabled={composer && (active?.phase === 'resuming' || threadSwitching)}></textarea>
           </div>
           {#if submitError}<p class="cancel-error" role="alert">{submitError}</p>{/if}
           {#if cancelError}<p class="cancel-error" role="alert">{cancelError}</p>{/if}

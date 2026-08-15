@@ -437,11 +437,12 @@ impl AttachCompanionState {
     }
 
     fn stop_desktop_client(&self) {
-        let mut client = self
+        let supervisor = self
             .desktop_client
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if let Some(supervisor) = client.take() {
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take();
+        if let Some(supervisor) = supervisor {
             supervisor.stop.stop();
             let _ = supervisor.worker.join();
         }
@@ -879,11 +880,16 @@ fn start_desktop_client<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
                         observer_app
                             .state::<AttachCompanionState>()
                             .record_connected(connected);
-                        let _ = observer_app.emit("desktop-client-connection-changed", connected);
+                        let status = observer_app
+                            .state::<AttachCompanionState>()
+                            .listener_status();
+                        let _ = observer_app.emit("desktop-client-status-changed", status);
                     },
                 );
             })
         });
+    let status = app.state::<AttachCompanionState>().listener_status();
+    let _ = app.emit("desktop-client-status-changed", status);
 }
 
 #[cfg(target_os = "linux")]
@@ -971,6 +977,8 @@ fn run_attach_listener_with_hooks<R: tauri::Runtime>(
     let companion_state = app.state::<AttachCompanionState>();
     companion_state.publish_listener_stop(listener.stop_handle());
     companion_state.record_listener_started();
+    let status = companion_state.listener_status();
+    let _ = app.emit("desktop-client-status-changed", status);
     let expected_desktop_executable = std::env::current_exe().ok();
     loop {
         let (stream, credentials) = match listener.accept() {
