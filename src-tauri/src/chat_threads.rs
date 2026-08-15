@@ -131,6 +131,39 @@ fn owned_threads_error_message(_error: OwnedThreadsError) -> String {
     "Conversation history is unavailable.".into()
 }
 
+#[cfg(target_os = "linux")]
+fn chat_thread_summaries_command(
+    storage: &SharedStorage,
+    attach_state: &AttachCompanionState,
+    subject: Option<&str>,
+    limit: usize,
+    cursor: Option<&str>,
+) -> Result<serde_json::Value, String> {
+    match attach_state.desktop_client_session() {
+        DesktopClientSession::NoSupervisor => {
+            let mut storage = storage
+                .lock()
+                .map_err(|_| "Conversation history is unavailable.".to_string())?;
+            serde_json::to_value(chat_thread_summaries_page(
+                &mut storage.journal,
+                subject,
+                limit,
+                cursor,
+            )?)
+            .map_err(|_| "Conversation history is unavailable.".to_string())
+        }
+        DesktopClientSession::Connected(client) => client
+            .thread_summaries(
+                limit
+                    .try_into()
+                    .map_err(|_| "Conversation history is unavailable.".to_string())?,
+                cursor,
+            )
+            .map_err(|_| "Conversation history is unavailable.".to_string()),
+        DesktopClientSession::Disconnected => Err(auth::background_service_error()),
+    }
+}
+
 pub(crate) fn chat_thread_open_page(
     journal: &mut RunJournal,
     subject: Option<&str>,
@@ -153,6 +186,49 @@ pub(crate) fn chat_thread_open_page(
 
 fn thread_history_error_message(_error: ThreadHistoryError) -> String {
     "Conversation history is unavailable.".into()
+}
+
+#[cfg(target_os = "linux")]
+fn chat_thread_open_command(
+    storage: &SharedStorage,
+    attach_state: &AttachCompanionState,
+    subject: Option<&str>,
+    session_root: &std::path::Path,
+    thread_id: &str,
+    limit: usize,
+    cursor: Option<&str>,
+) -> Result<serde_json::Value, String> {
+    match attach_state.desktop_client_session() {
+        DesktopClientSession::NoSupervisor => {
+            let mut storage = storage
+                .lock()
+                .map_err(|_| "Conversation history is unavailable.".to_string())?;
+            let muniment_core::run_events::ChatStorage { journal, cas } = &mut *storage;
+            serde_json::to_value(
+                core_chat_thread_open_page(
+                    journal,
+                    Some(cas),
+                    subject,
+                    session_root,
+                    thread_id,
+                    limit,
+                    cursor,
+                )
+                .map_err(thread_history_error_message)?,
+            )
+            .map_err(|_| "Conversation history is unavailable.".to_string())
+        }
+        DesktopClientSession::Connected(client) => client
+            .thread_history(
+                thread_id,
+                limit
+                    .try_into()
+                    .map_err(|_| "Conversation history is unavailable.".to_string())?,
+                cursor,
+            )
+            .map_err(|_| "Conversation history is unavailable.".to_string()),
+        DesktopClientSession::Disconnected => Err(auth::background_service_error()),
+    }
 }
 
 pub(crate) fn select_session_thread(
@@ -243,6 +319,27 @@ pub async fn chat_current_thread(
     Ok(state.session_thread.current(tokens.subject.as_deref()))
 }
 
+#[cfg(target_os = "linux")]
+#[tauri::command]
+pub async fn chat_thread_summaries(
+    app_handle: tauri::AppHandle,
+    auth_state: tauri::State<'_, auth::AuthState>,
+    state: tauri::State<'_, ChatState>,
+    attach_state: tauri::State<'_, AttachCompanionState>,
+    limit: usize,
+    cursor: Option<String>,
+) -> Result<serde_json::Value, String> {
+    let tokens = auth::fresh_tokens(&auth_state, &app_handle)?;
+    chat_thread_summaries_command(
+        &state.storage,
+        &attach_state,
+        tokens.subject.as_deref(),
+        limit,
+        cursor.as_deref(),
+    )
+}
+
+#[cfg(not(target_os = "linux"))]
 #[tauri::command]
 pub async fn chat_thread_summaries(
     app_handle: tauri::AppHandle,
@@ -415,6 +512,31 @@ pub async fn chat_new_thread(
     )
 }
 
+#[cfg(target_os = "linux")]
+#[tauri::command]
+pub async fn chat_thread_open(
+    app_handle: tauri::AppHandle,
+    auth_state: tauri::State<'_, auth::AuthState>,
+    state: tauri::State<'_, ChatState>,
+    attach_state: tauri::State<'_, AttachCompanionState>,
+    thread_id: String,
+    limit: usize,
+    cursor: Option<String>,
+) -> Result<serde_json::Value, String> {
+    let tokens = auth::fresh_tokens(&auth_state, &app_handle)?;
+    let session_root = state_session_root(&app_handle)?;
+    chat_thread_open_command(
+        &state.storage,
+        &attach_state,
+        tokens.subject.as_deref(),
+        &session_root,
+        &thread_id,
+        limit,
+        cursor.as_deref(),
+    )
+}
+
+#[cfg(not(target_os = "linux"))]
 #[tauri::command]
 pub async fn chat_thread_open(
     app_handle: tauri::AppHandle,
@@ -481,6 +603,8 @@ mod tests {
         use std::sync::mpsc;
         use tauri::Manager;
 
+        muniment_core::chat_prompt::use_mock_keyring_for_tests();
+
         fn app_with_thread(
             attach_state: AttachCompanionState,
         ) -> (tauri::App<tauri::test::MockRuntime>, String) {
@@ -502,6 +626,7 @@ mod tests {
             app.manage(ChatState::new(app.handle(), runtime_activity).unwrap());
             app.manage(attach_state);
             let run_id = Uuid::now_v7().to_string();
+            muniment_core::chat_prompt::store_prompt(&run_id, "Prompt", Some("owner")).unwrap();
             let state = app.state::<ChatState>();
             let thread_id = state
                 .storage
@@ -547,6 +672,37 @@ mod tests {
             ))
         }
 
+        fn invoke_summaries(
+            app: &tauri::App<tauri::test::MockRuntime>,
+            limit: usize,
+            cursor: Option<&str>,
+        ) -> Result<Value, String> {
+            chat_thread_summaries_command(
+                &app.state::<ChatState>().storage,
+                &app.state::<AttachCompanionState>(),
+                Some("owner"),
+                limit,
+                cursor,
+            )
+        }
+
+        fn invoke_open(
+            app: &tauri::App<tauri::test::MockRuntime>,
+            thread_id: &str,
+            limit: usize,
+            cursor: Option<&str>,
+        ) -> Result<Value, String> {
+            chat_thread_open_command(
+                &app.state::<ChatState>().storage,
+                &app.state::<AttachCompanionState>(),
+                Some("owner"),
+                &std::env::temp_dir(),
+                thread_id,
+                limit,
+                cursor,
+            )
+        }
+
         fn read_value(stream: &mut impl Read) -> Value {
             let mut length = [0; 4];
             stream.read_exact(&mut length).unwrap();
@@ -556,6 +712,12 @@ mod tests {
         }
 
         let (rename_app, rename_id) = app_with_thread(AttachCompanionState::default());
+        let summaries = invoke_summaries(&rename_app, 100, None).unwrap();
+        assert_eq!(summaries["summaries"][0]["threadId"], rename_id);
+        assert!(summaries.get("nextCursor").is_some());
+        let history = invoke_open(&rename_app, &rename_id, 100, None).unwrap();
+        assert!(history["entries"].is_array());
+        assert!(history.get("nextCursor").is_some());
         invoke_rename(&rename_app, &rename_id, "Renamed thread").unwrap();
         assert_eq!(
             rename_app
@@ -608,17 +770,28 @@ mod tests {
                 )
                 .unwrap();
             let mut requests = Vec::new();
-            for _ in 0..2 {
+            for _ in 0..4 {
                 let request = read_value(&mut stream);
                 requests.push((request["operation"].clone(), request["body"].clone()));
                 let request_id = Id::new(request["request_id"].as_str().unwrap()).unwrap();
+                let body = match request["operation"].as_str().unwrap() {
+                    "thread.summaries" => json!({
+                        "summaries": [{"threadId": "remote", "title": "Remote", "updatedAt": "now"}],
+                        "nextCursor": "remote-next"
+                    }),
+                    "thread.history" => json!({
+                        "entries": [{"remote": true}],
+                        "nextCursor": "history-next"
+                    }),
+                    _ => json!({}),
+                };
                 stream
                     .write_all(
                         &encode_frame(&Response {
                             protocol: Protocol,
                             request_id,
                             ok: Success,
-                            body: json!({}),
+                            body,
                         })
                         .unwrap(),
                     )
@@ -650,6 +823,17 @@ mod tests {
         connected_rx.recv_timeout(Duration::from_secs(1)).unwrap();
         live_state.set_desktop_client_for_test(true, |_, _| std::thread::spawn(|| {}));
         let (live_app, live_id) = app_with_thread(live_state);
+        assert_eq!(
+            invoke_summaries(&live_app, 100, Some("summary-cursor")).unwrap(),
+            json!({
+                "summaries": [{"threadId": "remote", "title": "Remote", "updatedAt": "now"}],
+                "nextCursor": "remote-next"
+            })
+        );
+        assert_eq!(
+            invoke_open(&live_app, &live_id, 99, Some("history-cursor")).unwrap(),
+            json!({"entries": [{"remote": true}], "nextCursor": "history-next"})
+        );
         invoke_rename(&live_app, &live_id, "Remote title").unwrap();
         invoke_delete(&live_app, &live_id).unwrap();
         assert_eq!(
@@ -669,11 +853,27 @@ mod tests {
             requests,
             vec![
                 (
+                    json!("thread.summaries"),
+                    json!({"limit": 100, "cursor": "summary-cursor"})
+                ),
+                (
+                    json!("thread.history"),
+                    json!({"thread_id": live_id, "limit": 99, "cursor": "history-cursor"})
+                ),
+                (
                     json!("thread.rename"),
                     json!({"thread_id": live_id, "title": "Remote title"})
                 ),
                 (json!("thread.delete"), json!({"thread_id": live_id})),
             ]
+        );
+        assert_eq!(
+            invoke_summaries(&live_app, 100, None).unwrap_err(),
+            "Conversation history is unavailable."
+        );
+        assert_eq!(
+            invoke_open(&live_app, &live_id, 100, None).unwrap_err(),
+            "Conversation history is unavailable."
         );
         live_app
             .state::<AttachCompanionState>()
@@ -682,14 +882,14 @@ mod tests {
         let disconnected_state = AttachCompanionState::default();
         disconnected_state.set_desktop_client_for_test(false, |_, _| std::thread::spawn(|| {}));
         let (disconnected_app, disconnected_id) = app_with_thread(disconnected_state);
-        for result in [
-            invoke_rename(&disconnected_app, &disconnected_id, "title"),
-            invoke_delete(&disconnected_app, &disconnected_id),
-        ] {
-            assert_eq!(
-                result.unwrap_err(),
-                "Muniment cannot reach its background service."
-            );
+        let errors = [
+            invoke_summaries(&disconnected_app, 100, Some("cursor")).unwrap_err(),
+            invoke_open(&disconnected_app, &disconnected_id, 100, Some("cursor")).unwrap_err(),
+            invoke_rename(&disconnected_app, &disconnected_id, "title").unwrap_err(),
+            invoke_delete(&disconnected_app, &disconnected_id).unwrap_err(),
+        ];
+        for error in errors {
+            assert_eq!(error, "Muniment cannot reach its background service.");
         }
         assert_eq!(
             disconnected_app
