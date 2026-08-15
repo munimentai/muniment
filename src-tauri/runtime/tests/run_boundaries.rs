@@ -6,7 +6,9 @@ use std::net::TcpListener;
 use std::sync::{Arc, Mutex};
 
 use muniment_core::attach::{RuntimeActivityRegistry, SignedWorkspaceApproval};
-use muniment_core::auth::{KeyringNativeCredentialStore, NativeCredentialStore};
+use muniment_core::auth::{
+    EntitlementSnapshotTracker, KeyringNativeCredentialStore, NativeCredentialStore,
+};
 use muniment_core::chat_view::SelectedFile;
 use muniment_core::journal::thread_mutation::create_thread_now;
 use muniment_core::journal::Provenance;
@@ -75,6 +77,7 @@ fn runtime_boundaries_prepare_a_desktop_run() {
             profile.join("memory"),
         )),
         activity,
+        Arc::new(EntitlementSnapshotTracker::new()),
         SignedWorkspaceApproval::default(),
         Arc::new(SessionThread::default()),
         muniment_runtime::open_companion_registry(&profile).unwrap(),

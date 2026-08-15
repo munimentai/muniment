@@ -1,21 +1,16 @@
 //! Native session service operations.
 
+pub use muniment_core::attach::linux::EntitlementSnapshotResult;
 use muniment_core::attach::RuntimeActivityRegistry;
 use muniment_core::auth::{
     api_base_url, ensure_native_session as ensure_core_native_session, list_native_devices,
     native_status, run_native_sign_in, sign_out_native_session, AuthStatus, BrowserOpener,
-    EntitlementSnapshotTracker, EntitlementSnapshotView, FreshNativeSession,
-    FreshNativeSessionError, KeyringNativeCredentialStore, NativeDeviceList, NativeDeviceListError,
-    NativeSignInError, NativeTokenError, UreqAuthorizationTransport, UreqNativeDeviceListTransport,
+    EntitlementSnapshotTracker, FreshNativeSession, FreshNativeSessionError,
+    KeyringNativeCredentialStore, NativeDeviceList, NativeDeviceListError, NativeSignInError,
+    NativeTokenError, UreqAuthorizationTransport, UreqNativeDeviceListTransport,
     UreqRegistrationTransport, UreqRevocationTransport, UreqTokenTransport,
 };
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct EntitlementSnapshotResult {
-    pub snapshot: EntitlementSnapshotView,
-    pub changed_snapshot_version: Option<u64>,
-}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EntitlementSnapshotError {
