@@ -478,7 +478,7 @@ client completes its handshake, because `admit_desktop_client` sends the
 900-second `CAPABILITY_IDLE_LIFETIME` ceiling the protocol names
 (MUNIDESK-1251). `DesktopClientHolder::rename_thread` and `delete_thread`
 (`client.rs:1417`, `:1431`) are the two typed desktop-only methods
-(MUNIDESK-1259). ADR 0012 carries nine attach amendments, and `THREAT_MODEL.md`
+(MUNIDESK-1259). ADR 0012 carries twelve attach amendments, and `THREAT_MODEL.md`
 records each, including every desktop client operation tranche.
 
 DONE 2026-08-14 through 2026-08-15 — the second desktop client operation
@@ -1276,7 +1276,7 @@ than verified. The attach socket row records companion revocation and the
 workspace namespace. The ADR 0012 runtime service row records the per-profile
 instance lock, the shipped `muniment-runtime` binary with its dormant service
 entries, the migration control peer check, the one prepared handoff, the desktop
-answer with its release path, both desktop client operation tranches, and the
+answer with its release path, three desktop client operation tranches, and the
 same-user limitation (MUNIDESK-1113).
 
 OPEN — the MUNIQA prompt-injection suite still follows ADR 0018's landed slices.
