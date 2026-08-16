@@ -479,6 +479,18 @@ impl RunAttachBoundaries for RuntimeAttachBoundaries {
                 "A reply is already in progress.".into(),
             ));
         }
+        let belongs_to_workspace = self
+            .storage
+            .lock()
+            .map_err(|_| persistence_error())?
+            .journal
+            .run_belongs_to_workspace(run_id, workspace)
+            .map_err(|_| persistence_error())?;
+        if !belongs_to_workspace {
+            return Err(RunStartError::InvalidRequest(
+                "The run was not found or is inaccessible.".into(),
+            ));
+        }
         let tokens = self.fresh_tokens()?;
         let grant = self.configure_run(run_id, "", &tokens, Some(workspace))?;
         service::resume_run(

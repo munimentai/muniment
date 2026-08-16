@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use muniment_core::active_run::cancel_active_run;
 use muniment_core::attach::linux::{CompanionProvenance, RunResumeRequest, ThreadListService};
-use muniment_core::attach::{Id, RuntimeActivityRegistry};
+use muniment_core::attach::{ErrorCode, Id, RuntimeActivityRegistry};
 use muniment_core::auth::{KeyringNativeCredentialStore, NativeCredentialStore};
 use muniment_core::chat_resume::clear_active_run;
 use muniment_core::pi_execution::{coordinate_prepared_prompt, PiRuntime};
@@ -27,6 +27,59 @@ use common::{credentials, fixture_grant, spawn_server_sequence, stage_pi_stub, T
 static ENVIRONMENT: Mutex<()> = Mutex::new(());
 
 struct FixtureSink;
+
+#[test]
+fn attach_dispatch_rejects_resume_for_another_workspace() {
+    let _environment = ENVIRONMENT.lock().unwrap();
+    let temporary_profile = TemporaryProfile::new("resume-workspace", false);
+    let storage = open_profile_storage(&temporary_profile.profile).unwrap();
+    let run_id = "018f0000-0000-7000-8000-000000000005";
+    prepare_new_run_with_session_thread(
+        &storage,
+        SessionThreadStart {
+            tracker: &SessionThread::default(),
+            continue_existing: false,
+        },
+        run_id,
+        "workspace-a",
+        Some("user"),
+        Vec::new(),
+        None,
+        "test",
+        "1",
+        || Ok(()),
+    )
+    .unwrap();
+    drop(storage);
+
+    let state =
+        RuntimeAttachState::open(&temporary_profile.profile, &temporary_profile.config).unwrap();
+    let mut service = muniment_runtime::compose_attach_service(
+        state.boundaries(),
+        state.companion_registry(),
+        &temporary_profile.profile,
+        &temporary_profile.config,
+    )
+    .unwrap();
+    let error = service
+        .resume_run(
+            "workspace-b",
+            RunResumeRequest {
+                run_id: run_id.into(),
+            },
+            &Id::new("018f0000-0000-7000-8000-000000000015").unwrap(),
+            &Id::new("018f0000-0000-7000-8000-000000000016").unwrap(),
+            CompanionProvenance {
+                profile: "default".into(),
+                companion_kind: "desktop".into(),
+                companion_version: "test".into(),
+                peer_uid: 1000,
+                peer_pid: 42,
+            },
+        )
+        .unwrap_err();
+    assert_eq!(error.code(), ErrorCode::InvalidRequest);
+}
 
 impl ChatEventSink for FixtureSink {
     fn provenance(&self) -> (&str, &str) {
