@@ -1804,6 +1804,32 @@ mod tests {
     }
 
     #[cfg(target_os = "linux")]
+    fn run_permission_request(
+        service: &mut DesktopAttachService<FakeRunStartBoundaries>,
+        answer: ChatPermissionAnswer,
+        request_id: &str,
+        key: &str,
+    ) -> Result<RunPermissionAnswerAccepted, ProtocolError> {
+        service.answer_run_permission(
+            "workspace-a",
+            RunPermissionAnswerRequest {
+                run_id: "0190a100-0000-7000-8000-000000000001".into(),
+                gate_id: "gate-1".into(),
+                answer,
+            },
+            &Id::new(request_id).unwrap(),
+            &Id::new(key).unwrap(),
+            CompanionProvenance {
+                profile: "default".into(),
+                companion_kind: "desktop-client".into(),
+                companion_version: "1.2.3".into(),
+                peer_uid: 1000,
+                peer_pid: 42,
+            },
+        )
+    }
+
+    #[cfg(target_os = "linux")]
     fn message_request(
         service: &mut DesktopAttachService<FakeRunStartBoundaries>,
         operation: Operation,
@@ -1888,27 +1914,25 @@ mod tests {
             Some((run_id, "workspace-a")),
         );
         let key = "018f0000-0000-7000-8000-000000000070";
-        let first = permission_request(
+        let first = run_permission_request(
             &mut service,
-            "workspace-a",
-            run_id,
-            "gate-1",
-            PermissionDecision::Allow,
+            ChatPermissionAnswer::Confirm(true),
             "018f0000-0000-7000-8000-000000000071",
             key,
         )
         .unwrap();
-        let replay = permission_request(
+        let replay = run_permission_request(
             &mut service,
-            "workspace-a",
-            run_id,
-            "gate-1",
-            PermissionDecision::Allow,
+            ChatPermissionAnswer::Confirm(true),
             "018f0000-0000-7000-8000-000000000072",
             key,
         )
         .unwrap();
-        assert_eq!(replay, first);
+        assert_eq!(replay.run_id, first.run_id);
+        assert_eq!(replay.gate_id, first.gate_id);
+        assert_eq!(replay.committed_seq, first.committed_seq);
+        assert_eq!(replay.accepted_at, first.accepted_at);
+        assert!(matches!(replay.answer, ChatPermissionAnswer::Confirm(true)));
         assert_eq!(
             service
                 .boundaries
@@ -1919,12 +1943,9 @@ mod tests {
             1
         );
 
-        let conflict = permission_request(
+        let conflict = run_permission_request(
             &mut service,
-            "workspace-a",
-            run_id,
-            "gate-1",
-            PermissionDecision::Deny,
+            ChatPermissionAnswer::Confirm(false),
             "018f0000-0000-7000-8000-000000000073",
             key,
         )
