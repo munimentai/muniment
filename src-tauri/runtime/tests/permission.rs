@@ -95,7 +95,9 @@ fn a_queued_permission_answer_reaches_a_live_runtime_run() {
     let config = temporary_profile.config.clone();
     let descriptor = stage_pi_stub(&temporary_root);
     let permission_capture = temporary_root.join("permission.jsonl");
+    let steer_capture = temporary_root.join("steer.json");
     std::env::set_var("PI_RESUME_STUB_PERMISSION_CAPTURE", &permission_capture);
+    std::env::set_var("PI_RESUME_STUB_STEER_CAPTURE", &steer_capture);
 
     let run_id = "018f0000-0000-7000-8000-000000000113";
     let storage = open_profile_storage(&profile).unwrap();
@@ -145,6 +147,14 @@ fn a_queued_permission_answer_reaches_a_live_runtime_run() {
             events.recv_timeout(Duration::from_secs(5)).unwrap().phase,
             "thinking"
         );
+        boundaries
+            .queue_attach_message(
+                "workspace-a",
+                run_id,
+                muniment_core::active_run::ChatDelivery::Steer,
+                "redirect here",
+            )
+            .unwrap();
         let gate_id = loop {
             let event = events.recv_timeout(Duration::from_secs(5)).unwrap();
             if let Some(permission) = event.pending_permission {
@@ -170,6 +180,9 @@ fn a_queued_permission_answer_reaches_a_live_runtime_run() {
     assert!(captured.contains(r#""type":"extension_ui_response""#));
     assert!(captured.contains(r#""id":"permission-1""#));
     assert!(captured.contains(r#""confirmed":true"#));
+    let captured = fs::read_to_string(steer_capture).unwrap();
+    assert!(captured.contains(r#""type":"steer""#));
+    assert!(captured.contains(r#""message":"redirect here""#));
 
     drop(storage);
     let storage = open_profile_storage(&profile).unwrap();
@@ -196,5 +209,6 @@ fn a_queued_permission_answer_reaches_a_live_runtime_run() {
     drop(journal_events);
     drop(storage);
     std::env::remove_var("PI_RESUME_STUB_PERMISSION_CAPTURE");
+    std::env::remove_var("PI_RESUME_STUB_STEER_CAPTURE");
     std::env::remove_var("MUNIMENT_PI_ROOT");
 }

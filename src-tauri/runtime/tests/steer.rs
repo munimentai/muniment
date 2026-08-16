@@ -17,11 +17,16 @@ use common::{fixture_grant, stage_pi_stub, TemporaryProfile};
 
 static ENVIRONMENT: Mutex<()> = Mutex::new(());
 
-#[test]
-fn a_queued_steer_reaches_a_live_runtime_run() {
+fn queued_message_reaches_a_live_runtime_run(
+    test_name: &str,
+    run_id: &str,
+    delivery: ChatDelivery,
+    message: &str,
+    command: &str,
+) {
     let _environment = ENVIRONMENT.lock().unwrap();
     muniment_core::chat_prompt::use_mock_keyring_for_tests();
-    let temporary_profile = TemporaryProfile::new("steer", true);
+    let temporary_profile = TemporaryProfile::new(test_name, true);
     let temporary_root = temporary_profile.root.clone();
     let profile = temporary_profile.profile.clone();
     let config = temporary_profile.config.clone();
@@ -29,7 +34,6 @@ fn a_queued_steer_reaches_a_live_runtime_run() {
     let steer_capture = temporary_root.join("steer.json");
     std::env::set_var("PI_RESUME_STUB_STEER_CAPTURE", &steer_capture);
 
-    let run_id = "018f0000-0000-7000-8000-000000000112";
     let storage = open_profile_storage(&profile).unwrap();
     let runtime = Arc::new(Mutex::new(None));
     let runtime_activity = RuntimeActivityRegistry::new();
@@ -78,21 +82,21 @@ fn a_queued_steer_reaches_a_live_runtime_run() {
             "thinking"
         );
         boundaries
-            .queue_attach_message("workspace-a", run_id, ChatDelivery::Steer, "redirect here")
+            .queue_attach_message("workspace-a", run_id, delivery, message)
             .unwrap();
         let delivered = events
             .iter()
             .take_while(|event| {
                 !matches!(event.phase.as_str(), "complete" | "failed" | "cancelled")
             })
-            .any(|event| event.text.contains("steered"));
+            .any(|event| event.text.contains(command));
         assert!(delivered);
         run.join().unwrap().unwrap();
     });
 
     let captured = fs::read_to_string(steer_capture).unwrap();
-    assert!(captured.contains(r#""type":"steer""#));
-    assert!(captured.contains(r#""message":"redirect here""#));
+    assert!(captured.contains(&format!(r#""type":"{command}""#)));
+    assert!(captured.contains(&format!(r#""message":"{message}""#)));
     for id in [run_id, "018f0000-0000-7000-8000-000000000999"] {
         assert!(boundaries
             .queue_attach_message("workspace-a", id, ChatDelivery::Steer, "too late")
@@ -111,4 +115,26 @@ fn a_queued_steer_reaches_a_live_runtime_run() {
     drop(storage);
     std::env::remove_var("PI_RESUME_STUB_STEER_CAPTURE");
     std::env::remove_var("MUNIMENT_PI_ROOT");
+}
+
+#[test]
+fn a_queued_steer_reaches_a_live_runtime_run() {
+    queued_message_reaches_a_live_runtime_run(
+        "steer",
+        "018f0000-0000-7000-8000-000000000112",
+        ChatDelivery::Steer,
+        "redirect here",
+        "steer",
+    );
+}
+
+#[test]
+fn a_queued_follow_up_reaches_a_live_runtime_run() {
+    queued_message_reaches_a_live_runtime_run(
+        "follow-up",
+        "018f0000-0000-7000-8000-000000000114",
+        ChatDelivery::FollowUp,
+        "then do this",
+        "follow_up",
+    );
 }
