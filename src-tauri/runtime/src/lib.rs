@@ -40,4 +40,6 @@ pub use service::{
 pub use service::{
     list_companions, open_companion_registry, revoke_companion, stream_run, subscribe_run_commits,
 };
-pub use sink::RuntimeChatEventSink;
+pub use sink::{
+    RuntimeChatEventBroadcast, RuntimeChatEventSink, CHAT_EVENT_SUBSCRIBER_QUEUE_CAPACITY,
+};

@@ -1,7 +1,7 @@
 //! Dormant runtime chat event delivery boundaries.
 
 use std::path::{Path, PathBuf};
-use std::sync::mpsc::Sender;
+use std::sync::mpsc::{self, Receiver, Sender, SyncSender, TrySendError};
 use std::sync::{Arc, Mutex};
 
 use muniment_core::chat_profile::ChatProfile;
@@ -10,9 +10,43 @@ use muniment_core::pi_launch::{PiLaunchBoundaries, PiLaunchError};
 use muniment_core::run_events::{ChatEvent, ChatEventSink};
 use muniment_core::sidecar::pi_install::{PiArtifactDescriptor, PI_ARTIFACT};
 
+pub const CHAT_EVENT_SUBSCRIBER_QUEUE_CAPACITY: usize = 256;
+
+/// Fans each chat event out to every live subscriber without blocking a run.
+#[derive(Clone, Default)]
+pub struct RuntimeChatEventBroadcast {
+    subscribers: Arc<Mutex<Vec<SyncSender<ChatEvent>>>>,
+}
+
+impl RuntimeChatEventBroadcast {
+    pub fn subscribe(&self) -> Receiver<ChatEvent> {
+        let (sender, receiver) = mpsc::sync_channel(CHAT_EVENT_SUBSCRIBER_QUEUE_CAPACITY);
+        self.subscribers
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push(sender);
+        receiver
+    }
+
+    fn deliver(&self, event: ChatEvent) {
+        self.subscribers
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .retain(|subscriber| match subscriber.try_send(event.clone()) {
+                Ok(()) => true,
+                Err(TrySendError::Full(_) | TrySendError::Disconnected(_)) => false,
+            });
+    }
+}
+
+enum RuntimeChatEventTarget {
+    Subscriber(Option<Sender<ChatEvent>>),
+    Broadcast(RuntimeChatEventBroadcast),
+}
+
 pub struct RuntimeChatEventSink {
     profile: ChatProfile,
-    subscriber: Mutex<Option<Sender<ChatEvent>>>,
+    target: Mutex<RuntimeChatEventTarget>,
     pi_artifact: PiArtifactDescriptor,
     memory_runtime: Arc<ApplicationMemoryRuntime>,
 }
@@ -20,12 +54,25 @@ pub struct RuntimeChatEventSink {
 impl RuntimeChatEventSink {
     pub fn new(
         profile_directory: impl AsRef<Path>,
+        broadcast: RuntimeChatEventBroadcast,
+        memory_runtime: Arc<ApplicationMemoryRuntime>,
+    ) -> Self {
+        Self {
+            profile: ChatProfile::new(profile_directory.as_ref()),
+            target: Mutex::new(RuntimeChatEventTarget::Broadcast(broadcast)),
+            pi_artifact: PI_ARTIFACT,
+            memory_runtime,
+        }
+    }
+
+    pub fn with_subscriber(
+        profile_directory: impl AsRef<Path>,
         subscriber: Option<Sender<ChatEvent>>,
         memory_runtime: Arc<ApplicationMemoryRuntime>,
     ) -> Self {
         Self {
             profile: ChatProfile::new(profile_directory.as_ref()),
-            subscriber: Mutex::new(subscriber),
+            target: Mutex::new(RuntimeChatEventTarget::Subscriber(subscriber)),
             pi_artifact: PI_ARTIFACT,
             memory_runtime,
         }
@@ -43,14 +90,22 @@ impl ChatEventSink for RuntimeChatEventSink {
     }
 
     fn deliver(&self, event: ChatEvent) -> Result<(), ()> {
-        let mut subscriber = self.subscriber.lock().map_err(|_| ())?;
-        if subscriber
-            .as_ref()
-            .is_some_and(|subscriber| subscriber.send(event).is_err())
-        {
-            *subscriber = None;
+        let mut target = self.target.lock().map_err(|_| ())?;
+        match &mut *target {
+            RuntimeChatEventTarget::Subscriber(subscriber) => {
+                if subscriber
+                    .as_ref()
+                    .is_some_and(|subscriber| subscriber.send(event).is_err())
+                {
+                    *subscriber = None;
+                }
+                Ok(())
+            }
+            RuntimeChatEventTarget::Broadcast(broadcast) => {
+                broadcast.deliver(event);
+                Ok(())
+            }
         }
-        Ok(())
     }
 }
 

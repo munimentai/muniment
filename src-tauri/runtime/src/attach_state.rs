@@ -17,7 +17,7 @@ use muniment_core::session_thread::SessionThread;
 use crate::service::{open_companion_registry, open_profile_storage};
 use crate::{
     compose_attach_service, installed_desktop_executable, AttachListenerInputs,
-    RuntimeAttachBoundaries,
+    RuntimeAttachBoundaries, RuntimeChatEventBroadcast,
 };
 
 /// Owns the state shared by all runtime attach connections.
@@ -35,6 +35,7 @@ pub struct RuntimeAttachState {
     companion_registry: CompanionRegistry,
     approvals: ApprovalCoordinator,
     sign_in_running: Arc<AtomicBool>,
+    chat_events: RuntimeChatEventBroadcast,
 }
 
 impl RuntimeAttachState {
@@ -66,6 +67,7 @@ impl RuntimeAttachState {
             companion_registry,
             approvals: ApprovalCoordinator::default(),
             sign_in_running: Arc::new(AtomicBool::new(false)),
+            chat_events: RuntimeChatEventBroadcast::default(),
         })
     }
 
@@ -84,6 +86,7 @@ impl RuntimeAttachState {
             Arc::clone(&self.session_thread),
             self.companion_registry.clone(),
             Arc::clone(&self.sign_in_running),
+            self.chat_events.clone(),
         )
     }
 
