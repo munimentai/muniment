@@ -37,9 +37,11 @@ use muniment_core::run_preparation::{
     prepare_new_run_with_session_thread, OpenSelectedFile, SessionThreadStart,
 };
 use muniment_core::run_start::{
-    ActiveRun, RunAttachBoundaries, RunStartBoundaries, RunStartError, RunStartLaunch,
+    accepted_time_now, new_run_id, ActiveRun, AttachPromptAccepted, AttachResumeAccepted,
+    RunAttachBoundaries, RunStartBoundaries, RunStartError, RunStartLaunch,
 };
 use muniment_core::session_thread::SessionThread;
+use muniment_core::sidecar::pi_install::PiArtifactDescriptor;
 
 use crate::service::{self, ConfigureRunError};
 use crate::{RuntimeChatEventBroadcast, RuntimeChatEventSink};
@@ -63,6 +65,7 @@ pub struct RuntimeAttachBoundaries {
     sign_in_running: Arc<AtomicBool>,
     browser_opener: Arc<dyn BrowserOpener>,
     chat_events: RuntimeChatEventBroadcast,
+    pi_artifact: Option<PiArtifactDescriptor>,
 }
 
 impl RuntimeAttachBoundaries {
@@ -128,12 +131,19 @@ impl RuntimeAttachBoundaries {
             sign_in_running,
             browser_opener: Arc::new(open_browser),
             chat_events,
+            pi_artifact: None,
         }
     }
 
     /// Replaces the production browser opener for tests and alternate hosts.
     pub fn with_browser_opener(mut self, browser_opener: Arc<dyn BrowserOpener>) -> Self {
         self.browser_opener = browser_opener;
+        self
+    }
+
+    /// Replaces the production Pi artifact for tests and alternate hosts.
+    pub fn with_pi_artifact(mut self, pi_artifact: PiArtifactDescriptor) -> Self {
+        self.pi_artifact = Some(pi_artifact);
         self
     }
 
@@ -398,27 +408,113 @@ fn persistence_error() -> RunStartError {
     RunStartError::Persistence("Conversation history is unavailable.".into())
 }
 
+fn run_service_error(error: String) -> RunStartError {
+    if error == "thread_not_found" {
+        RunStartError::ThreadNotFound
+    } else {
+        RunStartError::InvalidRequest(error)
+    }
+}
+
 impl RunAttachBoundaries for RuntimeAttachBoundaries {
     fn submit_run(
         &self,
-        _workspace: &str,
-        _text: String,
-        _files: Vec<SelectedFile>,
-        _thread_id: Option<String>,
-    ) -> Result<muniment_core::run_start::AttachPromptAccepted, RunStartError> {
-        Err(RunStartError::InvalidRequest(
-            "This prompt cannot be accepted.".into(),
-        ))
+        workspace: &str,
+        text: String,
+        files: Vec<SelectedFile>,
+        thread_id: Option<String>,
+    ) -> Result<AttachPromptAccepted, RunStartError> {
+        let prompt = text.trim().to_owned();
+        if prompt.is_empty() {
+            return Err(RunStartError::InvalidRequest(
+                "Enter a message before sending.".into(),
+            ));
+        }
+        if self.active_run_exists() {
+            return Err(RunStartError::InvalidRequest(
+                "A reply is already in progress.".into(),
+            ));
+        }
+        let tokens = self.fresh_tokens()?;
+        let run_id = new_run_id();
+        let grant = self.configure_run(&run_id, &prompt, &tokens, Some(workspace))?;
+        let files = open_selected_files(files)?;
+        let (accepted, launch) = service::accept_prompt(
+            &self.profile_directory,
+            Arc::clone(&self.storage),
+            Arc::clone(&self.runtime),
+            &self.runtime_activity,
+            &self.config_directory,
+            run_id,
+            prompt,
+            thread_id,
+            &self.session_thread,
+            true,
+            tokens.access_token,
+            tokens.subject,
+            files,
+            grant,
+            Arc::clone(&self.active),
+            None,
+            self.pi_artifact,
+        )
+        .map_err(run_service_error)?;
+        std::thread::spawn(move || service::drive_prompt(launch));
+        Ok(AttachPromptAccepted {
+            run_id: accepted.run_id,
+            thread_id: accepted.thread_id,
+            attachments: accepted.attachments,
+            committed_seq: accepted.committed_seq,
+            accepted_at: accepted.accepted_at,
+        })
     }
 
     fn resume_run(
         &self,
-        _workspace: &str,
-        _run_id: &str,
-    ) -> Result<muniment_core::run_start::AttachResumeAccepted, RunStartError> {
-        Err(RunStartError::InvalidRequest(
-            "This reply cannot be resumed.".into(),
-        ))
+        workspace: &str,
+        run_id: &str,
+    ) -> Result<AttachResumeAccepted, RunStartError> {
+        if self.active_run_exists() {
+            return Err(RunStartError::InvalidRequest(
+                "A reply is already in progress.".into(),
+            ));
+        }
+        let tokens = self.fresh_tokens()?;
+        let grant = self.configure_run(run_id, "", &tokens, Some(workspace))?;
+        service::resume_run(
+            &self.profile_directory,
+            Arc::clone(&self.storage),
+            Arc::clone(&self.runtime),
+            &self.runtime_activity,
+            &self.config_directory,
+            run_id.to_owned(),
+            tokens.access_token,
+            tokens.subject,
+            grant,
+            Arc::clone(&self.active),
+            None,
+            self.pi_artifact,
+        )
+        .map_err(run_service_error)?;
+        let mut storage = self.storage.lock().map_err(|_| persistence_error())?;
+        let thread_id = storage
+            .journal
+            .run_thread_id(run_id)
+            .map_err(|_| persistence_error())?
+            .ok_or(RunStartError::ThreadNotFound)?;
+        let committed_seq = storage
+            .journal
+            .events(run_id)
+            .map_err(|_| persistence_error())?
+            .last()
+            .map(|event| event.run_seq)
+            .ok_or_else(persistence_error)?;
+        Ok(AttachResumeAccepted {
+            run_id: run_id.to_owned(),
+            thread_id,
+            committed_seq,
+            accepted_at: accepted_time_now(),
+        })
     }
 
     fn queue_attach_message(
