@@ -3,11 +3,10 @@
 use std::path::PathBuf;
 use std::process::Command;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{mpsc, Arc, Mutex};
+use std::time::Duration;
 
-use muniment_core::active_run::{
-    queue_message, queue_permission_answer_with_commit, ChatDelivery, ChatQueueRequest,
-};
+use muniment_core::active_run::{ChatDelivery, ChatQueueRequest};
 use muniment_core::attach::linux::{
     EntitlementSnapshotResult, RunStreamPage, ThreadListPage, ThreadListRequest, ThreadListService,
     ThreadOpenPage, ThreadOpenRequest,
@@ -44,6 +43,8 @@ use muniment_core::session_thread::SessionThread;
 
 use crate::service::{self, ConfigureRunError};
 use crate::{RuntimeChatEventBroadcast, RuntimeChatEventSink};
+
+const ATTACH_PERMISSION_COMMIT_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// Supplies attach reads from runtime-owned state.
 pub struct RuntimeAttachBoundaries {
@@ -405,8 +406,8 @@ impl RunAttachBoundaries for RuntimeAttachBoundaries {
         delivery: ChatDelivery,
         message: &str,
     ) -> Result<(), RunStartError> {
-        queue_message(
-            &self.active,
+        service::queue_run_message(
+            Arc::clone(&self.active),
             ChatQueueRequest {
                 run_id: run_id.to_owned(),
                 workspace: Some(workspace.to_owned()),
@@ -637,14 +638,20 @@ impl RunAttachBoundaries for RuntimeAttachBoundaries {
         gate_id: &str,
         answer: ChatPermissionAnswer,
     ) -> Result<std::sync::mpsc::Receiver<Option<u64>>, RunStartError> {
-        queue_permission_answer_with_commit(
-            &self.active,
-            Some(workspace),
+        let committed_seq = service::answer_permission(
+            Arc::clone(&self.active),
+            workspace.to_owned(),
             run_id.to_owned(),
             gate_id.to_owned(),
             answer,
+            ATTACH_PERMISSION_COMMIT_TIMEOUT,
         )
-        .map_err(RunStartError::InvalidRequest)
+        .map_err(RunStartError::InvalidRequest)?;
+        let (committed, resolved) = mpsc::channel();
+        committed
+            .send(Some(committed_seq))
+            .map_err(|_| RunStartError::Persistence("The permission answer was lost.".into()))?;
+        Ok(resolved)
     }
 }
 

@@ -2,9 +2,15 @@ use std::fs;
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::Duration;
 
-use muniment_core::active_run::{ChatDelivery, ChatQueueRequest};
-use muniment_core::attach::RuntimeActivityRegistry;
-use muniment_runtime::{open_profile_storage, queue_run_message, run_prompt};
+use muniment_core::active_run::ChatDelivery;
+use muniment_core::attach::{RuntimeActivityRegistry, SignedWorkspaceApproval};
+use muniment_core::auth::EntitlementSnapshotTracker;
+use muniment_core::memory_runtime::ApplicationMemoryRuntime;
+use muniment_core::run_start::RunAttachBoundaries;
+use muniment_core::session_thread::SessionThread;
+use muniment_runtime::{
+    open_companion_registry, open_profile_storage, run_prompt, RuntimeAttachBoundaries,
+};
 
 mod common;
 use common::{fixture_grant, stage_pi_stub, TemporaryProfile};
@@ -28,6 +34,22 @@ fn a_queued_steer_reaches_a_live_runtime_run() {
     let runtime = Arc::new(Mutex::new(None));
     let runtime_activity = RuntimeActivityRegistry::new();
     let active = Arc::new(Mutex::new(None));
+    let boundaries = RuntimeAttachBoundaries::new(
+        Arc::clone(&storage),
+        Arc::clone(&active),
+        profile.clone(),
+        config.clone(),
+        Arc::clone(&runtime),
+        Arc::new(ApplicationMemoryRuntime::new(
+            config.clone(),
+            profile.join("memory"),
+        )),
+        runtime_activity.clone(),
+        Arc::new(EntitlementSnapshotTracker::new()),
+        SignedWorkspaceApproval::default(),
+        Arc::new(SessionThread::default()),
+        open_companion_registry(&profile).unwrap(),
+    );
     let (subscriber, events) = mpsc::channel();
     std::thread::scope(|scope| {
         let run = scope.spawn(|| {
@@ -55,16 +77,9 @@ fn a_queued_steer_reaches_a_live_runtime_run() {
             events.recv_timeout(Duration::from_secs(5)).unwrap().phase,
             "thinking"
         );
-        queue_run_message(
-            Arc::clone(&active),
-            ChatQueueRequest {
-                run_id: run_id.into(),
-                workspace: None,
-                delivery: ChatDelivery::Steer,
-                message: "redirect here".into(),
-            },
-        )
-        .unwrap();
+        boundaries
+            .queue_attach_message("workspace-a", run_id, ChatDelivery::Steer, "redirect here")
+            .unwrap();
         let delivered = events
             .iter()
             .take_while(|event| {
@@ -78,17 +93,10 @@ fn a_queued_steer_reaches_a_live_runtime_run() {
     let captured = fs::read_to_string(steer_capture).unwrap();
     assert!(captured.contains(r#""type":"steer""#));
     assert!(captured.contains(r#""message":"redirect here""#));
-    let inactive = |id: &str| ChatQueueRequest {
-        run_id: id.into(),
-        workspace: None,
-        delivery: ChatDelivery::Steer,
-        message: "too late".into(),
-    };
     for id in [run_id, "018f0000-0000-7000-8000-000000000999"] {
-        assert_eq!(
-            queue_run_message(Arc::clone(&active), inactive(id)),
-            Err("That reply is no longer active.".into())
-        );
+        assert!(boundaries
+            .queue_attach_message("workspace-a", id, ChatDelivery::Steer, "too late")
+            .is_err());
     }
 
     drop(storage);
