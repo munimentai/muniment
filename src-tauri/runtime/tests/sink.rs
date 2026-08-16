@@ -101,6 +101,22 @@ fn broadcasts_each_event_to_every_live_subscriber() {
 }
 
 #[test]
+fn removes_a_dropped_broadcast_subscriber_without_delivery() {
+    let broadcast = RuntimeChatEventBroadcast::default();
+    let dropped = broadcast.subscribe();
+    let remaining = broadcast.subscribe();
+    assert_eq!(broadcast.subscriber_count(), 2);
+
+    drop(dropped);
+
+    assert_eq!(broadcast.subscriber_count(), 1);
+    let profile = TemporaryProfile::new("sink-drop-broadcast", false);
+    let sink = RuntimeChatEventSink::new(&profile.profile, broadcast, memory_runtime(&profile));
+    sink.deliver(event()).unwrap();
+    assert_eq!(remaining.recv().unwrap().text, "hello");
+}
+
+#[test]
 fn drops_a_subscriber_when_its_bounded_queue_is_full() {
     let profile = TemporaryProfile::new("sink-full-broadcast", false);
     let broadcast = RuntimeChatEventBroadcast::default();

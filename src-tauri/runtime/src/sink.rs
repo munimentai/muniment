@@ -1,13 +1,14 @@
 //! Dormant runtime chat event delivery boundaries.
 
 use std::path::{Path, PathBuf};
-use std::sync::mpsc::{self, Receiver, Sender, SyncSender, TrySendError};
-use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::mpsc::{self, Sender, SyncSender, TrySendError};
+use std::sync::{Arc, Mutex, Weak};
 
 use muniment_core::chat_profile::ChatProfile;
 use muniment_core::memory_runtime::ApplicationMemoryRuntime;
 use muniment_core::pi_launch::{PiLaunchBoundaries, PiLaunchError};
-use muniment_core::run_events::{ChatEvent, ChatEventSink};
+use muniment_core::run_events::{ChatEvent, ChatEventSink, ChatEventSubscription};
 use muniment_core::sidecar::pi_install::{PiArtifactDescriptor, PI_ARTIFACT};
 
 pub const CHAT_EVENT_SUBSCRIBER_QUEUE_CAPACITY: usize = 256;
@@ -15,28 +16,65 @@ pub const CHAT_EVENT_SUBSCRIBER_QUEUE_CAPACITY: usize = 256;
 /// Fans each chat event out to every live subscriber without blocking a run.
 #[derive(Clone, Default)]
 pub struct RuntimeChatEventBroadcast {
-    subscribers: Arc<Mutex<Vec<SyncSender<ChatEvent>>>>,
+    shared: Arc<RuntimeChatEventBroadcastShared>,
+}
+
+#[derive(Default)]
+struct RuntimeChatEventBroadcastShared {
+    next_id: AtomicU64,
+    subscribers: Mutex<Vec<RuntimeChatEventSubscriber>>,
+}
+
+struct RuntimeChatEventSubscriber {
+    id: u64,
+    sender: SyncSender<ChatEvent>,
 }
 
 impl RuntimeChatEventBroadcast {
-    pub fn subscribe(&self) -> Receiver<ChatEvent> {
+    pub fn subscribe(&self) -> ChatEventSubscription {
         let (sender, receiver) = mpsc::sync_channel(CHAT_EVENT_SUBSCRIBER_QUEUE_CAPACITY);
-        self.subscribers
+        let id = self.shared.next_id.fetch_add(1, Ordering::Relaxed);
+        self.shared
+            .subscribers
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .push(sender);
-        receiver
+            .push(RuntimeChatEventSubscriber { id, sender });
+        let shared = Arc::downgrade(&self.shared);
+        ChatEventSubscription::new(receiver, move || remove_subscriber(&shared, id))
+    }
+
+    #[doc(hidden)]
+    pub fn subscriber_count(&self) -> usize {
+        self.shared
+            .subscribers
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .len()
     }
 
     fn deliver(&self, event: ChatEvent) {
-        self.subscribers
+        self.shared
+            .subscribers
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .retain(|subscriber| match subscriber.try_send(event.clone()) {
-                Ok(()) => true,
-                Err(TrySendError::Full(_) | TrySendError::Disconnected(_)) => false,
-            });
+            .retain(
+                |subscriber| match subscriber.sender.try_send(event.clone()) {
+                    Ok(()) => true,
+                    Err(TrySendError::Full(_) | TrySendError::Disconnected(_)) => false,
+                },
+            );
     }
+}
+
+fn remove_subscriber(shared: &Weak<RuntimeChatEventBroadcastShared>, id: u64) {
+    let Some(shared) = shared.upgrade() else {
+        return;
+    };
+    shared
+        .subscribers
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .retain(|subscriber| subscriber.id != id);
 }
 
 enum RuntimeChatEventTarget {
