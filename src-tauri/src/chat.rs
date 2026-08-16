@@ -126,6 +126,24 @@ impl<R: tauri::Runtime> TauriRunStartBoundaries<R> {
 
 impl<R: tauri::Runtime> RunAttachBoundaries for TauriRunStartBoundaries<R> {
     #[cfg(target_os = "linux")]
+    fn queue_attach_message(
+        &self,
+        _workspace: &str,
+        run_id: &str,
+        delivery: ChatDelivery,
+        message: &str,
+    ) -> Result<(), RunStartError> {
+        queue_message(
+            &self.state().active,
+            ChatQueueRequest {
+                run_id: run_id.to_owned(),
+                delivery,
+                message: message.to_owned(),
+            },
+        )
+        .map_err(RunStartError::InvalidRequest)
+    }
+    #[cfg(target_os = "linux")]
     fn list_threads(
         &self,
         workspace: &str,

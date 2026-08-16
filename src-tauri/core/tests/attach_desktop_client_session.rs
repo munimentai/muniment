@@ -8,7 +8,8 @@ use std::time::Duration;
 
 use muniment_core::attach::linux::{
     serve_desktop_client_session, AttachSessionError, CompanionProvenance,
-    EntitlementSnapshotResult, RunStartAccepted, RunStartRequest, RunStreamPage, ThreadListPage,
+    EntitlementSnapshotResult, RunMessageAccepted, RunMessageRequest, RunPermissionAnswerAccepted,
+    RunPermissionAnswerRequest, RunStartAccepted, RunStartRequest, RunStreamPage, ThreadListPage,
     ThreadListRequest, ThreadListService,
 };
 use muniment_core::attach::{
@@ -25,6 +26,114 @@ use muniment_core::journal::{CommitSubscription, JournalCommitHint, RunEventProj
 use muniment_core::run_events::ChatEvent;
 
 struct TestService;
+
+#[derive(Default)]
+struct RunControlService {
+    calls: Vec<Operation>,
+}
+
+impl ThreadListService for RunControlService {
+    fn list_threads(
+        &mut self,
+        _: &str,
+        _: ThreadListRequest,
+    ) -> Result<ThreadListPage, ProtocolError> {
+        unreachable!()
+    }
+
+    fn steer_run(
+        &mut self,
+        _: &str,
+        request: RunMessageRequest,
+        _: &Id,
+        _: &Id,
+        _: CompanionProvenance,
+    ) -> Result<RunMessageAccepted, ProtocolError> {
+        self.calls.push(Operation::RunSteer);
+        Ok(RunMessageAccepted {
+            run_id: request.run_id,
+            accepted_at: "2026-08-16T00:00:00Z".into(),
+        })
+    }
+
+    fn follow_up_run(
+        &mut self,
+        _: &str,
+        request: RunMessageRequest,
+        _: &Id,
+        _: &Id,
+        _: CompanionProvenance,
+    ) -> Result<RunMessageAccepted, ProtocolError> {
+        self.calls.push(Operation::RunFollowUp);
+        Ok(RunMessageAccepted {
+            run_id: request.run_id,
+            accepted_at: "2026-08-16T00:00:00Z".into(),
+        })
+    }
+
+    fn answer_run_permission(
+        &mut self,
+        _: &str,
+        request: RunPermissionAnswerRequest,
+        _: &Id,
+        _: &Id,
+        _: CompanionProvenance,
+    ) -> Result<RunPermissionAnswerAccepted, ProtocolError> {
+        self.calls.push(Operation::RunPermissionAnswer);
+        Ok(RunPermissionAnswerAccepted {
+            run_id: request.run_id,
+            gate_id: request.gate_id,
+            answer: request.answer,
+            committed_seq: 7,
+            accepted_at: "2026-08-16T00:00:00Z".into(),
+        })
+    }
+}
+
+#[test]
+fn desktop_client_dispatches_each_run_control() {
+    let run_id = "0190a100-0000-7000-8000-000000000001";
+    let (mut client, server) = UnixStream::pair().unwrap();
+    let session_thread = std::thread::spawn(move || {
+        let mut service = RunControlService::default();
+        let result = serve_desktop_client_session(server, &session(), &mut service);
+        (result, service.calls)
+    });
+
+    for (operation, body) in [
+        (
+            Operation::RunSteer,
+            serde_json::json!({"run_id":run_id,"text":"steer"}),
+        ),
+        (
+            Operation::RunFollowUp,
+            serde_json::json!({"run_id":run_id,"text":"follow up"}),
+        ),
+        (
+            Operation::RunPermissionAnswer,
+            serde_json::json!({"run_id":run_id,"gate_id":"gate-1","answer":{"type":"confirm","value":true}}),
+        ),
+    ] {
+        let Envelope::Response(response) = exchange(
+            &mut client,
+            idempotent_request("018f0000-0000-7000-8000-000000000210", operation, body),
+        ) else {
+            panic!("run control did not return an answer")
+        };
+        assert_eq!(response.body["run_id"], run_id);
+    }
+    drop(client);
+    let (result, calls) = session_thread.join().unwrap();
+    assert_eq!(result, Ok(()));
+    assert_eq!(
+        calls,
+        [
+            Operation::RunSteer,
+            Operation::RunFollowUp,
+            Operation::RunPermissionAnswer
+        ]
+    );
+}
 
 fn session() -> DesktopClientSession {
     DesktopClientSession {

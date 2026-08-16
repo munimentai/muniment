@@ -5,9 +5,10 @@
 use super::linux::{
     CompanionProvenance, EntitlementSnapshotResult, MigrationControlRequest,
     PermissionAnswerAccepted, PermissionAnswerRequest, PermissionDecision, RunCancelAccepted,
-    RunCancelRequest, RunStartAccepted, RunStartRequest as AttachRunStartRequest, RunStreamPage,
-    ThreadCreateAccepted, ThreadListPage, ThreadListRequest, ThreadListService, ThreadOpenPage,
-    ThreadOpenRequest,
+    RunCancelRequest, RunMessageAccepted, RunMessageRequest, RunPermissionAnswerAccepted,
+    RunPermissionAnswerRequest, RunStartAccepted, RunStartRequest as AttachRunStartRequest,
+    RunStreamPage, ThreadCreateAccepted, ThreadListPage, ThreadListRequest, ThreadListService,
+    ThreadOpenPage, ThreadOpenRequest,
 };
 use super::{
     bounded_claim, onboard_workspace_context,
@@ -15,6 +16,7 @@ use super::{
     CommittedResult, Id, IdempotencyOutcome, IdempotencyStore, Operation, Protocol, ProtocolError,
     Request as AttachRequest, WorkspaceContextMap, WorkspaceOnboardRequest, WorkspaceOnboarded,
 };
+use crate::active_run::ChatDelivery;
 use crate::journal::Provenance;
 use crate::permission_gate::ChatPermissionAnswer;
 use crate::run_start::{
@@ -75,6 +77,58 @@ pub struct DesktopAttachService<B, I = IdempotencyStore> {
     pub client_credentials: Arc<Mutex<HashMap<String, ClientCredential>>>,
     pub credential_path: Option<PathBuf>,
     pub client_identity: Option<String>,
+}
+
+#[allow(clippy::too_many_arguments)]
+fn queue_run_message<B: RunAttachBoundaries, I: RunStartIdempotency>(
+    boundaries: &B,
+    idempotency: &mut I,
+    operation: Operation,
+    delivery: ChatDelivery,
+    workspace: &str,
+    request: RunMessageRequest,
+    request_id: &Id,
+    idempotency_key: &Id,
+    companion: CompanionProvenance,
+) -> Result<RunMessageAccepted, ProtocolError> {
+    let canonical_input = json!({
+        "workspace": workspace,
+        "run_id": &request.run_id,
+        "text": &request.text,
+    });
+    let ledger_request = AttachRequest {
+        protocol: Protocol,
+        request_id: request_id.clone(),
+        operation,
+        capability: String::new(),
+        idempotency_key: Some(idempotency_key.clone()),
+        body: canonical_input.clone(),
+    };
+    let outcome = idempotency.execute(
+        &companion.profile,
+        &ledger_request,
+        &canonical_input,
+        || Ok(()),
+        || {
+            boundaries
+                .queue_attach_message(workspace, &request.run_id, delivery, &request.text)
+                .map_err(|error| error.protocol_error())?;
+            Ok(CommittedResult {
+                body: json!({
+                    "run_id": request.run_id,
+                    "accepted_at": chrono::Utc::now().to_rfc3339_opts(
+                        chrono::SecondsFormat::AutoSi,
+                        true,
+                    ),
+                }),
+                cursor: None,
+            })
+        },
+    )?;
+    let committed = match outcome {
+        IdempotencyOutcome::Committed(result) | IdempotencyOutcome::Replayed(result) => result,
+    };
+    serde_json::from_value(committed.body).map_err(|_| ProtocolError::persistence_failed())
 }
 
 #[cfg(target_os = "linux")]
@@ -665,6 +719,139 @@ impl<B: RunStartBoundaries + RunAttachBoundaries, I: RunStartIdempotency> Thread
                         "run_id": request.run_id,
                         "gate_id": request.gate_id,
                         "decision": request.decision,
+                        "committed_seq": committed_seq,
+                        "accepted_at": chrono::Utc::now().to_rfc3339_opts(
+                            chrono::SecondsFormat::AutoSi,
+                            true,
+                        ),
+                    }),
+                    cursor: None,
+                })
+            },
+        )?;
+        let committed = match outcome {
+            IdempotencyOutcome::Committed(result) | IdempotencyOutcome::Replayed(result) => result,
+        };
+        serde_json::from_value(committed.body).map_err(|_| ProtocolError::persistence_failed())
+    }
+
+    fn steer_run(
+        &mut self,
+        workspace: &str,
+        request: RunMessageRequest,
+        request_id: &Id,
+        idempotency_key: &Id,
+        companion: CompanionProvenance,
+    ) -> Result<RunMessageAccepted, ProtocolError> {
+        queue_run_message(
+            &self.boundaries,
+            &mut self.idempotency,
+            Operation::RunSteer,
+            ChatDelivery::Steer,
+            workspace,
+            request,
+            request_id,
+            idempotency_key,
+            companion,
+        )
+    }
+
+    fn follow_up_run(
+        &mut self,
+        workspace: &str,
+        request: RunMessageRequest,
+        request_id: &Id,
+        idempotency_key: &Id,
+        companion: CompanionProvenance,
+    ) -> Result<RunMessageAccepted, ProtocolError> {
+        queue_run_message(
+            &self.boundaries,
+            &mut self.idempotency,
+            Operation::RunFollowUp,
+            ChatDelivery::FollowUp,
+            workspace,
+            request,
+            request_id,
+            idempotency_key,
+            companion,
+        )
+    }
+
+    fn answer_run_permission(
+        &mut self,
+        workspace: &str,
+        request: RunPermissionAnswerRequest,
+        request_id: &Id,
+        idempotency_key: &Id,
+        companion: CompanionProvenance,
+    ) -> Result<RunPermissionAnswerAccepted, ProtocolError> {
+        let canonical_input = json!({
+            "workspace": workspace,
+            "run_id": &request.run_id,
+            "gate_id": &request.gate_id,
+            "answer": &request.answer,
+        });
+        let ledger_request = AttachRequest {
+            protocol: Protocol,
+            request_id: request_id.clone(),
+            operation: Operation::RunPermissionAnswer,
+            capability: String::new(),
+            idempotency_key: Some(idempotency_key.clone()),
+            body: canonical_input.clone(),
+        };
+        let outcome = self.idempotency.execute(
+            &companion.profile,
+            &ledger_request,
+            &canonical_input,
+            || Ok(()),
+            || {
+                let commits = self.boundaries.subscribe_run_commits(&request.run_id)?;
+                if commits.committed_high_water == 0 {
+                    return Err(ProtocolError::invalid_request());
+                }
+                let resolved = self
+                    .boundaries
+                    .queue_attach_permission_answer(
+                        workspace,
+                        &request.run_id,
+                        &request.gate_id,
+                        request.answer.clone(),
+                    )
+                    .map_err(|error| error.protocol_error())?;
+                let deadline = std::time::Instant::now() + PERMISSION_COMMIT_TIMEOUT;
+                let remaining = deadline
+                    .checked_duration_since(std::time::Instant::now())
+                    .ok_or_else(ProtocolError::persistence_failed)?;
+                let expected_seq = resolved
+                    .recv_timeout(remaining)
+                    .map_err(|_| ProtocolError::persistence_failed())?
+                    .ok_or_else(ProtocolError::invalid_request)?;
+                let committed_seq = loop {
+                    let remaining = deadline
+                        .checked_duration_since(std::time::Instant::now())
+                        .ok_or_else(ProtocolError::persistence_failed)?;
+                    let hint = commits
+                        .recv_timeout(remaining)
+                        .map_err(|_| ProtocolError::persistence_failed())?;
+                    if hint.run_id != request.run_id || hint.run_seq != expected_seq {
+                        continue;
+                    }
+                    let page = self.boundaries.stream_run(
+                        workspace,
+                        &request.run_id,
+                        hint.run_seq.saturating_sub(1),
+                    )?;
+                    if page.events.first().is_some_and(|event| {
+                        event.run_seq == hint.run_seq && event.event_type == "permission.resolved"
+                    }) {
+                        break hint.run_seq;
+                    }
+                };
+                Ok(CommittedResult {
+                    body: json!({
+                        "run_id": request.run_id,
+                        "gate_id": request.gate_id,
+                        "answer": request.answer,
                         "committed_seq": committed_seq,
                         "accepted_at": chrono::Utc::now().to_rfc3339_opts(
                             chrono::SecondsFormat::AutoSi,
