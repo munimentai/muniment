@@ -229,6 +229,7 @@ pub enum ErrorCode {
     IdempotencyKeyForbidden,
     IdempotencyConflict,
     PersistenceFailed,
+    DesktopBusy,
     InvalidCursor,
     InvalidArtifactCursor,
     InvalidRequest,
@@ -276,6 +277,12 @@ pub enum Operation {
     RunOpen,
     #[serde(rename = "run.start")]
     RunStart,
+    #[serde(rename = "run.submit")]
+    RunSubmit,
+    #[serde(rename = "run.resume")]
+    RunResume,
+    #[serde(rename = "run.permission_answer")]
+    RunPermissionAnswer,
     #[serde(rename = "run.stream")]
     RunStream,
     #[serde(rename = "run.chat_events")]
@@ -313,6 +320,9 @@ impl Operation {
                 | Self::SessionSignIn
                 | Self::CompanionRevoke
                 | Self::RunStart
+                | Self::RunSubmit
+                | Self::RunResume
+                | Self::RunPermissionAnswer
                 | Self::RunSteer
                 | Self::RunFollowUp
                 | Self::RunCancel
@@ -340,6 +350,9 @@ impl Operation {
             Self::CompanionRevoke => "companion.revoke",
             Self::RunOpen => "run.open",
             Self::RunStart => "run.start",
+            Self::RunSubmit => "run.submit",
+            Self::RunResume => "run.resume",
+            Self::RunPermissionAnswer => "run.permission_answer",
             Self::RunStream => "run.stream",
             Self::RunChatEvents => "run.chat_events",
             Self::RunCursorAck => "run.cursor_ack",
@@ -461,6 +474,8 @@ pub enum ErrorMessage {
     IdempotencyConflict,
     #[serde(rename = "The request could not be committed.")]
     PersistenceFailed,
+    #[serde(rename = "The desktop is busy with another request.")]
+    DesktopBusy,
     #[serde(rename = "The stream cursor is invalid.")]
     InvalidCursor,
     #[serde(rename = "The artifact transfer cursor is invalid.")]
@@ -530,6 +545,12 @@ impl ProtocolError {
             ErrorCode::PersistenceFailed,
             ErrorMessage::PersistenceFailed,
         );
+        error.retryable = true;
+        error
+    }
+
+    pub fn desktop_busy() -> Self {
+        let mut error = Self::simple(ErrorCode::DesktopBusy, ErrorMessage::DesktopBusy);
         error.retryable = true;
         error
     }
@@ -625,6 +646,7 @@ impl<'de> Deserialize<'de> for ProtocolError {
             (ErrorCode::IdempotencyKeyForbidden, None, None) => Self::idempotency_key_forbidden(),
             (ErrorCode::IdempotencyConflict, None, None) => Self::idempotency_conflict(),
             (ErrorCode::PersistenceFailed, None, None) => Self::persistence_failed(),
+            (ErrorCode::DesktopBusy, None, None) => Self::desktop_busy(),
             (ErrorCode::InvalidCursor, None, None) => Self::invalid_cursor(),
             (ErrorCode::InvalidArtifactCursor, None, None) => Self::invalid_artifact_cursor(),
             (ErrorCode::InvalidRequest, None, None) => Self::invalid_request(),

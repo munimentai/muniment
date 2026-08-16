@@ -1,10 +1,12 @@
 #[cfg(target_os = "linux")]
 use muniment_core::attach::ApprovalRequest;
 #[cfg(target_os = "linux")]
+use muniment_core::attach::ClientError;
+#[cfg(target_os = "linux")]
 use muniment_core::attach::{
-    answer_presented_approval, handshake_desktop_client_stream, serve_approval_presenter_at,
-    serve_desktop_client_at, ApprovalPresenterStopHandle, DesktopClientHolder,
-    DesktopClientStopHandle,
+    answer_presented_approval, handshake_desktop_client_stream, interruptible_connect_with_state,
+    serve_approval_presenter_at, serve_desktop_client_at, ApprovalPresenterStopHandle,
+    DesktopClientHolder, DesktopClientStopHandle, InterruptibleConnectState,
 };
 #[cfg(target_os = "linux")]
 use muniment_core::attach::{
@@ -219,6 +221,8 @@ pub struct AttachCompanionState {
     chat_events: Mutex<Option<ChatEventSupervisor>>,
     #[cfg(target_os = "linux")]
     connected: Mutex<bool>,
+    #[cfg(target_os = "linux")]
+    chat_events_connected: Mutex<bool>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
@@ -230,6 +234,7 @@ pub struct AttachListenerStatus {
     presenting: bool,
     supervisor_running: bool,
     connected: bool,
+    chat_events_connected: bool,
 }
 
 #[cfg(target_os = "linux")]
@@ -262,6 +267,17 @@ struct ChatEventStopHandle {
 struct ChatEventStopState {
     stopped: bool,
     stream: Option<UnixStream>,
+}
+
+#[cfg(target_os = "linux")]
+impl InterruptibleConnectState for ChatEventStopState {
+    fn stopped(&self) -> bool {
+        self.stopped
+    }
+
+    fn set_stream(&mut self, stream: Option<UnixStream>) {
+        self.stream = stream;
+    }
 }
 
 #[cfg(target_os = "linux")]
@@ -304,6 +320,7 @@ impl AttachCompanionState {
             desktop_client_holder: DesktopClientHolder::new(),
             chat_events: Mutex::new(None),
             connected: Mutex::new(false),
+            chat_events_connected: Mutex::new(false),
         }
     }
 
@@ -432,6 +449,10 @@ impl AttachCompanionState {
                 .is_some(),
             connected: *self
                 .connected
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
+            chat_events_connected: *self
+                .chat_events_connected
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner),
         }
@@ -598,6 +619,13 @@ impl AttachCompanionState {
             .unwrap_or_else(std::sync::PoisonError::into_inner) = connected;
     }
 
+    fn record_chat_events_connected(&self, connected: bool) {
+        *self
+            .chat_events_connected
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = connected;
+    }
+
     #[cfg(test)]
     pub(crate) fn set_desktop_client_for_test(
         &self,
@@ -651,6 +679,7 @@ impl Default for AttachCompanionState {
             desktop_client_holder: DesktopClientHolder::new(),
             chat_events: Mutex::new(None),
             connected: Mutex::new(false),
+            chat_events_connected: Mutex::new(false),
         }
     }
 }
@@ -714,9 +743,7 @@ pub fn attach_companions(
                 companions: Vec<AuthorizedCompanion>,
             }
 
-            let response = client
-                .list_companions()
-                .map_err(|_| ProtocolError::persistence_failed())?;
+            let response = client.list_companions().map_err(companion_client_error)?;
             serde_json::from_value::<CompanionList>(response)
                 .map(|response| response.companions)
                 .map_err(|_| ProtocolError::persistence_failed())
@@ -748,6 +775,7 @@ pub fn attach_listener_status(
             stopped: false,
             presenting: false,
             connected: false,
+            chat_events_connected: false,
             supervisor_running: false,
         }
     }
@@ -764,7 +792,7 @@ pub fn attach_revoke_companion(
         DesktopClientSession::Connected(client) => client
             .revoke_companion(&client_identity)
             .map(|_| ())
-            .map_err(|_| ProtocolError::persistence_failed()),
+            .map_err(companion_client_error),
         DesktopClientSession::Disconnected => Err(ProtocolError::persistence_failed()),
     };
 
@@ -772,6 +800,14 @@ pub fn attach_revoke_companion(
     {
         let _ = (state, client_identity);
         Err(ProtocolError::unsupported_operation())
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn companion_client_error(error: ClientError) -> ProtocolError {
+    match error {
+        ClientError::DesktopBusy => ProtocolError::desktop_busy(),
+        _ => ProtocolError::persistence_failed(),
     }
 }
 
@@ -1023,6 +1059,7 @@ fn start_desktop_client<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
     let client_endpoint = endpoint.clone();
     let client_app = app.clone();
     let event_app = app.clone();
+    let event_status_app = app.clone();
     app.state::<AttachCompanionState>()
         .start_desktop_supervisors(
             move |stop, holder| {
@@ -1055,6 +1092,15 @@ fn start_desktop_client<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
                         Duration::from_secs(5),
                         Duration::from_millis(250),
                         stop,
+                        move |connected| {
+                            event_status_app
+                                .state::<AttachCompanionState>()
+                                .record_chat_events_connected(connected);
+                            let status = event_status_app
+                                .state::<AttachCompanionState>()
+                                .listener_status();
+                            let _ = event_status_app.emit("desktop-client-status-changed", status);
+                        },
                         move |event| {
                             let _ = event_app.emit("chat-event", event);
                         },
@@ -1073,29 +1119,21 @@ fn serve_chat_events_at(
     io_timeout: Duration,
     retry_interval: Duration,
     stop: ChatEventStopHandle,
+    mut observe: impl FnMut(bool),
     mut deliver: impl FnMut(Value),
 ) {
     loop {
-        let stream = UnixStream::connect(endpoint).ok();
+        let stream = interruptible_connect_with_state(endpoint, &stop.inner);
         if let Some(stream) = stream {
-            let interrupt = stream.try_clone().ok();
-            let (state, _) = &*stop.inner;
-            let mut state = state
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            if state.stopped {
-                return;
-            }
-            state.stream = interrupt;
-            drop(state);
-
             if let Ok(mut client) =
                 handshake_desktop_client_stream(stream, client_version, io_timeout)
             {
                 if client.subscribe_chat_events().is_ok() {
+                    observe(true);
                     while let Ok(event) = client.read_chat_event() {
                         deliver(event);
                     }
+                    observe(false);
                 }
             }
             stop.inner
@@ -1308,8 +1346,8 @@ mod tests {
     use super::*;
     use crate::test_support::{append_test_event, FakeRunStartBoundaries};
     use muniment_core::attach::{
-        decode_frame, encode_frame, Authorization, ErrorCode, Id, Protocol, Response, Success,
-        Welcome,
+        decode_frame, encode_frame, Authorization, ErrorCode, ErrorMessage, Id, Protocol, Response,
+        Success, Welcome,
     };
     use muniment_core::journal::reducer::reduce;
     use muniment_core::journal::RunJournal;
@@ -1507,7 +1545,7 @@ mod tests {
 
     #[cfg(target_os = "linux")]
     #[test]
-    fn chat_event_supervisor_forwards_an_event_and_stops() {
+    fn chat_event_supervisor_reports_disconnect_after_stream_ends() {
         use muniment_core::attach::reconnect_welcome;
         use std::io::{Read, Write};
         use std::os::unix::net::UnixListener;
@@ -1569,13 +1607,12 @@ mod tests {
                     .unwrap(),
                 )
                 .unwrap();
-            let mut byte = [0];
-            assert_eq!(stream.read(&mut byte).unwrap(), 0);
         });
 
         let state = AttachCompanionState::default();
         let worker_endpoint = endpoint.clone();
         let (delivered, received) = mpsc::channel();
+        let (observed, observations) = mpsc::channel();
         state.start_chat_events(move |stop| {
             std::thread::spawn(move || {
                 serve_chat_events_at(
@@ -1584,6 +1621,7 @@ mod tests {
                     Duration::from_secs(1),
                     Duration::from_millis(10),
                     stop,
+                    move |connected| observed.send(connected).unwrap(),
                     move |event| delivered.send(event).unwrap(),
                 )
             })
@@ -1592,9 +1630,63 @@ mod tests {
             received.recv_timeout(Duration::from_secs(1)).unwrap(),
             json!({"phase": "running", "text": "forwarded"})
         );
+        assert!(observations.recv_timeout(Duration::from_secs(1)).unwrap());
+        let disconnected = observations.recv_timeout(Duration::from_secs(1)).unwrap();
+        assert!(!disconnected);
         state.stop_chat_events();
         assert!(state.chat_events.lock().unwrap().is_none());
         server.join().unwrap();
+        std::fs::remove_file(endpoint).unwrap();
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn chat_event_supervisor_stops_while_connect_is_pending() {
+        use std::os::fd::AsRawFd;
+        use std::os::unix::net::{UnixListener, UnixStream};
+        use std::sync::mpsc;
+
+        unsafe extern "C" {
+            fn listen(socket: i32, backlog: i32) -> i32;
+        }
+
+        let endpoint =
+            std::env::temp_dir().join(format!("muniment-chat-events-{}.sock", Uuid::now_v7()));
+        let listener = UnixListener::bind(&endpoint).unwrap();
+        // SAFETY: `listener` owns a valid Unix socket descriptor.
+        assert_eq!(unsafe { listen(listener.as_raw_fd(), 0) }, 0);
+        let queued_stream = UnixStream::connect(&endpoint).unwrap();
+        let stop = ChatEventStopHandle::default();
+        let worker_stop = stop.clone();
+        let worker_endpoint = endpoint.clone();
+        let (finished, finished_rx) = mpsc::channel();
+        let worker = std::thread::spawn(move || {
+            serve_chat_events_at(
+                &worker_endpoint,
+                "0.0.1",
+                Duration::from_secs(1),
+                Duration::from_millis(10),
+                worker_stop,
+                |_| {},
+                |_| {},
+            );
+            finished.send(()).unwrap();
+        });
+
+        let deadline = Instant::now() + Duration::from_secs(1);
+        loop {
+            let (state, _) = &*stop.inner;
+            if state.lock().unwrap().stream.is_some() {
+                break;
+            }
+            assert!(Instant::now() < deadline, "connect did not remain pending");
+            std::thread::yield_now();
+        }
+        stop.stop();
+        finished_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        worker.join().unwrap();
+        drop(queued_stream);
+        drop(listener);
         std::fs::remove_file(endpoint).unwrap();
     }
 
@@ -1762,6 +1854,7 @@ mod tests {
                 presenting: false,
                 supervisor_running: false,
                 connected: false,
+                chat_events_connected: false,
             }
         );
         std::fs::remove_dir_all(runtime).unwrap();
@@ -2148,6 +2241,8 @@ mod tests {
         let endpoint =
             std::env::temp_dir().join(format!("muniment-companion-client-{}.sock", Uuid::now_v7()));
         let listener = UnixListener::bind(&endpoint).unwrap();
+        let (request_tx, request_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
         let server = std::thread::spawn(move || {
             let (mut stream, _) = listener.accept().unwrap();
             assert_eq!(read_value(&mut stream)["client"]["kind"], "desktop-client");
@@ -2169,7 +2264,7 @@ mod tests {
                 )
                 .unwrap();
 
-            for body in [
+            for (index, body) in [
                 json!({"companions": [{
                     "identity": "companion-1",
                     "claimed_kind": "cli",
@@ -2178,8 +2273,15 @@ mod tests {
                 }]}),
                 json!({}),
                 json!({"companions": [{"identity": "partial"}]}),
-            ] {
+            ]
+            .into_iter()
+            .enumerate()
+            {
                 let request = read_value(&mut stream);
+                if index == 0 {
+                    request_tx.send(()).unwrap();
+                    release_rx.recv().unwrap();
+                }
                 let request_id = Id::new(request["request_id"].as_str().unwrap()).unwrap();
                 stream
                     .write_all(
@@ -2221,15 +2323,22 @@ mod tests {
         let app = tauri::test::mock_app();
         app.manage(state);
 
-        assert_eq!(
-            attach_companions(app.state()).unwrap(),
-            vec![AuthorizedCompanion {
-                identity: "companion-1".into(),
-                claimed_kind: "cli".into(),
-                claimed_version: "1.2.3".into(),
-                approved_at: Some("2026-08-04T12:00:00Z".into()),
-            }]
-        );
+        let DesktopClientSession::Connected(client) =
+            app.state::<AttachCompanionState>().desktop_client_session()
+        else {
+            panic!("desktop client must be connected");
+        };
+        let slow_call = std::thread::spawn(move || client.list_companions());
+        request_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        let list_busy = attach_companions(app.state()).unwrap_err();
+        assert_eq!(list_busy.code(), ErrorCode::DesktopBusy);
+        assert_eq!(list_busy.message(), ErrorMessage::DesktopBusy);
+        let revoke_busy = attach_revoke_companion(app.state(), "companion-1".into()).unwrap_err();
+        assert_eq!(revoke_busy.code(), ErrorCode::DesktopBusy);
+        assert_eq!(revoke_busy.message(), ErrorMessage::DesktopBusy);
+        release_tx.send(()).unwrap();
+        assert!(slow_call.join().unwrap().is_ok());
+
         attach_revoke_companion(app.state(), "companion-1".into()).unwrap();
         assert_eq!(
             attach_companions(app.state()).unwrap_err().code(),
@@ -2244,15 +2353,15 @@ mod tests {
         disconnected.set_desktop_client_for_test(false, |_, _| std::thread::spawn(|| {}));
         let app = tauri::test::mock_app();
         app.manage(disconnected);
+        let list_unreachable = attach_companions(app.state()).unwrap_err();
+        assert_eq!(list_unreachable.code(), ErrorCode::PersistenceFailed);
+        assert_eq!(list_unreachable.message(), ErrorMessage::PersistenceFailed);
+        let revoke_unreachable =
+            attach_revoke_companion(app.state(), "companion-1".into()).unwrap_err();
+        assert_eq!(revoke_unreachable.code(), ErrorCode::PersistenceFailed);
         assert_eq!(
-            attach_companions(app.state()).unwrap_err().code(),
-            ErrorCode::PersistenceFailed
-        );
-        assert_eq!(
-            attach_revoke_companion(app.state(), "companion-1".into())
-                .unwrap_err()
-                .code(),
-            ErrorCode::PersistenceFailed
+            revoke_unreachable.message(),
+            ErrorMessage::PersistenceFailed
         );
         app.state::<AttachCompanionState>()
             .stop_desktop_client_for_test();
@@ -2279,6 +2388,7 @@ mod tests {
                     presenting: false,
                     supervisor_running: false,
                     connected: false,
+                    chat_events_connected: false,
                 }
             );
         }
@@ -2294,6 +2404,7 @@ mod tests {
                 presenting: false,
                 supervisor_running: false,
                 connected: false,
+                chat_events_connected: false,
             }
         );
 
@@ -2312,6 +2423,7 @@ mod tests {
                 presenting: false,
                 supervisor_running: false,
                 connected: false,
+                chat_events_connected: false,
             }
         );
 
@@ -2326,6 +2438,7 @@ mod tests {
                 presenting: false,
                 supervisor_running: false,
                 connected: false,
+                chat_events_connected: false,
             }
         );
     }
@@ -2458,6 +2571,7 @@ mod tests {
                 presenting: false,
                 supervisor_running: false,
                 connected: false,
+                chat_events_connected: false,
             }
         );
         assert_state_works(&app);
@@ -2481,6 +2595,7 @@ mod tests {
                 presenting: false,
                 supervisor_running: false,
                 connected: false,
+                chat_events_connected: false,
             }
         );
         assert_state_works(&app);
