@@ -221,6 +221,8 @@ pub struct AttachCompanionState {
     chat_events: Mutex<Option<ChatEventSupervisor>>,
     #[cfg(target_os = "linux")]
     connected: Mutex<bool>,
+    #[cfg(target_os = "linux")]
+    chat_events_connected: Mutex<bool>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
@@ -232,6 +234,7 @@ pub struct AttachListenerStatus {
     presenting: bool,
     supervisor_running: bool,
     connected: bool,
+    chat_events_connected: bool,
 }
 
 #[cfg(target_os = "linux")]
@@ -317,6 +320,7 @@ impl AttachCompanionState {
             desktop_client_holder: DesktopClientHolder::new(),
             chat_events: Mutex::new(None),
             connected: Mutex::new(false),
+            chat_events_connected: Mutex::new(false),
         }
     }
 
@@ -445,6 +449,10 @@ impl AttachCompanionState {
                 .is_some(),
             connected: *self
                 .connected
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
+            chat_events_connected: *self
+                .chat_events_connected
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner),
         }
@@ -611,6 +619,13 @@ impl AttachCompanionState {
             .unwrap_or_else(std::sync::PoisonError::into_inner) = connected;
     }
 
+    fn record_chat_events_connected(&self, connected: bool) {
+        *self
+            .chat_events_connected
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = connected;
+    }
+
     #[cfg(test)]
     pub(crate) fn set_desktop_client_for_test(
         &self,
@@ -664,6 +679,7 @@ impl Default for AttachCompanionState {
             desktop_client_holder: DesktopClientHolder::new(),
             chat_events: Mutex::new(None),
             connected: Mutex::new(false),
+            chat_events_connected: Mutex::new(false),
         }
     }
 }
@@ -759,6 +775,7 @@ pub fn attach_listener_status(
             stopped: false,
             presenting: false,
             connected: false,
+            chat_events_connected: false,
             supervisor_running: false,
         }
     }
@@ -1042,6 +1059,7 @@ fn start_desktop_client<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
     let client_endpoint = endpoint.clone();
     let client_app = app.clone();
     let event_app = app.clone();
+    let event_status_app = app.clone();
     app.state::<AttachCompanionState>()
         .start_desktop_supervisors(
             move |stop, holder| {
@@ -1074,6 +1092,15 @@ fn start_desktop_client<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
                         Duration::from_secs(5),
                         Duration::from_millis(250),
                         stop,
+                        move |connected| {
+                            event_status_app
+                                .state::<AttachCompanionState>()
+                                .record_chat_events_connected(connected);
+                            let status = event_status_app
+                                .state::<AttachCompanionState>()
+                                .listener_status();
+                            let _ = event_status_app.emit("desktop-client-status-changed", status);
+                        },
                         move |event| {
                             let _ = event_app.emit("chat-event", event);
                         },
@@ -1092,6 +1119,7 @@ fn serve_chat_events_at(
     io_timeout: Duration,
     retry_interval: Duration,
     stop: ChatEventStopHandle,
+    mut observe: impl FnMut(bool),
     mut deliver: impl FnMut(Value),
 ) {
     loop {
@@ -1101,9 +1129,11 @@ fn serve_chat_events_at(
                 handshake_desktop_client_stream(stream, client_version, io_timeout)
             {
                 if client.subscribe_chat_events().is_ok() {
+                    observe(true);
                     while let Ok(event) = client.read_chat_event() {
                         deliver(event);
                     }
+                    observe(false);
                 }
             }
             stop.inner
@@ -1515,7 +1545,7 @@ mod tests {
 
     #[cfg(target_os = "linux")]
     #[test]
-    fn chat_event_supervisor_forwards_an_event_and_stops() {
+    fn chat_event_supervisor_reports_disconnect_after_stream_ends() {
         use muniment_core::attach::reconnect_welcome;
         use std::io::{Read, Write};
         use std::os::unix::net::UnixListener;
@@ -1577,13 +1607,12 @@ mod tests {
                     .unwrap(),
                 )
                 .unwrap();
-            let mut byte = [0];
-            assert_eq!(stream.read(&mut byte).unwrap(), 0);
         });
 
         let state = AttachCompanionState::default();
         let worker_endpoint = endpoint.clone();
         let (delivered, received) = mpsc::channel();
+        let (observed, observations) = mpsc::channel();
         state.start_chat_events(move |stop| {
             std::thread::spawn(move || {
                 serve_chat_events_at(
@@ -1592,6 +1621,7 @@ mod tests {
                     Duration::from_secs(1),
                     Duration::from_millis(10),
                     stop,
+                    move |connected| observed.send(connected).unwrap(),
                     move |event| delivered.send(event).unwrap(),
                 )
             })
@@ -1600,6 +1630,9 @@ mod tests {
             received.recv_timeout(Duration::from_secs(1)).unwrap(),
             json!({"phase": "running", "text": "forwarded"})
         );
+        assert!(observations.recv_timeout(Duration::from_secs(1)).unwrap());
+        let disconnected = observations.recv_timeout(Duration::from_secs(1)).unwrap();
+        assert!(!disconnected);
         state.stop_chat_events();
         assert!(state.chat_events.lock().unwrap().is_none());
         server.join().unwrap();
@@ -1634,6 +1667,7 @@ mod tests {
                 Duration::from_secs(1),
                 Duration::from_millis(10),
                 worker_stop,
+                |_| {},
                 |_| {},
             );
             finished.send(()).unwrap();
@@ -1820,6 +1854,7 @@ mod tests {
                 presenting: false,
                 supervisor_running: false,
                 connected: false,
+                chat_events_connected: false,
             }
         );
         std::fs::remove_dir_all(runtime).unwrap();
@@ -2353,6 +2388,7 @@ mod tests {
                     presenting: false,
                     supervisor_running: false,
                     connected: false,
+                    chat_events_connected: false,
                 }
             );
         }
@@ -2368,6 +2404,7 @@ mod tests {
                 presenting: false,
                 supervisor_running: false,
                 connected: false,
+                chat_events_connected: false,
             }
         );
 
@@ -2386,6 +2423,7 @@ mod tests {
                 presenting: false,
                 supervisor_running: false,
                 connected: false,
+                chat_events_connected: false,
             }
         );
 
@@ -2400,6 +2438,7 @@ mod tests {
                 presenting: false,
                 supervisor_running: false,
                 connected: false,
+                chat_events_connected: false,
             }
         );
     }
@@ -2532,6 +2571,7 @@ mod tests {
                 presenting: false,
                 supervisor_running: false,
                 connected: false,
+                chat_events_connected: false,
             }
         );
         assert_state_works(&app);
@@ -2555,6 +2595,7 @@ mod tests {
                 presenting: false,
                 supervisor_running: false,
                 connected: false,
+                chat_events_connected: false,
             }
         );
         assert_state_works(&app);

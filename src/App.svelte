@@ -606,7 +606,8 @@
 
   $effect(() => {
     const inWorkspace = auth.name === 'signed-in' && onboarding.name === 'complete' && desktopClientStatus
-      && !(desktopClientStatus.supervisor_running && !desktopClientStatus.connected)
+      && !(desktopClientStatus.supervisor_running
+        && (desktopClientStatus.connected === false || desktopClientStatus.chat_events_connected === false))
     if (inWorkspace && !wasInWorkspace && active?.phase !== 'resuming' && composer) {
       wasInWorkspace = true
       composer.focus()
@@ -866,7 +867,8 @@
         <p class="support" aria-live="polite">{auth.name === 'signing-in' ? auth.message : 'Sign in to continue to your workspace.'}</p>
         <button class="primary" class:inactive={auth.name === 'signing-in'} aria-disabled={auth.name === 'signing-in' ? 'true' : undefined} onclick={signIn}>Sign in</button>
       </section>
-    {:else if auth.name === 'signed-in' && desktopClientStatus?.supervisor_running && !desktopClientStatus.connected}
+    {:else if auth.name === 'signed-in' && desktopClientStatus?.supervisor_running
+      && (desktopClientStatus.connected === false || desktopClientStatus.chat_events_connected === false)}
       <section class="auth-state" aria-live="polite">
         <p class="record error-record">Muniment cannot reach its background service.</p>
         <p class="support">Muniment reconnects on its own.</p>
