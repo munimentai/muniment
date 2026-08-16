@@ -5,7 +5,9 @@ use std::sync::{mpsc, Arc, Mutex};
 use std::time::Duration;
 
 use muniment_core::active_run::cancel_active_run;
-use muniment_core::attach::RuntimeActivityRegistry;
+use muniment_core::attach::linux::{CompanionProvenance, RunResumeRequest, ThreadListService};
+use muniment_core::attach::{ErrorCode, Id, RuntimeActivityRegistry};
+use muniment_core::auth::{KeyringNativeCredentialStore, NativeCredentialStore};
 use muniment_core::chat_resume::clear_active_run;
 use muniment_core::pi_execution::{coordinate_prepared_prompt, PiRuntime};
 use muniment_core::run_events::{ChatEvent, ChatEventSink};
@@ -16,15 +18,68 @@ use muniment_core::run_start::ActiveRun;
 use muniment_core::session_thread::SessionThread;
 use muniment_core::sidecar::validate_pi_session;
 use muniment_runtime::{
-    accept_prompt, drive_prompt, open_profile_storage, resume_run, run_prompt, thread_page,
+    accept_prompt, drive_prompt, open_profile_storage, run_prompt, thread_page, RuntimeAttachState,
 };
 
 mod common;
-use common::{fixture_grant, stage_pi_stub, TemporaryProfile};
+use common::{credentials, fixture_grant, spawn_server_sequence, stage_pi_stub, TemporaryProfile};
 
 static ENVIRONMENT: Mutex<()> = Mutex::new(());
 
 struct FixtureSink;
+
+#[test]
+fn attach_dispatch_rejects_resume_for_another_workspace() {
+    let _environment = ENVIRONMENT.lock().unwrap();
+    let temporary_profile = TemporaryProfile::new("resume-workspace", false);
+    let storage = open_profile_storage(&temporary_profile.profile).unwrap();
+    let run_id = "018f0000-0000-7000-8000-000000000005";
+    prepare_new_run_with_session_thread(
+        &storage,
+        SessionThreadStart {
+            tracker: &SessionThread::default(),
+            continue_existing: false,
+        },
+        run_id,
+        "workspace-a",
+        Some("user"),
+        Vec::new(),
+        None,
+        "test",
+        "1",
+        || Ok(()),
+    )
+    .unwrap();
+    drop(storage);
+
+    let state =
+        RuntimeAttachState::open(&temporary_profile.profile, &temporary_profile.config).unwrap();
+    let mut service = muniment_runtime::compose_attach_service(
+        state.boundaries(),
+        state.companion_registry(),
+        &temporary_profile.profile,
+        &temporary_profile.config,
+    )
+    .unwrap();
+    let error = service
+        .resume_run(
+            "workspace-b",
+            RunResumeRequest {
+                run_id: run_id.into(),
+            },
+            &Id::new("018f0000-0000-7000-8000-000000000015").unwrap(),
+            &Id::new("018f0000-0000-7000-8000-000000000016").unwrap(),
+            CompanionProvenance {
+                profile: "default".into(),
+                companion_kind: "desktop".into(),
+                companion_version: "test".into(),
+                peer_uid: 1000,
+                peer_pid: 42,
+            },
+        )
+        .unwrap_err();
+    assert_eq!(error.code(), ErrorCode::InvalidRequest);
+}
 
 impl ChatEventSink for FixtureSink {
     fn provenance(&self) -> (&str, &str) {
@@ -395,12 +450,15 @@ fn runs_two_prompts_in_one_named_thread_and_rejects_an_unknown_thread() {
 #[test]
 fn resumes_an_interrupted_run_to_a_terminal_event() {
     let _environment = ENVIRONMENT.lock().unwrap();
+    muniment_core::chat_prompt::use_mock_keyring_for_tests();
+    let credential_store = KeyringNativeCredentialStore::new();
+    credential_store.clear_session().unwrap();
+    credential_store.save_credentials(&credentials()).unwrap();
     let temporary_profile = TemporaryProfile::new("resume", true);
     let temporary_root = temporary_profile.root.clone();
     let profile = temporary_profile.profile.clone();
     let config = temporary_profile.config.clone();
     let descriptor = stage_pi_stub(&temporary_root);
-    let runtime_activity = RuntimeActivityRegistry::new();
 
     let run_id = "018f0000-0000-7000-8000-000000000004";
     let session_root = profile.join("pi-sessions");
@@ -416,7 +474,7 @@ fn resumes_an_interrupted_run_to_a_terminal_event() {
         },
         run_id,
         "workspace-a",
-        Some("owner"),
+        Some("user"),
         Vec::new(),
         None,
         "test",
@@ -430,7 +488,7 @@ fn resumes_an_interrupted_run_to_a_terminal_event() {
         &mut projector,
         run_id,
         &mut sequence,
-        Some("owner"),
+        Some("user"),
         || {
             let (locator, _) = validate_pi_session(&session_root, "session.jsonl")
                 .map_err(|_| muniment_core::pi_execution::PreparedPromptError::SessionRoot)?;
@@ -439,22 +497,40 @@ fn resumes_an_interrupted_run_to_a_terminal_event() {
     )
     .unwrap();
     drop(storage);
-    let storage = open_profile_storage(&profile).unwrap();
-    resume_run(
+    let (base_url, server) =
+        spawn_server_sequence(vec![(200, session_body()), (200, grant_body())]);
+    std::env::set_var("MUNIMENT_API_BASE_URL", base_url);
+    let state = RuntimeAttachState::open(&profile, &config).unwrap();
+    let mut service = muniment_runtime::compose_attach_service(
+        state.boundaries().with_pi_artifact(descriptor),
+        state.companion_registry(),
         &profile,
-        Arc::clone(&storage),
-        Arc::new(Mutex::new(None)),
-        &runtime_activity,
         &config,
-        run_id.into(),
-        "token".into(),
-        Some("owner".into()),
-        fixture_grant(),
-        Arc::new(Mutex::new(None)),
-        None,
-        Some(descriptor),
     )
     .unwrap();
+    let accepted = service
+        .resume_run(
+            "workspace-a",
+            RunResumeRequest {
+                run_id: run_id.into(),
+            },
+            &Id::new("018f0000-0000-7000-8000-000000000013").unwrap(),
+            &Id::new("018f0000-0000-7000-8000-000000000014").unwrap(),
+            CompanionProvenance {
+                profile: "default".into(),
+                companion_kind: "desktop".into(),
+                companion_version: "test".into(),
+                peer_uid: 1000,
+                peer_pid: 42,
+            },
+        )
+        .unwrap();
+    assert_eq!(accepted.run_id, run_id);
+    assert!(!accepted.thread_id.is_empty());
+    assert!(accepted.committed_seq > 0);
+    server.join().unwrap();
+
+    let storage = open_profile_storage(&profile).unwrap();
 
     let events = storage.lock().unwrap().journal.events(run_id).unwrap();
     assert!(matches!(
@@ -464,5 +540,15 @@ fn resumes_an_interrupted_run_to_a_terminal_event() {
 
     drop(events);
     drop(storage);
+    credential_store.clear_session().unwrap();
+    std::env::remove_var("MUNIMENT_API_BASE_URL");
     std::env::remove_var("MUNIMENT_PI_ROOT");
+}
+
+fn session_body() -> String {
+    r#"{"session":{"org_id":"20000000-0000-4000-8000-000000000002","user_id":"30000000-0000-4000-8000-000000000003","role":"owner","device_id":"10000000-0000-4000-8000-000000000001","client_role":"desktop"},"entitlement_snapshot":{"payload":{"version":7,"user_display_name":"User","organization_display_name":"Muniment","groups":[]},"signature":"signature-secret","algorithm":"hmac-sha256"}}"#.into()
+}
+
+fn grant_body() -> String {
+    r#"{"workspace":"workspace-a","gatewayUrl":"https://gateway.example.com","virtualKey":"key","minimumCacheablePrefixCharacters":8192,"receiptUrl":"https://receipts.example.com"}"#.into()
 }
