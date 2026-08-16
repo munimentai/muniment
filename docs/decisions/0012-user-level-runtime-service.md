@@ -525,3 +525,42 @@ value.
 
 The five run commands `chat_submit`, `chat_resume`, `chat_queue`, `chat_cancel`,
 and `chat_answer_permission` remain outside this tranche.
+
+## Amendment – 2026-08-16: fifth desktop client operation tranche
+
+The fifth desktop-only tranche maps these wire operations to the existing
+runtime service entries:
+
+| Operation | Runtime service entry |
+|---|---|
+| `run.submit` | `service::accept_prompt`, then `service::drive_prompt` |
+| `run.resume` | `service::resume_run` |
+| `run.steer` | `service::queue_run_message` with `ChatDelivery::Steer` |
+| `run.follow_up` | `service::queue_run_message` with `ChatDelivery::FollowUp` |
+| `run.permission_answer` | `service::answer_permission` |
+
+A desktop client session may send these five operations. A companion session
+receives `unauthorized` for each operation. Each operation requires an
+idempotency key.
+
+`run.submit` returns after `service::accept_prompt` accepts the prompt. The
+runtime then calls `service::drive_prompt` on its own thread. The request does
+not wait for the run to finish.
+
+The existing `permission.answer` operation cannot carry a desktop answer. Its
+wire `decision` uses the two-variant `PermissionDecision`, while the desktop
+sends the six-variant `ChatPermissionAnswer`. The new
+`run.permission_answer` operation carries the desktop answer without reducing
+it to allow or deny. Its permission-answer commit wait is two seconds, below
+the attach client's five-second I/O deadline.
+
+`run.steer` and `run.follow_up` reuse their existing operation names and
+fixtures. They add desktop dispatch to `service::queue_run_message`.
+`run.cancel` is also reused. It already dispatches to `service::cancel_run`
+through the session workspace, so `chat_cancel` needs only a typed client
+method.
+
+A later slice converts all five desktop run commands in one atomic flip:
+`chat_submit`, `chat_resume`, `chat_queue`, `chat_cancel`, and
+`chat_answer_permission`. Until that slice lands, the desktop keeps all five
+commands on the current path.
