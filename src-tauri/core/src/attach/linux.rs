@@ -3257,6 +3257,7 @@ fn dispatch_request<S: ThreadListService>(
             .as_ref()
             .ok_or_else(ProtocolError::idempotency_key_required)?;
         let requested_thread_id = body.thread_id.clone();
+        let requested_attachment_count = body.files.len();
         let accepted = service.submit_run(
             workspace,
             RunSubmitRequest {
@@ -3274,13 +3275,13 @@ fn dispatch_request<S: ThreadListService>(
                 .as_ref()
                 .is_some_and(|thread_id| thread_id != &accepted.thread_id)
             || accepted.committed_seq == 0
+            || accepted.attachments.len() != requested_attachment_count
             || accepted.attachments.iter().any(|attachment| {
-                attachment.display_name.is_empty()
+                attachment.display_name.trim().is_empty()
                     || attachment.display_name.len() > MAX_TEXT_LENGTH
-                    || attachment
-                        .media_type
-                        .as_ref()
-                        .is_some_and(|value| value.is_empty() || value.len() > MAX_TEXT_LENGTH)
+                    || attachment.media_type.as_ref().is_some_and(|value| {
+                        value.trim().is_empty() || value.len() > MAX_TEXT_LENGTH
+                    })
             })
             || accepted.accepted_at.is_empty()
             || accepted.accepted_at.len() > MAX_TEXT_LENGTH
