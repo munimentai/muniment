@@ -431,6 +431,23 @@ describe('workspace composer entry', () => {
     expect(screen.queryByText('Muniment cannot reach its background service.')).not.toBeInTheDocument()
   })
 
+  it('shows the background service notice while the chat-event connection is down', async () => {
+    invoke.mockImplementation(async (command) => {
+      if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
+      if (command === 'attach_listener_status') {
+        return { connected: true, chat_events_connected: false, supervisor_running: true }
+      }
+      if (command === 'chat_thread_open') return []
+      if (command === 'auth_entitlement_snapshot') return snapshot()
+      if (command === 'chat_thread_summaries') return { summaries: [], nextCursor: null }
+      throw new Error(`unexpected command: ${command}`)
+    })
+    render(App)
+
+    expect(await screen.findByText('Muniment cannot reach its background service.')).toBeInTheDocument()
+    expect(screen.queryByRole('textbox', { name: 'Message' })).not.toBeInTheDocument()
+  })
+
   it('updates the surface when the desktop client supervisor starts and stops', async () => {
     render(App)
     await screen.findByRole('textbox', { name: 'Message' })
