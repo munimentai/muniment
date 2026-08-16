@@ -6,9 +6,10 @@ use super::linux::{
     CompanionProvenance, EntitlementSnapshotResult, MigrationControlRequest,
     PermissionAnswerAccepted, PermissionAnswerRequest, PermissionDecision, RunCancelAccepted,
     RunCancelRequest, RunMessageAccepted, RunMessageRequest, RunPermissionAnswerAccepted,
-    RunPermissionAnswerRequest, RunStartAccepted, RunStartRequest as AttachRunStartRequest,
-    RunStreamPage, ThreadCreateAccepted, ThreadListPage, ThreadListRequest, ThreadListService,
-    ThreadOpenPage, ThreadOpenRequest,
+    RunPermissionAnswerRequest, RunResumeAccepted, RunResumeRequest, RunStartAccepted,
+    RunStartRequest as AttachRunStartRequest, RunStreamPage, RunSubmitAccepted, RunSubmitRequest,
+    ThreadCreateAccepted, ThreadListPage, ThreadListRequest, ThreadListService, ThreadOpenPage,
+    ThreadOpenRequest,
 };
 use super::{
     bounded_claim, onboard_workspace_context,
@@ -725,6 +726,105 @@ impl<B: RunStartBoundaries + RunAttachBoundaries, I: RunStartIdempotency> Thread
                             true,
                         ),
                     }),
+                    cursor: None,
+                })
+            },
+        )?;
+        let committed = match outcome {
+            IdempotencyOutcome::Committed(result) | IdempotencyOutcome::Replayed(result) => result,
+        };
+        serde_json::from_value(committed.body).map_err(|_| ProtocolError::persistence_failed())
+    }
+
+    fn submit_run(
+        &mut self,
+        workspace: &str,
+        request: RunSubmitRequest,
+        request_id: &Id,
+        idempotency_key: &Id,
+        companion: CompanionProvenance,
+    ) -> Result<RunSubmitAccepted, ProtocolError> {
+        let canonical_input = json!({
+            "workspace": workspace,
+            "text": &request.text,
+            "files": &request.files,
+            "thread_id": &request.thread_id,
+        });
+        let ledger_request = AttachRequest {
+            protocol: Protocol,
+            request_id: request_id.clone(),
+            operation: Operation::RunSubmit,
+            capability: String::new(),
+            idempotency_key: Some(idempotency_key.clone()),
+            body: canonical_input.clone(),
+        };
+        let outcome = self.idempotency.execute(
+            &companion.profile,
+            &ledger_request,
+            &canonical_input,
+            || Ok(()),
+            || {
+                let accepted = self
+                    .boundaries
+                    .submit_run(
+                        workspace,
+                        request.text,
+                        request
+                            .files
+                            .into_iter()
+                            .map(|path| crate::chat_view::SelectedFile {
+                                path: PathBuf::from(path),
+                            })
+                            .collect(),
+                        request.thread_id,
+                    )
+                    .map_err(|error| error.protocol_error())?;
+                Ok(CommittedResult {
+                    body: serde_json::to_value(accepted)
+                        .map_err(|_| ProtocolError::persistence_failed())?,
+                    cursor: None,
+                })
+            },
+        )?;
+        let committed = match outcome {
+            IdempotencyOutcome::Committed(result) | IdempotencyOutcome::Replayed(result) => result,
+        };
+        serde_json::from_value(committed.body).map_err(|_| ProtocolError::persistence_failed())
+    }
+
+    fn resume_run(
+        &mut self,
+        workspace: &str,
+        request: RunResumeRequest,
+        request_id: &Id,
+        idempotency_key: &Id,
+        companion: CompanionProvenance,
+    ) -> Result<RunResumeAccepted, ProtocolError> {
+        let canonical_input = json!({
+            "workspace": workspace,
+            "run_id": &request.run_id,
+        });
+        let ledger_request = AttachRequest {
+            protocol: Protocol,
+            request_id: request_id.clone(),
+            operation: Operation::RunResume,
+            capability: String::new(),
+            idempotency_key: Some(idempotency_key.clone()),
+            body: canonical_input.clone(),
+        };
+        let outcome = self.idempotency.execute(
+            &companion.profile,
+            &ledger_request,
+            &canonical_input,
+            || Ok(()),
+            || {
+                let accepted = self
+                    .boundaries
+                    .resume_run(workspace, &request.run_id)
+                    .map_err(|error| error.protocol_error())?;
+                Ok(CommittedResult {
+                    body: serde_json::to_value(accepted)
+                        .map_err(|_| ProtocolError::persistence_failed())?,
                     cursor: None,
                 })
             },
