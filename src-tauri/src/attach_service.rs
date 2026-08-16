@@ -2,8 +2,9 @@
 use muniment_core::attach::ApprovalRequest;
 #[cfg(target_os = "linux")]
 use muniment_core::attach::{
-    answer_presented_approval, serve_approval_presenter_at, serve_desktop_client_at,
-    ApprovalPresenterStopHandle, DesktopClientHolder, DesktopClientStopHandle,
+    answer_presented_approval, handshake_desktop_client_stream, serve_approval_presenter_at,
+    serve_desktop_client_at, ApprovalPresenterStopHandle, DesktopClientHolder,
+    DesktopClientStopHandle,
 };
 #[cfg(target_os = "linux")]
 use muniment_core::attach::{
@@ -14,6 +15,8 @@ use muniment_core::attach::{ApprovalCoordinator, ProtocolError};
 use std::collections::HashMap;
 #[cfg(target_os = "linux")]
 use std::collections::{BTreeMap, BTreeSet};
+#[cfg(target_os = "linux")]
+use std::os::unix::net::UnixStream;
 #[cfg(target_os = "linux")]
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -211,6 +214,8 @@ pub struct AttachCompanionState {
     #[cfg(target_os = "linux")]
     desktop_client_holder: DesktopClientHolder,
     #[cfg(target_os = "linux")]
+    chat_events: Mutex<Option<ChatEventSupervisor>>,
+    #[cfg(target_os = "linux")]
     connected: Mutex<bool>,
 }
 
@@ -239,6 +244,40 @@ struct DesktopClientSupervisor {
 }
 
 #[cfg(target_os = "linux")]
+struct ChatEventSupervisor {
+    stop: ChatEventStopHandle,
+    worker: std::thread::JoinHandle<()>,
+}
+
+#[cfg(target_os = "linux")]
+#[derive(Clone, Default)]
+struct ChatEventStopHandle {
+    inner: Arc<(Mutex<ChatEventStopState>, Condvar)>,
+}
+
+#[cfg(target_os = "linux")]
+#[derive(Default)]
+struct ChatEventStopState {
+    stopped: bool,
+    stream: Option<UnixStream>,
+}
+
+#[cfg(target_os = "linux")]
+impl ChatEventStopHandle {
+    fn stop(&self) {
+        let (state, wake) = &*self.inner;
+        let mut state = state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        state.stopped = true;
+        if let Some(stream) = state.stream.take() {
+            let _ = stream.shutdown(std::net::Shutdown::Both);
+        }
+        wake.notify_all();
+    }
+}
+
+#[cfg(target_os = "linux")]
 pub(crate) enum DesktopClientSession {
     NoSupervisor,
     Connected(DesktopClientHolder),
@@ -260,6 +299,7 @@ impl AttachCompanionState {
             presenting: Mutex::new(false),
             desktop_client: Mutex::new(None),
             desktop_client_holder: DesktopClientHolder::new(),
+            chat_events: Mutex::new(None),
             connected: Mutex::new(false),
         }
     }
@@ -436,7 +476,24 @@ impl AttachCompanionState {
         *client = Some(DesktopClientSupervisor { stop, worker });
     }
 
+    fn start_chat_events(
+        &self,
+        start: impl FnOnce(ChatEventStopHandle) -> std::thread::JoinHandle<()>,
+    ) {
+        let mut supervisor = self
+            .chat_events
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if supervisor.is_some() {
+            return;
+        }
+        let stop = ChatEventStopHandle::default();
+        let worker = start(stop.clone());
+        *supervisor = Some(ChatEventSupervisor { stop, worker });
+    }
+
     fn stop_desktop_client(&self) {
+        self.stop_chat_events();
         let supervisor = self
             .desktop_client
             .lock()
@@ -447,6 +504,18 @@ impl AttachCompanionState {
             let _ = supervisor.worker.join();
         }
         self.record_connected(false);
+    }
+
+    fn stop_chat_events(&self) {
+        let supervisor = self
+            .chat_events
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take();
+        if let Some(supervisor) = supervisor {
+            supervisor.stop.stop();
+            let _ = supervisor.worker.join();
+        }
     }
 
     pub(crate) fn desktop_client_session(&self) -> DesktopClientSession {
@@ -526,6 +595,7 @@ impl Default for AttachCompanionState {
             presenting: Mutex::new(false),
             desktop_client: Mutex::new(None),
             desktop_client_holder: DesktopClientHolder::new(),
+            chat_events: Mutex::new(None),
             connected: Mutex::new(false),
         }
     }
@@ -544,6 +614,15 @@ impl Drop for AttachCompanionState {
         }
         if let Some(supervisor) = self
             .desktop_client
+            .get_mut()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take()
+        {
+            supervisor.stop.stop();
+            let _ = supervisor.worker.join();
+        }
+        if let Some(supervisor) = self
+            .chat_events
             .get_mut()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .take()
@@ -887,13 +966,14 @@ fn start_desktop_client<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
         return;
     };
     let endpoint = filesystem.endpoint_path().to_owned();
+    let client_endpoint = endpoint.clone();
     let client_app = app.clone();
     app.state::<AttachCompanionState>()
         .start_desktop_client(move |stop, holder| {
             std::thread::spawn(move || {
                 let observer_app = client_app.clone();
                 serve_desktop_client_at(
-                    &endpoint,
+                    &client_endpoint,
                     env!("CARGO_PKG_VERSION"),
                     Duration::from_secs(5),
                     Duration::from_millis(250),
@@ -911,8 +991,79 @@ fn start_desktop_client<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
                 );
             })
         });
+    let event_app = app.clone();
+    app.state::<AttachCompanionState>()
+        .start_chat_events(move |stop| {
+            std::thread::spawn(move || {
+                serve_chat_events_at(
+                    &endpoint,
+                    env!("CARGO_PKG_VERSION"),
+                    Duration::from_secs(5),
+                    Duration::from_millis(250),
+                    stop,
+                    move |event| {
+                        let _ = event_app.emit("chat-event", event);
+                    },
+                );
+            })
+        });
     let status = app.state::<AttachCompanionState>().listener_status();
     let _ = app.emit("desktop-client-status-changed", status);
+}
+
+#[cfg(target_os = "linux")]
+fn serve_chat_events_at(
+    endpoint: &Path,
+    client_version: &str,
+    io_timeout: Duration,
+    retry_interval: Duration,
+    stop: ChatEventStopHandle,
+    mut deliver: impl FnMut(Value),
+) {
+    loop {
+        let stream = UnixStream::connect(endpoint).ok();
+        if let Some(stream) = stream {
+            let interrupt = stream.try_clone().ok();
+            let (state, _) = &*stop.inner;
+            let mut state = state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if state.stopped {
+                return;
+            }
+            state.stream = interrupt;
+            drop(state);
+
+            if let Ok(mut client) =
+                handshake_desktop_client_stream(stream, client_version, io_timeout)
+            {
+                if client.subscribe_chat_events().is_ok() {
+                    while let Ok(event) = client.read_chat_event() {
+                        deliver(event);
+                    }
+                }
+            }
+            stop.inner
+                .0
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .stream = None;
+        }
+
+        let (state, wake) = &*stop.inner;
+        let state = state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if state.stopped {
+            return;
+        }
+        let (state, _) = wake
+            .wait_timeout_while(state, retry_interval, |state| !state.stopped)
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if state.stopped {
+            return;
+        }
+    }
 }
 
 #[cfg(target_os = "linux")]
@@ -1250,6 +1401,99 @@ mod tests {
         new_started_rx.recv().unwrap();
         assert!(state.listener_status().connected);
         state.stop_desktop_client();
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn chat_event_supervisor_forwards_an_event_and_stops() {
+        use muniment_core::attach::reconnect_welcome;
+        use std::io::{Read, Write};
+        use std::os::unix::net::UnixListener;
+        use std::sync::mpsc;
+
+        fn read_value(stream: &mut impl Read) -> Value {
+            let mut prefix = [0; 4];
+            stream.read_exact(&mut prefix).unwrap();
+            let mut frame = vec![0; 4 + u32::from_be_bytes(prefix) as usize];
+            frame[..4].copy_from_slice(&prefix);
+            stream.read_exact(&mut frame[4..]).unwrap();
+            decode_frame(&frame).unwrap().unwrap().0
+        }
+
+        let endpoint =
+            std::env::temp_dir().join(format!("muniment-chat-events-{}.sock", Uuid::now_v7()));
+        let listener = UnixListener::bind(&endpoint).unwrap();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            assert_eq!(read_value(&mut stream)["client"]["kind"], "desktop-client");
+            stream
+                .write_all(
+                    &encode_frame(&reconnect_welcome(1, "0.0.1", "11".repeat(16), "")).unwrap(),
+                )
+                .unwrap();
+            stream
+                .write_all(
+                    &encode_frame(&json!({
+                        "profile_id": "profile-1",
+                        "capability": "33".repeat(32),
+                        "expires_at": 60,
+                        "idle_timeout_seconds": 30,
+                        "workspace_scopes": {"/work/signed": []}
+                    }))
+                    .unwrap(),
+                )
+                .unwrap();
+            let request = read_value(&mut stream);
+            let request_id = Id::new(request["request_id"].as_str().unwrap()).unwrap();
+            stream
+                .write_all(
+                    &encode_frame(&Response {
+                        protocol: Protocol,
+                        request_id,
+                        ok: Success,
+                        body: json!({"subscription_id": "44".repeat(16)}),
+                    })
+                    .unwrap(),
+                )
+                .unwrap();
+            stream
+                .write_all(
+                    &encode_frame(&json!({
+                        "protocol": "muniment.attach/1",
+                        "subscription_id": "44".repeat(16),
+                        "event": "chat.event",
+                        "body": {"phase": "running", "text": "forwarded"}
+                    }))
+                    .unwrap(),
+                )
+                .unwrap();
+            let mut byte = [0];
+            assert_eq!(stream.read(&mut byte).unwrap(), 0);
+        });
+
+        let state = AttachCompanionState::default();
+        let worker_endpoint = endpoint.clone();
+        let (delivered, received) = mpsc::channel();
+        state.start_chat_events(move |stop| {
+            std::thread::spawn(move || {
+                serve_chat_events_at(
+                    &worker_endpoint,
+                    "0.0.1",
+                    Duration::from_secs(1),
+                    Duration::from_millis(10),
+                    stop,
+                    move |event| delivered.send(event).unwrap(),
+                )
+            })
+        });
+        assert_eq!(
+            received.recv_timeout(Duration::from_secs(1)).unwrap(),
+            json!({"phase": "running", "text": "forwarded"})
+        );
+        state.stop_chat_events();
+        assert!(state.chat_events.lock().unwrap().is_none());
+        server.join().unwrap();
+        std::fs::remove_file(endpoint).unwrap();
     }
 
     #[cfg(target_os = "linux")]
