@@ -756,8 +756,7 @@ impl RunAttachBoundaries for RuntimeAttachBoundaries {
 
     fn subscribe_chat_events(
         &self,
-    ) -> Result<std::sync::mpsc::Receiver<muniment_core::run_events::ChatEvent>, ProtocolError>
-    {
+    ) -> Result<muniment_core::run_events::ChatEventSubscription, ProtocolError> {
         Ok(self.chat_events.subscribe())
     }
 
