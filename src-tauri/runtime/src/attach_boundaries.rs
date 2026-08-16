@@ -399,6 +399,28 @@ fn persistence_error() -> RunStartError {
 }
 
 impl RunAttachBoundaries for RuntimeAttachBoundaries {
+    fn submit_run(
+        &self,
+        _workspace: &str,
+        _text: String,
+        _files: Vec<SelectedFile>,
+        _thread_id: Option<String>,
+    ) -> Result<muniment_core::run_start::AttachPromptAccepted, RunStartError> {
+        Err(RunStartError::InvalidRequest(
+            "This prompt cannot be accepted.".into(),
+        ))
+    }
+
+    fn resume_run(
+        &self,
+        _workspace: &str,
+        _run_id: &str,
+    ) -> Result<muniment_core::run_start::AttachResumeAccepted, RunStartError> {
+        Err(RunStartError::InvalidRequest(
+            "This reply cannot be resumed.".into(),
+        ))
+    }
+
     fn queue_attach_message(
         &self,
         workspace: &str,
