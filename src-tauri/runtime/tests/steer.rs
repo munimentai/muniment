@@ -59,6 +59,7 @@ fn a_queued_steer_reaches_a_live_runtime_run() {
             Arc::clone(&active),
             ChatQueueRequest {
                 run_id: run_id.into(),
+                workspace: None,
                 delivery: ChatDelivery::Steer,
                 message: "redirect here".into(),
             },
@@ -79,6 +80,7 @@ fn a_queued_steer_reaches_a_live_runtime_run() {
     assert!(captured.contains(r#""message":"redirect here""#));
     let inactive = |id: &str| ChatQueueRequest {
         run_id: id.into(),
+        workspace: None,
         delivery: ChatDelivery::Steer,
         message: "too late".into(),
     };

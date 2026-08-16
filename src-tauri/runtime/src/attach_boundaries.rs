@@ -5,7 +5,9 @@ use std::process::Command;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
-use muniment_core::active_run::queue_permission_answer_with_commit;
+use muniment_core::active_run::{
+    queue_message, queue_permission_answer_with_commit, ChatDelivery, ChatQueueRequest,
+};
 use muniment_core::attach::linux::{
     EntitlementSnapshotResult, RunStreamPage, ThreadListPage, ThreadListRequest, ThreadListService,
     ThreadOpenPage, ThreadOpenRequest,
@@ -396,6 +398,24 @@ fn persistence_error() -> RunStartError {
 }
 
 impl RunAttachBoundaries for RuntimeAttachBoundaries {
+    fn queue_attach_message(
+        &self,
+        workspace: &str,
+        run_id: &str,
+        delivery: ChatDelivery,
+        message: &str,
+    ) -> Result<(), RunStartError> {
+        queue_message(
+            &self.active,
+            ChatQueueRequest {
+                run_id: run_id.to_owned(),
+                workspace: Some(workspace.to_owned()),
+                delivery,
+                message: message.to_owned(),
+            },
+        )
+        .map_err(RunStartError::InvalidRequest)
+    }
     fn session_status(&self) -> Result<muniment_core::auth::AuthStatus, ProtocolError> {
         service::session_status().map_err(|_| ProtocolError::persistence_failed())
     }
