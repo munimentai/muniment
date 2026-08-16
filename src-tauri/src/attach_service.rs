@@ -210,6 +210,8 @@ pub struct AttachCompanionState {
     #[cfg(target_os = "linux")]
     presenting: Mutex<bool>,
     #[cfg(target_os = "linux")]
+    desktop_supervisor_lifecycle: Mutex<()>,
+    #[cfg(target_os = "linux")]
     desktop_client: Mutex<Option<DesktopClientSupervisor>>,
     #[cfg(target_os = "linux")]
     desktop_client_holder: DesktopClientHolder,
@@ -297,6 +299,7 @@ impl AttachCompanionState {
             listener_stopped: Condvar::new(),
             approval_presenter: Mutex::new(None),
             presenting: Mutex::new(false),
+            desktop_supervisor_lifecycle: Mutex::new(()),
             desktop_client: Mutex::new(None),
             desktop_client_holder: DesktopClientHolder::new(),
             chat_events: Mutex::new(None),
@@ -463,6 +466,17 @@ impl AttachCompanionState {
         &self,
         start: impl FnOnce(DesktopClientStopHandle, DesktopClientHolder) -> std::thread::JoinHandle<()>,
     ) {
+        let _lifecycle = self
+            .desktop_supervisor_lifecycle
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        self.start_desktop_client_locked(start);
+    }
+
+    fn start_desktop_client_locked(
+        &self,
+        start: impl FnOnce(DesktopClientStopHandle, DesktopClientHolder) -> std::thread::JoinHandle<()>,
+    ) {
         let mut client = self
             .desktop_client
             .lock()
@@ -480,6 +494,17 @@ impl AttachCompanionState {
         &self,
         start: impl FnOnce(ChatEventStopHandle) -> std::thread::JoinHandle<()>,
     ) {
+        let _lifecycle = self
+            .desktop_supervisor_lifecycle
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        self.start_chat_events_locked(start);
+    }
+
+    fn start_chat_events_locked(
+        &self,
+        start: impl FnOnce(ChatEventStopHandle) -> std::thread::JoinHandle<()>,
+    ) {
         let mut supervisor = self
             .chat_events
             .lock()
@@ -492,8 +517,28 @@ impl AttachCompanionState {
         *supervisor = Some(ChatEventSupervisor { stop, worker });
     }
 
+    fn start_desktop_supervisors(
+        &self,
+        start_client: impl FnOnce(
+            DesktopClientStopHandle,
+            DesktopClientHolder,
+        ) -> std::thread::JoinHandle<()>,
+        start_chat_events: impl FnOnce(ChatEventStopHandle) -> std::thread::JoinHandle<()>,
+    ) {
+        let _lifecycle = self
+            .desktop_supervisor_lifecycle
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        self.start_desktop_client_locked(start_client);
+        self.start_chat_events_locked(start_chat_events);
+    }
+
     fn stop_desktop_client(&self) {
-        self.stop_chat_events();
+        let _lifecycle = self
+            .desktop_supervisor_lifecycle
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        self.stop_chat_events_locked();
         let supervisor = self
             .desktop_client
             .lock()
@@ -507,6 +552,14 @@ impl AttachCompanionState {
     }
 
     fn stop_chat_events(&self) {
+        let _lifecycle = self
+            .desktop_supervisor_lifecycle
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        self.stop_chat_events_locked();
+    }
+
+    fn stop_chat_events_locked(&self) {
         let supervisor = self
             .chat_events
             .lock()
@@ -593,6 +646,7 @@ impl Default for AttachCompanionState {
             listener_stopped: Condvar::new(),
             approval_presenter: Mutex::new(None),
             presenting: Mutex::new(false),
+            desktop_supervisor_lifecycle: Mutex::new(()),
             desktop_client: Mutex::new(None),
             desktop_client_holder: DesktopClientHolder::new(),
             chat_events: Mutex::new(None),
@@ -968,45 +1022,46 @@ fn start_desktop_client<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
     let endpoint = filesystem.endpoint_path().to_owned();
     let client_endpoint = endpoint.clone();
     let client_app = app.clone();
-    app.state::<AttachCompanionState>()
-        .start_desktop_client(move |stop, holder| {
-            std::thread::spawn(move || {
-                let observer_app = client_app.clone();
-                serve_desktop_client_at(
-                    &client_endpoint,
-                    env!("CARGO_PKG_VERSION"),
-                    Duration::from_secs(5),
-                    Duration::from_millis(250),
-                    stop,
-                    holder,
-                    move |connected| {
-                        observer_app
-                            .state::<AttachCompanionState>()
-                            .record_connected(connected);
-                        let status = observer_app
-                            .state::<AttachCompanionState>()
-                            .listener_status();
-                        let _ = observer_app.emit("desktop-client-status-changed", status);
-                    },
-                );
-            })
-        });
     let event_app = app.clone();
     app.state::<AttachCompanionState>()
-        .start_chat_events(move |stop| {
-            std::thread::spawn(move || {
-                serve_chat_events_at(
-                    &endpoint,
-                    env!("CARGO_PKG_VERSION"),
-                    Duration::from_secs(5),
-                    Duration::from_millis(250),
-                    stop,
-                    move |event| {
-                        let _ = event_app.emit("chat-event", event);
-                    },
-                );
-            })
-        });
+        .start_desktop_supervisors(
+            move |stop, holder| {
+                std::thread::spawn(move || {
+                    let observer_app = client_app.clone();
+                    serve_desktop_client_at(
+                        &client_endpoint,
+                        env!("CARGO_PKG_VERSION"),
+                        Duration::from_secs(5),
+                        Duration::from_millis(250),
+                        stop,
+                        holder,
+                        move |connected| {
+                            observer_app
+                                .state::<AttachCompanionState>()
+                                .record_connected(connected);
+                            let status = observer_app
+                                .state::<AttachCompanionState>()
+                                .listener_status();
+                            let _ = observer_app.emit("desktop-client-status-changed", status);
+                        },
+                    );
+                })
+            },
+            move |stop| {
+                std::thread::spawn(move || {
+                    serve_chat_events_at(
+                        &endpoint,
+                        env!("CARGO_PKG_VERSION"),
+                        Duration::from_secs(5),
+                        Duration::from_millis(250),
+                        stop,
+                        move |event| {
+                            let _ = event_app.emit("chat-event", event);
+                        },
+                    );
+                })
+            },
+        );
     let status = app.state::<AttachCompanionState>().listener_status();
     let _ = app.emit("desktop-client-status-changed", status);
 }
@@ -1401,6 +1456,53 @@ mod tests {
         new_started_rx.recv().unwrap();
         assert!(state.listener_status().connected);
         state.stop_desktop_client();
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn listener_start_stops_both_supervisors_during_startup() {
+        use std::sync::mpsc;
+
+        let state = Arc::new(AttachCompanionState::default());
+        let (between_starts, between_starts_rx) = mpsc::channel();
+        let (continue_start, continue_start_rx) = mpsc::channel();
+        let start_state = state.clone();
+        let starter = std::thread::spawn(move || {
+            start_state.start_desktop_supervisors(
+                |_, _| std::thread::spawn(|| {}),
+                move |_| {
+                    between_starts.send(()).unwrap();
+                    continue_start_rx.recv().unwrap();
+                    std::thread::spawn(|| {})
+                },
+            );
+        });
+        between_starts_rx.recv().unwrap();
+
+        let listener_state = state.clone();
+        let (listener_attempted, listener_attempted_rx) = mpsc::channel();
+        let (listener_started, listener_started_rx) = mpsc::channel();
+        let listener = std::thread::spawn(move || {
+            listener_attempted.send(()).unwrap();
+            listener_state.record_listener_started();
+            listener_started.send(()).unwrap();
+        });
+        listener_attempted_rx.recv().unwrap();
+        assert!(
+            listener_started_rx
+                .recv_timeout(Duration::from_millis(100))
+                .is_err(),
+            "listener startup passed the supervisor lifecycle lock"
+        );
+
+        continue_start.send(()).unwrap();
+        starter.join().unwrap();
+        listener.join().unwrap();
+        listener_started_rx
+            .recv_timeout(Duration::from_secs(1))
+            .unwrap();
+        assert!(state.desktop_client.lock().unwrap().is_none());
+        assert!(state.chat_events.lock().unwrap().is_none());
     }
 
     #[cfg(target_os = "linux")]
