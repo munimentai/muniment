@@ -400,7 +400,7 @@ fn persistence_error() -> RunStartError {
 impl RunAttachBoundaries for RuntimeAttachBoundaries {
     fn queue_attach_message(
         &self,
-        _workspace: &str,
+        workspace: &str,
         run_id: &str,
         delivery: ChatDelivery,
         message: &str,
@@ -409,6 +409,7 @@ impl RunAttachBoundaries for RuntimeAttachBoundaries {
             &self.active,
             ChatQueueRequest {
                 run_id: run_id.to_owned(),
+                workspace: Some(workspace.to_owned()),
                 delivery,
                 message: message.to_owned(),
             },

@@ -1051,6 +1051,8 @@ mod tests {
         active_run: Mutex<Option<(String, String)>>,
         runtime_activity: RuntimeActivityRegistry,
         #[cfg(target_os = "linux")]
+        queued_messages: Mutex<Vec<(ChatDelivery, String)>>,
+        #[cfg(target_os = "linux")]
         queued_permission_answers: Mutex<Vec<(String, ChatPermissionAnswer)>>,
         #[cfg(target_os = "linux")]
         permission_auto_commit: bool,
@@ -1089,6 +1091,8 @@ mod tests {
                 active_run: Mutex::new(None),
                 runtime_activity: RuntimeActivityRegistry::new(),
                 #[cfg(target_os = "linux")]
+                queued_messages: Mutex::new(Vec::new()),
+                #[cfg(target_os = "linux")]
                 queued_permission_answers: Mutex::new(Vec::new()),
                 #[cfg(target_os = "linux")]
                 permission_auto_commit: true,
@@ -1105,6 +1109,32 @@ mod tests {
     }
 
     impl RunAttachBoundaries for FakeRunStartBoundaries {
+        #[cfg(target_os = "linux")]
+        fn queue_attach_message(
+            &self,
+            workspace: &str,
+            run_id: &str,
+            delivery: ChatDelivery,
+            message: &str,
+        ) -> Result<(), RunStartError> {
+            if !self
+                .active_run
+                .lock()
+                .unwrap()
+                .as_ref()
+                .is_some_and(|active| active.0 == run_id && active.1 == workspace)
+            {
+                return Err(RunStartError::InvalidRequest(
+                    "That reply is no longer active.".into(),
+                ));
+            }
+            self.queued_messages
+                .lock()
+                .unwrap()
+                .push((delivery, message.to_owned()));
+            Ok(())
+        }
+
         #[cfg(target_os = "linux")]
         fn list_threads(
             &self,
@@ -1771,6 +1801,147 @@ mod tests {
                 peer_pid: 42,
             },
         )
+    }
+
+    #[cfg(target_os = "linux")]
+    fn message_request(
+        service: &mut DesktopAttachService<FakeRunStartBoundaries>,
+        operation: Operation,
+        text: &str,
+        request_id: &str,
+        key: &str,
+    ) -> Result<RunMessageAccepted, ProtocolError> {
+        let request = RunMessageRequest {
+            run_id: "0190a100-0000-7000-8000-000000000001".into(),
+            text: text.into(),
+        };
+        let request_id = Id::new(request_id).unwrap();
+        let key = Id::new(key).unwrap();
+        let provenance = CompanionProvenance {
+            profile: "default".into(),
+            companion_kind: "desktop-client".into(),
+            companion_version: "1.2.3".into(),
+            peer_uid: 1000,
+            peer_pid: 42,
+        };
+        if operation == Operation::RunSteer {
+            service.steer_run("workspace-a", request, &request_id, &key, provenance)
+        } else {
+            service.follow_up_run("workspace-a", request, &request_id, &key, provenance)
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn attach_run_messages_replay_exact_retries_and_reject_conflicts_without_queueing() {
+        for (index, operation) in [Operation::RunSteer, Operation::RunFollowUp]
+            .into_iter()
+            .enumerate()
+        {
+            let run_id = "0190a100-0000-7000-8000-000000000001";
+            let mut service = permission_service(
+                FakeRunStartBoundaries::accepting(),
+                Some((run_id, "workspace-a")),
+            );
+            let key = format!("018f0000-0000-7000-8000-{:012x}", 50 + index);
+            let first = message_request(
+                &mut service,
+                operation,
+                "hello",
+                "018f0000-0000-7000-8000-000000000060",
+                &key,
+            )
+            .unwrap();
+            let replay = message_request(
+                &mut service,
+                operation,
+                "hello",
+                "018f0000-0000-7000-8000-000000000061",
+                &key,
+            )
+            .unwrap();
+            assert_eq!(replay, first);
+            assert_eq!(service.boundaries.queued_messages.lock().unwrap().len(), 1);
+
+            let conflict = message_request(
+                &mut service,
+                operation,
+                "changed",
+                "018f0000-0000-7000-8000-000000000062",
+                &key,
+            )
+            .unwrap_err();
+            assert_eq!(
+                serde_json::to_value(conflict).unwrap()["code"],
+                "idempotency_conflict"
+            );
+            assert_eq!(service.boundaries.queued_messages.lock().unwrap().len(), 1);
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn attach_run_permission_replays_exact_retry_and_rejects_conflict_without_queueing() {
+        let run_id = "0190a100-0000-7000-8000-000000000001";
+        let mut service = permission_service(
+            FakeRunStartBoundaries::accepting(),
+            Some((run_id, "workspace-a")),
+        );
+        let key = "018f0000-0000-7000-8000-000000000070";
+        let first = permission_request(
+            &mut service,
+            "workspace-a",
+            run_id,
+            "gate-1",
+            PermissionDecision::Allow,
+            "018f0000-0000-7000-8000-000000000071",
+            key,
+        )
+        .unwrap();
+        let replay = permission_request(
+            &mut service,
+            "workspace-a",
+            run_id,
+            "gate-1",
+            PermissionDecision::Allow,
+            "018f0000-0000-7000-8000-000000000072",
+            key,
+        )
+        .unwrap();
+        assert_eq!(replay, first);
+        assert_eq!(
+            service
+                .boundaries
+                .queued_permission_answers
+                .lock()
+                .unwrap()
+                .len(),
+            1
+        );
+
+        let conflict = permission_request(
+            &mut service,
+            "workspace-a",
+            run_id,
+            "gate-1",
+            PermissionDecision::Deny,
+            "018f0000-0000-7000-8000-000000000073",
+            key,
+        )
+        .unwrap_err();
+        assert_eq!(
+            serde_json::to_value(conflict).unwrap()["code"],
+            "idempotency_conflict"
+        );
+        assert_eq!(
+            service
+                .boundaries
+                .queued_permission_answers
+                .lock()
+                .unwrap()
+                .len(),
+            1
+        );
     }
 
     #[cfg(target_os = "linux")]

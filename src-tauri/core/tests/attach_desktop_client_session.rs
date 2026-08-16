@@ -135,6 +135,83 @@ fn desktop_client_dispatches_each_run_control() {
     );
 }
 
+#[test]
+fn desktop_run_controls_reject_invalid_fields_without_dispatch() {
+    let run_id = "0190a100-0000-7000-8000-000000000001";
+    let oversized = "x".repeat(32 * 1024 + 1);
+    let cases = vec![
+        (
+            Operation::RunSteer,
+            serde_json::json!({"run_id":run_id,"text":""}),
+        ),
+        (
+            Operation::RunSteer,
+            serde_json::json!({"run_id":run_id,"text":oversized}),
+        ),
+        (
+            Operation::RunSteer,
+            serde_json::json!({"run_id":"bad","text":"hello"}),
+        ),
+        (
+            Operation::RunSteer,
+            serde_json::json!({"run_id":run_id,"text":"hello","extra":true}),
+        ),
+        (
+            Operation::RunFollowUp,
+            serde_json::json!({"run_id":run_id,"text":""}),
+        ),
+        (
+            Operation::RunFollowUp,
+            serde_json::json!({"run_id":run_id,"text":oversized}),
+        ),
+        (
+            Operation::RunFollowUp,
+            serde_json::json!({"run_id":"bad","text":"hello"}),
+        ),
+        (
+            Operation::RunFollowUp,
+            serde_json::json!({"run_id":run_id,"text":"hello","extra":true}),
+        ),
+        (
+            Operation::RunPermissionAnswer,
+            serde_json::json!({"run_id":run_id,"gate_id":"","answer":{"type":"confirm","value":true}}),
+        ),
+        (
+            Operation::RunPermissionAnswer,
+            serde_json::json!({"run_id":run_id,"gate_id":oversized,"answer":{"type":"confirm","value":true}}),
+        ),
+        (
+            Operation::RunPermissionAnswer,
+            serde_json::json!({"run_id":"bad","gate_id":"gate-1","answer":{"type":"confirm","value":true}}),
+        ),
+        (
+            Operation::RunPermissionAnswer,
+            serde_json::json!({"run_id":run_id,"gate_id":"gate-1","answer":{"type":"confirm","value":true},"extra":true}),
+        ),
+    ];
+    let (mut client, server) = UnixStream::pair().unwrap();
+    let session_thread = std::thread::spawn(move || {
+        let mut service = RunControlService::default();
+        let result = serve_desktop_client_session(server, &session(), &mut service);
+        (result, service.calls)
+    });
+
+    for (index, (operation, body)) in cases.into_iter().enumerate() {
+        let request_id = format!("018f0000-0000-7000-8000-{:012x}", 300 + index);
+        let Envelope::Error(error) = exchange(
+            &mut client,
+            idempotent_request(&request_id, operation, body),
+        ) else {
+            panic!("invalid run control did not return an error")
+        };
+        assert_eq!(error.error.code(), ErrorCode::InvalidRequest);
+    }
+    drop(client);
+    let (result, calls) = session_thread.join().unwrap();
+    assert_eq!(result, Ok(()));
+    assert!(calls.is_empty());
+}
+
 fn session() -> DesktopClientSession {
     DesktopClientSession {
         capability: "admitted".into(),
