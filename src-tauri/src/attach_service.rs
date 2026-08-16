@@ -2,9 +2,9 @@
 use muniment_core::attach::ApprovalRequest;
 #[cfg(target_os = "linux")]
 use muniment_core::attach::{
-    answer_presented_approval, handshake_desktop_client_stream, serve_approval_presenter_at,
-    serve_desktop_client_at, ApprovalPresenterStopHandle, DesktopClientHolder,
-    DesktopClientStopHandle,
+    answer_presented_approval, handshake_desktop_client_stream, interruptible_connect_with_state,
+    serve_approval_presenter_at, serve_desktop_client_at, ApprovalPresenterStopHandle,
+    DesktopClientHolder, DesktopClientStopHandle, InterruptibleConnectState,
 };
 #[cfg(target_os = "linux")]
 use muniment_core::attach::{
@@ -262,6 +262,17 @@ struct ChatEventStopHandle {
 struct ChatEventStopState {
     stopped: bool,
     stream: Option<UnixStream>,
+}
+
+#[cfg(target_os = "linux")]
+impl InterruptibleConnectState for ChatEventStopState {
+    fn stopped(&self) -> bool {
+        self.stopped
+    }
+
+    fn set_stream(&mut self, stream: Option<UnixStream>) {
+        self.stream = stream;
+    }
 }
 
 #[cfg(target_os = "linux")]
@@ -1076,19 +1087,8 @@ fn serve_chat_events_at(
     mut deliver: impl FnMut(Value),
 ) {
     loop {
-        let stream = UnixStream::connect(endpoint).ok();
+        let stream = interruptible_connect_with_state(endpoint, &stop.inner);
         if let Some(stream) = stream {
-            let interrupt = stream.try_clone().ok();
-            let (state, _) = &*stop.inner;
-            let mut state = state
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            if state.stopped {
-                return;
-            }
-            state.stream = interrupt;
-            drop(state);
-
             if let Ok(mut client) =
                 handshake_desktop_client_stream(stream, client_version, io_timeout)
             {
@@ -1595,6 +1595,42 @@ mod tests {
         state.stop_chat_events();
         assert!(state.chat_events.lock().unwrap().is_none());
         server.join().unwrap();
+        std::fs::remove_file(endpoint).unwrap();
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn chat_event_supervisor_stops_before_connect() {
+        use std::os::unix::net::UnixListener;
+        use std::sync::mpsc;
+
+        let endpoint =
+            std::env::temp_dir().join(format!("muniment-chat-events-{}.sock", Uuid::now_v7()));
+        let listener = UnixListener::bind(&endpoint).unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let stop = ChatEventStopHandle::default();
+        stop.stop();
+        let worker_stop = stop.clone();
+        let worker_endpoint = endpoint.clone();
+        let (finished, finished_rx) = mpsc::channel();
+        let worker = std::thread::spawn(move || {
+            serve_chat_events_at(
+                &worker_endpoint,
+                "0.0.1",
+                Duration::from_secs(1),
+                Duration::from_millis(10),
+                worker_stop,
+                |_| {},
+            );
+            finished.send(()).unwrap();
+        });
+
+        finished_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        worker.join().unwrap();
+        assert_eq!(
+            listener.accept().unwrap_err().kind(),
+            std::io::ErrorKind::WouldBlock
+        );
         std::fs::remove_file(endpoint).unwrap();
     }
 
