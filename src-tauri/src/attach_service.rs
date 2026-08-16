@@ -1600,16 +1600,22 @@ mod tests {
 
     #[cfg(target_os = "linux")]
     #[test]
-    fn chat_event_supervisor_stops_before_connect() {
-        use std::os::unix::net::UnixListener;
+    fn chat_event_supervisor_stops_while_connect_is_pending() {
+        use std::os::fd::AsRawFd;
+        use std::os::unix::net::{UnixListener, UnixStream};
         use std::sync::mpsc;
+
+        unsafe extern "C" {
+            fn listen(socket: i32, backlog: i32) -> i32;
+        }
 
         let endpoint =
             std::env::temp_dir().join(format!("muniment-chat-events-{}.sock", Uuid::now_v7()));
         let listener = UnixListener::bind(&endpoint).unwrap();
-        listener.set_nonblocking(true).unwrap();
+        // SAFETY: `listener` owns a valid Unix socket descriptor.
+        assert_eq!(unsafe { listen(listener.as_raw_fd(), 0) }, 0);
+        let queued_stream = UnixStream::connect(&endpoint).unwrap();
         let stop = ChatEventStopHandle::default();
-        stop.stop();
         let worker_stop = stop.clone();
         let worker_endpoint = endpoint.clone();
         let (finished, finished_rx) = mpsc::channel();
@@ -1625,12 +1631,20 @@ mod tests {
             finished.send(()).unwrap();
         });
 
+        let deadline = Instant::now() + Duration::from_secs(1);
+        loop {
+            let (state, _) = &*stop.inner;
+            if state.lock().unwrap().stream.is_some() {
+                break;
+            }
+            assert!(Instant::now() < deadline, "connect did not remain pending");
+            std::thread::yield_now();
+        }
+        stop.stop();
         finished_rx.recv_timeout(Duration::from_secs(1)).unwrap();
         worker.join().unwrap();
-        assert_eq!(
-            listener.accept().unwrap_err().kind(),
-            std::io::ErrorKind::WouldBlock
-        );
+        drop(queued_stream);
+        drop(listener);
         std::fs::remove_file(endpoint).unwrap();
     }
 
