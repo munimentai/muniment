@@ -555,49 +555,44 @@ reads (`src/lib/chat-controller.js:100`). The event channel takes its own
 connection, because the request path reads exactly one envelope per request and
 `DesktopClientHolder` holds one mutex over that socket.
 
-MEASURED 2026-08-16 (seventy-eighth wave, planner, read the wire permission
-answer beside `ChatPermissionAnswer`) — the companion `permission.answer`
-operation cannot carry a desktop answer. Its wire `decision` is the two-variant
-`PermissionDecision` (`src-tauri/attach/src/client.rs:136`), and the desktop
-sends `ChatPermissionAnswer` (`src-tauri/core/src/permission_gate.rs:23`) with
-six variants: `Select`, `Confirm`, `Input`, `Editor`, `Cancelled`, and
-`CodeDiff`. The transcript renders an ask card for all four request kinds, so an
-allow-or-deny wire answer would drop the selection, the typed input, and the
-editor body. The fifth tranche therefore names its own desktop permission answer.
+DONE 2026-08-16 — the fifth tranche's service half is built for the three
+message controls, and the typed client calls landed (MUNIDESK-1306 through
+1315). ADR 0012 maps each fifth-tranche operation to its runtime service entry.
+`run.submit`, `run.resume`, and `run.permission_answer` carry wire names and
+request fixtures. `dispatch_request` serves `run.steer`, `run.follow_up`, and
+`run.permission_answer` to the desktop client and refuses each one for a
+companion. `DesktopAttachService`
+(`src-tauri/core/src/attach/desktop_service.rs`) answers them over the run
+boundaries through the idempotency ledger, and `RuntimeAttachBoundaries`
+connects them to `service::queue_run_message` and `service::answer_permission`.
+The new `run.permission_answer` operation carries the six-variant
+`ChatPermissionAnswer`, because the companion `permission.answer` wire reduces
+every answer to allow or deny. `DesktopClientHolder` carries typed `run_submit`,
+`run_cancel`, `run_permission_answer`, `run_steer`, and `run_follow_up` calls
+(`src-tauri/attach/src/client.rs:1525`).
 
-MEASURED 2026-08-16 (seventy-eighth wave, planner, read `Operation` beside every
-`dispatch_request` branch) — `run.steer` and `run.follow_up` are named with
-fixtures and no dispatch branch. `Operation::RunSteer` and
-`Operation::RunFollowUp` (`src-tauri/attach/src/envelope.rs:286`) encode and
-decode, `protocol-fixtures/muniment.attach/1/request-run-steer.json` and
-`request-run-follow-up.json` pin their bodies, and no branch in
-`src-tauri/core/src/attach/linux.rs` answers either one. The runtime already owns
-the behavior through `service::queue_run_message`
-(`src-tauri/runtime/src/service/run.rs:351`). The fifth tranche adds the two
-dispatch branches rather than new names.
-
-MEASURED 2026-08-16 (seventy-eighth wave, planner, read the `run.cancel` branch
-beside `cancel_active_run`) — the desktop reuses `run.cancel` unchanged. The
-branch (`src-tauri/core/src/attach/linux.rs:3077`) reaches
-`RunStartBoundaries::cancel_run`, which calls `cancel_active_run` with the
-session workspace (`src-tauri/core/src/active_run.rs:67`). The runtime records
-`ActiveRun.workspace` from the same `grant.workspace` value the desktop client
-session carries, so the workspace filter matches. `chat_cancel` needs a typed
-client method alone.
+MEASURED 2026-08-16 (seventy-ninth wave, planner, read every
+`Operation::RunSubmit` and `Operation::RunResume` reference) — the two
+prompt-carrying operations stop at the wire. Both names appear only in
+`src-tauri/attach/`: the envelope, the fixtures, the client, and the protocol
+tests. No `dispatch_request` branch serves either one, the desktop-only refusal
+list (`src-tauri/core/src/attach/linux.rs:2361`) omits both, `ThreadListService`
+declares no `submit_run` or `resume_run` entry, and the holder carries no typed
+`run_resume` call. A typed `run_submit` call therefore reaches no handler, and
+`run.resume` has no response fixture. The seventy-ninth wave closes this gap and
+then flips the five commands.
 
 AUDIT 2026-08-16 (seventy-eighth wave, scheduled code review over the commits
-since 2026-08-09) — four confirmed defects sit on the desktop client path, and
-all four wait for the cutover to reach a user. `serve_chat_events_at`
-(`src-tauri/src/attach_service.rs:1079`) connects without the interruptible
-helper its two sibling supervisors use, so a stop that lands during a blocking
-connect joins under the shared lifecycle lock. `DesktopClientHolder::with_client`
-(`src-tauri/attach/src/client.rs:1493`) holds the one socket mutex across the
-300-second sign-in, so every other command on that holder waits. The chat-event
-connection reports no connected state, so a failed event stream leaves the
-transcript frozen behind a `connected` banner. `RuntimeChatEventBroadcast`
-(`src-tauri/runtime/src/sink.rs:31`) prunes a dead subscriber only inside
-`deliver`, so an idle profile accumulates orphaned senders. The lane files one
-ticket per defect and keeps the fifth tranche separate.
+since 2026-08-09) — four confirmed defects sat on the desktop client path.
+Three fixes landed: the chat-event supervisor ends its worker inside a blocking
+connect (MUNIDESK-1303), a running sign-in no longer holds the one socket mutex
+against every other command (MUNIDESK-1304), and the chat-event stream reports
+its own connection state to the shell (MUNIDESK-1305). The fourth ticket drained
+unmerged. `RuntimeChatEventBroadcast::subscribe`
+(`src-tauri/runtime/src/sink.rs:22`) still adds a sender that only `deliver`
+(`:31`) removes, so a profile whose subscribers connect and drop between runs
+accumulates orphaned senders. The seventy-ninth wave re-files it in last
+position.
 
 RETIRED 2026-08-14 (seventy-first wave, planner, read `compose_attach_service`) —
 the runtime composition owes no Home resolution work. It reads `configured_home`
@@ -661,30 +656,31 @@ projector always holds state there. A test seam would also prove nothing, becaus
 projector rejects that event too. The lane re-opens this only against a new
 failure route.
 
-MERGE HAZARD — the seventy-eighth-wave slices are filed. Slices 3 through 6 each
-build on the wire names slice 2 adds, and each boundary slice answers the seam
-its dispatch slice declares. Every ticket tells the implementer to rebase on
-`main` before it opens the pull request. The 2026-08-04 silent revert came from a
-stale base.
+MERGE HAZARD — the seventy-ninth-wave slices are filed. Slice 2 answers the
+boundary seam slice 1 declares, slice 3 matches the response fixture slice 1
+adds, and slice 4 calls the work of all three. Every ticket tells the
+implementer to rebase on `main` before it opens the pull request. The
+2026-08-04 silent revert came from a stale base.
 
-SELECTED 2026-08-16 (seventy-eighth wave) — six slices in priority order. They
-build the service half of the run surface, which the five run commands ride.
+SELECTED 2026-08-16 (seventy-ninth wave) — five slices in priority order. They
+close the `run.submit` and `run.resume` service gap, then flip the five run
+commands.
 
-1. Amend ADR 0012 with the fifth desktop client operation tranche.
-2. Name `run.submit`, `run.resume`, and `run.permission_answer` with fixtures.
-3. Dispatch the three run controls to the desktop client and refuse them for a
-   companion.
-4. Answer the three run controls from the runtime service entries.
-5. Dispatch `run.steer` and `run.follow_up` to the desktop client and refuse them
+1. Dispatch `run.submit` and `run.resume` to the desktop client and refuse them
    for a companion.
-6. Connect `run.steer` and `run.follow_up` to the runtime service entries.
+2. Answer `run.submit` and `run.resume` from the runtime service entries.
+3. Add the typed `run.resume` client call.
+4. Flip the five run commands onto the desktop client in one slice.
+5. Re-file the chat-event broadcast prune defect.
 
-SEQUENCED 2026-08-16 (seventy-eighth wave) — the desktop flips all five run
-commands in one later slice. `chat_submit` and `chat_resume` install the active
-run, and `chat_queue`, `chat_cancel`, and `chat_answer_permission` all read it.
-A flip that converts one half alone would put the run in one process and its
-controls in the other, so a cancel or a permission answer would find no active
-run. The typed client methods and that one flip are the seventy-ninth-wave work.
+SEQUENCED 2026-08-16 (seventy-ninth wave) — the flip stays one atomic slice.
+`chat_submit` and `chat_resume` install the active run, and `chat_queue`,
+`chat_cancel`, and `chat_answer_permission` all read it. A flip that converts
+one half alone would put the run in one process and its controls in the other,
+so a cancel or a permission answer would find no active run. On the connected
+path `chat_submit` sends the session tracker's thread id through the
+`run.submit` `thread_id` field, so the runtime places the prompt in the thread
+the user sees while the tracker commands stay local.
 
 NOT FILED 2026-08-15 (seventy-fourth wave, planner, read the shell's auth branch
 order) — `auth_status` keeps its local keychain read before the cutover. The
@@ -1182,11 +1178,11 @@ earlier one. Requiring an up-to-date branch before merge, or a merge queue, is a
 repository-settings change that sits with the owner. The planner files no ticket
 for it.
 
-VERIFIED 2026-08-15 (seventy-seventh wave, planner) — one
+VERIFIED 2026-08-16 (seventy-ninth wave, planner) — one
 `cargo test -p muniment-core -p muniment-runtime -p muniment-attach` run started
-from `src-tauri` passes 1,348 tests over 120 test binaries, and the build prints no
-warning. One `npm ci` then `npm test` run passes 940 frontend tests over 63 files
-with 31 skipped, plus 3 browser tests. Start cargo from `src-tauri`, because the
+from `src-tauri` passes 1,372 tests, and the build prints no warning. One
+`npm ci` then `npm test` run passes 941 frontend tests over 63 files with 31
+skipped, plus 3 browser tests. Start cargo from `src-tauri`, because the
 repository root holds no `Cargo.toml`. A run started from the root dies with
 `could not find Cargo.toml`, which reads as a broken harness. This entry replaces
 the earlier ledger.
