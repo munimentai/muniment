@@ -675,9 +675,9 @@ build the service half of the run surface, which the five run commands ride.
 3. Dispatch the three run controls to the desktop client and refuse them for a
    companion.
 4. Answer the three run controls from the runtime service entries.
-5. Dispatch `run.submit` and `run.resume` to the desktop client and refuse them
+5. Dispatch `run.steer` and `run.follow_up` to the desktop client and refuse them
    for a companion.
-6. Answer `run.submit` and `run.resume` from the runtime service entries.
+6. Connect `run.steer` and `run.follow_up` to the runtime service entries.
 
 SEQUENCED 2026-08-16 (seventy-eighth wave) — the desktop flips all five run
 commands in one later slice. `chat_submit` and `chat_resume` install the active
