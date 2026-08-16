@@ -1186,6 +1186,7 @@ fn pairing_failure(error: ClientError) -> &'static str {
         ClientError::RuntimeDirectoryMissing => "Muniment runtime directory is unavailable",
         ClientError::RuntimeDirectoryRelative => "Muniment runtime directory is invalid",
         ClientError::DesktopUnavailable => "Muniment runtime attach is unavailable",
+        ClientError::DesktopBusy => "Muniment runtime attach is busy",
         ClientError::Timeout => "Muniment runtime pairing timed out",
         ClientError::ConnectionClosed => "Muniment runtime pairing was denied or closed",
         ClientError::MalformedFrame => "Muniment runtime sent a malformed attach message",
