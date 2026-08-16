@@ -20,6 +20,8 @@ use std::collections::BTreeMap;
 use crate::attach_service::{AttachCompanionState, DesktopClientSession};
 use crate::auth;
 use crate::chat::{state_session_root, ChatState};
+#[cfg(target_os = "linux")]
+use muniment_core::attach::ClientError;
 use muniment_core::run_events::SharedStorage;
 use muniment_core::session_thread::SessionThread;
 
@@ -59,7 +61,7 @@ fn rename_thread_command(
         }
         DesktopClientSession::Connected(client) => client
             .rename_thread(thread_id, title)
-            .map_err(|_| "Muniment cannot reach its background service.".to_string()),
+            .map_err(auth::desktop_client_error),
         DesktopClientSession::Disconnected => {
             Err("Muniment cannot reach its background service.".into())
         }
@@ -83,7 +85,7 @@ fn delete_thread_command(
         }
         DesktopClientSession::Connected(client) => client
             .delete_thread(thread_id)
-            .map_err(|_| "Muniment cannot reach its background service.".to_string()),
+            .map_err(auth::desktop_client_error),
         DesktopClientSession::Disconnected => {
             Err("Muniment cannot reach its background service.".into())
         }
@@ -132,6 +134,14 @@ fn owned_threads_error_message(_error: OwnedThreadsError) -> String {
 }
 
 #[cfg(target_os = "linux")]
+fn desktop_thread_history_error(error: ClientError) -> String {
+    match error {
+        ClientError::DesktopBusy => auth::desktop_client_error(error),
+        _ => "Conversation history is unavailable.".to_string(),
+    }
+}
+
+#[cfg(target_os = "linux")]
 fn chat_thread_summaries_command(
     storage: &SharedStorage,
     attach_state: &AttachCompanionState,
@@ -159,7 +169,7 @@ fn chat_thread_summaries_command(
                     .map_err(|_| "Conversation history is unavailable.".to_string())?,
                 cursor,
             )
-            .map_err(|_| "Conversation history is unavailable.".to_string()),
+            .map_err(desktop_thread_history_error),
         DesktopClientSession::Disconnected => Err(auth::background_service_error()),
     }
 }
@@ -226,7 +236,7 @@ fn chat_thread_open_command(
                     .map_err(|_| "Conversation history is unavailable.".to_string())?,
                 cursor,
             )
-            .map_err(|_| "Conversation history is unavailable.".to_string()),
+            .map_err(desktop_thread_history_error),
         DesktopClientSession::Disconnected => Err(auth::background_service_error()),
     }
 }

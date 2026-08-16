@@ -26,7 +26,7 @@ use tauri::Emitter;
 #[cfg(target_os = "linux")]
 use crate::attach_service::{AttachCompanionState, DesktopClientSession};
 #[cfg(target_os = "linux")]
-use muniment_core::attach::DesktopClientHolder;
+use muniment_core::attach::{ClientError, DesktopClientHolder};
 
 /// How long the loopback listener waits for the user to finish in the
 /// browser before the sign-in attempt is abandoned.
@@ -190,7 +190,7 @@ pub async fn auth_sign_in(
         attach_state.desktop_client_session(),
         move || sign_in_blocking(store.as_ref(), &app).map_err(|error| error.to_string()),
         |client| {
-            let response = client.sign_in().map_err(|_| background_service_error())?;
+            let response = client.sign_in().map_err(desktop_client_error)?;
             decode_sign_in_status(response)
         },
     )
@@ -351,7 +351,7 @@ async fn auth_entitlement_snapshot_with_state<R: tauri::Runtime>(
             let response: EntitlementSnapshotResponse = serde_json::from_value(
                 client
                     .entitlement_snapshot()
-                    .map_err(|_| background_service_error())?,
+                    .map_err(desktop_client_error)?,
             )
             .map_err(|_| background_service_error())?;
             if let Some(snapshot_version) = response.changed_snapshot_version {
@@ -404,12 +404,9 @@ async fn auth_devices_with_state<R: tauri::Runtime>(
     #[cfg(target_os = "linux")]
     match attach_state.desktop_client_session() {
         DesktopClientSession::Connected(client) => {
-            let response: auth::NativeDeviceList = serde_json::from_value(
-                client
-                    .list_devices()
-                    .map_err(|_| background_service_error())?,
-            )
-            .map_err(|_| background_service_error())?;
+            let response: auth::NativeDeviceList =
+                serde_json::from_value(client.list_devices().map_err(desktop_client_error)?)
+                    .map_err(|_| background_service_error())?;
             return Ok(response.devices);
         }
         DesktopClientSession::Disconnected => return Err(background_service_error()),
@@ -436,6 +433,14 @@ async fn auth_devices_with_state<R: tauri::Runtime>(
 #[cfg(target_os = "linux")]
 pub(crate) fn background_service_error() -> String {
     "Muniment cannot reach its background service.".to_string()
+}
+
+#[cfg(target_os = "linux")]
+pub(crate) fn desktop_client_error(error: ClientError) -> String {
+    match error {
+        ClientError::DesktopBusy => "Muniment is busy with another request. Try again.".to_string(),
+        _ => background_service_error(),
+    }
 }
 
 fn list_devices(
@@ -475,9 +480,7 @@ pub async fn auth_sign_out(
         || attach_state.clear_workspace(),
         move || local_sign_out(store),
         |client| {
-            let response = client
-                .sign_out()
-                .map_err(|_| "Muniment cannot reach its background service.".to_string())?;
+            let response = client.sign_out().map_err(desktop_client_error)?;
             decode_sign_out_status(response)
         },
     )
