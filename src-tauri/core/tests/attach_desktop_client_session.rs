@@ -2,12 +2,14 @@
 
 use std::io::{Read, Write};
 use std::os::unix::net::UnixStream;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::Duration;
 
 use muniment_core::attach::linux::{
-    serve_desktop_client_session, CompanionProvenance, EntitlementSnapshotResult, RunStartAccepted,
-    RunStartRequest, RunStreamPage, ThreadListPage, ThreadListRequest, ThreadListService,
+    serve_desktop_client_session, AttachSessionError, CompanionProvenance,
+    EntitlementSnapshotResult, RunStartAccepted, RunStartRequest, RunStreamPage, ThreadListPage,
+    ThreadListRequest, ThreadListService,
 };
 use muniment_core::attach::{
     decode_frame, encode_frame, CompanionRecord, DesktopClientSession, Envelope, ErrorCode,
@@ -445,6 +447,90 @@ fn desktop_chat_subscription_delivers_events_and_owns_the_session() {
 
     drop(sender);
     assert_eq!(session_thread.join().unwrap(), Ok(()));
+}
+
+#[test]
+fn desktop_chat_subscription_stays_responsive_under_sustained_events() {
+    let (sender, receiver) = mpsc::channel();
+    let (mut client, server) = UnixStream::pair().unwrap();
+    client
+        .set_read_timeout(Some(Duration::from_secs(2)))
+        .unwrap();
+    let session_thread = std::thread::spawn(move || {
+        serve_desktop_client_session(
+            server,
+            &session(),
+            &mut ChatEventService {
+                receiver: Some(receiver),
+            },
+        )
+    });
+
+    assert!(matches!(
+        exchange(
+            &mut client,
+            request(
+                "018f0000-0000-7000-8000-000000000215",
+                Operation::RunChatEvents,
+                "admitted",
+                serde_json::json!({}),
+            ),
+        ),
+        Envelope::Response(_)
+    ));
+    let producing = Arc::new(AtomicBool::new(true));
+    let producer_flag = Arc::clone(&producing);
+    let producer = std::thread::spawn(move || {
+        while producer_flag.load(Ordering::Relaxed) {
+            if sender
+                .send(ChatEvent {
+                    run_id: "018f0000-0000-7000-8000-000000000214".into(),
+                    phase: "running".into(),
+                    text: "event".into(),
+                    receipt: None,
+                    tool_activity: Vec::new(),
+                    attachments: Vec::new(),
+                    recalls: Vec::new(),
+                    applied_diffs: Vec::new(),
+                    pending_permission: None,
+                })
+                .is_err()
+            {
+                break;
+            }
+        }
+    });
+    assert!(matches!(read_envelope(&mut client), Envelope::Event(_)));
+
+    client
+        .write_all(
+            &encode_frame(&request(
+                "018f0000-0000-7000-8000-000000000216",
+                Operation::ThreadList,
+                "admitted",
+                serde_json::json!({}),
+            ))
+            .unwrap(),
+        )
+        .unwrap();
+    loop {
+        match read_envelope(&mut client) {
+            Envelope::Event(_) => {}
+            Envelope::Error(error) => {
+                assert_eq!(error.error.code(), ErrorCode::UnsupportedOperation);
+                break;
+            }
+            envelope => panic!("unexpected envelope: {envelope:?}"),
+        }
+    }
+
+    producing.store(false, Ordering::Relaxed);
+    producer.join().unwrap();
+    drop(client);
+    assert_eq!(
+        session_thread.join().unwrap(),
+        Err(AttachSessionError::Closed)
+    );
 }
 
 fn request(id: &str, operation: Operation, capability: &str, body: serde_json::Value) -> Request {

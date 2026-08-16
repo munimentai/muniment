@@ -2421,6 +2421,7 @@ impl From<ProtocolError> for DispatchFailure {
 }
 
 const MAX_ACTIVE_RUN_STREAMS: usize = 64;
+const MAX_CHAT_EVENTS_PER_POLL: usize = 64;
 
 struct ActiveRunStream {
     cursor: RunStreamCursor,
@@ -2442,7 +2443,7 @@ fn drain_chat_events(
     subscription: &ActiveChatSubscription,
 ) -> Result<(Vec<Event>, bool), AttachSessionError> {
     let mut events = Vec::new();
-    loop {
+    for _ in 0..MAX_CHAT_EVENTS_PER_POLL {
         match subscription.receiver.try_recv() {
             Ok(event) => events.push(Event {
                 protocol: Protocol,
@@ -2457,6 +2458,7 @@ fn drain_chat_events(
             Err(TryRecvError::Disconnected) => return Ok((events, true)),
         }
     }
+    Ok((events, false))
 }
 
 fn poll_run_streams<S: ThreadListService>(
