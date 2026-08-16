@@ -7,6 +7,7 @@ use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
 use std::thread;
 
+use muniment_core::active_run::ChatDelivery;
 use muniment_core::attach::linux::{
     CompanionProvenance, ThreadListRequest, ThreadListService, ThreadOpenRequest,
 };
@@ -520,16 +521,40 @@ fn runtime_boundaries_answer_all_attach_reads() {
         ProtocolError::thread_not_found()
     );
 
-    let _commit = boundaries
-        .queue_attach_permission_answer(
+    thread::scope(|scope| {
+        let answer = scope.spawn(|| {
+            boundaries.queue_attach_permission_answer(
+                "workspace-a",
+                "run-1",
+                "gate-1",
+                ChatPermissionAnswer::Confirm(true),
+            )
+        });
+        let queued = loop {
+            if let Some(queued) = permission_answers.lock().unwrap().pop_front() {
+                break queued;
+            }
+            thread::yield_now();
+        };
+        assert_eq!(queued.gate_id, "gate-1");
+        queued.resolved.unwrap().send(Some(7)).unwrap();
+        assert_eq!(answer.join().unwrap().unwrap().recv().unwrap(), Some(7));
+    });
+    for delivery in [ChatDelivery::Steer, ChatDelivery::FollowUp] {
+        assert!(matches!(
+            boundaries.queue_attach_message("workspace-a", "missing-run", delivery, "message"),
+            Err(muniment_core::run_start::RunStartError::InvalidRequest(_))
+        ));
+    }
+    assert!(matches!(
+        boundaries.queue_attach_permission_answer(
             "workspace-a",
-            "run-1",
+            "missing-run",
             "gate-1",
             ChatPermissionAnswer::Confirm(true),
-        )
-        .unwrap();
-    let queued = permission_answers.lock().unwrap().pop_front().unwrap();
-    assert_eq!(queued.gate_id, "gate-1");
+        ),
+        Err(muniment_core::run_start::RunStartError::InvalidRequest(_))
+    ));
 
     drop(boundaries);
     drop(storage);
