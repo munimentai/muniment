@@ -8,7 +8,10 @@ use muniment_core::pi_launch::{
     pi_launch_config, pi_launch_config_for_executable, PiLaunchBoundaries, PiLaunchError,
 };
 use muniment_core::run_events::{ChatEvent, ChatEventSink};
-use muniment_runtime::{open_profile_storage, RuntimeChatEventSink};
+use muniment_runtime::{
+    open_profile_storage, RuntimeChatEventBroadcast, RuntimeChatEventSink,
+    CHAT_EVENT_SUBSCRIBER_QUEUE_CAPACITY,
+};
 
 mod common;
 use common::{fixture_grant, TemporaryProfile};
@@ -46,8 +49,11 @@ fn memory_runtime(profile: &TemporaryProfile) -> Arc<ApplicationMemoryRuntime> {
 fn delivers_to_an_optional_subscriber() {
     let profile = TemporaryProfile::new("sink-subscriber", false);
     let (subscriber, events) = mpsc::channel();
-    let sink =
-        RuntimeChatEventSink::new(&profile.profile, Some(subscriber), memory_runtime(&profile));
+    let sink = RuntimeChatEventSink::with_subscriber(
+        &profile.profile,
+        Some(subscriber),
+        memory_runtime(&profile),
+    );
 
     sink.deliver(event()).unwrap();
 
@@ -60,7 +66,7 @@ fn delivers_to_an_optional_subscriber() {
 fn succeeds_without_a_subscriber() {
     let profile = TemporaryProfile::new("sink-no-subscriber", false);
 
-    RuntimeChatEventSink::new(&profile.profile, None, memory_runtime(&profile))
+    RuntimeChatEventSink::with_subscriber(&profile.profile, None, memory_runtime(&profile))
         .deliver(event())
         .unwrap();
 }
@@ -69,12 +75,53 @@ fn succeeds_without_a_subscriber() {
 fn clears_a_dropped_subscriber() {
     let profile = TemporaryProfile::new("sink-dropped-subscriber", false);
     let (subscriber, events) = mpsc::channel();
-    let sink =
-        RuntimeChatEventSink::new(&profile.profile, Some(subscriber), memory_runtime(&profile));
+    let sink = RuntimeChatEventSink::with_subscriber(
+        &profile.profile,
+        Some(subscriber),
+        memory_runtime(&profile),
+    );
     drop(events);
 
     sink.deliver(event()).unwrap();
     sink.deliver(event()).unwrap();
+}
+
+#[test]
+fn broadcasts_each_event_to_every_live_subscriber() {
+    let profile = TemporaryProfile::new("sink-broadcast", false);
+    let broadcast = RuntimeChatEventBroadcast::default();
+    let first = broadcast.subscribe();
+    let second = broadcast.subscribe();
+    let sink = RuntimeChatEventSink::new(&profile.profile, broadcast, memory_runtime(&profile));
+
+    sink.deliver(event()).unwrap();
+
+    assert_eq!(first.recv().unwrap().text, "hello");
+    assert_eq!(second.recv().unwrap().text, "hello");
+}
+
+#[test]
+fn drops_a_subscriber_when_its_bounded_queue_is_full() {
+    let profile = TemporaryProfile::new("sink-full-broadcast", false);
+    let broadcast = RuntimeChatEventBroadcast::default();
+    let stalled = broadcast.subscribe();
+    let sink = RuntimeChatEventSink::new(
+        &profile.profile,
+        broadcast.clone(),
+        memory_runtime(&profile),
+    );
+
+    for _ in 0..=CHAT_EVENT_SUBSCRIBER_QUEUE_CAPACITY {
+        sink.deliver(event()).unwrap();
+    }
+    for _ in 0..CHAT_EVENT_SUBSCRIBER_QUEUE_CAPACITY {
+        stalled.recv().unwrap();
+    }
+    assert!(stalled.recv().is_err());
+
+    let live = broadcast.subscribe();
+    sink.deliver(event()).unwrap();
+    assert_eq!(live.recv().unwrap().text, "hello");
 }
 
 #[test]
@@ -87,7 +134,7 @@ fn drives_pi_launch_config_over_the_profile_directory() {
     let extension = memory_runtime.agent_extension_path();
     fs::create_dir_all(extension.parent().unwrap()).unwrap();
     fs::write(&extension, "export default function () {}\n").unwrap();
-    let sink = RuntimeChatEventSink::new(&profile.profile, None, memory_runtime);
+    let sink = RuntimeChatEventSink::with_subscriber(&profile.profile, None, memory_runtime);
 
     assert_eq!(
         pi_launch_config(&sink, Some(&pi_install), &grant(), None).unwrap_err(),

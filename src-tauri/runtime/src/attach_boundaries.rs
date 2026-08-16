@@ -41,7 +41,7 @@ use muniment_core::run_start::{
 use muniment_core::session_thread::SessionThread;
 
 use crate::service::{self, ConfigureRunError};
-use crate::RuntimeChatEventSink;
+use crate::{RuntimeChatEventBroadcast, RuntimeChatEventSink};
 
 /// Supplies attach reads from runtime-owned state.
 pub struct RuntimeAttachBoundaries {
@@ -59,6 +59,7 @@ pub struct RuntimeAttachBoundaries {
     companion_registry: CompanionRegistry,
     sign_in_running: Arc<AtomicBool>,
     browser_opener: Arc<dyn BrowserOpener>,
+    chat_events: RuntimeChatEventBroadcast,
 }
 
 impl RuntimeAttachBoundaries {
@@ -89,6 +90,7 @@ impl RuntimeAttachBoundaries {
             session_thread,
             companion_registry,
             Arc::new(AtomicBool::new(false)),
+            RuntimeChatEventBroadcast::default(),
         )
     }
 
@@ -106,6 +108,7 @@ impl RuntimeAttachBoundaries {
         session_thread: Arc<SessionThread>,
         companion_registry: CompanionRegistry,
         sign_in_running: Arc<AtomicBool>,
+        chat_events: RuntimeChatEventBroadcast,
     ) -> Self {
         Self {
             storage,
@@ -121,6 +124,7 @@ impl RuntimeAttachBoundaries {
             companion_registry,
             sign_in_running,
             browser_opener: Arc::new(open_browser),
+            chat_events,
         }
     }
 
@@ -331,9 +335,14 @@ impl RunStartBoundaries for RuntimeAttachBoundaries {
         let runtime_activity = self.runtime_activity.clone();
         let memory_runtime = Arc::clone(&self.memory_runtime);
         let active = Arc::clone(&self.active);
+        let chat_events = self.chat_events.clone();
         std::thread::spawn(move || {
             muniment_core::chat_coordinate::coordinate(
-                RuntimeChatEventSink::new(&profile_directory, None, Arc::clone(&memory_runtime)),
+                RuntimeChatEventSink::new(
+                    &profile_directory,
+                    chat_events,
+                    Arc::clone(&memory_runtime),
+                ),
                 storage,
                 runtime,
                 runtime_activity,
@@ -592,6 +601,13 @@ impl RunAttachBoundaries for RuntimeAttachBoundaries {
             .journal
             .subscribe_commits(run_id)
             .map_err(|_| ProtocolError::persistence_failed())
+    }
+
+    fn subscribe_chat_events(
+        &self,
+    ) -> Result<std::sync::mpsc::Receiver<muniment_core::run_events::ChatEvent>, ProtocolError>
+    {
+        Ok(self.chat_events.subscribe())
     }
 
     fn queue_attach_permission_answer(

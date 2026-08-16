@@ -4,7 +4,9 @@ use std::collections::BTreeMap;
 use std::io::{Read, Write};
 use std::net::TcpListener;
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
+use muniment_core::attach::linux::ThreadListService;
 use muniment_core::attach::{RuntimeActivityRegistry, SignedWorkspaceApproval};
 use muniment_core::auth::{
     EntitlementSnapshotTracker, KeyringNativeCredentialStore, NativeCredentialStore,
@@ -18,13 +20,16 @@ use muniment_core::run_start::{
     prepare_desktop_run, RunStartBoundaries, RunStartError, RunStartRequest,
 };
 use muniment_core::session_thread::SessionThread;
-use muniment_runtime::{open_profile_storage, RuntimeAttachBoundaries};
+use muniment_runtime::{open_profile_storage, RuntimeAttachBoundaries, RuntimeAttachState};
 
 mod common;
-use common::{credentials, TemporaryProfile};
+use common::{credentials, stage_pi_stub, TemporaryProfile};
+
+static ENVIRONMENT: Mutex<()> = Mutex::new(());
 
 #[test]
 fn runtime_boundaries_prepare_a_desktop_run() {
+    let _environment = ENVIRONMENT.lock().unwrap();
     muniment_core::chat_prompt::use_mock_keyring_for_tests();
     let store = KeyringNativeCredentialStore::new();
     store.clear_session().unwrap();
@@ -131,6 +136,68 @@ fn runtime_boundaries_prepare_a_desktop_run() {
     responses.join().unwrap();
     store.clear_session().unwrap();
     std::env::remove_var("MUNIMENT_API_BASE_URL");
+}
+
+#[test]
+fn runtime_service_broadcasts_a_driven_prompts_chat_events() {
+    let _environment = ENVIRONMENT.lock().unwrap();
+    muniment_core::chat_prompt::use_mock_keyring_for_tests();
+    let store = KeyringNativeCredentialStore::new();
+    store.clear_session().unwrap();
+    store.save_credentials(&credentials()).unwrap();
+
+    let server = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+    let base_url = format!("http://{}", server.local_addr().unwrap());
+    std::env::set_var("MUNIMENT_API_BASE_URL", base_url);
+    let responses = std::thread::spawn(move || {
+        for body in [session_body(), grant_body()] {
+            let (mut stream, _) = server.accept().unwrap();
+            read_request(&mut stream);
+            write!(
+                stream,
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            )
+            .unwrap();
+        }
+    });
+
+    let profile = TemporaryProfile::new("run-chat-events", true);
+    stage_pi_stub(&profile.root);
+    let state = RuntimeAttachState::open(&profile.profile, &profile.config).unwrap();
+    let boundaries = state.boundaries();
+    let mut subscription_service = state.attach_service().unwrap();
+    let events = subscription_service.subscribe_chat_events().unwrap();
+    let mut second_subscription_service = state.attach_service().unwrap();
+    let second_events = second_subscription_service.subscribe_chat_events().unwrap();
+    let (result, launch) = prepare_desktop_run(
+        &boundaries,
+        RunStartRequest {
+            prompt: "hello".into(),
+            files: Vec::new(),
+            workspace: Some("workspace-a".into()),
+            provenance: None,
+            thread_id: None,
+        },
+    )
+    .unwrap();
+
+    boundaries.launch(launch);
+
+    let event = events.recv_timeout(Duration::from_secs(10)).unwrap();
+    assert_eq!(event.run_id, result.run_id);
+    let second_event = second_events.recv_timeout(Duration::from_secs(10)).unwrap();
+    assert_eq!(second_event.run_id, result.run_id);
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while boundaries.active_run_exists() && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert!(!boundaries.active_run_exists());
+
+    responses.join().unwrap();
+    store.clear_session().unwrap();
+    std::env::remove_var("MUNIMENT_API_BASE_URL");
+    std::env::remove_var("MUNIMENT_PI_ROOT");
 }
 
 fn session_body() -> String {

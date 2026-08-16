@@ -495,3 +495,33 @@ outside this tranche. The Linux cutover follows conversion of the whole chat
 surface. The desktop opens the profile journal and CAS when it creates
 `ChatState`, so an earlier listener cutover would create two owners for one
 profile.
+
+## Amendment – 2026-08-15: fourth desktop client operation tranche
+
+The fourth desktop-only tranche contains the single `run.chat_events` wire
+operation. It requires no idempotency key. A companion session receives
+`unauthorized` for this operation.
+
+The desktop opens a second desktop client connection for this subscription.
+The session serving that connection answers no other operation. The existing
+request path reads exactly one envelope and rejects an event in place of its
+response. Its holder also locks the socket for each request, so a blocking
+event read would stall every desktop command. Each accepted connection already
+runs on its own thread with its own service, so the second connection needs no
+new admission rule.
+
+The runtime keeps one chat-event broadcast per profile. Every run the service
+drives feeds that broadcast. A subscriber receives only the events delivered
+after it subscribes.
+
+Each subscription queue holds at most 256 events under
+`CHAT_EVENT_SUBSCRIBER_QUEUE_CAPACITY`. Delivery never blocks. If delivery
+finds the queue at that bound, the runtime drops the subscription. A run never
+stalls on a subscriber.
+
+Each event carries the same `ChatEvent` value that the desktop renders, with no
+redaction. The desktop client peer check supplies the authority to receive that
+value.
+
+The five run commands `chat_submit`, `chat_resume`, `chat_queue`, `chat_cancel`,
+and `chat_answer_permission` remain outside this tranche.

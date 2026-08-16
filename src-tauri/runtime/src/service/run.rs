@@ -276,7 +276,7 @@ pub fn accept_prompt(
 /// Drives an accepted prompt to completion.
 pub fn drive_prompt(launch: PromptLaunch) {
     coordinate(
-        RuntimeChatEventSink::new(
+        RuntimeChatEventSink::with_subscriber(
             &launch.profile_directory,
             launch.subscriber,
             launch.memory_runtime.clone(),
@@ -441,8 +441,12 @@ pub fn resume_run(
     )?;
     let (attempt, result) = std::sync::mpsc::channel();
     drive_resume(ResumeLaunch {
-        sink: RuntimeChatEventSink::new(profile_directory, subscriber, memory_runtime.clone())
-            .with_pi_artifact(pi_artifact.unwrap_or(PI_ARTIFACT)),
+        sink: RuntimeChatEventSink::with_subscriber(
+            profile_directory,
+            subscriber,
+            memory_runtime.clone(),
+        )
+        .with_pi_artifact(pi_artifact.unwrap_or(PI_ARTIFACT)),
         storage,
         runtime,
         runtime_activity: runtime_activity.clone(),
