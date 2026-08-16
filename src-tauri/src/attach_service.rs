@@ -1,6 +1,8 @@
 #[cfg(target_os = "linux")]
 use muniment_core::attach::ApprovalRequest;
 #[cfg(target_os = "linux")]
+use muniment_core::attach::ClientError;
+#[cfg(target_os = "linux")]
 use muniment_core::attach::{
     answer_presented_approval, handshake_desktop_client_stream, interruptible_connect_with_state,
     serve_approval_presenter_at, serve_desktop_client_at, ApprovalPresenterStopHandle,
@@ -725,9 +727,7 @@ pub fn attach_companions(
                 companions: Vec<AuthorizedCompanion>,
             }
 
-            let response = client
-                .list_companions()
-                .map_err(|_| ProtocolError::persistence_failed())?;
+            let response = client.list_companions().map_err(companion_client_error)?;
             serde_json::from_value::<CompanionList>(response)
                 .map(|response| response.companions)
                 .map_err(|_| ProtocolError::persistence_failed())
@@ -775,7 +775,7 @@ pub fn attach_revoke_companion(
         DesktopClientSession::Connected(client) => client
             .revoke_companion(&client_identity)
             .map(|_| ())
-            .map_err(|_| ProtocolError::persistence_failed()),
+            .map_err(companion_client_error),
         DesktopClientSession::Disconnected => Err(ProtocolError::persistence_failed()),
     };
 
@@ -783,6 +783,14 @@ pub fn attach_revoke_companion(
     {
         let _ = (state, client_identity);
         Err(ProtocolError::unsupported_operation())
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn companion_client_error(error: ClientError) -> ProtocolError {
+    match error {
+        ClientError::DesktopBusy => ProtocolError::desktop_busy(),
+        _ => ProtocolError::persistence_failed(),
     }
 }
 
@@ -1308,8 +1316,8 @@ mod tests {
     use super::*;
     use crate::test_support::{append_test_event, FakeRunStartBoundaries};
     use muniment_core::attach::{
-        decode_frame, encode_frame, Authorization, ErrorCode, Id, Protocol, Response, Success,
-        Welcome,
+        decode_frame, encode_frame, Authorization, ErrorCode, ErrorMessage, Id, Protocol, Response,
+        Success, Welcome,
     };
     use muniment_core::journal::reducer::reduce;
     use muniment_core::journal::RunJournal;
@@ -2198,6 +2206,8 @@ mod tests {
         let endpoint =
             std::env::temp_dir().join(format!("muniment-companion-client-{}.sock", Uuid::now_v7()));
         let listener = UnixListener::bind(&endpoint).unwrap();
+        let (request_tx, request_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
         let server = std::thread::spawn(move || {
             let (mut stream, _) = listener.accept().unwrap();
             assert_eq!(read_value(&mut stream)["client"]["kind"], "desktop-client");
@@ -2219,7 +2229,7 @@ mod tests {
                 )
                 .unwrap();
 
-            for body in [
+            for (index, body) in [
                 json!({"companions": [{
                     "identity": "companion-1",
                     "claimed_kind": "cli",
@@ -2228,8 +2238,15 @@ mod tests {
                 }]}),
                 json!({}),
                 json!({"companions": [{"identity": "partial"}]}),
-            ] {
+            ]
+            .into_iter()
+            .enumerate()
+            {
                 let request = read_value(&mut stream);
+                if index == 0 {
+                    request_tx.send(()).unwrap();
+                    release_rx.recv().unwrap();
+                }
                 let request_id = Id::new(request["request_id"].as_str().unwrap()).unwrap();
                 stream
                     .write_all(
@@ -2271,15 +2288,22 @@ mod tests {
         let app = tauri::test::mock_app();
         app.manage(state);
 
-        assert_eq!(
-            attach_companions(app.state()).unwrap(),
-            vec![AuthorizedCompanion {
-                identity: "companion-1".into(),
-                claimed_kind: "cli".into(),
-                claimed_version: "1.2.3".into(),
-                approved_at: Some("2026-08-04T12:00:00Z".into()),
-            }]
-        );
+        let DesktopClientSession::Connected(client) =
+            app.state::<AttachCompanionState>().desktop_client_session()
+        else {
+            panic!("desktop client must be connected");
+        };
+        let slow_call = std::thread::spawn(move || client.list_companions());
+        request_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        let list_busy = attach_companions(app.state()).unwrap_err();
+        assert_eq!(list_busy.code(), ErrorCode::DesktopBusy);
+        assert_eq!(list_busy.message(), ErrorMessage::DesktopBusy);
+        let revoke_busy = attach_revoke_companion(app.state(), "companion-1".into()).unwrap_err();
+        assert_eq!(revoke_busy.code(), ErrorCode::DesktopBusy);
+        assert_eq!(revoke_busy.message(), ErrorMessage::DesktopBusy);
+        release_tx.send(()).unwrap();
+        assert!(slow_call.join().unwrap().is_ok());
+
         attach_revoke_companion(app.state(), "companion-1".into()).unwrap();
         assert_eq!(
             attach_companions(app.state()).unwrap_err().code(),
@@ -2294,15 +2318,15 @@ mod tests {
         disconnected.set_desktop_client_for_test(false, |_, _| std::thread::spawn(|| {}));
         let app = tauri::test::mock_app();
         app.manage(disconnected);
+        let list_unreachable = attach_companions(app.state()).unwrap_err();
+        assert_eq!(list_unreachable.code(), ErrorCode::PersistenceFailed);
+        assert_eq!(list_unreachable.message(), ErrorMessage::PersistenceFailed);
+        let revoke_unreachable =
+            attach_revoke_companion(app.state(), "companion-1".into()).unwrap_err();
+        assert_eq!(revoke_unreachable.code(), ErrorCode::PersistenceFailed);
         assert_eq!(
-            attach_companions(app.state()).unwrap_err().code(),
-            ErrorCode::PersistenceFailed
-        );
-        assert_eq!(
-            attach_revoke_companion(app.state(), "companion-1".into())
-                .unwrap_err()
-                .code(),
-            ErrorCode::PersistenceFailed
+            revoke_unreachable.message(),
+            ErrorMessage::PersistenceFailed
         );
         app.state::<AttachCompanionState>()
             .stop_desktop_client_for_test();
