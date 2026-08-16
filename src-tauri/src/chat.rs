@@ -59,7 +59,11 @@ use tauri::{Emitter, Manager};
 #[cfg(test)]
 use uuid::Uuid;
 
+#[cfg(target_os = "linux")]
+use crate::attach_service::DesktopClientSession;
 use crate::auth;
+#[cfg(target_os = "linux")]
+use muniment_core::attach::ChatPermissionAnswer as AttachChatPermissionAnswer;
 #[cfg(test)]
 use muniment_core::session_thread::OfferedThread;
 use muniment_core::session_thread::SessionThread;
@@ -507,6 +511,30 @@ fn chat_resume_error_message(error: ChatResumeError) -> String {
     }
 }
 
+#[cfg(target_os = "linux")]
+fn attach_permission_answer(answer: ChatPermissionAnswer) -> AttachChatPermissionAnswer {
+    match answer {
+        ChatPermissionAnswer::Select(value) => AttachChatPermissionAnswer::Select(value),
+        ChatPermissionAnswer::Confirm(value) => AttachChatPermissionAnswer::Confirm(value),
+        ChatPermissionAnswer::Input(value) => AttachChatPermissionAnswer::Input(value),
+        ChatPermissionAnswer::Editor(value) => AttachChatPermissionAnswer::Editor(value),
+        ChatPermissionAnswer::Cancelled => AttachChatPermissionAnswer::Cancelled,
+        ChatPermissionAnswer::CodeDiff {
+            gate_id,
+            effect_id,
+            code_diff_id,
+            diff_sha256,
+            write_plan_sha256,
+        } => AttachChatPermissionAnswer::CodeDiff {
+            gate_id,
+            effect_id,
+            code_diff_id,
+            diff_sha256,
+            write_plan_sha256,
+        },
+    }
+}
+
 #[tauri::command]
 pub async fn chat_submit(
     app: tauri::AppHandle,
@@ -515,6 +543,46 @@ pub async fn chat_submit(
     prompt: String,
     files: Option<Vec<SelectedFile>>,
 ) -> Result<SubmitResult, String> {
+    #[cfg(target_os = "linux")]
+    match app
+        .state::<crate::attach_service::AttachCompanionState>()
+        .desktop_client_session()
+    {
+        DesktopClientSession::NoSupervisor => {}
+        DesktopClientSession::Connected(client) => {
+            let tokens = auth::fresh_tokens_async(&auth_state, &app).await?;
+            let thread_id = state.session_thread.current(tokens.subject.as_deref());
+            let files = files.unwrap_or_default();
+            let file_paths = files
+                .iter()
+                .map(|file| {
+                    file.path
+                        .to_str()
+                        .map(str::to_owned)
+                        .ok_or_else(attachment_error)
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            let accepted = client
+                .run_submit(&prompt, &file_paths, thread_id.as_deref())
+                .map_err(auth::desktop_client_error)?;
+            return Ok(SubmitResult {
+                run_id: accepted.run_id,
+                attachments: accepted
+                    .attachments
+                    .into_iter()
+                    .map(|attachment| ChatAttachment {
+                        display_name: attachment.display_name,
+                        byte_length: attachment.byte_length,
+                        media_type: attachment.media_type,
+                    })
+                    .collect(),
+                committed_seq: accepted.committed_seq,
+                accepted_at: accepted.accepted_at,
+            });
+        }
+        DesktopClientSession::Disconnected => return Err(auth::background_service_error()),
+    }
+
     // Preserve the command argument names while the channel-neutral boundary
     // resolves the same managed values from the owned app handle.
     let _ = (&auth_state, &state);
@@ -545,6 +613,26 @@ pub async fn chat_resume(
     state: tauri::State<'_, ChatState>,
     run_id: String,
 ) -> Result<SubmitResult, String> {
+    #[cfg(target_os = "linux")]
+    match app
+        .state::<crate::attach_service::AttachCompanionState>()
+        .desktop_client_session()
+    {
+        DesktopClientSession::NoSupervisor => {}
+        DesktopClientSession::Connected(client) => {
+            let accepted = client
+                .run_resume(&run_id)
+                .map_err(auth::desktop_client_error)?;
+            return Ok(SubmitResult {
+                run_id: accepted.run_id,
+                attachments: Vec::new(),
+                committed_seq: accepted.committed_seq,
+                accepted_at: accepted.accepted_at,
+            });
+        }
+        DesktopClientSession::Disconnected => return Err(auth::background_service_error()),
+    }
+
     let tokens = auth::fresh_tokens_async(&auth_state, &app).await?;
     let session_root = state_session_root(&app)?;
     let (resume, thread_id) = {
@@ -819,11 +907,29 @@ pub(crate) fn prepare_new_run(
 
 #[tauri::command]
 pub async fn chat_queue(
+    app: tauri::AppHandle,
     state: tauri::State<'_, ChatState>,
     run_id: String,
     delivery: ChatDelivery,
     message: String,
 ) -> Result<(), String> {
+    #[cfg(target_os = "linux")]
+    match app
+        .state::<crate::attach_service::AttachCompanionState>()
+        .desktop_client_session()
+    {
+        DesktopClientSession::NoSupervisor => {}
+        DesktopClientSession::Connected(client) => {
+            match delivery {
+                ChatDelivery::Steer => client.run_steer(&run_id, &message),
+                ChatDelivery::FollowUp => client.run_follow_up(&run_id, &message),
+            }
+            .map_err(auth::desktop_client_error)?;
+            return Ok(());
+        }
+        DesktopClientSession::Disconnected => return Err(auth::background_service_error()),
+    }
+
     queue_message(
         &state.active,
         ChatQueueRequest {
@@ -836,17 +942,52 @@ pub async fn chat_queue(
 }
 
 #[tauri::command]
-pub async fn chat_cancel(state: tauri::State<'_, ChatState>, run_id: String) -> Result<(), String> {
+pub async fn chat_cancel(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, ChatState>,
+    run_id: String,
+) -> Result<(), String> {
+    #[cfg(target_os = "linux")]
+    match app
+        .state::<crate::attach_service::AttachCompanionState>()
+        .desktop_client_session()
+    {
+        DesktopClientSession::NoSupervisor => {}
+        DesktopClientSession::Connected(client) => {
+            client
+                .run_cancel(&run_id)
+                .map_err(auth::desktop_client_error)?;
+            return Ok(());
+        }
+        DesktopClientSession::Disconnected => return Err(auth::background_service_error()),
+    }
+
     cancel_active_run(&state.active, &run_id, None)
 }
 
 #[tauri::command]
 pub async fn chat_answer_permission(
+    app: tauri::AppHandle,
     state: tauri::State<'_, ChatState>,
     run_id: String,
     gate_id: String,
     answer: ChatPermissionAnswer,
 ) -> Result<(), String> {
+    #[cfg(target_os = "linux")]
+    match app
+        .state::<crate::attach_service::AttachCompanionState>()
+        .desktop_client_session()
+    {
+        DesktopClientSession::NoSupervisor => {}
+        DesktopClientSession::Connected(client) => {
+            client
+                .run_permission_answer(&run_id, &gate_id, attach_permission_answer(answer))
+                .map_err(auth::desktop_client_error)?;
+            return Ok(());
+        }
+        DesktopClientSession::Disconnected => return Err(auth::background_service_error()),
+    }
+
     queue_permission_answer(&state.active, run_id, gate_id, answer)
 }
 
