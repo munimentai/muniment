@@ -908,6 +908,10 @@ impl<R: tauri::Runtime> TauriDesktopAttachService<R>
         workspace_contexts: WorkspaceContexts,
         client_credentials: Arc<Mutex<HashMap<String, ClientCredential>>>,
     ) -> Result<Self, ProtocolError> {
+        let drain_state = app
+            .state::<muniment_core::attach::DrainState>()
+            .inner()
+            .clone();
         let config = app
             .path()
             .app_config_dir()
@@ -939,6 +943,7 @@ impl<R: tauri::Runtime> TauriDesktopAttachService<R>
             client_credentials,
             credential_path: Some(credential_path),
             client_identity: None,
+            drain_state,
         })
     }
 }
@@ -2838,6 +2843,7 @@ mod tests {
                     client_credentials: credentials,
                     credential_path: None,
                     client_identity: None,
+                    drain_state: muniment_core::attach::DrainState::new(),
                 };
                 run_authenticated_session_with_service_approvals_and_registry(
                     server_stream,
@@ -3008,6 +3014,7 @@ mod tests {
                     client_credentials: credentials,
                     credential_path: None,
                     client_identity: None,
+                    drain_state: muniment_core::attach::DrainState::new(),
                 };
                 let result = run_authenticated_session_with_service_and_approvals(
                     server_stream,

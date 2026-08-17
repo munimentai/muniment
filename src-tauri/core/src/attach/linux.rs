@@ -2417,6 +2417,18 @@ where
             );
             return Err(AttachSessionError::Authorization);
         }
+        if service
+            .drain_state()
+            .is_some_and(|drain| drain.admit(request.operation).is_err())
+        {
+            write_request_error(
+                stream,
+                Some(request.request_id),
+                ProtocolError::runtime_draining(),
+                deadline,
+            );
+            continue;
+        }
         if matches!(
             request.operation,
             Operation::ThreadRename

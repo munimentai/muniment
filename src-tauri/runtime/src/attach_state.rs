@@ -5,7 +5,7 @@ use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
 
 use muniment_core::attach::{
-    ApprovalCoordinator, CompanionRegistry, DesktopAttachService, ProtocolError,
+    ApprovalCoordinator, CompanionRegistry, DesktopAttachService, DrainState, ProtocolError,
     RuntimeActivityRegistry, SignedWorkspaceApproval,
 };
 use muniment_core::auth::EntitlementSnapshotTracker;
@@ -29,6 +29,7 @@ pub struct RuntimeAttachState {
     runtime: Arc<Mutex<Option<PiRuntime>>>,
     memory_runtime: Arc<ApplicationMemoryRuntime>,
     runtime_activity: RuntimeActivityRegistry,
+    drain_state: DrainState,
     entitlement_tracker: Arc<EntitlementSnapshotTracker>,
     approval: SignedWorkspaceApproval,
     session_thread: Arc<SessionThread>,
@@ -61,6 +62,7 @@ impl RuntimeAttachState {
             active: Arc::new(Mutex::new(None)),
             runtime: Arc::new(Mutex::new(None)),
             runtime_activity: RuntimeActivityRegistry::new(),
+            drain_state: DrainState::new(),
             entitlement_tracker: Arc::new(EntitlementSnapshotTracker::new()),
             approval: SignedWorkspaceApproval::default(),
             session_thread: Arc::new(SessionThread::default()),
@@ -94,12 +96,14 @@ impl RuntimeAttachState {
     pub fn attach_service(
         &self,
     ) -> Result<DesktopAttachService<RuntimeAttachBoundaries>, ProtocolError> {
-        compose_attach_service(
+        let mut service = compose_attach_service(
             self.boundaries(),
             &self.companion_registry,
             &self.profile_directory,
             &self.config_directory,
-        )
+        )?;
+        service.drain_state = self.drain_state.clone();
+        Ok(service)
     }
 
     /// Builds listener inputs that share the runtime attach state.
