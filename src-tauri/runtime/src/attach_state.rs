@@ -125,4 +125,15 @@ impl RuntimeAttachState {
     pub fn signed_workspace_approval(&self) -> SignedWorkspaceApproval {
         self.approval.clone()
     }
+
+    /// Applies the retention choice currently recorded for this profile.
+    pub fn apply_recorded_retention(&self) -> Result<(), String> {
+        muniment_core::retention_record::apply_recorded_retention(
+            &self.config_directory,
+            |max_age_seconds| {
+                crate::service::apply_retention(Arc::clone(&self.storage), max_age_seconds)
+            },
+        )
+        .map(|_| ())
+    }
 }

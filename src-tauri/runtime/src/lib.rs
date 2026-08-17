@@ -16,7 +16,8 @@ mod sink;
 
 #[cfg(target_os = "linux")]
 pub use activation::{
-    run_runtime_activation, run_runtime_activation_with_desktop_executable, RuntimeActivationError,
+    run_runtime_activation, run_runtime_activation_with_desktop_executable,
+    run_runtime_activation_with_retention_trigger, RuntimeActivationError,
 };
 #[cfg(target_os = "linux")]
 pub use attach_boundaries::RuntimeAttachBoundaries;
