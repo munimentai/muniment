@@ -39,6 +39,7 @@ use muniment_core::chat_resume::{
 use muniment_core::chat_view::{chat_attachments, ChatAttachment, SelectedFile};
 use muniment_core::journal::reconciliation::reconcile_interrupted_runs;
 use muniment_core::journal::reducer::{project_chat, ChatProjector};
+use muniment_core::journal::retention::{apply_retention_now_with, RetentionError};
 #[cfg(target_os = "linux")]
 use muniment_core::journal::thread_mutation::create_thread_now;
 use muniment_core::journal::{EventEnvelope, Provenance};
@@ -730,11 +731,14 @@ impl ChatState {
         runtime_activity: RuntimeActivityRegistry,
     ) -> Result<Self, Box<dyn std::error::Error>> {
         let directory = app.path().app_data_dir()?;
+        let config_directory = app.path().app_config_dir()?;
         let profile = ChatProfile::new(directory);
         let (mut journal, cas) = profile.open_storage()?;
         reconcile_interrupted_runs(&mut journal, &desktop_provenance(None));
+        let storage = Arc::new(Mutex::new(ChatStorage { journal, cas }));
+        start_retention_schedule(config_directory, Arc::clone(&storage));
         Ok(Self {
-            storage: Arc::new(Mutex::new(ChatStorage { journal, cas })),
+            storage,
             active: Arc::new(Mutex::new(None)),
             runtime: Arc::new(Mutex::new(None)),
             session_thread: SessionThread::default(),
@@ -762,12 +766,16 @@ impl ChatState {
             return Ok(());
         }
         let directory = app.path().app_data_dir()?;
+        let config_directory = app.path().app_config_dir()?;
         let profile = ChatProfile::new(directory);
         let (mut journal, cas) = profile.open_storage()?;
         reconcile_interrupted_runs(&mut journal, &desktop_provenance(None));
+        let storage = Arc::new(Mutex::new(ChatStorage { journal, cas }));
         self.storage
-            .set(Arc::new(Mutex::new(ChatStorage { journal, cas })))
-            .map_err(|_| "Chat storage is already open.".into())
+            .set(Arc::clone(&storage))
+            .map_err(|_| "Chat storage is already open.")?;
+        start_retention_schedule(config_directory, storage);
+        Ok(())
     }
 
     #[cfg(target_os = "linux")]
@@ -781,6 +789,31 @@ impl ChatState {
     pub(crate) fn storage(&self) -> Result<&SharedStorage, String> {
         Ok(&self.storage)
     }
+}
+
+fn start_retention_schedule(config_directory: PathBuf, storage: SharedStorage) {
+    std::thread::spawn(move || {
+        muniment_core::retention_record::run_recorded_retention_checks(
+            &config_directory,
+            |interval| {
+                std::thread::sleep(interval);
+                true
+            },
+            |max_age_seconds| {
+                let mut storage = storage.lock().map_err(|_| ())?;
+                let ChatStorage { journal, cas } = &mut *storage;
+                apply_retention_now_with(journal, Some(cas), max_age_seconds, |deleted_run| {
+                    muniment_core::chat_prompt::delete_prompt(
+                        &deleted_run.run_id,
+                        deleted_run.subject.as_deref(),
+                    )
+                    .map_err(|_| RetentionError::BeforeDelete)
+                })
+                .map(|_| ())
+                .map_err(|_| ())
+            },
+        );
+    });
 }
 
 #[cfg(test)]
