@@ -311,12 +311,47 @@ fn unix_time() -> u64 {
 
 /// Signed-in subject/expiry from the stored tokens; no network.
 #[tauri::command]
+#[cfg(target_os = "linux")]
+pub async fn auth_status(
+    state: tauri::State<'_, AuthState>,
+    attach_state: tauri::State<'_, AttachCompanionState>,
+) -> Result<AuthStatus, String> {
+    let store = state.native_store.clone();
+    status_for_session(
+        attach_state.desktop_client_session(),
+        move || auth::native_status(store.as_ref(), unix_time()).map_err(|error| error.to_string()),
+        |client| {
+            serde_json::from_value(client.session_status().map_err(desktop_client_error)?)
+                .map_err(|error| error.to_string())
+        },
+    )
+    .await
+}
+
+#[tauri::command]
+#[cfg(not(target_os = "linux"))]
 pub async fn auth_status(state: tauri::State<'_, AuthState>) -> Result<AuthStatus, String> {
     let store = state.native_store.clone();
     tauri::async_runtime::spawn_blocking(move || auth::native_status(store.as_ref(), unix_time()))
         .await
         .map_err(|e| format!("status task failed: {e}"))?
         .map_err(|e| e.to_string())
+}
+
+#[cfg(target_os = "linux")]
+async fn status_for_session(
+    session: DesktopClientSession,
+    local_step: impl FnOnce() -> Result<AuthStatus, String> + Send + 'static,
+    connected_step: impl FnOnce(DesktopClientHolder) -> Result<AuthStatus, String> + Send + 'static,
+) -> Result<AuthStatus, String> {
+    let step: Box<dyn FnOnce() -> Result<AuthStatus, String> + Send> = match session {
+        DesktopClientSession::NoSupervisor => Box::new(local_step),
+        DesktopClientSession::Connected(client) => Box::new(move || connected_step(client)),
+        DesktopClientSession::Disconnected => return Err(background_service_error()),
+    };
+    tauri::async_runtime::spawn_blocking(step)
+        .await
+        .map_err(|error| format!("status task failed: {error}"))?
 }
 
 /// Fetch the authoritative native session and expose only its typed,
@@ -741,6 +776,52 @@ mod tests {
         assert!(status.signed_in);
         assert_eq!(status.subject.as_deref(), Some("account-1"));
         assert_eq!(status.expires_at, Some(42));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn status_handles_each_desktop_client_session() {
+        use std::sync::atomic::AtomicUsize;
+
+        fn steps() -> (
+            Arc<AtomicUsize>,
+            impl FnOnce() -> Result<AuthStatus, String> + Send + 'static,
+            impl FnOnce(DesktopClientHolder) -> Result<AuthStatus, String> + Send + 'static,
+        ) {
+            let calls = Arc::new(AtomicUsize::new(0));
+            let local_calls = calls.clone();
+            let connected_calls = calls.clone();
+            (
+                calls,
+                move || {
+                    local_calls.fetch_add(1, Ordering::SeqCst);
+                    Ok(signed_out_status())
+                },
+                move |_| {
+                    connected_calls.fetch_add(1, Ordering::SeqCst);
+                    Ok(signed_out_status())
+                },
+            )
+        }
+
+        for session in [
+            DesktopClientSession::NoSupervisor,
+            DesktopClientSession::Connected(DesktopClientHolder::new()),
+        ] {
+            let (calls, local, connected) = steps();
+            tauri::async_runtime::block_on(status_for_session(session, local, connected)).unwrap();
+            assert_eq!(calls.load(Ordering::SeqCst), 1);
+        }
+
+        let (calls, local, connected) = steps();
+        let error = tauri::async_runtime::block_on(status_for_session(
+            DesktopClientSession::Disconnected,
+            local,
+            connected,
+        ))
+        .unwrap_err();
+        assert_eq!(error, "Muniment cannot reach its background service.");
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
     }
 
     #[cfg(target_os = "linux")]

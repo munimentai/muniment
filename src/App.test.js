@@ -411,6 +411,59 @@ describe('pairing decisions', () => {
 })
 
 describe('workspace composer entry', () => {
+  it('shows the background service notice after the boot status read fails and reads status after recovery', async () => {
+    let statusReads = 0
+    invoke.mockImplementation(async (command) => {
+      if (command === 'auth_status') {
+        statusReads += 1
+        if (statusReads === 1) throw new Error('Muniment cannot reach its background service.')
+        return { signed_in: true, subject: 'token-subject' }
+      }
+      if (command === 'attach_listener_status') return { connected: false, supervisor_running: true }
+      if (command === 'chat_thread_open') return []
+      if (command === 'auth_entitlement_snapshot') return snapshot()
+      if (command === 'chat_thread_summaries') return { summaries: [], nextCursor: null }
+      throw new Error(`unexpected command: ${command}`)
+    })
+    render(App)
+
+    expect(await screen.findByText('Muniment cannot reach its background service.')).toBeInTheDocument()
+    expect(screen.queryByText('Sign in to continue to your workspace.')).not.toBeInTheDocument()
+
+    desktopClientListener({ payload: { connected: true, supervisor_running: true } })
+    expect(await screen.findByRole('textbox', { name: 'Message' })).toBeInTheDocument()
+    expect(statusReads).toBe(2)
+  })
+
+  it('keeps the recovered status when the failed boot read finishes late', async () => {
+    const bootStatus = deferred()
+    const listenerStatus = deferred()
+    let statusReads = 0
+    invoke.mockImplementation(async (command) => {
+      if (command === 'auth_status') {
+        statusReads += 1
+        if (statusReads === 1) return bootStatus.promise
+        return { signed_in: true, subject: 'token-subject' }
+      }
+      if (command === 'attach_listener_status') return listenerStatus.promise
+      if (command === 'chat_thread_open') return []
+      if (command === 'auth_entitlement_snapshot') return snapshot()
+      if (command === 'chat_thread_summaries') return { summaries: [], nextCursor: null }
+      throw new Error(`unexpected command: ${command}`)
+    })
+    render(App)
+    await waitFor(() => expect(desktopClientListener).toBeTypeOf('function'))
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('attach_listener_status'))
+
+    desktopClientListener({ payload: { connected: true, supervisor_running: true } })
+    expect(await screen.findByRole('textbox', { name: 'Message' })).toBeInTheDocument()
+    bootStatus.reject(new Error('Muniment cannot reach its background service.'))
+    listenerStatus.resolve({ connected: false, supervisor_running: true })
+
+    await waitFor(() => expect(statusReads).toBe(2))
+    expect(screen.getByRole('textbox', { name: 'Message' })).toBeInTheDocument()
+  })
+
   it('shows the background service notice only while a desktop client has no connection', async () => {
     invoke.mockImplementation(async (command) => {
       if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
