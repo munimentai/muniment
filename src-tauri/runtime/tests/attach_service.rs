@@ -14,7 +14,7 @@ use muniment_core::pi_execution::PiRuntime;
 use muniment_core::session_thread::SessionThread;
 use muniment_runtime::{
     compose_attach_service, open_companion_registry, open_profile_storage, revoke_companion,
-    RuntimeAttachBoundaries,
+    RuntimeAttachBoundaries, RuntimeAttachState,
 };
 
 mod common;
@@ -65,6 +65,18 @@ fn ensure_home_reads_a_choice_recorded_after_composition() {
         Some(profile.profile.join(COMPANION_CREDENTIAL_FILE_NAME))
     );
     assert!(service.client_identity.is_none());
+}
+
+#[test]
+fn runtime_attach_services_share_the_drain_state() {
+    let profile = TemporaryProfile::new("attach-service-drain", false);
+    let state = RuntimeAttachState::open(&profile.profile, &profile.config).unwrap();
+    let first = state.attach_service().unwrap();
+    let second = state.attach_service().unwrap();
+
+    assert!(!first.drain_state.is_set());
+    first.drain_state.set();
+    assert!(second.drain_state.is_set());
 }
 
 #[test]
