@@ -124,11 +124,12 @@ impl FakeRunStartBoundaries {
 impl RunAttachBoundaries for FakeRunStartBoundaries {
     #[cfg(target_os = "linux")]
     fn select_thread(&self, thread_id: &str) -> Result<bool, ProtocolError> {
+        let mut journal = self
+            .journal
+            .lock()
+            .map_err(|_| ProtocolError::persistence_failed())?;
         muniment_core::thread_ownership::subject_owns_first_run(
-            &mut self
-                .journal
-                .lock()
-                .map_err(|_| ProtocolError::persistence_failed())?,
+            &mut journal,
             thread_id,
             Some("owner"),
         )
