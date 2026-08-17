@@ -40,11 +40,11 @@ fn boundaries(profile: &TemporaryProfile) -> RuntimeAttachBoundaries {
 }
 
 #[test]
-fn recorded_home_wins_when_the_runtime_composes_the_service() {
-    let profile = TemporaryProfile::new("attach-service-home", true);
+fn ensure_home_reads_a_choice_recorded_after_composition() {
+    let profile = TemporaryProfile::new("attach-service-home", false);
     let registry = open_companion_registry(&profile.profile).unwrap();
 
-    let service = compose_attach_service(
+    let mut service = compose_attach_service(
         boundaries(&profile),
         &registry,
         &profile.profile,
@@ -52,7 +52,13 @@ fn recorded_home_wins_when_the_runtime_composes_the_service() {
     )
     .unwrap();
 
-    assert_eq!(service.home, profile.root.join("home"));
+    let confirmed_home = profile.root.join("confirmed-home");
+    muniment_core::home::confirm_home(&profile.config, &confirmed_home).unwrap();
+    service.ensure_home().unwrap();
+
+    for directory in ["memory", "agents", "projects", "sessions"] {
+        assert!(confirmed_home.join(directory).join("README.md").is_file());
+    }
     assert!(profile.profile.join("attach-idempotency.sqlite3").is_file());
     assert_eq!(
         service.credential_path,
