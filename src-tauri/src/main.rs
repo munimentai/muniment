@@ -13,7 +13,7 @@ mod onboarding_import;
 mod test_support;
 mod voice_capture;
 
-use muniment_core::attach::{PreparedHandoffSlot, RuntimeActivityRegistry};
+use muniment_core::attach::{DrainState, PreparedHandoffSlot, RuntimeActivityRegistry};
 use std::sync::{Arc, Mutex};
 use tauri::Manager;
 
@@ -26,6 +26,7 @@ fn main() {
     let runtime_activity = RuntimeActivityRegistry::new();
     let builder = tauri::Builder::default()
         .manage(runtime_activity.clone())
+        .manage(DrainState::new())
         .manage(Mutex::new(PreparedHandoffSlot::new()));
     #[cfg(feature = "e2e-webdriver")]
     let builder = builder.plugin(tauri_plugin_wdio_webdriver::init());

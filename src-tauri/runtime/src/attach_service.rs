@@ -32,5 +32,6 @@ pub fn compose_attach_service(
         client_credentials: companion_registry.credentials(),
         credential_path: Some(profile_directory.join(COMPANION_CREDENTIAL_FILE_NAME)),
         client_identity: None,
+        drain_state: muniment_core::attach::DrainState::new(),
     })
 }
