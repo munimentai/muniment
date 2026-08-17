@@ -11,6 +11,7 @@ mod model_install;
 mod onboarding_import;
 #[cfg(test)]
 mod test_support;
+mod thread_retention;
 mod voice_capture;
 
 use muniment_core::attach::{DrainState, PreparedHandoffSlot, RuntimeActivityRegistry};
@@ -86,6 +87,8 @@ fn main() {
             chat_threads::chat_rename_thread,
             chat_threads::chat_delete_thread,
             chat_threads::chat_new_thread,
+            thread_retention::thread_retention_choice,
+            thread_retention::record_thread_retention_choice,
             attach_service::attach_pairing_decide,
             attach_service::attach_companions,
             attach_service::attach_listener_status,

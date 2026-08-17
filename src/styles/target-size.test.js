@@ -12,6 +12,7 @@ const selectors = [
   '.provenance',
   '.companion-revoke',
   '.close-access',
+  '.retention-options input',
 ]
 
 const ruleBody = (source, selector) => [
