@@ -1,7 +1,9 @@
 #[cfg(target_os = "linux")]
 use muniment_core::attach::linux::{AttachFilesystem, InstanceLockError, TerminationSignalWait};
 #[cfg(target_os = "linux")]
-use muniment_runtime::{config_directory, profile_directory, run_runtime_activation};
+use muniment_runtime::{
+    config_directory, profile_directory, run_runtime_activation, RuntimeActivationExit,
+};
 #[cfg(target_os = "linux")]
 use std::path::PathBuf;
 #[cfg(target_os = "linux")]
@@ -18,6 +20,8 @@ const MAX_WAIT_INTERVAL: Duration = Duration::from_secs(2);
 const WAIT_TIMEOUT_ENV: &str = "MUNIMENT_RUNTIME_TEST_WAIT_TIMEOUT_MS";
 #[cfg(target_os = "linux")]
 const EXIT_AFTER_LOCK_ENV: &str = "MUNIMENT_RUNTIME_TEST_EXIT_AFTER_LOCK";
+#[cfg(target_os = "linux")]
+const UPGRADE_REFRESH_EXIT_STATUS: i32 = 75;
 
 const HELP: &str = "\
 Usage: muniment-runtime [OPTIONS]
@@ -37,9 +41,15 @@ fn main() {
     }
 
     #[cfg(target_os = "linux")]
-    if let Err(error) = run() {
-        eprintln!("muniment-runtime: {error}");
-        std::process::exit(1);
+    match run() {
+        Ok(RuntimeActivationExit::ManagerStop) => {}
+        Ok(RuntimeActivationExit::UpgradeRefresh) => {
+            std::process::exit(UPGRADE_REFRESH_EXIT_STATUS)
+        }
+        Err(error) => {
+            eprintln!("muniment-runtime: {error}");
+            std::process::exit(1);
+        }
     }
 
     #[cfg(not(target_os = "linux"))]
@@ -69,11 +79,11 @@ fn handle_arguments() -> Result<bool, String> {
 }
 
 #[cfg(target_os = "linux")]
-fn run() -> Result<(), String> {
+fn run() -> Result<RuntimeActivationExit, String> {
     let termination_signal = TerminationSignalWait::new().map_err(|error| error.to_string())?;
     let wait_timeout = test_wait_timeout()?;
     if std::env::var_os(EXIT_AFTER_LOCK_ENV).is_some() {
-        return wait_for_instance_lock(wait_timeout);
+        return wait_for_instance_lock(wait_timeout).map(|_| RuntimeActivationExit::ManagerStop);
     }
     let runtime_directory = std::env::var_os("XDG_RUNTIME_DIR")
         .map(PathBuf::from)

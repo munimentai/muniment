@@ -6,7 +6,8 @@ use muniment_core::journal::{EventEnvelope, EventPayload, Provenance};
 use muniment_core::retention_record::{write_retention_choice, RetentionChoice};
 use muniment_runtime::{
     open_profile_storage, run_runtime_activation_with_desktop_executable,
-    run_runtime_activation_with_retention_trigger, RetentionScheduleTestControl,
+    run_runtime_activation_with_retention_trigger, run_runtime_activation_with_upgrade_watch,
+    RetentionScheduleTestControl, RuntimeActivationExit, UpgradeWatchTestControl,
 };
 use std::collections::BTreeMap;
 use std::fs;
@@ -17,6 +18,50 @@ use std::time::{Duration, Instant};
 
 mod common;
 use common::TemporaryProfile;
+
+#[test]
+fn executable_replacement_requests_an_upgrade_refresh_exit() {
+    muniment_core::chat_prompt::use_mock_keyring_for_tests();
+    let profile = TemporaryProfile::new("activation-upgrade-watch", false);
+    fs::set_permissions(&profile.root, fs::Permissions::from_mode(0o700)).unwrap();
+    let executable = profile.root.join("runtime-executable");
+    fs::write(&executable, "old").unwrap();
+    let filesystem = AttachFilesystem::from_runtime_directory(&profile.root).unwrap();
+    let endpoint = filesystem.endpoint_path().to_owned();
+    drop(filesystem);
+    let (_stop_tx, stop_rx) = mpsc::channel();
+
+    thread::scope(|scope| {
+        let watched_executable = executable.clone();
+        let activation = scope.spawn(|| {
+            run_runtime_activation_with_upgrade_watch(
+                &profile.root,
+                &profile.profile,
+                &profile.config,
+                Instant::now() + Duration::from_secs(2),
+                Some(UpgradeWatchTestControl {
+                    path: watched_executable,
+                    poll_interval: Duration::from_millis(5),
+                }),
+                None,
+                stop_rx,
+            )
+            .unwrap()
+        });
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while !endpoint.exists() {
+            assert!(Instant::now() < deadline, "runtime endpoint did not open");
+            thread::sleep(Duration::from_millis(5));
+        }
+        let replacement = profile.root.join("replacement-executable");
+        fs::write(&replacement, "new").unwrap();
+        fs::rename(replacement, executable).unwrap();
+        assert_eq!(
+            activation.join().unwrap(),
+            RuntimeActivationExit::UpgradeRefresh
+        );
+    });
+}
 
 fn event(run_id: &str, event_id: &str, run_seq: u64, event_type: &str, at: &str) -> EventEnvelope {
     EventEnvelope {
@@ -87,7 +132,10 @@ fn fresh_profile_serves_session_status_and_releases_the_endpoint() {
 
         drop(client);
         stop_tx.send(()).unwrap();
-        activation.join().unwrap();
+        assert_eq!(
+            activation.join().unwrap(),
+            RuntimeActivationExit::ManagerStop
+        );
     });
 
     let filesystem = AttachFilesystem::from_runtime_directory(&profile.root).unwrap();

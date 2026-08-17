@@ -126,6 +126,14 @@ impl RuntimeAttachState {
         self.approval.clone()
     }
 
+    pub(crate) fn runtime_activity(&self) -> RuntimeActivityRegistry {
+        self.runtime_activity.clone()
+    }
+
+    pub(crate) fn drain_state(&self) -> DrainState {
+        self.drain_state.clone()
+    }
+
     /// Applies the retention choice currently recorded for this profile.
     pub fn apply_recorded_retention(&self) -> Result<(), String> {
         muniment_core::retention_record::apply_recorded_retention(

@@ -1,5 +1,6 @@
 //! Runtime attach service activation.
 
+use crate::upgrade_watch::UpgradeWatch;
 use crate::{
     migration::run_migration_takeover_with_activation, run_bound_attach_listener,
     AttachListenerError, MigrationTakeoverError, RuntimeAttachState,
@@ -8,10 +9,19 @@ use muniment_core::attach::linux::{AttachFilesystem, AttachTransport, InstanceLo
 use std::fmt;
 use std::path::Path;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, mpsc::Receiver, mpsc::Sender, Arc};
 use std::time::{Duration, Instant};
 
 const RETENTION_INTERVAL: Duration = Duration::from_secs(24 * 60 * 60);
+const UPGRADE_WATCH_INTERVAL: Duration = Duration::from_secs(1);
+
+/// The reason a runtime activation ended.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RuntimeActivationExit {
+    ManagerStop,
+    UpgradeRefresh,
+}
 
 enum ActivationCommand {
     Stop,
@@ -56,6 +66,7 @@ pub enum RuntimeActivationError {
     Bind,
     Listener(AttachListenerError),
     Migration(MigrationTakeoverError),
+    UpgradeWatch,
 }
 
 /// Injected retention schedule channels for contract tests.
@@ -63,6 +74,21 @@ pub enum RuntimeActivationError {
 pub struct RetentionScheduleTestControl {
     pub trigger: Receiver<()>,
     pub checked: Sender<()>,
+}
+
+/// Injected executable watch settings for contract tests.
+#[doc(hidden)]
+pub struct UpgradeWatchTestControl {
+    pub path: PathBuf,
+    pub poll_interval: Duration,
+}
+
+enum ExecutableConfig {
+    Admission(Option<PathBuf>),
+    Watch {
+        expected_desktop_executable: Option<PathBuf>,
+        watch: UpgradeWatch,
+    },
 }
 
 impl fmt::Display for RuntimeActivationError {
@@ -74,6 +100,7 @@ impl fmt::Display for RuntimeActivationError {
             Self::Bind => "runtime attach endpoint bind failed",
             Self::Listener(error) => return error.fmt(formatter),
             Self::Migration(error) => return error.fmt(formatter),
+            Self::UpgradeWatch => "runtime executable watch could not be started",
         })
     }
 }
@@ -87,13 +114,22 @@ pub fn run_runtime_activation(
     config_directory: impl AsRef<Path>,
     takeover_deadline: Instant,
     stop: Receiver<()>,
-) -> Result<(), RuntimeActivationError> {
-    run_runtime_activation_with_desktop_executable(
+) -> Result<RuntimeActivationExit, RuntimeActivationError> {
+    let runtime_executable =
+        std::env::current_exe().map_err(|_| RuntimeActivationError::UpgradeWatch)?;
+    run_runtime_activation_inner(
         runtime_directory,
         profile_directory,
         config_directory,
         takeover_deadline,
-        crate::installed_desktop_executable(),
+        Some(ExecutableConfig::Watch {
+            expected_desktop_executable: crate::installed_desktop_executable(),
+            watch: UpgradeWatch {
+                path: runtime_executable,
+                poll_interval: UPGRADE_WATCH_INTERVAL,
+            },
+        }),
+        None,
         stop,
     )
 }
@@ -107,7 +143,7 @@ pub fn run_runtime_activation_with_desktop_executable(
     takeover_deadline: Instant,
     expected_desktop_executable: Option<PathBuf>,
     stop: Receiver<()>,
-) -> Result<(), RuntimeActivationError> {
+) -> Result<RuntimeActivationExit, RuntimeActivationError> {
     run_runtime_activation_with_retention_trigger(
         runtime_directory,
         profile_directory,
@@ -115,6 +151,34 @@ pub fn run_runtime_activation_with_desktop_executable(
         takeover_deadline,
         expected_desktop_executable,
         None,
+        stop,
+    )
+}
+
+/// Runs activation with executable watch seams for contract tests.
+#[doc(hidden)]
+pub fn run_runtime_activation_with_upgrade_watch(
+    runtime_directory: impl AsRef<Path>,
+    profile_directory: impl AsRef<Path>,
+    config_directory: impl AsRef<Path>,
+    takeover_deadline: Instant,
+    watch: Option<UpgradeWatchTestControl>,
+    retention_control: Option<RetentionScheduleTestControl>,
+    stop: Receiver<()>,
+) -> Result<RuntimeActivationExit, RuntimeActivationError> {
+    run_runtime_activation_inner(
+        runtime_directory,
+        profile_directory,
+        config_directory,
+        takeover_deadline,
+        watch.map(|watch| ExecutableConfig::Watch {
+            expected_desktop_executable: Some(watch.path.clone()),
+            watch: UpgradeWatch {
+                path: watch.path,
+                poll_interval: watch.poll_interval,
+            },
+        }),
+        retention_control,
         stop,
     )
 }
@@ -129,7 +193,27 @@ pub fn run_runtime_activation_with_retention_trigger(
     expected_desktop_executable: Option<PathBuf>,
     retention_control: Option<RetentionScheduleTestControl>,
     stop: Receiver<()>,
-) -> Result<(), RuntimeActivationError> {
+) -> Result<RuntimeActivationExit, RuntimeActivationError> {
+    run_runtime_activation_inner(
+        runtime_directory,
+        profile_directory,
+        config_directory,
+        takeover_deadline,
+        Some(ExecutableConfig::Admission(expected_desktop_executable)),
+        retention_control,
+        stop,
+    )
+}
+
+fn run_runtime_activation_inner(
+    runtime_directory: impl AsRef<Path>,
+    profile_directory: impl AsRef<Path>,
+    config_directory: impl AsRef<Path>,
+    takeover_deadline: Instant,
+    executable_config: Option<ExecutableConfig>,
+    retention_control: Option<RetentionScheduleTestControl>,
+    stop: Receiver<()>,
+) -> Result<RuntimeActivationExit, RuntimeActivationError> {
     let runtime_directory = runtime_directory.as_ref();
     let state = Arc::new(
         RuntimeAttachState::open(profile_directory, config_directory)
@@ -139,9 +223,40 @@ pub fn run_runtime_activation_with_retention_trigger(
         .map_err(|_| RuntimeActivationError::Filesystem)?;
     let (command_tx, command_rx) = mpsc::channel();
     let (listener_stop_tx, listener_stop_rx) = mpsc::channel();
+    let watch_stopped = Arc::new(AtomicBool::new(false));
+    let manager_stopped = Arc::new(AtomicBool::new(false));
+    let refresh_pending = Arc::new(AtomicBool::new(false));
+    let expected_desktop_executable = match &executable_config {
+        Some(ExecutableConfig::Admission(path)) => path.clone(),
+        Some(ExecutableConfig::Watch {
+            expected_desktop_executable,
+            ..
+        }) => expected_desktop_executable.clone(),
+        None => None,
+    };
+    let watch_thread = executable_config
+        .and_then(|config| match config {
+            ExecutableConfig::Watch { watch, .. } => Some(watch),
+            ExecutableConfig::Admission(_) => None,
+        })
+        .map(|watch| {
+            watch.start(
+                state.drain_state(),
+                state.runtime_activity(),
+                Arc::clone(&watch_stopped),
+                Arc::clone(&refresh_pending),
+                listener_stop_tx.clone(),
+            )
+        })
+        .transpose()
+        .map_err(|_| RuntimeActivationError::UpgradeWatch)?;
     let stop_commands = command_tx.clone();
+    let stop_watch = Arc::clone(&watch_stopped);
+    let record_manager_stop = Arc::clone(&manager_stopped);
     std::thread::spawn(move || {
         let _ = stop.recv();
+        record_manager_stop.store(true, Ordering::Release);
+        stop_watch.store(true, Ordering::Release);
         let _ = stop_commands.send(ActivationCommand::Stop);
         let _ = listener_stop_tx.send(());
     });
@@ -212,5 +327,16 @@ pub fn run_runtime_activation_with_retention_trigger(
             .join()
             .expect("retention schedule does not panic");
     }
-    result
+    watch_stopped.store(true, Ordering::Release);
+    if let Some(watch_thread) = watch_thread {
+        watch_thread.join().expect("upgrade watch does not panic");
+    }
+    result?;
+    Ok(
+        if refresh_pending.load(Ordering::Acquire) && !manager_stopped.load(Ordering::Acquire) {
+            RuntimeActivationExit::UpgradeRefresh
+        } else {
+            RuntimeActivationExit::ManagerStop
+        },
+    )
 }
