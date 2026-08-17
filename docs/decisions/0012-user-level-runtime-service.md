@@ -564,3 +564,24 @@ A later slice converts all five desktop run commands in one atomic flip:
 `chat_submit`, `chat_resume`, `chat_queue`, `chat_cancel`, and
 `chat_answer_permission`. Until that slice lands, the desktop keeps all five
 commands on the current path.
+
+## Amendment – 2026-08-16: sixth desktop client operation tranche
+
+The desktop session-thread tracker is the only thread selection authority on
+the desktop client path. The runtime session-thread tracker holds no authority
+over a desktop prompt.
+
+A `run.submit` request with a null `thread_id` starts a fresh thread on both
+service halves. The desktop records the accepted `thread_id` from the response
+in its tracker. The next prompt then continues that thread.
+
+The sixth desktop-only tranche contains the single `thread.select` wire
+operation. It maps to the `service::select_thread` runtime entry, which uses
+the `subject_owns_first_run` predicate. The service validates that the subject
+owns the named thread before the desktop records the selection. A companion
+session receives `unauthorized` for this operation.
+
+`thread.select` appends nothing, so it requires no idempotency key.
+
+The existing `chat_current_thread` and `chat_new_thread` commands remain local
+session-thread tracker operations.
