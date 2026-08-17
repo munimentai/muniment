@@ -1,15 +1,30 @@
+use std::collections::BTreeMap;
 use std::sync::Mutex;
 
 use muniment_core::attach::RuntimeActivityRegistry;
 use muniment_core::auth::{
     EntitlementSnapshotTracker, KeyringNativeCredentialStore, NativeCredentialStore,
 };
-use muniment_runtime::sign_out;
+use muniment_core::journal::Provenance;
+use muniment_core::run_start::RunAttachBoundaries;
+use muniment_runtime::{sign_out, RuntimeAttachState};
 
 mod common;
-use common::{credentials, spawn_server, spawn_server_with};
+use common::{credentials, spawn_server, spawn_server_with, TemporaryProfile};
 
 static TEST_LOCK: Mutex<()> = Mutex::new(());
+
+fn provenance() -> Provenance {
+    Provenance {
+        source: "muniment-attach".into(),
+        source_version: "test".into(),
+        actor_id: None,
+        device_id: None,
+        rpc_request_id: None,
+        capability_versions: None,
+        extra: BTreeMap::new(),
+    }
+}
 
 fn save_session() -> KeyringNativeCredentialStore {
     muniment_core::chat_prompt::use_mock_keyring_for_tests();
@@ -45,18 +60,24 @@ fn sign_out_revokes_the_server_session_and_clears_the_local_session() {
 }
 
 #[test]
-fn sign_out_clears_the_local_session_when_revocation_is_rejected() {
+fn boundary_sign_out_clears_the_workspace_when_revocation_is_rejected() {
     let _guard = TEST_LOCK.lock().unwrap();
     let store = save_session();
-    let tracker = EntitlementSnapshotTracker::new();
-    let runtime_activity = RuntimeActivityRegistry::new();
+    let temporary_profile = TemporaryProfile::new("sign-out", false);
+    let state =
+        RuntimeAttachState::open(&temporary_profile.profile, &temporary_profile.config).unwrap();
+    let boundaries = state.boundaries();
+    boundaries
+        .signed_workspace_approval()
+        .record("workspace-a".into());
     let (base_url, server) = spawn_server(401, r#"{"ok":false}"#.into());
     std::env::set_var("MUNIMENT_API_BASE_URL", base_url);
 
-    let status = sign_out(&tracker, &runtime_activity).unwrap();
+    let status = boundaries.sign_out(provenance()).unwrap();
 
     assert!(!status.signed_in);
     assert!(store.load_credentials().unwrap().is_none());
+    assert!(boundaries.signed_workspace_approval().approval().is_none());
     server.join().unwrap();
     std::env::remove_var("MUNIMENT_API_BASE_URL");
 }
