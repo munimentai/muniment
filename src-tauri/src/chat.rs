@@ -56,6 +56,8 @@ use muniment_core::run_start::{
     start_desktop_run, ActiveRun, RunAttachBoundaries, RunStartBoundaries, RunStartError,
     RunStartLaunch, RunStartRequest, SubmitResult,
 };
+#[cfg(target_os = "linux")]
+use muniment_core::thread_ownership::subject_owns_first_run;
 use serde_json::{json, Value};
 use std::path::PathBuf;
 use tauri::{Emitter, Manager};
@@ -392,6 +394,19 @@ impl<R: tauri::Runtime> RunAttachBoundaries for TauriRunStartBoundaries<R> {
             .lock()
             .map_err(|_| ProtocolError::persistence_failed())?;
         ThreadListService::open_thread(&mut storage.journal, workspace, request)
+    }
+
+    #[cfg(target_os = "linux")]
+    fn select_thread(&self, thread_id: &str) -> Result<bool, ProtocolError> {
+        let tokens = auth::fresh_tokens(&self.app.state::<auth::AuthState>(), &self.app)
+            .map_err(|_| ProtocolError::unauthorized())?;
+        let state = self.state();
+        let mut storage = state
+            .storage
+            .lock()
+            .map_err(|_| ProtocolError::persistence_failed())?;
+        subject_owns_first_run(&mut storage.journal, thread_id, tokens.subject.as_deref())
+            .map_err(|_| ProtocolError::thread_not_found())
     }
 
     #[cfg(target_os = "linux")]
