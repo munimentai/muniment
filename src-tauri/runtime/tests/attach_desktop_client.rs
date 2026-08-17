@@ -26,7 +26,7 @@ use muniment_runtime::{open_profile_storage, RuntimeAttachState};
 use muniment_runtime::{run_attach_listener, AttachListenerInputs};
 
 mod common;
-use common::{credentials, spawn_server_sequence, TemporaryProfile};
+use common::{credentials, spawn_server_sequence, stage_pi_stub, TemporaryProfile};
 
 #[derive(Default)]
 struct TestService;
@@ -186,6 +186,76 @@ fn desktop_client_gets_session_status_without_a_recorded_workspace() {
         stop_tx.send(()).unwrap();
         listener.join().unwrap();
     });
+}
+
+#[test]
+fn workspace_less_desktop_client_submit_records_the_grant_workspace() {
+    muniment_core::chat_prompt::use_mock_keyring_for_tests();
+    let profile = TemporaryProfile::new("attach-desktop-submit-no-workspace", true);
+    fs::set_permissions(&profile.root, fs::Permissions::from_mode(0o700)).unwrap();
+    let descriptor = stage_pi_stub(&profile.root);
+    let state = Arc::new(RuntimeAttachState::open(&profile.profile, &profile.config).unwrap());
+    let approval = state.signed_workspace_approval();
+    assert!(approval.approval().is_none());
+    let filesystem = AttachFilesystem::from_runtime_directory(&profile.root).unwrap();
+    let endpoint = filesystem.endpoint_path().to_owned();
+    drop(filesystem);
+    let credential_store = KeyringNativeCredentialStore::new();
+    credential_store.clear_session().unwrap();
+    credential_store.save_credentials(&credentials()).unwrap();
+    let session_body = r#"{"session":{"org_id":"20000000-0000-4000-8000-000000000002","user_id":"30000000-0000-4000-8000-000000000003","role":"owner","device_id":"10000000-0000-4000-8000-000000000001","client_role":"desktop"},"entitlement_snapshot":{"payload":{"version":7,"user_display_name":"User","organization_display_name":"Muniment","groups":[]},"signature":"signature-secret","algorithm":"hmac-sha256"}}"#;
+    let grant_body = r#"{"workspace":"workspace-a","gatewayUrl":"https://gateway.example.com","virtualKey":"key","minimumCacheablePrefixCharacters":8192,"receiptUrl":"https://receipts.example.com"}"#;
+    let (base_url, server) =
+        spawn_server_sequence(vec![(200, session_body.into()), (200, grant_body.into())]);
+    std::env::set_var("MUNIMENT_API_BASE_URL", base_url);
+    let (stop_tx, stop_rx) = mpsc::channel();
+
+    thread::scope(|scope| {
+        let service_state = Arc::clone(&state);
+        let profile_directory = profile.profile.clone();
+        let config_directory = profile.config.clone();
+        let listener = scope.spawn(move || {
+            let mut inputs = state.attach_listener_inputs();
+            inputs.expected_desktop_executable = Some(std::env::current_exe().unwrap());
+            run_attach_listener(
+                &profile.root,
+                inputs,
+                None,
+                move || {
+                    muniment_runtime::compose_attach_service(
+                        service_state.boundaries().with_pi_artifact(descriptor),
+                        service_state.companion_registry(),
+                        &profile_directory,
+                        &config_directory,
+                    )
+                },
+                stop_rx,
+            )
+            .unwrap()
+        });
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let mut client = loop {
+            match connect_desktop_client_at(&endpoint, "1.0.0", Duration::from_secs(1)) {
+                Ok(client) => break client,
+                Err(_) if Instant::now() < deadline => thread::sleep(Duration::from_millis(10)),
+                Err(error) => panic!("attach listener did not accept the desktop client: {error}"),
+            }
+        };
+
+        assert!(client.workspace_scopes().is_empty());
+        let accepted = client.run_submit("hello", &[], None).unwrap();
+        assert!(!accepted.run_id.is_empty());
+        assert_eq!(approval.approval().unwrap().workspace, "workspace-a");
+
+        drop(client);
+        stop_tx.send(()).unwrap();
+        listener.join().unwrap();
+    });
+
+    server.join().unwrap();
+    credential_store.clear_session().unwrap();
+    std::env::remove_var("MUNIMENT_API_BASE_URL");
+    std::env::remove_var("MUNIMENT_PI_ROOT");
 }
 
 #[test]
