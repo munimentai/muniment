@@ -1241,6 +1241,16 @@ fn run_attach_listener_with_hooks<R: tauri::Runtime>(
         after_bind_failure();
         return;
     };
+    if let Some(chat_state) = app.try_state::<crate::chat::ChatState>() {
+        if chat_state.open_storage(&app).is_err() {
+            drop(listener);
+            drop(instance_lock);
+            app.state::<AttachCompanionState>()
+                .record_listener_start_failure(AttachListenerStartFailure::Filesystem);
+            eprintln!("Muniment could not open chat storage.");
+            return;
+        }
+    }
     let companion_state = app.state::<AttachCompanionState>();
     companion_state.publish_listener_stop(listener.stop_handle());
     companion_state.record_listener_started();
