@@ -92,6 +92,64 @@ fn delete_thread_command(
     }
 }
 
+#[cfg(target_os = "linux")]
+trait ThreadSelectClient {
+    fn thread_select(&self, thread_id: &str) -> Result<(), ClientError>;
+}
+
+#[cfg(target_os = "linux")]
+impl ThreadSelectClient for muniment_core::attach::DesktopClientHolder {
+    fn thread_select(&self, thread_id: &str) -> Result<(), ClientError> {
+        muniment_core::attach::DesktopClientHolder::thread_select(self, thread_id)
+    }
+}
+
+#[cfg(target_os = "linux")]
+enum ThreadSelectSession<C> {
+    NoSupervisor,
+    Connected(C),
+    Disconnected,
+}
+
+#[cfg(target_os = "linux")]
+impl From<DesktopClientSession>
+    for ThreadSelectSession<muniment_core::attach::DesktopClientHolder>
+{
+    fn from(session: DesktopClientSession) -> Self {
+        match session {
+            DesktopClientSession::NoSupervisor => Self::NoSupervisor,
+            DesktopClientSession::Connected(client) => Self::Connected(client),
+            DesktopClientSession::Disconnected => Self::Disconnected,
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn select_thread_command<C: ThreadSelectClient>(
+    session: ThreadSelectSession<C>,
+    storage: &SharedStorage,
+    session_thread: &SessionThread,
+    subject: Option<&str>,
+    thread_id: &str,
+) -> Result<(), String> {
+    match session {
+        ThreadSelectSession::NoSupervisor => {
+            let mut storage = storage
+                .lock()
+                .map_err(|_| "Conversation history is unavailable.".to_string())?;
+            select_session_thread(&mut storage.journal, session_thread, subject, thread_id)
+        }
+        ThreadSelectSession::Connected(client) => {
+            client
+                .thread_select(thread_id)
+                .map_err(auth::desktop_client_error)?;
+            session_thread.select(thread_id.to_owned(), subject);
+            Ok(())
+        }
+        ThreadSelectSession::Disconnected => Err(auth::background_service_error()),
+    }
+}
+
 pub(crate) fn newest_owned_workspace_thread(
     journal: &mut RunJournal,
     workspace: &str,
@@ -371,6 +429,30 @@ pub async fn chat_thread_summaries(
     )
 }
 
+#[cfg(target_os = "linux")]
+#[tauri::command]
+pub async fn chat_select_thread(
+    app_handle: tauri::AppHandle,
+    auth_state: tauri::State<'_, auth::AuthState>,
+    state: tauri::State<'_, ChatState>,
+    attach_state: tauri::State<'_, AttachCompanionState>,
+    thread_id: String,
+) -> Result<(), String> {
+    let session: ThreadSelectSession<_> = attach_state.desktop_client_session().into();
+    if matches!(&session, ThreadSelectSession::Disconnected) {
+        return Err(auth::background_service_error());
+    }
+    let tokens = auth::fresh_tokens(&auth_state, &app_handle)?;
+    select_thread_command(
+        session,
+        &state.storage,
+        &state.session_thread,
+        tokens.subject.as_deref(),
+        &thread_id,
+    )
+}
+
+#[cfg(not(target_os = "linux"))]
 #[tauri::command]
 pub async fn chat_select_thread(
     app_handle: tauri::AppHandle,
@@ -600,6 +682,109 @@ mod tests {
     use std::sync::{Arc, Mutex};
     use std::time::Duration;
     use uuid::Uuid;
+
+    #[cfg(target_os = "linux")]
+    #[derive(Clone)]
+    struct FakeThreadSelectClient {
+        calls: Arc<Mutex<Vec<String>>>,
+        result: Result<(), ClientError>,
+    }
+
+    #[cfg(target_os = "linux")]
+    impl ThreadSelectClient for FakeThreadSelectClient {
+        fn thread_select(&self, thread_id: &str) -> Result<(), ClientError> {
+            self.calls.lock().unwrap().push(thread_id.to_owned());
+            self.result.clone()
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn select_thread_routes_all_desktop_client_states_and_tracks_only_success() {
+        let directory =
+            std::env::temp_dir().join(format!("muniment-select-command-{}", Uuid::now_v7()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let storage = Arc::new(Mutex::new(ChatStorage {
+            journal: RunJournal::open(directory.join("runs.sqlite3")).unwrap(),
+            cas: LocalCas::open(&directory.join("cas")).unwrap(),
+        }));
+        let tracker = SessionThread::default();
+
+        let run_id = Uuid::now_v7().to_string();
+        muniment_core::chat_prompt::use_mock_keyring_for_tests();
+        muniment_core::chat_prompt::store_prompt(&run_id, "Prompt", Some("owner")).unwrap();
+        let local_thread = storage
+            .lock()
+            .unwrap()
+            .journal
+            .append_new_run(
+                "workspace-a",
+                &event_envelope(&run_id, 1, "run.started", json!({}), Some("owner")),
+            )
+            .unwrap();
+        select_thread_command::<FakeThreadSelectClient>(
+            ThreadSelectSession::NoSupervisor,
+            &storage,
+            &tracker,
+            Some("owner"),
+            &local_thread,
+        )
+        .unwrap();
+        assert_eq!(tracker.current(Some("owner")), Some(local_thread));
+
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let connected = FakeThreadSelectClient {
+            calls: Arc::clone(&calls),
+            result: Ok(()),
+        };
+        select_thread_command(
+            ThreadSelectSession::Connected(connected),
+            &storage,
+            &tracker,
+            Some("owner"),
+            "remote-thread",
+        )
+        .unwrap();
+        assert_eq!(&*calls.lock().unwrap(), &["remote-thread"]);
+        assert_eq!(
+            tracker.current(Some("owner")),
+            Some("remote-thread".to_string())
+        );
+
+        let failed = FakeThreadSelectClient {
+            calls,
+            result: Err(ClientError::AuthorizationExpired),
+        };
+        assert!(select_thread_command(
+            ThreadSelectSession::Connected(failed),
+            &storage,
+            &tracker,
+            Some("owner"),
+            "rejected-thread",
+        )
+        .is_err());
+        assert_eq!(
+            tracker.current(Some("owner")),
+            Some("remote-thread".to_string())
+        );
+
+        assert_eq!(
+            select_thread_command::<FakeThreadSelectClient>(
+                ThreadSelectSession::Disconnected,
+                &storage,
+                &tracker,
+                Some("owner"),
+                "disconnected-thread",
+            )
+            .unwrap_err(),
+            "Muniment cannot reach its background service."
+        );
+        assert_eq!(
+            tracker.current(Some("owner")),
+            Some("remote-thread".to_string())
+        );
+        std::fs::remove_dir_all(directory).unwrap();
+    }
 
     #[cfg(target_os = "linux")]
     #[test]
