@@ -579,6 +579,7 @@ impl RunAttachBoundaries for RuntimeAttachBoundaries {
         &self,
         _provenance: Provenance,
     ) -> Result<muniment_core::auth::AuthStatus, ProtocolError> {
+        self.clear_workspace();
         service::sign_out(&self.entitlement_tracker, &self.runtime_activity)
             .map_err(|_| ProtocolError::persistence_failed())
     }
