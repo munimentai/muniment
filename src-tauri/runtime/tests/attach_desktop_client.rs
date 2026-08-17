@@ -18,6 +18,7 @@ use muniment_core::attach::{
     ApprovalCoordinator, ApprovalRequest, CompanionRegistry, ProtocolError,
     SignedWorkspaceApproval, CAPABILITY_IDLE_LIFETIME,
 };
+use muniment_core::auth::AuthStatus;
 use muniment_core::auth::{KeyringNativeCredentialStore, NativeCredentialStore};
 use muniment_core::run_preparation::{prepare_new_run_with_session_thread, SessionThreadStart};
 use muniment_core::session_thread::SessionThread;
@@ -40,6 +41,14 @@ impl ThreadListService for TestService {
         Ok(ThreadListPage {
             threads: Vec::new(),
             next_cursor: None,
+        })
+    }
+
+    fn session_status(&mut self) -> Result<AuthStatus, ProtocolError> {
+        Ok(AuthStatus {
+            signed_in: false,
+            subject: None,
+            expires_at: None,
         })
     }
 }
@@ -121,6 +130,62 @@ fn shipped_desktop_client_completes_the_session() {
         .as_array()
         .unwrap()
         .is_empty());
+}
+
+#[test]
+fn desktop_client_gets_session_status_without_a_recorded_workspace() {
+    let profile = TemporaryProfile::new("attach-desktop-client-no-workspace", false);
+    fs::set_permissions(&profile.root, fs::Permissions::from_mode(0o700)).unwrap();
+    let filesystem = AttachFilesystem::from_runtime_directory(&profile.root).unwrap();
+    let endpoint = filesystem.endpoint_path().to_owned();
+    drop(filesystem);
+    let approval = SignedWorkspaceApproval::default();
+    let registry = CompanionRegistry::new(
+        Arc::new(Mutex::new(HashMap::new())),
+        profile.profile.join("companions.json"),
+        LiveConnectionRegistry::default(),
+    );
+    let (stop_tx, stop_rx) = mpsc::channel();
+
+    thread::scope(|scope| {
+        let listener = scope.spawn(|| {
+            run_attach_listener(
+                &profile.root,
+                AttachListenerInputs {
+                    companion_registry: &registry,
+                    approval,
+                    approvals: ApprovalCoordinator::default(),
+                    expected_desktop_executable: Some(std::env::current_exe().unwrap()),
+                },
+                None,
+                || Ok::<_, ()>(TestService),
+                stop_rx,
+            )
+            .unwrap()
+        });
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let mut client = loop {
+            match connect_desktop_client_at(&endpoint, "1.0.0", Duration::from_secs(1)) {
+                Ok(client) => break client,
+                Err(_) if Instant::now() < deadline => thread::sleep(Duration::from_millis(10)),
+                Err(error) => panic!("attach listener did not accept the desktop client: {error}"),
+            }
+        };
+
+        assert!(client.workspace_scopes().is_empty());
+        let response = client
+            .request(
+                Operation::SessionStatus,
+                None,
+                std::iter::empty::<(String, u64)>().collect(),
+            )
+            .unwrap();
+        assert_eq!(response.body["signed_in"], false);
+
+        drop(client);
+        stop_tx.send(()).unwrap();
+        listener.join().unwrap();
+    });
 }
 
 #[test]
