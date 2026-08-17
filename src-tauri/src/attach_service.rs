@@ -1241,6 +1241,16 @@ fn run_attach_listener_with_hooks<R: tauri::Runtime>(
         after_bind_failure();
         return;
     };
+    if let Some(chat_state) = app.try_state::<crate::chat::ChatState>() {
+        if chat_state.open_storage(&app).is_err() {
+            drop(listener);
+            drop(instance_lock);
+            app.state::<AttachCompanionState>()
+                .record_listener_start_failure(AttachListenerStartFailure::Filesystem);
+            eprintln!("Muniment could not open chat storage.");
+            return;
+        }
+    }
     let companion_state = app.state::<AttachCompanionState>();
     companion_state.publish_listener_stop(listener.stop_handle());
     companion_state.record_listener_started();
@@ -2009,6 +2019,79 @@ mod tests {
             None
         );
         drop(_instance_lock);
+        std::fs::remove_dir_all(runtime).unwrap();
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn held_instance_lock_leaves_chat_storage_deferred_without_reconciliation() {
+        let runtime = handoff_test_runtime("storage-deferred");
+        let filesystem = AttachFilesystem::from_runtime_directory(&runtime).unwrap();
+        let instance_lock = filesystem.acquire_instance_lock().unwrap();
+        let listener = Arc::new(
+            AttachListenerState::load(&runtime.join(COMPANION_CREDENTIAL_FILE_NAME)).unwrap(),
+        );
+        let app = tauri::test::mock_app();
+        app.manage(AttachCompanionState::default());
+        app.manage(AttachApprovalState::default());
+        app.manage(crate::chat::ChatState::new(RuntimeActivityRegistry::new()));
+        let journal_path = app.path().app_data_dir().unwrap().join("runs.sqlite3");
+        let run_id = Uuid::now_v7().to_string();
+        let mut journal = RunJournal::open(&journal_path).unwrap();
+        append_test_event(&mut journal, &run_id, 1, "run.started", json!({}), None);
+        drop(journal);
+
+        run_attach_listener(app.handle().clone(), listener, filesystem);
+
+        assert!(app.state::<crate::chat::ChatState>().storage().is_err());
+        let mut journal = RunJournal::open(journal_path).unwrap();
+        assert_eq!(journal.events(&run_id).unwrap().len(), 1);
+        app.state::<AttachCompanionState>()
+            .record_listener_started();
+        drop(instance_lock);
+        std::fs::remove_dir_all(runtime).unwrap();
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn listener_ownership_opens_chat_storage_and_reconciles_once() {
+        let runtime = handoff_test_runtime("storage-owned");
+        let filesystem = AttachFilesystem::from_runtime_directory(&runtime).unwrap();
+        let listener = Arc::new(
+            AttachListenerState::load(&runtime.join(COMPANION_CREDENTIAL_FILE_NAME)).unwrap(),
+        );
+        let app = tauri::test::mock_app();
+        app.manage(AttachCompanionState::default());
+        app.manage(AttachApprovalState::default());
+        app.manage(crate::chat::ChatState::new(RuntimeActivityRegistry::new()));
+        let journal_path = app.path().app_data_dir().unwrap().join("runs.sqlite3");
+        let run_id = Uuid::now_v7().to_string();
+        let mut journal = RunJournal::open(&journal_path).unwrap();
+        append_test_event(&mut journal, &run_id, 1, "run.started", json!({}), None);
+        drop(journal);
+
+        let worker_app = app.handle().clone();
+        let worker = std::thread::spawn(move || {
+            run_attach_listener(worker_app, listener, filesystem);
+        });
+        wait_for_listener(&app.state::<AttachCompanionState>());
+
+        let storage = app.state::<crate::chat::ChatState>();
+        assert!(storage.storage().is_ok());
+        assert_eq!(
+            storage
+                .storage()
+                .unwrap()
+                .lock()
+                .unwrap()
+                .journal
+                .events(&run_id)
+                .unwrap()
+                .len(),
+            2
+        );
+        stop_attach_listener(app.handle());
+        worker.join().unwrap();
         std::fs::remove_dir_all(runtime).unwrap();
     }
 

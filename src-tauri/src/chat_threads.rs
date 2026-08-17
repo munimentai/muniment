@@ -46,7 +46,7 @@ fn thread_ownership_error_message(_error: ThreadOwnershipError) -> String {
 
 #[cfg(target_os = "linux")]
 fn rename_thread_command(
-    storage: &SharedStorage,
+    storage: Option<&SharedStorage>,
     attach_state: &AttachCompanionState,
     subject: Option<&str>,
     thread_id: &str,
@@ -55,6 +55,7 @@ fn rename_thread_command(
     match attach_state.desktop_client_session() {
         DesktopClientSession::NoSupervisor => {
             let mut storage = storage
+                .ok_or_else(auth::background_service_error)?
                 .lock()
                 .map_err(|_| "Conversation history is unavailable.".to_string())?;
             rename_thread(&mut storage.journal, subject, thread_id, title)
@@ -70,7 +71,7 @@ fn rename_thread_command(
 
 #[cfg(target_os = "linux")]
 fn delete_thread_command(
-    storage: &SharedStorage,
+    storage: Option<&SharedStorage>,
     session_thread: &SessionThread,
     attach_state: &AttachCompanionState,
     subject: Option<&str>,
@@ -79,6 +80,7 @@ fn delete_thread_command(
     match attach_state.desktop_client_session() {
         DesktopClientSession::NoSupervisor => {
             let mut storage = storage
+                .ok_or_else(auth::background_service_error)?
                 .lock()
                 .map_err(|_| "Conversation history is unavailable.".to_string())?;
             delete_thread(&mut storage.journal, session_thread, subject, thread_id)
@@ -127,7 +129,7 @@ impl From<DesktopClientSession>
 #[cfg(target_os = "linux")]
 fn select_thread_command<C: ThreadSelectClient>(
     session: ThreadSelectSession<C>,
-    storage: &SharedStorage,
+    storage: Option<&SharedStorage>,
     session_thread: &SessionThread,
     subject: Option<&str>,
     thread_id: &str,
@@ -135,6 +137,7 @@ fn select_thread_command<C: ThreadSelectClient>(
     match session {
         ThreadSelectSession::NoSupervisor => {
             let mut storage = storage
+                .ok_or_else(auth::background_service_error)?
                 .lock()
                 .map_err(|_| "Conversation history is unavailable.".to_string())?;
             select_session_thread(&mut storage.journal, session_thread, subject, thread_id)
@@ -201,7 +204,7 @@ fn desktop_thread_history_error(error: ClientError) -> String {
 
 #[cfg(target_os = "linux")]
 fn chat_thread_summaries_command(
-    storage: &SharedStorage,
+    storage: Option<&SharedStorage>,
     attach_state: &AttachCompanionState,
     subject: Option<&str>,
     limit: usize,
@@ -210,6 +213,7 @@ fn chat_thread_summaries_command(
     match attach_state.desktop_client_session() {
         DesktopClientSession::NoSupervisor => {
             let mut storage = storage
+                .ok_or_else(auth::background_service_error)?
                 .lock()
                 .map_err(|_| "Conversation history is unavailable.".to_string())?;
             serde_json::to_value(chat_thread_summaries_page(
@@ -258,7 +262,7 @@ fn thread_history_error_message(_error: ThreadHistoryError) -> String {
 
 #[cfg(target_os = "linux")]
 fn chat_thread_open_command(
-    storage: &SharedStorage,
+    storage: Option<&SharedStorage>,
     attach_state: &AttachCompanionState,
     subject: Option<&str>,
     session_root: &std::path::Path,
@@ -269,6 +273,7 @@ fn chat_thread_open_command(
     match attach_state.desktop_client_session() {
         DesktopClientSession::NoSupervisor => {
             let mut storage = storage
+                .ok_or_else(auth::background_service_error)?
                 .lock()
                 .map_err(|_| "Conversation history is unavailable.".to_string())?;
             let muniment_core::run_events::ChatStorage { journal, cas } = &mut *storage;
@@ -399,7 +404,7 @@ pub async fn chat_thread_summaries(
 ) -> Result<serde_json::Value, String> {
     let tokens = auth::fresh_tokens(&auth_state, &app_handle)?;
     chat_thread_summaries_command(
-        &state.storage,
+        state.storage().ok(),
         &attach_state,
         tokens.subject.as_deref(),
         limit,
@@ -445,7 +450,7 @@ pub async fn chat_select_thread(
     let tokens = auth::fresh_tokens(&auth_state, &app_handle)?;
     select_thread_command(
         session,
-        &state.storage,
+        state.storage().ok(),
         &state.session_thread,
         tokens.subject.as_deref(),
         &thread_id,
@@ -517,7 +522,7 @@ async fn chat_rename_thread_with_state<R: tauri::Runtime>(
     let tokens = auth::fresh_tokens(&auth_state, &app_handle)?;
     #[cfg(target_os = "linux")]
     return rename_thread_command(
-        &state.storage,
+        state.storage().ok(),
         &attach_state,
         tokens.subject.as_deref(),
         &thread_id,
@@ -570,7 +575,7 @@ async fn chat_delete_thread_with_state<R: tauri::Runtime>(
     let tokens = auth::fresh_tokens(&auth_state, &app_handle)?;
     #[cfg(target_os = "linux")]
     return delete_thread_command(
-        &state.storage,
+        state.storage().ok(),
         &state.session_thread,
         &attach_state,
         tokens.subject.as_deref(),
@@ -597,11 +602,11 @@ pub async fn chat_new_thread(
     state: tauri::State<'_, ChatState>,
 ) -> Result<(), String> {
     let tokens = auth::fresh_tokens(&auth_state, &app_handle)?;
-    fresh_session_thread(
-        &state.storage,
-        &state.session_thread,
-        tokens.subject.as_deref(),
-    )
+    #[cfg(target_os = "linux")]
+    let storage = state.storage()?;
+    #[cfg(not(target_os = "linux"))]
+    let storage = &state.storage;
+    fresh_session_thread(storage, &state.session_thread, tokens.subject.as_deref())
 }
 
 #[cfg(target_os = "linux")]
@@ -618,7 +623,7 @@ pub async fn chat_thread_open(
     let tokens = auth::fresh_tokens(&auth_state, &app_handle)?;
     let session_root = state_session_root(&app_handle)?;
     chat_thread_open_command(
-        &state.storage,
+        state.storage().ok(),
         &attach_state,
         tokens.subject.as_deref(),
         &session_root,
@@ -724,7 +729,7 @@ mod tests {
             .unwrap();
         select_thread_command::<FakeThreadSelectClient>(
             ThreadSelectSession::NoSupervisor,
-            &storage,
+            Some(&storage),
             &tracker,
             Some("owner"),
             &local_thread,
@@ -739,7 +744,7 @@ mod tests {
         };
         select_thread_command(
             ThreadSelectSession::Connected(connected),
-            &storage,
+            Some(&storage),
             &tracker,
             Some("owner"),
             "remote-thread",
@@ -757,7 +762,7 @@ mod tests {
         };
         assert!(select_thread_command(
             ThreadSelectSession::Connected(failed),
-            &storage,
+            Some(&storage),
             &tracker,
             Some("owner"),
             "rejected-thread",
@@ -771,7 +776,7 @@ mod tests {
         assert_eq!(
             select_thread_command::<FakeThreadSelectClient>(
                 ThreadSelectSession::Disconnected,
-                &storage,
+                Some(&storage),
                 &tracker,
                 Some("owner"),
                 "disconnected-thread",
@@ -818,7 +823,9 @@ mod tests {
                     subject: Some("owner".into()),
                 },
             ));
-            app.manage(ChatState::new(app.handle(), runtime_activity).unwrap());
+            let chat_state = ChatState::new(runtime_activity);
+            chat_state.open_storage(app.handle()).unwrap();
+            app.manage(chat_state);
             app.manage(attach_state);
             let run_id = Uuid::now_v7().to_string();
             muniment_core::chat_prompt::store_prompt(&run_id, "Prompt", Some("owner")).unwrap();
@@ -873,7 +880,7 @@ mod tests {
             cursor: Option<&str>,
         ) -> Result<Value, String> {
             chat_thread_summaries_command(
-                &app.state::<ChatState>().storage,
+                Some(app.state::<ChatState>().storage().unwrap()),
                 &app.state::<AttachCompanionState>(),
                 Some("owner"),
                 limit,
@@ -888,7 +895,7 @@ mod tests {
             cursor: Option<&str>,
         ) -> Result<Value, String> {
             chat_thread_open_command(
-                &app.state::<ChatState>().storage,
+                Some(app.state::<ChatState>().storage().unwrap()),
                 &app.state::<AttachCompanionState>(),
                 Some("owner"),
                 &std::env::temp_dir(),
@@ -1104,7 +1111,7 @@ mod tests {
 
         for rename in [true, false] {
             let (app, thread_id) = app_with_thread(AttachCompanionState::default());
-            let poisoned = Arc::clone(&app.state::<ChatState>().storage);
+            let poisoned = Arc::clone(app.state::<ChatState>().storage().unwrap());
             let _ = std::thread::spawn(move || {
                 let _guard = poisoned.lock().unwrap();
                 panic!("poison journal lock");

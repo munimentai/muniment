@@ -1,5 +1,7 @@
 use std::collections::VecDeque;
 use std::sync::atomic::AtomicBool;
+#[cfg(target_os = "linux")]
+use std::sync::OnceLock;
 use std::sync::{Arc, Mutex};
 #[cfg(test)]
 use std::time::Duration;
@@ -333,11 +335,40 @@ impl<R: tauri::Runtime> PiLaunchBoundaries for TauriChatEventSink<R> {
 }
 
 pub struct ChatState {
+    #[cfg(not(target_os = "linux"))]
     pub(crate) storage: SharedStorage,
+    #[cfg(target_os = "linux")]
+    pub(crate) storage: DeferredStorage,
     active: Arc<Mutex<Option<ActiveRun>>>,
     runtime: Arc<Mutex<Option<PiRuntime>>>,
     pub(crate) session_thread: SessionThread,
     pub(crate) runtime_activity: RuntimeActivityRegistry,
+}
+
+#[cfg(target_os = "linux")]
+pub(crate) struct DeferredStorage(OnceLock<SharedStorage>);
+
+#[cfg(target_os = "linux")]
+impl DeferredStorage {
+    fn new() -> Self {
+        Self(OnceLock::new())
+    }
+
+    pub(crate) fn lock(&self) -> Result<std::sync::MutexGuard<'_, ChatStorage>, String> {
+        self.0
+            .get()
+            .ok_or_else(auth::background_service_error)?
+            .lock()
+            .map_err(|_| "The chat storage lock is poisoned.".into())
+    }
+
+    fn get(&self) -> Option<&SharedStorage> {
+        self.0.get()
+    }
+
+    fn set(&self, storage: SharedStorage) -> Result<(), SharedStorage> {
+        self.0.set(storage)
+    }
 }
 
 pub(crate) struct TauriRunStartBoundaries<R: tauri::Runtime> {
@@ -550,9 +581,10 @@ impl<R: tauri::Runtime> RunStartBoundaries for TauriRunStartBoundaries<R> {
         thread_id: Option<&str>,
     ) -> Result<(u64, ChatProjector), RunStartError> {
         let state = self.state();
+        let storage = state.storage().map_err(RunStartError::Persistence)?;
         let result = match thread_id {
             Some(thread_id) => prepare_new_run_in_thread_after_validation(
-                &state.storage,
+                storage,
                 run_id,
                 &grant.workspace,
                 tokens.subject.as_deref(),
@@ -562,7 +594,7 @@ impl<R: tauri::Runtime> RunStartBoundaries for TauriRunStartBoundaries<R> {
                 || protect_prompt(run_id, prompt, tokens.subject.as_deref()),
             ),
             None => prepare_new_run_with_session_thread_after_validation(
-                &state.storage,
+                storage,
                 SessionThreadStart {
                     tracker: &state.session_thread,
                     continue_existing: self.continue_session_thread,
@@ -653,7 +685,7 @@ impl<R: tauri::Runtime> RunStartBoundaries for TauriRunStartBoundaries<R> {
     fn launch(&self, launch: RunStartLaunch) {
         let app = self.app.clone();
         let state = self.state();
-        let storage = Arc::clone(&state.storage);
+        let storage = Arc::clone(state.storage().expect("The listener owns no chat storage."));
         let runtime = Arc::clone(&state.runtime);
         let runtime_activity = state.runtime_activity.clone();
         let memory_runtime = Arc::clone(
@@ -692,6 +724,7 @@ impl<R: tauri::Runtime> RunStartBoundaries for TauriRunStartBoundaries<R> {
 }
 
 impl ChatState {
+    #[cfg(not(target_os = "linux"))]
     pub fn new<R: tauri::Runtime>(
         app: &tauri::AppHandle<R>,
         runtime_activity: RuntimeActivityRegistry,
@@ -707,6 +740,46 @@ impl ChatState {
             session_thread: SessionThread::default(),
             runtime_activity,
         })
+    }
+
+    #[cfg(target_os = "linux")]
+    pub fn new(runtime_activity: RuntimeActivityRegistry) -> Self {
+        Self {
+            storage: DeferredStorage::new(),
+            active: Arc::new(Mutex::new(None)),
+            runtime: Arc::new(Mutex::new(None)),
+            session_thread: SessionThread::default(),
+            runtime_activity,
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    pub(crate) fn open_storage<R: tauri::Runtime>(
+        &self,
+        app: &tauri::AppHandle<R>,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        if self.storage.get().is_some() {
+            return Ok(());
+        }
+        let directory = app.path().app_data_dir()?;
+        let profile = ChatProfile::new(directory);
+        let (mut journal, cas) = profile.open_storage()?;
+        reconcile_interrupted_runs(&mut journal, &desktop_provenance(None));
+        self.storage
+            .set(Arc::new(Mutex::new(ChatStorage { journal, cas })))
+            .map_err(|_| "Chat storage is already open.".into())
+    }
+
+    #[cfg(target_os = "linux")]
+    pub(crate) fn storage(&self) -> Result<&SharedStorage, String> {
+        self.storage
+            .get()
+            .ok_or_else(auth::background_service_error)
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    pub(crate) fn storage(&self) -> Result<&SharedStorage, String> {
+        Ok(&self.storage)
     }
 }
 
@@ -931,7 +1004,7 @@ async fn local_chat_resume(
     );
     let launch = ResumeLaunch {
         sink: TauriChatEventSink::new(app, Arc::clone(&memory_runtime)),
-        storage: Arc::clone(&state.storage),
+        storage: Arc::clone(state.storage()?),
         runtime: Arc::clone(&state.runtime),
         runtime_activity,
         memory_runtime,
@@ -1417,16 +1490,33 @@ mod tests {
             std::env::temp_dir().join(format!("muniment-run-command-{}", Uuid::now_v7()));
         std::fs::create_dir_all(&directory).unwrap();
         let state = ChatState {
-            storage: Arc::new(Mutex::new(ChatStorage {
+            storage: DeferredStorage(OnceLock::from(Arc::new(Mutex::new(ChatStorage {
                 journal: RunJournal::open(directory.join("runs.sqlite3")).unwrap(),
                 cas: LocalCas::open(&directory.join("cas")).unwrap(),
-            })),
+            })))),
             active: Arc::new(Mutex::new(None)),
             runtime: Arc::new(Mutex::new(None)),
             session_thread: SessionThread::default(),
             runtime_activity: RuntimeActivityRegistry::new(),
         };
         (directory, state)
+    }
+
+    #[cfg(target_os = "linux")]
+    fn deferred_command_test_state() -> ChatState {
+        ChatState::new(RuntimeActivityRegistry::new())
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_chat_storage_starts_deferred() {
+        let state = deferred_command_test_state();
+
+        assert!(state.storage.get().is_none());
+        assert!(matches!(
+            state.storage(),
+            Err(error) if error == "Muniment cannot reach its background service."
+        ));
     }
 
     #[cfg(target_os = "linux")]
@@ -1454,13 +1544,14 @@ mod tests {
         assert_eq!(local.unwrap().run_id, "local-run");
         assert!(local_called.load(std::sync::atomic::Ordering::SeqCst));
 
-        state
+        let deferred_state = deferred_command_test_state();
+        deferred_state
             .session_thread
             .select("selected-thread".into(), Some("subject-1"));
         let client = FakeRunClient::default();
         let connected = tauri::async_runtime::block_on(handle_run_submit(
             RunCommandSession::Connected(client.clone()),
-            &state,
+            &deferred_state,
             Some("subject-1"),
             "prompt",
             vec![SelectedFile {
@@ -1470,7 +1561,7 @@ mod tests {
         ));
         assert_eq!(connected.unwrap().run_id, "remote-run");
         assert_eq!(
-            state.session_thread.current(Some("subject-1")),
+            deferred_state.session_thread.current(Some("subject-1")),
             Some("selected-thread".to_string())
         );
         assert_eq!(
@@ -1487,7 +1578,7 @@ mod tests {
         let new_client = FakeRunClient::default();
         let created = tauri::async_runtime::block_on(handle_run_submit(
             RunCommandSession::Connected(new_client),
-            &state,
+            &deferred_state,
             Some("subject-2"),
             "new prompt",
             vec![],
@@ -1495,7 +1586,7 @@ mod tests {
         ));
         assert!(created.is_ok());
         assert_eq!(
-            state.session_thread.current(Some("subject-2")),
+            deferred_state.session_thread.current(Some("subject-2")),
             Some("accepted-thread".to_string())
         );
         assert_disconnected(tauri::async_runtime::block_on(handle_run_submit::<
@@ -1504,7 +1595,7 @@ mod tests {
             _,
         >(
             RunCommandSession::Disconnected,
-            &state,
+            &deferred_state,
             None,
             "prompt",
             vec![],
@@ -1536,9 +1627,10 @@ mod tests {
         assert_eq!(local.unwrap().run_id, "local-run");
         assert!(local_called.load(std::sync::atomic::Ordering::SeqCst));
         let client = FakeRunClient::default();
+        let deferred_state = deferred_command_test_state();
         let connected = tauri::async_runtime::block_on(handle_run_resume(
             RunCommandSession::Connected(client.clone()),
-            &state,
+            &deferred_state,
             "run-1",
             || async { panic!("connected resume called the local operation") },
         ));
@@ -1552,7 +1644,7 @@ mod tests {
             _,
         >(
             RunCommandSession::Disconnected,
-            &state,
+            &deferred_state,
             "run-1",
             || async { panic!("disconnected resume called the local operation") },
         )));
