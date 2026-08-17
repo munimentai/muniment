@@ -5,7 +5,7 @@ prerequisites for desktop chat went live on 2026-07-11. Client work that uses
 them must exercise the real contracts. It must add no mocked production path.
 
 > **Compacted 2026-08-04, again 2026-08-07, again 2026-08-12, again
-> 2026-08-13, again 2026-08-14, and again 2026-08-15.** This document reached 265 KB and no longer
+> 2026-08-13, again 2026-08-14, again 2026-08-15, and again 2026-08-16.** This document reached 265 KB and no longer
 > fit in one read.
 > Every landed slice used to carry its own paragraph. Those paragraphs are now
 > per-lane summaries with their ticket ranges. Every open item, parked item,
@@ -23,7 +23,8 @@ them must exercise the real contracts. It must add no mocked production path.
 > runtime-service extraction section. The fourteenth took the Phase 2 client
 > core section. The sixteenth through the twenty-fifth all took that
 > extraction section again, and so did the twenty-sixth through the
-> thirty-fourth. It grows every wave, so it stays the next compaction target.
+> thirty-fourth, and the thirty-fifth. It grows every wave, so it stays the
+> next compaction target.
 
 ## M0 — Scaffold (done 2026-07-09)
 
@@ -444,42 +445,26 @@ temporary-profile guard. Nothing in `main` calls any entry.
 
 DONE 2026-08-13 through 2026-08-14 — the attach parts span all three sides
 (MUNIDESK-1188 through 1261). The core half sits under
-`src-tauri/core/src/attach/`, where `approval.rs`, `workspace_context.rs`,
-`peer_authority.rs`, `presenter_admission.rs`, `approval_present.rs`,
-`presenter_session.rs`, `presented_approval.rs`, `connection_route.rs`,
-`deadline_io.rs`, and `desktop_client_admission.rs` carry the signed workspace, the
-peer check, the presenter session, the connection route, the one deadline-bounded
-read and write helper set, and desktop client admission.
-`serve_desktop_client_session` (`src-tauri/core/src/attach/linux.rs:1875`) binds
-the client identity, passes the session's signed workspace to `dispatch_request`,
-and refuses `migration.control` and `approval.present` without ending the session.
-`Operation::ApprovalPresent` (`src-tauri/attach/src/envelope.rs:277`) and the
-approval and desktop client files under `protocol-fixtures/muniment.attach/1/`
-hold the wire.
-
-The runtime half holds the service. `directories.rs`, `compose_attach_service`
-(`runtime/src/attach_service.rs:15`), `RuntimeAttachState`
-(`runtime/src/attach_state.rs:19`), `run_attach_listener`
-(`runtime/src/attach_listener.rs:48`), and `run_bound_attach_listener` (`:85`)
-resolve the profile, build the service, own the endpoint, take the instance lock,
-route each accepted connection, and answer the handoff readiness probe. A desktop
-client connection that meets a runtime holding no signed workspace receives a
-typed refusal rather than a closed socket (MUNIDESK-1253).
-
-The desktop half holds the clients. `ApprovalPresenterClient`
-(`src-tauri/attach/src/client.rs:1462`), `serve_approval_presenter_at` (`:1988`),
-`DesktopClient` (`:1379`), `connect_desktop_client_at`, and
-`serve_desktop_client_at` are the two supervisors.
-`AttachCompanionState::start_approval_presenter`
-(`src-tauri/src/attach_service.rs:383`) and `start_desktop_client` (`:409`) start
-them, and `start_desktop_client` (`:811`) dials the endpoint after a confirmed
-handoff or at launch when another process holds the instance lock. The shipped
-client completes its handshake, because `admit_desktop_client` sends the
-900-second `CAPABILITY_IDLE_LIFETIME` ceiling the protocol names
-(MUNIDESK-1251). `DesktopClientHolder::rename_thread` and `delete_thread`
-(`client.rs:1417`, `:1431`) are the two typed desktop-only methods
-(MUNIDESK-1259). ADR 0012 carries twelve attach amendments, and `THREAT_MODEL.md`
-records each, including every desktop client operation tranche.
+`src-tauri/core/src/attach/`, where the approval, workspace-context,
+peer-authority, presenter, connection-route, deadline-IO, and
+desktop-client-admission modules carry the signed workspace, the peer check,
+the presenter session, and desktop client admission.
+`serve_desktop_client_session` (`src-tauri/core/src/attach/linux.rs:2102`)
+binds the client identity, passes the session's signed workspace to
+`dispatch_request`, and refuses `migration.control` and `approval.present`
+without ending the session. The runtime half composes the service and owns
+the endpoint, the instance lock, connection routing, and the handoff
+readiness probe (`runtime/src/attach_service.rs:15`,
+`runtime/src/attach_state.rs:19`, `runtime/src/attach_listener.rs:48`). The
+desktop half holds the approval presenter and desktop client supervisors and
+their typed clients (`src-tauri/attach/src/client.rs`), and
+`start_desktop_client` (`src-tauri/src/attach_service.rs:811`) dials the
+endpoint after a confirmed handoff or at launch when another process holds
+the instance lock. A desktop client that meets a runtime holding no signed
+workspace receives a typed refusal rather than a closed socket
+(MUNIDESK-1253). ADR 0012 carries twelve attach amendments, and
+`THREAT_MODEL.md` records each, including every desktop client operation
+tranche.
 
 DONE 2026-08-14 through 2026-08-15 — the second desktop client operation
 tranche is built end to end (MUNIDESK-1263 through 1281). `dispatch_request`
@@ -555,44 +540,62 @@ reads (`src/lib/chat-controller.js:100`). The event channel takes its own
 connection, because the request path reads exactly one envelope per request and
 `DesktopClientHolder` holds one mutex over that socket.
 
-DONE 2026-08-16 — the fifth tranche's service half is built for the three
-message controls, and the typed client calls landed (MUNIDESK-1306 through
-1315). ADR 0012 maps each fifth-tranche operation to its runtime service entry.
-`run.submit`, `run.resume`, and `run.permission_answer` carry wire names and
-request fixtures. `dispatch_request` serves `run.steer`, `run.follow_up`, and
+DONE 2026-08-16 — the fifth tranche is built end to end, and the five run
+commands ride the desktop client (MUNIDESK-1306 through 1315 and MUNIDESK-1317
+through 1320). ADR 0012 maps
+each fifth-tranche operation to its runtime service entry. `dispatch_request`
+serves `run.submit`, `run.resume`, `run.steer`, `run.follow_up`, and
 `run.permission_answer` to the desktop client and refuses each one for a
 companion. `DesktopAttachService`
 (`src-tauri/core/src/attach/desktop_service.rs`) answers them over the run
-boundaries through the idempotency ledger, and `RuntimeAttachBoundaries`
-connects them to `service::queue_run_message` and `service::answer_permission`.
-The new `run.permission_answer` operation carries the six-variant
+boundaries through the idempotency ledger, `RuntimeAttachBoundaries` connects
+them to the runtime service entries, and `DesktopClientHolder` carries a typed
+call per operation (`src-tauri/attach/src/client.rs:1445`). The new
+`run.permission_answer` operation carries the six-variant
 `ChatPermissionAnswer`, because the companion `permission.answer` wire reduces
-every answer to allow or deny. `DesktopClientHolder` carries typed `run_submit`,
-`run_cancel`, `run_permission_answer`, `run_steer`, and `run_follow_up` calls
-(`src-tauri/attach/src/client.rs:1525`).
+every answer to allow or deny. The flip landed as one atomic slice
+(MUNIDESK-1320): `chat_submit`, `chat_resume`, `chat_queue`, `chat_cancel`,
+and `chat_answer_permission` each route the three desktop client states
+through one shared handler set (`src-tauri/src/chat.rs:150`, routing tests at
+`:1416`). On the connected path `chat_submit` sends the desktop tracker's
+thread id through the `run.submit` `thread_id` field.
 
-MEASURED 2026-08-16 (seventy-ninth wave, planner, read every
-`Operation::RunSubmit` and `Operation::RunResume` reference) — the two
-prompt-carrying operations stop at the wire. Both names appear only in
-`src-tauri/attach/`: the envelope, the fixtures, the client, and the protocol
-tests. No `dispatch_request` branch serves either one, the desktop-only refusal
-list (`src-tauri/core/src/attach/linux.rs:2361`) omits both, `ThreadListService`
-declares no `submit_run` or `resume_run` entry, and the holder carries no typed
-`run_resume` call. A typed `run_submit` call therefore reaches no handler, and
-`run.resume` has no response fixture. The seventy-ninth wave closes this gap and
-then flips the five commands.
+MEASURED 2026-08-16 (eightieth wave, planner, read both `submit_run` halves
+beside the flip) — thread selection is split across the two processes. The
+desktop tracker (`src-tauri/src/chat.rs:334`) and the runtime tracker
+(`src-tauri/runtime/src/attach_state.rs:34`) both exist. For a `run.submit`
+with a null `thread_id`, `RuntimeAttachBoundaries::submit_run`
+(`src-tauri/runtime/src/attach_boundaries.rs:419`) passes
+`continue_existing: true`, so the runtime continues its own tracker's thread,
+while the desktop-owned listener passes `continue_session_thread: false`
+(`src-tauri/src/attach_service.rs:940`) and starts a fresh one. A connected
+New thread prompt would therefore land in a stale thread once the runtime
+owns the listener. The connected `chat_submit` also drops the accepted
+`thread_id` (`src-tauri/src/chat.rs:208`) instead of recording it in the
+desktop tracker, and `chat_select_thread` validates ownership only through
+the local journal (`src-tauri/src/chat_threads.rs:244`), so it has no
+connected path. The `run.submit` and `run.resume` responses already carry
+`thread_id`. The eightieth wave closes this split as the sixth desktop client
+operation tranche.
+
+MEASURED 2026-08-16 (eightieth wave, planner, read the `home.ensure` dispatch
+beside the runtime composition) — `home.ensure` needs no conversion slice
+before the cutover. `dispatch_request` already serves it to any authorized
+client, no desktop command rides the wire for it, because onboarding
+scaffolds the Home through local file writes alone, and the runtime
+composition resolves the confirmed Home
+(`src-tauri/runtime/src/attach_service.rs:22`). One concern moves to the
+cutover slice: a runtime composed before onboarding confirms a Home holds the
+default until it restarts.
 
 AUDIT 2026-08-16 (seventy-eighth wave, scheduled code review over the commits
 since 2026-08-09) — four confirmed defects sat on the desktop client path.
 Three fixes landed: the chat-event supervisor ends its worker inside a blocking
 connect (MUNIDESK-1303), a running sign-in no longer holds the one socket mutex
 against every other command (MUNIDESK-1304), and the chat-event stream reports
-its own connection state to the shell (MUNIDESK-1305). The fourth ticket drained
-unmerged. `RuntimeChatEventBroadcast::subscribe`
-(`src-tauri/runtime/src/sink.rs:22`) still adds a sender that only `deliver`
-(`:31`) removes, so a profile whose subscribers connect and drop between runs
-accumulates orphaned senders. The seventy-ninth wave re-files it in last
-position.
+its own connection state to the shell (MUNIDESK-1305). The fourth defect, the
+chat-event broadcast subscriber prune, landed on its re-file (MUNIDESK-1316).
+All four audit defects are closed.
 
 RETIRED 2026-08-14 (seventy-first wave, planner, read `compose_attach_service`) —
 the runtime composition owes no Home resolution work. It reads `configured_home`
@@ -656,31 +659,24 @@ projector always holds state there. A test seam would also prove nothing, becaus
 projector rejects that event too. The lane re-opens this only against a new
 failure route.
 
-MERGE HAZARD — the seventy-ninth-wave slices are filed. Slice 2 answers the
-boundary seam slice 1 declares, slice 3 matches the response fixture slice 1
-adds, and slice 4 calls the work of all three. Every ticket tells the
-implementer to rebase on `main` before it opens the pull request. The
-2026-08-04 silent revert came from a stale base.
+MERGE HAZARD — the eightieth-wave slices are filed. The dispatch slice needs
+the wire name the protocol slice adds, the boundary slice answers the entry
+the dispatch slice declares, and the desktop flip calls all three. Every
+ticket tells the implementer to rebase on `main` before it opens the pull
+request. The 2026-08-04 silent revert came from a stale base.
 
-SELECTED 2026-08-16 (seventy-ninth wave) — five slices in priority order. They
-close the `run.submit` and `run.resume` service gap, then flip the five run
-commands.
+SELECTED 2026-08-16 (eightieth wave) — six slices in priority order. They
+give thread selection one authority and close the sixth desktop client
+operation tranche.
 
-1. Dispatch `run.submit` and `run.resume` to the desktop client and refuse them
+1. ADR 0012: name the sixth tranche and the selection-authority rule.
+2. Attach protocol: name `thread.select` with fixtures.
+3. Attach dispatch: serve `thread.select` to the desktop client and refuse it
    for a companion.
-2. Answer `run.submit` and `run.resume` from the runtime service entries.
-3. Add the typed `run.resume` client call.
-4. Flip the five run commands onto the desktop client in one slice.
-5. Re-file the chat-event broadcast prune defect.
-
-SEQUENCED 2026-08-16 (seventy-ninth wave) — the flip stays one atomic slice.
-`chat_submit` and `chat_resume` install the active run, and `chat_queue`,
-`chat_cancel`, and `chat_answer_permission` all read it. A flip that converts
-one half alone would put the run in one process and its controls in the other,
-so a cancel or a permission answer would find no active run. On the connected
-path `chat_submit` sends the session tracker's thread id through the
-`run.submit` `thread_id` field, so the runtime places the prompt in the thread
-the user sees while the tracker commands stay local.
+4. Attach boundary: the runtime answers `thread.select`.
+5. Runtime submit: a `run.submit` with no thread id starts a fresh thread.
+6. Desktop flip: `chat_select_thread` rides the connected client, and a
+   connected submit records its accepted thread.
 
 NOT FILED 2026-08-15 (seventy-fourth wave, planner, read the shell's auth branch
 order) — `auth_status` keeps its local keychain read before the cutover. The
@@ -692,13 +688,11 @@ service would. The cutover moves this read with the credential store.
 
 SEQUENCED 2026-08-15 (seventy-seventh wave) — the decision comes before the
 wire, the wire before the dispatch, the dispatch before the broadcast, and the
-broadcast before its client and its one caller. The five run commands follow the
-event channel, then the session-thread tracker commands and `home.ensure`. The
-tracker commands wait for the run commands, because `chat_submit` reads the same
-tracker to place a new prompt, and a tracker split across two processes would
-send that prompt to the wrong thread. The Linux cutover follows the whole chat
-surface conversion, and it carries the user unit, the `auth_status` move, and the
-runtime's signed workspace. Remote Control follows the cutover.
+broadcast before its client and its one caller. The five run commands followed
+the event channel, and the sixth tranche now closes the tracker split the same
+paragraph predicted. The Linux cutover follows the sixth tranche, and it
+carries the user unit, the `auth_status` move, and the runtime's signed
+workspace. Remote Control follows the cutover.
 
 NOT FILED 2026-08-14 (seventy-second wave, planner, read the seventy-second-wave
 selection beside its own sequencing rule) — Linux user-unit registration stays
@@ -1178,9 +1172,9 @@ earlier one. Requiring an up-to-date branch before merge, or a merge queue, is a
 repository-settings change that sits with the owner. The planner files no ticket
 for it.
 
-VERIFIED 2026-08-16 (seventy-ninth wave, planner) — one
+VERIFIED 2026-08-16 (eightieth wave, planner) — one
 `cargo test -p muniment-core -p muniment-runtime -p muniment-attach` run started
-from `src-tauri` passes 1,372 tests, and the build prints no warning. One
+from `src-tauri` passes 1,380 tests, and the build prints no warning. One
 `npm ci` then `npm test` run passes 941 frontend tests over 63 files with 31
 skipped, plus 3 browser tests. Start cargo from `src-tauri`, because the
 repository root holds no `Cargo.toml`. A run started from the root dies with
