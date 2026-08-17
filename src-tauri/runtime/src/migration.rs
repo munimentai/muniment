@@ -15,7 +15,7 @@ use std::fmt;
 use std::net::Shutdown;
 use std::os::unix::net::UnixStream;
 use std::path::Path;
-use std::sync::mpsc::{self, Receiver, Sender};
+use std::sync::mpsc::{self, Receiver};
 use std::time::{Duration, Instant};
 
 const RETRY_INTERVAL: Duration = Duration::from_millis(10);
@@ -85,7 +85,11 @@ where
         check_deadline(deadline)?;
         match filesystem.acquire_instance_lock() {
             Ok(lock) => break lock,
-            Err(InstanceLockError::AlreadyHeld) => wait_to_retry(deadline)?,
+            Err(InstanceLockError::AlreadyHeld) => {
+                if stop_before_retry(&stop, deadline)? {
+                    return Ok(());
+                }
+            }
             Err(_) => return Err(MigrationTakeoverError::InstanceLock),
         }
     };
@@ -93,7 +97,11 @@ where
         check_deadline(deadline)?;
         match AttachTransport::bind(&filesystem) {
             Ok(transport) => break transport,
-            Err(_) => wait_to_retry(deadline)?,
+            Err(_) => {
+                if stop_before_retry(&stop, deadline)? {
+                    return Ok(());
+                }
+            }
         }
     };
 
@@ -116,23 +124,20 @@ fn request_handoff(
 ) -> Result<bool, MigrationTakeoverError> {
     loop {
         let io_timeout = remaining(deadline)?;
-        let stream = connect_before(filesystem.endpoint_path(), deadline)?;
-        let deadline_guard = DeadlineGuard::new(&stream, deadline)?;
-        let mut client = handshake_migration_control_stream(
-            stream,
-            env!("CARGO_PKG_VERSION"),
-            io_timeout.min(MAX_CONTROL_DEADLINE),
-        )
-        .map_err(|error| control_error_before(error, deadline))?;
+        let stream = match connect_before(filesystem.endpoint_path(), deadline, stop)? {
+            Some(stream) => stream,
+            None => return Ok(false),
+        };
         let remaining = remaining(deadline)?;
         let deadline_ms = remaining
             .min(MAX_CONTROL_DEADLINE)
             .as_millis()
             .clamp(1, 60_000) as u64;
-        let outcome = client
-            .control_migration(nonce, deadline_ms)
-            .map_err(|error| control_request_error_before(error, deadline))?;
-        drop(deadline_guard);
+        let outcome = match request_control(stream, nonce, io_timeout, deadline_ms, deadline, stop)?
+        {
+            Some(outcome) => outcome,
+            None => return Ok(false),
+        };
         match outcome {
             MigrationControlOutcome::Accepted => return Ok(true),
             MigrationControlOutcome::MigrationNotReady { retryable: true } => {
@@ -168,44 +173,79 @@ fn stop_before_retry(
     }
 }
 
-fn connect_before(path: &Path, deadline: Instant) -> Result<UnixStream, MigrationTakeoverError> {
+fn connect_before(
+    path: &Path,
+    deadline: Instant,
+    stop: &Receiver<()>,
+) -> Result<Option<UnixStream>, MigrationTakeoverError> {
     let path = path.to_owned();
     let (result_tx, result_rx) = mpsc::sync_channel(1);
     std::thread::spawn(move || {
         let _ = result_tx.send(UnixStream::connect(path));
     });
-    match result_rx.recv_timeout(remaining(deadline)?) {
-        Ok(Ok(stream)) => Ok(stream),
-        Ok(Err(_)) => Err(MigrationTakeoverError::DesktopUnavailable),
-        Err(mpsc::RecvTimeoutError::Timeout) => Err(MigrationTakeoverError::DeadlineElapsed),
-        Err(mpsc::RecvTimeoutError::Disconnected) => {
-            Err(MigrationTakeoverError::DesktopUnavailable)
+    loop {
+        if stop_requested(stop) {
+            return Ok(None);
+        }
+        match result_rx.recv_timeout(remaining(deadline)?.min(RETRY_INTERVAL)) {
+            Ok(Ok(stream)) => return Ok(Some(stream)),
+            Ok(Err(_)) => return Err(MigrationTakeoverError::DesktopUnavailable),
+            Err(mpsc::RecvTimeoutError::Timeout) => {}
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                return Err(MigrationTakeoverError::DesktopUnavailable);
+            }
         }
     }
 }
 
-struct DeadlineGuard(Sender<()>);
-
-impl DeadlineGuard {
-    fn new(stream: &UnixStream, deadline: Instant) -> Result<Self, MigrationTakeoverError> {
-        let stream = stream
-            .try_clone()
-            .map_err(|_| MigrationTakeoverError::DesktopUnavailable)?;
-        let (cancel_tx, cancel_rx) = mpsc::channel();
-        let timeout = remaining(deadline)?;
-        std::thread::spawn(move || {
-            if cancel_rx.recv_timeout(timeout).is_err() {
-                let _ = stream.shutdown(Shutdown::Both);
-            }
+fn request_control(
+    stream: UnixStream,
+    nonce: &str,
+    io_timeout: Duration,
+    deadline_ms: u64,
+    deadline: Instant,
+    stop: &Receiver<()>,
+) -> Result<Option<MigrationControlOutcome>, MigrationTakeoverError> {
+    let interrupt = stream
+        .try_clone()
+        .map_err(|_| MigrationTakeoverError::DesktopUnavailable)?;
+    let (result_tx, result_rx) = mpsc::sync_channel(1);
+    std::thread::scope(|scope| {
+        scope.spawn(|| {
+            let result = handshake_migration_control_stream(
+                stream,
+                env!("CARGO_PKG_VERSION"),
+                io_timeout.min(MAX_CONTROL_DEADLINE),
+            )
+            .map_err(|error| control_error_before(error, deadline))
+            .and_then(|mut client| {
+                client
+                    .control_migration(nonce, deadline_ms)
+                    .map_err(|error| control_request_error_before(error, deadline))
+            });
+            let _ = result_tx.send(result);
         });
-        Ok(Self(cancel_tx))
-    }
+        loop {
+            if stop_requested(stop) {
+                let _ = interrupt.shutdown(Shutdown::Both);
+                return Ok(None);
+            }
+            match result_rx.recv_timeout(remaining(deadline)?.min(RETRY_INTERVAL)) {
+                Ok(result) => return result.map(Some),
+                Err(mpsc::RecvTimeoutError::Timeout) => {}
+                Err(mpsc::RecvTimeoutError::Disconnected) => {
+                    return Err(MigrationTakeoverError::DesktopUnavailable);
+                }
+            }
+        }
+    })
 }
 
-impl Drop for DeadlineGuard {
-    fn drop(&mut self) {
-        let _ = self.0.send(());
-    }
+fn stop_requested(stop: &Receiver<()>) -> bool {
+    matches!(
+        stop.try_recv(),
+        Ok(()) | Err(mpsc::TryRecvError::Disconnected)
+    )
 }
 
 fn control_error_before(error: ClientError, deadline: Instant) -> MigrationTakeoverError {
@@ -236,11 +276,6 @@ fn remaining(deadline: Instant) -> Result<Duration, MigrationTakeoverError> {
 
 fn check_deadline(deadline: Instant) -> Result<(), MigrationTakeoverError> {
     remaining(deadline).map(|_| ())
-}
-
-fn wait_to_retry(deadline: Instant) -> Result<(), MigrationTakeoverError> {
-    std::thread::sleep(remaining(deadline)?.min(RETRY_INTERVAL));
-    check_deadline(deadline)
 }
 
 fn map_nonce_error(_: HandoffNonceRandomnessError) -> MigrationTakeoverError {

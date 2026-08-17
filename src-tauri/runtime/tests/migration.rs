@@ -137,6 +137,94 @@ fn takes_over_the_endpoint_with_the_minted_nonce() {
 }
 
 #[test]
+fn stop_ends_takeover_after_acceptance_while_the_holder_retains_the_lock() {
+    let runtime = RuntimeDirectory::new();
+    let filesystem = AttachFilesystem::from_runtime_directory(&runtime.0).unwrap();
+    let _desktop_lock = filesystem.acquire_instance_lock().unwrap();
+    let desktop = AttachTransport::bind(&filesystem).unwrap();
+    let (stop_tx, stop_rx) = mpsc::channel();
+    let (registry, approval, approvals) = listener_state(&runtime);
+
+    let started = Instant::now();
+    thread::scope(|scope| {
+        let takeover = scope.spawn(|| {
+            run_migration_takeover(
+                &runtime.0,
+                inputs(&registry, &approval, &approvals),
+                || Ok::<_, ()>(TestService),
+                started + Duration::from_secs(2),
+                stop_rx,
+            )
+        });
+        let (mut stream, _) = desktop.accept().unwrap();
+        let request = complete_handshake(&mut stream);
+        let nonce = request.body["handoff_nonce"].as_str().unwrap();
+        write_success(&mut stream, &request, nonce);
+
+        stop_tx.send(()).unwrap();
+        assert_eq!(takeover.join().unwrap(), Ok(()));
+    });
+    assert!(started.elapsed() < Duration::from_secs(1));
+}
+
+#[test]
+fn stop_interrupts_a_stalled_takeover_handshake() {
+    let runtime = RuntimeDirectory::new();
+    let filesystem = AttachFilesystem::from_runtime_directory(&runtime.0).unwrap();
+    let _desktop_lock = filesystem.acquire_instance_lock().unwrap();
+    let desktop = AttachTransport::bind(&filesystem).unwrap();
+    let (stop_tx, stop_rx) = mpsc::channel();
+    let (registry, approval, approvals) = listener_state(&runtime);
+
+    let started = Instant::now();
+    thread::scope(|scope| {
+        let takeover = scope.spawn(|| {
+            run_migration_takeover(
+                &runtime.0,
+                inputs(&registry, &approval, &approvals),
+                || Ok::<_, ()>(TestService),
+                started + Duration::from_secs(2),
+                stop_rx,
+            )
+        });
+        let (_stream, _) = desktop.accept().unwrap();
+
+        stop_tx.send(()).unwrap();
+        assert_eq!(takeover.join().unwrap(), Ok(()));
+    });
+    assert!(started.elapsed() < Duration::from_secs(1));
+}
+
+#[test]
+fn stop_interrupts_a_stalled_takeover_control_request() {
+    let runtime = RuntimeDirectory::new();
+    let filesystem = AttachFilesystem::from_runtime_directory(&runtime.0).unwrap();
+    let _desktop_lock = filesystem.acquire_instance_lock().unwrap();
+    let desktop = AttachTransport::bind(&filesystem).unwrap();
+    let (stop_tx, stop_rx) = mpsc::channel();
+    let (registry, approval, approvals) = listener_state(&runtime);
+
+    let started = Instant::now();
+    thread::scope(|scope| {
+        let takeover = scope.spawn(|| {
+            run_migration_takeover(
+                &runtime.0,
+                inputs(&registry, &approval, &approvals),
+                || Ok::<_, ()>(TestService),
+                started + Duration::from_secs(2),
+                stop_rx,
+            )
+        });
+        let (mut stream, _) = desktop.accept().unwrap();
+        let _request = complete_handshake(&mut stream);
+
+        stop_tx.send(()).unwrap();
+        assert_eq!(takeover.join().unwrap(), Ok(()));
+    });
+    assert!(started.elapsed() < Duration::from_secs(1));
+}
+
+#[test]
 fn retries_migration_not_ready_before_acceptance() {
     let runtime = RuntimeDirectory::new();
     let filesystem = AttachFilesystem::from_runtime_directory(&runtime.0).unwrap();
