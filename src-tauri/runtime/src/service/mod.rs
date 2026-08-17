@@ -14,7 +14,8 @@ pub use session::{
     EntitlementSnapshotError, EntitlementSnapshotResult, SignOutError,
 };
 pub use threads::{
-    apply_retention, create_thread, delete_thread, rename_thread, thread_page, thread_summaries,
+    apply_retention, create_thread, delete_thread, rename_thread, select_thread, thread_page,
+    thread_summaries,
 };
 #[cfg(target_os = "linux")]
 pub use threads::{stream_run, subscribe_run_commits};

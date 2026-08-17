@@ -17,6 +17,7 @@ use muniment_core::journal::thread_summaries::ThreadSummaryPage;
 use muniment_core::owned_threads::chat_thread_summaries_page;
 use muniment_core::run_events::{ChatStorage, SharedStorage};
 use muniment_core::thread_history::{chat_thread_open_page, ChatThreadOpenPage};
+use muniment_core::thread_ownership::subject_owns_first_run;
 use std::path::Path;
 
 /// Lists the threads owned by one subject.
@@ -36,6 +37,19 @@ pub fn thread_summaries(
         cursor.as_deref(),
     )
     .map_err(|_| "Conversation history is unavailable.".to_string())
+}
+
+/// Reports whether one subject owns a thread.
+pub fn select_thread(
+    storage: SharedStorage,
+    subject: Option<String>,
+    thread_id: String,
+) -> Result<bool, String> {
+    let mut storage = storage
+        .lock()
+        .map_err(|_| "Conversation history is unavailable.".to_string())?;
+    subject_owns_first_run(&mut storage.journal, &thread_id, subject.as_deref())
+        .map_err(|_| "Conversation history is unavailable.".to_string())
 }
 
 /// Reads one page of a run stream.

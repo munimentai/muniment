@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 
 use muniment_attach::{
     connect_desktop_client_at, handshake_stream, serve_approval_presenter_at,
-    ApprovalDecision as PresenterDecision, ApprovalPresenterStopHandle, Operation,
+    ApprovalDecision as PresenterDecision, ApprovalPresenterStopHandle, ClientError, Operation,
 };
 use muniment_core::attach::linux::{
     AttachFilesystem, LiveConnectionRegistry, ThreadListPage, ThreadListRequest, ThreadListService,
@@ -18,10 +18,14 @@ use muniment_core::attach::{
     ApprovalCoordinator, ApprovalRequest, CompanionRegistry, ProtocolError,
     SignedWorkspaceApproval, CAPABILITY_IDLE_LIFETIME,
 };
+use muniment_core::auth::{KeyringNativeCredentialStore, NativeCredentialStore};
+use muniment_core::run_preparation::{prepare_new_run_with_session_thread, SessionThreadStart};
+use muniment_core::session_thread::SessionThread;
+use muniment_runtime::{open_profile_storage, RuntimeAttachState};
 use muniment_runtime::{run_attach_listener, AttachListenerInputs};
 
 mod common;
-use common::TemporaryProfile;
+use common::{credentials, spawn_server_sequence, TemporaryProfile};
 
 #[derive(Default)]
 struct TestService;
@@ -42,6 +46,12 @@ impl ThreadListService for TestService {
 
 fn thread_list_body<T: FromIterator<(String, T)> + From<u64>>() -> T {
     [("limit".to_owned(), T::from(20))].into_iter().collect()
+}
+
+fn thread_select_body<T: FromIterator<(String, T)> + From<String>>(thread_id: String) -> T {
+    [("thread_id".to_owned(), T::from(thread_id))]
+        .into_iter()
+        .collect()
 }
 
 #[test]
@@ -111,6 +121,122 @@ fn shipped_desktop_client_completes_the_session() {
         .as_array()
         .unwrap()
         .is_empty());
+}
+
+#[test]
+fn desktop_client_selects_only_an_owned_thread() {
+    muniment_core::chat_prompt::use_mock_keyring_for_tests();
+    let profile = TemporaryProfile::new("attach-thread-select", true);
+    fs::set_permissions(&profile.root, fs::Permissions::from_mode(0o700)).unwrap();
+    let storage = open_profile_storage(&profile.profile).unwrap();
+    let run_id = "01900000-0000-7000-8000-000000000008";
+    prepare_new_run_with_session_thread(
+        &storage,
+        SessionThreadStart {
+            tracker: &SessionThread::default(),
+            continue_existing: false,
+        },
+        run_id,
+        "workspace-a",
+        Some("user"),
+        Vec::new(),
+        None,
+        "test",
+        "1",
+        || Ok(()),
+    )
+    .unwrap();
+    let thread_id = storage
+        .lock()
+        .unwrap()
+        .journal
+        .run_thread_id(run_id)
+        .unwrap()
+        .unwrap();
+    let foreign_run_id = "01900000-0000-7000-8000-000000000009";
+    prepare_new_run_with_session_thread(
+        &storage,
+        SessionThreadStart {
+            tracker: &SessionThread::default(),
+            continue_existing: false,
+        },
+        foreign_run_id,
+        "workspace-a",
+        Some("other"),
+        Vec::new(),
+        None,
+        "test",
+        "1",
+        || Ok(()),
+    )
+    .unwrap();
+    let foreign_thread_id = storage
+        .lock()
+        .unwrap()
+        .journal
+        .run_thread_id(foreign_run_id)
+        .unwrap()
+        .unwrap();
+    drop(storage);
+
+    let state = Arc::new(RuntimeAttachState::open(&profile.profile, &profile.config).unwrap());
+    state
+        .signed_workspace_approval()
+        .record("workspace-a".into());
+    let filesystem = AttachFilesystem::from_runtime_directory(&profile.root).unwrap();
+    let endpoint = filesystem.endpoint_path().to_owned();
+    drop(filesystem);
+    let credential_store = KeyringNativeCredentialStore::new();
+    credential_store.clear_session().unwrap();
+    credential_store.save_credentials(&credentials()).unwrap();
+    let session_body = r#"{"session":{"org_id":"20000000-0000-4000-8000-000000000002","user_id":"30000000-0000-4000-8000-000000000003","role":"owner","device_id":"10000000-0000-4000-8000-000000000001","client_role":"desktop"},"entitlement_snapshot":{"payload":{"version":7,"groups":[]},"signature":"signature-secret","algorithm":"hmac-sha256"}}"#;
+    let (base_url, server) =
+        spawn_server_sequence(vec![(200, session_body.into()), (200, session_body.into())]);
+    std::env::set_var("MUNIMENT_API_BASE_URL", base_url);
+    let (stop_tx, stop_rx) = mpsc::channel();
+
+    thread::scope(|scope| {
+        let service_state = Arc::clone(&state);
+        let listener = scope.spawn(move || {
+            let mut inputs = state.attach_listener_inputs();
+            inputs.expected_desktop_executable = Some(std::env::current_exe().unwrap());
+            run_attach_listener(
+                &profile.root,
+                inputs,
+                None,
+                move || service_state.attach_service(),
+                stop_rx,
+            )
+            .unwrap()
+        });
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let mut client = loop {
+            match connect_desktop_client_at(&endpoint, "1.0.0", Duration::from_secs(1)) {
+                Ok(client) => break client,
+                Err(_) if Instant::now() < deadline => thread::sleep(Duration::from_millis(10)),
+                Err(error) => panic!("attach listener did not accept the desktop client: {error}"),
+            }
+        };
+
+        let selected = client.request(Operation::ThreadSelect, None, thread_select_body(thread_id));
+        assert!(selected.unwrap().body.as_object().unwrap().is_empty());
+        assert_eq!(
+            client.request(
+                Operation::ThreadSelect,
+                None,
+                thread_select_body(foreign_thread_id),
+            ),
+            Err(ClientError::ThreadNotFound)
+        );
+
+        drop(client);
+        stop_tx.send(()).unwrap();
+        listener.join().unwrap();
+    });
+
+    server.join().unwrap();
+    std::env::remove_var("MUNIMENT_API_BASE_URL");
+    credential_store.clear_session().unwrap();
 }
 
 #[test]
