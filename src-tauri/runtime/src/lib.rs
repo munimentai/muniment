@@ -1,4 +1,6 @@
 #[cfg(target_os = "linux")]
+mod activation;
+#[cfg(target_os = "linux")]
 mod attach_boundaries;
 #[cfg(target_os = "linux")]
 mod attach_listener;
@@ -12,6 +14,10 @@ mod migration;
 pub mod service;
 mod sink;
 
+#[cfg(target_os = "linux")]
+pub use activation::{
+    run_runtime_activation, run_runtime_activation_with_desktop_executable, RuntimeActivationError,
+};
 #[cfg(target_os = "linux")]
 pub use attach_boundaries::RuntimeAttachBoundaries;
 #[cfg(target_os = "linux")]
