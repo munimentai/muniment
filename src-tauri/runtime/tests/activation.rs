@@ -6,7 +6,7 @@ use muniment_core::journal::{EventEnvelope, EventPayload, Provenance};
 use muniment_core::retention_record::{write_retention_choice, RetentionChoice};
 use muniment_runtime::{
     open_profile_storage, run_runtime_activation_with_desktop_executable,
-    run_runtime_activation_with_retention_trigger,
+    run_runtime_activation_with_retention_trigger, RetentionScheduleTestControl,
 };
 use std::collections::BTreeMap;
 use std::fs;
@@ -133,6 +133,7 @@ fn retention_trigger_deletes_only_expired_terminal_runs() {
         }
     }
     let (trigger_tx, trigger_rx) = mpsc::channel();
+    let (checked_tx, checked_rx) = mpsc::channel();
     let (stop_tx, stop_rx) = mpsc::channel();
 
     thread::scope(|scope| {
@@ -143,13 +144,18 @@ fn retention_trigger_deletes_only_expired_terminal_runs() {
                 &profile.config,
                 Instant::now() + Duration::from_secs(2),
                 Some(std::env::current_exe().unwrap()),
-                Some(trigger_rx),
+                Some(RetentionScheduleTestControl {
+                    trigger: trigger_rx,
+                    checked: checked_tx,
+                }),
                 stop_rx,
             )
             .unwrap();
         });
+        checked_rx.recv_timeout(Duration::from_secs(2)).unwrap();
         write_retention_choice(&profile.config, RetentionChoice::DeleteAfter30Days).unwrap();
         trigger_tx.send(()).unwrap();
+        checked_rx.recv_timeout(Duration::from_secs(2)).unwrap();
         let deadline = Instant::now() + Duration::from_secs(2);
         loop {
             let mut storage = storage.lock().unwrap();
@@ -163,5 +169,107 @@ fn retention_trigger_deletes_only_expired_terminal_runs() {
         }
         stop_tx.send(()).unwrap();
         activation.join().unwrap();
+
+        let stopped = "01900000-0000-7000-8000-000000000013";
+        storage
+            .lock()
+            .unwrap()
+            .journal
+            .append_batch(
+                0,
+                &[
+                    event(
+                        stopped,
+                        "01900000-0000-7000-8000-000000000025",
+                        1,
+                        "run.started",
+                        "2000-01-01T00:00:00Z",
+                    ),
+                    event(
+                        stopped,
+                        "01900000-0000-7000-8000-000000000026",
+                        2,
+                        "run.completed",
+                        "2000-01-01T00:00:00Z",
+                    ),
+                ],
+            )
+            .unwrap();
+        let _ = trigger_tx.send(());
+        assert!(checked_rx.recv_timeout(Duration::from_millis(100)).is_err());
+        assert_eq!(
+            storage
+                .lock()
+                .unwrap()
+                .journal
+                .events(stopped)
+                .unwrap()
+                .len(),
+            2
+        );
     });
+}
+
+#[test]
+fn blocked_ownership_does_not_start_retention() {
+    muniment_core::chat_prompt::use_mock_keyring_for_tests();
+    let profile = TemporaryProfile::new("activation-retention-lock", false);
+    fs::set_permissions(&profile.root, fs::Permissions::from_mode(0o700)).unwrap();
+    let storage = open_profile_storage(&profile.profile).unwrap();
+    let expired = "01900000-0000-7000-8000-000000000031";
+    storage
+        .lock()
+        .unwrap()
+        .journal
+        .append_batch(
+            0,
+            &[
+                event(
+                    expired,
+                    "01900000-0000-7000-8000-000000000032",
+                    1,
+                    "run.started",
+                    "2000-01-01T00:00:00Z",
+                ),
+                event(
+                    expired,
+                    "01900000-0000-7000-8000-000000000033",
+                    2,
+                    "run.completed",
+                    "2000-01-01T00:00:00Z",
+                ),
+            ],
+        )
+        .unwrap();
+    write_retention_choice(&profile.config, RetentionChoice::DeleteAfter30Days).unwrap();
+    let filesystem = AttachFilesystem::from_runtime_directory(&profile.root).unwrap();
+    let _lock = filesystem.acquire_instance_lock().unwrap();
+    let (_trigger_tx, trigger_rx) = mpsc::channel();
+    let (checked_tx, checked_rx) = mpsc::channel();
+    let (_stop_tx, stop_rx) = mpsc::channel();
+
+    assert!(run_runtime_activation_with_retention_trigger(
+        &profile.root,
+        &profile.profile,
+        &profile.config,
+        Instant::now() + Duration::from_secs(2),
+        Some(std::env::current_exe().unwrap()),
+        Some(RetentionScheduleTestControl {
+            trigger: trigger_rx,
+            checked: checked_tx,
+        }),
+        stop_rx,
+    )
+    .is_err());
+    assert!(checked_rx.try_recv().is_err());
+    assert_eq!(
+        storage
+            .lock()
+            .unwrap()
+            .journal
+            .events(expired)
+            .unwrap()
+            .len(),
+        2
+    );
 }
