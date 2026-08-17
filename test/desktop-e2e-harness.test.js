@@ -969,15 +969,10 @@ describe.skipIf(process.platform === 'win32')('cleanup failure accounting', () =
     expect(invoked.slice(0, 5)).toEqual(['stop-wdio', 'revoke-session', 'stop-app', 'remove-package', 'remove-state'])
     expect(command['stop-wdio']).toBe("stop_matching \\[w\\]dio.\\\*test/e2e/wdio.conf.js ")
     expect(command['revoke-session']).toBe('run_cleanup_e2e ')
-    expect(command['stop-app']).toContain('muniment-runtime')
-    expect(command['stop-app']).toContain('muniment-desktop')
-    expect(command['stop-app']).toContain('pkill\\ -x\\ muniment')
+    expect(command['stop-app']).toBe("bash -c pkill\\ -f\\ \\\'\\^/usr/lib/muniment/muniment-runtime\\(\\ \\|\\$\\)\\'\\ 2\\>/dev/null\\ \\|\\|\\ true\\;\\ pkill\\ -f\\ \\\'\\(\\^\\|/\\)muniment-desktop\\(\\ \\|\\$\\)\\'\\ 2\\>/dev/null\\ \\|\\|\\ true\\;\\ pkill\\ -x\\ muniment\\ 2\\>/dev/null\\ \\|\\|\\ true\\;\\ \\!\\ pgrep\\ -f\\ \\\'\\^/usr/lib/muniment/muniment-runtime\\(\\ \\|\\$\\)\\'\\ \\>/dev/null\\ \\&\\&\\ \\!\\ pgrep\\ -f\\ \\\'\\(\\^\\|/\\)muniment-desktop\\(\\ \\|\\$\\)\\'\\ \\>/dev/null\\ \\&\\&\\ \\!\\ pgrep\\ -x\\ muniment\\ \\>/dev/null ")
     expect(command['remove-package']).toBe('sudo apt-get remove -y muniment ')
     expect(command['package-gone']).toBe('package_absent ')
-    expect(command['processes-gone']).toContain('muniment-runtime')
-    expect(command['processes-gone']).toContain('muniment-desktop')
-    expect(command['processes-gone']).toContain('pgrep\\ -x\\ muniment')
-    expect(command['processes-gone']).toContain('test/e2e/wdio.conf.js')
+    expect(command['processes-gone']).toBe("bash -c \\!\\ pgrep\\ -f\\ \\\'\\^/usr/lib/muniment/muniment-runtime\\(\\ \\|\\$\\)\\'\\ \\&\\&\\ \\!\\ pgrep\\ -f\\ \\\'\\(\\^\\|/\\)muniment-desktop\\(\\ \\|\\$\\)\\'\\ \\&\\&\\ \\!\\ pgrep\\ -x\\ muniment\\ \\&\\&\\ \\!\\ pgrep\\ -f\\ \\\'\\[w\\]dio.\\*test/e2e/wdio.conf.js\\' ")
 
     const target = (label, operation) => {
       const match = command[label].match(new RegExp(`^${operation} ((?:/tmp/[^ ]+)) $`))
