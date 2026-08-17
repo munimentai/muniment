@@ -560,23 +560,49 @@ through one shared handler set (`src-tauri/src/chat.rs:150`, routing tests at
 `:1416`). On the connected path `chat_submit` sends the desktop tracker's
 thread id through the `run.submit` `thread_id` field.
 
-MEASURED 2026-08-16 (eightieth wave, planner, read both `submit_run` halves
-beside the flip) — thread selection is split across the two processes. The
-desktop tracker (`src-tauri/src/chat.rs:334`) and the runtime tracker
-(`src-tauri/runtime/src/attach_state.rs:34`) both exist. For a `run.submit`
-with a null `thread_id`, `RuntimeAttachBoundaries::submit_run`
-(`src-tauri/runtime/src/attach_boundaries.rs:419`) passes
-`continue_existing: true`, so the runtime continues its own tracker's thread,
-while the desktop-owned listener passes `continue_session_thread: false`
-(`src-tauri/src/attach_service.rs:940`) and starts a fresh one. A connected
-New thread prompt would therefore land in a stale thread once the runtime
-owns the listener. The connected `chat_submit` also drops the accepted
-`thread_id` (`src-tauri/src/chat.rs:208`) instead of recording it in the
-desktop tracker, and `chat_select_thread` validates ownership only through
-the local journal (`src-tauri/src/chat_threads.rs:244`), so it has no
-connected path. The `run.submit` and `run.resume` responses already carry
-`thread_id`. The eightieth wave closes this split as the sixth desktop client
-operation tranche.
+DONE 2026-08-16 through 2026-08-17 — the sixth tranche closed the
+thread-selection split (MUNIDESK-1322 through 1327). ADR 0012 names thread
+selection authority, `thread.select` has its fixtures, `dispatch_request`
+serves it to the desktop client and refuses it for a companion
+(`src-tauri/core/src/attach/linux.rs:3771`), and the runtime boundary answers
+it through its service entry. A `run.submit` with no thread id starts a fresh
+thread on both listeners. The connected `chat_select_thread` rides the
+client, and a connected submit sends the desktop tracker's thread and records
+the accepted `thread_id` (`src-tauri/src/chat.rs:168`).
+
+MEASURED 2026-08-17 (eighty-first wave, planner, read the admission gate
+beside the sign-in tranche) — the desktop-client refusal without a signed
+workspace would deadlock the cutover. The runtime listener refuses the
+desktop client route while `SignedWorkspaceApproval` is empty
+(`src-tauri/runtime/src/attach_listener.rs:172`), the approval records only
+when a run grant resolves (`src-tauri/runtime/src/attach_boundaries.rs:208`),
+and on Linux `auth_sign_in` rides the connected client. A fresh runtime would
+refuse the very client that signs in, so no run could ever record the
+workspace. The admission slice supersedes the MUNIDESK-1253 whole-session
+refusal. Companion pairing keeps its fail-closed rule.
+
+MEASURED 2026-08-17 (eighty-first wave, planner, read both sign-out halves) —
+runtime sign-out leaves the signed workspace recorded.
+`RuntimeAttachBoundaries::sign_out`
+(`src-tauri/runtime/src/attach_boundaries.rs:573`) calls `service::sign_out`,
+which clears the entitlement tracker alone. The desktop clears its workspace
+on sign-out before the revocation step (`src-tauri/src/auth/mod.rs:480`), so
+the runtime half is the gap. After the cutover a stale workspace would ride
+companion pairing prompts across accounts.
+
+MEASURED 2026-08-17 (eighty-first wave, planner, read `ChatState::new`) — the
+launch journal open is also a write. `ChatState::new`
+(`src-tauri/src/chat.rs:695`) runs `reconcile_interrupted_runs` on every
+launch, so a desktop that launches while the runtime executes a run would
+mark that live run interrupted. The launch-ownership slice closes this beside
+the read-side double open the seventy-sixth wave measured.
+
+NOT FILED 2026-08-17 (eighty-first wave) — runtime startup workspace
+resolution stays unfiled. The desktop records its workspace only when a run
+grant resolves, and the runtime already does the same. Resolving a grant at
+service start would exceed that parity and spend a network call on every
+login. After a runtime restart, companion pairing waits for one run, which is
+the behavior the desktop has today.
 
 MEASURED 2026-08-16 (eightieth wave, planner, read the `home.ensure` dispatch
 beside the runtime composition) — `home.ensure` needs no conversion slice
@@ -659,24 +685,24 @@ projector always holds state there. A test seam would also prove nothing, becaus
 projector rejects that event too. The lane re-opens this only against a new
 failure route.
 
-MERGE HAZARD — the eightieth-wave slices are filed. The dispatch slice needs
-the wire name the protocol slice adds, the boundary slice answers the entry
-the dispatch slice declares, and the desktop flip calls all three. Every
-ticket tells the implementer to rebase on `main` before it opens the pull
-request. The 2026-08-04 silent revert came from a stale base.
+MERGE HAZARD — the eighty-first-wave slices are filed. The activation slice
+serves the admission the admission slice relaxes, the launch-ownership slice
+removes the second journal owner, and the user unit starts the runtime for
+every login session. The user unit merges last, after activation and launch
+ownership. Every ticket tells the implementer to rebase on `main` before it
+opens the pull request. The 2026-08-04 silent revert came from a stale base.
 
-SELECTED 2026-08-16 (eightieth wave) — six slices in priority order. They
-give thread selection one authority and close the sixth desktop client
-operation tranche.
+SELECTED 2026-08-17 (eighty-first wave) — six slices in priority order. They
+start the Linux cutover.
 
-1. ADR 0012: name the sixth tranche and the selection-authority rule.
-2. Attach protocol: name `thread.select` with fixtures.
-3. Attach dispatch: serve `thread.select` to the desktop client and refuse it
-   for a companion.
-4. Attach boundary: the runtime answers `thread.select`.
-5. Runtime submit: a `run.submit` with no thread id starts a fresh thread.
-6. Desktop flip: `chat_select_thread` rides the connected client, and a
-   connected submit records its accepted thread.
+1. ADR 0012: name the Linux cutover rules.
+2. Attach admission: admit a desktop client while the runtime holds no signed
+   workspace.
+3. Runtime sign-out: clear the recorded signed workspace.
+4. Runtime activation: `main` serves the attach endpoint.
+5. Desktop launch: no journal ownership while another process holds the
+   instance lock.
+6. Linux package: the `muniment-runtime` user unit, merged last.
 
 NOT FILED 2026-08-15 (seventy-fourth wave, planner, read the shell's auth branch
 order) — `auth_status` keeps its local keychain read before the cutover. The
@@ -686,13 +712,14 @@ screen where the design shows the notice. `service::session_status` reads the
 keychain and takes no activity mark, so the local read returns the same answer the
 service would. The cutover moves this read with the credential store.
 
-SEQUENCED 2026-08-15 (seventy-seventh wave) — the decision comes before the
-wire, the wire before the dispatch, the dispatch before the broadcast, and the
-broadcast before its client and its one caller. The five run commands followed
-the event channel, and the sixth tranche now closes the tracker split the same
-paragraph predicted. The Linux cutover follows the sixth tranche, and it
-carries the user unit, the `auth_status` move, and the runtime's signed
-workspace. Remote Control follows the cutover.
+SEQUENCED 2026-08-17 (eighty-first wave) — the sixth tranche is built, and
+the Linux cutover slices are filed: the decision, the admission, the sign-out
+clear, the activation, the launch-ownership flip, and the user unit, in that
+order. The `auth_status` flip follows the cutover as its own slice, because
+`session.status` already rides the wire
+(`src-tauri/core/src/attach/linux.rs:2890`) and the typed holder call exists
+(`src-tauri/attach/src/client.rs:1493`), so only the desktop command and the
+shell branch order remain. Remote Control follows the cutover.
 
 NOT FILED 2026-08-14 (seventy-second wave, planner, read the seventy-second-wave
 selection beside its own sequencing rule) — Linux user-unit registration stays
@@ -1172,9 +1199,9 @@ earlier one. Requiring an up-to-date branch before merge, or a merge queue, is a
 repository-settings change that sits with the owner. The planner files no ticket
 for it.
 
-VERIFIED 2026-08-16 (eightieth wave, planner) — one
+VERIFIED 2026-08-17 (eighty-first wave, planner) — one
 `cargo test -p muniment-core -p muniment-runtime -p muniment-attach` run started
-from `src-tauri` passes 1,380 tests, and the build prints no warning. One
+from `src-tauri` passes 1,387 tests, and the build prints no warning. One
 `npm ci` then `npm test` run passes 941 frontend tests over 63 files with 31
 skipped, plus 3 browser tests. Start cargo from `src-tauri`, because the
 repository root holds no `Cargo.toml`. A run started from the root dies with
