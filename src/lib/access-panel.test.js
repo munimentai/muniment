@@ -43,6 +43,16 @@ function renderPanel(invoke) {
   } })
 }
 
+function deferred() {
+  let resolve
+  let reject
+  const promise = new Promise((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise
+    reject = rejectPromise
+  })
+  return { promise, resolve, reject }
+}
+
 function companionInvoke(revoke = async () => {}) {
   return vi.fn(async (command, args) => {
     if (command === 'auth_entitlement_snapshot') return snapshot
@@ -107,6 +117,73 @@ describe('access popover layout', () => {
 
     await waitFor(() => expect(screen.getByRole('radio', { name: 'Delete after 90 days' })).toBeChecked())
     expect(invoke.mock.calls.filter(([command]) => command === 'thread_retention_choice')).toHaveLength(2)
+  })
+
+  it('keeps a save active when the popover reloads before the save resolves', async () => {
+    const save = deferred()
+    const reload = deferred()
+    let loadCalls = 0
+    const invoke = companionInvoke()
+    invoke.mockImplementation(async (command) => {
+      if (command === 'thread_retention_choice') {
+        loadCalls += 1
+        return loadCalls === 1 ? 'keep_every_thread' : reload.promise
+      }
+      if (command === 'record_thread_retention_choice') return save.promise
+      if (command === 'auth_entitlement_snapshot') return snapshot
+      if (command === 'auth_devices') return []
+      if (command === 'attach_companions') return [companion]
+      if (command === 'attach_listener_status') return { started: true, failure: null }
+      throw new Error(`unexpected command: ${command}`)
+    })
+    renderPanel(invoke)
+    await fireEvent.click(await screen.findByRole('button', { name: /Alice/ }))
+    await fireEvent.click(screen.getByRole('radio', { name: 'Delete after 90 days' }))
+    await fireEvent.click(screen.getByRole('button', { name: 'Close profile' }))
+    await fireEvent.click(screen.getByRole('button', { name: /Alice/ }))
+
+    expect(screen.getByRole('radio', { name: 'Delete after 90 days' })).toBeDisabled()
+    save.resolve()
+
+    await waitFor(() => {
+      expect(screen.getByRole('radio', { name: 'Delete after 90 days' })).toBeChecked()
+      expect(screen.getByRole('radio', { name: 'Delete after 90 days' })).toBeEnabled()
+    })
+    reload.resolve(null)
+    await reload.promise
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(screen.getByRole('radio', { name: 'Delete after 90 days' })).toBeChecked()
+  })
+
+  it('restores the recorded choice and retries a failed save', async () => {
+    const firstSave = deferred()
+    const invoke = companionInvoke()
+    invoke.mockImplementation(async (command, args) => {
+      if (command === 'thread_retention_choice') return 'keep_every_thread'
+      if (command === 'record_thread_retention_choice') {
+        if (invoke.mock.calls.filter(([called]) => called === command).length === 1) return firstSave.promise
+        expect(args).toEqual({ choice: 'delete_after_30_days' })
+        return
+      }
+      if (command === 'auth_entitlement_snapshot') return snapshot
+      if (command === 'auth_devices') return []
+      if (command === 'attach_companions') return [companion]
+      if (command === 'attach_listener_status') return { started: true, failure: null }
+      throw new Error(`unexpected command: ${command}`)
+    })
+    renderPanel(invoke)
+    await fireEvent.click(await screen.findByRole('button', { name: /Alice/ }))
+    await fireEvent.click(screen.getByRole('radio', { name: 'Delete after 30 days' }))
+    firstSave.reject(new Error('save failed'))
+
+    expect(await screen.findByText('Thread retention could not be saved.')).toBeInTheDocument()
+    expect(screen.getByRole('radio', { name: 'Keep every thread' })).toBeChecked()
+    expect(screen.getByRole('radio', { name: 'Delete after 30 days' })).not.toBeChecked()
+    await fireEvent.click(screen.getByRole('button', { name: 'Try again' }))
+
+    await waitFor(() => expect(screen.getByRole('radio', { name: 'Delete after 30 days' })).toBeChecked())
+    expect(screen.queryByText('Thread retention could not be saved.')).not.toBeInTheDocument()
+    expect(invoke.mock.calls.filter(([command]) => command === 'record_thread_retention_choice')).toHaveLength(2)
   })
 
   it('bounds the column while only its content region scrolls', () => {

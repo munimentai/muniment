@@ -24,8 +24,12 @@
   let revokePending = $state(false)
   let revokeError = $state('')
   let retentionChoice = $state('keep_every_thread')
+  let recordedRetentionChoice = $state('keep_every_thread')
   let retentionSaving = $state(false)
-  let retentionRequest = 0
+  let retentionError = $state('')
+  let retentionRetryChoice = $state(null)
+  let retentionLoadRequest = 0
+  let retentionSaveRequest = 0
   let attachListenerPoll = 0
   let profileName = $derived(profileSnapshot?.user_display_name ?? subject ?? 'Signed in')
   let profileDetails = $derived(profileSnapshot ? `${profileSnapshot.organization_display_name ?? profileSnapshot.org_id} · ${profileSnapshot.role}` : 'Access unavailable')
@@ -77,24 +81,38 @@
   }
 
   async function loadRetentionChoice() {
-    const request = ++retentionRequest
+    const request = ++retentionLoadRequest
+    const saveRequest = retentionSaveRequest
     try {
       const choice = await tauri.invoke('thread_retention_choice')
-      if (request === retentionRequest) retentionChoice = choice ?? 'keep_every_thread'
+      if (request === retentionLoadRequest && saveRequest === retentionSaveRequest && !retentionSaving) {
+        recordedRetentionChoice = choice ?? 'keep_every_thread'
+        retentionChoice = recordedRetentionChoice
+      }
     } catch (_) {
-      if (request === retentionRequest) retentionChoice = 'keep_every_thread'
+      if (request === retentionLoadRequest && saveRequest === retentionSaveRequest && !retentionSaving) {
+        recordedRetentionChoice = 'keep_every_thread'
+        retentionChoice = recordedRetentionChoice
+      }
     }
   }
 
   async function chooseRetention(choice) {
-    const request = ++retentionRequest
+    retentionSaveRequest += 1
+    retentionChoice = choice
     retentionSaving = true
+    retentionError = ''
+    retentionRetryChoice = null
     try {
       await tauri.invoke('record_thread_retention_choice', { choice })
-      if (request === retentionRequest) retentionChoice = choice
+      recordedRetentionChoice = choice
     } catch (_) {
+      retentionChoice = recordedRetentionChoice
+      retentionError = 'Thread retention could not be saved.'
+      retentionRetryChoice = choice
     } finally {
-      if (request === retentionRequest) retentionSaving = false
+      retentionSaving = false
+      retentionSaveRequest += 1
     }
   }
 
@@ -293,6 +311,7 @@
               <label><input type="radio" name="thread-retention" value={option[1]} checked={retentionChoice === option[1]} disabled={retentionSaving} onchange={() => chooseRetention(option[1])} /> <span>{option[0]}</span></label>
             {/each}
           </div>
+          {#if retentionError}<div class="access-status" role="alert"><p>{retentionError}</p><button onclick={() => chooseRetention(retentionRetryChoice)}>Try again</button></div>{/if}
         </section>
         <section class="entitlements-section" aria-labelledby="entitlements-heading">
           <div class="access-heading"><h3 id="entitlements-heading" class="access-label">Your access</h3>{#if access.name === 'ready'}<p>Snapshot v{access.snapshot.snapshot_version}</p>{/if}</div>
