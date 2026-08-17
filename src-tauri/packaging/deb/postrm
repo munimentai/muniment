@@ -1,0 +1,8 @@
+#!/bin/sh
+set -e
+
+if [ "$1" = "remove" ] || [ "$1" = "purge" ]; then
+  rm -f /etc/systemd/user/default.target.wants/muniment-runtime.service
+fi
+
+exit 0
