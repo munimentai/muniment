@@ -685,25 +685,25 @@ projector always holds state there. A test seam would also prove nothing, becaus
 projector rejects that event too. The lane re-opens this only against a new
 failure route.
 
-MERGE HAZARD — the eighty-first-wave slices are filed. The activation slice
-serves the admission the admission slice relaxes, the launch-ownership slice
-removes the second journal owner, and the user unit starts the runtime for
-every login session. The user unit merges last, after activation and launch
-ownership. The `auth_status` flip follows the user unit as a separate slice.
-Every ticket tells the implementer to rebase on `main` before it opens the pull
+MERGE HAZARD — `main` contains the eighty-first-wave slices in their required
+order. The activation slice serves the relaxed admission. The launch-ownership
+slice removes the second journal owner. The user unit starts the runtime for
+every login session. The user unit merged last after activation and launch
+ownership. The `auth_status` flip follows the completed cutover as a separate
+slice. The `auth_status` flip must rebase on `main` before it opens the pull
 request. The 2026-08-04 silent revert came from a stale base.
 
-SELECTED 2026-08-17 (eighty-first wave) — six slices in priority order. They
-complete the Linux cutover before the separate `auth_status` flip.
+BUILT 2026-08-17 (eighty-first wave) — `main` contains six slices in priority
+order. They complete the Linux cutover before the separate `auth_status` flip.
 
-1. ADR 0012: name the Linux cutover rules.
+1. ADR 0012: name the Linux cutover rules (MUNIDESK-1329).
 2. Attach admission: admit a desktop client while the runtime holds no signed
-   workspace.
-3. Runtime sign-out: clear the recorded signed workspace.
-4. Runtime activation: `main` serves the attach endpoint.
+   workspace (MUNIDESK-1330).
+3. Runtime sign-out: clear the recorded signed workspace (MUNIDESK-1331).
+4. Runtime activation: `main` serves the attach endpoint (MUNIDESK-1332).
 5. Desktop launch: no journal ownership while another process holds the
-   instance lock.
-6. Linux package: the `muniment-runtime` user unit, merged last.
+   instance lock (MUNIDESK-1333).
+6. Linux package: the `muniment-runtime` user unit, merged last (MUNIDESK-1334).
 
 NOT FILED 2026-08-15 (seventy-fourth wave, planner, read the shell's auth branch
 order) — `auth_status` keeps its local keychain read before the cutover. The
@@ -715,9 +715,10 @@ service would. The cutover leaves this read local. A separate slice moves it
 after the user unit lands.
 
 SEQUENCED 2026-08-17 (eighty-first wave) — the sixth tranche is built, and
-the Linux cutover slices are filed: the decision, the admission, the sign-out
-clear, the activation, the launch-ownership flip, and the user unit, in that
-order. The `auth_status` flip follows the user unit as its own slice, because
+`main` contains the Linux cutover slices: the decision, the admission, the
+sign-out clear, the activation, the launch-ownership flip, and the user unit,
+in that order. The `auth_status` flip follows the user unit as its own slice,
+because
 `session.status` already rides the wire
 (`src-tauri/core/src/attach/linux.rs:2890`) and the typed holder call exists
 (`src-tauri/attach/src/client.rs:1493`), so only the desktop command and the
