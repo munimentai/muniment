@@ -77,7 +77,9 @@ where
         AttachFilesystem::from_runtime_directory(profile_directory.as_ref().as_os_str())
             .map_err(map_filesystem_error)?;
 
-    request_handoff(&filesystem, &nonce, deadline)?;
+    if !request_handoff(&filesystem, &nonce, deadline, &stop)? {
+        return Ok(());
+    }
 
     let instance_lock = loop {
         check_deadline(deadline)?;
@@ -110,7 +112,8 @@ fn request_handoff(
     filesystem: &AttachFilesystem,
     nonce: &str,
     deadline: Instant,
-) -> Result<(), MigrationTakeoverError> {
+    stop: &Receiver<()>,
+) -> Result<bool, MigrationTakeoverError> {
     loop {
         let io_timeout = remaining(deadline)?;
         let stream = connect_before(filesystem.endpoint_path(), deadline)?;
@@ -131,20 +134,37 @@ fn request_handoff(
             .map_err(|error| control_request_error_before(error, deadline))?;
         drop(deadline_guard);
         match outcome {
-            MigrationControlOutcome::Accepted => return Ok(()),
+            MigrationControlOutcome::Accepted => return Ok(true),
             MigrationControlOutcome::MigrationNotReady { retryable: true } => {
-                wait_to_retry(deadline)?
+                if stop_before_retry(stop, deadline)? {
+                    return Ok(false);
+                }
             }
             MigrationControlOutcome::MigrationNotReady { retryable: false } => {
-                return Err(MigrationTakeoverError::MigrationNotReady)
+                if stop_before_retry(stop, deadline)? {
+                    return Ok(false);
+                }
             }
             MigrationControlOutcome::Unauthorized => {
                 return Err(MigrationTakeoverError::Unauthorized)
             }
             MigrationControlOutcome::UnsupportedOperation => {
-                return Err(MigrationTakeoverError::UnsupportedOperation)
+                if stop_before_retry(stop, deadline)? {
+                    return Ok(false);
+                }
             }
         }
+    }
+}
+
+fn stop_before_retry(
+    stop: &Receiver<()>,
+    deadline: Instant,
+) -> Result<bool, MigrationTakeoverError> {
+    let wait = remaining(deadline)?.min(RETRY_INTERVAL);
+    match stop.recv_timeout(wait) {
+        Ok(()) | Err(mpsc::RecvTimeoutError::Disconnected) => Ok(true),
+        Err(mpsc::RecvTimeoutError::Timeout) => Ok(false),
     }
 }
 

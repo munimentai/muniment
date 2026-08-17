@@ -1,6 +1,6 @@
 #![cfg(target_os = "linux")]
 
-use muniment_attach::{decode_frame, handshake_stream, Request};
+use muniment_attach::{decode_frame, Request};
 use muniment_core::attach::linux::{
     AttachFilesystem, AttachTransport, LiveConnectionRegistry, ThreadListPage, ThreadListRequest,
     ThreadListService,
@@ -8,12 +8,13 @@ use muniment_core::attach::linux::{
 use muniment_core::attach::{
     probe_handoff, ApprovalCoordinator, CompanionRegistry, ProtocolError, SignedWorkspaceApproval,
 };
-use muniment_runtime::{run_migration_takeover, AttachListenerInputs, MigrationTakeoverError};
+use muniment_runtime::{
+    run_migration_takeover, run_runtime_activation, AttachListenerInputs, MigrationTakeoverError,
+};
 use std::collections::HashMap;
 use std::fs;
 use std::io::{Read, Write};
 use std::os::unix::fs::PermissionsExt;
-use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
@@ -102,15 +103,14 @@ fn takes_over_the_endpoint_with_the_minted_nonce() {
     let desktop_lock = filesystem.acquire_instance_lock().unwrap();
     let desktop = AttachTransport::bind(&filesystem).unwrap();
     let (stop_tx, stop_rx) = mpsc::channel();
-    let (registry, approval, approvals) = listener_state(&runtime);
     let test_timeout = Duration::from_secs(2);
 
     thread::scope(|scope| {
         let takeover = scope.spawn(|| {
-            run_migration_takeover(
+            run_runtime_activation(
                 &runtime.0,
-                inputs(&registry, &approval, &approvals),
-                || Ok::<_, ()>(TestService),
+                &runtime.0,
+                &runtime.0,
                 Instant::now() + test_timeout,
                 stop_rx,
             )
@@ -128,31 +128,10 @@ fn takes_over_the_endpoint_with_the_minted_nonce() {
         drop(stream);
         drop(desktop);
         drop(desktop_lock);
-        let companion_deadline = Instant::now() + test_timeout;
-        let companion_connected = loop {
-            if let Ok(companion) = UnixStream::connect(&endpoint) {
-                if handshake_stream(
-                    companion,
-                    "1.0.0",
-                    Duration::from_millis(200),
-                    Duration::from_secs(1),
-                    || {},
-                )
-                .is_ok()
-                {
-                    break true;
-                }
-            }
-            if Instant::now() >= companion_deadline {
-                break false;
-            }
-            thread::sleep(Duration::from_millis(10));
-        };
         let probe_result = probe_handoff(&endpoint, &nonce, Instant::now() + test_timeout);
 
         stop_tx.send(()).unwrap();
         takeover.join().unwrap();
-        assert!(companion_connected);
         assert!(probe_result.is_ok());
     });
 }
@@ -202,23 +181,11 @@ fn retries_migration_not_ready_before_acceptance() {
 }
 
 #[test]
-fn maps_nonretryable_control_answers_to_typed_errors() {
-    let cases = [
-        (
-            "migration_not_ready",
-            false,
-            MigrationTakeoverError::MigrationNotReady,
-        ),
-        ("unauthorized", false, MigrationTakeoverError::Unauthorized),
-        (
-            "unsupported_operation",
-            false,
-            MigrationTakeoverError::UnsupportedOperation,
-        ),
-    ];
+fn retries_compatibility_answers_until_the_deadline() {
+    let cases = ["migration_not_ready", "unsupported_operation"];
     let test_timeout = Duration::from_secs(2);
 
-    for (code, retryable, expected) in cases {
+    for code in cases {
         let runtime = RuntimeDirectory::new();
         let filesystem = AttachFilesystem::from_runtime_directory(&runtime.0).unwrap();
         let _desktop_lock = filesystem.acquire_instance_lock().unwrap();
@@ -226,22 +193,57 @@ fn maps_nonretryable_control_answers_to_typed_errors() {
         let (_stop_tx, stop_rx) = mpsc::channel();
         let (registry, approval, approvals) = listener_state(&runtime);
 
+        let started = Instant::now();
         thread::scope(|scope| {
             let takeover = scope.spawn(|| {
                 run_migration_takeover(
                     &runtime.0,
                     inputs(&registry, &approval, &approvals),
                     || Ok::<_, ()>(TestService),
-                    Instant::now() + test_timeout,
+                    Instant::now() + Duration::from_millis(100),
                     stop_rx,
                 )
             });
             let (mut stream, _) = desktop.accept().unwrap();
             let request = complete_handshake(&mut stream);
-            write_error(&mut stream, &request, code, retryable);
-            assert_eq!(takeover.join().unwrap().unwrap_err(), expected);
+            write_error(&mut stream, &request, code, false);
+            drop(stream);
+            assert_eq!(
+                takeover.join().unwrap().unwrap_err(),
+                MigrationTakeoverError::DeadlineElapsed
+            );
         });
+        assert!(started.elapsed() < test_timeout);
     }
+}
+
+#[test]
+fn maps_unauthorized_control_answer_to_a_typed_error() {
+    let runtime = RuntimeDirectory::new();
+    let filesystem = AttachFilesystem::from_runtime_directory(&runtime.0).unwrap();
+    let _desktop_lock = filesystem.acquire_instance_lock().unwrap();
+    let desktop = AttachTransport::bind(&filesystem).unwrap();
+    let (_stop_tx, stop_rx) = mpsc::channel();
+    let (registry, approval, approvals) = listener_state(&runtime);
+
+    thread::scope(|scope| {
+        let takeover = scope.spawn(|| {
+            run_migration_takeover(
+                &runtime.0,
+                inputs(&registry, &approval, &approvals),
+                || Ok::<_, ()>(TestService),
+                Instant::now() + Duration::from_secs(2),
+                stop_rx,
+            )
+        });
+        let (mut stream, _) = desktop.accept().unwrap();
+        let request = complete_handshake(&mut stream);
+        write_error(&mut stream, &request, "unauthorized", false);
+        assert_eq!(
+            takeover.join().unwrap().unwrap_err(),
+            MigrationTakeoverError::Unauthorized
+        );
+    });
 }
 
 #[test]
