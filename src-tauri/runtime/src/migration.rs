@@ -72,6 +72,30 @@ where
     S: ThreadListService + Send + 'static,
     F: Fn() -> Result<S, E> + Send + Sync + 'static,
 {
+    run_migration_takeover_with_activation(
+        profile_directory,
+        listener_inputs,
+        service_factory,
+        deadline,
+        || {},
+        stop,
+    )
+}
+
+/// Requests a migration handoff and calls `activated` after taking ownership.
+pub(crate) fn run_migration_takeover_with_activation<S, F, E, A>(
+    profile_directory: impl AsRef<Path>,
+    listener_inputs: AttachListenerInputs<'_>,
+    service_factory: F,
+    deadline: Instant,
+    activated: A,
+    stop: Receiver<()>,
+) -> Result<(), MigrationTakeoverError>
+where
+    S: ThreadListService + Send + 'static,
+    F: Fn() -> Result<S, E> + Send + Sync + 'static,
+    A: FnOnce(),
+{
     let nonce = mint_handoff_nonce().map_err(map_nonce_error)?;
     let filesystem =
         AttachFilesystem::from_runtime_directory(profile_directory.as_ref().as_os_str())
@@ -104,6 +128,7 @@ where
             }
         }
     };
+    activated();
 
     run_bound_attach_listener(
         instance_lock,
