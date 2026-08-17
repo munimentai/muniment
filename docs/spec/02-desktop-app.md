@@ -22,7 +22,15 @@ Expanded by default (260px), state remembered; collapse (`⌘\`) animates 180ms 
 
 Top→bottom: **New thread** (`⌘N`) · **Search** (`⌘F` global) · **Threads** (recents; title + relative time, no content previews; context menu: rename, share to project…, delete) · **Projects** (section renders only if the user belongs to ≥1 project; solo users never see the concept) · **Inbox** (only if the user owns workflows or belongs to a project) · **Profile block**.
 
-**Profile block:** no avatar. `mikey · dnsfilter · owner` — name grotesque, org+role mono muted. Click → popover: appearance (System/Light/Dark), **Your access**, keyboard shortcuts, sign out.
+**Profile block:** no avatar. `mikey · dnsfilter · owner`. The name uses grotesque, with the org and role in muted mono. Click → popover: **Appearance** (System/Light/Dark), **Thread retention**, **Your access**, **Devices**, **Connected programs**, and **Voice shortcut**, above a fixed **Sign out** footer.
+
+#### Thread retention
+
+The profile popover places **Thread retention** after **Appearance** and before **Your access**. It says "Choose how long Muniment keeps completed threads." The options are "Keep every thread", "Delete after 30 days", "Delete after 90 days", and "Delete after 1 year". "Keep every thread" is the selected default when no choice exists.
+
+The app records a user choice in `thread-retention.json` under the app config directory. It adds no journal table or column. A missing, malformed, or unrecognized record counts as no choice, so no process runs retention. Choosing "Keep every thread" records the choice but does not delete any thread.
+
+The process that owns the journal enforces a recorded age limit. On Linux, the user-level runtime service owns enforcement. On macOS and Windows, the desktop process owns enforcement. The owner reads the record once at startup and every 24 hours while it runs. Each check deletes only runs with a terminal event older than the selected age.
 
 #### Your access
 
