@@ -204,6 +204,7 @@ const eventListeners = []
 const invokedCommands = []
 let callbackId = 0
 let currentThreadId = history.length ? 'probe-thread' : null
+let retentionChoice = null
 
 function recordInvoke(surface, command, payload) {
   invokedCommands.push({ surface, command, payload })
@@ -228,7 +229,7 @@ function fixtureRendered() {
   if (accessFixture) {
     const popover = document.querySelector('.access-popover')
     const headings = Array.from(popover?.querySelectorAll('.access-label') ?? [], (heading) => heading.textContent)
-    return ['Appearance', 'Your access', 'Devices', 'Connected programs', 'Voice shortcut']
+    return ['Appearance', 'Thread retention', 'Your access', 'Devices', 'Connected programs', 'Voice shortcut']
       .every((heading) => headings.includes(heading))
       && popover.querySelector('.current-device')?.textContent === 'This device'
       && popover.querySelector('.revoked .device-state')?.textContent === 'Revoked'
@@ -426,6 +427,11 @@ window.__TAURI__ = {
             },
           ]
         : []
+      if (command === 'thread_retention_choice') return retentionChoice
+      if (command === 'record_thread_retention_choice') {
+        retentionChoice = payload.choice
+        return null
+      }
       if (command === 'attach_listener_status') return { started: true, failure: null, connected: false, supervisor_running: false }
       if (command === 'attach_companions') return [
         {

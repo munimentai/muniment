@@ -65,6 +65,50 @@ afterEach(() => {
 })
 
 describe('access popover layout', () => {
+  it('renders thread retention after appearance with the default choice selected', async () => {
+    renderPanel(companionInvoke())
+    await fireEvent.click(await screen.findByRole('button', { name: /Alice/ }))
+
+    const sections = [...screen.getByRole('dialog', { name: 'Profile' }).querySelectorAll('.access-content > section')]
+    expect(sections.slice(0, 3).map((section) => section.getAttribute('aria-labelledby'))).toEqual([
+      'appearance-heading',
+      'retention-heading',
+      'entitlements-heading',
+    ])
+    expect(screen.getByText('Choose how long Muniment keeps completed threads.')).toBeInTheDocument()
+    expect(screen.getByRole('radio', { name: 'Keep every thread' })).toBeChecked()
+    expect(screen.getByRole('radio', { name: 'Delete after 30 days' })).not.toBeChecked()
+    expect(screen.getByRole('radio', { name: 'Delete after 90 days' })).not.toBeChecked()
+    expect(screen.getByRole('radio', { name: 'Delete after 1 year' })).not.toBeChecked()
+  })
+
+  it('records a thread retention choice and restores it after reopening', async () => {
+    let recordedChoice = null
+    const invoke = companionInvoke(async () => {})
+    invoke.mockImplementation(async (command, args) => {
+      if (command === 'thread_retention_choice') return recordedChoice
+      if (command === 'record_thread_retention_choice') {
+        recordedChoice = args.choice
+        return
+      }
+      if (command === 'auth_entitlement_snapshot') return snapshot
+      if (command === 'auth_devices') return []
+      if (command === 'attach_companions') return [companion]
+      if (command === 'attach_listener_status') return { started: true, failure: null }
+      throw new Error(`unexpected command: ${command}`)
+    })
+    renderPanel(invoke)
+    await fireEvent.click(await screen.findByRole('button', { name: /Alice/ }))
+    await fireEvent.click(screen.getByRole('radio', { name: 'Delete after 90 days' }))
+
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('record_thread_retention_choice', { choice: 'delete_after_90_days' }))
+    await fireEvent.click(screen.getByRole('button', { name: 'Close profile' }))
+    await fireEvent.click(screen.getByRole('button', { name: /Alice/ }))
+
+    await waitFor(() => expect(screen.getByRole('radio', { name: 'Delete after 90 days' })).toBeChecked())
+    expect(invoke.mock.calls.filter(([command]) => command === 'thread_retention_choice')).toHaveLength(2)
+  })
+
   it('bounds the column while only its content region scrolls', () => {
     expect(rules.get('.access-popover')).toMatch(/max-height:\s*calc\(100vh\s*-\s*82px\)/)
     expect(rules.get('.access-popover')).toMatch(/display:\s*flex/)

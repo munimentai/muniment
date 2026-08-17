@@ -23,11 +23,20 @@
   let revokingIdentity = $state(null)
   let revokePending = $state(false)
   let revokeError = $state('')
+  let retentionChoice = $state('keep_every_thread')
+  let retentionSaving = $state(false)
+  let retentionRequest = 0
   let attachListenerPoll = 0
   let profileName = $derived(profileSnapshot?.user_display_name ?? subject ?? 'Signed in')
   let profileDetails = $derived(profileSnapshot ? `${profileSnapshot.organization_display_name ?? profileSnapshot.org_id} · ${profileSnapshot.role}` : 'Access unavailable')
 
   const themeOptions = [['System', 'system'], ['Light', 'light'], ['Dark', 'dark']]
+  const retentionOptions = [
+    ['Keep every thread', 'keep_every_thread'],
+    ['Delete after 30 days', 'delete_after_30_days'],
+    ['Delete after 90 days', 'delete_after_90_days'],
+    ['Delete after 1 year', 'delete_after_1_year'],
+  ]
 
   onDestroy(() => { attachListenerPoll += 1 })
 
@@ -62,8 +71,31 @@
 
   function openAccess() {
     loadAccess(true)
+    loadRetentionChoice()
     loadDevices()
     loadCompanions()
+  }
+
+  async function loadRetentionChoice() {
+    const request = ++retentionRequest
+    try {
+      const choice = await tauri.invoke('thread_retention_choice')
+      if (request === retentionRequest) retentionChoice = choice ?? 'keep_every_thread'
+    } catch (_) {
+      if (request === retentionRequest) retentionChoice = 'keep_every_thread'
+    }
+  }
+
+  async function chooseRetention(choice) {
+    const request = ++retentionRequest
+    retentionSaving = true
+    try {
+      await tauri.invoke('record_thread_retention_choice', { choice })
+      if (request === retentionRequest) retentionChoice = choice
+    } catch (_) {
+    } finally {
+      if (request === retentionRequest) retentionSaving = false
+    }
   }
 
   async function loadDevices() {
@@ -253,6 +285,15 @@
             {/each}
           </div>
         </section>
+        <section class="retention-section" aria-labelledby="retention-heading">
+          <h3 id="retention-heading" class="access-label">Thread retention</h3>
+          <p class="retention-help">Choose how long Muniment keeps completed threads.</p>
+          <div class="retention-options">
+            {#each retentionOptions as option}
+              <label><input type="radio" name="thread-retention" value={option[1]} checked={retentionChoice === option[1]} disabled={retentionSaving} onchange={() => chooseRetention(option[1])} /> <span>{option[0]}</span></label>
+            {/each}
+          </div>
+        </section>
         <section class="entitlements-section" aria-labelledby="entitlements-heading">
           <div class="access-heading"><h3 id="entitlements-heading" class="access-label">Your access</h3>{#if access.name === 'ready'}<p>Snapshot v{access.snapshot.snapshot_version}</p>{/if}</div>
           {#if access.name === 'loading'}
@@ -380,7 +421,11 @@
   .grant-grid li + li { margin-top: 2px; }
   .empty-grant, .access-status { margin: 8px 0; color: var(--muted); font: var(--text-12) var(--font-mono); }
   .access-status p { margin: 0 0 6px; }
-  .entitlements-section { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--border); }
+  .retention-section, .entitlements-section { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--border); }
+  .retention-help { margin: 0 0 5px; color: var(--muted); font-size: var(--text-12); }
+  .retention-options { display: grid; }
+  .retention-options label { display: flex; min-height: 24px; align-items: center; gap: 7px; font-size: var(--text-12); cursor: pointer; }
+  .retention-options input { min-width: 24px; min-height: 24px; margin: 0; accent-color: var(--ink); cursor: pointer; }
   .access-note { margin: 10px 0 0; color: var(--muted); font-size: var(--text-12); }
   .devices-section { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--border); }
   .companions-section { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--border); }
