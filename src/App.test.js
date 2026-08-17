@@ -4657,6 +4657,7 @@ describe('signed-in access popover', () => {
     expect(signOut.closest('.access-footer')).toBeInTheDocument()
     expect([...content.querySelectorAll(':scope > section')].map((section) => section.getAttribute('aria-labelledby'))).toEqual([
       'appearance-heading',
+      'retention-heading',
       'entitlements-heading',
       'devices-heading',
       'companions-heading',
