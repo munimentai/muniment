@@ -437,7 +437,12 @@ impl RunAttachBoundaries for RuntimeAttachBoundaries {
         }
         let tokens = self.fresh_tokens()?;
         let run_id = new_run_id();
-        let grant = self.configure_run(&run_id, &prompt, &tokens, Some(workspace))?;
+        let grant = self.configure_run(
+            &run_id,
+            &prompt,
+            &tokens,
+            (!workspace.is_empty()).then_some(workspace),
+        )?;
         let files = open_selected_files(files)?;
         let (accepted, launch) = service::accept_prompt(
             &self.profile_directory,
