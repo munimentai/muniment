@@ -13,12 +13,15 @@ mod directories;
 mod migration;
 pub mod service;
 mod sink;
+#[cfg(target_os = "linux")]
+mod upgrade_watch;
 
 #[cfg(target_os = "linux")]
 pub use activation::{
     run_runtime_activation, run_runtime_activation_with_desktop_executable,
-    run_runtime_activation_with_retention_trigger, RetentionScheduleTestControl,
-    RuntimeActivationError,
+    run_runtime_activation_with_retention_trigger, run_runtime_activation_with_upgrade_watch,
+    RetentionScheduleTestControl, RuntimeActivationError, RuntimeActivationExit,
+    UpgradeWatchTestControl,
 };
 #[cfg(target_os = "linux")]
 pub use attach_boundaries::RuntimeAttachBoundaries;

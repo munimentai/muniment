@@ -50,6 +50,8 @@ impl RuntimeAttachState {
         let storage = open_profile_storage(&profile_directory)
             .map_err(|_| ProtocolError::persistence_failed())?;
         let companion_registry = open_companion_registry(&profile_directory)?;
+        let drain_state = DrainState::new();
+        let runtime_activity = RuntimeActivityRegistry::with_drain_state(&drain_state);
 
         Ok(Self {
             memory_runtime: Arc::new(ApplicationMemoryRuntime::new(
@@ -61,8 +63,8 @@ impl RuntimeAttachState {
             storage,
             active: Arc::new(Mutex::new(None)),
             runtime: Arc::new(Mutex::new(None)),
-            runtime_activity: RuntimeActivityRegistry::new(),
-            drain_state: DrainState::new(),
+            runtime_activity,
+            drain_state,
             entitlement_tracker: Arc::new(EntitlementSnapshotTracker::new()),
             approval: SignedWorkspaceApproval::default(),
             session_thread: Arc::new(SessionThread::default()),
@@ -124,6 +126,14 @@ impl RuntimeAttachState {
     /// Returns the workspace approval shared with attach boundaries.
     pub fn signed_workspace_approval(&self) -> SignedWorkspaceApproval {
         self.approval.clone()
+    }
+
+    pub(crate) fn runtime_activity(&self) -> RuntimeActivityRegistry {
+        self.runtime_activity.clone()
+    }
+
+    pub(crate) fn drain_state(&self) -> DrainState {
+        self.drain_state.clone()
     }
 
     /// Applies the retention choice currently recorded for this profile.
