@@ -128,6 +128,7 @@
   let pairingRequests = $state([])
   let desktopClientStatus = $state(null)
   let desktopClientStatusVersion = 0
+  let authRequestVersion = 0
   const artifactShortcut = artifactRailShortcut()
   let destroyed = false
   const sidebarWidth = 260
@@ -622,6 +623,7 @@
   })
 
   async function run(action) {
+    const version = ++authRequestVersion
     const command = {
       status: 'auth_status',
       'sign-in': 'auth_sign_in',
@@ -631,10 +633,11 @@
     if (action === 'sign-in') auth = waitingState()
     try {
       const status = await tauri.invoke(command)
+      if (version !== authRequestVersion) return
       auth = statusState(status)
       if (auth.name === 'signed-in') await chatController.loadHistory()
     } catch (err) {
-      auth = errorState(action, err)
+      if (version === authRequestVersion) auth = errorState(action, err)
     }
   }
 
@@ -650,7 +653,11 @@
     const readDesktopClientStatus = () => {
       const version = desktopClientStatusVersion
       return tauri?.invoke('attach_listener_status').then((status) => {
-        if (version === desktopClientStatusVersion) desktopClientStatus = status
+        if (version === desktopClientStatusVersion) {
+          const connectionRecovered = desktopClientStatus?.connected !== true && status?.connected === true
+          desktopClientStatus = status
+          if (connectionRecovered) void run('status')
+        }
       }).catch(() => {
         if (version === desktopClientStatusVersion) {
           desktopClientStatus = { connected: false, supervisor_running: false }
@@ -661,8 +668,10 @@
     const startDesktopClientStatus = async () => {
       try {
         const stop = await window.__TAURI__?.event?.listen('desktop-client-status-changed', ({ payload }) => {
+          const connectionRecovered = desktopClientStatus?.connected !== true && payload?.connected === true
           desktopClientStatusVersion += 1
           desktopClientStatus = payload
+          if (connectionRecovered) void run('status')
         })
         if (destroyed) stop?.()
         else desktopClientUnlisten = stop
@@ -867,7 +876,8 @@
         <p class="support" aria-live="polite">{auth.name === 'signing-in' ? auth.message : 'Sign in to continue to your workspace.'}</p>
         <button class="primary" class:inactive={auth.name === 'signing-in'} aria-disabled={auth.name === 'signing-in' ? 'true' : undefined} onclick={signIn}>Sign in</button>
       </section>
-    {:else if auth.name === 'signed-in' && desktopClientStatus?.supervisor_running
+    {:else if (auth.name === 'signed-in' || (auth.name === 'error' && auth.retry === 'status'))
+      && desktopClientStatus?.supervisor_running
       && (desktopClientStatus.connected === false || desktopClientStatus.chat_events_connected === false)}
       <section class="auth-state" aria-live="polite">
         <p class="record error-record">Muniment cannot reach its background service.</p>
