@@ -155,8 +155,26 @@ Retention also picks its candidates before it loads them (MUNIDESK-885).
 `apply_retention` (`src-tauri/core/src/journal/retention.rs:55`) skips a run that
 carries no terminal event type or that is newer than the cutoff, and it added no
 column, table, index, or migration. Design-spec §2 now names the visible
-retention surface (MUNIDESK-1341), and the eighty-third wave files the
-enforcement chain that gives retention its first production caller.
+retention surface (MUNIDESK-1341).
+
+DONE 2026-08-17 — the retention enforcement chain is built (MUNIDESK-1343
+through 1346). `src-tauri/core/src/retention_record.rs` holds the
+`RetentionChoice` record with its durable atomic write, `start_retention_schedule`
+(`src-tauri/runtime/src/activation.rs:79`) applies the record on a 24-hour
+schedule wherever the runtime owns the journal, the profile popover carries the
+`Thread retention` section (`src/lib/AccessPanel.svelte:306`), and
+`start_retention_schedule` (`src-tauri/src/chat.rs:794`) runs the same check
+where the desktop owns the journal.
+
+MEASURED 2026-08-17 (eighty-fourth wave, planner, traced
+`record_thread_retention_choice` beside the runtime schedule) — a saved
+retention choice rides no wire. `src-tauri/src/thread_retention.rs` writes
+`thread-retention.json` under the app config directory, and on Linux the
+runtime reads the same file only on its own 24-hour poll, because both
+processes resolve the `ai.muniment.desktop` config directory. The save works,
+but application waits up to a day and the shared-directory dependency is
+recorded nowhere. The eighty-fourth wave files the `retention.recheck`
+operation pair that applies a saved choice promptly.
 
 RULE 2026-07-12 — pre-launch schema work on the desktop's local journal is in
 scope for this lane. The owner's post-go-live restriction applies to the
@@ -420,8 +438,18 @@ a replacement it drains, rejects new work, reaches quiesce, and exits with a
 distinct upgrade-refresh status, so `Restart=on-failure` starts the new
 payload. The desktop compares the attach welcome version with its minimum
 compatible runtime version and holds new runs while the runtime is older. The
-eighty-third wave files the core drain gate with `evaluate_quiesce` and the
-runtime replacement watch. The desktop welcome-version check follows.
+runtime half is built (MUNIDESK-1347, 1348). `evaluate_quiesce`
+(`src-tauri/core/src/attach/quiesce.rs`) accepts a `RuntimeActivity` that
+carries no blocker, `DrainState::admit`
+(`src-tauri/core/src/attach/runtime_activity.rs:27`) refuses a new blocking
+operation while the runtime drains, `UpgradeWatch`
+(`src-tauri/runtime/src/upgrade_watch.rs`) polls the executable's device and
+inode identity each second, and `main` exits with status 75 on the quiesced
+refresh so `Restart=on-failure` starts the new payload. The desktop
+welcome-version check is the eighty-fourth-wave chain. The attach `Welcome`
+already carries the accepting listener's build version in its `desktop_version`
+field, and the desktop handshake reads that field nowhere today
+(`src-tauri/attach/src/client.rs:2938`).
 
 DONE 2026-08-17 — the installed Linux smoke drives the runtime-owned topology
 (MUNIDESK-1339). `test/e2e/runner/linux.sh` starts the runtime service before
@@ -498,14 +526,14 @@ service start would exceed that parity and spend a network call on every
 login. After a runtime restart, companion pairing waits for one run, which is
 the behavior the desktop has today.
 
-SEQUENCED 2026-08-17 (eighty-third wave) — the cutover and its four
-post-cutover decision slices are all built, so this wave files the two
-implementation chains those decisions opened. The thread-retention chain
-builds the core record module, the shared enforcement check with its runtime
-schedule, the popover surface, and the desktop-owned schedule for macOS and
-Windows. The upgrade chain builds the core drain gate with `evaluate_quiesce`
-and the runtime replacement watch with its upgrade-refresh exit. The desktop
-welcome-version check follows next wave. Remote Control stays gated:
+SEQUENCED 2026-08-17 (eighty-fourth wave) — the eighty-third-wave retention
+and upgrade chains are all built (MUNIDESK-1343 through 1348), so this wave
+files the two chains those completions opened. The welcome-version chain
+records the welcome version on the connected desktop client with a fail-closed
+compare rule, holds new runs in the desktop while the runtime is older, and
+shows the pending upgrade in the shell. The retention-propagation pair adds
+the `retention.recheck` attach operation and sends it after a successful save,
+so a saved choice applies without the 24-hour wait. Remote Control stays gated:
 harness-spec §14.1 puts the relay leg on an outbound HTTPS session to
 `api.muniment.ai`, no muniment-cloud relay contract has published, and the
 desktop states remain pending owner mockup confirmation
@@ -982,10 +1010,10 @@ earlier one. Requiring an up-to-date branch before merge, or a merge queue, is a
 repository-settings change that sits with the owner. The planner files no ticket
 for it.
 
-VERIFIED 2026-08-17 (eighty-third wave, planner) — one
+VERIFIED 2026-08-17 (eighty-fourth wave, planner) — one
 `cargo test -p muniment-core -p muniment-runtime -p muniment-attach` run started
-from `src-tauri` passes 1,396 tests, and the build prints no warning. One
-`npm ci` then `npm test` run passes 948 frontend tests over 64 files with 31
+from `src-tauri` passes 1,419 tests, and the build prints no warning. One
+`npm ci` then `npm test` run passes 952 frontend tests over 64 files with 31
 skipped, plus 3 browser tests. Start cargo from `src-tauri`, because the
 repository root holds no `Cargo.toml`. A run started from the root dies with
 `could not find Cargo.toml`, which reads as a broken harness. This entry replaces
