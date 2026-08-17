@@ -46,14 +46,19 @@ fn main() {
                 app_data.join("memory"),
             ));
             app.manage(Arc::clone(&memory_runtime));
-            app.manage(chat::ChatState::new(
-                app.handle(),
-                runtime_activity.clone(),
-            )?);
             #[cfg(target_os = "linux")]
-            attach_service::start_attach_listener(app.handle().clone());
+            {
+                app.manage(chat::ChatState::new(runtime_activity.clone()));
+                attach_service::start_attach_listener(app.handle().clone());
+            }
             #[cfg(not(target_os = "linux"))]
-            app.manage(attach_service::AttachCompanionState::default());
+            {
+                app.manage(chat::ChatState::new(
+                    app.handle(),
+                    runtime_activity.clone(),
+                )?);
+                app.manage(attach_service::AttachCompanionState::default());
+            }
             let parakeet_root = app.path().app_data_dir()?.join("models").join("parakeet");
             app.manage(model_install::ParakeetInstallState::new(
                 parakeet_root.clone(),
