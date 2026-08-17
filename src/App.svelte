@@ -653,7 +653,11 @@
     const readDesktopClientStatus = () => {
       const version = desktopClientStatusVersion
       return tauri?.invoke('attach_listener_status').then((status) => {
-        if (version === desktopClientStatusVersion) desktopClientStatus = status
+        if (version === desktopClientStatusVersion) {
+          const connectionRecovered = desktopClientStatus?.connected !== true && status?.connected === true
+          desktopClientStatus = status
+          if (connectionRecovered) void run('status')
+        }
       }).catch(() => {
         if (version === desktopClientStatusVersion) {
           desktopClientStatus = { connected: false, supervisor_running: false }

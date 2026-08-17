@@ -435,6 +435,26 @@ describe('workspace composer entry', () => {
     expect(statusReads).toBe(2)
   })
 
+  it('reads status when the initial listener status reports recovery without an event', async () => {
+    let statusReads = 0
+    invoke.mockImplementation(async (command) => {
+      if (command === 'auth_status') {
+        statusReads += 1
+        if (statusReads === 1) throw new Error('Muniment cannot reach its background service.')
+        return { signed_in: true, subject: 'token-subject' }
+      }
+      if (command === 'attach_listener_status') return { connected: true, supervisor_running: true }
+      if (command === 'chat_thread_open') return []
+      if (command === 'auth_entitlement_snapshot') return snapshot()
+      if (command === 'chat_thread_summaries') return { summaries: [], nextCursor: null }
+      throw new Error(`unexpected command: ${command}`)
+    })
+    render(App)
+
+    expect(await screen.findByRole('textbox', { name: 'Message' })).toBeInTheDocument()
+    expect(statusReads).toBe(2)
+  })
+
   it('keeps the recovered status when the failed boot read finishes late', async () => {
     const bootStatus = deferred()
     const listenerStatus = deferred()

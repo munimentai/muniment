@@ -785,35 +785,49 @@ mod tests {
 
         fn steps() -> (
             Arc<AtomicUsize>,
+            Arc<AtomicUsize>,
             impl FnOnce() -> Result<AuthStatus, String> + Send + 'static,
             impl FnOnce(DesktopClientHolder) -> Result<AuthStatus, String> + Send + 'static,
         ) {
-            let calls = Arc::new(AtomicUsize::new(0));
-            let local_calls = calls.clone();
-            let connected_calls = calls.clone();
+            let local_calls = Arc::new(AtomicUsize::new(0));
+            let connected_calls = Arc::new(AtomicUsize::new(0));
+            let local_step_calls = local_calls.clone();
+            let connected_step_calls = connected_calls.clone();
             (
-                calls,
+                local_calls,
+                connected_calls,
                 move || {
-                    local_calls.fetch_add(1, Ordering::SeqCst);
+                    local_step_calls.fetch_add(1, Ordering::SeqCst);
                     Ok(signed_out_status())
                 },
                 move |_| {
-                    connected_calls.fetch_add(1, Ordering::SeqCst);
+                    connected_step_calls.fetch_add(1, Ordering::SeqCst);
                     Ok(signed_out_status())
                 },
             )
         }
 
-        for session in [
+        let (local_calls, connected_calls, local, connected) = steps();
+        tauri::async_runtime::block_on(status_for_session(
             DesktopClientSession::NoSupervisor,
-            DesktopClientSession::Connected(DesktopClientHolder::new()),
-        ] {
-            let (calls, local, connected) = steps();
-            tauri::async_runtime::block_on(status_for_session(session, local, connected)).unwrap();
-            assert_eq!(calls.load(Ordering::SeqCst), 1);
-        }
+            local,
+            connected,
+        ))
+        .unwrap();
+        assert_eq!(local_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(connected_calls.load(Ordering::SeqCst), 0);
 
-        let (calls, local, connected) = steps();
+        let (local_calls, connected_calls, local, connected) = steps();
+        tauri::async_runtime::block_on(status_for_session(
+            DesktopClientSession::Connected(DesktopClientHolder::new()),
+            local,
+            connected,
+        ))
+        .unwrap();
+        assert_eq!(local_calls.load(Ordering::SeqCst), 0);
+        assert_eq!(connected_calls.load(Ordering::SeqCst), 1);
+
+        let (local_calls, connected_calls, local, connected) = steps();
         let error = tauri::async_runtime::block_on(status_for_session(
             DesktopClientSession::Disconnected,
             local,
@@ -821,7 +835,8 @@ mod tests {
         ))
         .unwrap_err();
         assert_eq!(error, "Muniment cannot reach its background service.");
-        assert_eq!(calls.load(Ordering::SeqCst), 0);
+        assert_eq!(local_calls.load(Ordering::SeqCst), 0);
+        assert_eq!(connected_calls.load(Ordering::SeqCst), 0);
     }
 
     #[cfg(target_os = "linux")]
