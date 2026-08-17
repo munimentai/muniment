@@ -9,7 +9,7 @@ use muniment_core::run_preparation::{
 };
 use muniment_core::session_thread::SessionThread;
 use muniment_runtime::{
-    create_thread, delete_thread, open_profile_storage, rename_thread, thread_page,
+    create_thread, delete_thread, open_profile_storage, rename_thread, select_thread, thread_page,
     thread_summaries,
 };
 
@@ -159,6 +159,34 @@ fn rejects_a_thread_owned_by_another_subject() {
         .unwrap();
 
     assert_eq!(error, "Conversation history is unavailable.");
+}
+
+#[test]
+fn selects_only_an_owned_accessible_thread() {
+    let temporary_profile = TemporaryProfile::new("thread-select", false);
+    let storage = open_profile_storage(&temporary_profile.profile).unwrap();
+    let thread_id = prepare_run(&storage, "01900000-0000-7000-8000-000000000007", "owner");
+
+    assert!(select_thread(
+        Arc::clone(&storage),
+        Some("owner".into()),
+        thread_id.clone(),
+    )
+    .unwrap());
+    assert!(!select_thread(
+        Arc::clone(&storage),
+        Some("other".into()),
+        thread_id.clone(),
+    )
+    .unwrap());
+
+    delete_thread(
+        Arc::clone(&storage),
+        Some("owner".into()),
+        thread_id.clone(),
+    )
+    .unwrap();
+    assert!(select_thread(storage, Some("owner".into()), thread_id).is_err());
 }
 
 #[test]

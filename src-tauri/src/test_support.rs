@@ -123,6 +123,20 @@ impl FakeRunStartBoundaries {
 
 impl RunAttachBoundaries for FakeRunStartBoundaries {
     #[cfg(target_os = "linux")]
+    fn select_thread(&self, thread_id: &str) -> Result<bool, ProtocolError> {
+        let mut journal = self
+            .journal
+            .lock()
+            .map_err(|_| ProtocolError::persistence_failed())?;
+        muniment_core::thread_ownership::subject_owns_first_run(
+            &mut journal,
+            thread_id,
+            Some("owner"),
+        )
+        .map_err(|_| ProtocolError::thread_not_found())
+    }
+
+    #[cfg(target_os = "linux")]
     fn list_threads(
         &self,
         workspace: &str,

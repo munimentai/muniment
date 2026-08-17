@@ -56,6 +56,8 @@ use muniment_core::run_start::{
     start_desktop_run, ActiveRun, RunAttachBoundaries, RunStartBoundaries, RunStartError,
     RunStartLaunch, RunStartRequest, SubmitResult,
 };
+#[cfg(target_os = "linux")]
+use muniment_core::thread_ownership::subject_owns_first_run;
 use serde_json::{json, Value};
 use std::path::PathBuf;
 use tauri::{Emitter, Manager};
@@ -173,10 +175,13 @@ where
                         .ok_or_else(attachment_error)
                 })
                 .collect::<Result<Vec<_>, _>>()?;
-            client
+            let accepted = client
                 .run_submit(prompt, &file_paths, thread_id.as_deref())
-                .map(submit_result)
-                .map_err(auth::desktop_client_error)
+                .map_err(auth::desktop_client_error)?;
+            state
+                .session_thread
+                .select(accepted.thread_id.clone(), subject);
+            Ok(submit_result(accepted))
         }
         RunCommandSession::Disconnected => Err(auth::background_service_error()),
     }
@@ -392,6 +397,19 @@ impl<R: tauri::Runtime> RunAttachBoundaries for TauriRunStartBoundaries<R> {
             .lock()
             .map_err(|_| ProtocolError::persistence_failed())?;
         ThreadListService::open_thread(&mut storage.journal, workspace, request)
+    }
+
+    #[cfg(target_os = "linux")]
+    fn select_thread(&self, thread_id: &str) -> Result<bool, ProtocolError> {
+        let tokens = auth::fresh_tokens(&self.app.state::<auth::AuthState>(), &self.app)
+            .map_err(|_| ProtocolError::unauthorized())?;
+        let state = self.state();
+        let mut storage = state
+            .storage
+            .lock()
+            .map_err(|_| ProtocolError::persistence_failed())?;
+        subject_owns_first_run(&mut storage.journal, thread_id, tokens.subject.as_deref())
+            .map_err(|_| ProtocolError::thread_not_found())
     }
 
     #[cfg(target_os = "linux")]
@@ -1307,7 +1325,7 @@ mod tests {
             ));
             Ok(RunSubmitAccepted {
                 run_id: "remote-run".to_string(),
-                thread_id: thread_id.unwrap_or_default().to_string(),
+                thread_id: thread_id.unwrap_or("accepted-thread").to_string(),
                 attachments: Vec::new(),
                 committed_seq: 7,
                 accepted_at: "now".to_string(),
@@ -1452,6 +1470,10 @@ mod tests {
         ));
         assert_eq!(connected.unwrap().run_id, "remote-run");
         assert_eq!(
+            state.session_thread.current(Some("subject-1")),
+            Some("selected-thread".to_string())
+        );
+        assert_eq!(
             client.calls(),
             [RunClientCall::Submit(
                 "prompt".to_string(),
@@ -1461,6 +1483,21 @@ mod tests {
         );
         assert!(state.active.lock().unwrap().is_none());
         assert!(state.runtime.lock().unwrap().is_none());
+
+        let new_client = FakeRunClient::default();
+        let created = tauri::async_runtime::block_on(handle_run_submit(
+            RunCommandSession::Connected(new_client),
+            &state,
+            Some("subject-2"),
+            "new prompt",
+            vec![],
+            |_| async { panic!("connected submit called the local operation") },
+        ));
+        assert!(created.is_ok());
+        assert_eq!(
+            state.session_thread.current(Some("subject-2")),
+            Some("accepted-thread".to_string())
+        );
         assert_disconnected(tauri::async_runtime::block_on(handle_run_submit::<
             FakeRunClient,
             _,

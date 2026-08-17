@@ -449,7 +449,7 @@ impl RunAttachBoundaries for RuntimeAttachBoundaries {
             prompt,
             thread_id,
             &self.session_thread,
-            true,
+            false,
             tokens.access_token,
             tokens.subject,
             files,
@@ -633,6 +633,15 @@ impl RunAttachBoundaries for RuntimeAttachBoundaries {
             request.cursor,
         )
         .map_err(|_| ProtocolError::persistence_failed())
+    }
+
+    fn select_thread(&self, thread_id: &str) -> Result<bool, ProtocolError> {
+        let subject = self
+            .fresh_tokens()
+            .map_err(|error| error.protocol_error())?
+            .subject;
+        service::select_thread(Arc::clone(&self.storage), subject, thread_id.to_owned())
+            .map_err(|_| ProtocolError::persistence_failed())
     }
 
     fn thread_history(
