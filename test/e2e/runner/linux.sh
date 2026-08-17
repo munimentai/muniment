@@ -40,7 +40,7 @@ index_failure_artifacts() {
 }
 
 run_e2e() {
-  local wdio_log=$1 run_timeout=${2:-0} run_status=0 portal_log="$raw/xdg-desktop-portal.log"
+  local wdio_log=$1 run_timeout=${2:-0} run_status=0 portal_log="$raw/xdg-desktop-portal.log" runtime_log="$raw/muniment-runtime.log"
   local -a session=(dbus-run-session -- xvfb-run -a bash -c '
     portal=$(command -v xdg-desktop-portal || true)
     if [[ -z $portal ]]; then
@@ -51,16 +51,29 @@ run_e2e() {
     [[ -n $portal ]] || { echo "xdg-desktop-portal is unavailable" >&2; exit 1; }
     "$portal" >>"$1" 2>&1 &
     portal_pid=$!
+    runtime_pid=
     cleanup_session() {
+      if [[ -n $runtime_pid ]]; then
+        kill "$runtime_pid" 2>/dev/null || true
+        wait "$runtime_pid" 2>/dev/null || true
+      fi
       kill "$portal_pid" 2>/dev/null || true
       wait "$portal_pid" 2>/dev/null || true
     }
     trap cleanup_session EXIT
     timeout 30 gdbus wait --session --activate org.freedesktop.portal.Documents org.freedesktop.portal.Documents || { echo "xdg-document-portal did not start" >&2; exit 1; }
     timeout 30 gdbus wait --session org.freedesktop.portal.Desktop || exit 1
-    shift
+    /usr/lib/muniment/muniment-runtime >>"$2" 2>&1 &
+    runtime_pid=$!
+    shift 2
     "$@"
-  ' bash "$portal_log" npm run test:e2e)
+    run_status=$?
+    if ! kill -0 "$runtime_pid" 2>/dev/null; then
+      echo "installed runtime stopped before the E2E run ended" >&2
+      run_status=1
+    fi
+    exit "$run_status"
+  ' bash "$portal_log" "$runtime_log" npm run test:e2e)
   if (( run_timeout > 0 )); then
     timeout "$run_timeout" "${session[@]}" >"$wdio_log" 2>&1 || run_status=$?
   else
@@ -132,11 +145,11 @@ finalize() {
   # Launch a fresh embedded-driver session against the same app state. This is
   # bounded and idempotent, and still runs if the main WDIO process crashed.
   if (( ready )); then cleanup_step revoke-session run_cleanup_e2e; fi
-  cleanup_step stop-app bash -c "pkill -f '(^|/)muniment-desktop( |$)' 2>/dev/null || true; pkill -x muniment 2>/dev/null || true; ! pgrep -f '(^|/)muniment-desktop( |$)' >/dev/null && ! pgrep -x muniment >/dev/null"
+  cleanup_step stop-app bash -c "pkill -f '^/usr/lib/muniment/muniment-runtime( |$)' 2>/dev/null || true; pkill -f '(^|/)muniment-desktop( |$)' 2>/dev/null || true; pkill -x muniment 2>/dev/null || true; ! pgrep -f '^/usr/lib/muniment/muniment-runtime( |$)' >/dev/null && ! pgrep -f '(^|/)muniment-desktop( |$)' >/dev/null && ! pgrep -x muniment >/dev/null"
   if (( installed )); then cleanup_step remove-package sudo apt-get remove -y muniment; fi
   cleanup_step remove-state rm -rf -- "$state_root"
   cleanup_step package-gone package_absent
-  cleanup_step processes-gone bash -c "! pgrep -f '(^|/)muniment-desktop( |$)' && ! pgrep -x muniment && ! pgrep -f '[w]dio.*test/e2e/wdio.conf.js'"
+  cleanup_step processes-gone bash -c "! pgrep -f '^/usr/lib/muniment/muniment-runtime( |$)' && ! pgrep -f '(^|/)muniment-desktop( |$)' && ! pgrep -x muniment && ! pgrep -f '[w]dio.*test/e2e/wdio.conf.js'"
   cleanup_step state-gone cleanup_absent "$state_root"
 
   cleanup_step stage-cleanup-log cp "$cleanup_log" "$raw/cleanup.log"

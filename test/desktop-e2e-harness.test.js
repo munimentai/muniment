@@ -49,6 +49,23 @@ describe('installed production chat contract', () => {
     expect(spec).toContain("const home = await location.getProperty('textContent')")
   })
 
+  it('waits for the desktop client to connect before it submits the prompt', () => {
+    const connectionWait = spec.indexOf("window.__TAURI__.core.invoke('attach_listener_status')")
+    const prompt = spec.indexOf('const prompt = `Muniment E2E chat')
+    expect(connectionWait).toBeGreaterThan(-1)
+    expect(connectionWait).toBeLessThan(prompt)
+    expect(spec).toContain('attachStatus.supervisor_running === true && attachStatus.connected === true')
+  })
+
+  it('runs and stops the installed runtime inside each Linux E2E session', () => {
+    const linux = fs.readFileSync(path.join(root, 'test/e2e/runner/linux.sh'), 'utf8')
+    expect(linux).toContain('/usr/lib/muniment/muniment-runtime >>"$2" 2>&1 &')
+    expect(linux).toContain('kill "$runtime_pid" 2>/dev/null || true')
+    expect(linux).toContain('if ! kill -0 "$runtime_pid" 2>/dev/null; then')
+    expect(linux).toContain("pkill -f '^/usr/lib/muniment/muniment-runtime( |$)'")
+    expect(linux).toContain("! pgrep -f '^/usr/lib/muniment/muniment-runtime( |$)'")
+  })
+
   it('keeps the image fixture in isolated runner state rather than diagnostics', () => {
     const linux = fs.readFileSync(path.join(root, 'test/e2e/runner/linux.sh'), 'utf8')
     const windows = fs.readFileSync(path.join(root, 'test/e2e/runner/windows.ps1'), 'utf8')
@@ -952,10 +969,10 @@ describe.skipIf(process.platform === 'win32')('cleanup failure accounting', () =
     expect(invoked.slice(0, 5)).toEqual(['stop-wdio', 'revoke-session', 'stop-app', 'remove-package', 'remove-state'])
     expect(command['stop-wdio']).toBe("stop_matching \\[w\\]dio.\\\*test/e2e/wdio.conf.js ")
     expect(command['revoke-session']).toBe('run_cleanup_e2e ')
-    expect(command['stop-app']).toBe("bash -c pkill\\ -f\\ \\\'\\(\\^\\|/\\)muniment-desktop\\(\\ \\|\\\$\\)\\\'\\ 2\\\>/dev/null\\ \\|\\|\\ true\\\;\\ pkill\\ -x\\ muniment\\ 2\\\>/dev/null\\ \\|\\|\\ true\\\;\\ \\!\\ pgrep\\ -f\\ \\\'\\(\\^\\|/\\)muniment-desktop\\(\\ \\|\\\$\\)\\\'\\ \\>/dev/null\\ \\&\\&\\ \\!\\ pgrep\\ -x\\ muniment\\ \\>/dev/null ")
+    expect(command['stop-app']).toBe("bash -c pkill\\ -f\\ \\\'\\^/usr/lib/muniment/muniment-runtime\\(\\ \\|\\$\\)\\'\\ 2\\>/dev/null\\ \\|\\|\\ true\\;\\ pkill\\ -f\\ \\\'\\(\\^\\|/\\)muniment-desktop\\(\\ \\|\\$\\)\\'\\ 2\\>/dev/null\\ \\|\\|\\ true\\;\\ pkill\\ -x\\ muniment\\ 2\\>/dev/null\\ \\|\\|\\ true\\;\\ \\!\\ pgrep\\ -f\\ \\\'\\^/usr/lib/muniment/muniment-runtime\\(\\ \\|\\$\\)\\'\\ \\>/dev/null\\ \\&\\&\\ \\!\\ pgrep\\ -f\\ \\\'\\(\\^\\|/\\)muniment-desktop\\(\\ \\|\\$\\)\\'\\ \\>/dev/null\\ \\&\\&\\ \\!\\ pgrep\\ -x\\ muniment\\ \\>/dev/null ")
     expect(command['remove-package']).toBe('sudo apt-get remove -y muniment ')
     expect(command['package-gone']).toBe('package_absent ')
-    expect(command['processes-gone']).toBe("bash -c \\!\\ pgrep\\ -f\\ \\\'\\(\\^\\|/\\)muniment-desktop\\(\\ \\|\\\$\\)\\\'\\ \\&\\&\\ \\!\\ pgrep\\ -x\\ muniment\\ \\&\\&\\ \\!\\ pgrep\\ -f\\ \\\'\\\[w\\\]dio.\\\*test/e2e/wdio.conf.js\\\' ")
+    expect(command['processes-gone']).toBe("bash -c \\!\\ pgrep\\ -f\\ \\\'\\^/usr/lib/muniment/muniment-runtime\\(\\ \\|\\$\\)\\'\\ \\&\\&\\ \\!\\ pgrep\\ -f\\ \\\'\\(\\^\\|/\\)muniment-desktop\\(\\ \\|\\$\\)\\'\\ \\&\\&\\ \\!\\ pgrep\\ -x\\ muniment\\ \\&\\&\\ \\!\\ pgrep\\ -f\\ \\\'\\[w\\]dio.\\*test/e2e/wdio.conf.js\\' ")
 
     const target = (label, operation) => {
       const match = command[label].match(new RegExp(`^${operation} ((?:/tmp/[^ ]+)) $`))
