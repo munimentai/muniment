@@ -33,6 +33,7 @@ enum ActivationCommand {
 
 fn coordinate_activation(
     stop: Receiver<()>,
+    listener_finished: Receiver<()>,
     stopped: Arc<AtomicBool>,
     refresh_pending: Arc<AtomicBool>,
     activity: RuntimeActivityRegistry,
@@ -40,6 +41,12 @@ fn coordinate_activation(
     listener_stop: Sender<()>,
 ) -> RuntimeActivationExit {
     loop {
+        if !matches!(listener_finished.try_recv(), Err(mpsc::TryRecvError::Empty)) {
+            stopped.store(true, Ordering::Release);
+            let _ = commands.send(ActivationCommand::Stop);
+            let _ = listener_stop.send(());
+            return RuntimeActivationExit::ManagerStop;
+        }
         match stop.try_recv() {
             Ok(()) | Err(mpsc::TryRecvError::Disconnected) => {
                 stopped.store(true, Ordering::Release);
@@ -263,6 +270,7 @@ fn run_runtime_activation_inner(
         .map_err(|_| RuntimeActivationError::Filesystem)?;
     let (command_tx, command_rx) = mpsc::channel();
     let (listener_stop_tx, listener_stop_rx) = mpsc::channel();
+    let (listener_finished_tx, listener_finished_rx) = mpsc::channel();
     let watch_stopped = Arc::new(AtomicBool::new(false));
     let refresh_pending = Arc::new(AtomicBool::new(false));
     let expected_desktop_executable = match &executable_config {
@@ -294,6 +302,7 @@ fn run_runtime_activation_inner(
     let coordinator = std::thread::spawn(move || {
         coordinate_activation(
             stop,
+            listener_finished_rx,
             coordinator_stopped,
             coordinator_pending,
             coordinator_activity,
@@ -319,7 +328,17 @@ fn run_runtime_activation_inner(
         Ok(instance_lock) => {
             let transport = match AttachTransport::bind(&filesystem) {
                 Ok(transport) => transport,
-                Err(_) => return Err(RuntimeActivationError::Bind),
+                Err(_) => {
+                    let _ = listener_finished_tx.send(());
+                    watch_stopped.store(true, Ordering::Release);
+                    if let Some(watch_thread) = watch_thread {
+                        watch_thread.join().expect("upgrade watch does not panic");
+                    }
+                    coordinator
+                        .join()
+                        .expect("activation coordinator does not panic");
+                    return Err(RuntimeActivationError::Bind);
+                }
             };
             retention_thread = Some(start_retention_schedule(
                 Arc::clone(&state),
@@ -362,6 +381,7 @@ fn run_runtime_activation_inner(
         }
         Err(_) => Err(RuntimeActivationError::InstanceLock),
     };
+    let _ = listener_finished_tx.send(());
     let _ = command_tx.send(ActivationCommand::Finished);
     if let Some(retention_thread) = retention_thread {
         retention_thread
@@ -391,12 +411,21 @@ mod tests {
         let stopped = Arc::new(AtomicBool::new(false));
         let pending = Arc::new(AtomicBool::new(true));
         let (stop_tx, stop_rx) = mpsc::channel();
+        let (_finished_tx, finished_rx) = mpsc::channel();
         let (command_tx, _command_rx) = mpsc::channel();
         let (listener_tx, _listener_rx) = mpsc::channel();
 
         drain.set();
         let coordinator = std::thread::spawn(move || {
-            coordinate_activation(stop_rx, stopped, pending, activity, command_tx, listener_tx)
+            coordinate_activation(
+                stop_rx,
+                finished_rx,
+                stopped,
+                pending,
+                activity,
+                command_tx,
+                listener_tx,
+            )
         });
         stop_tx.send(()).unwrap();
         drop(blocker);

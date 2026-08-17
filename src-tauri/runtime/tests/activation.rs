@@ -7,7 +7,8 @@ use muniment_core::retention_record::{write_retention_choice, RetentionChoice};
 use muniment_runtime::{
     open_profile_storage, run_runtime_activation_with_desktop_executable,
     run_runtime_activation_with_retention_trigger, run_runtime_activation_with_upgrade_watch,
-    RetentionScheduleTestControl, RuntimeActivationExit, UpgradeWatchTestControl,
+    RetentionScheduleTestControl, RuntimeActivationError, RuntimeActivationExit,
+    UpgradeWatchTestControl,
 };
 use std::collections::BTreeMap;
 use std::fs;
@@ -320,4 +321,25 @@ fn blocked_ownership_does_not_start_retention() {
             .len(),
         2
     );
+}
+
+#[test]
+fn listener_failure_stops_the_coordinator_and_returns_the_error() {
+    muniment_core::chat_prompt::use_mock_keyring_for_tests();
+    let profile = TemporaryProfile::new("activation-listener-failure", false);
+    fs::set_permissions(&profile.root, fs::Permissions::from_mode(0o700)).unwrap();
+    let filesystem = AttachFilesystem::from_runtime_directory(&profile.root).unwrap();
+    let _lock = filesystem.acquire_instance_lock().unwrap();
+    let (_stop_tx, stop_rx) = mpsc::channel();
+
+    let result = run_runtime_activation_with_desktop_executable(
+        &profile.root,
+        &profile.profile,
+        &profile.config,
+        Instant::now(),
+        Some(std::env::current_exe().unwrap()),
+        stop_rx,
+    );
+
+    assert!(matches!(result, Err(RuntimeActivationError::Migration(_))));
 }
