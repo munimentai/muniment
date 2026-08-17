@@ -623,3 +623,37 @@ The Linux package ships a `systemd` user unit that starts
 `muniment-runtime` at session login. The unit merges only after activation,
 admission, and launch ownership are built. Where no user manager runs, the
 desktop keeps its own listener path.
+
+## Amendment – 2026-08-17: installed-payload refresh
+
+The runtime owns installed-payload refresh. It watches the identity of its own
+executable. When an upgrade replaces that executable, it exits with a distinct
+nonzero upgrade-refresh status. The shipped `Restart=on-failure` policy then
+starts the installed payload. A manager-requested service stop does not use the
+upgrade-refresh status, so the manager leaves the service stopped. Package
+scripts do not enumerate user managers or restart their services.
+
+A refresh request does not interrupt a live run. After detecting replacement,
+the runtime enters a drain state and rejects new work that could add any
+`evaluate_quiesce` blocker. This rule applies to desktop and companion clients.
+The runtime continues the active run and accepts `run.permission_answer` and
+`run.cancel`. It also keeps event subscriptions and read operations available
+so clients can finish or observe existing work. The runtime exits only when
+`evaluate_quiesce` accepts its current `RuntimeActivity`: no active run,
+pending permission gate, authentication operation, session refresh, or
+in-flight external effect may remain. It re-evaluates quiesce as activity
+changes. Concurrent replacements collapse into that single pending refresh.
+
+The desktop compares the version in the attach welcome with its minimum
+compatible runtime version. While the runtime is older, the desktop keeps the
+connection available for operations needed to finish existing work and reach
+quiesce. It sends no operation that requires the newer runtime and starts no
+new run. It shows that the runtime upgrade is pending, reconnects after the
+service exits, and resumes normal requests only after a compatible welcome.
+
+Only the running runtime may turn an observed replacement into its
+upgrade-refresh exit. A client cannot request this refresh through the attach
+protocol. On Linux, another OS user cannot signal the process or control its
+`systemd --user` manager, and the owner-only endpoint rejects that user's
+connection. An administrator may replace the installed package, but package
+authority does not grant attach or runtime authority.
