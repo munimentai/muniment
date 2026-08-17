@@ -884,14 +884,8 @@ fn resolve_attach_home(
     config: &Path,
     documents: Option<PathBuf>,
     home: Option<PathBuf>,
-) -> Result<PathBuf, ProtocolError> {
-    match muniment_core::home::configured_home(config)
-        .map_err(|_| ProtocolError::persistence_failed())?
-    {
-        Some(home) => Ok(home),
-        None => muniment_core::home::choose_default_home(documents, home)
-            .map_err(|_| ProtocolError::persistence_failed()),
-    }
+) -> muniment_core::attach::AttachHome {
+    muniment_core::attach::AttachHome::configured(config.to_path_buf(), documents, home)
 }
 
 #[cfg(target_os = "linux")]
@@ -922,7 +916,7 @@ impl<R: tauri::Runtime> TauriDesktopAttachService<R>
             &config,
             app.path().document_dir().ok(),
             app.path().home_dir().ok(),
-        )?;
+        );
         let idempotency = IdempotencyStore::open(
             app.path()
                 .app_data_dir()
@@ -2699,6 +2693,7 @@ mod tests {
                 Some(root.join("documents")),
                 Some(root.join("user-home")),
             )
+            .resolve()
             .unwrap(),
             recorded_home
         );
@@ -2714,7 +2709,9 @@ mod tests {
         std::fs::create_dir_all(&config).unwrap();
 
         assert_eq!(
-            resolve_attach_home(&config, None, Some(root.clone())).unwrap(),
+            resolve_attach_home(&config, None, Some(root.clone()))
+                .resolve()
+                .unwrap(),
             root.join("Muniment")
         );
 
@@ -2729,7 +2726,8 @@ mod tests {
         std::fs::create_dir_all(config.join("home.json")).unwrap();
 
         assert_eq!(
-            resolve_attach_home(&config, Some(root.join("documents")), Some(root.clone())),
+            resolve_attach_home(&config, Some(root.join("documents")), Some(root.clone()))
+                .resolve(),
             Err(ProtocolError::persistence_failed())
         );
 
