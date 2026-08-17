@@ -776,6 +776,11 @@ impl ChatState {
             .get()
             .ok_or_else(auth::background_service_error)
     }
+
+    #[cfg(not(target_os = "linux"))]
+    pub(crate) fn storage(&self) -> Result<&SharedStorage, String> {
+        Ok(&self.storage)
+    }
 }
 
 #[cfg(test)]
