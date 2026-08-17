@@ -78,6 +78,12 @@ through `subject_owns_first_run`. A companion session receives `unauthorized`.
 The operation appends nothing, so it requires no idempotency key.
 The desktop converts all five run commands in one later slice.
 
+The [ADR 0012 installed-payload refresh amendment](docs/decisions/0012-user-level-runtime-service.md#amendment--2026-08-17-installed-payload-refresh)
+makes the runtime the only process that may request its upgrade exit. The
+runtime waits for `evaluate_quiesce` before it exits. The owner-only endpoint,
+process signaling rules, and per-user service manager prevent another OS user
+from triggering the refresh. Package replacement grants no runtime authority.
+
 These checks do not distinguish hostile processes after the current OS account
 is compromised. They prevent names supplied inside the protocol from becoming
 privileged identities.
