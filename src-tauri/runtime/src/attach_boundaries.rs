@@ -449,7 +449,7 @@ impl RunAttachBoundaries for RuntimeAttachBoundaries {
             prompt,
             thread_id,
             &self.session_thread,
-            true,
+            false,
             tokens.access_token,
             tokens.subject,
             files,
