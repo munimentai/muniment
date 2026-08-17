@@ -28,7 +28,7 @@ use common::{credentials, stage_pi_stub, TemporaryProfile};
 static ENVIRONMENT: Mutex<()> = Mutex::new(());
 
 #[test]
-fn attach_dispatch_accepts_a_live_run_without_waiting_for_completion() {
+fn attach_dispatch_starts_a_fresh_thread_for_each_submit_without_a_thread_id() {
     let _environment = ENVIRONMENT.lock().unwrap();
     muniment_core::chat_prompt::use_mock_keyring_for_tests();
     let store = KeyringNativeCredentialStore::new();
@@ -39,7 +39,7 @@ fn attach_dispatch_accepts_a_live_run_without_waiting_for_completion() {
     let base_url = format!("http://{}", server.local_addr().unwrap());
     std::env::set_var("MUNIMENT_API_BASE_URL", base_url);
     let responses = std::thread::spawn(move || {
-        for body in [session_body(), grant_body()] {
+        for body in [session_body(), grant_body(), session_body(), grant_body()] {
             let (mut stream, _) = server.accept().unwrap();
             read_request(&mut stream);
             write!(
@@ -62,7 +62,7 @@ fn attach_dispatch_accepts_a_live_run_without_waiting_for_completion() {
         &profile.config,
     )
     .unwrap();
-    let accepted = service
+    let first = service
         .submit_run(
             "workspace-a",
             RunSubmitRequest {
@@ -81,9 +81,9 @@ fn attach_dispatch_accepts_a_live_run_without_waiting_for_completion() {
             },
         )
         .unwrap();
-    assert!(!accepted.run_id.is_empty());
-    assert!(!accepted.thread_id.is_empty());
-    assert!(accepted.committed_seq > 0);
+    assert!(!first.run_id.is_empty());
+    assert!(!first.thread_id.is_empty());
+    assert!(first.committed_seq > 0);
 
     let boundaries = state.boundaries();
     assert!(boundaries.active_run_exists());
@@ -92,11 +92,161 @@ fn attach_dispatch_accepts_a_live_run_without_waiting_for_completion() {
         std::thread::sleep(Duration::from_millis(10));
     }
     assert!(!boundaries.active_run_exists());
+
+    let second = service
+        .submit_run(
+            "workspace-a",
+            RunSubmitRequest {
+                text: "hello again".into(),
+                files: Vec::new(),
+                thread_id: None,
+            },
+            &Id::new("018f0000-0000-7000-8000-000000000013").unwrap(),
+            &Id::new("018f0000-0000-7000-8000-000000000014").unwrap(),
+            CompanionProvenance {
+                profile: "default".into(),
+                companion_kind: "desktop".into(),
+                companion_version: "test".into(),
+                peer_uid: 1000,
+                peer_pid: 42,
+            },
+        )
+        .unwrap();
+    assert_ne!(first.thread_id, second.thread_id);
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while boundaries.active_run_exists() && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert!(!boundaries.active_run_exists());
+    let storage = open_profile_storage(&profile.profile).unwrap();
+    assert_eq!(
+        storage
+            .lock()
+            .unwrap()
+            .journal
+            .run_thread_id(&first.run_id)
+            .unwrap()
+            .unwrap(),
+        first.thread_id
+    );
+    assert_eq!(
+        storage
+            .lock()
+            .unwrap()
+            .journal
+            .run_thread_id(&second.run_id)
+            .unwrap()
+            .unwrap(),
+        second.thread_id
+    );
     responses.join().unwrap();
     store.clear_session().unwrap();
     std::env::remove_var("MUNIMENT_API_BASE_URL");
     std::env::remove_var("MUNIMENT_PI_ROOT");
     std::env::remove_var("PI_RESUME_STUB_PROMPT_DELAY_MS");
+}
+
+#[test]
+fn attach_dispatch_submits_to_an_explicit_thread() {
+    let _environment = ENVIRONMENT.lock().unwrap();
+    muniment_core::chat_prompt::use_mock_keyring_for_tests();
+    let store = KeyringNativeCredentialStore::new();
+    store.clear_session().unwrap();
+    store.save_credentials(&credentials()).unwrap();
+
+    let server = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+    let base_url = format!("http://{}", server.local_addr().unwrap());
+    std::env::set_var("MUNIMENT_API_BASE_URL", base_url);
+    let responses = std::thread::spawn(move || {
+        for body in [session_body(), grant_body(), session_body(), grant_body()] {
+            let (mut stream, _) = server.accept().unwrap();
+            read_request(&mut stream);
+            write!(
+                stream,
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            )
+            .unwrap();
+        }
+    });
+
+    let profile = TemporaryProfile::new("attach-explicit-thread", true);
+    let descriptor = stage_pi_stub(&profile.root);
+    let state = RuntimeAttachState::open(&profile.profile, &profile.config).unwrap();
+    let mut service = muniment_runtime::compose_attach_service(
+        state.boundaries().with_pi_artifact(descriptor),
+        state.companion_registry(),
+        &profile.profile,
+        &profile.config,
+    )
+    .unwrap();
+    let first = service
+        .submit_run(
+            "workspace-a",
+            RunSubmitRequest {
+                text: "first".into(),
+                files: Vec::new(),
+                thread_id: None,
+            },
+            &Id::new("018f0000-0000-7000-8000-000000000015").unwrap(),
+            &Id::new("018f0000-0000-7000-8000-000000000016").unwrap(),
+            CompanionProvenance {
+                profile: "default".into(),
+                companion_kind: "desktop".into(),
+                companion_version: "test".into(),
+                peer_uid: 1000,
+                peer_pid: 42,
+            },
+        )
+        .unwrap();
+    let boundaries = state.boundaries();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while boundaries.active_run_exists() && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert!(!boundaries.active_run_exists());
+
+    let accepted = service
+        .submit_run(
+            "workspace-a",
+            RunSubmitRequest {
+                text: "hello".into(),
+                files: Vec::new(),
+                thread_id: Some(first.thread_id.clone()),
+            },
+            &Id::new("018f0000-0000-7000-8000-000000000017").unwrap(),
+            &Id::new("018f0000-0000-7000-8000-000000000018").unwrap(),
+            CompanionProvenance {
+                profile: "default".into(),
+                companion_kind: "desktop".into(),
+                companion_version: "test".into(),
+                peer_uid: 1000,
+                peer_pid: 42,
+            },
+        )
+        .unwrap();
+    assert_eq!(accepted.thread_id, first.thread_id);
+
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while boundaries.active_run_exists() && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert!(!boundaries.active_run_exists());
+    let storage = open_profile_storage(&profile.profile).unwrap();
+    assert_eq!(
+        storage
+            .lock()
+            .unwrap()
+            .journal
+            .run_thread_id(&accepted.run_id)
+            .unwrap()
+            .unwrap(),
+        accepted.thread_id
+    );
+    responses.join().unwrap();
+    store.clear_session().unwrap();
+    std::env::remove_var("MUNIMENT_API_BASE_URL");
+    std::env::remove_var("MUNIMENT_PI_ROOT");
 }
 
 #[test]
