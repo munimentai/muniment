@@ -1,0 +1,9 @@
+[Unit]
+Description=Muniment runtime
+
+[Service]
+ExecStart=/usr/lib/muniment/muniment-runtime
+Restart=on-failure
+
+[Install]
+WantedBy=default.target

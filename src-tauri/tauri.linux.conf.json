@@ -1,5 +1,14 @@
 {
   "bundle": {
+    "linux": {
+      "deb": {
+        "files": {
+          "/usr/lib/systemd/user/muniment-runtime.service": "packaging/muniment-runtime.service"
+        },
+        "postInstallScript": "packaging/deb/postinst",
+        "postRemoveScript": "packaging/deb/postrm"
+      }
+    },
     "resources": {
       "third-party/sherpa-onnx-v1.13.2/linux-x86_64/libsherpa-onnx-c-api.so": "asr-runtime/libsherpa-onnx-c-api.so",
       "third-party/sherpa-onnx-v1.13.2/linux-x86_64/libonnxruntime.so": "asr-runtime/libonnxruntime.so",
