@@ -154,8 +154,9 @@ the old cursor boundary check cost 39.1ms and the direct read costs 0.5ms.
 Retention also picks its candidates before it loads them (MUNIDESK-885).
 `apply_retention` (`src-tauri/core/src/journal/retention.rs:55`) skips a run that
 carries no terminal event type or that is newer than the cutoff, and it added no
-column, table, index, or migration. No production caller reaches retention yet,
-and the ADR 0012 runtime service will own it.
+column, table, index, or migration. Design-spec §2 now names the visible
+retention surface (MUNIDESK-1341), and the eighty-third wave files the
+enforcement chain that gives retention its first production caller.
 
 RULE 2026-07-12 — pre-launch schema work on the desktop's local journal is in
 scope for this lane. The owner's post-go-live restriction applies to the
@@ -385,7 +386,7 @@ restored the control and its tests.
 
 DONE 2026-08-04 through 2026-08-17 — phase one is built and the Linux cutover
 is complete (MUNIDESK-863, 868 through 1067, 1103, 1150 through 1191, 1188
-through 1327, and 1329 through 1334). ADR 0012 carries the extraction-sequence
+through 1327, and 1329 through 1341). ADR 0012 carries the extraction-sequence
 amendment, the control-authority and admission amendments, twelve attach
 amendments, six desktop client operation tranches, the runtime-owned browser
 sign-in amendment, and the Linux cutover rules. The `muniment-runtime` crate
@@ -403,40 +404,29 @@ opens no journal and marks no run interrupted (MUNIDESK-1333), runtime
 sign-out clears the recorded signed workspace (MUNIDESK-1331), and the
 listener admits a desktop client while it holds no signed workspace
 (MUNIDESK-1330), which closed the sign-in deadlock the eighty-first wave
-measured. The desktop keeps its local paths on the other platforms and for a
+measured. On Linux `auth_status` rides the connected desktop client
+(MUNIDESK-1337), which was the last cutover flip. The desktop keeps its local paths on the other platforms and for a
 profile with no runtime process. The 2026-08-16 audit's four desktop-client
 defects are fixed (MUNIDESK-1303 through 1316). Git history and
 `THREAT_MODEL.md` hold the slice-by-slice record.
 
-MEASURED 2026-08-17 (eighty-second wave, planner, read `compose_attach_service`
-beside the user unit) — the runtime resolves the confirmed Home once at
-composition (`src-tauri/runtime/src/attach_service.rs:22`). The user unit
-composes the runtime at login, before first-run onboarding confirms a Home, so
-a companion `home.ensure` scaffolds the default directory until the runtime
-restarts. `ApplicationMemoryRuntime::open_session`
-(`src-tauri/core/src/memory_runtime.rs:31`) already re-reads `configured_home`
-per session, so memory recall is unaffected. The desktop listener composition
-shares the timing. This supersedes the seventy-first-wave RETIRED entry, which
-read the resolution rule but not its timing. A slice is filed.
+DONE 2026-08-17 — a companion `home.ensure` resolves the confirmed Home when it
+runs rather than at composition (MUNIDESK-1338). A Home confirmed after login
+now lands in the confirmed directory without a runtime restart.
 
-MEASURED 2026-08-17 (eighty-second wave, planner, read the packaging beside
-the attach hello) — a package upgrade leaves the old runtime process serving
-until the next login. `src-tauri/packaging/deb/postinst` links the user unit
-and never restarts it, `Restart=on-failure` never refreshes a healthy process,
-the hello reports the listener's `CARGO_PKG_VERSION`
-(`src-tauri/runtime/src/attach_listener.rs:153`), and no production caller
-compares it. A new desktop against an old runtime can send an operation the
-old dispatcher refuses, and the affected commands then fail until the user
-logs out. An ADR decision slice is filed.
+DONE 2026-08-17 — ADR 0012 carries the installed-payload refresh amendment
+(MUNIDESK-1340). The runtime watches the identity of its own executable. After
+a replacement it drains, rejects new work, reaches quiesce, and exits with a
+distinct upgrade-refresh status, so `Restart=on-failure` starts the new
+payload. The desktop compares the attach welcome version with its minimum
+compatible runtime version and holds new runs while the runtime is older. The
+eighty-third wave files the core drain gate with `evaluate_quiesce` and the
+runtime replacement watch. The desktop welcome-version check follows.
 
-MEASURED 2026-08-17 (eighty-second wave, planner, read
-`test/e2e/runner/linux.sh`) — the installed Linux QA lane never starts the
-runtime service. It probes `muniment-runtime --version` (`linux.sh:223`) and
-then launches the desktop with no runtime process, so the smoke covers the
-desktop-owned path the cutover retired for installed users. The e2e `BROWSER`
-capture seam is environment-level (`linux.sh:227`), so a runtime started
-inside the session inherits it and `session.sign_in` still writes the auth URL
-file. A slice is filed.
+DONE 2026-08-17 — the installed Linux smoke drives the runtime-owned topology
+(MUNIDESK-1339). `test/e2e/runner/linux.sh` starts the runtime service before
+it launches the desktop, and the sign-in capture rides the environment-level
+`BROWSER` seam.
 
 MEASURED 2026-08-16 (eightieth wave, planner, read the `home.ensure` dispatch
 beside the runtime composition) — `home.ensure` needs no conversion slice
@@ -508,21 +498,17 @@ service start would exceed that parity and spend a network call on every
 login. After a runtime restart, companion pairing waits for one run, which is
 the behavior the desktop has today.
 
-MERGE HAZARD — the `auth_status` flip must rebase on current `main` before it
-opens its pull request. The 2026-08-04 silent revert came from a stale base.
-
-SEQUENCED 2026-08-17 (eighty-second wave) — the Linux cutover is complete, and
-the `auth_status` flip is filed as the last cutover slice. `session.status`
-already rides the wire (`src-tauri/core/src/attach/linux.rs:2890`), the typed
-holder call exists (`src-tauri/attach/src/client.rs:1493`), and only the
-desktop command and the shell branch order remain. Three post-cutover slices
-ride beside it: the use-time Home resolution, the runtime-owned QA topology,
-and the ADR 0012 upgrade rule. The visible retention surface takes its
-design-spec decision slice, because the activated runtime is the enforcement
-owner the journal lane waited for. Remote Control stays gated: harness-spec
-§14.1 puts the relay leg on an outbound HTTPS session to `api.muniment.ai`,
-no muniment-cloud relay contract has published, and the desktop states remain
-pending owner mockup confirmation
+SEQUENCED 2026-08-17 (eighty-third wave) — the cutover and its four
+post-cutover decision slices are all built, so this wave files the two
+implementation chains those decisions opened. The thread-retention chain
+builds the core record module, the shared enforcement check with its runtime
+schedule, the popover surface, and the desktop-owned schedule for macOS and
+Windows. The upgrade chain builds the core drain gate with `evaluate_quiesce`
+and the runtime replacement watch with its upgrade-refresh exit. The desktop
+welcome-version check follows next wave. Remote Control stays gated:
+harness-spec §14.1 puts the relay leg on an outbound HTTPS session to
+`api.muniment.ai`, no muniment-cloud relay contract has published, and the
+desktop states remain pending owner mockup confirmation
 (`docs/design-reference/remote-control-ux.md`).
 
 DONE — all three slices of the ADR 0009 attach workspace namespace amendment are
@@ -996,10 +982,10 @@ earlier one. Requiring an up-to-date branch before merge, or a merge queue, is a
 repository-settings change that sits with the owner. The planner files no ticket
 for it.
 
-VERIFIED 2026-08-17 (eighty-second wave, planner) — one
+VERIFIED 2026-08-17 (eighty-third wave, planner) — one
 `cargo test -p muniment-core -p muniment-runtime -p muniment-attach` run started
 from `src-tauri` passes 1,396 tests, and the build prints no warning. One
-`npm ci` then `npm test` run passes 943 frontend tests over 64 files with 31
+`npm ci` then `npm test` run passes 948 frontend tests over 64 files with 31
 skipped, plus 3 browser tests. Start cargo from `src-tauri`, because the
 repository root holds no `Cargo.toml`. A run started from the root dies with
 `could not find Cargo.toml`, which reads as a broken harness. This entry replaces
