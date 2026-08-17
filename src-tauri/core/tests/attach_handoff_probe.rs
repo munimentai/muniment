@@ -164,9 +164,8 @@ fn confirms_after_the_listener_binds() {
         let (server_started_tx, server_started_rx) = mpsc::sync_channel(0);
         let socket_path = socket.0.clone();
         let server = scope.spawn(move || {
-            server_started_tx.send(()).unwrap();
-            thread::sleep(Duration::from_millis(30));
             let listener = UnixListener::bind(socket_path).unwrap();
+            server_started_tx.send(()).unwrap();
             let (mut stream, _) = listener.accept().unwrap();
             read_hello(&mut stream);
             stream
