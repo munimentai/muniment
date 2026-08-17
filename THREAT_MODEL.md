@@ -80,7 +80,9 @@ The desktop converts all five run commands in one later slice.
 
 The [ADR 0012 installed-payload refresh amendment](docs/decisions/0012-user-level-runtime-service.md#amendment--2026-08-17-installed-payload-refresh)
 makes the runtime the only process that may request its upgrade exit. The
-runtime waits for `evaluate_quiesce` before it exits. The owner-only endpoint,
+runtime drains new quiesce-blocking work, then waits for `evaluate_quiesce`.
+Its distinct failure exit triggers the shipped `Restart=on-failure` policy.
+An explicit service stop leaves the service stopped. The owner-only endpoint,
 process signaling rules, and per-user service manager prevent another OS user
 from triggering the refresh. Package replacement grants no runtime authority.
 
