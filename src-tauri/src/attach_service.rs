@@ -2833,7 +2833,7 @@ mod tests {
                 let mut service = DesktopAttachService {
                     boundaries: FakeRunStartBoundaries::accepting(),
                     idempotency: IdempotencyStore::open(":memory:").unwrap(),
-                    home: std::env::temp_dir(),
+                    home: std::env::temp_dir().into(),
                     workspace_contexts: Arc::new(Mutex::new(WorkspaceContextMap::default())),
                     client_credentials: credentials,
                     credential_path: None,
@@ -3003,7 +3003,7 @@ mod tests {
                 let mut service = DesktopAttachService {
                     boundaries,
                     idempotency: IdempotencyStore::open(":memory:").unwrap(),
-                    home: service_root.join("home"),
+                    home: service_root.join("home").into(),
                     workspace_contexts: contexts,
                     client_credentials: credentials,
                     credential_path: None,
