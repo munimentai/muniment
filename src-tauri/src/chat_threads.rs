@@ -602,11 +602,11 @@ pub async fn chat_new_thread(
     state: tauri::State<'_, ChatState>,
 ) -> Result<(), String> {
     let tokens = auth::fresh_tokens(&auth_state, &app_handle)?;
-    fresh_session_thread(
-        state.storage()?,
-        &state.session_thread,
-        tokens.subject.as_deref(),
-    )
+    #[cfg(target_os = "linux")]
+    let storage = state.storage()?;
+    #[cfg(not(target_os = "linux"))]
+    let storage = &state.storage;
+    fresh_session_thread(storage, &state.session_thread, tokens.subject.as_deref())
 }
 
 #[cfg(target_os = "linux")]
