@@ -119,6 +119,15 @@ describe('installed nightly', () => {
     const authenticatedMarker = await $('textarea[placeholder="Ask anything"]')
     await authenticatedMarker.waitForDisplayed({ timeout: 120000 })
     await authenticatedMarker.saveScreenshot(path.join(rawDir, '02-authenticated.png'))
+    await browser.waitUntil(async () => {
+      const attachStatus = await browser.execute(async () => (
+        window.__TAURI__.core.invoke('attach_listener_status')
+      ))
+      return attachStatus.supervisor_running === true && attachStatus.connected === true
+    }, {
+      timeout: 60000,
+      timeoutMsg: 'desktop client did not connect to the installed runtime',
+    })
     const prompt = `Muniment E2E chat ${Date.now()}`
     await authenticatedMarker.setValue(prompt)
     const send = await $('button=Send')
