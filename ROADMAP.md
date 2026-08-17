@@ -541,7 +541,8 @@ connection, because the request path reads exactly one envelope per request and
 `DesktopClientHolder` holds one mutex over that socket.
 
 DONE 2026-08-16 — the fifth tranche is built end to end, and the five run
-commands ride the desktop client (MUNIDESK-1306 through 1320). ADR 0012 maps
+commands ride the desktop client (MUNIDESK-1306 through 1315 and MUNIDESK-1317
+through 1320). ADR 0012 maps
 each fifth-tranche operation to its runtime service entry. `dispatch_request`
 serves `run.submit`, `run.resume`, `run.steer`, `run.follow_up`, and
 `run.permission_answer` to the desktop client and refuses each one for a
