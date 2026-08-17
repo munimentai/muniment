@@ -5,7 +5,9 @@ use crate::{
     migration::run_migration_takeover_with_activation, run_bound_attach_listener,
     AttachListenerError, MigrationTakeoverError, RuntimeAttachState,
 };
+use muniment_core::attach::evaluate_quiesce;
 use muniment_core::attach::linux::{AttachFilesystem, AttachTransport, InstanceLockError};
+use muniment_core::attach::RuntimeActivityRegistry;
 use std::fmt;
 use std::path::Path;
 use std::path::PathBuf;
@@ -27,6 +29,44 @@ enum ActivationCommand {
     Stop,
     Retention,
     Finished,
+}
+
+fn coordinate_activation(
+    stop: Receiver<()>,
+    stopped: Arc<AtomicBool>,
+    refresh_pending: Arc<AtomicBool>,
+    activity: RuntimeActivityRegistry,
+    commands: Sender<ActivationCommand>,
+    listener_stop: Sender<()>,
+) -> RuntimeActivationExit {
+    loop {
+        match stop.try_recv() {
+            Ok(()) | Err(mpsc::TryRecvError::Disconnected) => {
+                stopped.store(true, Ordering::Release);
+                let _ = commands.send(ActivationCommand::Stop);
+                let _ = listener_stop.send(());
+                return RuntimeActivationExit::ManagerStop;
+            }
+            Err(mpsc::TryRecvError::Empty) => {}
+        }
+        if refresh_pending.load(Ordering::Acquire) && evaluate_quiesce(activity.snapshot()).is_ok()
+        {
+            if !matches!(stop.try_recv(), Err(mpsc::TryRecvError::Empty)) {
+                stopped.store(true, Ordering::Release);
+                let _ = commands.send(ActivationCommand::Stop);
+                let _ = listener_stop.send(());
+                return RuntimeActivationExit::ManagerStop;
+            }
+            stopped.store(true, Ordering::Release);
+            let _ = commands.send(ActivationCommand::Stop);
+            let _ = listener_stop.send(());
+            return RuntimeActivationExit::UpgradeRefresh;
+        }
+        if stopped.load(Ordering::Acquire) {
+            return RuntimeActivationExit::ManagerStop;
+        }
+        std::thread::sleep(Duration::from_millis(1));
+    }
 }
 
 fn start_retention_schedule(
@@ -224,7 +264,6 @@ fn run_runtime_activation_inner(
     let (command_tx, command_rx) = mpsc::channel();
     let (listener_stop_tx, listener_stop_rx) = mpsc::channel();
     let watch_stopped = Arc::new(AtomicBool::new(false));
-    let manager_stopped = Arc::new(AtomicBool::new(false));
     let refresh_pending = Arc::new(AtomicBool::new(false));
     let expected_desktop_executable = match &executable_config {
         Some(ExecutableConfig::Admission(path)) => path.clone(),
@@ -242,23 +281,25 @@ fn run_runtime_activation_inner(
         .map(|watch| {
             watch.start(
                 state.drain_state(),
-                state.runtime_activity(),
                 Arc::clone(&watch_stopped),
                 Arc::clone(&refresh_pending),
-                listener_stop_tx.clone(),
             )
         })
         .transpose()
         .map_err(|_| RuntimeActivationError::UpgradeWatch)?;
-    let stop_commands = command_tx.clone();
-    let stop_watch = Arc::clone(&watch_stopped);
-    let record_manager_stop = Arc::clone(&manager_stopped);
-    std::thread::spawn(move || {
-        let _ = stop.recv();
-        record_manager_stop.store(true, Ordering::Release);
-        stop_watch.store(true, Ordering::Release);
-        let _ = stop_commands.send(ActivationCommand::Stop);
-        let _ = listener_stop_tx.send(());
+    let coordinator_commands = command_tx.clone();
+    let coordinator_stopped = Arc::clone(&watch_stopped);
+    let coordinator_pending = Arc::clone(&refresh_pending);
+    let coordinator_activity = state.runtime_activity();
+    let coordinator = std::thread::spawn(move || {
+        coordinate_activation(
+            stop,
+            coordinator_stopped,
+            coordinator_pending,
+            coordinator_activity,
+            coordinator_commands,
+            listener_stop_tx,
+        )
     });
     let retention_checked = retention_control
         .as_ref()
@@ -331,12 +372,38 @@ fn run_runtime_activation_inner(
     if let Some(watch_thread) = watch_thread {
         watch_thread.join().expect("upgrade watch does not panic");
     }
+    let exit = coordinator
+        .join()
+        .expect("activation coordinator does not panic");
     result?;
-    Ok(
-        if refresh_pending.load(Ordering::Acquire) && !manager_stopped.load(Ordering::Acquire) {
-            RuntimeActivationExit::UpgradeRefresh
-        } else {
+    Ok(exit)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn manager_stop_precedes_refresh_after_drain_starts() {
+        let drain = muniment_core::attach::DrainState::new();
+        let activity = RuntimeActivityRegistry::with_drain_state(&drain);
+        let blocker = activity.mark_active_run();
+        let stopped = Arc::new(AtomicBool::new(false));
+        let pending = Arc::new(AtomicBool::new(true));
+        let (stop_tx, stop_rx) = mpsc::channel();
+        let (command_tx, _command_rx) = mpsc::channel();
+        let (listener_tx, _listener_rx) = mpsc::channel();
+
+        drain.set();
+        let coordinator = std::thread::spawn(move || {
+            coordinate_activation(stop_rx, stopped, pending, activity, command_tx, listener_tx)
+        });
+        stop_tx.send(()).unwrap();
+        drop(blocker);
+
+        assert_eq!(
+            coordinator.join().unwrap(),
             RuntimeActivationExit::ManagerStop
-        },
-    )
+        );
+    }
 }

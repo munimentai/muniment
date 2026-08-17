@@ -1,12 +1,12 @@
 //! Installed runtime executable replacement watch.
 
-use muniment_core::attach::{evaluate_quiesce, DrainState, RuntimeActivityRegistry};
+use muniment_core::attach::DrainState;
 use std::fs;
 use std::io;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{mpsc::Sender, Arc};
+use std::sync::Arc;
 use std::time::Duration;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -34,10 +34,8 @@ impl UpgradeWatch {
     pub(crate) fn start(
         self,
         drain_state: DrainState,
-        activity: RuntimeActivityRegistry,
         stopped: Arc<AtomicBool>,
         refresh_pending: Arc<AtomicBool>,
-        listener_stop: Sender<()>,
     ) -> io::Result<std::thread::JoinHandle<()>> {
         let initial_identity = ExecutableIdentity::read(&self.path)?;
         Ok(std::thread::spawn(move || loop {
@@ -54,12 +52,6 @@ impl UpgradeWatch {
                     refresh_pending.store(true, Ordering::Release);
                 }
             }
-            if refresh_pending.load(Ordering::Acquire)
-                && evaluate_quiesce(activity.snapshot()).is_ok()
-            {
-                let _ = listener_stop.send(());
-                break;
-            }
         }))
     }
 }
@@ -67,8 +59,8 @@ impl UpgradeWatch {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use muniment_core::attach::{evaluate_quiesce, RuntimeActivityRegistry};
     use std::fs::File;
-    use std::sync::mpsc;
     use std::time::{SystemTime, UNIX_EPOCH};
 
     #[test]
@@ -89,18 +81,11 @@ mod tests {
         let blocker = activity.mark_active_run();
         let stopped = Arc::new(AtomicBool::new(false));
         let pending = Arc::new(AtomicBool::new(false));
-        let (exit_tx, exit_rx) = mpsc::channel();
         let thread = UpgradeWatch {
             path: watched.clone(),
             poll_interval: Duration::from_millis(5),
         }
-        .start(
-            drain.clone(),
-            activity,
-            stopped,
-            Arc::clone(&pending),
-            exit_tx,
-        )
+        .start(drain.clone(), Arc::clone(&stopped), Arc::clone(&pending))
         .unwrap();
 
         let replacement = directory.join("replacement");
@@ -112,13 +97,14 @@ mod tests {
         }
         assert!(drain.is_set());
         assert!(pending.load(Ordering::Acquire));
-        assert!(exit_rx.try_recv().is_err());
+        assert!(evaluate_quiesce(activity.snapshot()).is_err());
 
         File::create(directory.join("second-replacement")).unwrap();
         fs::rename(directory.join("second-replacement"), &watched).unwrap();
-        assert!(exit_rx.try_recv().is_err());
+        assert!(evaluate_quiesce(activity.snapshot()).is_err());
         drop(blocker);
-        exit_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        assert!(evaluate_quiesce(activity.snapshot()).is_ok());
+        stopped.store(true, Ordering::Release);
         thread.join().unwrap();
         fs::remove_dir_all(directory).unwrap();
     }
