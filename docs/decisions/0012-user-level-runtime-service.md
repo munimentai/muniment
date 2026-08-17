@@ -585,3 +585,41 @@ session receives `unauthorized` for this operation.
 
 The existing `chat_current_thread` and `chat_new_thread` commands remain local
 session-thread tracker operations.
+
+## Amendment – 2026-08-17: Linux cutover rules
+
+### Activation
+
+The `muniment-runtime` main composes the attach state and serves it. For a
+fresh profile, it binds the profile endpoint through `run_attach_listener`.
+When another process holds the instance lock, it follows
+`run_migration_takeover`. A termination signal ends the service cleanly.
+
+### Admission
+
+The runtime admits the installed desktop client while it holds no signed
+workspace. The granted capability then carries no workspace scope. The first
+resolved run grant records the signed workspace for the runtime.
+
+Companion pairing still fails closed while the runtime holds no signed
+workspace. This rule supersedes the MUNIDESK-1253 whole-session refusal. That
+refusal would reject the desktop client that must sign in and resolve the first
+run grant, so a fresh runtime could never record a workspace.
+
+### Launch ownership
+
+A desktop that finds the instance lock held opens no profile journal and does
+not run `reconcile_interrupted_runs`. It rides the desktop client connection.
+The desktop opens the profile journal only while it owns the listener.
+
+### Sign-out
+
+Sign-out clears the runtime's recorded signed workspace before the existing
+revocation step.
+
+### Packaging
+
+The Linux package ships a `systemd` user unit that starts
+`muniment-runtime` at session login. The unit merges only after activation,
+admission, and launch ownership are built. Where no user manager runs, the
+desktop keeps its own listener path.

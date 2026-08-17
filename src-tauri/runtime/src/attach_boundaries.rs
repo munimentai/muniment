@@ -437,7 +437,12 @@ impl RunAttachBoundaries for RuntimeAttachBoundaries {
         }
         let tokens = self.fresh_tokens()?;
         let run_id = new_run_id();
-        let grant = self.configure_run(&run_id, &prompt, &tokens, Some(workspace))?;
+        let grant = self.configure_run(
+            &run_id,
+            &prompt,
+            &tokens,
+            (!workspace.is_empty()).then_some(workspace),
+        )?;
         let files = open_selected_files(files)?;
         let (accepted, launch) = service::accept_prompt(
             &self.profile_directory,
@@ -574,6 +579,7 @@ impl RunAttachBoundaries for RuntimeAttachBoundaries {
         &self,
         _provenance: Provenance,
     ) -> Result<muniment_core::auth::AuthStatus, ProtocolError> {
+        self.clear_workspace();
         service::sign_out(&self.entitlement_tracker, &self.runtime_activity)
             .map_err(|_| ProtocolError::persistence_failed())
     }

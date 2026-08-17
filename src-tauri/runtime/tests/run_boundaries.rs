@@ -28,7 +28,7 @@ use common::{credentials, stage_pi_stub, TemporaryProfile};
 static ENVIRONMENT: Mutex<()> = Mutex::new(());
 
 #[test]
-fn attach_dispatch_starts_a_fresh_thread_for_each_submit_without_a_thread_id() {
+fn workspace_less_submit_records_the_resolved_grant_workspace() {
     let _environment = ENVIRONMENT.lock().unwrap();
     muniment_core::chat_prompt::use_mock_keyring_for_tests();
     let store = KeyringNativeCredentialStore::new();
@@ -64,7 +64,7 @@ fn attach_dispatch_starts_a_fresh_thread_for_each_submit_without_a_thread_id() {
     .unwrap();
     let first = service
         .submit_run(
-            "workspace-a",
+            "",
             RunSubmitRequest {
                 text: "hello".into(),
                 files: Vec::new(),
@@ -84,6 +84,14 @@ fn attach_dispatch_starts_a_fresh_thread_for_each_submit_without_a_thread_id() {
     assert!(!first.run_id.is_empty());
     assert!(!first.thread_id.is_empty());
     assert!(first.committed_seq > 0);
+    assert_eq!(
+        state
+            .signed_workspace_approval()
+            .approval()
+            .unwrap()
+            .workspace,
+        "workspace-a"
+    );
 
     let boundaries = state.boundaries();
     assert!(boundaries.active_run_exists());

@@ -1,0 +1,10 @@
+#!/bin/sh
+set -e
+
+if [ "$1" = "configure" ]; then
+  mkdir -p /etc/systemd/user/default.target.wants
+  ln -sfn /usr/lib/systemd/user/muniment-runtime.service \
+    /etc/systemd/user/default.target.wants/muniment-runtime.service
+fi
+
+exit 0

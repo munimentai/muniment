@@ -30,6 +30,8 @@ impl RuntimeDirectory {
         let mut command = Command::new(env!("CARGO_BIN_EXE_muniment-runtime"));
         command
             .env("XDG_RUNTIME_DIR", &self.0)
+            .env("XDG_DATA_HOME", &self.0)
+            .env("XDG_CONFIG_HOME", &self.0)
             .env(WAIT_TIMEOUT_ENV, timeout_ms.to_string());
         command
     }

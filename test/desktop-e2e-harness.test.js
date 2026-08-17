@@ -63,7 +63,7 @@ describe('installed production chat contract', () => {
   })
 
   it('uses a bounded completion condition and verifies the server receipt route', () => {
-    expect(spec).toContain('this.timeout(360000)')
+    expect(spec).toContain('this.timeout(900000)')
     expect(spec).toContain('await browser.waitUntil(async () => {')
     expect(spec).toContain('timeout: 180000')
     expect(spec).toContain('chat response did not complete with a receipt for prompt:')

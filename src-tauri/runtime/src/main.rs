@@ -1,6 +1,12 @@
 #[cfg(target_os = "linux")]
 use muniment_core::attach::linux::{AttachFilesystem, InstanceLockError, TerminationSignalWait};
 #[cfg(target_os = "linux")]
+use muniment_runtime::{config_directory, profile_directory, run_runtime_activation};
+#[cfg(target_os = "linux")]
+use std::path::PathBuf;
+#[cfg(target_os = "linux")]
+use std::sync::mpsc;
+#[cfg(target_os = "linux")]
 use std::time::{Duration, Instant};
 
 #[cfg(target_os = "linux")]
@@ -66,6 +72,35 @@ fn handle_arguments() -> Result<bool, String> {
 fn run() -> Result<(), String> {
     let termination_signal = TerminationSignalWait::new().map_err(|error| error.to_string())?;
     let wait_timeout = test_wait_timeout()?;
+    if std::env::var_os(EXIT_AFTER_LOCK_ENV).is_some() {
+        return wait_for_instance_lock(wait_timeout);
+    }
+    let runtime_directory = std::env::var_os("XDG_RUNTIME_DIR")
+        .map(PathBuf::from)
+        .ok_or_else(|| "XDG_RUNTIME_DIR is not set".to_owned())?;
+    let profile_directory = profile_directory().map_err(|error| error.to_string())?;
+    let config_directory = config_directory().map_err(|error| error.to_string())?;
+    let takeover_deadline = wait_timeout
+        .and_then(|timeout| Instant::now().checked_add(timeout))
+        .unwrap_or_else(|| Instant::now() + Duration::from_secs(100 * 365 * 24 * 60 * 60));
+    let (stop_tx, stop_rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        if termination_signal.wait().is_ok() {
+            let _ = stop_tx.send(());
+        }
+    });
+    run_runtime_activation(
+        runtime_directory,
+        profile_directory,
+        config_directory,
+        takeover_deadline,
+        stop_rx,
+    )
+    .map_err(|error| error.to_string())
+}
+
+#[cfg(target_os = "linux")]
+fn wait_for_instance_lock(wait_timeout: Option<Duration>) -> Result<(), String> {
     let filesystem = AttachFilesystem::from_environment().map_err(|error| error.to_string())?;
     let started = Instant::now();
     let mut wait_interval = INITIAL_WAIT_INTERVAL;
@@ -93,10 +128,7 @@ fn run() -> Result<(), String> {
         }
     };
 
-    if std::env::var_os(EXIT_AFTER_LOCK_ENV).is_some() {
-        return Ok(());
-    }
-    termination_signal.wait().map_err(|error| error.to_string())
+    Ok(())
 }
 
 #[cfg(target_os = "linux")]
