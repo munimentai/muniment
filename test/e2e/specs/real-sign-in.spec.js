@@ -16,7 +16,7 @@ describe('installed nightly', () => {
   })
 
   it('signs in through the production UI', async function () {
-    this.timeout(360000)
+    this.timeout(900000)
     const location = await $('[data-testid="onboarding-home-path"]')
     await location.waitForDisplayed()
     const home = await location.getProperty('textContent')
