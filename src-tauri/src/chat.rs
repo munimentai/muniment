@@ -13,7 +13,10 @@ use muniment_core::attach::linux::{
     ThreadListPage, ThreadListRequest, ThreadListService, ThreadOpenPage, ThreadOpenRequest,
 };
 #[cfg(target_os = "linux")]
-use muniment_core::attach::ProtocolError;
+use muniment_core::attach::{
+    ClientError, DesktopClientHolder, ProtocolError, RunCancelAccepted, RunMessageAccepted,
+    RunPermissionAnswerAccepted, RunResumeAccepted, RunSubmitAccepted,
+};
 use muniment_core::attach::{RuntimeActivityGuard, RuntimeActivityRegistry};
 #[cfg(test)]
 use muniment_core::attachment::AttachmentDeliveryError;
@@ -59,10 +62,229 @@ use tauri::{Emitter, Manager};
 #[cfg(test)]
 use uuid::Uuid;
 
+#[cfg(target_os = "linux")]
+use crate::attach_service::DesktopClientSession;
 use crate::auth;
+#[cfg(target_os = "linux")]
+use muniment_core::attach::ChatPermissionAnswer as AttachChatPermissionAnswer;
 #[cfg(test)]
 use muniment_core::session_thread::OfferedThread;
 use muniment_core::session_thread::SessionThread;
+
+#[cfg(target_os = "linux")]
+trait RunCommandClient {
+    fn run_submit(
+        &self,
+        text: &str,
+        files: &[String],
+        thread_id: Option<&str>,
+    ) -> Result<RunSubmitAccepted, ClientError>;
+    fn run_resume(&self, run_id: &str) -> Result<RunResumeAccepted, ClientError>;
+    fn run_steer(&self, run_id: &str, text: &str) -> Result<RunMessageAccepted, ClientError>;
+    fn run_follow_up(&self, run_id: &str, text: &str) -> Result<RunMessageAccepted, ClientError>;
+    fn run_cancel(&self, run_id: &str) -> Result<RunCancelAccepted, ClientError>;
+    fn run_permission_answer(
+        &self,
+        run_id: &str,
+        gate_id: &str,
+        answer: AttachChatPermissionAnswer,
+    ) -> Result<RunPermissionAnswerAccepted, ClientError>;
+}
+
+#[cfg(target_os = "linux")]
+impl RunCommandClient for DesktopClientHolder {
+    fn run_submit(
+        &self,
+        text: &str,
+        files: &[String],
+        thread_id: Option<&str>,
+    ) -> Result<RunSubmitAccepted, ClientError> {
+        DesktopClientHolder::run_submit(self, text, files, thread_id)
+    }
+
+    fn run_resume(&self, run_id: &str) -> Result<RunResumeAccepted, ClientError> {
+        DesktopClientHolder::run_resume(self, run_id)
+    }
+
+    fn run_steer(&self, run_id: &str, text: &str) -> Result<RunMessageAccepted, ClientError> {
+        DesktopClientHolder::run_steer(self, run_id, text)
+    }
+
+    fn run_follow_up(&self, run_id: &str, text: &str) -> Result<RunMessageAccepted, ClientError> {
+        DesktopClientHolder::run_follow_up(self, run_id, text)
+    }
+
+    fn run_cancel(&self, run_id: &str) -> Result<RunCancelAccepted, ClientError> {
+        DesktopClientHolder::run_cancel(self, run_id)
+    }
+
+    fn run_permission_answer(
+        &self,
+        run_id: &str,
+        gate_id: &str,
+        answer: AttachChatPermissionAnswer,
+    ) -> Result<RunPermissionAnswerAccepted, ClientError> {
+        DesktopClientHolder::run_permission_answer(self, run_id, gate_id, answer)
+    }
+}
+
+#[cfg(target_os = "linux")]
+enum RunCommandSession<C> {
+    NoSupervisor,
+    Connected(C),
+    Disconnected,
+}
+
+#[cfg(target_os = "linux")]
+impl From<DesktopClientSession> for RunCommandSession<DesktopClientHolder> {
+    fn from(session: DesktopClientSession) -> Self {
+        match session {
+            DesktopClientSession::NoSupervisor => Self::NoSupervisor,
+            DesktopClientSession::Connected(client) => Self::Connected(client),
+            DesktopClientSession::Disconnected => Self::Disconnected,
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+async fn handle_run_submit<C, L, F>(
+    session: RunCommandSession<C>,
+    state: &ChatState,
+    subject: Option<&str>,
+    prompt: &str,
+    files: Vec<SelectedFile>,
+    local: L,
+) -> Result<SubmitResult, String>
+where
+    C: RunCommandClient,
+    L: FnOnce(Vec<SelectedFile>) -> F,
+    F: std::future::Future<Output = Result<SubmitResult, String>>,
+{
+    match session {
+        RunCommandSession::NoSupervisor => local(files).await,
+        RunCommandSession::Connected(client) => {
+            let thread_id = state.session_thread.current(subject);
+            let file_paths = files
+                .iter()
+                .map(|file| {
+                    file.path
+                        .to_str()
+                        .map(str::to_owned)
+                        .ok_or_else(attachment_error)
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            client
+                .run_submit(prompt, &file_paths, thread_id.as_deref())
+                .map(submit_result)
+                .map_err(auth::desktop_client_error)
+        }
+        RunCommandSession::Disconnected => Err(auth::background_service_error()),
+    }
+}
+
+#[cfg(target_os = "linux")]
+async fn handle_run_resume<C, L, F>(
+    session: RunCommandSession<C>,
+    _state: &ChatState,
+    run_id: &str,
+    local: L,
+) -> Result<SubmitResult, String>
+where
+    C: RunCommandClient,
+    L: FnOnce() -> F,
+    F: std::future::Future<Output = Result<SubmitResult, String>>,
+{
+    match session {
+        RunCommandSession::NoSupervisor => local().await,
+        RunCommandSession::Connected(client) => client
+            .run_resume(run_id)
+            .map(resume_result)
+            .map_err(auth::desktop_client_error),
+        RunCommandSession::Disconnected => Err(auth::background_service_error()),
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn submit_result(accepted: RunSubmitAccepted) -> SubmitResult {
+    SubmitResult {
+        run_id: accepted.run_id,
+        attachments: accepted
+            .attachments
+            .into_iter()
+            .map(|attachment| ChatAttachment {
+                display_name: attachment.display_name,
+                byte_length: attachment.byte_length,
+                media_type: attachment.media_type,
+            })
+            .collect(),
+        committed_seq: accepted.committed_seq,
+        accepted_at: accepted.accepted_at,
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn resume_result(accepted: RunResumeAccepted) -> SubmitResult {
+    SubmitResult {
+        run_id: accepted.run_id,
+        attachments: Vec::new(),
+        committed_seq: accepted.committed_seq,
+        accepted_at: accepted.accepted_at,
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn handle_run_queue<C: RunCommandClient, L: FnOnce() -> Result<(), String>>(
+    session: RunCommandSession<C>,
+    run_id: &str,
+    delivery: ChatDelivery,
+    message: &str,
+    local: L,
+) -> Result<(), String> {
+    match session {
+        RunCommandSession::NoSupervisor => local(),
+        RunCommandSession::Connected(client) => match delivery {
+            ChatDelivery::Steer => client.run_steer(run_id, message),
+            ChatDelivery::FollowUp => client.run_follow_up(run_id, message),
+        }
+        .map(|_| ())
+        .map_err(auth::desktop_client_error),
+        RunCommandSession::Disconnected => Err(auth::background_service_error()),
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn handle_run_cancel<C: RunCommandClient, L: FnOnce() -> Result<(), String>>(
+    session: RunCommandSession<C>,
+    run_id: &str,
+    local: L,
+) -> Result<(), String> {
+    match session {
+        RunCommandSession::NoSupervisor => local(),
+        RunCommandSession::Connected(client) => client
+            .run_cancel(run_id)
+            .map(|_| ())
+            .map_err(auth::desktop_client_error),
+        RunCommandSession::Disconnected => Err(auth::background_service_error()),
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn handle_run_permission_answer<C: RunCommandClient, L: FnOnce() -> Result<(), String>>(
+    session: RunCommandSession<C>,
+    run_id: &str,
+    gate_id: &str,
+    answer: AttachChatPermissionAnswer,
+    local: L,
+) -> Result<(), String> {
+    match session {
+        RunCommandSession::NoSupervisor => local(),
+        RunCommandSession::Connected(client) => client
+            .run_permission_answer(run_id, gate_id, answer)
+            .map(|_| ())
+            .map_err(auth::desktop_client_error),
+        RunCommandSession::Disconnected => Err(auth::background_service_error()),
+    }
+}
 
 pub(crate) struct TauriChatEventSink<R: tauri::Runtime> {
     app: tauri::AppHandle<R>,
@@ -507,6 +729,30 @@ fn chat_resume_error_message(error: ChatResumeError) -> String {
     }
 }
 
+#[cfg(target_os = "linux")]
+fn attach_permission_answer(answer: ChatPermissionAnswer) -> AttachChatPermissionAnswer {
+    match answer {
+        ChatPermissionAnswer::Select(value) => AttachChatPermissionAnswer::Select(value),
+        ChatPermissionAnswer::Confirm(value) => AttachChatPermissionAnswer::Confirm(value),
+        ChatPermissionAnswer::Input(value) => AttachChatPermissionAnswer::Input(value),
+        ChatPermissionAnswer::Editor(value) => AttachChatPermissionAnswer::Editor(value),
+        ChatPermissionAnswer::Cancelled => AttachChatPermissionAnswer::Cancelled,
+        ChatPermissionAnswer::CodeDiff {
+            gate_id,
+            effect_id,
+            code_diff_id,
+            diff_sha256,
+            write_plan_sha256,
+        } => AttachChatPermissionAnswer::CodeDiff {
+            gate_id,
+            effect_id,
+            code_diff_id,
+            diff_sha256,
+            write_plan_sha256,
+        },
+    }
+}
+
 #[tauri::command]
 pub async fn chat_submit(
     app: tauri::AppHandle,
@@ -515,9 +761,40 @@ pub async fn chat_submit(
     prompt: String,
     files: Option<Vec<SelectedFile>>,
 ) -> Result<SubmitResult, String> {
-    // Preserve the command argument names while the channel-neutral boundary
-    // resolves the same managed values from the owned app handle.
-    let _ = (&auth_state, &state);
+    #[cfg(target_os = "linux")]
+    {
+        let session: RunCommandSession<_> = app
+            .state::<crate::attach_service::AttachCompanionState>()
+            .desktop_client_session()
+            .into();
+        let subject = if matches!(session, RunCommandSession::Connected(_)) {
+            let tokens = auth::fresh_tokens_async(&auth_state, &app).await?;
+            tokens.subject
+        } else {
+            None
+        };
+        let selected_files = files.unwrap_or_default();
+        let local_prompt = prompt.clone();
+        return handle_run_submit(
+            session,
+            &state,
+            subject.as_deref(),
+            &prompt,
+            selected_files,
+            |local_files| local_chat_submit(app, local_prompt, local_files),
+        )
+        .await;
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    return local_chat_submit(app, prompt, files.unwrap_or_default()).await;
+}
+
+async fn local_chat_submit(
+    app: tauri::AppHandle,
+    prompt: String,
+    files: Vec<SelectedFile>,
+) -> Result<SubmitResult, String> {
     tauri::async_runtime::spawn_blocking(move || {
         start_desktop_run(
             &TauriRunStartBoundaries {
@@ -526,7 +803,7 @@ pub async fn chat_submit(
             },
             RunStartRequest {
                 prompt,
-                files: files.unwrap_or_default(),
+                files,
                 workspace: None,
                 provenance: None,
                 thread_id: None,
@@ -540,6 +817,30 @@ pub async fn chat_submit(
 
 #[tauri::command]
 pub async fn chat_resume(
+    app: tauri::AppHandle,
+    auth_state: tauri::State<'_, auth::AuthState>,
+    state: tauri::State<'_, ChatState>,
+    run_id: String,
+) -> Result<SubmitResult, String> {
+    #[cfg(target_os = "linux")]
+    {
+        let session = app
+            .state::<crate::attach_service::AttachCompanionState>()
+            .desktop_client_session()
+            .into();
+        let local_state = state.clone();
+        let local_run_id = run_id.clone();
+        return handle_run_resume(session, &state, &run_id, || {
+            local_chat_resume(app, auth_state, local_state, local_run_id)
+        })
+        .await;
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    return local_chat_resume(app, auth_state, state, run_id).await;
+}
+
+async fn local_chat_resume(
     app: tauri::AppHandle,
     auth_state: tauri::State<'_, auth::AuthState>,
     state: tauri::State<'_, ChatState>,
@@ -819,7 +1120,33 @@ pub(crate) fn prepare_new_run(
 
 #[tauri::command]
 pub async fn chat_queue(
+    app: tauri::AppHandle,
     state: tauri::State<'_, ChatState>,
+    run_id: String,
+    delivery: ChatDelivery,
+    message: String,
+) -> Result<(), String> {
+    #[cfg(target_os = "linux")]
+    let local_run_id = run_id.clone();
+    #[cfg(target_os = "linux")]
+    let local_message = message.clone();
+    #[cfg(target_os = "linux")]
+    return handle_run_queue(
+        app.state::<crate::attach_service::AttachCompanionState>()
+            .desktop_client_session()
+            .into(),
+        &run_id,
+        delivery,
+        &message,
+        || local_chat_queue(&state, local_run_id, delivery, local_message),
+    );
+
+    #[cfg(not(target_os = "linux"))]
+    return local_chat_queue(&state, run_id, delivery, message);
+}
+
+fn local_chat_queue(
+    state: &ChatState,
     run_id: String,
     delivery: ChatDelivery,
     message: String,
@@ -836,18 +1163,49 @@ pub async fn chat_queue(
 }
 
 #[tauri::command]
-pub async fn chat_cancel(state: tauri::State<'_, ChatState>, run_id: String) -> Result<(), String> {
-    cancel_active_run(&state.active, &run_id, None)
+pub async fn chat_cancel(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, ChatState>,
+    run_id: String,
+) -> Result<(), String> {
+    #[cfg(target_os = "linux")]
+    return handle_run_cancel(
+        app.state::<crate::attach_service::AttachCompanionState>()
+            .desktop_client_session()
+            .into(),
+        &run_id,
+        || cancel_active_run(&state.active, &run_id, None),
+    );
+
+    #[cfg(not(target_os = "linux"))]
+    return cancel_active_run(&state.active, &run_id, None);
 }
 
 #[tauri::command]
 pub async fn chat_answer_permission(
+    app: tauri::AppHandle,
     state: tauri::State<'_, ChatState>,
     run_id: String,
     gate_id: String,
     answer: ChatPermissionAnswer,
 ) -> Result<(), String> {
-    queue_permission_answer(&state.active, run_id, gate_id, answer)
+    #[cfg(target_os = "linux")]
+    let local_run_id = run_id.clone();
+    #[cfg(target_os = "linux")]
+    let local_gate_id = gate_id.clone();
+    #[cfg(target_os = "linux")]
+    return handle_run_permission_answer(
+        app.state::<crate::attach_service::AttachCompanionState>()
+            .desktop_client_session()
+            .into(),
+        &run_id,
+        &gate_id,
+        attach_permission_answer(answer.clone()),
+        || queue_permission_answer(&state.active, local_run_id, local_gate_id, answer),
+    );
+
+    #[cfg(not(target_os = "linux"))]
+    return queue_permission_answer(&state.active, run_id, gate_id, answer);
 }
 
 pub(crate) fn event_envelope(
@@ -911,6 +1269,379 @@ mod tests {
     use muniment_core::sidecar::validate_pi_session;
 
     static PI_ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    #[cfg(target_os = "linux")]
+    #[derive(Clone, Debug, Eq, PartialEq)]
+    enum RunClientCall {
+        Submit(String, Vec<String>, Option<String>),
+        Resume(String),
+        Steer(String, String),
+        FollowUp(String, String),
+        Cancel(String),
+        PermissionAnswer(String, String, AttachChatPermissionAnswer),
+    }
+
+    #[cfg(target_os = "linux")]
+    #[derive(Clone, Default)]
+    struct FakeRunClient(Arc<Mutex<Vec<RunClientCall>>>);
+
+    #[cfg(target_os = "linux")]
+    impl FakeRunClient {
+        fn calls(&self) -> Vec<RunClientCall> {
+            self.0.lock().unwrap().clone()
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    impl RunCommandClient for FakeRunClient {
+        fn run_submit(
+            &self,
+            text: &str,
+            files: &[String],
+            thread_id: Option<&str>,
+        ) -> Result<RunSubmitAccepted, ClientError> {
+            self.0.lock().unwrap().push(RunClientCall::Submit(
+                text.to_owned(),
+                files.to_vec(),
+                thread_id.map(str::to_owned),
+            ));
+            Ok(RunSubmitAccepted {
+                run_id: "remote-run".to_string(),
+                thread_id: thread_id.unwrap_or_default().to_string(),
+                attachments: Vec::new(),
+                committed_seq: 7,
+                accepted_at: "now".to_string(),
+            })
+        }
+
+        fn run_resume(&self, run_id: &str) -> Result<RunResumeAccepted, ClientError> {
+            self.0
+                .lock()
+                .unwrap()
+                .push(RunClientCall::Resume(run_id.to_string()));
+            Ok(RunResumeAccepted {
+                run_id: run_id.to_string(),
+                thread_id: "thread-1".to_string(),
+                committed_seq: 8,
+                accepted_at: "now".to_string(),
+            })
+        }
+
+        fn run_steer(&self, run_id: &str, text: &str) -> Result<RunMessageAccepted, ClientError> {
+            self.0
+                .lock()
+                .unwrap()
+                .push(RunClientCall::Steer(run_id.to_string(), text.to_string()));
+            Ok(RunMessageAccepted {
+                run_id: run_id.to_string(),
+                accepted_at: "now".to_string(),
+            })
+        }
+
+        fn run_follow_up(
+            &self,
+            run_id: &str,
+            text: &str,
+        ) -> Result<RunMessageAccepted, ClientError> {
+            self.0.lock().unwrap().push(RunClientCall::FollowUp(
+                run_id.to_string(),
+                text.to_string(),
+            ));
+            Ok(RunMessageAccepted {
+                run_id: run_id.to_string(),
+                accepted_at: "now".to_string(),
+            })
+        }
+
+        fn run_cancel(&self, run_id: &str) -> Result<RunCancelAccepted, ClientError> {
+            self.0
+                .lock()
+                .unwrap()
+                .push(RunClientCall::Cancel(run_id.to_string()));
+            Ok(RunCancelAccepted {
+                run_id: run_id.to_string(),
+                accepted_at: "now".to_string(),
+            })
+        }
+
+        fn run_permission_answer(
+            &self,
+            run_id: &str,
+            gate_id: &str,
+            answer: AttachChatPermissionAnswer,
+        ) -> Result<RunPermissionAnswerAccepted, ClientError> {
+            self.0.lock().unwrap().push(RunClientCall::PermissionAnswer(
+                run_id.to_string(),
+                gate_id.to_string(),
+                answer.clone(),
+            ));
+            Ok(RunPermissionAnswerAccepted {
+                run_id: run_id.to_string(),
+                gate_id: gate_id.to_string(),
+                answer,
+                committed_seq: 9,
+                accepted_at: "now".to_string(),
+            })
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    fn assert_disconnected<T>(result: Result<T, String>) {
+        assert_eq!(
+            result.err().unwrap(),
+            "Muniment cannot reach its background service."
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    fn command_test_state() -> (PathBuf, ChatState) {
+        let directory =
+            std::env::temp_dir().join(format!("muniment-run-command-{}", Uuid::now_v7()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let state = ChatState {
+            storage: Arc::new(Mutex::new(ChatStorage {
+                journal: RunJournal::open(directory.join("runs.sqlite3")).unwrap(),
+                cas: LocalCas::open(&directory.join("cas")).unwrap(),
+            })),
+            active: Arc::new(Mutex::new(None)),
+            runtime: Arc::new(Mutex::new(None)),
+            session_thread: SessionThread::default(),
+            runtime_activity: RuntimeActivityRegistry::new(),
+        };
+        (directory, state)
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn chat_submit_routes_all_states_and_connected_stops_before_local_run() {
+        let (directory, state) = command_test_state();
+        let local_called = Arc::new(AtomicBool::new(false));
+        let local_flag = Arc::clone(&local_called);
+        let local = tauri::async_runtime::block_on(handle_run_submit::<FakeRunClient, _, _>(
+            RunCommandSession::NoSupervisor,
+            &state,
+            None,
+            "prompt",
+            vec![],
+            |_| async move {
+                local_flag.store(true, std::sync::atomic::Ordering::SeqCst);
+                Ok(SubmitResult {
+                    run_id: "local-run".into(),
+                    attachments: vec![],
+                    committed_seq: 0,
+                    accepted_at: String::new(),
+                })
+            },
+        ));
+        assert_eq!(local.unwrap().run_id, "local-run");
+        assert!(local_called.load(std::sync::atomic::Ordering::SeqCst));
+
+        state
+            .session_thread
+            .select("selected-thread".into(), Some("subject-1"));
+        let client = FakeRunClient::default();
+        let connected = tauri::async_runtime::block_on(handle_run_submit(
+            RunCommandSession::Connected(client.clone()),
+            &state,
+            Some("subject-1"),
+            "prompt",
+            vec![SelectedFile {
+                path: PathBuf::from("/tmp/a.txt"),
+            }],
+            |_| async { panic!("connected submit called the local operation") },
+        ));
+        assert_eq!(connected.unwrap().run_id, "remote-run");
+        assert_eq!(
+            client.calls(),
+            [RunClientCall::Submit(
+                "prompt".to_string(),
+                vec!["/tmp/a.txt".to_string()],
+                Some("selected-thread".to_string())
+            )]
+        );
+        assert!(state.active.lock().unwrap().is_none());
+        assert!(state.runtime.lock().unwrap().is_none());
+        assert_disconnected(tauri::async_runtime::block_on(handle_run_submit::<
+            FakeRunClient,
+            _,
+            _,
+        >(
+            RunCommandSession::Disconnected,
+            &state,
+            None,
+            "prompt",
+            vec![],
+            |_| async { panic!("disconnected submit called the local operation") },
+        )));
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn chat_resume_routes_all_states_and_connected_stops_before_local_run() {
+        let (directory, state) = command_test_state();
+        let local_called = Arc::new(AtomicBool::new(false));
+        let local_flag = Arc::clone(&local_called);
+        let local = tauri::async_runtime::block_on(handle_run_resume::<FakeRunClient, _, _>(
+            RunCommandSession::NoSupervisor,
+            &state,
+            "run-1",
+            || async move {
+                local_flag.store(true, std::sync::atomic::Ordering::SeqCst);
+                Ok(SubmitResult {
+                    run_id: "local-run".into(),
+                    attachments: vec![],
+                    committed_seq: 0,
+                    accepted_at: String::new(),
+                })
+            },
+        ));
+        assert_eq!(local.unwrap().run_id, "local-run");
+        assert!(local_called.load(std::sync::atomic::Ordering::SeqCst));
+        let client = FakeRunClient::default();
+        let connected = tauri::async_runtime::block_on(handle_run_resume(
+            RunCommandSession::Connected(client.clone()),
+            &state,
+            "run-1",
+            || async { panic!("connected resume called the local operation") },
+        ));
+        assert!(connected.is_ok());
+        assert_eq!(client.calls(), [RunClientCall::Resume("run-1".to_string())]);
+        assert!(state.active.lock().unwrap().is_none());
+        assert!(state.runtime.lock().unwrap().is_none());
+        assert_disconnected(tauri::async_runtime::block_on(handle_run_resume::<
+            FakeRunClient,
+            _,
+            _,
+        >(
+            RunCommandSession::Disconnected,
+            &state,
+            "run-1",
+            || async { panic!("disconnected resume called the local operation") },
+        )));
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn chat_queue_routes_all_desktop_client_states_and_deliveries() {
+        let local_called = AtomicBool::new(false);
+        assert!(handle_run_queue::<FakeRunClient, _>(
+            RunCommandSession::NoSupervisor,
+            "run-1",
+            ChatDelivery::Steer,
+            "message",
+            || {
+                local_called.store(true, std::sync::atomic::Ordering::SeqCst);
+                Ok(())
+            }
+        )
+        .is_ok());
+        assert!(local_called.load(std::sync::atomic::Ordering::SeqCst));
+        let client = FakeRunClient::default();
+        assert!(handle_run_queue(
+            RunCommandSession::Connected(client.clone()),
+            "run-1",
+            ChatDelivery::Steer,
+            "steer",
+            || panic!("connected queue called the local operation")
+        )
+        .is_ok());
+        assert!(handle_run_queue(
+            RunCommandSession::Connected(client.clone()),
+            "run-2",
+            ChatDelivery::FollowUp,
+            "follow-up",
+            || panic!("connected queue called the local operation")
+        )
+        .is_ok());
+        assert_eq!(
+            client.calls(),
+            [
+                RunClientCall::Steer("run-1".to_string(), "steer".to_string()),
+                RunClientCall::FollowUp("run-2".to_string(), "follow-up".to_string())
+            ]
+        );
+        assert_disconnected(handle_run_queue::<FakeRunClient, _>(
+            RunCommandSession::Disconnected,
+            "run-1",
+            ChatDelivery::FollowUp,
+            "message",
+            || panic!("disconnected queue called the local operation"),
+        ));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn chat_cancel_routes_all_desktop_client_states() {
+        let local_called = AtomicBool::new(false);
+        assert!(handle_run_cancel::<FakeRunClient, _>(
+            RunCommandSession::NoSupervisor,
+            "run-1",
+            || {
+                local_called.store(true, std::sync::atomic::Ordering::SeqCst);
+                Ok(())
+            }
+        )
+        .is_ok());
+        assert!(local_called.load(std::sync::atomic::Ordering::SeqCst));
+        let client = FakeRunClient::default();
+        assert!(handle_run_cancel(
+            RunCommandSession::Connected(client.clone()),
+            "run-1",
+            || panic!("connected cancel called the local operation")
+        )
+        .is_ok());
+        assert_eq!(client.calls(), [RunClientCall::Cancel("run-1".to_string())]);
+        assert_disconnected(handle_run_cancel::<FakeRunClient, _>(
+            RunCommandSession::Disconnected,
+            "run-1",
+            || panic!("disconnected cancel called the local operation"),
+        ));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn chat_answer_permission_routes_all_desktop_client_states() {
+        let answer = AttachChatPermissionAnswer::Confirm(true);
+        let local_called = AtomicBool::new(false);
+        assert!(handle_run_permission_answer::<FakeRunClient, _>(
+            RunCommandSession::NoSupervisor,
+            "run-1",
+            "gate-1",
+            answer.clone(),
+            || {
+                local_called.store(true, std::sync::atomic::Ordering::SeqCst);
+                Ok(())
+            }
+        )
+        .is_ok());
+        assert!(local_called.load(std::sync::atomic::Ordering::SeqCst));
+        let client = FakeRunClient::default();
+        assert!(handle_run_permission_answer(
+            RunCommandSession::Connected(client.clone()),
+            "run-1",
+            "gate-1",
+            answer.clone(),
+            || panic!("connected permission answer called the local operation")
+        )
+        .is_ok());
+        assert_eq!(
+            client.calls(),
+            [RunClientCall::PermissionAnswer(
+                "run-1".to_string(),
+                "gate-1".to_string(),
+                answer.clone()
+            )]
+        );
+        assert_disconnected(handle_run_permission_answer::<FakeRunClient, _>(
+            RunCommandSession::Disconnected,
+            "run-1",
+            "gate-1",
+            answer,
+            || panic!("disconnected permission answer called the local operation"),
+        ));
+    }
 
     struct FakeCoordinateSink {
         session_root: PathBuf,
