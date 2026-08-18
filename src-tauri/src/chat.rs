@@ -1,6 +1,6 @@
 use std::collections::VecDeque;
 use std::sync::atomic::AtomicBool;
-#[cfg(target_os = "linux")]
+use std::sync::mpsc::{channel, RecvTimeoutError, Sender};
 use std::sync::OnceLock;
 use std::sync::{Arc, Mutex};
 #[cfg(test)]
@@ -357,6 +357,31 @@ pub struct ChatState {
     runtime: Arc<Mutex<Option<PiRuntime>>>,
     pub(crate) session_thread: SessionThread,
     pub(crate) runtime_activity: RuntimeActivityRegistry,
+    pub(crate) retention_trigger: RetentionTrigger,
+}
+
+/// Wakes the desktop retention schedule between its timed checks.
+#[derive(Default)]
+pub(crate) struct RetentionTrigger(OnceLock<Sender<()>>);
+
+impl RetentionTrigger {
+    fn install(&self, trigger: Sender<()>) {
+        let _ = self.0.set(trigger);
+    }
+
+    /// Asks the schedule to check now. Reports whether the schedule took it.
+    pub(crate) fn check_now(&self) -> bool {
+        self.0.get().is_some_and(|trigger| trigger.send(()).is_ok())
+    }
+
+    /// Builds a trigger that a test reads instead of a schedule.
+    #[cfg(test)]
+    pub(crate) fn for_test() -> (Self, std::sync::mpsc::Receiver<()>) {
+        let (trigger, checks) = channel();
+        let installed = Self::default();
+        installed.install(trigger);
+        (installed, checks)
+    }
 }
 
 #[cfg(target_os = "linux")]
@@ -749,13 +774,18 @@ impl ChatState {
         let (mut journal, cas) = profile.open_storage()?;
         reconcile_interrupted_runs(&mut journal, &desktop_provenance(None));
         let storage = Arc::new(Mutex::new(ChatStorage { journal, cas }));
-        start_retention_schedule(config_directory, Arc::clone(&storage));
+        let retention_trigger = RetentionTrigger::default();
+        retention_trigger.install(start_retention_schedule(
+            config_directory,
+            Arc::clone(&storage),
+        ));
         Ok(Self {
             storage,
             active: Arc::new(Mutex::new(None)),
             runtime: Arc::new(Mutex::new(None)),
             session_thread: SessionThread::default(),
             runtime_activity,
+            retention_trigger,
         })
     }
 
@@ -767,6 +797,7 @@ impl ChatState {
             runtime: Arc::new(Mutex::new(None)),
             session_thread: SessionThread::default(),
             runtime_activity,
+            retention_trigger: RetentionTrigger::default(),
         }
     }
 
@@ -787,7 +818,8 @@ impl ChatState {
         self.storage
             .set(Arc::clone(&storage))
             .map_err(|_| "Chat storage is already open.")?;
-        start_retention_schedule(config_directory, storage);
+        self.retention_trigger
+            .install(start_retention_schedule(config_directory, storage));
         Ok(())
     }
 
@@ -804,13 +836,19 @@ impl ChatState {
     }
 }
 
-fn start_retention_schedule(config_directory: PathBuf, storage: SharedStorage) {
+/// Starts the schedule and returns the trigger for an immediate check.
+fn start_retention_schedule(config_directory: PathBuf, storage: SharedStorage) -> Sender<()> {
+    let (trigger, checks) = channel();
     std::thread::spawn(move || {
         muniment_core::retention_record::run_recorded_retention_checks(
             &config_directory,
-            |interval| {
-                std::thread::sleep(interval);
-                true
+            |interval| match checks.recv_timeout(interval) {
+                Ok(()) => {
+                    while checks.try_recv().is_ok() {}
+                    true
+                }
+                Err(RecvTimeoutError::Timeout) => true,
+                Err(RecvTimeoutError::Disconnected) => false,
             },
             |max_age_seconds| {
                 let mut storage = storage.lock().map_err(|_| ())?;
@@ -827,6 +865,7 @@ fn start_retention_schedule(config_directory: PathBuf, storage: SharedStorage) {
             },
         );
     });
+    trigger
 }
 
 #[cfg(test)]
@@ -1568,6 +1607,7 @@ mod tests {
             runtime: Arc::new(Mutex::new(None)),
             session_thread: SessionThread::default(),
             runtime_activity: RuntimeActivityRegistry::new(),
+            retention_trigger: RetentionTrigger::default(),
         };
         (directory, state)
     }
@@ -3403,6 +3443,99 @@ mod tests {
 
         std::fs::remove_file(sessions.join(session_name)).unwrap();
         drop(shared);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    fn expired_run_event(run: u64, seq: u64, kind: &str) -> EventEnvelope {
+        EventEnvelope {
+            event_id: format!("0190b100-0000-7000-8000-{run:06}{seq:06}"),
+            run_id: format!("0190b000-0000-7000-8000-{run:012}"),
+            run_seq: seq,
+            event_type: kind.into(),
+            event_version: 1,
+            envelope_version: 1,
+            recorded_at: "2020-01-01T00:00:00Z".into(),
+            occurred_at: None,
+            correlation_id: None,
+            causation_id: None,
+            payload: EventPayload::Inline {
+                payload_json: json!({}),
+            },
+            provenance: desktop_provenance(Some("owner")),
+            extra: Default::default(),
+        }
+    }
+
+    fn append_expired_run(storage: &SharedStorage, run: u64) {
+        storage
+            .lock()
+            .unwrap()
+            .journal
+            .append_batch(
+                0,
+                &[
+                    expired_run_event(run, 1, "run.started"),
+                    expired_run_event(run, 2, "run.completed"),
+                ],
+            )
+            .unwrap();
+    }
+
+    fn wait_for_empty_journal(storage: &SharedStorage) {
+        let deadline = std::time::Instant::now() + Duration::from_secs(20);
+        loop {
+            if storage
+                .lock()
+                .unwrap()
+                .journal
+                .run_ids()
+                .unwrap()
+                .is_empty()
+            {
+                return;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the retention schedule did not check the journal"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    #[test]
+    fn an_uninstalled_retention_trigger_takes_no_check() {
+        assert!(!RetentionTrigger::default().check_now());
+        let (trigger, checks) = RetentionTrigger::for_test();
+        assert!(trigger.check_now());
+        assert!(checks.recv().is_ok());
+    }
+
+    #[test]
+    fn the_retention_schedule_checks_again_when_a_save_triggers_it() {
+        let directory =
+            std::env::temp_dir().join(format!("muniment-retention-schedule-{}", Uuid::now_v7()));
+        std::fs::create_dir_all(&directory).unwrap();
+        muniment_core::chat_prompt::use_mock_keyring_for_tests();
+        let config_directory = directory.join("config");
+        muniment_core::retention_record::write_retention_choice(
+            &config_directory,
+            muniment_core::retention_record::RetentionChoice::DeleteAfter30Days,
+        )
+        .unwrap();
+        let storage: SharedStorage = Arc::new(Mutex::new(ChatStorage {
+            journal: RunJournal::open(directory.join("runs.sqlite3")).unwrap(),
+            cas: LocalCas::open(&directory.join("cas")).unwrap(),
+        }));
+        append_expired_run(&storage, 1);
+
+        let trigger = start_retention_schedule(config_directory, Arc::clone(&storage));
+        wait_for_empty_journal(&storage);
+
+        append_expired_run(&storage, 2);
+        trigger.send(()).unwrap();
+        wait_for_empty_journal(&storage);
+
+        drop(trigger);
         std::fs::remove_dir_all(directory).unwrap();
     }
 }
