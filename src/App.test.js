@@ -521,11 +521,28 @@ describe('workspace composer entry', () => {
     expect(screen.queryByRole('textbox', { name: 'Message' })).not.toBeInTheDocument()
   })
 
+  it('keeps the workspace mounted through a drop shorter than the notice dwell', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    render(App)
+    const composer = await screen.findByRole('textbox', { name: 'Message' })
+
+    desktopClientListener({ payload: { connected: true, chat_events_connected: false, supervisor_running: true } })
+    await vi.advanceTimersByTimeAsync(250)
+    expect(screen.queryByText('Muniment cannot reach its background service.')).not.toBeInTheDocument()
+
+    desktopClientListener({ payload: { connected: true, chat_events_connected: true, supervisor_running: true } })
+    await vi.advanceTimersByTimeAsync(5_000)
+    expect(screen.queryByText('Muniment cannot reach its background service.')).not.toBeInTheDocument()
+    expect(screen.getByRole('textbox', { name: 'Message' })).toBe(composer)
+  })
+
   it('updates the surface when the desktop client supervisor starts and stops', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
     render(App)
     await screen.findByRole('textbox', { name: 'Message' })
 
     desktopClientListener({ payload: { connected: false, supervisor_running: true } })
+    await vi.advanceTimersByTimeAsync(2_000)
     expect(await screen.findByText('Muniment cannot reach its background service.')).toBeInTheDocument()
     expect(screen.queryByRole('textbox', { name: 'Message' })).not.toBeInTheDocument()
 
