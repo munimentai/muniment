@@ -600,17 +600,25 @@ describe('workspace composer entry', () => {
     expect(screen.queryByText('Muniment cannot reach its background service.')).not.toBeInTheDocument()
   })
 
-  it('holds Send behind the update notice while the runtime upgrade is pending', async () => {
+  const upgradeStatus = (pending) => ({
+    connected: true, chat_events_connected: true, supervisor_running: true, runtime_upgrade_pending: pending,
+  })
+
+  function mockRuntimeUpgrade({ pending, thread = [] } = {}) {
     invoke.mockImplementation(async (command) => {
       if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
-      if (command === 'attach_listener_status') {
-        return { connected: true, chat_events_connected: true, supervisor_running: true, runtime_upgrade_pending: true }
-      }
-      if (command === 'chat_thread_open') return []
+      if (command === 'attach_listener_status') return upgradeStatus(pending)
+      if (command === 'chat_thread_open') return thread
       if (command === 'auth_entitlement_snapshot') return snapshot()
       if (command === 'chat_submit') return { runId: 'run-upgrade', attachments: [] }
+      if (command === 'chat_resume') return { runId: 'run-interrupted' }
+      if (command === 'chat_queue') return undefined
       throw new Error(`unexpected command: ${command}`)
     })
+  }
+
+  it('holds Send behind the update notice while the runtime upgrade is pending', async () => {
+    mockRuntimeUpgrade({ pending: true })
     render(App)
     const composer = await screen.findByPlaceholderText('Ask anything')
     await fireEvent.input(composer, { target: { value: 'A question' } })
@@ -629,31 +637,55 @@ describe('workspace composer entry', () => {
   })
 
   it('drops the update notice and releases Send once the runtime upgrade finishes', async () => {
-    invoke.mockImplementation(async (command) => {
-      if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
-      if (command === 'attach_listener_status') {
-        return { connected: true, chat_events_connected: true, supervisor_running: true, runtime_upgrade_pending: true }
-      }
-      if (command === 'chat_thread_open') return []
-      if (command === 'auth_entitlement_snapshot') return snapshot()
-      if (command === 'chat_submit') return { runId: 'run-upgrade', attachments: [] }
-      throw new Error(`unexpected command: ${command}`)
-    })
+    mockRuntimeUpgrade({ pending: true })
     render(App)
     const composer = await screen.findByPlaceholderText('Ask anything')
     await fireEvent.input(composer, { target: { value: 'A question' } })
     const send = screen.getByRole('button', { name: 'Send' })
     expect(send).toHaveAttribute('aria-disabled', 'true')
 
-    desktopClientListener({
-      payload: { connected: true, chat_events_connected: true, supervisor_running: true, runtime_upgrade_pending: false },
-    })
+    desktopClientListener({ payload: upgradeStatus(false) })
 
     await waitFor(() => expect(send).not.toHaveAttribute('aria-disabled'))
     expect(screen.queryByText('A Muniment update is finishing.')).not.toBeInTheDocument()
     expect(screen.queryByText('Muniment resumes on its own.')).not.toBeInTheDocument()
     await fireEvent.click(send)
     expect(invoke).toHaveBeenCalledWith('chat_submit', { prompt: 'A question', files: [] })
+  })
+
+  it('holds Resume while the runtime upgrade is pending and releases it when the flag clears', async () => {
+    mockRuntimeUpgrade({ pending: true, thread: [{
+      runId: 'run-interrupted', phase: 'interrupted', text: 'Partial answer',
+      prompt: 'Original prompt', receipt: null, toolActivity: [], resumable: true,
+    }] })
+    render(App)
+    const resume = await screen.findByRole('button', { name: 'Resume' })
+    expect(resume).toBeDisabled()
+    await fireEvent.click(resume)
+    expect(invoke).not.toHaveBeenCalledWith('chat_resume', expect.anything())
+
+    desktopClientListener({ payload: upgradeStatus(false) })
+
+    await waitFor(() => expect(resume).not.toBeDisabled())
+    await fireEvent.click(resume)
+    expect(invoke).toHaveBeenCalledWith('chat_resume', { runId: 'run-interrupted' })
+  })
+
+  it('holds Queue follow-up when the runtime upgrade starts during a live run', async () => {
+    mockRuntimeUpgrade({ pending: false })
+    render(App)
+    const composer = await screen.findByPlaceholderText('Ask anything')
+    await fireEvent.input(composer, { target: { value: 'Initial prompt' } })
+    await fireEvent.click(screen.getByRole('button', { name: 'Send' }))
+    const queue = await screen.findByRole('button', { name: 'Queue follow-up' })
+    await fireEvent.input(composer, { target: { value: 'Then summarize it' } })
+    expect(queue).not.toBeDisabled()
+
+    desktopClientListener({ payload: upgradeStatus(true) })
+
+    await waitFor(() => expect(queue).toBeDisabled())
+    await fireEvent.click(queue)
+    expect(invoke).not.toHaveBeenCalledWith('chat_queue', expect.anything())
   })
 
   it('names and describes the composer in its default state', async () => {
