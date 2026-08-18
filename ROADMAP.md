@@ -166,15 +166,14 @@ schedule wherever the runtime owns the journal, the profile popover carries the
 `start_retention_schedule` (`src-tauri/src/chat.rs:794`) runs the same check
 where the desktop owns the journal.
 
-MEASURED 2026-08-17 (eighty-fourth wave, planner, traced
-`record_thread_retention_choice` beside the runtime schedule) — a saved
-retention choice rides no wire. `src-tauri/src/thread_retention.rs` writes
-`thread-retention.json` under the app config directory, and on Linux the
-runtime reads the same file only on its own 24-hour poll, because both
-processes resolve the `ai.muniment.desktop` config directory. The save works,
-but application waits up to a day and the shared-directory dependency is
-recorded nowhere. The eighty-fourth wave files the `retention.recheck`
-operation pair that applies a saved choice promptly.
+DONE 2026-08-18 — a saved retention choice applies without the 24-hour wait
+(MUNIDESK-1353, 1354). `retention.recheck` is an attach operation with the
+fixture pair under `protocol-fixtures/muniment.attach/1/`, the runtime answers
+it through `src-tauri/runtime/src/attach_boundaries.rs`, and
+`src-tauri/src/thread_retention.rs` sends it after a successful save. The
+eighty-fourth wave had measured the save riding no wire, with both processes
+reading `thread-retention.json` from the shared `ai.muniment.desktop` config
+directory.
 
 RULE 2026-07-12 — pre-launch schema work on the desktop's local journal is in
 scope for this lane. The owner's post-go-live restriction applies to the
@@ -445,11 +444,22 @@ carries no blocker, `DrainState::admit`
 operation while the runtime drains, `UpgradeWatch`
 (`src-tauri/runtime/src/upgrade_watch.rs`) polls the executable's device and
 inode identity each second, and `main` exits with status 75 on the quiesced
-refresh so `Restart=on-failure` starts the new payload. The desktop
-welcome-version check is the eighty-fourth-wave chain. The attach `Welcome`
-already carries the accepting listener's build version in its `desktop_version`
-field, and the desktop handshake reads that field nowhere today
-(`src-tauri/attach/src/client.rs:2938`).
+refresh so `Restart=on-failure` starts the new payload. The desktop half is
+built too (MUNIDESK-1350, 1351, 1352). `DesktopClientHolder`
+(`src-tauri/attach/src/client.rs:1466`) records the welcome version.
+`with_compatible_client` (`:1636`) answers `RuntimeUpgradePending` before it
+sends a run operation, so the four run commands hold while the runtime is
+older. `runtimeUpgradePending` (`src/App.svelte:855`) holds send, resume, and
+queue in the shell, and it shows the pending upgrade notice.
+
+DONE 2026-08-18 — the runtime unit states its restart backoff (MUNIDESK-1364).
+`src-tauri/packaging/muniment-runtime.service` carries `RestartSec=5s` under
+`[Service]`, and `StartLimitIntervalSec=300s` with `StartLimitBurst=5` under
+`[Unit]`. The unit no longer takes the `systemd` defaults of a 100ms delay and
+five starts in 10 seconds. A crash loop now reaches that limit in about twenty
+seconds and leaves the unit failed, which is the needs-attention state ADR 0012
+asks for. The status-75 upgrade refresh spends one of the five starts
+(`docs/linux-packages.md`).
 
 DONE 2026-08-17 — the installed Linux smoke drives the runtime-owned topology
 (MUNIDESK-1339). `test/e2e/runner/linux.sh` starts the runtime service before
@@ -526,18 +536,60 @@ service start would exceed that parity and spend a network call on every
 login. After a runtime restart, companion pairing waits for one run, which is
 the behavior the desktop has today.
 
-SEQUENCED 2026-08-17 (eighty-fourth wave) — the eighty-third-wave retention
-and upgrade chains are all built (MUNIDESK-1343 through 1348), so this wave
-files the two chains those completions opened. The welcome-version chain
-records the welcome version on the connected desktop client with a fail-closed
-compare rule, holds new runs in the desktop while the runtime is older, and
-shows the pending upgrade in the shell. The retention-propagation pair adds
-the `retention.recheck` attach operation and sends it after a successful save,
-so a saved choice applies without the 24-hour wait. Remote Control stays gated:
-harness-spec §14.1 puts the relay leg on an outbound HTTPS session to
-`api.muniment.ai`, no muniment-cloud relay contract has published, and the
-desktop states remain pending owner mockup confirmation
+SEQUENCED 2026-08-18 (eighty-sixth wave) — the eighty-fifth-wave run-rejoin
+chain and its runtime-unit backoff slice are all built (MUNIDESK-1359 through
+1364). This wave takes the chat-event gap the rejoin chain left open. The first
+slice gives `chat-controller.js` a re-read that refreshes the open thread while
+a run is active. The second slice triggers that re-read when
+`chat_events_connected` turns true. Remote Control stays gated for three
+reasons. Harness-spec §14.1 puts the relay leg on an outbound HTTPS session to
+`api.muniment.ai`. No muniment-cloud relay contract has published. The desktop
+states remain pending owner mockup confirmation
 (`docs/design-reference/remote-control-ux.md`).
+
+DONE 2026-08-18 — the desktop rejoins a run the runtime is still executing
+(MUNIDESK-1359, 1360, 1361, 1363). The ADR 0012 desktop-run-rejoin amendment
+states the rule. `projection_phase` (`src-tauri/core/src/chat_view.rs:112`)
+answers `streaming`, `thinking`, or `pending-permission` for an unsettled run.
+`unsettledRun` (`src/lib/chat-state.js:165`) names the newest such run in a
+loaded transcript. `openThread` (`src/lib/chat-controller.js:184`) applies the
+buffered events to that run and publishes it through `onActive`.
+`test/probe/in-flight.html` renders the rejoined state. The eighty-fifth wave
+had measured `openThread` leaving `active` null. The composer then took a
+second prompt, and the run in flight carried no Stop, steer, or follow-up
+control.
+
+DONE 2026-08-18 — the desktop's chat-event buffer is bounded (MUNIDESK-1362).
+`launch` (`src-tauri/runtime/src/attach_boundaries.rs:343`) sends every attach
+run's events through `RuntimeChatEventBroadcast`, and the desktop subscribes to
+all of them (`src-tauri/src/attach_service.rs:1144`). `handleEvent`
+(`src/lib/chat-controller.js:92`) now holds an unknown run id only while a call
+waits for its run (`:100`). It drops the event otherwise. `releaseBuffer`
+(`:62`) clears the whole map when the last wait ends. The eighty-fifth wave had
+measured the buffer keeping every foreign run's text-delta stream for the
+window's life. No path cleared a buffered run this desktop did not start.
+`send` (`:377`) and `resume` (`:419`) delete only a run this desktop launched,
+and `cleanup` (`:452`) runs at window close alone.
+
+MEASURED 2026-08-18 (eighty-fifth wave, planner, read the broadcast beside the
+recovery re-read) — a chat-event gap leaves the open run's text short.
+`RuntimeChatEventBroadcast::deliver` (`src-tauri/runtime/src/sink.rs:55`) drops
+a subscriber whose 256-event queue fills, `serve_chat_events_at`
+(`src-tauri/src/attach_service.rs:1144`) reconnects, and the desktop re-reads
+the thread only when `desktopClientStatus.connected` turns true
+(`src/App.svelte:666`). A `chat_events_connected` recovery triggers no re-read,
+so the run keeps whatever hole the gap left. The rejoin chain cleared the
+dependency this entry had recorded. `openThread`
+(`src/lib/chat-controller.js:184`) still returns early while a run is active,
+so the re-read needs a path that refreshes an open thread in place. The
+eighty-sixth wave files that chain.
+
+NOT FILED 2026-08-18 (eighty-fifth wave) — the sidebar does not learn about a
+thread another client created. `refreshThreads`
+(`src/lib/chat-controller.js:71`) runs at load and when this desktop's own
+active run settles, so an ACP or CLI thread appears only after the next launch.
+Which events the chat broadcast owes a passive client is a contract call, and
+it is wider than one slice.
 
 DONE — all three slices of the ADR 0009 attach workspace namespace amendment are
 built (MUNIDESK-883, 887, 893, 896, 905). The signed `grant.workspace` value is
@@ -1010,14 +1062,14 @@ earlier one. Requiring an up-to-date branch before merge, or a merge queue, is a
 repository-settings change that sits with the owner. The planner files no ticket
 for it.
 
-VERIFIED 2026-08-17 (eighty-fourth wave, planner) — one
+VERIFIED 2026-08-18 (eighty-fifth wave, planner) — one
 `cargo test -p muniment-core -p muniment-runtime -p muniment-attach` run started
-from `src-tauri` passes 1,419 tests, and the build prints no warning. One
-`npm ci` then `npm test` run passes 952 frontend tests over 64 files with 31
+from `src-tauri` passes 1,427 tests, and the build prints no warning. One
+`npm ci` then `npm test` run passes 979 frontend tests over 64 files with 31
 skipped, plus 3 browser tests. Start cargo from `src-tauri`, because the
 repository root holds no `Cargo.toml`. A run started from the root dies with
-`could not find Cargo.toml`, which reads as a broken harness. This entry replaces
-the earlier ledger.
+`could not find Cargo.toml`, which reads as a broken harness. This entry
+replaces the earlier ledger.
 
 MEASURED 2026-08-13 (fifty-eighth wave, planner, counted each path with
 `git log --name-only --since=2026-08-01 -- <path>`) — `src-tauri/src/chat.rs` is
