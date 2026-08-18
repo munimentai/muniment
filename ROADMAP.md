@@ -538,15 +538,13 @@ the behavior the desktop has today.
 
 SEQUENCED 2026-08-18 (eighty-sixth wave) — the eighty-fifth-wave run-rejoin
 chain and its runtime-unit backoff slice are all built (MUNIDESK-1359 through
-1364). This wave files the first slice of the chat-event gap chain. That slice
-gives `chat-controller.js` a `refreshOpenThread` re-read, which refreshes the
-open thread in place while a run is active. The second slice triggers that
-re-read when `chat_events_connected` turns true. It waits for the refresh
-function to exist, so the eighty-seventh wave files it. Remote Control stays
-gated for three
-reasons. Harness-spec §14.1 puts the relay leg on an outbound HTTPS session to
-`api.muniment.ai`. No muniment-cloud relay contract has published. The desktop
-states remain pending owner mockup confirmation
+1364). This wave files both slices of the chat-event gap chain. The first
+slice gives `chat-controller.js` a `refreshOpenThread` re-read, which
+refreshes the open thread in place while a run is active. The second slice
+triggers that re-read when `chat_events_connected` turns true. Remote Control
+stays gated for three reasons. Harness-spec §14.1 puts the relay leg on an
+outbound HTTPS session to `api.muniment.ai`. No muniment-cloud relay contract
+has published. The desktop states remain pending owner mockup confirmation
 (`docs/design-reference/remote-control-ux.md`).
 
 DONE 2026-08-18 — the desktop rejoins a run the runtime is still executing
@@ -591,17 +589,20 @@ thread another client created. `refreshThreads`
 (`src/lib/chat-controller.js:71`) runs at load and when this desktop's own
 active run settles, so an ACP or CLI thread appears only after the next launch.
 Which events the chat broadcast owes a passive client is a contract call, and
-it is wider than one slice. This wave files the ADR 0012 amendment that decides
-the rule. The implementation slice follows the amendment.
+it is wider than one slice. This wave files the ADR 0012
+passive-chat-event-delivery amendment. The implementation slice follows the
+amendment.
 
 MEASURED 2026-08-18 (eighty-sixth wave, planner, read the reconnect handler
 beside the run submit path) — a desktop-client reconnect moves the user to the
-newest thread, and the next message still lands in the old one. `run('status')`
-fires when `connected` turns true (`src/App.svelte:664`, `:678`), and it calls
-`loadHistory` (`:645`). `loadHistory` opens `summaries[0].threadId`
-(`src/lib/chat-controller.js:155`) and sends no `chat_select_thread`. The
-desktop keeps its own selection in `SessionThread`, and `handle_run_submit`
-sends `session_thread.current` as the run's thread (`src-tauri/src/chat.rs:184`).
+newest thread, and the next message still lands in the old one.
+`run('status')` fires when `connected` turns true (`src/App.svelte:666`,
+`:681`), and it calls `loadHistory` (`:645`). `loadHistory` opens
+`summaries[0].threadId` (`src/lib/chat-controller.js:155`) and sends no
+`chat_select_thread`. `openThread` (`:184`) returns early while a run is
+active, so this move lands only when no run is in flight. The desktop keeps
+its own selection in `SessionThread`, and `handle_run_submit` sends
+`session_thread.current` as the run's thread (`src-tauri/src/chat.rs:184`).
 The runtime restarts on the status-75 upgrade refresh, so this reconnect is a
 routine event rather than a rare one. The eighty-sixth wave files the fix.
 
