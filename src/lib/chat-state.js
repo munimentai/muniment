@@ -154,3 +154,18 @@ export function historyMessages(history) {
     { role: 'assistant', run: { id: entry.runId, phase: entry.phase, text: entry.text, receipt: entry.receipt ?? null, recalls: entry.recalls ?? [], prompt: entry.prompt ?? '', toolActivity: entry.toolActivity ?? [], appliedDiffs: entry.appliedDiffs ?? [], pendingPermission: entry.pendingPermission ?? null, resumable: entry.resumable === true } },
   ])
 }
+
+// The phases a run reaches once it stops. src-tauri/src/chat.rs projection_phase
+// answers one of these for a settled run and thinking, streaming, or
+// pending-permission for a run that still executes (ADR 0012, desktop run rejoin).
+export const settledPhases = new Set(['complete', 'cancelled', 'failed', 'interrupted'])
+
+// The run the runtime still drives in a projected message list. A thread whose
+// runs all settled answers null, so the desktop leaves the active run null.
+export function unsettledRun(messages = []) {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const run = messages[index]?.run
+    if (run && !settledPhases.has(run.phase)) return run
+  }
+  return null
+}

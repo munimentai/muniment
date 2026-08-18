@@ -11,6 +11,12 @@ describe('probe harness', () => {
     expect(source.split(readyMarker)).toHaveLength(2)
   })
 
+  it('drives the in-flight page from the shared stub', () => {
+    const page = fs.readFileSync(path.join(process.cwd(), 'test/probe/in-flight.html'), 'utf8')
+    expect(page).toContain('<script src="./stub.js" data-history="in-flight"></script>')
+    expect(page).not.toContain('probeReady')
+  })
+
   it('reports a started attachment listener', () => {
     expect(source).toMatch(/if \(command === 'attach_listener_status'\) return \{ started: true, failure: null, connected: false, supervisor_running: false \}/)
   })

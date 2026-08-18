@@ -67,8 +67,9 @@
   let submitError = $state('')
   let messages = $state([])
   let active = $state(null)
-  // The transcript is not a live region; only the run the user is waiting on is
-  // announced, and only when its phase changes. Restored history announces nothing.
+  // The transcript is not a live region. Only the run the user is waiting on is
+  // announced, and only when its phase changes. Restored history announces the
+  // run the desktop rejoins and nothing else.
   let announcedRun = $state(null)
   let announcement = $derived(runAnnouncement(announcedRun))
   let cancelError = $state('')
@@ -599,6 +600,12 @@
 
   $effect(() => {
     if (auth.name !== 'signed-in' || onboarding.name !== 'complete') artifactRailOpen = false
+  })
+
+  // A signed-out window drives no run, so the desktop drops the active one.
+  // The next sign-in restores history and rejoins whatever the runtime runs.
+  $effect(() => {
+    if (auth.name !== 'signed-in') active = null
   })
 
   $effect(() => {
