@@ -12,6 +12,13 @@ const unit = readFileSync(unitPath, 'utf8')
 const postInstall = readFileSync(postInstallPath, 'utf8')
 const postRemove = readFileSync(postRemovePath, 'utf8')
 
+// systemd reads the two start-limit directives from [Unit] and RestartSec from
+// [Service], so each assertion below reads only the section that owns it.
+function section(name) {
+  const afterHeader = unit.split(`[${name}]\n`)[1] ?? ''
+  return afterHeader.split('\n[')[0]
+}
+
 describe('Linux runtime user unit', () => {
   it('ships the unit at the systemd user unit path', () => {
     expect(deb.files).toEqual({
@@ -19,6 +26,12 @@ describe('Linux runtime user unit', () => {
     })
     expect(unit).toContain('ExecStart=/usr/lib/muniment/muniment-runtime')
     expect(unit).toContain('Restart=on-failure')
+  })
+
+  it('states its restart delay and its start limit', () => {
+    expect(section('Service')).toMatch(/^RestartSec=5s$/m)
+    expect(section('Unit')).toMatch(/^StartLimitIntervalSec=300s$/m)
+    expect(section('Unit')).toMatch(/^StartLimitBurst=5$/m)
   })
 
   it('starts at login and removes package-owned enablement', () => {

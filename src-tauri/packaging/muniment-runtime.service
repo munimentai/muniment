@@ -1,9 +1,12 @@
 [Unit]
 Description=Muniment runtime
+StartLimitIntervalSec=300s
+StartLimitBurst=5
 
 [Service]
 ExecStart=/usr/lib/muniment/muniment-runtime
 Restart=on-failure
+RestartSec=5s
 
 [Install]
 WantedBy=default.target
