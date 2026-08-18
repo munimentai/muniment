@@ -78,6 +78,10 @@ use muniment_core::session_thread::SessionThread;
 
 #[cfg(target_os = "linux")]
 trait RunCommandClient {
+    fn runtime_upgrade_pending(&self) -> bool {
+        false
+    }
+
     fn run_submit(
         &self,
         text: &str,
@@ -98,6 +102,10 @@ trait RunCommandClient {
 
 #[cfg(target_os = "linux")]
 impl RunCommandClient for DesktopClientHolder {
+    fn runtime_upgrade_pending(&self) -> bool {
+        crate::attach_service::runtime_upgrade_pending(self)
+    }
+
     fn run_submit(
         &self,
         text: &str,
@@ -168,6 +176,9 @@ where
     match session {
         RunCommandSession::NoSupervisor => local(files).await,
         RunCommandSession::Connected(client) => {
+            if client.runtime_upgrade_pending() {
+                return Err(auth::runtime_update_pending_error());
+            }
             let thread_id = state.session_thread.current(subject);
             let file_paths = files
                 .iter()
@@ -204,10 +215,15 @@ where
 {
     match session {
         RunCommandSession::NoSupervisor => local().await,
-        RunCommandSession::Connected(client) => client
-            .run_resume(run_id)
-            .map(resume_result)
-            .map_err(auth::desktop_client_error),
+        RunCommandSession::Connected(client) => {
+            if client.runtime_upgrade_pending() {
+                return Err(auth::runtime_update_pending_error());
+            }
+            client
+                .run_resume(run_id)
+                .map(resume_result)
+                .map_err(auth::desktop_client_error)
+        }
         RunCommandSession::Disconnected => Err(auth::background_service_error()),
     }
 }
@@ -250,12 +266,17 @@ fn handle_run_queue<C: RunCommandClient, L: FnOnce() -> Result<(), String>>(
 ) -> Result<(), String> {
     match session {
         RunCommandSession::NoSupervisor => local(),
-        RunCommandSession::Connected(client) => match delivery {
-            ChatDelivery::Steer => client.run_steer(run_id, message),
-            ChatDelivery::FollowUp => client.run_follow_up(run_id, message),
+        RunCommandSession::Connected(client) => {
+            if client.runtime_upgrade_pending() {
+                return Err(auth::runtime_update_pending_error());
+            }
+            match delivery {
+                ChatDelivery::Steer => client.run_steer(run_id, message),
+                ChatDelivery::FollowUp => client.run_follow_up(run_id, message),
+            }
+            .map(|_| ())
+            .map_err(auth::desktop_client_error)
         }
-        .map(|_| ())
-        .map_err(auth::desktop_client_error),
         RunCommandSession::Disconnected => Err(auth::background_service_error()),
     }
 }
@@ -1407,17 +1428,24 @@ mod tests {
 
     #[cfg(target_os = "linux")]
     #[derive(Clone, Default)]
-    struct FakeRunClient(Arc<Mutex<Vec<RunClientCall>>>);
+    struct FakeRunClient(Arc<Mutex<Vec<RunClientCall>>>, bool);
 
     #[cfg(target_os = "linux")]
     impl FakeRunClient {
         fn calls(&self) -> Vec<RunClientCall> {
             self.0.lock().unwrap().clone()
         }
+
+        fn with_runtime_upgrade_pending() -> Self {
+            Self(Arc::default(), true)
+        }
     }
 
     #[cfg(target_os = "linux")]
     impl RunCommandClient for FakeRunClient {
+        fn runtime_upgrade_pending(&self) -> bool {
+            self.1
+        }
         fn run_submit(
             &self,
             text: &str,
@@ -1514,6 +1542,14 @@ mod tests {
         assert_eq!(
             result.err().unwrap(),
             "Muniment cannot reach its background service."
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    fn assert_runtime_update_pending<T>(result: Result<T, String>) {
+        assert_eq!(
+            result.err().unwrap(),
+            "A runtime update is pending. Muniment will start new runs after the update."
         );
     }
 
@@ -1622,6 +1658,14 @@ mod tests {
             deferred_state.session_thread.current(Some("subject-2")),
             Some("accepted-thread".to_string())
         );
+        assert_runtime_update_pending(tauri::async_runtime::block_on(handle_run_submit(
+            RunCommandSession::Connected(FakeRunClient::with_runtime_upgrade_pending()),
+            &deferred_state,
+            None,
+            "prompt",
+            vec![],
+            |_| async { panic!("held submit called the local operation") },
+        )));
         assert_disconnected(tauri::async_runtime::block_on(handle_run_submit::<
             FakeRunClient,
             _,
@@ -1669,6 +1713,12 @@ mod tests {
         ));
         assert!(connected.is_ok());
         assert_eq!(client.calls(), [RunClientCall::Resume("run-1".to_string())]);
+        assert_runtime_update_pending(tauri::async_runtime::block_on(handle_run_resume(
+            RunCommandSession::Connected(FakeRunClient::with_runtime_upgrade_pending()),
+            &deferred_state,
+            "run-1",
+            || async { panic!("held resume called the local operation") },
+        )));
         assert!(state.active.lock().unwrap().is_none());
         assert!(state.runtime.lock().unwrap().is_none());
         assert_disconnected(tauri::async_runtime::block_on(handle_run_resume::<
@@ -1724,6 +1774,13 @@ mod tests {
                 RunClientCall::FollowUp("run-2".to_string(), "follow-up".to_string())
             ]
         );
+        assert_runtime_update_pending(handle_run_queue(
+            RunCommandSession::Connected(FakeRunClient::with_runtime_upgrade_pending()),
+            "run-1",
+            ChatDelivery::FollowUp,
+            "message",
+            || panic!("held queue called the local operation"),
+        ));
         assert_disconnected(handle_run_queue::<FakeRunClient, _>(
             RunCommandSession::Disconnected,
             "run-1",

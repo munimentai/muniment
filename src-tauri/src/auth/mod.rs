@@ -471,6 +471,11 @@ pub(crate) fn background_service_error() -> String {
 }
 
 #[cfg(target_os = "linux")]
+pub(crate) fn runtime_update_pending_error() -> String {
+    "A runtime update is pending. Muniment will start new runs after the update.".to_string()
+}
+
+#[cfg(target_os = "linux")]
 pub(crate) fn desktop_client_error(error: ClientError) -> String {
     match error {
         ClientError::DesktopBusy => "Muniment is busy with another request. Try again.".to_string(),

@@ -65,6 +65,23 @@ use tauri::{Emitter, Manager};
 use uuid::Uuid;
 
 #[cfg(target_os = "linux")]
+pub(crate) const MINIMUM_COMPATIBLE_RUNTIME_VERSION: &str = "0.0.1";
+
+#[cfg(target_os = "linux")]
+pub(crate) fn runtime_upgrade_pending(client: &DesktopClientHolder) -> bool {
+    runtime_version_upgrade_pending(client.connected_version().as_deref())
+}
+
+#[cfg(target_os = "linux")]
+fn runtime_version_upgrade_pending(connected_version: Option<&str>) -> bool {
+    let minimum = semver::Version::parse(MINIMUM_COMPATIBLE_RUNTIME_VERSION)
+        .expect("minimum compatible runtime version must be valid");
+    connected_version
+        .and_then(|version| semver::Version::parse(version).ok())
+        .map_or(true, |version| version < minimum)
+}
+
+#[cfg(target_os = "linux")]
 fn decide_migration_control(
     peer_result: Result<(), PeerAuthorityError>,
     activity: RuntimeActivity,
@@ -235,6 +252,7 @@ pub struct AttachListenerStatus {
     supervisor_running: bool,
     connected: bool,
     chat_events_connected: bool,
+    runtime_upgrade_pending: bool,
 }
 
 #[cfg(target_os = "linux")]
@@ -455,6 +473,11 @@ impl AttachCompanionState {
                 .chat_events_connected
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner),
+            runtime_upgrade_pending: *self
+                .connected
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                && runtime_upgrade_pending(&self.desktop_client_holder),
         }
     }
 
@@ -777,6 +800,7 @@ pub fn attach_listener_status(
             connected: false,
             chat_events_connected: false,
             supervisor_running: false,
+            runtime_upgrade_pending: false,
         }
     }
 }
@@ -1864,6 +1888,7 @@ mod tests {
                 supervisor_running: false,
                 connected: false,
                 chat_events_connected: false,
+                runtime_upgrade_pending: false,
             }
         );
         std::fs::remove_dir_all(runtime).unwrap();
@@ -2451,6 +2476,18 @@ mod tests {
 
     #[cfg(target_os = "linux")]
     #[test]
+    fn runtime_version_hold_covers_older_and_invalid_versions() {
+        assert!(runtime_version_upgrade_pending(Some("0.0.0")));
+        assert!(runtime_version_upgrade_pending(Some("invalid")));
+        assert!(runtime_version_upgrade_pending(None));
+        assert!(!runtime_version_upgrade_pending(Some(
+            MINIMUM_COMPATIBLE_RUNTIME_VERSION
+        )));
+        assert!(!runtime_version_upgrade_pending(Some("0.0.2")));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
     fn attach_listener_status_reports_started_and_each_start_failure() {
         let state = AttachCompanionState::default();
 
@@ -2471,6 +2508,7 @@ mod tests {
                     supervisor_running: false,
                     connected: false,
                     chat_events_connected: false,
+                    runtime_upgrade_pending: false,
                 }
             );
         }
@@ -2487,6 +2525,7 @@ mod tests {
                 supervisor_running: false,
                 connected: false,
                 chat_events_connected: false,
+                runtime_upgrade_pending: false,
             }
         );
 
@@ -2506,6 +2545,7 @@ mod tests {
                 supervisor_running: false,
                 connected: false,
                 chat_events_connected: false,
+                runtime_upgrade_pending: false,
             }
         );
 
@@ -2521,6 +2561,7 @@ mod tests {
                 supervisor_running: false,
                 connected: false,
                 chat_events_connected: false,
+                runtime_upgrade_pending: false,
             }
         );
     }
@@ -2654,6 +2695,7 @@ mod tests {
                 supervisor_running: false,
                 connected: false,
                 chat_events_connected: false,
+                runtime_upgrade_pending: false,
             }
         );
         assert_state_works(&app);
@@ -2678,6 +2720,7 @@ mod tests {
                 supervisor_running: false,
                 connected: false,
                 chat_events_connected: false,
+                runtime_upgrade_pending: false,
             }
         );
         assert_state_works(&app);

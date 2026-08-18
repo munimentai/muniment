@@ -1450,6 +1450,7 @@ mod linux {
     /// A connection-bound client for the peer-authorized desktop session.
     pub struct DesktopClient {
         stream: UnixStream,
+        runtime_version: String,
         profile_id: String,
         workspace_scopes: BTreeMap<String, BTreeSet<String>>,
         capability: String,
@@ -1462,11 +1463,19 @@ mod linux {
     #[derive(Clone, Debug, Default)]
     pub struct DesktopClientHolder {
         inner: Arc<(Mutex<Option<DesktopClient>>, Condvar)>,
+        connected_version: Arc<Mutex<Option<String>>>,
     }
 
     impl DesktopClientHolder {
         pub fn new() -> Self {
             Self::default()
+        }
+
+        pub fn connected_version(&self) -> Option<String> {
+            self.connected_version
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .clone()
         }
 
         pub fn request(
@@ -1586,6 +1595,10 @@ mod linux {
             let result = call(client.as_mut().ok_or(ClientError::DesktopUnavailable)?);
             if result.is_err() {
                 *client = None;
+                *self
+                    .connected_version
+                    .lock()
+                    .unwrap_or_else(|error| error.into_inner()) = None;
                 wake.notify_all();
             }
             result
@@ -2589,6 +2602,7 @@ mod linux {
                 if let Ok(client) =
                     handshake_desktop_client_stream(stream, client_version, io_timeout)
                 {
+                    let runtime_version = client.runtime_version.clone();
                     let (notification_lock, notification_wake) = &*stop.notification;
                     let mut notification = notification_lock
                         .lock()
@@ -2600,6 +2614,10 @@ mod linux {
                     }
                     let (held, wake) = &*holder.inner;
                     *held.lock().unwrap_or_else(|error| error.into_inner()) = Some(client);
+                    *holder
+                        .connected_version
+                        .lock()
+                        .unwrap_or_else(|error| error.into_inner()) = Some(runtime_version);
                     *notification = Some(std::thread::current().id());
                     drop(stop_state);
                     drop(notification);
@@ -2624,6 +2642,10 @@ mod linux {
                         })
                         .unwrap_or_else(|error| error.into_inner());
                     *connection = None;
+                    *holder
+                        .connected_version
+                        .lock()
+                        .unwrap_or_else(|error| error.into_inner()) = None;
                     observe(false);
                 }
                 clear_desktop_stream(&stop);
@@ -2962,6 +2984,7 @@ mod linux {
         }
         Ok(DesktopClient {
             stream,
+            runtime_version: welcome.desktop_version,
             profile_id: authorized.profile_id,
             workspace_scopes: authorized.workspace_scopes,
             capability: authorized.capability,
@@ -3290,6 +3313,7 @@ mod linux {
             let (stream, _peer) = UnixStream::pair().unwrap();
             let desktop_client = DesktopClient {
                 stream,
+                runtime_version: "0.0.1".to_string(),
                 profile_id: "profile".to_string(),
                 workspace_scopes: BTreeMap::new(),
                 capability: "capability".to_string(),
@@ -3393,6 +3417,10 @@ pub struct DesktopClientHolder;
 impl DesktopClientHolder {
     pub fn new() -> Self {
         Self
+    }
+
+    pub fn connected_version(&self) -> Option<String> {
+        None
     }
 
     pub fn run_submit(
