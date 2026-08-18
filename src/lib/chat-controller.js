@@ -42,6 +42,7 @@ export function createChatController({
   let destroyed = false
   let switchingThread = false
   let switchBlocked = false
+  let loadingHistory = false
   let threadRefreshSequence = 0
   let threadPageCount = 1
   let nextThreadCursor = null
@@ -76,7 +77,9 @@ export function createChatController({
   }
 
   function handleEvent({ payload }) {
-    const current = messages().find((message) => message.run?.id === payload.runId)?.run
+    // A thread load replaces the whole transcript, so no published run describes
+    // this event yet. openThread drains the buffer onto the loaded pages.
+    const current = loadingHistory ? null : messages().find((message) => message.run?.id === payload.runId)?.run
     if (!current) {
       buffered.set(payload.runId, [...(buffered.get(payload.runId) ?? []), payload])
       return
@@ -170,6 +173,7 @@ export function createChatController({
     const previousThreadId = readThreadId()
     const wasBlocked = switchBlocked
     let selected = false
+    loadingHistory = true
     try {
       if (select) {
         await invoke('chat_select_thread', { threadId })
@@ -188,13 +192,13 @@ export function createChatController({
       }
       if (destroyed) return
       const published = historyMessages(history)
-      // The runtime keeps driving an unsettled run while the window is away, so
-      // the desktop rejoins that run instead of starting one (ADR 0012, desktop
-      // run rejoin). handleEvent carries it forward by run id from here.
+      // The runtime keeps driving an unsettled run while the window is away. The
+      // desktop rejoins that run instead of starting one (ADR 0012, desktop run
+      // rejoin). handleEvent carries it forward by run id from here.
       const recorded = unsettledRun(published)
-      // Every event for that run reached handleEvent before any message carried
-      // its id, so the pages loaded over a growing buffer. The recorded state is
-      // stale by exactly those events, and only this site can apply them.
+      // handleEvent buffered every event that landed during the load, so the
+      // pages loaded over a growing buffer. The recorded state is stale by
+      // exactly those events, and only this site can apply them.
       const rejoined = recorded && applyBufferedChatEvents(recorded, buffered.get(recorded.id) ?? [])
       if (recorded) buffered.delete(recorded.id)
       const settled = !!rejoined && settledPhases.has(rejoined.phase)
@@ -213,7 +217,7 @@ export function createChatController({
       switchBlocked = false
       // The buffer can hold the whole run, so a rejoin can settle at once. The
       // refresh stays unawaited because this call already bumped the refresh
-      // sequence, and an awaited one would reorder onThreadSelected.
+      // sequence. An awaited refresh would reorder onThreadSelected.
       if (settled) void refreshThreads()
     } catch (_) {
       if (!destroyed) {
@@ -234,6 +238,7 @@ export function createChatController({
         onHistoryError('Conversation history could not be restored.', { label: 'Restore history', run: loadHistory })
       }
     } finally {
+      loadingHistory = false
       switchingThread = false
       if (!destroyed) onThreadSwitch(switchBlocked)
     }
