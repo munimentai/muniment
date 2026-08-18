@@ -538,13 +538,13 @@ the behavior the desktop has today.
 
 SEQUENCED 2026-08-18 (eighty-sixth wave) — the eighty-fifth-wave run-rejoin
 chain and its runtime-unit backoff slice are all built (MUNIDESK-1359 through
-1364). This wave takes the chat-event gap the rejoin chain left open. The first
-slice gives `chat-controller.js` a re-read that refreshes the open thread while
-a run is active. The second slice triggers that re-read when
-`chat_events_connected` turns true. Remote Control stays gated for three
-reasons. Harness-spec §14.1 puts the relay leg on an outbound HTTPS session to
-`api.muniment.ai`. No muniment-cloud relay contract has published. The desktop
-states remain pending owner mockup confirmation
+1364). This wave files both slices of the chat-event gap chain. The first
+slice gives `chat-controller.js` a `refreshOpenThread` re-read, which
+refreshes the open thread in place while a run is active. The second slice
+triggers that re-read when `chat_events_connected` turns true. Remote Control
+stays gated for three reasons. Harness-spec §14.1 puts the relay leg on an
+outbound HTTPS session to `api.muniment.ai`. No muniment-cloud relay contract
+has published. The desktop states remain pending owner mockup confirmation
 (`docs/design-reference/remote-control-ux.md`).
 
 DONE 2026-08-18 — the desktop rejoins a run the runtime is still executing
@@ -552,7 +552,7 @@ DONE 2026-08-18 — the desktop rejoins a run the runtime is still executing
 states the rule. `projection_phase` (`src-tauri/core/src/chat_view.rs:112`)
 answers `streaming`, `thinking`, or `pending-permission` for an unsettled run.
 `unsettledRun` (`src/lib/chat-state.js:165`) names the newest such run in a
-loaded transcript. `openThread` (`src/lib/chat-controller.js:184`) applies the
+loaded transcript. `openThread` (`src/lib/chat-controller.js:210`) applies the
 buffered events to that run and publishes it through `onActive`.
 `test/probe/in-flight.html` renders the rejoined state. The eighty-fifth wave
 had measured `openThread` leaving `active` null. The composer then took a
@@ -573,23 +573,52 @@ and `cleanup` (`:452`) runs at window close alone.
 
 MEASURED 2026-08-18 (eighty-fifth wave, planner, read the broadcast beside the
 recovery re-read) — a chat-event gap leaves the open run's text short.
-`RuntimeChatEventBroadcast::deliver` (`src-tauri/runtime/src/sink.rs:55`) drops
+`RuntimeChatEventBroadcast::deliver` (`src-tauri/runtime/src/sink.rs:62`) drops
 a subscriber whose 256-event queue fills, `serve_chat_events_at`
 (`src-tauri/src/attach_service.rs:1144`) reconnects, and the desktop re-reads
 the thread only when `desktopClientStatus.connected` turns true
-(`src/App.svelte:666`). A `chat_events_connected` recovery triggers no re-read,
+(`src/App.svelte:678`). A `chat_events_connected` recovery triggers no re-read,
 so the run keeps whatever hole the gap left. The rejoin chain cleared the
 dependency this entry had recorded. `openThread`
-(`src/lib/chat-controller.js:184`) still returns early while a run is active,
+(`src/lib/chat-controller.js:210`) still returns early while a run is active,
 so the re-read needs a path that refreshes an open thread in place. The
 eighty-sixth wave files that chain.
 
-NOT FILED 2026-08-18 (eighty-fifth wave) — the sidebar does not learn about a
+SEQUENCED 2026-08-18 (eighty-sixth wave) — the sidebar does not learn about a
 thread another client created. `refreshThreads`
-(`src/lib/chat-controller.js:71`) runs at load and when this desktop's own
+(`src/lib/chat-controller.js:78`) runs at load and when this desktop's own
 active run settles, so an ACP or CLI thread appears only after the next launch.
-Which events the chat broadcast owes a passive client is a contract call, and
-it is wider than one slice.
+Which events the chat broadcast owes a passive client was a contract call. The
+ADR 0012 passive-chat-event-delivery amendment has landed (MUNIDESK-1367,
+`docs/decisions/0012-user-level-runtime-service.md:691`). It states that a
+subscriber receives every event of every run in its workspace, and it names how
+a passive client learns that the thread list changed (`:729`). This wave files
+the implementation slice against that rule.
+
+DONE 2026-08-18 — a desktop-client reconnect keeps the thread the user has
+open (MUNIDESK-1366). `run('status')` fires when `connected` turns true
+(`src/App.svelte:678`, `:693`), and it calls `loadHistory` (`:657`).
+`loadHistory` now reads the open thread id (`src/lib/chat-controller.js:162`)
+and reopens that thread (`:176`). It falls back to `summaries[0].threadId`
+(`:171`) when the shell holds no thread, or when the held thread no longer
+opens (`:178`). `openThread` (`:210`) still returns early while a run is
+active (`:211`), so the old move landed only when no run was in flight. The
+eighty-sixth wave had measured the reconnect moving the user to the newest
+thread while the next message still landed in the old one. The desktop keeps
+its own selection in `SessionThread`, and `handle_run_submit` sends
+`session_thread.current` as the run's thread (`src-tauri/src/chat.rs:184`).
+The runtime restarts on the status-75 upgrade refresh, so that reconnect was a
+routine event rather than a rare one.
+
+DONE 2026-08-18 — the runtime reports every chat-event subscriber it drops for
+a full queue (MUNIDESK-1369). `deliver` (`src-tauri/runtime/src/sink.rs:62`)
+collects the id of each subscriber it drops (`:71`), and
+`full_queue_drop_count` (`:58`) reads the running total back. `deliver` prints
+one line per drop after the lock releases (`:83`), under the
+`muniment-runtime: ` prefix `main.rs` already uses
+(`src-tauri/runtime/src/main.rs:38`). An operator reading
+`journalctl --user -u muniment-runtime` now sees the reconnect and its cause.
+The eighty-sixth wave had measured the runtime recording no trace of the drop.
 
 DONE — all three slices of the ADR 0009 attach workspace namespace amendment are
 built (MUNIDESK-883, 887, 893, 896, 905). The signed `grant.workspace` value is
@@ -976,6 +1005,20 @@ DO NOT RE-FILE — asset weight is not worth a slice. The frontend emits one
 `marked` and DOMPurify account for roughly 55,000 bytes. Tauri serves those bytes
 from local disk, so a dynamic import would trade a few milliseconds of parse time
 for an async boundary in a synchronous component.
+
+DONE 2026-08-18 — a momentary background-service drop leaves the workspace on
+screen (MUNIDESK-1368). `createBackgroundServiceNotice`
+(`src/lib/background-service-notice.js:4`) waits out a two-second dwell before
+it raises the notice. The notice branch gates on
+`backgroundServiceNoticeVisible` (`src/App.svelte:906`) rather than on
+`connected` or `chat_events_connected` alone. The `Muniment cannot reach its
+background service.` notice (`:908`) still replaces the workspace (`:912`) for
+an outage that outlasts the dwell. The eighty-sixth wave had measured every
+drop unmounting the whole workspace. The remount cost the transcript its scroll
+position, and the focus effect (`:628`) took composer focus back (`:633`). The
+runtime drops a chat-event subscriber whose 256-event queue fills
+(`src-tauri/runtime/src/sink.rs:62`), and the desktop reconnects after a 250
+millisecond retry interval (`src-tauri/src/attach_service.rs:1144`).
 
 PARKED — `--space-*` tokens are absent, and a spacing sweep would touch nearly
 every declaration in the app, so it stays parked rather than half-done. The
