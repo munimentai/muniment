@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { applyBufferedChatEvents, applyChatEvent, codeDiffPermissionAnswer, composerAction, historyMessages, permissionGateAction, permissionGateCommitHint, receiptLabel, receiptRows, receiptSummary, runAnnouncement, toolName, toolStatus } from './chat-state.js'
+import { applyBufferedChatEvents, applyChatEvent, codeDiffPermissionAnswer, composerAction, historyMessages, permissionGateAction, permissionGateCommitHint, receiptLabel, receiptRows, receiptSummary, runAnnouncement, settledPhases, toolName, toolStatus, unsettledRun } from './chat-state.js'
 
 describe('chat composer and projection', () => {
   it('chooses submit or steer from the active run', () => {
@@ -281,6 +281,38 @@ describe('chat composer and projection', () => {
     expect(runAnnouncement(null)).toBe('')
     expect(runAnnouncement(undefined)).toBe('')
     expect(runAnnouncement({ phase: 'a-phase-that-does-not-exist', text: 'Partial answer' })).toBe('')
+  })
+
+  it('holds every phase a stopped run reaches', () => {
+    expect([...settledPhases].sort()).toEqual(['cancelled', 'complete', 'failed', 'interrupted'])
+  })
+
+  it('names no unsettled run in an empty or fully settled list', () => {
+    expect(unsettledRun([])).toBeNull()
+    expect(unsettledRun()).toBeNull()
+    expect(unsettledRun(historyMessages([
+      { runId: 'r1', prompt: 'One', phase: 'complete', text: 'Done' },
+      { runId: 'r2', prompt: 'Two', phase: 'cancelled', text: 'Stopped' },
+      { runId: 'r3', prompt: 'Three', phase: 'failed', text: '' },
+      { runId: 'r4', prompt: 'Four', phase: 'interrupted', text: 'Partial' },
+    ]))).toBeNull()
+  })
+
+  it('names the run the runtime still drives past user messages and settled runs', () => {
+    const messages = historyMessages([
+      { runId: 'r1', prompt: 'One', phase: 'complete', text: 'Done' },
+      { runId: 'r2', prompt: 'Two', phase: 'streaming', text: 'Half an ans' },
+    ])
+    expect(messages.filter((message) => message.role === 'user')).toHaveLength(2)
+    expect(unsettledRun(messages)).toMatchObject({ id: 'r2', phase: 'streaming', text: 'Half an ans' })
+  })
+
+  it('takes the newest run where several stayed unsettled', () => {
+    expect(unsettledRun(historyMessages([
+      { runId: 'r1', prompt: 'One', phase: 'thinking', text: '' },
+      { runId: 'r2', prompt: 'Two', phase: 'pending-permission', text: 'A rout' },
+      { runId: 'r3', prompt: 'Three', phase: 'complete', text: 'Done' },
+    ]))).toMatchObject({ id: 'r2', phase: 'pending-permission' })
   })
 
   it('preserves all projections that arrive before submit resolves', () => {
