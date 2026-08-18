@@ -53,7 +53,6 @@ pub struct RuntimeAttachBoundaries {
     storage: SharedStorage,
     active: Arc<Mutex<Option<ActiveRun>>>,
     profile_directory: PathBuf,
-    #[allow(dead_code)]
     config_directory: PathBuf,
     runtime: Arc<Mutex<Option<PiRuntime>>>,
     memory_runtime: Arc<ApplicationMemoryRuntime>,
@@ -647,6 +646,11 @@ impl RunAttachBoundaries for RuntimeAttachBoundaries {
             .map_err(|error| error.protocol_error())?
             .subject;
         service::select_thread(Arc::clone(&self.storage), subject, thread_id.to_owned())
+            .map_err(|_| ProtocolError::persistence_failed())
+    }
+
+    fn recheck_retention(&self) -> Result<(), ProtocolError> {
+        crate::attach_state::apply_recorded_retention(&self.config_directory, &self.storage)
             .map_err(|_| ProtocolError::persistence_failed())
     }
 

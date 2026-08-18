@@ -1,6 +1,6 @@
 #![cfg(target_os = "linux")]
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fs;
 use std::os::unix::{fs::PermissionsExt, net::UnixStream};
 use std::sync::{mpsc, Arc, Mutex};
@@ -20,6 +20,8 @@ use muniment_core::attach::{
 };
 use muniment_core::auth::AuthStatus;
 use muniment_core::auth::{KeyringNativeCredentialStore, NativeCredentialStore};
+use muniment_core::journal::{EventEnvelope, EventPayload, Provenance};
+use muniment_core::retention_record::{write_retention_choice, RetentionChoice};
 use muniment_core::run_preparation::{prepare_new_run_with_session_thread, SessionThreadStart};
 use muniment_core::session_thread::SessionThread;
 use muniment_runtime::{open_profile_storage, RuntimeAttachState};
@@ -372,6 +374,154 @@ fn desktop_client_selects_only_an_owned_thread() {
     server.join().unwrap();
     std::env::remove_var("MUNIMENT_API_BASE_URL");
     credential_store.clear_session().unwrap();
+}
+
+fn retention_event(run_id: &str, event_id: &str, run_seq: u64, event_type: &str) -> EventEnvelope {
+    EventEnvelope {
+        event_id: event_id.into(),
+        run_id: run_id.into(),
+        run_seq,
+        event_type: event_type.into(),
+        event_version: 1,
+        envelope_version: 1,
+        recorded_at: "2000-01-01T00:00:00Z".into(),
+        occurred_at: None,
+        correlation_id: None,
+        causation_id: None,
+        payload: EventPayload::Inline {
+            payload_json: "{}".parse().unwrap(),
+        },
+        provenance: Provenance {
+            source: "test".into(),
+            source_version: "1".into(),
+            actor_id: None,
+            device_id: None,
+            rpc_request_id: None,
+            capability_versions: None,
+            extra: BTreeMap::new(),
+        },
+        extra: BTreeMap::new(),
+    }
+}
+
+#[test]
+fn desktop_client_recheck_applies_the_recorded_retention() {
+    muniment_core::chat_prompt::use_mock_keyring_for_tests();
+    let profile = TemporaryProfile::new("attach-retention-recheck", false);
+    fs::set_permissions(&profile.root, fs::Permissions::from_mode(0o700)).unwrap();
+    let storage = open_profile_storage(&profile.profile).unwrap();
+    let expired = "01900000-0000-7000-8000-000000000031";
+    let recent = "01900000-0000-7000-8000-000000000032";
+    {
+        let mut locked = storage.lock().unwrap();
+        locked
+            .journal
+            .append_batch(
+                0,
+                &[
+                    retention_event(
+                        expired,
+                        "01900000-0000-7000-8000-000000000041",
+                        1,
+                        "run.started",
+                    ),
+                    retention_event(
+                        expired,
+                        "01900000-0000-7000-8000-000000000042",
+                        2,
+                        "run.completed",
+                    ),
+                ],
+            )
+            .unwrap();
+        let mut started = retention_event(
+            recent,
+            "01900000-0000-7000-8000-000000000043",
+            1,
+            "run.started",
+        );
+        started.recorded_at = "2999-01-01T00:00:00Z".into();
+        let mut completed = retention_event(
+            recent,
+            "01900000-0000-7000-8000-000000000044",
+            2,
+            "run.completed",
+        );
+        completed.recorded_at = "2999-01-01T00:00:00Z".into();
+        locked
+            .journal
+            .append_batch(0, &[started, completed])
+            .unwrap();
+    }
+
+    let state = Arc::new(RuntimeAttachState::open(&profile.profile, &profile.config).unwrap());
+    let filesystem = AttachFilesystem::from_runtime_directory(&profile.root).unwrap();
+    let endpoint = filesystem.endpoint_path().to_owned();
+    drop(filesystem);
+    let config_directory = profile.config.clone();
+    let (stop_tx, stop_rx) = mpsc::channel();
+
+    thread::scope(|scope| {
+        let service_state = Arc::clone(&state);
+        let listener = scope.spawn(move || {
+            let mut inputs = state.attach_listener_inputs();
+            inputs.expected_desktop_executable = Some(std::env::current_exe().unwrap());
+            run_attach_listener(
+                &profile.root,
+                inputs,
+                None,
+                move || service_state.attach_service(),
+                stop_rx,
+            )
+            .unwrap()
+        });
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let mut client = loop {
+            match connect_desktop_client_at(&endpoint, "1.0.0", Duration::from_secs(1)) {
+                Ok(client) => break client,
+                Err(_) if Instant::now() < deadline => thread::sleep(Duration::from_millis(10)),
+                Err(error) => panic!("attach listener did not accept the desktop client: {error}"),
+            }
+        };
+
+        let unrecorded = client
+            .request(
+                Operation::RetentionRecheck,
+                None,
+                std::iter::empty::<(String, u64)>().collect(),
+            )
+            .unwrap();
+        assert!(unrecorded.body.as_object().unwrap().is_empty());
+        assert_eq!(
+            storage
+                .lock()
+                .unwrap()
+                .journal
+                .events(expired)
+                .unwrap()
+                .len(),
+            2
+        );
+
+        write_retention_choice(&config_directory, RetentionChoice::DeleteAfter30Days).unwrap();
+        let applied = client
+            .request(
+                Operation::RetentionRecheck,
+                None,
+                std::iter::empty::<(String, u64)>().collect(),
+            )
+            .unwrap();
+        assert!(applied.body.as_object().unwrap().is_empty());
+        {
+            let mut locked = storage.lock().unwrap();
+            assert!(locked.journal.events(expired).unwrap().is_empty());
+            assert_eq!(locked.journal.events(recent).unwrap().len(), 2);
+        }
+
+        drop(client);
+        stop_tx.send(()).unwrap();
+        listener.join().unwrap();
+    });
 }
 
 #[test]
