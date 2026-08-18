@@ -166,7 +166,7 @@ schedule wherever the runtime owns the journal, the profile popover carries the
 `start_retention_schedule` (`src-tauri/src/chat.rs:794`) runs the same check
 where the desktop owns the journal.
 
-DONE 2026-08-17 — a saved retention choice applies without the 24-hour wait
+DONE 2026-08-18 — a saved retention choice applies without the 24-hour wait
 (MUNIDESK-1353, 1354). `retention.recheck` is an attach operation with the
 fixture pair under `protocol-fixtures/muniment.attach/1/`, the runtime answers
 it through `src-tauri/runtime/src/attach_boundaries.rs`, and
@@ -539,7 +539,9 @@ welcome-version and retention-propagation chains are all built (MUNIDESK-1350
 through 1354), so this wave takes the run-rejoin gap the Linux cutover opened.
 The chain names the rule in ADR 0012, gives `chat-state.js` the unsettled-run
 function, rejoins that run in `chat-controller.js`, bounds the chat-event
-buffer, and adds the probe fixture that shows the state. Remote Control stays
+buffer, and adds the probe fixture that shows the state. The wave files a sixth
+slice outside that chain. That slice gives the Linux runtime unit the bounded
+restart backoff ADR 0012 asks for. Remote Control stays
 gated: harness-spec §14.1 puts the relay leg on an outbound HTTPS session to
 `api.muniment.ai`, no muniment-cloud relay contract has published, and the
 desktop states remain pending owner mockup confirmation
@@ -564,10 +566,11 @@ without bound. `launch` (`src-tauri/runtime/src/attach_boundaries.rs:343`) sends
 every attach run's events through `RuntimeChatEventBroadcast`, and the desktop
 subscribes to all of them (`src-tauri/src/attach_service.rs:1144`).
 `handleEvent` (`src/lib/chat-controller.js:79`) stores every event whose run id
-is absent from the open thread, and only `cleanup` (`:405`) clears the map. An
-ACP editor run, a CLI run, or a run in a thread the user switched away from
-therefore keeps its whole text-delta stream in memory for the life of the
-window.
+is absent from the open thread. No path clears a buffered run this desktop did
+not start. The two deletes, `send` (`:335`) and `resume` (`:374`), fire only for
+a run this desktop launched. `cleanup` (`:405`) clears the whole map, and it
+runs at window close alone. A run from an ACP editor, the CLI, or a thread the
+user left therefore keeps its whole text-delta stream for the window's life.
 
 MEASURED 2026-08-18 (eighty-fifth wave, planner, read the broadcast beside the
 recovery re-read) — a chat-event gap leaves the open run's text short, and this
@@ -1061,11 +1064,11 @@ for it.
 VERIFIED 2026-08-18 (eighty-fifth wave, planner) — one
 `cargo test -p muniment-core -p muniment-runtime -p muniment-attach` run started
 from `src-tauri` passes 1,427 tests, and the build prints no warning. One
-`npm ci` then `npm test` run passes 961
-frontend tests over 64 files with 31 skipped, plus 3 browser tests. Start cargo
-from `src-tauri`, because the repository root holds no `Cargo.toml`. A run
-started from the root dies with `could not find Cargo.toml`, which reads as a
-broken harness. This entry replaces the earlier ledger.
+`npm ci` then `npm test` run passes 979 frontend tests over 64 files with 31
+skipped, plus 3 browser tests. Start cargo from `src-tauri`, because the
+repository root holds no `Cargo.toml`. A run started from the root dies with
+`could not find Cargo.toml`, which reads as a broken harness. This entry
+replaces the earlier ledger.
 
 MEASURED 2026-08-13 (fifty-eighth wave, planner, counted each path with
 `git log --name-only --since=2026-08-01 -- <path>`) — `src-tauri/src/chat.rs` is
