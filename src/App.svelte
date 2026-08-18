@@ -839,12 +839,20 @@
     const action = composerAction(event, draft, active)
     if (action) {
       event.preventDefault()
+      // The keyboard takes the same hold as the Send button.
+      if (runtimeUpgradePending()) return
       action === 'submit' ? chatController.send() : chatController.queue('steer')
     }
   }
 
+  // ADR 0012: the runtime rejects a new run while its upgrade is pending. The
+  // shell holds Send until a compatible welcome clears the flag.
+  function runtimeUpgradePending() {
+    return desktopClientStatus?.runtime_upgrade_pending === true
+  }
+
   function sendDisabled() {
-    return !draft.trim() || active?.phase === 'resuming' || active?.id === 'pending' || (!active && (dictationBusy() || threadSwitching))
+    return runtimeUpgradePending() || !draft.trim() || active?.phase === 'resuming' || active?.id === 'pending' || (!active && (dictationBusy() || threadSwitching))
   }
 
   function send() {
@@ -1097,6 +1105,12 @@
           {#if submitError}<p class="cancel-error" role="alert">{submitError}</p>{/if}
           {#if cancelError}<p class="cancel-error" role="alert">{cancelError}</p>{/if}
           {#if queueError}<p class="cancel-error" role="alert">{queueError}</p>{/if}
+          {#if runtimeUpgradePending()}
+            <section class="update-notice" aria-live="polite">
+              <p class="record error-record">A Muniment update is finishing.</p>
+              <p class="support">Muniment resumes on its own.</p>
+            </section>
+          {/if}
           <div class="composer-row" bind:this={composerRow}>
             {#if isDictationActive(dictation)}
               <span id="composer-hint" class="capture-status" role="status">
@@ -1452,6 +1466,10 @@
   .copy-failure { margin-top: 4px; }
   .run-error { color: var(--muted); font: var(--text-12) var(--font-mono); }
   .cancel-error, .history-error { margin: 0 0 8px; color: var(--muted); font: var(--text-12) var(--font-mono); }
+  /* The notice keeps the background service register at the composer 12px scale.
+     A 15px support line would compete with the draft text. */
+  .update-notice { display: grid; gap: 2px; margin: 0 0 8px; }
+  .update-notice .support { font-size: var(--text-12); }
   .run-error button { min-width: 24px; min-height: 24px; padding: 2px 6px; background: transparent; font: inherit; }
   .composer { grid-area: composer; width: min(760px, calc(100% - 48px)); margin: 0 auto 24px; padding: 12px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-panel); }
   .composer:focus-within { border-color: var(--muted); }

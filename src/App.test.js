@@ -600,6 +600,62 @@ describe('workspace composer entry', () => {
     expect(screen.queryByText('Muniment cannot reach its background service.')).not.toBeInTheDocument()
   })
 
+  it('holds Send behind the update notice while the runtime upgrade is pending', async () => {
+    invoke.mockImplementation(async (command) => {
+      if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
+      if (command === 'attach_listener_status') {
+        return { connected: true, chat_events_connected: true, supervisor_running: true, runtime_upgrade_pending: true }
+      }
+      if (command === 'chat_thread_open') return []
+      if (command === 'auth_entitlement_snapshot') return snapshot()
+      if (command === 'chat_submit') return { runId: 'run-upgrade', attachments: [] }
+      throw new Error(`unexpected command: ${command}`)
+    })
+    render(App)
+    const composer = await screen.findByPlaceholderText('Ask anything')
+    await fireEvent.input(composer, { target: { value: 'A question' } })
+
+    const notice = screen.getByText('A Muniment update is finishing.')
+    expect(notice).toHaveClass('record', 'error-record')
+    expect(notice.closest('section')).toHaveAttribute('aria-live', 'polite')
+    expect(screen.getByText('Muniment resumes on its own.')).toHaveClass('support')
+
+    const send = screen.getByRole('button', { name: 'Send' })
+    expect(send).toHaveAttribute('aria-disabled', 'true')
+    expect(send).not.toBeDisabled()
+    await fireEvent.click(send)
+    await fireEvent.keyDown(composer, { key: 'Enter' })
+    expect(invoke).not.toHaveBeenCalledWith('chat_submit', expect.anything())
+  })
+
+  it('drops the update notice and releases Send once the runtime upgrade finishes', async () => {
+    invoke.mockImplementation(async (command) => {
+      if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
+      if (command === 'attach_listener_status') {
+        return { connected: true, chat_events_connected: true, supervisor_running: true, runtime_upgrade_pending: true }
+      }
+      if (command === 'chat_thread_open') return []
+      if (command === 'auth_entitlement_snapshot') return snapshot()
+      if (command === 'chat_submit') return { runId: 'run-upgrade', attachments: [] }
+      throw new Error(`unexpected command: ${command}`)
+    })
+    render(App)
+    const composer = await screen.findByPlaceholderText('Ask anything')
+    await fireEvent.input(composer, { target: { value: 'A question' } })
+    const send = screen.getByRole('button', { name: 'Send' })
+    expect(send).toHaveAttribute('aria-disabled', 'true')
+
+    desktopClientListener({
+      payload: { connected: true, chat_events_connected: true, supervisor_running: true, runtime_upgrade_pending: false },
+    })
+
+    await waitFor(() => expect(send).not.toHaveAttribute('aria-disabled'))
+    expect(screen.queryByText('A Muniment update is finishing.')).not.toBeInTheDocument()
+    expect(screen.queryByText('Muniment resumes on its own.')).not.toBeInTheDocument()
+    await fireEvent.click(send)
+    expect(invoke).toHaveBeenCalledWith('chat_submit', { prompt: 'A question', files: [] })
+  })
+
   it('names and describes the composer in its default state', async () => {
     render(App)
 
