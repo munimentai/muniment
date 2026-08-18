@@ -185,7 +185,7 @@
     readFiles: () => selectedFiles,
     readThreadId: () => currentThreadId,
     readThreadSummaries: () => threadSummaries,
-    blocked: () => dictationBusy(),
+    blocked: () => dictationBusy() || runtimeUpgradePending(),
     onMessages: (next) => { messages = next },
     onActive: (next) => { active = next },
     onAnnounce: (next) => { announcedRun = next },
@@ -843,8 +843,14 @@
     }
   }
 
+  // ADR 0012: the runtime rejects a new run while its upgrade is pending. The
+  // shell holds send, resume and queue until a compatible welcome clears the flag.
+  function runtimeUpgradePending() {
+    return desktopClientStatus?.runtime_upgrade_pending === true
+  }
+
   function sendDisabled() {
-    return !draft.trim() || active?.phase === 'resuming' || active?.id === 'pending' || (!active && (dictationBusy() || threadSwitching))
+    return runtimeUpgradePending() || !draft.trim() || active?.phase === 'resuming' || active?.id === 'pending' || (!active && (dictationBusy() || threadSwitching))
   }
 
   function send() {
@@ -977,9 +983,9 @@
                   {:else}<p>The changes were applied, but their record is no longer stored.</p>{/if}
                 </div>
               {/each}
-              {#if message.run.phase === 'failed'}<div class="run-error">Reply failed. <button disabled={dictationBusy()} onclick={() => { draft = message.run.prompt; chatController.send() }}>Try again</button></div>{/if}
-              {#if message.run.phase === 'cancelled'}<div class="run-error">Reply stopped. {#if message.run.prompt}<button disabled={dictationBusy()} onclick={() => { draft = message.run.prompt; chatController.send() }}>Try again</button>{/if}</div>{/if}
-              {#if message.run.phase === 'interrupted'}<div class="run-error" role={message.run.resumeError ? 'alert' : undefined}>{message.run.resumeError ?? 'Reply interrupted.'} {#if message.run.resumable}<button disabled={!!active || dictationBusy()} onclick={() => chatController.resume(message.run)}>Resume</button>{:else if message.run.prompt}<button disabled={dictationBusy()} onclick={() => { draft = message.run.prompt; chatController.send() }}>Try again</button>{/if}</div>{/if}
+              {#if message.run.phase === 'failed'}<div class="run-error">Reply failed. <button disabled={dictationBusy() || runtimeUpgradePending()} onclick={() => { draft = message.run.prompt; chatController.send() }}>Try again</button></div>{/if}
+              {#if message.run.phase === 'cancelled'}<div class="run-error">Reply stopped. {#if message.run.prompt}<button disabled={dictationBusy() || runtimeUpgradePending()} onclick={() => { draft = message.run.prompt; chatController.send() }}>Try again</button>{/if}</div>{/if}
+              {#if message.run.phase === 'interrupted'}<div class="run-error" role={message.run.resumeError ? 'alert' : undefined}>{message.run.resumeError ?? 'Reply interrupted.'} {#if message.run.resumable}<button disabled={!!active || dictationBusy() || runtimeUpgradePending()} onclick={() => chatController.resume(message.run)}>Resume</button>{:else if message.run.prompt}<button disabled={dictationBusy() || runtimeUpgradePending()} onclick={() => { draft = message.run.prompt; chatController.send() }}>Try again</button>{/if}</div>{/if}
               {#if message.run.phase === 'pending-permission' && message.run.pendingPermission}
                 {@const gate = message.run.pendingPermission}
                 {@const answerState = permissionState(message.run)}
@@ -1097,6 +1103,12 @@
           {#if submitError}<p class="cancel-error" role="alert">{submitError}</p>{/if}
           {#if cancelError}<p class="cancel-error" role="alert">{cancelError}</p>{/if}
           {#if queueError}<p class="cancel-error" role="alert">{queueError}</p>{/if}
+          {#if runtimeUpgradePending()}
+            <section class="update-notice" aria-live="polite">
+              <p class="record error-record">A Muniment update is finishing.</p>
+              <p class="support">Muniment resumes on its own.</p>
+            </section>
+          {/if}
           <div class="composer-row" bind:this={composerRow}>
             {#if isDictationActive(dictation)}
               <span id="composer-hint" class="capture-status" role="status">
@@ -1112,7 +1124,7 @@
               {#if active?.phase === 'resuming'}
                 <button disabled>Resuming…</button>
               {:else if active && active.id !== 'pending'}
-                <button class="quiet follow-up" disabled={!draft.trim()} onclick={() => chatController.queue('followUp')}>Queue follow-up</button>
+                <button class="quiet follow-up" disabled={!draft.trim() || runtimeUpgradePending()} onclick={() => chatController.queue('followUp')}>Queue follow-up</button>
                 <button onclick={() => chatController.cancel()}>Stop</button>
               {/if}
               <button class="primary" aria-disabled={sendDisabled() ? 'true' : undefined} onclick={send}>Send</button>
@@ -1452,6 +1464,10 @@
   .copy-failure { margin-top: 4px; }
   .run-error { color: var(--muted); font: var(--text-12) var(--font-mono); }
   .cancel-error, .history-error { margin: 0 0 8px; color: var(--muted); font: var(--text-12) var(--font-mono); }
+  /* The notice keeps the background service register at the composer 12px scale.
+     A 15px support line would compete with the draft text. */
+  .update-notice { display: grid; gap: 2px; margin: 6px 0 8px; }
+  .update-notice .support { font-size: var(--text-12); }
   .run-error button { min-width: 24px; min-height: 24px; padding: 2px 6px; background: transparent; font: inherit; }
   .composer { grid-area: composer; width: min(760px, calc(100% - 48px)); margin: 0 auto 24px; padding: 12px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-panel); }
   .composer:focus-within { border-color: var(--muted); }
