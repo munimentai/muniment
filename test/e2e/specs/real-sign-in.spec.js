@@ -5,6 +5,23 @@ import { remote } from 'webdriverio'
 
 const rawDir = process.env.MUNIMENT_E2E_RAW_DIR
 
+// The JUnit report is the one diagnostic that survives a failed artifact
+// upload. A wait that runs out names the desktop client connection and the
+// rendered shell in its own message.
+async function shellState() {
+  let connection = 'unavailable'
+  try {
+    connection = JSON.stringify(await browser.execute(async () => (
+      window.__TAURI__.core.invoke('attach_listener_status')
+    ))) ?? 'unavailable'
+  } catch {}
+  let rendered = 'unavailable'
+  try {
+    rendered = (await (await $('main')).getText()).replace(/\s+/g, ' ').slice(0, 300) || 'empty'
+  } catch {}
+  return `desktop client status: ${connection}. shell: ${rendered}`
+}
+
 describe('installed nightly', () => {
   afterEach(async () => {
     const profile = await $('.profile-button')
@@ -30,7 +47,18 @@ describe('installed nightly', () => {
     await skipImport.click()
 
     const signedOut = await $('button=Sign in')
-    await signedOut.waitForDisplayed()
+    // The shell now reads the session through the desktop client, so the
+    // signed-out screen appears once that client connects to the installed
+    // runtime. Bound the wait for that connection instead of the default.
+    try {
+      await signedOut.waitForDisplayed({
+        timeout: 120000,
+        timeoutMsg: 'the signed-out screen did not appear after onboarding',
+      })
+    } catch (waitError) {
+      throw new Error(`${waitError.message} ${await shellState()}`)
+    }
+
     const readmes = ['memory', 'agents', 'projects', 'sessions'].map((directory) => ({
       directory,
       path: path.join(home, directory, 'README.md'),

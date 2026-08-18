@@ -50,11 +50,21 @@ describe('installed production chat contract', () => {
   })
 
   it('waits for the desktop client to connect before it submits the prompt', () => {
-    const connectionWait = spec.indexOf("window.__TAURI__.core.invoke('attach_listener_status')")
+    // Anchor on the connection gate itself. The diagnostic helper reads the same
+    // command earlier in the file, so the first invoke is no longer the gate.
+    const connectionWait = spec.indexOf('attachStatus.supervisor_running === true && attachStatus.connected === true')
     const prompt = spec.indexOf('const prompt = `Muniment E2E chat')
     expect(connectionWait).toBeGreaterThan(-1)
     expect(connectionWait).toBeLessThan(prompt)
-    expect(spec).toContain('attachStatus.supervisor_running === true && attachStatus.connected === true')
+    expect(spec).toContain("window.__TAURI__.core.invoke('attach_listener_status')")
+  })
+
+  it('bounds the signed-out wait and reports the desktop client in its message', () => {
+    expect(spec).toMatch(/signedOut\.waitForDisplayed\(\{\s*timeout: 120000,/)
+    expect(spec).toContain("timeoutMsg: 'the signed-out screen did not appear after onboarding'")
+    expect(spec).toContain('throw new Error(`${waitError.message} ${await shellState()}`)')
+    expect(spec).toContain('return `desktop client status: ${connection}. shell: ${rendered}`')
+    expect(spec.indexOf('async function shellState()')).toBeLessThan(spec.indexOf("describe('installed nightly'"))
   })
 
   it('runs and stops the installed runtime inside each Linux E2E session', () => {
