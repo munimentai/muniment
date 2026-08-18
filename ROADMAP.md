@@ -538,10 +538,12 @@ the behavior the desktop has today.
 
 SEQUENCED 2026-08-18 (eighty-sixth wave) — the eighty-fifth-wave run-rejoin
 chain and its runtime-unit backoff slice are all built (MUNIDESK-1359 through
-1364). This wave takes the chat-event gap the rejoin chain left open. The first
-slice gives `chat-controller.js` a re-read that refreshes the open thread while
-a run is active. The second slice triggers that re-read when
-`chat_events_connected` turns true. Remote Control stays gated for three
+1364). This wave files the first slice of the chat-event gap chain. That slice
+gives `chat-controller.js` a `refreshOpenThread` re-read, which refreshes the
+open thread in place while a run is active. The second slice triggers that
+re-read when `chat_events_connected` turns true. It waits for the refresh
+function to exist, so the eighty-seventh wave files it. Remote Control stays
+gated for three
 reasons. Harness-spec §14.1 puts the relay leg on an outbound HTTPS session to
 `api.muniment.ai`. No muniment-cloud relay contract has published. The desktop
 states remain pending owner mockup confirmation
@@ -584,12 +586,32 @@ dependency this entry had recorded. `openThread`
 so the re-read needs a path that refreshes an open thread in place. The
 eighty-sixth wave files that chain.
 
-NOT FILED 2026-08-18 (eighty-fifth wave) — the sidebar does not learn about a
+SEQUENCED 2026-08-18 (eighty-sixth wave) — the sidebar does not learn about a
 thread another client created. `refreshThreads`
 (`src/lib/chat-controller.js:71`) runs at load and when this desktop's own
 active run settles, so an ACP or CLI thread appears only after the next launch.
 Which events the chat broadcast owes a passive client is a contract call, and
-it is wider than one slice.
+it is wider than one slice. This wave files the ADR 0012 amendment that decides
+the rule. The implementation slice follows the amendment.
+
+MEASURED 2026-08-18 (eighty-sixth wave, planner, read the reconnect handler
+beside the run submit path) — a desktop-client reconnect moves the user to the
+newest thread, and the next message still lands in the old one. `run('status')`
+fires when `connected` turns true (`src/App.svelte:664`, `:678`), and it calls
+`loadHistory` (`:645`). `loadHistory` opens `summaries[0].threadId`
+(`src/lib/chat-controller.js:155`) and sends no `chat_select_thread`. The
+desktop keeps its own selection in `SessionThread`, and `handle_run_submit`
+sends `session_thread.current` as the run's thread (`src-tauri/src/chat.rs:184`).
+The runtime restarts on the status-75 upgrade refresh, so this reconnect is a
+routine event rather than a rare one. The eighty-sixth wave files the fix.
+
+SEQUENCED 2026-08-18 (eighty-sixth wave, planner, read the broadcast drop
+beside the runtime operator lines) — the runtime records no trace when it drops
+a chat-event subscriber for a full queue (`src-tauri/runtime/src/sink.rs:55`).
+An operator reading `journalctl --user -u muniment-runtime` sees the reconnect
+and never its cause. `main.rs` already prints operator lines under the
+`muniment-runtime: ` prefix (`src-tauri/runtime/src/main.rs:38`). This wave
+files that one line with its drop counter.
 
 DONE — all three slices of the ADR 0009 attach workspace namespace amendment are
 built (MUNIDESK-883, 887, 893, 896, 905). The signed `grant.workspace` value is
@@ -976,6 +998,18 @@ DO NOT RE-FILE — asset weight is not worth a slice. The frontend emits one
 `marked` and DOMPurify account for roughly 55,000 bytes. Tauri serves those bytes
 from local disk, so a dynamic import would trade a few milliseconds of parse time
 for an async boundary in a synchronous component.
+
+MEASURED 2026-08-18 (eighty-sixth wave, planner, read the workspace branch
+beside the chat-event reconnect loop) — a momentary background-service drop
+unmounts the whole workspace. `src/App.svelte:892` replaces the workspace with
+the `Muniment cannot reach its background service.` notice whenever `connected`
+or `chat_events_connected` reports false. The runtime drops a chat-event
+subscriber whose 256-event queue fills (`src-tauri/runtime/src/sink.rs:55`), and
+the desktop reconnects after a 250 millisecond retry interval
+(`src-tauri/src/attach_service.rs:1144`). The remount costs the transcript its
+scroll position, and the focus effect takes composer focus back
+(`src/App.svelte:615`). The notice serves a real outage, so it stays. The
+eighty-sixth wave files a two-second dwell in front of it.
 
 PARKED — `--space-*` tokens are absent, and a spacing sweep would touch nearly
 every declaration in the app, so it stays parked rather than half-done. The
