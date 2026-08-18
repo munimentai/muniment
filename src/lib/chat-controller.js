@@ -168,7 +168,17 @@ export function createChatController({
         onHistoryError('')
         return
       }
-      await openThread(openThreadId || summaries[0].threadId, switchBlocked)
+      const newest = summaries[0].threadId
+      if (openThreadId && openThreadId !== newest) {
+        // Retention can prune the open thread, and a sign-in under another
+        // subject leaves the shell holding an id it no longer owns. Fall back to
+        // the newest thread, or every reconnect retries the same dead id.
+        if (await openThread(openThreadId, switchBlocked) !== false) return
+        if (destroyed) return
+        await openThread(newest, switchBlocked)
+        return
+      }
+      await openThread(newest, switchBlocked)
     } catch (_) {
       if (!destroyed) onHistoryError('Conversation history could not be restored.', { label: 'Restore history', run: loadHistory })
     }
@@ -252,6 +262,9 @@ export function createChatController({
       // refresh stays unawaited because this call already bumped the refresh
       // sequence. An awaited refresh would reorder onThreadSelected.
       if (settled) void refreshThreads()
+      // loadHistory reads this back: false means the thread did not load, so the
+      // caller can fall back. A skipped call returns undefined instead.
+      return true
     } catch (_) {
       if (!destroyed) {
         if (wasBlocked) {
@@ -270,6 +283,7 @@ export function createChatController({
         }
         onHistoryError('Conversation history could not be restored.', { label: 'Restore history', run: loadHistory })
       }
+      return false
     } finally {
       loadingHistory = false
       releaseBuffer()
