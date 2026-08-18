@@ -12,6 +12,7 @@
   import Onboarding from './lib/Onboarding.svelte'
   import { ARTIFACT_RAIL_MAX_WIDTH, ARTIFACT_RAIL_MIN_WIDTH, artifactRailShortcut, createArtifactRailController, defaultArtifactRailWidth, isArtifactRailShortcut, shortcutDisplayLabel } from './lib/artifact-rail-state.js'
   import { bootState, errorState, registrationRetryState, statusState, waitingState } from './lib/auth-state.js'
+  import { createBackgroundServiceNotice } from './lib/background-service-notice.js'
   import { ringPath, solidMilledRingPath } from './lib/mark.js'
   import { codeDiffPermissionAnswer, composerAction, formatByteSize, permissionGateAction, permissionGateCommitHint, receiptLabel, receiptRows, receiptSummary, runAnnouncement, toolName, toolStatus } from './lib/chat-state.js'
   import { createChatController } from './lib/chat-controller.js'
@@ -129,6 +130,7 @@
   let pairingRequests = $state([])
   let desktopClientStatus = $state(null)
   let desktopClientStatusVersion = 0
+  let backgroundServiceNoticeVisible = $state(false)
   let authRequestVersion = 0
   const artifactShortcut = artifactRailShortcut()
   let destroyed = false
@@ -221,6 +223,17 @@
     listen: (...args) => window.__TAURI__?.event?.listen(...args),
     onVisible: (visible) => { entitlementToastVisible = visible },
   })
+
+  const backgroundServiceNotice = createBackgroundServiceNotice({
+    onVisible: (visible) => { backgroundServiceNoticeVisible = visible },
+  })
+
+  // The notice decides its own visibility, so every status reaches it beside
+  // the field the rest of the shell reads.
+  function applyDesktopClientStatus(status) {
+    desktopClientStatus = status
+    backgroundServiceNotice.update(status)
+  }
 
   function toggleSidebar() {
     sidebarCollapsed = !sidebarCollapsed
@@ -614,8 +627,7 @@
 
   $effect(() => {
     const inWorkspace = auth.name === 'signed-in' && onboarding.name === 'complete' && desktopClientStatus
-      && !(desktopClientStatus.supervisor_running
-        && (desktopClientStatus.connected === false || desktopClientStatus.chat_events_connected === false))
+      && !backgroundServiceNoticeVisible
     if (inWorkspace && !wasInWorkspace && active?.phase !== 'resuming' && composer) {
       wasInWorkspace = true
       composer.focus()
@@ -662,12 +674,12 @@
       return tauri?.invoke('attach_listener_status').then((status) => {
         if (version === desktopClientStatusVersion) {
           const connectionRecovered = desktopClientStatus?.connected !== true && status?.connected === true
-          desktopClientStatus = status
+          applyDesktopClientStatus(status)
           if (connectionRecovered) void run('status')
         }
       }).catch(() => {
         if (version === desktopClientStatusVersion) {
-          desktopClientStatus = { connected: false, supervisor_running: false }
+          applyDesktopClientStatus({ connected: false, supervisor_running: false })
         }
         console.error('Desktop client status failed.')
       })
@@ -677,7 +689,7 @@
         const stop = await window.__TAURI__?.event?.listen('desktop-client-status-changed', ({ payload }) => {
           const connectionRecovered = desktopClientStatus?.connected !== true && payload?.connected === true
           desktopClientStatusVersion += 1
-          desktopClientStatus = payload
+          applyDesktopClientStatus(payload)
           if (connectionRecovered) void run('status')
         })
         if (destroyed) stop?.()
@@ -787,6 +799,7 @@
       dictationController.cleanup()
       chatController.cleanup()
       entitlementToast.cleanup()
+      backgroundServiceNotice.cleanup()
       pairingUnlisten?.()
       registrationRetryUnlisten?.()
       desktopClientUnlisten?.()
@@ -890,8 +903,7 @@
         <button class="primary" class:inactive={auth.name === 'signing-in'} aria-disabled={auth.name === 'signing-in' ? 'true' : undefined} onclick={signIn}>Sign in</button>
       </section>
     {:else if (auth.name === 'signed-in' || (auth.name === 'error' && auth.retry === 'status'))
-      && desktopClientStatus?.supervisor_running
-      && (desktopClientStatus.connected === false || desktopClientStatus.chat_events_connected === false)}
+      && backgroundServiceNoticeVisible}
       <section class="auth-state" aria-live="polite">
         <p class="record error-record">Muniment cannot reach its background service.</p>
         <p class="support">Muniment reconnects on its own.</p>

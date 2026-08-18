@@ -22,6 +22,7 @@ pub struct RuntimeChatEventBroadcast {
 #[derive(Default)]
 struct RuntimeChatEventBroadcastShared {
     next_id: AtomicU64,
+    full_queue_drops: AtomicU64,
     subscribers: Mutex<Vec<RuntimeChatEventSubscriber>>,
 }
 
@@ -52,7 +53,14 @@ impl RuntimeChatEventBroadcast {
             .len()
     }
 
+    /// Counts the subscribers this broadcast dropped for a full queue.
+    #[doc(hidden)]
+    pub fn full_queue_drop_count(&self) -> u64 {
+        self.shared.full_queue_drops.load(Ordering::Relaxed)
+    }
+
     fn deliver(&self, event: ChatEvent) {
+        let mut full_queue_drops = Vec::new();
         self.shared
             .subscribers
             .lock()
@@ -60,9 +68,24 @@ impl RuntimeChatEventBroadcast {
             .retain(
                 |subscriber| match subscriber.sender.try_send(event.clone()) {
                     Ok(()) => true,
-                    Err(TrySendError::Full(_) | TrySendError::Disconnected(_)) => false,
+                    Err(TrySendError::Full(_)) => {
+                        full_queue_drops.push(subscriber.id);
+                        false
+                    }
+                    // A disconnected receiver is the ordinary close of a client connection.
+                    Err(TrySendError::Disconnected(_)) => false,
                 },
             );
+        self.shared
+            .full_queue_drops
+            .fetch_add(full_queue_drops.len() as u64, Ordering::Relaxed);
+        // Report each drop after the lock releases, so no run waits on stderr.
+        for id in full_queue_drops {
+            eprintln!(
+                "muniment-runtime: dropped chat-event subscriber {id} because its \
+                 {CHAT_EVENT_SUBSCRIBER_QUEUE_CAPACITY}-event queue is full"
+            );
+        }
     }
 }
 

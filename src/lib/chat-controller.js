@@ -51,6 +51,9 @@ export function createChatController({
   let threadPageCount = 1
   let nextThreadCursor = null
   let loadingOlderThreads = false
+  // The shell shows a fresh thread and the first load after sign-in the same way:
+  // no thread id. loadHistory reads this flag back to tell the two apart.
+  let freshThread = false
   const renameQueues = new Map()
 
   function holdBuffer() {
@@ -67,6 +70,10 @@ export function createChatController({
   const publishMessages = (next) => {
     if (!destroyed) onMessages(next)
   }
+  const publishFreshThread = (next) => {
+    freshThread = next
+    onFreshThread(next)
+  }
 
   async function refreshThreads() {
     const sequence = ++threadRefreshSequence
@@ -82,7 +89,7 @@ export function createChatController({
       onThreadSummaries(summaries)
       onThreadSelected(currentThreadId)
       if (currentThreadId && summaries.some((summary) => summary.threadId === currentThreadId)) {
-        onFreshThread(false)
+        publishFreshThread(false)
       }
     } catch (_) {
       // A settlement refresh must not disturb the visible conversation state.
@@ -147,12 +154,31 @@ export function createChatController({
         onHistoryError('')
         publishMessages([])
         onThreadSelected(null)
-        onFreshThread(true)
+        publishFreshThread(true)
         onHistoryLoaded()
         onFollow()
         return
       }
-      await openThread(summaries[0].threadId, switchBlocked)
+      const openThreadId = readThreadId()
+      // A reconnect reloads the history, so the thread the user has open must
+      // stay open. Only the first load after sign-in falls through to the newest
+      // thread. A blocked switch falls through too, because openThread alone
+      // restores the backend selection.
+      if (!openThreadId && freshThread && !switchBlocked) {
+        onHistoryError('')
+        return
+      }
+      const newest = summaries[0].threadId
+      if (openThreadId && openThreadId !== newest) {
+        // Retention can prune the open thread, and a sign-in under another
+        // subject leaves the shell holding an id it no longer owns. Fall back to
+        // the newest thread, or every reconnect retries the same dead id.
+        if (await openThread(openThreadId, switchBlocked) !== false) return
+        if (destroyed) return
+        await openThread(newest, switchBlocked)
+        return
+      }
+      await openThread(newest, switchBlocked)
     } catch (_) {
       if (!destroyed) onHistoryError('Conversation history could not be restored.', { label: 'Restore history', run: loadHistory })
     }
@@ -222,7 +248,7 @@ export function createChatController({
       onHistoryStart()
       onAnnounce(null)
       onThreadSelected(threadId)
-      onFreshThread(false)
+      publishFreshThread(false)
       publishMessages(rejoined
         ? published.map((message) => message.run?.id === rejoined.id ? { ...message, run: rejoined } : message)
         : published)
@@ -236,6 +262,9 @@ export function createChatController({
       // refresh stays unawaited because this call already bumped the refresh
       // sequence. An awaited refresh would reorder onThreadSelected.
       if (settled) void refreshThreads()
+      // loadHistory reads this back: false means the thread did not load, so the
+      // caller can fall back. A skipped call returns undefined instead.
+      return true
     } catch (_) {
       if (!destroyed) {
         if (wasBlocked) {
@@ -254,6 +283,7 @@ export function createChatController({
         }
         onHistoryError('Conversation history could not be restored.', { label: 'Restore history', run: loadHistory })
       }
+      return false
     } finally {
       loadingHistory = false
       releaseBuffer()
@@ -273,7 +303,7 @@ export function createChatController({
       onHistoryStart()
       onAnnounce(null)
       onThreadSelected(null)
-      onFreshThread(true)
+      publishFreshThread(true)
       publishMessages([])
       onHistoryLoaded()
       onFollow()
@@ -333,7 +363,7 @@ export function createChatController({
         onHistoryStart()
         onAnnounce(null)
         onThreadSelected(null)
-        onFreshThread(true)
+        publishFreshThread(true)
         publishMessages([])
         onHistoryLoaded()
         onFollow()
