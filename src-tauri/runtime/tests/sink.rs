@@ -111,9 +111,14 @@ fn removes_a_dropped_broadcast_subscriber_without_delivery() {
 
     assert_eq!(broadcast.subscriber_count(), 1);
     let profile = TemporaryProfile::new("sink-drop-broadcast", false);
-    let sink = RuntimeChatEventSink::new(&profile.profile, broadcast, memory_runtime(&profile));
+    let sink = RuntimeChatEventSink::new(
+        &profile.profile,
+        broadcast.clone(),
+        memory_runtime(&profile),
+    );
     sink.deliver(event()).unwrap();
     assert_eq!(remaining.recv().unwrap().text, "hello");
+    assert_eq!(broadcast.full_queue_drop_count(), 0);
 }
 
 #[test]
@@ -134,10 +139,12 @@ fn drops_a_subscriber_when_its_bounded_queue_is_full() {
         stalled.recv().unwrap();
     }
     assert!(stalled.recv().is_err());
+    assert_eq!(broadcast.full_queue_drop_count(), 1);
 
     let live = broadcast.subscribe();
     sink.deliver(event()).unwrap();
     assert_eq!(live.recv().unwrap().text, "hello");
+    assert_eq!(broadcast.full_queue_drop_count(), 1);
 }
 
 #[test]
