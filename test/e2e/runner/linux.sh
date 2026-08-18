@@ -236,6 +236,15 @@ node test/e2e/support/probe-installed-adapter.mjs /usr/lib/muniment/muniment-acp
 [[ -x /usr/lib/muniment/muniment-runtime ]] || { echo 'installed runtime is unavailable or not executable' >&2; status=1; exit; }
 runtime_version=$(/usr/lib/muniment/muniment-runtime --version) || { echo 'installed runtime version probe failed' >&2; status=1; exit; }
 [[ -n $runtime_version ]] || { echo 'installed runtime version probe returned no version' >&2; status=1; exit; }
+# The installed runtime admits a desktop client only when the peer executable
+# resolves to the installed desktop path beside its own resources. This suite
+# drives the WebDriver build, so point that path at the build. Both sides
+# resolve the link, so the runtime answers the session for the app under test
+# instead of routing it as a companion.
+installed_desktop=/usr/bin/muniment
+[[ -f $installed_desktop ]] || { echo 'installed desktop path is unavailable' >&2; status=1; exit; }
+sudo ln -sf "$app_binary" "$installed_desktop" || { echo 'installed desktop path could not point at the E2E build' >&2; status=1; exit; }
+[[ $(readlink -f "$installed_desktop") == "$(readlink -f "$app_binary")" ]] || { echo 'installed desktop path does not resolve to the E2E build' >&2; status=1; exit; }
 export MUNIMENT_E2E_APP_BINARY="$app_binary" MUNIMENT_E2E_RAW_DIR="$raw"
 export MUNIMENT_E2E_AUTH_URL_FILE="$auth_url_file" BROWSER="$PWD/test/e2e/support/browser-launcher.sh"
 export MUNIMENT_E2E_IMAGE_PATH="$image_fixture"

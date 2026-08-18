@@ -33,6 +33,13 @@ describe('installed onboarding spec contract', () => {
     expect(onboardingSpec).not.toContain('browser.tauri.mock')
     expect(onboardingSpec).toContain('chooseFolder(')
   })
+
+  it('reports the desktop client when the signed-out wait runs out', () => {
+    expect(onboardingSpec).toContain("timeoutMsg: 'the signed-out screen did not appear after onboarding'")
+    expect(onboardingSpec).toContain('throw new Error(`${waitError.message} ${await shellState()}`)')
+    expect(onboardingSpec).toContain('return `desktop client status: ${connection}. shell: ${rendered}`')
+    expect(onboardingSpec.indexOf('async function shellState()')).toBeLessThan(onboardingSpec.indexOf("describe('installed nightly model-ready onboarding'"))
+  })
 })
 
 describe('installed production chat contract', () => {
@@ -1047,6 +1054,31 @@ describe('installed ACP adapter contract', () => {
     expect(runner).toContain(probe)
     expect(runner.indexOf(executableCheck)).toBeLessThan(runner.indexOf(probe))
     expect(runner).toContain("echo 'installed ACP adapter initialize probe failed' >&2")
+  })
+})
+
+describe('installed desktop client identity', () => {
+  const runner = fs.readFileSync(path.join(root, 'test/e2e/runner/linux.sh'), 'utf8')
+
+  it('points the installed desktop path at the WebDriver build before each phase', () => {
+    expect(runner).toContain('installed_desktop=/usr/bin/muniment')
+    expect(runner).toContain('[[ -f $installed_desktop ]]')
+    expect(runner).toContain('sudo ln -sf "$app_binary" "$installed_desktop"')
+    expect(runner).toContain("echo 'installed desktop path could not point at the E2E build' >&2")
+    expect(runner.indexOf('sudo ln -sf "$app_binary" "$installed_desktop"'))
+      .toBeLessThan(runner.indexOf('run_e2e "$raw/wdio-onboarding.log"'))
+  })
+
+  it('reads the shipped binary before that path changes', () => {
+    expect(runner.indexOf('webdriver-release-guard.mjs absent'))
+      .toBeLessThan(runner.indexOf('sudo ln -sf "$app_binary" "$installed_desktop"'))
+  })
+
+  it('fails the run when that path resolves elsewhere', () => {
+    expect(runner).toContain('[[ $(readlink -f "$installed_desktop") == "$(readlink -f "$app_binary")" ]]')
+    expect(runner).toContain("echo 'installed desktop path does not resolve to the E2E build' >&2")
+    expect(runner.indexOf('readlink -f "$installed_desktop"'))
+      .toBeGreaterThan(runner.indexOf('sudo ln -sf "$app_binary" "$installed_desktop"'))
   })
 })
 
