@@ -527,6 +527,258 @@ describe('chat controller', () => {
     expect(context.messages()).toEqual([])
   })
 
+  it('opens the newest thread on the first load after sign-in', async () => {
+    const invoke = vi.fn(async (command) => command === 'chat_thread_summaries'
+      ? { summaries: [{ threadId: 'thread-3' }, { threadId: 'thread-1' }], nextCursor: null }
+      : { entries: [], nextCursor: null })
+    const context = setup(invoke)
+
+    await context.controller.loadHistory()
+
+    expect(invoke.mock.calls).toEqual([
+      ['chat_thread_summaries', { limit: 20 }],
+      ['chat_thread_open', { threadId: 'thread-3', limit: 100 }],
+    ])
+    expect(context.onThreadSelected).toHaveBeenLastCalledWith('thread-3')
+  })
+
+  it('reopens the thread the shell holds open when a reconnect reloads history', async () => {
+    let currentThreadId = null
+    const invoke = vi.fn(async (command) => {
+      if (command === 'chat_thread_summaries') return { summaries: [{ threadId: 'thread-3' }, { threadId: 'thread-1' }], nextCursor: null }
+      if (command === 'chat_thread_open') return { entries: [], nextCursor: null }
+      return undefined
+    })
+    const context = setup(invoke)
+    const controller = createChatController({
+      invoke,
+      listen: vi.fn(),
+      readMessages: context.messages,
+      readActive: context.active,
+      readAnnounced: () => null,
+      readDraft: () => '',
+      readFiles: () => [],
+      readThreadId: () => currentThreadId,
+      onMessages: context.setMessages,
+      onActive: vi.fn(),
+      onAnnounce: vi.fn(),
+      onDraft: vi.fn(),
+      onFiles: vi.fn(),
+      onSubmitError: vi.fn(),
+      onCancelError: vi.fn(),
+      onQueueError: vi.fn(),
+      onHistoryError: vi.fn(),
+      onThreadSelected: (next) => { currentThreadId = next },
+    })
+
+    await controller.loadHistory()
+    await controller.openThread('thread-1')
+    invoke.mockClear()
+    await controller.loadHistory()
+
+    expect(invoke.mock.calls).toEqual([
+      ['chat_thread_summaries', { limit: 20 }],
+      ['chat_thread_open', { threadId: 'thread-1', limit: 100 }],
+    ])
+    expect(currentThreadId).toBe('thread-1')
+  })
+
+  it('keeps a fresh thread in place when a reconnect reloads history', async () => {
+    let currentThreadId = 'thread-1'
+    let freshThread = false
+    const onMessages = vi.fn()
+    const onThreadSummaries = vi.fn()
+    const invoke = vi.fn(async (command) => command === 'chat_thread_summaries'
+      ? { summaries: [{ threadId: 'thread-1' }], nextCursor: null }
+      : undefined)
+    const controller = createChatController({
+      invoke,
+      listen: vi.fn(),
+      readMessages: () => [],
+      readActive: () => null,
+      readAnnounced: () => null,
+      readDraft: () => '',
+      readFiles: () => [],
+      readThreadId: () => currentThreadId,
+      onMessages,
+      onActive: vi.fn(),
+      onAnnounce: vi.fn(),
+      onDraft: vi.fn(),
+      onFiles: vi.fn(),
+      onSubmitError: vi.fn(),
+      onCancelError: vi.fn(),
+      onQueueError: vi.fn(),
+      onHistoryError: vi.fn(),
+      onThreadSummaries,
+      onThreadSelected: (next) => { currentThreadId = next },
+      onFreshThread: (next) => { freshThread = next },
+    })
+
+    await controller.newThread()
+    invoke.mockClear()
+    onMessages.mockClear()
+
+    await controller.loadHistory()
+
+    expect(invoke.mock.calls).toEqual([['chat_thread_summaries', { limit: 20 }]])
+    expect(onThreadSummaries).toHaveBeenLastCalledWith([{ threadId: 'thread-1' }])
+    expect(onMessages).not.toHaveBeenCalled()
+    expect(currentThreadId).toBeNull()
+    expect(freshThread).toBe(true)
+  })
+
+  it('selects the newest thread when a blocked switch left a fresh thread open', async () => {
+    let currentThreadId = null
+    let openFails = true
+    const invoke = vi.fn(async (command) => {
+      if (command === 'chat_thread_summaries') return { summaries: [{ threadId: 'thread-1' }], nextCursor: null }
+      if (command !== 'chat_thread_open') return undefined
+      if (!openFails) return { entries: [], nextCursor: null }
+      openFails = false
+      throw new Error('offline')
+    })
+    const context = setup(invoke)
+    const controller = createChatController({
+      invoke,
+      listen: vi.fn(),
+      readMessages: context.messages,
+      readActive: context.active,
+      readAnnounced: () => null,
+      readDraft: () => '',
+      readFiles: () => [],
+      readThreadId: () => currentThreadId,
+      onMessages: context.setMessages,
+      onActive: vi.fn(),
+      onAnnounce: vi.fn(),
+      onDraft: vi.fn(),
+      onFiles: vi.fn(),
+      onSubmitError: vi.fn(),
+      onCancelError: vi.fn(),
+      onQueueError: vi.fn(),
+      onHistoryError: vi.fn(),
+      onThreadSelected: (next) => { currentThreadId = next },
+    })
+
+    await controller.newThread()
+    await controller.openThread('thread-1')
+    invoke.mockClear()
+    await controller.loadHistory()
+
+    expect(invoke.mock.calls).toEqual([
+      ['chat_thread_summaries', { limit: 20 }],
+      ['chat_select_thread', { threadId: 'thread-1' }],
+      ['chat_thread_open', { threadId: 'thread-1', limit: 100 }],
+    ])
+    expect(currentThreadId).toBe('thread-1')
+  })
+
+  it('opens the newest thread when the thread the shell holds open no longer loads', async () => {
+    let currentThreadId = null
+    let summaries = [{ threadId: 'thread-3' }, { threadId: 'thread-1' }]
+    const onHistoryError = vi.fn()
+    const invoke = vi.fn(async (command, payload) => {
+      if (command === 'chat_thread_summaries') return { summaries, nextCursor: null }
+      if (command !== 'chat_thread_open') return undefined
+      if (payload.threadId === 'thread-1' && summaries.length === 1) throw new Error('missing first run')
+      return { entries: [], nextCursor: null }
+    })
+    const context = setup(invoke)
+    const controller = createChatController({
+      invoke,
+      listen: vi.fn(),
+      readMessages: context.messages,
+      readActive: context.active,
+      readAnnounced: () => null,
+      readDraft: () => '',
+      readFiles: () => [],
+      readThreadId: () => currentThreadId,
+      onMessages: context.setMessages,
+      onActive: vi.fn(),
+      onAnnounce: vi.fn(),
+      onDraft: vi.fn(),
+      onFiles: vi.fn(),
+      onSubmitError: vi.fn(),
+      onCancelError: vi.fn(),
+      onQueueError: vi.fn(),
+      onHistoryError,
+      onThreadSelected: (next) => { currentThreadId = next },
+    })
+
+    await controller.openThread('thread-1')
+    // Retention prunes the open thread while the window sits idle.
+    summaries = [{ threadId: 'thread-3' }]
+    invoke.mockClear()
+    onHistoryError.mockClear()
+    await controller.loadHistory()
+
+    expect(invoke.mock.calls).toEqual([
+      ['chat_thread_summaries', { limit: 20 }],
+      ['chat_thread_open', { threadId: 'thread-1', limit: 100 }],
+      ['chat_thread_open', { threadId: 'thread-3', limit: 100 }],
+    ])
+    expect(currentThreadId).toBe('thread-3')
+    expect(onHistoryError).toHaveBeenLastCalledWith('')
+  })
+
+  it('reselects the thread the shell holds open when a blocked switch reloads history', async () => {
+    let currentThreadId = null
+    let openThreeFails = true
+    let restoreFails = false
+    const onThreadSwitch = vi.fn()
+    const invoke = vi.fn(async (command, payload) => {
+      if (command === 'chat_thread_summaries') return { summaries: [{ threadId: 'thread-3' }, { threadId: 'thread-1' }], nextCursor: null }
+      if (command === 'chat_select_thread') {
+        if (!restoreFails) return undefined
+        restoreFails = false
+        throw new Error('offline')
+      }
+      if (command !== 'chat_thread_open') return undefined
+      if (payload.threadId === 'thread-3' && openThreeFails) {
+        openThreeFails = false
+        restoreFails = true
+        throw new Error('offline')
+      }
+      return { entries: [], nextCursor: null }
+    })
+    const context = setup(invoke)
+    const controller = createChatController({
+      invoke,
+      listen: vi.fn(),
+      readMessages: context.messages,
+      readActive: context.active,
+      readAnnounced: () => null,
+      readDraft: () => '',
+      readFiles: () => [],
+      readThreadId: () => currentThreadId,
+      onMessages: context.setMessages,
+      onActive: vi.fn(),
+      onAnnounce: vi.fn(),
+      onDraft: vi.fn(),
+      onFiles: vi.fn(),
+      onSubmitError: vi.fn(),
+      onCancelError: vi.fn(),
+      onQueueError: vi.fn(),
+      onHistoryError: vi.fn(),
+      onThreadSelected: (next) => { currentThreadId = next },
+      onThreadSwitch,
+    })
+
+    await controller.openThread('thread-1')
+    // The switch to thread-3 fails and the restore fails too, so the backend
+    // selection no longer matches the thread the shell holds open.
+    await controller.openThread('thread-3')
+    invoke.mockClear()
+    await controller.loadHistory()
+
+    expect(invoke.mock.calls).toEqual([
+      ['chat_thread_summaries', { limit: 20 }],
+      ['chat_select_thread', { threadId: 'thread-1' }],
+      ['chat_thread_open', { threadId: 'thread-1', limit: 100 }],
+    ])
+    expect(currentThreadId).toBe('thread-1')
+    expect(onThreadSwitch).toHaveBeenLastCalledWith(false)
+  })
+
   it('appends older threads and reports when the last page arrives', async () => {
     let summaries = [{ threadId: 'thread-1' }]
     const invoke = vi.fn()
