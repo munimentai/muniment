@@ -21,6 +21,7 @@ function setup(invoke = vi.fn()) {
   let listener
   const errors = []
   const onMessages = vi.fn((next) => { messages = next })
+  const onActive = vi.fn((next) => { active = next })
   const onThreadSummaries = vi.fn()
   const onMoreThreads = vi.fn()
   const onThreadSelected = vi.fn()
@@ -39,7 +40,7 @@ function setup(invoke = vi.fn()) {
     readDraft: () => draft,
     readFiles: () => files,
     onMessages,
-    onActive: (next) => { active = next },
+    onActive,
     onAnnounce: (next) => { announced = next },
     onDraft: (next) => { draft = next },
     onFiles: (next) => { files = next },
@@ -60,8 +61,10 @@ function setup(invoke = vi.fn()) {
     event: (payload) => listener({ payload }),
     messages: () => messages,
     active: () => active,
+    announced: () => announced,
     errors,
     onMessages,
+    onActive,
     onThreadSummaries,
     onMoreThreads,
     onThreadSelected,
@@ -672,6 +675,163 @@ describe('chat controller', () => {
     expect(context.messages().map((message) => message.text ?? message.run.text)).toEqual([
       'First question', 'First answer', 'Second question', 'Second answer',
     ])
+  })
+
+  it('rejoins the unsettled run of the opened thread without commanding it', async () => {
+    const invoke = vi.fn()
+      .mockResolvedValueOnce({ summaries: [{ threadId: 'thread-1' }], nextCursor: null })
+      .mockResolvedValueOnce({ entries: [
+        { runId: 'run-1', phase: 'complete', text: 'First answer', prompt: 'First question', receipt: {}, toolActivity: [] },
+        { runId: 'run-2', phase: 'streaming', text: 'Half an ans', prompt: 'Second question', receipt: null, toolActivity: [] },
+      ], nextCursor: null })
+    const context = setup(invoke)
+
+    await context.controller.loadHistory()
+
+    expect(context.active()).toMatchObject({ id: 'run-2', phase: 'streaming', text: 'Half an ans' })
+    expect(context.announced()).toMatchObject({ id: 'run-2', phase: 'streaming' })
+    expect(invoke.mock.calls).toEqual([
+      ['chat_thread_summaries', { limit: 20 }],
+      ['chat_thread_open', { threadId: 'thread-1', limit: 100 }],
+    ])
+  })
+
+  it('leaves the active run null when every run in the opened thread settled', async () => {
+    const invoke = vi.fn()
+      .mockResolvedValueOnce(undefined)
+      .mockResolvedValueOnce({ entries: [
+        { runId: 'run-1', phase: 'complete', text: 'Done', prompt: 'One', receipt: {}, toolActivity: [] },
+        { runId: 'run-2', phase: 'interrupted', text: 'Partial', prompt: 'Two', receipt: null, toolActivity: [] },
+      ], nextCursor: null })
+    const context = setup(invoke)
+
+    await context.controller.openThread('thread-2')
+
+    expect(context.onActive).toHaveBeenCalledWith(null)
+    expect(context.active()).toBeNull()
+    expect(context.announced()).toBeNull()
+    expect(invoke.mock.calls).toEqual([
+      ['chat_select_thread', { threadId: 'thread-2' }],
+      ['chat_thread_open', { threadId: 'thread-2', limit: 100 }],
+    ])
+  })
+
+  it('settles a rejoined run from a chat event', async () => {
+    const invoke = vi.fn((command) => {
+      if (command === 'chat_thread_open') {
+        return { entries: [{ runId: 'run-2', phase: 'streaming', text: 'Half an ans', prompt: 'Second question', receipt: null, toolActivity: [] }], nextCursor: null }
+      }
+      if (command === 'chat_thread_summaries') return { summaries: [{ threadId: 'thread-2' }], nextCursor: null }
+      if (command === 'chat_current_thread') return 'thread-2'
+      return undefined
+    })
+    const context = setup(invoke)
+    await context.start()
+    await context.controller.openThread('thread-2')
+
+    context.event({ runId: 'run-2', type: 'text-delta', text: 'wer' })
+
+    expect(context.messages().at(-1).run).toMatchObject({ id: 'run-2', phase: 'streaming', text: 'Half an answer' })
+    expect(context.active()).toMatchObject({ id: 'run-2', phase: 'streaming' })
+
+    context.event({ runId: 'run-2', type: 'completed', receipt: { route: 'local' } })
+
+    expect(context.messages().at(-1).run).toMatchObject({ id: 'run-2', phase: 'complete', text: 'Half an answer', receipt: { route: 'local' } })
+    expect(context.announced()).toMatchObject({ id: 'run-2', phase: 'complete' })
+    expect(context.active()).toBeNull()
+    await vi.waitFor(() => expect(invoke).toHaveBeenCalledWith('chat_current_thread'))
+    expect(invoke).not.toHaveBeenCalledWith('chat_submit', expect.anything())
+    expect(invoke).not.toHaveBeenCalledWith('chat_resume', expect.anything())
+  })
+
+  it('carries a delta that arrives while the rejoined thread loads', async () => {
+    const history = deferred()
+    const invoke = vi.fn((command) => command === 'chat_thread_open' ? history.promise : Promise.resolve())
+    const context = setup(invoke)
+    await context.start()
+
+    const opening = context.controller.openThread('thread-2')
+    await vi.waitFor(() => expect(invoke).toHaveBeenCalledWith('chat_thread_open', expect.anything()))
+    context.event({ runId: 'run-2', type: 'text-delta', text: 'wer' })
+    history.resolve({ entries: [{ runId: 'run-2', phase: 'streaming', text: 'Half an ans', prompt: 'Second question', receipt: null, toolActivity: [] }], nextCursor: null })
+    await opening
+
+    expect(context.messages().at(-1).run).toMatchObject({ id: 'run-2', phase: 'streaming', text: 'Half an answer' })
+    expect(context.active()).toMatchObject({ id: 'run-2', phase: 'streaming', text: 'Half an answer' })
+    expect(context.announced()).toMatchObject({ id: 'run-2', text: 'Half an answer' })
+    expect(invoke).not.toHaveBeenCalledWith('chat_submit', expect.anything())
+    expect(invoke).not.toHaveBeenCalledWith('chat_resume', expect.anything())
+  })
+
+  it('settles the rejoined run when its completion arrives while the thread loads', async () => {
+    const history = deferred()
+    const invoke = vi.fn((command) => {
+      if (command === 'chat_thread_open') return history.promise
+      if (command === 'chat_thread_summaries') return Promise.resolve({ summaries: [{ threadId: 'thread-2' }], nextCursor: null })
+      if (command === 'chat_current_thread') return Promise.resolve('thread-2')
+      return Promise.resolve()
+    })
+    const context = setup(invoke)
+    await context.start()
+
+    const opening = context.controller.openThread('thread-2')
+    await vi.waitFor(() => expect(invoke).toHaveBeenCalledWith('chat_thread_open', expect.anything()))
+    context.event({ runId: 'run-2', type: 'completed', receipt: { route: 'local' } })
+    history.resolve({ entries: [{ runId: 'run-2', phase: 'streaming', text: 'Half an answer', prompt: 'Second question', receipt: null, toolActivity: [] }], nextCursor: null })
+    await opening
+
+    expect(context.messages().at(-1).run).toMatchObject({ id: 'run-2', phase: 'complete', text: 'Half an answer', receipt: { route: 'local' } })
+    expect(context.announced()).toMatchObject({ id: 'run-2', phase: 'complete' })
+    expect(context.onActive).toHaveBeenLastCalledWith(null)
+    expect(context.active()).toBeNull()
+    await vi.waitFor(() => expect(invoke).toHaveBeenCalledWith('chat_current_thread'))
+    expect(invoke).not.toHaveBeenCalledWith('chat_submit', expect.anything())
+    expect(invoke).not.toHaveBeenCalledWith('chat_resume', expect.anything())
+  })
+
+  it('carries a delta that lands while the thread loads over a live transcript', async () => {
+    const history = deferred()
+    const invoke = vi.fn((command) => command === 'chat_thread_open' ? history.promise : Promise.resolve())
+    const context = setup(invoke)
+    await context.start()
+    context.setMessages([{ role: 'assistant', run: { id: 'run-2', phase: 'streaming', text: 'Half an ans', receipt: null, toolActivity: [] } }])
+
+    const opening = context.controller.openThread('thread-2')
+    await vi.waitFor(() => expect(invoke).toHaveBeenCalledWith('chat_thread_open', expect.anything()))
+    context.event({ runId: 'run-2', type: 'text-delta', text: 'wer' })
+    history.resolve({ entries: [{ runId: 'run-2', phase: 'streaming', text: 'Half an ans', prompt: 'Second question', receipt: null, toolActivity: [] }], nextCursor: null })
+    await opening
+
+    expect(context.messages().at(-1).run).toMatchObject({ id: 'run-2', phase: 'streaming', text: 'Half an answer' })
+    expect(context.active()).toMatchObject({ id: 'run-2', phase: 'streaming', text: 'Half an answer' })
+    expect(invoke).not.toHaveBeenCalledWith('chat_submit', expect.anything())
+    expect(invoke).not.toHaveBeenCalledWith('chat_resume', expect.anything())
+  })
+
+  it('settles the rejoined run when its completion lands over a live transcript', async () => {
+    const history = deferred()
+    const invoke = vi.fn((command) => {
+      if (command === 'chat_thread_open') return history.promise
+      if (command === 'chat_thread_summaries') return Promise.resolve({ summaries: [{ threadId: 'thread-2' }], nextCursor: null })
+      if (command === 'chat_current_thread') return Promise.resolve('thread-2')
+      return Promise.resolve()
+    })
+    const context = setup(invoke)
+    await context.start()
+    context.setMessages([{ role: 'assistant', run: { id: 'run-2', phase: 'streaming', text: 'Half an answer', receipt: null, toolActivity: [] } }])
+
+    const opening = context.controller.openThread('thread-2')
+    await vi.waitFor(() => expect(invoke).toHaveBeenCalledWith('chat_thread_open', expect.anything()))
+    context.event({ runId: 'run-2', type: 'completed', receipt: { route: 'local' } })
+    history.resolve({ entries: [{ runId: 'run-2', phase: 'streaming', text: 'Half an answer', prompt: 'Second question', receipt: null, toolActivity: [] }], nextCursor: null })
+    await opening
+
+    expect(context.messages().at(-1).run).toMatchObject({ id: 'run-2', phase: 'complete', text: 'Half an answer', receipt: { route: 'local' } })
+    expect(context.onActive).toHaveBeenLastCalledWith(null)
+    expect(context.active()).toBeNull()
+    await vi.waitFor(() => expect(invoke).toHaveBeenCalledWith('chat_current_thread'))
+    expect(invoke).not.toHaveBeenCalledWith('chat_submit', expect.anything())
+    expect(invoke).not.toHaveBeenCalledWith('chat_resume', expect.anything())
   })
 
   it('selects another thread and publishes it only after every page loads', async () => {
