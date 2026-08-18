@@ -1465,7 +1465,10 @@ mod linux {
     #[derive(Clone, Debug, Default)]
     pub struct DesktopClientHolder {
         inner: Arc<(Mutex<Option<DesktopClient>>, Condvar)>,
-        connected_version: Arc<Mutex<Option<String>>>,
+        /// Mirrors the held client's welcome version. Readers such as the
+        /// disconnect observer run while the client lock is held, so they read
+        /// the version here instead of locking the client again.
+        runtime_version: Arc<Mutex<Option<String>>>,
     }
 
     impl DesktopClientHolder {
@@ -1473,8 +1476,8 @@ mod linux {
             Self::default()
         }
 
-        pub fn connected_version(&self) -> Option<String> {
-            self.connected_version
+        pub fn runtime_version(&self) -> Option<String> {
+            self.runtime_version
                 .lock()
                 .unwrap_or_else(|error| error.into_inner())
                 .clone()
@@ -1649,7 +1652,7 @@ mod linux {
             if !matches!(&result, Err(ClientError::RuntimeUpgradePending)) && result.is_err() {
                 *client = None;
                 *self
-                    .connected_version
+                    .runtime_version
                     .lock()
                     .unwrap_or_else(|error| error.into_inner()) = None;
                 wake.notify_all();
@@ -2668,7 +2671,7 @@ mod linux {
                     let (held, wake) = &*holder.inner;
                     *held.lock().unwrap_or_else(|error| error.into_inner()) = Some(client);
                     *holder
-                        .connected_version
+                        .runtime_version
                         .lock()
                         .unwrap_or_else(|error| error.into_inner()) = Some(runtime_version);
                     *notification = Some(std::thread::current().id());
@@ -2696,7 +2699,7 @@ mod linux {
                         .unwrap_or_else(|error| error.into_inner());
                     *connection = None;
                     *holder
-                        .connected_version
+                        .runtime_version
                         .lock()
                         .unwrap_or_else(|error| error.into_inner()) = None;
                     observe(false);
@@ -3532,7 +3535,7 @@ impl DesktopClientHolder {
         Self
     }
 
-    pub fn connected_version(&self) -> Option<String> {
+    pub fn runtime_version(&self) -> Option<String> {
         None
     }
 

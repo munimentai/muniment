@@ -64,12 +64,14 @@ use tauri::{Emitter, Manager};
 #[cfg(target_os = "linux")]
 use uuid::Uuid;
 
+/// Matches the `muniment-runtime` version in `src-tauri/runtime/Cargo.toml`.
+/// Raise this constant when a new run needs a newer runtime.
 #[cfg(target_os = "linux")]
 pub(crate) const MINIMUM_COMPATIBLE_RUNTIME_VERSION: &str = "0.0.1";
 
 #[cfg(target_os = "linux")]
 pub(crate) fn runtime_upgrade_pending(client: &DesktopClientHolder) -> bool {
-    runtime_version_upgrade_pending(client.connected_version().as_deref())
+    runtime_version_upgrade_pending(client.runtime_version().as_deref())
 }
 
 #[cfg(target_os = "linux")]
@@ -452,6 +454,10 @@ impl AttachCompanionState {
             AttachListenerLifecycle::Failed(failure) => Some(failure),
             _ => None,
         };
+        let connected = *self
+            .connected
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         AttachListenerStatus {
             started: lifecycle == AttachListenerLifecycle::Listening,
             failure: failure.map(|failure| match failure {
@@ -470,18 +476,12 @@ impl AttachCompanionState {
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .is_some(),
-            connected: *self
-                .connected
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner),
+            connected,
             chat_events_connected: *self
                 .chat_events_connected
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner),
-            runtime_upgrade_pending: *self
-                .connected
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
+            runtime_upgrade_pending: connected
                 && runtime_upgrade_pending(&self.desktop_client_holder),
         }
     }
@@ -2489,6 +2489,23 @@ mod tests {
             MINIMUM_COMPATIBLE_RUNTIME_VERSION
         )));
         assert!(!runtime_version_upgrade_pending(Some("0.0.2")));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn attach_listener_status_reports_the_runtime_upgrade_hold_while_connected() {
+        let state = AttachCompanionState::default();
+        state.record_listener_started();
+
+        state.record_connected(true);
+        let held = state.listener_status();
+        assert!(held.connected);
+        assert!(held.runtime_upgrade_pending);
+
+        state.record_connected(false);
+        let released = state.listener_status();
+        assert!(!released.connected);
+        assert!(!released.runtime_upgrade_pending);
     }
 
     #[cfg(target_os = "linux")]
