@@ -138,12 +138,17 @@ impl RuntimeAttachState {
 
     /// Applies the retention choice currently recorded for this profile.
     pub fn apply_recorded_retention(&self) -> Result<(), String> {
-        muniment_core::retention_record::apply_recorded_retention(
-            &self.config_directory,
-            |max_age_seconds| {
-                crate::service::apply_retention(Arc::clone(&self.storage), max_age_seconds)
-            },
-        )
-        .map(|_| ())
+        apply_recorded_retention(&self.config_directory, &self.storage)
     }
+}
+
+/// Re-reads the recorded retention choice and applies its age limit.
+pub(crate) fn apply_recorded_retention(
+    config_directory: &Path,
+    storage: &muniment_core::run_events::SharedStorage,
+) -> Result<(), String> {
+    muniment_core::retention_record::apply_recorded_retention(config_directory, |max_age_seconds| {
+        crate::service::apply_retention(Arc::clone(storage), max_age_seconds)
+    })
+    .map(|_| ())
 }
