@@ -657,3 +657,33 @@ protocol. On Linux, another OS user cannot signal the process or control its
 `systemd --user` manager, and the owner-only endpoint rejects that user's
 connection. An administrator may replace the installed package, but package
 authority does not grant attach or runtime authority.
+
+## Amendment – 2026-08-18: desktop run rejoin
+
+The Linux cutover lets `muniment-runtime` continue a run after the desktop
+window closes. A relaunched desktop then opens a thread whose newest run still
+executes. The desktop rejoins that run. It does not treat the thread as idle.
+
+`projection_phase` answers `thinking`, `streaming`, or `pending-permission` for
+an unsettled run. On thread open, the desktop takes the newest unsettled run in
+that thread as its active run. Where the thread holds no unsettled run, the
+desktop leaves the active run null, as it does today.
+
+A rejoined run keeps its recorded prompt, text, tool activity, and pending
+permission gate. The desktop renders those recorded values as the starting state
+of the run. Further chat events reach that run by run id, so the existing
+chat-event match carries the rejoined run forward.
+
+The desktop starts no prompt, resume, or other execution for a rejoined run. The
+runtime already drives it. The desktop offers the same stop, steer, and
+follow-up controls that it offers a run it started. The composer, the thread
+switch, and the thread delete follow the existing active-run rules.
+
+`projection_phase` answers `complete`, `cancelled`, `failed`, or `interrupted`
+for a settled run. A settled run never rejoins. An `interrupted` run keeps the
+existing resume control on its history entry.
+
+Where the desktop owns the profile journal, `reconcile_interrupted_runs` settles
+every unfinished run at open. That path meets no unsettled run, so this rule
+changes nothing on it. The rule governs only the path where the runtime owns
+the journal.
