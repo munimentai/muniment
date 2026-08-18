@@ -64,6 +64,30 @@ use tauri::{Emitter, Manager};
 #[cfg(target_os = "linux")]
 use uuid::Uuid;
 
+/// Matches the `muniment-runtime` version in `src-tauri/runtime/Cargo.toml`.
+/// Raise this constant when a new run needs a newer runtime.
+#[cfg(target_os = "linux")]
+pub(crate) const MINIMUM_COMPATIBLE_RUNTIME_VERSION: &str = "0.0.1";
+
+#[cfg(target_os = "linux")]
+pub(crate) fn runtime_upgrade_pending(client: &DesktopClientHolder) -> bool {
+    runtime_version_upgrade_pending(client.runtime_version().as_deref())
+}
+
+#[cfg(target_os = "linux")]
+pub(crate) fn runtime_version_compatible(version: &str) -> bool {
+    !runtime_version_upgrade_pending(Some(version))
+}
+
+#[cfg(target_os = "linux")]
+fn runtime_version_upgrade_pending(connected_version: Option<&str>) -> bool {
+    let minimum = semver::Version::parse(MINIMUM_COMPATIBLE_RUNTIME_VERSION)
+        .expect("minimum compatible runtime version must be valid");
+    connected_version
+        .and_then(|version| semver::Version::parse(version).ok())
+        .map_or(true, |version| version < minimum)
+}
+
 #[cfg(target_os = "linux")]
 fn decide_migration_control(
     peer_result: Result<(), PeerAuthorityError>,
@@ -235,6 +259,7 @@ pub struct AttachListenerStatus {
     supervisor_running: bool,
     connected: bool,
     chat_events_connected: bool,
+    runtime_upgrade_pending: bool,
 }
 
 #[cfg(target_os = "linux")]
@@ -429,6 +454,10 @@ impl AttachCompanionState {
             AttachListenerLifecycle::Failed(failure) => Some(failure),
             _ => None,
         };
+        let connected = *self
+            .connected
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         AttachListenerStatus {
             started: lifecycle == AttachListenerLifecycle::Listening,
             failure: failure.map(|failure| match failure {
@@ -447,14 +476,13 @@ impl AttachCompanionState {
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .is_some(),
-            connected: *self
-                .connected
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner),
+            connected,
             chat_events_connected: *self
                 .chat_events_connected
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner),
+            runtime_upgrade_pending: connected
+                && runtime_upgrade_pending(&self.desktop_client_holder),
         }
     }
 
@@ -777,6 +805,7 @@ pub fn attach_listener_status(
             connected: false,
             chat_events_connected: false,
             supervisor_running: false,
+            runtime_upgrade_pending: false,
         }
     }
 }
@@ -1864,6 +1893,7 @@ mod tests {
                 supervisor_running: false,
                 connected: false,
                 chat_events_connected: false,
+                runtime_upgrade_pending: false,
             }
         );
         std::fs::remove_dir_all(runtime).unwrap();
@@ -2451,6 +2481,35 @@ mod tests {
 
     #[cfg(target_os = "linux")]
     #[test]
+    fn runtime_version_hold_covers_older_and_invalid_versions() {
+        assert!(runtime_version_upgrade_pending(Some("0.0.0")));
+        assert!(runtime_version_upgrade_pending(Some("invalid")));
+        assert!(runtime_version_upgrade_pending(None));
+        assert!(!runtime_version_upgrade_pending(Some(
+            MINIMUM_COMPATIBLE_RUNTIME_VERSION
+        )));
+        assert!(!runtime_version_upgrade_pending(Some("0.0.2")));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn attach_listener_status_reports_the_runtime_upgrade_hold_while_connected() {
+        let state = AttachCompanionState::default();
+        state.record_listener_started();
+
+        state.record_connected(true);
+        let held = state.listener_status();
+        assert!(held.connected);
+        assert!(held.runtime_upgrade_pending);
+
+        state.record_connected(false);
+        let released = state.listener_status();
+        assert!(!released.connected);
+        assert!(!released.runtime_upgrade_pending);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
     fn attach_listener_status_reports_started_and_each_start_failure() {
         let state = AttachCompanionState::default();
 
@@ -2471,6 +2530,7 @@ mod tests {
                     supervisor_running: false,
                     connected: false,
                     chat_events_connected: false,
+                    runtime_upgrade_pending: false,
                 }
             );
         }
@@ -2487,6 +2547,7 @@ mod tests {
                 supervisor_running: false,
                 connected: false,
                 chat_events_connected: false,
+                runtime_upgrade_pending: false,
             }
         );
 
@@ -2506,6 +2567,7 @@ mod tests {
                 supervisor_running: false,
                 connected: false,
                 chat_events_connected: false,
+                runtime_upgrade_pending: false,
             }
         );
 
@@ -2521,6 +2583,7 @@ mod tests {
                 supervisor_running: false,
                 connected: false,
                 chat_events_connected: false,
+                runtime_upgrade_pending: false,
             }
         );
     }
@@ -2654,6 +2717,7 @@ mod tests {
                 supervisor_running: false,
                 connected: false,
                 chat_events_connected: false,
+                runtime_upgrade_pending: false,
             }
         );
         assert_state_works(&app);
@@ -2678,6 +2742,7 @@ mod tests {
                 supervisor_running: false,
                 connected: false,
                 chat_events_connected: false,
+                runtime_upgrade_pending: false,
             }
         );
         assert_state_works(&app);
