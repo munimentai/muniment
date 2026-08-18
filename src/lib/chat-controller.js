@@ -1,4 +1,4 @@
-import { applyBufferedChatEvents, applyChatEvent, historyMessages, settledPhases } from './chat-state.js'
+import { applyBufferedChatEvents, applyChatEvent, historyMessages, settledPhases, unsettledRun } from './chat-state.js'
 
 const historyPageCap = 100
 const historyPageLimit = 100
@@ -187,11 +187,18 @@ export function createChatController({
         cursor = result.nextCursor
       }
       if (destroyed) return
+      const published = historyMessages(history)
+      // The runtime keeps driving an unsettled run while the window is away, so
+      // the desktop rejoins that run instead of starting one (ADR 0012, desktop
+      // run rejoin). handleEvent carries it forward by run id from here.
+      const rejoined = unsettledRun(published)
       onHistoryStart()
       onAnnounce(null)
       onThreadSelected(threadId)
       onFreshThread(false)
-      publishMessages(historyMessages(history))
+      publishMessages(published)
+      onActive(rejoined)
+      if (rejoined) onAnnounce(rejoined)
       onHistoryLoaded()
       onFollow()
       onHistoryError('')

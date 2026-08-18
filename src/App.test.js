@@ -3817,7 +3817,7 @@ describe('thread announcements', () => {
     signedIn([{ runId: 'run-live', phase: 'streaming', text: 'Half an', prompt: 'A question', receipt: null, toolActivity: [] }])
     expect(await screen.findByText('Half an')).toBeInTheDocument()
     const region = screen.getByTestId('run-announcement')
-    expect(region.textContent).toBe('')
+    await waitFor(() => expect(region).toHaveTextContent('Generating a reply.'))
     await waitFor(() => expect(chatListener).toBeTypeOf('function'))
     const drain = watch(region)
 
@@ -3825,6 +3825,14 @@ describe('thread announcements', () => {
 
     await waitFor(() => expect(region).toHaveTextContent('Reply complete. Half an answer'))
     expect(drain()).toHaveLength(1)
+  })
+
+  it('offers a rejoined reply the controls of a reply this desktop started', async () => {
+    signedIn([{ runId: 'run-live', phase: 'streaming', text: 'Half an', prompt: 'A question', receipt: null, toolActivity: [] }])
+
+    expect(await screen.findByRole('button', { name: 'Stop' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Queue follow-up' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Add files' })).not.toBeInTheDocument()
   })
 
   it('stays silent when a stray event lands on an already settled restored run', async () => {
