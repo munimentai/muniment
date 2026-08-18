@@ -34,6 +34,31 @@ const historyFixtures = {
       resumable: true,
     },
   ],
+  'in-flight': [
+    {
+      runId: 'probe-settled',
+      prompt: 'List the lease documents.',
+      phase: 'complete',
+      text: 'The archive holds three leases: Northwind, Ridgeway, and Halden.',
+      receipt: {
+        route: 'analysis/low',
+        model: 'pi-2',
+        cost: '$0.004',
+        time: '1.8s',
+      },
+      toolActivity: [{ effectId: 'probe-list', displayName: 'List folder', status: 'completed' }],
+      resumable: false,
+    },
+    {
+      runId: 'probe-in-flight',
+      prompt: 'Compare the renewal clauses across the three leases.',
+      phase: 'streaming',
+      text: 'Northwind renews for one year unless either party gives 60 days notice. Ridgeway carries the same window, and Halden',
+      receipt: null,
+      toolActivity: [{ effectId: 'probe-compare', displayName: 'Read ridgeway.pdf', status: 'running' }],
+      resumable: false,
+    },
+  ],
   markdown: [
     {
       runId: 'probe-markdown',
