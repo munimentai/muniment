@@ -191,18 +191,30 @@ export function createChatController({
       // The runtime keeps driving an unsettled run while the window is away, so
       // the desktop rejoins that run instead of starting one (ADR 0012, desktop
       // run rejoin). handleEvent carries it forward by run id from here.
-      const rejoined = unsettledRun(published)
+      const recorded = unsettledRun(published)
+      // Every event for that run reached handleEvent before any message carried
+      // its id, so the pages loaded over a growing buffer. The recorded state is
+      // stale by exactly those events, and only this site can apply them.
+      const rejoined = recorded && applyBufferedChatEvents(recorded, buffered.get(recorded.id) ?? [])
+      if (recorded) buffered.delete(recorded.id)
+      const settled = !!rejoined && settledPhases.has(rejoined.phase)
       onHistoryStart()
       onAnnounce(null)
       onThreadSelected(threadId)
       onFreshThread(false)
-      publishMessages(published)
-      onActive(rejoined)
+      publishMessages(rejoined
+        ? published.map((message) => message.run?.id === rejoined.id ? { ...message, run: rejoined } : message)
+        : published)
+      onActive(settled ? null : rejoined)
       if (rejoined) onAnnounce(rejoined)
       onHistoryLoaded()
       onFollow()
       onHistoryError('')
       switchBlocked = false
+      // The buffer can hold the whole run, so a rejoin can settle at once. The
+      // refresh stays unawaited because this call already bumped the refresh
+      // sequence, and an awaited one would reorder onThreadSelected.
+      if (settled) void refreshThreads()
     } catch (_) {
       if (!destroyed) {
         if (wasBlocked) {

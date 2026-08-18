@@ -3827,6 +3827,31 @@ describe('thread announcements', () => {
     expect(drain()).toHaveLength(1)
   })
 
+  it('rejoins the run again after a sign-out and a sign-in', async () => {
+    let authed = true
+    let text = 'Half an'
+    invoke.mockImplementation(async (command) => {
+      if (command === 'auth_status') return { signed_in: authed, subject: authed ? 'user-a' : null }
+      if (command === 'auth_sign_in') { authed = true; return { signed_in: true, subject: 'user-a' } }
+      if (command === 'auth_sign_out') { authed = false; return { signed_in: false, subject: null } }
+      if (command === 'chat_thread_open') return [{ runId: 'run-live', phase: 'streaming', text, prompt: 'A question', receipt: null, toolActivity: [] }]
+      if (command === 'auth_entitlement_snapshot') return snapshot()
+      if (command === 'auth_devices') return []
+      throw new Error(`unexpected command: ${command}`)
+    })
+    render(App)
+    expect(await screen.findByRole('button', { name: 'Stop' })).toBeInTheDocument()
+
+    await fireEvent.click(screen.getByRole('button', { name: /Alice/i }))
+    await fireEvent.click(screen.getByRole('button', { name: 'Sign out' }))
+    // The run kept streaming while the window was signed out.
+    text = 'Half an answer'
+    await fireEvent.click(await screen.findByRole('button', { name: 'Sign in' }))
+
+    expect(await screen.findByText('Half an answer')).toBeInTheDocument()
+    expect(await screen.findByRole('button', { name: 'Stop' })).toBeInTheDocument()
+  })
+
   it('offers a rejoined reply the controls of a reply this desktop started', async () => {
     signedIn([{ runId: 'run-live', phase: 'streaming', text: 'Half an', prompt: 'A question', receipt: null, toolActivity: [] }])
 

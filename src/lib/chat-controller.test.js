@@ -744,6 +744,51 @@ describe('chat controller', () => {
     expect(invoke).not.toHaveBeenCalledWith('chat_resume', expect.anything())
   })
 
+  it('carries a delta that arrives while the rejoined thread loads', async () => {
+    const history = deferred()
+    const invoke = vi.fn((command) => command === 'chat_thread_open' ? history.promise : Promise.resolve())
+    const context = setup(invoke)
+    await context.start()
+
+    const opening = context.controller.openThread('thread-2')
+    await vi.waitFor(() => expect(invoke).toHaveBeenCalledWith('chat_thread_open', expect.anything()))
+    context.event({ runId: 'run-2', type: 'text-delta', text: 'wer' })
+    history.resolve({ entries: [{ runId: 'run-2', phase: 'streaming', text: 'Half an ans', prompt: 'Second question', receipt: null, toolActivity: [] }], nextCursor: null })
+    await opening
+
+    expect(context.messages().at(-1).run).toMatchObject({ id: 'run-2', phase: 'streaming', text: 'Half an answer' })
+    expect(context.active()).toMatchObject({ id: 'run-2', phase: 'streaming', text: 'Half an answer' })
+    expect(context.announced()).toMatchObject({ id: 'run-2', text: 'Half an answer' })
+    expect(invoke).not.toHaveBeenCalledWith('chat_submit', expect.anything())
+    expect(invoke).not.toHaveBeenCalledWith('chat_resume', expect.anything())
+  })
+
+  it('settles the rejoined run when its completion arrives while the thread loads', async () => {
+    const history = deferred()
+    const invoke = vi.fn((command) => {
+      if (command === 'chat_thread_open') return history.promise
+      if (command === 'chat_thread_summaries') return Promise.resolve({ summaries: [{ threadId: 'thread-2' }], nextCursor: null })
+      if (command === 'chat_current_thread') return Promise.resolve('thread-2')
+      return Promise.resolve()
+    })
+    const context = setup(invoke)
+    await context.start()
+
+    const opening = context.controller.openThread('thread-2')
+    await vi.waitFor(() => expect(invoke).toHaveBeenCalledWith('chat_thread_open', expect.anything()))
+    context.event({ runId: 'run-2', type: 'completed', receipt: { route: 'local' } })
+    history.resolve({ entries: [{ runId: 'run-2', phase: 'streaming', text: 'Half an answer', prompt: 'Second question', receipt: null, toolActivity: [] }], nextCursor: null })
+    await opening
+
+    expect(context.messages().at(-1).run).toMatchObject({ id: 'run-2', phase: 'complete', text: 'Half an answer', receipt: { route: 'local' } })
+    expect(context.announced()).toMatchObject({ id: 'run-2', phase: 'complete' })
+    expect(context.onActive).toHaveBeenLastCalledWith(null)
+    expect(context.active()).toBeNull()
+    await vi.waitFor(() => expect(invoke).toHaveBeenCalledWith('chat_current_thread'))
+    expect(invoke).not.toHaveBeenCalledWith('chat_submit', expect.anything())
+    expect(invoke).not.toHaveBeenCalledWith('chat_resume', expect.anything())
+  })
+
   it('selects another thread and publishes it only after every page loads', async () => {
     const previous = [{ role: 'user', text: 'Current transcript' }]
     const onThreadSelected = vi.fn()
