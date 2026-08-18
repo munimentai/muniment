@@ -6,6 +6,23 @@ import { homePathMatches } from '../support/home-path.mjs'
 const FOLDER_DIALOG_WAIT_SECONDS = 30
 const FOLDER_DIALOG_TITLE = '(Select|Open|Choose|Pick).*([Ff]older|[Dd]irectory|[Ff]ile)'
 
+// The JUnit report is the one diagnostic that survives a failed artifact
+// upload. A wait that runs out names the desktop client connection and the
+// rendered shell in its own message.
+async function shellState() {
+  let connection = 'unavailable'
+  try {
+    connection = JSON.stringify(await browser.execute(async () => (
+      window.__TAURI__.core.invoke('attach_listener_status')
+    ))) ?? 'unavailable'
+  } catch {}
+  let rendered = 'unavailable'
+  try {
+    rendered = (await (await $('main')).getText()).replace(/\s+/g, ' ').slice(0, 300) || 'empty'
+  } catch {}
+  return `desktop client status: ${connection}. shell: ${rendered}`
+}
+
 describe('installed nightly model-ready onboarding', () => {
   it('chooses an isolated Home and scaffolds its README files', async () => {
     const home = process.env.MUNIMENT_E2E_HOME_PATH
@@ -66,7 +83,16 @@ describe('installed nightly model-ready onboarding', () => {
     const skipImport = await $('button=Continue without importing')
     await skipImport.waitForDisplayed()
     await skipImport.click()
-    await (await $('button=Sign in')).waitForDisplayed()
+    const signedOut = await $('button=Sign in')
+    // The installed runtime answers the session, so this screen waits on the
+    // desktop client connection. Report that connection when the wait runs out.
+    try {
+      await signedOut.waitForDisplayed({
+        timeoutMsg: 'the signed-out screen did not appear after onboarding',
+      })
+    } catch (waitError) {
+      throw new Error(`${waitError.message} ${await shellState()}`)
+    }
 
     for (const directory of ['memory', 'agents', 'projects', 'sessions']) {
       expect(await readFile(path.join(home, directory, 'README.md'), 'utf8')).toContain(`# ${directory[0].toUpperCase()}${directory.slice(1)}`)
