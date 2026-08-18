@@ -446,18 +446,20 @@ operation while the runtime drains, `UpgradeWatch`
 inode identity each second, and `main` exits with status 75 on the quiesced
 refresh so `Restart=on-failure` starts the new payload. The desktop half is
 built too (MUNIDESK-1350, 1351, 1352). `DesktopClientHolder`
-(`src-tauri/attach/src/client.rs:1635`) records the welcome version and answers
-`RuntimeUpgradePending` from `with_compatible_client` before it sends a run
-operation, the four run commands hold while the runtime is older, and
-`src/App.svelte:1106` shows the pending upgrade in the shell.
+(`src-tauri/attach/src/client.rs:1466`) records the welcome version.
+`with_compatible_client` (`:1636`) answers `RuntimeUpgradePending` before it
+sends a run operation, so the four run commands hold while the runtime is
+older. `runtimeUpgradePending` (`src/App.svelte:855`) holds send, resume, and
+queue in the shell, and it shows the pending upgrade notice.
 
-MEASURED 2026-08-18 (eighty-fifth wave, planner, read the shipped unit beside
-the upgrade-refresh exit) — the runtime unit states no restart backoff.
-`src-tauri/packaging/muniment-runtime.service` carries `Restart=on-failure`
-alone, so it takes the `systemd` defaults of a 100ms delay and five starts in
-10 seconds. ADR 0012 asks for a bounded backoff, and the status-75 upgrade
-refresh shares that same window. The eighty-fifth wave files the unit
-slice.
+DONE 2026-08-18 — the runtime unit states its restart backoff (MUNIDESK-1364).
+`src-tauri/packaging/muniment-runtime.service` carries `RestartSec=5s` under
+`[Service]`, and `StartLimitIntervalSec=300s` with `StartLimitBurst=5` under
+`[Unit]`. The unit no longer takes the `systemd` defaults of a 100ms delay and
+five starts in 10 seconds. A crash loop now reaches that limit in about twenty
+seconds and leaves the unit failed, which is the needs-attention state ADR 0012
+asks for. The status-75 upgrade refresh spends one of the five starts
+(`docs/linux-packages.md`).
 
 DONE 2026-08-17 — the installed Linux smoke drives the runtime-owned topology
 (MUNIDESK-1339). `test/e2e/runner/linux.sh` starts the runtime service before
@@ -534,58 +536,57 @@ service start would exceed that parity and spend a network call on every
 login. After a runtime restart, companion pairing waits for one run, which is
 the behavior the desktop has today.
 
-SEQUENCED 2026-08-18 (eighty-fifth wave) — the eighty-fourth-wave
-welcome-version and retention-propagation chains are all built (MUNIDESK-1350
-through 1354), so this wave takes the run-rejoin gap the Linux cutover opened.
-The chain names the rule in ADR 0012, gives `chat-state.js` the unsettled-run
-function, rejoins that run in `chat-controller.js`, bounds the chat-event
-buffer, and adds the probe fixture that shows the state. The wave files a sixth
-slice outside that chain. That slice gives the Linux runtime unit the bounded
-restart backoff ADR 0012 asks for. Remote Control stays
-gated: harness-spec §14.1 puts the relay leg on an outbound HTTPS session to
-`api.muniment.ai`, no muniment-cloud relay contract has published, and the
-desktop states remain pending owner mockup confirmation
+SEQUENCED 2026-08-18 (eighty-sixth wave) — the eighty-fifth-wave run-rejoin
+chain and its runtime-unit backoff slice are all built (MUNIDESK-1359 through
+1364). This wave takes the chat-event gap the rejoin chain left open. The first
+slice gives `chat-controller.js` a re-read that refreshes the open thread while
+a run is active. The second slice triggers that re-read when
+`chat_events_connected` turns true. Remote Control stays gated for three
+reasons. Harness-spec §14.1 puts the relay leg on an outbound HTTPS session to
+`api.muniment.ai`. No muniment-cloud relay contract has published. The desktop
+states remain pending owner mockup confirmation
 (`docs/design-reference/remote-control-ux.md`).
 
-MEASURED 2026-08-18 (eighty-fifth wave, planner, read `historyMessages` beside
-the runtime broadcast) — the desktop does not rejoin a run the runtime is still
-executing. `historyMessages` (`src/lib/chat-state.js:151`) turns each history
-entry into a message, and no caller reads an active run back out, so
-`openThread` (`src/lib/chat-controller.js:166`) leaves `active` null. Before the
-cutover a launch settled every unfinished run through
-`reconcile_interrupted_runs`, so the desktop never met a live one. The runtime
-now keeps the run after the desktop window closes, and `projection_phase`
-(`src-tauri/core/src/chat_view.rs:112`) answers `streaming`, `thinking`, or
-`pending-permission` for it. With `active` null the composer takes a second
-prompt, the sidebar allows a thread switch and a delete, and the transcript
-offers no Stop, steer, or follow-up control for the run in flight.
+DONE 2026-08-18 — the desktop rejoins a run the runtime is still executing
+(MUNIDESK-1359, 1360, 1361, 1363). The ADR 0012 desktop-run-rejoin amendment
+states the rule. `projection_phase` (`src-tauri/core/src/chat_view.rs:112`)
+answers `streaming`, `thinking`, or `pending-permission` for an unsettled run.
+`unsettledRun` (`src/lib/chat-state.js:165`) names the newest such run in a
+loaded transcript. `openThread` (`src/lib/chat-controller.js:184`) applies the
+buffered events to that run and publishes it through `onActive`.
+`test/probe/in-flight.html` renders the rejoined state. The eighty-fifth wave
+had measured `openThread` leaving `active` null. The composer then took a
+second prompt, and the run in flight carried no Stop, steer, or follow-up
+control.
 
-MEASURED 2026-08-18 (eighty-fifth wave, planner, read `handleEvent` beside
-`RuntimeAttachBoundaries::launch`) — the desktop's chat-event buffer grows
-without bound. `launch` (`src-tauri/runtime/src/attach_boundaries.rs:343`) sends
-every attach run's events through `RuntimeChatEventBroadcast`, and the desktop
-subscribes to all of them (`src-tauri/src/attach_service.rs:1144`).
-`handleEvent` (`src/lib/chat-controller.js:79`) stores every event whose run id
-is absent from the open thread. No path clears a buffered run this desktop did
-not start. The two deletes, `send` (`:335`) and `resume` (`:374`), fire only for
-a run this desktop launched. `cleanup` (`:405`) clears the whole map, and it
-runs at window close alone. A run from an ACP editor, the CLI, or a thread the
-user left therefore keeps its whole text-delta stream for the window's life.
+DONE 2026-08-18 — the desktop's chat-event buffer is bounded (MUNIDESK-1362).
+`launch` (`src-tauri/runtime/src/attach_boundaries.rs:343`) sends every attach
+run's events through `RuntimeChatEventBroadcast`, and the desktop subscribes to
+all of them (`src-tauri/src/attach_service.rs:1144`). `handleEvent`
+(`src/lib/chat-controller.js:92`) now holds an unknown run id only while a call
+waits for its run (`:100`). It drops the event otherwise. `releaseBuffer`
+(`:62`) clears the whole map when the last wait ends. The eighty-fifth wave had
+measured the buffer keeping every foreign run's text-delta stream for the
+window's life. No path cleared a buffered run this desktop did not start.
+`send` (`:377`) and `resume` (`:419`) delete only a run this desktop launched,
+and `cleanup` (`:452`) runs at window close alone.
 
 MEASURED 2026-08-18 (eighty-fifth wave, planner, read the broadcast beside the
-recovery re-read) — a chat-event gap leaves the open run's text short, and this
-lane files no slice yet. `RuntimeChatEventBroadcast::deliver`
-(`src-tauri/runtime/src/sink.rs:55`) drops a subscriber whose 256-event queue
-fills, `serve_chat_events_at` (`src-tauri/src/attach_service.rs:1144`)
-reconnects, and the desktop re-reads the thread only when
-`desktopClientStatus.connected` turns true (`src/App.svelte:657`). A
-`chat_events_connected` recovery triggers no re-read, so the run keeps whatever
-hole the gap left. The re-read also has to run while a run is active, which
-`openThread` refuses today, so it waits behind the rejoin chain.
+recovery re-read) — a chat-event gap leaves the open run's text short.
+`RuntimeChatEventBroadcast::deliver` (`src-tauri/runtime/src/sink.rs:55`) drops
+a subscriber whose 256-event queue fills, `serve_chat_events_at`
+(`src-tauri/src/attach_service.rs:1144`) reconnects, and the desktop re-reads
+the thread only when `desktopClientStatus.connected` turns true
+(`src/App.svelte:666`). A `chat_events_connected` recovery triggers no re-read,
+so the run keeps whatever hole the gap left. The rejoin chain cleared the
+dependency this entry had recorded. `openThread`
+(`src/lib/chat-controller.js:184`) still returns early while a run is active,
+so the re-read needs a path that refreshes an open thread in place. The
+eighty-sixth wave files that chain.
 
 NOT FILED 2026-08-18 (eighty-fifth wave) — the sidebar does not learn about a
 thread another client created. `refreshThreads`
-(`src/lib/chat-controller.js:58`) runs at load and when this desktop's own
+(`src/lib/chat-controller.js:71`) runs at load and when this desktop's own
 active run settles, so an ACP or CLI thread appears only after the next launch.
 Which events the chat broadcast owes a passive client is a contract call, and
 it is wider than one slice.
