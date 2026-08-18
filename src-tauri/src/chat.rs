@@ -78,10 +78,6 @@ use muniment_core::session_thread::SessionThread;
 
 #[cfg(target_os = "linux")]
 trait RunCommandClient {
-    fn runtime_upgrade_pending(&self) -> bool {
-        false
-    }
-
     fn run_submit(
         &self,
         text: &str,
@@ -102,29 +98,38 @@ trait RunCommandClient {
 
 #[cfg(target_os = "linux")]
 impl RunCommandClient for DesktopClientHolder {
-    fn runtime_upgrade_pending(&self) -> bool {
-        crate::attach_service::runtime_upgrade_pending(self)
-    }
-
     fn run_submit(
         &self,
         text: &str,
         files: &[String],
         thread_id: Option<&str>,
     ) -> Result<RunSubmitAccepted, ClientError> {
-        DesktopClientHolder::run_submit(self, text, files, thread_id)
+        self.run_submit_if_compatible(
+            text,
+            files,
+            thread_id,
+            crate::attach_service::runtime_version_compatible,
+        )
     }
 
     fn run_resume(&self, run_id: &str) -> Result<RunResumeAccepted, ClientError> {
-        DesktopClientHolder::run_resume(self, run_id)
+        self.run_resume_if_compatible(run_id, crate::attach_service::runtime_version_compatible)
     }
 
     fn run_steer(&self, run_id: &str, text: &str) -> Result<RunMessageAccepted, ClientError> {
-        DesktopClientHolder::run_steer(self, run_id, text)
+        self.run_steer_if_compatible(
+            run_id,
+            text,
+            crate::attach_service::runtime_version_compatible,
+        )
     }
 
     fn run_follow_up(&self, run_id: &str, text: &str) -> Result<RunMessageAccepted, ClientError> {
-        DesktopClientHolder::run_follow_up(self, run_id, text)
+        self.run_follow_up_if_compatible(
+            run_id,
+            text,
+            crate::attach_service::runtime_version_compatible,
+        )
     }
 
     fn run_cancel(&self, run_id: &str) -> Result<RunCancelAccepted, ClientError> {
@@ -176,9 +181,6 @@ where
     match session {
         RunCommandSession::NoSupervisor => local(files).await,
         RunCommandSession::Connected(client) => {
-            if client.runtime_upgrade_pending() {
-                return Err(auth::runtime_update_pending_error());
-            }
             let thread_id = state.session_thread.current(subject);
             let file_paths = files
                 .iter()
@@ -215,15 +217,10 @@ where
 {
     match session {
         RunCommandSession::NoSupervisor => local().await,
-        RunCommandSession::Connected(client) => {
-            if client.runtime_upgrade_pending() {
-                return Err(auth::runtime_update_pending_error());
-            }
-            client
-                .run_resume(run_id)
-                .map(resume_result)
-                .map_err(auth::desktop_client_error)
-        }
+        RunCommandSession::Connected(client) => client
+            .run_resume(run_id)
+            .map(resume_result)
+            .map_err(auth::desktop_client_error),
         RunCommandSession::Disconnected => Err(auth::background_service_error()),
     }
 }
@@ -266,17 +263,12 @@ fn handle_run_queue<C: RunCommandClient, L: FnOnce() -> Result<(), String>>(
 ) -> Result<(), String> {
     match session {
         RunCommandSession::NoSupervisor => local(),
-        RunCommandSession::Connected(client) => {
-            if client.runtime_upgrade_pending() {
-                return Err(auth::runtime_update_pending_error());
-            }
-            match delivery {
-                ChatDelivery::Steer => client.run_steer(run_id, message),
-                ChatDelivery::FollowUp => client.run_follow_up(run_id, message),
-            }
-            .map(|_| ())
-            .map_err(auth::desktop_client_error)
+        RunCommandSession::Connected(client) => match delivery {
+            ChatDelivery::Steer => client.run_steer(run_id, message),
+            ChatDelivery::FollowUp => client.run_follow_up(run_id, message),
         }
+        .map(|_| ())
+        .map_err(auth::desktop_client_error),
         RunCommandSession::Disconnected => Err(auth::background_service_error()),
     }
 }
@@ -1443,15 +1435,15 @@ mod tests {
 
     #[cfg(target_os = "linux")]
     impl RunCommandClient for FakeRunClient {
-        fn runtime_upgrade_pending(&self) -> bool {
-            self.1
-        }
         fn run_submit(
             &self,
             text: &str,
             files: &[String],
             thread_id: Option<&str>,
         ) -> Result<RunSubmitAccepted, ClientError> {
+            if self.1 {
+                return Err(ClientError::RuntimeUpgradePending);
+            }
             self.0.lock().unwrap().push(RunClientCall::Submit(
                 text.to_owned(),
                 files.to_vec(),
@@ -1467,6 +1459,9 @@ mod tests {
         }
 
         fn run_resume(&self, run_id: &str) -> Result<RunResumeAccepted, ClientError> {
+            if self.1 {
+                return Err(ClientError::RuntimeUpgradePending);
+            }
             self.0
                 .lock()
                 .unwrap()
@@ -1480,6 +1475,9 @@ mod tests {
         }
 
         fn run_steer(&self, run_id: &str, text: &str) -> Result<RunMessageAccepted, ClientError> {
+            if self.1 {
+                return Err(ClientError::RuntimeUpgradePending);
+            }
             self.0
                 .lock()
                 .unwrap()
@@ -1495,6 +1493,9 @@ mod tests {
             run_id: &str,
             text: &str,
         ) -> Result<RunMessageAccepted, ClientError> {
+            if self.1 {
+                return Err(ClientError::RuntimeUpgradePending);
+            }
             self.0.lock().unwrap().push(RunClientCall::FollowUp(
                 run_id.to_string(),
                 text.to_string(),

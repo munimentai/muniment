@@ -73,6 +73,11 @@ pub(crate) fn runtime_upgrade_pending(client: &DesktopClientHolder) -> bool {
 }
 
 #[cfg(target_os = "linux")]
+pub(crate) fn runtime_version_compatible(version: &str) -> bool {
+    !runtime_version_upgrade_pending(Some(version))
+}
+
+#[cfg(target_os = "linux")]
 fn runtime_version_upgrade_pending(connected_version: Option<&str>) -> bool {
     let minimum = semver::Version::parse(MINIMUM_COMPATIBLE_RUNTIME_VERSION)
         .expect("minimum compatible runtime version must be valid");
