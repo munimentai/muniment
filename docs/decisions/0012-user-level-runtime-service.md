@@ -687,3 +687,103 @@ Where the desktop owns the profile journal, `reconcile_interrupted_runs` settles
 every unfinished run at open. That path meets no unsettled run, so this rule
 changes nothing on it. The rule governs only the path where the runtime owns
 the journal.
+
+## Amendment – 2026-08-18: passive chat-event delivery
+
+### What a client receives for a run it did not start
+
+A chat-event subscriber receives every event of every run in its workspace. The
+runtime applies no filter for the client that started the run. The fourth
+tranche already feeds every run the service drives into the one per-profile
+broadcast. A subscriber therefore sees a run another client started exactly as
+it sees its own. A subscriber still receives only the events the runtime
+delivers after it subscribes. The journal, not the broadcast, carries the
+history before that point.
+
+The `submit_run` and `resume_run` boundaries that serve `run.submit` and
+`run.resume` break that rule today. Both pass an absent subscriber to
+`service::accept_prompt` and `service::resume_run`, so a run the desktop starts
+through the runtime reaches no subscriber. The slice passes the broadcast on
+those two boundaries, as the companion `launch` boundary already does.
+
+### Authorization
+
+The broadcast delivers an event only inside the workspace the signed grant
+names. `RuntimeChatEventBroadcast::deliver` takes the workspace of the run's
+resolved grant. It compares that value against the workspace the runtime
+recorded in its `SignedWorkspaceApproval`. A mismatch delivers nothing and
+keeps the subscription open. The broadcast delivers no event at all while the
+runtime holds no recorded workspace.
+
+The runtime reads the recorded workspace at delivery, not at subscribe. The
+2026-08-17 cutover admits the desktop client before the first run grant
+resolves, so a subscribe-time read would freeze an empty workspace on that
+connection. The first resolved run grant records the workspace before the run
+emits its first event. The desktop therefore receives that first run in full.
+
+`run.chat_events` stays a desktop-only operation. A companion session still
+receives `unauthorized`, because each event carries the unredacted `ChatEvent`
+value that the fourth tranche defined. A companion reads a run it did not start
+through the redacted ADR 0009 `run.event` stream instead.
+
+### How a passive client learns that the thread list changed
+
+Each broadcast event carries the thread id of its run. ADR 0016 makes new
+thread creation and its first run start one transaction, so every new thread
+produces chat events. A client that receives an event naming a thread its list
+does not hold refreshes the thread list. The sidebar then shows an ACP or CLI
+thread without a relaunch. A rename or a delete needs no signal, because
+`thread.rename` and `thread.delete` stay desktop-only operations.
+
+Three rules bound that delivery.
+
+The client refreshes once for each thread id it has not yet signaled, and not
+once for each event. A run emits an event for each streamed delta, so a
+per-event refresh would query the runtime on every token. The client marks the
+thread id when it signals, whether or not the refreshed page holds that thread.
+It keeps the signaled ids in an insertion-ordered set bounded at 256 entries and
+drops the oldest entry past that bound. The bound stops the same unbounded map
+that MUNIDESK-1362 removed from this handler.
+
+The client keeps at most one thread refresh in flight. It collapses every
+signal that arrives during a refresh into one follow-up refresh.
+
+The fourth tranche subscriber queue rule stands unchanged. Each subscription
+holds at most 256 events under `CHAT_EVENT_SUBSCRIBER_QUEUE_CAPACITY`. Delivery
+never blocks, and the runtime drops a subscription whose queue is full. A run
+never stalls on a subscriber. A dropped subscription loses its pending signals.
+The client refreshes the whole thread list when its next subscription opens, so
+that loss lasts one reconnect.
+
+### Operation and wire version
+
+This rule adds no attach operation and no wire version. The existing
+`run.chat_events` subscription already carries the `ChatEvent` body inside the
+current event envelope. The thread id joins that body as an optional field, and
+ADR 0009 already accepts an unknown optional field. An older desktop ignores the
+thread id and keeps today's behavior. An older runtime sends no thread id, so a
+newer desktop signals no refresh. The workspace stays inside the runtime,
+because the broadcast applies the filter before delivery.
+
+### Code sites for the implementation slice
+
+The later slice touches these sites:
+
+1. `ChatEvent` and `chat_event` (`src-tauri/core/src/run_events.rs`) carry the
+   optional thread id.
+2. `RuntimeChatEventSink::deliver` (`src-tauri/runtime/src/sink.rs`) stamps the
+   thread id of its own run.
+3. `RuntimeChatEventBroadcast::deliver` and its constructor (same file) apply
+   the workspace filter against the recorded `SignedWorkspaceApproval`.
+4. `launch`, `submit_run`, and `resume_run`
+   (`src-tauri/runtime/src/attach_boundaries.rs`) pass the run's thread id,
+   `grant.workspace`, and the broadcast into the sink.
+5. `RuntimeAttachState` (`src-tauri/runtime/src/attach_state.rs`) hands the
+   broadcast the recorded `SignedWorkspaceApproval`.
+6. `handleEvent` and `refreshThreads` (`src/lib/chat-controller.js`) hold the
+   signaled-thread set and the single-refresh rule.
+7. The golden fixtures in `src-tauri/attach/tests/protocol.rs` and
+   `src-tauri/core/tests/attach_desktop_client_session.rs` record the added
+   body field.
+
+This amendment changes no runtime code.
