@@ -1,6 +1,5 @@
-import { applyBufferedChatEvents, applyChatEvent, historyMessages } from './chat-state.js'
+import { applyBufferedChatEvents, applyChatEvent, historyMessages, settledPhases } from './chat-state.js'
 
-const settledPhases = new Set(['complete', 'cancelled', 'failed', 'interrupted'])
 const historyPageCap = 100
 const historyPageLimit = 100
 
