@@ -1183,14 +1183,73 @@ describe('chat controller', () => {
     expect(context.active()).toBeNull()
   })
 
-  it('reconciles resume buffering onto the newer live projection', async () => {
+  it('drops events for a run this window never started', async () => {
+    const submit = deferred()
+    const context = setup(vi.fn(() => submit.promise))
+    await context.start()
+
+    context.event({ runId: 'run-9', type: 'prompt-accepted' })
+    context.event({ runId: 'run-9', type: 'text-delta', text: 'Another' })
+    context.event({ runId: 'run-9', type: 'text-delta', text: ' surface' })
+    context.event({ runId: 'run-9', type: 'completed', receipt: { route: 'local' } })
+    const sending = context.controller.send()
+    submit.resolve({ runId: 'run-9' })
+    await sending
+
+    expect(context.messages().at(-1).run).toMatchObject({ id: 'run-9', phase: 'thinking', text: '', receipt: null })
+    expect(context.active()).toMatchObject({ id: 'run-9', phase: 'thinking' })
+  })
+
+  it('forgets events held for another run once the submission returns', async () => {
+    const first = deferred()
+    const second = deferred()
+    const invoke = vi.fn()
+      .mockImplementationOnce(() => first.promise)
+      .mockImplementationOnce(() => second.promise)
+    const context = setup(invoke)
+    await context.start()
+
+    const sending = context.controller.send()
+    context.event({ runId: 'run-9', type: 'text-delta', text: 'Another surface' })
+    first.resolve({ runId: 'run-1' })
+    await sending
+    context.setActive(null)
+    context.setDraft('Second question')
+    const resending = context.controller.send()
+    second.resolve({ runId: 'run-9' })
+    await resending
+
+    expect(context.messages().at(-1).run).toMatchObject({ id: 'run-9', phase: 'thinking', text: '' })
+  })
+
+  it('forgets events held for a run whose submission fails', async () => {
+    const first = deferred()
+    const second = deferred()
+    const invoke = vi.fn()
+      .mockImplementationOnce(() => first.promise)
+      .mockImplementationOnce(() => second.promise)
+    const context = setup(invoke)
+    await context.start()
+
+    const sending = context.controller.send()
+    context.event({ runId: 'run-1', type: 'text-delta', text: 'Held' })
+    first.reject('The message could not be sent.')
+    await sending
+    const resending = context.controller.send()
+    second.resolve({ runId: 'run-1' })
+    await resending
+
+    expect(context.messages().at(-1).run).toMatchObject({ id: 'run-1', phase: 'thinking', text: '' })
+  })
+
+  it('reconciles a resume onto the newer live projection', async () => {
     const resume = deferred()
     const context = setup(vi.fn((command) => command === 'chat_resume' ? resume.promise : undefined))
     await context.start()
-    context.event({ runId: 'run-1', type: 'prompt-accepted' })
     const interrupted = { id: 'run-1', phase: 'interrupted', text: '', resumable: true }
     context.setMessages([{ role: 'assistant', run: interrupted }])
     const resuming = context.controller.resume(interrupted)
+    context.event({ runId: 'run-1', type: 'prompt-accepted' })
     context.event({ runId: 'run-1', type: 'text-delta', text: 'Newer' })
     resume.resolve()
     await resuming
