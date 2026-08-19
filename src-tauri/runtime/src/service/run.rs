@@ -52,6 +52,7 @@ pub struct PromptLaunch {
     runtime_activity: RuntimeActivityRegistry,
     active: Arc<Mutex<Option<ActiveRun>>>,
     run_id: String,
+    thread_id: String,
     prompt: String,
     access_token: String,
     subject: Option<String>,
@@ -244,7 +245,7 @@ pub fn accept_prompt(
     let attachments = chat_attachments(&projection.attachments);
     let acceptance = PromptAcceptance {
         run_id: run_id.clone(),
-        thread_id,
+        thread_id: thread_id.clone(),
         attachments,
         committed_seq: prepared.0,
         accepted_at: accepted_time_now(),
@@ -257,6 +258,7 @@ pub fn accept_prompt(
         runtime_activity: runtime_activity.clone(),
         active,
         run_id,
+        thread_id,
         prompt,
         access_token,
         subject,
@@ -279,6 +281,7 @@ pub fn drive_prompt(launch: PromptLaunch) {
             &launch.profile_directory,
             launch.events,
             launch.memory_runtime.clone(),
+            launch.thread_id,
         )
         .with_pi_artifact(launch.pi_artifact.unwrap_or(PI_ARTIFACT)),
         launch.storage,
@@ -440,8 +443,13 @@ pub fn resume_run(
     )?;
     let (attempt, result) = std::sync::mpsc::channel();
     drive_resume(ResumeLaunch {
-        sink: RuntimeChatEventSink::with_target(profile_directory, events, memory_runtime.clone())
-            .with_pi_artifact(pi_artifact.unwrap_or(PI_ARTIFACT)),
+        sink: RuntimeChatEventSink::with_target(
+            profile_directory,
+            events,
+            memory_runtime.clone(),
+            thread_id,
+        )
+        .with_pi_artifact(pi_artifact.unwrap_or(PI_ARTIFACT)),
         storage,
         runtime,
         runtime_activity: runtime_activity.clone(),

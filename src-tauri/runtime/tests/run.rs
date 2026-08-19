@@ -533,6 +533,10 @@ fn resumes_an_interrupted_run_to_a_terminal_event() {
     assert!(accepted.committed_seq > 0);
     let event = events.recv_timeout(Duration::from_secs(10)).unwrap();
     assert_eq!(event.run_id, run_id);
+    assert_eq!(
+        event.thread_id.as_deref(),
+        Some(accepted.thread_id.as_str())
+    );
     server.join().unwrap();
 
     let storage = open_profile_storage(&profile).unwrap();
