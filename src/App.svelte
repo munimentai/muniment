@@ -229,10 +229,18 @@
   })
 
   // The notice decides its own visibility, so every status reaches it beside
-  // the field the rest of the shell reads.
+  // the field the rest of the shell reads. Both status paths call this one
+  // function, so the listener and the poll act alike.
   function applyDesktopClientStatus(status) {
+    // The runtime drops a chat-event subscriber whose queue fills, and the
+    // desktop resubscribes after a retry. No window saw the events inside that
+    // gap, so the shell reads the open thread again on the recovery. The first
+    // status compares against no earlier status, so it re-reads nothing.
+    const chatEventsRecovered = desktopClientStatus?.chat_events_connected === false
+      && status?.chat_events_connected === true
     desktopClientStatus = status
     backgroundServiceNotice.update(status)
+    if (chatEventsRecovered) void chatController.refreshOpenThread()
   }
 
   function toggleSidebar() {
