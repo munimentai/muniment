@@ -10,6 +10,7 @@ use muniment_core::run_start::RunAttachBoundaries;
 use muniment_core::session_thread::SessionThread;
 use muniment_runtime::{
     open_companion_registry, open_profile_storage, run_prompt, RuntimeAttachBoundaries,
+    RuntimeChatEventTarget,
 };
 
 mod common;
@@ -73,7 +74,7 @@ fn queued_message_reaches_a_live_runtime_run(
                 Vec::new(),
                 fixture_grant(),
                 Arc::clone(&active),
-                Some(subscriber),
+                RuntimeChatEventTarget::Subscriber(Some(subscriber)),
                 Some(descriptor),
             )
         });

@@ -19,7 +19,7 @@ use muniment_core::memory_index::ModelMemoryCapability;
 use muniment_core::memory_runtime::ApplicationMemoryRuntime;
 use muniment_core::permission_gate::ChatPermissionAnswer;
 use muniment_core::pi_execution::PiRuntime;
-use muniment_core::run_events::{ChatEvent, SharedStorage};
+use muniment_core::run_events::SharedStorage;
 use muniment_core::run_preparation::{
     prepare_new_run_in_thread_after_validation, prepare_new_run_with_session_thread,
     record_persistence_failure, OpenSelectedFile, SessionThreadStart,
@@ -30,12 +30,11 @@ use muniment_core::sidecar::pi_install::{PiArtifactDescriptor, PI_ARTIFACT};
 use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
-use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use super::runtime_provenance;
-use crate::RuntimeChatEventSink;
+use crate::{RuntimeChatEventSink, RuntimeChatEventTarget};
 
 pub struct PromptAcceptance {
     pub run_id: String,
@@ -62,7 +61,7 @@ pub struct PromptLaunch {
     adapter: Arc<Mutex<Option<Arc<muniment_core::sidecar::pi_chat::PiRunAdapter>>>>,
     permission_answers:
         Arc<Mutex<VecDeque<muniment_core::permission_gate::PendingPermissionAnswer>>>,
-    subscriber: Option<Sender<ChatEvent>>,
+    events: RuntimeChatEventTarget,
     pi_artifact: Option<PiArtifactDescriptor>,
     prepared: (u64, muniment_core::journal::reducer::ChatProjector),
 }
@@ -103,7 +102,7 @@ pub fn accept_prompt(
     files: Vec<OpenSelectedFile>,
     grant: ChatGrant,
     active: Arc<Mutex<Option<ActiveRun>>>,
-    subscriber: Option<Sender<ChatEvent>>,
+    events: RuntimeChatEventTarget,
     pi_artifact: Option<PiArtifactDescriptor>,
 ) -> Result<(PromptAcceptance, PromptLaunch), String> {
     let profile_directory = profile_directory.as_ref();
@@ -266,7 +265,7 @@ pub fn accept_prompt(
         transport,
         adapter,
         permission_answers,
-        subscriber,
+        events,
         pi_artifact,
         prepared,
     };
@@ -276,9 +275,9 @@ pub fn accept_prompt(
 /// Drives an accepted prompt to completion.
 pub fn drive_prompt(launch: PromptLaunch) {
     coordinate(
-        RuntimeChatEventSink::with_subscriber(
+        RuntimeChatEventSink::with_target(
             &launch.profile_directory,
-            launch.subscriber,
+            launch.events,
             launch.memory_runtime.clone(),
         )
         .with_pi_artifact(launch.pi_artifact.unwrap_or(PI_ARTIFACT)),
@@ -321,7 +320,7 @@ pub fn run_prompt(
     files: Vec<OpenSelectedFile>,
     grant: ChatGrant,
     active: Arc<Mutex<Option<ActiveRun>>>,
-    subscriber: Option<Sender<ChatEvent>>,
+    events: RuntimeChatEventTarget,
     pi_artifact: Option<PiArtifactDescriptor>,
 ) -> Result<(), String> {
     let (_, launch) = accept_prompt(
@@ -340,7 +339,7 @@ pub fn run_prompt(
         files,
         grant,
         active,
-        subscriber,
+        events,
         pi_artifact,
     )?;
     drive_prompt(launch);
@@ -394,7 +393,7 @@ pub fn resume_run(
     subject: Option<String>,
     grant: ChatGrant,
     active: Arc<Mutex<Option<ActiveRun>>>,
-    subscriber: Option<Sender<ChatEvent>>,
+    events: RuntimeChatEventTarget,
     pi_artifact: Option<PiArtifactDescriptor>,
 ) -> Result<(), String> {
     let profile_directory = profile_directory.as_ref();
@@ -441,12 +440,8 @@ pub fn resume_run(
     )?;
     let (attempt, result) = std::sync::mpsc::channel();
     drive_resume(ResumeLaunch {
-        sink: RuntimeChatEventSink::with_subscriber(
-            profile_directory,
-            subscriber,
-            memory_runtime.clone(),
-        )
-        .with_pi_artifact(pi_artifact.unwrap_or(PI_ARTIFACT)),
+        sink: RuntimeChatEventSink::with_target(profile_directory, events, memory_runtime.clone())
+            .with_pi_artifact(pi_artifact.unwrap_or(PI_ARTIFACT)),
         storage,
         runtime,
         runtime_activity: runtime_activity.clone(),

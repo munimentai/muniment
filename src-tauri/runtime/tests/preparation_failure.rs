@@ -2,7 +2,7 @@ use std::sync::{Arc, Mutex};
 
 use muniment_core::attach::RuntimeActivityRegistry;
 use muniment_core::journal::EventPayload;
-use muniment_runtime::{accept_prompt, open_profile_storage};
+use muniment_runtime::{accept_prompt, open_profile_storage, RuntimeChatEventTarget};
 
 mod common;
 use common::{fixture_grant, TemporaryProfile};
@@ -34,7 +34,7 @@ fn memory_session_failure_ends_the_prepared_run() {
         Vec::new(),
         fixture_grant(),
         Arc::clone(&active),
-        None,
+        RuntimeChatEventTarget::Subscriber(None),
         None,
     );
     let error = match result {

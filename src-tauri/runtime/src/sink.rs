@@ -100,8 +100,11 @@ fn remove_subscriber(shared: &Weak<RuntimeChatEventBroadcastShared>, id: u64) {
         .retain(|subscriber| subscriber.id != id);
 }
 
-enum RuntimeChatEventTarget {
+/// Names where one run sends its chat events.
+pub enum RuntimeChatEventTarget {
+    /// Sends to one caller-owned subscriber, or to nobody.
     Subscriber(Option<Sender<ChatEvent>>),
+    /// Fans out to every live subscriber of the shared broadcast.
     Broadcast(RuntimeChatEventBroadcast),
 }
 
@@ -118,12 +121,11 @@ impl RuntimeChatEventSink {
         broadcast: RuntimeChatEventBroadcast,
         memory_runtime: Arc<ApplicationMemoryRuntime>,
     ) -> Self {
-        Self {
-            profile: ChatProfile::new(profile_directory.as_ref()),
-            target: Mutex::new(RuntimeChatEventTarget::Broadcast(broadcast)),
-            pi_artifact: PI_ARTIFACT,
+        Self::with_target(
+            profile_directory,
+            RuntimeChatEventTarget::Broadcast(broadcast),
             memory_runtime,
-        }
+        )
     }
 
     pub fn with_subscriber(
@@ -131,9 +133,21 @@ impl RuntimeChatEventSink {
         subscriber: Option<Sender<ChatEvent>>,
         memory_runtime: Arc<ApplicationMemoryRuntime>,
     ) -> Self {
+        Self::with_target(
+            profile_directory,
+            RuntimeChatEventTarget::Subscriber(subscriber),
+            memory_runtime,
+        )
+    }
+
+    pub fn with_target(
+        profile_directory: impl AsRef<Path>,
+        target: RuntimeChatEventTarget,
+        memory_runtime: Arc<ApplicationMemoryRuntime>,
+    ) -> Self {
         Self {
             profile: ChatProfile::new(profile_directory.as_ref()),
-            target: Mutex::new(RuntimeChatEventTarget::Subscriber(subscriber)),
+            target: Mutex::new(target),
             pi_artifact: PI_ARTIFACT,
             memory_runtime,
         }
