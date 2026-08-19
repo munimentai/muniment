@@ -26,7 +26,8 @@ them must exercise the real contracts. It must add no mocked production path.
 > extraction section again, and so did the twenty-sixth through the
 > thirty-fourth, and the thirty-fifth. The thirty-sixth (2026-08-17) took it
 > again after the Linux cutover landed, and the thirty-seventh (2026-08-18)
-> folded the four eighty-sixth-wave slices into one entry. It grows every wave,
+> folded the four eighty-sixth-wave slices into one entry. The thirty-eighth
+> (2026-08-19) recorded the eighty-eighth-wave landings. It grows every wave,
 > so it stays the next compaction target.
 
 ## M0 — Scaffold (done 2026-07-09)
@@ -568,33 +569,32 @@ DONE 2026-08-18 — the shell re-reads an open thread in place (MUNIDESK-1372).
 buffered during the read. It drops its pages when another call publishes first,
 and a run in flight keeps running across the re-read.
 
-MEASURED 2026-08-18 (eighty-eighth wave, planner, read the two desktop status
-paths beside the broadcast and the frontend event handler) — three parts of the
-chat-event chain stay unbuilt. No site calls `refreshOpenThread`, so a dropped
-subscription still leaves the open run short by whatever the gap swallowed.
-`applyDesktopClientStatus` (`src/App.svelte:233`) reads every status and acts on
-a `connected` recovery alone (`:676`, `:690`). `ChatEvent`
-(`src-tauri/core/src/run_events.rs:24`) carries no thread id, so a passive
-client learns nothing about a thread another client created.
-`RuntimeChatEventBroadcast::deliver` (`src-tauri/runtime/src/sink.rs:62`) takes
-the event alone, so it applies no workspace filter. `handleEvent`
-(`src/lib/chat-controller.js:103`) holds no signaled-thread set.
+DONE 2026-08-19 — the eighty-eighth-wave reconnect, thread-id, and amendment
+slices landed (MUNIDESK-1374, 1375, 1376). `applyDesktopClientStatus`
+(`src/App.svelte:239`) calls `refreshOpenThread` when `chat_events_connected`
+recovers. `RuntimeChatEventSink::deliver` (`src-tauri/runtime/src/sink.rs:175`)
+stamps the run thread id onto every event. ADR 0012 names what a passive run
+owes the open thread
+(`docs/decisions/0012-user-level-runtime-service.md:791`).
 
-SEQUENCED 2026-08-18 (eighty-eighth wave) — this wave files four code slices and
-one amendment. The reconnect slice calls `refreshOpenThread` from the
-`chat_events_connected` recovery. The thread-id slice stamps each broadcast
-event with its run's thread. The workspace slice applies the recorded
-`SignedWorkspaceApproval` filter at delivery. The sidebar slice adds the bounded
-signaled-thread refresh ADR 0012 names
-(`docs/decisions/0012-user-level-runtime-service.md:729`). The amendment names
-what a passive run owes the thread the user has open. `handleEvent`
-(`src/lib/chat-controller.js:107`) drops every event of a run its transcript
-does not hold, so an ACP run inside the open thread renders nothing until the
-user reopens that thread. Remote Control stays gated for three reasons.
-Harness-spec §14.1 puts the relay leg on an outbound HTTPS session to
-`api.muniment.ai`. No muniment-cloud relay contract has published. The desktop
-states stay pending owner mockup confirmation
-(`docs/design-reference/remote-control-ux.md`).
+MEASURED 2026-08-19 (eighty-ninth wave, planner, read deliver beside
+handleEvent) — two parts of the 2026-08-18 passive-delivery chain stay unbuilt.
+The 2026-08-19 open-thread rule has no consumer.
+`RuntimeChatEventBroadcast::deliver` (`src-tauri/runtime/src/sink.rs:62`) takes
+the event alone. It applies no workspace filter. `handleEvent`
+(`src/lib/chat-controller.js:103`) holds no signaled-thread set and no
+signaled-run set. An event whose thread id is new never refreshes the thread
+list. An event that names the open thread with a run the transcript does not
+hold still drops.
+
+SEQUENCED 2026-08-19 (eighty-ninth wave) — this wave files the three remaining
+slices. The workspace slice applies the recorded `SignedWorkspaceApproval`
+filter at delivery. The sidebar slice adds the bounded signaled-thread refresh.
+The open-thread slice re-reads the open thread once for a passive run. Remote
+Control stays gated for three reasons. Harness-spec §14.1 puts the relay leg on
+an outbound HTTPS session to `api.muniment.ai`. No muniment-cloud relay
+contract has published. The desktop states stay pending owner mockup
+confirmation (`docs/design-reference/remote-control-ux.md`).
 
 DONE — all three slices of the ADR 0009 attach workspace namespace amendment are
 built (MUNIDESK-883, 887, 893, 896, 905). The signed `grant.workspace` value is
