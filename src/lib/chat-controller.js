@@ -297,17 +297,39 @@ export function createChatController({
     }
   }
 
+  // A re-read that publishes no pages still holds every event that landed while
+  // those pages loaded, because handleEvent buffered them all. releaseBuffer
+  // drops them next, so hand them to the run the shell shows first.
+  function drainVisibleRun() {
+    const run = destroyed ? null : active()
+    const held = run && buffered.get(run.id)
+    if (!held?.length) return
+    const projected = applyBufferedChatEvents(run, held)
+    buffered.delete(run.id)
+    publishMessages(messages().map((message) => message.run?.id === run.id ? { ...message, run: projected } : message))
+    onAnnounce(projected)
+    const settled = settledPhases.has(projected.phase)
+    onActive(settled ? null : projected)
+    if (settled) void refreshThreads()
+  }
+
   // The runtime drops a chat-event subscriber whose queue fills, and the desktop
   // resubscribes after a retry. The open run keeps whatever hole that gap left,
   // so this re-read repairs it in place. It reads the same pages openThread
-  // reads, and it selects no thread, so a run in flight keeps running.
+  // reads, and it selects no thread, so a run in flight keeps running. It also
+  // leaves a stale history error standing, because a background call owns no
+  // part of the visible error state.
   async function refreshOpenThread() {
     const threadId = readThreadId()
     if (!threadId || destroyed || switchingThread || refreshingOpenThread) return
-    // A submission that still waits for its run id owns the tail of the
-    // transcript, and no page can carry that run yet. A re-read would drop it.
+    // A submission still waiting for its run id owns the transcript tail, and no
+    // page can carry that run yet. A re-read would drop it.
     if (active()?.id === 'pending') return
     refreshingOpenThread = true
+    // send, resume, queue and a concurrent openThread each publish a transcript
+    // this call cannot see. Any of them replaces this array, and the pages go
+    // stale the moment that happens.
+    const publishedAtEntry = messages()
     historyLoads += 1
     holdBuffer()
     try {
@@ -323,6 +345,13 @@ export function createChatController({
         history.push(...result.entries)
         if (result.nextCursor == null) break
         cursor = result.nextCursor
+      }
+      // Another call published while the pages loaded, so the pages describe an
+      // older transcript. That call owns the view now, and publishing the pages
+      // would drop the message and the run it just added.
+      if (messages() !== publishedAtEntry) {
+        drainVisibleRun()
+        return
       }
       const published = historyMessages(history)
       const recorded = unsettledRun(published)
@@ -347,6 +376,9 @@ export function createChatController({
       if (settled) void refreshThreads()
     } catch (_) {
       // A background re-read must not disturb the visible conversation state.
+      // This call repairs a hole a dropped subscriber left, so a failed read
+      // must not open a wider one.
+      drainVisibleRun()
     } finally {
       historyLoads -= 1
       releaseBuffer()

@@ -1455,6 +1455,110 @@ describe('chat controller', () => {
     expect(context.onMessages).not.toHaveBeenCalled()
   })
 
+  it('abandons a re-read that a send replaced, and keeps the sent run and its events', async () => {
+    const history = deferred()
+    const submit = deferred()
+    const invoke = vi.fn((command) => {
+      if (command === 'chat_thread_open') return history.promise
+      if (command === 'chat_submit') return submit.promise
+      return Promise.resolve()
+    })
+    const context = setup(invoke, { threadId: 'thread-1' })
+    await context.start()
+    context.setMessages([
+      { role: 'user', text: 'First question' },
+      { role: 'assistant', run: { id: 'run-1', phase: 'complete', text: 'First answer' } },
+    ])
+
+    const refreshing = context.controller.refreshOpenThread()
+    await vi.waitFor(() => expect(invoke).toHaveBeenCalledWith('chat_thread_open', expect.anything()))
+    const sending = context.controller.send()
+    history.resolve({ entries: [{ runId: 'run-1', phase: 'complete', text: 'First answer', prompt: 'First question', receipt: {}, toolActivity: [] }], nextCursor: null })
+    await refreshing
+    context.event({ runId: 'run-9', type: 'text-delta', text: 'Reply' })
+    submit.resolve({ runId: 'run-9' })
+    await sending
+    context.event({ runId: 'run-9', type: 'text-delta', text: ' more' })
+
+    expect(context.messages().map((message) => message.text ?? message.run.text)).toEqual([
+      'First question', 'First answer', 'Hello', 'Reply more',
+    ])
+    expect(context.active()).toMatchObject({ id: 'run-9', phase: 'streaming', text: 'Reply more' })
+  })
+
+  it('abandons a re-read that a resume replaced, and keeps the resuming run', async () => {
+    const history = deferred()
+    const resume = deferred()
+    const invoke = vi.fn((command) => {
+      if (command === 'chat_thread_open') return history.promise
+      if (command === 'chat_resume') return resume.promise
+      return Promise.resolve()
+    })
+    const context = setup(invoke, { threadId: 'thread-1' })
+    await context.start()
+    const interrupted = { id: 'run-1', phase: 'interrupted', text: 'Half an', resumable: true }
+    context.setMessages([{ role: 'assistant', run: interrupted }])
+
+    const refreshing = context.controller.refreshOpenThread()
+    await vi.waitFor(() => expect(invoke).toHaveBeenCalledWith('chat_thread_open', expect.anything()))
+    const resuming = context.controller.resume(interrupted)
+    history.resolve({ entries: [{ runId: 'run-1', phase: 'interrupted', text: 'Half an', prompt: 'A question', receipt: null, toolActivity: [], resumable: true }], nextCursor: null })
+    await refreshing
+
+    expect(context.messages().at(-1).run).toMatchObject({ id: 'run-1', phase: 'resuming' })
+    expect(context.active()).toMatchObject({ id: 'run-1', phase: 'resuming' })
+
+    resume.resolve()
+    await resuming
+
+    expect(context.active()).toMatchObject({ id: 'run-1', phase: 'resuming' })
+    expect(context.onActive).not.toHaveBeenCalledWith(null)
+  })
+
+  it('carries an event onto the visible run when a queued message abandons the re-read', async () => {
+    const history = deferred()
+    const invoke = vi.fn((command) => command === 'chat_thread_open' ? history.promise : Promise.resolve())
+    const context = setup(invoke, { threadId: 'thread-1' })
+    await context.start()
+    const run = { id: 'run-2', phase: 'streaming', text: 'Half an ans' }
+    context.setMessages([{ role: 'assistant', run }])
+    context.setActive(run)
+
+    const refreshing = context.controller.refreshOpenThread()
+    await vi.waitFor(() => expect(invoke).toHaveBeenCalledWith('chat_thread_open', expect.anything()))
+    await context.controller.queue('now')
+    context.event({ runId: 'run-2', type: 'text-delta', text: 'wer' })
+    history.resolve({ entries: [{ runId: 'run-2', phase: 'streaming', text: 'Half an ans', prompt: 'A question', receipt: null, toolActivity: [] }], nextCursor: null })
+    await refreshing
+
+    expect(context.messages().map((message) => message.text ?? message.run.text)).toEqual(['Half an answer', 'Hello'])
+    expect(context.active()).toMatchObject({ id: 'run-2', phase: 'streaming', text: 'Half an answer' })
+  })
+
+  it('carries an event that arrived while a failed re-read loaded its pages', async () => {
+    const history = deferred()
+    const invoke = vi.fn((command) => command === 'chat_thread_open' ? history.promise : Promise.resolve())
+    const context = setup(invoke, { threadId: 'thread-1' })
+    await context.start()
+    const run = { id: 'run-2', phase: 'streaming', text: 'Half an ans' }
+    context.setMessages([{ role: 'assistant', run }])
+    context.setActive(run)
+
+    const refreshing = context.controller.refreshOpenThread()
+    await vi.waitFor(() => expect(invoke).toHaveBeenCalledWith('chat_thread_open', expect.anything()))
+    context.event({ runId: 'run-2', type: 'text-delta', text: 'wer' })
+    history.reject(new Error('offline'))
+    await refreshing
+
+    expect(context.messages().at(-1).run).toMatchObject({ id: 'run-2', phase: 'streaming', text: 'Half an answer' })
+    expect(context.active()).toMatchObject({ id: 'run-2', phase: 'streaming', text: 'Half an answer' })
+    expect(context.onHistoryError).not.toHaveBeenCalled()
+
+    context.event({ runId: 'run-2', type: 'text-delta', text: '!' })
+
+    expect(context.messages().at(-1).run.text).toBe('Half an answer!')
+  })
+
   it('re-reads nothing when no thread is open', async () => {
     const invoke = vi.fn()
     const context = setup(invoke)
