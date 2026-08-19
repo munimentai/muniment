@@ -590,10 +590,23 @@ describe('workspace composer entry', () => {
   })
 
   it('re-reads no thread on the first status the window reads', async () => {
+    let finishRegistration
+    desktopClientListen = vi.fn(() => new Promise((resolve) => { finishRegistration = resolve }))
     mockChatEventsStatus(true)
     render(App)
-    await screen.findByPlaceholderText('Ask anything')
+    await waitFor(() => expect(desktopClientListener).toBeDefined())
+    await waitFor(() => expect(threadOpens()).toBe(1))
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    invoke.mockClear()
 
+    // The first status the window reads arrives after the thread opens, so a
+    // re-read would show up as a second read.
+    finishRegistration(desktopClientUnlisten)
+
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('attach_listener_status'))
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    // The one read comes from the connected recovery, which calls run('status').
     expect(threadOpens()).toBe(1)
   })
 

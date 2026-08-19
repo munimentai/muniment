@@ -234,7 +234,7 @@
   function applyDesktopClientStatus(status) {
     // The runtime drops a chat-event subscriber whose queue fills, and the
     // desktop resubscribes after a retry. No window saw the events inside that
-    // gap, so the open thread reads itself again on the recovery. The first
+    // gap, so the shell reads the open thread again on the recovery. The first
     // status compares against no earlier status, so it re-reads nothing.
     const chatEventsRecovered = desktopClientStatus?.chat_events_connected === false
       && status?.chat_events_connected === true
