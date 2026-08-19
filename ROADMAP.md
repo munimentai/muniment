@@ -6,7 +6,7 @@ them must exercise the real contracts. It must add no mocked production path.
 
 > **Compacted 2026-08-04, again 2026-08-07, again 2026-08-12, again
 > 2026-08-13, again 2026-08-14, again 2026-08-15, again 2026-08-16, again
-> 2026-08-17, and again 2026-08-18.** This document reached 265 KB and no longer
+> 2026-08-17, again 2026-08-18, and again 2026-08-19.** This document reached 265 KB and no longer
 > fit in one read.
 > Every landed slice used to carry its own paragraph. Those paragraphs are now
 > per-lane summaries with their ticket ranges. Every open item, parked item,
@@ -29,8 +29,9 @@ them must exercise the real contracts. It must add no mocked production path.
 > folded the four eighty-sixth-wave slices into one entry. The thirty-eighth
 > (2026-08-19) recorded the eighty-eighth-wave landings. The thirty-ninth
 > (2026-08-19) recorded the eighty-ninth-wave landings and named the two
-> remaining consumers. It grows every wave, so it stays the next compaction
-> target.
+> remaining consumers. The fortieth (2026-08-19) recorded the ninetieth-wave
+> open-thread landing and named the remaining reconnect consumer. It grows every
+> wave, so it stays the next compaction target.
 
 ## M0 — Scaffold (done 2026-07-09)
 
@@ -586,26 +587,30 @@ not match the recorded `SignedWorkspaceApproval`. `handleEvent`
 (`src/lib/chat-controller.js:139`) holds the bounded signaled-thread set and
 refreshes the newest page once per new thread id.
 
-MEASURED 2026-08-19 (ninetieth wave, planner, read handleEvent beside
-applyDesktopClientStatus) — two consumers of the 2026-08-18 and 2026-08-19
-amendments stay unbuilt. The 2026-08-19 open-thread rule has no consumer.
-`handleEvent` still drops an event whose run id is absent from the transcript.
-An event that names the open thread with a new run still renders nothing.
-`applyDesktopClientStatus` (`src/App.svelte:234`) re-reads the open thread on
-a chat-event reconnect and does not refresh the thread list. The 2026-08-18
-amendment says a dropped subscription loses its pending thread signals, and
-the client refreshes the thread list when the next subscription opens.
+DONE 2026-08-19 — the open-thread passive-run consumer landed (MUNIDESK-1382).
+`signalRun` (`src/lib/chat-controller.js:159`) re-reads the open thread once
+for a run id the transcript does not hold. The signaled-run set is bounded
+at 256 entries. Signals that arrive during a re-read collapse into one
+follow-up.
 
-SEQUENCED 2026-08-19 (ninetieth wave) — this wave files those two consumers.
-The open-thread slice re-reads the open thread once for a passive run. The
-reconnect slice refreshes the newest thread page when `chat_events_connected`
-recovers. After both land, the ADR 0012 passive-delivery chain is complete on
-Linux. Remote Control stays gated for three reasons. Harness-spec §14.1 puts
-the relay leg on an outbound HTTPS session to `api.muniment.ai`. No
-muniment-cloud relay contract has published. The desktop states stay pending
-owner mockup confirmation (`docs/design-reference/remote-control-ux.md`).
-macOS `launchd` registration and Windows Scheduled Task registration still
-need a later ADR 0012 amendment.
+MEASURED 2026-08-19 (ninety-first wave, planner, read applyDesktopClientStatus
+beside refreshThreads) — the 2026-08-18 reconnect list consumer stays unbuilt.
+`applyDesktopClientStatus` (`src/App.svelte:234`) re-reads the open thread
+when `chat_events_connected` recovers. It does not call `refreshThreads`.
+`refreshThreads` (`src/lib/chat-controller.js:96`) exists and is not exported.
+A dropped chat-event subscription loses pending thread signals. The newest
+page then stays stale until another refresh.
+
+SEQUENCED 2026-08-19 (ninety-first wave) — this wave files that reconnect
+consumer. After it lands, the ADR 0012 passive-delivery chain is complete on
+Linux. The next locally verifiable slice is `request.cancel` for a companion
+run.stream subscription. Remote Control stays gated for three reasons.
+Harness-spec §14.1 puts the relay leg on an outbound HTTPS session to
+`api.muniment.ai`. No muniment-cloud relay contract has published. The
+desktop states stay pending owner mockup confirmation
+(`docs/design-reference/remote-control-ux.md`). macOS `launchd` registration
+and Windows Scheduled Task registration still need a later ADR 0012
+amendment.
 
 DONE — all three slices of the ADR 0009 attach workspace namespace amendment are
 built (MUNIDESK-883, 887, 893, 896, 905). The signed `grant.workspace` value is
