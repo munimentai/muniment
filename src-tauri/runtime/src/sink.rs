@@ -5,6 +5,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{self, Sender, SyncSender, TrySendError};
 use std::sync::{Arc, Mutex, Weak};
 
+use muniment_core::attach::SignedWorkspaceApproval;
 use muniment_core::chat_profile::ChatProfile;
 use muniment_core::memory_runtime::ApplicationMemoryRuntime;
 use muniment_core::pi_launch::{PiLaunchBoundaries, PiLaunchError};
@@ -17,6 +18,7 @@ pub const CHAT_EVENT_SUBSCRIBER_QUEUE_CAPACITY: usize = 256;
 #[derive(Clone, Default)]
 pub struct RuntimeChatEventBroadcast {
     shared: Arc<RuntimeChatEventBroadcastShared>,
+    approval: SignedWorkspaceApproval,
 }
 
 #[derive(Default)]
@@ -32,6 +34,13 @@ struct RuntimeChatEventSubscriber {
 }
 
 impl RuntimeChatEventBroadcast {
+    pub fn new(approval: SignedWorkspaceApproval) -> Self {
+        Self {
+            shared: Arc::new(RuntimeChatEventBroadcastShared::default()),
+            approval,
+        }
+    }
+
     pub fn subscribe(&self) -> ChatEventSubscription {
         let (sender, receiver) = mpsc::sync_channel(CHAT_EVENT_SUBSCRIBER_QUEUE_CAPACITY);
         let id = self.shared.next_id.fetch_add(1, Ordering::Relaxed);
@@ -59,7 +68,14 @@ impl RuntimeChatEventBroadcast {
         self.shared.full_queue_drops.load(Ordering::Relaxed)
     }
 
-    fn deliver(&self, event: ChatEvent) {
+    fn deliver(&self, workspace: &str, event: ChatEvent) {
+        if !self
+            .approval
+            .approval()
+            .is_some_and(|approval| approval.workspace == workspace)
+        {
+            return;
+        }
         let mut full_queue_drops = Vec::new();
         self.shared
             .subscribers
@@ -114,6 +130,7 @@ pub struct RuntimeChatEventSink {
     pi_artifact: PiArtifactDescriptor,
     memory_runtime: Arc<ApplicationMemoryRuntime>,
     thread_id: String,
+    workspace: String,
 }
 
 impl RuntimeChatEventSink {
@@ -122,12 +139,14 @@ impl RuntimeChatEventSink {
         broadcast: RuntimeChatEventBroadcast,
         memory_runtime: Arc<ApplicationMemoryRuntime>,
         thread_id: String,
+        workspace: String,
     ) -> Self {
         Self::with_target(
             profile_directory,
             RuntimeChatEventTarget::Broadcast(broadcast),
             memory_runtime,
             thread_id,
+            workspace,
         )
     }
 
@@ -142,6 +161,7 @@ impl RuntimeChatEventSink {
             RuntimeChatEventTarget::Subscriber(subscriber),
             memory_runtime,
             thread_id,
+            String::new(),
         )
     }
 
@@ -150,6 +170,7 @@ impl RuntimeChatEventSink {
         target: RuntimeChatEventTarget,
         memory_runtime: Arc<ApplicationMemoryRuntime>,
         thread_id: String,
+        workspace: String,
     ) -> Self {
         Self {
             profile: ChatProfile::new(profile_directory.as_ref()),
@@ -157,6 +178,7 @@ impl RuntimeChatEventSink {
             pi_artifact: PI_ARTIFACT,
             memory_runtime,
             thread_id,
+            workspace,
         }
     }
 
@@ -185,7 +207,7 @@ impl ChatEventSink for RuntimeChatEventSink {
                 Ok(())
             }
             RuntimeChatEventTarget::Broadcast(broadcast) => {
-                broadcast.deliver(event);
+                broadcast.deliver(&self.workspace, event);
                 Ok(())
             }
         }

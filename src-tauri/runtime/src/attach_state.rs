@@ -52,6 +52,7 @@ impl RuntimeAttachState {
         let companion_registry = open_companion_registry(&profile_directory)?;
         let drain_state = DrainState::new();
         let runtime_activity = RuntimeActivityRegistry::with_drain_state(&drain_state);
+        let approval = SignedWorkspaceApproval::default();
 
         Ok(Self {
             memory_runtime: Arc::new(ApplicationMemoryRuntime::new(
@@ -66,12 +67,12 @@ impl RuntimeAttachState {
             runtime_activity,
             drain_state,
             entitlement_tracker: Arc::new(EntitlementSnapshotTracker::new()),
-            approval: SignedWorkspaceApproval::default(),
+            approval: approval.clone(),
             session_thread: Arc::new(SessionThread::default()),
             companion_registry,
             approvals: ApprovalCoordinator::default(),
             sign_in_running: Arc::new(AtomicBool::new(false)),
-            chat_events: RuntimeChatEventBroadcast::default(),
+            chat_events: RuntimeChatEventBroadcast::new(approval),
         })
     }
 
