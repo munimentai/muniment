@@ -416,8 +416,11 @@ fn runtime_service_broadcasts_a_driven_prompts_chat_events() {
 
     let event = events.recv_timeout(Duration::from_secs(10)).unwrap();
     assert_eq!(event.run_id, result.run_id);
+    let thread_id = boundaries.run_thread_id(&result.run_id).unwrap();
+    assert_eq!(event.thread_id.as_deref(), Some(thread_id.as_str()));
     let second_event = second_events.recv_timeout(Duration::from_secs(10)).unwrap();
     assert_eq!(second_event.run_id, result.run_id);
+    assert_eq!(second_event.thread_id.as_deref(), Some(thread_id.as_str()));
     let deadline = Instant::now() + Duration::from_secs(10);
     while boundaries.active_run_exists() && Instant::now() < deadline {
         std::thread::sleep(Duration::from_millis(10));
@@ -489,6 +492,10 @@ fn attach_submit_reaches_a_chat_event_subscriber() {
 
     let event = events.recv_timeout(Duration::from_secs(10)).unwrap();
     assert_eq!(event.run_id, accepted.run_id);
+    assert_eq!(
+        event.thread_id.as_deref(),
+        Some(accepted.thread_id.as_str())
+    );
 
     let deadline = Instant::now() + Duration::from_secs(10);
     while boundaries.active_run_exists() && Instant::now() < deadline {

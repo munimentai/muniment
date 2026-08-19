@@ -113,6 +113,7 @@ pub struct RuntimeChatEventSink {
     target: Mutex<RuntimeChatEventTarget>,
     pi_artifact: PiArtifactDescriptor,
     memory_runtime: Arc<ApplicationMemoryRuntime>,
+    thread_id: String,
 }
 
 impl RuntimeChatEventSink {
@@ -120,11 +121,13 @@ impl RuntimeChatEventSink {
         profile_directory: impl AsRef<Path>,
         broadcast: RuntimeChatEventBroadcast,
         memory_runtime: Arc<ApplicationMemoryRuntime>,
+        thread_id: String,
     ) -> Self {
         Self::with_target(
             profile_directory,
             RuntimeChatEventTarget::Broadcast(broadcast),
             memory_runtime,
+            thread_id,
         )
     }
 
@@ -132,11 +135,13 @@ impl RuntimeChatEventSink {
         profile_directory: impl AsRef<Path>,
         subscriber: Option<Sender<ChatEvent>>,
         memory_runtime: Arc<ApplicationMemoryRuntime>,
+        thread_id: String,
     ) -> Self {
         Self::with_target(
             profile_directory,
             RuntimeChatEventTarget::Subscriber(subscriber),
             memory_runtime,
+            thread_id,
         )
     }
 
@@ -144,12 +149,14 @@ impl RuntimeChatEventSink {
         profile_directory: impl AsRef<Path>,
         target: RuntimeChatEventTarget,
         memory_runtime: Arc<ApplicationMemoryRuntime>,
+        thread_id: String,
     ) -> Self {
         Self {
             profile: ChatProfile::new(profile_directory.as_ref()),
             target: Mutex::new(target),
             pi_artifact: PI_ARTIFACT,
             memory_runtime,
+            thread_id,
         }
     }
 
@@ -164,7 +171,8 @@ impl ChatEventSink for RuntimeChatEventSink {
         ("muniment-runtime", env!("CARGO_PKG_VERSION"))
     }
 
-    fn deliver(&self, event: ChatEvent) -> Result<(), ()> {
+    fn deliver(&self, mut event: ChatEvent) -> Result<(), ()> {
+        event.thread_id = Some(self.thread_id.clone());
         let mut target = self.target.lock().map_err(|_| ())?;
         match &mut *target {
             RuntimeChatEventTarget::Subscriber(subscriber) => {
