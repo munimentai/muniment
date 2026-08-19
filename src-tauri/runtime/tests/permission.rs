@@ -13,7 +13,7 @@ use muniment_core::run_start::RunAttachBoundaries;
 use muniment_core::session_thread::SessionThread;
 use muniment_runtime::{
     answer_permission, open_companion_registry, open_profile_storage, run_prompt,
-    RuntimeAttachBoundaries,
+    RuntimeAttachBoundaries, RuntimeChatEventTarget,
 };
 
 mod common;
@@ -139,7 +139,7 @@ fn a_queued_permission_answer_reaches_a_live_runtime_run() {
                 Vec::new(),
                 fixture_grant(),
                 Arc::clone(&active),
-                Some(subscriber),
+                RuntimeChatEventTarget::Subscriber(Some(subscriber)),
                 Some(descriptor),
             )
         });

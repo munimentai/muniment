@@ -3,7 +3,7 @@ use std::sync::{mpsc, Arc, Mutex};
 use std::time::Duration;
 
 use muniment_core::attach::RuntimeActivityRegistry;
-use muniment_runtime::{cancel_run, open_profile_storage, run_prompt};
+use muniment_runtime::{cancel_run, open_profile_storage, run_prompt, RuntimeChatEventTarget};
 
 mod common;
 use common::{fixture_grant, stage_pi_stub, TemporaryProfile};
@@ -47,7 +47,7 @@ fn cancelling_a_live_run_sends_abort_to_pi() {
                 Vec::new(),
                 fixture_grant(),
                 Arc::clone(&active),
-                Some(subscriber),
+                RuntimeChatEventTarget::Subscriber(Some(subscriber)),
                 Some(descriptor),
             )
         });
