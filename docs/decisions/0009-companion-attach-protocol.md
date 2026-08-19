@@ -740,6 +740,40 @@ mapping to `thread.list`, `thread.open`, `thread.create`, and `run.start`, with
 contract tests for missing grants and mismatched directories. This amendment
 changes no code.
 
+## Amendment — 2026-08-19: run.open contract
+
+`run.open` is a closed v1 operation. It opens a bounded projection of one
+existing `run_id` in the authorized workspace. It is read-only and never
+starts or resumes execution.
+
+The request body is `{run_id}`. It carries no cursor. Unknown body fields
+return non-retryable `invalid_request`. A missing or malformed `run_id`
+returns the same error. The resolved workspace comes from the authorized
+capability, not the body.
+
+The response body uses the existing `RunStreamPage` fields: `run_id`,
+`first_available_run_seq`, `current_run_seq`, `events`, and `exhausted`.
+That body is the `RunStreamPage` that `stream_run` already returns from
+`after_run_seq` 0. The `events` field holds the redacted projections from
+that page. The operation creates no subscription. It emits no events.
+
+The operation requires scope `thread.read` for the authorized workspace.
+`run.stream` requires that same scope. The desktop returns `unauthorized`
+when the capability lacks `thread.read`. A companion session may send
+`run.open`.
+
+The desktop maps a missing, foreign, or inaccessible run as `stream_run`
+already maps `NotFoundOrInaccessible`. That mapping returns non-retryable
+`invalid_request` and discloses no extra detail.
+
+`exhausted` false means the client uses `run.stream` for the rest. Zed ACP
+`session/load` restores a session through `thread.open`. `run.open` is the
+single-run inspect path beside `thread.open`.
+
+The first implementation slice is **attach run.open dispatch**. It adds
+request routing, the `stream_run` reuse, error mapping, and contract tests.
+This amendment changes no code.
+
 ## Rejected alternatives
 
 **TCP loopback alone.** Loopback limits network reach but supplies no portable
