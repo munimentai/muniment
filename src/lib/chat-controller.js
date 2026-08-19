@@ -46,7 +46,11 @@ export function createChatController({
   let destroyed = false
   let switchingThread = false
   let switchBlocked = false
-  let loadingHistory = false
+  // How many calls replace the transcript with freshly read pages right now: a
+  // thread open, an in-place re-read, or both at once. handleEvent buffers every
+  // event while one runs, because no published run describes it yet.
+  let historyLoads = 0
+  let refreshingOpenThread = false
   let threadRefreshSequence = 0
   let threadPageCount = 1
   let nextThreadCursor = null
@@ -98,8 +102,9 @@ export function createChatController({
 
   function handleEvent({ payload }) {
     // A thread load replaces the whole transcript, so no published run describes
-    // this event yet. openThread drains the buffer onto the loaded pages.
-    const current = loadingHistory ? null : messages().find((message) => message.run?.id === payload.runId)?.run
+    // this event yet. openThread and refreshOpenThread drain the buffer onto the
+    // loaded pages.
+    const current = historyLoads ? null : messages().find((message) => message.run?.id === payload.runId)?.run
     if (!current) {
       // The runtime broadcasts every attach run, so most unknown run ids belong
       // to another surface. Hold the event only while a call waits for its run
@@ -215,7 +220,7 @@ export function createChatController({
     const previousThreadId = readThreadId()
     const wasBlocked = switchBlocked
     let selected = false
-    loadingHistory = true
+    historyLoads += 1
     holdBuffer()
     try {
       if (select) {
@@ -285,10 +290,67 @@ export function createChatController({
       }
       return false
     } finally {
-      loadingHistory = false
+      historyLoads -= 1
       releaseBuffer()
       switchingThread = false
       if (!destroyed) onThreadSwitch(switchBlocked)
+    }
+  }
+
+  // The runtime drops a chat-event subscriber whose queue fills, and the desktop
+  // resubscribes after a retry. The open run keeps whatever hole that gap left,
+  // so this re-read repairs it in place. It reads the same pages openThread
+  // reads, and it selects no thread, so a run in flight keeps running.
+  async function refreshOpenThread() {
+    const threadId = readThreadId()
+    if (!threadId || destroyed || switchingThread || refreshingOpenThread) return
+    // A submission that still waits for its run id owns the tail of the
+    // transcript, and no page can carry that run yet. A re-read would drop it.
+    if (active()?.id === 'pending') return
+    refreshingOpenThread = true
+    historyLoads += 1
+    holdBuffer()
+    try {
+      const history = []
+      let cursor
+      for (let page = 0; page < historyPageCap; page += 1) {
+        const payload = { threadId, limit: historyPageLimit }
+        if (cursor !== undefined) payload.cursor = cursor
+        const result = await invoke('chat_thread_open', payload)
+        // A thread switch can land while the pages load. The pages then describe
+        // a thread the shell no longer shows, so this call drops them.
+        if (destroyed || readThreadId() !== threadId) return
+        history.push(...result.entries)
+        if (result.nextCursor == null) break
+        cursor = result.nextCursor
+      }
+      const published = historyMessages(history)
+      const recorded = unsettledRun(published)
+      // handleEvent buffered every event that landed during the re-read, and the
+      // pages are stale by exactly those events. Only this site can apply them.
+      const rejoined = recorded && applyBufferedChatEvents(recorded, buffered.get(recorded.id) ?? [])
+      if (recorded) buffered.delete(recorded.id)
+      const settled = !!rejoined && settledPhases.has(rejoined.phase)
+      const republished = rejoined
+        ? published.map((message) => message.run?.id === rejoined.id ? { ...message, run: rejoined } : message)
+        : published
+      publishMessages(republished)
+      // The pages carry the run the runtime still drives, so the shell keeps
+      // that run active. A re-read that finds no such run ends the active one,
+      // because the settlement is the event the dropped subscriber lost.
+      onActive(settled ? null : rejoined)
+      // The live region follows one run. Restate that run alone, so a re-read
+      // never switches the subject the user hears.
+      const announcedId = readAnnounced()?.id
+      const tracked = announcedId && republished.find((message) => message.run?.id === announcedId)?.run
+      if (tracked) onAnnounce(tracked)
+      if (settled) void refreshThreads()
+    } catch (_) {
+      // A background re-read must not disturb the visible conversation state.
+    } finally {
+      historyLoads -= 1
+      releaseBuffer()
+      refreshingOpenThread = false
     }
   }
 
@@ -487,5 +549,5 @@ export function createChatController({
     buffered.clear()
   }
 
-  return { start, loadHistory, loadOlderThreads, openThread: (threadId) => openThread(threadId, true), newThread, renameThread, deleteThread, send, cancel, resume, queue, cleanup }
+  return { start, loadHistory, loadOlderThreads, openThread: (threadId) => openThread(threadId, true), refreshOpenThread, newThread, renameThread, deleteThread, send, cancel, resume, queue, cleanup }
 }

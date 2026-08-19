@@ -12,14 +12,16 @@ function deferred() {
   return { promise, resolve, reject }
 }
 
-function setup(invoke = vi.fn()) {
+function setup(invoke = vi.fn(), { threadId = null } = {}) {
   let messages = []
   let active = null
   let announced = null
   let draft = 'Hello'
   let files = []
+  let openThreadId = threadId
   let listener
   const errors = []
+  const onHistoryError = vi.fn()
   const onMessages = vi.fn((next) => { messages = next })
   const onActive = vi.fn((next) => { active = next })
   const onThreadSummaries = vi.fn()
@@ -39,6 +41,7 @@ function setup(invoke = vi.fn()) {
     readAnnounced: () => announced,
     readDraft: () => draft,
     readFiles: () => files,
+    readThreadId: () => openThreadId,
     onMessages,
     onActive,
     onAnnounce: (next) => { announced = next },
@@ -47,7 +50,7 @@ function setup(invoke = vi.fn()) {
     onSubmitError: (error) => { if (error) errors.push(error) },
     onCancelError: vi.fn(),
     onQueueError: vi.fn(),
-    onHistoryError: vi.fn(),
+    onHistoryError,
     onThreadSummaries,
     onMoreThreads,
     onThreadSelected,
@@ -62,9 +65,11 @@ function setup(invoke = vi.fn()) {
     messages: () => messages,
     active: () => active,
     announced: () => announced,
+    draft: () => draft,
     errors,
     onMessages,
     onActive,
+    onHistoryError,
     onThreadSummaries,
     onMoreThreads,
     onThreadSelected,
@@ -74,6 +79,7 @@ function setup(invoke = vi.fn()) {
     setActive: (next) => { active = next },
     setDraft: (next) => { draft = next },
     setMessages: (next) => { messages = next },
+    setThreadId: (next) => { openThreadId = next },
   }
 }
 
@@ -1351,6 +1357,152 @@ describe('chat controller', () => {
     await context.controller.openThread('thread-2')
 
     expect(invoke).not.toHaveBeenCalled()
+  })
+
+  it('re-reads every page of the open thread while a run stays active', async () => {
+    const invoke = vi.fn(async (command, payload) => {
+      if (command !== 'chat_thread_open') throw new Error(`unexpected command: ${command}`)
+      return payload.cursor === undefined
+        ? { entries: [{ runId: 'run-1', phase: 'complete', text: 'First answer', prompt: 'First question', receipt: {}, toolActivity: [] }], nextCursor: 'page-2' }
+        : { entries: [{ runId: 'run-2', phase: 'streaming', text: 'Half an answer', prompt: 'Second question', receipt: null, toolActivity: [] }], nextCursor: null }
+    })
+    const context = setup(invoke, { threadId: 'thread-1' })
+    const run = { id: 'run-2', phase: 'streaming', text: 'Half an' }
+    context.setMessages([{ role: 'assistant', run }])
+    context.setActive(run)
+
+    await context.controller.refreshOpenThread()
+
+    expect(invoke.mock.calls).toEqual([
+      ['chat_thread_open', { threadId: 'thread-1', limit: 100 }],
+      ['chat_thread_open', { threadId: 'thread-1', limit: 100, cursor: 'page-2' }],
+    ])
+    expect(context.messages().map((message) => message.text ?? message.run.text)).toEqual([
+      'First question', 'First answer', 'Second question', 'Half an answer',
+    ])
+    expect(context.active()).toMatchObject({ id: 'run-2', phase: 'streaming', text: 'Half an answer' })
+    expect(context.onThreadSelected).not.toHaveBeenCalled()
+    expect(context.draft()).toBe('Hello')
+  })
+
+  it('carries an event that arrives while the open thread re-reads', async () => {
+    const history = deferred()
+    const invoke = vi.fn((command) => command === 'chat_thread_open' ? history.promise : Promise.resolve())
+    const context = setup(invoke, { threadId: 'thread-1' })
+    await context.start()
+    const run = { id: 'run-2', phase: 'streaming', text: 'Half an ans' }
+    context.setMessages([{ role: 'assistant', run }])
+    context.setActive(run)
+
+    const refreshing = context.controller.refreshOpenThread()
+    await vi.waitFor(() => expect(invoke).toHaveBeenCalledWith('chat_thread_open', expect.anything()))
+    context.event({ runId: 'run-2', type: 'text-delta', text: 'wer' })
+    history.resolve({ entries: [{ runId: 'run-2', phase: 'streaming', text: 'Half an ans', prompt: 'Second question', receipt: null, toolActivity: [] }], nextCursor: null })
+    await refreshing
+
+    expect(context.messages().at(-1).run).toMatchObject({ id: 'run-2', phase: 'streaming', text: 'Half an answer' })
+    expect(context.active()).toMatchObject({ id: 'run-2', phase: 'streaming', text: 'Half an answer' })
+  })
+
+  it('ends the active run when the re-read finds its lost settlement', async () => {
+    const invoke = vi.fn(async (command) => {
+      if (command !== 'chat_thread_open') throw new Error(`unexpected command: ${command}`)
+      return { entries: [{ runId: 'run-2', phase: 'complete', text: 'Whole answer', prompt: 'Second question', receipt: { route: 'local' }, toolActivity: [] }], nextCursor: null }
+    })
+    const context = setup(invoke, { threadId: 'thread-1' })
+    const run = { id: 'run-2', phase: 'streaming', text: 'Half an' }
+    context.setMessages([{ role: 'assistant', run }])
+    context.setActive(run)
+
+    await context.controller.refreshOpenThread()
+
+    expect(context.messages().at(-1).run).toMatchObject({ id: 'run-2', phase: 'complete', text: 'Whole answer' })
+    expect(context.onActive).toHaveBeenLastCalledWith(null)
+    expect(context.active()).toBeNull()
+  })
+
+  it('leaves the transcript and the active run unchanged when the re-read fails', async () => {
+    const invoke = vi.fn(async () => { throw new Error('offline') })
+    const context = setup(invoke, { threadId: 'thread-1' })
+    const run = { id: 'run-2', phase: 'streaming', text: 'Half an' }
+    const previous = [{ role: 'assistant', run }]
+    context.setMessages(previous)
+    context.setActive(run)
+
+    await context.controller.refreshOpenThread()
+
+    expect(context.messages()).toBe(previous)
+    expect(context.active()).toBe(run)
+    expect(context.onMessages).not.toHaveBeenCalled()
+    expect(context.onActive).not.toHaveBeenCalled()
+    expect(context.onHistoryError).not.toHaveBeenCalled()
+  })
+
+  it('discards a re-read whose thread closed while its pages loaded', async () => {
+    const history = deferred()
+    const invoke = vi.fn((command) => command === 'chat_thread_open' ? history.promise : Promise.resolve())
+    const context = setup(invoke, { threadId: 'thread-1' })
+    const previous = [{ role: 'user', text: 'Current transcript' }]
+    context.setMessages(previous)
+
+    const refreshing = context.controller.refreshOpenThread()
+    await vi.waitFor(() => expect(invoke).toHaveBeenCalledWith('chat_thread_open', expect.anything()))
+    context.setThreadId('thread-2')
+    history.resolve({ entries: [{ runId: 'run-1', phase: 'complete', text: 'Stale answer', prompt: 'Stale question', receipt: {}, toolActivity: [] }], nextCursor: null })
+    await refreshing
+
+    expect(context.messages()).toBe(previous)
+    expect(context.onMessages).not.toHaveBeenCalled()
+  })
+
+  it('re-reads nothing when no thread is open', async () => {
+    const invoke = vi.fn()
+    const context = setup(invoke)
+
+    await context.controller.refreshOpenThread()
+
+    expect(invoke).not.toHaveBeenCalled()
+  })
+
+  it('re-reads nothing while a thread switch runs', async () => {
+    const history = deferred()
+    const invoke = vi.fn((command) => command === 'chat_thread_open' ? history.promise : Promise.resolve())
+    const context = setup(invoke, { threadId: 'thread-1' })
+
+    const opening = context.controller.openThread('thread-2')
+    await vi.waitFor(() => expect(invoke).toHaveBeenCalledWith('chat_thread_open', { threadId: 'thread-2', limit: 100 }))
+    await context.controller.refreshOpenThread()
+
+    expect(invoke).not.toHaveBeenCalledWith('chat_thread_open', { threadId: 'thread-1', limit: 100 })
+    history.resolve({ entries: [], nextCursor: null })
+    await opening
+  })
+
+  it('re-reads nothing while another re-read runs', async () => {
+    const history = deferred()
+    const invoke = vi.fn(() => history.promise)
+    const context = setup(invoke, { threadId: 'thread-1' })
+
+    const refreshing = context.controller.refreshOpenThread()
+    await vi.waitFor(() => expect(invoke).toHaveBeenCalledTimes(1))
+    await context.controller.refreshOpenThread()
+
+    expect(invoke).toHaveBeenCalledTimes(1)
+    history.resolve({ entries: [], nextCursor: null })
+    await refreshing
+  })
+
+  it('re-reads nothing while a submission waits for its run id', async () => {
+    const submit = deferred()
+    const invoke = vi.fn(() => submit.promise)
+    const context = setup(invoke, { threadId: 'thread-1' })
+
+    const sending = context.controller.send()
+    await context.controller.refreshOpenThread()
+
+    expect(invoke).not.toHaveBeenCalledWith('chat_thread_open', expect.anything())
+    submit.resolve({ runId: 'run-1' })
+    await sending
   })
 
   it('stops opening history after 100 pages and publishes them in order', async () => {
