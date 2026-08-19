@@ -787,3 +787,69 @@ The later slice touches these sites:
    body field.
 
 This amendment changes no runtime code.
+
+## Amendment – 2026-08-19: open-thread passive run
+
+### What a passive run owes the open thread
+
+The 2026-08-18 passive chat-event delivery amendment gives a subscriber every
+event of every run in its workspace. It names how a passive client learns that
+the thread list changed. It names nothing for the open thread.
+
+`handleEvent` (`src/lib/chat-controller.js`) finds no message for a run id the
+transcript does not hold. It drops the event. A run another client started
+inside the open thread renders nothing until the user reopens that thread.
+
+The desktop re-reads the open thread in place once. The first event that names
+that thread with a run id the transcript does not hold triggers the re-read.
+When the transcript already holds the run id, `handleEvent` applies the event
+as it does today. When the event names another thread, the desktop does not
+re-read the open thread.
+
+`refreshOpenThread` already re-reads those pages in place and selects no
+thread. `unsettledRun` (`src/lib/chat-state.js`) hands the re-read pages the
+run the runtime still drives. The 2026-08-18 desktop run rejoin amendment
+already covers that run. The runtime admits one active run per profile
+(`src-tauri/runtime/src/attach_boundaries.rs`). At most one such run exists at
+a time.
+
+The desktop marks that run id signaled whether or not the re-read finds it. It
+never re-reads for that run again. A run emits an event for each streamed
+delta, so a per-event re-read would query the runtime on every token.
+
+### Bounds
+
+Three rules bound that re-read.
+
+The desktop re-reads once for each run id it has not yet signaled, and not
+once for each event. It marks the run id when it signals, whether or not the
+re-read finds that run. It keeps the signaled run ids in an insertion-ordered
+set of at most 256 entries. It drops the oldest entry past that bound. The
+bound stops the same unbounded map that MUNIDESK-1362 removed from this
+handler.
+
+The desktop keeps at most one open-thread re-read in flight. It collapses
+every signal that arrives during a re-read into one follow-up re-read.
+
+The fourth tranche subscriber queue rule stands unchanged. A dropped
+subscription loses its pending signals.
+
+### Operation and wire version
+
+This rule adds no attach operation and no wire version. The 2026-08-18
+passive chat-event delivery amendment already carries the thread id on the
+event body. This rule reads that field. An older desktop drops the event and
+keeps today's behavior. An older runtime sends no thread id, so a newer
+desktop re-reads the open thread for no such run.
+
+### Code sites for the implementation slice
+
+The later slice touches these sites:
+
+1. `handleEvent` (`src/lib/chat-controller.js`) holds the signaled-run set
+   and the single-re-read rule.
+2. `refreshOpenThread` (same file) keeps one re-read in flight and collapses
+   every signal during a re-read into one follow-up re-read.
+
+The later slice changes no attach boundary, no sink, and no `ChatEvent`
+field. This amendment changes no runtime code.
