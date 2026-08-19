@@ -536,6 +536,79 @@ describe('workspace composer entry', () => {
     expect(screen.getByRole('textbox', { name: 'Message' })).toBe(composer)
   })
 
+  const chatEventsStatus = (chatEventsConnected) => ({
+    connected: true, chat_events_connected: chatEventsConnected, supervisor_running: true,
+  })
+
+  function mockChatEventsStatus(chatEventsConnected) {
+    invoke.mockImplementation(async (command) => {
+      if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
+      if (command === 'attach_listener_status') return chatEventsStatus(chatEventsConnected)
+      if (command === 'chat_thread_open') return []
+      if (command === 'auth_entitlement_snapshot') return snapshot()
+      throw new Error(`unexpected command: ${command}`)
+    })
+  }
+
+  const threadOpens = () => invoke.mock.calls.filter(([command]) => command === 'chat_thread_open').length
+
+  it('re-reads the open thread in place after the chat-event connection recovers', async () => {
+    mockChatEventsStatus(true)
+    render(App)
+    await screen.findByPlaceholderText('Ask anything')
+    invoke.mockClear()
+
+    desktopClientListener({ payload: chatEventsStatus(false) })
+    expect(invoke).not.toHaveBeenCalledWith('chat_thread_open', expect.anything())
+
+    desktopClientListener({ payload: chatEventsStatus(true) })
+    expect(invoke).toHaveBeenCalledWith('chat_thread_open', { threadId: 'thread-1', limit: 100 })
+    expect(threadOpens()).toBe(1)
+    expect(invoke).not.toHaveBeenCalledWith('chat_select_thread', expect.anything())
+  })
+
+  it('re-reads the open thread when the status poll reports the recovery', async () => {
+    let finishRegistration
+    desktopClientListen = vi.fn(() => new Promise((resolve) => { finishRegistration = resolve }))
+    mockChatEventsStatus(true)
+    render(App)
+    await waitFor(() => expect(desktopClientListener).toBeDefined())
+    await waitFor(() => expect(threadOpens()).toBe(1))
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    // The first status reaches the window through the listener, so the poll
+    // that follows carries the recovery.
+    desktopClientListener({ payload: chatEventsStatus(false) })
+    await waitFor(() => expect(threadOpens()).toBe(2))
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    invoke.mockClear()
+
+    finishRegistration(desktopClientUnlisten)
+
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('chat_thread_open', { threadId: 'thread-1', limit: 100 }))
+    expect(threadOpens()).toBe(1)
+  })
+
+  it('re-reads no thread on the first status the window reads', async () => {
+    mockChatEventsStatus(true)
+    render(App)
+    await screen.findByPlaceholderText('Ask anything')
+
+    expect(threadOpens()).toBe(1)
+  })
+
+  it('re-reads no thread while a status keeps the chat-event connection up', async () => {
+    mockChatEventsStatus(true)
+    render(App)
+    await screen.findByPlaceholderText('Ask anything')
+    invoke.mockClear()
+
+    desktopClientListener({ payload: chatEventsStatus(true) })
+    desktopClientListener({ payload: chatEventsStatus(true) })
+
+    expect(invoke).not.toHaveBeenCalledWith('chat_thread_open', expect.anything())
+  })
+
   it('updates the surface when the desktop client supervisor starts and stops', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true })
     render(App)
