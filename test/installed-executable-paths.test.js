@@ -4,10 +4,12 @@ import { describe, expect, it } from 'vitest'
 const configPath = 'src-tauri/tauri.conf.json'
 const resolverPath = 'src-tauri/runtime/src/directories.rs'
 const runnerPath = 'test/e2e/runner/linux.sh'
+const postInstallPath = 'src-tauri/packaging/deb/postinst'
 
 const config = JSON.parse(readFileSync(configPath, 'utf8'))
 const resolver = readFileSync(resolverPath, 'utf8')
 const runner = readFileSync(runnerPath, 'utf8')
+const postInstall = readFileSync(postInstallPath, 'utf8')
 const resolverFunction = resolver.match(
   /pub fn installed_desktop_executable_from[\s\S]*?\n}\n/,
 )?.[0]
@@ -36,5 +38,15 @@ describe('installed desktop executable paths', () => {
       .toBe(runnerLibrary)
     expect(resolverSegments[0], `${resolverPath} runtime value ${resolverSegments[0]} disagrees with ${runnerPath} value ${runnerRuntime}`)
       .toBe(runnerRuntime)
+  })
+
+  it('installs the product-name desktop path that the Linux runner remaps', () => {
+    const installedDesktop = runner.match(/installed_desktop=(\/\S+)/)?.[1]
+
+    expect(installedDesktop, `${runnerPath} installed desktop value ${installedDesktop} disagrees with ${configPath} productName ${config.productName}`)
+      .toBe(`/usr/bin/${config.productName}`)
+    expect(postInstall, `${postInstallPath} does not install ${installedDesktop}`)
+      .toContain(`ln -sfn muniment-desktop ${installedDesktop}`)
+    expect(runner).toContain('[[ -f $installed_desktop ]]')
   })
 })
