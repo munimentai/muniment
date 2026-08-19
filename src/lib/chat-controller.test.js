@@ -12,19 +12,20 @@ function deferred() {
   return { promise, resolve, reject }
 }
 
-function setup(invoke = vi.fn(), { threadId = null } = {}) {
+function setup(invoke = vi.fn(), { threadId = null, summaries = [] } = {}) {
   let messages = []
   let active = null
   let announced = null
   let draft = 'Hello'
   let files = []
   let openThreadId = threadId
+  let threadSummaries = summaries
   let listener
   const errors = []
   const onHistoryError = vi.fn()
   const onMessages = vi.fn((next) => { messages = next })
   const onActive = vi.fn((next) => { active = next })
-  const onThreadSummaries = vi.fn()
+  const onThreadSummaries = vi.fn((next) => { threadSummaries = next })
   const onMoreThreads = vi.fn()
   const onThreadSelected = vi.fn()
   const onFreshThread = vi.fn()
@@ -42,6 +43,7 @@ function setup(invoke = vi.fn(), { threadId = null } = {}) {
     readDraft: () => draft,
     readFiles: () => files,
     readThreadId: () => openThreadId,
+    readThreadSummaries: () => threadSummaries,
     onMessages,
     onActive,
     onAnnounce: (next) => { announced = next },
@@ -76,6 +78,7 @@ function setup(invoke = vi.fn(), { threadId = null } = {}) {
     onFreshThread,
     onFocus,
     onFollow,
+    summaries: () => threadSummaries,
     setActive: (next) => { active = next },
     setDraft: (next) => { draft = next },
     setMessages: (next) => { messages = next },
@@ -1706,6 +1709,183 @@ describe('chat controller', () => {
 
     expect(context.messages().at(-1).run).toMatchObject({ id: 'run-9', phase: 'thinking', text: '', receipt: null })
     expect(context.active()).toMatchObject({ id: 'run-9', phase: 'thinking' })
+  })
+
+  it('refreshes the thread list once when an event names a new thread', async () => {
+    const previous = [{ role: 'user', text: 'Keep this transcript' }]
+    const invoke = vi.fn(async (command) => {
+      if (command === 'chat_thread_summaries') {
+        return { summaries: [{ threadId: 'thread-2', title: 'ACP' }, { threadId: 'thread-1' }], nextCursor: null }
+      }
+      if (command === 'chat_current_thread') return 'thread-1'
+      throw new Error(`unexpected command: ${command}`)
+    })
+    const context = setup(invoke, { threadId: 'thread-1', summaries: [{ threadId: 'thread-1' }] })
+    context.setMessages(previous)
+    await context.start()
+
+    context.event({ runId: 'run-9', type: 'text-delta', text: 'ACP', threadId: 'thread-2' })
+    await vi.waitFor(() => expect(context.summaries()).toEqual([
+      { threadId: 'thread-2', title: 'ACP' },
+      { threadId: 'thread-1' },
+    ]))
+
+    expect(context.messages()).toBe(previous)
+    expect(invoke.mock.calls).toEqual([
+      ['chat_thread_summaries', { limit: 20 }],
+      ['chat_current_thread'],
+    ])
+    expect(context.onThreadSelected).toHaveBeenCalledWith('thread-1')
+
+    context.event({ runId: 'run-9', type: 'text-delta', text: ' more', threadId: 'thread-2' })
+    expect(invoke.mock.calls).toEqual([
+      ['chat_thread_summaries', { limit: 20 }],
+      ['chat_current_thread'],
+    ])
+  })
+
+  it('refreshes once when a new thread settles the open run', async () => {
+    const invoke = vi.fn(async (command) => {
+      if (command === 'chat_thread_summaries') return { summaries: [{ threadId: 'thread-2' }], nextCursor: null }
+      if (command === 'chat_current_thread') return 'thread-2'
+      throw new Error(`unexpected command: ${command}`)
+    })
+    const context = setup(invoke, { threadId: 'thread-2' })
+    await context.start()
+    const run = { id: 'run-1', phase: 'streaming', text: 'Done' }
+    context.setMessages([{ role: 'assistant', run }])
+    context.setActive(run)
+
+    context.event({ runId: 'run-1', type: 'completed', threadId: 'thread-2' })
+    await vi.waitFor(() => expect(invoke).toHaveBeenCalledWith('chat_current_thread'))
+
+    expect(context.active()).toBeNull()
+    expect(invoke.mock.calls.filter(([command]) => command === 'chat_thread_summaries')).toHaveLength(1)
+    expect(invoke).not.toHaveBeenCalledWith('chat_thread_open', expect.anything())
+    expect(invoke).not.toHaveBeenCalledWith('chat_select_thread', expect.anything())
+  })
+
+  it('refreshes on settlement when the summaries already hold the thread', async () => {
+    const summaries = [{ threadId: 'thread-1', title: 'Hello' }]
+    const invoke = vi.fn((command) => {
+      if (command === 'chat_thread_summaries') return { summaries, nextCursor: null }
+      if (command === 'chat_current_thread') return 'thread-1'
+      throw new Error(`unexpected command: ${command}`)
+    })
+    const context = setup(invoke, { threadId: 'thread-1', summaries })
+    await context.start()
+    const run = { id: 'run-1', phase: 'streaming', text: 'Done' }
+    context.setMessages([{ role: 'assistant', run }])
+    context.setActive(run)
+
+    context.event({ runId: 'run-1', type: 'completed', threadId: 'thread-1' })
+    await vi.waitFor(() => expect(context.onThreadSelected).toHaveBeenCalledWith('thread-1'))
+
+    expect(invoke.mock.calls).toEqual([
+      ['chat_thread_summaries', { limit: 20 }],
+      ['chat_current_thread'],
+    ])
+  })
+
+  it('does not refresh again for a later event with the same thread id', async () => {
+    const invoke = vi.fn(async (command) => {
+      if (command === 'chat_thread_summaries') return { summaries: [{ threadId: 'thread-1' }], nextCursor: null }
+      if (command === 'chat_current_thread') return 'thread-1'
+      throw new Error(`unexpected command: ${command}`)
+    })
+    const context = setup(invoke, { summaries: [{ threadId: 'thread-1' }] })
+    await context.start()
+
+    context.event({ runId: 'run-9', type: 'text-delta', text: 'ACP', threadId: 'thread-2' })
+    await vi.waitFor(() => expect(invoke).toHaveBeenCalledWith('chat_thread_summaries', { limit: 20 }))
+    context.event({ runId: 'run-9', type: 'text-delta', text: ' more', threadId: 'thread-2' })
+
+    expect(invoke.mock.calls.filter(([command]) => command === 'chat_thread_summaries')).toHaveLength(1)
+  })
+
+  it.each([
+    [{ runId: 'run-9', type: 'text-delta', text: 'ACP' }],
+    [{ runId: 'run-9', type: 'text-delta', text: 'ACP', threadId: null }],
+    [{ runId: 'run-9', type: 'text-delta', text: 'ACP', threadId: '' }],
+    [{ runId: 'run-9', type: 'text-delta', text: 'ACP', threadId: 'thread-1' }],
+  ])('does not refresh for event %j', async (payload) => {
+    const invoke = vi.fn(async (command) => {
+      if (command === 'chat_thread_summaries') return { summaries: [{ threadId: 'thread-1' }], nextCursor: null }
+      if (command === 'chat_current_thread') return 'thread-1'
+      throw new Error(`unexpected command: ${command}`)
+    })
+    const context = setup(invoke, { summaries: [{ threadId: 'thread-1' }] })
+    await context.start()
+
+    context.event(payload)
+
+    expect(invoke).not.toHaveBeenCalled()
+  })
+
+  it('collapses signaled-thread refreshes that arrive while one is in flight', async () => {
+    const first = deferred()
+    const second = deferred()
+    let summaryCalls = 0
+    const invoke = vi.fn(async (command) => {
+      if (command === 'chat_thread_summaries') {
+        summaryCalls += 1
+        if (summaryCalls === 1) await first.promise
+        else await second.promise
+        return { summaries: [{ threadId: 'thread-1' }], nextCursor: null }
+      }
+      if (command === 'chat_current_thread') return 'thread-1'
+      throw new Error(`unexpected command: ${command}`)
+    })
+    const context = setup(invoke, { summaries: [{ threadId: 'thread-1' }] })
+    await context.start()
+
+    context.event({ runId: 'run-9', type: 'text-delta', text: 'One', threadId: 'thread-2' })
+    await vi.waitFor(() => expect(summaryCalls).toBe(1))
+    context.event({ runId: 'run-10', type: 'text-delta', text: 'Two', threadId: 'thread-3' })
+    context.event({ runId: 'run-11', type: 'text-delta', text: 'Three', threadId: 'thread-4' })
+    expect(summaryCalls).toBe(1)
+    first.resolve()
+    await vi.waitFor(() => expect(summaryCalls).toBe(2))
+    second.resolve()
+    await vi.waitFor(() => expect(invoke.mock.calls.filter(([command]) => command === 'chat_thread_summaries')).toHaveLength(2))
+    expect(summaryCalls).toBe(2)
+  })
+
+  it('drops the oldest signaled thread past 256 entries', async () => {
+    const first = deferred()
+    let summaryCalls = 0
+    const invoke = vi.fn(async (command) => {
+      if (command === 'chat_thread_summaries') {
+        summaryCalls += 1
+        if (summaryCalls === 1) await first.promise
+        return { summaries: [{ threadId: 'held' }], nextCursor: null }
+      }
+      if (command === 'chat_current_thread') return 'held'
+      throw new Error(`unexpected command: ${command}`)
+    })
+    const context = setup(invoke, { summaries: [{ threadId: 'held' }] })
+    await context.start()
+
+    for (let index = 0; index < 256; index += 1) {
+      context.event({ runId: `run-${index}`, type: 'text-delta', text: 'x', threadId: `thread-${index}` })
+      if (index === 0) await vi.waitFor(() => expect(summaryCalls).toBe(1))
+    }
+    expect(summaryCalls).toBe(1)
+    first.resolve()
+    await vi.waitFor(() => expect(context.onThreadSummaries).toHaveBeenCalledTimes(2))
+    expect(summaryCalls).toBe(2)
+
+    context.event({ runId: 'run-0', type: 'text-delta', text: 'x', threadId: 'thread-0' })
+    expect(summaryCalls).toBe(2)
+
+    context.event({ runId: 'run-256', type: 'text-delta', text: 'x', threadId: 'thread-256' })
+    await vi.waitFor(() => expect(summaryCalls).toBe(3))
+
+    context.event({ runId: 'run-0', type: 'text-delta', text: 'x', threadId: 'thread-0' })
+    await vi.waitFor(() => expect(summaryCalls).toBe(4))
+
+    context.event({ runId: 'run-256', type: 'text-delta', text: 'x', threadId: 'thread-256' })
+    expect(summaryCalls).toBe(4)
   })
 
   it('forgets events held for another run once the submission returns', async () => {
