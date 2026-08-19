@@ -282,6 +282,7 @@ pub fn drive_prompt(launch: PromptLaunch) {
             launch.events,
             launch.memory_runtime.clone(),
             launch.thread_id,
+            launch.grant.workspace.clone(),
         )
         .with_pi_artifact(launch.pi_artifact.unwrap_or(PI_ARTIFACT)),
         launch.storage,
@@ -448,6 +449,7 @@ pub fn resume_run(
             events,
             memory_runtime.clone(),
             thread_id,
+            grant.workspace.clone(),
         )
         .with_pi_artifact(pi_artifact.unwrap_or(PI_ARTIFACT)),
         storage,

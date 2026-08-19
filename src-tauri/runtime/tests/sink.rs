@@ -1,7 +1,8 @@
 use std::fs;
-use std::sync::mpsc;
+use std::sync::mpsc::{self, TryRecvError};
 use std::sync::Arc;
 
+use muniment_core::attach::SignedWorkspaceApproval;
 use muniment_core::chat_grant::ChatGrant;
 use muniment_core::memory_runtime::ApplicationMemoryRuntime;
 use muniment_core::pi_launch::{
@@ -44,6 +45,12 @@ fn memory_runtime(profile: &TemporaryProfile) -> Arc<ApplicationMemoryRuntime> {
         profile.profile.clone(),
         profile.profile.join("memory"),
     ))
+}
+
+fn recorded_broadcast(workspace: &str) -> RuntimeChatEventBroadcast {
+    let approval = SignedWorkspaceApproval::default();
+    approval.record(workspace.into());
+    RuntimeChatEventBroadcast::new(approval)
 }
 
 #[test]
@@ -98,7 +105,7 @@ fn clears_a_dropped_subscriber() {
 #[test]
 fn broadcasts_each_event_to_every_live_subscriber() {
     let profile = TemporaryProfile::new("sink-broadcast", false);
-    let broadcast = RuntimeChatEventBroadcast::default();
+    let broadcast = recorded_broadcast("workspace-a");
     let first = broadcast.subscribe();
     let second = broadcast.subscribe();
     let sink = RuntimeChatEventSink::new(
@@ -106,6 +113,7 @@ fn broadcasts_each_event_to_every_live_subscriber() {
         broadcast,
         memory_runtime(&profile),
         "thread-1".into(),
+        "workspace-a".into(),
     );
 
     sink.deliver(event()).unwrap();
@@ -117,13 +125,14 @@ fn broadcasts_each_event_to_every_live_subscriber() {
 #[test]
 fn stamps_the_run_thread_id_on_every_broadcast_event() {
     let profile = TemporaryProfile::new("sink-broadcast-thread", false);
-    let broadcast = RuntimeChatEventBroadcast::default();
+    let broadcast = recorded_broadcast("workspace-a");
     let subscriber = broadcast.subscribe();
     let sink = RuntimeChatEventSink::new(
         &profile.profile,
         broadcast,
         memory_runtime(&profile),
         "thread-1".into(),
+        "workspace-a".into(),
     );
 
     let mut event = event();
@@ -137,7 +146,7 @@ fn stamps_the_run_thread_id_on_every_broadcast_event() {
 
 #[test]
 fn removes_a_dropped_broadcast_subscriber_without_delivery() {
-    let broadcast = RuntimeChatEventBroadcast::default();
+    let broadcast = recorded_broadcast("workspace-a");
     let dropped = broadcast.subscribe();
     let remaining = broadcast.subscribe();
     assert_eq!(broadcast.subscriber_count(), 2);
@@ -151,6 +160,7 @@ fn removes_a_dropped_broadcast_subscriber_without_delivery() {
         broadcast.clone(),
         memory_runtime(&profile),
         "thread-1".into(),
+        "workspace-a".into(),
     );
     sink.deliver(event()).unwrap();
     assert_eq!(remaining.recv().unwrap().text, "hello");
@@ -160,13 +170,14 @@ fn removes_a_dropped_broadcast_subscriber_without_delivery() {
 #[test]
 fn drops_a_subscriber_when_its_bounded_queue_is_full() {
     let profile = TemporaryProfile::new("sink-full-broadcast", false);
-    let broadcast = RuntimeChatEventBroadcast::default();
+    let broadcast = recorded_broadcast("workspace-a");
     let stalled = broadcast.subscribe();
     let sink = RuntimeChatEventSink::new(
         &profile.profile,
         broadcast.clone(),
         memory_runtime(&profile),
         "thread-1".into(),
+        "workspace-a".into(),
     );
 
     for _ in 0..=CHAT_EVENT_SUBSCRIBER_QUEUE_CAPACITY {
@@ -225,4 +236,62 @@ fn drives_pi_launch_config_over_the_profile_directory() {
         .args
         .windows(2)
         .any(|args| { args == ["--extension", extension.to_string_lossy().as_ref()] }));
+}
+
+#[test]
+fn withholds_a_mismatched_broadcast_and_keeps_the_subscription() {
+    let profile = TemporaryProfile::new("sink-broadcast-mismatch", false);
+    let broadcast = recorded_broadcast("workspace-a");
+    let subscriber = broadcast.subscribe();
+    let mismatched = RuntimeChatEventSink::new(
+        &profile.profile,
+        broadcast.clone(),
+        memory_runtime(&profile),
+        "thread-1".into(),
+        "workspace-b".into(),
+    );
+    let matched = RuntimeChatEventSink::new(
+        &profile.profile,
+        broadcast.clone(),
+        memory_runtime(&profile),
+        "thread-1".into(),
+        "workspace-a".into(),
+    );
+
+    mismatched.deliver(event()).unwrap();
+
+    assert!(matches!(subscriber.try_recv(), Err(TryRecvError::Empty)));
+    assert_eq!(broadcast.subscriber_count(), 1);
+
+    matched.deliver(event()).unwrap();
+    assert_eq!(subscriber.recv().unwrap().text, "hello");
+}
+
+#[test]
+fn withholds_an_unrecorded_broadcast_and_reads_the_workspace_at_delivery() {
+    let profile = TemporaryProfile::new("sink-broadcast-unrecorded", false);
+    let approval = SignedWorkspaceApproval::default();
+    let broadcast = RuntimeChatEventBroadcast::new(approval.clone());
+    let subscriber = broadcast.subscribe();
+    let sink = RuntimeChatEventSink::new(
+        &profile.profile,
+        broadcast.clone(),
+        memory_runtime(&profile),
+        "thread-1".into(),
+        "workspace-a".into(),
+    );
+
+    sink.deliver(event()).unwrap();
+
+    assert!(matches!(subscriber.try_recv(), Err(TryRecvError::Empty)));
+    assert_eq!(broadcast.subscriber_count(), 1);
+
+    approval.record("workspace-a".into());
+    sink.deliver(event()).unwrap();
+    assert_eq!(subscriber.recv().unwrap().text, "hello");
+
+    approval.clear();
+    sink.deliver(event()).unwrap();
+    assert!(matches!(subscriber.try_recv(), Err(TryRecvError::Empty)));
+    assert_eq!(broadcast.subscriber_count(), 1);
 }

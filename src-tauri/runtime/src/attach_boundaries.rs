@@ -91,11 +91,11 @@ impl RuntimeAttachBoundaries {
             memory_runtime,
             runtime_activity,
             entitlement_tracker,
-            approval,
+            approval.clone(),
             session_thread,
             companion_registry,
             Arc::new(AtomicBool::new(false)),
-            RuntimeChatEventBroadcast::default(),
+            RuntimeChatEventBroadcast::new(approval),
         )
     }
 
@@ -363,6 +363,7 @@ impl RunStartBoundaries for RuntimeAttachBoundaries {
                     chat_events,
                     Arc::clone(&memory_runtime),
                     thread_id,
+                    launch.grant.workspace.clone(),
                 ),
                 storage,
                 runtime,
