@@ -19,6 +19,7 @@ use common::{fixture_grant, TemporaryProfile};
 fn event() -> ChatEvent {
     ChatEvent {
         run_id: "run-1".into(),
+        thread_id: None,
         phase: "running".into(),
         text: "hello".into(),
         receipt: None,
@@ -53,12 +54,14 @@ fn delivers_to_an_optional_subscriber() {
         &profile.profile,
         Some(subscriber),
         memory_runtime(&profile),
+        "thread-1".into(),
     );
 
     sink.deliver(event()).unwrap();
 
     let delivered = events.recv().unwrap();
     assert_eq!(delivered.run_id, "run-1");
+    assert_eq!(delivered.thread_id.as_deref(), Some("thread-1"));
     assert_eq!(delivered.text, "hello");
 }
 
@@ -66,9 +69,14 @@ fn delivers_to_an_optional_subscriber() {
 fn succeeds_without_a_subscriber() {
     let profile = TemporaryProfile::new("sink-no-subscriber", false);
 
-    RuntimeChatEventSink::with_subscriber(&profile.profile, None, memory_runtime(&profile))
-        .deliver(event())
-        .unwrap();
+    RuntimeChatEventSink::with_subscriber(
+        &profile.profile,
+        None,
+        memory_runtime(&profile),
+        "thread-1".into(),
+    )
+    .deliver(event())
+    .unwrap();
 }
 
 #[test]
@@ -79,6 +87,7 @@ fn clears_a_dropped_subscriber() {
         &profile.profile,
         Some(subscriber),
         memory_runtime(&profile),
+        "thread-1".into(),
     );
     drop(events);
 
@@ -92,12 +101,38 @@ fn broadcasts_each_event_to_every_live_subscriber() {
     let broadcast = RuntimeChatEventBroadcast::default();
     let first = broadcast.subscribe();
     let second = broadcast.subscribe();
-    let sink = RuntimeChatEventSink::new(&profile.profile, broadcast, memory_runtime(&profile));
+    let sink = RuntimeChatEventSink::new(
+        &profile.profile,
+        broadcast,
+        memory_runtime(&profile),
+        "thread-1".into(),
+    );
 
     sink.deliver(event()).unwrap();
 
     assert_eq!(first.recv().unwrap().text, "hello");
     assert_eq!(second.recv().unwrap().text, "hello");
+}
+
+#[test]
+fn stamps_the_run_thread_id_on_every_broadcast_event() {
+    let profile = TemporaryProfile::new("sink-broadcast-thread", false);
+    let broadcast = RuntimeChatEventBroadcast::default();
+    let subscriber = broadcast.subscribe();
+    let sink = RuntimeChatEventSink::new(
+        &profile.profile,
+        broadcast,
+        memory_runtime(&profile),
+        "thread-1".into(),
+    );
+
+    let mut event = event();
+    event.thread_id = Some("other-thread".into());
+    sink.deliver(event).unwrap();
+
+    let delivered = subscriber.recv().unwrap();
+    assert_eq!(delivered.run_id, "run-1");
+    assert_eq!(delivered.thread_id.as_deref(), Some("thread-1"));
 }
 
 #[test]
@@ -115,6 +150,7 @@ fn removes_a_dropped_broadcast_subscriber_without_delivery() {
         &profile.profile,
         broadcast.clone(),
         memory_runtime(&profile),
+        "thread-1".into(),
     );
     sink.deliver(event()).unwrap();
     assert_eq!(remaining.recv().unwrap().text, "hello");
@@ -130,6 +166,7 @@ fn drops_a_subscriber_when_its_bounded_queue_is_full() {
         &profile.profile,
         broadcast.clone(),
         memory_runtime(&profile),
+        "thread-1".into(),
     );
 
     for _ in 0..=CHAT_EVENT_SUBSCRIBER_QUEUE_CAPACITY {
@@ -157,7 +194,12 @@ fn drives_pi_launch_config_over_the_profile_directory() {
     let extension = memory_runtime.agent_extension_path();
     fs::create_dir_all(extension.parent().unwrap()).unwrap();
     fs::write(&extension, "export default function () {}\n").unwrap();
-    let sink = RuntimeChatEventSink::with_subscriber(&profile.profile, None, memory_runtime);
+    let sink = RuntimeChatEventSink::with_subscriber(
+        &profile.profile,
+        None,
+        memory_runtime,
+        "thread-1".into(),
+    );
 
     assert_eq!(
         pi_launch_config(&sink, Some(&pi_install), &grant(), None).unwrap_err(),

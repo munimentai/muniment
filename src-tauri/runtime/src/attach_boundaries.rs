@@ -341,6 +341,14 @@ impl RunStartBoundaries for RuntimeAttachBoundaries {
     }
 
     fn launch(&self, launch: RunStartLaunch) {
+        let thread_id = match self.run_thread_id(&launch.run_id) {
+            Ok(thread_id) => thread_id,
+            Err(_) => {
+                self.close_memory_session(&launch.run_id);
+                self.clear_active_run(&launch.run_id);
+                return;
+            }
+        };
         let profile_directory = self.profile_directory.clone();
         let storage = Arc::clone(&self.storage);
         let runtime = Arc::clone(&self.runtime);
@@ -354,6 +362,7 @@ impl RunStartBoundaries for RuntimeAttachBoundaries {
                     &profile_directory,
                     chat_events,
                     Arc::clone(&memory_runtime),
+                    thread_id,
                 ),
                 storage,
                 runtime,
