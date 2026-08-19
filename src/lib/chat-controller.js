@@ -663,5 +663,5 @@ export function createChatController({
     buffered.clear()
   }
 
-  return { start, loadHistory, loadOlderThreads, openThread: (threadId) => openThread(threadId, true), refreshOpenThread, newThread, renameThread, deleteThread, send, cancel, resume, queue, cleanup }
+  return { start, loadHistory, loadOlderThreads, openThread: (threadId) => openThread(threadId, true), refreshOpenThread, refreshThreads, newThread, renameThread, deleteThread, send, cancel, resume, queue, cleanup }
 }

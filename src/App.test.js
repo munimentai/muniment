@@ -545,6 +545,7 @@ describe('workspace composer entry', () => {
       if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
       if (command === 'attach_listener_status') return chatEventsStatus(chatEventsConnected)
       if (command === 'chat_thread_open') return []
+      if (command === 'chat_current_thread') return 'thread-1'
       if (command === 'auth_entitlement_snapshot') return snapshot()
       throw new Error(`unexpected command: ${command}`)
     })
@@ -564,6 +565,7 @@ describe('workspace composer entry', () => {
     desktopClientListener({ payload: chatEventsStatus(true) })
     expect(invoke).toHaveBeenCalledWith('chat_thread_open', { threadId: 'thread-1', limit: 100 })
     expect(threadOpens()).toBe(1)
+    expect(invoke).toHaveBeenCalledWith('chat_current_thread')
     expect(invoke).not.toHaveBeenCalledWith('chat_select_thread', expect.anything())
   })
 
@@ -587,6 +589,8 @@ describe('workspace composer entry', () => {
 
     await waitFor(() => expect(invoke).toHaveBeenCalledWith('chat_thread_open', { threadId: 'thread-1', limit: 100 }))
     expect(threadOpens()).toBe(1)
+    expect(invoke).toHaveBeenCalledWith('chat_current_thread')
+    expect(invoke).not.toHaveBeenCalledWith('chat_select_thread', expect.anything())
   })
 
   it('re-reads no thread on the first status the window reads', async () => {
@@ -608,6 +612,7 @@ describe('workspace composer entry', () => {
     await new Promise((resolve) => setTimeout(resolve, 0))
     // The one read comes from the connected recovery, which calls run('status').
     expect(threadOpens()).toBe(1)
+    expect(invoke).not.toHaveBeenCalledWith('chat_current_thread')
   })
 
   it('re-reads no thread while a status keeps the chat-event connection up', async () => {
@@ -620,6 +625,31 @@ describe('workspace composer entry', () => {
     desktopClientListener({ payload: chatEventsStatus(true) })
 
     expect(invoke).not.toHaveBeenCalledWith('chat_thread_open', expect.anything())
+    expect(invoke).not.toHaveBeenCalledWith('chat_current_thread')
+  })
+
+  it('shows a thread added to the newest page during the chat-event drop', async () => {
+    mockChatEventsStatus(true)
+    render(App)
+    await screen.findByPlaceholderText('Ask anything')
+    await waitFor(() => expect(screen.getByRole('button', { name: 'New thread' })).toBeEnabled())
+    await waitFor(() => expect(document.querySelector('.thread-row[aria-current="true"]')).toBeInTheDocument())
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(document.querySelector('[data-thread-id="thread-2"]')).not.toBeInTheDocument()
+    invoke.mockClear()
+
+    desktopClientListener({ payload: chatEventsStatus(false) })
+    threadSummaryResult = [
+      { threadId: 'thread-2', title: 'First prompt', updatedAt: '' },
+      { threadId: 'thread-1', title: '', updatedAt: '' },
+    ]
+    desktopClientListener({ payload: chatEventsStatus(true) })
+
+    await waitFor(() => expect(document.querySelector('[data-thread-id="thread-2"]')).toHaveTextContent('First prompt'))
+    expect(document.querySelector('.thread-row[aria-current="true"]')).toHaveTextContent('New thread')
+    expect(invoke).toHaveBeenCalledWith('chat_thread_open', { threadId: 'thread-1', limit: 100 })
+    expect(invoke).toHaveBeenCalledWith('chat_current_thread')
+    expect(invoke).not.toHaveBeenCalledWith('chat_select_thread', expect.anything())
   })
 
   it('updates the surface when the desktop client supervisor starts and stops', async () => {

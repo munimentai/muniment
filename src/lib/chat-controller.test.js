@@ -87,6 +87,10 @@ function setup(invoke = vi.fn(), { threadId = null, summaries = [] } = {}) {
 }
 
 describe('chat controller', () => {
+  it('returns refreshThreads', () => {
+    expect(setup().controller.refreshThreads).toEqual(expect.any(Function))
+  })
+
   it('reports a rejected listener registration and retries it with history', async () => {
     const listen = vi.fn()
       .mockRejectedValueOnce(new Error('registration failed'))
