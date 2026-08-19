@@ -1888,6 +1888,162 @@ describe('chat controller', () => {
     expect(summaryCalls).toBe(4)
   })
 
+  it('re-reads the open thread once when an event names a new run on that thread', async () => {
+    const invoke = vi.fn(async (command) => {
+      if (command !== 'chat_thread_open') throw new Error(`unexpected command: ${command}`)
+      return {
+        entries: [{
+          runId: 'run-9', phase: 'streaming', text: 'ACP',
+          prompt: 'From the phone', receipt: null, toolActivity: [],
+        }],
+        nextCursor: null,
+      }
+    })
+    const context = setup(invoke, { threadId: 'thread-1', summaries: [{ threadId: 'thread-1' }] })
+    context.setMessages([{ role: 'user', text: 'Keep this transcript' }])
+    await context.start()
+
+    context.event({ runId: 'run-9', type: 'text-delta', text: 'ACP', threadId: 'thread-1' })
+    await vi.waitFor(() => expect(invoke).toHaveBeenCalledWith('chat_thread_open', { threadId: 'thread-1', limit: 100 }))
+
+    expect(context.messages().map((message) => message.text ?? message.run.text)).toEqual([
+      'From the phone', 'ACP',
+    ])
+    expect(context.active()).toMatchObject({ id: 'run-9', phase: 'streaming', text: 'ACP' })
+    expect(context.onThreadSelected).not.toHaveBeenCalled()
+    expect(invoke).not.toHaveBeenCalledWith('chat_select_thread', expect.anything())
+
+    context.event({ runId: 'run-9', type: 'text-delta', text: ' more', threadId: 'thread-1' })
+    expect(invoke.mock.calls).toEqual([
+      ['chat_thread_open', { threadId: 'thread-1', limit: 100 }],
+    ])
+    expect(context.messages().at(-1).run).toMatchObject({ id: 'run-9', phase: 'streaming', text: 'ACP more' })
+  })
+
+  it('does not re-read again for a run id the set already holds', async () => {
+    const invoke = vi.fn(async (command) => {
+      if (command !== 'chat_thread_open') throw new Error(`unexpected command: ${command}`)
+      return { entries: [], nextCursor: null }
+    })
+    const context = setup(invoke, { threadId: 'thread-1', summaries: [{ threadId: 'thread-1' }] })
+    await context.start()
+
+    context.event({ runId: 'run-9', type: 'text-delta', text: 'ACP', threadId: 'thread-1' })
+    await vi.waitFor(() => expect(invoke).toHaveBeenCalledTimes(1))
+    context.event({ runId: 'run-9', type: 'text-delta', text: ' more', threadId: 'thread-1' })
+
+    expect(invoke).toHaveBeenCalledTimes(1)
+    expect(context.messages()).toEqual([])
+  })
+
+  it.each([
+    [{ runId: 'run-9', type: 'text-delta', text: 'ACP' }],
+    [{ runId: 'run-9', type: 'text-delta', text: 'ACP', threadId: null }],
+    [{ runId: 'run-9', type: 'text-delta', text: 'ACP', threadId: '' }],
+    [{ runId: 'run-9', type: 'text-delta', text: 'ACP', threadId: 'thread-2' }],
+    [{ runId: 'run-1', type: 'text-delta', text: 'ACP', threadId: 'thread-1' }],
+  ])('does not re-read the open thread for event %j', async (payload) => {
+    const invoke = vi.fn(async (command) => {
+      if (command === 'chat_thread_summaries') return { summaries: [{ threadId: 'thread-2' }], nextCursor: null }
+      if (command === 'chat_current_thread') return 'thread-1'
+      throw new Error(`unexpected command: ${command}`)
+    })
+    const context = setup(invoke, { threadId: 'thread-1', summaries: [{ threadId: 'thread-1' }] })
+    await context.start()
+    context.setMessages([{ role: 'assistant', run: { id: 'run-1', phase: 'complete', text: 'Done' } }])
+
+    context.event(payload)
+    await Promise.resolve()
+
+    expect(invoke).not.toHaveBeenCalledWith('chat_thread_open', expect.anything())
+  })
+
+  it('collapses signaled-run re-reads that arrive while one is in flight', async () => {
+    const first = deferred()
+    const second = deferred()
+    let openCalls = 0
+    const invoke = vi.fn(async (command) => {
+      if (command !== 'chat_thread_open') throw new Error(`unexpected command: ${command}`)
+      openCalls += 1
+      if (openCalls === 1) await first.promise
+      else await second.promise
+      return { entries: [], nextCursor: null }
+    })
+    const context = setup(invoke, { threadId: 'thread-1', summaries: [{ threadId: 'thread-1' }] })
+    await context.start()
+
+    context.event({ runId: 'run-9', type: 'text-delta', text: 'One', threadId: 'thread-1' })
+    await vi.waitFor(() => expect(openCalls).toBe(1))
+    context.event({ runId: 'run-10', type: 'text-delta', text: 'Two', threadId: 'thread-1' })
+    context.event({ runId: 'run-11', type: 'text-delta', text: 'Three', threadId: 'thread-1' })
+    expect(openCalls).toBe(1)
+    first.resolve()
+    await vi.waitFor(() => expect(openCalls).toBe(2))
+    second.resolve()
+    await vi.waitFor(() => expect(invoke.mock.calls.filter(([command]) => command === 'chat_thread_open')).toHaveLength(2))
+    expect(openCalls).toBe(2)
+  })
+
+  it('drops the oldest signaled run past 256 entries', async () => {
+    const first = deferred()
+    let openCalls = 0
+    const invoke = vi.fn(async (command) => {
+      if (command !== 'chat_thread_open') throw new Error(`unexpected command: ${command}`)
+      openCalls += 1
+      if (openCalls === 1) await first.promise
+      return { entries: [], nextCursor: null }
+    })
+    const context = setup(invoke, { threadId: 'thread-1', summaries: [{ threadId: 'thread-1' }] })
+    await context.start()
+
+    for (let index = 0; index < 256; index += 1) {
+      context.event({ runId: `run-${index}`, type: 'text-delta', text: 'x', threadId: 'thread-1' })
+      if (index === 0) await vi.waitFor(() => expect(openCalls).toBe(1))
+    }
+    expect(openCalls).toBe(1)
+    first.resolve()
+    await vi.waitFor(() => expect(openCalls).toBe(2))
+
+    context.event({ runId: 'run-0', type: 'text-delta', text: 'x', threadId: 'thread-1' })
+    expect(openCalls).toBe(2)
+
+    context.event({ runId: 'run-256', type: 'text-delta', text: 'x', threadId: 'thread-1' })
+    await vi.waitFor(() => expect(openCalls).toBe(3))
+
+    context.event({ runId: 'run-0', type: 'text-delta', text: 'x', threadId: 'thread-1' })
+    await vi.waitFor(() => expect(openCalls).toBe(4))
+
+    context.event({ runId: 'run-256', type: 'text-delta', text: 'x', threadId: 'thread-1' })
+    expect(openCalls).toBe(4)
+  })
+
+  it('collapses a signal into one follow-up when a re-read is already in flight', async () => {
+    const first = deferred()
+    const second = deferred()
+    let openCalls = 0
+    const invoke = vi.fn(async (command) => {
+      if (command !== 'chat_thread_open') throw new Error(`unexpected command: ${command}`)
+      openCalls += 1
+      if (openCalls === 1) await first.promise
+      else await second.promise
+      return { entries: [], nextCursor: null }
+    })
+    const context = setup(invoke, { threadId: 'thread-1', summaries: [{ threadId: 'thread-1' }] })
+    await context.start()
+
+    const refreshing = context.controller.refreshOpenThread()
+    await vi.waitFor(() => expect(openCalls).toBe(1))
+    context.event({ runId: 'run-9', type: 'text-delta', text: 'ACP', threadId: 'thread-1' })
+    context.event({ runId: 'run-10', type: 'text-delta', text: 'Two', threadId: 'thread-1' })
+    expect(openCalls).toBe(1)
+    first.resolve()
+    await refreshing
+    await vi.waitFor(() => expect(openCalls).toBe(2))
+    second.resolve()
+    await vi.waitFor(() => expect(openCalls).toBe(2))
+    expect(invoke.mock.calls.filter(([command]) => command === 'chat_thread_open')).toHaveLength(2)
+  })
+
   it('forgets events held for another run once the submission returns', async () => {
     const first = deferred()
     const second = deferred()
